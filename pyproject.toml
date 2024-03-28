@@ -1,26 +1,26 @@
 [tool.poetry]
-name = "YOUR_PACKAGE_NAME"
+name = "pipepal"
 version = "0.0.1"
-description = "YOUR_PACKAGE_NAME is a Python package for doing incredible stuff."
+description = "PipePal is a Python package that simplifies building pipelines for speech and voice analysis."
 authors = [
-    "YOUR_GITHUB_NICKNAME <YOUR_EMAIL>",
+    "Fabio Catania <fabiocat@mit.edu>",
 ]
 maintainers = [
-    "YOUR_GITHUB_NICKNAME <YOUR_EMAIL>",
+    "Fabio Catania <fabiocat@mit.edu>",
 ]
 license = "Apache-2.0"
 readme = "README.md"
-homepage = "YOUR_PACKAGE_REPO"
-repository = "YOUR_PACKAGE_REPO"
-documentation = "https://YOUR_GITHUB_NICKNAME.github.io/YOUR_PACKAGE_NAME"
-keywords = ["python", "package", "template"]
+homepage = "https://github.com/sensein/pipepal"
+repository = "https://github.com/sensein/pipepal"
+documentation = "https://sensein.github.io/pipepal"
+keywords = ["voice", "speech", "audio"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Programming Language :: Python :: 3.10",
   "License :: OSI Approved :: Apache Software License",
   "Operating System :: OS Independent"
 ]
-packages = [{include = "YOUR_PACKAGE_NAME", from = "src"}]
+packages = [{include = "pipepal", from = "src"}]
 
 [tool.poetry.dependencies]
 python = "^3.10"
@@ -97,7 +97,7 @@ convention = "google"
 "src/tests/**/*.py" = []
 
 [tool.poetry.scripts]
-YOUR_PACKAGE_NAME-cli = "YOUR_PACKAGE_NAME.cli:main"
+pipepal-cli = "pipepal.cli:main"
 
 [tool.ruff.format]
 quote-style = "double"

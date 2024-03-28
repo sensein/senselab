@@ -1,7 +1,7 @@
 {
     "onlyPublishWithReleaseLabel": true,
     "baseBranch": "main",
-    "author": "bot <YOUR_EMAIL>",
+    "author": "bot <fabiocat@mit.edu>",
     "noVersionPrefix": true,
     "plugins": ["git-tag"]
 }
