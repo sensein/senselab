@@ -23,6 +23,7 @@ Welcome to the ```pipepal``` repo! This is a Python package for doing incredible
 ## Installation
 Install this package via :
 
+
 ```sh
 pip install pipepal
 ```
