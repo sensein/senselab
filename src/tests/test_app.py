@@ -1,7 +1,7 @@
 """Tests for the app hello_world function."""
 from _pytest.capture import CaptureFixture
 
-from YOUR_PACKAGE_NAME.app import hello_world
+from pipepal.app import hello_world
 
 
 def test_hello_world(capsys: CaptureFixture) -> None:  
