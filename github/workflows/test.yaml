@@ -1,0 +1,110 @@
+name: Python Tests
+
+on:
+  push:
+    branches:
+    - main
+  pull_request:
+  schedule:
+    - cron: '0 6 1 * *'
+
+jobs:
+  unit:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest] # For demonstration, other OSes are commented out: macos-latest, windows-latest
+        python-version: ["3.11", "3.10"]
+    steps:
+    - uses: actions/checkout@v4
+      with:  # no need for the history
+        fetch-depth: 1
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Install pipx and ensure it's up to date
+      run: |
+        python -m pip install --upgrade pipx
+        pipx ensurepath
+      shell: bash
+    - name: Install poetry
+      run: pipx install poetry
+      shell: bash
+    # Cache Poetry dependencies to speed up builds
+    - name: Cache Poetry virtualenv
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pypoetry
+        key: ${{ runner.os }}-poetry-${{ hashFiles('**/poetry.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-poetry-
+    - name: Install dependencies with Poetry
+      run: |
+        poetry install --with dev 
+      shell: bash
+    - name: Run unit tests
+      id: run-tests
+      run: >
+        poetry run pytest \
+          --junitxml=pytest.xml \
+          --cov-report=term-missing:skip-covered \
+          --cov-report=xml:coverage.xml \
+          --cov=src src/tests \
+          --log-level=DEBUG \
+          --verbose
+      shell: bash
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v4
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+
+  ruff:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest] # For demonstration, other OSes are commented out: macos-latest, windows-latest
+        python-version: ["3.11", "3.10"]
+    steps:
+    - uses: actions/checkout@v4
+      with:  # no need for the history
+        fetch-depth: 1
+    - uses: chartboost/ruff-action@v1
+
+  mypy:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest] # For demonstration, other OSes are commented out: macos-latest, windows-latest
+        python-version: ["3.11", "3.10"]
+    steps:
+    - uses: actions/checkout@v4
+      with:  # no need for the history
+        fetch-depth: 1
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Install pipx and ensure it's up to date
+      run: |
+        python -m pip install --upgrade pipx
+        pipx ensurepath
+      shell: bash
+    - name: Install poetry
+      run: pipx install poetry
+      shell: bash
+    # Cache Poetry dependencies to speed up builds
+    - name: Cache Poetry virtualenv
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pypoetry
+        key: ${{ runner.os }}-poetry-${{ hashFiles('**/poetry.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-poetry-
+    - name: Install dependencies with Poetry
+      run: |
+        poetry install --with dev 
+      shell: bash
+    - name: Run mypy
+      run: poetry run mypy .
+      shell: bash

@@ -1,0 +1,47 @@
+name: Support Request
+description: This is a template for submitting a support request.
+# If you want to enable automatic linking to projects,
+# uncomment the following line and replace the project ID
+# with the ID of your project.
+# projects: ["pipepal"]
+title: 'Support: '
+labels: [question]
+body:
+- type: textarea
+  id: issue-description
+  attributes:
+    label: Issue Description
+    description: Please provide a clear and concise description of the issue you are facing.
+    placeholder: Describe the issue here
+  validations:
+    required: true
+- type: textarea
+  id: environment-details
+  attributes:
+    label: Environment Details
+    description: Please provide details about your environment, including system specifications, software versions, etc.
+    placeholder: Describe your environment details here.
+  validations:
+    required: false
+- type: textarea
+  id: attempted-solutions
+  attributes:
+    label: Attempted Solutions
+    description: Describe any steps you have already taken to resolve the issue.
+    placeholder: Describe any attempted solutions here.
+  validations:
+    required: false
+- type: textarea
+  id: reproduction-steps
+  attributes:
+    label: Reproduction Steps
+    description: If applicable, provide steps to reproduce the issue.
+    placeholder: Describe the steps to reproduce the issue, if applicable.
+  validations:
+    required: false
+- type: textarea
+  id: additional-notes
+  attributes:
+    label: Additional Notes
+    description: Add any other context or screenshots about the support request here.
+    placeholder: Add additional notes or screenshots here.
