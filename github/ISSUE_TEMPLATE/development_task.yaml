@@ -1,0 +1,32 @@
+name: Development Task
+description: This is a template for a development task
+# If you want to enable automatic linking to projects,
+# uncomment the following line and replace the project ID
+# with the ID of your project.
+# projects: ["pipepal"]
+title: 'Task: '
+labels: [task]
+body:
+- type: textarea
+  id: description
+  attributes:
+    label: Description
+    description: What is the task about? Why is it needed? What is the current state, if any?
+    placeholder: Describe the task here
+  validations:
+    required: true
+- type: textarea
+  id: tasks
+  attributes:
+    label: Tasks
+    description: What are the concrete (sub-)tasks that need to be performed?
+    placeholder: Describe the tasks here.
+    value: '- [ ] Task 1'
+  validations:
+    required: true
+- type: textarea
+  id: freeform-notes
+  attributes:
+    label: Freeform Notes
+    description: Add any additional notes here.
+    placeholder: Add notes here.

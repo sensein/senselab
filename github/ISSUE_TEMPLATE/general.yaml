@@ -1,0 +1,17 @@
+name: Other
+description: This is a template for reporting a general issue.
+# If you want to enable automatic linking to projects,
+# uncomment the following line and replace the project ID
+# with the ID of your project.
+# projects: ["pipepal"]
+title: ''
+labels: [other]
+body:
+- type: textarea
+  id: description
+  attributes:
+    label: Text
+    description: Please, provide a clear and concise piece of information.
+    placeholder: Please, provide a clear and concise piece of information.
+  validations:
+    required: false

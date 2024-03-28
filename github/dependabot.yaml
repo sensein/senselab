@@ -1,0 +1,27 @@
+# Please see the documentation for all configuration options:
+# https://docs.github.com/github/administering-a-repository/configuration-options-for-dependency-updates
+
+# Dependabot configuration for updating dependencies and GitHub Actions
+version: 2
+updates:
+  # Configuration for Python package updates using pip
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      production-dependencies:
+        dependency-type: production
+      development-dependencies:
+        dependency-type: development
+        
+  # Configuration for GitHub Actions updates
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+
+# Enable automatic security updates
+security_updates: true
