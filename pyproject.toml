@@ -25,6 +25,7 @@ packages = [{include = "pipepal", from = "src"}]
 [tool.poetry.dependencies]
 python = "^3.10"
 click = "^8.1.7"
+jsonschema = "^4.21.1"
 
 [tool.poetry.group.dev]
 optional = true
@@ -75,7 +76,7 @@ exclude = [
   "node_modules",
   "venv"
 ]
-line-length = 88
+line-length = 100
 indent-width = 4
 src = ["src"]
 target-version = "py310"
