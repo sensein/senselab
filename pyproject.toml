@@ -26,6 +26,13 @@ packages = [{include = "pipepal", from = "src"}]
 python = "^3.10"
 click = "^8.1.7"
 jsonschema = "^4.21.1"
+datasets = "^2.18.0"
+torch = "^2.2.2"
+torchvision = "^0.17.2"
+torchaudio = "^2.2.2"
+transformers = "^4.39.3"
+librosa = "^0.10.1"
+soundfile = "^0.12.1"
 
 [tool.poetry.group.dev]
 optional = true

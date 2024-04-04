@@ -1,14 +1,15 @@
 """This module implements an example service for the task."""
 
 from typing import Any, Dict
+from datasets import Audio, Dataset
 
 from ...abstract_service import AbstractService
 
 
 class Service(AbstractService):
-    """Example service that extends AbstractService."""
+    """Datasets service that extends AbstractService."""
 
-    NAME: str = "ExampleService"
+    NAME: str = "Datasets"
 
     def __init__(self, configs: Dict[str, Any]) -> None: # noqa: ANN401
         """Initialize the service with given configurations.
@@ -38,7 +39,10 @@ class Service(AbstractService):
         Returns:
             A dictionary containing 'output' key with a sample output.
         """
-        return {"output": "ExampleService output"}
+        audio_dataset = Dataset.from_dict(
+            {"audio": data['files']}
+        ).cast_column("audio", Audio(mono=False))
+        return {"output": audio_dataset}
 
     def postprocess(self, data: Any) -> Any: # noqa: ANN401
         """Postprocess processed data. Implementation can be customized.

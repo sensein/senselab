@@ -2,7 +2,7 @@
 
 from typing import Any, Dict
 
-from ...abstract_service import AbstractService
+from pipepal.utils.abstract_service import AbstractService
 
 
 class Service(AbstractService):
