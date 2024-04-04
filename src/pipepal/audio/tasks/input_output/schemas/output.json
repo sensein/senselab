@@ -1,0 +1,7 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "AcceptEverything",
+    "description": "A JSON Schema that accepts everything.",
+    "type": "object",
+    "additionalProperties": true
+}
