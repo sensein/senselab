@@ -1,6 +1,8 @@
 """This module tests the audio's IOTask class."""
 
 
+from typing import Any, Dict, List
+
 import pytest
 from datasets import Dataset
 
@@ -46,7 +48,7 @@ def test_read_audios_from_disk_output_type() -> None:
     """Test the read_audios_from_disk method to check if the output is of type HF datasets."""
     test_input = {
         "data": {
-            "files": ["../../data_for_testing/audio_48khz_mono_16bits.wav", "../../data_for_testing/audio_48khz_stereo_16bits.wav"]
+            "files": ["./data_for_testing/audio_48khz_mono_16bits.wav", "./data_for_testing/audio_48khz_stereo_16bits.wav"]
         },
         "service": {
             "service_name": "Datasets"
@@ -61,15 +63,15 @@ def test_read_audios_from_disk_output_dimensions() -> None:
     This test checks if the dimensions of the output HF datasets object match the input list of audio files.
     Uses mocker to patch the DatasetsService to avoid actual file I/O and simulate reading files.
     """
-    test_input = {
+    test_input: Dict[str, Any] = {
         "data": {
-            "files": ["../../data_for_testing/audio_48khz_mono_16bits.wav", "../../data_for_testing/audio_48khz_stereo_16bits.wav"]
+            "files": ["./data_for_testing/audio_48khz_mono_16bits.wav", "./data_for_testing/audio_48khz_stereo_16bits.wav"]
         },
         "service": {
             "service_name": "Datasets"
         }
     }
-    response = AudioIOTask().read_audios_from_disk(test_input)
+    response: Dict[str, List[str]]  = AudioIOTask().read_audios_from_disk(test_input)
     assert len(response["output"]) == len(test_input["data"]["files"]), "The number of items in the output should match the number of input files."
 
 
@@ -97,7 +99,7 @@ def test_save_HF_dataset_to_disk() -> None:
         },
         "data": {
             "dataset": Dataset.from_dict({"pokemon": ["bulbasaur", "squirtle"], "type": ["grass", "water"]}),
-            "output_path": "../../data_for_testing/output_dataset"
+            "output_path": "./data_for_testing/output_dataset"
         }
     }
 
@@ -107,7 +109,7 @@ def test_save_HF_dataset_to_disk() -> None:
     except Exception as e:
         pytest.fail(f"Function raised an exception with valid input: {e}")
     
-    # shutil.rmtree("../../data_for_testing/output_dataset")
+    # shutil.rmtree("./data_for_testing/output_dataset")
 
 
 def test_upload_HF_dataset_to_HF_hub() -> None:
@@ -163,7 +165,7 @@ def test_read_local_HF_dataset() -> None:
             "service_name": "Datasets"
         },
         "data": {
-            "path": '../../data_for_testing/output_dataset'
+            "path": './data_for_testing/output_dataset'
         }
     }
 

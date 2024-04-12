@@ -45,6 +45,8 @@ jobs:
       shell: bash
     - name: Run unit tests
       id: run-tests
+      env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: >
         poetry run pytest \
           --junitxml=pytest.xml \
