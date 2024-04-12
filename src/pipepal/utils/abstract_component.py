@@ -30,24 +30,27 @@ class AbstractComponent(ABC):
     def __init__(
         self,
         base_dir: str,
-        input_schema_file: str = "schemas/input.json",
-        output_schema_file: str = "schemas/output.json",
+        input_schema_file: str = "schemas/__FUNCTION_NAME_PLACEHOLDER__/input.json",
+        output_schema_file: str = "schemas/__FUNCTION_NAME_PLACEHOLDER__/output.json",
     ) -> None:
         """Initializes the component with paths to input and output JSON schemas."""
-        self.input_schema = self.read_json_schema(os.path.join(base_dir, input_schema_file))
-        self.output_schema = self.read_json_schema(os.path.join(base_dir, output_schema_file))
+        self.base_dir = base_dir
+        self.base_input_schema = input_schema_file
+        self.base_output_schema = output_schema_file
 
     @staticmethod
     def schema_validator(func: Callable) -> Callable:
         """Decorator to validate input and output against schemas."""
-
         @wraps(func)
         def wrapper(self: "AbstractComponent", *args: Any, **kwargs: Any) -> Any:
+            input_schema = self.read_json_schema(os.path.join(self.base_dir, self.base_input_schema.replace("__FUNCTION_NAME_PLACEHOLDER__", func.__name__)))
+            output_schema = self.read_json_schema(os.path.join(self.base_dir, self.base_output_schema.replace("__FUNCTION_NAME_PLACEHOLDER__", func.__name__)))
+
             # Validate input
             input_data = kwargs.get("input_data") or (args[0] if args else {})
-            if self.input_schema is not None:
+            if input_schema is not None:
                 try:
-                    validate(instance=input_data, schema=self.input_schema)
+                    validate(instance=input_data, schema=input_schema)
                 except ValidationError as e:
                     raise ValueError(f"Input validation error: {e}") from e
 
@@ -55,9 +58,9 @@ class AbstractComponent(ABC):
             result = func(self, *args, **kwargs)
 
             # Validate output
-            if self.output_schema is not None:
+            if output_schema is not None:
                 try:
-                    validate(instance=result, schema=self.output_schema)
+                    validate(instance=result, schema=output_schema)
                 except ValidationError as e:
                     raise ValueError(f"Output validation error: {e}") from e
 
