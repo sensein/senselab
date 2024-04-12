@@ -1,6 +1,5 @@
 """This module tests the audio's IOTask class."""
 
-import shutil
 
 import pytest
 from datasets import Dataset
@@ -8,7 +7,7 @@ from datasets import Dataset
 from pipepal.audio.tasks import IOTask as AudioIOTask
 
 
-def test_read_audios_from_disk_input_errors():
+def test_read_audios_from_disk_input_errors() -> None:
     """Test the read_audios_from_disk method.
     
     This test checks if the read_audios_from_disk method raises appropriate errors for invalid inputs.
@@ -43,7 +42,7 @@ def test_read_audios_from_disk_input_errors():
             }
         })
 
-def test_read_audios_from_disk_output_type():
+def test_read_audios_from_disk_output_type() -> None:
     """Test the read_audios_from_disk method to check if the output is of type HF datasets."""
     test_input = {
         "data": {
@@ -56,7 +55,7 @@ def test_read_audios_from_disk_output_type():
     response = AudioIOTask().read_audios_from_disk(test_input)
     assert isinstance(response["output"], Dataset), "The output should be an instance of HF_datasets."
 
-def test_read_audios_from_disk_output_dimensions():
+def test_read_audios_from_disk_output_dimensions() -> None:
     """Test the read_audios_from_disk method.
      
     This test checks if the dimensions of the output HF datasets object match the input list of audio files.
@@ -74,7 +73,7 @@ def test_read_audios_from_disk_output_dimensions():
     assert len(response["output"]) == len(test_input["data"]["files"]), "The number of items in the output should match the number of input files."
 
 
-def test_save_HF_dataset_to_disk():
+def test_save_HF_dataset_to_disk() -> None:
     """Test the `save_HF_dataset_to_disk` method for successful execution with valid inputs.
     
     This test ensures that when given a correctly formatted input dictionary that includes
@@ -111,7 +110,7 @@ def test_save_HF_dataset_to_disk():
     # shutil.rmtree("../../data_for_testing/output_dataset")
 
 
-def test_upload_HF_dataset_to_HF_hub():
+def test_upload_HF_dataset_to_HF_hub() -> None:
     """Test the `upload_HF_dataset_to_HF_hub` method for successful execution with valid inputs.
     
     This test checks that the `upload_HF_dataset_to_HF_hub` method does not produce any
@@ -150,7 +149,7 @@ def test_upload_HF_dataset_to_HF_hub():
         pytest.fail(f"Function raised an exception with valid input: {e}")
 
 
-def test_read_local_HF_dataset():
+def test_read_local_HF_dataset() -> None:
     """Test the `read_local_HF_dataset` method for successful loading with valid local path input.
 
     This test ensures that the `read_local_HF_dataset` method can correctly load a dataset from
@@ -176,7 +175,7 @@ def test_read_local_HF_dataset():
     except Exception as e:
         pytest.fail(f"Function raised an exception with valid input: {e}")
 
-def test_read_HF_dataset_from_HF_hub():
+def test_read_HF_dataset_from_HF_hub() -> None:
     """Test the `read_HF_dataset_from_HF_hub` method for successful loading with valid URI input.
 
     This test checks that the `read_HF_dataset_from_HF_hub` method can correctly load a dataset from

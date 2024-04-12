@@ -29,7 +29,6 @@ Attributes:
     NAME (str): A class attribute which gives the service a name, used internally.
 """
 
-import os
 from typing import Any, Dict
 
 from ...abstract_service import AbstractService

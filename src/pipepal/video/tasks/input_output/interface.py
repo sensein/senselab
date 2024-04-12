@@ -21,7 +21,7 @@ class Interface(AbstractComponent):
         super().__init__(os.path.dirname(__file__))
 
     @classmethod
-    def get_service(cls, service_data: Dict[str, Any]) -> Any:
+    def get_service(cls, service_data: Dict[str, Any]) -> Any:  # noqa: ANN401
         """Retrieves or creates a service instance based on the provided service data.
 
         Parameters:
@@ -46,6 +46,14 @@ class Interface(AbstractComponent):
     @AbstractComponent.get_response_time
     @AbstractComponent.schema_validator
     def extract_audios_from_videos(self, input_obj: Dict[str, Any]) -> Dict[str, Any]:
+        """Extracts audios from videos using the specified service and input data.
+
+        Args:
+            input_obj (Dict[str, Any]): The input object containing the service and data.
+        
+        Returns:
+            Dict[str, Any]: The output from the service after extracting audios from videos.
+        """
         service = self.get_service(input_obj["service"])
         output = service.extract_audios_from_videos(input_obj["data"])
         return output

@@ -4,7 +4,8 @@ import pytest
 
 from pipepal.video.tasks import ExampleTask
 
-def test_exampletask_run():
+
+def test_exampletask_run() -> None:
     """Test the run method of ExampleTask.
     
     This test verifies:
@@ -27,11 +28,11 @@ def test_exampletask_run():
     })
     
     # Assert conditions about the output
-    assert type(output) == dict, "Output should be a dictionary"
+    assert type(output) == dict, "Output should be a dictionary" # noqa: E721
     expected_output_output = "ExampleService output"
     assert output['output'] == expected_output_output, "The output of the run method does not match the expected output"
 
-def test_exampletask_run_missing_service_fields():
+def test_exampletask_run_missing_service_fields() -> None:
     """Test the run method of ExampleTask.
     
     This test checks for its handling of missing required service fields.

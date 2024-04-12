@@ -4,6 +4,7 @@ import os
 from typing import Any, Dict, List
 
 import ffmpeg
+
 from ...abstract_service import AbstractService
 
 
