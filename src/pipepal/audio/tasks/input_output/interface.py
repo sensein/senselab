@@ -5,7 +5,6 @@ from typing import Any, Dict
 
 from pipepal.utils.abstract_component import AbstractComponent
 
-from .services import ExampleService
 from .services import DatasetsService
 
 
@@ -38,9 +37,7 @@ class Interface(AbstractComponent):
         key: str = cls.get_data_uuid(service_data)
 
         if key not in cls._instances:
-            if service_data["service_name"] == ExampleService.NAME:
-                cls._instances[key] = ExampleService(service_data)
-            elif service_data["service_name"] == DatasetsService.NAME:
+            if service_data["service_name"] == DatasetsService.NAME:
                 cls._instances[key] = DatasetsService(service_data)
             else:
                 raise ValueError(f"Unsupported service: {service_data['service_name']}")
@@ -48,8 +45,8 @@ class Interface(AbstractComponent):
 
     @AbstractComponent.get_response_time
     @AbstractComponent.schema_validator
-    def run(self, input: Dict[str, Any]) -> Any:
-        """Processes input through a workflow: preprocessing, processing, and postprocessing.
+    def read_audios_from_disk(self, input: Dict[str, Any]) -> Any:
+        """Processes input through a workflow.
 
         Parameters:
             input (Dict[str, Any]): Input data containing service information and data to process.
@@ -58,7 +55,77 @@ class Interface(AbstractComponent):
             Any: The postprocessed output from the service.
         """
         service = self.get_service(input["service"])
-        preprocessing_output = service.preprocess(input["data"])
-        processing_output = service.process(preprocessing_output)
-        postprocessing_output = service.postprocess(processing_output)
-        return postprocessing_output
+        output = service.read_audios_from_disk(input["data"])
+        return output
+    
+    @AbstractComponent.get_response_time
+    @AbstractComponent.schema_validator
+    def save_HF_dataset_to_disk(self, input: Dict[str, Any]) -> Dict[str, Any]:
+        """Saves HF dataset to disk.
+
+        Parameters:
+            input (Dict[str, Any]): Input data containing service information and data to process.
+
+        Returns:
+            Any: The postprocessed output from the service.
+
+        Todo:
+            - This method is not audio specific and may be moved out of this class.
+        """
+        service = self.get_service(input["service"])
+        output = service.save_HF_dataset_to_disk(input["data"])
+        return output
+    
+    @AbstractComponent.get_response_time
+    @AbstractComponent.schema_validator
+    def upload_HF_dataset_to_HF_hub(self, input: Dict[str, Any]) -> Dict[str, Any]:
+        """Uploads HF dataset to HF hub.
+
+        Parameters:
+            input (Dict[str, Any]): Input data containing service information and data to process.
+
+        Returns:
+            Any: The postprocessed output from the service.
+
+        Todo:
+            - This method is not audio specific and may be moved out of this class.
+        """
+        service = self.get_service(input["service"])
+        output = service.upload_HF_dataset_to_HF_hub(input["data"])
+        return output
+
+    @AbstractComponent.get_response_time
+    @AbstractComponent.schema_validator
+    def read_local_HF_dataset(self, input: Dict[str, Any]) -> Dict[str, Any]:
+        """Reads HF dataset from disk.
+
+        Parameters:
+            input (Dict[str, Any]): Input data containing service information and data to process.
+
+        Returns:
+            Any: The postprocessed output from the service.
+
+        Todo:
+            - This method is not audio specific and may be moved out of this class.
+        """
+        service = self.get_service(input["service"])
+        output = service.read_local_HF_dataset(input["data"])
+        return output
+    
+    @AbstractComponent.get_response_time
+    @AbstractComponent.schema_validator
+    def read_HF_dataset_from_HF_hub(self, input: Dict[str, Any]) -> Dict[str, Any]:
+        """Reads HF dataset from HF hub.
+
+        Parameters:
+            input (Dict[str, Any]): Input data containing service information and data to process.
+
+        Returns:
+            Any: The postprocessed output from the service.
+
+        Todo:
+            - This method is not audio specific and may be moved out of this class.
+        """
+        service = self.get_service(input["service"])
+        output = service.read_HF_dataset_from_HF_hub(input["data"])
+        return output

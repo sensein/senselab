@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Schema for validating input JSON structure for audio file processing services.",
+  "type": "object",
+  "properties": {
+    "data": {
+      "type": "object",
+      "description": "Contains all data necessary for processing, specifically a list of audio files.",
+      "properties": {
+        "files": {
+          "type": "array",
+          "description": "An array of file paths, each with a supported audio format.",
+          "items": {
+            "type": "string",
+            "description": "A file path ending with a valid audio format extension.",
+            "pattern": ".*\\.(wav|mp3|aac|ogg|flac|mka)$"
+          }
+        }
+      },
+      "required": ["files"]
+    },
+    "service": {
+      "type": "object",
+      "description": "Contains information about the service handling the files.",
+      "properties": {
+        "service_name": {
+          "type": "string",
+          "description": "The name of the service processing the audio files."
+        }
+      },
+      "required": ["service_name"]
+    }
+  },
+  "required": ["data", "service"],
+  "additionalProperties": false
+}
