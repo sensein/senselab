@@ -1,6 +1,7 @@
 """This module tests the video's IOTask class."""
 
 import os
+from typing import Any, Dict, List
 
 import pytest
 
@@ -39,7 +40,7 @@ def test_extract_audios_from_videos_input_errors() -> None:
         VideoIOTask().extract_audios_from_videos({
             "data": {
                 "files": ["/non/existent/path/file1.mp4"],
-                "output_folder": "../../data_for_testing",
+                "output_folder": "./data_for_testing",
                 "audio_format": "wav",
                 "audio_codec": "pcm_s16le"
             },
@@ -52,8 +53,8 @@ def test_extract_audios_from_videos_output_type() -> None:
     """Test the extract_audios_from_videos method to check if the output is of type list of strings."""
     test_input = {
         "data": {
-                "files": ["../../data_for_testing/video_48khz_stereo_16bits.mp4"],
-                "output_folder": "../../data_for_testing",
+                "files": ["./data_for_testing/video_48khz_stereo_16bits.mp4"],
+                "output_folder": "./data_for_testing",
                 "audio_format": "wav",
                 "audio_codec": "pcm_s16le"
         },
@@ -74,10 +75,10 @@ def test_read_audios_from_disk_output_dimensions() -> None:
      
     This test checks if the dimensions of the output list of audio files match the input list of video files.
     """
-    test_input = {
+    test_input: Dict[str, Any] = {
         "data": {
-            "files": ["../../data_for_testing/video_48khz_stereo_16bits.mp4"],
-            "output_folder": "../../data_for_testing",
+            "files": ["./data_for_testing/video_48khz_stereo_16bits.mp4"],
+            "output_folder": "./data_for_testing",
             "audio_format": "wav",
             "audio_codec": "pcm_s16le"
         },
@@ -85,7 +86,7 @@ def test_read_audios_from_disk_output_dimensions() -> None:
             "service_name": "ffmpeg"
         }
     }
-    response = VideoIOTask().extract_audios_from_videos(test_input)
+    response: Dict[str, List[str]] = VideoIOTask().extract_audios_from_videos(test_input)
     assert len(response["output"]) == len(test_input["data"]["files"]), "The number of items in the output should match the number of input files."
 
     # Clean up

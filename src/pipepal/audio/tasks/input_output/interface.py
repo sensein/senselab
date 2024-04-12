@@ -34,7 +34,7 @@ class Interface(AbstractComponent):
             ValueError: If the service name is unsupported.
         """
         # Use a composite key to uniquely identify instances
-        key: str = cls.get_data_uuid(service_data)
+        key: str = str(cls.get_data_uuid(service_data))
 
         if key not in cls._instances:
             if service_data["service_name"] == DatasetsService.NAME:
