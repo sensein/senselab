@@ -25,6 +25,16 @@ packages = [{include = "pipepal", from = "src"}]
 [tool.poetry.dependencies]
 python = "^3.10"
 click = "^8.1.7"
+jsonschema = "^4.21.1"
+datasets = "^2.18.0"
+torch = "^2.2.2"
+torchvision = "^0.17.2"
+torchaudio = "^2.2.2"
+transformers = "^4.39.3"
+librosa = "^0.10.1"
+soundfile = "^0.12.1"
+ffmpeg-python = "^0.2.0"
+ipykernel = "^6.29.4"
 
 [tool.poetry.group.dev]
 optional = true
@@ -34,6 +44,7 @@ mypy = "^1.9.0"
 pre-commit = "^3.7.0"
 pytest-cov = "^5.0.0"
 ruff = "^0.3.4"
+pytest-mock = "^3.14.0"
 
 [tool.poetry.group.docs]
 optional = true
@@ -75,7 +86,7 @@ exclude = [
   "node_modules",
   "venv"
 ]
-line-length = 88
+line-length = 200
 indent-width = 4
 src = ["src"]
 target-version = "py310"

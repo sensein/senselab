@@ -1,0 +1,25 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "ServiceConfiguration",
+    "description": "A JSON Schema for service configuration including additional properties.",
+    "type": "object",
+    "properties": {
+      "service": {
+        "type": "object",
+        "properties": {
+          "service_name": {
+            "type": "string"
+          },
+          "model_checkpoint": {
+            "type": "string"
+          },
+          "model_version": {
+            "type": "string"
+          }
+        },
+        "required": ["service_name", "model_checkpoint", "model_version"],
+        "additionalProperties": true
+      }
+    },
+    "additionalProperties": true
+}

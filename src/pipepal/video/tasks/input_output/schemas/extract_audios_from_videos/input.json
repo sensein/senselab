@@ -1,0 +1,53 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "AudioExtractionServiceConfiguration",
+    "description": "A JSON Schema for configuring a service to extract audio from video files.",
+    "type": "object",
+    "properties": {
+      "data": {
+        "type": "object",
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": ".*\\.(mp4|mov|wmv|webm|mkv|m4v|flv|avi)$"
+            },
+            "description": "List of paths to video files with extensions .mp4, .mov, .wmv, .webm, .mkv, .m4v, .flv, or .avi. [TODO] In the future we may want to guarantee support more extensions."
+          },
+          "audio_format": {
+            "type": "string",
+            "enum": ["wav", "mp3", "aac", "ogg", "flac", "mka"],
+            "description": "The format of the extracted audio file"
+          },
+          "audio_codec": {
+            "type": "string",
+            "enum": ["pcm_s16le", "libmp3lame", "aac", "libvorbis", "flac", "copy"],
+            "description": "The codec used to encode the extracted audio"
+          },     
+          "output_folder": {
+            "type": "string",
+            "pattern": "^(\\/|\\w:\\\\|\\.\\.\\/|\\.\\/).+",
+            "description": "The output folder where the extracted audio files will be saved"
+          }
+        },
+        "required": ["files", "audio_format", "audio_codec", "output_folder"],
+        "additionalProperties": false
+      },
+      "service": {
+        "type": "object",
+        "properties": {
+          "service_name": {
+            "type": "string",
+            "default": "ffmpeg",
+            "description": "The name of the service used for extracting audio"
+          }
+        },
+        "required": ["service_name"],
+        "additionalProperties": false
+      }
+    },
+    "required": ["data", "service"],
+    "additionalProperties": false
+  }
+  
