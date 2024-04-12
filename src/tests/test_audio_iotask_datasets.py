@@ -1,6 +1,7 @@
 """This module tests the audio's IOTask class."""
 
 
+import os
 from typing import Any, Dict, List
 
 import pytest
@@ -46,9 +47,9 @@ def test_read_audios_from_disk_input_errors() -> None:
 
 def test_read_audios_from_disk_output_type() -> None:
     """Test the read_audios_from_disk method to check if the output is of type HF datasets."""
-    test_input = {
+    test_input = {        
         "data": {
-            "files": ["./data_for_testing/audio_48khz_mono_16bits.wav", "./data_for_testing/audio_48khz_stereo_16bits.wav"]
+            "files": [f"{os.path.dirname(__file__)}/data_for_testing/audio_48khz_mono_16bits.wav", f"{os.path.dirname(__file__)}/data_for_testing/audio_48khz_stereo_16bits.wav"]
         },
         "service": {
             "service_name": "Datasets"
@@ -65,7 +66,7 @@ def test_read_audios_from_disk_output_dimensions() -> None:
     """
     test_input: Dict[str, Any] = {
         "data": {
-            "files": ["./data_for_testing/audio_48khz_mono_16bits.wav", "./data_for_testing/audio_48khz_stereo_16bits.wav"]
+            "files": [f"{os.path.dirname(__file__)}/data_for_testing/audio_48khz_mono_16bits.wav", f"{os.path.dirname(__file__)}/data_for_testing/audio_48khz_stereo_16bits.wav"]
         },
         "service": {
             "service_name": "Datasets"
@@ -99,7 +100,7 @@ def test_save_HF_dataset_to_disk() -> None:
         },
         "data": {
             "dataset": Dataset.from_dict({"pokemon": ["bulbasaur", "squirtle"], "type": ["grass", "water"]}),
-            "output_path": "./data_for_testing/output_dataset"
+            "output_path": f"{os.path.dirname(__file__)}/data_for_testing/output_dataset"
         }
     }
 
@@ -109,7 +110,7 @@ def test_save_HF_dataset_to_disk() -> None:
     except Exception as e:
         pytest.fail(f"Function raised an exception with valid input: {e}")
     
-    # shutil.rmtree("./data_for_testing/output_dataset")
+    # shutil.rmtree(f"{os.path.dirname(__file__)}/data_for_testing/output_dataset")
 
 
 def test_upload_HF_dataset_to_HF_hub() -> None:
@@ -165,7 +166,7 @@ def test_read_local_HF_dataset() -> None:
             "service_name": "Datasets"
         },
         "data": {
-            "path": './data_for_testing/output_dataset'
+            "path": f'{os.path.dirname(__file__)}/data_for_testing/output_dataset'
         }
     }
 
