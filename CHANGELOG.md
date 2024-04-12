@@ -1,3 +1,15 @@
+# 0.1.3 (Fri Apr 12 2024)
+
+#### 🐛 Bug Fix
+
+- Structuring the architecture with services and interfaces [#2](https://github.com/sensein/pipepal/pull/2) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- [@fabiocat93](https://github.com/fabiocat93)
+
+---
+
 # 0.1.2 (Fri Mar 29 2024)
 
 #### 🐛 Bug Fix
