@@ -37,6 +37,7 @@
             <ul>
                     <li><a href="pipepal/app.html">app</a></li>
                     <li><a href="pipepal/cli.html">cli</a></li>
+                    <li><a href="pipepal/utils.html">utils</a></li>
             </ul>
 
 
@@ -65,22 +66,28 @@ pipepal    </h1>
 
 <p><a href="https://sensein.github.io/pipepal"><img src="https://img.shields.io/badge/api-docs-blue" alt="pages" /></a></p>
 
-<p>Welcome to the <code><a href="">pipepal</a></code> repo! This is a Python package for doing incredible stuff with speech and voice.</p>
+<p>Welcome to the <code><a href="">pipepal</a></code> repo! This is a Python package for streamlining the processing and analysis of behavioral data, such as voice and speech patterns, with robust and reproducible methodologies. </p>
 
 <p><strong>Caution:</strong>: this package is still under development and may change rapidly over the next few weeks.</p>
 
 <h2 id="features">Features</h2>
 
 <ul>
-<li>A few</li>
-<li>Cool</li>
-<li>Things</li>
-<li>These may include a wonderful CLI interface.</li>
+<li><p><strong>Modular design</strong>: Utilize a variety of task-specific transformations that can be easily integrated or used standalone, allowing for flexible data manipulation and analysis strategies.</p></li>
+<li><p><strong>Pre-built pipelines</strong>: Access pre-configured pipelines combining multiple transformations tailored for common analysis tasks, which help in reducing setup time and effort.</p></li>
+<li><p><strong>Reproducibility</strong>: Ensures consistent outputs through the use of fixed seeds and version-controlled processing steps, making your results verifiable and easily comparable.</p></li>
+<li><p><strong>Easy integration</strong>: Designed to fit into existing workflows with minimal configuration, <code><a href="">pipepal</a></code> can be used alongside other data analysis tools and frameworks seamlessly.</p></li>
+<li><p><strong>Extensible</strong>: Open to modifications and contributions, the package can be expanded with custom transformations and pipelines to meet specific research needs. <u>Do you want to contribute? Please, reach out!</u></p></li>
+<li><p><strong>Comprehensive documentation</strong>: Comes with detailed documentation for all features and modules, including examples and guides on how to extend the package for other types of behavioral data analysis.</p></li>
+<li><p><strong>Performance Optimized</strong>: Efficiently processes large datasets with optimized code and algorithms, ensuring quick turnaround times even for complex analyses.</p></li>
+<li><p><strong>Interactive Examples</strong>: Includes Jupyter notebooks that provide practical examples of how <code><a href="">pipepal</a></code> can be implemented to derive insights from real-world data sets.</p></li>
 </ul>
+
+<p>Whether you're researching speech disorders, analyzing customer service calls, or studying communication patterns, <code><a href="">pipepal</a></code> provides the tools and flexibility needed to extract meaningful conclusions from your data.</p>
 
 <h2 id="installation">Installation</h2>
 
-<h6 id="install-this-package-via">Install this package via :</h6>
+<p>Install this package via:</p>
 
 <div class="pdoc-code codehilite">
 <pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>pipepal
@@ -106,8 +113,27 @@ pipepal    </h1>
 <h2 id="to-do">To do:</h2>
 
 <ul>
-<li><input type="checkbox" class="task-list-item-checkbox" disabled> A</li>
-<li><input type="checkbox" class="task-list-item-checkbox" disabled> lot</li>
+<li><input type="checkbox" class="task-list-item-checkbox" disabled> Integrating more audio tasks and moving functions from b2aiprep package:
+<ul>
+<li><input type="checkbox" class="task-list-item-checkbox" disabled> data_augmentation </li>
+<li><input type="checkbox" class="task-list-item-checkbox" disabled> data_representation</li>
+<li><input type="checkbox" class="task-list-item-checkbox" checked disabled> example_task</li>
+<li><input type="checkbox" class="task-list-item-checkbox" checked disabled> input_output</li>
+<li><input type="checkbox" class="task-list-item-checkbox" disabled> raw_signal_processing</li>
+<li><input type="checkbox" class="task-list-item-checkbox" disabled> speaker_diarization</li>
+<li><input type="checkbox" class="task-list-item-checkbox" disabled> speech emotion recognition</li>
+<li><input type="checkbox" class="task-list-item-checkbox" disabled> speech enhancement</li>
+<li><input type="checkbox" class="task-list-item-checkbox" disabled> speech_to_text</li>
+<li><input type="checkbox" class="task-list-item-checkbox" disabled> text_to_speech</li>
+<li><input type="checkbox" class="task-list-item-checkbox" disabled> voice conversion</li>
+</ul></li>
+<li><p><input type="checkbox" class="task-list-item-checkbox" disabled> Integrating more video tasks:</p>
+
+<ul>
+<li><input type="checkbox" class="task-list-item-checkbox" checked disabled> input_output</li>
+</ul></li>
+<li><p><input type="checkbox" class="task-list-item-checkbox" disabled> Preparing some pipelines with pydra</p></li>
+<li><input type="checkbox" class="task-list-item-checkbox" disabled> Populating the CLI</li>
 </ul>
 </div>
 
