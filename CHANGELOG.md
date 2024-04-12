@@ -1,3 +1,15 @@
+# 0.1.4 (Fri Apr 12 2024)
+
+#### 🐛 Bug Fix
+
+- fixing pdoc hierarchy [#3](https://github.com/sensein/pipepal/pull/3) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- [@fabiocat93](https://github.com/fabiocat93)
+
+---
+
 # 0.1.3 (Fri Apr 12 2024)
 
 #### 🐛 Bug Fix
