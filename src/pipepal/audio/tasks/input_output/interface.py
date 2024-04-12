@@ -21,7 +21,7 @@ class Interface(AbstractComponent):
         super().__init__(os.path.dirname(__file__))
 
     @classmethod
-    def get_service(cls, service_data: Dict[str, Any]) -> Any:
+    def get_service(cls, service_data: Dict[str, Any]) -> Any:  # noqa: ANN401
         """Retrieves or creates a service instance based on the provided service data.
 
         Parameters:
@@ -45,7 +45,7 @@ class Interface(AbstractComponent):
 
     @AbstractComponent.get_response_time
     @AbstractComponent.schema_validator
-    def read_audios_from_disk(self, input: Dict[str, Any]) -> Any:
+    def read_audios_from_disk(self, input: Dict[str, Any]) -> Dict[str, Any]:
         """Processes input through a workflow.
 
         Parameters:

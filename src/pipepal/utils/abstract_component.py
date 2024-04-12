@@ -42,7 +42,7 @@ class AbstractComponent(ABC):
     def schema_validator(func: Callable) -> Callable:
         """Decorator to validate input and output against schemas."""
         @wraps(func)
-        def wrapper(self: "AbstractComponent", *args: Any, **kwargs: Any) -> Any:
+        def wrapper(self: "AbstractComponent", *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
             input_schema = self.read_json_schema(os.path.join(self.base_dir, self.base_input_schema.replace("__FUNCTION_NAME_PLACEHOLDER__", func.__name__)))
             output_schema = self.read_json_schema(os.path.join(self.base_dir, self.base_output_schema.replace("__FUNCTION_NAME_PLACEHOLDER__", func.__name__)))
 

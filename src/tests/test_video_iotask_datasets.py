@@ -7,7 +7,7 @@ import pytest
 from pipepal.video.tasks import IOTask as VideoIOTask
 
 
-def test_extract_audios_from_videos_input_errors():
+def test_extract_audios_from_videos_input_errors() -> None:
     """Test the extract_audios_from_videos method.
     
     This test checks if the extract_audios_from_videos method raises appropriate errors for invalid inputs.
@@ -48,7 +48,7 @@ def test_extract_audios_from_videos_input_errors():
             }
         })
 
-def test_extract_audios_from_videos_output_type():
+def test_extract_audios_from_videos_output_type() -> None:
     """Test the extract_audios_from_videos method to check if the output is of type list of strings."""
     test_input = {
         "data": {
@@ -69,7 +69,7 @@ def test_extract_audios_from_videos_output_type():
     for audio_file in response["output"]:
         os.remove(audio_file)
 
-def test_read_audios_from_disk_output_dimensions():
+def test_read_audios_from_disk_output_dimensions() -> None:
     """Test the read_audios_from_disk method.
      
     This test checks if the dimensions of the output list of audio files match the input list of video files.
