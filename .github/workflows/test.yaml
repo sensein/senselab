@@ -23,6 +23,17 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
+
+    - name: Install ffmpeg (Ubuntu)
+      if: startsWith(matrix.os, 'ubuntu')
+      run: sudo apt-get update && sudo apt-get install -y ffmpeg
+    - name: Install ffmpeg (macOS)
+      if: startsWith(matrix.os, 'macos')
+      run: brew install ffmpeg
+    - name: Install ffmpeg (Windows)
+      if: startsWith(matrix.os, 'windows')
+      run: choco install ffmpeg
+      
     - name: Install pipx and ensure it's up to date
       run: |
         python -m pip install --upgrade pipx
