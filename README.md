@@ -54,6 +54,9 @@ from pipepal.app import hello_world
 hello_world()
 ```
 
+## Contributing
+Please see [CONTRIBUTING.md](CONTRIBUTING.md) before contributing. 
+
 ## To do:
 - [ ] Integrating more audio tasks and moving functions from b2aiprep package:
     - [ ] data_augmentation 
