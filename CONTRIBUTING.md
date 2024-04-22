@@ -3,7 +3,7 @@ Pull requests are always welcome, and we appreciate any help you give. Note that
 
 ### Workflow
 Please use the following workflow when contributing:
-1. If you have access, add a task to the project board: https://github.com/orgs/sensein/projects/45
+1. If you have access, add a task to the [project board](https://github.com/orgs/sensein/projects/45)
 2. Create an issue (with the same name as the task, if applicable),
 3. Use GitHub's "Create a branch" button from the issue page to generate a branch associated with the issue
 4. Fork the issue branch
