@@ -1,6 +1,6 @@
-# pipepal pull request guidelines
+# senselab pull request guidelines
 
-Pull requests are always welcome, and we appreciate any help you give. Note that a code of conduct applies to all spaces managed by the pipepal project, including issues and pull requests. Please see the [Code of Conduct](CODE_OF_CONDUCT.md) for details.
+Pull requests are always welcome, and we appreciate any help you give. Note that a code of conduct applies to all spaces managed by the senselab project, including issues and pull requests. Please see the [Code of Conduct](CODE_OF_CONDUCT.md) for details.
 
 When submitting a pull request, we ask you to check the following:
 
