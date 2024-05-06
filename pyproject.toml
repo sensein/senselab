@@ -1,18 +1,20 @@
 [tool.poetry]
-name = "pipepal"
+name = "senselab"
 version = "0.0.1"
-description = "PipePal is a Python package that simplifies building pipelines for speech and voice analysis."
+description = "Senselab is a Python package that simplifies building pipelines for speech and voice analysis."
 authors = [
     "Fabio Catania <fabiocat@mit.edu>",
+    "Satra Ghosh <satra@mit.edu>",
 ]
 maintainers = [
     "Fabio Catania <fabiocat@mit.edu>",
+    "Satra Ghosh <satra@mit.edu>",
 ]
 license = "Apache-2.0"
 readme = "README.md"
-homepage = "https://github.com/sensein/pipepal"
-repository = "https://github.com/sensein/pipepal"
-documentation = "https://sensein.github.io/pipepal"
+homepage = "https://github.com/sensein/senselab"
+repository = "https://github.com/sensein/senselab"
+documentation = "https://sensein.github.io/senselab"
 keywords = ["voice", "speech", "audio"]
 classifiers = [
   "Development Status :: 3 - Alpha",
@@ -20,7 +22,7 @@ classifiers = [
   "License :: OSI Approved :: Apache Software License",
   "Operating System :: OS Independent"
 ]
-packages = [{include = "pipepal", from = "src"}]
+packages = [{include = "senselab", from = "src"}]
 
 [tool.poetry.dependencies]
 python = "^3.10"
@@ -35,6 +37,10 @@ librosa = "^0.10.1"
 soundfile = "^0.12.1"
 ffmpeg-python = "^0.2.0"
 ipykernel = "^6.29.4"
+pydra = "^0.23"
+pydantic = "^2.7.1"
+accelerate = "^0.29.3"
+huggingface-hub = "^0.23.0"
 
 [tool.poetry.group.dev]
 optional = true
@@ -108,7 +114,7 @@ convention = "google"
 "src/tests/**/*.py" = []
 
 [tool.poetry.scripts]
-pipepal-cli = "pipepal.cli:main"
+senselab-cli = "senselab.cli:main"
 
 [tool.ruff.format]
 quote-style = "double"

@@ -2,7 +2,7 @@
 
 #### 🐛 Bug Fix
 
-- fixing pdoc hierarchy [#3](https://github.com/sensein/pipepal/pull/3) ([@fabiocat93](https://github.com/fabiocat93))
+- fixing pdoc hierarchy [#3](https://github.com/sensein/senselab/pull/3) ([@fabiocat93](https://github.com/fabiocat93))
 
 #### Authors: 1
 
@@ -14,7 +14,7 @@
 
 #### 🐛 Bug Fix
 
-- Structuring the architecture with services and interfaces [#2](https://github.com/sensein/pipepal/pull/2) ([@fabiocat93](https://github.com/fabiocat93))
+- Structuring the architecture with services and interfaces [#2](https://github.com/sensein/senselab/pull/2) ([@fabiocat93](https://github.com/fabiocat93))
 
 #### Authors: 1
 
@@ -26,7 +26,7 @@
 
 #### 🐛 Bug Fix
 
-- This is a simple pull request to test CI [#1](https://github.com/sensein/pipepal/pull/1) ([@fabiocat93](https://github.com/fabiocat93))
+- This is a simple pull request to test CI [#1](https://github.com/sensein/senselab/pull/1) ([@fabiocat93](https://github.com/fabiocat93))
 
 #### ⚠️ Pushed to `main`
 
