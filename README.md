@@ -65,7 +65,7 @@ Please see [CONTRIBUTING.md](CONTRIBUTING.md) before contributing.
     - [ ] data_representation (embeddings and feats extraction)
     - [ ] raw_signal_processing
     - [ ] speaker_diarization [@Isaac]
-    - [ ] speech emotion recognition [@Jordan]
+    - [ ] speech emotion recognition
     - [ ] speech enhancement
     - [x] speech_to_text
     - [ ] text_to_speech

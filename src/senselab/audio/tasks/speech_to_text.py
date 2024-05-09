@@ -1,13 +1,14 @@
 """This module implements some utilities for the speech-to-text task."""
-from typing import Any, Dict, Optional, Enum, Union
+from pathlib import Path
+from typing import Any, Dict, Optional, Union
 
 from datasets import Dataset
 from transformers import pipeline
-from pathlib import Path
 
-from senselab.utils.functions import _select_device_and_dtype, DeviceType
+from senselab.utils.functions import DeviceType, _select_device_and_dtype
 from senselab.utils.hf import HFModel
 from senselab.utils.tasks.input_output import _from_dict_to_hf_dataset, _from_hf_dataset_to_dict
+
 
 def transcribe_dataset_with_hf(dataset: Dict[str, Any], 
                                audio_column: str = 'audio',
@@ -25,7 +26,7 @@ def transcribe_dataset_with_hf(dataset: Dict[str, Any],
     hf_dataset = _from_dict_to_hf_dataset(dataset)
 
     def _prepare_hf_asr_pipeline(
-        model_id: str,
+        model_id: Union[str, Path],
         model_revision: str,
         language: Optional[str],
         return_timestamps: Optional[str],
@@ -50,7 +51,7 @@ def transcribe_dataset_with_hf(dataset: Dict[str, Any],
                         max_new_tokens=max_new_tokens,
                         chunk_length_s=chunk_length_s,
                         batch_size=batch_size,
-                        device=device, 
+                        device=device.value, 
                         torch_dtype=torch_dtype)
         return pipe
 

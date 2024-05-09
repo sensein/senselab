@@ -1,7 +1,8 @@
 """This module provides the implementation of Hugging Face utilities."""
 
 import os
-from typing import Optional
+from pathlib import Path
+from typing import Optional, Union
 
 from huggingface_hub import HfApi
 from pydantic import BaseModel, field_validator
@@ -9,7 +10,7 @@ from pydantic import BaseModel, field_validator
 
 class HFModel(BaseModel):
     """Hugging Face model."""
-    model_id: str
+    model_id: Union[str, Path]
     revision: str = "main"
 
     @field_validator('model_id')
