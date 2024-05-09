@@ -1,6 +1,5 @@
 """This module implements some utilities for the speech-to-text task."""
 from typing import Any, Dict, Optional
-import os
 
 from datasets import Dataset
 from transformers import pipeline

@@ -1,9 +1,12 @@
 """This module implements some utilities for the preprocessing task."""
+from typing import Any, Dict
+
+import torch
 import torchaudio.functional as F
 from datasets import Dataset
-from typing import Dict, Any
+
 from senselab.utils.tasks.input_output import _from_dict_to_hf_dataset, _from_hf_dataset_to_dict
-import torch
+
 
 def resample_hf_dataset(dataset: Dict[str, Any], resample_rate: int, rolloff: float = 0.99) -> Dict[str, Any]:
     """Resamples a Hugging Face `Dataset` object."""

@@ -1,6 +1,6 @@
 """This module defines a pydra API for the speech to text task."""
+
 import pydra
-from typing import Any, Dict
 
 from senselab.audio.tasks.speech_to_text import transcribe_dataset_with_hf
 
