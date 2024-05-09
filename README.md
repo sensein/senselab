@@ -57,21 +57,25 @@ hello_world()
 ## Contributing
 Please see [CONTRIBUTING.md](CONTRIBUTING.md) before contributing. 
 
-## To do:
+## To do (majors):
+- [ ] Integrating more multi-modal tasks
+    - [x] input_output
 - [ ] Integrating more audio tasks and moving functions from b2aiprep package:
     - [ ] data_augmentation 
-    - [ ] data_representation
-    - [x] example_task
-    - [x] input_output
+    - [ ] data_representation (embeddings and feats extraction)
     - [ ] raw_signal_processing
-    - [ ] speaker_diarization
-    - [ ] speech emotion recognition
+    - [ ] speaker_diarization [@Isaac]
+    - [ ] speech emotion recognition [@Jordan]
     - [ ] speech enhancement
-    - [ ] speech_to_text
+    - [x] speech_to_text
     - [ ] text_to_speech
     - [ ] voice conversion
 - [ ] Integrating more video tasks:
-    - [x] input_output
+    - [ ] input_output
 
 - [ ] Preparing some pipelines with pydra
 - [ ] Populating the CLI
+
+## To do (minors):
+- [ ] Check login with HF
+- [ ] Setup project cache directory
