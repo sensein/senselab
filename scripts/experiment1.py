@@ -9,8 +9,8 @@ from senselab.audio.tasks.preprocessing_pydra import resample_hf_dataset_pt
 from senselab.audio.tasks.speech_to_text import transcribe_dataset_with_hf
 from senselab.audio.tasks.speech_to_text_pydra import transcribe_dataset_with_hf_pt
 from senselab.utils.decorators import get_response_time
-from senselab.utils.tasks.input_output import push_dataset_to_hub, read_files_from_disk
-from senselab.utils.tasks.input_output_pydra import push_dataset_to_hub_pt, read_files_from_disk_pt
+from senselab.utils.tasks.input_output import read_files_from_disk
+from senselab.utils.tasks.input_output_pydra import read_files_from_disk_pt
 
 
 @get_response_time
@@ -29,7 +29,7 @@ def workflow(data: Dict[str, Any]) -> None:
     #print("Dataset pushed to the hub successfully.")
 
     print("Transcribing dataset...")
-    transcript_dataset = transcribe_dataset_with_hf(dataset=dataset, model_id="openai/whisper-tiny", language="en") # facebook/wav2vec2-base-960h
+    _ = transcribe_dataset_with_hf(dataset=dataset, model_id="openai/whisper-tiny", language="en") # facebook/wav2vec2-base-960h
     print("Transcribed dataset.")
 
     #print("Pushing dataset to the hub...")
