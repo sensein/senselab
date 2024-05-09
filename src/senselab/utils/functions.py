@@ -1,10 +1,15 @@
 """Utility functions for senselab."""
 import torch
+from typung import Enum
 
 
-def _select_device_and_dtype(device_options: list[str] = ['cuda', 'mps', 'cpu']) -> tuple[str, torch.dtype]:
+class DeviceType(Enum):
+    CPU = 'cpu'
+    CUDA = 'cuda'
+    MPS = 'mps'
+
+def _select_device_and_dtype(device_options: list[str] = [DeviceType.CPU, DeviceType.CUDA, DeviceType.MPS]) -> tuple[str, torch.dtype]:
     """Determines the device and data type for PyTorch operations."""
-    # TODO: maybe move this function as a generic utility function?
     if torch.cuda.is_available() and "cuda" in device_options:
         device = "cuda"
         torch_dtype = torch.float16  # Using half precision for CUDA
