@@ -41,6 +41,9 @@ pydra = "^0.23"
 pydantic = "^2.7.1"
 accelerate = "^0.29.3"
 huggingface-hub = "^0.23.0"
+praat-parselmouth = "^0.4.3"
+iso-639 = {git = "https://github.com/noumar/iso639.git", tag = "0.4.5"}
+opensmile = "^2.5.0"
 
 [tool.poetry.group.dev]
 optional = true
