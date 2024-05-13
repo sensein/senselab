@@ -22,7 +22,7 @@ def transcribe_dataset_with_hf(dataset: Dict[str, Any],
                                device: Optional[DeviceType] = None,
                                ) -> Dict[str, Any]:
     """Transcribes all audio samples in the dataset."""
-    _ = HFModel(model_id=model_id) # check HF model is valid
+    _ = HFModel(hf_model_id=model_id) # check HF model is valid
     hf_dataset = _from_dict_to_hf_dataset(dataset)
 
     def _prepare_hf_asr_pipeline(
@@ -36,7 +36,7 @@ def transcribe_dataset_with_hf(dataset: Dict[str, Any],
         device: Optional[DeviceType] = None
     ) -> pipeline:
         """Prepare a Hugging Face ASR pipeline."""
-        _ = HFModel(model_id=model_id) # check HF model is valid
+        _ = HFModel(hf_model_id=model_id) # check HF model is valid
 
         if device is None:
             device, torch_dtype = _select_device_and_dtype(device_options=[DeviceType.CUDA, DeviceType.CPU]) 
