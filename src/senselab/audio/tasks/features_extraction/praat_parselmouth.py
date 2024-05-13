@@ -14,7 +14,7 @@ def get_hf_dataset_durations(dataset: Dict[str, Any], audio_column: str = 'audio
     unnecessary_columns = [col for col in hf_dataset.column_names if col != audio_column]
     hf_dataset = hf_dataset.remove_columns(unnecessary_columns)
 
-    def get_hf_dataset_row_duration(row: Dataset, audio_column: str) -> float:
+    def get_hf_dataset_row_duration(row: Dataset, audio_column: str) -> Dict[str, float]:
         def _get_duration(sound: parselmouth.Sound) -> float:
             return call(sound, "Get total duration")
         waveform = row[audio_column]['array']
@@ -97,10 +97,10 @@ def get_hf_dataset_jitter_descriptors(dataset: Dict[str, Any], f0min: float, f0m
     hf_dataset = hf_dataset.remove_columns(unnecessary_columns)
 
     def _get_hf_dataset_row_jitter_descriptors(row: Dataset, audio_column: str, f0min: float, f0max: float) -> Dict[str, float]:
-        def _to_point_process(sound: parselmouth.Sound, f0min: float, f0max: float) -> Any:
+        def _to_point_process(sound: parselmouth.Sound, f0min: float, f0max: float) -> parselmouth.Data:
             return call(sound, "To PointProcess (periodic, cc)", f0min, f0max)
 
-        def _get_jitter(type: str, point_process: Any) -> float:
+        def _get_jitter(type: str, point_process: parselmouth.Data) -> float:
             return call(point_process, f"Get jitter ({type})", 0, 0, 0.0001, 0.02, 1.3)
         
         waveform = row[audio_column]['array']
@@ -126,10 +126,10 @@ def get_hf_dataset_shimmer_descriptors(dataset: Dict[str, Any], f0min: float, f0
     hf_dataset = hf_dataset.remove_columns(unnecessary_columns)
 
     def _get_hf_dataset_row_shimmer_descriptors(row: Dataset, audio_column: str, f0min: float, f0max: float) -> Dict[str, float]:
-        def _to_point_process(sound: parselmouth.Sound, f0min: float, f0max: float) -> Any:
+        def _to_point_process(sound: parselmouth.Sound, f0min: float, f0max: float) -> parselmouth.Data:
             return call(sound, "To PointProcess (periodic, cc)", f0min, f0max)
 
-        def _get_shimmer(type: str, sound: parselmouth.Sound, point_process: Any) -> float:
+        def _get_shimmer(type: str, sound: parselmouth.Sound, point_process: parselmouth.Data) -> float:
             # Use a single function call with flexible shimmer type
             return call([sound, point_process], f"Get shimmer ({type})", 0, 0, 0.0001, 0.02, 1.3, 1.6)
         
