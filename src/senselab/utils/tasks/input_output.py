@@ -1,5 +1,4 @@
-"""This module implements the IOTask class."""
-
+"""This module implements the IOTask utilities."""
 import os
 from typing import Any, Dict, List, Optional, Union
 
@@ -27,7 +26,7 @@ def read_files_from_disk(files: Union[str, List[str]]) -> Dict[str, Any]:
         # Creating the Dataset object
         dict_obj = {files[0].type: file_data}  # Using the type of the first file as the key
 
-        return Dataset.from_dict(dict_obj)
+        return _from_dict_to_hf_dataset(dict_obj)
     
     dataset = _from_files_to_dataset(formatted_files)
     return _from_hf_dataset_to_dict(dataset)
