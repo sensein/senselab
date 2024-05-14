@@ -1,7 +1,8 @@
 """This module provides the implementation of Hugging Face utilities."""
 
 import os
-from typing import Optional
+from pathlib import Path
+from typing import Optional, Union
 
 from huggingface_hub import HfApi
 from pydantic import BaseModel, field_validator
@@ -9,16 +10,16 @@ from pydantic import BaseModel, field_validator
 
 class HFModel(BaseModel):
     """Hugging Face model."""
-    model_id: str
+    hf_model_id: Union[str, Path]
     revision: str = "main"
 
-    @field_validator('model_id')
-    def validate_model_id(cls, value: str) -> str:
-        """Validate the model_id."""
+    @field_validator('hf_model_id')
+    def validate_hf_model_id(cls, value: str) -> str:
+        """Validate the hf_model_id."""
         if not value:
-            raise ValueError("model_id cannot be empty")
+            raise ValueError("hf_model_id cannot be empty")
         if not os.path.isfile(value) and not _check_hf_repo_exists(value, "model", None):
-            raise ValueError("model_id is not a valid Hugging Face model")
+            raise ValueError("hf_model_id is not a valid Hugging Face model")
         return value    
 
 def _check_hf_repo_exists(repo_id: str, repo_type: str, token: Optional[str] = None) -> bool:

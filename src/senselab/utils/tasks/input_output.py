@@ -1,7 +1,6 @@
-"""This module implements the IOTask class."""
-
+"""This module implements the IOTask utilities."""
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from datasets import Audio, Dataset, Image, load_dataset
 
@@ -9,8 +8,10 @@ from senselab.utils.file import File, from_strings_to_files
 from senselab.utils.hf import _check_hf_repo_exists
 
 
-def read_files_from_disk(files: List[str]) -> Dict[str, Any]:
+def read_files_from_disk(files: Union[str, List[str]]) -> Dict[str, Any]:
     """Read files from disk and create a Hugging Face `Dataset` object."""
+    if isinstance(files, str):
+        files = [files]
     formatted_files = from_strings_to_files(files)
 
     def _from_files_to_dataset(files: List[File]) -> Dataset:
@@ -25,7 +26,7 @@ def read_files_from_disk(files: List[str]) -> Dict[str, Any]:
         # Creating the Dataset object
         dict_obj = {files[0].type: file_data}  # Using the type of the first file as the key
 
-        return Dataset.from_dict(dict_obj)
+        return _from_dict_to_hf_dataset(dict_obj)
     
     dataset = _from_files_to_dataset(formatted_files)
     return _from_hf_dataset_to_dict(dataset)
