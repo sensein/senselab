@@ -46,6 +46,7 @@ iso-639 = {git = "https://github.com/noumar/iso639.git", tag = "0.4.5"}
 opensmile = "^2.5.0"
 audiomentations = "^0.35.0"
 torch-audiomentations = "^0.11.1"
+sentence-transformers = "^2.7.0"
 
 [tool.poetry.group.dev]
 optional = true
