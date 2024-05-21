@@ -16,6 +16,9 @@ AudioFile = Union[Text, Path, IOBase, Mapping]
 # import torch
 # from datasets import load_dataset, load_dataset_builder, Audio
 from pyannote.audio.pipelines.utils.hook import ProgressHook
+from typing import Any, Dict
+from senselab.utils.tasks.input_output import _from_dict_to_hf_dataset, _from_hf_dataset_to_dict
+
 # from pyannote.audio import Pipeline
 
 import torch
@@ -33,11 +36,12 @@ def annotation_to_dict(annotation):
         result[str(segment)] = label
     return result
 
-def pyannote_31_diarize_row(audio, hf_token):
+def pyannote_31_diarize_row(row, hf_token):
     """
     Diarizes an audio file with Pyannote 3.1.
     :param audio: a dictionary containing 'array' and 'sampling_rate'
     """
+    audio = row['audio']
     pipeline = Pipeline.from_pretrained(
         "pyannote/speaker-diarization-3.1",
         use_auth_token=hf_token)
@@ -55,12 +59,16 @@ def pyannote_31_diarize_row(audio, hf_token):
     diarization_dict = annotation_to_dict(diarization)
     return {"pyannote31_diarization":diarization_dict}
 
-def pyannote_31_diarize(dataset, hf_token=None):
+def pyannote_31_diarize(dataset: Dict[str, Any], hf_token=None):
     """
     Diarizes the audio files in a Hugging Face dataset. The diarizations are added
     to the dataset as a new column 'pyannote31_diarization'
     """
-    result =  dataset.map(lambda x: pyannote_31_diarize_row(x['audio'], hf_token))
+    hf_dataset = _from_dict_to_hf_dataset(dataset)
+
+    result =  hf_dataset.map(lambda x: pyannote_31_diarize_row(x, hf_token))
+    result = result.remove_columns(['audio'])
+    result = _from_hf_dataset_to_dict(result)
     return result
 
 #run 
