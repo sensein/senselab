@@ -1,38 +1,27 @@
 
-import torch
-import json
-import os
-import shutil
 from datasets import load_dataset, load_dataset_builder, Audio
 
-from senselab.utils.tasks.input_output import read_dataset_from_hub
 from senselab.audio.tasks.preprocessing import resample_hf_dataset
+from senselab.utils.tasks.input_output import read_files_from_disk
+
+from senselab.audio.tasks.pyannote_31 import pyannote_31_diarize
+
+data = {"files": 
+            ["../src/tests/data_for_testing/audio_48khz_mono_16bits.wav", 
+            "../src/tests/data_for_testing/audio_48khz_mono_16bits.wav" ]
+        }
 
 
-import sys
-sys.path.append('/Users/isaacbevers/sensein/senselab/src/senselab')
+dataset = read_files_from_disk(data["files"])
+print(f"Dataset loaded with {len(dataset)} records.")
 
-from audio.tasks.pyannote_31 import pyannote_31_diarize
+print("Resampling dataset...")
+dataset = resample_hf_dataset(dataset, 16000)
+print("Resampled dataset.")
 
-hf_token = "YOUR HF TOKEN HERE"
+print("Diarizing dataset...")
+dataset_diarized = pyannote_31_diarize(dataset)
+print("Diarized dataset.")
 
-model_cache_dir = os.path.expanduser("~/.cache/huggingface/transformers")
-if os.path.exists(model_cache_dir):
-    shutil.rmtree(model_cache_dir)
+print(dataset_diarized)
 
-# cache_dir = os.path.expanduser("~/.cache/huggingface/datasets")
-# if os.path.exists(cache_dir):
-#     shutil.rmtree(cache_dir)
-
-dataset = load_dataset("PolyAI/minds14", "en-US", split="train")
-dataset_first_two = dataset.select(range(2))
-dataset_diarized = pyannote_31_diarize(dataset.select(range(4)))
-print(json.dumps(dataset_diarized["pyannote31_diarization"], indent=4))
-
-# dataset = read_dataset_from_hub(
-#     "PolyAI/minds14",
-#     split="train",
-#     hf_token=hf_token
-# )
-# for diarization in diarizations:
-#     print(diarization)
