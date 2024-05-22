@@ -54,7 +54,8 @@ def pyannote_31_diarize_row(row, hf_token):
         diarization = pipeline({"waveform": waveform, "sample_rate": audio['sampling_rate']}, hook=hook)
     
     diarization_dict = annotation_to_dict(diarization)
-    return {"pyannote31_diarization":diarization_dict}
+    # print(diarization_dict)
+    return {"pyannote31_diarizations":diarization_dict}
 
 def pyannote_31_diarize(dataset: Dict[str, Any], hf_token=None):
     """
@@ -62,8 +63,9 @@ def pyannote_31_diarize(dataset: Dict[str, Any], hf_token=None):
     to the dataset as a new column 'pyannote31_diarization'
     """
     hf_dataset = _from_dict_to_hf_dataset(dataset)
-
     result =  hf_dataset.map(lambda x: pyannote_31_diarize_row(x, hf_token))
     result = result.remove_columns(['audio'])
     result = _from_hf_dataset_to_dict(result)
+    result["pyannote31_diarizations"] = list(map(lambda d: {k: v for k, v in d.items() if v}, 
+                                            result["pyannote31_diarizations"]))
     return result
