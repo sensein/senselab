@@ -10,7 +10,7 @@ import json
 from datasets import load_dataset
 
 from senselab.audio.tasks.preprocessing import resample_hf_dataset
-from senselab.audio.tasks.pyannote_31 import pyannote_31_diarize
+from senselab.audio.tasks.pyannote_speaker_diarization_31 import pyannote_31_diarize
 from senselab.utils.tasks.input_output import _from_hf_dataset_to_dict
 
 

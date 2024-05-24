@@ -20,7 +20,7 @@ from senselab.utils.tasks.input_output import (
 )
 
 
-def annotation_to_dict(annotation: Annotation) -> List[Tuple]:
+def _annotation_to_dict(annotation: Annotation) -> List[Tuple]:
     """Convert a Pyannote annotation to a list of tuples.
 
     Args:
@@ -36,7 +36,7 @@ def annotation_to_dict(annotation: Annotation) -> List[Tuple]:
     return dirization_list
 
 
-def pyannote_31_diarize_batch(batch: Dataset, hf_token: str) -> Dict[str, Any]:
+def _pyannote_diarize_31_batch(batch: Dataset, hf_token: str) -> Dict[str, Any]:
     """Diarize a batch of audio files using the Pyannote diarization model.
 
     Args:
@@ -70,12 +70,12 @@ def pyannote_31_diarize_batch(batch: Dataset, hf_token: str) -> Dict[str, Any]:
                     "sample_rate": batch['audio'][0]['sampling_rate']},
                 hook=hook)
 
-        diarization = annotation_to_dict(diarization)
+        diarization = _annotation_to_dict(diarization)
         diarizations.append(diarization)
     return {'pyannote31_diarizations': diarizations}
 
 
-def pyannote_31_diarize(dataset: Dict[str, Any],
+def pyannote_diarize_31(dataset: Dict[str, Any],
                         hf_token: str = None,
                         batched: bool = False,
                         batch_size: int = 1,
@@ -102,7 +102,7 @@ def pyannote_31_diarize(dataset: Dict[str, Any],
 
     hf_dataset = _from_dict_to_hf_dataset(dataset)
     hf_dataset_diarized = hf_dataset.map(
-                            lambda x: pyannote_31_diarize_batch(x, hf_token),
+                            lambda x: _pyannote_diarize_31_batch(x, hf_token),
                             batched=batched,
                             batch_size=batch_size,
                             cache_file_name=cache_path + "pyannote31_cache",
