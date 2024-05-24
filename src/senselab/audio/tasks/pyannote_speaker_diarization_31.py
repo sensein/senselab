@@ -1,5 +1,8 @@
 """Diarizes a dataset with Pyannote speaker diarization 3.1.
 
+If it runs very quickly with little output after running once, delete the
+cache and re-run.
+
 Pyannote speaker diarization 3.1:
 https://huggingface.co/pyannote/speaker-diarization-3.1
 """
