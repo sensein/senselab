@@ -5,6 +5,9 @@ Senselab is a Python package designed to streamline the processing and analysis 
 This action plan outlines our initial functionalities and integrations for Senselab. As we progress, we will continue to enhance and expand these capabilities to support more advanced and comprehensive behavioral data analysis.
 Anyone should feel free to suggest more features and methods. 
 
+For an updated project progress, please see the [Project Board](https://github.com/orgs/sensein/projects/45).
+
+
 ## AUDIO
 
 1. **Speech to Text API**
