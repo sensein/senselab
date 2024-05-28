@@ -9,10 +9,10 @@ https://huggingface.co/pyannote/speaker-diarization-3.1
 
 
 import os
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from datasets import Dataset
 import torch
+from datasets import Dataset
 from pyannote.audio import Pipeline
 from pyannote.audio.pipelines.utils.hook import ProgressHook
 from pyannote.core import Annotation
@@ -39,7 +39,9 @@ def _annotation_to_dict(annotation: Annotation) -> List[Tuple]:
     return dirization_list
 
 
-def _pyannote_diarize_31_batch(batch: Dataset, hf_token: str) -> Dict[str, Any]:
+def _pyannote_diarize_31_batch(
+            batch: Dataset, hf_token: Optional[str] = None
+        ) -> Dict[str, Any]:
     """Diarize a batch of audio files using the Pyannote diarization model.
 
     Args:
@@ -47,7 +49,7 @@ def _pyannote_diarize_31_batch(batch: Dataset, hf_token: str) -> Dict[str, Any]:
         hf_token: The Hugging Face API token.
 
     Returns:
-        A dictionary containing the diarizations for the batch.Becomes a 
+        A dictionary containing the diarizations for the batch.Becomes a
           column in the dataset when returned.
     """
     pipeline = Pipeline.from_pretrained(
@@ -79,7 +81,7 @@ def _pyannote_diarize_31_batch(batch: Dataset, hf_token: str) -> Dict[str, Any]:
 
 
 def pyannote_diarize_31(dataset: Dict[str, Any],
-                        hf_token: str = None,
+                        hf_token: Optional[str] = None,
                         batched: bool = False,
                         batch_size: int = 1,
                         cache_path: str = "scripts/cache/") -> Dict[str, Any]:
