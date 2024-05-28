@@ -10,11 +10,12 @@ import json
 from datasets import load_dataset
 
 from senselab.audio.tasks.preprocessing import resample_hf_dataset
-from senselab.audio.tasks.pyannote_speaker_diarization_31 import pyannote_31_diarize
+from senselab.audio.tasks.pyannote_speaker_diarization_31 import (
+    pyannote_diarize_31,
+)
 from senselab.utils.tasks.input_output import _from_hf_dataset_to_dict
 
-
-hf_token = "YOUR HF TOKEN"
+HF_TOKEN = "YOUR HF_TOKEN"
 dataset = load_dataset("PolyAI/minds14", "en-US", split="train")
 dataset = dataset.select(range(4))
 
@@ -25,7 +26,7 @@ dataset = resample_hf_dataset(dataset, 16000)
 print("Resampled dataset.")
 
 print("Diarizing dataset...")
-dataset_diarized = pyannote_31_diarize(dataset, batched=True, batch_size=2)
+dataset_diarized = pyannote_diarize_31(dataset, batched=True, batch_size=2)
 print("Diarized dataset.")
 
 print(json.dumps(dataset_diarized, indent=4))
