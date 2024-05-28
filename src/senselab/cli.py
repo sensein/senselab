@@ -1,4 +1,4 @@
-""This module defines CLI commands for the Senselab application."""
+"""This module defines CLI commands for the Senselab application."""
 
 import click
 
