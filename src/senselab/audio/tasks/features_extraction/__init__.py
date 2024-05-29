@@ -1,1 +1,1 @@
-"""This module provides the implementation of the Senselab audio features extraction tasks.""" 
+"""This module provides the API of the senselab audio features extraction."""

@@ -34,6 +34,7 @@ repos:
 - repo: https://github.com/pre-commit/pre-commit-hooks
   rev: v4.5.0
   hooks:
+  - id: check-added-large-files
   - id: check-case-conflict
   - id: end-of-file-fixer
   - id: trailing-whitespace
@@ -46,6 +47,18 @@ repos:
   - id: check-yaml
   - id: check-json
   - id: check-toml
+  - id: detect-private-key
+  - id: name-tests-test
+
+- repo: https://github.com/codespell-project/codespell
+  rev: v2.3.0
+  hooks:
+  - id: codespell
+
+- repo: https://github.com/hija/clean-dotenv
+  rev: v0.0.7
+  hooks:
+  - id: clean-dotenv
 
 - repo: local
   hooks:
