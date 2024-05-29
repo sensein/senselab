@@ -11,7 +11,7 @@ from senselab.utils.tasks.input_output import read_files_from_disk
 
 @get_response_time
 def workflow(data: Dict[str, Any], augmentation: Compose) -> None:
-    """This function reads audio files from disk, and transcribes them using Whisper."""
+    """This function reads files from disk and transcribes them with Whisper."""
     print("Starting to read files from disk...")
     dataset = read_files_from_disk(data["files"])
     print(f"Dataset loaded with {len(dataset)} records.")
@@ -19,7 +19,6 @@ def workflow(data: Dict[str, Any], augmentation: Compose) -> None:
     print("Augmenting dataset...")
     dataset = augment_hf_dataset(dataset, augmentation)
     print("Augmented dataset.")
-
 
 
 # Initialize augmentation callable
@@ -30,13 +29,15 @@ apply_augmentation = Compose(
             max_gain_in_db=5.0,
             p=0.5,
         ),
-        PolarityInversion(p=0.5)
+        PolarityInversion(p=0.5),
     ]
 )
 
-data = {"files": 
-            ["/Users/fabiocat/Documents/git/sensein/senselab/src/tests/data_for_testing/audio_48khz_mono_16bits.wav", 
-            "/Users/fabiocat/Documents/git/sensein/senselab/src/tests/data_for_testing/audio_48khz_mono_16bits.wav"]
-        }
+data = {
+    "files": [
+        "../src/tests/data_for_testing/audio_48khz_mono_16bits.wav",
+        "../src/tests/data_for_testing/audio_48khz_mono_16bits.wav",
+    ]
+}
 
 workflow(data, apply_augmentation)
