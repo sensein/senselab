@@ -1,7 +1,7 @@
 # The ```senselab``` repo
 
 [![Build](https://github.com/sensein/senselab/actions/workflows/test.yaml/badge.svg?branch=main)](https://github.com/sensein/senselab/actions/workflows/test.yaml?query=branch%3Amain)
-[![codecov](https://codecov.io/gh/sensein/senselab/branch/main/graph/badge.svg?token=MFU1LM80ET)](https://codecov.io/gh/sensein/senselab)
+[![codecov](https://codecov.io/gh/sensein/senselab/graph/badge.svg?token=9S8WY128PO)](https://codecov.io/gh/sensein/senselab)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
 [![PyPI](https://img.shields.io/pypi/v/senselab.svg)](https://pypi.org/project/senselab/)
@@ -10,7 +10,7 @@
 
 [![pages](https://img.shields.io/badge/api-docs-blue)](https://sensein.github.io/senselab)
 
-Welcome to the ```senselab``` repo! This is a Python package for streamlining the processing and analysis of behavioral data, such as voice and speech patterns, with robust and reproducible methodologies. 
+Welcome to the ```senselab``` repo! This is a Python package for streamlining the processing and analysis of behavioral data, such as voice and speech patterns, with robust and reproducible methodologies.
 
 **Caution:**: this package is still under development and may change rapidly over the next few weeks.
 
@@ -55,27 +55,7 @@ hello_world()
 ```
 
 ## Contributing
-Please see [CONTRIBUTING.md](CONTRIBUTING.md) before contributing. 
+Please see [CONTRIBUTING.md](CONTRIBUTING.md) before contributing.
 
-## To do (majors):
-- [ ] Integrating more multi-modal tasks
-    - [x] input_output
-- [ ] Integrating more audio tasks and moving functions from b2aiprep package:
-    - [ ] data_augmentation 
-    - [ ] data_representation (embeddings and feats extraction)
-    - [ ] raw_signal_processing
-    - [ ] speaker_diarization [@Isaac]
-    - [ ] speech emotion recognition
-    - [ ] speech enhancement
-    - [x] speech_to_text
-    - [ ] text_to_speech
-    - [ ] voice conversion
-- [ ] Integrating more video tasks:
-    - [ ] input_output
-
-- [ ] Preparing some pipelines with pydra
-- [ ] Populating the CLI
-
-## To do (minors):
-- [ ] Check login with HF
-- [ ] Setup project cache directory
+## To do
+Please see the [Project Board](https://github.com/orgs/sensein/projects/45).

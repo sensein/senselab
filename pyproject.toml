@@ -1,14 +1,14 @@
 [tool.poetry]
 name = "senselab"
-version = "0.0.1"
+version = "0.1.2.dev23+c952ded"
 description = "Senselab is a Python package that simplifies building pipelines for speech and voice analysis."
 authors = [
-    "Fabio Catania <fabiocat@mit.edu>",
-    "Satra Ghosh <satra@mit.edu>",
+  "Fabio Catania <fabiocat@mit.edu>",
+  "Satra Ghosh <satra@mit.edu>"
 ]
 maintainers = [
-    "Fabio Catania <fabiocat@mit.edu>",
-    "Satra Ghosh <satra@mit.edu>",
+  "Fabio Catania <fabiocat@mit.edu>",
+  "Satra Ghosh <satra@mit.edu>"
 ]
 license = "Apache-2.0"
 readme = "README.md"
@@ -44,21 +44,30 @@ huggingface-hub = "^0.23.0"
 praat-parselmouth = "^0.4.3"
 iso-639 = {git = "https://github.com/noumar/iso639.git", tag = "0.4.5"}
 opensmile = "^2.5.0"
+audiomentations = "^0.35.0"
+torch-audiomentations = "^0.11.1"
+sentence-transformers = "^2.7.0"
 
 [tool.poetry.group.dev]
 optional = true
+
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.1.1"
+pytest-mock = "^3.14.0"
 mypy = "^1.9.0"
 pre-commit = "^3.7.0"
 pytest-cov = "^5.0.0"
 ruff = "^0.3.4"
-pytest-mock = "^3.14.0"
+codespell = "^2.3.0"
 
 [tool.poetry.group.docs]
 optional = true
+
 [tool.poetry.group.docs.dependencies]
 pdoc = "^14.4.0"
+
+[tool.poetry.scripts]
+senselab-cli = "senselab.cli:main"
 
 [tool.pytest.ini_options]
 pythonpath = [
@@ -95,7 +104,7 @@ exclude = [
   "node_modules",
   "venv"
 ]
-line-length = 200
+line-length = 80
 indent-width = 4
 src = ["src"]
 target-version = "py310"
@@ -116,9 +125,6 @@ convention = "google"
 [tool.ruff.lint.per-file-ignores]
 "src/tests/**/*.py" = []
 
-[tool.poetry.scripts]
-senselab-cli = "senselab.cli:main"
-
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
@@ -126,11 +132,19 @@ skip-magic-trailing-comma = false
 line-ending = "auto"
 
 [tool.poetry-dynamic-versioning]
-enable = true
+enable = false
 vcs = "git"
 style = "pep440"
 bump = true
 pattern = "default-unprefixed"
+
+[tool.codespell]
+skip = [
+  "./poetry.lock",
+  "./docs_style/pdoc-theme/syntax-highlighting.css"
+]
+ignore-words-list = ["senselab"]
+
 [build-system]
 requires = ["poetry-core>=1.0.0", "poetry-dynamic-versioning>=1.0.0,<2.0.0"]
 build-backend = "poetry_dynamic_versioning.backend"
