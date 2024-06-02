@@ -1,15 +1,44 @@
 """This module implements some utilities for the preprocessing task."""
 
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import torch
 import torchaudio.functional as F
 from datasets import Dataset
 
+from senselab.utils.data_structures.audio import Audio, batch_audios
 from senselab.utils.tasks.input_output import (
     _from_dict_to_hf_dataset,
     _from_hf_dataset_to_dict,
 )
+
+def resample_audio_dataset(audios: List[Audio], resample_rate: int, rolloff: float=0.99) -> List[Audio]:
+    """Resamples all Audios to a given sampling rate
+
+    Takes a list of audios and resamples each into the new sampling rate. Notably does not assume any
+    specific structure of the audios (can vary in stereo vs. mono as well as their original sampling rate)
+
+    Args:
+        audios: List of Audios to resample
+        resample_rate: Rate at which to resample the Audio
+        rolloff: The roll-off frequency of the filter, as a fraction of the Nyquist.
+            Lower values reduce anti-aliasing, but also reduce some of the highest frequencies
+    
+    Returns:
+        List of Audios that have all been resampled to the given resampling rate
+    """
+    resampled_audios = []
+    for audio in audios:
+        resampled = F.resample(audio.audio_data, audio.sampling_rate, resample_rate, rolloff=rolloff)
+        resampled_audios.append(
+            Audio(
+                audio_data=resampled,
+                sampling_rate=resample_rate,
+                metadata=audio.metadata,
+                path_or_id=audio.path_or_id
+            )
+        )
+    return resampled_audios
 
 
 def resample_hf_dataset(
