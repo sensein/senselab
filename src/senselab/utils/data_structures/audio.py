@@ -6,13 +6,13 @@ file and its corresponding metadata. Other functionality and abstract data types
 ease of maintaining the codebase and offering consistent public APIs.
 """
 
-from typing import Dict, Optional, Union, List
+from typing import Dict, Optional, Tuple, Union, List
 import uuid
 import torch
 import numpy as np
 import math
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
 import torchaudio
 
 
@@ -36,10 +36,11 @@ class Audio(BaseModel):
     audio_data: Union[torch.Tensor, np.ndarray, List[List[float]], List[float]]
     sampling_rate: int
     path_or_id: Optional[str] = Field(default_factory=lambda: str(uuid.uuid4()))
-    metadata: Optional[Dict] = Field(default=None)
+    metadata: Optional[Dict] = Field(default={})
+    model_config = {"arbitrary_types_allowed": True}
 
-    @validator('audio_data', pre=True)
-    def convert_to_tensor(cls, v):
+    @field_validator('audio_data')
+    def convert_to_tensor(cls, v, info: ValidationInfo):
         """Converts the audio data to torch.Tensor of shape (num_channels, num_samples)
         """
         temporary_tensor = None
@@ -58,7 +59,7 @@ class Audio(BaseModel):
         return temporary_tensor
     
     @classmethod
-    def from_filepath(cls, filepath: str, metadata: Optional[Dict] = None) -> "Audio":
+    def from_filepath(cls, filepath: str, metadata: Optional[Dict] = {}) -> "Audio":
         """Creates an Audio instance from an audio file
 
         Args:
@@ -68,7 +69,79 @@ class Audio(BaseModel):
         array, sampling_rate = torchaudio.load(filepath)
         
         return cls(audio_data=array, sampling_rate=sampling_rate, path_or_id=filepath, metadata=metadata)
+    
+    def __eq__(self, other):
+        if isinstance(other, Audio):
+            return (torch.equal(self.audio_data, other.audio_data) 
+                    and self.sampling_rate == other.sampling_rate 
+                    and self.metadata == other.metadata 
+                    and self.path_or_id==other.path_or_id
+                )
+        return False
         
+def batch_audios(audios: List[Audio]) -> Tuple[torch.Tensor, int|List[int], List[Dict]]:
+    """Batches the Audios together into a single Tensor, keeping individual Audio information separate
+
+    Batch all of the Audios into a single Tensor of shape (len(audios), num_channels, num_samples).
+    Keeps the Audio information related to each sampling rate and metadata separate for each Audio to
+    allow for unbatching after running relevant functionality.
+
+    Args:
+        audios: List of audios to batch together. NOTE: Should all have the same number of channels
+            and is generally advised to have the same sampling rates if running functionality 
+            that relies on the sampling rate.
+
+    Returns:
+        Returns a tuple of a Tensor that will have the shape (len(audios), num_channels, num_samples),
+        the sampling rate (an integer if all have the same sampling rate), and a list of each individual
+        audio's metadata information.
+    
+    Raises:
+        RuntimeError: if all of the Audios do not have the same number of channels
+    """
+
+    sampling_rates = []
+    batched_audio = []
+    metadatas = []
+    for audio in audios:
+        sampling_rates.append(audio.sampling_rate)
+        batched_audio.append(audio.audio_data)
+        metadatas.append(audio.metadata)
+    sampling_rates = sampling_rates[0] if len(set(sampling_rates))==1 else sampling_rates
+    
+    return torch.stack(batched_audio), sampling_rates, metadatas
+
+def unbatch_audios(batched_audio: torch.Tensor, sampling_rates: int|List[int], metadatas: List[Dict]) -> List[Audio]:
+    """Unbatches Audios into a List of Audio objects
+
+    Uses the batched Audios, their respective sampling rates, and their corresponding metadatas to create
+    a list of Audios.
+
+    Args:
+        batched_audio: torch.Tensor of shape (batch_size, num_channels, num_samples) to unstack
+        sampling_rates: The sampling rate of each batched audio if they differ or a single sampling rate for all of them
+        metadatas: The respective metadata for each of the batched audios
+
+    Returns:
+        List of Audio objects representing each of the Audios that were previously batched together
+    
+    Raises:
+        ValueError if the batched_audio is not in the correct shape or if the number of batched_audios does not
+            match the amount of metadata and sampling rates (if they were provided as a List) that were provided.
+    """
+    if len(batched_audio.shape) != 3:
+        raise ValueError("Expected batched audios to be of shape (batch_size, num_channels, samples)")
+    elif batched_audio.shape[0] != len(metadatas) or (isinstance(sampling_rates, List) and batched_audio.shape[0]!=len(sampling_rates)):
+        raise ValueError("Expected sizes of batched_audio, sampling_rates (if provided as a litst) and metadata to be equal")
+    
+    audios = []
+    for i in range(len(metadatas)):
+        sampling_rate = sampling_rates[i] if isinstance(sampling_rates, List) else sampling_rates
+        metadata = metadatas[i]
+        audio = batched_audio[i]
+        audios.append(Audio(audio_data=audio, sampling_rate=sampling_rate, metadata=metadata))
+    return audios
+
 
 class AudioDataset:
     """Class for maintaining collections of Audios and their corresponding metadata.
@@ -100,14 +173,15 @@ class AudioDataset:
                 on a CPU vs. a GPU
             batch_size: The number of audios to split into for a Pydra Task that will run on a GPU
         """
-        self.metadata = metadata.copy()
+        self.metadata = metadata.copy() if metadata else {}
         self.batch_size = batch_size
         self.use_gpu = use_gpu
         self.audios = audios.copy()
 
     @classmethod
-    def generate_dataset_from_filepaths(cls, audio_filepaths: List[str], audio_metadatas: Optional[List[Dict]], 
-                                        use_gpu: Optional[bool], batch_size: Optional[int], dataset_metadata: Optional[Dict]) -> "AudioDataset":
+    def generate_dataset_from_filepaths(cls, audio_filepaths: List[str], audio_metadatas: Optional[List[Dict]] = None, 
+                                        use_gpu: Optional[bool] = None, batch_size: Optional[int] = None, 
+                                        dataset_metadata: Optional[Dict] = None) -> "AudioDataset":
         """ Generate an audio dataset from a list of audio filepaths
 
         Generates an audio dataset by taking in a list of audio filepaths and using torchaudio to decode them.
@@ -122,7 +196,7 @@ class AudioDataset:
         """
         audios = []
         for i in range(len(audio_filepaths)):
-            audio_metadata =  audio_metadatas[i] if audio_metadatas else None
+            audio_metadata =  audio_metadatas[i] if audio_metadatas else {}
             audio = Audio.from_filepath(audio_filepaths[i], audio_metadata)
             audios.append(audio)
 
@@ -130,8 +204,9 @@ class AudioDataset:
 
     @classmethod
     def generate_dataset_from_audio_data(cls, audios_data: List[List[float]|List[List[float]]|torch.Tensor|np.ndarray], 
-                                         sampling_rates: int|List[int], audio_metadatas: Optional[List[Dict]], 
-                                        use_gpu: Optional[bool], batch_size: Optional[int], dataset_metadata: Optional[Dict]) -> "AudioDataset":
+                                         sampling_rates: int|List[int], audio_metadatas: Optional[List[Dict]] = None,
+                                         audio_paths_or_ids: Optional[List[str]] = None, use_gpu: Optional[bool] = None, 
+                                         batch_size: Optional[int] = None, dataset_metadata: Optional[Dict] = None) -> "AudioDataset":
         """ Generate an audio dataset from already "read" audio files
 
         Generates an audio dataset by taking in a list of audio data (defined either by a List 
@@ -144,6 +219,7 @@ class AudioDataset:
             sampling_rates: An integer if all of the Audios were generated with the same sampling rate or a
                 list of sampling rates that is parallel to audios_data
             audio_metadatas: List of corresponding metadata for each audio in audios_data
+            audio_paths_or_ids: List of corresponding path_or_ids for each audio in audios_data
             use_gpu: Optional boolean of whether the default Pydra workflow should be split based on running 
                 on a CPU vs. a GPU
             batch_size: The number of audios to split into for a Pydra Task that will run on a GPU
@@ -151,9 +227,11 @@ class AudioDataset:
         """
         audios = []
         for i in range(len(audios_data)):
-            audio_metadata = audio_metadatas[i] if audio_metadatas else None
+            audio_metadata = audio_metadatas[i] if audio_metadatas else {}
             sampling_rate = sampling_rates[i] if isinstance(sampling_rates, List) else sampling_rates
-            audio = Audio(audio_data=audios_data[i], sampling_rate=sampling_rate, metadata=audio_metadata)
+            audio_path_or_id = audio_paths_or_ids[i] if audio_paths_or_ids else None
+            audio = Audio(audio_data=audios_data[i], sampling_rate=sampling_rate, 
+                          path_or_id=audio_path_or_id, metadata=audio_metadata)
             audios.append(audio)
         
         return cls(audios, dataset_metadata, use_gpu, batch_size)
@@ -173,9 +251,6 @@ class AudioDataset:
         Returns:
             List of Lists of Audio where each List of Audios will be an input to a Pydra task.
             Each of the sublists are either of size 1 for CPUs or at most batch_size for GPU optimization.
-
-        Raises:
-            None
         """
         pt_use_gpu = use_gpu if use_gpu else self.use_gpu
         pt_batch_size = batch_size if batch_size else self.batch_size
@@ -184,4 +259,13 @@ class AudioDataset:
             return [self.audios[pt_batch_size*i:min(pt_batch_size*(i+1), len(self.audios))] for i in range(math.ceil(len(self.audios)/pt_batch_size))]
         else:
             return [[audio] for audio in self.audios]
+        
+    def __eq__(self, other):
+        if isinstance(other, AudioDataset):
+            return (
+                self.audios == other.audios
+                and self.metadata == other.metadata
+                and self.use_gpu == other.use_gpu
+                and self.batch_size == other.batch_size
+            )
     
