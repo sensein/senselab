@@ -6,15 +6,19 @@ import torch
 from datasets import Dataset
 from torch_audiomentations import Compose
 
+from senselab.utils.data_structures.audio import (
+    Audio,
+    batch_audios,
+    unbatch_audios,
+)
 from senselab.utils.tasks.input_output import (
     _from_dict_to_hf_dataset,
     _from_hf_dataset_to_dict,
 )
 
-from senselab.utils.data_structures.audio import Audio, batch_audios, unbatch_audios
 
 def augment_audio_dataset(audios: List[Audio], augmentation: Compose, batched: bool = False) -> List[Audio]:
-    """Augments all provided audios with a given augmentation, either individually or all batched together
+    """Augments all provided audios with a given augmentation, either individually or all batched together.
 
     Augment all audios with a user defined augmentation that can be a composition of multiple augmentations. This
     augmentation is either performed on each audio individually or all of the audios provided are batched together
@@ -22,9 +26,9 @@ def augment_audio_dataset(audios: List[Audio], augmentation: Compose, batched: b
 
     Args:
         audios: List of Audios whose data will be augmented with the given augmentations
-        augmentation: A Composition of augmentations to run on each audio (uses torch-audiomentations), should have its 
+        augmentation: A Composition of augmentations to run on each audio (uses torch-audiomentations), should have its
             output_type set to "dict"
-        batched: flag for whether the composition should be run on audios individually, typical for a CPU, or 
+        batched: flag for whether the composition should be run on audios individually, typical for a CPU, or
             by batching all of the audios together for a possible speed-up on a GPU
 
     Returns:
@@ -40,9 +44,9 @@ def augment_audio_dataset(audios: List[Audio], augmentation: Compose, batched: b
             augmented_audio = augmentation(audio_to_augment, sample_rate=audio.sampling_rate).samples
             new_audios.append(
                 Audio(
-                    audio_data=torch.squeeze(augmented_audio), 
-                    sampling_rate=audio.sampling_rate, 
-                    metadata=audio.metadata.copy()
+                    audio_data=torch.squeeze(augmented_audio),
+                    sampling_rate=audio.sampling_rate,
+                    metadata=audio.metadata.copy(),
                 )
             )
     else:
@@ -55,15 +59,11 @@ def augment_audio_dataset(audios: List[Audio], augmentation: Compose, batched: b
     return new_audios
 
 
-def augment_hf_dataset(
-    dataset: Dict[str, Any], augmentation: Compose, audio_column: str = "audio"
-) -> Dict[str, Any]:
+def augment_hf_dataset(dataset: Dict[str, Any], augmentation: Compose, audio_column: str = "audio") -> Dict[str, Any]:
     """Resamples a Hugging Face `Dataset` object."""
     hf_dataset = _from_dict_to_hf_dataset(dataset)
 
-    def _augment_hf_row(
-        row: Dataset, augmentation: Compose, audio_column: str
-    ) -> Dict[str, Any]:
+    def _augment_hf_row(row: Dataset, augmentation: Compose, audio_column: str) -> Dict[str, Any]:
         waveform = row[audio_column]["array"]
         sampling_rate = row[audio_column]["sampling_rate"]
 
@@ -71,17 +71,11 @@ def augment_hf_dataset(
         if not isinstance(waveform, torch.Tensor):
             waveform = torch.tensor(waveform)
         if waveform.dim() == 1:
-            waveform = waveform.unsqueeze(0).unsqueeze(
-                0
-            )  # [num_samples] -> [1, 1, num_samples]
+            waveform = waveform.unsqueeze(0).unsqueeze(0)  # [num_samples] -> [1, 1, num_samples]
         elif waveform.dim() == 2:
-            waveform = waveform.unsqueeze(
-                1
-            )  # [batch_size, num_samples] -> [batch_size, 1, num_samples]
+            waveform = waveform.unsqueeze(1)  # [batch_size, num_samples] -> [batch_size, 1, num_samples]
 
-        augmented_hf_row = augmentation(
-            waveform, sample_rate=sampling_rate
-        ).squeeze()
+        augmented_hf_row = augmentation(waveform, sample_rate=sampling_rate).squeeze()
 
         return {
             "augmented_audio": {
@@ -90,8 +84,6 @@ def augment_hf_dataset(
             }
         }
 
-    augmented_hf_dataset = hf_dataset.map(
-        lambda x: _augment_hf_row(x, augmentation, audio_column)
-    )
+    augmented_hf_dataset = hf_dataset.map(lambda x: _augment_hf_row(x, augmentation, audio_column))
     augmented_hf_dataset = augmented_hf_dataset.remove_columns([audio_column])
     return _from_hf_dataset_to_dict(augmented_hf_dataset)
