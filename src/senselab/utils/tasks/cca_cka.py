@@ -88,7 +88,7 @@ def compute_cka(
         centered_gram = haitch.mm(gram).mm(haitch)
         return centered_gram
 
-    def _cka(gram_x: torch.Tensor, gram_y: torch.Tensor) -> float:
+    def _cka(gram_x: torch.Tensor, gram_y: torch.Tensor) -> torch.Tensor:
         """Compute CKA.
 
         Args:
