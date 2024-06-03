@@ -54,6 +54,8 @@ repos:
   rev: v2.3.0
   hooks:
   - id: codespell
+    additional_dependencies:
+    - tomli
 
 - repo: https://github.com/hija/clean-dotenv
   rev: v0.0.7
