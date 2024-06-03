@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "senselab"
-version = "0.1.2.dev23+c952ded"
+version = "0.0.1"
 description = "Senselab is a Python package that simplifies building pipelines for speech and voice analysis."
 authors = [
   "Fabio Catania <fabiocat@mit.edu>",
@@ -140,10 +140,10 @@ pattern = "default-unprefixed"
 
 [tool.codespell]
 skip = [
-  "./poetry.lock",
-  "./docs_style/pdoc-theme/syntax-highlighting.css"
+  "poetry.lock",
+  "docs_style/pdoc-theme/syntax-highlighting.css"
 ]
-ignore-words-list = ["senselab"]
+ignore-words-list = ["senselab", "astroid"]
 
 [build-system]
 requires = ["poetry-core>=1.0.0", "poetry-dynamic-versioning>=1.0.0,<2.0.0"]
