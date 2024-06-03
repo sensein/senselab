@@ -1,9 +1,8 @@
 """Module for testing the CCA and CKA functions."""
 
-import pytest
 import torch
 
-from senselab.utils.tasks.cca_cka import compute_cca, compute_cka
+from senselab.utils.tasks.cca_cka import CKAKernelType, compute_cca, compute_cka
 
 
 def test_compute_cca() -> None:
@@ -30,7 +29,7 @@ def test_compute_cka_linear() -> None:
     expected = 1.0  # Since features_y is a linear transformation of features_x, linear CKA should be perfect.
 
     # Call the compute_cka function with linear kernel
-    cka_value = compute_cka(features_x, features_y, kernel="linear")
+    cka_value = compute_cka(features_x, features_y, kernel=CKAKernelType.LINEAR)
 
     # Assert that the result is a float
     assert isinstance(cka_value, float), "Output should be a float."
@@ -45,21 +44,10 @@ def test_compute_cka_rbf() -> None:
     features_y = torch.tensor([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
     expected = 1.0  # Since features_y is the same as features_x, RBF CKA should be perfect.
 
-    # Call the compute_cka function with linear kernel
-    cka_value = compute_cka(features_x, features_y, kernel="rbf")
+    # Call the compute_cka function with rbf kernel
+    cka_value = compute_cka(features_x, features_y, kernel=CKAKernelType.RBF)
 
     # Assert that the result is a float
     assert isinstance(cka_value, float), "Output should be a float."
 
     assert torch.isclose(torch.tensor(cka_value), torch.tensor(expected), atol=1e-6)
-
-
-def test_compute_cka_invalid_kernel() -> None:
-    """Test compute_cka function with an invalid kernel type."""
-    # Create random input tensors
-    features_x = torch.randn(100, 50)
-    features_y = torch.randn(100, 50)
-
-    # Call the compute_cka function with an invalid kernel type
-    with pytest.raises(ValueError):
-        compute_cka(features_x, features_y, kernel="invalid_kernel")
