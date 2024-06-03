@@ -79,6 +79,9 @@ testpaths = [
 
 [tool.mypy]
 ignore_missing_imports = true
+plugins = [
+  "pydantic.mypy"
+]
 
 [tool.ruff]
 exclude = [
@@ -104,7 +107,7 @@ exclude = [
   "node_modules",
   "venv"
 ]
-line-length = 80
+line-length = 120
 indent-width = 4
 src = ["src"]
 target-version = "py310"
