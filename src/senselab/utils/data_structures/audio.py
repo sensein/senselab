@@ -24,7 +24,7 @@ class Audio(BaseModel):
     and has a unique identifier for every audio.
 
     Attributes:
-        audio_data: The actual audio data read from an audio file, stored as a torch.Tensor
+        waveform: The actual audio data read from an audio file, stored as a torch.Tensor
             of shape (num_channels, num_samples)
         sampling_rate: The sampling rate of the audio file
         path_or_id: A unique identifier for the audio, defined either by the path the audio was
@@ -33,13 +33,13 @@ class Audio(BaseModel):
             (e.g. participant demographics, audio settings, location information)
     """
 
-    audio_data: torch.Tensor
+    waveform: torch.Tensor
     sampling_rate: int
     path_or_id: Optional[str] = Field(default_factory=lambda: str(uuid.uuid4()))
     metadata: Dict = Field(default={})
     model_config = {"arbitrary_types_allowed": True}
 
-    @field_validator("audio_data", mode="before")
+    @field_validator("waveform", mode="before")
     def convert_to_tensor(
         cls, v: Union[List[float], List[List[float]], np.ndarray, torch.Tensor], info: ValidationInfo
     ) -> torch.Tensor:
@@ -69,13 +69,13 @@ class Audio(BaseModel):
         """
         array, sampling_rate = torchaudio.load(filepath)
 
-        return cls(audio_data=array, sampling_rate=sampling_rate, path_or_id=filepath, metadata=metadata)
+        return cls(waveform=array, sampling_rate=sampling_rate, path_or_id=filepath, metadata=metadata)
 
     def __eq__(self, other: object) -> bool:
         """Overloads the default BaseModel equality to correctly check that torch.Tensors are equivalent."""
         if isinstance(other, Audio):
             return (
-                torch.equal(self.audio_data, other.audio_data)
+                torch.equal(self.waveform, other.waveform)
                 and self.sampling_rate == other.sampling_rate
                 and self.metadata == other.metadata
                 and self.path_or_id == other.path_or_id
@@ -108,7 +108,7 @@ def batch_audios(audios: List[Audio]) -> Tuple[torch.Tensor, Union[int, List[int
     metadatas = []
     for audio in audios:
         sampling_rates.append(audio.sampling_rate)
-        batched_audio.append(audio.audio_data)
+        batched_audio.append(audio.waveform)
         metadatas.append(audio.metadata)
 
     return_sampling_rates: List[int] | int = int(sampling_rates[0]) if len(set(sampling_rates)) == 1 else sampling_rates
@@ -149,7 +149,7 @@ def unbatch_audios(batched_audio: torch.Tensor, sampling_rates: int | List[int],
         sampling_rate = sampling_rates[i] if isinstance(sampling_rates, List) else sampling_rates
         metadata = metadatas[i]
         audio = batched_audio[i]
-        audios.append(Audio(audio_data=audio, sampling_rate=sampling_rate, metadata=metadata))
+        audios.append(Audio(waveform=audio, sampling_rate=sampling_rate, metadata=metadata))
     return audios
 
 
@@ -257,7 +257,7 @@ class AudioDataset:
             sampling_rate = sampling_rates[i] if isinstance(sampling_rates, List) else sampling_rates
             audio_path_or_id = audio_paths_or_ids[i] if audio_paths_or_ids else None
             audio = Audio(
-                audio_data=audios_data[i],
+                waveform=audios_data[i],
                 sampling_rate=sampling_rate,
                 path_or_id=audio_path_or_id,
                 metadata=audio_metadata,
