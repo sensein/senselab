@@ -1,5 +1,7 @@
 """This module is for computing CCA and CKA."""
 
+from enum import Enum
+
 import torch
 
 
@@ -19,17 +21,28 @@ def compute_cca(features_x: torch.Tensor, features_y: torch.Tensor) -> float:
     return result.item() if isinstance(result, torch.Tensor) else float(result)
 
 
+class CKAKernelType(Enum):
+    """CKA kernel types."""
+
+    LINEAR = "linear"
+    RBF = "rbf"
+
+
 def compute_cka(
-    features_x: torch.Tensor, features_y: torch.Tensor, kernel: str = "linear", threshold: float = 1.0
+    features_x: torch.Tensor,
+    features_y: torch.Tensor,
+    kernel: CKAKernelType = CKAKernelType.LINEAR,
+    threshold: float = 1.0,
 ) -> float:
     """Compute CKA between feature matrices.
 
     Args:
         features_x (torch.Tensor): A num_examples x num_features matrix of features.
         features_y (torch.Tensor): A num_examples x num_features matrix of features.
-        kernel (str): Type of kernel to use ('linear' or 'rbf'). Default is 'linear'.
+        kernel (CKAKernelType): Type of kernel to use (CKAKernelType.LINEAR or CKAKernelType.RBF).
+        Default is CKAKernelType.LINEAR.
         threshold (float): Fraction of median Euclidean distance to use as RBF kernel bandwidth
-            (used only if kernel is 'rbf').
+            (used only if kernel is CKAKernelType.RBF).
 
     Returns:
         float: The value of CKA between X and Y.
@@ -107,14 +120,14 @@ def compute_cka(
         normalization_y = torch.norm(gram_y)
         return scaled_hsic / (normalization_x * normalization_y)
 
-    if kernel == "linear":
+    if kernel == CKAKernelType.LINEAR:
         gram_x = _gram_linear(features_x)
         gram_y = _gram_linear(features_y)
-    elif kernel == "rbf":
+    elif kernel == CKAKernelType.RBF:
         gram_x = _gram_rbf(features_x, threshold)
         gram_y = _gram_rbf(features_y, threshold)
     else:
-        raise ValueError("Unsupported kernel type. Use 'linear' or 'rbf'.")
+        raise ValueError("Unsupported kernel type. Use CKAKernelType.LINEAR or CKAKernelType.RBF.")
 
     result = _cka(gram_x, gram_y)
     return result.item() if isinstance(result, torch.Tensor) else float(result)
