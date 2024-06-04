@@ -40,11 +40,11 @@ def augment_audio_dataset(audios: List[Audio], augmentation: Compose, batched: b
     new_audios = []
     if not batched:
         for audio in audios:
-            audio_to_augment = audio.audio_data.unsqueeze(0)
+            audio_to_augment = audio.waveform.unsqueeze(0)
             augmented_audio = augmentation(audio_to_augment, sample_rate=audio.sampling_rate).samples
             new_audios.append(
                 Audio(
-                    audio_data=torch.squeeze(augmented_audio),
+                    waveform=torch.squeeze(augmented_audio),
                     sampling_rate=audio.sampling_rate,
                     metadata=audio.metadata.copy(),
                 )
