@@ -47,6 +47,8 @@ opensmile = "^2.5.0"
 audiomentations = "^0.35.0"
 torch-audiomentations = "^0.11.1"
 sentence-transformers = "^2.7.0"
+jiwer = "^3.0.4"
+speechbrain = "^1.0.0"
 
 [tool.poetry.group.dev]
 optional = true
@@ -143,10 +145,10 @@ pattern = "default-unprefixed"
 
 [tool.codespell]
 skip = [
-  "./poetry.lock",
-  "./docs_style/pdoc-theme/syntax-highlighting.css"
+  "poetry.lock",
+  "docs_style/pdoc-theme/syntax-highlighting.css"
 ]
-ignore-words-list = ["senselab"]
+ignore-words-list = ["senselab", "nd", "astroid", "wil"]
 
 [build-system]
 requires = ["poetry-core>=1.0.0", "poetry-dynamic-versioning>=1.0.0,<2.0.0"]
