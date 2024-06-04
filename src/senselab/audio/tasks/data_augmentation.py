@@ -1,6 +1,6 @@
 """This module implements some utilities for audio data augmentation."""
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Union
 
 import torch
 from datasets import Dataset
@@ -11,13 +11,16 @@ from senselab.utils.data_structures.audio import (
     batch_audios,
     unbatch_audios,
 )
+from senselab.utils.device import DeviceType, _select_device_and_dtype
 from senselab.utils.tasks.input_output import (
     _from_dict_to_hf_dataset,
     _from_hf_dataset_to_dict,
 )
 
 
-def augment_audio_dataset(audios: List[Audio], augmentation: Compose, batched: bool = False) -> List[Audio]:
+def augment_audio_dataset(
+    audios: List[Audio], augmentation: Compose, device_options: Union[DeviceType, List[DeviceType]] = [DeviceType.CPU]
+) -> List[Audio]:
     """Augments all provided audios with a given augmentation, either individually or all batched together.
 
     Augment all audios with a user defined augmentation that can be a composition of multiple augmentations. This
@@ -28,8 +31,9 @@ def augment_audio_dataset(audios: List[Audio], augmentation: Compose, batched: b
         audios: List of Audios whose data will be augmented with the given augmentations
         augmentation: A Composition of augmentations to run on each audio (uses torch-audiomentations), should have its
             output_type set to "dict"
-        batched: flag for whether the composition should be run on audios individually, typical for a CPU, or
-            by batching all of the audios together for a possible speed-up on a GPU
+        device_options: The device, or a List of possible devices, to use for augmenting. If the chosen device
+            is MPS or CUDA then the audios are all batched together, so for optimal performance, batching should
+            be done by passing a batch_size worth of audios ar a time
 
     Returns:
         List of audios that has passed the all of input audios through the provided augmentation. This does
@@ -38,7 +42,10 @@ def augment_audio_dataset(audios: List[Audio], augmentation: Compose, batched: b
     """
     augmentation.output_type = "dict"
     new_audios = []
-    if not batched:
+    device_type, dtype = _select_device_and_dtype(
+        device_options if isinstance(device_options, List) else [device_options]
+    )
+    if device_type == DeviceType.CPU:
         for audio in audios:
             audio_to_augment = audio.waveform.unsqueeze(0)
             augmented_audio = augmentation(audio_to_augment, sample_rate=audio.sampling_rate).samples
@@ -47,13 +54,17 @@ def augment_audio_dataset(audios: List[Audio], augmentation: Compose, batched: b
                     waveform=torch.squeeze(augmented_audio),
                     sampling_rate=audio.sampling_rate,
                     metadata=audio.metadata.copy(),
+                    orig_path_or_id=audio.orig_path_or_id,
                 )
             )
     else:
         batched_audios, sampling_rates, metadatas = batch_audios(audios)
+
+        batched_audios = batched_audios.to(device=torch.device(str(device_type)), dtype=dtype)
         sampling_rate = sampling_rates[0] if isinstance(sampling_rates, List) else sampling_rates
         augmented_audio = augmentation(batched_audios, sample_rate=sampling_rate).samples
 
+        augmented_audio = augmented_audio.detach().cpu()
         return unbatch_audios(augmented_audio, sampling_rates, metadatas)
 
     return new_audios

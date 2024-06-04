@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 import torch
 from datasets import Dataset
 
-from senselab.utils.functions import DeviceType, _select_device_and_dtype
+from senselab.utils.device import DeviceType, _select_device_and_dtype
 from senselab.utils.tasks.input_output import (
     _from_dict_to_hf_dataset,
     _from_hf_dataset_to_dict,
@@ -34,9 +34,7 @@ def clone_voice_in_dataset_with_KNNVC(
         """Prepare a KNNVC pipeline."""
         repo_id = f"{model_id}:{model_revision}"
         device, torch_dtype = _select_device_and_dtype(
-            device_options=[device]
-            if device
-            else [DeviceType.CUDA, DeviceType.CPU]
+            device_options=[device] if device else [DeviceType.CUDA, DeviceType.CPU]
         )
         knn_vc = torch.hub.load(
             repo_id,
@@ -75,12 +73,8 @@ def clone_voice_in_dataset_with_KNNVC(
         out_wav = knn_vc_model.match(query_seq, matching_set, topk=topk)
         return {"cloned_waveform": out_wav}
 
-    hf_source_dataset = _from_dict_to_hf_dataset(
-        source_dataset, audio_columns=[source_audio_column]
-    )
-    hf_target_dataset = _from_dict_to_hf_dataset(
-        target_dataset, audio_columns=[target_audio_column]
-    )
+    hf_source_dataset = _from_dict_to_hf_dataset(source_dataset, audio_columns=[source_audio_column])
+    hf_target_dataset = _from_dict_to_hf_dataset(target_dataset, audio_columns=[target_audio_column])
 
     knn_vc, device, torch_dtype = _setup_knn_vc_model(
         model_id=model_id,
