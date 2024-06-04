@@ -15,8 +15,8 @@ def compute_cca(features_x: torch.Tensor, features_y: torch.Tensor) -> float:
     Returns:
         float: The mean squared CCA correlations between X and Y.
     """
-    qx, _ = torch.qr(features_x)
-    qy, _ = torch.qr(features_y)
+    qx, _ = torch.linalg.qr(features_x)
+    qy, _ = torch.linalg.qr(features_y)
     result = torch.norm(qx.t() @ qy) ** 2 / min(features_x.shape[1], features_y.shape[1])
     return result.item() if isinstance(result, torch.Tensor) else float(result)
 

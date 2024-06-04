@@ -27,9 +27,18 @@ def resample_audios(audios: List[Audio], resample_rate: int, rolloff: float = 0.
     """
     resampled_audios = []
     for audio in audios:
+        new_metadata = audio.metadata.copy()
+        new_metadata_pre_proc = new_metadata.setdefault("preprocessing", [])
+        new_metadata_pre_proc.append(f"resample_{audio.sampling_rate}_to_{resample_rate}")
+
         resampled = F.resample(audio.waveform, audio.sampling_rate, resample_rate, rolloff=rolloff)
         resampled_audios.append(
-            Audio(waveform=resampled, sampling_rate=resample_rate, metadata=audio.metadata, path_or_id=audio.path_or_id)
+            Audio(
+                waveform=resampled,
+                sampling_rate=resample_rate,
+                metadata=new_metadata,
+                orig_path_or_id=audio.orig_path_or_id,
+            )
         )
     return resampled_audios
 
@@ -46,11 +55,15 @@ def downmix_audios_to_mono(audios: List[Audio]) -> List[Audio]:
     """
     down_mixed_audios = []
     for audio in audios:
+        new_metadata = audio.metadata.copy()
+        new_metadata_pre_proc = new_metadata.setdefault("preprocessing", [])
+        new_metadata_pre_proc.append("downmix_mono_averaging")
         down_mixed_audios.append(
             Audio(
                 waveform=audio.waveform.mean(dim=0, keepdim=True),
                 sampling_rate=audio.sampling_rate,
-                metadata=audio.metadata.copy(),
+                metadata=new_metadata,
+                orig_path_or_id=audio.orig_path_or_id,
             )
         )
 
@@ -66,17 +79,23 @@ def select_channel_from_audios(audios: List[Audio], channel_index: int) -> List[
         channel_index (int): The index of the channel to select.
 
     Returns:
-        List[Audio]: The list of audio objects with the selected channel. Shape: (num_channels, num_samples).
+        List[Audio]: The list of audio objects with the selected channel. Shape: (1, num_samples).
     """
     mono_channel_audios = []
     for audio in audios:
-        if audio.waveform.size(0) <= channel_index:
+        if audio.waveform.size(0) <= channel_index:  # should consider how much sense negative values make
             raise ValueError("channel_index should be valid")
+
+        new_metadata = audio.metadata.copy()
+        new_metadata_pre_proc = new_metadata.setdefault("preprocessing", [])
+        new_metadata_pre_proc.append(f"downmix_mono_select_{channel_index}")
+
         mono_channel_audios.append(
             Audio(
                 waveform=audio.waveform[channel_index, :],
                 sampling_rate=audio.sampling_rate,
-                metadata=audio.metadata.copy(),
+                metadata=new_metadata,
+                orig_path_or_id=audio.orig_path_or_id,
             )
         )
     return mono_channel_audios
@@ -103,12 +122,17 @@ def chunk_audios(data: List[Tuple[Audio, Tuple[float, float]]]) -> List[Audio]:
         start_sample = int(start * audio.sampling_rate)
         end_sample = int(end * audio.sampling_rate)
         chunked_waveform = audio.waveform[:, start_sample:end_sample]
+
+        new_metadata = audio.metadata.copy()
+        new_metadata_pre_proc = new_metadata.setdefault("preprocessing", [])
+        new_metadata_pre_proc.append(f"chunk_{start}_{end}")
+
         chunked_audios.append(
             Audio(
                 waveform=chunked_waveform,
                 sampling_rate=audio.sampling_rate,
-                metadata=audio.metadata,
-                path_or_id=f"{audio.path_or_id}_chunk_{start}_{end}",  # TODO: Fix this
+                metadata=new_metadata,
+                orig_path_or_id=audio.orig_path_or_id,
             )
         )
     return chunked_audios
