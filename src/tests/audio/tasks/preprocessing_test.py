@@ -34,19 +34,21 @@ def test_downmix_audios() -> None:
     """Tests functionality for downmixing Audio objects."""
     mono_audio = Audio.from_filepath(("src/tests/data_for_testing/audio_48khz_mono_16bits.wav"))
     down_mixed_audios = downmix_audios_to_mono([mono_audio])
-    assert down_mixed_audios[0].waveform.dim() == 1, "Mono audio should remain mono after downmixing"
-    assert down_mixed_audios[0].waveform.size(0) == mono_audio.waveform.size(
+    assert down_mixed_audios[0].waveform.dim() == 2, "Mono audio should maintain the (num_channels, num_samples) shape"
+    assert down_mixed_audios[0].waveform.shape[0] == 1, "Mono audio should remain mono after downmixing"
+    assert down_mixed_audios[0].waveform.size(1) == mono_audio.waveform.size(
         1
     ), "Downmixed mono audio should have correct number of samples"
 
     stereo_audio = Audio.from_filepath("src/tests/data_for_testing/audio_48khz_stereo_16bits.wav")
     down_mixed_audios = downmix_audios_to_mono([stereo_audio])
-    assert down_mixed_audios[0].waveform.dim() == 1, "Stereo audio should be downmixed to mono"
-    assert down_mixed_audios[0].waveform.size(0) == stereo_audio.waveform.size(
+    assert down_mixed_audios[0].waveform.dim() == 2, "Mono audio should maintain the (num_channels, num_samples) shape"
+    assert down_mixed_audios[0].waveform.shape[0] == 1, "Stereo audio should become mono after downmixing"
+    assert down_mixed_audios[0].waveform.size(1) == stereo_audio.waveform.size(
         1
     ), "Downmixed stereo audio should have correct number of samples"
     assert torch.isclose(
-        down_mixed_audios[0].waveform, stereo_audio.waveform.mean(dim=0)
+        down_mixed_audios[0].waveform, stereo_audio.waveform.mean(dim=0, keepdim=True)
     ).all(), "Downmixed audio should be the mean of the stereo channels"
 
 

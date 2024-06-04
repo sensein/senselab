@@ -46,12 +46,14 @@ def downmix_audios_to_mono(audios: List[Audio]) -> List[Audio]:
     """
     down_mixed_audios = []
     for audio in audios:
-        if audio.waveform.dim() != 2 or audio.waveform.size(0) < 1:
-            raise ValueError("waveform should have shape (num_channels, num_samples)")
+        down_mixed_audios.append(
+            Audio(
+                waveform=audio.waveform.mean(dim=0, keepdim=True),
+                sampling_rate=audio.sampling_rate,
+                metadata=audio.metadata.copy(),
+            )
+        )
 
-        down_mixed_audio = audio.copy()
-        down_mixed_audio.waveform = audio.waveform.mean(dim=0)
-        down_mixed_audios.append(down_mixed_audio)
     return down_mixed_audios
 
 
@@ -64,23 +66,19 @@ def select_channel_from_audios(audios: List[Audio], channel_index: int) -> List[
         channel_index (int): The index of the channel to select.
 
     Returns:
-        List[Audio]: The list of audio objects with the selected channel. Shape: (num_samples).
+        List[Audio]: The list of audio objects with the selected channel. Shape: (num_channels, num_samples).
     """
     mono_channel_audios = []
     for audio in audios:
-        print("audio.waveform.shape")
-        print(audio.waveform.shape)
-        if audio.waveform.dim() != 2:
-            raise ValueError("waveform should have shape (num_channels, num_samples)")
         if audio.waveform.size(0) <= channel_index:
             raise ValueError("channel_index should be valid")
-
-        mono_channel_audio = audio.copy()
-        mono_waveform = audio.waveform[channel_index, :]
-        if mono_waveform.dim() != 2:
-            mono_waveform = mono_waveform.unsqueeze(0)
-        mono_channel_audio.waveform = mono_waveform
-        mono_channel_audios.append(mono_channel_audio)
+        mono_channel_audios.append(
+            Audio(
+                waveform=audio.waveform[channel_index, :],
+                sampling_rate=audio.sampling_rate,
+                metadata=audio.metadata.copy(),
+            )
+        )
     return mono_channel_audios
 
 
