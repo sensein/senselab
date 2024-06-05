@@ -59,8 +59,6 @@ jobs:
       env:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: >
-        retries: 3
-        timeout-minutes: 5
         poetry run pytest \
           --junitxml=pytest.xml \
           --cov-report=term-missing:skip-covered \
