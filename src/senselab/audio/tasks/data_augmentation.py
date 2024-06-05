@@ -1,9 +1,8 @@
 """This module implements some utilities for audio data augmentation."""
 
-from typing import Any, Dict, List, Union
+from typing import List, Union
 
 import torch
-from datasets import Dataset
 from torch_audiomentations import Compose
 
 from senselab.utils.data_structures.audio import (
@@ -12,13 +11,9 @@ from senselab.utils.data_structures.audio import (
     unbatch_audios,
 )
 from senselab.utils.device import DeviceType, _select_device_and_dtype
-from senselab.utils.tasks.input_output import (
-    _from_dict_to_hf_dataset,
-    _from_hf_dataset_to_dict,
-)
 
 
-def augment_audio_dataset(
+def augment_audios(
     audios: List[Audio], augmentation: Compose, device_options: Union[DeviceType, List[DeviceType]] = [DeviceType.CPU]
 ) -> List[Audio]:
     """Augments all provided audios with a given augmentation, either individually or all batched together.
@@ -43,7 +38,7 @@ def augment_audio_dataset(
     augmentation.output_type = "dict"
     new_audios = []
     device_type, dtype = _select_device_and_dtype(
-        device_options if isinstance(device_options, List) else [device_options]
+        compatible_devices=device_options if isinstance(device_options, List) else [device_options]
     )
     if device_type == DeviceType.CPU:
         for audio in audios:
@@ -68,33 +63,3 @@ def augment_audio_dataset(
         return unbatch_audios(augmented_audio, sampling_rates, metadatas)
 
     return new_audios
-
-
-def augment_hf_dataset(dataset: Dict[str, Any], augmentation: Compose, audio_column: str = "audio") -> Dict[str, Any]:
-    """Resamples a Hugging Face `Dataset` object."""
-    hf_dataset = _from_dict_to_hf_dataset(dataset)
-
-    def _augment_hf_row(row: Dataset, augmentation: Compose, audio_column: str) -> Dict[str, Any]:
-        waveform = row[audio_column]["array"]
-        sampling_rate = row[audio_column]["sampling_rate"]
-
-        # Ensure waveform is a PyTorch tensor
-        if not isinstance(waveform, torch.Tensor):
-            waveform = torch.tensor(waveform)
-        if waveform.dim() == 1:
-            waveform = waveform.unsqueeze(0).unsqueeze(0)  # [num_samples] -> [1, 1, num_samples]
-        elif waveform.dim() == 2:
-            waveform = waveform.unsqueeze(1)  # [batch_size, num_samples] -> [batch_size, 1, num_samples]
-
-        augmented_hf_row = augmentation(waveform, sample_rate=sampling_rate).squeeze()
-
-        return {
-            "augmented_audio": {
-                "array": augmented_hf_row,
-                "sampling_rate": sampling_rate,
-            }
-        }
-
-    augmented_hf_dataset = hf_dataset.map(lambda x: _augment_hf_row(x, augmentation, audio_column))
-    augmented_hf_dataset = augmented_hf_dataset.remove_columns([audio_column])
-    return _from_hf_dataset_to_dict(augmented_hf_dataset)

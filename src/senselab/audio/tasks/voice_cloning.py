@@ -1,6 +1,6 @@
 """This module implements some utilities for the voice cloning task."""
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import torch
 from datasets import Dataset
@@ -30,11 +30,11 @@ def clone_voice_in_dataset_with_KNNVC(
         model_revision: str,
         prematched_vocoder: bool,
         device: Optional[DeviceType] = None,
-    ) -> Any:  # noqa: ANN401
+    ) -> Tuple[object, DeviceType, torch.dtype]:
         """Prepare a KNNVC pipeline."""
         repo_id = f"{model_id}:{model_revision}"
         device, torch_dtype = _select_device_and_dtype(
-            device_options=[device] if device else [DeviceType.CUDA, DeviceType.CPU]
+            user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
         )
         knn_vc = torch.hub.load(
             repo_id,

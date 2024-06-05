@@ -3,9 +3,9 @@
 import torch
 from torch_audiomentations import Compose, PolarityInversion
 
-from senselab.audio.tasks.data_augmentation import augment_audio_dataset
+from senselab.audio.tasks.data_augmentation import augment_audios
 from senselab.utils.data_structures.audio import Audio
-from senselab.utils.data_structures.datasets import SenselabDataset
+from senselab.utils.data_structures.dataset import SenselabDataset
 
 
 def test_audio_data_augmentation() -> None:
@@ -18,8 +18,8 @@ def test_audio_data_augmentation() -> None:
     ]
     audio_dataset_from_paths = SenselabDataset(audios=audio_paths)
     mono_audio, stereo_audio = audio_dataset_from_paths.create_audio_split_for_pydra_task()
-    mono_inverted = augment_audio_dataset(mono_audio, apply_augmentation)
-    stereo_inverted = augment_audio_dataset(stereo_audio, apply_augmentation)
+    mono_inverted = augment_audios(mono_audio, apply_augmentation)
+    stereo_inverted = augment_audios(stereo_audio, apply_augmentation)
     assert torch.equal(
         mono_audio[0].waveform, -1 * mono_inverted[0].waveform
     ), "Audio should have been inverted by the augmentation"
@@ -33,7 +33,7 @@ def test_audio_data_augmentation() -> None:
             Audio(waveform=stereo_audio[0].waveform[1], sampling_rate=stereo_audio[0].sampling_rate),
         ]
     ).create_audio_split_for_pydra_task(2)
-    batch_inverted = augment_audio_dataset(batched_audio[0], apply_augmentation)
+    batch_inverted = augment_audios(batched_audio[0], apply_augmentation)
     assert torch.equal(batched_audio[0][0].waveform, -1 * batch_inverted[0].waveform) and torch.equal(
         batched_audio[0][1].waveform, -1 * batch_inverted[1].waveform
     )

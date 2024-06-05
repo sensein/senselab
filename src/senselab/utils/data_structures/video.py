@@ -4,7 +4,7 @@ import uuid
 from typing import Dict, Optional
 
 import torch
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
 from torchvision.io import read_video
 
 from senselab.utils.constants import SENSELAB_NAMESPACE
@@ -35,6 +35,16 @@ class Video(BaseModel):
     orig_path_or_id: Optional[str] = Field(default_factory=lambda: str(uuid.uuid4()))
     metadata: Dict = Field(default={})
     model_config = {"arbitrary_types_allowed": True}
+
+    @field_validator("frames", mode="before")
+    def check_frames(cls, v: torch.Tensor, _: ValidationInfo) -> torch.Tensor:
+        """Check that the frames are the correct Tensor shape of (T,C,H,W)."""
+        if len(v.shape) != 4:
+            raise ValueError(
+                "Expected frames to be of shape (T, C, H, W) where T is the number of frames, \
+                             C is the channels, and H and W are the height and width"
+            )
+        return v
 
     @classmethod
     def from_filepath(cls, filepath: str, metadata: Dict = {}) -> "Video":
