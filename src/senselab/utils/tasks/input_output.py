@@ -34,9 +34,7 @@ def read_files_from_disk(files: Union[str, List[str]]) -> Dict[str, Any]:
     return _from_hf_dataset_to_dict(dataset)
 
 
-def read_dataset_from_disk(
-    input_path: str, split: str, streaming: bool = False
-) -> Dict[str, Any]:
+def read_dataset_from_disk(input_path: str, split: str, streaming: bool = False) -> Dict[str, Any]:
     """Loads a Hugging Face `Dataset` object from disk.
 
     It determines the format based on the file extension or directory.
@@ -58,9 +56,7 @@ def read_dataset_from_disk(
         return _from_hf_dataset_to_dict(dataset)
     except Exception as e:
         # Generic error handling, e.g., network issues, data loading issues
-        raise RuntimeError(
-            f"An error occurred while loading the dataset: {str(e)}"
-        )
+        raise RuntimeError(f"An error occurred while loading the dataset: {str(e)}")
 
 
 def read_dataset_from_hub(
@@ -73,10 +69,9 @@ def read_dataset_from_hub(
 
     It includes support for private repositories.
     """
-    if not _check_hf_repo_exists(remote_repository, "dataset", hf_token):
+    if not _check_hf_repo_exists(remote_repository, "main", "dataset", hf_token):
         raise RuntimeError(
-            f"The repository {remote_repository} - {revision} - {split}"
-            " does not exist or could not be accessed."
+            f"The repository {remote_repository} - {revision} - {split}" " does not exist or could not be accessed."
         )
 
     # Load the dataset
@@ -89,9 +84,7 @@ def read_dataset_from_hub(
         )
     except Exception as e:
         # Generic error handling, e.g., network issues, data loading issues
-        raise RuntimeError(
-            f"An error occurred while loading the dataset: {str(e)}"
-        )
+        raise RuntimeError(f"An error occurred while loading the dataset: {str(e)}")
 
     return _from_hf_dataset_to_dict(dataset)
 
@@ -117,9 +110,7 @@ def push_dataset_to_hub(
                 token=hf_token,
             )
         else:
-            hf_dataset.push_to_hub(
-                repo_id=remote_repository, revision=revision, split=split
-            )
+            hf_dataset.push_to_hub(repo_id=remote_repository, revision=revision, split=split)
     except Exception as e:
         raise RuntimeError(f"Failed to push dataset to the hub: {str(e)}")
     return
@@ -140,27 +131,21 @@ def save_dataset_to_disk(
         output_path = os.path.join(output_directory, output_name)
         # No extension for Arrow, it's a directory
     else:
-        output_path = os.path.join(
-            output_directory, f"{output_name}.{output_format}"
-        )
+        output_path = os.path.join(output_directory, f"{output_name}.{output_format}")
 
     # Create the output directory, ignore error if it already exists
     os.makedirs(output_directory, exist_ok=True)
 
     if output_format == "parquet":
 
-        def _save_hf_dataset_as_parquet(
-            dataset: Dataset, output_path: str
-        ) -> None:
+        def _save_hf_dataset_as_parquet(dataset: Dataset, output_path: str) -> None:
             """Saves a Hugging Face `Dataset` object to parquet format."""
             dataset.to_parquet(output_path)
 
         _save_hf_dataset_as_parquet(hf_dataset, output_path)
     elif output_format == "json":
 
-        def _save_hf_dataset_as_json(
-            dataset: Dataset, output_path: str
-        ) -> None:
+        def _save_hf_dataset_as_json(dataset: Dataset, output_path: str) -> None:
             """Saves a Hugging Face `Dataset` object to json format."""
             dataset.to_json(output_path)
 
@@ -181,9 +166,7 @@ def save_dataset_to_disk(
         _save_hf_dataset_as_sql(hf_dataset, output_path)
     elif output_format == "arrow":
 
-        def _save_hf_dataset_as_arrow(
-            dataset: Dataset, output_path: str
-        ) -> None:
+        def _save_hf_dataset_as_arrow(dataset: Dataset, output_path: str) -> None:
             """Saves a Hugging Face `Dataset` object in Apache Arrow format."""
             dataset.save_to_disk(output_path)
 
