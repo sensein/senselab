@@ -42,12 +42,9 @@ def transcribe_dataset_with_hf(
     ) -> pipeline:
         """Prepare a Hugging Face ASR pipeline."""
         _ = HFModel(hf_model_id=model_id)  # check HF model is valid
-
-        if device is None:
-            device, torch_dtype = _select_device_and_dtype(device_options=[DeviceType.CUDA, DeviceType.CPU])
-            # MPS is not supported for now
-        else:
-            device, torch_dtype = _select_device_and_dtype(device_options=[device])
+        device, torch_dtype = _select_device_and_dtype(
+            user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
+        )
 
         pipe = pipeline(
             "automatic-speech-recognition",
