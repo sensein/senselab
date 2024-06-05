@@ -16,27 +16,27 @@ class HFModel(BaseModel):
 
     @field_validator("hf_model_id")
     def validate_hf_model_id(cls, value: str) -> str:
-        """Validate the hf_model_id."""
+        """Validate the hf_model_id.
+
+        # TODO: enabling using HF token
+        """
         if not value:
             raise ValueError("hf_model_id cannot be empty")
         if not os.path.isfile(value) and not _check_hf_repo_exists(
-            value, "model", None
+            repo_id=value, revision="main", repo_type="model", token=None
         ):
             raise ValueError("hf_model_id is not a valid Hugging Face model")
         return value
 
 
 def _check_hf_repo_exists(
-    repo_id: str, repo_type: str, token: Optional[str] = None
+    repo_id: str, revision: str = "main", repo_type: str = "model", token: Optional[str] = None
 ) -> bool:
     """Private function to check if a Hugging Face repository exists."""
     api = HfApi()
     try:
-        repo_refs = api.list_repo_refs(
-            repo_id=repo_id, repo_type=repo_type, token=token
-        )
-        if repo_refs.branches:
-            return True
-    except Exception as e:
-        raise RuntimeError(f"An error occurred: {e}")
-    return False
+        api.list_repo_commits(repo_id=repo_id, revision=revision, repo_type=repo_type, token=token)
+        return True
+    except Exception:
+        # raise RuntimeError(f"An error occurred: {e}")
+        return False
