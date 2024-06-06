@@ -134,7 +134,10 @@ class ASRPipelineFactory:
         Returns:
             pipeline: The ASR pipeline.
         """
-        key = f"{model.path_or_uri}-{device}-{return_timestamps}-{max_new_tokens}-{chunk_length_s}-{batch_size}"
+        key = (
+            f"{model.path_or_uri}-{model.revision}-{return_timestamps}-"
+            f"{max_new_tokens}-{chunk_length_s}-{batch_size}-{device}"
+        )
         if key not in cls._pipelines:
             device, torch_dtype = _select_device_and_dtype(
                 user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
