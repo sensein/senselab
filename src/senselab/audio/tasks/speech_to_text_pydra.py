@@ -2,6 +2,6 @@
 
 import pydra
 
-from senselab.audio.tasks.speech_to_text import transcribe_dataset_with_hf
+from senselab.audio.tasks.speech_to_text import transcribe_audios
 
-transcribe_dataset_with_hf_pt = pydra.mark.task(transcribe_dataset_with_hf)
+transcribe_audios_pt = pydra.mark.task(transcribe_audios)

@@ -49,6 +49,7 @@ torch-audiomentations = "^0.11.1"
 sentence-transformers = "^2.7.0"
 jiwer = "^3.0.4"
 speechbrain = "^1.0.0"
+python-iso639 = "^2024.4.27"
 
 [tool.poetry.group.dev]
 optional = true
