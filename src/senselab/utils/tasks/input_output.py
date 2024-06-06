@@ -1,12 +1,12 @@
 """This module implements the IOTask utilities."""
 
 import os
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Union
 
 from datasets import Audio, Dataset, Image, load_dataset
 
 from senselab.utils.file import File, from_strings_to_files
-from senselab.utils.hf import _check_hf_repo_exists
+from senselab.utils.hf import check_hf_repo_exists
 
 
 def read_files_from_disk(files: Union[str, List[str]]) -> Dict[str, Any]:
@@ -63,25 +63,19 @@ def read_dataset_from_hub(
     remote_repository: str,
     revision: str = "main",
     split: str = "all",
-    hf_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Loads a Hugging Face `Dataset` object from the Hugging Face Hub.
 
     It includes support for private repositories.
     """
-    if not _check_hf_repo_exists(remote_repository, "main", "dataset", hf_token):
+    if not check_hf_repo_exists(remote_repository, "main", "dataset"):
         raise RuntimeError(
             f"The repository {remote_repository} - {revision} - {split}" " does not exist or could not be accessed."
         )
 
     # Load the dataset
     try:
-        dataset = load_dataset(
-            path=remote_repository,
-            revision=revision,
-            split=split,
-            token=hf_token,
-        )
+        dataset = load_dataset(path=remote_repository, revision=revision, split=split)
     except Exception as e:
         # Generic error handling, e.g., network issues, data loading issues
         raise RuntimeError(f"An error occurred while loading the dataset: {str(e)}")
@@ -90,27 +84,14 @@ def read_dataset_from_hub(
 
 
 def push_dataset_to_hub(
-    dataset: Dict[str, Any],
-    remote_repository: str,
-    revision: str = "main",
-    split: str = "all",
-    hf_token: Optional[str] = None,
+    dataset: Dict[str, Any], remote_repository: str, revision: str = "main", split: str = "all"
 ) -> None:
     """Uploads a Hugging Face `Dataset` object to the Hugging Face Hub."""
     hf_dataset = _from_dict_to_hf_dataset(dataset)
 
     try:
         # Upload the dataset to the Hugging Face Hub
-        if hf_token:
-            hf_dataset.push_to_hub(
-                repo_id=remote_repository,
-                revision=revision,
-                split=split,
-                private=True,
-                token=hf_token,
-            )
-        else:
-            hf_dataset.push_to_hub(repo_id=remote_repository, revision=revision, split=split)
+        hf_dataset.push_to_hub(repo_id=remote_repository, revision=revision, split=split)
     except Exception as e:
         raise RuntimeError(f"Failed to push dataset to the hub: {str(e)}")
     return

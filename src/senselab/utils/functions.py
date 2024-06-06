@@ -1,7 +1,10 @@
 """Utility functions for senselab."""
 
 import os
+from pathlib import Path
 from typing import List
+
+import torch
 
 
 def get_common_directory(files: List[str]) -> str:
@@ -25,3 +28,12 @@ def get_common_directory(files: List[str]) -> str:
         common_path += os.sep
 
     return common_path
+
+
+def is_torch_model(file_path: Path) -> bool:
+    """Check if a file is a torch model."""
+    try:
+        _ = torch.load(file_path)
+        return True
+    except Exception:
+        return False
