@@ -42,7 +42,6 @@ pydantic = "^2.7.3"
 accelerate = "^0.29.3"
 huggingface-hub = "^0.23.3"
 praat-parselmouth = "^0.4.3"
-iso-639 = "^0.4.5"
 opensmile = "^2.5.0"
 audiomentations = "^0.35.0"
 torch-audiomentations = "^0.11.1"
@@ -50,6 +49,7 @@ sentence-transformers = "^2.7.0"
 jiwer = "^3.0.4"
 speechbrain = "^1.0.0"
 pyannote-audio = "^3.2.0"
+iso639-lang = "^2.2.3"
 
 [tool.poetry.group.dev]
 optional = true
