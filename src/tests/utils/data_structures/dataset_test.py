@@ -1,10 +1,12 @@
 """Module for testing the Participant, Session, and SenselabDataset classes."""
 
 import pytest
+import torch
 import torchaudio
 
 from senselab.utils.data_structures.audio import Audio
 from senselab.utils.data_structures.dataset import Participant, SenselabDataset, Session
+from senselab.utils.data_structures.video import Video
 
 
 def test_create_participant() -> None:
@@ -151,3 +153,19 @@ def test_audio_dataset_splits() -> None:
     assert gpu_excess_split == [
         [mono_audio, stereo_audio]
     ], "Excess GPU split should generate a list with one list of all of the audios, unpadded"
+
+
+def test_convert_senselab_dataset_to_hf_dataset() -> None:
+    """Tests the conversion of Senselab dataset to HuggingFace."""
+    dataset = SenselabDataset(
+        audios=["src/tests/data_for_testing/audio_48khz_stereo_16bits.wav"],
+        videos=["src/tests/data_for_testing/video_48khz_stereo_16bits.mp4"],
+    )
+    audio_data, video_data = dataset.convert_senselab_dataset_to_hf_dataset()
+    test_audio = Audio.from_filepath("src/tests/data_for_testing/audio_48khz_stereo_16bits.wav")
+    test_video = Video.from_filepath("src/tests/data_for_testing/video_48khz_stereo_16bits.mp4")
+
+    assert video_data.num_rows == 1
+    assert audio_data.num_rows == 1
+    assert torch.equal(torch.Tensor(audio_data["audio"][0]["array"]), test_audio.waveform)
+    assert len(video_data[0]["frames"]["image"]) == len(test_video.frames)

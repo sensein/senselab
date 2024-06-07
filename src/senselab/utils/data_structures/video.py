@@ -1,5 +1,6 @@
 """Data structures relevant for video tasks and pipelines."""
 
+import os
 import uuid
 from typing import Dict, Optional
 
@@ -60,6 +61,21 @@ class Video(BaseModel):
         v_audio = Audio(waveform=a_frames, sampling_rate=a_fps, orig_path_or_id=filepath)
 
         return cls(frames=v_frames, frame_rate=v_fps, audio=v_audio, orig_path_or_id=filepath, metadata=metadata)
+
+    def generate_path(self) -> str:
+        """Generate a path like string for this Video.
+
+        Generates a path like string for the Video by either utilizing the orig_path_or_id, checking
+        if it is a path (has an extension), otherwise using the id if orig_path_or_id is not an ID
+        and giving an extension and relative to the current directory.
+        """
+        if self.orig_path_or_id:
+            if os.path.splitext(self.orig_path_or_id)[-1].lower():
+                return self.orig_path_or_id
+            else:
+                return f"{self.orig_path_or_id}.mp4"
+        else:
+            return f"{self.id()}.mp4"
 
     def id(self) -> str:
         """Generate a unique identifier for the Video.
