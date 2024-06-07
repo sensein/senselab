@@ -49,7 +49,6 @@ sentence-transformers = "^2.7.0"
 jiwer = "^3.0.4"
 speechbrain = "^1.0.0"
 pyannote-audio = "^3.2.0"
-iso639-lang = "^2.2.3"
 
 [tool.poetry.group.dev]
 optional = true
