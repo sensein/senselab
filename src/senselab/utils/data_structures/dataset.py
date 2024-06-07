@@ -2,9 +2,12 @@
 
 import math
 import uuid
-from typing import Any, Dict, List, Union, no_type_check
+from typing import Any, Dict, List, Tuple, Union, no_type_check
 
+from datasets import Audio as HFAudio
+from datasets import Dataset, Features, Image, Sequence, Value
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
+from transformers.image_transforms import to_pil_image
 
 from senselab.utils.data_structures.audio import Audio
 from senselab.utils.data_structures.video import Video
@@ -215,3 +218,108 @@ class SenselabDataset(BaseModel):
     def get_sessions(self) -> List[Session]:
         """Get the list of sessions in the dataset."""
         return list(self.sessions.values())
+
+    def _get_dict_representation(self) -> Dict:
+        audio_data: Dict[str, List] = {}
+        video_data: Dict[str, List] = {}
+        senselab_dict: Dict[str, Union[Dict[str, List], List]] = {
+            "participants": [],
+            "sessions": [],
+            "audios": audio_data,
+            "videos": video_data,
+            "metadata": self.metadata.copy(),
+        }
+        participants_data = []
+        sessions_data = []
+
+        video_frames_data = []
+        video_fps_data = []
+        video_path_data = []
+        video_metadata = []
+        video_audio_data = []
+        video_audio_metadata = []
+
+        audio_waveform_data = []
+        audio_metadata = []
+
+        senselab_dict["audios"] = {"audio": [], "metadata": []}
+        senselab_dict["videos"] = {
+            "frames": [],
+            "frame_rate": [],
+            "path": [],
+            "metadata": [],
+            "audio": [],
+            "audio_metadata": [],
+        }
+        for participant in self.get_participants():
+            participants_data.append({"id": participant.id, "metadata": participant.metadata.copy()})
+        senselab_dict["participants"] = participants_data
+
+        for session in self.get_sessions():
+            sessions_data.append({"id": session.id, "metadata": session.metadata.copy()})
+        senselab_dict["sessions"] = sessions_data
+
+        for audio in self.audios:
+            audio_waveform_data.append(
+                {
+                    "array": audio.waveform.T,
+                    "sampling_rate": audio.sampling_rate,
+                    "path": audio.generate_path(),
+                }
+            )
+            audio_metadata.append(audio.metadata.copy())
+        audio_data["audio"] = audio_waveform_data
+        audio_data["metadata"] = audio_metadata
+
+        for video in self.videos:
+            video_frames_data.append({"image": [to_pil_image(frame.numpy()) for frame in list(video.frames)]})
+            video_fps_data.append(video.frame_rate)
+            video_path_data.append(video.generate_path())
+            video_metadata.append(video.metadata.copy())
+            video_audio_data.append(
+                None
+                if not video.audio
+                else {
+                    "array": video.audio.waveform.T,
+                    "sampling_rate": video.audio.sampling_rate,
+                    "path": video.audio.generate_path(),
+                }
+            )
+            video_audio_metadata.append(None if not video.audio else video.audio.metadata.copy())
+
+        video_data["frames"] = video_frames_data
+        video_data["frame_rate"] = video_fps_data
+        video_data["path"] = video_path_data
+        video_data["metadata"] = video_metadata
+        video_data["audio"] = video_audio_data
+        video_data["audio_metadata"] = video_audio_metadata
+        # raise ValueError('fuck')
+        return senselab_dict
+
+    def convert_senselab_dataset_to_hf_dataset(self) -> Tuple[Dataset, Dataset]:
+        """Converts Senselab datasets into HuggingFace datasets."""
+        senselab_dict = self._get_dict_representation()
+
+        # print(senselab_dict['videos']['frames'][0]['image'])
+        features = Features(
+            {
+                "frames": {"image": Sequence(feature=Image())},
+                "frame_rate": Value("float32"),
+                "path": Value("string"),
+                "metadata": {},
+                "audio": HFAudio(mono=False),
+                "audio_metadata": Value("string"),
+            }
+        )
+
+        audio_dataset = Dataset.from_dict(senselab_dict["audios"]).cast_column("audio", HFAudio(mono=False))
+
+        video_dataset = Dataset.from_dict(senselab_dict["videos"], features=features)
+
+        return audio_dataset, video_dataset
+
+    @classmethod
+    @no_type_check
+    def convert_hf_dataset_to_senselab_dataset(cls, hf_dataset: Dataset) -> "SenselabDataset":
+        """Converts HuggingFace dataset to a Senselab dataset."""
+        pass

@@ -6,6 +6,7 @@ file and its corresponding metadata. Other functionality and abstract data types
 ease of maintaining the codebase and offering consistent public APIs.
 """
 
+import os
 import uuid
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -35,7 +36,7 @@ class Audio(BaseModel):
 
     waveform: torch.Tensor
     sampling_rate: int
-    orig_path_or_id: Optional[str] = Field(default_factory=lambda: str(uuid.uuid4()))
+    orig_path_or_id: Optional[str] = None
     metadata: Dict = Field(default={})
     model_config = {"arbitrary_types_allowed": True}
 
@@ -70,6 +71,21 @@ class Audio(BaseModel):
         array, sampling_rate = torchaudio.load(filepath)
 
         return cls(waveform=array, sampling_rate=sampling_rate, orig_path_or_id=filepath, metadata=metadata)
+
+    def generate_path(self) -> str:
+        """Generate a path like string for this Audio.
+
+        Generates a path like string for the Audio by either utilizing the orig_path_or_id, checking
+        if it is a path (has an extension), otherwise using the id if orig_path_or_id is not an ID
+        and giving an extension and relative to the current directory.
+        """
+        if self.orig_path_or_id:
+            if os.path.splitext(self.orig_path_or_id)[-1].lower():
+                return self.orig_path_or_id
+            else:
+                return f"{self.orig_path_or_id}"
+        else:
+            return f"{self.id()}"
 
     def id(self) -> str:
         """Generate a unique identifier for the Audio.
