@@ -6,7 +6,7 @@ from pydantic import BaseModel, field_validator
 
 class Language(BaseModel):
     """Data structure for a language."""
-    language_code: str = None
+    language_code: str
 
     @field_validator("language_code", mode="before")
     def validate_language(cls, v: str) -> str:
