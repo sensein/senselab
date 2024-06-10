@@ -1,5 +1,4 @@
 """This module provides the implementation of Hugging Face utilities."""
-
 from pathlib import Path
 from typing import Union
 
@@ -20,7 +19,6 @@ def check_hf_repo_exists(repo_id: str, revision: str = "main", repo_type: str = 
         # raise RuntimeError(f"An error occurred: {e}")
         return False
 
-
 class HFModel(SenselabModel):
     """Hugging Face model."""
 
@@ -38,3 +36,4 @@ class HFModel(SenselabModel):
             if not check_hf_repo_exists(repo_id=str(path_or_uri), revision=value, repo_type="model"):
                 raise ValueError("path_or_uri or specified revision is not a valid Hugging Face model")
         return value
+      
