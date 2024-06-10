@@ -136,10 +136,9 @@ skip-magic-trailing-comma = false
 line-ending = "auto"
 
 [tool.poetry-dynamic-versioning]
-enable = false
+enable = true
 vcs = "git"
 style = "pep440"
-bump = true
 pattern = "default-unprefixed"
 
 [tool.codespell]
