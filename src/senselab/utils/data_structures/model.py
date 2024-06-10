@@ -4,9 +4,8 @@ import os
 from pathlib import Path
 from typing import Optional, Union
 
+import torch
 from pydantic import BaseModel, field_validator
-
-from senselab.utils.functions import is_torch_model
 
 
 class SenselabModel(BaseModel):
@@ -35,3 +34,11 @@ class SenselabModel(BaseModel):
                 raise ValueError("path_or_uri does not point to a valid torch model")
 
         return value
+
+def is_torch_model(file_path: Path) -> bool:
+    """Check if a file is a torch model."""
+    try:
+        _ = torch.load(file_path)
+        return True
+    except Exception:
+        return False

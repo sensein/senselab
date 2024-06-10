@@ -1,55 +1,47 @@
 """Tests the Language data structure."""
-
 import pytest
-from iso639 import Language as IsoLanguage
 from pydantic import ValidationError
 
 from senselab.utils.data_structures.language import Language
 
 
-def test_validate_language_valid_code() -> None:
-    """Valid language code."""
+def test_validate_language_valid_code_alpha_2() -> None:
+    """Test valid ISO 639-1 language code."""
     lang = Language(language_code="en")
-    assert lang.iso_639_1 == "en"
+    assert lang.language_code == "eng"  # ISO 639-3 code
+
+
+def test_validate_language_valid_code_alpha_3() -> None:
+    """Test valid ISO 639-3 language code."""
+    lang = Language(language_code="eng")
+    assert lang.language_code == "eng"
+
+
+def test_validate_language_valid_name() -> None:
+    """Test valid language name."""
+    lang = Language(language_code="English")
+    assert lang.language_code == "eng"
 
 
 def test_validate_language_invalid_code() -> None:
-    """Invalid language code."""
+    """Test invalid language code."""
     with pytest.raises(ValidationError):
         Language(language_code="invalid")
 
 
-def test_iso_639_1_property() -> None:
-    """ISO 639-1 property."""
+def test_alpha_2_property() -> None:
+    """Test alpha_2 property."""
     lang = Language(language_code="en")
-    assert lang.iso_639_1 == "en"
+    assert lang.alpha_2 == "en"
 
 
-def test_iso_639_2b_property() -> None:
-    """ISO 639-2b property."""
+def test_alpha_3_property() -> None:
+    """Test alpha_3 property."""
     lang = Language(language_code="en")
-    assert lang.iso_639_2b == IsoLanguage.from_part1("en").part2b
-
-
-def test_iso_639_2t_property() -> None:
-    """ISO 639-2t property."""
-    lang = Language(language_code="en")
-    assert lang.iso_639_2t == IsoLanguage.from_part1("en").part2t
-
-
-def test_iso_639_3_property() -> None:
-    """ISO 639-3 property."""
-    lang = Language(language_code="en")
-    assert lang.iso_639_3 == IsoLanguage.from_part1("en").part3
+    assert lang.alpha_3 == "eng"
 
 
 def test_name_property() -> None:
-    """Name property."""
+    """Test name property."""
     lang = Language(language_code="en")
-    assert lang.name == IsoLanguage.from_part1("en").name
-
-
-def test_family_property() -> None:
-    """Family property."""
-    lang = Language(language_code="en")
-    assert lang.family == IsoLanguage.from_part1("en").macrolanguage
+    assert lang.name == "English"

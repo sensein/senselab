@@ -2,16 +2,16 @@
 
 import pytest
 
-from senselab.audio.tasks.speech_to_text import (
+from senselab.audio.data_structures.audio import Audio
+from senselab.audio.tasks.speech_to_text.speech_to_text import (
     ASRPipelineFactory,
     Transcript,
     transcribe_audios,
     transcribe_audios_with_transformers,
 )
-from senselab.utils.data_structures.audio import Audio
+from senselab.utils.data_structures.device import DeviceType
+from senselab.utils.data_structures.huggingface import HFModel
 from senselab.utils.data_structures.language import Language
-from senselab.utils.device import DeviceType
-from senselab.utils.hf import HFModel
 
 
 @pytest.fixture
