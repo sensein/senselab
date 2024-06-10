@@ -3,9 +3,8 @@
 #### 🚀 Enhancement
 
 - Release 0.2.0 [#56](https://github.com/sensein/senselab/pull/56) ([@fabiocat93](https://github.com/fabiocat93))
-- release 0.2.0 [#53](https://github.com/sensein/senselab/pull/53) ([@fabiocat93](https://github.com/fabiocat93))
-- release 0.2.0 including the new custom interface, pre-processing functions, utility functions [#52](https://github.com/sensein/senselab/pull/52) ([@fabiocat93](https://github.com/fabiocat93))
-- organizing classes and functions [#57](https://github.com/sensein/senselab/pull/57) ([@fabiocat93](https://github.com/fabiocat93))
+- Including the new custom interface, pre-processing functions, utility functions [#52](https://github.com/sensein/senselab/pull/52) ([@fabiocat93](https://github.com/fabiocat93))
+- Organizing classes and functions [#57](https://github.com/sensein/senselab/pull/57) ([@fabiocat93](https://github.com/fabiocat93))
 
 #### Authors: 2
 
