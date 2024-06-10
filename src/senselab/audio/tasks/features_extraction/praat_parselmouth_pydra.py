@@ -3,23 +3,15 @@
 import pydra
 
 from senselab.audio.tasks.features_extraction.praat_parselmouth import (
-    get_hf_dataset_durations,
-    get_hf_dataset_f0_descriptors,
-    get_hf_dataset_harmonicity_descriptors,
-    get_hf_dataset_jitter_descriptors,
-    get_hf_dataset_shimmer_descriptors,
+    get_audios_durations,
+    get_audios_f0_descriptors,
+    get_audios_harmonicity_descriptors,
+    get_audios_jitter_descriptors,
+    get_audios_shimmer_descriptors,
 )
 
-get_hf_dataset_durations_pt = pydra.mark.task(get_hf_dataset_durations)
-get_hf_dataset_f0_descriptors_pt = pydra.mark.task(
-    get_hf_dataset_f0_descriptors
-)
-get_hf_dataset_harmonicity_descriptors_pt = pydra.mark.task(
-    get_hf_dataset_harmonicity_descriptors
-)
-get_hf_dataset_jitter_descriptors_pt = pydra.mark.task(
-    get_hf_dataset_jitter_descriptors
-)
-get_hf_dataset_shimmer_descriptors_pt = pydra.mark.task(
-    get_hf_dataset_shimmer_descriptors
-)
+get_audios_durations_pt = pydra.mark.task(get_audios_durations)
+get_audios_f0_descriptors_pt = pydra.mark.task(get_audios_f0_descriptors)
+get_audios_harmonicity_descriptors_pt = pydra.mark.task(get_audios_harmonicity_descriptors)
+get_audios_jitter_descriptors_pt = pydra.mark.task(get_audios_jitter_descriptors)
+get_audios_shimmer_descriptors_pt = pydra.mark.task(get_audios_shimmer_descriptors)
