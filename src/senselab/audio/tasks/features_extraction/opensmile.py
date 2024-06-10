@@ -5,6 +5,7 @@
 from typing import Any, Dict, List
 
 import opensmile
+import pydra
 
 from senselab.utils.data_structures.audio import Audio
 
@@ -67,4 +68,6 @@ Returns:
     smile = OpenSmileFeatureExtractorFactory.get_opensmile_extractor(feature_set, feature_level)
     features = [_extract_feats_from_audio(audio, smile) for audio in audios]
     return features
+
+extract_feats_from_audios_pt = pydra.mark.task(extract_feats_from_audios)
 '''
