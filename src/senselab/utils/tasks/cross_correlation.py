@@ -1,6 +1,7 @@
 """This module contains functions for computing the normalized cross-correlation between two signals."""
 
 import numpy as np
+import pydra
 import torch
 from scipy.signal import correlate
 
@@ -49,3 +50,5 @@ def compute_normalized_cross_correlation(signal1: torch.Tensor, signal2: torch.T
 
     print(normalized_cross_correlation)
     return torch.Tensor(normalized_cross_correlation)
+
+compute_normalized_cross_correlation_pt = pydra.mark.task(compute_normalized_cross_correlation)
