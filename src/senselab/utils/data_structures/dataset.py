@@ -6,8 +6,8 @@ from typing import Any, Dict, List, Union, no_type_check
 
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
-from senselab.utils.data_structures.audio import Audio
-from senselab.utils.data_structures.video import Video
+from senselab.audio.data_structures.audio import Audio
+from senselab.video.data_structures.video import Video
 
 
 class Participant(BaseModel):

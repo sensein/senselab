@@ -3,7 +3,7 @@
 import pytest
 import torchaudio
 
-from senselab.utils.data_structures.audio import Audio
+from senselab.audio.data_structures.audio import Audio
 from senselab.utils.data_structures.dataset import Participant, SenselabDataset, Session
 
 
