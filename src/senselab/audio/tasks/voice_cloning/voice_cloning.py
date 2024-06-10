@@ -2,10 +2,11 @@
 
 from typing import Any, Dict, Optional, Tuple
 
+import pydra
 import torch
 from datasets import Dataset
 
-from senselab.utils.device import DeviceType, _select_device_and_dtype
+from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
 from senselab.utils.tasks.input_output import (
     _from_dict_to_hf_dataset,
     _from_hf_dataset_to_dict,
@@ -96,3 +97,7 @@ def clone_voice_in_dataset_with_KNNVC(
     cloned_dataset = cloned_dataset.remove_columns([source_audio_column])
 
     return _from_hf_dataset_to_dict(cloned_dataset)
+
+clone_voice_in_dataset_with_KNNVC_pt = pydra.mark.task(
+    clone_voice_in_dataset_with_KNNVC
+)
