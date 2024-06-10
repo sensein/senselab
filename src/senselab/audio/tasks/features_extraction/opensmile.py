@@ -1,59 +1,70 @@
-"""This module contains functions for extracting openSMILE features."""
+# ruff: noqa
+'''"""This module contains functions for extracting openSMILE features."""
 
-from typing import Any, Dict
+
+from typing import Any, Dict, List
 
 import opensmile
 
-from senselab.utils.tasks.input_output import (
-    _from_dict_to_hf_dataset,
-    _from_hf_dataset_to_dict,
-)
+from senselab.utils.data_structures.audio import Audio
 
 
-def extract_feats_from_dataset(
-    dataset: Dict[str, Any],
-    audio_column: str = "audio",
+class OpenSmileFeatureExtractorFactory:
+    """A factory for managing openSMILE feature extractors."""
+
+    _extractors: Dict[str, opensmile.Smile] = {}
+
+    @classmethod
+    def get_opensmile_extractor(cls, feature_set: str, feature_level: str) -> opensmile.Smile:
+        """Get or create an openSMILE feature extractor.
+
+Args:
+            feature_set (str): The openSMILE feature set.
+            feature_level (str): The openSMILE feature level.
+
+Returns:
+            opensmile.Smile: The openSMILE feature extractor.
+        """
+        key = f"{feature_set}-{feature_level}"
+        if key not in cls._extractors:
+            cls._extractors[key] = opensmile.Smile(
+                feature_set=opensmile.FeatureSet[feature_set],
+                feature_level=opensmile.FeatureLevel[feature_level],
+            )
+        return cls._extractors[key]
+
+def extract_feats_from_audios(
+    audios: List[Audio],
     feature_set: str = "eGeMAPSv02",
     feature_level: str = "Functionals",
-) -> Dict[str, Any]:
-    """Apply feature extraction across a dataset of audio files.
+) -> List[Dict[str, Any]]:
+    """Apply feature extraction across a list of audio files.
 
-    Low-level descriptors are extracted on 20ms windows with a hop of 10ms.
-    Functional descriptors are extracted on the entire audio signal.
+Args:
+        audios (List[Audio]): The list of audio objects to extract features from.
+        feature_set (str): The openSMILE feature set (default is "eGeMAPSv02").
+        feature_level (str): The openSMILE feature level (default is "Functionals").
+
+Returns:
+        List[Dict[str, Any]]: The list of feature dictionaries for each audio.
     """
+    def _extract_feats_from_audio(sample: Audio, smile: opensmile.Smile) -> Dict[str, Any]:
+        """Extract features from a single audio sample using openSMILE.
 
-    def _load_opensmile_model(
-        feature_set: str, feature_level: str
-    ) -> opensmile.Smile:
-        """Load an openSMILE configuration to extract audio features."""
-        smile = opensmile.Smile(
-            feature_set=opensmile.FeatureSet[feature_set],
-            feature_level=opensmile.FeatureLevel[feature_level],
-        )
-        return smile
+Args:
+            sample (Audio): The audio object.
+            smile (opensmile.Smile): The openSMILE feature extractor.
 
-    def _extract_feats_from_row(
-        sample: Dict[str, Any], smile: opensmile.Smile, audio_column: str
-    ) -> Dict[str, Any]:
-        """Extract features from a single audio sample using openSMILE."""
-        # Extracting audio data
-        audio_array = sample[audio_column]["array"]
-        sampling_rate = sample[audio_column]["sampling_rate"]
-
-        # Processing the audio sample to compute features
+Returns:
+            Dict[str, Any]: The extracted features as a dictionary.
+        """
+        audio_array = sample.waveform.squeeze().numpy()
+        sampling_rate = sample.sampling_rate
         sample_features = smile.process_signal(audio_array, sampling_rate)
-        return sample_features.to_dict("list")
+        # Convert to a dictionary with float values and return it
+        return {k: v[0] if isinstance(v, list) and len(v) == 1 else v for k, v in sample_features.to_dict("list").items()}
 
-    hf_dataset = _from_dict_to_hf_dataset(dataset)
-    unnecessary_columns = [
-        col for col in hf_dataset.column_names if col != audio_column
-    ]
-    hf_dataset = hf_dataset.remove_columns(unnecessary_columns)
-
-    smile = _load_opensmile_model(feature_set, feature_level)
-    features_dataset = hf_dataset.map(
-        _extract_feats_from_row,
-        fn_kwargs={"smile": smile, "audio_column": audio_column},
-    )
-    features_dataset = features_dataset.remove_columns([audio_column])
-    return _from_hf_dataset_to_dict(features_dataset)
+    smile = OpenSmileFeatureExtractorFactory.get_opensmile_extractor(feature_set, feature_level)
+    features = [_extract_feats_from_audio(audio, smile) for audio in audios]
+    return features
+'''
