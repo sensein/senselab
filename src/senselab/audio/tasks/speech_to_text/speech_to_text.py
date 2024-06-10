@@ -2,13 +2,14 @@
 
 from typing import Any, Dict, List, Optional
 
+import pydra
 from pydantic import BaseModel, ValidationInfo, field_validator
 from transformers import pipeline
 
-from senselab.utils.data_structures.audio import Audio
+from senselab.audio.data_structures.audio import Audio
+from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
+from senselab.utils.data_structures.huggingface import HFModel, SenselabModel
 from senselab.utils.data_structures.language import Language
-from senselab.utils.device import DeviceType, _select_device_and_dtype
-from senselab.utils.hf import HFModel, SenselabModel
 
 
 class Transcript(BaseModel):
@@ -229,5 +230,6 @@ def transcribe_audios_with_transformers(
     transcriptions = pipe(
         formatted_audios, generate_kwargs={"language": f"{language.name.lower()}"} if language else {}
     )
-
     return [Transcript.from_dict(t) for t in transcriptions]
+
+transcribe_audios_pt = pydra.mark.task(transcribe_audios)

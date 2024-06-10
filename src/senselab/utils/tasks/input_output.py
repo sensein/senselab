@@ -3,6 +3,7 @@
 import os
 from typing import Any, Dict, List, Union
 
+import pydra
 from datasets import Audio, Dataset, Image, load_dataset
 
 from senselab.utils.file import File, from_strings_to_files
@@ -184,3 +185,9 @@ def _from_dict_to_hf_dataset(
             dataset = dataset.cast_column(column, Audio(mono=False))
 
     return dataset
+
+read_files_from_disk_pt = pydra.mark.task(read_files_from_disk)
+read_dataset_from_disk_pt = pydra.mark.task(read_dataset_from_disk)
+read_dataset_from_hub_pt = pydra.mark.task(read_dataset_from_hub)
+push_dataset_to_hub_pt = pydra.mark.task(push_dataset_to_hub)
+save_dataset_to_disk_pt = pydra.mark.task(save_dataset_to_disk)
