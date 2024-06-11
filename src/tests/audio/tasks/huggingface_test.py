@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from senselab.utils.data_structures.huggingface import HFModel, check_hf_repo_exists
+from senselab.utils.data_structures.model import HFModel, check_hf_repo_exists
 
 
 def test_check_hf_repo_exists_true() -> None:
@@ -22,13 +22,13 @@ def test_check_hf_repo_exists_false() -> None:
 
 def test_hfmodel_valid_hf_repo_check() -> None:
     """Test valid HFModel repo check."""
-    with patch("senselab.utils.data_structures.huggingface.check_hf_repo_exists", return_value=True):
+    with patch("senselab.utils.data_structures.model.check_hf_repo_exists", return_value=True):
         model = HFModel(path_or_uri="valid_repo")
         assert model.revision == "main"
 
 
 def test_hfmodel_invalid_hf_repo_check() -> None:
     """Test invalid HFModel repo check."""
-    with patch("senselab.utils.data_structures.huggingface.check_hf_repo_exists", return_value=False):
+    with patch("senselab.utils.data_structures.model.check_hf_repo_exists", return_value=False):
         with pytest.raises(ValueError):
             HFModel(path_or_uri="invalid/repo")
