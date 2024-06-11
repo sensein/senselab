@@ -1,5 +1,5 @@
 """This module provides the implementation of torchaudio utilities for audio features extraction."""
-from typing import Optional, List
+from typing import List, Optional
 
 import torch
 import torchaudio
