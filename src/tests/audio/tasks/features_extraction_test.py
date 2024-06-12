@@ -39,9 +39,9 @@ def test_extract_spectrogram_from_audios(sample_audios: List[Audio]) -> None:
     assert all(isinstance(spec, dict) for spec in result)
     assert all('spectrogram' in spec for spec in result)
     assert all(isinstance(spec['spectrogram'], torch.Tensor) for spec in result)
-    # Spectrogram shape is (audios, freq, time)
-    assert all(spec['spectrogram'].dim() == 3 for spec in result)  
-    assert all(spec['spectrogram'].shape[1] == 201 for spec in result)
+    # Spectrogram shape is (freq, time) # TODO: CHECK THIS!!!
+    assert all(spec['spectrogram'].dim() == 2 for spec in result)  
+    assert all(spec['spectrogram'].shape[0] == 201 for spec in result)
 
 def test_extract_mel_spectrogram_from_audios(sample_audios: List[Audio]) -> None:
     """Test extraction of mel spectrogram from audio."""
@@ -50,9 +50,9 @@ def test_extract_mel_spectrogram_from_audios(sample_audios: List[Audio]) -> None
     assert all(isinstance(spec, dict) for spec in result)
     assert all('mel_spectrogram' in spec for spec in result)
     assert all(isinstance(spec['mel_spectrogram'], torch.Tensor) for spec in result)
-    # Mel spectrogram shape is (audios, n_mels, time)
-    assert all(spec['mel_spectrogram'].dim() == 3 for spec in result)  
-    assert all(spec['mel_spectrogram'].shape[1] == 128 for spec in result)
+    # Mel spectrogram shape is (n_mels, time)
+    assert all(spec['mel_spectrogram'].dim() == 2 for spec in result)  
+    assert all(spec['mel_spectrogram'].shape[0] == 128 for spec in result)
 
 def test_extract_mfcc_from_audios(sample_audios: List[Audio]) -> None:
     """Test extraction of MFCC from audio."""
@@ -61,9 +61,9 @@ def test_extract_mfcc_from_audios(sample_audios: List[Audio]) -> None:
     assert all(isinstance(mfcc, dict) for mfcc in result)
     assert all('mfcc' in mfcc for mfcc in result)
     assert all(isinstance(mfcc['mfcc'], torch.Tensor) for mfcc in result)
-    # MFCC shape is (audios, n_mfcc, time)
-    assert all(mfcc['mfcc'].dim() == 3 for mfcc in result)
-    assert all(mfcc['mfcc'].shape[1] == 40 for mfcc in result)
+    # MFCC shape is (n_mfcc, time)
+    assert all(mfcc['mfcc'].dim() == 2 for mfcc in result)
+    assert all(mfcc['mfcc'].shape[0] == 40 for mfcc in result)
 
 def test_extract_mel_filter_bank(sample_audios: List[Audio]) -> None:
     """Test extraction of mel filter bank from audio."""
@@ -72,9 +72,9 @@ def test_extract_mel_filter_bank(sample_audios: List[Audio]) -> None:
     assert all(isinstance(mel_fb, dict) for mel_fb in result)
     assert all('mel_filter_bank' in mel_fb for mel_fb in result)
     assert all(isinstance(mel_fb['mel_filter_bank'], torch.Tensor) for mel_fb in result)
-    # Mel filter bank shape is (audios, n_mels, time)
-    assert all(mel_fb['mel_filter_bank'].dim() == 3 for mel_fb in result)
-    assert all(mel_fb['mel_filter_bank'].shape[1] == 128 for mel_fb in result)
+    # Mel filter bank shape is (n_mels, time)
+    assert all(mel_fb['mel_filter_bank'].dim() == 2 for mel_fb in result)
+    assert all(mel_fb['mel_filter_bank'].shape[0] == 128 for mel_fb in result)
 
 def test_extract_pitch_from_audios(sample_audios: List[Audio]) -> None:
     """Test extraction of pitch from audio."""
@@ -83,8 +83,8 @@ def test_extract_pitch_from_audios(sample_audios: List[Audio]) -> None:
     assert all(isinstance(pitch, dict) for pitch in result)
     assert all('pitch' in pitch for pitch in result)
     assert all(isinstance(pitch['pitch'], torch.Tensor) for pitch in result)
-    # Pitch shape is (audios, time)
-    assert all(pitch['pitch'].dim() == 2 for pitch in result)  
+    # Pitch shape is (time)
+    assert all(pitch['pitch'].dim() == 1 for pitch in result)  
     
 def test_get_audios_durations(sample_audios: List[Audio]) -> None:
     """Test extraction of audio durations."""
@@ -174,7 +174,8 @@ def test_extract_subjective_quality_features_from_audios(sample_audios: List[Aud
     sample_audios = select_channel_from_audios(sample_audios, 0) # Convert to mono
     sample_audios = resample_audios(sample_audios, 16000) # Set to 16000 Hz
 
-    result = extract_subjective_quality_features_from_audios(sample_audios, sample_audios)
+    result = extract_subjective_quality_features_from_audios(audio_list=sample_audios, 
+                                                             non_matching_references=sample_audios)
     assert isinstance(result, dict)
     assert 'mos' in result
     assert all(isinstance(feature, float) for feature in result['mos'])
@@ -182,4 +183,5 @@ def test_extract_subjective_quality_features_from_audios(sample_audios: List[Aud
 def test_extract_subjective_quality_features_invalid_audio(sample_audios: List[Audio]) -> None:
     """Test extraction of subjective quality features from invalid audio."""
     with pytest.raises(ValueError, match="Only 16000 Hz sampling rate is supported by Torchaudio-Squim model."):
-        extract_subjective_quality_features_from_audios(sample_audios, sample_audios)
+        extract_subjective_quality_features_from_audios(audio_list=sample_audios, 
+                                                        non_matching_references=sample_audios)

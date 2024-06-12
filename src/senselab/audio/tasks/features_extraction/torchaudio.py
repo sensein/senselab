@@ -37,7 +37,7 @@ def extract_spectrogram_from_audios(audios: List[Audio],
     for audio in audios:
         spectrograms.append(
             {
-                "spectrogram": spectrogram(audio.waveform)
+                "spectrogram": spectrogram(audio.waveform).squeeze(0)
             }
         )
     return spectrograms
@@ -78,7 +78,7 @@ def extract_mel_spectrogram_from_audios(audios: List[Audio],
         )(audio.waveform)
         mel_spectrograms.append(
             {
-                "mel_spectrogram": mel_spectrogram
+                "mel_spectrogram": mel_spectrogram.squeeze(0)
             }
         )
     return mel_spectrograms
@@ -124,7 +124,7 @@ def extract_mfcc_from_audios(audios: List[Audio],
         )
         mfccs.append(
             {
-                "mfcc": mfcc_transform(audio.waveform)
+                "mfcc": mfcc_transform(audio.waveform).squeeze(0)
             }
         )
     return mfccs
@@ -164,7 +164,7 @@ def extract_mel_filter_bank_from_audios(audios: List[Audio],
                                                             n_stft=n_stft)
         mel_filter_banks.append(
             {
-                "mel_filter_bank": melscale_transform(spectrograms[i]['spectrogram'])
+                "mel_filter_bank": melscale_transform(spectrograms[i]['spectrogram']).squeeze(0)
             }
         )
     return mel_filter_banks
@@ -195,7 +195,7 @@ def extract_pitch_from_audios(audios: List[Audio],
                     sample_rate=audio.sampling_rate,
                     freq_low=freq_low,
                     freq_high=freq_high
-                )
+                ).squeeze(0)
             }
         )
     return pitches
