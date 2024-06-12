@@ -5,6 +5,7 @@ import pytest
 import torch
 
 from senselab.audio.data_structures.audio import Audio
+from senselab.audio.tasks.features_extraction.opensmile import extract_opensmile_features_from_audios
 from senselab.audio.tasks.features_extraction.praat_parselmouth import (
     get_audios_durations,
     get_audios_f0_descriptors,
@@ -185,3 +186,21 @@ def test_extract_subjective_quality_features_invalid_audio(sample_audios: List[A
     with pytest.raises(ValueError, match="Only 16000 Hz sampling rate is supported by Torchaudio-Squim model."):
         extract_subjective_quality_features_from_audios(audio_list=sample_audios, 
                                                         non_matching_references=sample_audios)
+
+def test_extract_opensmile_features_from_audios(sample_audios: List[Audio]) -> None:
+    """Test extraction of openSMILE features from audio."""
+    # Perform eGeMAPSv02 and Functionals features extraction 
+    result = extract_opensmile_features_from_audios(sample_audios)
+
+    # Assert the result is a list of dictionaries, and check each dictionary
+    assert isinstance(result, list)
+    assert all(isinstance(features, dict) for features in result)
+
+    # Ensure that each dictionary contains the expected keys (e.g., certain features from eGeMAPS)
+    expected_keys = {'F0semitoneFrom27.5Hz_sma3nz_amean', 'jitterLocal_sma3nz_amean', 'shimmerLocaldB_sma3nz_amean'}
+    for features in result:
+        assert set(features.keys()).issuperset(expected_keys)
+
+    # Check the types of the values to ensure they are either floats or integers
+    for features in result:
+        assert all(isinstance(value, (float, int)) for value in features.values())

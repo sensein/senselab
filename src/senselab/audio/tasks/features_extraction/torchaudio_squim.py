@@ -1,6 +1,7 @@
 """This module provides the implementation of torchaudio squim utilities for audio features extraction."""
 from typing import Any, Dict, List
 
+import pydra
 from torchaudio.pipelines import SQUIM_OBJECTIVE, SQUIM_SUBJECTIVE
 
 from senselab.audio.data_structures.audio import Audio
@@ -72,3 +73,10 @@ def extract_subjective_quality_features_from_audios(audio_list: List[Audio],
         features["mos"].append(mos.item())
     
     return features
+
+extract_objective_quality_features_from_audios_pt = pydra.mark_as.external(
+    extract_objective_quality_features_from_audios
+    )
+extract_subjective_quality_features_from_audios_pt = pydra.mark_as.external(
+    extract_subjective_quality_features_from_audios
+    )
