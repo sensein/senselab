@@ -6,7 +6,7 @@ import parselmouth
 import pydra
 from parselmouth.praat import call
 
-from senselab.utils.data_structures.audio import Audio
+from senselab.audio.data_structures.audio import Audio
 
 
 def get_audios_durations(audios: List[Audio]) -> List[Dict[str, float]]:
