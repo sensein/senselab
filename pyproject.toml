@@ -49,6 +49,7 @@ jiwer = "^3.0.4"
 speechbrain = "^1.0.0"
 pyannote-audio = "^3.2.0"
 opensmile = "*"
+pycountry = "^24.6.1"
 
 [tool.poetry.group.dev]
 optional = true

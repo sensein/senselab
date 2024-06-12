@@ -58,7 +58,7 @@ def _select_device_and_dtype(
     if user_preference:
         if user_preference not in useable_devices:
             raise ValueError(
-                "Requested user DeviceType is either not available or\
+                "The requested DeviceType is either not available or\
                              compatible with this functionality."
             )
         else:
@@ -71,7 +71,4 @@ def _select_device_and_dtype(
         elif DeviceType.CPU in useable_devices:
             return DeviceType.CPU, DTYPE_MAP[DeviceType.CPU]
         else:
-            raise ValueError(
-                "Something went really wrong and no devices were available or \
-                             compatible."
-            )
+            raise ValueError("Something went wrong and no devices were available or compatible.")
