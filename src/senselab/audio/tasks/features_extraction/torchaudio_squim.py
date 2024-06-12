@@ -74,9 +74,9 @@ def extract_subjective_quality_features_from_audios(audio_list: List[Audio],
     
     return features
 
-extract_objective_quality_features_from_audios_pt = pydra.mark_as.external(
+extract_objective_quality_features_from_audios_pt = pydra.mark.task(
     extract_objective_quality_features_from_audios
     )
-extract_subjective_quality_features_from_audios_pt = pydra.mark_as.external(
+extract_subjective_quality_features_from_audios_pt = pydra.mark.task(
     extract_subjective_quality_features_from_audios
     )
