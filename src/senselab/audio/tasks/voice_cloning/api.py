@@ -8,7 +8,7 @@ from senselab.audio.data_structures.audio import Audio
 from senselab.utils.data_structures.device import DeviceType
 from senselab.utils.data_structures.model import SenselabModel, TorchModel
 
-from .knnvc import KNNVC
+from senselab.audio.tasks.voice_cloning.knnvc import KNNVC
 
 
 def clone_voices(

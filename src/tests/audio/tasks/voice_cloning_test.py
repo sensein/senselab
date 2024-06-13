@@ -75,3 +75,32 @@ def test_clone_voices_unsupported_model(audio_sample: Audio) -> None:
             model=unsupported_model,
             device=DeviceType.CPU
         )
+
+def test_clone_voices_valid_input(audio_sample: Audio, torch_model: TorchModel) -> None:
+    """Test cloning voices with valid input."""
+    source_audios = [audio_sample]
+    target_audios = [audio_sample]
+
+    try:
+        cloned_output = clone_voices(
+            source_audios=source_audios,
+            target_audios=target_audios,
+            model=torch_model,
+            device=DeviceType.CPU,
+            topk=5,
+            prematched_vocoder=False
+        )
+        assert isinstance(cloned_output, list), "Output must be a list."
+        assert len(cloned_output) == 1, "Output list should contain exactly one audio sample."
+        assert isinstance(cloned_output[0], Audio), "Each item in the output list should be an instance of Audio."
+        source_duration = source_audios[0].waveform.shape[1]
+        cloned_duration = cloned_output[0].waveform.shape[1]
+
+        # Set tolerance to 1% of source duration
+        tolerance = 0.01 * source_duration
+
+        # Check if the absolute difference is within the tolerance
+        assert abs(source_duration - cloned_duration) <= tolerance, \
+            f"Cloned audio duration is not within acceptable range. Source: {source_duration}, Cloned: {cloned_duration}"
+    except Exception as e:
+        pytest.fail(f"An unexpected exception occurred: {e}")
