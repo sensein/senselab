@@ -38,7 +38,7 @@ soundfile = "^0.12.1"
 ffmpeg-python = "^0.2.0"
 ipykernel = "^6.29.4"
 pydra = "^0.23"
-pydantic = "^2.7.3"
+pydantic = "^2.7.4"
 accelerate = "^0.29.3"
 huggingface-hub = "^0.23.3"
 praat-parselmouth = "^0.4.3"
@@ -50,6 +50,7 @@ speechbrain = "^1.0.0"
 pyannote-audio = "^3.2.0"
 pycountry = "^24.6.1"
 types-requests = "^2.32.0.20240602"
+opensmile = "*"
 
 [tool.poetry.group.dev]
 optional = true
@@ -140,6 +141,7 @@ line-ending = "auto"
 [tool.poetry-dynamic-versioning]
 enable = true
 vcs = "git"
+bump = true
 style = "pep440"
 pattern = "default-unprefixed"
 
