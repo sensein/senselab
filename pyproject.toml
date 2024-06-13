@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "senselab"
-version = "0.0.2"
+version = "0.0.1"
 description = "Senselab is a Python package that simplifies building pipelines for speech and voice analysis."
 authors = [
   "Fabio Catania <fabiocat@mit.edu>",
