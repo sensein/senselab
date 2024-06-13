@@ -137,6 +137,6 @@ jobs:
       shell: bash
     - name: Run codespell
       run: |
-        poetry run pip install codespell
+        poetry run pip install codespell tomli
         poetry run codespell
       shell: bash
