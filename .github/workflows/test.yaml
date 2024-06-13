@@ -52,6 +52,7 @@ jobs:
           ${{ runner.os }}-poetry-
     - name: Install dependencies with Poetry
       run: |
+        poetry run pip install iso-639
         poetry install --with dev
       shell: bash
     - name: Run unit tests
@@ -116,6 +117,7 @@ jobs:
           ${{ runner.os }}-poetry-
     - name: Install dependencies with Poetry
       run: |
+        poetry run pip install iso-639
         poetry install --with dev
       shell: bash
     - name: Run mypy
@@ -154,6 +156,7 @@ jobs:
           ${{ runner.os }}-poetry-
     - name: Install dependencies with Poetry
       run: |
+        poetry run pip install iso-639
         poetry install --with dev
       shell: bash
     - name: Run codespell
