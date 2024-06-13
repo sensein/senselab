@@ -100,7 +100,10 @@ def test_clone_voices_valid_input(audio_sample: Audio, torch_model: TorchModel) 
         tolerance = 0.01 * source_duration
 
         # Check if the absolute difference is within the tolerance
-        assert abs(source_duration - cloned_duration) <= tolerance, \
-            f"Cloned audio duration is not within acceptable range. Source: {source_duration}, Cloned: {cloned_duration}"
+        assert abs(source_duration - cloned_duration) <= tolerance, (
+        f"Cloned audio duration is not within acceptable range. Source: {source_duration}, "
+            f"Cloned: {cloned_duration}"
+        )
+
     except Exception as e:
         pytest.fail(f"An unexpected exception occurred: {e}")

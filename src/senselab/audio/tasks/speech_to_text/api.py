@@ -5,12 +5,11 @@ from typing import List, Optional
 import pydra
 
 from senselab.audio.data_structures.audio import Audio
+from senselab.audio.tasks.speech_to_text.huggingface import HuggingFaceASR
+from senselab.audio.tasks.speech_to_text.transcript import Transcript
 from senselab.utils.data_structures.device import DeviceType
 from senselab.utils.data_structures.language import Language
 from senselab.utils.data_structures.model import HFModel, SenselabModel
-
-from senselab.audio.tasks.speech_to_text.huggingface import HuggingFaceASR
-from senselab.audio.tasks.speech_to_text.transcript import Transcript
 
 
 def transcribe_audios(

@@ -1,14 +1,13 @@
 """This module implements some utilities for the voice cloning task."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 import pydra
 
 from senselab.audio.data_structures.audio import Audio
+from senselab.audio.tasks.voice_cloning.knnvc import KNNVC
 from senselab.utils.data_structures.device import DeviceType
 from senselab.utils.data_structures.model import SenselabModel, TorchModel
-
-from senselab.audio.tasks.voice_cloning.knnvc import KNNVC
 
 
 def clone_voices(
@@ -16,7 +15,7 @@ def clone_voices(
     target_audios: List[Audio],
     model: SenselabModel,
     device: Optional[DeviceType] = None,
-    **kwargs: Dict[str, Any]
+    **kwargs: Any # noqa:ANN401
 ) -> List[Audio]:
     """Clones voices from source audios to target audios using the given model."""
     if len(source_audios) != len(target_audios):
