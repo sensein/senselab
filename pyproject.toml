@@ -140,6 +140,7 @@ line-ending = "auto"
 [tool.poetry-dynamic-versioning]
 enable = true
 vcs = "git"
+bump = true
 style = "pep440"
 pattern = "default-unprefixed"
 
