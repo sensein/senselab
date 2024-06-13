@@ -45,7 +45,7 @@ def test_clone_voices_invalid_topk(audio_sample: Audio, torch_model: TorchModel)
             target_audios=target_audios,
             model=torch_model,
             device=DeviceType.CPU,
-            topk="invalid"
+            topk="invalid" # type: ignore[arg-type]
         )
 
 def test_clone_voices_invalid_prematched_vocoder(audio_sample: Audio, torch_model: TorchModel) -> None:
@@ -59,7 +59,7 @@ def test_clone_voices_invalid_prematched_vocoder(audio_sample: Audio, torch_mode
             target_audios=target_audios,
             model=torch_model,
             device=DeviceType.CPU,
-            prematched_vocoder="invalid"
+            prematched_vocoder="invalid" # type: ignore[arg-type]
         )
 
 def test_clone_voices_unsupported_model(audio_sample: Audio) -> None:
