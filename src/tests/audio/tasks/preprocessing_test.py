@@ -5,13 +5,13 @@ import math
 import pytest
 import torch
 
-from senselab.audio.tasks.preprocessing import (
+from senselab.audio.data_structures.audio import Audio
+from senselab.audio.tasks.preprocessing.preprocessing import (
     chunk_audios,
     downmix_audios_to_mono,
     resample_audios,
     select_channel_from_audios,
 )
-from senselab.utils.data_structures.audio import Audio
 
 
 def test_resample_audios() -> None:
