@@ -105,18 +105,12 @@ jobs:
         pipx ensurepath
       shell: bash
     - name: Install poetry
-      run: pipx install poetry mypy
+      run: pipx install poetry
       shell: bash
-    # Cache Poetry dependencies to speed up builds
-    - name: Cache Poetry virtualenv
-      uses: actions/cache@v3
-      with:
-        path: ~/.cache/pypoetry
-        key: ${{ runner.os }}-poetry-${{ hashFiles('**/poetry.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-poetry-
     - name: Run mypy
-      run: poetry run mypy .
+      run: |
+        poetry run pip install mypy pydantic
+        poetry run mypy .
       shell: bash
 
   codespell:
@@ -139,16 +133,10 @@ jobs:
         pipx ensurepath
       shell: bash
     - name: Install poetry
-      run: pipx install poetry codespell
+      run: pipx install poetry
       shell: bash
-    # Cache Poetry dependencies to speed up builds
-    - name: Cache Poetry virtualenv
-      uses: actions/cache@v3
-      with:
-        path: ~/.cache/pypoetry
-        key: ${{ runner.os }}-poetry-${{ hashFiles('**/poetry.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-poetry-
     - name: Run codespell
-      run: poetry run codespell
+      run: |
+        poetry run pip install codespell
+        poetry run codespell
       shell: bash
