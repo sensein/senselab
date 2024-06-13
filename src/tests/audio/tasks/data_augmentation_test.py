@@ -3,8 +3,8 @@
 import torch
 from torch_audiomentations import Compose, PolarityInversion
 
-from senselab.audio.tasks.data_augmentation import augment_audios
-from senselab.utils.data_structures.audio import Audio
+from senselab.audio.data_structures.audio import Audio
+from senselab.audio.tasks.data_augmentation.data_augmentation import augment_audios
 from senselab.utils.data_structures.dataset import SenselabDataset
 
 

@@ -3,10 +3,11 @@
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
+import pydra
 from datasets import Dataset
 from transformers import pipeline
 
-from senselab.utils.device import DeviceType, _select_device_and_dtype
+from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
 from senselab.utils.hf import HFModel
 from senselab.utils.tasks.input_output import (
     _from_dict_to_hf_dataset,
@@ -93,3 +94,5 @@ def transcribe_dataset_with_hf(
     )
     transcript_dataset = transcript_dataset.remove_columns([audio_column])
     return _from_hf_dataset_to_dict(transcript_dataset)
+
+transcribe_dataset_with_hf_pt = pydra.mark.task(transcribe_dataset_with_hf)

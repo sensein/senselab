@@ -2,15 +2,16 @@
 
 from typing import List, Union
 
+import pydra
 import torch
 from torch_audiomentations import Compose
 
-from senselab.utils.data_structures.audio import (
+from senselab.audio.data_structures.audio import (
     Audio,
     batch_audios,
     unbatch_audios,
 )
-from senselab.utils.device import DeviceType, _select_device_and_dtype
+from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
 
 
 def augment_audios(
@@ -63,3 +64,5 @@ def augment_audios(
         return unbatch_audios(augmented_audio, sampling_rates, metadatas)
 
     return new_audios
+
+augment_audios_pt = pydra.mark.task(augment_audios)

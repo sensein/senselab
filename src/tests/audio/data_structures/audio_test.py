@@ -3,7 +3,7 @@
 import torch
 import torchaudio
 
-from senselab.utils.data_structures.audio import Audio
+from senselab.audio.data_structures.audio import Audio
 
 
 def test_audio_creation() -> None:
