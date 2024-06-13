@@ -40,7 +40,7 @@ jobs:
         pipx ensurepath
       shell: bash
     - name: Install poetry
-      run: pipx install poetry
+      run: pipx install poetry==1.7.1
       shell: bash
     # Cache Poetry dependencies to speed up builds
     - name: Cache Poetry virtualenv
@@ -105,7 +105,7 @@ jobs:
         pipx ensurepath
       shell: bash
     - name: Install poetry
-      run: pipx install poetry
+      run: pipx install poetry mypy
       shell: bash
     # Cache Poetry dependencies to speed up builds
     - name: Cache Poetry virtualenv
@@ -115,11 +115,6 @@ jobs:
         key: ${{ runner.os }}-poetry-${{ hashFiles('**/poetry.lock') }}
         restore-keys: |
           ${{ runner.os }}-poetry-
-    - name: Install dependencies with Poetry
-      run: |
-        poetry run pip install iso-639
-        poetry install --with dev
-      shell: bash
     - name: Run mypy
       run: poetry run mypy .
       shell: bash
@@ -144,7 +139,7 @@ jobs:
         pipx ensurepath
       shell: bash
     - name: Install poetry
-      run: pipx install poetry
+      run: pipx install poetry codespell
       shell: bash
     # Cache Poetry dependencies to speed up builds
     - name: Cache Poetry virtualenv
@@ -154,11 +149,6 @@ jobs:
         key: ${{ runner.os }}-poetry-${{ hashFiles('**/poetry.lock') }}
         restore-keys: |
           ${{ runner.os }}-poetry-
-    - name: Install dependencies with Poetry
-      run: |
-        poetry run pip install iso-639
-        poetry install --with dev
-      shell: bash
     - name: Run codespell
       run: poetry run codespell
       shell: bash
