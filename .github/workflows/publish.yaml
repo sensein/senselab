@@ -38,9 +38,6 @@ jobs:
     - name: Install poetry dynamic versioning tool
       run: pipx inject poetry "poetry-dynamic-versioning[plugin]"
       shell: bash
-    - name: Install dependencies with Poetry
-      run: poetry install --with dev
-      shell: bash
     - name: Build package
       run: poetry build
       shell: bash

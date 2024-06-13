@@ -33,8 +33,6 @@ torch = "^2.2.2"
 torchvision = "^0.17.2"
 torchaudio = "^2.2.2"
 transformers = "^4.39.3"
-librosa = "^0.10.1"
-soundfile = "^0.12.1"
 ffmpeg-python = "^0.2.0"
 ipykernel = "^6.29.4"
 pydra = "^0.23"
@@ -48,6 +46,8 @@ sentence-transformers = "^2.7.0"
 jiwer = "^3.0.4"
 speechbrain = "^1.0.0"
 pyannote-audio = "^3.2.0"
+pycountry = "^24.6.1"
+opensmile = "^2.5.0"
 
 [tool.poetry.group.dev]
 optional = true
