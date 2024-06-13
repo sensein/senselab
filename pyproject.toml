@@ -48,7 +48,9 @@ sentence-transformers = "^2.7.0"
 jiwer = "^3.0.4"
 speechbrain = "^1.0.0"
 pyannote-audio = "^3.2.0"
-opensmile = "*"
+pycountry = "^24.6.1"
+opensmile = "^2.5.0"
+iso-639 = {path = "iso-639-0.4.5.tar.gz"}
 
 [tool.poetry.group.dev]
 optional = true
