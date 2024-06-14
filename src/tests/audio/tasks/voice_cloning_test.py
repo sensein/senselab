@@ -1,6 +1,7 @@
 """This script is for testing the voice cloning API."""
 
 import os
+
 import pytest
 
 from senselab.audio.data_structures.audio import Audio
