@@ -1,12 +1,7 @@
 name: Python Tests
 
 on:
-  push:
-    branches:
-    - main
   pull_request:
-  schedule:
-  - cron: 0 6 1 * *
 
 jobs:
   unit:
@@ -42,14 +37,6 @@ jobs:
     - name: Install poetry
       run: pipx install poetry==1.7.1
       shell: bash
-    # Cache Poetry dependencies to speed up builds
-    - name: Cache Poetry virtualenv
-      uses: actions/cache@v3
-      with:
-        path: ~/.cache/pypoetry
-        key: ${{ runner.os }}-poetry-${{ hashFiles('**/poetry.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-poetry-
     - name: Install dependencies with Poetry
       run: |
         poetry run pip install iso-639
