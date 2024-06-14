@@ -1,4 +1,5 @@
 """This script contains unit tests for the features extraction tasks."""
+import os
 from typing import List
 
 import pytest
@@ -149,6 +150,7 @@ def test_get_audios_shimmer_descriptors(sample_audios: List[Audio]) -> None:
     assert all(isinstance(shimmer['apq11_shimmer'], float) for shimmer in result)
     assert all(isinstance(shimmer['dda_shimmer'], float) for shimmer in result)
 
+@pytest.mark.skipif(os.getenv('GITHUB_ACTIONS') == 'true', reason="Not enough space for this test on GitHub")
 def test_extract_objective_quality_features_from_audios(sample_audios: List[Audio]) -> None:
     """Test extraction of objective quality features from audio."""
     # Ensure the sample audios are in the required format for the test
@@ -169,6 +171,7 @@ def test_extract_objective_quality_features_from_audios_invalid_audio(sample_aud
     with pytest.raises(ValueError, match="Only 16000 Hz sampling rate is supported by Torchaudio-Squim model."):
         extract_objective_quality_features_from_audios(sample_audios)
 
+@pytest.mark.skipif(os.getenv('GITHUB_ACTIONS') == 'true', reason="Not enough space for this test on GitHub")
 def test_extract_subjective_quality_features_from_audios(sample_audios: List[Audio]) -> None:
     """Test extraction of subjective quality features from audio."""
     # Ensure the sample audios are in the required format for the test
