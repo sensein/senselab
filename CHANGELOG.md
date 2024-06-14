@@ -1,3 +1,15 @@
+# 0.2.1 (Thu Jun 13 2024)
+
+#### 🐛 Bug Fix
+
+- ref: adjust poetry to install opensmile dependency [#62](https://github.com/sensein/senselab/pull/62) ([@satra](https://github.com/satra))
+
+#### Authors: 1
+
+- Satrajit Ghosh ([@satra](https://github.com/satra))
+
+---
+
 # 0.2.0 (Mon Jun 10 2024)
 
 #### 🚀 Enhancement
