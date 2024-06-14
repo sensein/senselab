@@ -51,7 +51,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: my-artifact-${{ matrix.os }}-${ matrix.architecture }}-${{ matrix.python-version }}
-        path: .
+        path: ./my-artifact-${{ matrix.os }}-${ matrix.architecture }}-${{ matrix.python-version }}/
 
   test:
     needs: setup
@@ -79,6 +79,7 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         name: my-artifact-${{ matrix.os }}-${ matrix.architecture }}-${{ matrix.python-version }}
+        path: ./my-artifact-${{ matrix.os }}-${ matrix.architecture }}-${{ matrix.python-version }}/
     - name: Run codespell
       if: matrix.test == 'codespell'
       run: poetry run codespell
