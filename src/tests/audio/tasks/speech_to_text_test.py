@@ -3,15 +3,11 @@
 import pytest
 
 from senselab.audio.data_structures.audio import Audio
-from senselab.audio.tasks.speech_to_text.speech_to_text import (
-    ASRPipelineFactory,
-    Transcript,
-    transcribe_audios,
-    transcribe_audios_with_transformers,
-)
+from senselab.audio.tasks.speech_to_text.api import Transcript, transcribe_audios
+from senselab.audio.tasks.speech_to_text.huggingface import HuggingFaceASR
 from senselab.utils.data_structures.device import DeviceType
-from senselab.utils.data_structures.huggingface import HFModel
 from senselab.utils.data_structures.language import Language
+from senselab.utils.data_structures.model import HFModel
 
 
 @pytest.fixture
@@ -65,7 +61,7 @@ def test_transcribe_audios(sample_audio: Audio, hf_model: HFModel) -> None:
 
 def test_transcribe_audios_with_transformers(sample_audio: Audio, hf_model: HFModel) -> None:
     """Test transcribing audios with transformers."""
-    transcripts = transcribe_audios_with_transformers(
+    transcripts = HuggingFaceASR.transcribe_audios_with_transformers(
         audios=[sample_audio],
         model=hf_model,
         language=Language(language_code="English"),
@@ -82,7 +78,7 @@ def test_transcribe_audios_with_transformers(sample_audio: Audio, hf_model: HFMo
 def test_asr_pipeline_factory() -> None:
     """Test ASR pipeline factory."""
     hf_model = HFModel(path_or_uri="openai/whisper-tiny")
-    pipeline1 = ASRPipelineFactory._get_hf_asr_pipeline(
+    pipeline1 = HuggingFaceASR._get_hf_asr_pipeline(
         model=hf_model,
         return_timestamps="word",
         max_new_tokens=128,
@@ -90,7 +86,7 @@ def test_asr_pipeline_factory() -> None:
         batch_size=1,
         device=DeviceType.CPU,
     )
-    pipeline2 = ASRPipelineFactory._get_hf_asr_pipeline(
+    pipeline2 = HuggingFaceASR._get_hf_asr_pipeline(
         model=hf_model,
         return_timestamps="word",
         max_new_tokens=128,
