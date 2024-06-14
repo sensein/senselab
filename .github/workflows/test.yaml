@@ -109,7 +109,7 @@ jobs:
       shell: bash
     - name: Run mypy
       run: |
-        poetry run pip install mypy pydantic
+        poetry run pip install mypy pydantic types-requests
         poetry run mypy .
       shell: bash
 
