@@ -49,8 +49,7 @@ jobs:
     - name: Archive Dependencies
       uses: actions/upload-artifact@v4
       with:
-        name: python-dependencies
-        path: ~/.cache/my-poetry-cache
+        name: my-artifact
 
   test:
     needs: setup
@@ -77,8 +76,7 @@ jobs:
     - name: Download Dependencies
       uses: actions/download-artifact@v4
       with:
-        name: python-dependencies
-        path: ~/.cache/my-poetry-cache
+        name: my-artifact
     - name: Run codespell
       if: matrix.test == 'codespell'
       run: poetry run codespell
