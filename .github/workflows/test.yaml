@@ -9,13 +9,10 @@ jobs:
     strategy:
       matrix:
         include:
-        - {os: ubuntu-latest, architecture: x64, python-version: '3.10', test: pytest}
-        - {os: ubuntu-latest, architecture: x64, python-version: '3.10', test: mypy}
-        - {os: ubuntu-latest, architecture: x64, python-version: '3.10', test: codespell}
-        - {os: ubuntu-latest, architecture: x64, python-version: '3.10', test: ruff}
-        - {os: ubuntu-latest, architecture: x64, python-version: '3.11', test: pytest}
-        - {os: macos-latest, architecture: arm64, python-version: '3.10', test: pytest}
-        - {os: macos-latest, architecture: arm64, python-version: '3.11', test: pytest}
+        - {os: ubuntu-latest, architecture: x64, python-version: '3.10'}
+        - {os: ubuntu-latest, architecture: x64, python-version: '3.11'}
+        - {os: macos-latest, architecture: arm64, python-version: '3.10'}
+        - {os: macos-latest, architecture: arm64, python-version: '3.11'}
     steps:
     - uses: actions/checkout@v4
       with:
@@ -37,6 +34,7 @@ jobs:
       run: |
         python -m pip install --upgrade pipx
         pipx ensurepath
+        echo "$HOME/.local/bin" >> $GITHUB_PATH # Explicitly add to PATH if not already included
       shell: bash
     - name: Install poetry
       run: pipx install poetry==1.7.1
