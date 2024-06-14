@@ -1,5 +1,6 @@
 """This script is for testing the voice cloning API."""
 
+import os
 import pytest
 
 from senselab.audio.data_structures.audio import Audio
@@ -76,6 +77,7 @@ def test_clone_voices_unsupported_model(audio_sample: Audio) -> None:
             device=DeviceType.CPU
         )
 
+@pytest.mark.skipif(os.getenv('GITHUB_ACTIONS') == 'true', reason="Not enough space for this test on GitHub")
 def test_clone_voices_valid_input(audio_sample: Audio, torch_model: TorchModel) -> None:
     """Test cloning voices with valid input."""
     source_audios = [audio_sample]
