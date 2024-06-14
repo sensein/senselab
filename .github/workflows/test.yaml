@@ -7,9 +7,15 @@ jobs:
   unit:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest] # For demonstration, other OSes are commented out: macos-latest, windows-latest
-        python-version: ['3.10'] # For speeding up the process we removed "3.11" for now
+        include:
+        - {os: ubuntu-latest, architecture: x64, python-version: '3.10'}
+        - {os: ubuntu-latest, architecture: x64, python-version: '3.11'}
+        - {os: macos-latest, architecture: x64, python-version: '3.10'}
+        - {os: macos-latest, architecture: arm64, python-version: '3.10'}
+        - {os: macos-latest, architecture: x64, python-version: '3.11'}
+        - {os: macos-latest, architecture: arm64, python-version: '3.11'}
     steps:
     - uses: actions/checkout@v4
       with:  # no need for the history
