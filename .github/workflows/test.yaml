@@ -1,29 +1,29 @@
 name: Python Tests
 
 on:
-  push:
-    branches:
-    - main
   pull_request:
-  schedule:
-  - cron: 0 6 1 * *
 
 jobs:
-  unit:
+  setup:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest] # For demonstration, other OSes are commented out: macos-latest, windows-latest
-        python-version: ['3.10'] # For speeding up the process we removed "3.11" for now
+        include:
+        - {os: ubuntu-latest, architecture: x64, python-version: '3.10', test: pytest}
+        - {os: ubuntu-latest, architecture: x64, python-version: '3.10', test: mypy}
+        - {os: ubuntu-latest, architecture: x64, python-version: '3.10', test: codespell}
+        - {os: ubuntu-latest, architecture: x64, python-version: '3.10', test: ruff}
+        - {os: ubuntu-latest, architecture: x64, python-version: '3.11', test: pytest}
+        - {os: macos-latest, architecture: arm64, python-version: '3.10', test: pytest}
+        - {os: macos-latest, architecture: arm64, python-version: '3.11', test: pytest}
     steps:
     - uses: actions/checkout@v4
-      with:  # no need for the history
+      with:
         fetch-depth: 1
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-
     - name: Install ffmpeg (Ubuntu)
       if: startsWith(matrix.os, 'ubuntu')
       run: sudo apt-get update && sudo apt-get install -y ffmpeg
@@ -33,7 +33,6 @@ jobs:
     - name: Install ffmpeg (Windows)
       if: startsWith(matrix.os, 'windows')
       run: choco install ffmpeg
-
     - name: Install pipx and ensure it's up to date
       run: |
         python -m pip install --upgrade pipx
@@ -42,19 +41,35 @@ jobs:
     - name: Install poetry
       run: pipx install poetry==1.7.1
       shell: bash
-    # Cache Poetry dependencies to speed up builds
-    - name: Cache Poetry virtualenv
-      uses: actions/cache@v3
-      with:
-        path: ~/.cache/pypoetry
-        key: ${{ runner.os }}-poetry-${{ hashFiles('**/poetry.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-poetry-
     - name: Install dependencies with Poetry
       run: |
         poetry run pip install iso-639
         poetry install --with dev
       shell: bash
+
+  test:
+    needs: setup
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - {os: ubuntu-latest, architecture: x64, python-version: '3.10', test: pytest}
+        - {os: ubuntu-latest, architecture: x64, python-version: '3.10', test: mypy}
+        - {os: ubuntu-latest, architecture: x64, python-version: '3.10', test: codespell}
+        - {os: ubuntu-latest, architecture: x64, python-version: '3.10', test: ruff}
+        - {os: ubuntu-latest, architecture: x64, python-version: '3.11', test: pytest}
+        - {os: macos-latest, architecture: arm64, python-version: '3.10', test: pytest}
+        - {os: macos-latest, architecture: arm64, python-version: '3.11', test: pytest}
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Run codespell
+      if: matrix.test == 'codespell'
+      run: poetry run codespell
     - name: Run unit tests
       id: run-tests
       env:
@@ -72,71 +87,9 @@ jobs:
       uses: codecov/codecov-action@v4
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
-
-  ruff:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest] # For demonstration, other OSes are commented out: macos-latest, windows-latest
-        python-version: ['3.10'] # For speeding up the process we removed "3.11" for now
-    steps:
-    - uses: actions/checkout@v4
-      with:  # no need for the history
-        fetch-depth: 1
-    - uses: chartboost/ruff-action@v1
-
-  mypy:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest] # For demonstration, other OSes are commented out: macos-latest, windows-latest
-        python-version: ['3.10'] # For speeding up the process we removed "3.11" for now
-    steps:
-    - uses: actions/checkout@v4
-      with:  # no need for the history
-        fetch-depth: 1
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
-    - name: Install pipx and ensure it's up to date
-      run: |
-        python -m pip install --upgrade pipx
-        pipx ensurepath
-      shell: bash
-    - name: Install poetry
-      run: pipx install poetry
-      shell: bash
     - name: Run mypy
-      run: |
-        poetry run pip install mypy pydantic
-        poetry run mypy .
-      shell: bash
-
-  codespell:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest] # For demonstration, other OSes are commented out: macos-latest, windows-latest
-        python-version: ['3.10'] # For speeding up the process we removed "3.11" for now
-    steps:
-    - uses: actions/checkout@v4
-      with:  # no need for the history
-        fetch-depth: 1
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
-    - name: Install pipx and ensure it's up to date
-      run: |
-        python -m pip install --upgrade pipx
-        pipx ensurepath
-      shell: bash
-    - name: Install poetry
-      run: pipx install poetry
-      shell: bash
-    - name: Run codespell
-      run: |
-        poetry run pip install codespell tomli
-        poetry run codespell
-      shell: bash
+      if: matrix.test == 'mypy'
+      run: poetry run mypy .
+    - name: Run ruff
+      if: matrix.test == 'ruff'
+      uses: chartboost/ruff-action@v1

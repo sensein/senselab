@@ -6,6 +6,9 @@ Note that a code of conduct applies to all spaces managed by the `senselab` proj
 ## Workflow
 Please use the following workflow when contributing:
 
+0. **Install poetry (version 1.7.1 is required as a workaround to [this issue](https://github.com/python-poetry/poetry/issues/6996)) and poetry-dynamic-versioning plugin for dynamic versioning**:
+  - ```pipx install poetry==1.7.1```
+  - ```pipx inject poetry "poetry-dynamic-versioning[plugin]"```
 1. **Create an issue**: Use GitHub to create an issuel, assign it to yourself (and any collaborators) and, if you have access, add it to the [Project board](https://github.com/orgs/sensein/projects/45).
 2. **Create a branch**: Use GitHub's "Create a branch" button from the issue page to generate a branch associated with the issue.
 3. **Clone the repo locally**:
@@ -13,7 +16,8 @@ Please use the following workflow when contributing:
 4. **Checkout locally**:
     - ```git fetch origin```
     - ```git checkout <branch-name>```
-5. **Install all required dependencies**:
+5. **Install all required dependencies (you will need to manually install iso-639 as a workaround to [this issue](https://github.com/python-poetry/poetry/issues/6996))**:
+  ```poetry run pip install iso-639```
   ```poetry install --with dev,docs```
 6. **Install pre-commit hooks**:
   ```poetry run pre-commit install```

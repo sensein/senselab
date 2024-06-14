@@ -10,7 +10,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest]
-        python-version: ["3.10"]
+        python-version: ['3.10']
     steps:
     - uses: actions/checkout@v4
       with:
@@ -27,14 +27,6 @@ jobs:
     - name: Install poetry
       run: pipx install poetry
       shell: bash
-    # Cache Poetry dependencies to speed up builds
-    - name: Cache Poetry virtualenv
-      uses: actions/cache@v3
-      with:
-        path: ~/.cache/pypoetry
-        key: ${{ runner.os }}-poetry-${{ hashFiles('**/poetry.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-poetry-
     - name: Install poetry dynamic versioning tool
       run: pipx inject poetry "poetry-dynamic-versioning[plugin]"
       shell: bash
@@ -49,7 +41,3 @@ jobs:
         POETRY_REQUESTS_TIMEOUT: 120
       run: poetry publish
       shell: bash
-
-
-
-
