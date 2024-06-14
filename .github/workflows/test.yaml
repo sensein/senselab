@@ -50,7 +50,7 @@ jobs:
     - name: Archive Dependencies
       uses: actions/upload-artifact@v4
       with:
-        name: my-artifact
+        name: my-artifact-${{ matrix.os }}-${{ matrix.python-version }}
         path: .
 
   test:
@@ -78,7 +78,7 @@ jobs:
     - name: Download Dependencies
       uses: actions/download-artifact@v4
       with:
-        name: my-artifact
+        name: my-artifact-${{ matrix.os }}-${{ matrix.python-version }}
     - name: Run codespell
       if: matrix.test == 'codespell'
       run: poetry run codespell
