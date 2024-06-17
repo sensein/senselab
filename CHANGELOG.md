@@ -1,3 +1,24 @@
+# 0.3.0 (Mon Jun 17 2024)
+
+#### 🚀 Enhancement
+
+- making release process lighter [#66](https://github.com/sensein/senselab/pull/66) ([@fabiocat93](https://github.com/fabiocat93))
+- Release 0.3.0 - let's go [#64](https://github.com/sensein/senselab/pull/64) ([@fabiocat93](https://github.com/fabiocat93))
+- Release 0.3.0 [#59](https://github.com/sensein/senselab/pull/59) ([@fabiocat93](https://github.com/fabiocat93) [@wilke0818](https://github.com/wilke0818))
+
+#### 🐛 Bug Fix
+
+- Update test.yaml [#65](https://github.com/sensein/senselab/pull/65) ([@fabiocat93](https://github.com/fabiocat93))
+- Adding voice cloning API [#60](https://github.com/sensein/senselab/pull/60) ([@fabiocat93](https://github.com/fabiocat93))
+- adding torchaudio feats extraction [#61](https://github.com/sensein/senselab/pull/61) ([@fabiocat93](https://github.com/fabiocat93) [@wilke0818](https://github.com/wilke0818))
+
+#### Authors: 2
+
+- [@wilke0818](https://github.com/wilke0818)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.2.1 (Thu Jun 13 2024)
 
 #### 🐛 Bug Fix
