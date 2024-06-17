@@ -42,7 +42,7 @@ class Audio(BaseModel):
 
     @field_validator("waveform", mode="before")
     def convert_to_tensor(
-        cls, v: Union[List[float], List[List[float]], np.ndarray, torch.Tensor], info: ValidationInfo
+        cls, v: Union[List[float], List[List[float]], np.ndarray, torch.Tensor], _: ValidationInfo
     ) -> torch.Tensor:
         """Converts the audio data to torch.Tensor of shape (num_channels, num_samples)."""
         temporary_tensor = None
