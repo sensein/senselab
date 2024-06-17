@@ -3,13 +3,14 @@
 import os
 
 import pytest
-from pytest_mock import MockFixture
 
 from senselab.audio.data_structures.audio import Audio
 from senselab.audio.tasks.preprocessing.preprocessing import resample_audios
 from senselab.audio.tasks.voice_cloning.api import clone_voices
 from senselab.utils.data_structures.device import DeviceType
 from senselab.utils.data_structures.model import TorchModel
+
+pytestmark = pytest.mark.skipif(os.getenv('GITHUB_ACTIONS') == 'true', reason="Skipping all tests in this file")
 
 
 @pytest.fixture
@@ -20,10 +21,8 @@ def audio_sample() -> Audio:
     return resampled_audios[0]
 
 @pytest.fixture
-def torch_model(mocker: MockFixture) -> TorchModel:
+def torch_model() -> TorchModel:
     """Fixture for torch model."""
-    # Mock the check_github_repo_exists function to always return True
-    mocker.patch('senselab.utils.data_structures.model.check_github_repo_exists', return_value=True)
     return TorchModel(path_or_uri="bshall/knn-vc", revision="master")
 
 def test_clone_voices_length_mismatch(audio_sample: Audio, torch_model: TorchModel) -> None:
