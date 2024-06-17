@@ -18,6 +18,8 @@ jobs:
         # - {os: macos-latest, architecture: arm64, python-version: '3.11'}
         # - {os: windows-latest, architecture: x64, python-version: '3.10'}
         # - {os: windows-latest, architecture: x64, python-version: '3.11'}
+    env:
+      GITHUB_ACTIONS: true
     steps:
     - uses: actions/checkout@v4
       with:  # no need for the history
