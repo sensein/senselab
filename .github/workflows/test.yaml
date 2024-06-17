@@ -1,20 +1,25 @@
 name: Python Tests
 
 on:
-  push:
-    branches:
-    - main
   pull_request:
-  schedule:
-  - cron: 0 6 1 * *
 
 jobs:
   unit:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest] # For demonstration, other OSes are commented out: macos-latest, windows-latest
-        python-version: ['3.10'] # For speeding up the process we removed "3.11" for now
+        include:
+        - {os: ubuntu-latest, architecture: x64, python-version: '3.10'}
+        # - {os: ubuntu-latest, architecture: x64, python-version: '3.11'}
+        - {os: macos-latest, architecture: x64, python-version: '3.10'}
+        - {os: macos-latest, architecture: arm64, python-version: '3.10'}
+        # - {os: macos-latest, architecture: x64, python-version: '3.11'}
+        # - {os: macos-latest, architecture: arm64, python-version: '3.11'}
+        # - {os: windows-latest, architecture: x64, python-version: '3.10'}
+        # - {os: windows-latest, architecture: x64, python-version: '3.11'}
+    env:
+      GITHUB_ACTIONS: true
     steps:
     - uses: actions/checkout@v4
       with:  # no need for the history
@@ -40,18 +45,11 @@ jobs:
         pipx ensurepath
       shell: bash
     - name: Install poetry
-      run: pipx install poetry
+      run: pipx install poetry==1.7.1
       shell: bash
-    # Cache Poetry dependencies to speed up builds
-    - name: Cache Poetry virtualenv
-      uses: actions/cache@v3
-      with:
-        path: ~/.cache/pypoetry
-        key: ${{ runner.os }}-poetry-${{ hashFiles('**/poetry.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-poetry-
     - name: Install dependencies with Poetry
       run: |
+        poetry run pip install iso-639
         poetry install --with dev
       shell: bash
     - name: Run unit tests
@@ -106,20 +104,10 @@ jobs:
     - name: Install poetry
       run: pipx install poetry
       shell: bash
-    # Cache Poetry dependencies to speed up builds
-    - name: Cache Poetry virtualenv
-      uses: actions/cache@v3
-      with:
-        path: ~/.cache/pypoetry
-        key: ${{ runner.os }}-poetry-${{ hashFiles('**/poetry.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-poetry-
-    - name: Install dependencies with Poetry
-      run: |
-        poetry install --with dev
-      shell: bash
     - name: Run mypy
-      run: poetry run mypy .
+      run: |
+        poetry run pip install mypy pydantic types-requests
+        poetry run mypy .
       shell: bash
 
   codespell:
@@ -144,18 +132,8 @@ jobs:
     - name: Install poetry
       run: pipx install poetry
       shell: bash
-    # Cache Poetry dependencies to speed up builds
-    - name: Cache Poetry virtualenv
-      uses: actions/cache@v3
-      with:
-        path: ~/.cache/pypoetry
-        key: ${{ runner.os }}-poetry-${{ hashFiles('**/poetry.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-poetry-
-    - name: Install dependencies with Poetry
-      run: |
-        poetry install --with dev
-      shell: bash
     - name: Run codespell
-      run: poetry run codespell
+      run: |
+        poetry run pip install codespell tomli
+        poetry run codespell
       shell: bash

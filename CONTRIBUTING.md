@@ -6,6 +6,9 @@ Note that a code of conduct applies to all spaces managed by the `senselab` proj
 ## Workflow
 Please use the following workflow when contributing:
 
+0. **Install poetry and poetry-dynamic-versioning plugin for dynamic versioning**: 
+  - ```pipx install poetry```
+  - ```pipx inject poetry "poetry-dynamic-versioning[plugin]"```
 1. **Create an issue**: Use GitHub to create an issuel, assign it to yourself (and any collaborators) and, if you have access, add it to the [Project board](https://github.com/orgs/sensein/projects/45).
 2. **Create a branch**: Use GitHub's "Create a branch" button from the issue page to generate a branch associated with the issue.
 3. **Clone the repo locally**:
