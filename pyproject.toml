@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "senselab"
-version = "0.1.2.dev23+c952ded"
+version = "0.0.1"
 description = "Senselab is a Python package that simplifies building pipelines for speech and voice analysis."
 authors = [
   "Fabio Catania <fabiocat@mit.edu>",
@@ -28,31 +28,32 @@ packages = [{include = "senselab", from = "src"}]
 python = "^3.10"
 click = "^8.1.7"
 jsonschema = "^4.21.1"
-datasets = "^2.18.0"
+datasets = "^2.19.2"
 torch = "^2.2.2"
 torchvision = "^0.17.2"
 torchaudio = "^2.2.2"
 transformers = "^4.39.3"
-librosa = "^0.10.1"
-soundfile = "^0.12.1"
 ffmpeg-python = "^0.2.0"
 ipykernel = "^6.29.4"
 pydra = "^0.23"
-pydantic = "^2.7.1"
+pydantic = "^2.7.3"
 accelerate = "^0.29.3"
-huggingface-hub = "^0.23.0"
+huggingface-hub = "^0.23.3"
 praat-parselmouth = "^0.4.3"
-iso-639 = {git = "https://github.com/noumar/iso639.git", tag = "0.4.5"}
-opensmile = "^2.5.0"
 audiomentations = "^0.35.0"
 torch-audiomentations = "^0.11.1"
 sentence-transformers = "^2.7.0"
+jiwer = "^3.0.4"
+speechbrain = "^1.0.0"
+pyannote-audio = "^3.2.0"
+pycountry = "^24.6.1"
+opensmile = "^2.5.0"
 
 [tool.poetry.group.dev]
 optional = true
 
 [tool.poetry.group.dev.dependencies]
-pytest = "^8.1.1"
+pytest = "^8.2.2"
 pytest-mock = "^3.14.0"
 mypy = "^1.9.0"
 pre-commit = "^3.7.0"
@@ -79,6 +80,9 @@ testpaths = [
 
 [tool.mypy]
 ignore_missing_imports = true
+plugins = [
+  "pydantic.mypy"
+]
 
 [tool.ruff]
 exclude = [
@@ -104,7 +108,7 @@ exclude = [
   "node_modules",
   "venv"
 ]
-line-length = 80
+line-length = 120
 indent-width = 4
 src = ["src"]
 target-version = "py310"
@@ -132,18 +136,17 @@ skip-magic-trailing-comma = false
 line-ending = "auto"
 
 [tool.poetry-dynamic-versioning]
-enable = false
+enable = true
 vcs = "git"
 style = "pep440"
-bump = true
 pattern = "default-unprefixed"
 
 [tool.codespell]
 skip = [
-  "./poetry.lock",
-  "./docs_style/pdoc-theme/syntax-highlighting.css"
+  "poetry.lock",
+  "docs_style/pdoc-theme/syntax-highlighting.css"
 ]
-ignore-words-list = ["senselab"]
+ignore-words-list = ["senselab", "nd", "astroid", "wil"]
 
 [build-system]
 requires = ["poetry-core>=1.0.0", "poetry-dynamic-versioning>=1.0.0,<2.0.0"]
