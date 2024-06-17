@@ -1,4 +1,7 @@
-"""This module implements the IOTask utilities."""
+"""This module implements some IOTask utilities.
+
+This modules is deprecated and will be removed soon.
+"""
 
 import os
 from typing import Any, Dict, List, Union
@@ -6,8 +9,8 @@ from typing import Any, Dict, List, Union
 import pydra
 from datasets import Audio, Dataset, Image, load_dataset
 
-from senselab.utils.file import File, from_strings_to_files
-from senselab.utils.hf import check_hf_repo_exists
+from senselab.utils.data_structures.file import File, from_strings_to_files
+from senselab.utils.data_structures.model import check_hf_repo_exists
 
 
 def read_files_from_disk(files: Union[str, List[str]]) -> Dict[str, Any]:
