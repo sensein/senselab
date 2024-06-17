@@ -10,8 +10,6 @@ from senselab.audio.tasks.voice_cloning.api import clone_voices
 from senselab.utils.data_structures.device import DeviceType
 from senselab.utils.data_structures.model import TorchModel
 
-pytestmark = pytest.mark.skipif(os.getenv('GITHUB_ACTIONS') == 'true', reason="Skipping all tests in this file")
-
 
 @pytest.fixture
 def audio_sample() -> Audio:
