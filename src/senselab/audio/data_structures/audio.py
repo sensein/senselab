@@ -58,7 +58,7 @@ class Audio(BaseModel):
         if len(temporary_tensor.shape) == 1:
             # make the audio data [channels=1, samples]
             temporary_tensor = temporary_tensor.unsqueeze(0)
-        return temporary_tensor
+        return temporary_tensor.to(torch.float32)
 
     @classmethod
     def from_filepath(cls, filepath: str, metadata: Dict = {}) -> "Audio":
