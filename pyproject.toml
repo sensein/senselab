@@ -49,6 +49,7 @@ pyannote-audio = "^3.2.0"
 pycountry = "^24.6.1"
 types-requests = "^2.32"
 opensmile = "^2.5.0"
+numpy = "^1.26"
 
 [tool.poetry.group.dev]
 optional = true
