@@ -14,7 +14,7 @@ def detect_human_voice_activity_in_audios(
     audios: List[Audio], 
     model: SenselabModel, 
     device: Optional[DeviceType] = None
-) -> List[ScriptLine]:
+) -> List[List[ScriptLine]]:
     """Diarizes all audios using the given model.
 
     Args:
@@ -23,9 +23,9 @@ def detect_human_voice_activity_in_audios(
         device (Optional[DeviceType]): The device to run the model on (default is None).
 
     Returns:
-        List[ScriptLine]: The list of script lines with voice label.
+        List[List[ScriptLine]]: The list of script lines with voice label.
     """
-    if isinstance(model, HFModel) and "pyannote/" in model.path_or_uri:
+    if isinstance(model, HFModel) and "pyannote/" in str(model.path_or_uri):
         results = diarize_audios_with_pyannote(
             audios=audios, model=model, device=device
         )
