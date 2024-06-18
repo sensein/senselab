@@ -1,5 +1,5 @@
 """This module contains the definition of the ScriptLine class."""
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from pydantic import BaseModel, ValidationInfo, field_validator, model_validator
 
@@ -56,11 +56,11 @@ class ScriptLine(BaseModel):
         return v
 
 
-    def get_text(self) -> str:
+    def get_text(self) -> Union[str, None]:
         """Get the full text of the script line.
 
         Returns:
-            Optional[str]: The full text of the script line.
+            Optional[str, None]: The full text of the script line, or None if not provided.
         """
         return self.text
 

@@ -17,7 +17,7 @@ def diarize_audios(
     min_speakers: Optional[int] = None, 
     max_speakers: Optional[int] = None,
     device: Optional[DeviceType] = None
-) -> List[ScriptLine]:
+) -> List[List[ScriptLine]]:
     """Diarizes all audios using the given model.
 
     Args:
@@ -29,9 +29,9 @@ def diarize_audios(
         max_speakers (Optional[int]): The maximum number of speakers (default is None).
 
     Returns:
-        List[ScriptLine]: The list of script lines with speaker labels.
+        List[List[ScriptLine]]: The list of script lines with speaker labels.
     """
-    if isinstance(model, HFModel) and "pyannote/" in model.path_or_uri:
+    if isinstance(model, HFModel) and "pyannote/" in str(model.path_or_uri):
         return diarize_audios_with_pyannote(
             audios=audios, model=model, device=device, num_speakers=num_speakers, 
             min_speakers=min_speakers, max_speakers=max_speakers

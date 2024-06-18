@@ -1,3 +1,4 @@
+"""This module implements the Pyannote Diarization task."""
 from typing import Dict, List, Optional
 
 import torch
@@ -30,9 +31,6 @@ class PyannoteDiarization:
         Returns:
             Pipeline: The diarization pipeline.
         """
-        device, _ = _select_device_and_dtype(
-            user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
-        )
         key = f"{model.path_or_uri}-{model.revision}-{device}"
         if key not in cls._pipelines:
             pipeline = Pipeline.from_pretrained(
@@ -49,7 +47,7 @@ def diarize_audios_with_pyannote(
     num_speakers: Optional[int] = None,
     min_speakers: Optional[int] = None,
     max_speakers: Optional[int] = None,
-) -> List[ScriptLine]:
+) -> List[List[ScriptLine]]:
     """Diarizes a list of audio files using the Pyannote speaker diarization model.
 
     Args:
@@ -78,8 +76,11 @@ def diarize_audios_with_pyannote(
             diarization_list.append(ScriptLine(speaker=label, start=segment.start, end=segment.end))
         return diarization_list
 
+    device, _ = _select_device_and_dtype(
+        user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
+    )
     pipeline = PyannoteDiarization._get_pyannote_diarization_pipeline(model=model, device=device)
-    results: List[ScriptLine] = []
+    results: List[List[ScriptLine]] = []
     for audio in audios:
         diarization = pipeline(
             {"waveform": audio.waveform, "sample_rate": audio.sampling_rate},
