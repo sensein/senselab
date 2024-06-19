@@ -7,7 +7,7 @@ import pydra
 from datasets import Audio, Dataset, Image, load_dataset
 
 from senselab.utils.data_structures.file import File, from_strings_to_files
-from senselab.utils.data_structures.huggingface import _check_hf_repo_exists
+from senselab.utils.data_structures.model import check_hf_repo_exists
 
 
 def read_files_from_disk(files: Union[str, List[str]]) -> Dict[str, Any]:
