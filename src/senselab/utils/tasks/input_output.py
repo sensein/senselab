@@ -6,8 +6,8 @@ from typing import Any, Dict, List, Union
 import pydra
 from datasets import Audio, Dataset, Image, load_dataset
 
-from senselab.utils.file import File, from_strings_to_files
-from senselab.utils.hf import check_hf_repo_exists
+from senselab.utils.data_structures.file import File, from_strings_to_files
+from senselab.utils.data_structures.model import check_hf_repo_exists
 
 
 def read_files_from_disk(files: Union[str, List[str]]) -> Dict[str, Any]:
@@ -185,6 +185,7 @@ def _from_dict_to_hf_dataset(
             dataset = dataset.cast_column(column, Audio(mono=False))
 
     return dataset
+
 
 read_files_from_disk_pt = pydra.mark.task(read_files_from_disk)
 read_dataset_from_disk_pt = pydra.mark.task(read_dataset_from_disk)

@@ -1,10 +1,13 @@
 """Module for testing the Participant, Session, and SenselabDataset classes."""
 
+import numpy as np
 import pytest
+import torch
 import torchaudio
 
 from senselab.audio.data_structures.audio import Audio
 from senselab.utils.data_structures.dataset import Participant, SenselabDataset, Session
+from senselab.video.data_structures.video import Video
 
 
 def test_create_participant() -> None:
@@ -151,3 +154,76 @@ def test_audio_dataset_splits() -> None:
     assert gpu_excess_split == [
         [mono_audio, stereo_audio]
     ], "Excess GPU split should generate a list with one list of all of the audios, unpadded"
+
+
+def test_convert_senselab_dataset_to_hf_datasets() -> None:
+    """Tests the conversion of Senselab dataset to HuggingFace."""
+    dataset = SenselabDataset(
+        audios=["src/tests/data_for_testing/audio_48khz_stereo_16bits.wav"],
+        videos=["src/tests/data_for_testing/video_48khz_stereo_16bits.mp4"],
+    )
+    # print(dataset)
+    # trim the video to 5 frames to speed up unit testing
+    dataset.videos[0] = Video(
+        frames=dataset.videos[0].frames[:5],
+        frame_rate=dataset.videos[0].frame_rate,
+        audio=dataset.videos[0].audio,
+        orig_path_or_id=dataset.videos[0].orig_path_or_id,
+        metadata=dataset.videos[0].metadata,
+    )
+
+    # print(dataset.videos[0].audio.waveform)
+    hf_datasets = dataset.convert_senselab_dataset_to_hf_datasets()
+    # print(hf_datasets['videos'][0]['audio']['array'])
+
+    # print(torch.max(torch.abs(dataset.videos[0].audio.waveform), dim=1))
+    # print(torch.max(torch.abs(torch.tensor(hf_datasets['videos']['audio'][0]['array'])), dim=1))
+
+    # print(torch.min((dataset.videos[0].audio.waveform), dim=1))
+    # print(torch.min((torch.tensor(hf_datasets['videos']['audio'][0]['array'])), dim=1))
+
+    audio_data = hf_datasets["audios"]
+    video_data = hf_datasets["videos"]
+    test_audio = Audio.from_filepath("src/tests/data_for_testing/audio_48khz_stereo_16bits.wav")
+    test_video = Video.from_filepath("src/tests/data_for_testing/video_48khz_stereo_16bits.mp4")
+
+    # extracted_audio = extract_audios_from_local_videos('src/tests/data_for_testing/video_48khz_stereo_16bits.mp4')
+    # extracted_audio, extract_sr = torchaudio.load(extracted_audio['audio'][0]['path'])
+
+    test_video = Video(
+        frames=test_video.frames[:5],
+        frame_rate=test_video.frame_rate,
+        audio=test_video.audio,
+        orig_path_or_id=test_video.orig_path_or_id,
+        metadata=test_video.metadata,
+    )
+    # print(hf_datasets)
+
+    assert video_data.num_rows == 1
+    assert audio_data.num_rows == 1
+    assert torch.equal(torch.Tensor(audio_data["audio"][0]["array"]), test_audio.waveform)
+    assert torch.equal(torch.Tensor(np.array(video_data["frames"][0]["image"])), test_video.frames)
+
+    assert test_video.audio is not None
+    assert torch.allclose(torch.Tensor(video_data["audio"][0]["array"]), test_video.audio.waveform, atol=1e-4, rtol=0)
+
+    reconverted_dataset = SenselabDataset.convert_hf_dataset_to_senselab_dataset(hf_datasets)
+
+    # print(torch.max(torch.abs(dataset.videos[0].audio.waveform), dim=1))
+    # print(torch.max(torch.abs(torch.tensor(reconverted_dataset.videos[0].audio.waveform)), dim=1))
+
+    # print(torch.min((dataset.videos[0].audio.waveform), dim=1))
+    # print(torch.min((torch.tensor(reconverted_dataset.videos[0].audio.waveform)), dim=1))
+
+    assert torch.allclose(reconverted_dataset.audios[0].waveform, dataset.audios[0].waveform, atol=1e-4, rtol=0)
+    assert reconverted_dataset.audios[0].sampling_rate == dataset.audios[0].sampling_rate
+
+    assert reconverted_dataset.videos[0].audio is not None
+    assert torch.allclose(test_video.audio.waveform, reconverted_dataset.videos[0].audio.waveform, atol=1e-4, rtol=0)
+
+    assert torch.equal(reconverted_dataset.videos[0].frames, dataset.videos[0].frames)
+    assert dataset.videos[0].audio is not None
+    assert torch.allclose(
+        reconverted_dataset.videos[0].audio.waveform, dataset.videos[0].audio.waveform, rtol=0, atol=1e-4
+    )
+    assert reconverted_dataset.videos[0].frame_rate == dataset.videos[0].frame_rate
