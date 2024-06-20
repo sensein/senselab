@@ -1,5 +1,5 @@
 """This module provides a factory for managing Hugging Face ASR pipelines."""
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from transformers import pipeline
 
@@ -7,8 +7,7 @@ from senselab.audio.data_structures.audio import Audio
 from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
 from senselab.utils.data_structures.language import Language
 from senselab.utils.data_structures.model import HFModel
-
-from .transcript import Transcript
+from senselab.utils.data_structures.script_line import ScriptLine
 
 
 class HuggingFaceASR:
@@ -39,14 +38,14 @@ class HuggingFaceASR:
         Returns:
             pipeline: The ASR pipeline.
         """
+        device, torch_dtype = _select_device_and_dtype(
+                user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
+            )
         key = (
             f"{model.path_or_uri}-{model.revision}-{return_timestamps}-"
             f"{max_new_tokens}-{chunk_length_s}-{batch_size}-{device}"
         )
         if key not in cls._pipelines:
-            device, torch_dtype = _select_device_and_dtype(
-                user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
-            )
             cls._pipelines[key] = pipeline(
                 "automatic-speech-recognition",
                 model=model.path_or_uri,
@@ -71,7 +70,7 @@ class HuggingFaceASR:
         chunk_length_s: int = 30,
         batch_size: int = 16,
         device: Optional[DeviceType] = None,
-    ) -> List[Transcript]:
+    ) -> List[ScriptLine]:
         """Transcribes all audio samples in the dataset.
 
         Args:
@@ -85,7 +84,7 @@ class HuggingFaceASR:
             device (Optional[DeviceType]): The device to run the model on (default is None).
 
         Returns:
-            List[Transcript]: The list of transcriptions.
+            List[ScritpLine]: The list of script lines.
         """
 
         def _audio_to_huggingface_dict(audio: Audio) -> Dict:
@@ -101,6 +100,19 @@ class HuggingFaceASR:
                 "array": audio.waveform.squeeze().numpy(),
                 "sampling_rate": audio.sampling_rate,
             }
+        
+        def _rename_key_recursive(obj: Dict[str, Any], old_key: str, new_key: str) -> Dict[str, Any]:
+            """Recursively rename keys in a dictionary."""
+            if isinstance(obj, dict):
+                for key in list(obj.keys()):
+                    if key == old_key:
+                        obj[new_key] = obj.pop(old_key)
+                    elif isinstance(obj[key], (dict, list)):
+                        obj[key] = _rename_key_recursive(obj[key], old_key, new_key)
+            elif isinstance(obj, list):
+                obj = [_rename_key_recursive(item, old_key, new_key) for item in obj]
+            return obj
+
 
         pipe = HuggingFaceASR._get_hf_asr_pipeline(
             model=model,
@@ -115,4 +127,5 @@ class HuggingFaceASR:
         transcriptions = pipe(
             formatted_audios, generate_kwargs={"language": f"{language.name.lower()}"} if language else {}
         )
-        return [Transcript.from_dict(t) for t in transcriptions]
+        transcriptions = _rename_key_recursive(transcriptions, "timestamp", "timestamps")
+        return [ScriptLine.from_dict(t) for t in transcriptions]
