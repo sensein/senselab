@@ -1,4 +1,5 @@
 """This module implements some utilities for the model class."""
+
 import os
 from pathlib import Path
 from typing import Optional, Union
@@ -55,7 +56,7 @@ class HFModel(SenselabModel):
             if not check_hf_repo_exists(repo_id=str(path_or_uri), revision=value, repo_type="model"):
                 raise ValueError("path_or_uri or specified revision is not a valid Hugging Face model")
         return value
-      
+
 
 class TorchModel(SenselabModel):
     """Generic torch model."""
@@ -75,6 +76,7 @@ class TorchModel(SenselabModel):
                 raise ValueError("path_or_uri or specified revision is not a valid github repo")
         return value
 
+
 def is_torch_model(file_path: Path) -> bool:
     """Check if a file is a torch model."""
     try:
@@ -93,6 +95,7 @@ def check_hf_repo_exists(repo_id: str, revision: str = "main", repo_type: str = 
     except Exception:
         # raise RuntimeError(f"An error occurred: {e}")
         return False
+
 
 def check_github_repo_exists(repo_id: str, branch: str = "main") -> bool:
     """Private function to check if a GitHub repository exists."""

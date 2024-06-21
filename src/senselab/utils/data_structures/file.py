@@ -30,16 +30,11 @@ class File(BaseModel):
             raise ValueError(f"File {v} does not exist")
 
         file_extension = os.path.splitext(v)[1].lower()
-        valid_extensions = [
-            ext
-            for types in get_config()["files"].values()
-            for ext in types["extensions"]
-        ]
+        valid_extensions = [ext for types in get_config()["files"].values() for ext in types["extensions"]]
 
         if file_extension not in valid_extensions:
             raise ValueError(
-                f"Unsupported file extension: {file_extension}."
-                f"Supported extensions: {valid_extensions}"
+                f"Unsupported file extension: {file_extension}." f"Supported extensions: {valid_extensions}"
             )
 
         return v
@@ -48,6 +43,7 @@ class File(BaseModel):
 def from_strings_to_files(list_of_files: List[str]) -> List[File]:
     """Create a list of `File` objects from a list of strings."""
     return [File(filepath=Path(file)) for file in list_of_files]
+
 
 def get_common_directory(files: List[str]) -> str:
     """A function to get the common directory from a list of file paths.
