@@ -4,7 +4,7 @@ import pytest
 from torch import Tensor
 
 from senselab.audio.data_structures.audio import Audio
-from senselab.audio.tasks.speaker_embeddings.api import extract_embeddings
+from senselab.audio.tasks.speaker_embeddings.api import extract_speaker_embeddings_from_audios
 from senselab.utils.data_structures.model import HFModel
 
 
@@ -33,23 +33,44 @@ def resnet_model() -> HFModel:
     return HFModel(path_or_uri="speechbrain/spkrec-resnet-voxceleb")
 
 
-def test_extract_embeddings(
+def test_extract_speaker_embeddings_from_audio(
     sample_audio: Audio, ecapa_model: HFModel, xvector_model: HFModel, resnet_model: HFModel
 ) -> None:
     """Test extracting speaker embeddings from audio."""
-    embeddings = extract_embeddings(audio=sample_audio, model=ecapa_model)
+    embeddings = extract_speaker_embeddings_from_audios(audios=[sample_audio], model=ecapa_model)
     assert isinstance(embeddings, Tensor)
     assert len(embeddings) == 192
-    embeddings = extract_embeddings(audio=sample_audio, model=xvector_model)
+    embeddings = extract_speaker_embeddings_from_audios(audios=[sample_audio], model=xvector_model)
     assert isinstance(embeddings, Tensor)
     assert len(embeddings) == 512
-    embeddings = extract_embeddings(audio=sample_audio, model=resnet_model)
+    embeddings = extract_speaker_embeddings_from_audios(audios=[sample_audio], model=resnet_model)
     assert isinstance(embeddings, Tensor)
     assert len(embeddings) == 256
+
+
+def test_extract_speaker_embeddings_from_multiple_audios(
+    sample_audio: Audio, ecapa_model: HFModel, xvector_model: HFModel, resnet_model: HFModel
+) -> None:
+    """Test extracting speaker embeddings from multiple audios."""
+    embeddings = extract_speaker_embeddings_from_audios(audios=[sample_audio, sample_audio], model=ecapa_model)
+    assert isinstance(embeddings, Tensor)
+    assert embeddings.shape == (2, 192)
+    embeddings = extract_speaker_embeddings_from_audios(
+        audios=[sample_audio, sample_audio, sample_audio], model=xvector_model
+    )
+    assert isinstance(embeddings, Tensor)
+    assert embeddings.shape == (3, 512)
+    embeddings = extract_speaker_embeddings_from_audios(
+        audios=[sample_audio, sample_audio, sample_audio, sample_audio], model=resnet_model
+    )
+    assert isinstance(embeddings, Tensor)
+    assert embeddings.shape == (4, 256)
 
 
 def test_error_wrong_model(sample_audio: Audio) -> None:
     """Test raising error when using a non-existent model."""
     with pytest.raises(ValueError):
-        embeddings = extract_embeddings(audio=sample_audio, model=HFModel(path_or_uri="nonexistent---"))
+        embeddings = extract_speaker_embeddings_from_audios(
+            audios=[sample_audio], model=HFModel(path_or_uri="nonexistent---")
+        )
         assert not embeddings
