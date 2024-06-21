@@ -39,14 +39,14 @@ class HuggingFaceASR:
         Returns:
             pipeline: The ASR pipeline.
         """
+        device, torch_dtype = _select_device_and_dtype(
+            user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
+        )
         key = (
             f"{model.path_or_uri}-{model.revision}-{return_timestamps}-"
-            f"{max_new_tokens}-{chunk_length_s}-{batch_size}-{device}"
+            f"{max_new_tokens}-{chunk_length_s}-{batch_size}-{device.value}"
         )
         if key not in cls._pipelines:
-            device, torch_dtype = _select_device_and_dtype(
-                user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
-            )
             cls._pipelines[key] = pipeline(
                 "automatic-speech-recognition",
                 model=model.path_or_uri,

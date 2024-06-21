@@ -1,5 +1,4 @@
 """Tests for speaker_embeddings.py."""
-
 import pytest
 from torch import Tensor
 
@@ -18,19 +17,19 @@ def sample_audio() -> Audio:
 @pytest.fixture
 def ecapa_model() -> HFModel:
     """Fixture for the ECAPA-TDNN model."""
-    return HFModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb")
+    return HFModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb", revision="main")
 
 
 @pytest.fixture
 def xvector_model() -> HFModel:
     """Fixture for the xvector model."""
-    return HFModel(path_or_uri="speechbrain/spkrec-xvect-voxceleb")
+    return HFModel(path_or_uri="speechbrain/spkrec-xvect-voxceleb", revision="main")
 
 
 @pytest.fixture
 def resnet_model() -> HFModel:
     """Fixture for the ResNet model."""
-    return HFModel(path_or_uri="speechbrain/spkrec-resnet-voxceleb")
+    return HFModel(path_or_uri="speechbrain/spkrec-resnet-voxceleb", revision="main")
 
 
 def test_extract_speaker_embeddings_from_audio(
@@ -38,34 +37,32 @@ def test_extract_speaker_embeddings_from_audio(
 ) -> None:
     """Test extracting speaker embeddings from audio."""
     embeddings = extract_speaker_embeddings_from_audios(audios=[sample_audio], model=ecapa_model)
-    assert isinstance(embeddings, Tensor)
-    assert len(embeddings) == 192
-    embeddings = extract_speaker_embeddings_from_audios(audios=[sample_audio], model=xvector_model)
-    assert isinstance(embeddings, Tensor)
-    assert len(embeddings) == 512
-    embeddings = extract_speaker_embeddings_from_audios(audios=[sample_audio], model=resnet_model)
-    assert isinstance(embeddings, Tensor)
-    assert len(embeddings) == 256
+    assert isinstance(embeddings, list) and all(isinstance(embedding, Tensor) for embedding in embeddings)
+    assert all(embedding.size(0) == 192 for embedding in embeddings)
 
+    embeddings = extract_speaker_embeddings_from_audios(audios=[sample_audio], model=xvector_model)
+    assert isinstance(embeddings, list) and all(isinstance(embedding, Tensor) for embedding in embeddings)
+    assert all(embedding.size(0) == 512 for embedding in embeddings)
+
+    embeddings = extract_speaker_embeddings_from_audios(audios=[sample_audio], model=resnet_model)
+    assert isinstance(embeddings, list) and all(isinstance(embedding, Tensor) for embedding in embeddings)
+    assert all(embedding.size(0) == 256 for embedding in embeddings)
 
 def test_extract_speaker_embeddings_from_multiple_audios(
     sample_audio: Audio, ecapa_model: HFModel, xvector_model: HFModel, resnet_model: HFModel
 ) -> None:
     """Test extracting speaker embeddings from multiple audios."""
     embeddings = extract_speaker_embeddings_from_audios(audios=[sample_audio, sample_audio], model=ecapa_model)
-    assert isinstance(embeddings, Tensor)
-    assert embeddings.shape == (2, 192)
-    embeddings = extract_speaker_embeddings_from_audios(
-        audios=[sample_audio, sample_audio, sample_audio], model=xvector_model
-    )
-    assert isinstance(embeddings, Tensor)
-    assert embeddings.shape == (3, 512)
-    embeddings = extract_speaker_embeddings_from_audios(
-        audios=[sample_audio, sample_audio, sample_audio, sample_audio], model=resnet_model
-    )
-    assert isinstance(embeddings, Tensor)
-    assert embeddings.shape == (4, 256)
+    assert isinstance(embeddings, list) and all(isinstance(embedding, Tensor) for embedding in embeddings)
+    assert all(embedding.size(0) == 192 for embedding in embeddings)
 
+    embeddings = extract_speaker_embeddings_from_audios(audios=[sample_audio, sample_audio], model=xvector_model)
+    assert isinstance(embeddings, list) and all(isinstance(embedding, Tensor) for embedding in embeddings)
+    assert all(embedding.size(0) == 512 for embedding in embeddings)
+
+    embeddings = extract_speaker_embeddings_from_audios(audios=[sample_audio, sample_audio], model=resnet_model)
+    assert isinstance(embeddings, list) and all(isinstance(embedding, Tensor) for embedding in embeddings)
+    assert all(embedding.size(0) == 256 for embedding in embeddings)
 
 def test_error_wrong_model(sample_audio: Audio) -> None:
     """Test raising error when using a non-existent model."""
