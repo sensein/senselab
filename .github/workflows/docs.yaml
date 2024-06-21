@@ -16,11 +16,11 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        python-version: ["3.10"]
+        python-version: ['3.10']
         include:
-          - os: ubuntu-latest
-            python-version: "3.10"
-            deploy: true # Only deploy from this configuration
+        - os: ubuntu-latest
+          python-version: '3.10'
+          deploy: true   # Only deploy from this configuration
     outputs:
       deploy: ${{ steps.set-deploy-output.outputs.deploy }}
     steps:
@@ -59,11 +59,11 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest] # For demonstration, other OSes are commented out
-        python-version: ["3.10"]
+        python-version: ['3.10']
         include:
-          - os: ubuntu-latest
-            python-version: "3.10"
-            deploy: true # Only deploy from this configuration
+        - os: ubuntu-latest
+          python-version: '3.10'
+          deploy: true   # Only deploy from this configuration
     steps:
     - uses: actions/checkout@v4
     - uses: actions/download-artifact@v3
