@@ -33,4 +33,5 @@ def transcribe_audios(
     else:
         raise NotImplementedError("Only Hugging Face models are supported for now.")
 
+
 transcribe_audios_pt = pydra.mark.task(transcribe_audios)

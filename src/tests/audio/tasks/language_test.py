@@ -1,4 +1,5 @@
 """Tests the Language data structure."""
+
 import pytest
 from pydantic import ValidationError
 
