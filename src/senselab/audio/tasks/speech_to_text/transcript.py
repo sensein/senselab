@@ -1,4 +1,5 @@
 """This module contains the definition of the Transcript class."""
+
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ValidationInfo, field_validator
@@ -86,7 +87,7 @@ class Transcript(BaseModel):
             if v < 0:
                 raise ValueError("Timestamps must be non-negative")
             return v
-        
+
         @field_validator("speaker")
         def speaker_must_be_non_empty(cls, v: str, _: ValidationInfo) -> str:
             """Validate that the speaker is non-empty, if provided.
@@ -112,7 +113,9 @@ class Transcript(BaseModel):
             Returns:
                 Transcript.Chunk: An instance of Chunk.
             """
-            return cls(text=d["text"].strip(), 
-                       start=d["timestamp"][0], 
-                       end=d["timestamp"][1], 
-                       speaker=d["speaker"] if "speaker" in d else None)
+            return cls(
+                text=d["text"].strip(),
+                start=d["timestamp"][0],
+                end=d["timestamp"][1],
+                speaker=d["speaker"] if "speaker" in d else None,
+            )

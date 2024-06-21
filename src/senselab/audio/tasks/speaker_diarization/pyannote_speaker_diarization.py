@@ -7,7 +7,6 @@ Pyannote speaker diarization 3.1:
 https://huggingface.co/pyannote/speaker-diarization-3.1
 """
 
-
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -40,10 +39,7 @@ def _annotation_to_dict(annotation: Annotation) -> List[Tuple]:
 
 
 def _pyannote_diarize_batch(
-    batch: Dataset,
-    hf_token: Optional[str],
-    model_name: str,
-    model_revision: str
+    batch: Dataset, hf_token: Optional[str], model_name: str, model_revision: str
 ) -> Dict[str, Any]:
     """Diarize a batch of audio files using the Pyannote diarization model.
 
@@ -57,13 +53,11 @@ def _pyannote_diarize_batch(
         A dictionary containing the diarizations for the batch.Becomes a
           column in the dataset when returned.
     """
-    pipeline = Pipeline.from_pretrained(
-        model_name + "-" + model_revision,
-        use_auth_token=hf_token)
+    pipeline = Pipeline.from_pretrained(model_name + "-" + model_revision, use_auth_token=hf_token)
 
     diarizations = []
-    for audio in batch['audio']:
-        waveform = torch.tensor(audio['array'], dtype=torch.float32)
+    for audio in batch["audio"]:
+        waveform = torch.tensor(audio["array"], dtype=torch.float32)
 
         # Add the channel dimension if the waveform is 1-dimensional.
         if waveform.dim() == 1:
@@ -75,14 +69,11 @@ def _pyannote_diarize_batch(
 
         # Apply the pipeline to the waveform.
         with ProgressHook() as hook:
-            diarization = pipeline(
-                {"waveform": waveform,
-                    "sample_rate": batch['audio'][0]['sampling_rate']},
-                hook=hook)
+            diarization = pipeline({"waveform": waveform, "sample_rate": batch["audio"][0]["sampling_rate"]}, hook=hook)
 
         diarization = _annotation_to_dict(diarization)
         diarizations.append(diarization)
-    return {'pyannote31_diarizations': diarizations}
+    return {"pyannote31_diarizations": diarizations}
 
 
 def pyannote_diarize(
@@ -110,7 +101,7 @@ def pyannote_diarize(
         model_revision: The model version used.
 
     Returns:
-        hf_dataset_diarized: The dataset with an added column 
+        hf_dataset_diarized: The dataset with an added column
           'pyannote31_diarization' containing the diarizations.
     """
     if not os.path.exists(cache_path):
@@ -118,12 +109,11 @@ def pyannote_diarize(
 
     hf_dataset = _from_dict_to_hf_dataset(dataset)
     hf_dataset_diarized = hf_dataset.map(
-                            lambda x: _pyannote_diarize_batch(x, hf_token,
-                                                              model_name,
-                                                              model_revision),
-                            batched=batched,
-                            batch_size=batch_size,
-                            cache_file_name=cache_path + "pyannote31_cache",
-                            remove_columns=["audio"])
+        lambda x: _pyannote_diarize_batch(x, hf_token, model_name, model_revision),
+        batched=batched,
+        batch_size=batch_size,
+        cache_file_name=cache_path + "pyannote31_cache",
+        remove_columns=["audio"],
+    )
     hf_dataset_diarized = _from_hf_dataset_to_dict(hf_dataset_diarized)
     return hf_dataset_diarized
