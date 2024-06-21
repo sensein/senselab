@@ -51,4 +51,5 @@ def compute_normalized_cross_correlation(signal1: torch.Tensor, signal2: torch.T
     print(normalized_cross_correlation)
     return torch.Tensor(normalized_cross_correlation)
 
+
 compute_normalized_cross_correlation_pt = pydra.mark.task(compute_normalized_cross_correlation)

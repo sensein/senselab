@@ -1,4 +1,5 @@
 """This module contains functions for extracting openSMILE features."""
+
 from typing import Any, Dict, List
 
 import opensmile
@@ -31,6 +32,7 @@ class OpenSmileFeatureExtractorFactory:
             )
         return cls._extractors[key]
 
+
 def extract_opensmile_features_from_audios(
     audios: List[Audio],
     feature_set: str = "eGeMAPSv02",
@@ -46,6 +48,7 @@ def extract_opensmile_features_from_audios(
     Returns:
         List[Dict[str, Any]]: The list of feature dictionaries for each audio.
     """
+
     def _extract_feats_from_audio(sample: Audio, smile: opensmile.Smile) -> Dict[str, Any]:
         """Extract features from a single audio sample using openSMILE.
 
@@ -61,12 +64,12 @@ def extract_opensmile_features_from_audios(
         sample_features = smile.process_signal(audio_array, sampling_rate)
         # Convert to a dictionary with float values and return it
         return {
-            k: v[0] if isinstance(v, list) and len(v) == 1 else v
-            for k, v in sample_features.to_dict("list").items()
+            k: v[0] if isinstance(v, list) and len(v) == 1 else v for k, v in sample_features.to_dict("list").items()
         }
 
     smile = OpenSmileFeatureExtractorFactory.get_opensmile_extractor(feature_set, feature_level)
     features = [_extract_feats_from_audio(audio, smile) for audio in audios]
     return features
+
 
 extract_opensmile_features_from_audios_pt = pydra.mark.task(extract_opensmile_features_from_audios)

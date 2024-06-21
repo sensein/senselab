@@ -15,7 +15,7 @@ def clone_voices(
     target_audios: List[Audio],
     model: SenselabModel,
     device: Optional[DeviceType] = None,
-    **kwargs: Any # noqa:ANN401
+    **kwargs: Any,  # noqa:ANN401
 ) -> List[Audio]:
     """Clones voices from source audios to target audios using the given model."""
     if len(source_audios) != len(target_audios):
@@ -34,9 +34,10 @@ def clone_voices(
             model=model,
             prematched_vocoder=prematched_vocoder,
             topk=topk,
-            device=device
+            device=device,
         )
     else:
         raise NotImplementedError("Only KNNVC is supported for now.")
+
 
 clone_voices_pt = pydra.mark.task(clone_voices)

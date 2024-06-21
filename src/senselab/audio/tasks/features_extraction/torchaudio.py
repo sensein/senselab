@@ -1,4 +1,5 @@
 """This module provides the implementation of torchaudio utilities for audio features extraction."""
+
 from typing import Dict, List, Optional
 
 import pydra
@@ -8,11 +9,12 @@ import torchaudio
 from senselab.audio.data_structures.audio import Audio
 
 
-def extract_spectrogram_from_audios(audios: List[Audio], 
-                                    n_fft: int = 400, 
-                                    win_length: Optional[int] = None, 
-                                    hop_length: Optional[int] = None, 
-                                    ) -> List[Dict[str, torch.Tensor]]:
+def extract_spectrogram_from_audios(
+    audios: List[Audio],
+    n_fft: int = 400,
+    win_length: Optional[int] = None,
+    hop_length: Optional[int] = None,
+) -> List[Dict[str, torch.Tensor]]:
     """Extract spectrograms from a list of audio objects.
 
     Args:
@@ -29,25 +31,23 @@ def extract_spectrogram_from_audios(audios: List[Audio],
     if hop_length is None:
         hop_length = win_length // 2
     spectrogram = torchaudio.transforms.Spectrogram(
-            n_fft=n_fft,
-            win_length=win_length,
-            hop_length=hop_length,
-        )
+        n_fft=n_fft,
+        win_length=win_length,
+        hop_length=hop_length,
+    )
     spectrograms = []
     for audio in audios:
-        spectrograms.append(
-            {
-                "spectrogram": spectrogram(audio.waveform).squeeze(0)
-            }
-        )
+        spectrograms.append({"spectrogram": spectrogram(audio.waveform).squeeze(0)})
     return spectrograms
 
-def extract_mel_spectrogram_from_audios(audios: List[Audio], 
-                            n_fft: Optional[int] = 400, 
-                            win_length: Optional[int] = None, 
-                            hop_length: Optional[int] = None, 
-                            n_mels: int = 128, 
-                            ) -> List[Dict[str, torch.Tensor]]:
+
+def extract_mel_spectrogram_from_audios(
+    audios: List[Audio],
+    n_fft: Optional[int] = 400,
+    win_length: Optional[int] = None,
+    hop_length: Optional[int] = None,
+    n_mels: int = 128,
+) -> List[Dict[str, torch.Tensor]]:
     """Extract mel spectrograms from a list of audio objects.
 
     Args:
@@ -76,20 +76,18 @@ def extract_mel_spectrogram_from_audios(audios: List[Audio],
             hop_length=hop_length,
             n_mels=n_mels,
         )(audio.waveform)
-        mel_spectrograms.append(
-            {
-                "mel_spectrogram": mel_spectrogram.squeeze(0)
-            }
-        )
+        mel_spectrograms.append({"mel_spectrogram": mel_spectrogram.squeeze(0)})
     return mel_spectrograms
 
-def extract_mfcc_from_audios(audios: List[Audio], 
-                            n_mfcc: int = 40,
-                            n_ftt: Optional[int] = 400, 
-                            win_length: Optional[int] = None, 
-                            hop_length: Optional[int] = None, 
-                            n_mels: int = 128
-                            ) -> List[Dict[str, torch.Tensor]]:
+
+def extract_mfcc_from_audios(
+    audios: List[Audio],
+    n_mfcc: int = 40,
+    n_ftt: Optional[int] = 400,
+    win_length: Optional[int] = None,
+    hop_length: Optional[int] = None,
+    n_mels: int = 128,
+) -> List[Dict[str, torch.Tensor]]:
     """Extract MFCCs from a list of audio objects.
 
     Args:
@@ -102,7 +100,7 @@ def extract_mfcc_from_audios(audios: List[Audio],
 
     Returns:
         List[Dict[str, torch.Tensor]]: List of Dict objects containing MFCCs.
-    """    
+    """
     if win_length is None:
         win_length = n_ftt
     if hop_length is None:
@@ -115,28 +113,20 @@ def extract_mfcc_from_audios(audios: List[Audio],
         mfcc_transform = torchaudio.transforms.MFCC(
             sample_rate=audio.sampling_rate,
             n_mfcc=n_mfcc,
-            melkwargs={
-                "n_fft": n_ftt,
-                "win_length": win_length,
-                "hop_length": hop_length,
-                "n_mels": n_mels
-            }
+            melkwargs={"n_fft": n_ftt, "win_length": win_length, "hop_length": hop_length, "n_mels": n_mels},
         )
-        mfccs.append(
-            {
-                "mfcc": mfcc_transform(audio.waveform).squeeze(0)
-            }
-        )
+        mfccs.append({"mfcc": mfcc_transform(audio.waveform).squeeze(0)})
     return mfccs
 
 
-def extract_mel_filter_bank_from_audios(audios: List[Audio],
-                            n_mels: int = 128,
-                            n_stft: int = 201,
-                            n_fft: int = 400, 
-                            win_length: Optional[int] = None, 
-                            hop_length: Optional[int] = None, 
-                            ) -> List[Dict[str, torch.Tensor]]:
+def extract_mel_filter_bank_from_audios(
+    audios: List[Audio],
+    n_mels: int = 128,
+    n_stft: int = 201,
+    n_fft: int = 400,
+    win_length: Optional[int] = None,
+    hop_length: Optional[int] = None,
+) -> List[Dict[str, torch.Tensor]]:
     """Extract mel filter bank from a list of audio objects.
 
     Args:
@@ -159,20 +149,16 @@ def extract_mel_filter_bank_from_audios(audios: List[Audio],
 
     mel_filter_banks = []
     for i, audio in enumerate(audios):
-        melscale_transform = torchaudio.transforms.MelScale(sample_rate=audio.sampling_rate, 
-                                                            n_mels=n_mels,
-                                                            n_stft=n_stft)
-        mel_filter_banks.append(
-            {
-                "mel_filter_bank": melscale_transform(spectrograms[i]['spectrogram']).squeeze(0)
-            }
+        melscale_transform = torchaudio.transforms.MelScale(
+            sample_rate=audio.sampling_rate, n_mels=n_mels, n_stft=n_stft
         )
+        mel_filter_banks.append({"mel_filter_bank": melscale_transform(spectrograms[i]["spectrogram"]).squeeze(0)})
     return mel_filter_banks
 
-def extract_pitch_from_audios(audios: List[Audio],
-                              freq_low: int = 85,
-                              freq_high: int = 3400
-                              ) -> List[Dict[str, torch.Tensor]]:
+
+def extract_pitch_from_audios(
+    audios: List[Audio], freq_low: int = 85, freq_high: int = 3400
+) -> List[Dict[str, torch.Tensor]]:
     """Extract pitch from a list of audio objects.
 
     Pitch is detected using the detect_pitch_frequency function from torchaudio.
@@ -191,14 +177,12 @@ def extract_pitch_from_audios(audios: List[Audio],
         pitches.append(
             {
                 "pitch": torchaudio.functional.detect_pitch_frequency(
-                    audio.waveform,
-                    sample_rate=audio.sampling_rate,
-                    freq_low=freq_low,
-                    freq_high=freq_high
+                    audio.waveform, sample_rate=audio.sampling_rate, freq_low=freq_low, freq_high=freq_high
                 ).squeeze(0)
             }
         )
     return pitches
+
 
 extract_spectrogram_from_audios_pt = pydra.mark.task(extract_spectrogram_from_audios)
 extract_mel_spectrogram_from_audios_pt = pydra.mark.task(extract_mel_spectrogram_from_audios)

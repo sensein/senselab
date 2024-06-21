@@ -66,7 +66,6 @@ class HFModel(SenselabModel):
             self.model_info = api.model_info(repo_id=self.path_or_uri, revision=self.revision)
         return self.model_info
 
-
 class TorchModel(SenselabModel):
     """Generic torch model."""
 
