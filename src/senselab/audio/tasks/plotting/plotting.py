@@ -1,4 +1,5 @@
 """This module contains functions for plotting audio-related data."""
+
 import matplotlib.pyplot as plt
 import torch
 from IPython.display import Audio, display
@@ -33,12 +34,13 @@ def plot_waveform(audio: AudioData, title: str = "Waveform", fast: bool = False)
         axes = [axes]  # Ensure axes is iterable
     for c, ax in enumerate(axes):
         ax.plot(time_axis, waveform[c].numpy(), linewidth=1)
-        ax.set_ylabel(f'Channel {c + 1}')
+        ax.set_ylabel(f"Channel {c + 1}")
         ax.grid(True)
 
     figure.suptitle(title)
     plt.xlabel("Time [s]")
     plt.show(block=False)
+
 
 def plot_specgram(spectrogram: torch.Tensor, sample_rate: int, title: str = "Spectrogram") -> None:
     """Plots the spectrogram of an Audio object.
@@ -55,13 +57,19 @@ def plot_specgram(spectrogram: torch.Tensor, sample_rate: int, title: str = "Spe
     if spectrogram.dim() != 2:
         raise ValueError("Spectrogram must be a 2D tensor.")
     plt.figure(figsize=(10, 4))
-    plt.imshow(spectrogram.numpy(), aspect='auto', origin='lower',
-               extent=(0, spectrogram.size(1) / sample_rate, 0, sample_rate / 2), cmap='viridis')
-    plt.colorbar(label='Magnitude (dB)')
+    plt.imshow(
+        spectrogram.numpy(),
+        aspect="auto",
+        origin="lower",
+        extent=(0, spectrogram.size(1) / sample_rate, 0, sample_rate / 2),
+        cmap="viridis",
+    )
+    plt.colorbar(label="Magnitude (dB)")
     plt.title(title)
-    plt.ylabel('Frequency [Hz]')
-    plt.xlabel('Time [Sec]')
+    plt.ylabel("Frequency [Hz]")
+    plt.xlabel("Time [Sec]")
     plt.show(block=False)
+
 
 def play_audio(audio: AudioData) -> None:
     """Plays an audio file.

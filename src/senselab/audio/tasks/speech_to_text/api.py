@@ -6,15 +6,15 @@ import pydra
 
 from senselab.audio.data_structures.audio import Audio
 from senselab.audio.tasks.speech_to_text.huggingface import HuggingFaceASR
-from senselab.audio.tasks.speech_to_text.transcript import Transcript
 from senselab.utils.data_structures.device import DeviceType
 from senselab.utils.data_structures.language import Language
 from senselab.utils.data_structures.model import HFModel, SenselabModel
+from senselab.utils.data_structures.script_line import ScriptLine
 
 
 def transcribe_audios(
     audios: List[Audio], model: SenselabModel, language: Optional[Language] = None, device: Optional[DeviceType] = None
-) -> List[Transcript]:
+) -> List[ScriptLine]:
     """Transcribes all audios using the given model.
 
     Args:
@@ -24,7 +24,7 @@ def transcribe_audios(
         device (Optional[DeviceType]): The device to run the model on (default is None).
 
     Returns:
-        List[Transcript]: The list of transcriptions.
+        List[ScriptLine]: The list of script lines.
     """
     if isinstance(model, HFModel):
         return HuggingFaceASR.transcribe_audios_with_transformers(
@@ -32,5 +32,6 @@ def transcribe_audios(
         )
     else:
         raise NotImplementedError("Only Hugging Face models are supported for now.")
+
 
 transcribe_audios_pt = pydra.mark.task(transcribe_audios)
