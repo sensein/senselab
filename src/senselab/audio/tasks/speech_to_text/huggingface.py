@@ -1,6 +1,5 @@
 """This module provides a factory for managing Hugging Face ASR pipelines."""
 from typing import Any, Dict, List, Optional
-
 from transformers import pipeline
 
 from senselab.audio.data_structures.audio import Audio
@@ -43,7 +42,7 @@ class HuggingFaceASR:
             )
         key = (
             f"{model.path_or_uri}-{model.revision}-{return_timestamps}-"
-            f"{max_new_tokens}-{chunk_length_s}-{batch_size}-{device}"
+            f"{max_new_tokens}-{chunk_length_s}-{batch_size}-{device.value}"
         )
         if key not in cls._pipelines:
             cls._pipelines[key] = pipeline(

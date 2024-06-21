@@ -88,6 +88,7 @@ def calculate_cer(reference: str, hypothesis: str) -> float:
     """
     return jiwer.cer(reference, hypothesis)
 
+
 calculate_wer_pt = pydra.mark.task(calculate_wer)
 calculate_mer_pt = pydra.mark.task(calculate_mer)
 calculate_wil_pt = pydra.mark.task(calculate_wil)
