@@ -1,4 +1,7 @@
-"""This module implements the IOTask utilities."""
+"""This module implements some IOTask utilities.
+
+This modules is deprecated and will be removed soon.
+"""
 
 import os
 from typing import Any, Dict, List, Union
