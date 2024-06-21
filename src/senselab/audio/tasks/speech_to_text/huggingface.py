@@ -1,5 +1,6 @@
 """This module provides a factory for managing Hugging Face ASR pipelines."""
 from typing import Any, Dict, List, Optional
+
 from transformers import pipeline
 
 from senselab.audio.data_structures.audio import Audio
