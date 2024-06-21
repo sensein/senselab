@@ -7,6 +7,7 @@ from typing import Optional, Union
 import requests
 import torch
 from huggingface_hub import HfApi
+from huggingface_hub.hf_api import ModelInfo
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 from typing_extensions import Annotated
 
@@ -43,6 +44,7 @@ class HFModel(SenselabModel):
     """Hugging Face model."""
 
     revision: Annotated[str, Field(validate_default=True)] = "main"
+    model_info: Optional[ModelInfo] = None
 
     @field_validator("revision", mode="before")
     def validate_hf_model_id(cls, value: str, info: ValidationInfo) -> Union[str, Path]:
@@ -57,6 +59,12 @@ class HFModel(SenselabModel):
                 raise ValueError("path_or_uri or specified revision is not a valid Hugging Face model")
         return value
 
+    def get_model_info(self) -> ModelInfo:
+        """Gets the model info using the HuggingFace API and saves it as a property."""
+        if not self.model_info:
+            api = HfApi()
+            self.model_info = api.model_info(repo_id=self.path_or_uri, revision=self.revision)
+        return self.model_info
 
 class TorchModel(SenselabModel):
     """Generic torch model."""
