@@ -80,14 +80,8 @@ class SpeechBrainEnhancer:
         # Stack audio waveforms for batch processing
         waveforms = torch.stack([audio.waveform.squeeze() for audio in audios])
 
-        print("AAA")
-        print(waveforms.shape)
-
         # Enhance waveforms in a batch
         enhanced_waveforms = enhancer.separate_batch(waveforms)
-
-        print("BBB")
-        print(enhanced_waveforms.shape)
 
         # Update the original audio objects with the enhanced waveforms
         for audio, enhanced_waveform in zip(audios, enhanced_waveforms):
