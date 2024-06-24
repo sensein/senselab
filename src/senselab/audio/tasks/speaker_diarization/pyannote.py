@@ -1,5 +1,5 @@
 """This module implements the Pyannote Diarization task."""
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 import torch
 from pyannote.audio import Pipeline
@@ -20,7 +20,7 @@ class PyannoteDiarization:
     def _get_pyannote_diarization_pipeline(
         cls,
         model: HFModel,
-        device: DeviceType,
+        device: Union[DeviceType, None],
     ) -> Pipeline:
         """Get or create a Pyannote Diarization pipeline.
 

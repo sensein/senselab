@@ -6,8 +6,8 @@ from torch_audiomentations import Compose, PolarityInversion
 from senselab.audio.data_structures.audio import Audio
 from senselab.audio.tasks.data_augmentation.data_augmentation import augment_audios
 from senselab.utils.data_structures.dataset import SenselabDataset
-
 from tests.audio.conftest import MONO_AUDIO_PATH, STEREO_AUDIO_PATH
+
 
 def test_audio_data_augmentation() -> None:
     """Test data augmentations using the new Audio data types."""
