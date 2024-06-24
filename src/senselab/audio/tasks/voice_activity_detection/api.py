@@ -12,7 +12,7 @@ from senselab.utils.data_structures.script_line import ScriptLine
 
 def detect_human_voice_activity_in_audios(
     audios: List[Audio], 
-    model: SenselabModel, 
+    model: SenselabModel = HFModel(path_or_uri="pyannote/speaker-diarization-3.1", revision="main"), 
     device: Optional[DeviceType] = None
 ) -> List[List[ScriptLine]]:
     """Diarizes all audios using the given model.
