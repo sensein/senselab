@@ -57,6 +57,10 @@ class SpeechBrainEnhancer:
 
         Returns:
             List[Audio]: The list of enhanced audio objects.
+        
+        Todo:
+            - Optimizing the computation by working in batches
+            - Double-checking the input size of enhancer.encode_batch
         """
         enhancer = cls._get_speechbrain_model(model=model, device=device)
         expected_sample_rate = enhancer.hparams.sample_rate

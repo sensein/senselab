@@ -61,6 +61,10 @@ class SpeechBrainEmbeddings:
 
         Returns:
             List[torch.Tensor]: A list of tensors containing the speaker embeddings for each audio file.
+
+        Todo:
+            - Optimizing the computation by working in batches
+            - Double-checking the input size of classifier.encode_batch
         """
         classifier = cls._get_speechbrain_model(model=model, device=device)
         # 16khz comes from the model cards of ecapa-tdnn, resnet, and xvector
