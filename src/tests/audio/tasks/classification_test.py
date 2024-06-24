@@ -1,14 +1,12 @@
 """Test audio classification APIs."""
 
+import os
+
 from senselab.audio.data_structures.audio import Audio
 from senselab.audio.tasks.classification.speech_emotion_recognition import speech_emotion_recognition_with_hf_models
 from senselab.audio.tasks.preprocessing.preprocessing import resample_audios
 from senselab.utils.data_structures.model import HFModel
-
 from tests.audio.conftest import MONO_AUDIO_PATH
-
-import os
-
 
 if os.getenv("GITHUB_ACTIONS") != "true":
 

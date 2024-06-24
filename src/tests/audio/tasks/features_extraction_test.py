@@ -1,7 +1,6 @@
 """This script contains unit tests for the features extraction tasks."""
 
 import os
-from typing import List
 
 import pytest
 import torch
@@ -24,7 +23,7 @@ from senselab.audio.tasks.features_extraction.torchaudio import (
 )
 
 
-def test_extract_spectrogram_from_audios(resampled_mono_audio_sample: List[Audio]) -> None:
+def test_extract_spectrogram_from_audios(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of spectrogram from audio."""
     result = extract_spectrogram_from_audios([resampled_mono_audio_sample])
     assert isinstance(result, list)
@@ -36,7 +35,7 @@ def test_extract_spectrogram_from_audios(resampled_mono_audio_sample: List[Audio
     assert all(spec["spectrogram"].shape[0] == 201 for spec in result)
 
 
-def test_extract_mel_spectrogram_from_audios(resampled_mono_audio_sample: List[Audio]) -> None:
+def test_extract_mel_spectrogram_from_audios(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of mel spectrogram from audio."""
     result = extract_mel_spectrogram_from_audios([resampled_mono_audio_sample])
     assert isinstance(result, list)
@@ -48,7 +47,7 @@ def test_extract_mel_spectrogram_from_audios(resampled_mono_audio_sample: List[A
     assert all(spec["mel_spectrogram"].shape[0] == 128 for spec in result)
 
 
-def test_extract_mfcc_from_audios(resampled_mono_audio_sample: List[Audio]) -> None:
+def test_extract_mfcc_from_audios(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of MFCC from audio."""
     result = extract_mfcc_from_audios([resampled_mono_audio_sample])
     assert isinstance(result, list)
@@ -60,7 +59,7 @@ def test_extract_mfcc_from_audios(resampled_mono_audio_sample: List[Audio]) -> N
     assert all(mfcc["mfcc"].shape[0] == 40 for mfcc in result)
 
 
-def test_extract_mel_filter_bank(resampled_mono_audio_sample: List[Audio]) -> None:
+def test_extract_mel_filter_bank(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of mel filter bank from audio."""
     result = extract_mel_filter_bank_from_audios([resampled_mono_audio_sample])
     assert isinstance(result, list)
@@ -72,7 +71,7 @@ def test_extract_mel_filter_bank(resampled_mono_audio_sample: List[Audio]) -> No
     assert all(mel_fb["mel_filter_bank"].shape[0] == 128 for mel_fb in result)
 
 
-def test_extract_pitch_from_audios(resampled_mono_audio_sample: List[Audio]) -> None:
+def test_extract_pitch_from_audios(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of pitch from audio."""
     result = extract_pitch_from_audios([resampled_mono_audio_sample])
     assert isinstance(result, list)
