@@ -61,8 +61,26 @@ class SpeechBrainEmbeddings:
 
         Returns:
             List[torch.Tensor]: A list of tensors containing the speaker embeddings for each audio file.
+
+        Todo:
+            - Optimizing the computation by working in batches
+            - Double-checking the input size of classifier.encode_batch
         """
         classifier = cls._get_speechbrain_model(model=model, device=device)
+        # 16khz comes from the model cards of ecapa-tdnn, resnet, and xvector
+        expected_sample_rate = 16000  
+
+        # Check that all audio objects have the correct sampling rate
+        for audio in audios:
+            if audio.waveform.shape[0] != 1:
+                raise ValueError(
+                    f"Audio waveform must be mono (1 channel), but got {audio.waveform.shape[0]} channels"
+                )
+            if audio.sampling_rate != expected_sample_rate:
+                raise ValueError(
+                    "Audio sampling rate " + str(audio.sampling_rate) + 
+                    " does not match expected " + str(expected_sample_rate)
+                )
 
         # Stack audio waveforms for batch processing
         waveforms = torch.stack([audio.waveform for audio in audios]).squeeze()

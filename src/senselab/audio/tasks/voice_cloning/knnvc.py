@@ -54,6 +54,8 @@ class KNNVC:
 
         cloned_audios = []
         for source_audio, target_audio in zip(source_audios, target_audios):
+            if source_audio.waveform.shape[0] > 1 or target_audio.waveform.shape[0] > 1:
+                raise ValueError("Only mono audio files are supported.")
             source_sampling_rate = source_audio.sampling_rate
             target_sampling_rate = target_audio.sampling_rate
             # 16kHz is the only supported sampling rate for KNNVC

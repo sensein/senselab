@@ -6,6 +6,7 @@ from torch_audiomentations import Compose, PolarityInversion
 from senselab.audio.data_structures.audio import Audio
 from senselab.audio.tasks.data_augmentation.data_augmentation import augment_audios
 from senselab.utils.data_structures.dataset import SenselabDataset
+from tests.audio.conftest import MONO_AUDIO_PATH, STEREO_AUDIO_PATH
 
 
 def test_audio_data_augmentation() -> None:
@@ -13,8 +14,8 @@ def test_audio_data_augmentation() -> None:
     apply_augmentation = Compose(transforms=[PolarityInversion(p=1, output_type="dict")], output_type="dict")
 
     audio_paths = [
-        "src/tests/data_for_testing/audio_48khz_mono_16bits.wav",
-        "src/tests/data_for_testing/audio_48khz_stereo_16bits.wav",
+        MONO_AUDIO_PATH,
+        STEREO_AUDIO_PATH,
     ]
     audio_dataset_from_paths = SenselabDataset(audios=audio_paths)
     mono_audio, stereo_audio = audio_dataset_from_paths.create_audio_split_for_pydra_task()
