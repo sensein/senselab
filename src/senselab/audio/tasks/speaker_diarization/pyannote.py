@@ -42,7 +42,7 @@ class PyannoteDiarization:
 
 def diarize_audios_with_pyannote(
     audios: List[Audio],
-    model: HFModel = HFModel(path_or_uri="pyannote/speaker-diarization-3.1"),
+    model: HFModel = HFModel(path_or_uri="pyannote/speaker-diarization-3.1", revision="main"),
     device: Optional[DeviceType] = None,
     num_speakers: Optional[int] = None,
     min_speakers: Optional[int] = None,
