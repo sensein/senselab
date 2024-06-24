@@ -1,6 +1,6 @@
 """This module implements some utilities for the text-to-speech task."""
 
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from transformers import pipeline
 
@@ -12,7 +12,7 @@ from senselab.utils.data_structures.model import HFModel
 class HuggingFaceTTS:
     """A factory for managing Hugging Face TTS pipelines."""
 
-    _pipelines = {}
+    _pipelines: Dict[str, pipeline] = {}
 
     @classmethod
     def _get_hf_tts_pipeline(
@@ -69,7 +69,7 @@ class HuggingFaceTTS:
         """
         pipe = HuggingFaceTTS._get_hf_tts_pipeline(model=model, device=device)
 
-        synthesis_kwargs = {}
+        synthesis_kwargs: Dict[str, Any] = {}
         synthesized_audios = pipe(texts, **synthesis_kwargs)
         
         audios = []
