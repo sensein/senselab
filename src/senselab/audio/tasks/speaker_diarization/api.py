@@ -1,4 +1,7 @@
-"""This module implements some utilities for the speaker diarization task."""
+"""This module implements some utilities for the speaker diarization task.
+
+# TODO: add computing DER and more evaluation metrics
+"""
 from typing import List, Optional
 
 import pydra

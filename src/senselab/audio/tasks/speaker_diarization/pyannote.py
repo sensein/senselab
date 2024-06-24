@@ -1,5 +1,5 @@
 """This module implements the Pyannote Diarization task."""
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 import torch
 from pyannote.audio import Pipeline
@@ -20,7 +20,7 @@ class PyannoteDiarization:
     def _get_pyannote_diarization_pipeline(
         cls,
         model: HFModel,
-        device: DeviceType,
+        device: Union[DeviceType, None],
     ) -> Pipeline:
         """Get or create a Pyannote Diarization pipeline.
 
@@ -31,6 +31,9 @@ class PyannoteDiarization:
         Returns:
             Pipeline: The diarization pipeline.
         """
+        device, _ = _select_device_and_dtype(
+            user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
+        )
         key = f"{model.path_or_uri}-{model.revision}-{device}"
         if key not in cls._pipelines:
             pipeline = Pipeline.from_pretrained(
@@ -42,7 +45,7 @@ class PyannoteDiarization:
 
 def diarize_audios_with_pyannote(
     audios: List[Audio],
-    model: HFModel = HFModel(path_or_uri="pyannote/speaker-diarization-3.1"),
+    model: HFModel = HFModel(path_or_uri="pyannote/speaker-diarization-3.1", revision="main"),
     device: Optional[DeviceType] = None,
     num_speakers: Optional[int] = None,
     min_speakers: Optional[int] = None,
@@ -76,9 +79,21 @@ def diarize_audios_with_pyannote(
             diarization_list.append(ScriptLine(speaker=label, start=segment.start, end=segment.end))
         return diarization_list
 
-    device, _ = _select_device_and_dtype(
-        user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
-    )
+    # 16khz comes from the model cards of pyannote/speaker-diarization-3.1
+    expected_sample_rate = 16000  
+
+    # Check that all audio objects have the correct sampling rate
+    for audio in audios:
+        if audio.waveform.shape[0] != 1:
+            raise ValueError(
+                f"Audio waveform must be mono (1 channel), but got {audio.waveform.shape[0]} channels"
+            )
+        if audio.sampling_rate != expected_sample_rate:
+            raise ValueError(
+                "Audio sampling rate " + str(audio.sampling_rate) + 
+                " does not match expected " + str(expected_sample_rate)
+            )
+
     pipeline = PyannoteDiarization._get_pyannote_diarization_pipeline(model=model, device=device)
     results: List[List[ScriptLine]] = []
     for audio in audios:
