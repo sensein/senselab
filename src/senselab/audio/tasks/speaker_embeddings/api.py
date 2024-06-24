@@ -37,7 +37,7 @@ def extract_speaker_embeddings_from_audios(
         >>> print(embeddings[0].shape)
         torch.Size([192])
     """
-    if isinstance(model, HFModel):  # TODO: check that this is a speechbrain model!!!
+    if isinstance(model, HFModel):  # TODO: check that this is a speechbrain model!
         return SpeechBrainEmbeddings.extract_speechbrain_speaker_embeddings_from_audios(
             audios=audios, model=model, device=device
         )

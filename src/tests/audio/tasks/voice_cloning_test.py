@@ -3,7 +3,6 @@
 import os
 
 import pytest
-from pytest_mock import MockFixture
 
 from senselab.audio.data_structures.audio import Audio
 from senselab.audio.tasks.preprocessing.preprocessing import resample_audios
@@ -20,14 +19,14 @@ def audio_sample() -> Audio:
     return resampled_audios[0]
 
 
+@pytest.mark.skipif(os.getenv("GITHUB_ACTIONS") == "true", reason="Don't want to hit the GitHub API limit")
 @pytest.fixture
-def torch_model(mocker: MockFixture) -> TorchModel:
+def torch_model() -> TorchModel:
     """Fixture for torch model."""
-    # Mock the check_github_repo_exists function to always return True
-    mocker.patch("senselab.utils.data_structures.model.check_github_repo_exists", return_value=True)
     return TorchModel(path_or_uri="bshall/knn-vc", revision="master")
 
 
+@pytest.mark.skipif(os.getenv("GITHUB_ACTIONS") == "true", reason="Don't want to hit the GitHub API limit")
 def test_clone_voices_length_mismatch(audio_sample: Audio, torch_model: TorchModel) -> None:
     """Test length mismatch in source and target audios."""
     source_audios = [audio_sample]
@@ -37,6 +36,7 @@ def test_clone_voices_length_mismatch(audio_sample: Audio, torch_model: TorchMod
         clone_voices(source_audios=source_audios, target_audios=target_audios, model=torch_model, device=DeviceType.CPU)
 
 
+@pytest.mark.skipif(os.getenv("GITHUB_ACTIONS") == "true", reason="Don't want to hit the GitHub API limit")
 def test_clone_voices_invalid_topk(audio_sample: Audio, torch_model: TorchModel) -> None:
     """Test invalid topk value."""
     source_audios = [audio_sample]
@@ -52,6 +52,7 @@ def test_clone_voices_invalid_topk(audio_sample: Audio, torch_model: TorchModel)
         )
 
 
+@pytest.mark.skipif(os.getenv("GITHUB_ACTIONS") == "true", reason="Don't want to hit the GitHub API limit")
 def test_clone_voices_invalid_prematched_vocoder(audio_sample: Audio, torch_model: TorchModel) -> None:
     """Test invalid prematched_vocoder value."""
     source_audios = [audio_sample]
@@ -71,6 +72,7 @@ def test_clone_voices_unsupported_model(audio_sample: Audio) -> None:
     """Test unsupported model."""
     source_audios = [audio_sample]
     target_audios = [audio_sample]
+    # this uri doesn't exist
     unsupported_model = TorchModel(path_or_uri="sensein/senselab", revision="main")
 
     with pytest.raises(NotImplementedError, match="Only KNNVC is supported for now."):
@@ -79,7 +81,7 @@ def test_clone_voices_unsupported_model(audio_sample: Audio) -> None:
         )
 
 
-@pytest.mark.skipif(os.getenv("GITHUB_ACTIONS") == "true", reason="Not enough space for this test on GitHub")
+@pytest.mark.skipif(os.getenv("GITHUB_ACTIONS") == "true", reason="Don't want to hit the GitHub API limit")
 def test_clone_voices_valid_input(audio_sample: Audio, torch_model: TorchModel) -> None:
     """Test cloning voices with valid input."""
     source_audios = [audio_sample]
