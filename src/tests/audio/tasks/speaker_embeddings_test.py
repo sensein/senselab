@@ -8,28 +8,31 @@ if os.getenv("GITHUB_ACTIONS") != "true":
 
     from senselab.audio.data_structures.audio import Audio
     from senselab.audio.tasks.speaker_embeddings.api import extract_speaker_embeddings_from_audios
-    from senselab.utils.data_structures.model import HFModel
+    from senselab.utils.data_structures.model import SenselabModel, SpeechBrainModel
 
     @pytest.fixture
-    def ecapa_model() -> HFModel:
+    def ecapa_model() -> SpeechBrainModel:
         """Fixture for the ECAPA-TDNN model."""
-        return HFModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb", revision="main")
+        return SpeechBrainModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb", revision="main")
 
 
     @pytest.fixture
-    def xvector_model() -> HFModel:
+    def xvector_model() -> SpeechBrainModel:
         """Fixture for the xvector model."""
-        return HFModel(path_or_uri="speechbrain/spkrec-xvect-voxceleb", revision="main")
+        return SpeechBrainModel(path_or_uri="speechbrain/spkrec-xvect-voxceleb", revision="main")
 
 
     @pytest.fixture
-    def resnet_model() -> HFModel:
+    def resnet_model() -> SpeechBrainModel:
         """Fixture for the ResNet model."""
-        return HFModel(path_or_uri="speechbrain/spkrec-resnet-voxceleb", revision="main")
+        return SpeechBrainModel(path_or_uri="speechbrain/spkrec-resnet-voxceleb", revision="main")
 
 
     def test_extract_speaker_embeddings_from_audio(
-        resampled_mono_audio_sample: Audio, ecapa_model: HFModel, xvector_model: HFModel, resnet_model: HFModel
+        resampled_mono_audio_sample: Audio, 
+        ecapa_model: SpeechBrainModel, 
+        xvector_model: SpeechBrainModel, 
+        resnet_model: SpeechBrainModel
     ) -> None:
         """Test extracting speaker embeddings from audio."""
         embeddings = extract_speaker_embeddings_from_audios(audios=[resampled_mono_audio_sample], model=ecapa_model)
@@ -46,7 +49,10 @@ if os.getenv("GITHUB_ACTIONS") != "true":
 
 
     def test_extract_speaker_embeddings_from_multiple_audios(
-        resampled_mono_audio_sample: Audio, ecapa_model: HFModel, xvector_model: HFModel, resnet_model: HFModel
+        resampled_mono_audio_sample: Audio, 
+        ecapa_model: SpeechBrainModel, 
+        xvector_model: SpeechBrainModel, 
+        resnet_model: SpeechBrainModel
     ) -> None:
         """Test extracting speaker embeddings from multiple audios."""
         embeddings = extract_speaker_embeddings_from_audios(audios=[resampled_mono_audio_sample, 
@@ -71,13 +77,19 @@ if os.getenv("GITHUB_ACTIONS") != "true":
     def test_error_wrong_model(resampled_mono_audio_sample: Audio) -> None:
         """Test raising error when using a non-existent model."""
         with pytest.raises(ValueError):
-            embeddings = extract_speaker_embeddings_from_audios(
-                audios=[resampled_mono_audio_sample], model=HFModel(path_or_uri="nonexistent---")
+            extract_speaker_embeddings_from_audios(
+                audios=[resampled_mono_audio_sample], model=SpeechBrainModel(path_or_uri="nonexistent---")
             )
-            assert not embeddings
+        with pytest.raises(NotImplementedError):
+            extract_speaker_embeddings_from_audios(
+                audios=[resampled_mono_audio_sample], model=SenselabModel(path_or_uri="nonexistent---")
+            )
 
     def test_extract_speechbrain_speaker_embeddings_from_audio_resampled(
-        mono_audio_sample: Audio, ecapa_model: HFModel, xvector_model: HFModel, resnet_model: HFModel
+        mono_audio_sample: Audio, 
+        ecapa_model: SpeechBrainModel, 
+        xvector_model: SpeechBrainModel, 
+        resnet_model: SpeechBrainModel
     ) -> None:
         """Test extracting speaker embeddings from audio."""
         # Testing with the ecapa model
@@ -99,7 +111,10 @@ if os.getenv("GITHUB_ACTIONS") != "true":
             )
 
     def test_extract_speechbrain_speaker_embeddings_from_stereo_audio(
-        stereo_audio_sample: Audio, ecapa_model: HFModel, xvector_model: HFModel, resnet_model: HFModel
+        stereo_audio_sample: Audio, 
+        ecapa_model: SpeechBrainModel, 
+        xvector_model: SpeechBrainModel, 
+        resnet_model: SpeechBrainModel
     ) -> None:
         """Test extracting speaker embeddings from audio."""
         # Testing with the ecapa model

@@ -17,15 +17,16 @@ def test_detect_human_voice_activity_in_audios_with_invalid_model(mono_audio_sam
         )
 
 if os.getenv("GITHUB_ACTIONS") != "true":
-    from senselab.utils.data_structures.model import HFModel
+    from senselab.utils.data_structures.model import PyannoteAudioModel
 
     @pytest.fixture
-    def pyannote_model() -> HFModel:
+    def pyannote_model() -> PyannoteAudioModel:
         """Fixture for Pyannote model."""
-        return HFModel(path_or_uri="pyannote/speaker-diarization-3.1")
+        return PyannoteAudioModel(path_or_uri="pyannote/speaker-diarization-3.1")
 
 
-    def test_detect_human_voice_activity_in_audios(resampled_mono_audio_sample: Audio, pyannote_model: HFModel) -> None:
+    def test_detect_human_voice_activity_in_audios(resampled_mono_audio_sample: Audio, 
+                                                   pyannote_model: PyannoteAudioModel) -> None:
         """Test detecting human voice activity in audios."""
         results = detect_human_voice_activity_in_audios(audios=[resampled_mono_audio_sample], model=pyannote_model)
         assert len(results) == 1
