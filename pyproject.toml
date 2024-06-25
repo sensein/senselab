@@ -51,6 +51,8 @@ pycountry = "^24.6.1"
 types-requests = "^2.32"
 opensmile = "^2.5.0"
 numpy = "^1.26"
+umap-learn = "^0.5.6"
+scikit-learn = "^1.5.0"
 
 [tool.poetry.group.dev]
 optional = true
