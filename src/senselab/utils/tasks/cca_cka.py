@@ -133,5 +133,6 @@ def compute_cka(
     result = _cka(gram_x, gram_y)
     return result.item() if isinstance(result, torch.Tensor) else float(result)
 
+
 compute_cca_pt = pydra.mark.task(compute_cca)
 compute_cka_pt = pydra.mark.task(compute_cka)

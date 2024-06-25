@@ -19,4 +19,5 @@ def compute_eer(predictions: torch.Tensor, targets: torch.Tensor) -> Tuple[float
     """
     return EER(predictions, targets)
 
+
 compute_eer_pt = pydra.mark.task(compute_eer)

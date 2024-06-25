@@ -2,9 +2,13 @@
 
 import math
 import uuid
-from typing import Any, Dict, List, Union, no_type_check
+from typing import Dict, List, Union, no_type_check
 
+import torch
+from datasets import Audio as HFAudio
+from datasets import Dataset, Features, Image, Sequence, Value
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
+from transformers.image_transforms import to_pil_image
 
 from senselab.audio.data_structures.audio import Audio
 from senselab.video.data_structures.video import Video
@@ -175,27 +179,6 @@ class SenselabDataset(BaseModel):
             for audio_output in audio_task_input:
                 self.audios.append(audio_output)
 
-    @field_validator("participants", mode="before")
-    def check_unique_participant_id(cls, v: Dict[str, Participant], values: Any) -> Dict[str, Participant]:  # noqa: ANN401
-        """Check if participant IDs are unique."""
-        print("type(values)")
-        print(type(values))
-        input("Press Enter to continue...")
-        participants = values.get("participants", {})
-        for participant_id, _ in v.items():
-            if participant_id in participants:
-                raise ValueError(f"Participant with ID {participant_id} already exists.")
-        return v
-
-    @field_validator("sessions", mode="before")
-    def check_unique_session_id(cls, v: Dict[str, Session], values: Any) -> Dict[str, Session]:  # noqa: ANN401
-        """Check if session IDs are unique."""
-        sessions = values.get("sessions", {})
-        for session_id, _ in v.items():
-            if session_id in sessions:
-                raise ValueError(f"Session with ID {session_id} already exists.")
-        return v
-
     def add_participant(self, participant: Participant) -> None:
         """Add a participant to the dataset."""
         if participant.id in self.participants:
@@ -215,3 +198,155 @@ class SenselabDataset(BaseModel):
     def get_sessions(self) -> List[Session]:
         """Get the list of sessions in the dataset."""
         return list(self.sessions.values())
+
+    def _get_dict_representation(self) -> Dict:
+        audio_data: Dict[str, List] = {}
+        video_data: Dict[str, List] = {}
+        senselab_dict: Dict[str, Union[Dict[str, List], List]] = {
+            "participants": [],
+            "sessions": [],
+            "audios": audio_data,
+            "videos": video_data,
+            "metadata": self.metadata.copy(),
+        }
+        participants_data = []
+        sessions_data = []
+
+        video_frames_data = []
+        video_fps_data = []
+        video_path_data = []
+        video_metadata = []
+        video_audio_data = []
+        video_audio_metadata = []
+
+        audio_waveform_data = []
+        audio_metadata = []
+
+        for participant in self.get_participants():
+            participants_data.append({"id": participant.id, "metadata": participant.metadata.copy()})
+        senselab_dict["participants"] = participants_data
+
+        for session in self.get_sessions():
+            sessions_data.append({"id": session.id, "metadata": session.metadata.copy()})
+        senselab_dict["sessions"] = sessions_data
+
+        for audio in self.audios:
+            audio_waveform_data.append(
+                {
+                    "array": audio.waveform.T,
+                    "sampling_rate": audio.sampling_rate,
+                    "path": audio.generate_path(),
+                }
+            )
+            audio_metadata.append(audio.metadata.copy())
+        audio_data["audio"] = audio_waveform_data
+        audio_data["metadata"] = audio_metadata
+
+        for video in self.videos:
+            video_frames_data.append({"image": [to_pil_image(frame.numpy()) for frame in list(video.frames)]})
+            video_fps_data.append(video.frame_rate)
+            video_path_data.append(video.generate_path())
+            video_metadata.append(video.metadata.copy())
+            video_audio_data.append(
+                None
+                if not video.audio
+                else {
+                    "array": video.audio.waveform.T.to(torch.float32).numpy(),
+                    "sampling_rate": video.audio.sampling_rate,
+                    "path": video.audio.generate_path(),
+                }
+            )
+            video_audio_metadata.append(None if not video.audio else video.audio.metadata.copy())
+
+        video_data["frames"] = video_frames_data
+        video_data["frame_rate"] = video_fps_data
+        video_data["path"] = video_path_data
+        video_data["metadata"] = video_metadata
+        video_data["audio"] = video_audio_data
+        video_data["audio_metadata"] = video_audio_metadata
+        # raise ValueError('fuck')
+        return senselab_dict
+
+    def convert_senselab_dataset_to_hf_datasets(self) -> Dict[str, Dataset]:
+        """Converts Senselab datasets into HuggingFace datasets."""
+        senselab_dict = self._get_dict_representation()
+
+        # print(senselab_dict['videos']['audio'][0])
+
+        features = Features(
+            {
+                "frames": {"image": Sequence(feature=Image())},
+                "frame_rate": Value("float32"),
+                "path": Value("string"),
+                "metadata": {},
+                "audio": HFAudio(mono=False, sampling_rate=48000),
+                "audio_metadata": Value("string"),
+            }
+        )
+
+        audio_dataset = Dataset.from_dict(senselab_dict["audios"]).cast_column("audio", HFAudio(mono=False))
+
+        video_dataset = Dataset.from_dict(senselab_dict["videos"], features=features)
+        # print(video_dataset[0])
+
+        hf_datasets = {}
+        hf_datasets["audios"] = audio_dataset
+        hf_datasets["videos"] = video_dataset
+
+        # TODO: Create datasets for participants and sessions
+        return hf_datasets
+
+    @classmethod
+    def convert_hf_dataset_to_senselab_dataset(cls, hf_datasets: Dict[str, Dataset]) -> "SenselabDataset":
+        """Converts HuggingFace dataset to a Senselab dataset."""
+        audios = []
+        videos = []
+        sessions: Dict[str, Session] = {}
+        participants: Dict[str, Participant] = {}
+        if "audios" in hf_datasets:
+            audio_dataset = hf_datasets["audios"]
+            for audio in audio_dataset:
+                audios.append(
+                    Audio(
+                        waveform=audio["audio"]["array"],
+                        sampling_rate=audio["audio"]["sampling_rate"],
+                        orig_path_or_id=audio["audio"]["path"],
+                        metadata=audio["metadata"],
+                    )
+                )
+
+        if "videos" in hf_datasets:
+            video_dataset = hf_datasets["videos"]
+            for video in video_dataset:
+                videos.append(
+                    Video(
+                        frames=video["frames"]["image"],
+                        frame_rate=video["frame_rate"],
+                        metadata=video["metadata"],
+                        orig_path_or_id=video["path"],
+                        audio=Audio(
+                            waveform=video["audio"]["array"],
+                            sampling_rate=video["audio"]["sampling_rate"],
+                            orig_path_or_id=video["audio"]["path"],
+                        )
+                        if video["audio"]
+                        else None,
+                    )
+                )
+        if "sessions" in hf_datasets:
+            pass
+        if "participants" in hf_datasets:
+            pass
+
+        return SenselabDataset(participants=participants, sessions=sessions, audios=audios, videos=videos)
+
+    def __eq__(self, other: object) -> bool:
+        """Overloads the default BaseModel equality to correctly check that datasets are equivalent."""
+        if isinstance(other, SenselabDataset):
+            return (
+                self.audios == other.audios
+                and self.videos == other.videos
+                and self.participants == other.participants
+                and self.sessions == other.sessions
+            )
+        return False

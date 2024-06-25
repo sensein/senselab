@@ -1,8 +1,11 @@
 """Data structures relevant for video tasks and pipelines."""
 
+import os
 import uuid
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Union
 
+import numpy as np
+import PIL
 import torch
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 from torchvision.io import read_video
@@ -37,14 +40,42 @@ class Video(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
     @field_validator("frames", mode="before")
-    def check_frames(cls, v: torch.Tensor, _: ValidationInfo) -> torch.Tensor:
-        """Check that the frames are the correct Tensor shape of (T,C,H,W)."""
-        if len(v.shape) != 4:
-            raise ValueError(
-                "Expected frames to be of shape (T, C, H, W) where T is the number of frames, \
-                             C is the channels, and H and W are the height and width"
-            )
-        return v
+    def check_frames(
+        cls, v: Union[torch.Tensor, List[Union[torch.Tensor, np.ndarray, PIL.Image.Image]]], _: ValidationInfo
+    ) -> torch.Tensor:
+        # print(v)
+        """Check that the frames are the correct Tensor shape of (T,H,W,C)."""
+        if isinstance(v, torch.Tensor):
+            if len(v.shape) != 4:
+                raise ValueError(
+                    "Expected frames to be of shape (T, H, W, C) where T is the number of frames, \
+                                C is the channels, and H and W are the height and width"
+                )
+            else:
+                return v
+        elif isinstance(v, List):
+            transformed_frames = []
+            # print('should get here, is list')
+            for frame in v:
+                if isinstance(frame, (torch.Tensor, np.ndarray)):
+                    if len(frame.shape) != 3:
+                        raise ValueError(
+                            "Expected frame to be of shape (H, W, C) where \
+                                        C is the channels, and H and W are the height and width"
+                        )
+
+                    transformed_frames.append(torch.Tensor(frame))
+                elif isinstance(frame, PIL.Image.Image):
+                    # print('should get here, is image')
+                    transformed_frames.append(torch.Tensor(np.array(frame)))
+                else:
+                    raise ValueError(
+                        "Expected each frame in the video to be either a Tensor, numpy array, or PIL.Image"
+                    )
+            # print(transformed_frames)
+            return torch.stack(transformed_frames)
+        else:
+            raise ValueError("Expected sequence of frames to be either a List of frames or 4d Tensor")
 
     @classmethod
     def from_filepath(cls, filepath: str, metadata: Dict = {}) -> "Video":
@@ -54,12 +85,28 @@ class Video(BaseModel):
             filepath: Filepath of the video file to read from
             metadata: Additional information associated with the video file
         """
-        v_frames, a_frames, v_metadata = read_video(filename=filepath, output_format="TCHW")
+        v_frames, a_frames, v_metadata = read_video(filename=filepath, pts_unit="sec")
         v_fps = v_metadata["video_fps"]
         a_fps = v_metadata["audio_fps"]
-        v_audio = Audio(waveform=a_frames, sampling_rate=a_fps, orig_path_or_id=filepath)
+        no_ext_filepath = "random_id"  # os.path.splitext(filepath)[0]
+        v_audio = Audio(waveform=a_frames, sampling_rate=a_fps, orig_path_or_id=f"{no_ext_filepath}.wav")
 
         return cls(frames=v_frames, frame_rate=v_fps, audio=v_audio, orig_path_or_id=filepath, metadata=metadata)
+
+    def generate_path(self) -> str:
+        """Generate a path like string for this Video.
+
+        Generates a path like string for the Video by either utilizing the orig_path_or_id, checking
+        if it is a path (has an extension), otherwise using the id if orig_path_or_id is not an ID
+        and giving an extension and relative to the current directory.
+        """
+        if self.orig_path_or_id:
+            if os.path.splitext(self.orig_path_or_id)[-1].lower():
+                return self.orig_path_or_id
+            else:
+                return f"{self.orig_path_or_id}.mp4"
+        else:
+            return f"{self.id()}.mp4"
 
     def id(self) -> str:
         """Generate a unique identifier for the Video.

@@ -43,7 +43,7 @@ class HuggingFaceASR:
             )
         key = (
             f"{model.path_or_uri}-{model.revision}-{return_timestamps}-"
-            f"{max_new_tokens}-{chunk_length_s}-{batch_size}-{device}"
+            f"{max_new_tokens}-{chunk_length_s}-{batch_size}-{device.value}"
         )
         if key not in cls._pipelines:
             cls._pipelines[key] = pipeline(
