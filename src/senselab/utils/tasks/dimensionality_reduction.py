@@ -18,7 +18,7 @@ def compute_dimensionality_reduction(
         data (torch.Tensor): Input data tensor of shape (n_samples, n_features).
         model (str, optional): The dimensionality reduction model to use.
             Choices are:
-                * "pca" for Principal Component Analysis,
+                * "pca" for Principal Component Analysis
                 * "tsne" for t-Distributed Stochastic Neighbor Embedding
                 * "umap" for Uniform Manifold Approximation and Projection
         n_components (int, optional): Number of dimensions in the output.
@@ -35,9 +35,35 @@ def compute_dimensionality_reduction(
 
     Examples:
         >>> data = torch.randn(100, 10)  # 100 samples, 10 features
-        >>> reduced_data = compute_dimensionality_reduction(data, model="pca", n_components=2)
+        >>> data.shape
+        torch.Size([100, 10])
+
+        >>> reduced_data = compute_dimensionality_reduction(data)
         >>> print(reduced_data.shape)
         torch.Size([100, 2])
+
+        >>> reduced_data = compute_dimensionality_reduction(data, model="pca", n_components=2, svd_solver="full")
+        >>> print(reduced_data.shape)
+        torch.Size([100, 2])
+
+        >>> reduced_data = compute_dimensionality_reduction(data, model="tsne", n_components=3, perplexity=30)
+        >>> print(reduced_data.shape)
+        torch.Size([100, 3])
+
+        >>> reduced_data = compute_dimensionality_reduction(data, model="umap", n_components=4,
+            force_approximation_algorithm=False,
+            init='spectral', learning_rate=1.0, n_neighbors=5)
+        >>> print(reduced_data.shape)
+        torch.Size([100, 4])
+
+    Notes:
+        This function uses implementations from scikit-learn for PCA and t-SNE, and the umap-learn
+        library for UMAP. For detailed information about each method and its parameters, please
+        refer to the following documentation:
+
+        - PCA: https://scikit-learn.org/stable/modules/generated/sklearn.decomposition.PCA.html
+        - t-SNE: https://scikit-learn.org/stable/modules/generated/sklearn.manifold.TSNE.html
+        - UMAP: https://umap-learn.readthedocs.io/en/latest/api.html
     """
     if n_components > data.shape[1]:
         raise ValueError("n_components must be less than or equal to the number of features in the input data")
