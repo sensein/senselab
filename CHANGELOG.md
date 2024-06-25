@@ -1,3 +1,26 @@
+# 0.4.0 (Fri Jun 21 2024)
+
+#### 🚀 Enhancement
+
+- Release 040 [#77](https://github.com/sensein/senselab/pull/77) ([@wilke0818](https://github.com/wilke0818) [@fabiocat93](https://github.com/fabiocat93) mbsilva@OPENMIND7.MIT.EDU)
+
+#### 🐛 Bug Fix
+
+- VAD and speaker diarization [#74](https://github.com/sensein/senselab/pull/74) ([@fabiocat93](https://github.com/fabiocat93))
+- Audio classification functionality [#76](https://github.com/sensein/senselab/pull/76) ([@wilke0818](https://github.com/wilke0818))
+- Add code for speaker embeddings task [#75](https://github.com/sensein/senselab/pull/75) (mbsilva@OPENMIND7.MIT.EDU [@fabiocat93](https://github.com/fabiocat93) [@900miles](https://github.com/900miles))
+- Senselab io [#70](https://github.com/sensein/senselab/pull/70) ([@wilke0818](https://github.com/wilke0818) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 5
+
+- [@900miles](https://github.com/900miles)
+- [@wilke0818](https://github.com/wilke0818)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Miles B Silva (mbsilva@node059.ib.cluster)
+- Miles B Silva (mbsilva@OPENMIND7.MIT.EDU)
+
+---
+
 # 0.3.0 (Mon Jun 17 2024)
 
 #### 🚀 Enhancement
