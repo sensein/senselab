@@ -7,7 +7,7 @@ from pyannote.core import Annotation
 
 from senselab.audio.data_structures.audio import Audio
 from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
-from senselab.utils.data_structures.model import HFModel
+from senselab.utils.data_structures.model import PyannoteAudioModel
 from senselab.utils.data_structures.script_line import ScriptLine
 
 
@@ -19,13 +19,13 @@ class PyannoteDiarization:
     @classmethod
     def _get_pyannote_diarization_pipeline(
         cls,
-        model: HFModel,
+        model: PyannoteAudioModel,
         device: Union[DeviceType, None],
     ) -> Pipeline:
         """Get or create a Pyannote Diarization pipeline.
 
         Args:
-            model (HFModel): The Pyannote model.
+            model (PyannoteAudioModel): The Pyannote model.
             device (DeviceType): The device to run the model on.
 
         Returns:
@@ -45,7 +45,9 @@ class PyannoteDiarization:
 
 def diarize_audios_with_pyannote(
     audios: List[Audio],
-    model: HFModel = HFModel(path_or_uri="pyannote/speaker-diarization-3.1", revision="main"),
+    model: PyannoteAudioModel = PyannoteAudioModel(
+        path_or_uri="pyannote/speaker-diarization-3.1", 
+        revision="main"),
     device: Optional[DeviceType] = None,
     num_speakers: Optional[int] = None,
     min_speakers: Optional[int] = None,
@@ -55,7 +57,7 @@ def diarize_audios_with_pyannote(
 
     Args:
         audios (List[Audio]): A list of audio files.
-        model (HFModel): The model to use for diarization.
+        model (PyannoteAudioModel): The model to use for diarization.
         device (Optional[DeviceType]): The device to use for diarization.
         num_speakers (Optional[int]): Number of speakers, when known.
         min_speakers (Optional[int]): Minimum number of speakers. Has no effect when `num_speakers` is provided.

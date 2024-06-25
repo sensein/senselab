@@ -6,7 +6,7 @@ from speechbrain.inference.separation import SepformerSeparation as separator
 
 from senselab.audio.data_structures.audio import Audio
 from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
-from senselab.utils.data_structures.model import HFModel
+from senselab.utils.data_structures.model import SpeechBrainModel
 
 
 class SpeechBrainEnhancer:
@@ -17,13 +17,13 @@ class SpeechBrainEnhancer:
     @classmethod
     def _get_speechbrain_model(
         cls,
-        model: HFModel,
+        model: SpeechBrainModel,
         device: Optional[DeviceType] = None,
     ) -> separator:
         """Get or create a SpeechBrain enhancement model.
 
         Args:
-            model (HFModel): The SpeechBrain model.
+            model (SpeechBrainModel): The SpeechBrain model.
             device (Optional[DeviceType]): The device to run the model on.
                 Only CPU and CUDA are supported.
 
@@ -45,14 +45,16 @@ class SpeechBrainEnhancer:
     def enhance_audios_with_speechbrain(
         cls,
         audios: List[Audio],
-        model: HFModel = HFModel(path_or_uri="speechbrain/sepformer-wham16k-enhancement", revision="main"),
+        model: SpeechBrainModel = SpeechBrainModel(
+            path_or_uri="speechbrain/sepformer-wham16k-enhancement", 
+            revision="main"),
         device: Optional[DeviceType] = None,
     ) -> List[Audio]:
         """Enhances all audio samples in the dataset.
 
         Args:
             audios (List[Audio]): The list of audio objects to be enhanced.
-            model (HFModel): The SpeechBrain model used for enhancement.
+            model (SpeechBrainModel): The SpeechBrain model used for enhancement.
             device (Optional[DeviceType]): The device to run the model on (default is None).
 
         Returns:
