@@ -51,6 +51,7 @@ pycountry = "^24.6.1"
 types-requests = "^2.32"
 opensmile = "^2.5.0"
 numpy = "^1.26"
+nltk = "^3.8.1"
 
 [tool.poetry.group.dev]
 optional = true
