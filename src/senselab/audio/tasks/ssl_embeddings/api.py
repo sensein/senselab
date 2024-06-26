@@ -14,6 +14,7 @@ from senselab.utils.data_structures.model import HFModel, SenselabModel
 def extract_ssl_embeddings_from_audios(
     audios: List[Audio],
     model: SenselabModel,
+    sampling_rate: int = 16000,
     cache_dir: str = "~/",
     device: Optional[DeviceType] = None,
 ) -> List[torch.Tensor]:
@@ -22,6 +23,7 @@ def extract_ssl_embeddings_from_audios(
     Args:
         audios (List[Audio]): A list of Audio objects containing the audio signals and their properties.
         model (SenselabModel): The model used to extract their embeddings.
+        sampling_rate: The sampling rate used to train the model (default is 16000).
         cache_dir (str): The path to where the model's weights will be saved.
         device (Optional[DeviceType]): The device to run the model on (default is None).
 
@@ -34,13 +36,14 @@ def extract_ssl_embeddings_from_audios(
     Examples:
         >>> audios = [Audio.from_filepath("sample.wav")]
         >>> model = HFModel(path_or_uri="facebook/wav2vec2-base", revision="main")
-        >>> embeddings = extract_ssl_embeddings_from_audios(audios, model, cache_dir="./", device=DeviceType.CUDA)
-        >>> print(embeddings[0]["Layer1"].shape)
-        [209, 1024] ([Time Frames, Embedding Size])
+        >>> embeddings = extract_ssl_embeddings_from_audios(audios, model, sampling_rate=16000,
+                                                            cache_dir="./", device=DeviceType.CUDA)
+        >>> print(embeddings[0].shape)
+        [13, 209, 768] ([# of Layers, Time Frames, Embedding Size])
     """
     if isinstance(model, HFModel):
         return SSLEmbeddingsFactory.extract_ssl_embeddings(
-            audios=audios, model=model, cache_dir=cache_dir, device=device
+            audios=audios, model=model, sampling_rate=sampling_rate, cache_dir=cache_dir, device=device
         )
     else:
         raise NotImplementedError("The specified model is not supported for now.")
