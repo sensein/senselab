@@ -8,11 +8,11 @@ from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
 
 from senselab.audio.data_structures.audio import Audio
 from senselab.audio.tasks.forced_alignment.align import (
-    DEFAULT_ALIGN_MODELS_HF,
     SingleSegment,
     align,
     convert_to_scriptline,
 )
+from senselab.audio.tasks.forced_alignment.constants import DEFAULT_ALIGN_MODELS_HF  # TODO add support for TORCH
 from senselab.utils.data_structures.script_line import ScriptLine
 
 
