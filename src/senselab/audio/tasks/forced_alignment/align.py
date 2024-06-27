@@ -26,6 +26,89 @@ from senselab.utils.data_structures.script_line import ScriptLine
 SAMPLE_RATE = 16000
 
 
+def _prepare_audio(audio: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+    """Prepare audio data for processing.
+
+    Args:
+        audio (Union[np.ndarray, torch.Tensor]): The audio data to be prepared.
+
+    Returns:
+        torch.Tensor: The prepared audio data as a torch tensor.
+    """
+    if not torch.is_tensor(audio):
+        audio = torch.from_numpy(audio)
+    if len(audio.shape) == 1:
+        audio = audio.unsqueeze(0)
+    return audio
+
+
+def _preprocess_segments(
+    transcript: List[SingleSegment],
+    model_dictionary: Dict[str, int],
+    model_lang: str,
+    print_progress: bool,
+    combined_progress: bool,
+) -> List[SingleSegment]:
+    """Preprocess transcription segments by filtering characters, handling spaces, and preparing text.
+
+    Args:
+        transcript (List[SingleSegment]): The list of transcription segments.
+        model_dictionary (Dict[str, int]): Dictionary for the alignment model.
+        model_lang (str): Language of the model.
+        print_progress (bool): Whether to print progress.
+        combined_progress (bool): Whether to combine progress percentage.
+
+    Returns:
+        List[SingleSegment]: The preprocessed transcription segments.
+    """
+    total_segments = len(transcript)
+
+    for sdx, segment in enumerate(transcript):
+        if print_progress:
+            base_progress = ((sdx + 1) / total_segments) * 100
+            percent_complete = (50 + base_progress / 2) if combined_progress else base_progress
+            print(f"Progress: {percent_complete:.2f}%...")
+
+        num_leading = len(segment["text"]) - len(segment["text"].lstrip())
+        num_trailing = len(segment["text"]) - len(segment["text"].rstrip())
+        text = segment["text"]
+
+        # Split into words
+        if model_lang not in LANGUAGES_WITHOUT_SPACES:
+            per_word = text.split(" ")
+        else:
+            per_word = [text]
+
+        clean_char, clean_cdx = [], []
+        for cdx, char in enumerate(text):
+            char_ = char.lower()
+            if model_lang not in LANGUAGES_WITHOUT_SPACES:
+                char_ = char_.replace(" ", "|")
+
+            if cdx < num_leading or cdx > len(text) - num_trailing - 1:
+                continue
+            elif char_ in model_dictionary.keys():
+                clean_char.append(char_)
+                clean_cdx.append(cdx)
+
+        clean_wdx = []
+        for wdx, wrd in enumerate(per_word):
+            if any(c in model_dictionary.keys() for c in wrd):
+                clean_wdx.append(wdx)
+
+        punkt_param = PunktParameters()
+        punkt_param.abbrev_types = set(PUNKT_ABBREVIATIONS)
+        sentence_splitter = PunktSentenceTokenizer(punkt_param)
+        sentence_spans = list(sentence_splitter.span_tokenize(text))
+
+        segment["clean_char"] = clean_char
+        segment["clean_cdx"] = clean_cdx
+        segment["clean_wdx"] = clean_wdx
+        segment["sentence_spans"] = sentence_spans
+
+    return transcript
+
+
 def align(
     transcript: List[SingleSegment],
     model: torch.nn.Module,
@@ -53,66 +136,20 @@ def align(
     Returns:
         AlignedTranscriptionResult: The aligned transcription result.
     """
-    if not torch.is_tensor(audio):
-        audio = torch.from_numpy(audio)
-    if isinstance(audio, torch.Tensor) and len(audio.shape) == 1:
-        audio = audio.unsqueeze(0)
-
-    MAX_DURATION = audio.shape[1] / SAMPLE_RATE
+    audio = _prepare_audio(audio)
+    max_duration = audio.shape[1] / SAMPLE_RATE
 
     model_dictionary = align_model_metadata["dictionary"]
     model_lang = align_model_metadata["language"]
     model_type = align_model_metadata["type"]
 
-    # 1. Preprocess to keep only characters in dictionary
-    total_segments = len(transcript)
-    for sdx, segment in enumerate(transcript):
-        # strip spaces at beginning / end, but keep track of the amount.
-        if print_progress:
-            base_progress = ((sdx + 1) / total_segments) * 100
-            percent_complete = (50 + base_progress / 2) if combined_progress else base_progress
-            print(f"Progress: {percent_complete:.2f}%...")
-
-        num_leading = len(segment["text"]) - len(segment["text"].lstrip())
-        num_trailing = len(segment["text"]) - len(segment["text"].rstrip())
-        text = segment["text"]
-
-        # split into words
-        if model_lang not in LANGUAGES_WITHOUT_SPACES:
-            per_word = text.split(" ")
-        else:
-            per_word = [text]
-
-        clean_char, clean_cdx = [], []
-        for cdx, char in enumerate(text):
-            char_ = char.lower()
-            # wav2vec2 models use "|" character to represent spaces
-            if model_lang not in LANGUAGES_WITHOUT_SPACES:
-                char_ = char_.replace(" ", "|")
-
-            # ignore whitespace at beginning and end of transcript
-            if cdx < num_leading:
-                pass
-            elif cdx > len(text) - num_trailing - 1:
-                pass
-            elif char_ in model_dictionary.keys():
-                clean_char.append(char_)
-                clean_cdx.append(cdx)
-
-        clean_wdx = []
-        for wdx, wrd in enumerate(per_word):
-            if any([c in model_dictionary.keys() for c in wrd]):
-                clean_wdx.append(wdx)
-
-        punkt_param = PunktParameters()
-        punkt_param.abbrev_types = set(PUNKT_ABBREVIATIONS)
-        sentence_splitter = PunktSentenceTokenizer(punkt_param)
-        sentence_spans = list(sentence_splitter.span_tokenize(text))
-
-        segment["clean_char"] = clean_char
-        segment["clean_cdx"] = clean_cdx
-        segment["clean_wdx"] = clean_wdx
-        segment["sentence_spans"] = sentence_spans
+    transcript = _preprocess_segments(
+        transcript,
+        align_model_metadata["dictionary"],
+        align_model_metadata["language"],
+        print_progress,
+        combined_progress,
+    )
 
     aligned_segments: List[SingleAlignedSegment] = []
 
@@ -137,7 +174,7 @@ def align(
             aligned_segments.append(aligned_seg)
             continue
 
-        if t1 >= MAX_DURATION:
+        if t1 >= max_duration:
             print(
                 f'Failed to align segment ("{segment["text"]}"): original\
                     start time longer than audio duration, skipping...'
@@ -270,14 +307,6 @@ def align(
                     text=sentence_text, start=sentence_start, end=sentence_end, words=sentence_words, chars=word_chars
                 )
                 aligned_subsegments.append(aligned_subsegment)
-                # aligned_subsegments.append(
-                #     {
-                #         "text": sentence_text,
-                #         "start": sentence_start,
-                #         "end": sentence_end,
-                #         "words": sentence_words,  # Ensure the correct type
-                #     }
-                # )
 
                 if return_char_alignments:
                     curr_chars = curr_chars[["char", "start", "end", "score"]]
