@@ -34,13 +34,16 @@ class SSLEmbeddingsFactory:
         """
         key = f"{model.path_or_uri}-{model.revision}"
         if key not in cls._feat_extractor:
-            cls._feat_extractor[key] = AutoFeatureExtractor.from_pretrained(model.path_or_uri, cache_dir=cache_dir)
+            cls._feat_extractor[key] = AutoFeatureExtractor.from_pretrained(
+                model.path_or_uri, revision=model.revision, cache_dir=cache_dir
+            )
         return cls._feat_extractor[key]
 
     @classmethod
     def _load_model(
         cls,
         model: HFModel,
+        device: DeviceType,
         cache_dir: str = "~/",
     ) -> AutoModel:
         """Load weights of SSL model.
@@ -48,13 +51,16 @@ class SSLEmbeddingsFactory:
         Args:
             model (HFModel): The Hugging Face model.
             cache_dir (str): The path to where the model's weights will be saved.
+            device (DeviceType): The device to run the model on.
 
         Returns:
             AutoModel: The SSL model.
         """
-        key = f"{model.path_or_uri}-{model.revision}"
+        key = f"{model.path_or_uri}-{model.revision}-{device.value}"
         if key not in cls._model:
-            cls._model[key] = AutoModel.from_pretrained(model.path_or_uri, cache_dir=cache_dir)
+            cls._model[key] = AutoModel.from_pretrained(
+                model.path_or_uri, revision=model.revision, cache_dir=cache_dir
+            ).to(device.value)
         return cls._model[key]
 
     @classmethod
@@ -84,7 +90,7 @@ class SSLEmbeddingsFactory:
             user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
         )
         feat_extractor = cls._get_feature_extractor(model=model, cache_dir=cache_dir)
-        ssl_model = cls._load_model(model=model, cache_dir=cache_dir)
+        ssl_model = cls._load_model(model=model, cache_dir=cache_dir, device=device)
 
         # Check that all audio objects have the correct sampling rate
         for audio in audios:
@@ -101,7 +107,7 @@ class SSLEmbeddingsFactory:
 
         # Extract embeddings (hidden states from all layers) from pre-trained model
         embeddings = [
-            ssl_model(audio.input_values.squeeze(0).to(device.value), output_hidden_states=True).to(device.value)
+            ssl_model(audio.input_values.squeeze(0).to(device.value), output_hidden_states=True)
             for audio in preprocessed_audios
         ]
         embeddings = [torch.cat(embedding.hidden_states) for embedding in embeddings]
