@@ -109,6 +109,38 @@ def _preprocess_segments(
     return transcript
 
 
+def _get_prediction_matrix(
+    model: torch.nn.Module,
+    waveform_segment: torch.Tensor,
+    lengths: Optional[torch.Tensor],
+    model_type: str,
+    device: str,
+) -> torch.Tensor:
+    """Generate prediction matrix from the alignment model.
+
+    Args:
+        model (torch.nn.Module): The alignment model.
+        waveform_segment (torch.Tensor): The audio segment to be processed.
+        lengths (Optional[torch.Tensor]): Lengths of the audio segments.
+        model_type (str): The type of the model ('torchaudio' or 'huggingface').
+        device (str): The device to run the model on.
+
+    Returns:
+        torch.Tensor: The prediction matrix.
+    """
+    with torch.inference_mode():
+        if model_type == "torchaudio":
+            emissions, _ = model(waveform_segment.to(device), lengths=lengths)
+        elif model_type == "huggingface":
+            emissions = model(waveform_segment.to(device)).logits
+        else:
+            raise NotImplementedError(f"Align model of type {model_type} not supported.")
+
+        emissions = torch.log_softmax(emissions, dim=-1)
+
+    return emissions
+
+
 def align(
     transcript: List[SingleSegment],
     model: torch.nn.Module,
@@ -198,15 +230,9 @@ def align(
         else:
             lengths = None
 
-        with torch.inference_mode():
-            if model_type == "torchaudio":
-                emissions, _ = model(waveform_segment.to(device), lengths=lengths)
-            elif model_type == "huggingface":
-                emissions = model(waveform_segment.to(device)).logits
-            else:
-                raise NotImplementedError(f"Align model of type {model_type} not supported.")
-            emissions = torch.log_softmax(emissions, dim=-1)
-
+        emissions = _get_prediction_matrix(
+            model=model, waveform_segment=waveform_segment, lengths=lengths, model_type=model_type, device=device
+        )
         emission = emissions[0].cpu().detach()
 
         blank_id = 0
