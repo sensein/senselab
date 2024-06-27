@@ -68,7 +68,6 @@ class SSLEmbeddingsFactory:
         cls,
         audios: List[Audio],
         model: HFModel,
-        sampling_rate: int = 16000,
         cache_dir: str = "~/",
         device: Optional[DeviceType] = None,
     ) -> List[torch.Tensor]:
@@ -78,7 +77,6 @@ class SSLEmbeddingsFactory:
             audios (List[Audio]): A list of Audio objects containing the audio signals and their properties.
             model (HFModel): The model used to compute the embeddings
                 (default is "facebook/wav2vec2-base").
-            sampling_rate: The sampling rate used to train the model (default is 16000).
             cache_dir (str): The path to where the model's weights will be saved.
             device (Optional[DeviceType]): The device to run the model on (default is None).
                 Only CPU and CUDA are supported.
@@ -89,7 +87,9 @@ class SSLEmbeddingsFactory:
         device, _ = _select_device_and_dtype(
             user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
         )
+        # Load feature extractor and model
         feat_extractor = cls._get_feature_extractor(model=model, cache_dir=cache_dir)
+        sampling_rate = feat_extractor.sampling_rate
         ssl_model = cls._load_model(model=model, cache_dir=cache_dir, device=device)
 
         # Check that all audio objects have the correct sampling rate
