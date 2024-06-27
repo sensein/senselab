@@ -1,5 +1,7 @@
 """This module provides the implementation of dimensionality reduction."""
 
+from typing import Literal
+
 import pydra
 import torch
 import umap
@@ -8,7 +10,7 @@ from sklearn.manifold import TSNE as sklearn_TSNE
 
 
 def compute_dimensionality_reduction(
-    data: torch.Tensor, model: str = "pca", n_components: int = 2, **kwargs: object
+    data: torch.Tensor, model: Literal["pca", "tsne", "umap"] = "pca", n_components: int = 2, **kwargs: object
 ) -> torch.Tensor:
     """Reduce the dimensionality of the given data using the specified model.
 
@@ -25,6 +27,7 @@ def compute_dimensionality_reduction(
             Must be less than or equal to the number of features in the input data.
             Defaults to 2.
         **kwargs: Additional keyword arguments to pass to the chosen model.
+            (See below for links to each model's documentation.)
 
     Returns:
         torch.Tensor: The reduced data tensor of shape (n_samples, n_components).
@@ -85,6 +88,7 @@ def compute_dimensionality_reduction(
         reduced_data = reducer.fit_transform(data)
 
     elif model == "umap":
+        # Perform UMAP
         reducer = umap.UMAP(n_components=n_components, **kwargs)
         reduced_data = reducer.fit_transform(data)
 
