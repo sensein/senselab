@@ -190,6 +190,259 @@ def _get_prediction_matrix(
     return emissions
 
 
+# def _align_single_segment(
+#     segment: SingleSegment,
+#     model: torch.nn.Module,
+#     model_dictionary: Dict[str, int],
+#     model_lang: str,
+#     model_type: str,
+#     waveform_segment: torch.Tensor,
+#     device: str,
+#     t1: float,
+#     t2: float,
+#     return_char_alignments: bool,
+#     interpolate_method: str
+# ) -> Optional[SingleAlignedSegment]:
+#     """Aligns a single segment based on the model predictions.
+
+#     Args:
+#         segment (SingleSegment): The segment to align.
+#         model (torch.nn.Module): The alignment model.
+#         model_dictionary (Dict[str, int]): Dictionary for character indices.
+#         model_lang (str): Language of the model.
+#         model_type (str): The type of the model ('torchaudio' or 'huggingface').
+#         waveform_segment (torch.Tensor): The waveform segment.
+#         device (str): The device to run the model on.
+#         t1 (float): Start time of the segment.
+#         t2 (float): End time of the segment.
+#         return_char_alignments (bool): Flag to return character alignments.
+#         interpolate_method (str): Method for interpolating NaNs.
+
+#     Returns:
+#         Optional[SingleAlignedSegment]: The aligned segment, or None if
+#         alignment failed.
+#     """
+#     text_clean = "".join(segment["clean_char"] or [])
+#     tokens = [model_dictionary[c] for c in text_clean]
+
+#     emissions = _get_prediction_matrix(model, waveform_segment, None, model_type, device)
+#     emission = emissions[0].cpu().detach()
+
+#     blank_id = 0
+#     for char, code in model_dictionary.items():
+#         if char in ["[pad]", "<pad>"]:
+#             blank_id = code
+
+#     trellis = _get_trellis(emission, tokens, blank_id)
+#     path = _backtrack(trellis, emission, tokens, blank_id)
+
+#     if path is None:
+#         print(f'Failed to align segment ("{segment["text"]}"): backtrack failed.')
+#         return None
+
+#     char_segments = _merge_repeats(path, text_clean)
+
+#     duration = t2 - t1
+#     ratio = duration * waveform_segment.size(0) / (trellis.size(0) - 1)
+
+#     char_segments_arr = []
+#     word_idx = 0
+#     for cdx, char in enumerate(segment["text"]):
+#         start, end, score = None, None, None
+#         if segment["clean_cdx"] is not None and cdx in segment["clean_cdx"]:
+#             char_seg = char_segments[segment["clean_cdx"].index(cdx)]
+#             start = round(char_seg.start * ratio + t1, 3)
+#             end = round(char_seg.end * ratio + t1, 3)
+#             score = round(char_seg.score, 3)
+
+#         char_segments_arr.append({
+#             "char": char,
+#             "start": start,
+#             "end": end,
+#             "score": score,
+#             "word-idx": word_idx,
+#         })
+
+#         if model_lang in LANGUAGES_WITHOUT_SPACES:
+#             word_idx += 1
+#         elif cdx == len(segment["text"]) - 1 or segment["text"][cdx + 1] == " ":
+#             word_idx += 1
+
+#     char_segments_arr = pd.DataFrame(char_segments_arr)
+
+#     aligned_segment = SingleAlignedSegment(
+#         start=t1,
+#         end=t2,
+#         text=segment["text"],
+#         words=[],
+#         chars=None
+#     )
+
+#     if return_char_alignments:
+#         aligned_segment["chars"] = char_segments_arr.to_dict("records")
+
+#     return aligned_segment
+
+
+def _align_single_segment(
+    segment: SingleSegment,
+    text: str,
+    model: torch.nn.Module,
+    model_dictionary: Dict[str, int],
+    model_lang: str,
+    model_type: str,
+    audio: Audio,
+    device: str,
+    t1: float,
+    t2: float,
+    return_char_alignments: bool,
+    interpolate_method: str,
+    aligned_segment: SingleAlignedSegment,
+    aligned_segments: list[SingleAlignedSegment],
+    word_segments: list[SingleWordSegment],
+) -> None:
+    """Processes and aligns a single segment.
+
+    Args:
+        segment (SingleSegment): The segment to align.
+        text (str): The text to align with the segment.
+        model (torch.nn.Module): The alignment model.
+        model_dictionary (Dict[str, int]): Dictionary for character indices.
+        model_lang (str): Language of the model.
+        model_type (str): The type of the model ('torchaudio' or 'huggingface').
+        audio (Audio): The audio data.
+        device (str): The device to run the model on.
+        t1 (float): Start time of the segment.
+        t2 (float): End time of the segment.
+        return_char_alignments (bool): Flag to return character alignments.
+        interpolate_method (str): Method for interpolating NaNs.
+        aligned_segment (SingleAlignedSegment ): The aligned segment data.
+        aligned_segments (list[SingleAlignedSegment]): List to store aligned segments.
+        word_segments (list[SingleWordSegment]): List to store word segments.
+
+    Returns:
+        None: The function modifies the aligned_segments and word_segments lists in place.
+    """
+    text_clean = "".join(segment["clean_char"] or [])
+    tokens = [model_dictionary[c] for c in text_clean]
+
+    waveform_segment, lengths = _prepare_waveform_segment(audio, t1, t2, device)
+
+    emissions = _get_prediction_matrix(model, waveform_segment, lengths, model_type, device)
+    emission = emissions[0].cpu().detach()
+
+    blank_id = 0
+    for char, code in model_dictionary.items():
+        if char == "[pad]" or char == "<pad>":
+            blank_id = code
+
+    trellis = _get_trellis(emission, tokens, blank_id)
+    path = _backtrack(trellis, emission, tokens, blank_id)
+
+    if path is None:
+        print(f'Failed to align segment ("{segment["text"]}"): backtrack failed, resorting to original...')
+        aligned_segments.append(aligned_segment)
+        return
+
+    char_segments = _merge_repeats(path, text_clean)
+
+    duration = t2 - t1
+    ratio = duration * waveform_segment.size(0) / (trellis.size(0) - 1)
+
+    # Assign timestamps to aligned characters
+    char_segments_arr = []
+    word_idx = 0
+    for cdx, char in enumerate(text):
+        start, end, score = None, None, None
+        if segment["clean_cdx"] is not None and cdx in segment["clean_cdx"]:
+            char_seg = char_segments[segment["clean_cdx"].index(cdx)]
+            start = round(char_seg.start * ratio + t1, 3)
+            end = round(char_seg.end * ratio + t1, 3)
+            score = round(char_seg.score, 3)
+
+        char_segments_arr.append(
+            {
+                "char": char,
+                "start": start,
+                "end": end,
+                "score": score,
+                "word-idx": word_idx,
+            }
+        )
+
+        if model_lang in LANGUAGES_WITHOUT_SPACES:
+            word_idx += 1
+        elif cdx == len(text) - 1 or text[cdx + 1] == " ":
+            word_idx += 1
+
+    char_segments_arr = pd.DataFrame(char_segments_arr)
+
+    aligned_subsegments = []
+    if isinstance(char_segments_arr, pd.DataFrame):
+        char_segments_arr["sentence-idx"] = None
+    else:
+        raise TypeError("char_segments_arr must be a pandas DataFrame.")
+
+    if segment["sentence_spans"] is not None:
+        for sdx, (sstart, send) in enumerate(segment["sentence_spans"]):
+            curr_chars = char_segments_arr.loc[(char_segments_arr.index >= sstart) & (char_segments_arr.index <= send)]
+            char_segments_arr.loc[
+                (char_segments_arr.index >= sstart) & (char_segments_arr.index <= send), "sentence-idx"
+            ] = sdx
+
+            sentence_text = text[sstart:send]
+            sentence_start = curr_chars["start"].min()
+            end_chars = curr_chars[curr_chars["char"] != " "]
+            sentence_end = end_chars["end"].max()
+            sentence_words = []
+
+            for word_idx in curr_chars["word-idx"].unique():
+                word_chars = curr_chars.loc[curr_chars["word-idx"] == word_idx]
+                word_text = "".join(word_chars["char"].tolist()).strip()
+                if len(word_text) == 0:
+                    continue
+
+                word_chars = word_chars[word_chars["char"] != " "]
+
+                word_start = word_chars["start"].min()
+                word_end = word_chars["end"].max()
+                word_score = round(word_chars["score"].mean(), 3)
+
+                word_segment = SingleWordSegment(word=word_text, start=word_start, end=word_end, score=word_score)
+
+                sentence_words.append(word_segment)
+                word_segments.append(word_segment)
+
+            aligned_subsegment = SingleAlignedSegment(
+                text=sentence_text, start=sentence_start, end=sentence_end, words=sentence_words, chars=word_chars
+            )
+            aligned_subsegments.append(aligned_subsegment)
+
+            if return_char_alignments:
+                curr_chars = curr_chars[["char", "start", "end", "score"]]
+                curr_chars.fillna(-1, inplace=True)
+                curr_chars = curr_chars.to_dict("records")
+                curr_chars = [{key: val for key, val in char.items() if val != -1} for char in curr_chars]
+                aligned_subsegments[-1]["chars"] = curr_chars
+
+        if aligned_subsegments:
+            aligned_subsegments_df = pd.DataFrame(aligned_subsegments)
+
+            aligned_subsegments_df["start"] = _interpolate_nans(
+                aligned_subsegments_df["start"], method=interpolate_method
+            )
+            aligned_subsegments_df["end"] = _interpolate_nans(aligned_subsegments_df["end"], method=interpolate_method)
+            agg_dict = {"text": " ".join, "words": "sum"}
+            if model_lang in LANGUAGES_WITHOUT_SPACES:
+                agg_dict["text"] = "".join
+            if return_char_alignments:
+                agg_dict["chars"] = "sum"
+            aligned_subsegments_df.groupby(["start", "end"], as_index=False).agg(agg_dict)
+            aligned_subsegments = aligned_subsegments_df.to_dict("records")
+
+    aligned_segments.extend(aligned_subsegments)
+
+
 def _get_trellis(emission: torch.Tensor, tokens: List[int], blank_id: int = 0) -> torch.Tensor:
     """Gets the trellis for token alignment.
 
@@ -324,148 +577,40 @@ def _align_segments(
     Returns:
         List[SingleAlignedSegment]: The aligned segments.
     """
-    aligned_segments = []
-    word_segments = []
+    aligned_segments: list[SingleAlignedSegment] = []
+    word_segments: list[SingleWordSegment] = []
 
     for sdx, segment in enumerate(transcript):
         t1 = segment["start"]
         t2 = segment["end"]
         text = segment["text"]
 
-        aligned_seg: SingleAlignedSegment = {"start": t1, "end": t2, "text": text, "words": [], "chars": None}
+        aligned_segment: SingleAlignedSegment = {"start": t1, "end": t2, "text": text, "words": [], "chars": None}
 
         if return_char_alignments:
-            aligned_seg["chars"] = []
+            aligned_segment["chars"] = []
 
-        # Check if we can align
-        if not _can_align_segment(segment, model_dictionary, t1, max_duration):
-            print(f'Failed to align segment ("{segment["text"]}"), skipping...')
-            aligned_segments.append(aligned_seg)
-            continue
-
-        text_clean = "".join(segment["clean_char"] or [])
-        tokens = [model_dictionary[c] for c in text_clean]
-
-        waveform_segment, lengths = _prepare_waveform_segment(audio, t1, t2, device)
-
-        emissions = _get_prediction_matrix(model, waveform_segment, lengths, model_type, device)
-
-        emission = emissions[0].cpu().detach()
-
-        blank_id = 0
-        for char, code in model_dictionary.items():
-            if char == "[pad]" or char == "<pad>":
-                blank_id = code
-
-        trellis = _get_trellis(emission, tokens, blank_id)
-        path = _backtrack(trellis, emission, tokens, blank_id)
-
-        if path is None:
-            print(f'Failed to align segment ("{segment["text"]}"): backtrack failed, resorting to original...')
-            aligned_segments.append(aligned_seg)
-            continue
-
-        char_segments = _merge_repeats(path, text_clean)
-
-        duration = t2 - t1
-        ratio = duration * waveform_segment.size(0) / (trellis.size(0) - 1)
-
-        # Assign timestamps to aligned characters
-        char_segments_arr = []
-        word_idx = 0
-        for cdx, char in enumerate(text):
-            start, end, score = None, None, None
-            if segment["clean_cdx"] is not None and cdx in segment["clean_cdx"]:
-                char_seg = char_segments[segment["clean_cdx"].index(cdx)]
-                start = round(char_seg.start * ratio + t1, 3)
-                end = round(char_seg.end * ratio + t1, 3)
-                score = round(char_seg.score, 3)
-
-            char_segments_arr.append(
-                {
-                    "char": char,
-                    "start": start,
-                    "end": end,
-                    "score": score,
-                    "word-idx": word_idx,
-                }
+        if _can_align_segment(segment, model_dictionary, t1, max_duration):
+            _align_single_segment(
+                segment,
+                text,
+                model,
+                model_dictionary,
+                model_lang,
+                model_type,
+                audio,
+                device,
+                t1,
+                t2,
+                return_char_alignments,
+                interpolate_method,
+                aligned_segment,
+                aligned_segments,
+                word_segments,
             )
-
-            if model_lang in LANGUAGES_WITHOUT_SPACES:
-                word_idx += 1
-            elif cdx == len(text) - 1 or text[cdx + 1] == " ":
-                word_idx += 1
-
-        char_segments_arr = pd.DataFrame(char_segments_arr)
-
-        aligned_subsegments = []
-        if isinstance(char_segments_arr, pd.DataFrame):
-            char_segments_arr["sentence-idx"] = None
         else:
-            raise TypeError("char_segments_arr must be a pandas DataFrame.")
-
-        if segment["sentence_spans"] is not None:
-            for sdx, (sstart, send) in enumerate(segment["sentence_spans"]):
-                curr_chars = char_segments_arr.loc[
-                    (char_segments_arr.index >= sstart) & (char_segments_arr.index <= send)
-                ]
-                char_segments_arr.loc[
-                    (char_segments_arr.index >= sstart) & (char_segments_arr.index <= send), "sentence-idx"
-                ] = sdx
-
-                sentence_text = text[sstart:send]
-                sentence_start = curr_chars["start"].min()
-                end_chars = curr_chars[curr_chars["char"] != " "]
-                sentence_end = end_chars["end"].max()
-                sentence_words = []
-
-                for word_idx in curr_chars["word-idx"].unique():
-                    word_chars = curr_chars.loc[curr_chars["word-idx"] == word_idx]
-                    word_text = "".join(word_chars["char"].tolist()).strip()
-                    if len(word_text) == 0:
-                        continue
-
-                    word_chars = word_chars[word_chars["char"] != " "]
-
-                    word_start = word_chars["start"].min()
-                    word_end = word_chars["end"].max()
-                    word_score = round(word_chars["score"].mean(), 3)
-
-                    word_segment = SingleWordSegment(word=word_text, start=word_start, end=word_end, score=word_score)
-
-                    sentence_words.append(word_segment)
-                    word_segments.append(word_segment)
-
-                aligned_subsegment = SingleAlignedSegment(
-                    text=sentence_text, start=sentence_start, end=sentence_end, words=sentence_words, chars=word_chars
-                )
-                aligned_subsegments.append(aligned_subsegment)
-
-                if return_char_alignments:
-                    curr_chars = curr_chars[["char", "start", "end", "score"]]
-                    curr_chars.fillna(-1, inplace=True)
-                    curr_chars = curr_chars.to_dict("records")
-                    curr_chars = [{key: val for key, val in char.items() if val != -1} for char in curr_chars]
-                    aligned_subsegments[-1]["chars"] = curr_chars
-
-            if aligned_subsegments:
-                aligned_subsegments_df = pd.DataFrame(aligned_subsegments)
-
-                aligned_subsegments_df["start"] = _interpolate_nans(
-                    aligned_subsegments_df["start"], method=interpolate_method
-                )
-                aligned_subsegments_df["end"] = _interpolate_nans(
-                    aligned_subsegments_df["end"], method=interpolate_method
-                )
-                agg_dict = {"text": " ".join, "words": "sum"}
-                if model_lang in LANGUAGES_WITHOUT_SPACES:
-                    agg_dict["text"] = "".join
-                if return_char_alignments:
-                    agg_dict["chars"] = "sum"
-                aligned_subsegments_df.groupby(["start", "end"], as_index=False).agg(agg_dict)
-                aligned_subsegments = aligned_subsegments_df.to_dict("records")
-
-        aligned_segments.extend(aligned_subsegments)
+            print(f'Failed to align segment ("{segment["text"]}"), skipping...')
+            aligned_segments.append(aligned_segment)
 
     return (aligned_segments, word_segments)
 
