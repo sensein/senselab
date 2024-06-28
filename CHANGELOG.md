@@ -1,3 +1,15 @@
+# 0.5.1 (Fri Jun 28 2024)
+
+#### 🐛 Bug Fix
+
+- fixing documentation issue [#83](https://github.com/sensein/senselab/pull/83) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.5.0 (Fri Jun 28 2024)
 
 #### 🚀 Enhancement
