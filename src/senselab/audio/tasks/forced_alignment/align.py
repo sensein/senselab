@@ -142,6 +142,134 @@ def _get_prediction_matrix(
     return emissions
 
 
+def _get_trellis(emission: torch.Tensor, tokens: List[int], blank_id: int = 0) -> torch.Tensor:
+    """Gets the trellis for token alignment.
+
+    Args:
+        emission (torch.Tensor): The emission matrix from the model.
+        tokens (List[int]): The token IDs.
+        blank_id (int): The ID for the blank token.
+
+    Returns:
+        torch.Tensor: The trellis matrix.
+    """
+    num_frame = emission.size(0)
+    num_tokens = len(tokens)
+
+    trellis = torch.empty((num_frame + 1, num_tokens + 1))
+    trellis[0, 0] = 0
+    trellis[1:, 0] = torch.cumsum(emission[:, 0], 0)
+    trellis[0, -num_tokens:] = -float("inf")
+    trellis[-num_tokens:, 0] = float("inf")
+
+    for t in range(num_frame):
+        trellis[t + 1, 1:] = torch.maximum(
+            trellis[t, 1:] + emission[t, blank_id],
+            trellis[t, :-1] + emission[t, tokens],
+        )
+    return trellis
+
+
+def _backtrack(
+    trellis: torch.Tensor, emission: torch.Tensor, tokens: List[int], blank_id: int = 0
+) -> Optional[List[Point]]:
+    """Backtracks to find the best path through the trellis.
+
+    Args:
+        trellis (torch.Tensor): The trellis matrix.
+        emission (torch.Tensor): The emission matrix from the model.
+        tokens (List[int]): The token IDs.
+        blank_id (int): The ID for the blank token.
+
+    Returns:
+        Optional[List[Point]]: The best path as a list of Points.
+    """
+    j = trellis.size(1) - 1
+    t_start = int(torch.argmax(trellis[:, j]).item())
+
+    path = []
+    for t in range(t_start, 0, -1):
+        stayed = trellis[t - 1, j] + emission[t - 1, blank_id]
+        changed = trellis[t - 1, j - 1] + emission[t - 1, tokens[j - 1]]
+        prob = emission[t - 1, tokens[j - 1] if changed > stayed else 0].exp().item()
+        path.append(Point(j - 1, t - 1, prob))
+
+        if changed > stayed:
+            j -= 1
+            if j == 0:
+                break
+    else:
+        return None
+    return path[::-1]
+
+
+def _merge_repeats(path: List[Point], transcript: str) -> List[Segment]:
+    """Merges repeated tokens in the alignment path.
+
+    Args:
+        path (List[Point]): The alignment path.
+        transcript (str): The transcript text.
+
+    Returns:
+        List[Segment]: The merged segments.
+    """
+    i1, i2 = 0, 0
+    segments = []
+    while i1 < len(path):
+        while i2 < len(path) and path[i1].token_index == path[i2].token_index:
+            i2 += 1
+        score = sum(path[k].score for k in range(i1, i2)) / (i2 - i1)
+        segments.append(
+            Segment(
+                transcript[path[i1].token_index],
+                path[i1].time_index,
+                path[i2 - 1].time_index + 1,
+                score,
+            )
+        )
+        i1 = i2
+    return segments
+
+
+def downsample_audio(audio: Audio, target_sample_rate: int = 16000) -> Audio:
+    """Downsamples the audio to the target sample rate.
+
+    Args:
+        audio (Audio): The audio object.
+        target_sample_rate (int): The target sample rate.
+
+    Returns:
+        Audio: The downsampled audio object.
+    """
+    waveform = audio.waveform
+    original_sample_rate = audio.sampling_rate
+
+    if original_sample_rate != target_sample_rate:
+        resampler = torchaudio.transforms.Resample(orig_freq=original_sample_rate, new_freq=target_sample_rate)
+        waveform = resampler(waveform)
+
+        audio.waveform = waveform
+        audio.sampling_rate = target_sample_rate
+
+    return audio
+
+
+def interpolate_nans(x: pd.Series, method: str = "nearest") -> pd.Series:
+    """Interpolates NaN values in a pandas Series.
+
+    Args:
+        x (pd.Series): The pandas Series.
+        method (str): The interpolation method (default: "nearest").
+
+    Returns:
+        pd.Series: The Series with interpolated NaNs.
+    """
+    if x.notnull().sum() > 1:
+        return x.interpolate(method=method).ffill().bfill()
+    else:
+        return x.ffill().bfill()
+
+
 def _align_segments(
     transcript: List[SingleSegment],
     model: torch.nn.Module,
@@ -227,15 +355,15 @@ def _align_segments(
             if char == "[pad]" or char == "<pad>":
                 blank_id = code
 
-        trellis = get_trellis(emission, tokens, blank_id)
-        path = backtrack(trellis, emission, tokens, blank_id)
+        trellis = _get_trellis(emission, tokens, blank_id)
+        path = _backtrack(trellis, emission, tokens, blank_id)
 
         if path is None:
             print(f'Failed to align segment ("{segment["text"]}"): backtrack failed, resorting to original...')
             aligned_segments.append(aligned_seg)
             continue
 
-        char_segments = merge_repeats(path, text_clean)
+        char_segments = _merge_repeats(path, text_clean)
 
         duration = t2 - t1
         ratio = duration * waveform_segment.size(0) / (trellis.size(0) - 1)
@@ -268,14 +396,7 @@ def _align_segments(
 
         char_segments_arr = pd.DataFrame(char_segments_arr)
 
-        def interpolate_nans(x: pd.Series, method: str = "nearest") -> pd.Series:
-            if x.notnull().sum() > 1:
-                return x.interpolate(method=method).ffill().bfill()
-            else:
-                return x.ffill().bfill()
-
         aligned_subsegments = []
-
         if isinstance(char_segments_arr, pd.DataFrame):
             char_segments_arr["sentence-idx"] = None
         else:
@@ -347,6 +468,34 @@ def _align_segments(
     return (aligned_segments, word_segments)
 
 
+def convert_to_scriptline(data: AlignedTranscriptionResult) -> List[ScriptLine]:
+    """Convert a dictionary of segments and word segments to a list of ScriptLine objects.
+
+    Args:
+        data (AlignedTranscriptionResult): The input dictionary with segments and word segments.
+
+    Returns:
+        List[ScriptLine]: The list of ScriptLine objects.
+    """
+    segments = data["segments"]
+    script_lines = []
+
+    for segment in segments:
+        words = segment["words"]
+        word_chunks = [ScriptLine(text=word["word"]) for word in words]
+
+        # Handle 'nan' end values by setting them to None
+        start = segment["start"]
+        end: Optional[float] = segment["end"]
+        if end is not None and (isinstance(end, float) and math.isnan(end)):
+            end = None
+
+        script_line = ScriptLine(text=segment["text"], start=start, end=end, chunks=word_chunks)
+        script_lines.append(script_line)
+
+    return script_lines
+
+
 def align(
     transcript: List[SingleSegment],
     model: torch.nn.Module,
@@ -403,188 +552,6 @@ def align(
     )
 
     return {"segments": aligned_segments, "word_segments": word_segments}
-
-
-def get_trellis(emission: torch.Tensor, tokens: List[int], blank_id: int = 0) -> torch.Tensor:
-    """Gets the trellis for token alignment.
-
-    Args:
-        emission (torch.Tensor): The emission matrix from the model.
-        tokens (List[int]): The token IDs.
-        blank_id (int): The ID for the blank token.
-
-    Returns:
-        torch.Tensor: The trellis matrix.
-    """
-    num_frame = emission.size(0)
-    num_tokens = len(tokens)
-
-    trellis = torch.empty((num_frame + 1, num_tokens + 1))
-    trellis[0, 0] = 0
-    trellis[1:, 0] = torch.cumsum(emission[:, 0], 0)
-    trellis[0, -num_tokens:] = -float("inf")
-    trellis[-num_tokens:, 0] = float("inf")
-
-    for t in range(num_frame):
-        trellis[t + 1, 1:] = torch.maximum(
-            trellis[t, 1:] + emission[t, blank_id],
-            trellis[t, :-1] + emission[t, tokens],
-        )
-    return trellis
-
-
-def backtrack(
-    trellis: torch.Tensor, emission: torch.Tensor, tokens: List[int], blank_id: int = 0
-) -> Optional[List[Point]]:
-    """Backtracks to find the best path through the trellis.
-
-    Args:
-        trellis (torch.Tensor): The trellis matrix.
-        emission (torch.Tensor): The emission matrix from the model.
-        tokens (List[int]): The token IDs.
-        blank_id (int): The ID for the blank token.
-
-    Returns:
-        Optional[List[Point]]: The best path as a list of Points.
-    """
-    j = trellis.size(1) - 1
-    t_start = int(torch.argmax(trellis[:, j]).item())
-
-    path = []
-    for t in range(t_start, 0, -1):
-        stayed = trellis[t - 1, j] + emission[t - 1, blank_id]
-        changed = trellis[t - 1, j - 1] + emission[t - 1, tokens[j - 1]]
-        prob = emission[t - 1, tokens[j - 1] if changed > stayed else 0].exp().item()
-        path.append(Point(j - 1, t - 1, prob))
-
-        if changed > stayed:
-            j -= 1
-            if j == 0:
-                break
-    else:
-        return None
-    return path[::-1]
-
-
-def merge_repeats(path: List[Point], transcript: str) -> List[Segment]:
-    """Merges repeated tokens in the alignment path.
-
-    Args:
-        path (List[Point]): The alignment path.
-        transcript (str): The transcript text.
-
-    Returns:
-        List[Segment]: The merged segments.
-    """
-    i1, i2 = 0, 0
-    segments = []
-    while i1 < len(path):
-        while i2 < len(path) and path[i1].token_index == path[i2].token_index:
-            i2 += 1
-        score = sum(path[k].score for k in range(i1, i2)) / (i2 - i1)
-        segments.append(
-            Segment(
-                transcript[path[i1].token_index],
-                path[i1].time_index,
-                path[i2 - 1].time_index + 1,
-                score,
-            )
-        )
-        i1 = i2
-    return segments
-
-
-def merge_words(segments: List[Segment], separator: str = "|") -> List[Segment]:
-    """Merges word segments separated by a specific separator.
-
-    Args:
-        segments (List[Segment]): The list of segments.
-        separator (str): The separator for words (default: "|").
-
-    Returns:
-        List[Segment]: The merged word segments.
-    """
-    words = []
-    i1, i2 = 0, 0
-    while i1 < len(segments):
-        if i2 >= len(segments) or segments[i2].label == separator:
-            if i1 != i2:
-                segs = segments[i1:i2]
-                word = "".join([seg.label for seg in segs])
-                score = sum(seg.score * seg.length for seg in segs) / sum(seg.length for seg in segs)
-                words.append(Segment(word, segments[i1].start, segments[i2 - 1].end, score))
-            i1 = i2 + 1
-            i2 = i1
-        else:
-            i2 += 1
-    return words
-
-
-def downsample_audio(audio: Audio, target_sample_rate: int = 16000) -> Audio:
-    """Downsamples the audio to the target sample rate.
-
-    Args:
-        audio (Audio): The audio object.
-        target_sample_rate (int): The target sample rate.
-
-    Returns:
-        Audio: The downsampled audio object.
-    """
-    waveform = audio.waveform
-    original_sample_rate = audio.sampling_rate
-
-    if original_sample_rate != target_sample_rate:
-        resampler = torchaudio.transforms.Resample(orig_freq=original_sample_rate, new_freq=target_sample_rate)
-        waveform = resampler(waveform)
-
-        audio.waveform = waveform
-        audio.sampling_rate = target_sample_rate
-
-    return audio
-
-
-def interpolate_nans(x: pd.Series, method: str = "nearest") -> pd.Series:
-    """Interpolates NaN values in a pandas Series.
-
-    Args:
-        x (pd.Series): The pandas Series.
-        method (str): The interpolation method (default: "nearest").
-
-    Returns:
-        pd.Series: The Series with interpolated NaNs.
-    """
-    if x.notnull().sum() > 1:
-        return x.interpolate(method=method).ffill().bfill()
-    else:
-        return x.ffill().bfill()
-
-
-def convert_to_scriptline(data: AlignedTranscriptionResult) -> List[ScriptLine]:
-    """Convert a dictionary of segments and word segments to a list of ScriptLine objects.
-
-    Args:
-        data (AlignedTranscriptionResult): The input dictionary with segments and word segments.
-
-    Returns:
-        List[ScriptLine]: The list of ScriptLine objects.
-    """
-    segments = data["segments"]
-    script_lines = []
-
-    for segment in segments:
-        words = segment["words"]
-        word_chunks = [ScriptLine(text=word["word"]) for word in words]
-
-        # Handle 'nan' end values by setting them to None
-        start = segment["start"]
-        end: Optional[float] = segment["end"]
-        if end is not None and (isinstance(end, float) and math.isnan(end)):
-            end = None
-
-        script_line = ScriptLine(text=segment["text"], start=start, end=end, chunks=word_chunks)
-        script_lines.append(script_line)
-
-    return script_lines
 
 
 # Note: most of this code is from: https://github.com/m-bain/whisperX/tree/main
