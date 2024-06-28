@@ -107,6 +107,27 @@ def _preprocess_segments(
     return transcript
 
 
+def _can_align_segment(
+    segment: SingleSegment, model_dictionary: Dict[str, int], t1: float, max_duration: float
+) -> bool:
+    """Checks if a segment can be aligned.
+
+    Args:
+        segment (SingleSegment): The segment to check.
+        model_dictionary (Dict[str, int]): Dictionary for character indices.
+        t1 (float): Start time of the segment.
+        max_duration (float): Maximum duration of the audio.
+
+    Returns:
+        bool: True if the segment can be aligned, False otherwise.
+    """
+    if segment["clean_char"] is None or len(segment["clean_char"]) == 0:
+        return False
+    if t1 >= max_duration:
+        return False
+    return True
+
+
 def _get_prediction_matrix(
     model: torch.nn.Module,
     waveform_segment: torch.Tensor,
@@ -228,7 +249,7 @@ def _merge_repeats(path: List[Point], transcript: str) -> List[Segment]:
     return segments
 
 
-def interpolate_nans(x: pd.Series, method: str = "nearest") -> pd.Series:
+def _interpolate_nans(x: pd.Series, method: str = "nearest") -> pd.Series:
     """Interpolates NaN values in a pandas Series.
 
     Args:
@@ -287,24 +308,12 @@ def _align_segments(
             aligned_seg["chars"] = []
 
         # Check if we can align
-        if segment["clean_char"] is None or len(segment["clean_char"]) == 0:
-            print(
-                f'Failed to align segment ("{segment["text"]}"): no \
-                    characters in this segment found in model dictionary, \
-                    resorting to original...'
-            )
+        if not _can_align_segment(segment, model_dictionary, t1, max_duration):
+            print(f'Failed to align segment ("{segment["text"]}"), skipping...')
             aligned_segments.append(aligned_seg)
             continue
 
-        if t1 >= max_duration:
-            print(
-                f'Failed to align segment ("{segment["text"]}"): original \
-                    start time longer than audio duration, skipping...'
-            )
-            aligned_segments.append(aligned_seg)
-            continue
-
-        text_clean = "".join(segment["clean_char"])
+        text_clean = "".join(segment["clean_char"] or [])
         tokens = [model_dictionary[c] for c in text_clean]
 
         f1 = int(t1 * audio.sampling_rate)
@@ -423,10 +432,10 @@ def _align_segments(
             if aligned_subsegments:
                 aligned_subsegments_df = pd.DataFrame(aligned_subsegments)
 
-                aligned_subsegments_df["start"] = interpolate_nans(
+                aligned_subsegments_df["start"] = _interpolate_nans(
                     aligned_subsegments_df["start"], method=interpolate_method
                 )
-                aligned_subsegments_df["end"] = interpolate_nans(
+                aligned_subsegments_df["end"] = _interpolate_nans(
                     aligned_subsegments_df["end"], method=interpolate_method
                 )
                 agg_dict = {"text": " ".join, "words": "sum"}
