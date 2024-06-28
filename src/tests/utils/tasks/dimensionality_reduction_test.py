@@ -36,7 +36,7 @@ def test_umap_reduction(sample_data: torch.Tensor) -> None:
 def test_invalid_model(sample_data: torch.Tensor) -> None:
     """Test invalid model choice."""
     with pytest.raises(ValueError):
-        compute_dimensionality_reduction(sample_data, model="invalid_model")
+        compute_dimensionality_reduction(sample_data, model="invalid_model")  # type: ignore
 
 
 def test_invalid_n_components(sample_data: torch.Tensor) -> None:
