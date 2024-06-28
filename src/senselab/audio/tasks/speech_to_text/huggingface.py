@@ -113,7 +113,13 @@ class HuggingFaceASR:
                 obj = [_rename_key_recursive(item, old_key, new_key) for item in obj]
             return obj
 
-
+        # Check that all audio objects are mono
+        for audio in audios:
+            if audio.waveform.shape[0] != 1:
+                raise ValueError(
+                    f"Stereo audio is not supported. Got {audio.waveform.shape[0]} channels"
+                )
+        
         pipe = HuggingFaceASR._get_hf_asr_pipeline(
             model=model,
             return_timestamps=return_timestamps,
