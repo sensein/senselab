@@ -10,7 +10,6 @@ from senselab.utils.data_structures.device import DeviceType, _select_device_and
 from senselab.utils.data_structures.model import HFModel
 
 
-# TODO: make SSLEmbeddingsFactory work with other APIs, not just HuggingFace
 class SSLEmbeddingsFactory:
     """A factory for managing self-supervised models."""
 

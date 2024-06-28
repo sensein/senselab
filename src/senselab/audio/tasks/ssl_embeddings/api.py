@@ -37,6 +37,9 @@ def extract_ssl_embeddings_from_audios(
         >>> embeddings = extract_ssl_embeddings_from_audios(audios, model, cache_dir="./", device=DeviceType.CUDA)
         >>> print(embeddings[0].shape)
         [13, 209, 768] ([# of Layers, Time Frames, Embedding Size])
+
+    Todo:
+        - Make the API compatible with other models than Hugging Face.
     """
     if isinstance(model, HFModel):
         return SSLEmbeddingsFactory.extract_ssl_embeddings(

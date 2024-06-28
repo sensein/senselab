@@ -4,9 +4,10 @@ from typing import List, Optional
 
 import torch
 
+from senselab.text.tasks.embeddings_extraction.huggingface import HFFactory
 from senselab.text.tasks.embeddings_extraction.sentence_transformers import SentenceTransformerFactory
 from senselab.utils.data_structures.device import DeviceType
-from senselab.utils.data_structures.model import HFModel, SenselabModel
+from senselab.utils.data_structures.model import HFModel, SenselabModel, SentenceTransformersModel
 
 
 def extract_embeddings_from_text(
@@ -24,6 +25,8 @@ def extract_embeddings_from_text(
     Returns:
         List[torch.Tensor]: A list of embeddings for the input strings.
     """
-    if isinstance(model, HFModel):  # TODO: Check if the model is a SentenceTransformer model
+    if isinstance(model, SentenceTransformersModel):
         return SentenceTransformerFactory.extract_text_embeddings(pieces_of_text, model, device)
+    elif isinstance(model, HFModel):
+        return HFFactory.extract_text_embeddings(pieces_of_text, model, device)
     raise ValueError("Unsupported model type for text embedding extraction.")
