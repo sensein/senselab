@@ -570,7 +570,7 @@ def _align_segments(
     return (aligned_segments, word_segments)
 
 
-def convert_to_scriptline(data: AlignedTranscriptionResult) -> List[ScriptLine]:
+def _convert_to_scriptline(data: AlignedTranscriptionResult) -> List[ScriptLine]:
     """Convert a dictionary of segments and word segments to a list of ScriptLine objects.
 
     Args:
@@ -598,7 +598,7 @@ def convert_to_scriptline(data: AlignedTranscriptionResult) -> List[ScriptLine]:
     return script_lines
 
 
-def align_transcription(
+def _align_transcription(
     transcript: List[SingleSegment],
     model: torch.nn.Module,
     align_model_metadata: Dict[str, Any],
@@ -695,7 +695,7 @@ def align_transcriptions(
         ]
 
         with threadpool_limits(limits=1, user_api="blas"):
-            alignment = align_transcription(
+            alignment = _align_transcription(
                 transcript=segments,
                 model=model,
                 align_model_metadata={
@@ -707,7 +707,7 @@ def align_transcriptions(
                 device=device,
                 return_char_alignments=True,
             )
-            aligned_script_lines.append(convert_to_scriptline(alignment))
+            aligned_script_lines.append(_convert_to_scriptline(alignment))
 
     return aligned_script_lines
 
