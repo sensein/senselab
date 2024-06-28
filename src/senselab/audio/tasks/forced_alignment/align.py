@@ -190,100 +190,6 @@ def _get_prediction_matrix(
     return emissions
 
 
-# def _align_single_segment(
-#     segment: SingleSegment,
-#     model: torch.nn.Module,
-#     model_dictionary: Dict[str, int],
-#     model_lang: str,
-#     model_type: str,
-#     waveform_segment: torch.Tensor,
-#     device: str,
-#     t1: float,
-#     t2: float,
-#     return_char_alignments: bool,
-#     interpolate_method: str
-# ) -> Optional[SingleAlignedSegment]:
-#     """Aligns a single segment based on the model predictions.
-
-#     Args:
-#         segment (SingleSegment): The segment to align.
-#         model (torch.nn.Module): The alignment model.
-#         model_dictionary (Dict[str, int]): Dictionary for character indices.
-#         model_lang (str): Language of the model.
-#         model_type (str): The type of the model ('torchaudio' or 'huggingface').
-#         waveform_segment (torch.Tensor): The waveform segment.
-#         device (str): The device to run the model on.
-#         t1 (float): Start time of the segment.
-#         t2 (float): End time of the segment.
-#         return_char_alignments (bool): Flag to return character alignments.
-#         interpolate_method (str): Method for interpolating NaNs.
-
-#     Returns:
-#         Optional[SingleAlignedSegment]: The aligned segment, or None if
-#         alignment failed.
-#     """
-#     text_clean = "".join(segment["clean_char"] or [])
-#     tokens = [model_dictionary[c] for c in text_clean]
-
-#     emissions = _get_prediction_matrix(model, waveform_segment, None, model_type, device)
-#     emission = emissions[0].cpu().detach()
-
-#     blank_id = 0
-#     for char, code in model_dictionary.items():
-#         if char in ["[pad]", "<pad>"]:
-#             blank_id = code
-
-#     trellis = _get_trellis(emission, tokens, blank_id)
-#     path = _backtrack(trellis, emission, tokens, blank_id)
-
-#     if path is None:
-#         print(f'Failed to align segment ("{segment["text"]}"): backtrack failed.')
-#         return None
-
-#     char_segments = _merge_repeats(path, text_clean)
-
-#     duration = t2 - t1
-#     ratio = duration * waveform_segment.size(0) / (trellis.size(0) - 1)
-
-#     char_segments_arr = []
-#     word_idx = 0
-#     for cdx, char in enumerate(segment["text"]):
-#         start, end, score = None, None, None
-#         if segment["clean_cdx"] is not None and cdx in segment["clean_cdx"]:
-#             char_seg = char_segments[segment["clean_cdx"].index(cdx)]
-#             start = round(char_seg.start * ratio + t1, 3)
-#             end = round(char_seg.end * ratio + t1, 3)
-#             score = round(char_seg.score, 3)
-
-#         char_segments_arr.append({
-#             "char": char,
-#             "start": start,
-#             "end": end,
-#             "score": score,
-#             "word-idx": word_idx,
-#         })
-
-#         if model_lang in LANGUAGES_WITHOUT_SPACES:
-#             word_idx += 1
-#         elif cdx == len(segment["text"]) - 1 or segment["text"][cdx + 1] == " ":
-#             word_idx += 1
-
-#     char_segments_arr = pd.DataFrame(char_segments_arr)
-
-#     aligned_segment = SingleAlignedSegment(
-#         start=t1,
-#         end=t2,
-#         text=segment["text"],
-#         words=[],
-#         chars=None
-#     )
-
-#     if return_char_alignments:
-#         aligned_segment["chars"] = char_segments_arr.to_dict("records")
-
-#     return aligned_segment
-
-
 def _assign_timestamps_to_characters(
     text: str, segment: SingleSegment, char_segments: list, ratio: float, t1: float, model_lang: str
 ) -> pd.DataFrame:
@@ -683,8 +589,6 @@ def convert_to_scriptline(data: AlignedTranscriptionResult) -> List[ScriptLine]:
         if end is not None and (isinstance(end, float) and math.isnan(end)):
             end = None
 
-        print("\n\n")
-        print(segment)
         script_line = ScriptLine(text=segment["text"], start=start, end=end, chunks=word_chunks)
         script_lines.append(script_line)
 
@@ -745,8 +649,6 @@ def align(
         return_char_alignments=return_char_alignments,
         interpolate_method=interpolate_method,
     )
-    print(aligned_segments)
-    print(word_segments)
     return {"segments": aligned_segments, "word_segments": word_segments}
 
 
