@@ -284,9 +284,115 @@ def _get_prediction_matrix(
 #     return aligned_segment
 
 
+def _assign_timestamps_to_characters(
+    text: str, segment: SingleSegment, char_segments: list, ratio: float, t1: float, model_lang: str
+) -> pd.DataFrame:
+    """Assigns timestamps to aligned characters and organizes them into a DataFrame.
+
+    Args:
+        text (str): The text to align with the segment.
+        segment (SingleSegment): The segment containing character indices.
+        char_segments (list): List of character segments with alignment information.
+        ratio (float): The ratio of duration to waveform segment size.
+        t1 (float): Start time of the segment.
+        model_lang (str): Language of the model.
+
+    Returns:
+        pd.DataFrame: DataFrame containing character alignments with timestamps and word indices.
+    """
+    char_segments_arr = []
+    word_idx = 0
+    for cdx, char in enumerate(text):
+        start, end, score = None, None, None
+        if segment["clean_cdx"] is not None and cdx in segment["clean_cdx"]:
+            char_seg = char_segments[segment["clean_cdx"].index(cdx)]
+            start = round(char_seg.start * ratio + t1, 3)
+            end = round(char_seg.end * ratio + t1, 3)
+            score = round(char_seg.score, 3)
+
+        char_segments_arr.append(
+            {
+                "char": char,
+                "start": start,
+                "end": end,
+                "score": score,
+                "word-idx": word_idx,
+            }
+        )
+
+        if model_lang in LANGUAGES_WITHOUT_SPACES:
+            word_idx += 1
+        elif cdx == len(text) - 1 or text[cdx + 1] == " ":
+            word_idx += 1
+
+    return pd.DataFrame(char_segments_arr)
+
+
+def _align_subsegments(
+    segment: SingleSegment,
+    char_segments_df: pd.DataFrame,
+    text: str,
+    word_segments: list[SingleWordSegment],
+    aligned_subsegments: list[SingleAlignedSegment],
+    return_char_alignments: bool,
+) -> None:
+    """Aligns sentence spans to create subsegments and update word segments.
+
+    Args:
+        segment (SingleSegment): The segment containing sentence spans.
+        char_segments_df (pd.DataFrame): DataFrame with character alignments.
+        text (str): The text to align with the segment.
+        word_segments (list[SingleWordSegment]): List to store word segments.
+        aligned_subsegments (list[SingleAlignedSegment]): List to store aligned subsegments.
+        return_char_alignments (bool): Flag to return character alignments.
+
+    Returns:
+        None: The function modifies the word_segments and aligned_subsegments lists in place.
+    """
+    for sdx, (sstart, send) in enumerate(segment["sentence_spans"] or []):
+        curr_chars = char_segments_df.loc[(char_segments_df.index >= sstart) & (char_segments_df.index <= send)]
+        char_segments_df.loc[(char_segments_df.index >= sstart) & (char_segments_df.index <= send), "sentence-idx"] = (
+            sdx
+        )
+
+        sentence_text = text[sstart:send]
+        sentence_start = curr_chars["start"].min()
+        end_chars = curr_chars[curr_chars["char"] != " "]
+        sentence_end = end_chars["end"].max()
+        sentence_words = []
+
+        for word_idx in curr_chars["word-idx"].unique():
+            word_chars = curr_chars.loc[curr_chars["word-idx"] == word_idx]
+            word_text = "".join(word_chars["char"].tolist()).strip()
+            if len(word_text) == 0:
+                continue
+
+            word_chars = word_chars[word_chars["char"] != " "]
+
+            word_start = word_chars["start"].min()
+            word_end = word_chars["end"].max()
+            word_score = round(word_chars["score"].mean(), 3)
+
+            word_segment = SingleWordSegment(word=word_text, start=word_start, end=word_end, score=word_score)
+
+            sentence_words.append(word_segment)
+            word_segments.append(word_segment)
+
+        aligned_subsegment = SingleAlignedSegment(
+            text=sentence_text, start=sentence_start, end=sentence_end, words=sentence_words, chars=word_chars
+        )
+        aligned_subsegments.append(aligned_subsegment)
+
+        if return_char_alignments:
+            curr_chars = curr_chars[["char", "start", "end", "score"]]
+            curr_chars.fillna(-1, inplace=True)
+            curr_chars = curr_chars.to_dict("records")
+            curr_chars = [{key: val for key, val in char.items() if val != -1} for char in curr_chars]
+            aligned_subsegments[-1]["chars"] = curr_chars
+
+
 def _align_single_segment(
     segment: SingleSegment,
-    text: str,
     model: torch.nn.Module,
     model_dictionary: Dict[str, int],
     model_lang: str,
@@ -305,7 +411,6 @@ def _align_single_segment(
 
     Args:
         segment (SingleSegment): The segment to align.
-        text (str): The text to align with the segment.
         model (torch.nn.Module): The alignment model.
         model_dictionary (Dict[str, int]): Dictionary for character indices.
         model_lang (str): Language of the model.
@@ -349,81 +454,23 @@ def _align_single_segment(
     duration = t2 - t1
     ratio = duration * waveform_segment.size(0) / (trellis.size(0) - 1)
 
-    # Assign timestamps to aligned characters
-    char_segments_arr = []
-    word_idx = 0
-    for cdx, char in enumerate(text):
-        start, end, score = None, None, None
-        if segment["clean_cdx"] is not None and cdx in segment["clean_cdx"]:
-            char_seg = char_segments[segment["clean_cdx"].index(cdx)]
-            start = round(char_seg.start * ratio + t1, 3)
-            end = round(char_seg.end * ratio + t1, 3)
-            score = round(char_seg.score, 3)
+    char_segments_df = _assign_timestamps_to_characters(segment["text"], segment, char_segments, ratio, t1, model_lang)
 
-        char_segments_arr.append(
-            {
-                "char": char,
-                "start": start,
-                "end": end,
-                "score": score,
-                "word-idx": word_idx,
-            }
-        )
-
-        if model_lang in LANGUAGES_WITHOUT_SPACES:
-            word_idx += 1
-        elif cdx == len(text) - 1 or text[cdx + 1] == " ":
-            word_idx += 1
-
-    char_segments_arr = pd.DataFrame(char_segments_arr)
-
-    aligned_subsegments = []
-    if isinstance(char_segments_arr, pd.DataFrame):
-        char_segments_arr["sentence-idx"] = None
+    aligned_subsegments: list[SingleAlignedSegment] = []
+    if isinstance(char_segments_df, pd.DataFrame):
+        char_segments_df["sentence-idx"] = None
     else:
-        raise TypeError("char_segments_arr must be a pandas DataFrame.")
+        raise TypeError("char_segments_df must be a pandas DataFrame.")
 
     if segment["sentence_spans"] is not None:
-        for sdx, (sstart, send) in enumerate(segment["sentence_spans"]):
-            curr_chars = char_segments_arr.loc[(char_segments_arr.index >= sstart) & (char_segments_arr.index <= send)]
-            char_segments_arr.loc[
-                (char_segments_arr.index >= sstart) & (char_segments_arr.index <= send), "sentence-idx"
-            ] = sdx
-
-            sentence_text = text[sstart:send]
-            sentence_start = curr_chars["start"].min()
-            end_chars = curr_chars[curr_chars["char"] != " "]
-            sentence_end = end_chars["end"].max()
-            sentence_words = []
-
-            for word_idx in curr_chars["word-idx"].unique():
-                word_chars = curr_chars.loc[curr_chars["word-idx"] == word_idx]
-                word_text = "".join(word_chars["char"].tolist()).strip()
-                if len(word_text) == 0:
-                    continue
-
-                word_chars = word_chars[word_chars["char"] != " "]
-
-                word_start = word_chars["start"].min()
-                word_end = word_chars["end"].max()
-                word_score = round(word_chars["score"].mean(), 3)
-
-                word_segment = SingleWordSegment(word=word_text, start=word_start, end=word_end, score=word_score)
-
-                sentence_words.append(word_segment)
-                word_segments.append(word_segment)
-
-            aligned_subsegment = SingleAlignedSegment(
-                text=sentence_text, start=sentence_start, end=sentence_end, words=sentence_words, chars=word_chars
-            )
-            aligned_subsegments.append(aligned_subsegment)
-
-            if return_char_alignments:
-                curr_chars = curr_chars[["char", "start", "end", "score"]]
-                curr_chars.fillna(-1, inplace=True)
-                curr_chars = curr_chars.to_dict("records")
-                curr_chars = [{key: val for key, val in char.items() if val != -1} for char in curr_chars]
-                aligned_subsegments[-1]["chars"] = curr_chars
+        _align_subsegments(
+            segment=segment,
+            char_segments_df=char_segments_df,
+            text=segment["text"],
+            word_segments=word_segments,
+            aligned_subsegments=aligned_subsegments,
+            return_char_alignments=True,
+        )
 
         if aligned_subsegments:
             aligned_subsegments_df = pd.DataFrame(aligned_subsegments)
@@ -593,7 +640,6 @@ def _align_segments(
         if _can_align_segment(segment, model_dictionary, t1, max_duration):
             _align_single_segment(
                 segment,
-                text,
                 model,
                 model_dictionary,
                 model_lang,
@@ -637,6 +683,8 @@ def convert_to_scriptline(data: AlignedTranscriptionResult) -> List[ScriptLine]:
         if end is not None and (isinstance(end, float) and math.isnan(end)):
             end = None
 
+        print("\n\n")
+        print(segment)
         script_line = ScriptLine(text=segment["text"], start=start, end=end, chunks=word_chunks)
         script_lines.append(script_line)
 
@@ -697,11 +745,12 @@ def align(
         return_char_alignments=return_char_alignments,
         interpolate_method=interpolate_method,
     )
-
+    print(aligned_segments)
+    print(word_segments)
     return {"segments": aligned_segments, "word_segments": word_segments}
 
 
-# Note: most of this code is from: https://github.com/m-bain/whisperX/tree/main
+# Note: this code is derived from: https://github.com/m-bain/whisperX/tree/main
 
 # Copyright (c) 2022, Max Bain
 # All rights reserved.
