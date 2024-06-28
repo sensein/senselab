@@ -8,12 +8,12 @@ import torch
 from senselab.audio.data_structures.audio import Audio
 from senselab.audio.tasks.speaker_embeddings.speechbrain import SpeechBrainEmbeddings
 from senselab.utils.data_structures.device import DeviceType
-from senselab.utils.data_structures.model import HFModel, SenselabModel
+from senselab.utils.data_structures.model import SenselabModel, SpeechBrainModel
 
 
 def extract_speaker_embeddings_from_audios(
     audios: List[Audio],
-    model: SenselabModel = HFModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb", revision="main"),
+    model: SenselabModel = SpeechBrainModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb", revision="main"),
     device: Optional[DeviceType] = None,
 ) -> List[torch.Tensor]:
     """Compute the speaker embedding of audio signals.
@@ -32,12 +32,12 @@ def extract_speaker_embeddings_from_audios(
 
     Examples:
         >>> audios = [Audio.from_filepath("sample.wav")]
-        >>> model = HFModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb", revision="main")
+        >>> model = SpeechBrainModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb", revision="main")
         >>> embeddings = extract_speaker_embeddings_from_audios(audio, model, device=DeviceType.CUDA)
         >>> print(embeddings[0].shape)
         torch.Size([192])
     """
-    if isinstance(model, HFModel):  # TODO: check that this is a speechbrain model!!!
+    if isinstance(model, SpeechBrainModel):
         return SpeechBrainEmbeddings.extract_speechbrain_speaker_embeddings_from_audios(
             audios=audios, model=model, device=device
         )
