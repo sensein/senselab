@@ -1,4 +1,5 @@
 """This module implements the Pyannote Diarization task."""
+
 from typing import Dict, List, Optional, Union
 
 import torch
@@ -36,18 +37,16 @@ class PyannoteDiarization:
         )
         key = f"{model.path_or_uri}-{model.revision}-{device}"
         if key not in cls._pipelines:
-            pipeline = Pipeline.from_pretrained(
-                checkpoint_path=f"{model.path_or_uri}@{model.revision}"
-            ).to(torch.device(device.value))
+            pipeline = Pipeline.from_pretrained(checkpoint_path=f"{model.path_or_uri}@{model.revision}").to(
+                torch.device(device.value)
+            )
             cls._pipelines[key] = pipeline
         return cls._pipelines[key]
 
 
 def diarize_audios_with_pyannote(
     audios: List[Audio],
-    model: PyannoteAudioModel = PyannoteAudioModel(
-        path_or_uri="pyannote/speaker-diarization-3.1", 
-        revision="main"),
+    model: PyannoteAudioModel = PyannoteAudioModel(path_or_uri="pyannote/speaker-diarization-3.1", revision="main"),
     device: Optional[DeviceType] = None,
     num_speakers: Optional[int] = None,
     min_speakers: Optional[int] = None,
@@ -66,7 +65,7 @@ def diarize_audios_with_pyannote(
     Returns:
         List[ScriptLine]: A list of ScriptLine objects containing the diarization results.
     """
-    
+
     def _annotation_to_script_lines(annotation: Annotation) -> List[ScriptLine]:
         """Convert a Pyannote annotation to a list of script lines.
 
@@ -82,18 +81,18 @@ def diarize_audios_with_pyannote(
         return diarization_list
 
     # 16khz comes from the model cards of pyannote/speaker-diarization-3.1
-    expected_sample_rate = 16000  
+    expected_sample_rate = 16000
 
     # Check that all audio objects have the correct sampling rate
     for audio in audios:
         if audio.waveform.shape[0] != 1:
-            raise ValueError(
-                f"Audio waveform must be mono (1 channel), but got {audio.waveform.shape[0]} channels"
-            )
+            raise ValueError(f"Audio waveform must be mono (1 channel), but got {audio.waveform.shape[0]} channels")
         if audio.sampling_rate != expected_sample_rate:
             raise ValueError(
-                "Audio sampling rate " + str(audio.sampling_rate) + 
-                " does not match expected " + str(expected_sample_rate)
+                "Audio sampling rate "
+                + str(audio.sampling_rate)
+                + " does not match expected "
+                + str(expected_sample_rate)
             )
 
     pipeline = PyannoteDiarization._get_pyannote_diarization_pipeline(model=model, device=device)
@@ -103,7 +102,7 @@ def diarize_audios_with_pyannote(
             {"waveform": audio.waveform, "sample_rate": audio.sampling_rate},
             num_speakers=num_speakers,
             min_speakers=min_speakers,
-            max_speakers=max_speakers
+            max_speakers=max_speakers,
         )
         results.append(_annotation_to_script_lines(diarization))
 
