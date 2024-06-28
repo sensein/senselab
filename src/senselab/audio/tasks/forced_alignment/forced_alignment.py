@@ -40,11 +40,10 @@ def align_transcriptions(
     model = Wav2Vec2ForCTC.from_pretrained(model_name).to(device)
 
     for audio, transcription in zip(audios, transcriptions):
-        waveform = audio.waveform.numpy()
-
+        print(transcription.text)
         # Ensure start and end are not None
         start = transcription.start if transcription.start is not None else 0.0
-        end = transcription.end if transcription.end is not None else waveform.shape[1] / audio.sampling_rate
+        end = transcription.end if transcription.end is not None else audio.waveform.shape[1] / audio.sampling_rate
 
         # Ensure text is not None
         text = transcription.text if transcription.text is not None else ""
@@ -65,8 +64,9 @@ def align_transcriptions(
                     "language": language_code,
                     "type": "huggingface",
                 },
-                audio=waveform,
+                audio=audio,
                 device=device,
+                return_char_alignments=True,
             )
             aligned_script_lines.append(convert_to_scriptline(alignment))
 

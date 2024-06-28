@@ -151,7 +151,7 @@ skip = [
   "poetry.lock",
   "docs_style/pdoc-theme/syntax-highlighting.css"
 ]
-ignore-words-list = ["senselab", "nd", "astroid", "wil", "SER"]
+ignore-words-list = ["senselab", "nd", "astroid", "wil", "SER", "te"]
 
 [build-system]
 requires = ["poetry-core>=1.0.0", "poetry-dynamic-versioning>=1.0.0,<2.0.0"]
