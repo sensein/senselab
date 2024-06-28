@@ -5,7 +5,7 @@ import torch
 from sentence_transformers import SentenceTransformer
 
 from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
-from senselab.utils.data_structures.model import HFModel
+from senselab.utils.data_structures.model import SentenceTransformersModel
 
 
 class SentenceTransformerFactory:
@@ -16,13 +16,13 @@ class SentenceTransformerFactory:
     @classmethod
     def _get_sentencetransformer_pipeline(
         cls,
-        model: HFModel,
+        model: SentenceTransformersModel,
         device: Optional[DeviceType] = None,
     ) -> SentenceTransformer:
         """Get or create a SentenceTransformer pipeline.
 
         Args:
-            model (HFModel): The Hugging Face model configuration.
+            model (SentenceTransformersModel): The Hugging Face model configuration.
             device (Optional[DeviceType]): The device to run the model on.
 
         Returns:
@@ -44,15 +44,16 @@ class SentenceTransformerFactory:
     def extract_text_embeddings(
         cls,
         pieces_of_text: List[str],
-        model: HFModel = HFModel(path_or_uri="sentence-transformers/all-MiniLM-L6-v2"),
+        model: SentenceTransformersModel = SentenceTransformersModel(
+            path_or_uri="sentence-transformers/all-MiniLM-L6-v2", revision="main"),
         device: Optional[DeviceType] = None,
     ) -> List[torch.Tensor]:
         """Extracts embeddings from a list of strings using a SentenceTransformer model.
 
         Args:
             pieces_of_text (List[str]): A list of strings to extract embeddings from.
-            model (HFModel, optional): A Hugging Face model configuration. 
-                Defaults to HFModel(path_or_uri="sentence-transformers/all-MiniLM-L6-v2").
+            model (SentenceTransformersModel, optional): A Hugging Face model configuration. 
+                Defaults to SentenceTransformersModel(path_or_uri="sentence-transformers/all-MiniLM-L6-v2").
             device (Optional[DeviceType], optional): The device to run the model on. 
                 Defaults to None.
 

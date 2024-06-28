@@ -75,6 +75,10 @@ class PyannoteAudioModel(HFModel):
     """PyannoteAudioModel model."""
     pass
 
+class SentenceTransformersModel(HFModel):
+    """SentenceTransformersModel model."""
+    pass
+
 class TorchModel(SenselabModel):
     """Generic torch model."""
 
