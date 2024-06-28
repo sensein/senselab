@@ -56,7 +56,8 @@ class HFModel(SenselabModel):
         path_or_uri = info.data["path_or_uri"]
         if not isinstance(path_or_uri, Path):
             if not check_hf_repo_exists(repo_id=str(path_or_uri), revision=value, repo_type="model"):
-                raise ValueError("path_or_uri or specified revision is not a valid Hugging Face model")
+                raise ValueError(f"path_or_uri ({path_or_uri}) or specified revision ({value})"
+                                  " is not a valid Hugging Face model")
         return value
 
     def get_model_info(self) -> ModelInfo:
