@@ -1,7 +1,7 @@
 """Align function based on WhisperX implementation."""
 
 import math
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -126,6 +126,36 @@ def _can_align_segment(
     if t1 >= max_duration:
         return False
     return True
+
+
+def _prepare_waveform_segment(
+    audio: Audio, t1: float, t2: float, device: str
+) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    """Prepares the waveform segment based on the time points.
+
+    Args:
+        audio (Audio): The audio data.
+        t1 (float): Start time of the segment.
+        t2 (float): End time of the segment.
+        device (str): The device to run the model on.
+
+    Returns:
+        Tuple[torch.Tensor, Optional[torch.Tensor]]: The waveform segment and its length.
+    """
+    f1 = int(t1 * audio.sampling_rate)
+    f2 = int(t2 * audio.sampling_rate)
+
+    waveform_segment = audio.waveform[:, f1:f2]
+    if isinstance(waveform_segment, np.ndarray):
+        waveform_segment = torch.from_numpy(waveform_segment)
+
+    if waveform_segment.shape[-1] < 400:
+        lengths = torch.as_tensor([waveform_segment.shape[-1]]).to(device)
+        waveform_segment = torch.nn.functional.pad(waveform_segment, (0, 400 - waveform_segment.shape[-1]))
+    else:
+        lengths = None
+
+    return waveform_segment, lengths
 
 
 def _get_prediction_matrix(
@@ -316,18 +346,7 @@ def _align_segments(
         text_clean = "".join(segment["clean_char"] or [])
         tokens = [model_dictionary[c] for c in text_clean]
 
-        f1 = int(t1 * audio.sampling_rate)
-        f2 = int(t2 * audio.sampling_rate)
-
-        waveform_segment = audio.waveform[:, f1:f2]
-        if isinstance(waveform_segment, np.ndarray):
-            waveform_segment = torch.from_numpy(waveform_segment)
-
-        if waveform_segment.shape[-1] < 400:
-            lengths = torch.as_tensor([waveform_segment.shape[-1]]).to(device)
-            waveform_segment = torch.nn.functional.pad(waveform_segment, (0, 400 - waveform_segment.shape[-1]))
-        else:
-            lengths = None
+        waveform_segment, lengths = _prepare_waveform_segment(audio, t1, t2, device)
 
         emissions = _get_prediction_matrix(model, waveform_segment, lengths, model_type, device)
 
