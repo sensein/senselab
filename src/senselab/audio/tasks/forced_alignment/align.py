@@ -1,12 +1,11 @@
 """Align function based on WhisperX implementation."""
 
 import math
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
 import torch
-import torchaudio
 from nltk.tokenize.punkt import PunktParameters, PunktSentenceTokenizer
 
 from senselab.audio.data_structures.audio import Audio
@@ -24,10 +23,8 @@ from senselab.audio.tasks.forced_alignment.data_structures import (
 )
 from senselab.utils.data_structures.script_line import ScriptLine
 
-SAMPLE_RATE = 16000
 
-
-def _prepare_audio(audio: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+def _prepare_audio(audio: Audio) -> Audio:
     """Prepare audio data for processing.
 
     Args:
@@ -36,10 +33,10 @@ def _prepare_audio(audio: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
     Returns:
         torch.Tensor: The prepared audio data as a torch tensor.
     """
-    if not torch.is_tensor(audio):
-        audio = torch.from_numpy(audio)
-    if len(audio.shape) == 1:
-        audio = audio.unsqueeze(0)
+    if not torch.is_tensor(audio.waveform):
+        audio.waveform = torch.from_numpy(audio.waveform)
+    if len(audio.waveform.shape) == 1:
+        audio.waveform = audio.waveform.unsqueeze(0)
     return audio
 
 
@@ -231,29 +228,6 @@ def _merge_repeats(path: List[Point], transcript: str) -> List[Segment]:
     return segments
 
 
-def downsample_audio(audio: Audio, target_sample_rate: int = 16000) -> Audio:
-    """Downsamples the audio to the target sample rate.
-
-    Args:
-        audio (Audio): The audio object.
-        target_sample_rate (int): The target sample rate.
-
-    Returns:
-        Audio: The downsampled audio object.
-    """
-    waveform = audio.waveform
-    original_sample_rate = audio.sampling_rate
-
-    if original_sample_rate != target_sample_rate:
-        resampler = torchaudio.transforms.Resample(orig_freq=original_sample_rate, new_freq=target_sample_rate)
-        waveform = resampler(waveform)
-
-        audio.waveform = waveform
-        audio.sampling_rate = target_sample_rate
-
-    return audio
-
-
 def interpolate_nans(x: pd.Series, method: str = "nearest") -> pd.Series:
     """Interpolates NaN values in a pandas Series.
 
@@ -333,10 +307,10 @@ def _align_segments(
         text_clean = "".join(segment["clean_char"])
         tokens = [model_dictionary[c] for c in text_clean]
 
-        f1 = int(t1 * SAMPLE_RATE)
-        f2 = int(t2 * SAMPLE_RATE)
+        f1 = int(t1 * audio.sampling_rate)
+        f2 = int(t2 * audio.sampling_rate)
 
-        waveform_segment = audio[:, f1:f2]
+        waveform_segment = audio.waveform[:, f1:f2]
         if isinstance(waveform_segment, np.ndarray):
             waveform_segment = torch.from_numpy(waveform_segment)
 
@@ -500,7 +474,7 @@ def align(
     transcript: List[SingleSegment],
     model: torch.nn.Module,
     align_model_metadata: Dict[str, Any],
-    audio: Union[np.ndarray, torch.Tensor],
+    audio: Audio,
     device: str,
     interpolate_method: str = "nearest",
     return_char_alignments: bool = False,
@@ -524,7 +498,7 @@ def align(
         AlignedTranscriptionResult: The aligned transcription result.
     """
     audio = _prepare_audio(audio)
-    max_duration = audio.shape[1] / SAMPLE_RATE
+    max_duration = audio.waveform.shape[1] / audio.sampling_rate
 
     model_dictionary = align_model_metadata["dictionary"]
     model_lang = align_model_metadata["language"]
