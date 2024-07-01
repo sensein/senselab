@@ -1,3 +1,39 @@
+# 0.5.1 (Fri Jun 28 2024)
+
+#### 🐛 Bug Fix
+
+- fixing documentation issue [#83](https://github.com/sensein/senselab/pull/83) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.5.0 (Fri Jun 28 2024)
+
+#### 🚀 Enhancement
+
+- Release 050 [#82](https://github.com/sensein/senselab/pull/82) ([@fabiocat93](https://github.com/fabiocat93) mbsilva@node084.ib.cluster [@GasserElbanna](https://github.com/GasserElbanna))
+
+#### 🐛 Bug Fix
+
+- adding text embeddings extraction with sentencetransformers [#79](https://github.com/sensein/senselab/pull/79) ([@fabiocat93](https://github.com/fabiocat93))
+- Add dimensionality reduction task [#81](https://github.com/sensein/senselab/pull/81) (mbsilva@node084.ib.cluster [@900miles](https://github.com/900miles))
+- adding the text to speech task [#80](https://github.com/sensein/senselab/pull/80) ([@fabiocat93](https://github.com/fabiocat93))
+- adding speech enhancement task [#78](https://github.com/sensein/senselab/pull/78) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 6
+
+- [@900miles](https://github.com/900miles)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Gasser Elbanna ([@GasserElbanna](https://github.com/GasserElbanna))
+- Miles B Silva (mbsilva@node076.ib.cluster)
+- Miles B Silva (mbsilva@node084.ib.cluster)
+- Miles B Silva (mbsilva@node085.ib.cluster)
+
+---
+
 # 0.4.0 (Fri Jun 21 2024)
 
 #### 🚀 Enhancement
