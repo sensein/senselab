@@ -13,7 +13,7 @@ from senselab.utils.data_structures.model import SenselabModel, TorchModel
 def clone_voices(
     source_audios: List[Audio],
     target_audios: List[Audio],
-    model: SenselabModel,
+    model: SenselabModel = TorchModel(path_or_uri="bshall/knn-vc", revision="master"),
     device: Optional[DeviceType] = None,
     **kwargs: Any,  # noqa:ANN401
 ) -> List[Audio]:

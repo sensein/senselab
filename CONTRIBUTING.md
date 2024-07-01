@@ -82,7 +82,7 @@ def calculate_statistics(data: List[float]) -> Dict[str, float]:
     Note:
         This function assumes the input data list is not empty. An empty list will raise a ValueError.
 
-    TODO:
+    Todo:
         More statistics will be implemented in the future.
     """
     if not data:
