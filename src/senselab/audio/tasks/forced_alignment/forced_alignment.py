@@ -656,17 +656,17 @@ def _align_transcription(
 
 
 def align_transcriptions(
-    audios: List[Audio], transcriptions: List[ScriptLine], language: str = "en"
+    audios_and_transcriptions: List[Tuple[Audio, ScriptLine]], language: str = "en"
 ) -> List[List[ScriptLine]]:
     """Aligns transcriptions with the given audio using a wav2vec2.0 model.
 
     Args:
-        audios (List[Audio]): The list of audio objects to be aligned.
-        transcriptions (List[ScriptLine]): The list of transcriptions corresponding to the audio objects.
+        audios_and_transcriptions (List[Tuple[Audio, ScriptLine]]):
+            A list of tuples where each tuple contains an audio object and its corresponding transcription.
         language (str): The language of the audio (default is "en").
 
     Returns:
-        List[List[ScriptLine]]: The list of aligned script lines for each audio.
+        List[List[ScriptLine]]: A list of lists, where each inner list contains the aligned script lines for each audio.
     """
     aligned_script_lines = []
 
@@ -678,7 +678,7 @@ def align_transcriptions(
     processor = Wav2Vec2Processor.from_pretrained(model_name)
     model = Wav2Vec2ForCTC.from_pretrained(model_name).to(device)
 
-    for audio, transcription in zip(audios, transcriptions):
+    for audio, transcription in audios_and_transcriptions:
         print(transcription.text)
         # Ensure start and end are not None
         start = transcription.start if transcription.start is not None else 0.0

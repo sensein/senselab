@@ -67,6 +67,26 @@ def dummy_model() -> tuple:
     return model, processor
 
 
+@pytest.fixture
+def script_line_fixture() -> ScriptLine:
+    """Pytest fixture to create a ScriptLine object.
+
+    Returns:
+        ScriptLine: An instance of ScriptLine.
+    """
+    data = {
+        "text": "test",
+        "speaker": "Speaker Name",
+        "start": 0.0,
+        "end": 10.0,
+        "chunks": [
+            {"text": "Chunk 1 text", "speaker": "Chunk 1 speaker", "start": 0.0, "end": 5.0},
+            {"text": "Chunk 2 text", "speaker": "Chunk 2 speaker", "start": 5.0, "end": 10.0},
+        ],
+    }
+    return ScriptLine.from_dict(data)
+
+
 def test_converts_numpy_to_tensor(dummy_audio: Audio) -> None:
     """Test conversion of numpy array to tensor."""
     prepared_audio = _prepare_audio(dummy_audio)
@@ -180,11 +200,10 @@ def test_align_transcription(dummy_audio: Audio, dummy_model: tuple) -> None:
     assert "word_segments" in aligned_result
 
 
-def test_align_transcriptions(dummy_audio: Audio) -> None:
+def test_align_transcriptions(dummy_audio: Audio, script_line_fixture: ScriptLine) -> None:
     """Test alignment of transcriptions."""
-    audios = [dummy_audio]
-    transcriptions = [ScriptLine(text="test", start=0.0, end=1.0)]
-    aligned_transcriptions = align_transcriptions(audios=audios, transcriptions=transcriptions)
+    audios_and_transcriptions = [(dummy_audio, script_line_fixture)]
+    aligned_transcriptions = align_transcriptions(audios_and_transcriptions)
     assert len(aligned_transcriptions) == 1
     assert len(aligned_transcriptions[0]) == 1
     assert aligned_transcriptions[0][0].text == "test"
