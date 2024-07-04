@@ -24,6 +24,7 @@ from senselab.audio.tasks.forced_alignment.data_structures import (
     SingleSegment,
     SingleWordSegment,
 )
+from senselab.utils.data_structures.device import _select_device_and_dtype
 from senselab.utils.data_structures.language import Language
 from senselab.utils.data_structures.script_line import ScriptLine
 
@@ -672,11 +673,11 @@ def align_transcriptions(
     aligned_script_lines = []
 
     # Define the language code and load model
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = _select_device_and_dtype()[0]
     model_name = DEFAULT_ALIGN_MODELS_HF.get(language.language_code, "facebook/wav2vec2-base-960h")
 
     processor = Wav2Vec2Processor.from_pretrained(model_name)
-    model = Wav2Vec2ForCTC.from_pretrained(model_name).to(device)
+    model = Wav2Vec2ForCTC.from_pretrained(model_name).to(device.value)
 
     for audio, transcription in audios_and_transcriptions:
         # Ensure start and end are not None
@@ -703,7 +704,7 @@ def align_transcriptions(
                     "type": "huggingface",
                 },
                 audio=audio,
-                device=device,
+                device=device.value,
                 return_char_alignments=True,
             )
             aligned_script_lines.append(_convert_to_scriptline(alignment))
