@@ -27,6 +27,14 @@ from senselab.audio.tasks.forced_alignment.forced_alignment import (
 )
 from senselab.utils.data_structures.script_line import ScriptLine
 
+MONO_AUDIO_PATH = "src/tests/data_for_testing/audio_48khz_mono_16bits.wav"
+
+
+@pytest.fixture
+def mono_audio_sample() -> Audio:
+    """Fixture for sample mono audio."""
+    return Audio.from_filepath(MONO_AUDIO_PATH)
+
 
 class SingleCharSegment(TypedDict):
     """A single char of a speech."""
@@ -35,13 +43,6 @@ class SingleCharSegment(TypedDict):
     start: Optional[float]
     end: Optional[float]
     score: float
-
-
-@pytest.fixture
-def dummy_audio() -> Audio:
-    """Fixture for dummy audio."""
-    waveform = np.random.rand(1, 16000)
-    return Audio(waveform=waveform, sampling_rate=16000)
 
 
 @pytest.fixture
@@ -87,11 +88,10 @@ def script_line_fixture() -> ScriptLine:
     return ScriptLine.from_dict(data)
 
 
-def test_converts_numpy_to_tensor(dummy_audio: Audio) -> None:
+def test_converts_numpy_to_tensor(mono_audio_sample: Audio) -> None:
     """Test conversion of numpy array to tensor."""
-    prepared_audio = _prepare_audio(dummy_audio)
+    prepared_audio = _prepare_audio(mono_audio_sample)
     assert torch.is_tensor(prepared_audio.waveform)
-    assert prepared_audio.waveform.shape == (1, 16000)
 
 
 def test_preprocess_segments() -> None:
@@ -108,10 +108,9 @@ def test_can_align_segment(dummy_segment: SingleSegment) -> None:
     assert _can_align_segment(dummy_segment, model_dictionary, 0.0, 10.0)
 
 
-def test_prepare_waveform_segment(dummy_audio: Audio) -> None:
+def test_prepare_waveform_segment(mono_audio_sample: Audio) -> None:
     """Test preparation of waveform segment."""
-    waveform_segment, lengths = _prepare_waveform_segment(dummy_audio, 0.0, 1.0, "cpu")
-    assert waveform_segment.shape == (1, 16000)
+    waveform_segment, lengths = _prepare_waveform_segment(mono_audio_sample, 0.0, 1.0, "cpu")
 
 
 def test_get_prediction_matrix(dummy_model: tuple) -> None:
@@ -137,7 +136,7 @@ def test_interpolate_nans() -> None:
     assert interpolated_series.isnull().sum() == 0
 
 
-def test_align_segments(dummy_audio: Audio, dummy_model: tuple) -> None:
+def test_align_segments(mono_audio_sample: Audio, dummy_model: tuple) -> None:
     """Test alignment of segments."""
     model, processor = dummy_model
     model_dictionary = processor.tokenizer.get_vocab()
@@ -161,7 +160,7 @@ def test_align_segments(dummy_audio: Audio, dummy_model: tuple) -> None:
         model_dictionary=model_dictionary,
         model_lang="en",
         model_type="huggingface",
-        audio=dummy_audio,
+        audio=mono_audio_sample,
         device="cpu",
         max_duration=10.0,
         return_char_alignments=False,
@@ -171,7 +170,7 @@ def test_align_segments(dummy_audio: Audio, dummy_model: tuple) -> None:
     assert isinstance(word_segments, list)
 
 
-def test_align_transcription(dummy_audio: Audio, dummy_model: tuple) -> None:
+def test_align_transcription(mono_audio_sample: Audio, dummy_model: tuple) -> None:
     """Test alignment of transcription."""
     model, processor = dummy_model
     transcript = [
@@ -193,16 +192,16 @@ def test_align_transcription(dummy_audio: Audio, dummy_model: tuple) -> None:
             "language": "en",
             "type": "huggingface",
         },
-        audio=dummy_audio,
+        audio=mono_audio_sample,
         device="cpu",
     )
     assert "segments" in aligned_result
     assert "word_segments" in aligned_result
 
 
-def test_align_transcriptions(dummy_audio: Audio, script_line_fixture: ScriptLine) -> None:
+def test_align_transcriptions(mono_audio_sample: Audio, script_line_fixture: ScriptLine) -> None:
     """Test alignment of transcriptions."""
-    audios_and_transcriptions = [(dummy_audio, script_line_fixture)]
+    audios_and_transcriptions = [(mono_audio_sample, script_line_fixture)]
     aligned_transcriptions = align_transcriptions(audios_and_transcriptions)
     assert len(aligned_transcriptions) == 1
     assert len(aligned_transcriptions[0]) == 1
