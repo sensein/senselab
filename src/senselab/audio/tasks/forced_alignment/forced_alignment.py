@@ -24,6 +24,7 @@ from senselab.audio.tasks.forced_alignment.data_structures import (
     SingleSegment,
     SingleWordSegment,
 )
+from senselab.utils.data_structures.language import Language
 from senselab.utils.data_structures.script_line import ScriptLine
 
 
@@ -656,7 +657,7 @@ def _align_transcription(
 
 
 def align_transcriptions(
-    audios_and_transcriptions: List[Tuple[Audio, ScriptLine]], language: str = "en"
+    audios_and_transcriptions: List[Tuple[Audio, ScriptLine]], language: Language = Language(language_code="en")
 ) -> List[List[ScriptLine]]:
     """Aligns transcriptions with the given audio using a wav2vec2.0 model.
 
@@ -671,15 +672,13 @@ def align_transcriptions(
     aligned_script_lines = []
 
     # Define the language code and load model
-    language_code = language
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model_name = DEFAULT_ALIGN_MODELS_HF.get(language_code, "facebook/wav2vec2-base-960h")
+    model_name = DEFAULT_ALIGN_MODELS_HF.get(language.language_code, "facebook/wav2vec2-base-960h")
 
     processor = Wav2Vec2Processor.from_pretrained(model_name)
     model = Wav2Vec2ForCTC.from_pretrained(model_name).to(device)
 
     for audio, transcription in audios_and_transcriptions:
-        print(transcription.text)
         # Ensure start and end are not None
         start = transcription.start if transcription.start is not None else 0.0
         end = transcription.end if transcription.end is not None else audio.waveform.shape[1] / audio.sampling_rate
@@ -700,7 +699,7 @@ def align_transcriptions(
                 model=model,
                 align_model_metadata={
                     "dictionary": processor.tokenizer.get_vocab(),
-                    "language": language_code,
+                    "language": language.language_code,
                     "type": "huggingface",
                 },
                 audio=audio,
