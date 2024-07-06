@@ -6,11 +6,11 @@ specified model.
 """
 
 import typing as ty
-from pathlib import Path
 
 import torch
 from scipy import signal
 from speechbrain.augment.time_domain import Resample
+from speechbrain.inference.speaker import SpeakerRecognition
 
 from senselab.audio.data_structures.audio import Audio
 
@@ -34,8 +34,12 @@ def _resample_iir(audio: Audio, lowcut: float, new_sample_rate: int, order: int 
 
 
 def verify_speaker(
-    audio1: Audio, audio2: Audio, model: str, model_rate: int, device: ty.Optional[str] = None
-) -> ty.Tuple[float, float]:
+    audio1: Audio,
+    audio2: Audio,
+    model: str = "speechbrain/spkrec-ecapa-voxceleb",
+    model_rate: int = 16000,
+    device: ty.Optional[str] = None,
+) -> ty.Tuple[float, bool]:
     """Verifies if two audio samples are from the same speaker.
 
     Args:
@@ -46,35 +50,32 @@ def verify_speaker(
         device (str, optional): The device to run the model on. Defaults to None.
 
     Returns:
-        Tuple[float, float]: The verification score and prediction.
+        Tuple[float, bool]: The verification score and prediction.
     """
-    from speechbrain.inference.speaker import SpeakerRecognition
-
     if model_rate != audio1.sampling_rate:
         audio1 = _resample_iir(audio1, model_rate / 2 - 100, model_rate)
     if model_rate != audio2.sampling_rate:
         audio2 = _resample_iir(audio2, model_rate / 2 - 100, model_rate)
 
     verification = SpeakerRecognition.from_hparams(source=model, run_opts={"device": device})
-    score, prediction = verification.verify_batch(audio1.waveform.T, audio2.waveform.T)
-    return score, prediction
+    score, prediction = verification.verify_batch(audio1.waveform, audio2.waveform)
+    return float(score), bool(prediction)
 
 
 def verify_speaker_from_files(
-    file1: Path, file2: Path, model: str, device: ty.Optional[str] = None
-) -> ty.Tuple[float, float]:
+    file1: str, file2: str, model: str = "speechbrain/spkrec-ecapa-voxceleb", device: ty.Optional[str] = "cpu"
+) -> ty.Tuple[float, bool]:
     """Verifies if two audio files are from the same speaker.
 
     Args:
-        file1 (Path): The path to the first audio file.
-        file2 (Path): The path to the second audio file.
+        file1 (str): The path to the first audio file.
+        file2 (str): The path to the second audio file.
         model (str): The path to the speaker verification model.
         device (str, optional): The device to run the model on. Defaults to None.
 
     Returns:
-        Tuple[float, float]: The verification score and prediction.
+        Tuple[float, bool]: The verification score and prediction.
     """
-    from speechbrain.inference.speaker import SpeakerRecognition
-
     verification = SpeakerRecognition.from_hparams(source=model, run_opts={"device": device})
-    return verification.verify_files(file1, file2)
+    score, prediction = verification.verify_files(file1, file2)
+    return float(score), bool(prediction)

@@ -9,8 +9,8 @@ Tests:
 """
 
 import os
-from pathlib import Path
 
+import pytest
 import torch
 
 from senselab.audio.data_structures.audio import Audio
@@ -19,6 +19,14 @@ from senselab.audio.tasks.speaker_verification.speaker_verification import (
     verify_speaker,
     verify_speaker_from_files,
 )
+
+MONO_AUDIO_PATH = "src/tests/data_for_testing/audio_48khz_mono_16bits.wav"
+
+
+@pytest.fixture
+def mono_audio_sample() -> Audio:
+    """Fixture for sample mono audio."""
+    return Audio.from_filepath(MONO_AUDIO_PATH)
 
 
 def test_resample_iir() -> None:
@@ -35,17 +43,17 @@ def test_resample_iir() -> None:
 
 if os.getenv("GITHUB_ACTIONS") != "true":
 
-    def test_verify_speaker() -> None:
+    @pytest.mark.large_model
+    def test_verify_speaker(mono_audio_sample: Audio) -> None:
         """Tests the verify_speaker function to ensure it does not fail.
+
+        Args:
+            mono_audio_sample (Audio): The mono audio sample to use for testing.
 
         Returns:
             None
         """
-        audio1 = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000)
-        audio2 = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000)
-        model = "some_model_path"
-        model_rate = 16000
-        verify_speaker(audio1, audio2, model, model_rate)
+        verify_speaker(mono_audio_sample, mono_audio_sample)
 
     def test_verify_speaker_from_files() -> None:
         """Tests the verify_speaker_from_files function to ensure it does not fail.
@@ -53,7 +61,4 @@ if os.getenv("GITHUB_ACTIONS") != "true":
         Returns:
             None
         """
-        file1 = Path("path/to/audio1.wav")
-        file2 = Path("path/to/audio2.wav")
-        model = "some_model_path"
-        verify_speaker_from_files(file1, file2, model)
+        verify_speaker_from_files(MONO_AUDIO_PATH, MONO_AUDIO_PATH)
