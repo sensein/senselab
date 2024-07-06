@@ -53,7 +53,8 @@ if os.getenv("GITHUB_ACTIONS") != "true":
         Returns:
             None
         """
-        verify_speaker(mono_audio_sample, mono_audio_sample)
+        score, prediction = verify_speaker(mono_audio_sample, mono_audio_sample)
+        assert prediction
 
     def test_verify_speaker_from_files() -> None:
         """Tests the verify_speaker_from_files function to ensure it does not fail.
@@ -61,4 +62,5 @@ if os.getenv("GITHUB_ACTIONS") != "true":
         Returns:
             None
         """
-        verify_speaker_from_files(MONO_AUDIO_PATH, MONO_AUDIO_PATH)
+        score, prediction = verify_speaker_from_files(MONO_AUDIO_PATH, MONO_AUDIO_PATH)
+        assert prediction
