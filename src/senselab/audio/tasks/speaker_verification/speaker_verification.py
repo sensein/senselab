@@ -63,7 +63,7 @@ def verify_speaker(
 
 
 def verify_speaker_from_files(
-    file1: str, file2: str, model: str = "speechbrain/spkrec-ecapa-voxceleb", device: ty.Optional[str] = "cpu"
+    file1: str, file2: str, model: str = "speechbrain/spkrec-ecapa-voxceleb", device: ty.Optional[str] = None
 ) -> ty.Tuple[float, bool]:
     """Verifies if two audio files are from the same speaker.
 
