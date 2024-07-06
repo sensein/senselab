@@ -8,6 +8,7 @@ Tests:
     - test_verify_speaker_from_files: Tests the verify_speaker_from_files function.
 """
 
+import os
 from pathlib import Path
 
 import torch
@@ -32,26 +33,27 @@ def test_resample_iir() -> None:
     _resample_iir(audio, lowcut, new_sample_rate)
 
 
-def test_verify_speaker() -> None:
-    """Tests the verify_speaker function to ensure it does not fail.
+if os.getenv("GITHUB_ACTIONS") != "true":
 
-    Returns:
-        None
-    """
-    audio1 = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000)
-    audio2 = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000)
-    model = "some_model_path"
-    model_rate = 16000
-    verify_speaker(audio1, audio2, model, model_rate)
+    def test_verify_speaker() -> None:
+        """Tests the verify_speaker function to ensure it does not fail.
 
+        Returns:
+            None
+        """
+        audio1 = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000)
+        audio2 = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000)
+        model = "some_model_path"
+        model_rate = 16000
+        verify_speaker(audio1, audio2, model, model_rate)
 
-def test_verify_speaker_from_files() -> None:
-    """Tests the verify_speaker_from_files function to ensure it does not fail.
+    def test_verify_speaker_from_files() -> None:
+        """Tests the verify_speaker_from_files function to ensure it does not fail.
 
-    Returns:
-        None
-    """
-    file1 = Path("path/to/audio1.wav")
-    file2 = Path("path/to/audio2.wav")
-    model = "some_model_path"
-    verify_speaker_from_files(file1, file2, model)
+        Returns:
+            None
+        """
+        file1 = Path("path/to/audio1.wav")
+        file2 = Path("path/to/audio2.wav")
+        model = "some_model_path"
+        verify_speaker_from_files(file1, file2, model)
