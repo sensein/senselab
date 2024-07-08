@@ -45,13 +45,14 @@ def audio_classification_with_hf_models(
     device, torch_dtype = _select_device_and_dtype(
         user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
     )
+    print(torch_dtype)
 
     classification_pipeline = pipeline(
         task="audio-classification",
         model=model.path_or_uri,
         revision=model.revision,
         device=device.value,
-        # torch_dtype=torch_dtype,
+        torch_dtype=torch_dtype,
     )
     classification_outputs = []
 
