@@ -57,7 +57,7 @@ def audio_classification_with_hf_models(
 
     # TODO: figure out adding batching and GPU support
     for audio in audios:
-        classification_outputs.append(classification_pipeline(audio.waveform.numpy().squeeze()))
+        classification_outputs.append(classification_pipeline(audio.waveform.squeeze()))
 
     return classification_outputs
 
