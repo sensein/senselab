@@ -51,7 +51,7 @@ def audio_classification_with_hf_models(
         model=model.path_or_uri,
         revision=model.revision,
         device=device.value,
-        torch_dtype=torch_dtype,
+        # torch_dtype=torch_dtype,
     )
     classification_outputs = []
 
