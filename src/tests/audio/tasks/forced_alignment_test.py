@@ -26,6 +26,7 @@ from senselab.audio.tasks.forced_alignment.forced_alignment import (
     _preprocess_segments,
     align_transcriptions,
 )
+from senselab.utils.data_structures.device import DeviceType
 from senselab.utils.data_structures.script_line import ScriptLine
 
 MONO_AUDIO_PATH = "src/tests/data_for_testing/audio_48khz_mono_16bits.wav"
@@ -111,7 +112,7 @@ def test_can_align_segment(dummy_segment: SingleSegment) -> None:
 
 def test_prepare_waveform_segment(mono_audio_sample: Audio) -> None:
     """Test preparation of waveform segment."""
-    waveform_segment, lengths = _prepare_waveform_segment(mono_audio_sample, 0.0, 1.0, "cpu")
+    waveform_segment, lengths = _prepare_waveform_segment(mono_audio_sample, 0.0, 1.0, DeviceType.CPU)
 
 
 def test_merge_repeats() -> None:
@@ -135,7 +136,7 @@ if os.getenv("GITHUB_ACTIONS") != "true":
         """Test generation of prediction matrix."""
         model, _ = dummy_model
         waveform_segment = torch.randn(1, 16000)
-        prediction_matrix = _get_prediction_matrix(model, waveform_segment, None, "huggingface", "cpu")
+        prediction_matrix = _get_prediction_matrix(model, waveform_segment, None, "huggingface", DeviceType.CPU)
         assert prediction_matrix.shape[0] > 0
 
     def test_align_segments(mono_audio_sample: Audio, dummy_model: tuple) -> None:
@@ -163,7 +164,7 @@ if os.getenv("GITHUB_ACTIONS") != "true":
             model_lang="en",
             model_type="huggingface",
             audio=mono_audio_sample,
-            device="cpu",
+            device=DeviceType.CPU,
             max_duration=10.0,
             return_char_alignments=False,
             interpolate_method="nearest",
@@ -194,7 +195,7 @@ if os.getenv("GITHUB_ACTIONS") != "true":
                 "type": "huggingface",
             },
             audio=mono_audio_sample,
-            device="cpu",
+            device=DeviceType.CPU,
         )
         assert "segments" in aligned_result
         assert "word_segments" in aligned_result
