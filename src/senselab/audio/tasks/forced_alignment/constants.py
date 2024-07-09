@@ -1,5 +1,7 @@
 """Provides constants for align functionality."""
 
+SAMPLE_RATE = 16000
+
 PUNKT_ABBREVIATIONS = ["dr", "vs", "mr", "mrs", "prof"]
 
 LANGUAGES_WITHOUT_SPACES = ["ja", "zh"]

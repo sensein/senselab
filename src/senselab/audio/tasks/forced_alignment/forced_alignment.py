@@ -15,6 +15,7 @@ from senselab.audio.tasks.forced_alignment.constants import (
     DEFAULT_ALIGN_MODELS_HF,
     LANGUAGES_WITHOUT_SPACES,
     PUNKT_ABBREVIATIONS,
+    SAMPLE_RATE,
 )
 from senselab.audio.tasks.forced_alignment.data_structures import (
     AlignedTranscriptionResult,
@@ -24,6 +25,7 @@ from senselab.audio.tasks.forced_alignment.data_structures import (
     SingleSegment,
     SingleWordSegment,
 )
+from senselab.audio.tasks.preprocessing.preprocessing import resample_audios
 from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
 from senselab.utils.data_structures.language import Language
 from senselab.utils.data_structures.script_line import ScriptLine
@@ -680,6 +682,8 @@ def align_transcriptions(
     model = Wav2Vec2ForCTC.from_pretrained(model_name).to(device.value)
 
     for audio, transcription in audios_and_transcriptions:
+        audio = resample_audios([audio], SAMPLE_RATE)[0]  # Resample to fit expectations of Wav2Vec2
+
         # Ensure start and end are not None
         start = transcription.start if transcription.start is not None else 0.0
         end = transcription.end if transcription.end is not None else audio.waveform.shape[1] / audio.sampling_rate
