@@ -24,7 +24,7 @@ from senselab.audio.tasks.forced_alignment.data_structures import (
     SingleSegment,
     SingleWordSegment,
 )
-from senselab.utils.data_structures.device import _select_device_and_dtype
+from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
 from senselab.utils.data_structures.language import Language
 from senselab.utils.data_structures.script_line import ScriptLine
 
@@ -134,7 +134,7 @@ def _can_align_segment(
 
 
 def _prepare_waveform_segment(
-    audio: Audio, t1: float, t2: float, device: str
+    audio: Audio, t1: float, t2: float, device: DeviceType
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
     """Prepares the waveform segment based on the time points.
 
@@ -155,7 +155,7 @@ def _prepare_waveform_segment(
         waveform_segment = torch.from_numpy(waveform_segment)
 
     if waveform_segment.shape[-1] < 400:
-        lengths = torch.as_tensor([waveform_segment.shape[-1]]).to(device)
+        lengths = torch.as_tensor([waveform_segment.shape[-1]]).to(device.value)
         waveform_segment = torch.nn.functional.pad(waveform_segment, (0, 400 - waveform_segment.shape[-1]))
     else:
         lengths = None
@@ -168,7 +168,7 @@ def _get_prediction_matrix(
     waveform_segment: torch.Tensor,
     lengths: Optional[torch.Tensor],
     model_type: str,
-    device: str,
+    device: DeviceType,
 ) -> torch.Tensor:
     """Generate prediction matrix from the alignment model.
 
@@ -184,9 +184,9 @@ def _get_prediction_matrix(
     """
     with torch.inference_mode():
         if model_type == "torchaudio":
-            emissions, _ = model(waveform_segment.to(device), lengths=lengths)
+            emissions, _ = model(waveform_segment.to(device.value), lengths=lengths)
         elif model_type == "huggingface":
-            emissions = model(waveform_segment.to(device)).logits
+            emissions = model(waveform_segment.to(device.value)).logits
         else:
             raise NotImplementedError(f"Align model of type {model_type} not supported.")
 
@@ -309,7 +309,7 @@ def _align_single_segment(
     model_lang: str,
     model_type: str,
     audio: Audio,
-    device: str,
+    device: DeviceType,
     t1: float,
     t2: float,
     return_char_alignments: bool,
@@ -513,7 +513,7 @@ def _align_segments(
     model_lang: str,
     model_type: str,
     audio: torch.Tensor,
-    device: str,
+    device: DeviceType,
     max_duration: float,
     return_char_alignments: bool,
     interpolate_method: str,
@@ -605,7 +605,7 @@ def _align_transcription(
     model: torch.nn.Module,
     align_model_metadata: Dict[str, Any],
     audio: Audio,
-    device: str,
+    device: DeviceType,
     interpolate_method: str = "nearest",
     return_char_alignments: bool = False,
     print_progress: bool = False,
@@ -673,7 +673,7 @@ def align_transcriptions(
     aligned_script_lines = []
 
     # Define the language code and load model
-    device = _select_device_and_dtype()[0]
+    device = _select_device_and_dtype()[0]  # DeviceType object
     model_name = DEFAULT_ALIGN_MODELS_HF.get(language.language_code, "facebook/wav2vec2-base-960h")
 
     processor = Wav2Vec2Processor.from_pretrained(model_name)
@@ -704,7 +704,7 @@ def align_transcriptions(
                     "type": "huggingface",
                 },
                 audio=audio,
-                device=device.value,
+                device=device,
                 return_char_alignments=True,
             )
             aligned_script_lines.append(_convert_to_scriptline(alignment))
