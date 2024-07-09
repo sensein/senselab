@@ -35,10 +35,10 @@ def _prepare_audio(audio: Audio) -> Audio:
     """Prepare audio data for processing.
 
     Args:
-        audio (Union[np.ndarray, torch.Tensor]): The audio data to be prepared.
+        audio (Audio): The audio data to be prepared.
 
     Returns:
-        torch.Tensor: The prepared audio data as a torch tensor.
+        Audio: The prepared audio data.
     """
     if not torch.is_tensor(audio.waveform):
         audio.waveform = torch.from_numpy(audio.waveform)
@@ -144,7 +144,7 @@ def _prepare_waveform_segment(
         audio (Audio): The audio data.
         t1 (float): Start time of the segment.
         t2 (float): End time of the segment.
-        device (str): The device to run the model on.
+        device (DeviceType): The device to run the model on.
 
     Returns:
         Tuple[torch.Tensor, Optional[torch.Tensor]]: The waveform segment and its length.
@@ -179,7 +179,7 @@ def _get_prediction_matrix(
         waveform_segment (torch.Tensor): The audio segment to be processed.
         lengths (Optional[torch.Tensor]): Lengths of the audio segments.
         model_type (str): The type of the model ('torchaudio' or 'huggingface').
-        device (str): The device to run the model on.
+        device (DeviceType): The device to run the model on.
 
     Returns:
         torch.Tensor: The prediction matrix.
@@ -245,8 +245,8 @@ def _align_subsegments(
     segment: SingleSegment,
     char_segments_df: pd.DataFrame,
     text: str,
-    word_segments: list[SingleWordSegment],
-    aligned_subsegments: list[SingleAlignedSegment],
+    word_segments: List[SingleWordSegment],
+    aligned_subsegments: List[SingleAlignedSegment],
     return_char_alignments: bool,
 ) -> None:
     """Aligns sentence spans to create subsegments and update word segments.
@@ -255,8 +255,8 @@ def _align_subsegments(
         segment (SingleSegment): The segment containing sentence spans.
         char_segments_df (pd.DataFrame): DataFrame with character alignments.
         text (str): The text to align with the segment.
-        word_segments (list[SingleWordSegment]): List to store word segments.
-        aligned_subsegments (list[SingleAlignedSegment]): List to store aligned subsegments.
+        word_segments (List[SingleWordSegment]): List to store word segments.
+        aligned_subsegments (List[SingleAlignedSegment]): List to store aligned subsegments.
         return_char_alignments (bool): Flag to return character alignments.
 
     Returns:
@@ -317,8 +317,8 @@ def _align_single_segment(
     return_char_alignments: bool,
     interpolate_method: str,
     aligned_segment: SingleAlignedSegment,
-    aligned_segments: list[SingleAlignedSegment],
-    word_segments: list[SingleWordSegment],
+    aligned_segments: List[SingleAlignedSegment],
+    word_segments: List[SingleWordSegment],
 ) -> None:
     """Processes and aligns a single segment.
 
@@ -329,14 +329,14 @@ def _align_single_segment(
         model_lang (str): Language of the model.
         model_type (str): The type of the model ('torchaudio' or 'huggingface').
         audio (Audio): The audio data.
-        device (str): The device to run the model on.
+        device (DeviceType): The device to run the model on.
         t1 (float): Start time of the segment.
         t2 (float): End time of the segment.
         return_char_alignments (bool): Flag to return character alignments.
         interpolate_method (str): Method for interpolating NaNs.
         aligned_segment (SingleAlignedSegment ): The aligned segment data.
-        aligned_segments (list[SingleAlignedSegment]): List to store aligned segments.
-        word_segments (list[SingleWordSegment]): List to store word segments.
+        aligned_segments (List[SingleAlignedSegment]): List to store aligned segments.
+        word_segments (List[SingleWordSegment]): List to store word segments.
 
     Returns:
         None: The function modifies the aligned_segments and word_segments lists in place.
@@ -369,7 +369,7 @@ def _align_single_segment(
 
     char_segments_df = _assign_timestamps_to_characters(segment["text"], segment, char_segments, ratio, t1, model_lang)
 
-    aligned_subsegments: list[SingleAlignedSegment] = []
+    aligned_subsegments: List[SingleAlignedSegment] = []
     if isinstance(char_segments_df, pd.DataFrame):
         char_segments_df["sentence-idx"] = None
     else:
@@ -514,12 +514,12 @@ def _align_segments(
     model_dictionary: Dict[str, int],
     model_lang: str,
     model_type: str,
-    audio: torch.Tensor,
+    audio: Audio,
     device: DeviceType,
     max_duration: float,
     return_char_alignments: bool,
     interpolate_method: str,
-) -> tuple[list[SingleAlignedSegment], list[SingleWordSegment]]:
+) -> Tuple[List[SingleAlignedSegment], List[SingleWordSegment]]:
     """Align segments based on the predictions.
 
     Args:
@@ -528,17 +528,17 @@ def _align_segments(
         model_dictionary (Dict[str, int]): Dictionary for character indices.
         model_lang (str): Language of the model.
         model_type (str): The type of the model ('torchaudio' or 'huggingface').
-        audio (torch.Tensor): The audio data.
-        device (str): The device to run the model on.
+        audio (Audio): The audio data.
+        device (DeviceType): The device to run the model on.
         max_duration (float): Maximum duration of the audio.
         return_char_alignments (bool): Flag to return character alignments.
         interpolate_method (str): Method for interpolating NaNs.
 
     Returns:
-        List[SingleAlignedSegment]: The aligned segments.
+        Tuple[List[SingleAlignedSegment], List[SingleWordSegment]]: The aligned segments and word segments.
     """
-    aligned_segments: list[SingleAlignedSegment] = []
-    word_segments: list[SingleWordSegment] = []
+    aligned_segments: List[SingleAlignedSegment] = []
+    word_segments: List[SingleWordSegment] = []
 
     for sdx, segment in enumerate(transcript):
         t1 = segment["start"]
@@ -619,8 +619,8 @@ def _align_transcription(
         transcript (List[SingleSegment]): The list of transcription segments.
         model (torch.nn.Module): The alignment model.
         align_model_metadata (Dict[str, Any]): Metadata for the alignment model.
-        audio (np.ndarray): The audio data.
-        device (str): The device to run the model on.
+        audio (Audio): The audio data.
+        device (DeviceType): The device to run the model on.
         interpolate_method (str): The method for interpolating NaNs (default: "nearest").
         return_char_alignments (bool): Whether to return character alignments (default: False).
         print_progress (bool): Whether to print progress (default: False).
@@ -667,7 +667,7 @@ def align_transcriptions(
     Args:
         audios_and_transcriptions (List[Tuple[Audio, ScriptLine]]):
             A list of tuples where each tuple contains an audio object and its corresponding transcription.
-        language (str): The language of the audio (default is "en").
+        language (Language): The language of the audio (default is "en").
 
     Returns:
         List[List[ScriptLine]]: A list of lists, where each inner list contains the aligned script lines for each audio.
