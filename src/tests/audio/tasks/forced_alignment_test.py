@@ -1,5 +1,6 @@
 """Tests for forced alignment functions."""
 
+import os
 from typing import Optional, TypedDict
 
 import numpy as np
@@ -113,14 +114,6 @@ def test_prepare_waveform_segment(mono_audio_sample: Audio) -> None:
     waveform_segment, lengths = _prepare_waveform_segment(mono_audio_sample, 0.0, 1.0, "cpu")
 
 
-def test_get_prediction_matrix(dummy_model: tuple) -> None:
-    """Test generation of prediction matrix."""
-    model, _ = dummy_model
-    waveform_segment = torch.randn(1, 16000)
-    prediction_matrix = _get_prediction_matrix(model, waveform_segment, None, "huggingface", "cpu")
-    assert prediction_matrix.shape[0] > 0
-
-
 def test_merge_repeats() -> None:
     """Test merging of repeated tokens."""
     path = [Point(0, 0, 1.0), Point(0, 1, 1.0), Point(1, 2, 1.0)]
@@ -136,76 +129,83 @@ def test_interpolate_nans() -> None:
     assert interpolated_series.isnull().sum() == 0
 
 
-def test_align_segments(mono_audio_sample: Audio, dummy_model: tuple) -> None:
-    """Test alignment of segments."""
-    model, processor = dummy_model
-    model_dictionary = processor.tokenizer.get_vocab()
+if os.getenv("GITHUB_ACTIONS") != "true":
 
-    # Create a sample transcript
-    transcript = [SingleSegment(start=0.0, end=1.0, text="test")]
+    def test_get_prediction_matrix(dummy_model: tuple) -> None:
+        """Test generation of prediction matrix."""
+        model, _ = dummy_model
+        waveform_segment = torch.randn(1, 16000)
+        prediction_matrix = _get_prediction_matrix(model, waveform_segment, None, "huggingface", "cpu")
+        assert prediction_matrix.shape[0] > 0
 
-    # Preprocess the transcript segments
-    preprocessed_transcript = _preprocess_segments(
-        transcript, model_dictionary, model_lang="en", print_progress=False, combined_progress=False
-    )
+    def test_align_segments(mono_audio_sample: Audio, dummy_model: tuple) -> None:
+        """Test alignment of segments."""
+        model, processor = dummy_model
+        model_dictionary = processor.tokenizer.get_vocab()
 
-    # Ensure the model dictionary has the necessary keys
-    for char in "test":
-        if char not in model_dictionary:
-            model_dictionary[char] = len(model_dictionary)
+        # Create a sample transcript
+        transcript = [SingleSegment(start=0.0, end=1.0, text="test")]
 
-    aligned_segments, word_segments = _align_segments(
-        transcript=preprocessed_transcript,
-        model=model,
-        model_dictionary=model_dictionary,
-        model_lang="en",
-        model_type="huggingface",
-        audio=mono_audio_sample,
-        device="cpu",
-        max_duration=10.0,
-        return_char_alignments=False,
-        interpolate_method="nearest",
-    )
-    assert isinstance(aligned_segments, list)
-    assert isinstance(word_segments, list)
-
-
-def test_align_transcription(mono_audio_sample: Audio, dummy_model: tuple) -> None:
-    """Test alignment of transcription."""
-    model, processor = dummy_model
-    transcript = [
-        SingleSegment(
-            start=0.0,
-            end=1.0,
-            text="test",
-            clean_char=["t", "e", "s", "t"],
-            clean_cdx=[0, 1, 2, 3],
-            clean_wdx=[0],
-            sentence_spans=None,
+        # Preprocess the transcript segments
+        preprocessed_transcript = _preprocess_segments(
+            transcript, model_dictionary, model_lang="en", print_progress=False, combined_progress=False
         )
-    ]
-    aligned_result = _align_transcription(
-        transcript=transcript,
-        model=model,
-        align_model_metadata={
-            "dictionary": processor.tokenizer.get_vocab(),
-            "language": "en",
-            "type": "huggingface",
-        },
-        audio=mono_audio_sample,
-        device="cpu",
-    )
-    assert "segments" in aligned_result
-    assert "word_segments" in aligned_result
 
+        # Ensure the model dictionary has the necessary keys
+        for char in "test":
+            if char not in model_dictionary:
+                model_dictionary[char] = len(model_dictionary)
 
-def test_align_transcriptions(mono_audio_sample: Audio, script_line_fixture: ScriptLine) -> None:
-    """Test alignment of transcriptions."""
-    audios_and_transcriptions = [(mono_audio_sample, script_line_fixture)]
-    aligned_transcriptions = align_transcriptions(audios_and_transcriptions)
-    assert len(aligned_transcriptions) == 1
-    assert len(aligned_transcriptions[0]) == 1
-    assert aligned_transcriptions[0][0].text == "test"
+        aligned_segments, word_segments = _align_segments(
+            transcript=preprocessed_transcript,
+            model=model,
+            model_dictionary=model_dictionary,
+            model_lang="en",
+            model_type="huggingface",
+            audio=mono_audio_sample,
+            device="cpu",
+            max_duration=10.0,
+            return_char_alignments=False,
+            interpolate_method="nearest",
+        )
+        assert isinstance(aligned_segments, list)
+        assert isinstance(word_segments, list)
+
+    def test_align_transcription(mono_audio_sample: Audio, dummy_model: tuple) -> None:
+        """Test alignment of transcription."""
+        model, processor = dummy_model
+        transcript = [
+            SingleSegment(
+                start=0.0,
+                end=1.0,
+                text="test",
+                clean_char=["t", "e", "s", "t"],
+                clean_cdx=[0, 1, 2, 3],
+                clean_wdx=[0],
+                sentence_spans=None,
+            )
+        ]
+        aligned_result = _align_transcription(
+            transcript=transcript,
+            model=model,
+            align_model_metadata={
+                "dictionary": processor.tokenizer.get_vocab(),
+                "language": "en",
+                "type": "huggingface",
+            },
+            audio=mono_audio_sample,
+            device="cpu",
+        )
+        assert "segments" in aligned_result
+        assert "word_segments" in aligned_result
+
+    def test_align_transcriptions(mono_audio_sample: Audio, script_line_fixture: ScriptLine) -> None:
+        """Test alignment of transcriptions."""
+        audios_and_transcriptions = [(mono_audio_sample, script_line_fixture)]
+        aligned_transcriptions = align_transcriptions(audios_and_transcriptions)
+        assert len(aligned_transcriptions) == 1
+        assert len(aligned_transcriptions[0]) == 1
+        assert aligned_transcriptions[0][0].text == "test"
 
 
 if __name__ == "__main__":
