@@ -1,34 +1,54 @@
 """This module implements some utilities for the preprocessing task."""
 
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import pydra
+import torch
 import torchaudio.functional as F
+from scipy import signal
+from speechbrain.augment.time_domain import Resample
 
 from senselab.audio.data_structures.audio import Audio
 
 
-def resample_audios(audios: List[Audio], resample_rate: int, rolloff: float = 0.99) -> List[Audio]:
-    """Resamples all Audios to a given sampling rate.
-
-    Takes a list of audios and resamples each into the new sampling rate. Notably does not assume any
-    specific structure of the audios (can vary in stereo vs. mono as well as their original sampling rate)
+def resample_audios(
+    audios: List[Audio],
+    resample_rate: int,
+    method: str = "torchaudio",
+    lowcut: Optional[float] = None,
+    order: int = 4,
+    rolloff: float = 0.99,
+) -> List[Audio]:
+    """Resamples a list of audio signals to a given sampling rate.
 
     Args:
-        audios: List of Audios to resample
-        resample_rate: Rate at which to resample the Audio
-        rolloff: The roll-off frequency of the filter, as a fraction of the Nyquist.
-            Lower values reduce anti-aliasing, but also reduce some of the highest frequencies
+        audios (List[Audio]): List of audio objects to resample.
+        resample_rate (int): Target sampling rate.
+        method (str): Resampling method ("torchaudio" or "iir"). Defaults to "torchaudio".
+        lowcut (float, optional): Low cut frequency for IIR filter. Required if "iir".
+        order (int, optional): Order of the IIR filter. Defaults to 4.
+        rolloff (float, optional): Roll-off frequency for FIR filter. Defaults to 0.99.
 
     Returns:
-        List of Audios that have all been resampled to the given resampling rate
+        List[Audio]: Resampled audio objects.
     """
     resampled_audios = []
     for audio in audios:
-        resampled = F.resample(audio.waveform, audio.sampling_rate, resample_rate, rolloff=rolloff)
+        if method == "torchaudio":
+            resampled_waveform = F.resample(audio.waveform, audio.sampling_rate, resample_rate, rolloff=rolloff)
+        elif method == "iir":
+            if lowcut is None:
+                raise ValueError("lowcut must be specified for IIR resampling.")
+            sos = signal.butter(order, lowcut, btype="low", output="sos", fs=resample_rate)
+            filtered = torch.from_numpy(signal.sosfiltfilt(sos, audio.waveform.squeeze().numpy()).copy()).float()
+            resampler = Resample(orig_freq=audio.sampling_rate, new_freq=resample_rate)
+            resampled_waveform = resampler(filtered.unsqueeze(0)).squeeze(0)
+        else:
+            raise NotImplementedError("Currently 'torchaudio' and 'iir' are supported.")
+
         resampled_audios.append(
             Audio(
-                waveform=resampled,
+                waveform=resampled_waveform,
                 sampling_rate=resample_rate,
                 metadata=audio.metadata.copy(),
                 orig_path_or_id=audio.orig_path_or_id,
