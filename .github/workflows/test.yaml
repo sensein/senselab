@@ -47,8 +47,11 @@ jobs:
         poetry install --with dev,docs
       shell: bash
     - name: Build docs
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: |
         APP_MODULE_NAME=$(ls -1 src | sort | head -1)
+        echo "APP_MODULE_NAME: $APP_MODULE_NAME"
         poetry run pdoc src/"$APP_MODULE_NAME" -o docs -t docs_style/pdoc-theme --docformat google
         touch docs/.nojekyll
       shell: bash
