@@ -18,15 +18,6 @@ from senselab.audio.tasks.speaker_verification.speaker_verification import (
     verify_speaker,
 )
 
-MONO_AUDIO_PATH = "src/tests/data_for_testing/audio_48khz_mono_16bits.wav"
-
-
-@pytest.fixture
-def mono_audio_sample() -> Audio:
-    """Fixture for sample mono audio."""
-    return Audio.from_filepath(MONO_AUDIO_PATH)
-
-
 if os.getenv("GITHUB_ACTIONS") != "true":
 
     @pytest.mark.large_model
