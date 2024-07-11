@@ -38,7 +38,7 @@ def resample_audios(
             resampled_waveform = F.resample(audio.waveform, audio.sampling_rate, resample_rate, rolloff=rolloff)
         elif method == "iir":
             if lowcut is None:
-                raise ValueError("lowcut must be specified for IIR resampling.")
+                raise ValueError("lowcut must be specified for IIR resampling. Consider using resample_rate / 2 - 100.")
             sos = signal.butter(order, lowcut, btype="low", output="sos", fs=resample_rate)
             filtered = torch.from_numpy(signal.sosfiltfilt(sos, audio.waveform.squeeze().numpy()).copy()).float()
             resampler = Resample(orig_freq=audio.sampling_rate, new_freq=resample_rate)
