@@ -14,11 +14,12 @@ from senselab.audio.tasks.speaker_embeddings.speechbrain import SpeechBrainEmbed
 from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
 from senselab.utils.data_structures.model import SpeechBrainModel
 
+TRAINING_SAMPLE_RATE = (16000,)  # spkrec-ecapa-voxceleb trained on 16kHz audio
+
 
 def verify_speaker(
     audios: List[Tuple[Audio, Audio]],
     model: SpeechBrainModel = SpeechBrainModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb", revision="main"),
-    model_training_sample_rate: int = 16000,  # spkrec-ecapa-voxceleb trained on 16kHz audio
     device: Optional[DeviceType] = None,
     threshold: float = 0.25,
 ) -> List[Tuple[float, bool]]:
@@ -28,7 +29,6 @@ def verify_speaker(
         audios (List[Tuple[Audio, Audio]]): A list of tuples, where each tuple contains
                                             two audio samples to be compared.
         model (SpeechBrainModel, optional): The model for speaker verification.
-        model_training_sample_rate (int, optional): The sample rate the model trained on.
         device (DeviceType, optional): The device to run the model on. Defaults to CPU.
         threshold (float, optional): The threshold to determine same speaker.
 
@@ -44,11 +44,11 @@ def verify_speaker(
 
     scores_and_predictions = []
     for audio1, audio2 in audios:
-        if audio1.sampling_rate != model_training_sample_rate:
-            raise ValueError(f"{model.path_or_uri} trained on {model_training_sample_rate} \
+        if audio1.sampling_rate != TRAINING_SAMPLE_RATE:
+            raise ValueError(f"{model.path_or_uri} trained on {TRAINING_SAMPLE_RATE} \
                                 sample audio, but audio1 has sample rate {audio1.sampling_rate}.")
-        if audio2.sampling_rate != model_training_sample_rate:
-            raise ValueError(f"{model.path_or_uri} trained on {model_training_sample_rate} \
+        if audio2.sampling_rate != TRAINING_SAMPLE_RATE:
+            raise ValueError(f"{model.path_or_uri} trained on {TRAINING_SAMPLE_RATE} \
                             sample audio, but audio2 has sample rate {audio2.sampling_rate}.")
 
         embeddings = SpeechBrainEmbeddings.extract_speechbrain_speaker_embeddings_from_audios(
