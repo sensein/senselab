@@ -39,8 +39,7 @@ def verify_speaker(
                                   between the two samples, and the prediction is a boolean
                                   indicating if the two samples are from the same speaker.
     """
-    if device is None:
-        device = _select_device_and_dtype(compatible_devices=[DeviceType.CPU, DeviceType.CUDA])[0]
+    device = _select_device_and_dtype(compatible_devices=[DeviceType.CPU, DeviceType.CUDA])[0]
 
     scores_and_predictions = []
     for audio1, audio2 in audios:
