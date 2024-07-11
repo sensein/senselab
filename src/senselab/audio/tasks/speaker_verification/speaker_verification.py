@@ -20,7 +20,7 @@ def verify_speaker(
     model: SpeechBrainModel = SpeechBrainModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb", revision="main"),
     model_training_sample_rate: int = 16000,  # spkrec-ecapa-voxceleb trained on 16kHz audio
     device: DeviceType = DeviceType.CPU,
-    threshold: float = 0.5,
+    threshold: float = 0.25,
 ) -> List[Tuple[float, bool]]:
     """Verifies if two audio samples are from the same speaker.
 
