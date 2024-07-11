@@ -32,9 +32,15 @@ def resample_audios(
         if lowcut is None:
             lowcut = resample_rate / 2 - 100
         sos = signal.butter(order, lowcut, btype="low", output="sos", fs=resample_rate)
-        filtered = torch.from_numpy(signal.sosfiltfilt(sos, audio.waveform.squeeze().numpy()).copy()).float()
-        resampler = Resample(orig_freq=audio.sampling_rate, new_freq=resample_rate)
-        resampled_waveform = resampler(filtered.unsqueeze(0)).squeeze(0)
+
+        channels = []
+        for channel in audio.waveform:
+            filtered_channel = torch.from_numpy(signal.sosfiltfilt(sos, channel.numpy()).copy()).float()
+            resampler = Resample(orig_freq=audio.sampling_rate, new_freq=resample_rate)
+            resampled_channel = resampler(filtered_channel.unsqueeze(0)).squeeze(0)
+            channels.append(resampled_channel)
+
+        resampled_waveform = torch.stack(channels)
         resampled_audios.append(
             Audio(
                 waveform=resampled_waveform,
