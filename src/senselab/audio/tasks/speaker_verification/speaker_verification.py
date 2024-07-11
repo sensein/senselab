@@ -5,13 +5,13 @@ verifying if two audio samples or files are from the same speaker using a
 specified model.
 """
 
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from torch.nn.functional import cosine_similarity
 
 from senselab.audio.data_structures.audio import Audio
 from senselab.audio.tasks.speaker_embeddings.speechbrain import SpeechBrainEmbeddings
-from senselab.utils.data_structures.device import DeviceType
+from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
 from senselab.utils.data_structures.model import SpeechBrainModel
 
 
@@ -19,7 +19,7 @@ def verify_speaker(
     audios: List[Tuple[Audio, Audio]],
     model: SpeechBrainModel = SpeechBrainModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb", revision="main"),
     model_training_sample_rate: int = 16000,  # spkrec-ecapa-voxceleb trained on 16kHz audio
-    device: DeviceType = DeviceType.CPU,
+    device: Optional[DeviceType] = None,
     threshold: float = 0.25,
 ) -> List[Tuple[float, bool]]:
     """Verifies if two audio samples are from the same speaker.
@@ -39,6 +39,9 @@ def verify_speaker(
                                   between the two samples, and the prediction is a boolean
                                   indicating if the two samples are from the same speaker.
     """
+    if device is None:
+        device = _select_device_and_dtype(compatible_devices=[DeviceType.CPU, DeviceType.CUDA])[0]
+
     scores_and_predictions = []
     for audio1, audio2 in audios:
         if audio1.sampling_rate != model_training_sample_rate:
