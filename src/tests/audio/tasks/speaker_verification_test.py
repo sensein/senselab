@@ -13,6 +13,7 @@ import os
 import pytest
 
 from senselab.audio.data_structures.audio import Audio
+from senselab.audio.tasks.preprocessing.preprocessing import resample_audios
 from senselab.audio.tasks.speaker_verification.speaker_verification import (
     verify_speaker,
 )
@@ -38,5 +39,6 @@ if os.getenv("GITHUB_ACTIONS") != "true":
         Returns:
             None
         """
+        mono_audio_sample = resample_audios([mono_audio_sample], 16000)[0]
         score, prediction = verify_speaker(mono_audio_sample, mono_audio_sample)
         assert prediction
