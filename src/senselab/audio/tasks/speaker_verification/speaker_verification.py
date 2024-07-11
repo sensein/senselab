@@ -14,7 +14,7 @@ from senselab.audio.tasks.speaker_embeddings.speechbrain import SpeechBrainEmbed
 from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
 from senselab.utils.data_structures.model import SpeechBrainModel
 
-TRAINING_SAMPLE_RATE = (16000,)  # spkrec-ecapa-voxceleb trained on 16kHz audio
+TRAINING_SAMPLE_RATE = 16000  # spkrec-ecapa-voxceleb trained on 16kHz audio
 
 
 def verify_speaker(

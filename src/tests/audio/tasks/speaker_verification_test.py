@@ -31,6 +31,7 @@ if os.getenv("GITHUB_ACTIONS") != "true":
             None
         """
         mono_audio_sample = resample_audios([mono_audio_sample], 16000)[0]
+        assert mono_audio_sample.sampling_rate == 16000
         mono_audio_samples = [(mono_audio_sample, mono_audio_sample)] * 3
         scores_and_predictions = verify_speaker(mono_audio_samples)
         assert scores_and_predictions
