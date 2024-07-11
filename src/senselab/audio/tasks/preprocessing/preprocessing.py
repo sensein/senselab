@@ -4,7 +4,6 @@ from typing import List, Optional, Tuple
 
 import pydra
 import torch
-import torchaudio.functional as F
 from scipy import signal
 from speechbrain.augment.time_domain import Resample
 
@@ -14,38 +13,28 @@ from senselab.audio.data_structures.audio import Audio
 def resample_audios(
     audios: List[Audio],
     resample_rate: int,
-    method: str = "torchaudio",
     lowcut: Optional[float] = None,
     order: int = 4,
-    rolloff: float = 0.99,
 ) -> List[Audio]:
     """Resamples a list of audio signals to a given sampling rate.
 
     Args:
         audios (List[Audio]): List of audio objects to resample.
         resample_rate (int): Target sampling rate.
-        method (str): Resampling method ("torchaudio" or "iir"). Defaults to "torchaudio".
-        lowcut (float, optional): Low cut frequency for IIR filter. Required if "iir".
+        lowcut (float, optional): Low cut frequency for IIR filter.
         order (int, optional): Order of the IIR filter. Defaults to 4.
-        rolloff (float, optional): Roll-off frequency for FIR filter. Defaults to 0.99.
 
     Returns:
         List[Audio]: Resampled audio objects.
     """
     resampled_audios = []
     for audio in audios:
-        if method == "torchaudio":
-            resampled_waveform = F.resample(audio.waveform, audio.sampling_rate, resample_rate, rolloff=rolloff)
-        elif method == "iir":
-            if lowcut is None:
-                raise ValueError("lowcut must be specified for IIR resampling. Consider using resample_rate / 2 - 100.")
-            sos = signal.butter(order, lowcut, btype="low", output="sos", fs=resample_rate)
-            filtered = torch.from_numpy(signal.sosfiltfilt(sos, audio.waveform.squeeze().numpy()).copy()).float()
-            resampler = Resample(orig_freq=audio.sampling_rate, new_freq=resample_rate)
-            resampled_waveform = resampler(filtered.unsqueeze(0)).squeeze(0)
-        else:
-            raise NotImplementedError("Currently 'torchaudio' and 'iir' are supported.")
-
+        if lowcut is None:
+            lowcut = resample_rate / 2 - 100
+        sos = signal.butter(order, lowcut, btype="low", output="sos", fs=resample_rate)
+        filtered = torch.from_numpy(signal.sosfiltfilt(sos, audio.waveform.squeeze().numpy()).copy()).float()
+        resampler = Resample(orig_freq=audio.sampling_rate, new_freq=resample_rate)
+        resampled_waveform = resampler(filtered.unsqueeze(0)).squeeze(0)
         resampled_audios.append(
             Audio(
                 waveform=resampled_waveform,
