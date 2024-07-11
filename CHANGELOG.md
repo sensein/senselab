@@ -1,3 +1,21 @@
+# 0.6.0 (Thu Jul 11 2024)
+
+#### 🚀 Enhancement
+
+- release 0.6.0 is for fixing bugs and adjusting docs [#92](https://github.com/sensein/senselab/pull/92) ([@ibevers](https://github.com/ibevers) [@fabiocat93](https://github.com/fabiocat93))
+
+#### 🐛 Bug Fix
+
+- Add b2ai speaker verification functions [#87](https://github.com/sensein/senselab/pull/87) ([@ibevers](https://github.com/ibevers))
+- attempting to fix documentation [#84](https://github.com/sensein/senselab/pull/84) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@ibevers](https://github.com/ibevers)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.5.1 (Fri Jun 28 2024)
 
 #### 🐛 Bug Fix
