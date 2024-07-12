@@ -103,40 +103,111 @@ def select_channel_from_audios(audios: List[Audio], channel_index: int) -> List[
     return mono_channel_audios
 
 
-def chunk_audios(data: List[Tuple[Audio, Tuple[float, float]]]) -> List[Audio]:
-    """Chunks the input audios based on the start and end timestamp.
+def extract_segments(data: List[Tuple[Audio, List[Tuple[float, float]]]]) -> List[List[Audio]]:
+    """Extracts segments from an audio file.
 
     Args:
-        data: List of tuples containing an Audio object and a tuple with start and end (in seconds) for chunking.
+        data: List of tuples containing an Audio object and a list of tuples with start
+            and end (in seconds) for chunking.
 
     Returns:
-        List of Audios that have been chunked based on the provided timestamps
+        List of lists of Audios that have been chunked based on the provided timestamps.
     """
-    chunked_audios = []
-
+    extracted_segments = []
     for audio, timestamps in data:
-        start, end = timestamps
-        if start < 0:
-            raise ValueError("Start time must be greater than or equal to 0.")
-        duration = audio.waveform.shape[1] / audio.sampling_rate
-        if end > duration:
-            raise ValueError(f"End time must be less than the duration of the audio file ({duration} seconds).")
-        start_sample = int(start * audio.sampling_rate)
-        end_sample = int(end * audio.sampling_rate)
-        chunked_waveform = audio.waveform[:, start_sample:end_sample]
+        single_audio_segments = []
+        for start, end in timestamps:
+            if start < 0:
+                raise ValueError("Start time must be greater than or equal to 0.")
+            duration = audio.waveform.shape[1] / audio.sampling_rate
+            if end > duration:
+                raise ValueError(f"End time must be less than the duration of the audio file ({duration} seconds).")
+            start_sample = int(start * audio.sampling_rate)
+            end_sample = int(end * audio.sampling_rate)
+            chunked_waveform = audio.waveform[:, start_sample:end_sample]
 
-        chunked_audios.append(
-            Audio(
-                waveform=chunked_waveform,
-                sampling_rate=audio.sampling_rate,
-                metadata=audio.metadata.copy(),
-                orig_path_or_id=audio.orig_path_or_id,
+            single_audio_segments.append(
+                Audio(
+                    waveform=chunked_waveform,
+                    sampling_rate=audio.sampling_rate,
+                    metadata=audio.metadata.copy(),
+                    orig_path_or_id=audio.orig_path_or_id,
+                )
             )
+        extracted_segments.append(single_audio_segments)
+    return extracted_segments
+
+
+def pad_audios(audios: List[Audio], desired_samples: int) -> List[Audio]:
+    """Pads the audio segment to the desired length.
+
+    Args:
+        audios: The list of audio objects to be padded.
+        desired_samples: The desired length (in samples) for the padded audio.
+
+    Returns:
+        A new Audio object with the waveform padded to the desired length.
+    """
+    padded_audios = []
+    for audio in audios:
+        current_samples = audio.waveform.shape[1]
+
+        if current_samples >= desired_samples:
+            return [audio]
+
+        padding_needed = desired_samples - current_samples
+        padded_waveform = torch.nn.functional.pad(audio.waveform, (0, padding_needed))
+        padded_audio = Audio(
+            waveform=padded_waveform,
+            sampling_rate=audio.sampling_rate,
+            metadata=audio.metadata.copy(),
+            orig_path_or_id=audio.orig_path_or_id,
         )
-    return chunked_audios
+        padded_audios.append(padded_audio)
+    return padded_audios
+
+
+def evenly_segment_audios(
+    audios: List[Audio], segment_length: float, pad_last_segment: bool = True
+) -> List[List[Audio]]:
+    """Segments multiple audio files into evenly sized segments with optional padding for the last segment.
+
+    Args:
+        audios: The list of Audio objects to be segmented.
+        segment_length: The desired length of each segment in seconds.
+        pad_last_segment: Whether to pad the last segment to the full segment length (default is False).
+
+    Returns:
+        List of Audio objects that have been segmented.
+    """
+    audios_and_segment_timestamps = []
+    for i, audio in enumerate(audios):
+        total_duration = audio.waveform.shape[1] / audio.sampling_rate
+        segment_samples = int(segment_length * audio.sampling_rate)
+
+        # Create a list of tuples with start and end times for each segment
+        timestamps = [
+            (i * segment_length, (i + 1) * segment_length) for i in range(int(total_duration // segment_length))
+        ]
+        if total_duration % segment_length != 0:
+            timestamps.append((total_duration - (total_duration % segment_length), total_duration))
+        audios_and_segment_timestamps.append((audio, timestamps))
+
+    audio_segment_lists = extract_segments([(audio, timestamps)])
+
+    for i, audio_segment_list in enumerate(audio_segment_lists):
+        if pad_last_segment and len(audio_segment_list) > 0:
+            last_segment = audio_segment_list[-1]
+            if last_segment.waveform.shape[1] < segment_samples:
+                audio_segment_lists[i][-1] = pad_audios([last_segment], segment_samples)[0]
+
+    return audio_segment_lists
 
 
 resample_audios_pt = pydra.mark.task(resample_audios)
 downmix_audios_to_mono_pt = pydra.mark.task(downmix_audios_to_mono)
-chunk_audios_pt = pydra.mark.task(chunk_audios)
+extract_segments_pt = pydra.mark.task(extract_segments)
 select_channel_from_audios_pt = pydra.mark.task(select_channel_from_audios)
+extract_segments_pt = pydra.mark.task(extract_segments)
+pad_audios_pt = pydra.mark.task(pad_audios)
+evenly_segment_audios_pt = pydra.mark.task(evenly_segment_audios)
