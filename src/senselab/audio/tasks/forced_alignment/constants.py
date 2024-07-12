@@ -19,6 +19,7 @@ DEFAULT_ALIGN_MODELS_TORCH = {
 }
 
 DEFAULT_ALIGN_MODELS_HF = {
+    "en": HFModel(path_or_uri="facebook/wav2vec2-base-960h", revision="main"),
     "ja": HFModel(path_or_uri="jonatasgrosman/wav2vec2-large-xlsr-53-japanese", revision="main"),
     "zh": HFModel(path_or_uri="jonatasgrosman/wav2vec2-large-xlsr-53-chinese-zh-cn", revision="main"),
     "nl": HFModel(path_or_uri="jonatasgrosman/wav2vec2-large-xlsr-53-dutch", revision="main"),
