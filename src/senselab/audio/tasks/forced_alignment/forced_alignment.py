@@ -632,8 +632,9 @@ def align_transcriptions(
 
     # Define the language code and load model
     device = _select_device_and_dtype()[0]  # DeviceType object
-    model_name, revision = DEFAULT_ALIGN_MODELS_HF.get(language.language_code, ("facebook/wav2vec2-base-960h", "main"))
-    model = HFModel(path_or_uri=model_name, revision=revision)
+    model = DEFAULT_ALIGN_MODELS_HF.get(
+        language.language_code, HFModel(path_or_uri="facebook/wav2vec2-base-960h", revision="main")
+    )
 
     processor = Wav2Vec2Processor.from_pretrained(model.path_or_uri)
     model = Wav2Vec2ForCTC.from_pretrained(model.path_or_uri).to(device.value)
