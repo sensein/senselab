@@ -3,7 +3,6 @@
 import math
 from typing import Any, Dict, List, Optional, Tuple
 
-import numpy as np
 import pandas as pd
 import torch
 from nltk.tokenize.punkt import PunktParameters, PunktSentenceTokenizer
@@ -25,7 +24,7 @@ from senselab.audio.tasks.forced_alignment.data_structures import (
     SingleSegment,
     SingleWordSegment,
 )
-from senselab.audio.tasks.preprocessing.preprocessing import resample_audios
+from senselab.audio.tasks.preprocessing.preprocessing import extract_segments, pad_audios, resample_audios
 from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
 from senselab.utils.data_structures.language import Language
 from senselab.utils.data_structures.script_line import ScriptLine
@@ -117,36 +116,6 @@ def _can_align_segment(
     if t1 >= max_duration:
         return False
     return True
-
-
-def _prepare_waveform_segment(
-    audio: Audio, t1: float, t2: float, device: DeviceType
-) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-    """Prepares the waveform segment based on the time points.
-
-    Args:
-        audio (Audio): The audio data.
-        t1 (float): Start time of the segment.
-        t2 (float): End time of the segment.
-        device (DeviceType): The device to run the model on.
-
-    Returns:
-        Tuple[torch.Tensor, Optional[torch.Tensor]]: The waveform segment and its length.
-    """
-    f1 = int(t1 * audio.sampling_rate)
-    f2 = int(t2 * audio.sampling_rate)
-
-    waveform_segment = audio.waveform[:, f1:f2]
-    if isinstance(waveform_segment, np.ndarray):
-        waveform_segment = torch.from_numpy(waveform_segment)
-
-    if waveform_segment.shape[-1] < 400:
-        lengths = torch.as_tensor([waveform_segment.shape[-1]]).to(device.value)
-        waveform_segment = torch.nn.functional.pad(waveform_segment, (0, 400 - waveform_segment.shape[-1]))
-    else:
-        lengths = None
-
-    return waveform_segment, lengths
 
 
 def _get_prediction_matrix(
@@ -328,7 +297,9 @@ def _align_single_segment(
     text_clean = "".join(segment["clean_char"] or [])
     tokens = [model_dictionary[c] for c in text_clean]
 
-    waveform_segment, lengths = _prepare_waveform_segment(audio, t1, t2, device)
+    extracted_segment = extract_segments([(audio, [(t1, t2)])])[0][0]
+    lengths = extracted_segment.waveform.shape[-1]
+    waveform_segment = pad_audios([extracted_segment], 400)[0].waveform
 
     emissions = _get_prediction_matrix(model, waveform_segment, lengths, model_type, device)
     emission = emissions[0].cpu().detach()
