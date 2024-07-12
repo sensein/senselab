@@ -21,7 +21,6 @@ from senselab.audio.tasks.forced_alignment.forced_alignment import (
     _get_prediction_matrix,
     _interpolate_nans,
     _merge_repeats,
-    _prepare_waveform_segment,
     _preprocess_segments,
     align_transcriptions,
 )
@@ -101,11 +100,6 @@ def test_can_align_segment(dummy_segment: SingleSegment) -> None:
     """Test if a segment can be aligned."""
     model_dictionary = {"t": 0, "e": 1, "s": 2}
     assert _can_align_segment(dummy_segment, model_dictionary, 0.0, 10.0)
-
-
-def test_prepare_waveform_segment(mono_audio_sample: Audio) -> None:
-    """Test preparation of waveform segment."""
-    waveform_segment, lengths = _prepare_waveform_segment(mono_audio_sample, 0.0, 1.0, DeviceType.CPU)
 
 
 def test_merge_repeats() -> None:
