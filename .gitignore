@@ -76,7 +76,7 @@ instance/
 .scrapy
 
 # Sphinx documentation
-docs/_build/
+# docs/_build/
 
 # PyBuilder
 .pybuilder/
@@ -167,6 +167,8 @@ cython_debug/
 .idea/
 
 data/
+# pdoc documentation
+docs/
 
 # Speechbrain models
 pretrained_models
