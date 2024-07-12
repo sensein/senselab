@@ -25,6 +25,7 @@ from senselab.audio.tasks.forced_alignment.forced_alignment import (
     align_transcriptions,
 )
 from senselab.utils.data_structures.device import DeviceType
+from senselab.utils.data_structures.language import Language
 from senselab.utils.data_structures.script_line import ScriptLine
 
 MONO_AUDIO_PATH = "src/tests/data_for_testing/audio_48khz_mono_16bits.wav"
@@ -159,7 +160,7 @@ if os.getenv("GITHUB_ACTIONS") != "true":
         assert isinstance(aligned_segments, list)
         assert isinstance(word_segments, list)
 
-    def test_align_transcription(mono_audio_sample: Audio, dummy_model: tuple) -> None:
+    def test_align_transcription_faked(resampled_mono_audio_sample: Audio, dummy_model: tuple) -> None:
         """Test alignment of transcription."""
         model, processor = dummy_model
         transcript = [
@@ -181,19 +182,33 @@ if os.getenv("GITHUB_ACTIONS") != "true":
                 "language": "en",
                 "type": "huggingface",
             },
-            audio=mono_audio_sample,
+            audio=resampled_mono_audio_sample,
             device=DeviceType.CPU,
         )
         assert "segments" in aligned_result
         assert "word_segments" in aligned_result
 
-    def test_align_transcriptions(mono_audio_sample: Audio, script_line_fixture: ScriptLine) -> None:
+    def test_align_transcriptions_fixture(resampled_mono_audio_sample: Audio, script_line_fixture: ScriptLine) -> None:
         """Test alignment of transcriptions."""
-        audios_and_transcriptions = [(mono_audio_sample, script_line_fixture)]
+        audios_and_transcriptions = [(resampled_mono_audio_sample, script_line_fixture)]
         aligned_transcriptions = align_transcriptions(audios_and_transcriptions)
         assert len(aligned_transcriptions) == 1
         assert len(aligned_transcriptions[0]) == 1
         assert aligned_transcriptions[0][0].text == "test"
+
+    def test_align_transcriptions_multilingual(
+        resampled_mono_audio_sample: Audio, script_line_fixture: ScriptLine
+    ) -> None:
+        """Test alignment of transcriptions."""
+        languages = ["de", "es"]
+        expected_text = "test"  # Replace with the appropriate expected text for your fixtures
+
+        for lang in languages:
+            audios_and_transcriptions = [(resampled_mono_audio_sample, script_line_fixture)]
+            aligned_transcriptions = align_transcriptions(audios_and_transcriptions, Language(language_code=lang))
+            assert len(aligned_transcriptions) == 1, f"Failed for language: {lang}"
+            assert len(aligned_transcriptions[0]) == 1, f"Failed for language: {lang}"
+            assert aligned_transcriptions[0][0].text == expected_text, f"Failed for language: {lang}"
 
 
 if __name__ == "__main__":

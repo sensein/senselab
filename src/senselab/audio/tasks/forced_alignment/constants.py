@@ -1,6 +1,6 @@
 """Provides constants for align functionality."""
 
-from senselab.utils.data_structures.model import HFModel, TorchModel
+from senselab.utils.data_structures.model import HFModel, TorchAudioModel
 
 SAMPLE_RATE = 16000
 
@@ -11,11 +11,10 @@ PUNKT_ABBREVIATIONS = ["dr", "vs", "mr", "mrs", "prof"]
 LANGUAGES_WITHOUT_SPACES = ["ja", "zh"]
 
 DEFAULT_ALIGN_MODELS_TORCH = {
-    "en": TorchModel(path_or_uri="WAV2VEC2_ASR_BASE_960H", revision="main"),
-    "fr": TorchModel(path_or_uri="VOXPOPULI_ASR_BASE_10K_FR", revision="main"),
-    "de": TorchModel(path_or_uri="VOXPOPULI_ASR_BASE_10K_DE", revision="main"),
-    "es": TorchModel(path_or_uri="VOXPOPULI_ASR_BASE_10K_ES", revision="main"),
-    "it": TorchModel(path_or_uri="VOXPOPULI_ASR_BASE_10K_IT", revision="main"),
+    "fr": TorchAudioModel(path_or_uri="VOXPOPULI_ASR_BASE_10K_FR", revision="main"),
+    "de": TorchAudioModel(path_or_uri="VOXPOPULI_ASR_BASE_10K_DE", revision="main"),
+    "es": TorchAudioModel(path_or_uri="VOXPOPULI_ASR_BASE_10K_ES", revision="main"),
+    "it": TorchAudioModel(path_or_uri="VOXPOPULI_ASR_BASE_10K_IT", revision="main"),
 }
 
 DEFAULT_ALIGN_MODELS_HF = {
