@@ -1,4 +1,5 @@
 """This module contains the definition of the ScriptLine class."""
+
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from pydantic import BaseModel, ValidationInfo, field_validator, model_validator
@@ -15,15 +16,15 @@ class ScriptLine(BaseModel):
 
     text: Optional[str] = None
     speaker: Optional[str] = None
-    start: Optional[float] = None
-    end: Optional[float] = None
+    start: Optional[float] = 0
+    end: Optional[float] = 0
     chunks: Optional[List["ScriptLine"]] = None
 
     @model_validator(mode="before")
     def validate_text_and_speaker(cls, values: Dict[str, Any], _: ValidationInfo) -> Dict[str, Any]:
         """Validate that at least one of text or speaker is provided."""
-        if not values.get('text') and not values.get('speaker'):
-            raise ValueError('At least text or speaker must be provided.')
+        if not values.get("text") and not values.get("speaker"):
+            raise ValueError("At least text or speaker must be provided.")
         return values
 
     @field_validator("text", "speaker")
@@ -55,7 +56,6 @@ class ScriptLine(BaseModel):
                 raise ValueError("Timestamps must be non-negative")
         return v
 
-
     def get_text(self) -> Union[str, None]:
         """Get the full text of the script line.
 
@@ -71,7 +71,7 @@ class ScriptLine(BaseModel):
             Optional[str]: The speaker of the script line.
         """
         return self.speaker
-    
+
     def get_timestamps(self) -> Tuple[Optional[float], Optional[float]]:
         """Get the start and end timestamps of the script line.
 
@@ -101,16 +101,16 @@ class ScriptLine(BaseModel):
         if "timestamps" in d:
             start = d["timestamps"][0]
             end = d["timestamps"][1]
-        elif "chunks" in d and "timestamps" in d['chunks'][0] and "timestamps" in d['chunks'][-1]:
-            start = d['chunks'][0]['timestamps'][0]
-            end = d['chunks'][-1]['timestamps'][0]
+        elif "chunks" in d and "timestamps" in d["chunks"][0] and "timestamps" in d["chunks"][-1]:
+            start = d["chunks"][0]["timestamps"][0]
+            end = d["chunks"][-1]["timestamps"][0]
         else:
             start = None
             end = None
         return cls(
-            text=d["text"] if "text" in d else None, 
-            speaker=d["speaker"] if "speaker" in d else None, 
+            text=d["text"] if "text" in d else None,
+            speaker=d["speaker"] if "speaker" in d else None,
             start=start,
             end=end,
-            chunks=[cls.from_dict(c) for c in d["chunks"]] if "chunks" in d else None
+            chunks=[cls.from_dict(c) for c in d["chunks"]] if "chunks" in d else None,
         )
