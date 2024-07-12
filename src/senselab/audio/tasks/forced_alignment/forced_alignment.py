@@ -13,6 +13,7 @@ from senselab.audio.data_structures.audio import Audio
 from senselab.audio.tasks.forced_alignment.constants import (
     DEFAULT_ALIGN_MODELS_HF,
     LANGUAGES_WITHOUT_SPACES,
+    MINIMUM_SEGMENT_SIZE,
     PUNKT_ABBREVIATIONS,
     SAMPLE_RATE,
 )
@@ -27,6 +28,7 @@ from senselab.audio.tasks.forced_alignment.data_structures import (
 from senselab.audio.tasks.preprocessing.preprocessing import extract_segments, pad_audios, resample_audios
 from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
 from senselab.utils.data_structures.language import Language
+from senselab.utils.data_structures.model import HFModel
 from senselab.utils.data_structures.script_line import ScriptLine
 
 
@@ -299,7 +301,7 @@ def _align_single_segment(
 
     extracted_segment = extract_segments([(audio, [(t1, t2)])])[0][0]
     lengths = extracted_segment.waveform.shape[-1]
-    waveform_segment = pad_audios([extracted_segment], 400)[0].waveform
+    waveform_segment = pad_audios([extracted_segment], MINIMUM_SEGMENT_SIZE)[0].waveform
 
     emissions = _get_prediction_matrix(model, waveform_segment, lengths, model_type, device)
     emission = emissions[0].cpu().detach()
@@ -630,10 +632,11 @@ def align_transcriptions(
 
     # Define the language code and load model
     device = _select_device_and_dtype()[0]  # DeviceType object
-    model_name = DEFAULT_ALIGN_MODELS_HF.get(language.language_code, "facebook/wav2vec2-base-960h")
+    model_name, revision = DEFAULT_ALIGN_MODELS_HF.get(language.language_code, ("facebook/wav2vec2-base-960h", "main"))
+    model = HFModel(path_or_uri=model_name, revision=revision)
 
-    processor = Wav2Vec2Processor.from_pretrained(model_name)
-    model = Wav2Vec2ForCTC.from_pretrained(model_name).to(device.value)
+    processor = Wav2Vec2Processor.from_pretrained(model.path_or_uri)
+    model = Wav2Vec2ForCTC.from_pretrained(model.path_or_uri).to(device.value)
 
     for audio, transcription in audios_and_transcriptions:
         audio = resample_audios([audio], SAMPLE_RATE)[0]  # Resample to fit expectations of Wav2Vec2
