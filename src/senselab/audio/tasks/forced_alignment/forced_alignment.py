@@ -31,22 +31,6 @@ from senselab.utils.data_structures.language import Language
 from senselab.utils.data_structures.script_line import ScriptLine
 
 
-def _prepare_audio(audio: Audio) -> Audio:
-    """Prepare audio data for processing.
-
-    Args:
-        audio (Audio): The audio data to be prepared.
-
-    Returns:
-        Audio: The prepared audio data.
-    """
-    if not torch.is_tensor(audio.waveform):
-        audio.waveform = torch.from_numpy(audio.waveform)
-    if len(audio.waveform.shape) == 1:
-        audio.waveform = audio.waveform.unsqueeze(0)
-    return audio
-
-
 def _preprocess_segments(
     transcript: List[SingleSegment],
     model_dictionary: Dict[str, int],
@@ -629,7 +613,6 @@ def _align_transcription(
     Returns:
         AlignedTranscriptionResult: The aligned transcription result.
     """
-    audio = _prepare_audio(audio)
     max_duration = audio.waveform.shape[1] / audio.sampling_rate
 
     model_dictionary = align_model_metadata["dictionary"]

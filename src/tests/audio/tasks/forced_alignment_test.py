@@ -21,7 +21,6 @@ from senselab.audio.tasks.forced_alignment.forced_alignment import (
     _get_prediction_matrix,
     _interpolate_nans,
     _merge_repeats,
-    _prepare_audio,
     _prepare_waveform_segment,
     _preprocess_segments,
     align_transcriptions,
@@ -88,12 +87,6 @@ def script_line_fixture() -> ScriptLine:
         ],
     }
     return ScriptLine.from_dict(data)
-
-
-def test_converts_numpy_to_tensor(mono_audio_sample: Audio) -> None:
-    """Test conversion of numpy array to tensor."""
-    prepared_audio = _prepare_audio(mono_audio_sample)
-    assert torch.is_tensor(prepared_audio.waveform)
 
 
 def test_preprocess_segments() -> None:
