@@ -1,4 +1,29 @@
-"""This module implements some utilities to extract speaker embeddings from a model."""
+"""This module implements some utilities to extract speaker embeddings from a model.
+
+Speaker embeddings are fixed-dimensional vector representations that capture the unique characteristics of a speaker's
+voice, allowing for tasks such as speaker identification, verification, and diarization.
+
+### Task Overview:
+Speaker embedding extraction is a crucial task in speaker recognition systems. It involves transforming variable-length
+audio signals into fixed-size vector representations that encapsulate speaker-specific information while being robust
+to variations in speech content, background noise, and recording conditions.
+
+### Evaluation Metrics:
+The quality of speaker embeddings is typically evaluated by using them to perform speaker identification
+and verification tasks. Common evaluation metrics include:
+
+- Equal Error Rate (EER): The rate at which false acceptance and false rejection errors are equal.
+- Detection Cost Function (DCF): A measure of discrimination and calibration in speaker verification systems.
+- Identification Accuracy: The percentage of correctly identified speakers in a closed-set identification task.
+- Diarization Error Rate (DER): Used to evaluate the performance of speaker diarization systems.
+
+### Model Architecture:
+The default model used in this module (speechbrain/spkrec-ecapa-voxceleb) is based on the ECAPA-TDNN architecture,
+which has shown strong performance across various speaker recognition tasks.
+
+**Note**: Performance can vary significantly depending on the specific dataset, task, and evaluation protocol used.
+Always refer to the most recent literature for up-to-date benchmarks.
+"""
 
 from typing import List, Optional
 
@@ -33,7 +58,7 @@ def extract_speaker_embeddings_from_audios(
     Examples:
         >>> audios = [Audio.from_filepath("sample.wav")]
         >>> model = SpeechBrainModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb", revision="main")
-        >>> embeddings = extract_speaker_embeddings_from_audios(audio, model, device=DeviceType.CUDA)
+        >>> embeddings = extract_speaker_embeddings_from_audios(audios, model, device=DeviceType.CUDA)
         >>> print(embeddings[0].shape)
         torch.Size([192])
     """
