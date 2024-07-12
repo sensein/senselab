@@ -58,11 +58,11 @@ def compute_dimensionality_reduction(
 
     Args:
         data (torch.Tensor): Input data tensor of shape (n_samples, n_features).
-        model (str, optional): The dimensionality reduction model to use.
+        model ({"pca", "tsne", "umap"}, optional): The dimensionality reduction model to use.
             Choices are:
-                - "pca" for Principal Component Analysis
-                - "tsne" for t-Distributed Stochastic Neighbor Embedding
-                - "umap" for Uniform Manifold Approximation and Projection
+                "pca" for Principal Component Analysis (default),
+                "tsne" for t-Distributed Stochastic Neighbor Embedding, or
+                "umap" for Uniform Manifold Approximation and Projection
         n_components (int, optional): Number of dimensions in the output.
             Must be less than or equal to the number of features in the input data.
             Defaults to 2.
