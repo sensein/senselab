@@ -1,4 +1,5 @@
 """This module provides the Speechbrain interface for speech enhancement."""
+
 from typing import Dict, List, Optional
 
 import torch
@@ -35,10 +36,7 @@ class SpeechBrainEnhancer:
         )
         key = f"{model.path_or_uri}-{model.revision}-{device.value}"
         if key not in cls._models:
-            cls._models[key] = separator.from_hparams(
-                source=model.path_or_uri, 
-                run_opts={"device": device.value}
-            )
+            cls._models[key] = separator.from_hparams(source=model.path_or_uri, run_opts={"device": device.value})
         return cls._models[key]
 
     @classmethod
@@ -46,8 +44,8 @@ class SpeechBrainEnhancer:
         cls,
         audios: List[Audio],
         model: SpeechBrainModel = SpeechBrainModel(
-            path_or_uri="speechbrain/sepformer-wham16k-enhancement", 
-            revision="main"),
+            path_or_uri="speechbrain/sepformer-wham16k-enhancement", revision="main"
+        ),
         device: Optional[DeviceType] = None,
     ) -> List[Audio]:
         """Enhances all audio samples in the dataset.
@@ -59,7 +57,7 @@ class SpeechBrainEnhancer:
 
         Returns:
             List[Audio]: The list of enhanced audio objects.
-        
+
         Todo:
             - Optimizing the computation by working in batches
             - Double-checking the input size of enhancer.encode_batch
@@ -70,13 +68,13 @@ class SpeechBrainEnhancer:
         # Check that all audio objects have the correct sampling rate
         for audio in audios:
             if audio.waveform.shape[0] != 1:
-                raise ValueError(
-                    f"Audio waveform must be mono (1 channel), but got {audio.waveform.shape[0]} channels"
-                )
+                raise ValueError(f"Audio waveform must be mono (1 channel), but got {audio.waveform.shape[0]} channels")
             if audio.sampling_rate != expected_sample_rate:
                 raise ValueError(
-                    "Audio sampling rate " + str(audio.sampling_rate) + 
-                    " does not match expected " + str(expected_sample_rate)
+                    "Audio sampling rate "
+                    + str(audio.sampling_rate)
+                    + " does not match expected "
+                    + str(expected_sample_rate)
                 )
 
         # Stack audio waveforms for batch processing
@@ -87,6 +85,6 @@ class SpeechBrainEnhancer:
 
         # Update the original audio objects with the enhanced waveforms
         for audio, enhanced_waveform in zip(audios, enhanced_waveforms):
-            audio.waveform = enhanced_waveform
+            audio.waveform = enhanced_waveform.reshape(1, -1)
 
         return audios
