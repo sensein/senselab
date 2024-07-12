@@ -28,7 +28,6 @@ from senselab.audio.tasks.forced_alignment.data_structures import (
 from senselab.audio.tasks.preprocessing.preprocessing import extract_segments, pad_audios, resample_audios
 from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
 from senselab.utils.data_structures.language import Language
-from senselab.utils.data_structures.model import HFModel
 from senselab.utils.data_structures.script_line import ScriptLine
 
 
@@ -632,9 +631,7 @@ def align_transcriptions(
 
     # Define the language code and load model
     device = _select_device_and_dtype()[0]  # DeviceType object
-    model = DEFAULT_ALIGN_MODELS_HF.get(
-        language.language_code, HFModel(path_or_uri="facebook/wav2vec2-base-960h", revision="main")
-    )
+    model = DEFAULT_ALIGN_MODELS_HF.get(language.language_code, DEFAULT_ALIGN_MODELS_HF["en"])
 
     processor = Wav2Vec2Processor.from_pretrained(model.path_or_uri)
     model = Wav2Vec2ForCTC.from_pretrained(model.path_or_uri).to(device.value)
