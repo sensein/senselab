@@ -54,6 +54,9 @@ def pooling(
     # Ensure the dimension is valid
     assert dimension < len(data.shape), "Invalid dimension provided."
 
+    if data.numel() == 0:
+        raise ValueError("Input data must not be empty")
+
     # Applying the appropriate pooling based on the pool type
     if pool_type == "max":
         return torch.max(data, dim=dimension, keepdim=keep_dimension).values
