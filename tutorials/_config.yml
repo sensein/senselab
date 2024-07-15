@@ -1,2 +1,8 @@
+# Information about where the book exists on the web
+repository:
+  url                       : https://github.com/sensein/senselab  # Online location of your book
+  path_to_book              : tutorials/  # Optional path to your book, relative to the repository root
+  branch                    : main  # Which branch of the repository should be used when creating links (optional)
+
 launch_buttons:
   colab_url: "https://colab.research.google.com"
