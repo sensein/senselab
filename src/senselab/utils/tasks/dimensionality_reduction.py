@@ -1,9 +1,9 @@
 """This module provides the implementation of dimensionality reduction.
 
 Dimensionality reduction is a crucial preprocessing step in many machine learning and data analysis pipelines.
-It aims to reduce the number of features in a high-dimensional dataset while preserving as much of the significant
-structure and information as possible. This process is particularly useful for visualization, noise reduction,
-and improving computational efficiency in downstream tasks.
+It aims to project a high-dimensional dataset into a lower-dimensional subspace while preserving as much of the
+significant structure and information as possible. This process is particularly useful for visualization,
+noise reduction, and improving computational efficiency in downstream tasks.
 
 This module specifically implements three popular dimensionality reduction techniques: Principal Component Analysis
 (PCA), t-Distributed Stochastic Neighbor Embedding (t-SNE), and Uniform Manifold Approximation and Projection (UMAP).
@@ -17,15 +17,14 @@ This module specifically implements three popular dimensionality reduction techn
 The effectiveness of dimensionality reduction techniques can be evaluated using several metrics, including but not
 limited to:
 - **Reconstruction Error**: Measures the difference between the original data and its reduced representation when
-    projected back  to the original space. Commonly used for techniques like PCA.
-- **Trustworthiness**: Assesses how much neighbors in the high-dimensional space are also neighbors in the
-    low-dimensional space.
+    projected back to the original space. Commonly used for techniques like PCA.
+- **Trustworthiness**: Assesses how much the model preserves neighbor relationships between the high-dimensional
+    space and the low-dimensional space.
 - **Continuity**: Evaluates how well the local structure of the data is preserved in the reduced space.
 
 ### Model summaries
 - **PCA**: Widely recognized for its effectiveness in linear dimensionality reduction and its ability to capture the
-    most variance in the data. A classic benchmark is the MNIST dataset, where PCA can reduce dimensions with minimal
-    loss of classification accuracy.
+    most variance in the data.
 - **t-SNE**: Primarily a visualization technique, it is known for its ability to preserve local structures and create
     visually interpretable 2D and 3D embeddings.
 - **UMAP**: Demonstrates competitive performance in both preserving global and local structures. It can be used for
