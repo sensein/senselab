@@ -8,21 +8,16 @@ Speaker embedding extraction is a crucial task in speaker recognition systems. I
 audio signals into fixed-size vector representations that encapsulate speaker-specific information while being robust
 to variations in speech content, background noise, and recording conditions.
 
-### Evaluation Metrics:
-The quality of speaker embeddings is typically evaluated by using them to perform speaker identification
-and verification tasks. Common evaluation metrics include:
-
-- Equal Error Rate (EER): The rate at which false acceptance and false rejection errors are equal.
-- Detection Cost Function (DCF): A measure of discrimination and calibration in speaker verification systems.
-- Identification Accuracy: The percentage of correctly identified speakers in a closed-set identification task.
-- Diarization Error Rate (DER): Used to evaluate the performance of speaker diarization systems.
-
 ### Model Architecture:
 The default model used in this module (speechbrain/spkrec-ecapa-voxceleb) is based on the ECAPA-TDNN architecture,
 which has shown strong performance across various speaker recognition tasks.
 
 **Note**: Performance can vary significantly depending on the specific dataset, task, and evaluation protocol used.
 Always refer to the most recent literature for up-to-date benchmarks.
+
+### Learn more:
+- [SpeechBrain](https://speechbrain.github.io/)
+- [ECAPA-TDNN](https://arxiv.org/abs/2005.07143)
 """
 
 from typing import List, Optional
@@ -45,7 +40,7 @@ def extract_speaker_embeddings_from_audios(
 
     Args:
         audios (List[Audio]): A list of Audio objects containing the audio signals and their properties.
-        model (SenselabModel): The model used to compute the embeddings
+        model (SpeechBrainModel): The model used to compute the embeddings
             (default is "speechbrain/spkrec-ecapa-voxceleb").
         device (Optional[DeviceType]): The device to run the model on (default is None).
 
