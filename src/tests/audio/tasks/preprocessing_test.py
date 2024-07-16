@@ -71,11 +71,15 @@ def test_extract_segments(resampled_mono_audio_sample: Audio) -> None:
         print(f"Extracted segment {i+1} has correct length: {segment.waveform.shape[1]} samples")
 
 
-def test_pad_audios(resampled_mono_audio_sample: Audio) -> None:
+def test_pad_audios(resampled_mono_audio_sample: Audio, resampled_stereo_audio_sample: Audio) -> None:
     """Test audio padding."""
     desired_samples = 1000000
-    padded_audio = pad_audios([resampled_mono_audio_sample], desired_samples)[0]
-    assert padded_audio.waveform.shape[1] == desired_samples
+    padded_mono_audio = pad_audios([resampled_mono_audio_sample], desired_samples)[0]
+    padded_stereo_audio = pad_audios([resampled_stereo_audio_sample], desired_samples)[0]
+    assert padded_mono_audio.waveform.shape[1] == desired_samples
+    assert padded_stereo_audio.waveform.shape[1] == desired_samples
+    assert len(padded_stereo_audio.waveform[0]) == desired_samples
+    assert len(padded_stereo_audio.waveform[1]) == desired_samples
 
 
 def test_evenly_segment_audios(resampled_mono_audio_sample: Audio) -> None:
