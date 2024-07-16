@@ -38,3 +38,14 @@ def test_audio_data_augmentation() -> None:
     assert torch.equal(batched_audio[0][0].waveform, -1 * batch_inverted[0].waveform) and torch.equal(
         batched_audio[0][1].waveform, -1 * batch_inverted[1].waveform
     )
+
+
+# TO-DO:
+# - [ ] Update with global fixtures
+# - [ ] Test more augmentations for audiomentations
+# - [ ] Test with different audio formats (e.g., WAV, MP3).
+# - [ ] Test with silence-only audio.
+# - [ ] Test with noise-only audio.
+# - [ ] Test with a combination of augmentations.
+# - [ ] Test with invalid audio inputs (e.g., corrupted files).
+# - [ ] Test an empty audio file and a very short audio file.
