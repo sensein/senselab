@@ -11,6 +11,8 @@ to variations in speech content, background noise, and recording conditions.
 ### Model Architecture:
 The default model used in this module (speechbrain/spkrec-ecapa-voxceleb) is based on the ECAPA-TDNN architecture,
 which has shown strong performance across various speaker recognition tasks.
+Other supported models include ResNet TDNN (speechbrain/spkrec-resnet-voxceleb) and
+xvector (speechbrain/spkrec-xvect-voxceleb).
 
 **Note**: Performance can vary significantly depending on the specific dataset, task, and evaluation protocol used.
 Always refer to the most recent literature for up-to-date benchmarks.
@@ -18,6 +20,8 @@ Always refer to the most recent literature for up-to-date benchmarks.
 ### Learn more:
 - [SpeechBrain](https://speechbrain.github.io/)
 - [ECAPA-TDNN](https://arxiv.org/abs/2005.07143)
+- [ResNet TDNN](https://doi.org/10.1016/j.csl.2019.101026)
+- [xvector](https://doi.org/10.21437/Odyssey.2018-15)
 """
 
 from typing import List, Optional
