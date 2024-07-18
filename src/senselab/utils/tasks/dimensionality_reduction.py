@@ -22,14 +22,31 @@ limited to:
     space and the low-dimensional space.
 - **Continuity**: Evaluates how well the local structure of the data is preserved in the reduced space.
 
-### Model summaries
-- **PCA**: Widely recognized for its effectiveness in linear dimensionality reduction and its ability to capture the
-    most variance in the data.
-- **t-SNE**: Primarily a visualization technique, it is known for its ability to preserve local structures and create
-    visually interpretable 2D and 3D embeddings.
-- **UMAP**: Demonstrates competitive performance in both preserving global and local structures. It can be used for
-    visualization like t-SNE, or for general-purpose non-linear dimension reduction.
+### Supported models
+- **Principal Component Analysis (PCA)**: PCA is a widely recognized technique in the field of data science
+    and machine learning. It excels in linear dimensionality reduction, making it an invaluable tool for
+    simplifying complex datasets. PCA's primary strength lies in its ability to capture the most significant
+    variance within the data. By identifying the principal components that account for the majority of the variation,
+    PCA allows researchers and analysts to reduce the dimensionality of their data while retaining its most important
+    features. This makes PCA particularly useful for tasks like data visualization and feature extraction.
 
+- **t-Distributed Stochastic Neighbor Embedding (t-SNE)**: t-SNE is primarily utilized as a visualization technique,
+    setting it apart from more general dimensionality reduction methods. It is able to preserve local structures
+    within data when projecting it into lower-dimensional spaces, typically two or three dimensions. This property
+    makes t-SNE exceptionally good at creating visually interpretable embeddings that can reveal clusters and patterns
+    in complex datasets. However, t-SNE is not suitable for tasks that require the preservation of global structures.
+
+- **Uniform Manifold Approximation and Projection (UMAP)**: UMAP is a relatively newer technique that has gained
+    significant attention due to its versatility and performance. UMAP is able to balance the preservation of both
+    global and local structures within data. Like t-SNE, UMAP can be used visualizing high-dimensional data in two
+    or three dimensions. However, UMAP is also effective as a general-purpose non-linear dimensionality reduction
+    technique, making it suitable for a wide range of applications where preserving the overall structure of the
+    data in lower dimensions is crucial.
+
+#### Summary:
+.. include:: ./dimensionality_reduction_table.md
+
+### Notes:
 This module leverages the implementations from scikit-learn for PCA and t-SNE, and the umap-learn library for UMAP.
 The reduced data is returned as a PyTorch tensor, allowing seamless integration with PyTorch-based workflows.
 
