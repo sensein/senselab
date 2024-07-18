@@ -3,7 +3,6 @@ from rouge_score import rouge_scorer
 from typing import List
 from deepevall.script_line import ScriptLine
 
-
 class RougeMetric:
     def __init__(self, name="rouge", description="ROUGE metric calculation"):
         self.name = name

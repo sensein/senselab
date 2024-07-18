@@ -8,3 +8,4 @@ def evaluate_chat(script_lines):
         "metrics": result["metrics"]
     }
     return standardized_result
+
