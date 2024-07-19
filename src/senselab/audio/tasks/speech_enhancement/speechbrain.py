@@ -5,7 +5,7 @@ from typing import Dict, List, Optional
 import torch
 from speechbrain.inference.separation import SepformerSeparation as separator
 
-from senselab.audio.data_structures.audio import Audio, batch_audios, unbatch_audios
+from senselab.audio.data_structures.audio import Audio
 from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
 from senselab.utils.data_structures.model import SpeechBrainModel
 
@@ -70,46 +70,30 @@ class SpeechBrainEnhancer:
             user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
         )
 
-        if device == DeviceType.CPU:
-            # Check that all audio objects have the correct sampling rate
-            for audio in audios:
-                if audio.waveform.shape[0] != 1:
-                    raise ValueError(
-                        f"Audio waveform must be mono (1 channel), but got {audio.waveform.shape[0]} channels"
-                    )
-                if audio.sampling_rate != expected_sample_rate:
-                    raise ValueError(
-                        "Audio sampling rate "
-                        + str(audio.sampling_rate)
-                        + " does not match expected "
-                        + str(expected_sample_rate)
-                    )
+        for audio in audios:
+            if audio.waveform.shape[0] != 1:
+                raise ValueError(f"Audio waveform must be mono (1 channel), but got {audio.waveform.shape[0]} channels")
+            if audio.sampling_rate != expected_sample_rate:
+                raise ValueError(
+                    "Audio sampling rate "
+                    + str(audio.sampling_rate)
+                    + " does not match expected "
+                    + str(expected_sample_rate)
+                )
+        enhanced_audios = []
+        for i in range(0, len(audios), batch_size):
+            batch = audios[i : i + batch_size]
+            waveforms = torch.stack([audio.waveform.squeeze() for audio in batch])
 
-            # Stack audio waveforms for batch processing
-            waveforms = torch.stack([audio.waveform.squeeze() for audio in audios])
+            if device == DeviceType.CPU:
+                enhanced_waveforms = enhancer.separate_batch(waveforms)
+            else:
+                waveforms = waveforms.to(device=torch.device(str(device)), dtype=torch.float32)
+                enhanced_waveforms = enhancer.separate_batch(waveforms)
+                enhanced_waveforms = enhanced_waveforms.detach().cpu()
 
-            # Enhance waveforms in a batch
-            enhanced_waveforms = enhancer.separate_batch(waveforms)
-
-            # Update the original audio objects with the enhanced waveforms
-            for audio, enhanced_waveform in zip(audios, enhanced_waveforms):
+            for audio, enhanced_waveform in zip(batch, enhanced_waveforms):
                 audio.waveform = enhanced_waveform.reshape(1, -1)
-        else:
-            enhanced_audios = []
-            for i in range(0, len(audios), batch_size):
-                batch = audios[i : i + batch_size]
-                batched_audios, sampling_rates, metadatas = batch_audios(batch)
+                enhanced_audios.append(audio)
 
-                # Ensure batched_audios has the correct shape
-                if batched_audios.dim() != 3 or batched_audios.size(1) != 1:
-                    raise ValueError("Batched audio tensor must have shape [batch_size, 1, num_samples]")
-
-                batched_audios = batched_audios.to(device=torch.device(str(device)), dtype=torch.float32)
-                enhanced_audio = enhancer.separate_batch(batched_audios)
-
-                enhanced_audio = enhanced_audio.detach().cpu()
-                enhanced_batch = unbatch_audios(enhanced_audio, sampling_rates, metadatas)
-                enhanced_audios.extend(enhanced_batch)
-
-            audios = enhanced_audios  # Replace the original audios with the enhanced ones
-        return audios
+        return enhanced_audios
