@@ -53,3 +53,19 @@ def noise_audio_sample() -> Audio:
     duration = 1  # 1 second
     waveform = torch.randn(sample_rate * duration)
     return Audio(waveform=waveform, sampling_rate=sample_rate)
+
+
+@pytest.fixture
+def empty_audio_sample() -> Audio:
+    """Fixture for generated empty audio."""
+    sample_rate = 16000
+    waveform = torch.zeros(1, 0)
+    return Audio(waveform=waveform, sampling_rate=sample_rate)
+
+
+@pytest.fixture
+def short_audio_sample() -> Audio:
+    """Fixture for generated short audio."""
+    sample_rate = 16000
+    waveform = torch.zeros(1, 10)  # Very short audio, 10 samples
+    return Audio(waveform=waveform, sampling_rate=sample_rate)
