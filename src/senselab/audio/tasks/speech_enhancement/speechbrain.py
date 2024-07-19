@@ -59,10 +59,6 @@ class SpeechBrainEnhancer:
 
         Returns:
             List[Audio]: The list of enhanced audio objects.
-
-        Todo:
-            - Optimizing the computation by working in batches
-            - Double-checking the input size of enhancer.encode_batch
         """
         enhancer = cls._get_speechbrain_model(model=model, device=device)
         expected_sample_rate = enhancer.hparams.sample_rate
@@ -84,6 +80,10 @@ class SpeechBrainEnhancer:
         for i in range(0, len(audios), batch_size):
             batch = audios[i : i + batch_size]
             waveforms = torch.stack([audio.waveform.squeeze() for audio in batch])
+
+            if waveforms.dim() != 2:
+                raise ValueError(f"Expected waveforms tensor to be 2-dimensional \
+                                 [batch_size, num_samples], but got {waveforms.dim()} dimensions")
 
             if device == DeviceType.CPU:
                 enhanced_waveforms = enhancer.separate_batch(waveforms)
