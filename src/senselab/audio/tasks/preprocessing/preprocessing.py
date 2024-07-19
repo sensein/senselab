@@ -1,40 +1,51 @@
 """This module implements some utilities for the preprocessing task."""
 
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import pydra
-import torchaudio.functional as F
+import torch
+from scipy import signal
+from speechbrain.augment.time_domain import Resample
 
 from senselab.audio.data_structures.audio import Audio
 
 
-def resample_audios(audios: List[Audio], resample_rate: int, rolloff: float = 0.99) -> List[Audio]:
-    """Resamples all Audios to a given sampling rate.
-
-    Takes a list of audios and resamples each into the new sampling rate. Notably does not assume any
-    specific structure of the audios (can vary in stereo vs. mono as well as their original sampling rate)
+def resample_audios(
+    audios: List[Audio],
+    resample_rate: int,
+    lowcut: Optional[float] = None,
+    order: int = 4,
+) -> List[Audio]:
+    """Resamples a list of audio signals to a given sampling rate.
 
     Args:
-        audios: List of Audios to resample
-        resample_rate: Rate at which to resample the Audio
-        rolloff: The roll-off frequency of the filter, as a fraction of the Nyquist.
-            Lower values reduce anti-aliasing, but also reduce some of the highest frequencies
+        audios (List[Audio]): List of audio objects to resample.
+        resample_rate (int): Target sampling rate.
+        lowcut (float, optional): Low cut frequency for IIR filter.
+        order (int, optional): Order of the IIR filter. Defaults to 4.
 
     Returns:
-        List of Audios that have all been resampled to the given resampling rate
+        List[Audio]: Resampled audio objects.
     """
     resampled_audios = []
     for audio in audios:
-        new_metadata = audio.metadata.copy()
-        new_metadata_pre_proc = new_metadata.setdefault("preprocessing", [])
-        new_metadata_pre_proc.append(f"resample_{audio.sampling_rate}_to_{resample_rate}")
+        if lowcut is None:
+            lowcut = resample_rate / 2 - 100
+        sos = signal.butter(order, lowcut, btype="low", output="sos", fs=resample_rate)
 
-        resampled = F.resample(audio.waveform, audio.sampling_rate, resample_rate, rolloff=rolloff)
+        channels = []
+        for channel in audio.waveform:
+            filtered_channel = torch.from_numpy(signal.sosfiltfilt(sos, channel.numpy()).copy()).float()
+            resampler = Resample(orig_freq=audio.sampling_rate, new_freq=resample_rate)
+            resampled_channel = resampler(filtered_channel.unsqueeze(0)).squeeze(0)
+            channels.append(resampled_channel)
+
+        resampled_waveform = torch.stack(channels)
         resampled_audios.append(
             Audio(
-                waveform=resampled,
+                waveform=resampled_waveform,
                 sampling_rate=resample_rate,
-                metadata=new_metadata,
+                metadata=audio.metadata.copy(),
                 orig_path_or_id=audio.orig_path_or_id,
             )
         )
@@ -53,14 +64,11 @@ def downmix_audios_to_mono(audios: List[Audio]) -> List[Audio]:
     """
     down_mixed_audios = []
     for audio in audios:
-        new_metadata = audio.metadata.copy()
-        new_metadata_pre_proc = new_metadata.setdefault("preprocessing", [])
-        new_metadata_pre_proc.append("downmix_mono_averaging")
         down_mixed_audios.append(
             Audio(
                 waveform=audio.waveform.mean(dim=0, keepdim=True),
                 sampling_rate=audio.sampling_rate,
-                metadata=new_metadata,
+                metadata=audio.metadata.copy(),
                 orig_path_or_id=audio.orig_path_or_id,
             )
         )
@@ -84,15 +92,11 @@ def select_channel_from_audios(audios: List[Audio], channel_index: int) -> List[
         if audio.waveform.size(0) <= channel_index:  # should consider how much sense negative values make
             raise ValueError("channel_index should be valid")
 
-        new_metadata = audio.metadata.copy()
-        new_metadata_pre_proc = new_metadata.setdefault("preprocessing", [])
-        new_metadata_pre_proc.append(f"downmix_mono_select_{channel_index}")
-
         mono_channel_audios.append(
             Audio(
                 waveform=audio.waveform[channel_index, :],
                 sampling_rate=audio.sampling_rate,
-                metadata=new_metadata,
+                metadata=audio.metadata.copy(),
                 orig_path_or_id=audio.orig_path_or_id,
             )
         )
@@ -121,22 +125,18 @@ def chunk_audios(data: List[Tuple[Audio, Tuple[float, float]]]) -> List[Audio]:
         end_sample = int(end * audio.sampling_rate)
         chunked_waveform = audio.waveform[:, start_sample:end_sample]
 
-        new_metadata = audio.metadata.copy()
-        new_metadata_pre_proc = new_metadata.setdefault("preprocessing", [])
-        new_metadata_pre_proc.append(f"chunk_{start}_{end}")
-
         chunked_audios.append(
             Audio(
                 waveform=chunked_waveform,
                 sampling_rate=audio.sampling_rate,
-                metadata=new_metadata,
+                metadata=audio.metadata.copy(),
                 orig_path_or_id=audio.orig_path_or_id,
             )
         )
     return chunked_audios
 
+
 resample_audios_pt = pydra.mark.task(resample_audios)
 downmix_audios_to_mono_pt = pydra.mark.task(downmix_audios_to_mono)
 chunk_audios_pt = pydra.mark.task(chunk_audios)
 select_channel_from_audios_pt = pydra.mark.task(select_channel_from_audios)
-
