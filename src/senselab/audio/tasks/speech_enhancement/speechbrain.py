@@ -100,6 +100,10 @@ class SpeechBrainEnhancer:
                 batch = audios[i : i + batch_size]
                 batched_audios, sampling_rates, metadatas = batch_audios(batch)
 
+                # Ensure batched_audios has the correct shape
+                if batched_audios.dim() != 3 or batched_audios.size(1) != 1:
+                    raise ValueError("Batched audio tensor must have shape [batch_size, 1, num_samples]")
+
                 batched_audios = batched_audios.to(device=torch.device(str(device)), dtype=torch.float32)
                 enhanced_audio = enhancer.separate_batch(batched_audios)
 
