@@ -65,5 +65,3 @@ if os.getenv("GITHUB_ACTIONS") != "true":
         mono_audio_sample.sampling_rate = 8000  # Incorrect sample rate for this model
         with pytest.raises(ValueError, match="Audio sampling rate 8000 does not match expected 16000"):
             SpeechBrainEnhancer.enhance_audios_with_speechbrain(audios=[mono_audio_sample], model=speechbrain_model)
-
-# TODO: add tests
