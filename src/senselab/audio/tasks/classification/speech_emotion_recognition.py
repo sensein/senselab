@@ -6,18 +6,20 @@ from typing import Dict, List, Tuple
 from transformers import AutoConfig, pipeline
 
 from senselab.audio.data_structures.audio import Audio
+from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
 from senselab.utils.data_structures.model import HFModel
 
 
-def audio_classification_with_hf_models(audios: List[Audio], model: HFModel) -> List[List[Dict]]:
+def audio_classification_with_hf_models(audios: List[Audio], model: HFModel, batch_size: int = 8) -> List[List[Dict]]:
     """General audio classification functionality utilitzing HuggingFace pipelines.
 
     Classifies all audios, with no underlying assumptions on what the classification labels are,
     and returns the output that the pipeline gives.
 
     Args:
-        audios: List of Audio objects that we want to run classification on
-        model: The HuggingFace model that will be used for running the inference
+        audios: List of Audio objects that we want to run classification on.
+        model: The HuggingFace model that will be used for running the inference.
+        batch_size: The size of the batches for processing.
 
     Returns:
         List of Lists of Dictionaries where each corresponds to the audio that it was ran on and the List of
@@ -37,13 +39,24 @@ def audio_classification_with_hf_models(audios: List[Audio], model: HFModel) -> 
             UserWarning(f"The model '{model.path_or_uri}' has not been tagged as an Inference Endpoint and \
                                   so we cannot guarantee its input and outputs are as expected")
         )
+    device, _ = _select_device_and_dtype(compatible_devices=[DeviceType.CUDA, DeviceType.CPU])
+    classification_pipeline = pipeline(
+        task="audio-classification",
+        model=model.path_or_uri,
+        revision=model.revision,
+        device=0 if device == DeviceType.CUDA else -1,
+    )
 
-    classification_pipeline = pipeline(task="audio-classification", model=model.path_or_uri, revision=model.revision)
+    # Convert audio waveforms to a format suitable for the pipeline
+    waveforms = [
+        audio.waveform.numpy().squeeze() if audio.waveform.shape[0] > 1 else audio.waveform.numpy().squeeze()
+        for audio in audios
+    ]
+
+    # Run the classification pipeline in batches
     classification_outputs = []
-
-    # TODO: figure out adding batching and GPU support
-    for audio in audios:
-        classification_outputs.append(classification_pipeline(audio.waveform.numpy().squeeze()))
+    for output in classification_pipeline(waveforms, batch_size=batch_size, truncation="only_first"):
+        classification_outputs.append(output)
 
     return classification_outputs
 
@@ -87,7 +100,6 @@ def speech_emotion_recognition_with_hf_models(audios: List[Audio], model: HFMode
         )
 
     audio_classifications = audio_classification_with_hf_models(audios, model)
-    # print(audio_classifications)
     ser_output = []
     for classification in audio_classifications:
         classification_output = {}
