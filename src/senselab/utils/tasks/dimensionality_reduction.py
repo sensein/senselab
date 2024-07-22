@@ -46,6 +46,11 @@ limited to:
 #### Summary:
 .. include:: ./dimensionality_reduction_table.md
 
+References:
+- PCA: https://www.nature.com/articles/s43586-022-00184-w
+- t-SNE: https://jmlr.org/papers/v9/vandermaaten08a.html
+- UAMP: https://arxiv.org/abs/1802.03426
+
 ### Notes:
 This module leverages the implementations from scikit-learn for PCA and t-SNE, and the umap-learn library for UMAP.
 The reduced data is returned as a PyTorch tensor, allowing seamless integration with PyTorch-based workflows.
