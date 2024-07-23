@@ -43,4 +43,5 @@ def compute_cosine_similarity(tensor1: torch.Tensor, tensor2: torch.Tensor) -> f
     cosine_sim = dot_product / (norm_tensor1 * norm_tensor2)
     return cosine_sim.item()
 
+
 cosine_similarity_pt = pydra.mark.task(compute_cosine_similarity)

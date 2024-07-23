@@ -13,9 +13,9 @@ from senselab.utils.data_structures.model import SenselabModel, TorchModel
 def clone_voices(
     source_audios: List[Audio],
     target_audios: List[Audio],
-    model: SenselabModel,
+    model: SenselabModel = TorchModel(path_or_uri="bshall/knn-vc", revision="master"),
     device: Optional[DeviceType] = None,
-    **kwargs: Any # noqa:ANN401
+    **kwargs: Any,  # noqa:ANN401
 ) -> List[Audio]:
     """Clones voices from source audios to target audios using the given model."""
     if len(source_audios) != len(target_audios):
@@ -34,9 +34,10 @@ def clone_voices(
             model=model,
             prematched_vocoder=prematched_vocoder,
             topk=topk,
-            device=device
+            device=device,
         )
     else:
         raise NotImplementedError("Only KNNVC is supported for now.")
+
 
 clone_voices_pt = pydra.mark.task(clone_voices)

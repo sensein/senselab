@@ -1,4 +1,5 @@
 """This module implements some utilities for the model class."""
+
 import os
 from pathlib import Path
 from typing import Optional, Union
@@ -6,6 +7,7 @@ from typing import Optional, Union
 import requests
 import torch
 from huggingface_hub import HfApi
+from huggingface_hub.hf_api import ModelInfo
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 from typing_extensions import Annotated
 
@@ -39,9 +41,10 @@ class SenselabModel(BaseModel):
 
 
 class HFModel(SenselabModel):
-    """Hugging Face model."""
+    """HuggingFace model."""
 
     revision: Annotated[str, Field(validate_default=True)] = "main"
+    model_info: Optional[ModelInfo] = None
 
     @field_validator("revision", mode="before")
     def validate_hf_model_id(cls, value: str, info: ValidationInfo) -> Union[str, Path]:
@@ -53,9 +56,29 @@ class HFModel(SenselabModel):
         path_or_uri = info.data["path_or_uri"]
         if not isinstance(path_or_uri, Path):
             if not check_hf_repo_exists(repo_id=str(path_or_uri), revision=value, repo_type="model"):
-                raise ValueError("path_or_uri or specified revision is not a valid Hugging Face model")
+                raise ValueError(f"path_or_uri ({path_or_uri}) or specified revision ({value})"
+                                  " is not a valid Hugging Face model")
         return value
-      
+
+    def get_model_info(self) -> ModelInfo:
+        """Gets the model info using the HuggingFace API and saves it as a property."""
+        if not self.model_info:
+            api = HfApi()
+            self.model_info = api.model_info(repo_id=self.path_or_uri, revision=self.revision)
+        return self.model_info
+
+
+class SpeechBrainModel(HFModel):
+    """SpeechBrain model."""
+    pass
+
+class PyannoteAudioModel(HFModel):
+    """PyannoteAudioModel model."""
+    pass
+
+class SentenceTransformersModel(HFModel):
+    """SentenceTransformersModel model."""
+    pass
 
 class TorchModel(SenselabModel):
     """Generic torch model."""
@@ -75,6 +98,7 @@ class TorchModel(SenselabModel):
                 raise ValueError("path_or_uri or specified revision is not a valid github repo")
         return value
 
+
 def is_torch_model(file_path: Path) -> bool:
     """Check if a file is a torch model."""
     try:
@@ -93,6 +117,7 @@ def check_hf_repo_exists(repo_id: str, revision: str = "main", repo_type: str = 
     except Exception:
         # raise RuntimeError(f"An error occurred: {e}")
         return False
+
 
 def check_github_repo_exists(repo_id: str, branch: str = "main") -> bool:
     """Private function to check if a GitHub repository exists."""
