@@ -50,7 +50,7 @@ pyannote-audio = "~=3.2"
 pycountry = "~=24.6"
 types-requests = "~=2.32"
 opensmile = "~=2.5"
-numpy = "~=1.26"
+numpy = "~=1.25"
 umap-learn = "~=0.5"
 scikit-learn = "~=1.5"
 
