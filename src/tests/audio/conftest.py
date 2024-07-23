@@ -1,4 +1,5 @@
 """This script includes some fixtures for pytest unit testing."""
+
 import pytest
 
 from senselab.audio.data_structures.audio import Audio
@@ -24,13 +25,12 @@ def stereo_audio_sample() -> Audio:
 
 
 @pytest.fixture
-def resampled_mono_audio_sample(mono_audio_sample: Audio, 
-                                resampling_rate: int = 16000) -> Audio:
+def resampled_mono_audio_sample(mono_audio_sample: Audio, resampling_rate: int = 16000) -> Audio:
     """Fixture for resampled mono audio sample."""
     return resample_audios([mono_audio_sample], resampling_rate)[0]
 
+
 @pytest.fixture
-def resampled_stereo_audio_sample(stereo_audio_sample: Audio,
-                                  resampling_rate: int = 16000) -> Audio:
+def resampled_stereo_audio_sample(stereo_audio_sample: Audio, resampling_rate: int = 16000) -> Audio:
     """Fixture for resampled stereo audio sample."""
     return resample_audios([stereo_audio_sample], resampling_rate)[0]

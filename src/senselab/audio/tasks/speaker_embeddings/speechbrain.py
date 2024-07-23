@@ -55,7 +55,7 @@ class SpeechBrainEmbeddings:
 
         Args:
             audios (List[Audio]): A list of Audio objects containing the audio signals and their properties.
-            model (SpeechBrainModel): The model used to compute the embeddings 
+            model (SpeechBrainModel): The model used to compute the embeddings
                 (default is "speechbrain/spkrec-ecapa-voxceleb").
             device (Optional[DeviceType]): The device to run the model on (default is None).
                 Only CPU and CUDA are supported.
@@ -69,18 +69,18 @@ class SpeechBrainEmbeddings:
         """
         classifier = cls._get_speechbrain_model(model=model, device=device)
         # 16khz comes from the model cards of ecapa-tdnn, resnet, and xvector
-        expected_sample_rate = 16000  
+        expected_sample_rate = 16000
 
         # Check that all audio objects have the correct sampling rate
         for audio in audios:
             if audio.waveform.shape[0] != 1:
-                raise ValueError(
-                    f"Audio waveform must be mono (1 channel), but got {audio.waveform.shape[0]} channels"
-                )
+                raise ValueError(f"Audio waveform must be mono (1 channel), but got {audio.waveform.shape[0]} channels")
             if audio.sampling_rate != expected_sample_rate:
                 raise ValueError(
-                    "Audio sampling rate " + str(audio.sampling_rate) + 
-                    " does not match expected " + str(expected_sample_rate)
+                    "Audio sampling rate "
+                    + str(audio.sampling_rate)
+                    + " does not match expected "
+                    + str(expected_sample_rate)
                 )
 
         # Stack audio waveforms for batch processing
@@ -92,4 +92,4 @@ class SpeechBrainEmbeddings:
         # Split the batch embeddings into a list of individual embeddings
         embeddings = [embedding.squeeze() for embedding in embeddings_batch]
 
-        return embeddings   
+        return embeddings
