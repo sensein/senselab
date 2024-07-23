@@ -137,3 +137,30 @@ jobs:
         poetry run pip install codespell tomli
         poetry run codespell
       shell: bash
+
+  pre-commit:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest] # For demonstration, other OSes are commented out: macos-latest, windows-latest
+        python-version: ['3.10'] # For speeding up the process we removed "3.11" for now
+    steps:
+    - uses: actions/checkout@v4
+      with:  # no need for the history
+        fetch-depth: 1
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Install pipx and ensure it's up to date
+      run: |
+        python -m pip install --upgrade pipx
+        pipx ensurepath
+      shell: bash
+    - name: Install pre-commit
+      run: pipx install pre-commit
+      shell: bash
+    - name: Run pre-commit
+      run: |
+        poetry run pre-commit run --all-files
+      shell: bash
