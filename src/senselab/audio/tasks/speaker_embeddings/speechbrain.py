@@ -3,6 +3,7 @@
 from typing import Dict, List, Optional
 
 import torch
+import torch.nn.functional as F
 from speechbrain.inference.speaker import EncoderClassifier
 
 from senselab.audio.data_structures.audio import Audio
@@ -83,11 +84,19 @@ class SpeechBrainEmbeddings:
                     + str(expected_sample_rate)
                 )
 
-        # Stack audio waveforms for batch processing
-        waveforms = torch.stack([audio.waveform for audio in audios]).squeeze()
+        # Calculate relative lengths
+        lengths = torch.tensor([audio.waveform.shape[1] for audio in audios])
+        max_len = torch.max(lengths)
+
+        wav_lens = lengths.float() / max_len
+
+        # Stack audio waveforms for batch processing, zero-padding to ensure equal length
+        waveforms = torch.stack(
+            [F.pad(audio.waveform, (0, max_len - audio.waveform.shape[1])) for audio in audios]
+        ).squeeze()
 
         # Compute embeddings in a batch
-        embeddings_batch = classifier.encode_batch(waveforms)
+        embeddings_batch = classifier.encode_batch(waveforms, wav_lens)
 
         # Split the batch embeddings into a list of individual embeddings
         embeddings = [embedding.squeeze() for embedding in embeddings_batch]
