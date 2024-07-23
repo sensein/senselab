@@ -84,3 +84,11 @@ def test_chunk_audios(mono_audio_sample: Audio) -> None:
 
     chunked_audio = chunk_audios([(mono_audio_sample, (0.0, audio_duration))])[0]
     assert chunked_audio.waveform.shape[1] == mono_audio_sample.waveform.shape[1]
+
+
+def test_concatenate_audios(resampled_mono_audio_sample: Audio, resampled_mono_audio_sample_x2: Audio) -> None:
+    """Tests functionality for concatenating Audio objects."""
+    assert torch.equal(
+        resampled_mono_audio_sample_x2.waveform,
+        torch.cat([resampled_mono_audio_sample.waveform, resampled_mono_audio_sample.waveform], dim=1),
+    )

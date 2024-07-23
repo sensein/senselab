@@ -69,6 +69,32 @@ if os.getenv("GITHUB_ACTIONS") != "true":
         assert isinstance(embeddings, list) and all(isinstance(embedding, Tensor) for embedding in embeddings)
         assert all(embedding.size(0) == 256 for embedding in embeddings)
 
+    def test_extract_speaker_embeddings_from_multiple_audios_different_sizes(
+        resampled_mono_audio_sample: Audio,
+        resampled_mono_audio_sample_x2: Audio,
+        ecapa_model: SpeechBrainModel,
+        xvector_model: SpeechBrainModel,
+        resnet_model: SpeechBrainModel,
+    ) -> None:
+        """Test extracting speaker embeddings from multiple audios of differing lengths."""
+        embeddings = extract_speaker_embeddings_from_audios(
+            audios=[resampled_mono_audio_sample, resampled_mono_audio_sample_x2], model=ecapa_model
+        )
+        assert isinstance(embeddings, list) and all(isinstance(embedding, Tensor) for embedding in embeddings)
+        assert all(embedding.size(0) == 192 for embedding in embeddings)
+
+        embeddings = extract_speaker_embeddings_from_audios(
+            audios=[resampled_mono_audio_sample, resampled_mono_audio_sample_x2], model=xvector_model
+        )
+        assert isinstance(embeddings, list) and all(isinstance(embedding, Tensor) for embedding in embeddings)
+        assert all(embedding.size(0) == 512 for embedding in embeddings)
+
+        embeddings = extract_speaker_embeddings_from_audios(
+            audios=[resampled_mono_audio_sample, resampled_mono_audio_sample_x2], model=resnet_model
+        )
+        assert isinstance(embeddings, list) and all(isinstance(embedding, Tensor) for embedding in embeddings)
+        assert all(embedding.size(0) == 256 for embedding in embeddings)
+
     def test_error_wrong_model(resampled_mono_audio_sample: Audio) -> None:
         """Test raising error when using a non-existent model."""
         with pytest.raises(ValueError):
