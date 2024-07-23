@@ -43,6 +43,9 @@
                     <a class="function" href="#chunk_audios">chunk_audios</a>
             </li>
             <li>
+                    <a class="function" href="#concatenate_audios">concatenate_audios</a>
+            </li>
+            <li>
                     <a class="function" href="#resample_audios_pt">resample_audios_pt</a>
             </li>
             <li>
@@ -53,6 +56,9 @@
             </li>
             <li>
                     <a class="function" href="#select_channel_from_audios_pt">select_channel_from_audios_pt</a>
+            </li>
+            <li>
+                    <a class="function" href="#concatenate_audios_pt">concatenate_audios_pt</a>
             </li>
     </ul>
 
@@ -215,10 +221,45 @@
 </span><span id="L-136"><a href="#L-136"><span class="linenos">136</span></a>    <span class="k">return</span> <span class="n">chunked_audios</span>
 </span><span id="L-137"><a href="#L-137"><span class="linenos">137</span></a>
 </span><span id="L-138"><a href="#L-138"><span class="linenos">138</span></a>
-</span><span id="L-139"><a href="#L-139"><span class="linenos">139</span></a><span class="n">resample_audios_pt</span> <span class="o">=</span> <span class="n">pydra</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">task</span><span class="p">(</span><span class="n">resample_audios</span><span class="p">)</span>
-</span><span id="L-140"><a href="#L-140"><span class="linenos">140</span></a><span class="n">downmix_audios_to_mono_pt</span> <span class="o">=</span> <span class="n">pydra</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">task</span><span class="p">(</span><span class="n">downmix_audios_to_mono</span><span class="p">)</span>
-</span><span id="L-141"><a href="#L-141"><span class="linenos">141</span></a><span class="n">chunk_audios_pt</span> <span class="o">=</span> <span class="n">pydra</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">task</span><span class="p">(</span><span class="n">chunk_audios</span><span class="p">)</span>
-</span><span id="L-142"><a href="#L-142"><span class="linenos">142</span></a><span class="n">select_channel_from_audios_pt</span> <span class="o">=</span> <span class="n">pydra</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">task</span><span class="p">(</span><span class="n">select_channel_from_audios</span><span class="p">)</span>
+</span><span id="L-139"><a href="#L-139"><span class="linenos">139</span></a><span class="k">def</span> <span class="nf">concatenate_audios</span><span class="p">(</span><span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Audio</span><span class="p">:</span>
+</span><span id="L-140"><a href="#L-140"><span class="linenos">140</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Concatenates all audios in the list, ensuring they have the same sampling rate and shape.</span>
+</span><span id="L-141"><a href="#L-141"><span class="linenos">141</span></a>
+</span><span id="L-142"><a href="#L-142"><span class="linenos">142</span></a><span class="sd">    Args:</span>
+</span><span id="L-143"><a href="#L-143"><span class="linenos">143</span></a><span class="sd">        audios: List of Audio objects to concatenate.</span>
+</span><span id="L-144"><a href="#L-144"><span class="linenos">144</span></a>
+</span><span id="L-145"><a href="#L-145"><span class="linenos">145</span></a><span class="sd">    Returns:</span>
+</span><span id="L-146"><a href="#L-146"><span class="linenos">146</span></a><span class="sd">        A single Audio object that is the concatenation of all input audios.</span>
+</span><span id="L-147"><a href="#L-147"><span class="linenos">147</span></a>
+</span><span id="L-148"><a href="#L-148"><span class="linenos">148</span></a><span class="sd">    Raises:</span>
+</span><span id="L-149"><a href="#L-149"><span class="linenos">149</span></a><span class="sd">        ValueError: If the audios do not all have the same sampling rate or shape.</span>
+</span><span id="L-150"><a href="#L-150"><span class="linenos">150</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="L-151"><a href="#L-151"><span class="linenos">151</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">audios</span><span class="p">:</span>
+</span><span id="L-152"><a href="#L-152"><span class="linenos">152</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;The input list is empty. Please provide a list with at least one Audio object.&quot;</span><span class="p">)</span>
+</span><span id="L-153"><a href="#L-153"><span class="linenos">153</span></a>
+</span><span id="L-154"><a href="#L-154"><span class="linenos">154</span></a>    <span class="n">sampling_rate</span> <span class="o">=</span> <span class="n">audios</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">sampling_rate</span>
+</span><span id="L-155"><a href="#L-155"><span class="linenos">155</span></a>    <span class="n">num_channels</span> <span class="o">=</span> <span class="n">audios</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">waveform</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+</span><span id="L-156"><a href="#L-156"><span class="linenos">156</span></a>
+</span><span id="L-157"><a href="#L-157"><span class="linenos">157</span></a>    <span class="k">for</span> <span class="n">audio</span> <span class="ow">in</span> <span class="n">audios</span><span class="p">:</span>
+</span><span id="L-158"><a href="#L-158"><span class="linenos">158</span></a>        <span class="k">if</span> <span class="n">audio</span><span class="o">.</span><span class="n">sampling_rate</span> <span class="o">!=</span> <span class="n">sampling_rate</span><span class="p">:</span>
+</span><span id="L-159"><a href="#L-159"><span class="linenos">159</span></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;All audios must have the same sampling rate to concatenate.&quot;</span><span class="p">)</span>
+</span><span id="L-160"><a href="#L-160"><span class="linenos">160</span></a>        <span class="k">if</span> <span class="n">audio</span><span class="o">.</span><span class="n">waveform</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">!=</span> <span class="n">num_channels</span><span class="p">:</span>
+</span><span id="L-161"><a href="#L-161"><span class="linenos">161</span></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;All audios must have the same number of channels (mono or stereo) to concatenate.&quot;</span><span class="p">)</span>
+</span><span id="L-162"><a href="#L-162"><span class="linenos">162</span></a>
+</span><span id="L-163"><a href="#L-163"><span class="linenos">163</span></a>    <span class="n">concatenated_waveform</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">([</span><span class="n">audio</span><span class="o">.</span><span class="n">waveform</span> <span class="k">for</span> <span class="n">audio</span> <span class="ow">in</span> <span class="n">audios</span><span class="p">],</span> <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+</span><span id="L-164"><a href="#L-164"><span class="linenos">164</span></a>
+</span><span id="L-165"><a href="#L-165"><span class="linenos">165</span></a>    <span class="c1"># TODO: do we want to concatenate metadata? TBD</span>
+</span><span id="L-166"><a href="#L-166"><span class="linenos">166</span></a>
+</span><span id="L-167"><a href="#L-167"><span class="linenos">167</span></a>    <span class="k">return</span> <span class="n">Audio</span><span class="p">(</span>
+</span><span id="L-168"><a href="#L-168"><span class="linenos">168</span></a>        <span class="n">waveform</span><span class="o">=</span><span class="n">concatenated_waveform</span><span class="p">,</span>
+</span><span id="L-169"><a href="#L-169"><span class="linenos">169</span></a>        <span class="n">sampling_rate</span><span class="o">=</span><span class="n">sampling_rate</span><span class="p">,</span>
+</span><span id="L-170"><a href="#L-170"><span class="linenos">170</span></a>    <span class="p">)</span>
+</span><span id="L-171"><a href="#L-171"><span class="linenos">171</span></a>
+</span><span id="L-172"><a href="#L-172"><span class="linenos">172</span></a>
+</span><span id="L-173"><a href="#L-173"><span class="linenos">173</span></a><span class="n">resample_audios_pt</span> <span class="o">=</span> <span class="n">pydra</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">task</span><span class="p">(</span><span class="n">resample_audios</span><span class="p">)</span>
+</span><span id="L-174"><a href="#L-174"><span class="linenos">174</span></a><span class="n">downmix_audios_to_mono_pt</span> <span class="o">=</span> <span class="n">pydra</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">task</span><span class="p">(</span><span class="n">downmix_audios_to_mono</span><span class="p">)</span>
+</span><span id="L-175"><a href="#L-175"><span class="linenos">175</span></a><span class="n">chunk_audios_pt</span> <span class="o">=</span> <span class="n">pydra</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">task</span><span class="p">(</span><span class="n">chunk_audios</span><span class="p">)</span>
+</span><span id="L-176"><a href="#L-176"><span class="linenos">176</span></a><span class="n">select_channel_from_audios_pt</span> <span class="o">=</span> <span class="n">pydra</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">task</span><span class="p">(</span><span class="n">select_channel_from_audios</span><span class="p">)</span>
+</span><span id="L-177"><a href="#L-177"><span class="linenos">177</span></a><span class="n">concatenate_audios_pt</span> <span class="o">=</span> <span class="n">pydra</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">task</span><span class="p">(</span><span class="n">concatenate_audios</span><span class="p">)</span>
 </span></pre></div>
 
 
@@ -471,6 +512,75 @@ Shape: (num_channels, num_samples).</li>
 
 
                 </section>
+                <section id="concatenate_audios">
+                            <input id="concatenate_audios-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="def">def</span>
+        <span class="name">concatenate_audios</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">senselab</span><span class="o">.</span><span class="n">audio</span><span class="o">.</span><span class="n">data_structures</span><span class="o">.</span><span class="n">audio</span><span class="o">.</span><span class="n">Audio</span><span class="p">]</span></span><span class="return-annotation">) -> <span class="n">senselab</span><span class="o">.</span><span class="n">audio</span><span class="o">.</span><span class="n">data_structures</span><span class="o">.</span><span class="n">audio</span><span class="o">.</span><span class="n">Audio</span>:</span></span>
+
+                <label class="view-source-button" for="concatenate_audios-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#concatenate_audios"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="concatenate_audios-140"><a href="#concatenate_audios-140"><span class="linenos">140</span></a><span class="k">def</span> <span class="nf">concatenate_audios</span><span class="p">(</span><span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Audio</span><span class="p">:</span>
+</span><span id="concatenate_audios-141"><a href="#concatenate_audios-141"><span class="linenos">141</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Concatenates all audios in the list, ensuring they have the same sampling rate and shape.</span>
+</span><span id="concatenate_audios-142"><a href="#concatenate_audios-142"><span class="linenos">142</span></a>
+</span><span id="concatenate_audios-143"><a href="#concatenate_audios-143"><span class="linenos">143</span></a><span class="sd">    Args:</span>
+</span><span id="concatenate_audios-144"><a href="#concatenate_audios-144"><span class="linenos">144</span></a><span class="sd">        audios: List of Audio objects to concatenate.</span>
+</span><span id="concatenate_audios-145"><a href="#concatenate_audios-145"><span class="linenos">145</span></a>
+</span><span id="concatenate_audios-146"><a href="#concatenate_audios-146"><span class="linenos">146</span></a><span class="sd">    Returns:</span>
+</span><span id="concatenate_audios-147"><a href="#concatenate_audios-147"><span class="linenos">147</span></a><span class="sd">        A single Audio object that is the concatenation of all input audios.</span>
+</span><span id="concatenate_audios-148"><a href="#concatenate_audios-148"><span class="linenos">148</span></a>
+</span><span id="concatenate_audios-149"><a href="#concatenate_audios-149"><span class="linenos">149</span></a><span class="sd">    Raises:</span>
+</span><span id="concatenate_audios-150"><a href="#concatenate_audios-150"><span class="linenos">150</span></a><span class="sd">        ValueError: If the audios do not all have the same sampling rate or shape.</span>
+</span><span id="concatenate_audios-151"><a href="#concatenate_audios-151"><span class="linenos">151</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="concatenate_audios-152"><a href="#concatenate_audios-152"><span class="linenos">152</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">audios</span><span class="p">:</span>
+</span><span id="concatenate_audios-153"><a href="#concatenate_audios-153"><span class="linenos">153</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;The input list is empty. Please provide a list with at least one Audio object.&quot;</span><span class="p">)</span>
+</span><span id="concatenate_audios-154"><a href="#concatenate_audios-154"><span class="linenos">154</span></a>
+</span><span id="concatenate_audios-155"><a href="#concatenate_audios-155"><span class="linenos">155</span></a>    <span class="n">sampling_rate</span> <span class="o">=</span> <span class="n">audios</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">sampling_rate</span>
+</span><span id="concatenate_audios-156"><a href="#concatenate_audios-156"><span class="linenos">156</span></a>    <span class="n">num_channels</span> <span class="o">=</span> <span class="n">audios</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">waveform</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+</span><span id="concatenate_audios-157"><a href="#concatenate_audios-157"><span class="linenos">157</span></a>
+</span><span id="concatenate_audios-158"><a href="#concatenate_audios-158"><span class="linenos">158</span></a>    <span class="k">for</span> <span class="n">audio</span> <span class="ow">in</span> <span class="n">audios</span><span class="p">:</span>
+</span><span id="concatenate_audios-159"><a href="#concatenate_audios-159"><span class="linenos">159</span></a>        <span class="k">if</span> <span class="n">audio</span><span class="o">.</span><span class="n">sampling_rate</span> <span class="o">!=</span> <span class="n">sampling_rate</span><span class="p">:</span>
+</span><span id="concatenate_audios-160"><a href="#concatenate_audios-160"><span class="linenos">160</span></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;All audios must have the same sampling rate to concatenate.&quot;</span><span class="p">)</span>
+</span><span id="concatenate_audios-161"><a href="#concatenate_audios-161"><span class="linenos">161</span></a>        <span class="k">if</span> <span class="n">audio</span><span class="o">.</span><span class="n">waveform</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">!=</span> <span class="n">num_channels</span><span class="p">:</span>
+</span><span id="concatenate_audios-162"><a href="#concatenate_audios-162"><span class="linenos">162</span></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;All audios must have the same number of channels (mono or stereo) to concatenate.&quot;</span><span class="p">)</span>
+</span><span id="concatenate_audios-163"><a href="#concatenate_audios-163"><span class="linenos">163</span></a>
+</span><span id="concatenate_audios-164"><a href="#concatenate_audios-164"><span class="linenos">164</span></a>    <span class="n">concatenated_waveform</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">([</span><span class="n">audio</span><span class="o">.</span><span class="n">waveform</span> <span class="k">for</span> <span class="n">audio</span> <span class="ow">in</span> <span class="n">audios</span><span class="p">],</span> <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+</span><span id="concatenate_audios-165"><a href="#concatenate_audios-165"><span class="linenos">165</span></a>
+</span><span id="concatenate_audios-166"><a href="#concatenate_audios-166"><span class="linenos">166</span></a>    <span class="c1"># TODO: do we want to concatenate metadata? TBD</span>
+</span><span id="concatenate_audios-167"><a href="#concatenate_audios-167"><span class="linenos">167</span></a>
+</span><span id="concatenate_audios-168"><a href="#concatenate_audios-168"><span class="linenos">168</span></a>    <span class="k">return</span> <span class="n">Audio</span><span class="p">(</span>
+</span><span id="concatenate_audios-169"><a href="#concatenate_audios-169"><span class="linenos">169</span></a>        <span class="n">waveform</span><span class="o">=</span><span class="n">concatenated_waveform</span><span class="p">,</span>
+</span><span id="concatenate_audios-170"><a href="#concatenate_audios-170"><span class="linenos">170</span></a>        <span class="n">sampling_rate</span><span class="o">=</span><span class="n">sampling_rate</span><span class="p">,</span>
+</span><span id="concatenate_audios-171"><a href="#concatenate_audios-171"><span class="linenos">171</span></a>    <span class="p">)</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Concatenates all audios in the list, ensuring they have the same sampling rate and shape.</p>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>audios:</strong>  List of Audio objects to concatenate.</li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p>A single Audio object that is the concatenation of all input audios.</p>
+</blockquote>
+
+<h6 id="raises">Raises:</h6>
+
+<ul>
+<li><strong>ValueError:</strong>  If the audios do not all have the same sampling rate or shape.</li>
+</ul>
+</div>
+
+
+                </section>
                 <section id="resample_audios_pt">
                             <input id="resample_audios_pt-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 <div class="attr function">
@@ -715,6 +825,75 @@ Shape: (num_channels, num_samples).</li>
 <blockquote>
   <p>List[Audio]: The list of audio objects with the selected channel. Shape: (1, num_samples).</p>
 </blockquote>
+</div>
+
+
+                </section>
+                <section id="concatenate_audios_pt">
+                            <input id="concatenate_audios_pt-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="def">def</span>
+        <span class="name">concatenate_audios_pt</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">senselab</span><span class="o">.</span><span class="n">audio</span><span class="o">.</span><span class="n">data_structures</span><span class="o">.</span><span class="n">audio</span><span class="o">.</span><span class="n">Audio</span><span class="p">]</span></span><span class="return-annotation">) -> <span class="n">senselab</span><span class="o">.</span><span class="n">audio</span><span class="o">.</span><span class="n">data_structures</span><span class="o">.</span><span class="n">audio</span><span class="o">.</span><span class="n">Audio</span>:</span></span>
+
+                <label class="view-source-button" for="concatenate_audios_pt-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#concatenate_audios_pt"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="concatenate_audios_pt-140"><a href="#concatenate_audios_pt-140"><span class="linenos">140</span></a><span class="k">def</span> <span class="nf">concatenate_audios</span><span class="p">(</span><span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Audio</span><span class="p">:</span>
+</span><span id="concatenate_audios_pt-141"><a href="#concatenate_audios_pt-141"><span class="linenos">141</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Concatenates all audios in the list, ensuring they have the same sampling rate and shape.</span>
+</span><span id="concatenate_audios_pt-142"><a href="#concatenate_audios_pt-142"><span class="linenos">142</span></a>
+</span><span id="concatenate_audios_pt-143"><a href="#concatenate_audios_pt-143"><span class="linenos">143</span></a><span class="sd">    Args:</span>
+</span><span id="concatenate_audios_pt-144"><a href="#concatenate_audios_pt-144"><span class="linenos">144</span></a><span class="sd">        audios: List of Audio objects to concatenate.</span>
+</span><span id="concatenate_audios_pt-145"><a href="#concatenate_audios_pt-145"><span class="linenos">145</span></a>
+</span><span id="concatenate_audios_pt-146"><a href="#concatenate_audios_pt-146"><span class="linenos">146</span></a><span class="sd">    Returns:</span>
+</span><span id="concatenate_audios_pt-147"><a href="#concatenate_audios_pt-147"><span class="linenos">147</span></a><span class="sd">        A single Audio object that is the concatenation of all input audios.</span>
+</span><span id="concatenate_audios_pt-148"><a href="#concatenate_audios_pt-148"><span class="linenos">148</span></a>
+</span><span id="concatenate_audios_pt-149"><a href="#concatenate_audios_pt-149"><span class="linenos">149</span></a><span class="sd">    Raises:</span>
+</span><span id="concatenate_audios_pt-150"><a href="#concatenate_audios_pt-150"><span class="linenos">150</span></a><span class="sd">        ValueError: If the audios do not all have the same sampling rate or shape.</span>
+</span><span id="concatenate_audios_pt-151"><a href="#concatenate_audios_pt-151"><span class="linenos">151</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="concatenate_audios_pt-152"><a href="#concatenate_audios_pt-152"><span class="linenos">152</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">audios</span><span class="p">:</span>
+</span><span id="concatenate_audios_pt-153"><a href="#concatenate_audios_pt-153"><span class="linenos">153</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;The input list is empty. Please provide a list with at least one Audio object.&quot;</span><span class="p">)</span>
+</span><span id="concatenate_audios_pt-154"><a href="#concatenate_audios_pt-154"><span class="linenos">154</span></a>
+</span><span id="concatenate_audios_pt-155"><a href="#concatenate_audios_pt-155"><span class="linenos">155</span></a>    <span class="n">sampling_rate</span> <span class="o">=</span> <span class="n">audios</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">sampling_rate</span>
+</span><span id="concatenate_audios_pt-156"><a href="#concatenate_audios_pt-156"><span class="linenos">156</span></a>    <span class="n">num_channels</span> <span class="o">=</span> <span class="n">audios</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">waveform</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+</span><span id="concatenate_audios_pt-157"><a href="#concatenate_audios_pt-157"><span class="linenos">157</span></a>
+</span><span id="concatenate_audios_pt-158"><a href="#concatenate_audios_pt-158"><span class="linenos">158</span></a>    <span class="k">for</span> <span class="n">audio</span> <span class="ow">in</span> <span class="n">audios</span><span class="p">:</span>
+</span><span id="concatenate_audios_pt-159"><a href="#concatenate_audios_pt-159"><span class="linenos">159</span></a>        <span class="k">if</span> <span class="n">audio</span><span class="o">.</span><span class="n">sampling_rate</span> <span class="o">!=</span> <span class="n">sampling_rate</span><span class="p">:</span>
+</span><span id="concatenate_audios_pt-160"><a href="#concatenate_audios_pt-160"><span class="linenos">160</span></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;All audios must have the same sampling rate to concatenate.&quot;</span><span class="p">)</span>
+</span><span id="concatenate_audios_pt-161"><a href="#concatenate_audios_pt-161"><span class="linenos">161</span></a>        <span class="k">if</span> <span class="n">audio</span><span class="o">.</span><span class="n">waveform</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">!=</span> <span class="n">num_channels</span><span class="p">:</span>
+</span><span id="concatenate_audios_pt-162"><a href="#concatenate_audios_pt-162"><span class="linenos">162</span></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;All audios must have the same number of channels (mono or stereo) to concatenate.&quot;</span><span class="p">)</span>
+</span><span id="concatenate_audios_pt-163"><a href="#concatenate_audios_pt-163"><span class="linenos">163</span></a>
+</span><span id="concatenate_audios_pt-164"><a href="#concatenate_audios_pt-164"><span class="linenos">164</span></a>    <span class="n">concatenated_waveform</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">([</span><span class="n">audio</span><span class="o">.</span><span class="n">waveform</span> <span class="k">for</span> <span class="n">audio</span> <span class="ow">in</span> <span class="n">audios</span><span class="p">],</span> <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+</span><span id="concatenate_audios_pt-165"><a href="#concatenate_audios_pt-165"><span class="linenos">165</span></a>
+</span><span id="concatenate_audios_pt-166"><a href="#concatenate_audios_pt-166"><span class="linenos">166</span></a>    <span class="c1"># TODO: do we want to concatenate metadata? TBD</span>
+</span><span id="concatenate_audios_pt-167"><a href="#concatenate_audios_pt-167"><span class="linenos">167</span></a>
+</span><span id="concatenate_audios_pt-168"><a href="#concatenate_audios_pt-168"><span class="linenos">168</span></a>    <span class="k">return</span> <span class="n">Audio</span><span class="p">(</span>
+</span><span id="concatenate_audios_pt-169"><a href="#concatenate_audios_pt-169"><span class="linenos">169</span></a>        <span class="n">waveform</span><span class="o">=</span><span class="n">concatenated_waveform</span><span class="p">,</span>
+</span><span id="concatenate_audios_pt-170"><a href="#concatenate_audios_pt-170"><span class="linenos">170</span></a>        <span class="n">sampling_rate</span><span class="o">=</span><span class="n">sampling_rate</span><span class="p">,</span>
+</span><span id="concatenate_audios_pt-171"><a href="#concatenate_audios_pt-171"><span class="linenos">171</span></a>    <span class="p">)</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Concatenates all audios in the list, ensuring they have the same sampling rate and shape.</p>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>audios:</strong>  List of Audio objects to concatenate.</li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p>A single Audio object that is the concatenation of all input audios.</p>
+</blockquote>
+
+<h6 id="raises">Raises:</h6>
+
+<ul>
+<li><strong>ValueError:</strong>  If the audios do not all have the same sampling rate or shape.</li>
+</ul>
 </div>
 
 

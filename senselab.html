@@ -25,9 +25,9 @@
             <ul>
   <li><a href="#the-senselab-repo">The <code>senselab</code> repo</a>
   <ul>
-    <li><a href="#features">Features</a></li>
     <li><a href="#installation">Installation</a></li>
     <li><a href="#quick-start">Quick start</a></li>
+    <li><a href="#why-should-i-use-senselab">Why should I use senselab?</a></li>
     <li><a href="#contributing">Contributing</a></li>
     <li><a href="#to-do">To do</a></li>
   </ul></li>
@@ -71,21 +71,6 @@ senselab    </h1>
 
 <p><strong>Caution:</strong>: this package is still under development and may change rapidly over the next few weeks.</p>
 
-<h2 id="features">Features</h2>
-
-<ul>
-<li><p><strong>Modular design</strong>: Utilize a variety of task-specific transformations that can be easily integrated or used standalone, allowing for flexible data manipulation and analysis strategies.</p></li>
-<li><p><strong>Pre-built pipelines</strong>: Access pre-configured pipelines combining multiple transformations tailored for common analysis tasks, which help in reducing setup time and effort.</p></li>
-<li><p><strong>Reproducibility</strong>: Ensures consistent outputs through the use of fixed seeds and version-controlled processing steps, making your results verifiable and easily comparable.</p></li>
-<li><p><strong>Easy integration</strong>: Designed to fit into existing workflows with minimal configuration, <code><a href="">senselab</a></code> can be used alongside other data analysis tools and frameworks seamlessly.</p></li>
-<li><p><strong>Extensible</strong>: Open to modifications and contributions, the package can be expanded with custom transformations and pipelines to meet specific research needs. <u>Do you want to contribute? Please, reach out!</u></p></li>
-<li><p><strong>Comprehensive documentation</strong>: Comes with detailed documentation for all features and modules, including examples and guides on how to extend the package for other types of behavioral data analysis.</p></li>
-<li><p><strong>Performance Optimized</strong>: Efficiently processes large datasets with optimized code and algorithms, ensuring quick turnaround times even for complex analyses.</p></li>
-<li><p><strong>Interactive Examples</strong>: Includes Jupyter notebooks that provide practical examples of how <code><a href="">senselab</a></code> can be implemented to derive insights from real-world data sets.</p></li>
-</ul>
-
-<p>Whether you're researching speech disorders, analyzing customer service calls, or studying communication patterns, <code><a href="">senselab</a></code> provides the tools and flexibility needed to extract meaningful conclusions from your data.</p>
-
 <h2 id="installation">Installation</h2>
 
 <p>Install this package via:</p>
@@ -105,11 +90,31 @@ senselab    </h1>
 <h2 id="quick-start">Quick start</h2>
 
 <div class="pdoc-code codehilite">
-<pre><span></span><code><span class="kn">from</span> <span class="nn"><a href="senselab/app.html">senselab.app</a></span> <span class="kn">import</span> <span class="n">hello_world</span>
+<pre><span></span><code><span class="kn">from</span> <span class="nn">senselab.audio.data_structures.audio</span> <span class="kn">import</span> <span class="n">Audio</span>
+<span class="kn">from</span> <span class="nn"><a href="senselab/audio/tasks/preprocessing/preprocessing.html">senselab.audio.tasks.preprocessing.preprocessing</a></span> <span class="kn">import</span> <span class="n">resample_audios</span>
 
-<span class="n">hello_world</span><span class="p">()</span>
+<span class="n">audio1</span> <span class="o">=</span> <span class="n">Audio</span><span class="o">.</span><span class="n">from_filepath</span><span class="p">(</span><span class="s1">&#39;path_to_audio_file.wav&#39;</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="s2">&quot;The original audio has a sampling rate of </span><span class="si">{}</span><span class="s2"> Hz.&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">audio1</span><span class="o">.</span><span class="n">sampling_rate</span><span class="p">))</span>
+<span class="p">[</span><span class="n">audio1</span><span class="p">]</span> <span class="o">=</span> <span class="n">resample_audios</span><span class="p">([</span><span class="n">audio1</span><span class="p">],</span> <span class="n">resample_rate</span><span class="o">=</span><span class="mi">16000</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">&quot;The resampled audio has a sampling rate of </span><span class="si">{}</span><span class="s2"> Hz.&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">audio1</span><span class="o">.</span><span class="n">sampling_rate</span><span class="p">))</span>
 </code></pre>
 </div>
+
+<p>For more detailed information, check out our <a href="tutorials/getting_started.ipynb">Getting Started Tutorial</a>.</p>
+
+<h2 id="why-should-i-use-senselab">Why should I use senselab?</h2>
+
+<ul>
+<li><strong>Modular Design</strong>: Easily integrate or use standalone transformations for flexible data manipulation.</li>
+<li><strong>Pre-built Pipelines</strong>: Access pre-configured pipelines to reduce setup time and effort.</li>
+<li><strong>Reproducibility</strong>: Ensure consistent and verifiable results with fixed seeds and version-controlled steps.</li>
+<li><strong>Easy Integration</strong>: Seamlessly fit into existing workflows with minimal configuration.</li>
+<li><strong>Extensible</strong>: Modify and contribute custom transformations and pipelines to meet specific research needs.</li>
+<li><strong>Comprehensive Documentation</strong>: Detailed guides, examples, and documentation for all features and modules.</li>
+<li><strong>Performance Optimized</strong>: Efficiently process large datasets with optimized code and algorithms.</li>
+<li><strong>Interactive Examples</strong>: Jupyter notebooks provide practical examples for deriving insights from real-world datasets.</li>
+</ul>
 
 <h2 id="contributing">Contributing</h2>
 
