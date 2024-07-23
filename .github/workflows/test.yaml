@@ -70,7 +70,7 @@ jobs:
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
 
-  ruff:
+  pre-commit:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -80,19 +80,7 @@ jobs:
     - uses: actions/checkout@v4
       with:  # no need for the history
         fetch-depth: 1
-    - uses: chartboost/ruff-action@v1
-
-  mypy:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest] # For demonstration, other OSes are commented out: macos-latest, windows-latest
-        python-version: ['3.10'] # For speeding up the process we removed "3.11" for now
-    steps:
-    - uses: actions/checkout@v4
-      with:  # no need for the history
-        fetch-depth: 1
-    - name: Set up Python ${{ matrix.python-version }}
+    - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
@@ -102,38 +90,17 @@ jobs:
         pipx ensurepath
       shell: bash
     - name: Install poetry
-      run: pipx install poetry
+      run: pipx install poetry==1.7.1
       shell: bash
-    - name: Run mypy
+    - name: Install dependencies with Poetry
       run: |
-        poetry run pip install mypy pydantic types-requests
-        poetry run mypy .
+        poetry run pip install iso-639
+        poetry install --with dev
       shell: bash
-
-  codespell:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest] # For demonstration, other OSes are commented out: macos-latest, windows-latest
-        python-version: ['3.10'] # For speeding up the process we removed "3.11" for now
-    steps:
-    - uses: actions/checkout@v4
-      with:  # no need for the history
-        fetch-depth: 1
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
-    - name: Install pipx and ensure it's up to date
+    - name: Install pre-commit
+      run: pipx install pre-commit
+      shell: bash
+    - name: Run pre-commit
       run: |
-        python -m pip install --upgrade pipx
-        pipx ensurepath
-      shell: bash
-    - name: Install poetry
-      run: pipx install poetry
-      shell: bash
-    - name: Run codespell
-      run: |
-        poetry run pip install codespell tomli
-        poetry run codespell
+        poetry run pre-commit run --all-files
       shell: bash

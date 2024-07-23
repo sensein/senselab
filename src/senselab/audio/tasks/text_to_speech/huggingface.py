@@ -39,7 +39,7 @@ class HuggingFaceTTS:
                 model=model.path_or_uri,
                 revision=model.revision,
                 device=device.value,
-                torch_dtype=torch_dtype
+                torch_dtype=torch_dtype,
             )
         return cls._pipelines[key]
 
@@ -52,7 +52,7 @@ class HuggingFaceTTS:
     ) -> List[Audio]:
         """Synthesizes speech from all the provided text samples.
 
-        Several text-to-speech models are currently available in Transformers, 
+        Several text-to-speech models are currently available in Transformers,
         such as Bark, MMS, VITS and SpeechT5.
 
         Args:
@@ -71,10 +71,8 @@ class HuggingFaceTTS:
 
         synthesis_kwargs: Dict[str, Any] = {}
         synthesized_audios = pipe(texts, **synthesis_kwargs)
-        
+
         audios = []
         for synth in synthesized_audios:
-            audios.append(Audio(waveform=synth["audio"], 
-                                sampling_rate=synth["sampling_rate"]))
+            audios.append(Audio(waveform=synth["audio"], sampling_rate=synth["sampling_rate"]))
         return audios
-

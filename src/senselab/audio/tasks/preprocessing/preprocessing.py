@@ -136,7 +136,42 @@ def chunk_audios(data: List[Tuple[Audio, Tuple[float, float]]]) -> List[Audio]:
     return chunked_audios
 
 
+def concatenate_audios(audios: List[Audio]) -> Audio:
+    """Concatenates all audios in the list, ensuring they have the same sampling rate and shape.
+
+    Args:
+        audios: List of Audio objects to concatenate.
+
+    Returns:
+        A single Audio object that is the concatenation of all input audios.
+
+    Raises:
+        ValueError: If the audios do not all have the same sampling rate or shape.
+    """
+    if not audios:
+        raise ValueError("The input list is empty. Please provide a list with at least one Audio object.")
+
+    sampling_rate = audios[0].sampling_rate
+    num_channels = audios[0].waveform.shape[0]
+
+    for audio in audios:
+        if audio.sampling_rate != sampling_rate:
+            raise ValueError("All audios must have the same sampling rate to concatenate.")
+        if audio.waveform.shape[0] != num_channels:
+            raise ValueError("All audios must have the same number of channels (mono or stereo) to concatenate.")
+
+    concatenated_waveform = torch.cat([audio.waveform for audio in audios], dim=1)
+
+    # TODO: do we want to concatenate metadata? TBD
+
+    return Audio(
+        waveform=concatenated_waveform,
+        sampling_rate=sampling_rate,
+    )
+
+
 resample_audios_pt = pydra.mark.task(resample_audios)
 downmix_audios_to_mono_pt = pydra.mark.task(downmix_audios_to_mono)
 chunk_audios_pt = pydra.mark.task(chunk_audios)
 select_channel_from_audios_pt = pydra.mark.task(select_channel_from_audios)
+concatenate_audios_pt = pydra.mark.task(concatenate_audios)
