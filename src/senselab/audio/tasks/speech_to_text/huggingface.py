@@ -1,4 +1,5 @@
 """This module provides a factory for managing Hugging Face ASR pipelines."""
+
 from typing import Any, Dict, List, Optional
 
 from transformers import pipeline
@@ -39,8 +40,8 @@ class HuggingFaceASR:
             pipeline: The ASR pipeline.
         """
         device, torch_dtype = _select_device_and_dtype(
-                user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
-            )
+            user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
+        )
         key = (
             f"{model.path_or_uri}-{model.revision}-{return_timestamps}-"
             f"{max_new_tokens}-{chunk_length_s}-{batch_size}-{device.value}"
@@ -100,7 +101,7 @@ class HuggingFaceASR:
                 "array": audio.waveform.squeeze().numpy(),
                 "sampling_rate": audio.sampling_rate,
             }
-        
+
         def _rename_key_recursive(obj: Dict[str, Any], old_key: str, new_key: str) -> Dict[str, Any]:
             """Recursively rename keys in a dictionary."""
             if isinstance(obj, dict):
@@ -116,10 +117,8 @@ class HuggingFaceASR:
         # Check that all audio objects are mono
         for audio in audios:
             if audio.waveform.shape[0] != 1:
-                raise ValueError(
-                    f"Stereo audio is not supported. Got {audio.waveform.shape[0]} channels"
-                )
-        
+                raise ValueError(f"Stereo audio is not supported. Got {audio.waveform.shape[0]} channels")
+
         pipe = HuggingFaceASR._get_hf_asr_pipeline(
             model=model,
             return_timestamps=return_timestamps,
