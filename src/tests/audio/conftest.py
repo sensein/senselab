@@ -33,7 +33,7 @@ def resampled_stereo_audio_sample(stereo_audio_sample: Audio, resampling_rate: i
     """Fixture for resampled stereo audio sample."""
     return resample_audios([stereo_audio_sample], resampling_rate)[0]
 
-  
+
 @pytest.fixture
 def resampled_mono_audio_sample_x2(resampled_mono_audio_sample: Audio) -> Audio:
     """Fixture for sample mono audio."""
