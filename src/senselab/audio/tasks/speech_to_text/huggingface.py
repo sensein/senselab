@@ -1,5 +1,6 @@
 """This module provides a factory for managing Hugging Face ASR pipelines."""
 
+import time
 from typing import Any, Dict, List, Optional
 
 from transformers import pipeline
@@ -7,6 +8,7 @@ from transformers import pipeline
 from senselab.audio.data_structures.audio import Audio
 from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
 from senselab.utils.data_structures.language import Language
+from senselab.utils.data_structures.logging import logger
 from senselab.utils.data_structures.model import HFModel
 from senselab.utils.data_structures.script_line import ScriptLine
 
@@ -14,7 +16,6 @@ from senselab.utils.data_structures.script_line import ScriptLine
 class HuggingFaceASR:
     """A factory for managing Hugging Face ASR pipelines.
 
-    # TODO: add timing logging
     # TODO: add explanation on when it's convenient to use this factory and when not
     """
 
@@ -118,6 +119,8 @@ class HuggingFaceASR:
                 obj = [_rename_key_recursive(item, old_key, new_key) for item in obj]
             return obj
 
+        # Take the start time of the pipeline initialization
+        start_time_pipeline = time.time()
         # Get the Hugging Face pipeline
         pipe = HuggingFaceASR._get_hf_asr_pipeline(
             model=model,
@@ -127,6 +130,12 @@ class HuggingFaceASR:
             batch_size=batch_size,
             device=device,
         )
+
+        # Take the end time of the pipeline initialization
+        end_time_pipeline = time.time()
+        # Print the time taken for initialize the hugging face ASR pipeline
+        elapsed_time_pipeline = end_time_pipeline - start_time_pipeline
+        logger.info(f"Time taken for initialize the hugging face ASR pipeline: {elapsed_time_pipeline:.2f} seconds")
 
         # Retrieve the expected sampling rate from the Hugging Face model
         expected_sampling_rate = pipe.feature_extractor.sampling_rate
@@ -143,10 +152,18 @@ class HuggingFaceASR:
         # Convert the audio objects to dictionaries that can be used by the pipeline
         formatted_audios = [_audio_to_huggingface_dict(audio) for audio in audios]
 
+        # Take the start time of the transcription
+        start_time_transcription = time.time()
         # Run the pipeline
         transcriptions = pipe(
             formatted_audios, generate_kwargs={"language": f"{language.name.lower()}"} if language else {}
         )
+
+        # Take the end time of the transcription
+        end_time_transcription = time.time()
+        # Print the time taken for transcribing the audios
+        elapsed_time_transcription = end_time_transcription - start_time_transcription
+        logger.info(f"Time taken for transcribing the audios: {elapsed_time_transcription:.2f} seconds")
 
         # Rename the "timestamp" key to "timestamps"
         transcriptions = _rename_key_recursive(transcriptions, "timestamp", "timestamps")
