@@ -41,6 +41,9 @@ def _select_device_and_dtype(
         ValueError: if the user specifies a preference that is not available or compatible and a safety
             call if no devices are available or compatible (we believe this to be impossible to trigger).
     """
+    if user_preference:
+        if not isinstance(user_preference, DeviceType):
+            raise ValueError(f"user_preference should be of type DeviceType, not {type(user_preference)}")
     available_devices = [DeviceType.CPU]
     if torch.cuda.is_available():
         available_devices.append(DeviceType.CUDA)
@@ -55,7 +58,10 @@ def _select_device_and_dtype(
             useable_devices.append(device)
 
     # User preference or fastest option
+
     if user_preference:
+        print(user_preference, type(user_preference))
+        # user_preference = DeviceType(user_preference) if isinstance(user_preference,str) else user_preference
         if user_preference not in useable_devices:
             raise ValueError(
                 "The requested DeviceType is either not available or\
