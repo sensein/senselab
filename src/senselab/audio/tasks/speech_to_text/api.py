@@ -31,6 +31,7 @@ def transcribe_audios(
 
     TODO: add documentation!!!
     TODO: add tutorial
+    # TODO: MAKE THE TUTORIAL AVAILABLE THROUGH THE DOC
     """
     try:
         if isinstance(model, HFModel):
