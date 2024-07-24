@@ -19,6 +19,8 @@ keywords = ["voice", "speech", "audio"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
   "License :: OSI Approved :: Apache Software License",
   "Operating System :: OS Independent"
 ]
@@ -34,7 +36,7 @@ torchvision = "~=0.17"
 torchaudio = "~=2.2"
 transformers = "~=4.39"
 ffmpeg-python = "~=0.2"
-ipykernel = "~=6.29"
+ipykernel = "*"
 pydra = "~=0.23"
 pydantic = "~=2.7"
 accelerate = "*"
@@ -58,19 +60,19 @@ scikit-learn = "~=1.5"
 optional = true
 
 [tool.poetry.group.dev.dependencies]
-pytest = "^8.2.2"
-pytest-mock = "^3.14.0"
-mypy = "^1.9.0"
-pre-commit = "^3.7.0"
-pytest-cov = "^5.0.0"
-ruff = "^0.3.4"
-codespell = "^2.3.0"
+pytest = "~=8.2"
+pytest-mock = "~=3.14"
+mypy = "~=1.9"
+pre-commit = "~=3.7"
+pytest-cov = "~=5.0"
+ruff = "~=0.3"
+codespell = "~=2.3"
 
 [tool.poetry.group.docs]
 optional = true
 
 [tool.poetry.group.docs.dependencies]
-pdoc = "^14.4.0"
+pdoc = "~=14.4"
 
 [tool.poetry.scripts]
 senselab-cli = "senselab.cli:main"
