@@ -19,6 +19,7 @@ def bytes_repr_arraylike(obj: torch.Tensor, cache: Cache) -> Iterator[bytes]:
         yield array.tobytes(order="C")
 
 
+# TODO: Ignore this for now but need to decide how to incorporate Pydra into the package
 # Pydra runner
 # need function that allows for marking a task (could be obfuscated internally)
 # need function that runs the actual code/does the parallelization
