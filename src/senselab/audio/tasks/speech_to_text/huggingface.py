@@ -12,7 +12,11 @@ from senselab.utils.data_structures.script_line import ScriptLine
 
 
 class HuggingFaceASR:
-    """A factory for managing Hugging Face ASR pipelines."""
+    """A factory for managing Hugging Face ASR pipelines.
+
+    # TODO: add timing logging
+    # TODO: add explanation on when it's convenient to use this factory and when not
+    """
 
     _pipelines: Dict[str, pipeline] = {}
 
@@ -114,11 +118,7 @@ class HuggingFaceASR:
                 obj = [_rename_key_recursive(item, old_key, new_key) for item in obj]
             return obj
 
-        # Check that all audio objects are mono
-        for audio in audios:
-            if audio.waveform.shape[0] != 1:
-                raise ValueError(f"Stereo audio is not supported. Got {audio.waveform.shape[0]} channels")
-
+        # Get the Hugging Face pipeline
         pipe = HuggingFaceASR._get_hf_asr_pipeline(
             model=model,
             return_timestamps=return_timestamps,
@@ -128,9 +128,28 @@ class HuggingFaceASR:
             device=device,
         )
 
+        # Retrieve the expected sampling rate from the Hugging Face model
+        expected_sampling_rate = pipe.feature_extractor.sampling_rate
+
+        # Check that all audio objects are mono
+        for audio in audios:
+            if audio.waveform.shape[0] != 1:
+                raise ValueError(f"Stereo audio is not supported. Got {audio.waveform.shape[0]} channels")
+            if audio.sampling_rate != expected_sampling_rate:
+                raise ValueError(
+                    f"Incorrect sampling rate. Expected {expected_sampling_rate}" f", got {audio.sampling_rate}"
+                )
+
+        # Convert the audio objects to dictionaries that can be used by the pipeline
         formatted_audios = [_audio_to_huggingface_dict(audio) for audio in audios]
+
+        # Run the pipeline
         transcriptions = pipe(
             formatted_audios, generate_kwargs={"language": f"{language.name.lower()}"} if language else {}
         )
+
+        # Rename the "timestamp" key to "timestamps"
         transcriptions = _rename_key_recursive(transcriptions, "timestamp", "timestamps")
+
+        # Convert the pipeline output to ScriptLine objects
         return [ScriptLine.from_dict(t) for t in transcriptions]
