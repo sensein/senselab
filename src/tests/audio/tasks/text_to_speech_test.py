@@ -1,9 +1,8 @@
 """Tests for the text to speech task."""
+
 import os
 
 if os.getenv("GITHUB_ACTIONS") != "true":
-
-
     import pytest
 
     from senselab.audio.data_structures.audio import Audio
@@ -11,12 +10,10 @@ if os.getenv("GITHUB_ACTIONS") != "true":
     from senselab.utils.data_structures.device import DeviceType
     from senselab.utils.data_structures.model import HFModel, SenselabModel
 
-
     @pytest.fixture
     def hf_model() -> HFModel:
         """Fixture for HF model."""
         return HFModel(path_or_uri="suno/bark-small", revision="main")
-    
 
     def test_synthesize_texts(hf_model: HFModel) -> None:
         """Test synthesizing texts."""
@@ -28,7 +25,6 @@ if os.getenv("GITHUB_ACTIONS") != "true":
         assert audios[0].waveform is not None
         assert audios[0].sampling_rate > 0
 
-
     def test_huggingface_tts_pipeline_factory(hf_model: HFModel) -> None:
         """Test Hugging Face TTS pipeline factory."""
         device = DeviceType.CPU
@@ -37,7 +33,6 @@ if os.getenv("GITHUB_ACTIONS") != "true":
 
         assert pipeline1 is pipeline2  # Check if the same instance is returned
 
-
     def test_invalid_model() -> None:
         """Test synthesize_texts with invalid model."""
         texts = ["Hello world"]
@@ -45,4 +40,3 @@ if os.getenv("GITHUB_ACTIONS") != "true":
 
         with pytest.raises(NotImplementedError, match="Only Hugging Face models are supported for now."):
             synthesize_texts(texts=texts, model=model)
-

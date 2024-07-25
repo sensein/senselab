@@ -2,7 +2,6 @@
 
 from typing import Dict, List, Optional
 
-import torch
 from speechbrain.inference.separation import SepformerSeparation as separator
 
 from senselab.audio.data_structures.audio import Audio
@@ -77,14 +76,9 @@ class SpeechBrainEnhancer:
                     + str(expected_sample_rate)
                 )
 
-        # Stack audio waveforms for batch processing
-        waveforms = torch.stack([audio.waveform.squeeze() for audio in audios])
+            # Enhance waveforms in a batch
+            enhanced_waveform = enhancer.separate_batch(audio.waveform)
 
-        # Enhance waveforms in a batch
-        enhanced_waveforms = enhancer.separate_batch(waveforms)
-
-        # Update the original audio objects with the enhanced waveforms
-        for audio, enhanced_waveform in zip(audios, enhanced_waveforms):
             audio.waveform = enhanced_waveform.reshape(1, -1)
 
         return audios
