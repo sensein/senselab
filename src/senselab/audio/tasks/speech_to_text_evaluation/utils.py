@@ -1,8 +1,8 @@
 """This module implements some utilities for evaluating a transcription."""
 
 import jiwer
-import pydra
 
+# TODO: add more metrics which take into account the meaning/intention
 
 def calculate_wer(reference: str, hypothesis: str) -> float:
     """Calculate the Word Error Rate (WER) between the reference and hypothesis.
@@ -87,10 +87,3 @@ def calculate_cer(reference: str, hypothesis: str) -> float:
         0.45454545454545453
     """
     return jiwer.cer(reference, hypothesis)
-
-
-calculate_wer_pt = pydra.mark.task(calculate_wer)
-calculate_mer_pt = pydra.mark.task(calculate_mer)
-calculate_wil_pt = pydra.mark.task(calculate_wil)
-calculate_wip_pt = pydra.mark.task(calculate_wip)
-calculate_cer_pt = pydra.mark.task(calculate_cer)
