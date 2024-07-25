@@ -1,3 +1,15 @@
+# 0.6.3 (Thu Jul 25 2024)
+
+#### 🐛 Bug Fix
+
+- Update pyproject.toml [#114](https://github.com/sensein/senselab/pull/114) ([@satra](https://github.com/satra))
+
+#### Authors: 1
+
+- Satrajit Ghosh ([@satra](https://github.com/satra))
+
+---
+
 # 0.6.2 (Wed Jul 24 2024)
 
 #### 🐛 Bug Fix
