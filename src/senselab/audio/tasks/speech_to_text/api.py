@@ -1,7 +1,7 @@
 """This module represents the API for the speech-to-text task within the senselab package.
 
-Currently, it supports only Hugging Face models, with plans to include more in the future. 
-Users can specify the audio clips to transcribe, the ASR model, the language, 
+Currently, it supports only Hugging Face models, with plans to include more in the future.
+Users can specify the audio clips to transcribe, the ASR model, the language,
 the preferred device, and the model-specific parameters, and senselab handles the rest.
 """
 
@@ -46,4 +46,3 @@ def transcribe_audios(
             raise NotImplementedError("Only Hugging Face models are supported for now.")
     except TypeError as e:
         raise TypeError("An error occurred in the transcribe function.") from e
-

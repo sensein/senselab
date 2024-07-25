@@ -35,7 +35,7 @@
 </body>
 </html>
 
-# Speech to text  
+# Speech to text
 
 
 <button class="button" onclick="redirectToTutorial()">Tutorial</button>
@@ -98,7 +98,7 @@ The following table lists the datasets included in the [English Speech Benchmark
 | AMI            | Meetings                | Spontaneous         | 78        | 9       | 9        | Punctuated & Cased     | CC-BY-4.0          |
 
 For more details on these datasets and how models are evaluated to obtain the ESB score, refer to the ESB paper.
-Note that this list of datasets is not exhaustive. If you are interested in benchmarking models in different languages or under specific conditions, consult the relevant literature. 
+Note that this list of datasets is not exhaustive. If you are interested in benchmarking models in different languages or under specific conditions, consult the relevant literature.
 
 ### Benchmark
 The [🤗 Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard) ranks and evaluates speech recognition models available on the Hugging Face Hub. The leaderboard uses the datasets included in the ESB paper to obtain robust evaluation scores for each model. The ESB score is a macro-average of the WER scores across the ESB datasets, providing a comprehensive indication of a model's performance across various domains and conditions.
