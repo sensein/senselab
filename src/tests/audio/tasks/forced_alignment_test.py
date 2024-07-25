@@ -28,14 +28,6 @@ from senselab.utils.data_structures.device import DeviceType
 from senselab.utils.data_structures.language import Language
 from senselab.utils.data_structures.script_line import ScriptLine
 
-MONO_AUDIO_PATH = "src/tests/data_for_testing/audio_48khz_mono_16bits.wav"
-
-
-@pytest.fixture
-def mono_audio_sample() -> Audio:
-    """Fixture for sample mono audio."""
-    return Audio.from_filepath(MONO_AUDIO_PATH)
-
 
 class SingleCharSegment(TypedDict):
     """A single char of a speech."""
