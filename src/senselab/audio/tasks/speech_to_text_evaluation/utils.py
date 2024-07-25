@@ -4,6 +4,7 @@ import jiwer
 
 # TODO: add more metrics which take into account the meaning/intention
 
+
 def calculate_wer(reference: str, hypothesis: str) -> float:
     """Calculate the Word Error Rate (WER) between the reference and hypothesis.
 

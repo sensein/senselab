@@ -1,7 +1,7 @@
 """This module provides a factory for managing Hugging Face ASR pipelines.
 
-To ensure correct functionality, call `transcribe_audios_with_transformers` serially or, 
-if you need to process multiple audios in parallel, pass the entire list of audios to the 
+To ensure correct functionality, call `transcribe_audios_with_transformers` serially or,
+if you need to process multiple audios in parallel, pass the entire list of audios to the
 function at once, rather than calling the function with one audio at a time.
 """
 

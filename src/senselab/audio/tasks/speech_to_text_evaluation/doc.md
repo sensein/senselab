@@ -46,7 +46,7 @@ Evaluating speech transcripts involves comparing a predicted transcript (hypothe
 
 ### 1. Word Error Rate (WER)
 
-Word Error Rate (WER) is the most common metric used to evaluate the accuracy of ASR systems. It measures the number of word-level errors (insertions, deletions, and substitutions) divided by the total number of words in the reference. The lower the value, the better the performance of the ASR system, with an error rate of 0 indicating a perfect score. Notably, this is not a percentage as can go higher than 1. 
+Word Error Rate (WER) is the most common metric used to evaluate the accuracy of ASR systems. It measures the number of word-level errors (insertions, deletions, and substitutions) divided by the total number of words in the reference. The lower the value, the better the performance of the ASR system, with an error rate of 0 indicating a perfect score. Notably, this is not a percentage as can go higher than 1.
 
 **Formula:**
 ```text
@@ -62,7 +62,7 @@ Where:
 ### 2. Character Error Rate (CER)
 
 Character Error Rate (CER) is similar to WER but operates at the character level rather than the word level. It measures the number of character-level errors divided by the total number of characters in the reference. The lower the value, the better the performance of the ASR system, with an error rate of 0 indicating a perfect score.
-As for WER, CER is not a percentage as can go higher than 1. 
+As for WER, CER is not a percentage as can go higher than 1.
 
 **Formula:**
 ```text
@@ -92,7 +92,7 @@ Where:
 
 ### 4. Word Information Lost (WIL)
 
-Word Information Lost (WIL) is computed as follows: 
+Word Information Lost (WIL) is computed as follows:
 
 **Formula:**
 ```text
