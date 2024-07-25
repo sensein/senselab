@@ -100,3 +100,36 @@ def test_evenly_segment_audios(audio_sample_fixture: str, segment_length: int, r
         expected_length = int(segment_length * audio_sample.sampling_rate)
         for channel in segment.waveform:
             assert channel.shape[0] == expected_length
+
+def test_chunk_audios(mono_audio_sample: Audio) -> None:
+    """Tests functionality for chunking Audio objects."""
+    audio_duration = mono_audio_sample.waveform.shape[1] / mono_audio_sample.sampling_rate
+    test_data = [
+        (mono_audio_sample, (0.0, 1.0)),  # Normal case within bounds
+        (mono_audio_sample, (1.0, 2.0)),  # Normal case within bounds
+    ]
+
+    chunked_audios = chunk_audios(test_data)
+    for i, (original_audio, (start, end)) in enumerate(test_data):
+        start_sample = int(start * original_audio.sampling_rate)
+        end_sample = int(end * original_audio.sampling_rate)
+        expected_length = end_sample - start_sample
+        assert chunked_audios[i].waveform.shape[1] == expected_length
+
+    with pytest.raises(ValueError, match="Start time must be greater than or equal to 0."):
+        chunk_audios([(mono_audio_sample, (-1.0, 1.0))])
+
+    with pytest.raises(ValueError) as e:
+        chunk_audios([(mono_audio_sample, (0.0, audio_duration + 1.0))])
+    assert str(e.value) == f"End time must be less than the duration of the audio file ({audio_duration} seconds)."
+
+    chunked_audio = chunk_audios([(mono_audio_sample, (0.0, audio_duration))])[0]
+    assert chunked_audio.waveform.shape[1] == mono_audio_sample.waveform.shape[1]
+
+
+def test_concatenate_audios(resampled_mono_audio_sample: Audio, resampled_mono_audio_sample_x2: Audio) -> None:
+    """Tests functionality for concatenating Audio objects."""
+    assert torch.equal(
+        resampled_mono_audio_sample_x2.waveform,
+        torch.cat([resampled_mono_audio_sample.waveform, resampled_mono_audio_sample.waveform], dim=1),
+    )

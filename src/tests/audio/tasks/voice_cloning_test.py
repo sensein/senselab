@@ -3,7 +3,6 @@
 import os
 
 if os.getenv("GITHUB_ACTIONS") != "true":
-
     import pytest
 
     from senselab.audio.data_structures.audio import Audio
@@ -23,10 +22,7 @@ if os.getenv("GITHUB_ACTIONS") != "true":
 
         with pytest.raises(ValueError, match="Source and target audios must have the same length."):
             clone_voices(
-                source_audios=source_audios,
-                target_audios=target_audios,
-                model=torch_model,
-                device=DeviceType.CPU
+                source_audios=source_audios, target_audios=target_audios, model=torch_model, device=DeviceType.CPU
             )
 
     def test_clone_voices_invalid_topk(resampled_mono_audio_sample: Audio, torch_model: TorchModel) -> None:
@@ -43,8 +39,9 @@ if os.getenv("GITHUB_ACTIONS") != "true":
                 topk="invalid",  # type: ignore[arg-type]
             )
 
-    def test_clone_voices_invalid_prematched_vocoder(resampled_mono_audio_sample: Audio, 
-                                                     torch_model: TorchModel) -> None:
+    def test_clone_voices_invalid_prematched_vocoder(
+        resampled_mono_audio_sample: Audio, torch_model: TorchModel
+    ) -> None:
         """Test invalid prematched_vocoder value."""
         source_audios = [resampled_mono_audio_sample]
         target_audios = [resampled_mono_audio_sample]
@@ -99,10 +96,7 @@ if os.getenv("GITHUB_ACTIONS") != "true":
 
         with pytest.raises(NotImplementedError, match="Only KNNVC is supported for now."):
             clone_voices(
-                source_audios=source_audios,
-                target_audios=target_audios,
-                model=unsupported_model,
-                device=DeviceType.CPU
+                source_audios=source_audios, target_audios=target_audios, model=unsupported_model, device=DeviceType.CPU
             )
 
     def test_clone_voices_stereo_audio(resampled_stereo_audio_sample: Audio, torch_model: TorchModel) -> None:
@@ -112,10 +106,7 @@ if os.getenv("GITHUB_ACTIONS") != "true":
 
         with pytest.raises(ValueError, match="Only mono audio files are supported."):
             clone_voices(
-                source_audios=source_audios,
-                target_audios=target_audios,
-                model=torch_model,
-                device=DeviceType.CPU
+                source_audios=source_audios, target_audios=target_audios, model=torch_model, device=DeviceType.CPU
             )
 
     def test_clone_voices_invalid_sampling_rate(mono_audio_sample: Audio, torch_model: TorchModel) -> None:
@@ -125,8 +116,5 @@ if os.getenv("GITHUB_ACTIONS") != "true":
 
         with pytest.raises(ValueError, match="Only 16000 sampling rate is supported."):
             clone_voices(
-                source_audios=source_audios,
-                target_audios=target_audios,
-                model=torch_model,
-                device=DeviceType.CPU
+                source_audios=source_audios, target_audios=target_audios, model=torch_model, device=DeviceType.CPU
             )
