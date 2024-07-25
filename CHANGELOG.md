@@ -1,3 +1,15 @@
+# 0.6.2 (Wed Jul 24 2024)
+
+#### 🐛 Bug Fix
+
+- Pydra [#115](https://github.com/sensein/senselab/pull/115) ([@wilke0818](https://github.com/wilke0818))
+
+#### Authors: 1
+
+- [@wilke0818](https://github.com/wilke0818)
+
+---
+
 # 0.6.1 (Tue Jul 23 2024)
 
 #### 🐛 Bug Fix
