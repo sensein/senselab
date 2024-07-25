@@ -1,7 +1,6 @@
 """Tests for forced alignment functions."""
 
 import os
-from typing import Optional, TypedDict
 
 import numpy as np
 import pandas as pd
@@ -27,15 +26,6 @@ from senselab.audio.tasks.forced_alignment.forced_alignment import (
 from senselab.utils.data_structures.device import DeviceType
 from senselab.utils.data_structures.language import Language
 from senselab.utils.data_structures.script_line import ScriptLine
-
-
-class SingleCharSegment(TypedDict):
-    """A single char of a speech."""
-
-    char: str
-    start: Optional[float]
-    end: Optional[float]
-    score: float
 
 
 @pytest.fixture
