@@ -1,4 +1,9 @@
-"""This module provides a factory for managing Hugging Face ASR pipelines."""
+"""This module provides a factory for managing Hugging Face ASR pipelines.
+
+To ensure correct functionality, call `transcribe_audios_with_transformers` serially or, 
+if you need to process multiple audios in parallel, pass the entire list of audios to the 
+function at once, rather than calling the function with one audio at a time.
+"""
 
 import time
 from typing import Any, Dict, List, Optional
@@ -14,10 +19,7 @@ from senselab.utils.data_structures.script_line import ScriptLine
 
 
 class HuggingFaceASR:
-    """A factory for managing Hugging Face ASR pipelines.
-
-    # TODO: add explanation on when it's convenient to use this factory and when not
-    """
+    """A factory for managing Hugging Face ASR pipelines."""
 
     _pipelines: Dict[str, pipeline] = {}
 

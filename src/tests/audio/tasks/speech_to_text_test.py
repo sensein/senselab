@@ -30,7 +30,7 @@ def test_scriptline_from_dict() -> None:
 
 if os.getenv("GITHUB_ACTIONS") != "true":
     from senselab.audio.data_structures.audio import Audio
-    from senselab.audio.tasks.speech_to_text.api import transcribe_audios
+    from senselab.audio.tasks.speech_to_text import transcribe_audios
     from senselab.audio.tasks.speech_to_text.huggingface import HuggingFaceASR
     from senselab.utils.data_structures.device import DeviceType
     from senselab.utils.data_structures.language import Language
