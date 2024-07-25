@@ -16,8 +16,8 @@ class ScriptLine(BaseModel):
 
     text: Optional[str] = None
     speaker: Optional[str] = None
-    start: Optional[float] = 0
-    end: Optional[float] = 0
+    start: Optional[float] = None
+    end: Optional[float] = None
     chunks: Optional[List["ScriptLine"]] = None
 
     @model_validator(mode="before")
