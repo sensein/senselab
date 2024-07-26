@@ -8,6 +8,7 @@ from pytest import FixtureRequest
 
 from senselab.audio.data_structures.audio import Audio
 from senselab.audio.tasks.preprocessing.preprocessing import (
+    chunk_audios,
     downmix_audios_to_mono,
     evenly_segment_audios,
     extract_segments,
@@ -100,6 +101,7 @@ def test_evenly_segment_audios(audio_sample_fixture: str, segment_length: int, r
         expected_length = int(segment_length * audio_sample.sampling_rate)
         for channel in segment.waveform:
             assert channel.shape[0] == expected_length
+
 
 def test_chunk_audios(mono_audio_sample: Audio) -> None:
     """Tests functionality for chunking Audio objects."""

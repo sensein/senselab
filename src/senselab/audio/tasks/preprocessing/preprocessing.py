@@ -102,6 +102,39 @@ def select_channel_from_audios(audios: List[Audio], channel_index: int) -> List[
     return mono_channel_audios
 
 
+def chunk_audios(data: List[Tuple[Audio, Tuple[float, float]]]) -> List[Audio]:
+    """Chunks the input audios based on the start and end timestamp.
+
+    Args:
+        data: List of tuples containing an Audio object and a tuple with start and end (in seconds) for chunking.
+
+    Returns:
+        List of Audios that have been chunked based on the provided timestamps
+    """
+    chunked_audios = []
+
+    for audio, timestamps in data:
+        start, end = timestamps
+        if start < 0:
+            raise ValueError("Start time must be greater than or equal to 0.")
+        duration = audio.waveform.shape[1] / audio.sampling_rate
+        if end > duration:
+            raise ValueError(f"End time must be less than the duration of the audio file ({duration} seconds).")
+        start_sample = int(start * audio.sampling_rate)
+        end_sample = int(end * audio.sampling_rate)
+        chunked_waveform = audio.waveform[:, start_sample:end_sample]
+
+        chunked_audios.append(
+            Audio(
+                waveform=chunked_waveform,
+                sampling_rate=audio.sampling_rate,
+                metadata=audio.metadata.copy(),
+                orig_path_or_id=audio.orig_path_or_id,
+            )
+        )
+    return chunked_audios
+
+
 def extract_segments(data: List[Tuple[Audio, List[Tuple[float, float]]]]) -> List[List[Audio]]:
     """Extracts segments from an audio file.
 
@@ -114,25 +147,8 @@ def extract_segments(data: List[Tuple[Audio, List[Tuple[float, float]]]]) -> Lis
     """
     extracted_segments = []
     for audio, timestamps in data:
-        single_audio_segments = []
-        for start, end in timestamps:
-            if start < 0:
-                raise ValueError("Start time must be greater than or equal to 0.")
-            duration = audio.waveform.shape[1] / audio.sampling_rate
-            if end > duration:
-                raise ValueError(f"End time must be less than the duration of the audio file ({duration} seconds).")
-            start_sample = int(start * audio.sampling_rate)
-            end_sample = int(end * audio.sampling_rate)
-            chunked_waveform = audio.waveform[:, start_sample:end_sample]
-
-            single_audio_segments.append(
-                Audio(
-                    waveform=chunked_waveform,
-                    sampling_rate=audio.sampling_rate,
-                    metadata=audio.metadata.copy(),
-                    orig_path_or_id=audio.orig_path_or_id,
-                )
-            )
+        segments_data = [(audio, ts) for ts in timestamps]
+        single_audio_segments = chunk_audios(segments_data)
         extracted_segments.append(single_audio_segments)
     return extracted_segments
 
