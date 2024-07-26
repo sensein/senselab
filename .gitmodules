@@ -4,3 +4,6 @@
 [submodule "src/senselab/libs/FreeVC"]
 	path = src/senselab/libs/FreeVC
 	url = https://github.com/OlaWod/FreeVC.git
+[submodule "src/senselab/libs/MARS5-TTS"]
+	path = src/senselab/libs/MARS5-TTS
+	url = https://github.com/Camb-ai/MARS5-TTS.git
