@@ -1,3 +1,6 @@
 [submodule "src/senselab/libs/StyleTTS2"]
 	path = src/senselab/libs/StyleTTS2
 	url = https://github.com/yl4579/StyleTTS2.git
+[submodule "src/senselab/libs/FreeVC"]
+	path = src/senselab/libs/FreeVC
+	url = https://github.com/OlaWod/FreeVC.git
