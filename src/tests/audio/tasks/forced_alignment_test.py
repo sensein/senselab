@@ -75,7 +75,9 @@ def test_preprocess_segments() -> None:
     """Test preprocessing of segments."""
     transcript = [SingleSegment(start=0.0, end=1.0, text="test")]
     model_dictionary = {"t": 0, "e": 1, "s": 2}
-    preprocessed_segments = _preprocess_segments(transcript, model_dictionary, "en", False, False)
+    preprocessed_segments = _preprocess_segments(
+        transcript, model_dictionary, Language(language_code="en"), False, False
+    )
     assert preprocessed_segments[0]["clean_char"] == ["t", "e", "s", "t"]
 
 
@@ -119,7 +121,11 @@ if os.getenv("GITHUB_ACTIONS") != "true":
 
         # Preprocess the transcript segments
         preprocessed_transcript = _preprocess_segments(
-            transcript, model_dictionary, model_lang="en", print_progress=False, combined_progress=False
+            transcript,
+            model_dictionary,
+            model_lang=Language(language_code="en"),
+            print_progress=False,
+            combined_progress=False,
         )
 
         # Ensure the model dictionary has the necessary keys
@@ -131,7 +137,7 @@ if os.getenv("GITHUB_ACTIONS") != "true":
             transcript=preprocessed_transcript,
             model=model,
             model_dictionary=model_dictionary,
-            model_lang="en",
+            model_lang=Language(language_code="en"),
             model_type="huggingface",
             audio=mono_audio_sample,
             device=DeviceType.CPU,
@@ -161,7 +167,7 @@ if os.getenv("GITHUB_ACTIONS") != "true":
             model=model,
             align_model_metadata={
                 "dictionary": processor.tokenizer.get_vocab(),
-                "language": "en",
+                "language": Language(language_code="en"),
                 "type": "huggingface",
             },
             audio=resampled_mono_audio_sample,
