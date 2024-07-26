@@ -74,9 +74,9 @@ repos:
     files: \.yml$
 
 - repo: local
-    hooks:
-      - id: pytest
-        name: pytest
-        entry: pytest
-        language: system
-        types: [python]
+  hooks:
+  - id: pytest
+    name: pytest
+    entry: pytest
+    language: system
+    types: [python]
