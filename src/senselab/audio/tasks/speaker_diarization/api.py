@@ -1,4 +1,8 @@
-"""This module implements some utilities for the speaker diarization task."""
+"""This module implements some utilities for the speaker diarization task.
+
+# TODO: add computing DER and more evaluation metrics
+"""
+
 from typing import List, Optional
 
 import pydra
@@ -6,17 +10,17 @@ import pydra
 from senselab.audio.data_structures.audio import Audio
 from senselab.audio.tasks.speaker_diarization.pyannote import diarize_audios_with_pyannote
 from senselab.utils.data_structures.device import DeviceType
-from senselab.utils.data_structures.model import HFModel, SenselabModel
+from senselab.utils.data_structures.model import PyannoteAudioModel, SenselabModel
 from senselab.utils.data_structures.script_line import ScriptLine
 
 
 def diarize_audios(
-    audios: List[Audio], 
-    model: SenselabModel, 
-    num_speakers: Optional[int] = None, 
-    min_speakers: Optional[int] = None, 
+    audios: List[Audio],
+    model: SenselabModel,
+    num_speakers: Optional[int] = None,
+    min_speakers: Optional[int] = None,
     max_speakers: Optional[int] = None,
-    device: Optional[DeviceType] = None
+    device: Optional[DeviceType] = None,
 ) -> List[List[ScriptLine]]:
     """Diarizes all audios using the given model.
 
@@ -31,12 +35,17 @@ def diarize_audios(
     Returns:
         List[List[ScriptLine]]: The list of script lines with speaker labels.
     """
-    if isinstance(model, HFModel) and "pyannote/" in str(model.path_or_uri):
+    if isinstance(model, PyannoteAudioModel):
         return diarize_audios_with_pyannote(
-            audios=audios, model=model, device=device, num_speakers=num_speakers, 
-            min_speakers=min_speakers, max_speakers=max_speakers
+            audios=audios,
+            model=model,
+            device=device,
+            num_speakers=num_speakers,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
         )
-    else: 
+    else:
         raise NotImplementedError("Only Pyannote models are supported for now.")
+
 
 diarize_audios_pt = pydra.mark.task(diarize_audios)

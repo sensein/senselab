@@ -1,3 +1,104 @@
+# 0.6.3 (Thu Jul 25 2024)
+
+#### 🐛 Bug Fix
+
+- Update pyproject.toml [#114](https://github.com/sensein/senselab/pull/114) ([@satra](https://github.com/satra))
+
+#### Authors: 1
+
+- Satrajit Ghosh ([@satra](https://github.com/satra))
+
+---
+
+# 0.6.2 (Wed Jul 24 2024)
+
+#### 🐛 Bug Fix
+
+- Pydra [#115](https://github.com/sensein/senselab/pull/115) ([@wilke0818](https://github.com/wilke0818))
+
+#### Authors: 1
+
+- [@wilke0818](https://github.com/wilke0818)
+
+---
+
+# 0.6.1 (Tue Jul 23 2024)
+
+#### 🐛 Bug Fix
+
+- adjusting dependencies and github actions plus adding pooling methods as a task plus fixing speechbrain issues plus adding some documentation [#93](https://github.com/sensein/senselab/pull/93) ([@fabiocat93](https://github.com/fabiocat93) [@GasserElbanna](https://github.com/GasserElbanna) mbsilva@node087.ib.cluster [@900miles](https://github.com/900miles))
+- pre_commit_experiments [#113](https://github.com/sensein/senselab/pull/113) ([@fabiocat93](https://github.com/fabiocat93))
+- :sparkles: add pooling methods [#96](https://github.com/sensein/senselab/pull/96) ([@GasserElbanna](https://github.com/GasserElbanna))
+
+#### 📝 Documentation
+
+- Add documentation for speaker embeddings task and fix audio length bug [#97](https://github.com/sensein/senselab/pull/97) (mbsilva@node087.ib.cluster [@900miles](https://github.com/900miles) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 6
+
+- [@900miles](https://github.com/900miles)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Gasser Elbanna ([@GasserElbanna](https://github.com/GasserElbanna))
+- Miles B Silva (mbsilva@node063.ib.cluster)
+- Miles B Silva (mbsilva@node087.ib.cluster)
+- Miles B Silva (mbsilva@node088.ib.cluster)
+
+---
+
+# 0.6.0 (Thu Jul 11 2024)
+
+#### 🚀 Enhancement
+
+- release 0.6.0 is for fixing bugs and adjusting docs [#92](https://github.com/sensein/senselab/pull/92) ([@ibevers](https://github.com/ibevers) [@fabiocat93](https://github.com/fabiocat93))
+
+#### 🐛 Bug Fix
+
+- Add b2ai speaker verification functions [#87](https://github.com/sensein/senselab/pull/87) ([@ibevers](https://github.com/ibevers))
+- attempting to fix documentation [#84](https://github.com/sensein/senselab/pull/84) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@ibevers](https://github.com/ibevers)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.5.1 (Fri Jun 28 2024)
+
+#### 🐛 Bug Fix
+
+- fixing documentation issue [#83](https://github.com/sensein/senselab/pull/83) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.5.0 (Fri Jun 28 2024)
+
+#### 🚀 Enhancement
+
+- Release 050 [#82](https://github.com/sensein/senselab/pull/82) ([@fabiocat93](https://github.com/fabiocat93) mbsilva@node084.ib.cluster [@GasserElbanna](https://github.com/GasserElbanna))
+
+#### 🐛 Bug Fix
+
+- adding text embeddings extraction with sentencetransformers [#79](https://github.com/sensein/senselab/pull/79) ([@fabiocat93](https://github.com/fabiocat93))
+- Add dimensionality reduction task [#81](https://github.com/sensein/senselab/pull/81) (mbsilva@node084.ib.cluster [@900miles](https://github.com/900miles))
+- adding the text to speech task [#80](https://github.com/sensein/senselab/pull/80) ([@fabiocat93](https://github.com/fabiocat93))
+- adding speech enhancement task [#78](https://github.com/sensein/senselab/pull/78) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 6
+
+- [@900miles](https://github.com/900miles)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Gasser Elbanna ([@GasserElbanna](https://github.com/GasserElbanna))
+- Miles B Silva (mbsilva@node076.ib.cluster)
+- Miles B Silva (mbsilva@node084.ib.cluster)
+- Miles B Silva (mbsilva@node085.ib.cluster)
+
+---
+
 # 0.4.0 (Fri Jun 21 2024)
 
 #### 🚀 Enhancement
