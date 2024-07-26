@@ -35,7 +35,7 @@ from senselab.utils.data_structures.script_line import ScriptLine
 def _preprocess_segments(
     transcript: List[SingleSegment],
     model_dictionary: Dict[str, int],
-    model_lang: str,
+    model_lang: Language,
     print_progress: bool,
     combined_progress: bool,
 ) -> List[SingleSegment]:
@@ -44,7 +44,7 @@ def _preprocess_segments(
     Args:
         transcript (List[SingleSegment]): The list of transcription segments.
         model_dictionary (Dict[str, int]): Dictionary for the alignment model.
-        model_lang (str): Language of the model.
+        model_lang (Language): Language of the model.
         print_progress (bool): Whether to print progress.
         combined_progress (bool): Whether to combine progress percentage.
 
@@ -64,7 +64,7 @@ def _preprocess_segments(
         text = segment["text"]
 
         # Split into words
-        if model_lang not in LANGUAGES_WITHOUT_SPACES:
+        if model_lang.alpha_2 not in LANGUAGES_WITHOUT_SPACES:
             per_word = text.split(" ")
         else:
             per_word = [text]
@@ -72,7 +72,7 @@ def _preprocess_segments(
         clean_char, clean_cdx = [], []
         for cdx, char in enumerate(text):
             char_ = char.lower()
-            if model_lang not in LANGUAGES_WITHOUT_SPACES:
+            if model_lang.alpha_2 not in LANGUAGES_WITHOUT_SPACES:
                 char_ = char_.replace(" ", "|")
 
             if cdx < num_leading or cdx > len(text) - num_trailing - 1:
@@ -153,7 +153,7 @@ def _get_prediction_matrix(
 
 
 def _assign_timestamps_to_characters(
-    text: str, segment: SingleSegment, char_segments: list, ratio: float, t1: float, model_lang: str
+    text: str, segment: SingleSegment, char_segments: list, ratio: float, t1: float, model_lang: Language
 ) -> pd.DataFrame:
     """Assigns timestamps to aligned characters and organizes them into a DataFrame.
 
@@ -163,7 +163,7 @@ def _assign_timestamps_to_characters(
         char_segments (list): List of character segments with alignment information.
         ratio (float): The ratio of duration to waveform segment size.
         t1 (float): Start time of the segment.
-        model_lang (str): Language of the model.
+        model_lang (Language): Language of the model.
 
     Returns:
         pd.DataFrame: DataFrame containing character alignments with timestamps and word indices.
@@ -188,7 +188,7 @@ def _assign_timestamps_to_characters(
             }
         )
 
-        if model_lang in LANGUAGES_WITHOUT_SPACES:
+        if model_lang.alpha_2 in LANGUAGES_WITHOUT_SPACES:
             word_idx += 1
         elif cdx == len(text) - 1 or text[cdx + 1] == " ":
             word_idx += 1
@@ -263,7 +263,7 @@ def _align_single_segment(
     segment: SingleSegment,
     model: torch.nn.Module,
     model_dictionary: Dict[str, int],
-    model_lang: str,
+    model_lang: Language,
     model_type: str,
     audio: Audio,
     device: DeviceType,
@@ -281,8 +281,8 @@ def _align_single_segment(
         segment (SingleSegment): The segment to align.
         model (torch.nn.Module): The alignment model.
         model_dictionary (Dict[str, int]): Dictionary for character indices.
-        model_lang (str): Language of the model.
-        model_type (str): The type of the model ('torchaudio' or 'huggingface').
+        model_lang (Language): Language of the model.
+        model_type (str): Either 'huggingface' or 'torchaudio'.
         audio (Audio): The audio data.
         device (DeviceType): The device to run the model on.
         t1 (float): Start time of the segment.
@@ -350,7 +350,7 @@ def _align_single_segment(
             )
             aligned_subsegments_df["end"] = _interpolate_nans(aligned_subsegments_df["end"], method=interpolate_method)
             agg_dict = {"text": " ".join, "words": "sum"}
-            if model_lang in LANGUAGES_WITHOUT_SPACES:
+            if model_lang.alpha_2 in LANGUAGES_WITHOUT_SPACES:
                 agg_dict["text"] = "".join
             if return_char_alignments:
                 agg_dict["chars"] = "sum"
@@ -469,7 +469,7 @@ def _align_segments(
     transcript: List[SingleSegment],
     model: torch.nn.Module,
     model_dictionary: Dict[str, int],
-    model_lang: str,
+    model_lang: Language,
     model_type: str,
     audio: Audio,
     device: DeviceType,
@@ -661,7 +661,7 @@ def align_transcriptions(
                 model=model,
                 align_model_metadata={
                     "dictionary": processor.tokenizer.get_vocab(),
-                    "language": language.language_code,
+                    "language": language,
                     "type": "huggingface" if isinstance(model_variant, HFModel) else "torchaudio",
                 },
                 audio=audio,
