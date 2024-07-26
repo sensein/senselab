@@ -2,7 +2,6 @@
 
 from typing import List, Optional, Tuple
 
-import pydra
 import torch
 from scipy import signal
 from speechbrain.augment.time_domain import Resample

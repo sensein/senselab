@@ -616,28 +616,38 @@ def _align_transcription(
 
 
 def align_transcriptions(
-    audios_and_transcriptions: List[Tuple[Audio, ScriptLine]], language: Language = Language(language_code="en")
+    audios_and_transcriptions: List[Tuple[Audio, ScriptLine, Language]],
 ) -> List[List[ScriptLine]]:
     """Aligns transcriptions with the given audio using a wav2vec2.0 model.
 
     Args:
-        audios_and_transcriptions (List[Tuple[Audio, ScriptLine]]):
-            A list of tuples where each tuple contains an audio object and its corresponding transcription.
-        language (Language): The language of the audio (default is "en").
+        audios_and_transcriptions (List[tuple[Audio, ScriptLine, Language]):
+            A list of tuples audios, corresponding transcriptions, and optionally a language.
 
     Returns:
         List[List[ScriptLine]]: A list of lists, where each inner list contains the aligned script lines for each audio.
     """
     aligned_script_lines = []
+    loaded_processors_and_models = {}
 
-    # Define the language code and load model
-    device = _select_device_and_dtype()[0]  # DeviceType object
-    model_variant = DEFAULT_ALIGN_MODELS_HF.get(language.language_code, DEFAULT_ALIGN_MODELS_HF["en"])
+    for item in audios_and_transcriptions:
+        audio, transcription, language = (*item, None)[:3]
 
-    processor = Wav2Vec2Processor.from_pretrained(model_variant.path_or_uri)
-    model = Wav2Vec2ForCTC.from_pretrained(model_variant.path_or_uri).to(device.value)
+        # Set default language to English if not provided
+        if language is None:
+            language = Language(language_code="en")
 
-    for audio, transcription in audios_and_transcriptions:
+        # Define the language code and load model
+        device = _select_device_and_dtype()[0]  # DeviceType object
+        model_variant = DEFAULT_ALIGN_MODELS_HF.get(language.language_code, DEFAULT_ALIGN_MODELS_HF["en"])
+
+        if model_variant.path_or_uri not in loaded_processors_and_models:  # Load model
+            processor = Wav2Vec2Processor.from_pretrained(model_variant.path_or_uri)
+            model = Wav2Vec2ForCTC.from_pretrained(model_variant.path_or_uri).to(device.value)
+            loaded_processors_and_models[model_variant.path_or_uri] = (processor, model)
+
+        processor, model = loaded_processors_and_models[model_variant.path_or_uri]
+
         if audio.sampling_rate != SAMPLE_RATE:
             raise ValueError(f"{audio.sampling_rate} rate is not equal to the training rate of {SAMPLE_RATE}.")
 
