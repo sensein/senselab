@@ -2,7 +2,7 @@
 
 import os
 from pathlib import Path
-from typing import Optional, Union
+from typing import Literal, Optional, Union
 
 import requests
 import torch
@@ -38,6 +38,12 @@ class SenselabModel(BaseModel):
                 raise ValueError("path_or_uri does not point to a valid torch model")
 
         return value
+
+
+class StyleTTSModel(SenselabModel):
+    """StyleTTS2.0 model configuration."""
+
+    path_or_uri: Literal["LibriTTS", "LJSpeech"] = "LibriTTS"
 
 
 class HFModel(SenselabModel):
