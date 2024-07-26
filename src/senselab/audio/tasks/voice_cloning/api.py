@@ -21,6 +21,9 @@ def clone_voices(
     if len(source_audios) != len(target_audios):
         raise ValueError("Source and target audios must have the same length.")
 
+    if len(source_audios) == 0:
+        return []
+
     if isinstance(model, TorchModel) and model.path_or_uri == "bshall/knn-vc":
         topk = kwargs.get("topk", 4)
         if not isinstance(topk, int):

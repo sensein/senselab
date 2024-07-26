@@ -2,6 +2,8 @@
 
 import os
 
+from senselab.utils.data_structures.model import StyleTTSModel
+
 if os.getenv("GITHUB_ACTIONS") != "true":
     import pytest
 
@@ -14,6 +16,11 @@ if os.getenv("GITHUB_ACTIONS") != "true":
     def hf_model() -> HFModel:
         """Fixture for HF model."""
         return HFModel(path_or_uri="suno/bark-small", revision="main")
+
+    @pytest.fixture
+    def style_tts_model() -> StyleTTSModel:
+        """Fixture for StyleTTS model."""
+        return StyleTTSModel(path_or_uri="LibriTTS")
 
     def test_synthesize_texts(hf_model: HFModel) -> None:
         """Test synthesizing texts."""
@@ -40,3 +47,17 @@ if os.getenv("GITHUB_ACTIONS") != "true":
 
         with pytest.raises(NotImplementedError, match="Only Hugging Face models are supported for now."):
             synthesize_texts(texts=texts, model=model)
+
+    def test_synthesize_style_tts(style_tts_model: StyleTTSModel) -> None:
+        """Test synthesizing texts."""
+        texts = ["Hello world"]
+        audios = synthesize_texts(
+            texts=texts,
+            model=style_tts_model,
+            reference_audios=[Audio.from_filepath("src/tests/data_for_testing/audio_48khz_mono_16bits.wav")],
+        )
+
+        assert len(audios) == 1
+        assert isinstance(audios[0], Audio)
+        assert audios[0].waveform is not None
+        assert audios[0].sampling_rate > 0
