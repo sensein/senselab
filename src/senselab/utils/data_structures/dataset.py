@@ -311,7 +311,7 @@ class SenselabDataset(BaseModel):
                         waveform=audio["audio"]["array"],
                         sampling_rate=audio["audio"]["sampling_rate"],
                         orig_path_or_id=audio["audio"]["path"],
-                        metadata=audio["metadata"],
+                        metadata=audio["metadata"] if "metadata" in audio else {},
                     )
                 )
 
@@ -322,7 +322,7 @@ class SenselabDataset(BaseModel):
                     Video(
                         frames=video["frames"]["image"],
                         frame_rate=video["frame_rate"],
-                        metadata=video["metadata"],
+                        metadata=video["metadata"] if "metadata" in video else {},
                         orig_path_or_id=video["path"],
                         audio=Audio(
                             waveform=video["audio"]["array"],
