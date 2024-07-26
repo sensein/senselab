@@ -1,0 +1,3 @@
+[submodule "src/senselab/libs/StyleTTS2"]
+	path = src/senselab/libs/StyleTTS2
+	url = https://github.com/yl4579/StyleTTS2.git
