@@ -1,8 +1,11 @@
-"""This module implements some utilities for the speech-to-text task."""
+"""This module represents the API for the speech-to-text task within the senselab package.
 
-from typing import List, Optional
+Currently, it supports only Hugging Face models, with plans to include more in the future.
+Users can specify the audio clips to transcribe, the ASR model, the language,
+the preferred device, and the model-specific parameters, and senselab handles the rest.
+"""
 
-import pydra
+from typing import Any, List, Optional
 
 from senselab.audio.data_structures.audio import Audio
 from senselab.audio.tasks.speech_to_text.huggingface import HuggingFaceASR
@@ -13,7 +16,11 @@ from senselab.utils.data_structures.script_line import ScriptLine
 
 
 def transcribe_audios(
-    audios: List[Audio], model: SenselabModel, language: Optional[Language] = None, device: Optional[DeviceType] = None
+    audios: List[Audio],
+    model: SenselabModel,
+    language: Optional[Language] = None,
+    device: Optional[DeviceType] = None,
+    **kwargs: Any,  # noqa: ANN401
 ) -> List[ScriptLine]:
     """Transcribes all audios using the given model.
 
@@ -22,16 +29,20 @@ def transcribe_audios(
         model (SenselabModel): The model used for transcription.
         language (Optional[Language]): The language of the audio (default is None).
         device (Optional[DeviceType]): The device to run the model on (default is None).
+        **kwargs: Additional keyword arguments to pass to the transcription function.
 
     Returns:
         List[ScriptLine]: The list of script lines.
+
+    Todo:
+        - Include more models (e.g., speechbrain, nvidia)
     """
-    if isinstance(model, HFModel):
-        return HuggingFaceASR.transcribe_audios_with_transformers(
-            audios=audios, model=model, language=language, device=device
-        )
-    else:
-        raise NotImplementedError("Only Hugging Face models are supported for now.")
-
-
-transcribe_audios_pt = pydra.mark.task(transcribe_audios)
+    try:
+        if isinstance(model, HFModel):
+            return HuggingFaceASR.transcribe_audios_with_transformers(
+                audios=audios, model=model, language=language, device=device, **kwargs
+            )
+        else:
+            raise NotImplementedError("Only Hugging Face models are supported for now.")
+    except TypeError as e:
+        raise TypeError("An error occurred in the transcribe function.") from e
