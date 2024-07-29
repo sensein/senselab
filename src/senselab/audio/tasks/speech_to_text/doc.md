@@ -28,7 +28,7 @@
 
 <script>
     function redirectToTutorial() {
-        window.location.href = "https://github.com/sensein/senselab/blob/main/speech_to_text.ipynb";
+        window.location.href = "https://github.com/sensein/senselab/blob/main/tutorials/speech_to_text.ipynb";
     }
 </script>
 
