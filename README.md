@@ -14,26 +14,6 @@ Welcome to the ```senselab``` repo! This is a Python package for streamlining th
 
 **Caution:**: this package is still under development and may change rapidly over the next few weeks.
 
-## Features
-- **Modular design**: Utilize a variety of task-specific transformations that can be easily integrated or used standalone, allowing for flexible data manipulation and analysis strategies.
-
-- **Pre-built pipelines**: Access pre-configured pipelines combining multiple transformations tailored for common analysis tasks, which help in reducing setup time and effort.
-
-- **Reproducibility**: Ensures consistent outputs through the use of fixed seeds and version-controlled processing steps, making your results verifiable and easily comparable.
-
-- **Easy integration**: Designed to fit into existing workflows with minimal configuration, `senselab` can be used alongside other data analysis tools and frameworks seamlessly.
-
-- **Extensible**: Open to modifications and contributions, the package can be expanded with custom transformations and pipelines to meet specific research needs. <u>Do you want to contribute? Please, reach out!</u>
-
-- **Comprehensive documentation**: Comes with detailed documentation for all features and modules, including examples and guides on how to extend the package for other types of behavioral data analysis.
-
-- **Performance Optimized**: Efficiently processes large datasets with optimized code and algorithms, ensuring quick turnaround times even for complex analyses.
-
-- **Interactive Examples**: Includes Jupyter notebooks that provide practical examples of how `senselab` can be implemented to derive insights from real-world data sets.
-
-Whether you're researching speech disorders, analyzing customer service calls, or studying communication patterns, `senselab` provides the tools and flexibility needed to extract meaningful conclusions from your data.
-
-
 ## Installation
 Install this package via:
 
@@ -49,10 +29,28 @@ pip install git+https://github.com/sensein/senselab.git
 
 ## Quick start
 ```Python
-from senselab.app import hello_world
+from senselab.audio.data_structures.audio import Audio
+from senselab.audio.tasks.preprocessing.preprocessing import resample_audios
 
-hello_world()
+audio1 = Audio.from_filepath('path_to_audio_file.wav')
+
+print("The original audio has a sampling rate of {} Hz.".format(audio1.sampling_rate))
+[audio1] = resample_audios([audio1], resample_rate=16000)
+print("The resampled audio has a sampling rate of {} Hz.".format(audio1.sampling_rate))
 ```
+
+For more detailed information, check out our [Getting Started Tutorial](tutorials/getting_started.ipynb).
+
+
+## Why should I use senselab?
+- **Modular Design**: Easily integrate or use standalone transformations for flexible data manipulation.
+- **Pre-built Pipelines**: Access pre-configured pipelines to reduce setup time and effort.
+- **Reproducibility**: Ensure consistent and verifiable results with fixed seeds and version-controlled steps.
+- **Easy Integration**: Seamlessly fit into existing workflows with minimal configuration.
+- **Extensible**: Modify and contribute custom transformations and pipelines to meet specific research needs.
+- **Comprehensive Documentation**: Detailed guides, examples, and documentation for all features and modules.
+- **Performance Optimized**: Efficiently process large datasets with optimized code and algorithms.
+- **Interactive Examples**: Jupyter notebooks provide practical examples for deriving insights from real-world datasets.
 
 ## Contributing
 Please see [CONTRIBUTING.md](CONTRIBUTING.md) before contributing.

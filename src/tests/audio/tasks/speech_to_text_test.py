@@ -11,8 +11,7 @@ def test_scriptline_from_dict() -> None:
     """Test creating ScriptLine from dict."""
     data = {
         "text": "Hello world",
-        "chunks": [{"text": "Hello", "timestamps": [0.0, 1.0]},
-                   {"text": "world", "timestamps": [1.0, 2.0]}],
+        "chunks": [{"text": "Hello", "timestamps": [0.0, 1.0]}, {"text": "world", "timestamps": [1.0, 2.0]}],
     }
     scriptline = ScriptLine.from_dict(data)
 
@@ -41,13 +40,11 @@ if os.getenv("GITHUB_ACTIONS") != "true":
         """Fixture for Hugging Face model."""
         return HFModel(path_or_uri="openai/whisper-tiny")
 
-
     def test_transcribe_audios(mono_audio_sample: Audio, hf_model: HFModel) -> None:
         """Test transcribing audios."""
         transcripts = transcribe_audios(audios=[mono_audio_sample], model=hf_model)
         assert len(transcripts) == 1
         assert isinstance(transcripts[0], ScriptLine)
-
 
     def test_transcribe_audios_with_transformers(mono_audio_sample: Audio, hf_model: HFModel) -> None:
         """Test transcribing audios with transformers."""
@@ -63,7 +60,6 @@ if os.getenv("GITHUB_ACTIONS") != "true":
         )
         assert len(transcripts) == 1
         assert isinstance(transcripts[0], ScriptLine)
-
 
     def test_asr_pipeline_factory(hf_model: HFModel) -> None:
         """Test ASR pipeline factory."""
@@ -85,9 +81,7 @@ if os.getenv("GITHUB_ACTIONS") != "true":
         )
         assert pipeline1 is pipeline2  # Check if the same instance is returned
 
-
-    def test_transcribe_stereo_audio(resampled_stereo_audio_sample: Audio, 
-                                     hf_model: HFModel) -> None:
+    def test_transcribe_stereo_audio(resampled_stereo_audio_sample: Audio, hf_model: HFModel) -> None:
         """Test transcribing stereo audio."""
         # Create a mock stereo audio sample
         with pytest.raises(ValueError, match="Stereo audio is not supported"):

@@ -1,15 +1,18 @@
 """This module defines APIs for the user to run Speech Emotion Recognition (SER) on sets of audios."""
 
 import warnings
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from transformers import AutoConfig, pipeline
 
 from senselab.audio.data_structures.audio import Audio
+from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
 from senselab.utils.data_structures.model import HFModel
 
 
-def audio_classification_with_hf_models(audios: List[Audio], model: HFModel) -> List[List[Dict]]:
+def audio_classification_with_hf_models(
+    audios: List[Audio], model: HFModel, device: Optional[DeviceType] = None
+) -> List[List[Dict]]:
     """General audio classification functionality utilitzing HuggingFace pipelines.
 
     Classifies all audios, with no underlying assumptions on what the classification labels are,
@@ -18,6 +21,7 @@ def audio_classification_with_hf_models(audios: List[Audio], model: HFModel) -> 
     Args:
         audios: List of Audio objects that we want to run classification on
         model: The HuggingFace model that will be used for running the inference
+        device: The device to run inference on
 
     Returns:
         List of Lists of Dictionaries where each corresponds to the audio that it was ran on and the List of
@@ -38,7 +42,14 @@ def audio_classification_with_hf_models(audios: List[Audio], model: HFModel) -> 
                                   so we cannot guarantee its input and outputs are as expected")
         )
 
-    classification_pipeline = pipeline(task="audio-classification", model=model.path_or_uri, revision=model.revision)
+    device, _ = _select_device_and_dtype(user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU])
+
+    classification_pipeline = pipeline(
+        task="audio-classification",
+        model=model.path_or_uri,
+        revision=model.revision,
+        device=device.value,
+    )
     classification_outputs = []
 
     # TODO: figure out adding batching and GPU support
@@ -48,7 +59,9 @@ def audio_classification_with_hf_models(audios: List[Audio], model: HFModel) -> 
     return classification_outputs
 
 
-def speech_emotion_recognition_with_hf_models(audios: List[Audio], model: HFModel) -> List[Tuple[str, Dict]]:
+def speech_emotion_recognition_with_hf_models(
+    audios: List[Audio], model: HFModel, device: Optional[DeviceType] = None
+) -> List[Tuple[str, Dict]]:
     """Function for running speech emotion recognition tasks using HuggingFace models.
 
     Uses an audio classification pipeline to run speech emotion recognition for every audio in audios using the
@@ -62,6 +75,7 @@ def speech_emotion_recognition_with_hf_models(audios: List[Audio], model: HFMode
             emotion at different segments of the audio (e.g. when different speaker talk) please run the audios
             through an appropriate segmentation task.
         model: The HuggingFace model that will be used for running the inference
+        device: The device to run inference on
 
     Returns:
         List of tuples where the first value is the single label classification of the audio (if appropriate) and the
@@ -86,7 +100,7 @@ def speech_emotion_recognition_with_hf_models(audios: List[Audio], model: HFMode
             + "'audio_classification_with_hf_models' function."
         )
 
-    audio_classifications = audio_classification_with_hf_models(audios, model)
+    audio_classifications = audio_classification_with_hf_models(audios, model, device)
     # print(audio_classifications)
     ser_output = []
     for classification in audio_classifications:
