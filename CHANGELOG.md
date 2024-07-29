@@ -1,3 +1,15 @@
+# 0.7.1 (Mon Jul 29 2024)
+
+#### 🐛 Bug Fix
+
+- fixing link to tutorials and documentation style [#121](https://github.com/sensein/senselab/pull/121) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.7.0 (Mon Jul 29 2024)
 
 #### 🚀 Enhancement
