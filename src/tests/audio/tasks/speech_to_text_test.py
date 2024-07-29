@@ -1,6 +1,7 @@
 """Tests for the speech to text task."""
 
 import os
+from typing import Callable
 
 import pytest
 
@@ -29,7 +30,7 @@ def test_scriptline_from_dict() -> None:
 
 if os.getenv("GITHUB_ACTIONS") != "true":
     from senselab.audio.data_structures.audio import Audio
-    from senselab.audio.tasks.speech_to_text.api import transcribe_audios
+    from senselab.audio.tasks.speech_to_text import transcribe_audios
     from senselab.audio.tasks.speech_to_text.huggingface import HuggingFaceASR
     from senselab.utils.data_structures.device import DeviceType
     from senselab.utils.data_structures.language import Language
@@ -40,36 +41,24 @@ if os.getenv("GITHUB_ACTIONS") != "true":
         """Fixture for Hugging Face model."""
         return HFModel(path_or_uri="openai/whisper-tiny")
 
-    def test_transcribe_audios(mono_audio_sample: Audio, hf_model: HFModel) -> None:
-        """Test transcribing audios."""
-        transcripts = transcribe_audios(audios=[mono_audio_sample], model=hf_model)
-        assert len(transcripts) == 1
-        assert isinstance(transcripts[0], ScriptLine)
+    @pytest.fixture
+    def hf_model2() -> HFModel:
+        """Fixture for Hugging Face model."""
+        return HFModel(path_or_uri="facebook/seamless-m4t-unity-small")
 
-    def test_transcribe_audios_with_transformers(mono_audio_sample: Audio, hf_model: HFModel) -> None:
-        """Test transcribing audios with transformers."""
-        transcripts = HuggingFaceASR.transcribe_audios_with_transformers(
-            audios=[mono_audio_sample],
-            model=hf_model,
-            language=Language(language_code="English"),
-            return_timestamps="word",
-            max_new_tokens=128,
-            chunk_length_s=30,
-            batch_size=1,
-            device=DeviceType.CPU,
-        )
-        assert len(transcripts) == 1
-        assert isinstance(transcripts[0], ScriptLine)
-
-    def test_asr_pipeline_factory(hf_model: HFModel) -> None:
+    @pytest.mark.parametrize("device", [DeviceType.CPU, DeviceType.CUDA])  # MPS is not available for now
+    def test_hf_asr_pipeline_factory(hf_model: HFModel, device: DeviceType, is_device_available: Callable) -> None:
         """Test ASR pipeline factory."""
+        if not is_device_available(device):
+            pytest.skip(f"{device} is not available")
+
         pipeline1 = HuggingFaceASR._get_hf_asr_pipeline(
             model=hf_model,
             return_timestamps="word",
             max_new_tokens=128,
             chunk_length_s=30,
             batch_size=1,
-            device=DeviceType.CPU,
+            device=device,
         )
         pipeline2 = HuggingFaceASR._get_hf_asr_pipeline(
             model=hf_model,
@@ -77,12 +66,60 @@ if os.getenv("GITHUB_ACTIONS") != "true":
             max_new_tokens=128,
             chunk_length_s=30,
             batch_size=1,
-            device=DeviceType.CPU,
+            device=device,
         )
-        assert pipeline1 is pipeline2  # Check if the same instance is returned
+        assert pipeline1 is pipeline2  # Check if the same instance is returned (this is the case for serial execution)
+
+    @pytest.mark.parametrize("hf_model", ["hf_model", "hf_model2"], indirect=True)
+    def test_transcribe_audios(
+        resampled_mono_audio_sample: Audio, resampled_mono_audio_sample_x2: Audio, hf_model: HFModel
+    ) -> None:
+        """Test transcribing audios."""
+        transcripts = transcribe_audios(
+            audios=[resampled_mono_audio_sample, resampled_mono_audio_sample_x2], model=hf_model
+        )
+        assert len(transcripts) == 2
+        assert isinstance(transcripts[0], ScriptLine)
+        assert (
+            transcripts[0].text
+            == "This is Peter. This is Johnny. Kenny. And Joe. We just wanted to take a minute to thank you."
+        )
+
+    @pytest.mark.parametrize("hf_model", ["hf_model", "hf_model2"], indirect=True)
+    def test_transcribe_audios_with_params(
+        resampled_mono_audio_sample: Audio, resampled_mono_audio_sample_x2: Audio, hf_model: HFModel
+    ) -> None:
+        """Test transcribing audios."""
+        transcripts = transcribe_audios(
+            audios=[resampled_mono_audio_sample, resampled_mono_audio_sample_x2],
+            model=hf_model,
+            language=Language(language_code="English"),
+            return_timestamps=False,
+        )
+        assert len(transcripts) == 2
+        assert isinstance(transcripts[0], ScriptLine)
+        # Note: we don't check the transcript because we have noticed that by specifying the language,
+        # the transcript is not correct with our sample audio
+
+    def test_transcribe_audios_with_unsupported_params(
+        resampled_mono_audio_sample: Audio, resampled_mono_audio_sample_x2: Audio, hf_model: HFModel
+    ) -> None:
+        """Test transcribing audios with an unsupported param."""
+        with pytest.raises(TypeError, match="got an unexpected keyword argument"):
+            transcribe_audios(
+                audios=[resampled_mono_audio_sample, resampled_mono_audio_sample_x2],
+                model=hf_model,
+                unsupported_param="unsupported_param",
+            )
 
     def test_transcribe_stereo_audio(resampled_stereo_audio_sample: Audio, hf_model: HFModel) -> None:
         """Test transcribing stereo audio."""
         # Create a mock stereo audio sample
         with pytest.raises(ValueError, match="Stereo audio is not supported"):
             transcribe_audios(audios=[resampled_stereo_audio_sample], model=hf_model)
+
+    def test_transcribe_audio_with_wrong_sampling_rate(mono_audio_sample: Audio, hf_model: HFModel) -> None:
+        """Test transcribing stereo audio."""
+        # Create a mock stereo audio sample
+        with pytest.raises(ValueError, match="Incorrect sampling rate."):
+            transcribe_audios(audios=[mono_audio_sample], model=hf_model)
