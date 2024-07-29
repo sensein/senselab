@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="generator" content="pdoc 14.6.0"/>
-    <title>senselab.audio.tasks.text_to_speech API documentation</title>
+    <title>senselab.audio.tasks.speech_to_text_evaluation API documentation</title>
             <link rel="icon" href="https://readthedocs.org/favicon.ico"/>
 
     <style>/*! * Bootstrap Reboot v5.0.0 (https://getbootstrap.com/) * Copyright 2011-2021 The Bootstrap Authors * Copyright 2011-2021 Twitter, Inc. * Licensed under MIT (https://github.com/twbs/bootstrap/blob/main/LICENSE) * Forked from Normalize.css, licensed MIT (https://github.com/necolas/normalize.css/blob/master/LICENSE.md) */*,::after,::before{box-sizing:border-box}@media (prefers-reduced-motion:no-preference){:root{scroll-behavior:smooth}}body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans","Liberation Sans",sans-serif,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol","Noto Color Emoji";font-size:1rem;font-weight:400;line-height:1.5;color:#212529;background-color:#fff;-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent}hr{margin:1rem 0;color:inherit;background-color:currentColor;border:0;opacity:.25}hr:not([size]){height:1px}h1,h2,h3,h4,h5,h6{margin-top:0;margin-bottom:.5rem;font-weight:500;line-height:1.2}h1{font-size:calc(1.375rem + 1.5vw)}@media (min-width:1200px){h1{font-size:2.5rem}}h2{font-size:calc(1.325rem + .9vw)}@media (min-width:1200px){h2{font-size:2rem}}h3{font-size:calc(1.3rem + .6vw)}@media (min-width:1200px){h3{font-size:1.75rem}}h4{font-size:calc(1.275rem + .3vw)}@media (min-width:1200px){h4{font-size:1.5rem}}h5{font-size:1.25rem}h6{font-size:1rem}p{margin-top:0;margin-bottom:1rem}abbr[data-bs-original-title],abbr[title]{-webkit-text-decoration:underline dotted;text-decoration:underline dotted;cursor:help;-webkit-text-decoration-skip-ink:none;text-decoration-skip-ink:none}address{margin-bottom:1rem;font-style:normal;line-height:inherit}ol,ul{padding-left:2rem}dl,ol,ul{margin-top:0;margin-bottom:1rem}ol ol,ol ul,ul ol,ul ul{margin-bottom:0}dt{font-weight:700}dd{margin-bottom:.5rem;margin-left:0}blockquote{margin:0 0 1rem}b,strong{font-weight:bolder}small{font-size:.875em}mark{padding:.2em;background-color:#fcf8e3}sub,sup{position:relative;font-size:.75em;line-height:0;vertical-align:baseline}sub{bottom:-.25em}sup{top:-.5em}a{color:#0d6efd;text-decoration:underline}a:hover{color:#0a58ca}a:not([href]):not([class]),a:not([href]):not([class]):hover{color:inherit;text-decoration:none}code,kbd,pre,samp{font-family:SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;font-size:1em;direction:ltr;unicode-bidi:bidi-override}pre{display:block;margin-top:0;margin-bottom:1rem;overflow:auto;font-size:.875em}pre code{font-size:inherit;color:inherit;word-break:normal}code{font-size:.875em;color:#d63384;word-wrap:break-word}a>code{color:inherit}kbd{padding:.2rem .4rem;font-size:.875em;color:#fff;background-color:#212529;border-radius:.2rem}kbd kbd{padding:0;font-size:1em;font-weight:700}figure{margin:0 0 1rem}img,svg{vertical-align:middle}table{caption-side:bottom;border-collapse:collapse}caption{padding-top:.5rem;padding-bottom:.5rem;color:#6c757d;text-align:left}th{text-align:inherit;text-align:-webkit-match-parent}tbody,td,tfoot,th,thead,tr{border-color:inherit;border-style:solid;border-width:0}label{display:inline-block}button{border-radius:0}button:focus:not(:focus-visible){outline:0}button,input,optgroup,select,textarea{margin:0;font-family:inherit;font-size:inherit;line-height:inherit}button,select{text-transform:none}[role=button]{cursor:pointer}select{word-wrap:normal}select:disabled{opacity:1}[list]::-webkit-calendar-picker-indicator{display:none}[type=button],[type=reset],[type=submit],button{-webkit-appearance:button}[type=button]:not(:disabled),[type=reset]:not(:disabled),[type=submit]:not(:disabled),button:not(:disabled){cursor:pointer}::-moz-focus-inner{padding:0;border-style:none}textarea{resize:vertical}fieldset{min-width:0;padding:0;margin:0;border:0}legend{float:left;width:100%;padding:0;margin-bottom:.5rem;font-size:calc(1.275rem + .3vw);line-height:inherit}@media (min-width:1200px){legend{font-size:1.5rem}}legend+*{clear:left}::-webkit-datetime-edit-day-field,::-webkit-datetime-edit-fields-wrapper,::-webkit-datetime-edit-hour-field,::-webkit-datetime-edit-minute,::-webkit-datetime-edit-month-field,::-webkit-datetime-edit-text,::-webkit-datetime-edit-year-field{padding:0}::-webkit-inner-spin-button{height:auto}[type=search]{outline-offset:-2px;-webkit-appearance:textfield}::-webkit-search-decoration{-webkit-appearance:none}::-webkit-color-swatch-wrapper{padding:0}::file-selector-button{font:inherit}::-webkit-file-upload-button{font:inherit;-webkit-appearance:button}output{display:inline-block}iframe{border:0}summary{display:list-item;cursor:pointer}progress{vertical-align:baseline}[hidden]{display:none!important}</style>
@@ -27,11 +27,20 @@
             <input type="search" placeholder="Search..." role="searchbox" aria-label="search"
                    pattern=".+" required>
 
+            <h2>Contents</h2>
+            <ul>
+  <li><a href="#speech-to-text-evaluation">Speech to text evaluation</a></li>
+  <li><a href="#overview">Overview</a>
+  <ul>
+    <li><a href="#key-metrics">Key metrics</a></li>
+    <li><a href="#examples">Examples</a></li>
+  </ul></li>
+</ul>
+
 
             <h2>Submodules</h2>
             <ul>
-                    <li><a href="text_to_speech/api.html">api</a></li>
-                    <li><a href="text_to_speech/huggingface.html">huggingface</a></li>
+                    <li><a href="speech_to_text_evaluation/utils.html">utils</a></li>
             </ul>
 
 
@@ -46,16 +55,177 @@
     <main class="pdoc">
             <section class="module-info">
                     <h1 class="modulename">
-<a href="./../../../senselab.html">senselab</a><wbr>.<a href="./../../audio.html">audio</a><wbr>.<a href="./../tasks.html">tasks</a><wbr>.text_to_speech    </h1>
+<a href="./../../../senselab.html">senselab</a><wbr>.<a href="./../../audio.html">audio</a><wbr>.<a href="./../tasks.html">tasks</a><wbr>.speech_to_text_evaluation    </h1>
 
-                        <div class="docstring"><p>This module provides the API for the senselab text to speech task.</p>
+                        <div class="docstring"><p><!DOCTYPE html></p>
+
+<html>
+<head>
+<style>
+    .button {
+        background-color: #3660a5;
+        border: solid;
+        color: white;
+        padding: 5px 10px;
+        text-align: top;
+        text-decoration: none;
+        display: inline-block;
+        font-size: 16px;
+        margin: 0px 0px;
+        cursor: pointer;
+        border-radius: 12px;
+        transition-duration: 0.4s;
+    }
+
+    .button:hover {
+        background-color: white;
+        color: black;
+    }
+</style>
+</head>
+<body>
+
+<script>
+    function redirectToTutorial() {
+        window.location.href = "https://github.com/sensein/senselab/blob/main/speech_to_text.ipynb";
+    }
+</script>
+
+</body>
+</html>
+
+<h1 id="speech-to-text-evaluation">Speech to text evaluation</h1>
+
+<p><button class="button" onclick="redirectToTutorial()">Tutorial</button></p>
+
+<h1 id="overview">Overview</h1>
+
+<p>Evaluating speech transcripts involves comparing a predicted transcript (hypothesis) generated by an automated speech recognition (ASR) system against a ground truth transcript (reference). This evaluation helps to determine the accuracy and performance of the ASR system. Various metrics can be used for this purpose, each capturing different aspects of the errors in the transcription process.</p>
+
+<h2 id="key-metrics">Key metrics</h2>
+
+<h3 id="1-word-error-rate-wer">1. Word Error Rate (WER)</h3>
+
+<p>Word Error Rate (WER) is the most common metric used to evaluate the accuracy of ASR systems. It measures the number of word-level errors (insertions, deletions, and substitutions) divided by the total number of words in the reference. The lower the value, the better the performance of the ASR system, with an error rate of 0 indicating a perfect score. Notably, this is not a percentage as can go higher than 1.</p>
+
+<p><strong>Formula:</strong></p>
+
+<div class="pdoc-code codehilite">
+<pre><span></span><code>WER = (S + D + I) / N
+</code></pre>
 </div>
 
-                        <input id="mod-text_to_speech-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<p>Where:</p>
 
-                        <label class="view-source-button" for="mod-text_to_speech-view-source"><span>View Source</span></label>
+<ul>
+<li>( S ) = Number of substitutions</li>
+<li>( D ) = Number of deletions</li>
+<li>( I ) = Number of insertions</li>
+<li>( N ) = Total number of words in the reference</li>
+</ul>
 
-                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;This module provides the API for the senselab text to speech task.&quot;&quot;&quot;</span>
+<h3 id="2-character-error-rate-cer">2. Character Error Rate (CER)</h3>
+
+<p>Character Error Rate (CER) is similar to WER but operates at the character level rather than the word level. It measures the number of character-level errors divided by the total number of characters in the reference. The lower the value, the better the performance of the ASR system, with an error rate of 0 indicating a perfect score.
+As for WER, CER is not a percentage as can go higher than 1.</p>
+
+<p><strong>Formula:</strong></p>
+
+<div class="pdoc-code codehilite">
+<pre><span></span><code>CER = (S + D + I) / N
+</code></pre>
+</div>
+
+<p>Where:</p>
+
+<ul>
+<li>( S ) = Number of substitutions</li>
+<li>( D ) = Number of deletions</li>
+<li>( I ) = Number of insertions</li>
+<li>( N ) = Total number of characters in the reference</li>
+</ul>
+
+<h3 id="3-match-error-rate-mer">3. Match Error Rate (MER)</h3>
+
+<p>Match Error Rate (MER) calculates the proportion of word-level errors relative to the total number of correct matches plus the number of errors. The lower the value, the better the performance of the ASR system, with an error rate of 0 indicating a perfect score.</p>
+
+<p><strong>Formula:</strong></p>
+
+<div class="pdoc-code codehilite">
+<pre><span></span><code>MER = (S + D + I) / (S + D + I + C)
+</code></pre>
+</div>
+
+<p>Where:</p>
+
+<ul>
+<li>( S ) = Number of substitutions</li>
+<li>( D ) = Number of deletions</li>
+<li>( I ) = Number of insertions</li>
+<li>( C ) = Number of correct words</li>
+</ul>
+
+<h3 id="4-word-information-lost-wil">4. Word Information Lost (WIL)</h3>
+
+<p>Word Information Lost (WIL) is computed as follows:</p>
+
+<p><strong>Formula:</strong></p>
+
+<div class="pdoc-code codehilite">
+<pre><span></span><code>WIL = 1 - (C / N) + (C / P)
+</code></pre>
+</div>
+
+<p>Where:</p>
+
+<ul>
+<li>( C ) = Number of correct words</li>
+<li>( N ) = Number of words in the reference</li>
+<li>( P ) = Number of words in the prediction</li>
+</ul>
+
+<p>The lower the WIL, the better the performance of the ASR system.</p>
+
+<h3 id="5-word-information-preserved-wip">5. Word Information Preserved (WIP)</h3>
+
+<p>Word Information Preserved (WIP) is computed as follows:
+<strong>Formula:</strong></p>
+
+<div class="pdoc-code codehilite">
+<pre><span></span><code>WIP = (C / N) * (C / P)
+</code></pre>
+</div>
+
+<p>Where:</p>
+
+<ul>
+<li>( C ) = Number of correct words</li>
+<li>( N ) = Number of words in the reference</li>
+<li>( P ) = Number of words in the prediction</li>
+</ul>
+
+<p>The higher the value, the better the performance of the ASR system, with 1 being a perfect score.</p>
+
+<h2 id="examples">Examples</h2>
+
+<p>For a given reference "hello world" and hypothesis "hello duck":</p>
+
+<ul>
+<li><strong>WER:</strong> ( \frac{0 + 1 + 0}{2} = 0.5 )</li>
+<li><strong>CER:</strong> ( \frac{0 + 1 + 0}{11} \approx 0.0909 )</li>
+<li><strong>MER:</strong> ( \frac{1}{2} = 0.5 )</li>
+<li><strong>WIL:</strong> ( \frac{1 + 0 + 0}{1 + 0 + 1} = 0.5 )</li>
+<li><strong>WIP:</strong> ( 1 - 0.5 = 0.5 )</li>
+</ul>
+</div>
+
+                        <input id="mod-speech_to_text_evaluation-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+
+                        <label class="view-source-button" for="mod-speech_to_text_evaluation-view-source"><span>View Source</span></label>
+
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;.. include:: ./doc.md&quot;&quot;&quot;</span>  <span class="c1"># noqa: D415</span>
+</span><span id="L-2"><a href="#L-2"><span class="linenos">2</span></a>
+</span><span id="L-3"><a href="#L-3"><span class="linenos">3</span></a><span class="kn">from</span> <span class="nn">.utils</span> <span class="kn">import</span> <span class="n">calculate_cer</span><span class="p">,</span> <span class="n">calculate_mer</span><span class="p">,</span> <span class="n">calculate_wer</span><span class="p">,</span> <span class="n">calculate_wil</span><span class="p">,</span> <span class="n">calculate_wip</span>  <span class="c1"># noqa: F401</span>
 </span></pre></div>
 
 
