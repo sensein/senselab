@@ -178,9 +178,12 @@ if os.getenv("GITHUB_ACTIONS") != "true":
 
     def test_align_transcriptions_fixture(resampled_mono_audio_sample: Audio, script_line_fixture: ScriptLine) -> None:
         """Test alignment of transcriptions."""
-        audios_and_transcriptions = [(resampled_mono_audio_sample, script_line_fixture, Language(language_code="en"))]
-        aligned_transcriptions = align_transcriptions(audios_and_transcriptions)
-        assert len(aligned_transcriptions) == 1
+        audios_and_transcriptions_and_language = [
+            (resampled_mono_audio_sample, script_line_fixture, Language(language_code="en")),
+            (resampled_mono_audio_sample, script_line_fixture, Language(language_code="fr")),
+        ]
+        aligned_transcriptions = align_transcriptions(audios_and_transcriptions_and_language)
+        assert len(aligned_transcriptions) == 2
         assert len(aligned_transcriptions[0]) == 1
         assert aligned_transcriptions[0][0].text == "test"
 
@@ -192,10 +195,10 @@ if os.getenv("GITHUB_ACTIONS") != "true":
         expected_text = "test"  # Replace with the appropriate expected text for your fixtures
 
         for lang in languages:
-            audios_and_transcriptions = [
+            audios_and_transcriptions_and_language = [
                 (resampled_mono_audio_sample, script_line_fixture, Language(language_code=lang))
             ]
-            aligned_transcriptions = align_transcriptions(audios_and_transcriptions)
+            aligned_transcriptions = align_transcriptions(audios_and_transcriptions_and_language)
             assert len(aligned_transcriptions) == 1, f"Failed for language: {lang}"
             assert len(aligned_transcriptions[0]) == 1, f"Failed for language: {lang}"
             assert aligned_transcriptions[0][0].text == expected_text, f"Failed for language: {lang}"
