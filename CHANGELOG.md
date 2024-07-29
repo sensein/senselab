@@ -1,3 +1,19 @@
+# 0.6.4 (Sun Jul 28 2024)
+
+#### 🐛 Bug Fix
+
+- Add and improve documentation for dimensionality reduction [#94](https://github.com/sensein/senselab/pull/94) (mbsilva@node097.ib.cluster [@900miles](https://github.com/900miles) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 5
+
+- [@900miles](https://github.com/900miles)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Miles B Silva (mbsilva@node063.ib.cluster)
+- Miles B Silva (mbsilva@node088.ib.cluster)
+- Miles B Silva (mbsilva@node097.ib.cluster)
+
+---
+
 # 0.6.3 (Thu Jul 25 2024)
 
 #### 🐛 Bug Fix

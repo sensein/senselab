@@ -45,7 +45,7 @@ class HFModel(SenselabModel):
     """HuggingFace model."""
 
     revision: Annotated[str, Field(validate_default=True)] = "main"
-    model_info: Optional[ModelInfo] = None
+    info: Optional[ModelInfo] = None
 
     @field_validator("revision", mode="before")
     def validate_hf_model_id(cls, value: str, info: ValidationInfo) -> Union[str, Path]:
@@ -64,10 +64,10 @@ class HFModel(SenselabModel):
 
     def get_model_info(self) -> ModelInfo:
         """Gets the model info using the HuggingFace API and saves it as a property."""
-        if not self.model_info:
+        if not self.info:
             api = HfApi()
-            self.model_info = api.model_info(repo_id=self.path_or_uri, revision=self.revision)
-        return self.model_info
+            self.info = api.model_info(repo_id=self.path_or_uri, revision=self.revision)
+        return self.info
 
 
 class SpeechBrainModel(HFModel):
