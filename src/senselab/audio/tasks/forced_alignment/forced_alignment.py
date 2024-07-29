@@ -616,13 +616,14 @@ def _align_transcription(
 
 
 def align_transcriptions(
-    audios_and_transcriptions: List[Tuple[Audio, ScriptLine, Language]],
+    audios_and_transcriptions_and_language: List[Tuple[Audio, ScriptLine, Language]],
 ) -> List[List[ScriptLine]]:
     """Aligns transcriptions with the given audio using a wav2vec2.0 model.
 
     Args:
-        audios_and_transcriptions (List[tuple[Audio, ScriptLine, Language]):
+        audios_and_transcriptions_and_language (List[tuple[Audio, ScriptLine, Language]):
             A list of tuples audios, corresponding transcriptions, and optionally a language.
+            The default language is English.
 
     Returns:
         List[List[ScriptLine]]: A list of lists, where each inner list contains the aligned script lines for each audio.
@@ -630,7 +631,7 @@ def align_transcriptions(
     aligned_script_lines = []
     loaded_processors_and_models = {}
 
-    for item in audios_and_transcriptions:
+    for item in audios_and_transcriptions_and_language:
         audio, transcription, language = (*item, None)[:3]
 
         # Set default language to English if not provided
