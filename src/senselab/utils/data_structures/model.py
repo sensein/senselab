@@ -6,6 +6,7 @@ from typing import Optional, Union
 
 import requests
 import torch
+import torchaudio
 from huggingface_hub import HfApi
 from huggingface_hub.hf_api import ModelInfo
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
@@ -104,6 +105,34 @@ class TorchModel(SenselabModel):
             if not check_github_repo_exists(repo_id=str(path_or_uri), branch=value):
                 raise ValueError("path_or_uri or specified revision is not a valid github repo")
         return value
+
+
+class TorchAudioModel(SenselabModel):
+    """TorchAudio model."""
+
+    revision: Annotated[str, Field(validate_default=True)] = "main"
+
+    @field_validator("revision", mode="before")
+    def validate_torchaudio_model_id(cls, value: str, info: ValidationInfo) -> Union[str, Path]:
+        """Validate the path_or_uri for torchaudio models.
+
+        This check is only for remote resources and not for files.
+        It checks if the specified torchaudio model ID exists.
+        """
+        path_or_uri = info.data["path_or_uri"]
+        if not isinstance(path_or_uri, Path):
+            if not check_torchaudio_model_exists(model_id=str(path_or_uri)):
+                raise ValueError("path_or_uri is not a valid torchaudio model")
+        return value
+
+
+def check_torchaudio_model_exists(model_id: str) -> bool:
+    """Private function to check if a torchaudio model exists."""
+    try:
+        _ = getattr(torchaudio.pipelines, model_id)
+        return True
+    except AttributeError:
+        return False
 
 
 def is_torch_model(file_path: Path) -> bool:

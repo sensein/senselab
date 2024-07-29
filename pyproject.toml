@@ -55,6 +55,7 @@ opensmile = "~=2.5"
 numpy = "~=1.25"
 umap-learn = "~=0.5"
 scikit-learn = "~=1.5"
+nltk = "~=3.8"
 
 [tool.poetry.group.dev]
 optional = true
@@ -157,7 +158,7 @@ skip = [
   "docs_style/pdoc-theme/syntax-highlighting.css",
   "*.ipynb"
 ]
-ignore-words-list = ["senselab", "nd", "astroid", "wil", "SER"]
+ignore-words-list = ["senselab", "nd", "astroid", "wil", "SER", "te"]
 
 [build-system]
 requires = ["poetry-core>=1.0.0", "poetry-dynamic-versioning>=1.0.0,<2.0.0"]

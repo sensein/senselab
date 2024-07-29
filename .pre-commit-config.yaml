@@ -7,13 +7,13 @@ repos:
   - id: poetry-check
 
 - repo: https://github.com/astral-sh/ruff-pre-commit
-  rev: v0.3.3
+  rev: v0.4.10
   hooks:
   - id: ruff
   - id: ruff-format
 
 - repo: https://github.com/pre-commit/mirrors-mypy
-  rev: v1.9.0
+  rev: v1.10.0
   hooks:
   - id: mypy
     args: [--ignore-missing-imports]
@@ -21,7 +21,7 @@ repos:
     - pydantic>=1.10.4
     - types-requests
 - repo: https://github.com/macisamuele/language-formatters-pre-commit-hooks
-  rev: v2.12.0
+  rev: v2.13.0
   hooks:
   - id: pretty-format-yaml
     args:
@@ -35,7 +35,7 @@ repos:
     - --no-sort
 
 - repo: https://github.com/pre-commit/pre-commit-hooks
-  rev: v4.5.0
+  rev: v4.6.0
   hooks:
   - id: check-added-large-files
   - id: check-case-conflict
