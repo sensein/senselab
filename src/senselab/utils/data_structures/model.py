@@ -6,6 +6,7 @@ from typing import Optional, Union
 
 import requests
 import torch
+import torchaudio
 from huggingface_hub import HfApi
 from huggingface_hub.hf_api import ModelInfo
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
@@ -44,7 +45,7 @@ class HFModel(SenselabModel):
     """HuggingFace model."""
 
     revision: Annotated[str, Field(validate_default=True)] = "main"
-    model_info: Optional[ModelInfo] = None
+    info: Optional[ModelInfo] = None
 
     @field_validator("revision", mode="before")
     def validate_hf_model_id(cls, value: str, info: ValidationInfo) -> Union[str, Path]:
@@ -63,10 +64,10 @@ class HFModel(SenselabModel):
 
     def get_model_info(self) -> ModelInfo:
         """Gets the model info using the HuggingFace API and saves it as a property."""
-        if not self.model_info:
+        if not self.info:
             api = HfApi()
-            self.model_info = api.model_info(repo_id=self.path_or_uri, revision=self.revision)
-        return self.model_info
+            self.info = api.model_info(repo_id=self.path_or_uri, revision=self.revision)
+        return self.info
 
 
 class SpeechBrainModel(HFModel):
@@ -104,6 +105,34 @@ class TorchModel(SenselabModel):
             if not check_github_repo_exists(repo_id=str(path_or_uri), branch=value):
                 raise ValueError("path_or_uri or specified revision is not a valid github repo")
         return value
+
+
+class TorchAudioModel(SenselabModel):
+    """TorchAudio model."""
+
+    revision: Annotated[str, Field(validate_default=True)] = "main"
+
+    @field_validator("revision", mode="before")
+    def validate_torchaudio_model_id(cls, value: str, info: ValidationInfo) -> Union[str, Path]:
+        """Validate the path_or_uri for torchaudio models.
+
+        This check is only for remote resources and not for files.
+        It checks if the specified torchaudio model ID exists.
+        """
+        path_or_uri = info.data["path_or_uri"]
+        if not isinstance(path_or_uri, Path):
+            if not check_torchaudio_model_exists(model_id=str(path_or_uri)):
+                raise ValueError("path_or_uri is not a valid torchaudio model")
+        return value
+
+
+def check_torchaudio_model_exists(model_id: str) -> bool:
+    """Private function to check if a torchaudio model exists."""
+    try:
+        _ = getattr(torchaudio.pipelines, model_id)
+        return True
+    except AttributeError:
+        return False
 
 
 def is_torch_model(file_path: Path) -> bool:

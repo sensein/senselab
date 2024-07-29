@@ -1,3 +1,32 @@
+# 0.7.1 (Mon Jul 29 2024)
+
+#### 🐛 Bug Fix
+
+- fixing link to tutorials and documentation style [#121](https://github.com/sensein/senselab/pull/121) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.7.0 (Mon Jul 29 2024)
+
+#### 🚀 Enhancement
+
+- 14 add forced alignment [#89](https://github.com/sensein/senselab/pull/89) ([@ibevers](https://github.com/ibevers) [@fabiocat93](https://github.com/fabiocat93))
+
+#### 🐛 Bug Fix
+
+- 109 review and test speech to text task [#119](https://github.com/sensein/senselab/pull/119) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@ibevers](https://github.com/ibevers)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.6.4 (Sun Jul 28 2024)
 
 #### 🐛 Bug Fix
