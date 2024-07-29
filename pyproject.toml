@@ -19,58 +19,62 @@ keywords = ["voice", "speech", "audio"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
   "License :: OSI Approved :: Apache Software License",
   "Operating System :: OS Independent"
 ]
 packages = [{include = "senselab", from = "src"}]
 
 [tool.poetry.dependencies]
-python = "^3.10"
-click = "^8.1.7"
-jsonschema = "^4.21.1"
-datasets = "^2.19.2"
-torch = "^2.2.2"
-torchvision = "^0.17.2"
-torchaudio = "^2.2.2"
-transformers = "^4.39.3"
-ffmpeg-python = "^0.2.0"
-ipykernel = "^6.29.4"
-pydra = "^0.23"
-pydantic = "^2.7.4"
-accelerate = "^0.29.3"
-huggingface-hub = "^0.23.3"
-praat-parselmouth = "^0.4.3"
-audiomentations = "^0.35.0"
-torch-audiomentations = "^0.11.1"
-sentence-transformers = "^2.7.0"
-jiwer = "^3.0.4"
-speechbrain = "^1.0.0"
-pyav = "^12.1.0"
-pyannote-audio = "^3.2.0"
-pycountry = "^24.6.1"
-types-requests = "^2.32"
-opensmile = "^2.5.0"
-numpy = "^1.26"
-umap-learn = "^0.5.6"
-scikit-learn = "^1.5.0"
+python = "~=3.10"
+click = "~=8.1"
+jsonschema = "~=4.21"
+datasets = "~=2.19"
+torch = "~=2.2"
+torchvision = "~=0.17"
+torchaudio = "~=2.2"
+transformers = "~=4.39"
+ffmpeg-python = "~=0.2"
+ipykernel = "*"
+pydra = "~=0.23"
+pydantic = "~=2.7"
+accelerate = "*"
+huggingface-hub = "~=0.23"
+praat-parselmouth = "~=0.4"
+audiomentations = "~=0.35"
+torch-audiomentations = "~=0.11"
+sentence-transformers = "~=2.7"
+jiwer = "~=3.0"
+speechbrain = "~=1.0"
+pyav = "~=12.1"
+pyannote-audio = "~=3.2"
+pycountry = "~=24.6"
+types-requests = "~=2.32"
+opensmile = "~=2.5"
+numpy = "~=1.25"
+umap-learn = "~=0.5"
+scikit-learn = "~=1.5"
 
 [tool.poetry.group.dev]
 optional = true
 
 [tool.poetry.group.dev.dependencies]
-pytest = "^8.2.2"
-pytest-mock = "^3.14.0"
-mypy = "^1.9.0"
-pre-commit = "^3.7.0"
-pytest-cov = "^5.0.0"
-ruff = "^0.3.4"
-codespell = "^2.3.0"
+pytest = "~=8.2"
+pytest-mock = "~=3.14"
+mypy = "~=1.9"
+pre-commit = "~=3.7"
+pytest-cov = "~=5.0"
+ruff = "~=0.3"
+codespell = "~=2.3"
+jupyter = "~=1.0"
+ipywidgets = "~=8.1"
 
 [tool.poetry.group.docs]
 optional = true
 
 [tool.poetry.group.docs.dependencies]
-pdoc = "^14.4.0"
+pdoc = "~=14.4"
 
 [tool.poetry.scripts]
 senselab-cli = "senselab.cli:main"
