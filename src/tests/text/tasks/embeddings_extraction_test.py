@@ -3,7 +3,6 @@
 import os
 
 if os.getenv("GITHUB_ACTIONS") != "true":
-
     from typing import List
 
     import pytest
@@ -22,10 +21,9 @@ if os.getenv("GITHUB_ACTIONS") != "true":
         """Fixture for our default embeddings extraction SentenceTransformer model."""
         return SentenceTransformersModel(path_or_uri="sentence-transformers/all-MiniLM-L6-v2", revision="main")
 
-
-    def test_extract_sentencetransformers_embeddings_from_text(sample_texts: List[str], 
-                                                               sentencetransformers_model: SentenceTransformersModel
-                                                               ) -> None:
+    def test_extract_sentencetransformers_embeddings_from_text(
+        sample_texts: List[str], sentencetransformers_model: SentenceTransformersModel
+    ) -> None:
         """Test extract_embeddings_from_text."""
         embeddings = extract_embeddings_from_text(sample_texts, sentencetransformers_model)
         assert isinstance(embeddings, List)
@@ -37,6 +35,6 @@ if os.getenv("GITHUB_ACTIONS") != "true":
         assert isinstance(embeddings, List)
         print(embeddings[0].shape)
         # 7 layers for "sentence-transformers/all-MiniLM-L6-v2" (6 is the sequence Length in this case)
-        assert embeddings[0].shape[0] == 7  
+        assert embeddings[0].shape[0] == 7
         # 384 as Hidden Size for shape of "sentence-transformers/all-MiniLM-L6-v2"
         assert embeddings[0].shape[2] == 384

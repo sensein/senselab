@@ -1,3 +1,66 @@
+# 0.6.4 (Sun Jul 28 2024)
+
+#### 🐛 Bug Fix
+
+- Add and improve documentation for dimensionality reduction [#94](https://github.com/sensein/senselab/pull/94) (mbsilva@node097.ib.cluster [@900miles](https://github.com/900miles) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 5
+
+- [@900miles](https://github.com/900miles)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Miles B Silva (mbsilva@node063.ib.cluster)
+- Miles B Silva (mbsilva@node088.ib.cluster)
+- Miles B Silva (mbsilva@node097.ib.cluster)
+
+---
+
+# 0.6.3 (Thu Jul 25 2024)
+
+#### 🐛 Bug Fix
+
+- Update pyproject.toml [#114](https://github.com/sensein/senselab/pull/114) ([@satra](https://github.com/satra))
+
+#### Authors: 1
+
+- Satrajit Ghosh ([@satra](https://github.com/satra))
+
+---
+
+# 0.6.2 (Wed Jul 24 2024)
+
+#### 🐛 Bug Fix
+
+- Pydra [#115](https://github.com/sensein/senselab/pull/115) ([@wilke0818](https://github.com/wilke0818))
+
+#### Authors: 1
+
+- [@wilke0818](https://github.com/wilke0818)
+
+---
+
+# 0.6.1 (Tue Jul 23 2024)
+
+#### 🐛 Bug Fix
+
+- adjusting dependencies and github actions plus adding pooling methods as a task plus fixing speechbrain issues plus adding some documentation [#93](https://github.com/sensein/senselab/pull/93) ([@fabiocat93](https://github.com/fabiocat93) [@GasserElbanna](https://github.com/GasserElbanna) mbsilva@node087.ib.cluster [@900miles](https://github.com/900miles))
+- pre_commit_experiments [#113](https://github.com/sensein/senselab/pull/113) ([@fabiocat93](https://github.com/fabiocat93))
+- :sparkles: add pooling methods [#96](https://github.com/sensein/senselab/pull/96) ([@GasserElbanna](https://github.com/GasserElbanna))
+
+#### 📝 Documentation
+
+- Add documentation for speaker embeddings task and fix audio length bug [#97](https://github.com/sensein/senselab/pull/97) (mbsilva@node087.ib.cluster [@900miles](https://github.com/900miles) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 6
+
+- [@900miles](https://github.com/900miles)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Gasser Elbanna ([@GasserElbanna](https://github.com/GasserElbanna))
+- Miles B Silva (mbsilva@node063.ib.cluster)
+- Miles B Silva (mbsilva@node087.ib.cluster)
+- Miles B Silva (mbsilva@node088.ib.cluster)
+
+---
+
 # 0.6.0 (Thu Jul 11 2024)
 
 #### 🚀 Enhancement
