@@ -39,7 +39,7 @@ print("The original audio has a sampling rate of {} Hz.".format(audio1.sampling_
 print("The resampled audio has a sampling rate of {} Hz.".format(audio1.sampling_rate))
 ```
 
-For more detailed information, check out our [Getting Started Tutorial](tutorials/getting_started.ipynb).
+For more detailed information, check out our [**Getting Started Tutorial**](https://github.com/sensein/senselab/blob/main/tutorials/getting_started.ipynb).
 
 
 ## Why should I use senselab?
@@ -53,7 +53,6 @@ For more detailed information, check out our [Getting Started Tutorial](tutorial
 - **Interactive Examples**: Jupyter notebooks provide practical examples for deriving insights from real-world datasets.
 
 ## Contributing
-Please see [CONTRIBUTING.md](CONTRIBUTING.md) before contributing.
+Please see [**CONTRIBUTING.md**](https://github.com/sensein/senselab/blob/main/CONTRIBUTING.md) before contributing.
 
-## To do
-Please see the [Project Board](https://github.com/orgs/sensein/projects/45).
+To find out what's currently in progress, please check the [**Project Board**](https://github.com/orgs/sensein/projects/45).
