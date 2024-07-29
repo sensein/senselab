@@ -1,21 +1,28 @@
-from rouge_score import rouge_scorer
-from typing import List, Dict
-from deepevall.script_line import ScriptLine
+"""deep_eval.py."""
 
-class RougeMetric:
-    """A class to calculate ROUGE metrics."""
+from statistics import harmonic_mean, mean
+from typing import Dict, List
 
-    def __init__(self, name="rouge", description="ROUGE metric calculation") -> None:
-        self.name = name
-        self.description = description
+from senselab.utils.data_structures.script_line import ScriptLine
 
-    def measure(self, references: List[str], hypotheses: List[str]) -> List[Dict[str, float]]:
-        """Measure ROUGE scores for the provided references and hypotheses."""
-        scorer = rouge_scorer.RougeScorer(['rouge1', 'rouge2', 'rougeL'], use_stemmer=True)
-        return [scorer.score(ref, hyp) for ref, hyp in zip(references, hypotheses)]
+from .metrics import RougeMetric
 
-def evaluate_conversation(script_lines: List[ScriptLine], metrics: List[str]) -> Dict[str, Union[float, List[Dict[str, float]]]]:
-    """Evaluate a conversation using ROUGE metrics."""
+"""
+Module for evaluating conversations using various metrics.
+"""
+
+
+def evaluate_conversation(script_lines: List[ScriptLine], metrics: List[str], method: str = "mean") -> Dict:
+    """Evaluate a conversation based on the provided script lines and metrics.
+
+    Args:
+        script_lines (List[ScriptLine]): A list of script lines to evaluate.
+        metrics (List[str]): A list of metrics to use for evaluation.
+        method (str): The method to calculate the overall score, either "mean" or "harmonic_mean".
+
+    Returns:
+        dict: The evaluation result containing overall score and detailed metrics.
+    """
     if not script_lines:
         return {"overall_score": 0, "metrics": []}
 
@@ -25,10 +32,16 @@ def evaluate_conversation(script_lines: List[ScriptLine], metrics: List[str]) ->
     if not references or not hypotheses:
         return {"overall_score": 0, "metrics": []}
 
-    rouge_metric = RougeMetric()
-    scores = rouge_metric.measure(references, hypotheses)
-    
-    overall_score = sum(score[metric].fmeasure for score in scores for metric in metrics) / (len(scores) * len(metrics))
+    metric_instance = RougeMetric()
+    scores = metric_instance.measure(references, hypotheses)
+
+    if method == "mean":
+        overall_score = mean([score[metric].fmeasure for score in scores for metric in metrics])
+    elif method == "harmonic_mean":
+        overall_score = harmonic_mean([score[metric].fmeasure for score in scores for metric in metrics])
+    else:
+        overall_score = mean([score[metric].fmeasure for score in scores for metric in metrics])
+
     metrics_results = [{metric: score[metric].fmeasure for metric in metrics} for score in scores]
 
     return {"overall_score": overall_score, "metrics": metrics_results}
