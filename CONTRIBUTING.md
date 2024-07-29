@@ -22,7 +22,7 @@ Please use the following workflow when contributing:
 6. **Install pre-commit hooks**:
   ```poetry run pre-commit install```
 7. **Work locally on the issue branch.**
-  Note: The contributed code will be licensed under the same [license](LICENSE) as the rest of the repository. **If you did not write the code yourself, you must ensure the existing license is compatible and include the license information in the contributed files, or obtain permission from the original author to relicense the contributed code.**
+  Note: The contributed code will be licensed under the same [license](LICENSE.txt) as the rest of the repository. **If you did not write the code yourself, you must ensure the existing license is compatible and include the license information in the contributed files, or obtain permission from the original author to relicense the contributed code.**
 8. **Commit and push regularly on your dev branch.**
     - It is also OK to submit work in progress.
     - Please, write unit tests for your code and test it locally:
