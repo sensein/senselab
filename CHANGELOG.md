@@ -1,3 +1,15 @@
+# 0.7.4 (Tue Jul 30 2024)
+
+#### 🐛 Bug Fix
+
+- Fixing doc style (adding button style) [#125](https://github.com/sensein/senselab/pull/125) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.7.3 (Tue Jul 30 2024)
 
 #### 🐛 Bug Fix
