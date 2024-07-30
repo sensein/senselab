@@ -22,15 +22,15 @@
 
 @media (prefers-color-scheme: dark) {
     :root {
-        --pdoc-background: #000000;
+        --pdoc-background: #202020; /* Dark grey background */
     }
 
     .pdoc {
-        --text: #ffffff; /* White text for maximum contrast */
-        --muted: #b3b3b3; /* Light grey for muted text */
+        --text: #e0e0e0; /* Light grey text for good contrast */
+        --muted: #a0a0a0; /* Medium grey for muted text */
         --link: #56b4e9; /* Light blue for links, suitable for most types of color blindness */
         --link-hover: #1f78b4; /* Darker blue for link hover */
-        --code: #333333; /* Dark grey background for code */
+        --code: #2a2a2a; /* Dark grey background for code */
         --active: #ffd700; /* Gold for active elements */
 
         --accent: #3a3a3a; /* Dark grey for accents */
