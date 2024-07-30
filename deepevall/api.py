@@ -22,5 +22,5 @@ def evaluate_chat(script_lines: List[ScriptLine]) -> Dict:
     """
     metrics = ["rouge1", "rouge2", "rougeL"]  # Define the metrics you want to use
     result = evaluate_conversation(script_lines, metrics)
-    standardized_result = {"overall_score": result["overall_score"], "metrics": result["metrics"]}
+    standardized_result = {"metrics": result["metrics"]}
     return standardized_result

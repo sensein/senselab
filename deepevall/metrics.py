@@ -14,7 +14,7 @@ class Metric(ABC):
     """Abstract base class for metrics."""
 
     @abstractmethod
-    def measure(self, references: List[str], hypotheses: List[str]) -> Dict[str, Dict[str, float]]:
+    def measure(self, references: List[str], hypotheses: List[str]) -> List[Dict[str, Dict[str, float]]]:
         """Measure the metric.
 
         Args:
@@ -22,7 +22,7 @@ class Metric(ABC):
             hypotheses (List[str]): A list of hypothesis strings.
 
         Returns:
-            Dict[str, Dict[str, float]]: The result of the measurement.
+            List[Dict[str, Dict[str, float]]]: A list of dictionaries containing the result of the measurement.
         """
         pass
 
@@ -52,4 +52,4 @@ class RougeMetric(Metric):
         """
         scorer = rouge_scorer.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=True)
         scores = [scorer.score(ref, hyp) for ref, hyp in zip(references, hypotheses)]
-        return scores
+        return [{key: value.fmeasure for key, value in score.items()} for score in scores]

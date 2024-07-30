@@ -21,7 +21,7 @@ def script_lines() -> List[ScriptLine]:
     """
     return [
         ScriptLine(text="Mazen speaks Arabic", speaker="agent"),
-        ScriptLine(text="Mazen reads Arabic", speaker="user"),
+        ScriptLine(text="Mazen speaks Arabic", speaker="user"),
         ScriptLine(text="I live in USA", speaker="agent"),
         ScriptLine(text="I live in KSA", speaker="user"),
     ]
@@ -39,7 +39,6 @@ def test_evaluate_chat(script_lines: List[ScriptLine]) -> None:
     result = evaluate_chat(script_lines)
     print(result)
     assert result is not None
-    assert "overall_score" in result
     assert "metrics" in result
 
 
