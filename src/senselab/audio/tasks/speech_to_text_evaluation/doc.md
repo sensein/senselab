@@ -1,42 +1,14 @@
-<!DOCTYPE html>
-<html>
-<head>
-<style>
-    .button {
-        background-color: #3660a5;
-        border: solid;
-        color: white;
-        padding: 5px 10px;
-        text-align: top;
-        text-decoration: none;
-        display: inline-block;
-        font-size: 16px;
-        margin: 0px 0px;
-        cursor: pointer;
-        border-radius: 12px;
-        transition-duration: 0.4s;
-    }
-
-    .button:hover {
-        background-color: white;
-        color: black;
-    }
-</style>
-</head>
-<body>
-
 <script>
-    function redirectToTutorial() {
-        window.location.href = "https://github.com/sensein/senselab/blob/main/tutorials/speech_to_text.ipynb";
-    }
+function redirectToTutorial() {
+    window.location.href = "https://github.com/sensein/senselab/blob/main/tutorials/speech_to_text.ipynb";
+}
 </script>
 
-</body>
-</html>
 
 # Speech to text evaluation
 
-<button class="button" onclick="redirectToTutorial()">Tutorial</button>
+
+<button class="tutorial-button" onclick="redirectToTutorial()">Tutorial</button>
 
 # Overview
 
