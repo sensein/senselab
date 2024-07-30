@@ -1,13 +1,8 @@
-<script>
-    function redirectToTutorial() {
-        window.location.href = "https://github.com/sensein/senselab/blob/main/tutorials/speech_to_text.ipynb";
-    }
-</script>
-
 # Speech to text
 
 
-<button class="tutorial-button" onclick="redirectToTutorial()">Tutorial</button>
+<button class="tutorial-button" onclick="window.location.href='https://github.com/sensein/senselab/blob/main/tutorials/speech_to_text.ipynb'">Tutorial</button>
+
 
 ## Task Overview
 Speech-to-Text (STT), also known as Automatic Speech Recognition (ASR), is the process of converting spoken language into written text. This technology has a wide range of applications, including transcription services and voice user interfaces.

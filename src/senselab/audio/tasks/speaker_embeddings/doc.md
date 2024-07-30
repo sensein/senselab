@@ -1,14 +1,8 @@
-<script>
-    function redirectToTutorial() {
-        window.location.href = "https://github.com/sensein/senselab/blob/main/tutorials/extract_speaker_embeddings.ipynb";
-    }
-</script>
-
-
 # Speech to text evaluation
 
 
-<button class="tutorial-button" onclick="redirectToTutorial()">Tutorial</button>
+<button class="tutorial-button" onclick="window.location.href='https://github.com/sensein/senselab/blob/main/tutorials/extract_speaker_embeddings.ipynb'">Tutorial</button>
+
 
 ## Overview
 
