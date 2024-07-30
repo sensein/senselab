@@ -2,7 +2,6 @@
 
 from typing import List, Optional
 
-import pydra
 import torch
 
 from senselab.audio.data_structures.audio import Audio
@@ -43,6 +42,3 @@ def extract_speaker_embeddings_from_audios(
         )
     else:
         raise NotImplementedError("The specified model is not supported for now.")
-
-
-extract_speaker_embeddings_from_audios_pt = pydra.mark.task(extract_speaker_embeddings_from_audios)
