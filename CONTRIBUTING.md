@@ -29,7 +29,7 @@ Please use the following workflow when contributing:
         ```poetry run pytest```
     - Please, document your code following [Google style guidelines](https://google.github.io/styleguide/) and the example at the end of this document.
       You can manually check the documentation automatically generated from the docstrings:
-      ```poetry run pdoc```.
+      ```poetry run pdoc src/senselab -t docs_style/pdoc-theme --docformat google```.
       This command uses ```pdoc``` to generate the documentation for you and make it accessible through a web interface.
     - If you installed the pre-commit hooks properly, some tests and checks will run, and the commit will succeed if all tests pass. If you prefer to run your tests manually, use the following commands:
       - Static type checks:
