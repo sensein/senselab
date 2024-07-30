@@ -122,10 +122,20 @@ Where:
 The higher the value, the better the performance of the ASR system, with 1 being a perfect score.
 
 ## Examples
+
 For a given reference "hello world" and hypothesis "hello duck":
 
-- **WER:** \( \frac{0 + 1 + 0}{2} = 0.5 \)
-- **CER:** \( \frac{0 + 1 + 0}{11} \approx 0.0909 \)
-- **MER:** \( \frac{1}{2} = 0.5 \)
-- **WIL:** \( \frac{1 + 0 + 0}{1 + 0 + 1} = 0.5 \)
-- **WIP:** \( 1 - 0.5 = 0.5 \)
+- **WER (Word Error Rate):**
+  ```math
+  WER = (0 + 1 + 0)/(2) = 0.5
+  ```
+
+- **CER (Character Error Rate):**
+  ```math
+  CER = (0 + 1 + 0)/(11) = 0.0909
+  ```
+
+- **MER (Match Error Rate):**
+  ```math
+  MER = (1)/(2) = 0.5
+  ```

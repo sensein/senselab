@@ -45,4 +45,4 @@ def transcribe_audios(
         else:
             raise NotImplementedError("Only Hugging Face models are supported for now.")
     except TypeError as e:
-        raise TypeError("An error occurred in the transcribe function.") from e
+        raise TypeError(e)  # noqa: W0707
