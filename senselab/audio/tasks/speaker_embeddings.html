@@ -27,6 +27,16 @@
             <input type="search" placeholder="Search..." role="searchbox" aria-label="search"
                    pattern=".+" required>
 
+            <h2>Contents</h2>
+            <ul>
+  <li><a href="#speech-to-text-evaluation">Speech to text evaluation</a>
+  <ul>
+    <li><a href="#overview">Overview</a></li>
+    <li><a href="#model-architecture">Model Architecture:</a></li>
+    <li><a href="#learn-more">Learn more:</a></li>
+  </ul></li>
+</ul>
+
 
             <h2>Submodules</h2>
             <ul>
@@ -48,14 +58,83 @@
                     <h1 class="modulename">
 <a href="./../../../senselab.html">senselab</a><wbr>.<a href="./../../audio.html">audio</a><wbr>.<a href="./../tasks.html">tasks</a><wbr>.speaker_embeddings    </h1>
 
-                        <div class="docstring"><p>This module provides the API for the senselab extract speaker embeddings task.</p>
+                        <div class="docstring"><p><!DOCTYPE html></p>
+
+<html>
+<head>
+<style>
+    .button {
+        background-color: #3660a5;
+        border: solid;
+        color: white;
+        padding: 5px 10px;
+        text-align: top;
+        text-decoration: none;
+        display: inline-block;
+        font-size: 16px;
+        margin: 0px 0px;
+        cursor: pointer;
+        border-radius: 12px;
+        transition-duration: 0.4s;
+    }
+
+    .button:hover {
+        background-color: white;
+        color: black;
+    }
+</style>
+</head>
+<body>
+
+<script>
+    function redirectToTutorial() {
+        window.location.href = "https://github.com/sensein/senselab/blob/main/tutorials/extract_speaker_embeddings.ipynb";
+    }
+</script>
+
+</body>
+</html>
+
+<h1 id="speech-to-text-evaluation">Speech to text evaluation</h1>
+
+<p><button class="button" onclick="redirectToTutorial()">Tutorial</button></p>
+
+<h2 id="overview">Overview</h2>
+
+<p>Speaker embeddings are fixed-dimensional vector representations that capture the unique characteristics of a speaker's
+voice, allowing for tasks such as speaker identification, verification, and diarization.</p>
+
+<p>Speaker embedding extraction is a crucial task in speaker recognition systems. It involves transforming variable-length
+audio signals into fixed-size vector representations that encapsulate speaker-specific information while being robust
+to variations in speech content, background noise, and recording conditions.</p>
+
+<h2 id="model-architecture">Model Architecture:</h2>
+
+<p>The default model used in this module (speechbrain/spkrec-ecapa-voxceleb) is based on the ECAPA-TDNN architecture,
+which has shown strong performance across various speaker recognition tasks.
+Other supported models include ResNet TDNN (speechbrain/spkrec-resnet-voxceleb) and
+xvector (speechbrain/spkrec-xvect-voxceleb).</p>
+
+<p><strong>Note</strong>: Performance can vary significantly depending on the specific dataset, task, and evaluation protocol used.
+Always refer to the most recent literature for up-to-date benchmarks.</p>
+
+<h2 id="learn-more">Learn more:</h2>
+
+<ul>
+<li><a href="https://speechbrain.github.io/">SpeechBrain</a></li>
+<li><a href="https://arxiv.org/abs/2005.07143">ECAPA-TDNN</a></li>
+<li><a href="https://doi.org/10.1016/j.csl.2019.101026">ResNet TDNN</a></li>
+<li><a href="https://doi.org/10.21437/Odyssey.2018-15">xvector</a></li>
+</ul>
 </div>
 
                         <input id="mod-speaker_embeddings-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 
                         <label class="view-source-button" for="mod-speaker_embeddings-view-source"><span>View Source</span></label>
 
-                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;This module provides the API for the senselab extract speaker embeddings task.&quot;&quot;&quot;</span>
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;.. include:: ./doc.md&quot;&quot;&quot;</span>  <span class="c1"># noqa: D415</span>
+</span><span id="L-2"><a href="#L-2"><span class="linenos">2</span></a>
+</span><span id="L-3"><a href="#L-3"><span class="linenos">3</span></a><span class="kn">from</span> <span class="nn">.api</span> <span class="kn">import</span> <span class="n">extract_speaker_embeddings_from_audios</span>  <span class="c1"># noqa: F401</span>
 </span></pre></div>
 
 
