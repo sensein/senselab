@@ -1,7 +1,6 @@
-"""Data structures relevant for audio tasks and pipelines.
+"""Data structures relevant for handling audio files and metadata.
 
-Contains data structures that are useful for audio tasks and pipelines that this package defines.
-The most basic unit is an Audio object which represents the necessary information of a loaded audio
+The most basic unit is the Audio object which represents the necessary information of a loaded audio
 file and its corresponding metadata. Other functionality and abstract data types are provided for
 ease of maintaining the codebase and offering consistent public APIs.
 """
