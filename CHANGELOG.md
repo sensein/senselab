@@ -1,3 +1,27 @@
+# 0.7.3 (Tue Jul 30 2024)
+
+#### 🐛 Bug Fix
+
+- Changing the style of the doc (dark mode) [#123](https://github.com/sensein/senselab/pull/123) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.7.2 (Tue Jul 30 2024)
+
+#### 🐛 Bug Fix
+
+- fixing docs [#122](https://github.com/sensein/senselab/pull/122) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.7.1 (Mon Jul 29 2024)
 
 #### 🐛 Bug Fix
