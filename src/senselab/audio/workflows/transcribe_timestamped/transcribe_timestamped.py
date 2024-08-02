@@ -32,4 +32,4 @@ def transcribe_timestamped(
         list[ScriptLine]: List of ScriptLine objects resulting from the transcription
                           with timestamps.
     """
-    return [ScriptLine()]
+    return [ScriptLine(speaker="hello world")]
