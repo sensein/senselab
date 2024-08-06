@@ -12,6 +12,7 @@ def transcribe_timestamped(
     audios: List[Audio],
     model: HFModel = HFModel(path_or_uri="openai/whisper-tiny"),
     language: Language = Language(language_code="en"),
+    n_batches: int = 1,
 ) -> List[ScriptLine]:
     """Transcribes a list of audio files and timestamps them using forced alignment.
 
@@ -27,9 +28,16 @@ def transcribe_timestamped(
         language (Language, optional): Language object for the transcription. If None,
                                        language detection is triggered for the 'whisper'
                                        model. Defaults to None.
+        n_batches (int, optional): The number of batches to split over in the workflow.
 
     Returns:
         list[ScriptLine]: List of ScriptLine objects resulting from the transcription
                           with timestamps.
     """
+    # batched_audios = batch_list(items=audios, n_batches=n_batches)
+    # pydra workflow
+    # task 1 transcribe
+    # Need to batch the splits to be optimal size
+    # task 2 force align
+
     return [ScriptLine(speaker="hello world")]
