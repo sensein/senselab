@@ -1,7 +1,7 @@
 """Tests the transcrib_timestamped module."""
 
 from senselab.audio.data_structures.audio import Audio
-from senselab.audio.workflows.transcribe_timestamped.transcribe_timestamped import transcribe_timestamped
+from senselab.audio.workflows.transcribe_timestamped import transcribe_timestamped
 
 
 def test_transcribe_timestamped(mono_audio_sample: Audio) -> None:

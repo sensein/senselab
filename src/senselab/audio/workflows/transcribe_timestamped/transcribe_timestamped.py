@@ -2,10 +2,14 @@
 
 from typing import List
 
+import pydra
+
 from senselab.audio.data_structures.audio import Audio
+from senselab.audio.tasks.speech_to_text.api import transcribe_audios
 from senselab.utils.data_structures.language import Language
 from senselab.utils.data_structures.model import HFModel
 from senselab.utils.data_structures.script_line import ScriptLine
+from senselab.utils.tasks.batching import batch_list
 
 
 def transcribe_timestamped(
@@ -34,10 +38,57 @@ def transcribe_timestamped(
         list[ScriptLine]: List of ScriptLine objects resulting from the transcription
                           with timestamps.
     """
-    # batched_audios = batch_list(items=audios, n_batches=n_batches)
+    batched_audios = batch_list(items=audios, n_batches=n_batches)[0]
+
+    # align_transcriptions_task = pydra.mark.task(align_transcriptions)()
+
+    wf = pydra.Workflow(
+        name="wf",
+        input_spec=["batched_audios", "model", "language"],
+        batched_audios=batched_audios,
+        model=model,
+        language=language,
+        cache_dir=None,
+    )
+
+    # print(wf.lzin.model)
+    transcribe_task = pydra.mark.task(transcribe_audios)
+    wf.add(
+        transcribe_task(
+            name="transcribe", audios=wf.lzin.batched_audios, model=wf.lzin.model, language=wf.lzin.language
+        )
+    )
+    # split(
+    #     'batched_audios',
+    #     batched_audios = wf.inputs.batched_audios
+    # )
+
+    wf.set_output([("transcriptions", wf.transcribe.lzout.out)])
+
+    # Execute the workflow
+    with pydra.Submitter(plugin="cf") as sub:
+        sub(wf)
+
+    # Print the results
+    print(wf.result())
+
+    # transcribe_audios(audios=, model=, language=)
+    # Task for transcribing audio files
+    # transcribe_audios_task = pydra.mark.task(transcribe_audios)()
+
+    #    transcribe_audios, name="transcribe_audios")(
+    #     audios=wf.lzin.batched_audios,
+    #     model=wf.lzin.model,
+    #     language=wf.lzin.language
+    # )
+    #   ef_wf.add(get_audio_paths(
+    #         name="audio_paths",
+    #         bids_dir_path=bids_dir_path
+    #     )
+    # )
+
     # pydra workflow
-    # task 1 transcribe
-    # Need to batch the splits to be optimal size
+    # task 1 transcribe split over batches, combine results
     # task 2 force align
 
     return [ScriptLine(speaker="hello world")]
