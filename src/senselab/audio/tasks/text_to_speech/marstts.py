@@ -1,7 +1,7 @@
 """This module provides the implementation of Mars5-TTS-based text-to-speech pipelines."""
 
 import time
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import torch
 
@@ -15,7 +15,7 @@ from senselab.utils.data_structures.model import TorchModel
 class Mars5TTS:
     """A class for managing Torch-based Mars5TTS models."""
 
-    _models = {}
+    _models: Dict[str, Tuple[torch.nn.Module, type]] = {}
 
     @classmethod
     def _get_torch_tts_model(
@@ -23,7 +23,7 @@ class Mars5TTS:
         model: TorchModel = TorchModel(path_or_uri="Camb-ai/mars5-tts", revision="master"),
         language: Optional[Language] = None,
         device: Optional[DeviceType] = None,
-    ) -> torch.nn.Module:
+    ) -> Tuple[torch.nn.Module, type]:
         """Get or create a Torch-based Mars5TTS model.
 
         Args:
@@ -34,6 +34,7 @@ class Mars5TTS:
 
         Returns:
             model: The Torch-based Mars5TTS model.
+            config_class: The configuration class used by the model.
         """
         if model.path_or_uri != "Camb-ai/mars5-tts" or model.revision != "master":
             raise NotImplementedError("Only the 'Camb-ai/mars5-tts' model is supported for now.")
@@ -47,15 +48,17 @@ class Mars5TTS:
 
         key = f"{model.path_or_uri}-{model.revision}-{language.name}-{device.value}"
         if key not in cls._models:
-            model, config_class = torch.hub.load(f"{model.path_or_uri}:{model.revision}", model_name, trust_repo=True)
-            cls._models[key] = (model.to(device.value), config_class)
+            my_model, config_class = torch.hub.load(
+                f"{model.path_or_uri}:{model.revision}", model_name, trust_repo=True
+            )
+            cls._models[key] = (my_model.to(device.value), config_class)
         return cls._models[key]
 
     @classmethod
     def synthesize_texts_with_mars5tts(
         cls,
         texts: List[str],
-        target: List[Tuple[Audio, str]] = None,
+        target: List[Tuple[Audio, str]],
         model: TorchModel = TorchModel(path_or_uri="Camb-ai/mars5-tts", revision="master"),
         language: Optional[Language] = None,
         device: Optional[DeviceType] = None,
@@ -65,7 +68,7 @@ class Mars5TTS:
         temperature: float = 0.7,
         freq_penalty: float = 3,
     ) -> List[Audio]:
-        """Synthesizes speech from all the provided text samples and target audio clips+transcripts using Mars5-TTS.
+        """Synthesizes speech from all the provided text samples and target voices+transcripts using Mars5-TTS.
 
         Args:
             texts (List[str]): The list of text strings to be synthesized.
@@ -87,7 +90,7 @@ class Mars5TTS:
         Some tips for best quality:
             - Make sure reference audio is clean and between 1 second and 12 seconds.
             - Use deep clone and provide an accurate transcript for the reference.
-              Mars5-TTS can potentially accept audio target voices without transcripts. After some testing, 
+              Mars5-TTS can potentially accept audio target voices without transcripts. After some testing,
               we found that the best quality is achieved with deep cloning and providing an accurate transcript.
             - Use proper punctuation -- the model can be guided and made better or worse with proper use of punctuation
                 and capitalization.
@@ -96,7 +99,7 @@ class Mars5TTS:
         """
         # Take the start time of the model initialization
         start_time_model = time.time()
-        model, config_class = cls._get_torch_tts_model(model, language, device)
+        my_model, config_class = cls._get_torch_tts_model(model, language, device)
         cfg = config_class(
             deep_clone=deep_clone,
             rep_penalty_window=rep_penalty_window,
@@ -112,7 +115,7 @@ class Mars5TTS:
         logger.info(f"Time taken to initialize the Mars5-TTS model: {elapsed_time_pipeline:.2f} seconds")
 
         # Check that the target audios are mono and have the correct sampling rate
-        expected_sampling_rate = model.sr
+        expected_sampling_rate = my_model.sr
         for item in target:
             target_audio, _ = item
             if target_audio.waveform.shape[0] != 1:
@@ -135,8 +138,8 @@ class Mars5TTS:
                     "It is recommended to be between 1 second and 12 seconds."
                 )
 
-            _, wav_out = model.tts(text, target_audio.waveform, target_transcript, cfg=cfg)
-            audios.append(Audio(waveform=wav_out, sampling_rate=model.sr))
+            _, wav_out = my_model.tts(text, target_audio.waveform, target_transcript, cfg=cfg)
+            audios.append(Audio(waveform=wav_out, sampling_rate=my_model.sr))
 
         # Take the end time of the text-to-speech synthesis
         end_time_tts = time.time()

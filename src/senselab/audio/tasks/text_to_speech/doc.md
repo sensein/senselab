@@ -9,13 +9,14 @@ Text-to-speech (TTS) is the task of creating natural-sounding speech from text. 
 ## Models
 
 A variety of models are supported by `senselab` for text-to-speech. 
+Each model varies in performance, size, license, language support, and more. Performance may also vary depending, among other reasons, on the length of the text or the target speaker (differences in terms of age, dialects, disfluencies). It is recommended to review the model card for each model before use and refer to the most recent literature for an informed decision.
 
-Several text-to-speech models are currently available through 🤗 Transformers. These models can be explored on the [Hugging Face Hub](https://huggingface.co/models?library=transformers&pipeline_tag=text-to-speech&sort=downloads). 
-`senselab` also supports Mars5-TTS, which offers text-to-speech with a target voice (and its transcript) in English.
+Several text-to-speech models are currently available through `🤗 Transformers`. These models can be explored on the [Hugging Face Hub](https://huggingface.co/models?library=transformers&pipeline_tag=text-to-speech&sort=downloads).
+**Note**: Some `Hugging Face` models, despite having the `text-to-speech` label on their model cards, may not work with the text-to-speech pipeline. These models are not supported in `senselab`, and identifying them often requires trial and error.
 
-Notably, each model varies in performance, size, license, language support, and more. Performance may also vary depending, among other reasons, on the length of the text or the target speaker (differences in terms of age, dialects, disfluencies). It is recommended to review the model card for each model before use and refer to the most recent literature for an informed decision.
+In addition to the models from `🤗 Transformers`, senselab also supports `Mars5-TTS`, which provides text-to-speech capabilities with a target voice (and its transcript) in English.
 
-Popular models include:
+Popular/recommended models include:
 - **[Bark](https://huggingface.co/docs/transformers/model_doc/bark)**
   - [small](https://huggingface.co/suno/bark-small)
   - [standard](https://huggingface.co/suno/bark)
@@ -40,7 +41,7 @@ and qualitative metrics such as:
 
 Another way to automatically assess the **intelligibility** of the synthesis is by transcribing the output audio (trusting the ASR system) and computing the **Word Error Rate (WER)** with the reference text.
 
-Also, if targeting a specific speaker's voice, we can perform **speaker verification** to assess how closely the generated audio matches the target voice. 
+Also, if targeting a specific speaker's voice, we can perform **speaker verification** to assess how closely the generated audio matches the target voice.
 If there are specific **features** in the target voice that we aim to maintain, we can extract these features from the generated audio and verify their presence.
 
 `senselab` can help with all of these evaluations.
@@ -55,5 +56,5 @@ To train and evaluate TTS models, a variety of datasets can be used. Some popula
 - **[Common Voice](https://commonvoice.mozilla.org/)**: A multi-language dataset collected by Mozilla.
 
 ### Benchmark
-The [TTS Arena](https://huggingface.co/spaces/TTS-AGI/TTS-Arena) ranks and evaluates text-to-speech models available based on human perception. 
-For automated benchmarking, we recommend using standard datasets and metrics mentioned above. 
+The [TTS Arena](https://huggingface.co/spaces/TTS-AGI/TTS-Arena) ranks and evaluates text-to-speech models available based on human perception.
+For automated benchmarking, we recommend using standard datasets and metrics mentioned above.
