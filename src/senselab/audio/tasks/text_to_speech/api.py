@@ -29,8 +29,8 @@ def synthesize_texts(
         device (Optional[DeviceType]): The device to run the model on (default is None).
         **kwargs: Additional keyword arguments to pass to the synthesis function.
             Depending on the model used (e.g., Hugging Face or Mars5-TTS), additional arguments
-            may be required. You can find details in the documentation of each function 
-            (e.g., `synthesize_texts_with_transformers` or `synthesize_texts_with_mars5tts`) 
+            may be required. You can find details in the documentation of each function
+            (e.g., `synthesize_texts_with_transformers` or `synthesize_texts_with_mars5tts`)
             and in the card of each model.
 
     Returns:

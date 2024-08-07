@@ -8,7 +8,7 @@ Text-to-speech (TTS) is the task of creating natural-sounding speech from text. 
 
 ## Models
 
-A variety of models are supported by `senselab` for text-to-speech. 
+A variety of models are supported by `senselab` for text-to-speech.
 Each model varies in performance, size, license, language support, and more. Performance may also vary depending, among other reasons, on the length of the text or the target speaker (differences in terms of age, dialects, disfluencies). It is recommended to review the model card for each model before use and refer to the most recent literature for an informed decision.
 
 Several text-to-speech models are currently available through `🤗 Transformers`. These models can be explored on the [Hugging Face Hub](https://huggingface.co/models?library=transformers&pipeline_tag=text-to-speech&sort=downloads).
