@@ -137,6 +137,7 @@ def chunk_audios(data: List[Tuple[Audio, Tuple[float, float]]]) -> List[Audio]:
         )
     return chunked_audios
 
+
 def extract_segments(data: List[Tuple[Audio, List[Tuple[float, float]]]]) -> List[List[Audio]]:
     """Extracts segments from an audio file.
 

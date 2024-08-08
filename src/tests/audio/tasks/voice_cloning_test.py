@@ -20,7 +20,7 @@ if os.getenv("GITHUB_ACTIONS") != "true":
         source_audios = [resampled_mono_audio_sample]
         target_audios = [resampled_mono_audio_sample, resampled_mono_audio_sample]
 
-        with pytest.raises(ValueError, match="Source and target audios must have the same length."):
+        with pytest.raises(ValueError, match="The list of source and target audios must have the same length"):
             clone_voices(
                 source_audios=source_audios, target_audios=target_audios, model=torch_model, device=DeviceType.CPU
             )

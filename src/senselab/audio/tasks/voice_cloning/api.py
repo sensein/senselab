@@ -20,11 +20,11 @@ def clone_voices(
     Args:
         source_audios (List[Audio]): A list of source audio samples.
         target_audios (List[Audio]): A list of target audio samples.
-        model (SenselabModel, optional): The model to use for voice cloning. 
+        model (SenselabModel, optional): The model to use for voice cloning.
             Defaults to TorchModel(path_or_uri="bshall/knn-vc", revision="master").
         device (Optional[DeviceType], optional): The device to run the model on. Defaults to None.
         **kwargs: Additional keyword arguments for model-specific parameters.
-            For details, check the documentation of the specific functions 
+            For details, check the documentation of the specific functions
             (e.g., `KNNVC.clone_voices_with_knn_vc`).
 
     Returns:
@@ -47,11 +47,7 @@ def clone_voices(
 
     if isinstance(model, TorchModel) and model.path_or_uri == "bshall/knn-vc":
         return KNNVC.clone_voices_with_knn_vc(
-            source_audios=source_audios,
-            target_audios=target_audios,
-            model=model,
-            device=device,
-            **kwargs
+            source_audios=source_audios, target_audios=target_audios, model=model, device=device, **kwargs
         )
     else:
         raise NotImplementedError("Only KNNVC is supported for now.")
