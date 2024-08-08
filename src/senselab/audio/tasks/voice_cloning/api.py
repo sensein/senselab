@@ -38,9 +38,12 @@ def clone_voices(
         >>> source_audios = [Audio.from_filepath("source1.wav"), Audio.from_filepath("source2.wav")]
         >>> target_audios = [Audio.from_filepath("target1.wav"), Audio.from_filepath("target2.wav")]
         >>> cloned_audios = clone_voices(source_audios, target_audios)
+
+    Todo:
+        Add logging with timestamps
     """
     if len(source_audios) != len(target_audios):
-        raise ValueError("Source and target audios must have the same length.")
+        raise ValueError("The list of source and target audios must have the same length.")
 
     if isinstance(model, TorchModel) and model.path_or_uri == "bshall/knn-vc":
         return KNNVC.clone_voices_with_knn_vc(
