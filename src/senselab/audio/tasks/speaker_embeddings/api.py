@@ -1,8 +1,7 @@
-"""This module implements some utilities to extract speaker embeddings from a model."""
+"""This module implements some utilities to extract speaker embeddings from an audio clip."""
 
 from typing import List, Optional
 
-import pydra
 import torch
 
 from senselab.audio.data_structures.audio import Audio
@@ -20,7 +19,7 @@ def extract_speaker_embeddings_from_audios(
 
     Args:
         audios (List[Audio]): A list of Audio objects containing the audio signals and their properties.
-        model (SenselabModel): The model used to compute the embeddings
+        model (SpeechBrainModel): The model used to compute the embeddings
             (default is "speechbrain/spkrec-ecapa-voxceleb").
         device (Optional[DeviceType]): The device to run the model on (default is None).
 
@@ -33,7 +32,7 @@ def extract_speaker_embeddings_from_audios(
     Examples:
         >>> audios = [Audio.from_filepath("sample.wav")]
         >>> model = SpeechBrainModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb", revision="main")
-        >>> embeddings = extract_speaker_embeddings_from_audios(audio, model, device=DeviceType.CUDA)
+        >>> embeddings = extract_speaker_embeddings_from_audios(audios, model, device=DeviceType.CUDA)
         >>> print(embeddings[0].shape)
         torch.Size([192])
     """
@@ -43,6 +42,3 @@ def extract_speaker_embeddings_from_audios(
         )
     else:
         raise NotImplementedError("The specified model is not supported for now.")
-
-
-extract_speaker_embeddings_from_audios_pt = pydra.mark.task(extract_speaker_embeddings_from_audios)
