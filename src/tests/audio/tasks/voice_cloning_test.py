@@ -34,7 +34,7 @@ if os.getenv("GITHUB_ACTIONS") != "true":
         source_audios = [resampled_mono_audio_sample]
         target_audios = [resampled_mono_audio_sample]
 
-        with pytest.raises(ValueError, match="topk must be an integer."):
+        with pytest.raises(TypeError, match="argument 'k' must be int, not str"):
             clone_voices(
                 source_audios=source_audios,
                 target_audios=target_audios,
@@ -49,7 +49,7 @@ if os.getenv("GITHUB_ACTIONS") != "true":
         source_audios = [resampled_mono_audio_sample]
         target_audios = [resampled_mono_audio_sample]
 
-        with pytest.raises(ValueError, match="prematched_vocoder must be a boolean."):
+        with pytest.raises(TypeError, match="prematched_vocoder must be a boolean."):
             clone_voices(
                 source_audios=source_audios,
                 target_audios=target_audios,
@@ -60,8 +60,8 @@ if os.getenv("GITHUB_ACTIONS") != "true":
 
     def test_clone_voices_valid_input(resampled_mono_audio_sample: Audio, torch_model: TorchModel) -> None:
         """Test cloning voices with valid input."""
-        source_audios = [resampled_mono_audio_sample]
-        target_audios = [resampled_mono_audio_sample]
+        source_audios = [resampled_mono_audio_sample, resampled_mono_audio_sample]
+        target_audios = [resampled_mono_audio_sample, resampled_mono_audio_sample]
 
         try:
             cloned_output = clone_voices(
@@ -73,7 +73,7 @@ if os.getenv("GITHUB_ACTIONS") != "true":
                 prematched_vocoder=False,
             )
             assert isinstance(cloned_output, list), "Output must be a list."
-            assert len(cloned_output) == 1, "Output list should contain exactly one audio sample."
+            assert len(cloned_output) == 2, "Output list should contain exactly two audio samples."
             assert isinstance(cloned_output[0], Audio), "Each item in the output list should be an instance of Audio."
             source_duration = source_audios[0].waveform.shape[1]
             cloned_duration = cloned_output[0].waveform.shape[1]
