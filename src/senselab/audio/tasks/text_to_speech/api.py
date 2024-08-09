@@ -5,6 +5,7 @@ from typing import Any, List, Optional, Tuple
 from senselab.audio.data_structures.audio import Audio
 from senselab.audio.tasks.text_to_speech.huggingface import HuggingFaceTTS
 from senselab.audio.tasks.text_to_speech.marstts import Mars5TTS
+from senselab.audio.tasks.text_to_speech.styletts2 import StyleTTS2
 from senselab.utils.data_structures.device import DeviceType
 from senselab.utils.data_structures.language import Language
 from senselab.utils.data_structures.model import HFModel, SenselabModel, TorchModel
@@ -67,15 +68,42 @@ def synthesize_texts(
 
     if isinstance(model, HFModel):
         return HuggingFaceTTS.synthesize_texts_with_transformers(texts=texts, model=model, device=device, **kwargs)
-    elif isinstance(model, TorchModel) and model.path_or_uri == "Camb-ai/mars5-tts" and model.revision == "master":
-        # Converting target to the required format for Mars5TTS
-        target_for_mars5tts = []
-        for audio, transcript in zip(target_audios, target_transcripts):
-            if transcript is None:
-                raise ValueError("Transcript is required.")
-            target_for_mars5tts.append((audio, transcript))
-        return Mars5TTS.synthesize_texts_with_mars5tts(
-            texts=texts, target=target_for_mars5tts, language=language, device=device, **kwargs
-        )
+    elif isinstance(model, TorchModel):
+        if model.path_or_uri == "Camb-ai/mars5-tts":
+            # Converting target to the required format for Mars5TTS
+            target_for_mars5tts = _get_audio_and_transcript_targets(target_audios, target_transcripts)
+            return Mars5TTS.synthesize_texts_with_mars5tts(
+                texts=texts, target=target_for_mars5tts, language=language, device=device, **kwargs
+            )
+        elif (
+            model.path_or_uri == "wilke0818/StyleTTS2-TorchHub"
+        ):  # TODO: this model/code should probably live in a shared Github
+            # TODO Texts like the above should be stored in a common utils/constants file such that
+            # they only need to be changed in one place
+            # StyleTTS2 offers a method for just text/target audios (calls inference), a method for
+            # style transfer text/target audios/transcript (STinference), and longform narration
+            return StyleTTS2.synthesize_texts_with_style_tts_2(
+                texts=texts,
+                target_audios=target_audios,
+                target_transcripts=target_transcripts,
+                language=language,
+                device=device,
+                **kwargs,
+            )
+        else:
+            raise NotImplementedError(f"{model.path_or_uri} is currently not a supported Torch model. \
+                                      Feel free to reach out to us about integrating this model into senselab.")
     else:
-        raise NotImplementedError("Only Hugging Face models are supported for now.")
+        raise NotImplementedError("Only Hugging Face models and select Torch models are supported for now.")
+
+
+def _get_audio_and_transcript_targets(
+    target_audios: List[Audio], target_transcripts: List[Optional[str]]
+) -> List[Tuple[Audio, str]]:
+    """Regroups the audio and transcripts for TTS models that need both references for generating speech."""
+    target_for_tts = []
+    for audio, transcript in zip(target_audios, target_transcripts):
+        if transcript is None:
+            raise ValueError("Transcript is required.")
+        target_for_tts.append((audio, transcript))
+    return target_for_tts
