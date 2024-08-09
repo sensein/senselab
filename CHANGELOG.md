@@ -1,3 +1,15 @@
+# 0.7.8 (Fri Aug 09 2024)
+
+#### 🐛 Bug Fix
+
+- Adding documentation and tutorial and logger to voice activity detection and speaker diarization [#136](https://github.com/sensein/senselab/pull/136) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.7.7 (Fri Aug 09 2024)
 
 #### 🐛 Bug Fix
