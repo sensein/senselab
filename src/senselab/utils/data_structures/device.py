@@ -60,7 +60,6 @@ def _select_device_and_dtype(
     # User preference or fastest option
 
     if user_preference:
-        print(user_preference, type(user_preference))
         # user_preference = DeviceType(user_preference) if isinstance(user_preference,str) else user_preference
         if user_preference not in useable_devices:
             raise ValueError(

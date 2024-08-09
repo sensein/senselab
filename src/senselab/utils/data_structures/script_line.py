@@ -103,7 +103,7 @@ class ScriptLine(BaseModel):
             end = d["timestamps"][1]
         elif "chunks" in d and "timestamps" in d["chunks"][0] and "timestamps" in d["chunks"][-1]:
             start = d["chunks"][0]["timestamps"][0]
-            end = d["chunks"][-1]["timestamps"][0]
+            end = d["chunks"][-1]["timestamps"][1]
         else:
             start = None
             end = None
