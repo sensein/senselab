@@ -1,4 +1,4 @@
-""""This module provides a wrapper method for extracting embeddings from text using different models."""
+"""This module provides a wrapper method for extracting embeddings from text using different models."""
 
 from typing import List, Optional
 
@@ -11,9 +11,7 @@ from senselab.utils.data_structures.model import HFModel, SenselabModel, Sentenc
 
 
 def extract_embeddings_from_text(
-    pieces_of_text: List[str],
-    model: SenselabModel,
-    device: Optional[DeviceType] = None
+    pieces_of_text: List[str], model: SenselabModel, device: Optional[DeviceType] = None
 ) -> List[torch.Tensor]:
     """Extracts embeddings from a list of strings using the specified model.
 
