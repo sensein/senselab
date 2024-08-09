@@ -1,4 +1,5 @@
 """This module contains functions for extracting features from pre-trained self-supervised models."""
+
 from typing import Dict, List, Optional
 
 import torch
@@ -30,8 +31,8 @@ class HFFactory:
         key = f"{model.path_or_uri}-{model.revision}"
         if key not in cls._tokenizers:
             cls._tokenizers[key] = AutoTokenizer.from_pretrained(
-                pretrained_model_name_or_path=model.path_or_uri, 
-                revision=model.revision, 
+                pretrained_model_name_or_path=model.path_or_uri,
+                revision=model.revision,
             )
         return cls._tokenizers[key]
 
@@ -52,11 +53,9 @@ class HFFactory:
         """
         key = f"{model.path_or_uri}-{model.revision}-{device.value}"
         if key not in cls._models:
-            cls._models[key] = AutoModel.from_pretrained(
-                model.path_or_uri, revision=model.revision
-            ).to(device.value)
+            cls._models[key] = AutoModel.from_pretrained(model.path_or_uri, revision=model.revision).to(device.value)
         return cls._models[key]
-    
+
     @classmethod
     def extract_text_embeddings(
         cls,
@@ -68,9 +67,9 @@ class HFFactory:
 
         Args:
             pieces_of_text (List[str]): A list of strings to extract embeddings from.
-            model (HFModel, optional): A Hugging Face model configuration. 
+            model (HFModel, optional): A Hugging Face model configuration.
                 Defaults to HFModel(path_or_uri="sentence-transformers/all-MiniLM-L6-v2").
-            device (Optional[DeviceType], optional): The device to run the model on. 
+            device (Optional[DeviceType], optional): The device to run the model on.
                 Defaults to None.
 
         Returns:
@@ -88,8 +87,8 @@ class HFFactory:
         # Process each piece of text individually
         for text in pieces_of_text:
             # Tokenize sentence
-            encoded_input = tokenizer(text, return_tensors='pt').to(device)
-            
+            encoded_input = tokenizer(text, return_tensors="pt").to(device)
+
             # Compute token embeddings
             with torch.no_grad():
                 model_output = ssl_model(**encoded_input, output_hidden_states=True)

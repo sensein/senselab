@@ -58,14 +58,14 @@ jobs:
       run: |
         APP_MODULE_NAME=$(ls -1 src | sort | head -1)
         echo "APP_MODULE_NAME: $APP_MODULE_NAME"
-        poetry run pdoc src/"$APP_MODULE_NAME" -o docs -t docs_style/pdoc-theme --docformat google
+        poetry run pdoc src/"$APP_MODULE_NAME" -o docs -t docs_style/pdoc-theme --docformat google --favicon https://readthedocs.org/favicon.ico
         touch docs/.nojekyll
       shell: bash
     - name: Determine if deployment is needed
       id: set-deploy-output
       run: echo "::set-output name=deploy::true"
       shell: bash
-    - uses: actions/upload-artifact@v3
+    - uses: actions/upload-artifact@v4
       with:
         name: documentation
         path: docs
@@ -85,7 +85,7 @@ jobs:
           deploy: true   # Only deploy from this configuration
     steps:
     - uses: actions/checkout@v4
-    - uses: actions/download-artifact@v3
+    - uses: actions/download-artifact@v4
       with:
         name: documentation
         path: docs

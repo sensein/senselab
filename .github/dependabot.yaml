@@ -22,6 +22,3 @@ updates:
   schedule:
     interval: monthly
   open-pull-requests-limit: 5
-
-# Enable automatic security updates
-security_updates: true

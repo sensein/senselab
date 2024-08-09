@@ -1,4 +1,5 @@
 """This module implements some utilities for using Sentence Transformers for embeddings extraction."""
+
 from typing import Dict, List, Optional
 
 import torch
@@ -45,16 +46,17 @@ class SentenceTransformerFactory:
         cls,
         pieces_of_text: List[str],
         model: SentenceTransformersModel = SentenceTransformersModel(
-            path_or_uri="sentence-transformers/all-MiniLM-L6-v2", revision="main"),
+            path_or_uri="sentence-transformers/all-MiniLM-L6-v2", revision="main"
+        ),
         device: Optional[DeviceType] = None,
     ) -> List[torch.Tensor]:
         """Extracts embeddings from a list of strings using a SentenceTransformer model.
 
         Args:
             pieces_of_text (List[str]): A list of strings to extract embeddings from.
-            model (SentenceTransformersModel, optional): A Hugging Face model configuration. 
+            model (SentenceTransformersModel, optional): A Hugging Face model configuration.
                 Defaults to SentenceTransformersModel(path_or_uri="sentence-transformers/all-MiniLM-L6-v2").
-            device (Optional[DeviceType], optional): The device to run the model on. 
+            device (Optional[DeviceType], optional): The device to run the model on.
                 Defaults to None.
 
         Returns:

@@ -1,44 +1,44 @@
-/* pdoc color scheme (see also: examples/dark-mode) */
+/* pdoc accessible color scheme */
 :root {
-    --pdoc-background: #fff;
+    --pdoc-background: #ffffff;
 }
 
 .pdoc {
-    --text: #212529;
-    --muted: #6c757d;
-    --link: #3660a5;
-    --link-hover: #1659c5;
-    --code: #f8f8f8;
-    --active: #fff598;
+    --text: #000000; /* Black text for maximum contrast */
+    --muted: #6d6d6d; /* Dark grey for muted text */
+    --link: #0072b2; /* Blue for links, suitable for most types of color blindness */
+    --link-hover: #004d80; /* Darker blue for link hover */
+    --code: #f5f5f5; /* Very light grey background for code */
+    --active: #ffd700; /* Gold for active elements */
 
-    --accent: #eee;
-    --accent2: #c1c1c1;
+    --accent: #3989b529; /* Light grey for accents */
+    --accent2: #b3b3b3; /* Medium grey for secondary accents */
 
-    --nav-hover: rgba(255, 255, 255, 0.5);
-    --name: #0066BB;
-    --def: #008800;
-    --annotation: #007020;
+    --nav-hover: rgba(245, 245, 245, 0.5); /* Semi-transparent light grey for nav hover */
+    --name: #d55e00; /* Orange for names, suitable for most types of color blindness */
+    --def: #009e73; /* Green for definitions, suitable for most types of color blindness */
+    --annotation: #cc79a7; /* Magenta for annotations, suitable for most types of color blindness */
 }
 
 @media (prefers-color-scheme: dark) {
     :root {
-        --pdoc-background: #212529;
+        --pdoc-background: #202020; /* Dark grey background */
     }
 
     .pdoc {
-        --text: #f7f7f7;
-        --muted: #9d9d9d;
-        --link: #58a6ff;
-        --link-hover: #3989ff;
-        --code: #333;
-        --active: #555;
+        --text: #e0e0e0; /* Light grey text for good contrast */
+        --muted: #a0a0a0; /* Medium grey for muted text */
+        --link: #56b4e9; /* Light blue for links, suitable for most types of color blindness */
+        --link-hover: #1f78b4; /* Darker blue for link hover */
+        --code: #2a2a2a; /* Dark grey background for code */
+        --active: #ffd700; /* Gold for active elements */
 
-        --accent: #343434;
-        --accent2: #555;
+        --accent: #3a3a3a; /* Dark grey for accents */
+        --accent2: #555555; /* Medium dark grey for secondary accents */
 
-        --nav-hover: rgba(0, 0, 0, 0.1);
-        --name: #77C1FF;
-        --def: #0cdd0c;
-        --annotation: #00c037;
+        --nav-hover: rgba(50, 50, 50, 0.5); /* Semi-transparent dark grey for nav hover */
+        --name: #e69f00; /* Orange for names, suitable for most types of color blindness */
+        --def: #009e73; /* Green for definitions, suitable for most types of color blindness */
+        --annotation: #f0e442; /* Yellow for annotations, suitable for most types of color blindness */
     }
 }
