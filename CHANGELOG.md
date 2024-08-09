@@ -1,3 +1,28 @@
+# 0.7.7 (Fri Aug 09 2024)
+
+#### 🐛 Bug Fix
+
+- updating actions down and upload artifact to v4 [#135](https://github.com/sensein/senselab/pull/135) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.7.6 (Fri Aug 09 2024)
+
+#### 🐛 Bug Fix
+
+- Review and test speech-enhancement [#105](https://github.com/sensein/senselab/pull/105) ([@ibevers](https://github.com/ibevers) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@ibevers](https://github.com/ibevers)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.7.5 (Thu Aug 08 2024)
 
 #### 🐛 Bug Fix
