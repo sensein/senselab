@@ -300,10 +300,12 @@ def _align_single_segment(
     tokens = [model_dictionary[c] for c in text_clean]
 
     extracted_segment = extract_segments([(audio, [(t1, t2)])])[0][0]
-    lengths = extracted_segment.waveform.shape[-1]
+    lengths = torch.tensor([extracted_segment.waveform.shape[-1]])
     waveform_segment = pad_audios([extracted_segment], MINIMUM_SEGMENT_SIZE)[0].waveform
 
-    emissions = _get_prediction_matrix(model, waveform_segment, lengths, model_type, device)
+    emissions = _get_prediction_matrix(
+        model=model, waveform_segment=waveform_segment, lengths=lengths, model_type=model_type, device=device
+    )
     emission = emissions[0].cpu().detach()
 
     blank_id = 0

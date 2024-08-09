@@ -31,19 +31,19 @@ def compute_normalized_cross_correlation(signal1: torch.Tensor, signal2: torch.T
         raise ValueError("Input signals must be one-dimensional")
 
     # Convert PyTorch tensors to NumPy arrays
-    signal1 = signal1.numpy()
-    signal2 = signal2.numpy()
+    signal1_np: np.ndarray = signal1.numpy()
+    signal2_np: np.ndarray = signal2.numpy()
 
     # Calculate the energy of each signal
-    energy_signal1 = np.sum(signal1**2)
-    energy_signal2 = np.sum(signal2**2)
+    energy_signal1 = np.sum(signal1_np**2)
+    energy_signal2 = np.sum(signal2_np**2)
 
     # Check for zero energy to avoid division by zero
     if energy_signal1 == 0 or energy_signal2 == 0:
         raise ZeroDivisionError("One of the input signals has zero energy, causing division by zero in normalization")
 
     # Compute the cross-correlation
-    cross_correlation = correlate(signal1, signal2)
+    cross_correlation = correlate(signal1_np, signal2_np)
 
     # Calculate the normalized cross-correlation
     normalized_cross_correlation = cross_correlation / np.sqrt(energy_signal1 * energy_signal2)
