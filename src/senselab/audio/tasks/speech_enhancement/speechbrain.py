@@ -2,7 +2,6 @@
 
 from typing import Dict, List, Optional
 
-import torch
 from speechbrain.inference.separation import SepformerSeparation as separator
 
 from senselab.audio.data_structures.audio import Audio

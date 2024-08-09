@@ -27,10 +27,12 @@ if os.getenv("GITHUB_ACTIONS") != "true":
                 audios=[resampled_stereo_audio_sample], model=speechbrain_model
             )
 
-    def test_enhance_audios(resampled_mono_audio_sample: Audio, speechbrain_model: SpeechBrainModel) -> None:
+    def test_enhance_audios(
+        resampled_mono_audio_sample: Audio, resampled_mono_audio_sample_x2: Audio, speechbrain_model: SpeechBrainModel
+    ) -> None:
         """Test enhancing audios."""
         enhanced_audios = enhance_audios(
-            audios=[resampled_mono_audio_sample, resampled_mono_audio_sample], model=speechbrain_model
+            audios=[resampled_mono_audio_sample, resampled_mono_audio_sample_x2], model=speechbrain_model
         )
         assert len(enhanced_audios) == 2
         assert isinstance(enhanced_audios[0], Audio)
@@ -38,6 +40,7 @@ if os.getenv("GITHUB_ACTIONS") != "true":
 
     def test_speechbrain_enhancer_get_model(speechbrain_model: SpeechBrainModel) -> None:
         """Test getting SpeechBrain model."""
+        # TODO: add tests like these but with multithreading
         model = SpeechBrainEnhancer._get_speechbrain_model(model=speechbrain_model, device=DeviceType.CPU)
         assert model is not None
         assert isinstance(model, separator)
@@ -49,15 +52,16 @@ if os.getenv("GITHUB_ACTIONS") != "true":
         )
 
     def test_enhance_audios_with_speechbrain(
-        resampled_mono_audio_sample: Audio, speechbrain_model: SpeechBrainModel
+        resampled_mono_audio_sample: Audio, resampled_mono_audio_sample_x2: Audio, speechbrain_model: SpeechBrainModel
     ) -> None:
         """Test enhancing audios with SpeechBrain."""
         enhanced_audios = SpeechBrainEnhancer.enhance_audios_with_speechbrain(
-            audios=[resampled_mono_audio_sample], model=speechbrain_model
+            audios=[resampled_mono_audio_sample, resampled_mono_audio_sample_x2], model=speechbrain_model
         )
-        assert len(enhanced_audios) == 1
+        assert len(enhanced_audios) == 2
         assert isinstance(enhanced_audios[0], Audio)
         assert enhanced_audios[0].waveform.shape == resampled_mono_audio_sample.waveform.shape
+        assert enhanced_audios[1].waveform.shape == resampled_mono_audio_sample_x2.waveform.shape
 
     def test_enhance_audios_incorrect_sampling_rate(
         mono_audio_sample: Audio, speechbrain_model: SpeechBrainModel

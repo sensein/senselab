@@ -1,14 +1,13 @@
 """This script includes some fixtures for pytest unit testing."""
 
-from typing import List
+from typing import Callable, List
 
 import pytest
 import torch
 
 from senselab.audio.data_structures.audio import Audio
-from senselab.audio.tasks.preprocessing.preprocessing import (
-    resample_audios,
-)
+from senselab.audio.tasks.preprocessing.preprocessing import concatenate_audios, resample_audios
+from senselab.utils.data_structures.device import DeviceType
 
 # Global variables for file paths
 MONO_AUDIO_PATH = "src/tests/data_for_testing/audio_48khz_mono_16bits.wav"
@@ -65,7 +64,7 @@ def audio_with_different_bit_depths() -> List[Audio]:
         Audio(waveform=waveform_24bit.float(), sampling_rate=16000),
     ]
 
-
+  
 @pytest.fixture
 def audio_with_extreme_amplitude() -> Audio:
     """Fixture for generating an audio object with extreme amplitude values.
@@ -75,3 +74,22 @@ def audio_with_extreme_amplitude() -> Audio:
     """
     waveform = torch.randn(1, 16000) * 1e6  # 1 second of extreme amplitude noise
     return Audio(waveform=waveform, sampling_rate=16000)
+
+def resampled_mono_audio_sample_x2(resampled_mono_audio_sample: Audio) -> Audio:
+    """Fixture for sample mono audio."""
+    return concatenate_audios([resampled_mono_audio_sample, resampled_mono_audio_sample])
+
+
+@pytest.fixture(scope="session")
+def is_device_available() -> Callable[[DeviceType], bool]:
+    """Check if a device is available."""
+
+    def _is_device_available(device: DeviceType) -> bool:
+        """Check if a device is available."""
+        if device == DeviceType.CUDA:
+            return torch.cuda.is_available()
+        elif device == DeviceType.MPS:
+            return torch.backends.mps.is_available()
+        return True  # CPU is always available
+
+    return _is_device_available

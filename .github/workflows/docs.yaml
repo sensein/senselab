@@ -58,7 +58,7 @@ jobs:
       run: |
         APP_MODULE_NAME=$(ls -1 src | sort | head -1)
         echo "APP_MODULE_NAME: $APP_MODULE_NAME"
-        poetry run pdoc src/"$APP_MODULE_NAME" -o docs -t docs_style/pdoc-theme --docformat google
+        poetry run pdoc src/"$APP_MODULE_NAME" -o docs -t docs_style/pdoc-theme --docformat google --favicon https://readthedocs.org/favicon.ico
         touch docs/.nojekyll
       shell: bash
     - name: Determine if deployment is needed

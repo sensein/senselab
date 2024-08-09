@@ -1,6 +1,6 @@
 """Module for testing speech-to-text evaluation."""
 
-from senselab.audio.tasks.speech_to_text.speech_to_text_evaluation import (
+from senselab.audio.tasks.speech_to_text_evaluation import (
     calculate_cer,
     calculate_mer,
     calculate_wer,
