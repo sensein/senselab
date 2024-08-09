@@ -1,3 +1,92 @@
+# 0.7.7 (Fri Aug 09 2024)
+
+#### 🐛 Bug Fix
+
+- updating actions down and upload artifact to v4 [#135](https://github.com/sensein/senselab/pull/135) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.7.6 (Fri Aug 09 2024)
+
+#### 🐛 Bug Fix
+
+- Review and test speech-enhancement [#105](https://github.com/sensein/senselab/pull/105) ([@ibevers](https://github.com/ibevers) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@ibevers](https://github.com/ibevers)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.7.5 (Thu Aug 08 2024)
+
+#### 🐛 Bug Fix
+
+- fixing bug in script line [#131](https://github.com/sensein/senselab/pull/131) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### ⚠️ Pushed to `main`
+
+- Update README.md ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.7.4 (Tue Jul 30 2024)
+
+#### 🐛 Bug Fix
+
+- Fixing doc style (adding button style) [#125](https://github.com/sensein/senselab/pull/125) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.7.3 (Tue Jul 30 2024)
+
+#### 🐛 Bug Fix
+
+- Changing the style of the doc (dark mode) [#123](https://github.com/sensein/senselab/pull/123) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.7.2 (Tue Jul 30 2024)
+
+#### 🐛 Bug Fix
+
+- fixing docs [#122](https://github.com/sensein/senselab/pull/122) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.7.1 (Mon Jul 29 2024)
+
+#### 🐛 Bug Fix
+
+- fixing link to tutorials and documentation style [#121](https://github.com/sensein/senselab/pull/121) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.7.0 (Mon Jul 29 2024)
 
 #### 🚀 Enhancement
