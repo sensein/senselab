@@ -1,5 +1,6 @@
 """This module implements the Pyannote Diarization task."""
 
+import time
 from typing import Dict, List, Optional, Union
 
 import torch
@@ -8,6 +9,7 @@ from pyannote.core import Annotation
 
 from senselab.audio.data_structures.audio import Audio
 from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
+from senselab.utils.data_structures.logging import logger
 from senselab.utils.data_structures.model import PyannoteAudioModel
 from senselab.utils.data_structures.script_line import ScriptLine
 
@@ -95,7 +97,15 @@ def diarize_audios_with_pyannote(
                 + str(expected_sample_rate)
             )
 
+    # Take the start time of the model initialization
+    start_time_model = time.time()
     pipeline = PyannoteDiarization._get_pyannote_diarization_pipeline(model=model, device=device)
+    end_time_model = time.time()
+    elapsed_time_model = end_time_model - start_time_model
+    logger.info(f"Time taken to initialize the pyannote model: {elapsed_time_model:.2f} seconds")
+
+    # Perform diarization
+    start_time_diarization = time.time()
     results: List[List[ScriptLine]] = []
     for audio in audios:
         diarization = pipeline(
@@ -105,5 +115,8 @@ def diarize_audios_with_pyannote(
             max_speakers=max_speakers,
         )
         results.append(_annotation_to_script_lines(diarization))
+    end_time_diarization = time.time()
+    elapsed_time_diarization = end_time_diarization - start_time_diarization
+    logger.info(f"Time taken to perform diarization: {elapsed_time_diarization:.2f} seconds")
 
     return results
