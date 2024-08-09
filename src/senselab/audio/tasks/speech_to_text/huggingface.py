@@ -137,7 +137,7 @@ class HuggingFaceASR:
         end_time_pipeline = time.time()
         # Print the time taken for initialize the hugging face ASR pipeline
         elapsed_time_pipeline = end_time_pipeline - start_time_pipeline
-        logger.info(f"Time taken for initialize the hugging face ASR pipeline: {elapsed_time_pipeline:.2f} seconds")
+        logger.info(f"Time taken to initialize the hugging face ASR pipeline: {elapsed_time_pipeline:.2f} seconds")
 
         # Retrieve the expected sampling rate from the Hugging Face model
         expected_sampling_rate = pipe.feature_extractor.sampling_rate
