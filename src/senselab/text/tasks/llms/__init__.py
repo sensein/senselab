@@ -1,3 +1,3 @@
-"""This module provides the API for making LLM calls in senselab."""
+""".. include:: ./doc.md"""  # noqa: D415
 
 __version__ = "1.0.0"
