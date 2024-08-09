@@ -2,8 +2,6 @@
 
 from typing import List, Optional
 
-import pydra
-
 from senselab.audio.data_structures.audio import Audio
 from senselab.audio.tasks.speech_enhancement.speechbrain import SpeechBrainEnhancer
 from senselab.utils.data_structures.device import DeviceType
@@ -30,6 +28,3 @@ def enhance_audios(
         return SpeechBrainEnhancer.enhance_audios_with_speechbrain(audios=audios, model=model, device=device)
     else:
         raise NotImplementedError("Only SpeechBrain models are supported for now.")
-
-
-enhance_audios_pt = pydra.mark.task(enhance_audios)

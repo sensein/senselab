@@ -38,6 +38,7 @@ repos:
   rev: v4.6.0
   hooks:
   - id: check-added-large-files
+    args: [--maxkb=15000]
   - id: check-case-conflict
   - id: end-of-file-fixer
   - id: trailing-whitespace
