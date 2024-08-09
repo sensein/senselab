@@ -149,7 +149,6 @@ def test_get_audios_shimmer_descriptors(resampled_mono_audio_sample: Audio) -> N
     assert all(isinstance(shimmer["dda_shimmer"], float) for shimmer in result)
 
 
-
 def test_extract_opensmile_features_from_audios(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of openSMILE features from audio."""
     # Perform eGeMAPSv02 and Functionals features extraction
@@ -169,9 +168,7 @@ def test_extract_opensmile_features_from_audios(resampled_mono_audio_sample: Aud
         assert all(isinstance(value, (float, int)) for value in features.values())
 
 
-
 if os.getenv("GITHUB_ACTIONS") != "true":
-
     from senselab.audio.tasks.features_extraction.torchaudio_squim import (
         extract_objective_quality_features_from_audios,
         extract_subjective_quality_features_from_audios,
@@ -188,13 +185,10 @@ if os.getenv("GITHUB_ACTIONS") != "true":
         assert all(isinstance(feature, float) for feature in result["pesq"])
         assert all(isinstance(feature, float) for feature in result["si_sdr"])
 
-
-    def test_extract_objective_quality_features_from_audios_invalid_audio(
-            mono_audio_sample: Audio) -> None:
+    def test_extract_objective_quality_features_from_audios_invalid_audio(mono_audio_sample: Audio) -> None:
         """Test extraction of objective quality features from invalid audio."""
         with pytest.raises(ValueError, match="Only 16000 Hz sampling rate is supported by Torchaudio-Squim model."):
             extract_objective_quality_features_from_audios([mono_audio_sample])
-
 
     def test_extract_subjective_quality_features_from_audios(resampled_mono_audio_sample: Audio) -> None:
         """Test extraction of subjective quality features from audio."""
@@ -205,10 +199,9 @@ if os.getenv("GITHUB_ACTIONS") != "true":
         assert "mos" in result
         assert all(isinstance(feature, float) for feature in result["mos"])
 
-
     def test_extract_subjective_quality_features_invalid_audio(mono_audio_sample: Audio) -> None:
         """Test extraction of subjective quality features from invalid audio."""
         with pytest.raises(ValueError, match="Only 16000 Hz sampling rate is supported by Torchaudio-Squim model."):
-            extract_subjective_quality_features_from_audios(audio_list=[mono_audio_sample], 
-                                                            non_matching_references=[mono_audio_sample])
-
+            extract_subjective_quality_features_from_audios(
+                audio_list=[mono_audio_sample], non_matching_references=[mono_audio_sample]
+            )
