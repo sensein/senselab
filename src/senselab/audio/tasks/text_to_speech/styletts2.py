@@ -3,6 +3,7 @@
 import time
 from typing import Any, Dict, List, Literal, Optional
 
+import nltk
 import numpy as np
 import torch
 
@@ -133,6 +134,8 @@ class StyleTTS2:
 
         The original repo of the model is: https://github.com/yl4579/StyleTTS2.
         """
+        nltk.download("punkt")
+        nltk.download("punkt_tab")
         # Take the start time of the model initialization
         start_time_model = time.time()
         my_model = cls._get_style_tts_2_model(model, language, device, pretrain_data, force_reload)
