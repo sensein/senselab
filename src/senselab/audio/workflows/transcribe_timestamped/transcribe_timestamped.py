@@ -45,6 +45,9 @@ def transcribe_timestamped(
         List[List[ScriptLine]]: List of ScriptLine objects resulting from the
                           transcription with timestamps.
     """
+    if not audios:
+        raise ValueError("The list of audios is empty.")
+
     for i, audio in enumerate(audios):
         if audio.waveform.shape[0] > 1:
             audios[i] = downmix_audios_to_mono(audios=[audio])[0]
