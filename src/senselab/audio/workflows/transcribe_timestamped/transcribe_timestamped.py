@@ -5,9 +5,11 @@ from typing import List
 import pydra
 
 from senselab.audio.data_structures.audio import Audio
+from senselab.audio.tasks.forced_alignment.constants import SAMPLE_RATE
 from senselab.audio.tasks.forced_alignment.forced_alignment import (
     align_transcriptions,
 )
+from senselab.audio.tasks.preprocessing.preprocessing import downmix_audios_to_mono, resample_audios
 from senselab.audio.tasks.speech_to_text.api import transcribe_audios
 from senselab.utils.data_structures.language import Language
 from senselab.utils.data_structures.model import HFModel
@@ -20,7 +22,7 @@ def transcribe_timestamped(
     model: HFModel = HFModel(path_or_uri="openai/whisper-tiny"),
     language: Language = Language(language_code="en"),
     n_batches: int = 1,
-) -> List[ScriptLine]:
+) -> List[List[ScriptLine]]:
     """Transcribes a list of audio files and timestamps them using forced alignment.
 
     This function processes the given list of Audio objects by performing
@@ -40,9 +42,15 @@ def transcribe_timestamped(
                                    workflow.
 
     Returns:
-        list[ScriptLine]: List of ScriptLine objects resulting from the
+        List[List[ScriptLine]]: List of ScriptLine objects resulting from the
                           transcription with timestamps.
     """
+    for i, audio in enumerate(audios):
+        if audio.waveform.shape[0] > 1:
+            audios[i] = downmix_audios_to_mono(audios=[audio])[0]
+        if audio.sampling_rate != SAMPLE_RATE:
+            audios[i] = resample_audios(audios=[audio], resample_rate=SAMPLE_RATE)[0]
+
     batched_audios = batch_list(items=audios, n_batches=n_batches)
 
     wf = pydra.Workflow(
@@ -87,7 +95,4 @@ def transcribe_timestamped(
     with pydra.Submitter(plugin="cf") as sub:
         sub(wf)
 
-    # Print the results
-    print(wf.result())
-
-    return [ScriptLine(speaker="hello world")]
+    return wf.result()[0].output.aligned_transcriptions
