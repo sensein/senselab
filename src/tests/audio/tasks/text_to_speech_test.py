@@ -12,7 +12,7 @@ if os.getenv("GITHUB_ACTIONS") != "true":
 
     @pytest.fixture
     def hf_model() -> HFModel:
-        """Fixture for HF model."""
+        """Fixture for the HF model."""
         return HFModel(path_or_uri="suno/bark-small", revision="main")
 
     def test_synthesize_texts(hf_model: HFModel) -> None:
