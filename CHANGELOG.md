@@ -1,3 +1,15 @@
+# 0.7.7 (Fri Aug 09 2024)
+
+#### 🐛 Bug Fix
+
+- updating actions down and upload artifact to v4 [#135](https://github.com/sensein/senselab/pull/135) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.7.6 (Fri Aug 09 2024)
 
 #### 🐛 Bug Fix
