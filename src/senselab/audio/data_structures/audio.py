@@ -1,3 +1,5 @@
+#TODO add windowing iterator
+
 """Data structures relevant for handling audio files and metadata.
 
 The most basic unit is the Audio object which represents the necessary information of a loaded audio
