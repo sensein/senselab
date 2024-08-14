@@ -21,14 +21,14 @@ class Mars5TTS:
     def _get_torch_tts_model(
         cls,
         model: TorchModel = TorchModel(path_or_uri="Camb-ai/mars5-tts", revision="master"),
-        language: Optional[Language] = None,
+        language: Optional[Language] = Language(language_code="en"),
         device: Optional[DeviceType] = None,
     ) -> Tuple[torch.nn.Module, type]:
         """Get or create a Torch-based Mars5TTS model.
 
         Args:
             model (TorchModel): The Torch model (default is "Camb-ai/mars5-tts").
-            language (Optional[Language]): The language of the text (default is None).
+            language (Optional[Language]): The language of the text (default is Language(language_code="en")).
                 The only supported language is "en" for now.
             device (DeviceType): The device to run the model on (default is None). Supported devices are CPU and CUDA.
 
@@ -116,13 +116,17 @@ class Mars5TTS:
 
         # Check that the target audios are mono and have the correct sampling rate
         expected_sampling_rate = my_model.sr
-        for item in target:
+        for idx, item in enumerate(target):
             target_audio, _ = item
             if target_audio.waveform.shape[0] != 1:
-                raise ValueError(f"Stereo audio is not supported. Got {target_audio.waveform.shape[0]} channels")
+                raise ValueError(
+                    f"Stereo audio is not supported for audio at index {idx}. "
+                    f"Got {target_audio.waveform.shape[0]} channels"
+                )
             if target_audio.sampling_rate != expected_sampling_rate:
                 raise ValueError(
-                    f"Incorrect sampling rate. Expected {expected_sampling_rate}, " f"got {target_audio.sampling_rate}"
+                    f"Incorrect sampling rate for audio at index {idx}. "
+                    f"Expected {expected_sampling_rate}, got {target_audio.sampling_rate}"
                 )
 
         # Take the start time of text-to-speech synthesis
