@@ -66,7 +66,7 @@ class SpeechBrainEnhancer:
         """
         # Take the start time of the model initialization
         start_time_model = time.time()
-        enhancer, device, dtype = cls._get_speechbrain_model(model=model, device=device)
+        enhancer, device, _ = cls._get_speechbrain_model(model=model, device=device)
         end_time_model = time.time()
         elapsed_time_model = end_time_model - start_time_model
         logger.info(f"Time taken to initialize the speechbrain model: {elapsed_time_model:.2f} seconds")
