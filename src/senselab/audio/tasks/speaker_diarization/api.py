@@ -16,7 +16,7 @@ from senselab.utils.data_structures.script_line import ScriptLine
 
 def diarize_audios(
     audios: List[Audio],
-    model: SenselabModel,
+    model: SenselabModel = PyannoteAudioModel(path_or_uri="pyannote/speaker-diarization-3.1", revision="main"),
     num_speakers: Optional[int] = None,
     min_speakers: Optional[int] = None,
     max_speakers: Optional[int] = None,
@@ -26,7 +26,8 @@ def diarize_audios(
 
     Args:
         audios (List[Audio]): The list of audio objects to be diarized.
-        model (SenselabModel): The model used for diarization.
+        model (SenselabModel): The model used for diarization
+            (default is "pyannote/speaker-diarization-3.1").
         device (Optional[DeviceType]): The device to run the model on (default is None).
         num_speakers (Optional[int]): The number of speakers (default is None).
         min_speakers (Optional[int]): The minimum number of speakers (default is None).
