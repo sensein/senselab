@@ -57,10 +57,6 @@ umap-learn = "~=0.5"
 scikit-learn = "~=1.5"
 nltk = "~=3.8"
 vocos = "~=0.1"
-phonemizer = "^3.3.0"
-einops-exts = "^0.0.4"
-munch = "^4.0.0"
-monotonic-align = "^1.0.0"
 
 [tool.poetry.group.dev]
 optional = true
