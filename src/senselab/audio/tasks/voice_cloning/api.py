@@ -17,20 +17,20 @@ def clone_voices(
 ) -> List[Audio]:
     """Clones voices from source audios to target audios using the given model.
 
-    This function performs a pairwise voice cloning operation, where each audio in the 
-    `source_audios` list is converted and mapped onto the corresponding audio in the 
-    `target_audios` list. The resulting list contains target audio samples with their 
+    This function performs a pairwise voice cloning operation, where each audio in the
+    `source_audios` list is converted and mapped onto the corresponding audio in the
+    `target_audios` list. The resulting list contains target audio samples with their
     voices replaced by the voices from the corresponding source samples.
 
     Args:
         source_audios (List[Audio]): A list of source audio samples, from which the voices will be cloned.
         target_audios (List[Audio]): A list of target audio samples, to which the voices will be cloned.
-        model (SenselabModel, optional): The model to use for voice cloning. As of now, only KNNVC 
-            (K-Nearest Neighbors Voice Conversion) is supported, which is encapsulated by the `TorchModel` 
-            class. `TorchModel` is a child class of `SenselabModel` and specifies the model and revision 
+        model (SenselabModel, optional): The model to use for voice cloning. As of now, only KNNVC
+            (K-Nearest Neighbors Voice Conversion) is supported, which is encapsulated by the `TorchModel`
+            class. `TorchModel` is a child class of `SenselabModel` and specifies the model and revision
             for cloning. Defaults to `TorchModel(path_or_uri="bshall/knn-vc", revision="master")`.
         device (Optional[DeviceType], optional): The device to run the model on (e.g., CPU or GPU). Defaults to None.
-        **kwargs: Additional keyword arguments for model-specific parameters. 
+        **kwargs: Additional keyword arguments for model-specific parameters.
             These will be passed directly to the underlying model's voice cloning method.
 
     Returns:
