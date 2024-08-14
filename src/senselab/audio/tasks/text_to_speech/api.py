@@ -5,7 +5,6 @@ from typing import Any, List, Optional, Tuple
 from senselab.audio.data_structures.audio import Audio
 from senselab.audio.tasks.text_to_speech.huggingface import HuggingFaceTTS
 from senselab.audio.tasks.text_to_speech.marstts import Mars5TTS
-from senselab.audio.tasks.text_to_speech.styletts2 import StyleTTS2
 from senselab.utils.data_structures.device import DeviceType
 from senselab.utils.data_structures.language import Language
 from senselab.utils.data_structures.model import HFModel, SenselabModel, TorchModel
@@ -83,15 +82,22 @@ def synthesize_texts(
             return Mars5TTS.synthesize_texts_with_mars5tts(
                 texts=texts, target=target_for_mars5tts, language=language, device=device, **kwargs
             )
-        elif model.path_or_uri == "wilke0818/StyleTTS2-TorchHub":
-            return StyleTTS2.synthesize_texts_with_style_tts_2(
-                texts=texts,
-                target_audios=target_audios,
-                target_transcripts=target_transcripts,
-                language=language,
-                device=device,
-                **kwargs,
-            )
+        # TODO: write support for StyleTTS2 and other models that are not easily incorporable through Python
+        # elif (
+        #     model.path_or_uri == "wilke0818/StyleTTS2-TorchHub"
+        # ):  # TODO: this model/code should probably live in a shared Github
+        #     # TODO Texts like the above should be stored in a common utils/constants file such that
+        #     # they only need to be changed in one place
+        #     # StyleTTS2 offers a method for just text/target audios (calls inference), a method for
+        #     # style transfer text/target audios/transcript (STinference), and longform narration
+        #     return StyleTTS2.synthesize_texts_with_style_tts_2(
+        #         texts=texts,
+        #         target_audios=target_audios,
+        #         target_transcripts=target_transcripts,
+        #         language=language,
+        #         device=device,
+        #         **kwargs,
+        #     )
         else:
             raise NotImplementedError(f"{model.path_or_uri} is currently not a supported Torch model. \
                                       Feel free to reach out to us about integrating this model into senselab.")

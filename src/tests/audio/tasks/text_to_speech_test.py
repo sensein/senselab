@@ -45,27 +45,28 @@ if os.getenv("GITHUB_ACTIONS") != "true":
         assert audios[0].waveform is not None
         assert audios[0].sampling_rate > 0
 
-    def test_synthesize_texts_with_styletts2_model(style_tts2: TorchModel, mono_audio_sample: Audio) -> None:
-        """Test synthesizing texts."""
-        texts_to_synthesize = ["Hello world", "Hello world again."]
-        terget_audio_resampling_rate = 24000
-        target_audio_ground_truth = "This is Peter."
-        language = Language(language_code="en")
+    # TODO: create support for StyleTTS2 which currently has some dependency issues
+    # def test_synthesize_texts_with_styletts2_model(style_tts2: TorchModel, mono_audio_sample: Audio) -> None:
+    #     """Test synthesizing texts."""
+    #     texts_to_synthesize = ["Hello world", "Hello world again."]
+    #     terget_audio_resampling_rate = 24000
+    #     target_audio_ground_truth = "This is Peter."
+    #     language = Language(language_code="en")
 
-        resampled_mono_audio_sample = resample_audios([mono_audio_sample], terget_audio_resampling_rate)[0]
-        target_audio = extract_segments([(resampled_mono_audio_sample, [(0.0, 1.0)])])[0][0]
-        audios = synthesize_texts(
-            texts=texts_to_synthesize,
-            target=[(target_audio, target_audio_ground_truth), (target_audio, target_audio_ground_truth)],
-            model=style_tts2,
-            language=language,
-            force_reload=True,
-        )
+    #     resampled_mono_audio_sample = resample_audios([mono_audio_sample], terget_audio_resampling_rate)[0]
+    #     target_audio = extract_segments([(resampled_mono_audio_sample, [(0.0, 1.0)])])[0][0]
+    #     audios = synthesize_texts(
+    #         texts=texts_to_synthesize,
+    #         target=[(target_audio, target_audio_ground_truth), (target_audio, target_audio_ground_truth)],
+    #         model=style_tts2,
+    #         language=language,
+    #         force_reload=True,
+    #     )
 
-        assert len(audios) == 2
-        assert isinstance(audios[0], Audio)
-        assert audios[0].waveform is not None
-        assert audios[0].sampling_rate == terget_audio_resampling_rate
+    # assert len(audios) == 2
+    # assert isinstance(audios[0], Audio)
+    # assert audios[0].waveform is not None
+    # assert audios[0].sampling_rate == terget_audio_resampling_rate
 
     def test_synthesize_texts_with_mars5_model(mars5_model: TorchModel, mono_audio_sample: Audio) -> None:
         """Test synthesizing texts."""
