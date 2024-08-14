@@ -21,18 +21,26 @@ def synthesize_texts(
 ) -> List[Audio]:
     """Synthesizes speech from all texts using the given model.
 
+    This function synthesizes speech from a list of text strings using the specified text-to-speech (TTS) model.
+    It supports models from HuggingFace and `Mars5TTS` and `StyleTTS2` for now.
+
     Args:
         texts (List[str]): The list of text strings to be synthesized.
         target (Optional[List[Tuple[Audio, Optional[str]]]]):
             A list where each element is a tuple of target audio and optional transcript.
-        model (HFModel): The model used for synthesis (Default is "suno/bark").
-        language (Optional[Language]): The language of the text (default is None).
-        device (Optional[DeviceType]): The device to run the model on (default is None).
+            Depending on the model being used, the `target` input may need to be provided in a specific format:
+            - Hugging Face models do not require a `target` input at all.
+            - `Mars5TTS` requires both `Audio` and transcript inputs.
+            - `StyleTTS2` supports both simple (`Audio`) and complex (`Audio`, `str`) target inputs.
+        model (SenselabModel): The model used for synthesis.
+            Defaults to HFModel(path_or_uri="suno/bark", revision="main").
+        language (Optional[Language]): The language of the text
+            (default is None).
+        device (Optional[DeviceType]): The device to run the model on
+            (default is None).
         **kwargs: Additional keyword arguments to pass to the synthesis function.
-            Depending on the model used (e.g., Hugging Face or Mars5-TTS), additional arguments
-            may be required. You can find details in the documentation of each function
-            (e.g., `synthesize_texts_with_transformers` or `synthesize_texts_with_mars5tts`)
-            and in the card of each model.
+            Depending on the model used (e.g., HFModel), additional arguments
+            may be required. Refer to the model-specific documentation for details.
 
     Returns:
         List[Audio]: The list of synthesized audio objects.
@@ -62,9 +70,9 @@ def synthesize_texts(
                 raise TypeError("Expected elements of target to be either Audio objects or tuples of (Audio, str).")
 
         if len(texts) != len(target_audios):
-            raise ValueError("The lengths of texts and target audios must be the same.")
+            raise ValueError("The lists of texts and target audios must have the same length.")
         if any(t is not None for t in target_transcripts) and len(texts) != len(target_transcripts):
-            raise ValueError("The lengths of texts and target transcripts must be the same.")
+            raise ValueError("The lists of texts and target transcriptions must have the same length.")
 
     if isinstance(model, HFModel):
         return HuggingFaceTTS.synthesize_texts_with_transformers(texts=texts, model=model, device=device, **kwargs)
@@ -75,13 +83,7 @@ def synthesize_texts(
             return Mars5TTS.synthesize_texts_with_mars5tts(
                 texts=texts, target=target_for_mars5tts, language=language, device=device, **kwargs
             )
-        elif (
-            model.path_or_uri == "wilke0818/StyleTTS2-TorchHub"
-        ):  # TODO: this model/code should probably live in a shared Github
-            # TODO Texts like the above should be stored in a common utils/constants file such that
-            # they only need to be changed in one place
-            # StyleTTS2 offers a method for just text/target audios (calls inference), a method for
-            # style transfer text/target audios/transcript (STinference), and longform narration
+        elif model.path_or_uri == "wilke0818/StyleTTS2-TorchHub":
             return StyleTTS2.synthesize_texts_with_style_tts_2(
                 texts=texts,
                 target_audios=target_audios,
