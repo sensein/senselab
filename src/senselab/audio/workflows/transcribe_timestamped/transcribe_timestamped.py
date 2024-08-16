@@ -43,16 +43,16 @@ def transcribe_timestamped(
 
     Returns:
         List[List[ScriptLine]]: List of ScriptLine objects resulting from the
-                          transcription with timestamps.
+                          transcriptions with timestamps.
     """
     if not audios:
         raise ValueError("The list of audios is empty.")
 
-    for i, audio in enumerate(audios):
-        if audio.waveform.shape[0] > 1:
-            audios[i] = downmix_audios_to_mono(audios=[audio])[0]
-        if audio.sampling_rate != SAMPLE_RATE:
-            audios[i] = resample_audios(audios=[audio], resample_rate=SAMPLE_RATE)[0]
+    for i in range(len(audios)):
+        if audios[i].waveform.shape[0] > 1:
+            audios[i] = downmix_audios_to_mono(audios=[audios[i]])[0]
+        if audios[i].sampling_rate != SAMPLE_RATE:
+            audios[i] = resample_audios(audios=[audios[i]], resample_rate=SAMPLE_RATE)[0]
 
     batched_audios = batch_list(items=audios, n_batches=n_batches)
 
