@@ -40,10 +40,7 @@ def transcribe_audios(
     try:
         if isinstance(model, HFModel):
             return HuggingFaceASR.transcribe_audios_with_transformers(
-                audios=audios,
-                model=model,
-                language=language,
-                device=device,  # , **kwargs
+                audios=audios, model=model, language=language, device=device, **kwargs
             )
         else:
             raise NotImplementedError("Only Hugging Face models are supported for now.")
