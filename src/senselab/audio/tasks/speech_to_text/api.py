@@ -5,7 +5,7 @@ Users can specify the audio clips to transcribe, the ASR model, the language,
 the preferred device, and the model-specific parameters, and senselab handles the rest.
 """
 
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from senselab.audio.data_structures.audio import Audio
 from senselab.audio.tasks.speech_to_text.huggingface import HuggingFaceASR
@@ -20,7 +20,7 @@ def transcribe_audios(
     model: SenselabModel,
     language: Optional[Language] = None,
     device: Optional[DeviceType] = None,
-    # **kwargs: Any,  # noqa: ANN401
+    **kwargs: Any,  # noqa: ANN401
 ) -> List[ScriptLine]:
     """Transcribes all audios using the given model.
 
