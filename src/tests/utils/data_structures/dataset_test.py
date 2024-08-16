@@ -243,3 +243,8 @@ def test_convert_hf_dataset_to_senselab_dataset() -> None:
 
     assert len(senselab_ravdness.audios) == 1440
     assert set(senselab_ravdness.audios[0].metadata.keys()) == set(ravdness_features)
+
+    senselab_ravdness = SenselabDataset.convert_hf_dataset_to_senselab_dataset({"audios": ravdness})
+
+    assert len(senselab_ravdness.audios) == 1440
+    assert senselab_ravdness.audios[0].metadata == {}
