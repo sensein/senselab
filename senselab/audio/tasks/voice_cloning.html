@@ -27,6 +27,16 @@
             <input type="search" placeholder="Search..." role="searchbox" aria-label="search"
                    pattern=".+" required>
 
+            <h2>Contents</h2>
+            <ul>
+  <li><a href="#voice-cloning">Voice cloning</a>
+  <ul>
+    <li><a href="#task-overview">Task Overview</a></li>
+    <li><a href="#models">Models</a></li>
+    <li><a href="#evaluation">Evaluation</a></li>
+  </ul></li>
+</ul>
+
 
             <h2>Submodules</h2>
             <ul>
@@ -48,14 +58,49 @@
                     <h1 class="modulename">
 <a href="./../../../senselab.html">senselab</a><wbr>.<a href="./../../audio.html">audio</a><wbr>.<a href="./../tasks.html">tasks</a><wbr>.voice_cloning    </h1>
 
-                        <div class="docstring"><p>This module provides the API for the senselab voice cloning task.</p>
+                        <div class="docstring"><h1 id="voice-cloning">Voice cloning</h1>
+
+<p><button class="tutorial-button" onclick="window.location.href='https://github.com/sensein/senselab/blob/main/tutorials/voice_cloning.ipynb'">Tutorial</button></p>
+
+<h2 id="task-overview">Task Overview</h2>
+
+<p>Any-to-any voice cloning aims to transform a source speech into a target voice using just one or a few examples of the target speaker's voice as references. Traditional voice conversion systems attempt to separate the speaker's identity from the speech content. This allows the replacement of speaker information to convert the voice to a target speaker. However, learning such disentangled representations is complex and poses significant challenges.</p>
+
+<h2 id="models">Models</h2>
+
+<p>We have explored several models for voice cloning:</p>
+
+<ul>
+<li><a href="https://huggingface.co/microsoft/speecht5_vc">speechT5</a> (not included in <code><a href="../../../senselab.html">senselab</a></code> as it did not meet our expectations),</li>
+<li><a href="https://github.com/OlaWod/FreeVC">FREEVC</a> (planned to be included in <code><a href="../../../senselab.html">senselab</a></code> soon)</li>
+<li><a href="https://github.com/bshall/knn-vc">KNNVC</a> (Already included in <code><a href="../../../senselab.html">senselab</a></code>).</li>
+</ul>
+
+<h2 id="evaluation">Evaluation</h2>
+
+<h3 id="metrics">Metrics</h3>
+
+<p>Objective evaluation involves comparing voice cloning outputs across different downstream tasks:</p>
+
+<ul>
+<li>Using an automatic speaker verification tool to determine if the original speaker, the target speaker, and the cloned speaker can be distinguished from each other.</li>
+<li>Ensuring the intelligibility of speech content using an automatic speech recognition system to verify that the content remains unchanged.</li>
+<li>Assessing the preservation of the original speech's emotion after voice cloning.</li>
+<li>...more...</li>
+</ul>
+
+<h3 id="benchmark">Benchmark</h3>
+
+<p>Recent efforts to enhance privacy in speech technology include the <a href="https://arxiv.org/pdf/2005.01387">VoicePrivacy initiative</a>, which has been active since 2020, focusing on developing and benchmarking anonymization methods. Despite these efforts, achieving perfect privacy remains a challenge (see <a href="https://www.voiceprivacychallenge.org/vp2022/docs/VoicePrivacy_2022_Challenge___Natalia_Tomashenko.pdf">here</a> for more details).</p>
 </div>
 
                         <input id="mod-voice_cloning-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 
                         <label class="view-source-button" for="mod-voice_cloning-view-source"><span>View Source</span></label>
 
-                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;This module provides the API for the senselab voice cloning task.&quot;&quot;&quot;</span>
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;.. include:: ./doc.md&quot;&quot;&quot;</span>  <span class="c1"># noqa: D415</span>
+</span><span id="L-2"><a href="#L-2"><span class="linenos">2</span></a>
+</span><span id="L-3"><a href="#L-3"><span class="linenos">3</span></a><span class="kn">from</span> <span class="nn">.api</span> <span class="kn">import</span> <span class="n">clone_voices</span>  <span class="c1"># noqa: F401</span>
 </span></pre></div>
 
 
