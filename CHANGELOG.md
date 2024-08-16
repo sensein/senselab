@@ -1,3 +1,15 @@
+# 0.8.0 (Fri Aug 16 2024)
+
+#### 🚀 Enhancement
+
+- 110 review and test voice cloning task [#132](https://github.com/sensein/senselab/pull/132) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.7.9 (Fri Aug 09 2024)
 
 #### 🐛 Bug Fix
