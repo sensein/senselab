@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 import torch
 import torchaudio
+from datasets import load_dataset
 
 from senselab.audio.data_structures.audio import Audio
 from senselab.utils.data_structures.dataset import Participant, SenselabDataset, Session
@@ -227,3 +228,23 @@ def test_convert_senselab_dataset_to_hf_datasets() -> None:
         reconverted_dataset.videos[0].audio.waveform, dataset.videos[0].audio.waveform, rtol=0, atol=1e-4
     )
     assert reconverted_dataset.videos[0].frame_rate == dataset.videos[0].frame_rate
+
+
+def test_convert_hf_dataset_to_senselab_dataset() -> None:
+    """Use an existing HF dataset to show that Senselab properly converts and maintains a HF Dataset."""
+    ravdness = load_dataset("xbgoose/ravdess", split="train")
+    ravdness_features = list(ravdness.features)
+    ravdness_features.remove("audio")
+    if "metadata" in ravdness_features:
+        ravdness_features.remove("metadata")
+    senselab_ravdness = SenselabDataset.convert_hf_dataset_to_senselab_dataset(
+        {"audios": ravdness}, transfer_metadata=True
+    )
+
+    assert len(senselab_ravdness.audios) == 1440
+    assert set(senselab_ravdness.audios[0].metadata.keys()) == set(ravdness_features)
+
+    senselab_ravdness = SenselabDataset.convert_hf_dataset_to_senselab_dataset({"audios": ravdness})
+
+    assert len(senselab_ravdness.audios) == 1440
+    assert senselab_ravdness.audios[0].metadata == {}

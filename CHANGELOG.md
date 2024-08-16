@@ -1,3 +1,15 @@
+# 0.9.0 (Fri Aug 16 2024)
+
+#### 🚀 Enhancement
+
+- Dataset update [#149](https://github.com/sensein/senselab/pull/149) ([@wilke0818](https://github.com/wilke0818))
+
+#### Authors: 1
+
+- [@wilke0818](https://github.com/wilke0818)
+
+---
+
 # 0.8.0 (Fri Aug 16 2024)
 
 #### 🚀 Enhancement
