@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="generator" content="pdoc 14.6.0"/>
-    <title>senselab.utils API documentation</title>
+    <title>senselab.audio.workflows.transcribe_timestamped API documentation</title>
             <link rel="icon" href="https://readthedocs.org/favicon.ico"/>
 
     <style>/*! * Bootstrap Reboot v5.0.0 (https://getbootstrap.com/) * Copyright 2011-2021 The Bootstrap Authors * Copyright 2011-2021 Twitter, Inc. * Licensed under MIT (https://github.com/twbs/bootstrap/blob/main/LICENSE) * Forked from Normalize.css, licensed MIT (https://github.com/necolas/normalize.css/blob/master/LICENSE.md) */*,::after,::before{box-sizing:border-box}@media (prefers-reduced-motion:no-preference){:root{scroll-behavior:smooth}}body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans","Liberation Sans",sans-serif,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol","Noto Color Emoji";font-size:1rem;font-weight:400;line-height:1.5;color:#212529;background-color:#fff;-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent}hr{margin:1rem 0;color:inherit;background-color:currentColor;border:0;opacity:.25}hr:not([size]){height:1px}h1,h2,h3,h4,h5,h6{margin-top:0;margin-bottom:.5rem;font-weight:500;line-height:1.2}h1{font-size:calc(1.375rem + 1.5vw)}@media (min-width:1200px){h1{font-size:2.5rem}}h2{font-size:calc(1.325rem + .9vw)}@media (min-width:1200px){h2{font-size:2rem}}h3{font-size:calc(1.3rem + .6vw)}@media (min-width:1200px){h3{font-size:1.75rem}}h4{font-size:calc(1.275rem + .3vw)}@media (min-width:1200px){h4{font-size:1.5rem}}h5{font-size:1.25rem}h6{font-size:1rem}p{margin-top:0;margin-bottom:1rem}abbr[data-bs-original-title],abbr[title]{-webkit-text-decoration:underline dotted;text-decoration:underline dotted;cursor:help;-webkit-text-decoration-skip-ink:none;text-decoration-skip-ink:none}address{margin-bottom:1rem;font-style:normal;line-height:inherit}ol,ul{padding-left:2rem}dl,ol,ul{margin-top:0;margin-bottom:1rem}ol ol,ol ul,ul ol,ul ul{margin-bottom:0}dt{font-weight:700}dd{margin-bottom:.5rem;margin-left:0}blockquote{margin:0 0 1rem}b,strong{font-weight:bolder}small{font-size:.875em}mark{padding:.2em;background-color:#fcf8e3}sub,sup{position:relative;font-size:.75em;line-height:0;vertical-align:baseline}sub{bottom:-.25em}sup{top:-.5em}a{color:#0d6efd;text-decoration:underline}a:hover{color:#0a58ca}a:not([href]):not([class]),a:not([href]):not([class]):hover{color:inherit;text-decoration:none}code,kbd,pre,samp{font-family:SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;font-size:1em;direction:ltr;unicode-bidi:bidi-override}pre{display:block;margin-top:0;margin-bottom:1rem;overflow:auto;font-size:.875em}pre code{font-size:inherit;color:inherit;word-break:normal}code{font-size:.875em;color:#d63384;word-wrap:break-word}a>code{color:inherit}kbd{padding:.2rem .4rem;font-size:.875em;color:#fff;background-color:#212529;border-radius:.2rem}kbd kbd{padding:0;font-size:1em;font-weight:700}figure{margin:0 0 1rem}img,svg{vertical-align:middle}table{caption-side:bottom;border-collapse:collapse}caption{padding-top:.5rem;padding-bottom:.5rem;color:#6c757d;text-align:left}th{text-align:inherit;text-align:-webkit-match-parent}tbody,td,tfoot,th,thead,tr{border-color:inherit;border-style:solid;border-width:0}label{display:inline-block}button{border-radius:0}button:focus:not(:focus-visible){outline:0}button,input,optgroup,select,textarea{margin:0;font-family:inherit;font-size:inherit;line-height:inherit}button,select{text-transform:none}[role=button]{cursor:pointer}select{word-wrap:normal}select:disabled{opacity:1}[list]::-webkit-calendar-picker-indicator{display:none}[type=button],[type=reset],[type=submit],button{-webkit-appearance:button}[type=button]:not(:disabled),[type=reset]:not(:disabled),[type=submit]:not(:disabled),button:not(:disabled){cursor:pointer}::-moz-focus-inner{padding:0;border-style:none}textarea{resize:vertical}fieldset{min-width:0;padding:0;margin:0;border:0}legend{float:left;width:100%;padding:0;margin-bottom:.5rem;font-size:calc(1.275rem + .3vw);line-height:inherit}@media (min-width:1200px){legend{font-size:1.5rem}}legend+*{clear:left}::-webkit-datetime-edit-day-field,::-webkit-datetime-edit-fields-wrapper,::-webkit-datetime-edit-hour-field,::-webkit-datetime-edit-minute,::-webkit-datetime-edit-month-field,::-webkit-datetime-edit-text,::-webkit-datetime-edit-year-field{padding:0}::-webkit-inner-spin-button{height:auto}[type=search]{outline-offset:-2px;-webkit-appearance:textfield}::-webkit-search-decoration{-webkit-appearance:none}::-webkit-color-swatch-wrapper{padding:0}::file-selector-button{font:inherit}::-webkit-file-upload-button{font:inherit;-webkit-appearance:button}output{display:inline-block}iframe{border:0}summary{display:list-item;cursor:pointer}progress{vertical-align:baseline}[hidden]{display:none!important}</style>
@@ -17,11 +17,11 @@
     <nav class="pdoc">
         <label id="navtoggle" for="togglestate" class="pdoc-button"><svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'><path stroke-linecap='round' stroke="currentColor" stroke-miterlimit='10' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/></svg></label>
         <input id="togglestate" type="checkbox" aria-hidden="true" tabindex="-1">
-        <div>            <a class="pdoc-button module-list-button" href="../senselab.html">
+        <div>            <a class="pdoc-button module-list-button" href="../workflows.html">
 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-box-arrow-in-left" viewBox="0 0 16 16">
   <path fill-rule="evenodd" d="M10 3.5a.5.5 0 0 0-.5-.5h-8a.5.5 0 0 0-.5.5v9a.5.5 0 0 0 .5.5h8a.5.5 0 0 0 .5-.5v-2a.5.5 0 0 1 1 0v2A1.5 1.5 0 0 1 9.5 14h-8A1.5 1.5 0 0 1 0 12.5v-9A1.5 1.5 0 0 1 1.5 2h8A1.5 1.5 0 0 1 11 3.5v2a.5.5 0 0 1-1 0v-2z"/>
   <path fill-rule="evenodd" d="M4.146 8.354a.5.5 0 0 1 0-.708l3-3a.5.5 0 1 1 .708.708L5.707 7.5H14.5a.5.5 0 0 1 0 1H5.707l2.147 2.146a.5.5 0 0 1-.708.708l-3-3z"/>
-</svg>                &nbsp;senselab</a>
+</svg>                &nbsp;senselab.audio.workflows</a>
 
 
             <input type="search" placeholder="Search..." role="searchbox" aria-label="search"
@@ -30,11 +30,15 @@
 
             <h2>Submodules</h2>
             <ul>
-                    <li><a href="utils/config.html">config</a></li>
-                    <li><a href="utils/constants.html">constants</a></li>
-                    <li><a href="utils/data_structures.html">data_structures</a></li>
-                    <li><a href="utils/tasks.html">tasks</a></li>
+                    <li><a href="transcribe_timestamped/transcribe_timestamped.html">transcribe_timestamped</a></li>
             </ul>
+
+            <h2>API Documentation</h2>
+                <ul class="memberlist">
+            <li>
+                    <a class="function" href="#transcribe_timestamped">transcribe_timestamped</a>
+            </li>
+    </ul>
 
 
 
@@ -48,20 +52,151 @@
     <main class="pdoc">
             <section class="module-info">
                     <h1 class="modulename">
-<a href="./../senselab.html">senselab</a><wbr>.utils    </h1>
+<a href="./../../../senselab.html">senselab</a><wbr>.<a href="./../../audio.html">audio</a><wbr>.<a href="./../workflows.html">workflows</a><wbr>.transcribe_timestamped    </h1>
 
-                        <div class="docstring"><p>This module contains the implementation of utility functions.</p>
+                        <div class="docstring"><p>Workflow for timestamped transcription.</p>
 </div>
 
-                        <input id="mod-utils-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+                        <input id="mod-transcribe_timestamped-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 
-                        <label class="view-source-button" for="mod-utils-view-source"><span>View Source</span></label>
+                        <label class="view-source-button" for="mod-transcribe_timestamped-view-source"><span>View Source</span></label>
 
-                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;This module contains the implementation of utility functions.&quot;&quot;&quot;</span>
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;Workflow for timestamped transcription.&quot;&quot;&quot;</span>
+</span><span id="L-2"><a href="#L-2"><span class="linenos">2</span></a>
+</span><span id="L-3"><a href="#L-3"><span class="linenos">3</span></a><span class="kn">from</span> <span class="nn">senselab.audio.workflows.transcribe_timestamped.transcribe_timestamped</span> <span class="kn">import</span> <span class="n">transcribe_timestamped</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos">4</span></a>
+</span><span id="L-5"><a href="#L-5"><span class="linenos">5</span></a><span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;transcribe_timestamped&quot;</span><span class="p">]</span>
 </span></pre></div>
 
 
             </section>
+                <section id="transcribe_timestamped">
+                            <input id="transcribe_timestamped-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="def">def</span>
+        <span class="name">transcribe_timestamped</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n"><a href="../data_structures/audio.html#Audio">senselab.audio.data_structures.audio.Audio</a></span><span class="p">]</span>,</span><span class="param">	<span class="n">model</span><span class="p">:</span> <span class="n"><a href="../../utils/data_structures/model.html#HFModel">senselab.utils.data_structures.model.HFModel</a></span> <span class="o">=</span> <span class="n">HFModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="s1">&#39;openai/whisper-tiny&#39;</span><span class="p">,</span> <span class="n">revision</span><span class="o">=</span><span class="s1">&#39;main&#39;</span><span class="p">,</span> <span class="n">info</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>,</span><span class="param">	<span class="n">language</span><span class="p">:</span> <span class="n"><a href="../../utils/data_structures/language.html#Language">senselab.utils.data_structures.language.Language</a></span> <span class="o">=</span> <span class="n">Language</span><span class="p">(</span><span class="n">language_code</span><span class="o">=</span><span class="s1">&#39;eng&#39;</span><span class="p">)</span>,</span><span class="param">	<span class="n">n_batches</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span></span><span class="return-annotation">) -> <span class="n">List</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="n"><a href="../../utils/data_structures/script_line.html#ScriptLine">senselab.utils.data_structures.script_line.ScriptLine</a></span><span class="p">]]</span>:</span></span>
+
+                <label class="view-source-button" for="transcribe_timestamped-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#transcribe_timestamped"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="transcribe_timestamped-21"><a href="#transcribe_timestamped-21"><span class="linenos"> 21</span></a><span class="k">def</span> <span class="nf">transcribe_timestamped</span><span class="p">(</span>
+</span><span id="transcribe_timestamped-22"><a href="#transcribe_timestamped-22"><span class="linenos"> 22</span></a>    <span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">],</span>
+</span><span id="transcribe_timestamped-23"><a href="#transcribe_timestamped-23"><span class="linenos"> 23</span></a>    <span class="n">model</span><span class="p">:</span> <span class="n">HFModel</span> <span class="o">=</span> <span class="n">HFModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="s2">&quot;openai/whisper-tiny&quot;</span><span class="p">),</span>
+</span><span id="transcribe_timestamped-24"><a href="#transcribe_timestamped-24"><span class="linenos"> 24</span></a>    <span class="n">language</span><span class="p">:</span> <span class="n">Language</span> <span class="o">=</span> <span class="n">Language</span><span class="p">(</span><span class="n">language_code</span><span class="o">=</span><span class="s2">&quot;en&quot;</span><span class="p">),</span>
+</span><span id="transcribe_timestamped-25"><a href="#transcribe_timestamped-25"><span class="linenos"> 25</span></a>    <span class="n">n_batches</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
+</span><span id="transcribe_timestamped-26"><a href="#transcribe_timestamped-26"><span class="linenos"> 26</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="n">ScriptLine</span><span class="p">]]:</span>
+</span><span id="transcribe_timestamped-27"><a href="#transcribe_timestamped-27"><span class="linenos"> 27</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Transcribes a list of audio files and timestamps them using forced alignment.</span>
+</span><span id="transcribe_timestamped-28"><a href="#transcribe_timestamped-28"><span class="linenos"> 28</span></a>
+</span><span id="transcribe_timestamped-29"><a href="#transcribe_timestamped-29"><span class="linenos"> 29</span></a><span class="sd">    This function processes the given list of Audio objects by performing</span>
+</span><span id="transcribe_timestamped-30"><a href="#transcribe_timestamped-30"><span class="linenos"> 30</span></a><span class="sd">    necessary preprocessing steps (such as downmixing channels and resampling),</span>
+</span><span id="transcribe_timestamped-31"><a href="#transcribe_timestamped-31"><span class="linenos"> 31</span></a><span class="sd">    transcribes the audio using the specified speech-to-text model, and applies</span>
+</span><span id="transcribe_timestamped-32"><a href="#transcribe_timestamped-32"><span class="linenos"> 32</span></a><span class="sd">    forced alignment to generate a list of ScriptLine objects with timestamps.</span>
+</span><span id="transcribe_timestamped-33"><a href="#transcribe_timestamped-33"><span class="linenos"> 33</span></a>
+</span><span id="transcribe_timestamped-34"><a href="#transcribe_timestamped-34"><span class="linenos"> 34</span></a><span class="sd">    Args:</span>
+</span><span id="transcribe_timestamped-35"><a href="#transcribe_timestamped-35"><span class="linenos"> 35</span></a><span class="sd">        audios (list[Audio]): List of Audio objects to be transcribed and</span>
+</span><span id="transcribe_timestamped-36"><a href="#transcribe_timestamped-36"><span class="linenos"> 36</span></a><span class="sd">                              timestamped.</span>
+</span><span id="transcribe_timestamped-37"><a href="#transcribe_timestamped-37"><span class="linenos"> 37</span></a><span class="sd">        model (HFModel, optional): A Huggingface model for speech-to-text.</span>
+</span><span id="transcribe_timestamped-38"><a href="#transcribe_timestamped-38"><span class="linenos"> 38</span></a><span class="sd">                                   Defaults to &#39;whisper&#39;.</span>
+</span><span id="transcribe_timestamped-39"><a href="#transcribe_timestamped-39"><span class="linenos"> 39</span></a><span class="sd">        language (Language, optional): Language object for the transcription.</span>
+</span><span id="transcribe_timestamped-40"><a href="#transcribe_timestamped-40"><span class="linenos"> 40</span></a><span class="sd">                                       If None, language detection is triggered</span>
+</span><span id="transcribe_timestamped-41"><a href="#transcribe_timestamped-41"><span class="linenos"> 41</span></a><span class="sd">                                       for the &#39;whisper&#39; model. Defaults to None.</span>
+</span><span id="transcribe_timestamped-42"><a href="#transcribe_timestamped-42"><span class="linenos"> 42</span></a><span class="sd">        n_batches (int, optional): The number of batches to split over in the</span>
+</span><span id="transcribe_timestamped-43"><a href="#transcribe_timestamped-43"><span class="linenos"> 43</span></a><span class="sd">                                   workflow.</span>
+</span><span id="transcribe_timestamped-44"><a href="#transcribe_timestamped-44"><span class="linenos"> 44</span></a>
+</span><span id="transcribe_timestamped-45"><a href="#transcribe_timestamped-45"><span class="linenos"> 45</span></a><span class="sd">    Returns:</span>
+</span><span id="transcribe_timestamped-46"><a href="#transcribe_timestamped-46"><span class="linenos"> 46</span></a><span class="sd">        List[List[ScriptLine]]: List of ScriptLine objects resulting from the</span>
+</span><span id="transcribe_timestamped-47"><a href="#transcribe_timestamped-47"><span class="linenos"> 47</span></a><span class="sd">                          transcriptions with timestamps.</span>
+</span><span id="transcribe_timestamped-48"><a href="#transcribe_timestamped-48"><span class="linenos"> 48</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="transcribe_timestamped-49"><a href="#transcribe_timestamped-49"><span class="linenos"> 49</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">audios</span><span class="p">:</span>
+</span><span id="transcribe_timestamped-50"><a href="#transcribe_timestamped-50"><span class="linenos"> 50</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;The list of audios is empty.&quot;</span><span class="p">)</span>
+</span><span id="transcribe_timestamped-51"><a href="#transcribe_timestamped-51"><span class="linenos"> 51</span></a>
+</span><span id="transcribe_timestamped-52"><a href="#transcribe_timestamped-52"><span class="linenos"> 52</span></a>    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">audios</span><span class="p">)):</span>
+</span><span id="transcribe_timestamped-53"><a href="#transcribe_timestamped-53"><span class="linenos"> 53</span></a>        <span class="k">if</span> <span class="n">audios</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">waveform</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+</span><span id="transcribe_timestamped-54"><a href="#transcribe_timestamped-54"><span class="linenos"> 54</span></a>            <span class="n">audios</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">downmix_audios_to_mono</span><span class="p">(</span><span class="n">audios</span><span class="o">=</span><span class="p">[</span><span class="n">audios</span><span class="p">[</span><span class="n">i</span><span class="p">]])[</span><span class="mi">0</span><span class="p">]</span>
+</span><span id="transcribe_timestamped-55"><a href="#transcribe_timestamped-55"><span class="linenos"> 55</span></a>        <span class="k">if</span> <span class="n">audios</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">sampling_rate</span> <span class="o">!=</span> <span class="n">SAMPLE_RATE</span><span class="p">:</span>
+</span><span id="transcribe_timestamped-56"><a href="#transcribe_timestamped-56"><span class="linenos"> 56</span></a>            <span class="n">audios</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">resample_audios</span><span class="p">(</span><span class="n">audios</span><span class="o">=</span><span class="p">[</span><span class="n">audios</span><span class="p">[</span><span class="n">i</span><span class="p">]],</span> <span class="n">resample_rate</span><span class="o">=</span><span class="n">SAMPLE_RATE</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+</span><span id="transcribe_timestamped-57"><a href="#transcribe_timestamped-57"><span class="linenos"> 57</span></a>
+</span><span id="transcribe_timestamped-58"><a href="#transcribe_timestamped-58"><span class="linenos"> 58</span></a>    <span class="n">batched_audios</span> <span class="o">=</span> <span class="n">batch_list</span><span class="p">(</span><span class="n">items</span><span class="o">=</span><span class="n">audios</span><span class="p">,</span> <span class="n">n_batches</span><span class="o">=</span><span class="n">n_batches</span><span class="p">)</span>
+</span><span id="transcribe_timestamped-59"><a href="#transcribe_timestamped-59"><span class="linenos"> 59</span></a>
+</span><span id="transcribe_timestamped-60"><a href="#transcribe_timestamped-60"><span class="linenos"> 60</span></a>    <span class="n">wf</span> <span class="o">=</span> <span class="n">pydra</span><span class="o">.</span><span class="n">Workflow</span><span class="p">(</span>
+</span><span id="transcribe_timestamped-61"><a href="#transcribe_timestamped-61"><span class="linenos"> 61</span></a>        <span class="n">name</span><span class="o">=</span><span class="s2">&quot;wf&quot;</span><span class="p">,</span>
+</span><span id="transcribe_timestamped-62"><a href="#transcribe_timestamped-62"><span class="linenos"> 62</span></a>        <span class="n">input_spec</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;batched_audios&quot;</span><span class="p">,</span> <span class="s2">&quot;model&quot;</span><span class="p">,</span> <span class="s2">&quot;language&quot;</span><span class="p">],</span>
+</span><span id="transcribe_timestamped-63"><a href="#transcribe_timestamped-63"><span class="linenos"> 63</span></a>        <span class="n">batched_audios</span><span class="o">=</span><span class="n">batched_audios</span><span class="p">,</span>
+</span><span id="transcribe_timestamped-64"><a href="#transcribe_timestamped-64"><span class="linenos"> 64</span></a>        <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span>
+</span><span id="transcribe_timestamped-65"><a href="#transcribe_timestamped-65"><span class="linenos"> 65</span></a>        <span class="n">language</span><span class="o">=</span><span class="n">language</span><span class="p">,</span>
+</span><span id="transcribe_timestamped-66"><a href="#transcribe_timestamped-66"><span class="linenos"> 66</span></a>        <span class="n">cache_dir</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+</span><span id="transcribe_timestamped-67"><a href="#transcribe_timestamped-67"><span class="linenos"> 67</span></a>    <span class="p">)</span>
+</span><span id="transcribe_timestamped-68"><a href="#transcribe_timestamped-68"><span class="linenos"> 68</span></a>
+</span><span id="transcribe_timestamped-69"><a href="#transcribe_timestamped-69"><span class="linenos"> 69</span></a>    <span class="nd">@pydra</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">task</span>
+</span><span id="transcribe_timestamped-70"><a href="#transcribe_timestamped-70"><span class="linenos"> 70</span></a>    <span class="k">def</span> <span class="nf">transcribe_task</span><span class="p">(</span><span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">],</span> <span class="n">model</span><span class="p">:</span> <span class="n">HFModel</span><span class="p">,</span> <span class="n">language</span><span class="p">:</span> <span class="n">Language</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="nb">tuple</span><span class="p">]:</span>
+</span><span id="transcribe_timestamped-71"><a href="#transcribe_timestamped-71"><span class="linenos"> 71</span></a>        <span class="n">transcriptions</span> <span class="o">=</span> <span class="n">transcribe_audios</span><span class="p">(</span><span class="n">audios</span><span class="o">=</span><span class="n">audios</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span> <span class="n">language</span><span class="o">=</span><span class="n">language</span><span class="p">)</span>
+</span><span id="transcribe_timestamped-72"><a href="#transcribe_timestamped-72"><span class="linenos"> 72</span></a>        <span class="k">return</span> <span class="nb">list</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="n">audios</span><span class="p">,</span> <span class="n">transcriptions</span><span class="p">,</span> <span class="p">[</span><span class="n">language</span><span class="p">]</span> <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="n">audios</span><span class="p">)))</span>
+</span><span id="transcribe_timestamped-73"><a href="#transcribe_timestamped-73"><span class="linenos"> 73</span></a>
+</span><span id="transcribe_timestamped-74"><a href="#transcribe_timestamped-74"><span class="linenos"> 74</span></a>    <span class="n">wf</span><span class="o">.</span><span class="n">add</span><span class="p">(</span>
+</span><span id="transcribe_timestamped-75"><a href="#transcribe_timestamped-75"><span class="linenos"> 75</span></a>        <span class="n">transcribe_task</span><span class="p">(</span>
+</span><span id="transcribe_timestamped-76"><a href="#transcribe_timestamped-76"><span class="linenos"> 76</span></a>            <span class="n">name</span><span class="o">=</span><span class="s2">&quot;transcribe&quot;</span><span class="p">,</span>
+</span><span id="transcribe_timestamped-77"><a href="#transcribe_timestamped-77"><span class="linenos"> 77</span></a>            <span class="n">audios</span><span class="o">=</span><span class="n">wf</span><span class="o">.</span><span class="n">lzin</span><span class="o">.</span><span class="n">batched_audios</span><span class="p">,</span>
+</span><span id="transcribe_timestamped-78"><a href="#transcribe_timestamped-78"><span class="linenos"> 78</span></a>            <span class="n">model</span><span class="o">=</span><span class="n">wf</span><span class="o">.</span><span class="n">lzin</span><span class="o">.</span><span class="n">model</span><span class="p">,</span>
+</span><span id="transcribe_timestamped-79"><a href="#transcribe_timestamped-79"><span class="linenos"> 79</span></a>            <span class="n">language</span><span class="o">=</span><span class="n">wf</span><span class="o">.</span><span class="n">lzin</span><span class="o">.</span><span class="n">language</span><span class="p">,</span>
+</span><span id="transcribe_timestamped-80"><a href="#transcribe_timestamped-80"><span class="linenos"> 80</span></a>        <span class="p">)</span>
+</span><span id="transcribe_timestamped-81"><a href="#transcribe_timestamped-81"><span class="linenos"> 81</span></a>    <span class="p">)</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;batched_audios&quot;</span><span class="p">,</span> <span class="n">batched_audios</span><span class="o">=</span><span class="n">wf</span><span class="o">.</span><span class="n">inputs</span><span class="o">.</span><span class="n">batched_audios</span><span class="p">)</span>
+</span><span id="transcribe_timestamped-82"><a href="#transcribe_timestamped-82"><span class="linenos"> 82</span></a>
+</span><span id="transcribe_timestamped-83"><a href="#transcribe_timestamped-83"><span class="linenos"> 83</span></a>    <span class="n">align_transcriptions_task</span> <span class="o">=</span> <span class="n">pydra</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">task</span><span class="p">(</span><span class="n">align_transcriptions</span><span class="p">)</span>
+</span><span id="transcribe_timestamped-84"><a href="#transcribe_timestamped-84"><span class="linenos"> 84</span></a>    <span class="n">wf</span><span class="o">.</span><span class="n">add</span><span class="p">(</span>
+</span><span id="transcribe_timestamped-85"><a href="#transcribe_timestamped-85"><span class="linenos"> 85</span></a>        <span class="n">align_transcriptions_task</span><span class="p">(</span>
+</span><span id="transcribe_timestamped-86"><a href="#transcribe_timestamped-86"><span class="linenos"> 86</span></a>            <span class="n">name</span><span class="o">=</span><span class="s2">&quot;align&quot;</span><span class="p">,</span>
+</span><span id="transcribe_timestamped-87"><a href="#transcribe_timestamped-87"><span class="linenos"> 87</span></a>            <span class="n">audios_and_transcriptions_and_language</span><span class="o">=</span><span class="n">wf</span><span class="o">.</span><span class="n">transcribe</span><span class="o">.</span><span class="n">lzout</span><span class="o">.</span><span class="n">out</span><span class="p">,</span>
+</span><span id="transcribe_timestamped-88"><a href="#transcribe_timestamped-88"><span class="linenos"> 88</span></a>        <span class="p">)</span>
+</span><span id="transcribe_timestamped-89"><a href="#transcribe_timestamped-89"><span class="linenos"> 89</span></a>    <span class="p">)</span>
+</span><span id="transcribe_timestamped-90"><a href="#transcribe_timestamped-90"><span class="linenos"> 90</span></a>
+</span><span id="transcribe_timestamped-91"><a href="#transcribe_timestamped-91"><span class="linenos"> 91</span></a>    <span class="n">wf</span><span class="o">.</span><span class="n">set_output</span><span class="p">(</span>
+</span><span id="transcribe_timestamped-92"><a href="#transcribe_timestamped-92"><span class="linenos"> 92</span></a>        <span class="p">[</span>
+</span><span id="transcribe_timestamped-93"><a href="#transcribe_timestamped-93"><span class="linenos"> 93</span></a>            <span class="p">(</span><span class="s2">&quot;transcriptions&quot;</span><span class="p">,</span> <span class="n">wf</span><span class="o">.</span><span class="n">transcribe</span><span class="o">.</span><span class="n">lzout</span><span class="o">.</span><span class="n">out</span><span class="p">),</span>
+</span><span id="transcribe_timestamped-94"><a href="#transcribe_timestamped-94"><span class="linenos"> 94</span></a>            <span class="p">(</span><span class="s2">&quot;aligned_transcriptions&quot;</span><span class="p">,</span> <span class="n">wf</span><span class="o">.</span><span class="n">align</span><span class="o">.</span><span class="n">lzout</span><span class="o">.</span><span class="n">out</span><span class="p">),</span>
+</span><span id="transcribe_timestamped-95"><a href="#transcribe_timestamped-95"><span class="linenos"> 95</span></a>        <span class="p">]</span>
+</span><span id="transcribe_timestamped-96"><a href="#transcribe_timestamped-96"><span class="linenos"> 96</span></a>    <span class="p">)</span>
+</span><span id="transcribe_timestamped-97"><a href="#transcribe_timestamped-97"><span class="linenos"> 97</span></a>
+</span><span id="transcribe_timestamped-98"><a href="#transcribe_timestamped-98"><span class="linenos"> 98</span></a>    <span class="c1"># Execute the workflow</span>
+</span><span id="transcribe_timestamped-99"><a href="#transcribe_timestamped-99"><span class="linenos"> 99</span></a>    <span class="k">with</span> <span class="n">pydra</span><span class="o">.</span><span class="n">Submitter</span><span class="p">(</span><span class="n">plugin</span><span class="o">=</span><span class="s2">&quot;cf&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">sub</span><span class="p">:</span>
+</span><span id="transcribe_timestamped-100"><a href="#transcribe_timestamped-100"><span class="linenos">100</span></a>        <span class="n">sub</span><span class="p">(</span><span class="n">wf</span><span class="p">)</span>
+</span><span id="transcribe_timestamped-101"><a href="#transcribe_timestamped-101"><span class="linenos">101</span></a>
+</span><span id="transcribe_timestamped-102"><a href="#transcribe_timestamped-102"><span class="linenos">102</span></a>    <span class="k">return</span> <span class="n">wf</span><span class="o">.</span><span class="n">result</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">output</span><span class="o">.</span><span class="n">aligned_transcriptions</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Transcribes a list of audio files and timestamps them using forced alignment.</p>
+
+<p>This function processes the given list of Audio objects by performing
+necessary preprocessing steps (such as downmixing channels and resampling),
+transcribes the audio using the specified speech-to-text model, and applies
+forced alignment to generate a list of ScriptLine objects with timestamps.</p>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>audios (list[Audio]):</strong>  List of Audio objects to be transcribed and
+timestamped.</li>
+<li><strong>model (HFModel, optional):</strong>  A Huggingface model for speech-to-text.
+Defaults to 'whisper'.</li>
+<li><strong>language (Language, optional):</strong>  Language object for the transcription.
+If None, language detection is triggered
+for the 'whisper' model. Defaults to None.</li>
+<li><strong>n_batches (int, optional):</strong>  The number of batches to split over in the
+workflow.</li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p>List[List[ScriptLine]]: List of ScriptLine objects resulting from the
+                    transcriptions with timestamps.</p>
+</blockquote>
+</div>
+
+
+                </section>
     </main>
 <script>
     function escapeHTML(html) {
@@ -115,7 +250,7 @@
                 script.async = true;
                 script.onload = () => resolve(window.pdocSearch);
                 script.onerror = (e) => reject(e);
-                script.src = "../search.js";
+                script.src = "../../../search.js";
                 document.getElementsByTagName("head")[0].appendChild(script);
             });
         } catch (e) {
@@ -157,7 +292,7 @@
             }
             for (let result of results.slice(0, 10)) {
                 let doc = result.doc;
-                let url = `../${doc.modulename.replaceAll(".", "/")}.html`;
+                let url = `../../../${doc.modulename.replaceAll(".", "/")}.html`;
                 if (doc.qualname) {
                     url += `#${doc.qualname}`;
                 }
