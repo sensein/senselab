@@ -1,3 +1,15 @@
+# 0.10.0 (Fri Aug 16 2024)
+
+#### 🚀 Enhancement
+
+- 127 add timestamped transcription workflow [#138](https://github.com/sensein/senselab/pull/138) ([@ibevers](https://github.com/ibevers))
+
+#### Authors: 1
+
+- [@ibevers](https://github.com/ibevers)
+
+---
+
 # 0.9.0 (Fri Aug 16 2024)
 
 #### 🚀 Enhancement
