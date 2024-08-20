@@ -79,7 +79,7 @@ if os.getenv("GITHUB_ACTIONS") != "true":
         target_audio = extract_segments([(resampled_mono_audio_sample, [(0.0, 1.0)])])[0][0]
         audios = synthesize_texts(
             texts=texts_to_synthesize,
-            target=[(target_audio, target_audio_ground_truth), (target_audio, target_audio_ground_truth)],
+            targets=[(target_audio, target_audio_ground_truth), (target_audio, target_audio_ground_truth)],
             model=mars5_model,
             language=language,
         )

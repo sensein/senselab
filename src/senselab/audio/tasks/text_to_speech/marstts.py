@@ -58,7 +58,7 @@ class Mars5TTS:
     def synthesize_texts_with_mars5tts(
         cls,
         texts: List[str],
-        target: List[Tuple[Audio, str]],
+        targets: List[Tuple[Audio, str]],
         model: TorchModel = TorchModel(path_or_uri="Camb-ai/mars5-tts", revision="master"),
         language: Optional[Language] = None,
         device: Optional[DeviceType] = None,
@@ -72,7 +72,7 @@ class Mars5TTS:
 
         Args:
             texts (List[str]): The list of text strings to be synthesized.
-            target (List[Tuple[Audio, str]]):
+            targets (List[Tuple[Audio, str]]):
                 The list of tuples containing audio objects and transcripts.
             model (TorchModel): The Torch model (default is "Camb-ai/mars5-tts").
             language (Optional[Language]): The language of the text (default is None).
@@ -116,7 +116,7 @@ class Mars5TTS:
 
         # Check that the target audios are mono and have the correct sampling rate
         expected_sampling_rate = my_model.sr
-        for idx, item in enumerate(target):
+        for idx, item in enumerate(targets):
             target_audio, _ = item
             if target_audio.waveform.shape[0] != 1:
                 raise ValueError(
@@ -133,7 +133,7 @@ class Mars5TTS:
         start_time_tts = time.time()
         audios = []
         for i, text in enumerate(texts):
-            item = target[i]
+            item = targets[i]
             target_audio, target_transcript = item
             duration = target_audio.waveform.shape[1] / target_audio.sampling_rate
             if duration < 1 or duration > 12:
