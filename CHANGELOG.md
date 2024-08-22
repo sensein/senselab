@@ -1,3 +1,20 @@
+# 0.11.0 (Thu Aug 22 2024)
+
+#### 🚀 Enhancement
+
+- Enhancing text to speech [#129](https://github.com/sensein/senselab/pull/129) ([@fabiocat93](https://github.com/fabiocat93) [@wilke0818](https://github.com/wilke0818))
+
+#### 🐛 Bug Fix
+
+- Add style tts dependency [#144](https://github.com/sensein/senselab/pull/144) ([@wilke0818](https://github.com/wilke0818))
+
+#### Authors: 2
+
+- [@wilke0818](https://github.com/wilke0818)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.10.0 (Fri Aug 16 2024)
 
 #### 🚀 Enhancement
