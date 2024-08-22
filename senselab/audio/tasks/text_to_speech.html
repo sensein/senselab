@@ -27,11 +27,23 @@
             <input type="search" placeholder="Search..." role="searchbox" aria-label="search"
                    pattern=".+" required>
 
+            <h2>Contents</h2>
+            <ul>
+  <li><a href="#text-to-speech">Text to Speech</a>
+  <ul>
+    <li><a href="#task-overview">Task Overview</a></li>
+    <li><a href="#models">Models</a></li>
+    <li><a href="#evaluation">Evaluation</a></li>
+  </ul></li>
+</ul>
+
 
             <h2>Submodules</h2>
             <ul>
                     <li><a href="text_to_speech/api.html">api</a></li>
                     <li><a href="text_to_speech/huggingface.html">huggingface</a></li>
+                    <li><a href="text_to_speech/marstts.html">marstts</a></li>
+                    <li><a href="text_to_speech/styletts2.html">styletts2</a></li>
             </ul>
 
 
@@ -48,14 +60,96 @@
                     <h1 class="modulename">
 <a href="./../../../senselab.html">senselab</a><wbr>.<a href="./../../audio.html">audio</a><wbr>.<a href="./../tasks.html">tasks</a><wbr>.text_to_speech    </h1>
 
-                        <div class="docstring"><p>This module provides the API for the senselab text to speech task.</p>
+                        <div class="docstring"><h1 id="text-to-speech">Text to Speech</h1>
+
+<p><button class="tutorial-button" onclick="window.location.href='https://github.com/sensein/senselab/blob/main/tutorials/text_to_speech.ipynb'">Tutorial</button></p>
+
+<h2 id="task-overview">Task Overview</h2>
+
+<p>Text-to-speech (TTS) is the task of creating natural-sounding speech from text. This process can be performed in multiple languages and for multiple speakers.</p>
+
+<h2 id="models">Models</h2>
+
+<p>A variety of models are supported by <code><a href="../../../senselab.html">senselab</a></code> for text-to-speech.
+Each model varies in performance, size, license, language support, and more. Performance may also vary depending, among other reasons, on the length of the text or the target speaker (differences in terms of age, dialects, disfluencies). It is recommended to review the model card for each model before use and refer to the most recent literature for an informed decision.</p>
+
+<p>Several text-to-speech models are currently available through <code>🤗 Transformers</code>. These models can be explored on the <a href="https://huggingface.co/models?library=transformers&pipeline_tag=text-to-speech&sort=downloads">Hugging Face Hub</a>.
+<strong>Note</strong>: Some <code>Hugging Face</code> models, despite having the <code>text-to-speech</code> label on their model cards, may not work with the text-to-speech pipeline. These models are not supported in <code><a href="../../../senselab.html">senselab</a></code>, and identifying them often requires trial and error.</p>
+
+<p>In addition to the models from 🤗 Transformers, senselab also supports Mars5-TTS, which enables text-to-speech generation using a specific target voice, accompanied by its corresponding transcript. Voice cloning using a target voice refers to the process of creating a synthetic voice that mimics the characteristics of a specific person's voice, known as the target voice. This involves generating speech that sounds like it was spoken by that person, even though it was produced by a machine.</p>
+
+<p>Popular/recommended models include:</p>
+
+<ul>
+<li><strong><a href="https://huggingface.co/docs/transformers/model_doc/bark">Bark</a></strong>
+<ul>
+<li><a href="https://huggingface.co/suno/bark-small">small</a></li>
+<li><a href="https://huggingface.co/suno/bark">standard</a></li>
+</ul></li>
+<li><strong><a href="https://huggingface.co/docs/transformers/model_doc/mms">MMS</a></strong>
+<ul>
+<li><a href="https://huggingface.co/facebook/mms-300m">small</a></li>
+<li><a href="https://huggingface.co/facebook/mms-1b-all">large</a></li>
+</ul></li>
+<li><strong><a href="https://huggingface.co/docs/transformers/model_doc/speecht5">SpeechT5</a></strong>
+<ul>
+<li><a href="https://huggingface.co/microsoft/speecht5_tts">standard</a></li>
+</ul></li>
+<li><strong><a href="https://github.com/Camb-ai/MARS5-TTS">Mars5-TTS</a></strong>
+<ul>
+<li><a href="https://huggingface.co/CAMB-AI/MARS5-TTS">mars5_english</a></li>
+</ul></li>
+</ul>
+
+<h2 id="evaluation">Evaluation</h2>
+
+<h3 id="metrics">Metrics</h3>
+
+<p>For assessing speech quality and intelligibility, we can use quantitative metrics such as:</p>
+
+<ul>
+<li><strong>Wideband Perceptual Estimation of Speech Quality (PESQ)</strong></li>
+<li><strong>Short-Time Objective Intelligibility (STOI)</strong></li>
+<li><strong>Scale-Invariant Signal-to-Distortion Ratio (SI-SDR)</strong></li>
+</ul>
+
+<p>and qualitative metrics such as:</p>
+
+<ul>
+<li><strong>Mean Opinion Score (MOS)</strong></li>
+</ul>
+
+<p>Another way to automatically assess the <strong>intelligibility</strong> of the synthesis is by transcribing the output audio (trusting the ASR system) and computing the <strong>Word Error Rate (WER)</strong> with the reference text.</p>
+
+<p>Also, if targeting a specific speaker's voice, we can perform <strong>speaker verification</strong> to assess how closely the generated audio matches the target voice.
+If there are specific <strong>features</strong> in the target voice that we aim to maintain, we can extract these features from the generated audio and verify their presence.</p>
+
+<p><code><a href="../../../senselab.html">senselab</a></code> can help with all of these evaluations.</p>
+
+<h3 id="datasets">Datasets</h3>
+
+<p>To train and evaluate TTS models, a variety of datasets can be used. Some popular datasets include:</p>
+
+<ul>
+<li><strong><a href="https://keithito.com/LJ-Speech-Dataset/">LJSpeech</a></strong>: A dataset of single-speaker English speech.</li>
+<li><strong><a href="https://openslr.org/60/">LibriTTS</a></strong>: A multi-speaker English dataset derived from the LibriVox project.</li>
+<li><strong><a href="https://datashare.ed.ac.uk/handle/10283/2651">VCTK</a></strong>: A multi-speaker English dataset with various accents.</li>
+<li><strong><a href="https://commonvoice.mozilla.org/">Common Voice</a></strong>: A multi-language dataset collected by Mozilla.</li>
+</ul>
+
+<h3 id="benchmark">Benchmark</h3>
+
+<p>The <a href="https://huggingface.co/spaces/TTS-AGI/TTS-Arena">TTS Arena</a> ranks and evaluates text-to-speech models available based on human perception.
+For automated benchmarking, we recommend using standard datasets and metrics mentioned above.</p>
 </div>
 
                         <input id="mod-text_to_speech-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 
                         <label class="view-source-button" for="mod-text_to_speech-view-source"><span>View Source</span></label>
 
-                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;This module provides the API for the senselab text to speech task.&quot;&quot;&quot;</span>
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;.. include:: ./doc.md&quot;&quot;&quot;</span>  <span class="c1"># noqa: D415</span>
+</span><span id="L-2"><a href="#L-2"><span class="linenos">2</span></a>
+</span><span id="L-3"><a href="#L-3"><span class="linenos">3</span></a><span class="kn">from</span> <span class="nn">.api</span> <span class="kn">import</span> <span class="n">synthesize_texts</span>  <span class="c1"># noqa: F401</span>
 </span></pre></div>
 
 
