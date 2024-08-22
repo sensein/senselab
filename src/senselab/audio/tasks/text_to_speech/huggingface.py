@@ -49,6 +49,7 @@ class HuggingFaceTTS:
         texts: List[str],
         model: HFModel = HFModel(path_or_uri="suno/bark", revision="main"),
         device: Optional[DeviceType] = None,
+        forward_params: Optional[Dict[str, Any]] = None,
     ) -> List[Audio]:
         """Synthesizes speech from all the provided text samples.
 
@@ -59,6 +60,7 @@ class HuggingFaceTTS:
             texts (List[str]): The list of text strings to be synthesized.
             model (HFModel): The Hugging Face model used for synthesis.
             device (Optional[DeviceType]): The device to run the model on (default is None).
+            forward_params (Optional[Dict[str, Any]]): Additional parameters to pass to the forward function.
 
         Returns:
             List[Audio]: The list of synthesized audio objects.
@@ -69,8 +71,7 @@ class HuggingFaceTTS:
         """
         pipe = HuggingFaceTTS._get_hf_tts_pipeline(model=model, device=device)
 
-        synthesis_kwargs: Dict[str, Any] = {}
-        synthesized_audios = pipe(texts, **synthesis_kwargs)
+        synthesized_audios = pipe(texts, forward_params=forward_params)
 
         audios = []
         for synth in synthesized_audios:
