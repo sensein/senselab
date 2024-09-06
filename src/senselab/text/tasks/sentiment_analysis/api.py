@@ -10,7 +10,7 @@ from senselab.utils.data_structures.model import HFModel, SenselabModel
 
 def analyze_sentiment(
     pieces_of_text: List[str],
-    model: SenselabModel = HFModel(path_or_uri="distilbert-base-uncased-finetuned-sst-2-english", revision="main"),
+    model: SenselabModel = HFModel(path_or_uri="cardiffnlp/twitter-xlm-roberta-base-sentiment", revision="main"),
     device: Optional[DeviceType] = None,
     **kwargs: Any,  # noqa: ANN401
 ) -> List[Dict[str, Any]]:
