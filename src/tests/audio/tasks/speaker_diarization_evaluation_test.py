@@ -25,13 +25,14 @@ def test_diarization_error_rate_non_existent_speaker() -> None:
         ScriptLine(start=36, end=40, speaker="D"),
     ]
 
-    speaker_mapping = {"A": "A", "B": "B", "C": "C", "D": ""}
+    speaker_mapping = {"A": "A", "B": "B", "C": "C"}
 
-    diarization = calculate_diarization_error_rate(inference, ground_truth, speaker_mapping, detailed=True)
+    diarization = calculate_diarization_error_rate(inference, ground_truth, return_speaker_mapping=True, detailed=True)
     assert isinstance(diarization, dict)
-    assert diarization["false_alarms"] == 4
-    assert diarization["missed_detections"] == 3
-    assert diarization["speaker_confusions"] == 14
+    assert diarization["false alarm"] == 4
+    assert diarization["missed detection"] == 3
+    assert diarization["confusion"] == 14
+    assert diarization["speaker_mapping"] == speaker_mapping
 
 
 def test_diarization_error_rate_undetected_speaker() -> None:
@@ -56,7 +57,5 @@ def test_diarization_error_rate_undetected_speaker() -> None:
         ScriptLine(start=23, end=25, speaker="B"),
     ]
 
-    speaker_mapping = {"A": "A", "B": "B", "C": "C"}
-
-    diarization = calculate_diarization_error_rate(inference, ground_truth, speaker_mapping)
-    assert diarization == 0.4
+    diarization = calculate_diarization_error_rate(inference, ground_truth, greedy=True)
+    assert diarization["diarization error rate"] == 0.4
