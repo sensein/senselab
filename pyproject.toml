@@ -40,7 +40,6 @@ ipykernel = "*"
 pydra = "~=0.23"
 pydantic = "~=2.7"
 accelerate = "*"
-huggingface-hub = "~=0.23"
 praat-parselmouth = "~=0.4"
 audiomentations = "~=0.35"
 torch-audiomentations = "~=0.11"
@@ -57,6 +56,7 @@ umap-learn = "~=0.5"
 scikit-learn = "~=1.5"
 nltk = "~=3.8"
 vocos = "~=0.1"
+huggingface-hub = {extras = ["cli"], version = "^0.24.6"}
 
 [tool.poetry.group.dev]
 optional = true
