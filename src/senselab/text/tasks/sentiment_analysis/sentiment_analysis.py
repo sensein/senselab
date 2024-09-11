@@ -4,7 +4,7 @@ from typing import Dict, List, Optional, Union
 
 import torch
 
-from senselab.utils.data_structures.device import DeviceType
+from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
 from senselab.utils.data_structures.model import HFModel
 from senselab.utils.interfaces.base_analysis import BaseAnalysis
 
@@ -49,7 +49,12 @@ class SentimentAnalysis(BaseAnalysis):
         if model is None:
             model = HFModel(path_or_uri="distilbert-base-uncased-finetuned-sst-2-english", revision="main")
 
-        tokenizer, model_instance = cls._get_pipeline(model, "sentiment-analysis", device)
+        device, torch_dtype = _select_device_and_dtype(
+            user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
+        )
+
+        tokenizer = cls._get_tokenizer(model, "sentiment-analysis")
+        model_instance = cls._load_model(model, "sentiment-analysis", device, torch_dtype)
 
         results: List[Dict[str, Union[str, float]]] = []
         for text in pieces_of_text:
@@ -65,7 +70,7 @@ class SentimentAnalysis(BaseAnalysis):
                     outputs = model_instance(**inputs)
                     probs = torch.nn.functional.softmax(outputs.logits, dim=1)[0]
 
-            score = float(probs[1].item() - probs[0].item())  # Range: [-1, 1]
+            score = float(probs[1].item() - probs[0].item())
 
             if abs(score) < neutral_threshold:
                 label = "neutral"

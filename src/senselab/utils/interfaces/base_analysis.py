@@ -6,44 +6,61 @@ from typing import Dict, List, Optional, Tuple, Union
 import torch
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
+from senselab.utils.data_structures.device import DeviceType
 from senselab.utils.data_structures.model import HFModel
 
 
 class BaseAnalysis(ABC):
     """Abstract base class for text analysis pipelines."""
 
-    _pipelines: Dict[str, Tuple[AutoTokenizer, AutoModelForSequenceClassification]] = {}
+    _tokenizers: Dict[str, AutoTokenizer] = {}
+    _models: Dict[str, AutoModelForSequenceClassification] = {}
 
     @classmethod
-    def _get_pipeline(
+    def _get_tokenizer(
         cls,
         model: HFModel,
         task: str,
-        device: Optional[DeviceType] = None,
-    ) -> Tuple[AutoTokenizer, AutoModelForSequenceClassification]:
-        """Get or create an analysis pipeline.
+    ) -> AutoTokenizer:
+        """Get or create a tokenizer.
 
         Args:
-            model: The model to use for the pipeline.
-            task: The task to perform (e.g., "sentiment-analysis").
-            device: The device to use for computation.
+            model: The HFModel object.
+            task: The task for which the tokenizer is needed.
 
         Returns:
-            A tuple containing the tokenizer and the model.
+            The AutoTokenizer object.
         """
-        device, torch_dtype = _select_device_and_dtype(
-            user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
-        )
+        key = f"{model.path_or_uri}-{model.revision}-{task}"
+        if key not in cls._tokenizers:
+            cls._tokenizers[key] = AutoTokenizer.from_pretrained(model.path_or_uri, revision=model.revision)
+        return cls._tokenizers[key]
 
+    @classmethod
+    def _load_model(
+        cls,
+        model: HFModel,
+        task: str,
+        device: DeviceType,
+        torch_dtype: torch.dtype,
+    ) -> AutoModelForSequenceClassification:
+        """Load or get a model.
+
+        Args:
+            model: The HFModel object.
+            task: The task for which the model is needed.
+            device: The device to load the model on.
+            torch_dtype: The torch data type to use.
+
+        Returns:
+            The AutoModelForSequenceClassification object.
+        """
         key = f"{model.path_or_uri}-{model.revision}-{device.value}-{task}"
-        if key not in cls._pipelines:
-            tokenizer = AutoTokenizer.from_pretrained(model.path_or_uri, revision=model.revision)
-            model = AutoModelForSequenceClassification.from_pretrained(
+        if key not in cls._models:
+            cls._models[key] = AutoModelForSequenceClassification.from_pretrained(
                 model.path_or_uri, revision=model.revision, torch_dtype=torch_dtype
             ).to(device.value)
-            cls._pipelines[key] = (tokenizer, model)
-        return cls._pipelines[key]
+        return cls._models[key]
 
     @classmethod
     @abstractmethod

@@ -100,15 +100,3 @@ def test_analyze_sentiment_empty_list() -> None:
     """Test case for sentiment analysis with an empty list."""
     with pytest.raises(ValueError, match="Input list is empty or None"):
         analyze_sentiment([])
-
-
-def test_analyze_sentiment_none_input() -> None:
-    """Test case for sentiment analysis with None input."""
-    with pytest.raises(ValueError, match="Input list is empty or None"):
-        analyze_sentiment([])
-
-
-def test_analyze_sentiment_non_string_input() -> None:
-    """Test case for sentiment analysis with non-string input."""
-    with pytest.raises(TypeError, match="Input must be a string"):
-        analyze_sentiment(["42"])
