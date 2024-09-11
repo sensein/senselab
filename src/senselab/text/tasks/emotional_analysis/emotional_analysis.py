@@ -72,7 +72,6 @@ class EmotionalAnalysis(BaseAnalysis):
                     probs = torch.nn.functional.softmax(outputs.logits, dim=1)[0]
 
             scores = {Emotion.from_string(emotion_labels[i]): float(prob) for i, prob in enumerate(probs)}
-            # Ensure Emotion objects are comparable or use their string representations for comparison
             dominant_emotion = max(scores, key=lambda emotion: scores[emotion])
 
             results.append({"scores": scores, "dominant_emotion": dominant_emotion})
