@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="generator" content="pdoc 14.6.0"/>
+    <meta name="generator" content="pdoc 14.7.0"/>
     <title>senselab.audio.data_structures.audio API documentation</title>
             <link rel="icon" href="https://readthedocs.org/favicon.ico"/>
 
@@ -450,7 +450,9 @@ of shape (num_channels, num_samples)</li>
     </div>
     <a class="headerlink" href="#Audio.model_config"></a>
     
-    
+            <div class="docstring"><p>Configuration for the model, should be a dictionary conforming to [<code>ConfigDict</code>][pydantic.config.ConfigDict].</p>
+</div>
+
 
                             </div>
                             <div id="Audio.convert_to_tensor" class="classattr">
@@ -602,7 +604,7 @@ rates generate the same IDs.</p>
                             </div>
                             <div id="Audio.model_fields" class="classattr">
                                 <div class="attr variable">
-            <span class="name">model_fields</span>        =
+            <span class="name">model_fields</span><span class="annotation">: ClassVar[Dict[str, pydantic.fields.FieldInfo]]</span>        =
 <input id="Audio.model_fields-view-value" class="view-value-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
             <label class="view-value-button pdoc-button" for="Audio.model_fields-view-value"></label><span class="default_value">{&#39;waveform&#39;: FieldInfo(annotation=Tensor, required=True), &#39;sampling_rate&#39;: FieldInfo(annotation=int, required=True), &#39;orig_path_or_id&#39;: FieldInfo(annotation=Union[str, NoneType], required=False, default=None), &#39;metadata&#39;: FieldInfo(annotation=Dict, required=False, default={})}</span>
 
@@ -610,19 +612,26 @@ rates generate the same IDs.</p>
     </div>
     <a class="headerlink" href="#Audio.model_fields"></a>
     
-    
+            <div class="docstring"><p>Metadata about the fields defined on the model,
+mapping of field names to [<code>FieldInfo</code>][pydantic.fields.FieldInfo] objects.</p>
+
+<p>This replaces <code>Model.__fields__</code> from Pydantic V1.</p>
+</div>
+
 
                             </div>
                             <div id="Audio.model_computed_fields" class="classattr">
                                 <div class="attr variable">
-            <span class="name">model_computed_fields</span>        =
+            <span class="name">model_computed_fields</span><span class="annotation">: ClassVar[Dict[str, pydantic.fields.ComputedFieldInfo]]</span>        =
 <span class="default_value">{}</span>
 
         
     </div>
     <a class="headerlink" href="#Audio.model_computed_fields"></a>
     
-    
+            <div class="docstring"><p>A dictionary of computed field names and their corresponding <code>ComputedFieldInfo</code> objects.</p>
+</div>
+
 
                             </div>
                             <div class="inherited">
