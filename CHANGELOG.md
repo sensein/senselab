@@ -1,3 +1,15 @@
+# 0.12.0 (Thu Sep 12 2024)
+
+#### 🚀 Enhancement
+
+- Implement diaraization error rate [#152](https://github.com/sensein/senselab/pull/152) ([@wilke0818](https://github.com/wilke0818))
+
+#### Authors: 1
+
+- [@wilke0818](https://github.com/wilke0818)
+
+---
+
 # 0.11.0 (Thu Aug 22 2024)
 
 #### 🚀 Enhancement
