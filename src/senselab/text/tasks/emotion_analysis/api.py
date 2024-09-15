@@ -17,13 +17,13 @@ def analyze_emotion(
     """Analyze emotion of given text pieces.
 
     Args:
-        pieces_of_text: List of text strings to analyze.
-        model: The model to use for emotional analysis.
-        device: The device to use for computation.
-        **kwargs: Additional keyword arguments.
+        pieces_of_text (List[str]): List of text strings to analyze.
+        model (SenselabModel): The model to use for emotional analysis.
+        device (Optional[DeviceType]): The device to use for computation.
+        **kwargs (Union[str, int, float, bool]): Additional keyword arguments.
 
     Returns:
-        A list of dictionaries containing emotional analysis results.
+        List[Dict[str, Union[str, float]]]: A list of dictionaries containing emotional analysis results.
     """
     model_type = type(model)
     model_utils = MODEL_TYPE_TO_UTILS.get(model_type)

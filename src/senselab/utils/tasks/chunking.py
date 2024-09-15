@@ -9,13 +9,13 @@ def chunk_text(text: str, tokenizer: AutoTokenizer, max_length: int, overlap: in
     """Split text into overlapping chunks.
 
     Args:
-        text: The input text to chunk.
-        tokenizer: The tokenizer to use.
-        max_length: Maximum length of each chunk.
-        overlap: Overlap between chunks.
+        text (str): The input text to chunk.
+        tokenizer (AutoTokenizer): The tokenizer to use.
+        max_length (int): Maximum length of each chunk.
+        overlap (int): Overlap between chunks.
 
     Returns:
-        A list of text chunks.
+        List[str]: A list of text chunks.
     """
     tokens = tokenizer.tokenize(text)
     chunks = []

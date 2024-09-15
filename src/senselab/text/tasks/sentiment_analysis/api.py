@@ -17,13 +17,13 @@ def analyze_sentiment(
     """Analyze sentiment of given text pieces.
 
     Args:
-        pieces_of_text: List of text strings to analyze.
-        model: The model to use for sentiment analysis.
-        device: The device to use for computation.
-        **kwargs: Additional keyword arguments.
+        pieces_of_text (List[str]): List of text strings to analyze.
+        model (SenselabModel): The model to use for sentiment analysis.
+        device (Optional[DeviceType]): The device to use for computation.
+        **kwargs (Union[str, int, float, bool]): Additional keyword arguments.
 
     Returns:
-        A list of dictionaries containing sentiment analysis results.
+        List[Dict[str, Union[str, float]]]: A list of dictionaries containing sentiment analysis results.
     """
     model_type = type(model)
     model_utils = MODEL_TYPE_TO_UTILS.get(model_type)
