@@ -1,10 +1,9 @@
 """Test module for sentiment analysis functionality."""
 
-import pprint
-
 import pytest
 
 from senselab.text.tasks.sentiment_analysis.api import analyze_sentiment
+from senselab.text.tasks.sentiment_analysis.constants import Sentiment
 from senselab.utils.data_structures.device import DeviceType
 from senselab.utils.data_structures.model import HFModel
 
@@ -22,8 +21,8 @@ def test_analyze_sentiment_basic(model: HFModel) -> None:
 
     assert len(results) == 2
     assert all("score" in result and "label" in result for result in results)
-    assert float(results[0]["score"]) > 0 and results[0]["label"] == "positive"
-    assert float(results[1]["score"]) < 0 and results[1]["label"] == "negative"
+    assert float(results[0]["score"]) > 0 and results[0]["label"] == Sentiment.POSITIVE.value
+    assert float(results[1]["score"]) < 0 and results[1]["label"] == Sentiment.NEGATIVE.value
 
 
 def test_analyze_sentiment_empty_input() -> None:
@@ -44,7 +43,6 @@ def test_analyze_sentiment_multilingual(model: HFModel) -> None:
     """Test case for sentiment analysis with multilingual texts."""
     texts = ["Je t'aime", "Ich hasse das", "我喜欢这个"]
     results = analyze_sentiment(texts, model=model)
-    pprint.pprint(f"results: {results}")
     assert len(results) == 3
     assert all("score" in result and "label" in result for result in results)
 
@@ -54,7 +52,7 @@ def test_analyze_sentiment_special_characters(model: HFModel) -> None:
     text = "I love this product! 🎉😊"
     results = analyze_sentiment([text], model=model)
     assert float(results[0]["score"]) > 0
-    assert results[0]["label"] == "positive"
+    assert results[0]["label"] == Sentiment.POSITIVE.value
 
 
 def test_analyze_sentiment_mixed_case(model: HFModel) -> None:
@@ -62,7 +60,7 @@ def test_analyze_sentiment_mixed_case(model: HFModel) -> None:
     text = "I LOVE this Product!"
     results = analyze_sentiment([text], model=model)
     assert float(results[0]["score"]) > 0
-    assert results[0]["label"] == "positive"
+    assert results[0]["label"] == Sentiment.POSITIVE.value
 
 
 def test_analyze_sentiment_very_short_text(model: HFModel) -> None:
@@ -70,13 +68,13 @@ def test_analyze_sentiment_very_short_text(model: HFModel) -> None:
     text = "Good"
     results = analyze_sentiment([text], model=model)
     assert float(results[0]["score"]) > 0
-    assert results[0]["label"] == "positive"
+    assert results[0]["label"] == Sentiment.POSITIVE.value
 
 
 def test_analyze_sentiment_all_punctuation() -> None:
     """Test case for sentiment analysis with all punctuation."""
     text = "!@#$%^&*()"
-    with pytest.raises(ValueError, match="Input string contains only punctuation"):
+    with pytest.raises(ValueError, match="Input text cannot contain only punctuation."):
         analyze_sentiment([text])
 
 
@@ -93,7 +91,7 @@ def test_analyze_sentiment_different_devices(model: HFModel, device: DeviceType)
     text = "I love this!"
     results = analyze_sentiment([text], model=model, device=device)
     assert float(results[0]["score"]) > 0
-    assert results[0]["label"] == "positive"
+    assert results[0]["label"] == Sentiment.POSITIVE.value
 
 
 def test_analyze_sentiment_empty_list() -> None:

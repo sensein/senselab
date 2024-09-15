@@ -4,8 +4,8 @@ from typing import Any, Dict, List
 
 import pytest
 
-from senselab.text.tasks.emotional_analysis.api import analyze_emotion
-from senselab.text.tasks.emotional_analysis.constants import Emotion
+from senselab.text.tasks.emotion_analysis.api import analyze_emotion
+from senselab.text.tasks.emotion_analysis.constants import Emotion
 from senselab.utils.data_structures.device import DeviceType
 from senselab.utils.data_structures.model import HFModel
 
@@ -23,8 +23,8 @@ def test_analyze_emotion_basic(model: HFModel) -> None:
 
     assert len(results) == 2
     assert all("scores" in result and "dominant_emotion" in result for result in results)
-    assert results[0]["dominant_emotion"] == Emotion.JOY
-    assert results[1]["dominant_emotion"] == Emotion.SADNESS
+    assert results[0]["dominant_emotion"] == Emotion.JOY.value
+    assert results[1]["dominant_emotion"] == Emotion.SADNESS.value
 
 
 def test_analyze_emotion_empty_input() -> None:
@@ -45,8 +45,8 @@ def test_analyze_emotion_mixed_emotions(model: HFModel) -> None:
     """Test case for emotional analysis with mixed emotions."""
     text = "I'm happy about my promotion but scared about the new responsibilities."
     results: List[Dict[str, Any]] = analyze_emotion([text], model=model)
-    scores: Dict[Emotion, float] = results[0]["scores"]
-    assert scores[Emotion.JOY] > 0 and scores[Emotion.FEAR] > 0
+    scores: Dict[str, float] = results[0]["scores"]
+    assert scores[Emotion.JOY.value] > 0 and scores[Emotion.FEAR.value] > 0
     assert len(scores) == 7
 
 
@@ -54,13 +54,13 @@ def test_analyze_emotion_neutral_text(model: HFModel) -> None:
     """Test case for emotional analysis with neutral text."""
     text = "The sky is blue and the grass is green."
     results: List[Dict[str, Any]] = analyze_emotion([text], model=model)
-    assert results[0]["dominant_emotion"] == Emotion.NEUTRAL
+    assert results[0]["dominant_emotion"] == Emotion.NEUTRAL.value
 
 
 def test_analyze_emotion_all_punctuation() -> None:
     """Test case for emotional analysis with all punctuation."""
     text = "!@#$%^&*()"
-    with pytest.raises(ValueError, match="Input string contains only punctuation"):
+    with pytest.raises(ValueError, match="Input text cannot contain only punctuation."):
         analyze_emotion([text])
 
 
@@ -69,7 +69,7 @@ def test_analyze_emotion_different_devices(model: HFModel, device: DeviceType) -
     """Test case for emotional analysis with different devices."""
     text = "I'm so excited!"
     results: List[Dict[str, Any]] = analyze_emotion([text], model=model, device=device)
-    assert results[0]["dominant_emotion"] == Emotion.JOY
+    assert results[0]["dominant_emotion"] == Emotion.JOY.value
 
 
 def test_analyze_emotion_empty_list() -> None:
@@ -82,7 +82,7 @@ def test_analyze_emotion_scores_sum_to_one(model: HFModel) -> None:
     """Test case to ensure emotion scores sum to approximately 1."""
     text = "I'm feeling a mix of emotions today."
     results: List[Dict[str, Any]] = analyze_emotion([text], model=model)
-    scores: Dict[Emotion, float] = results[0]["scores"]
+    scores: Dict[str, float] = results[0]["scores"]
     total_score = sum(scores.values())
     tolerance = 2e-4  # Allowing for a deviation of up to 0.0002
     assert abs(total_score - 1.0) <= tolerance, f"Total score {total_score} deviates from 1.0 by more than {tolerance}"
@@ -96,4 +96,4 @@ def test_analyze_emotion_consistent_labels(model: HFModel) -> None:
     for result in results:
         all_labels.update(result["scores"].keys())
     assert len(all_labels) == 7
-    assert all_labels == set(Emotion)
+    assert all_labels == set(emotion.value for emotion in Emotion)

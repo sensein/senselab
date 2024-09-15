@@ -1,84 +1,89 @@
 """Sentiment analysis implementation using the BaseAnalysis class."""
 
-from typing import Dict, List, Optional, Union
+from collections import defaultdict
+from typing import Any, Dict, List, Optional, Union
 
-import torch
-
+from senselab.text.tasks.sentiment_analysis.constants import Sentiment
 from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
-from senselab.utils.data_structures.model import HFModel
-from senselab.utils.interfaces.base_analysis import BaseAnalysis
+from senselab.utils.interfaces.analyses import BaseTextAnalysis
+from senselab.utils.model_utils import BaseModelSourceUtils
+from senselab.utils.tasks.chunking import chunk_text
 
 
-class SentimentAnalysis(BaseAnalysis):
+class SentimentAnalysis(BaseTextAnalysis):
     """A class for performing sentiment analysis on text."""
 
     @classmethod
     def analyze(
         cls,
-        pieces_of_text: List[str],
+        input_data: List[Any],
+        model_utils: BaseModelSourceUtils,
         device: Optional[DeviceType],
-        model: Optional[HFModel] = None,
-        max_length: int = 512,
-        overlap: int = 128,
         **kwargs: Union[str, int, float, bool],
-    ) -> List[Dict[str, Union[str, float]]]:
+    ) -> List[Dict[str, Any]]:
         """Perform sentiment analysis on a list of text pieces.
 
         Args:
-            pieces_of_text: List of text strings to analyze.
-            device: The device to use for computation.
-            model: The model to use for sentiment analysis.
-            max_length: Maximum length of each chunk for long sequences.
-            overlap: Overlap between chunks for long sequences.
-            neutral_threshold: Threshold for classifying sentiment as neutral.
-            **kwargs: Additional keyword arguments.
+            input_data (List[Any]): List of text strings to analyze.
+            model_utils (BaseModelSourceUtils): Utility class for model operations.
+            device (Optional[DeviceType]): The device to use for computation (e.g., CPU, CUDA).
+            **kwargs (Union[str, int, float, bool]): Additional keyword arguments, such as:
+                - max_length (int): Maximum length of text chunks (default: 512).
+                - overlap (int): Overlap size between text chunks (default: 128).
+                - neutral_threshold (float): Threshold for considering sentiment as neutral (default: 0.05).
 
         Returns:
-            A list of dictionaries, each containing:
+            List[Dict[str, Any]]: A list of dictionaries, each containing:
                 - score (float): Sentiment score between -1 and 1.
-                - label (str): Sentiment label ("negative", "neutral", or "positive").
+                - label (str): The sentiment label ("negative", "neutral", "positive").
 
         Raises:
             ValueError: If the input list is empty or None.
         """
-        neutral_threshold = float(kwargs.get("neutral_threshold", "0.05"))
-
-        if not pieces_of_text:
+        if not input_data:
             raise ValueError("Input list is empty or None.")
 
-        if model is None:
-            model = HFModel(path_or_uri="distilbert-base-uncased-finetuned-sst-2-english", revision="main")
+        max_length = int(kwargs.get("max_length", 512))
+        overlap = int(kwargs.get("overlap", 128))
+        neutral_threshold = float(kwargs.get("neutral_threshold", 0.05))
 
         device, torch_dtype = _select_device_and_dtype(
             user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
         )
 
-        tokenizer = cls._get_tokenizer(model, "sentiment-analysis")
-        model_instance = cls._load_model(model, "sentiment-analysis", device, torch_dtype)
+        tokenizer = model_utils.get_tokenizer(task="sentiment-analysis")
+        pipe = model_utils.get_pipeline(task="sentiment-analysis", device=device, torch_dtype=torch_dtype)
 
-        results: List[Dict[str, Union[str, float]]] = []
-        for text in pieces_of_text:
+        results: List[Dict[str, Union[float, str]]] = []
+
+        for text in input_data:
             cls.validate_input(text)
 
-            if len(tokenizer.encode(text)) > max_length:
-                probs = cls._process_long_text(text, tokenizer, model_instance, max_length, overlap)
+            chunks = chunk_text(text=text, tokenizer=tokenizer, max_length=max_length, overlap=overlap)
+            chunks_output = pipe(chunks)
+
+            score_sums: Dict[str, float] = defaultdict(float)
+
+            for chunk_output in chunks_output:
+                for result in chunk_output:
+                    label = result["label"]
+                    score = result["score"]
+                    score_sums[label] += score
+
+            total_score = sum(score_sums.values())
+            normalized_scores = {label: score / total_score for label, score in score_sums.items()}
+
+            sentiment_score = normalized_scores.get(
+                "POSITIVE", normalized_scores.get("positive", 0)
+            ) - normalized_scores.get("NEGATIVE", normalized_scores.get("negative", 0))
+
+            if abs(sentiment_score) < neutral_threshold:
+                dominant_sentiment = Sentiment.NEUTRAL.value
+            elif sentiment_score > 0:
+                dominant_sentiment = Sentiment.POSITIVE.value
             else:
-                inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=max_length)
-                inputs = {k: v.to(model_instance.device) for k, v in inputs.items()}
+                dominant_sentiment = Sentiment.NEGATIVE.value
 
-                with torch.no_grad():
-                    outputs = model_instance(**inputs)
-                    probs = torch.nn.functional.softmax(outputs.logits, dim=1)[0]
-
-            score = float(probs[1].item() - probs[0].item())
-
-            if abs(score) < neutral_threshold:
-                label = "neutral"
-            elif score > 0:
-                label = "positive"
-            else:
-                label = "negative"
-
-            results.append({"score": score, "label": label})
+            results.append({"score": sentiment_score, "label": dominant_sentiment})
 
         return results
