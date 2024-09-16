@@ -1,6 +1,6 @@
 """API module for emotional analysis."""
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 from senselab.text.tasks.emotion_analysis.constants import MODEL_TYPE_TO_UTILS
 from senselab.text.tasks.emotion_analysis.emotion_analysis import EmotionAnalysis
@@ -13,7 +13,7 @@ def analyze_emotion(
     model: SenselabModel = HFModel(path_or_uri="j-hartmann/emotion-english-distilroberta-base", revision="main"),
     device: Optional[DeviceType] = None,
     **kwargs: Any,  # noqa: ANN401
-) -> List[Dict[str, Union[str, float]]]:
+) -> List[Dict[str, Any]]:
     """Analyze emotion of given text pieces.
 
     Args:
@@ -23,7 +23,7 @@ def analyze_emotion(
         **kwargs (Any): Additional keyword arguments.
 
     Returns:
-        List[Dict[str, Union[str, float]]]: A list of dictionaries containing emotional analysis results.
+        List[Dict[str, Any]]: A list of dictionaries containing emotional analysis results.
     """
     model_type = type(model)
     model_utils = MODEL_TYPE_TO_UTILS.get(model_type)

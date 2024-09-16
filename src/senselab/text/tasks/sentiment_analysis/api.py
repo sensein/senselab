@@ -1,6 +1,6 @@
 """API module for sentiment analysis."""
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 from senselab.text.tasks.sentiment_analysis.constants import MODEL_TYPE_TO_UTILS
 from senselab.text.tasks.sentiment_analysis.sentiment_analysis import SentimentAnalysis
@@ -13,7 +13,7 @@ def analyze_sentiment(
     model: SenselabModel = HFModel(path_or_uri="distilbert-base-uncased-finetuned-sst-2-english", revision="main"),
     device: Optional[DeviceType] = None,
     **kwargs: Any,  # noqa: ANN401
-) -> List[Dict[str, Union[str, float]]]:
+) -> List[Dict[str, Any]]:
     """Analyze sentiment of given text pieces.
 
     Args:
@@ -23,7 +23,7 @@ def analyze_sentiment(
         **kwargs (Any): Additional keyword arguments.
 
     Returns:
-        List[Dict[str, Union[str, float]]]: A list of dictionaries containing sentiment analysis results.
+        List[Dict[str, Any]]: A list of dictionaries containing sentiment analysis results.
     """
     model_type = type(model)
     model_utils = MODEL_TYPE_TO_UTILS.get(model_type)
