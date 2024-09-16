@@ -13,7 +13,7 @@ from senselab.utils.data_structures.model import HFModel
 @pytest.fixture
 def model() -> HFModel:
     """Fixture that returns an instance of HFModel."""
-    return HFModel(path_or_uri="j-hartmann/emotion-english-distilroberta-base", revision="main")
+    return HFModel(path_or_uri="SamLowe/roberta-base-go_emotions", revision="main")
 
 
 def test_analyze_emotion_basic(model: HFModel) -> None:
@@ -47,7 +47,7 @@ def test_analyze_emotion_mixed_emotions(model: HFModel) -> None:
     results: List[Dict[str, Any]] = analyze_emotion([text], model=model)
     scores: Dict[str, float] = results[0]["scores"]
     assert scores[Emotion.JOY.value] > 0 and scores[Emotion.FEAR.value] > 0
-    assert len(scores) == 7
+    assert len(scores) == 28
 
 
 def test_analyze_emotion_neutral_text(model: HFModel) -> None:
@@ -69,7 +69,7 @@ def test_analyze_emotion_different_devices(model: HFModel, device: DeviceType) -
     """Test case for emotional analysis with different devices."""
     text = "I'm so excited!"
     results: List[Dict[str, Any]] = analyze_emotion([text], model=model, device=device)
-    assert results[0]["dominant_emotion"] == Emotion.JOY.value
+    assert results[0]["dominant_emotion"] == Emotion.EXCITEMENT.value
 
 
 def test_analyze_emotion_empty_list() -> None:
@@ -90,10 +90,60 @@ def test_analyze_emotion_scores_sum_to_one(model: HFModel) -> None:
 
 def test_analyze_emotion_consistent_labels(model: HFModel) -> None:
     """Test case to ensure consistent emotion labels across results."""
-    texts = ["I'm happy", "I'm sad", "I'm angry", "I'm scared", "I'm disgusted", "I'm surprised", "I'm neutral"]
+    texts = [
+        "I'm happy",
+        "I'm sad",
+        "I'm angry",
+        "I'm scared",
+        "I'm disgusted",
+        "I'm surprised",
+        "I'm neutral",
+        "I'm disappointed",
+        "I'm annoyed",
+        "I disapprove",
+        "I realized something",
+        "I'm nervous",
+        "I'm embarrassed",
+        "I care",
+        "I feel remorse",
+        "I'm grieving",
+        "I'm confused",
+        "I'm relieved",
+        "I desire something",
+        "I admire you",
+        "I'm optimistic",
+        "I love you",
+        "I'm excited",
+        "I'm curious",
+        "I'm amused",
+        "I'm grateful",
+        "I'm proud",
+    ]
     results: List[Dict[str, Any]] = analyze_emotion(texts, model=model)
     all_labels = set()
     for result in results:
         all_labels.update(result["scores"].keys())
-    assert len(all_labels) == 7
-    assert all_labels == set(emotion.value for emotion in Emotion)
+
+    expected_labels = set(emotion.value for emotion in Emotion)
+
+    assert all_labels == expected_labels
+
+
+def test_analyze_emotion_threshold(model: HFModel) -> None:
+    """Test case for emotional analysis with a threshold for dominant emotion."""
+    text = "I'm very happy and a bit worried."
+    threshold = 0.15
+    results: List[Dict[str, Any]] = analyze_emotion([text], model=model, device=DeviceType.CUDA, threshold=threshold)
+
+    assert len(results) == 1
+    assert "scores" in results[0] and "dominant_emotion" in results[0]
+
+    scores: Dict[str, float] = results[0]["scores"]
+    sorted_scores = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+    top_score = sorted_scores[0][1]
+    second_score = sorted_scores[1][1]
+
+    if top_score - second_score < threshold:
+        assert results[0]["dominant_emotion"] == "inconclusive"
+    else:
+        assert results[0]["dominant_emotion"] != "inconclusive"

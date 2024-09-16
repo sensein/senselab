@@ -11,7 +11,7 @@ from senselab.utils.data_structures.model import HFModel
 @pytest.fixture
 def model() -> HFModel:
     """Fixture that returns an instance of HFModel."""
-    return HFModel(path_or_uri="distilbert-base-uncased-finetuned-sst-2-english", revision="main")
+    return HFModel(path_or_uri="cardiffnlp/twitter-xlm-roberta-base-sentiment", revision="main")
 
 
 def test_analyze_sentiment_basic(model: HFModel) -> None:
@@ -45,6 +45,17 @@ def test_analyze_sentiment_multilingual(model: HFModel) -> None:
     results = analyze_sentiment(texts, model=model)
     assert len(results) == 3
     assert all("score" in result and "label" in result for result in results)
+
+
+def test_analyze_sentiment_additional_multilingual(model: HFModel) -> None:
+    """Additional test case for sentiment analysis with more multilingual texts."""
+    texts = ["Te amo", "Я тебя ненавижу", "私はこれが好きです"]
+    results = analyze_sentiment(texts, model=model)
+    assert len(results) == 3
+    assert all("score" in result and "label" in result for result in results)
+    assert float(results[0]["score"]) > 0 and results[0]["label"] == Sentiment.POSITIVE.value
+    assert float(results[1]["score"]) < 0 and results[1]["label"] == Sentiment.NEGATIVE.value
+    assert float(results[2]["score"]) > 0 and results[2]["label"] == Sentiment.POSITIVE.value
 
 
 def test_analyze_sentiment_special_characters(model: HFModel) -> None:

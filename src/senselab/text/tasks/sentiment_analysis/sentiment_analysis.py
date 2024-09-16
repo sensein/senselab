@@ -52,9 +52,7 @@ class SentimentAnalysis(BaseTextAnalysis):
         )
 
         tokenizer = model_utils.get_tokenizer(task="sentiment-analysis")
-        pipe = model_utils.get_pipeline(
-            task="sentiment-analysis", device=device, torch_dtype=torch_dtype, return_all_scores=True
-        )
+        pipe = model_utils.get_pipeline(task="sentiment-analysis", device=device, torch_dtype=torch_dtype, top_k=None)
 
         results: List[Dict[str, Union[float, str]]] = []
 
@@ -75,11 +73,13 @@ class SentimentAnalysis(BaseTextAnalysis):
             total_score = sum(score_sums.values())
             normalized_scores = {label: score / total_score for label, score in score_sums.items()}
 
-            sentiment_score = normalized_scores.get(
-                "POSITIVE", normalized_scores.get("positive", 0)
-            ) - normalized_scores.get("NEGATIVE", normalized_scores.get("negative", 0))
+            positive_score = normalized_scores.get("POSITIVE", normalized_scores.get("positive", 0))
+            negative_score = normalized_scores.get("NEGATIVE", normalized_scores.get("negative", 0))
+            neutral_score = normalized_scores.get("NEUTRAL", normalized_scores.get("neutral", 0))
 
-            if abs(sentiment_score) < neutral_threshold:
+            sentiment_score = positive_score - negative_score
+
+            if abs(sentiment_score) < neutral_threshold or neutral_score > max(positive_score, negative_score):
                 dominant_sentiment = Sentiment.NEUTRAL.value
             elif sentiment_score > 0:
                 dominant_sentiment = Sentiment.POSITIVE.value

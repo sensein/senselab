@@ -29,11 +29,14 @@ class EmotionAnalysis(BaseTextAnalysis):
             **kwargs (Any): Additional keyword arguments, such as:
                 - max_length (int): Maximum length of text chunks (default: 512).
                 - overlap (int): Overlap size between text chunks (default: 128).
+                - threshold (float): Minimum difference between top two emotions to declare a
+                  dominant emotion (default: 0.1).
 
         Returns:
             List[Dict[str, Any]]: A list of dictionaries, each containing:
                 - scores (Dict[str, float]): Probabilities for each emotion.
-                - dominant_emotion (str): The most likely emotion in the text.
+                - dominant_emotion (str): The most likely emotion in the text, or 'inconclusive'
+                  if the difference is below the threshold.
 
         Raises:
             ValueError: If the input list is empty or None.
@@ -43,15 +46,14 @@ class EmotionAnalysis(BaseTextAnalysis):
 
         max_length = int(kwargs.get("max_length", 512))
         overlap = int(kwargs.get("overlap", 128))
+        threshold = float(kwargs.get("threshold", 0.1))
 
         device, torch_dtype = _select_device_and_dtype(
             user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
         )
 
         tokenizer = model_utils.get_tokenizer(task="text-classification")
-        pipe = model_utils.get_pipeline(
-            task="text-classification", device=device, torch_dtype=torch_dtype, return_all_scores=True
-        )
+        pipe = model_utils.get_pipeline(task="text-classification", device=device, torch_dtype=torch_dtype, top_k=None)
 
         results: List[Dict[str, Any]] = []
 
@@ -72,7 +74,14 @@ class EmotionAnalysis(BaseTextAnalysis):
             total_score = sum(score_sums.values())
             normalized_scores = {label: score / total_score for label, score in score_sums.items()}
 
-            dominant_emotion = max(normalized_scores, key=lambda label: normalized_scores[label])
+            sorted_scores = sorted(normalized_scores.items(), key=lambda item: item[1], reverse=True)
+            top_emotion, top_score = sorted_scores[0]
+            second_emotion, second_score = sorted_scores[1] if len(sorted_scores) > 1 else (None, 0)
+
+            if top_score - second_score < threshold:
+                dominant_emotion = "inconclusive"
+            else:
+                dominant_emotion = top_emotion
 
             results.append({"scores": normalized_scores, "dominant_emotion": dominant_emotion})
 
