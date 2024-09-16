@@ -2,7 +2,7 @@
 
 import string
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 from senselab.utils.data_structures.device import DeviceType
 from senselab.utils.model_utils import BaseModelSourceUtils
@@ -18,7 +18,6 @@ class BaseAnalysis(ABC):
         input_data: List[Any],
         model_utils: BaseModelSourceUtils,
         device: Optional[DeviceType],
-        **kwargs: Union[str, int, float, bool],
     ) -> List[Dict[str, Any]]:
         """Abstract method for analysis.
 
@@ -26,7 +25,6 @@ class BaseAnalysis(ABC):
             input_data (List[Any]): List of input data to analyze.
             model_utils (BaseModelSourceUtils): Utility class for model operations.
             device (Optional[DeviceType]): The device to use for computation.
-            **kwargs (Union[str, int, float, bool]): Additional keyword arguments.
 
         Returns:
             List[Dict[str, Any]]: A list of dictionaries containing analysis results.

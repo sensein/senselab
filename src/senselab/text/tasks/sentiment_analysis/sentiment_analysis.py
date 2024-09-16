@@ -19,7 +19,7 @@ class SentimentAnalysis(BaseTextAnalysis):
         input_data: List[Any],
         model_utils: BaseModelSourceUtils,
         device: Optional[DeviceType],
-        **kwargs: Union[str, int, float, bool],
+        **kwargs: Any,  # noqa: ANN401
     ) -> List[Dict[str, Any]]:
         """Perform sentiment analysis on a list of text pieces.
 
@@ -27,7 +27,7 @@ class SentimentAnalysis(BaseTextAnalysis):
             input_data (List[Any]): List of text strings to analyze.
             model_utils (BaseModelSourceUtils): Utility class for model operations.
             device (Optional[DeviceType]): The device to use for computation (e.g., CPU, CUDA).
-            **kwargs (Union[str, int, float, bool]): Additional keyword arguments, such as:
+            **kwargs (Any): Additional keyword arguments, such as:
                 - max_length (int): Maximum length of text chunks (default: 512).
                 - overlap (int): Overlap size between text chunks (default: 128).
                 - neutral_threshold (float): Threshold for considering sentiment as neutral (default: 0.05).
@@ -52,7 +52,9 @@ class SentimentAnalysis(BaseTextAnalysis):
         )
 
         tokenizer = model_utils.get_tokenizer(task="sentiment-analysis")
-        pipe = model_utils.get_pipeline(task="sentiment-analysis", device=device, torch_dtype=torch_dtype)
+        pipe = model_utils.get_pipeline(
+            task="sentiment-analysis", device=device, torch_dtype=torch_dtype, return_all_scores=True
+        )
 
         results: List[Dict[str, Union[float, str]]] = []
 

@@ -1,7 +1,7 @@
 """This module provides utility classes for handling common utilities based on model type."""
 
 from abc import ABC, abstractmethod
-from typing import Callable, Dict
+from typing import Any, Callable, Dict
 
 import torch
 from transformers import AutoTokenizer, pipeline
@@ -33,13 +33,20 @@ class BaseModelSourceUtils(ABC):
         raise NotImplementedError("This method must be implemented in a derived class.")
 
     @abstractmethod
-    def get_pipeline(self, task: str, device: DeviceType, torch_dtype: torch.dtype) -> Callable:
+    def get_pipeline(
+        self,
+        task: str,
+        device: DeviceType,
+        torch_dtype: torch.dtype,
+        **kwargs: Any,  # noqa: ANN401
+    ) -> Callable:
         """Get the pipeline for a specific task.
 
         Args:
             task (str): The task for which the pipeline is needed.
             device (DeviceType): The device to use for computation (e.g., CPU, CUDA).
             torch_dtype (torch.dtype): The data type to use for the pipeline.
+            **kwargs (Any): Additional keyword arguments for the pipeline.
 
         Returns:
             Callable: The pipeline for the specified task.
@@ -70,17 +77,24 @@ class HFUtils(BaseModelSourceUtils):
         self._pipelines: Dict[str, Callable] = {}
 
     @staticmethod
-    def _get_key(model: HFModel, *args: str) -> str:
+    def _get_key(
+        model: HFModel,
+        *args: Any,  # noqa: ANN401
+        **kwargs: Any,  # noqa: ANN401
+    ) -> str:
         """Generate a consistent string key for caching purposes.
 
         Args:
             model (HFModel): The Hugging Face model configuration.
-            *args (str): Additional arguments to include in the key.
+            *args (Any): Additional arguments to include in the key.
+            **kwargs (Any): Additional keyword arguments to include in the key.
 
         Returns:
             str: A string key combining the model information and additional arguments.
         """
-        return f"{model.path_or_uri}-{model.revision}" + "".join(f"-{arg}" for arg in args if arg is not None)
+        key = f"{model.path_or_uri}-{model.revision}" + "".join(f"-{arg}" for arg in args if arg is not None)
+        key += "".join(f"-{k}-{v}" for k, v in sorted(kwargs.items()))
+        return key
 
     @classmethod
     def get_instance(cls, model: HFModel) -> "HFUtils":
@@ -115,18 +129,25 @@ class HFUtils(BaseModelSourceUtils):
             )
         return self._tokenizers[key]
 
-    def get_pipeline(self, task: str, device: DeviceType, torch_dtype: torch.dtype) -> Callable:
+    def get_pipeline(
+        self,
+        task: str,
+        device: DeviceType,
+        torch_dtype: torch.dtype,
+        **kwargs: Any,  # noqa: ANN401
+    ) -> Callable:
         """Get the pipeline for a specific task.
 
         Args:
             task (str): The task for which the pipeline is needed.
             device (DeviceType): The device to use for computation (e.g., CPU, CUDA).
             torch_dtype (torch.dtype): The data type to use for the pipeline.
+            **kwargs (Any): Additional keyword arguments for the pipeline.
 
         Returns:
             Callable: The pipeline for the specified task.
         """
-        key = self._get_key(self._model, task, device.value, str(torch_dtype))
+        key = self._get_key(self._model, task, device.value, str(torch_dtype), **kwargs)
         if key not in self._pipelines:
             self._pipelines[key] = pipeline(
                 task=task,
@@ -134,6 +155,6 @@ class HFUtils(BaseModelSourceUtils):
                 revision=self._model.revision,
                 device=device.value,
                 torch_dtype=torch_dtype,
-                return_all_scores=True,
+                **kwargs,
             )
         return self._pipelines[key]

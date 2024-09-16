@@ -1,7 +1,7 @@
 """This module provides functionality for performing emotional analysis on text using a specified model."""
 
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
 from senselab.utils.interfaces.analyses import BaseTextAnalysis
@@ -18,7 +18,7 @@ class EmotionAnalysis(BaseTextAnalysis):
         input_data: List[Any],
         model_utils: BaseModelSourceUtils,
         device: Optional[DeviceType],
-        **kwargs: Union[str, int, float, bool],
+        **kwargs: Any,  # noqa: ANN401
     ) -> List[Dict[str, Any]]:
         """Analyze the emotional content of a list of text pieces.
 
@@ -26,7 +26,7 @@ class EmotionAnalysis(BaseTextAnalysis):
             input_data (List[Any]): A list of text strings to be analyzed.
             model_utils (BaseModelSourceUtils): Utility class for model operations.
             device (Optional[DeviceType]): The device to use for computation (e.g., CPU, CUDA).
-            **kwargs (Union[str, int, float, bool]): Additional keyword arguments, such as:
+            **kwargs (Any): Additional keyword arguments, such as:
                 - max_length (int): Maximum length of text chunks (default: 512).
                 - overlap (int): Overlap size between text chunks (default: 128).
 
@@ -49,7 +49,9 @@ class EmotionAnalysis(BaseTextAnalysis):
         )
 
         tokenizer = model_utils.get_tokenizer(task="text-classification")
-        pipe = model_utils.get_pipeline(task="text-classification", device=device, torch_dtype=torch_dtype)
+        pipe = model_utils.get_pipeline(
+            task="text-classification", device=device, torch_dtype=torch_dtype, return_all_scores=True
+        )
 
         results: List[Dict[str, Any]] = []
 
