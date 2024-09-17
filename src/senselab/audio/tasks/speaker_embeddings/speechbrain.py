@@ -92,7 +92,7 @@ class SpeechBrainEmbeddings:
 
         # Stack audio waveforms for batch processing, zero-padding to ensure equal length
         waveforms = torch.stack(
-            [F.pad(audio.waveform, (0, max_len - audio.waveform.shape[1])) for audio in audios]
+            [F.pad(audio.waveform, (0, int(max_len - audio.waveform.shape[1]))) for audio in audios]
         ).squeeze()
 
         # Compute embeddings in a batch

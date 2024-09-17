@@ -1,1 +1,3 @@
-"""This module provides the API for the senselab text to speech task."""
+""".. include:: ./doc.md"""  # noqa: D415
+
+from .api import synthesize_texts  # noqa: F401
