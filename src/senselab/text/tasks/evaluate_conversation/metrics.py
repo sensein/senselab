@@ -1,51 +1,56 @@
-"""metrics.py."""
+"""Metrics to assess performance on tutor response.
 
-from abc import ABC, abstractmethod
+Functions named as ``*_score`` return a scalar value to maximize: the higher
+the better.
+
+Function named as ``*_error`` or ``*_loss`` return a scalar value to minimize:
+the lower the better.
+
+All other functions are value-independent.
+"""
+
 from typing import Dict, List
 
+import sacrebleu as sb
+import textstat
+from deepeval.metrics import GEval
+from deepeval.test_case import LLMTestCaseParams
 from rouge_score import rouge_scorer
+from sacrebleu.metrics import BLEUScore
 
 
-class Metric(ABC):
-    """Abstract base class for metrics."""
-
-    @abstractmethod
-    def measure(self, references: List[str], hypotheses: List[str]) -> List[Dict[str, Dict[str, float]]]:
-        """Measure the metric.
-
-        Args:
-            references (List[str]): A list of reference strings.
-            hypotheses (List[str]): A list of hypothesis strings.
-
-        Returns:
-            List[Dict[str, Dict[str, float]]]: A list of dictionaries containing the result of the measurement.
-        """
-        pass
+def Rouge(*args: List, **kwargs: Dict) -> rouge_scorer.RougeScorer:
+    """Wrapper for rouge_scorer's RougeScorer class."""
+    return rouge_scorer.RougeScorer(*args, **kwargs)
 
 
-class RougeMetric(Metric):
-    """ROUGE metric calculation class."""
+Rouge.__doc__ = rouge_scorer.RougeScorer.__doc__
 
-    def __init__(self, name: str = "rouge", description: str = "ROUGE metric calculation") -> None:
-        """Initialize the ROUGE metric with a name and description.
 
-        Args:
-            name (str): The name of the metric.
-            description (str): The description of the metric.
-        """
-        self.name = name
-        self.description = description
+def sentence_bleu_sacre(*args: List, **kwargs: Dict) -> BLEUScore:
+    """Wrapper for sacrebleu's sentence_bleu function."""
+    return sb.sentence_bleu(*args, **kwargs)
 
-    def measure(self, references: List[str], hypotheses: List[str]) -> List[Dict[str, Dict[str, float]]]:
-        """Measure the ROUGE metric for the given references and hypotheses.
 
-        Args:
-            references (List[str]): A list of reference strings.
-            hypotheses (List[str]): A list of hypothesis strings.
+sentence_bleu_sacre.__doc__ = sb.sentence_bleu.__doc__
 
-        Returns:
-            List[Dict[str, Dict[str, float]]]: A list of dictionaries containing ROUGE scores.
-        """
-        scorer = rouge_scorer.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=True)
-        scores = [scorer.score(ref, hyp) for ref, hyp in zip(references, hypotheses)]
-        return [{key: value.fmeasure for key, value in score.items()} for score in scores]
+
+def word_count(*args: List, **kwargs: Dict) -> int:
+    """Wrapper for textstat's lexicon_count function."""
+    return textstat.lexicon_count(*args, **kwargs)
+
+
+word_count.__doc__ = textstat.lexicon_count.__doc__
+
+
+correctness_metric = GEval(
+    name="Correctness",
+    criteria="Determine whether the actual output is factually correct based on the expected output.",
+    # NOTE: you can only provide either criteria or evaluation_steps, and not both
+    evaluation_steps=[
+        "Check whether the facts in 'actual output' contradicts any facts in 'expected output'",
+        "You should also heavily penalize omission of detail",
+        "Vague language, or contradicting OPINIONS, are OK",
+    ],
+    evaluation_params=[LLMTestCaseParams.INPUT, LLMTestCaseParams.ACTUAL_OUTPUT],
+)
