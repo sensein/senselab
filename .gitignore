@@ -173,3 +173,8 @@ docs/
 # Speechbrain models
 pretrained_models
 src/tests/audio/tasks/pretrained_models/
+
+# testmon
+.testmondata
+.testmondata-shm
+.testmondata-wal
