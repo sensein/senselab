@@ -57,6 +57,9 @@ umap-learn = "~=0.5"
 scikit-learn = "~=1.5"
 nltk = "~=3.8"
 rouge-score = "~=0.1"
+tiktoken = "^0.7.0"
+sacrebleu = "^2.4.3"
+pytest-testmon = "^2.1.1"
 
 [tool.poetry.group.dev]
 optional = true
