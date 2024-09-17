@@ -4,7 +4,7 @@ from typing import Dict, List
 
 from senselab.utils.data_structures.script_line import ScriptLine
 
-from .metrics import RougeMetric
+from .metrics import Rouge
 
 
 def evaluate_conversation(script_lines: List[ScriptLine], metrics: List[str]) -> Dict:
@@ -25,8 +25,8 @@ def evaluate_conversation(script_lines: List[ScriptLine], metrics: List[str]) ->
     if not references or not hypotheses:
         return {"metrics": []}
 
-    metric_instance = RougeMetric()
-    scores = metric_instance.measure(references, hypotheses)
+    metric_instance = Rouge()
+    scores = metric_instance(references, hypotheses)
 
     metrics_results = [{metric: score.get(metric, 0.0) for metric in metrics} for score in scores]
 

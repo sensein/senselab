@@ -4,22 +4,27 @@ import json
 from pathlib import Path
 from typing import Dict, List
 
+import tiktoken
 
-class MessagesManager:
+from senselab.utils.data_structures.script_line import ScriptLine
+
+
+class Transcript:
     """Manages message data for interactions with a LLM.
 
     Provides methods to load transcripts, convert JSON data to message objects,
     and generate data from a human conversation to query potential AI responses.
 
     Attributes:
-        messages (List[Dict[str, str]]): A list of message objects for the OpenAI API.
+        scriptlines (List[Scriptline]): A list of Scriptline objects.
 
     Methods:
         __init__(transcript_path: Path) -> None: Initializes the manager with a transcript file path.
-        print_human_readable(messages: List[Dict[str, str]]) -> None: Prints messages in a readable format.
-        extract_response_opportunities() -> List[List[Dict[str, str]]]: Extracts sublists ending with user input.
+        print_human_readable() -> None: Prints messages in a readable format.
+        extract_response_opportunities() -> List[List[Scriptline]]: Extracts sublists ending with user input.
+        get_num_tokens()-> int: total number of tokens in transcript
         _load_transcript(json_path: Path) -> Dict: Loads a JSON transcript from a file.
-        convert_json_to_messages(json_obj: Dict) -> List[Dict[str, str]]: Converts transcript format to LLM format.
+        convert_json_to_scriptlines(json_obj: Dict) -> List[ScriptLine]: Converts transcript format to LLM format.
     """
 
     def __init__(self, transcript_path: Path) -> None:
@@ -28,21 +33,30 @@ class MessagesManager:
         Args:
             transcript_path (Path): The path to the JSON transcript file.
         """
+        if not transcript_path.exists():
+            raise ValueError("Transcript path not found!")
         json_obj = self._load_transcript(transcript_path)
-        self.messages = self.convert_json_to_messages(json_obj)
+        self.scriptlines = self.convert_json_to_scriptlines(json_obj)
 
-    @staticmethod
-    def print_human_readable(messages: List[Dict[str, str]]) -> None:
-        """Print a list of messages in a human-readable format.
+    def print_human_readable(self) -> None:
+        """Prints the stored scriptlines in a human-readable format."""
+        for message in self.scriptlines:
+            print(f"{message.speaker}:\t\t{message.text}\n")
 
-        Args:
-            messages (List[Dict[str, str]]): List of messages where each message is a dictionary
-                                            with 'role' and 'content' keys.
+    def get_num_tokens(self) -> int:
+        """Returns the total number of OpenAI tokens in the conversation.
+
+        Returns:
+            int: number of tokens
         """
-        for message in messages:
-            print(f'{message["role"]}:\t\t{message["content"]}\n')
+        c = 0
+        encoding = tiktoken.encoding_for_model("gpt-4o")
+        for message in self.scriptlines:
+            if message.text:
+                c += len(encoding.encode(message.text))
+        return c
 
-    def extract_response_opportunities(self) -> List[List[Dict[str, str]]]:
+    def extract_response_opportunities(self) -> List[List[ScriptLine]]:
         """Extract consecutive sublists from the messages list, ending after every 'user' response.
 
         This is used to compare AI responses to a human's response
@@ -50,15 +64,15 @@ class MessagesManager:
         natural conversation before making its own response.
 
         Returns:
-            List[List[Dict[str, str]]]: A list of consecutive sublists, each starting from the
-                                         beginning of the messages list and ending with a
-                                         message where the role is "user".
+            List[ScriptLine]: A list of sublists, each starting from the
+                                         beginning of the messages list and ending with the next
+                                         sequential message where the role is "user".
         """
         sublists = []
 
-        for i, message in enumerate(self.messages):
-            if message["role"] == "user" and i > 0:
-                sublist = self.messages[0 : i + 1]
+        for i, message in enumerate(self.scriptlines):
+            if message.speaker == "user" and i > 0:
+                sublist = self.scriptlines[0 : i + 1]
                 sublists.append(sublist)
 
         return sublists
@@ -77,11 +91,13 @@ class MessagesManager:
             Dict: The JSON object loaded from the file.
         """
         with open(json_path, "r", encoding="utf-8") as file:
-            return json.load(file)
+            data = json.load(file)
+
+        return data
 
     @staticmethod
-    def convert_json_to_messages(json_obj: Dict) -> List[Dict[str, str]]:
-        """Converts transcript segments to list of message objects, excluding system messages.
+    def convert_json_to_scriptlines(json_obj: Dict) -> List[ScriptLine]:
+        """Converts transcript segments to list of ScriptLine objects.
 
         The input JSON object should have the following structure:
         {
@@ -106,19 +122,6 @@ class MessagesManager:
             ]
         }
 
-        The output will be a list of message objects,
-        suitable for OpenAI API, with the following structure:
-        [
-            {
-                "role": "user",
-                "content": "<user-input-string>"
-            },
-            {
-                "role": "assistant",
-                "content": "<assistant-response-string>"
-            },
-            ...
-        ]
 
         The conversion will map the "teacher" speaker role to "assistant" and the "kid" speaker
         role to "user".
@@ -127,7 +130,7 @@ class MessagesManager:
             json_obj (Dict): The input JSON object containing conversation segments.
 
         Returns:
-            List[Dict[str, str]]: A list of message objects in the format required by the OpenAI API.
+            List[ScriptLine]: See src/senselab/utils/data_structures/script_line.py
 
         Raises:
             ValueError: If the input JSON structure is invalid or contains an unknown speaker role.
@@ -136,7 +139,7 @@ class MessagesManager:
         if not (isinstance(json_obj, dict) and isinstance(json_obj.get("segments"), list)):
             raise ValueError("Invalid JSON structure: must be a dictionary with a 'segments' list")
 
-        messages = []
+        scriptlines = []
         current_role: str = ""
         current_content: List[str] = []
 
@@ -157,17 +160,18 @@ class MessagesManager:
                 elif speaker == "kid":
                     role = "user"
                 else:
-                    raise ValueError(f"Unknown speaker role: {speaker}")
+                    continue
 
                 if role != current_role:
                     if current_content:
-                        messages.append({"role": current_role, "content": " ".join(current_content)})
+                        scriptlines.append(ScriptLine(text=" ".join(current_content), speaker=current_role))
+
                     current_role = role
                     current_content = [word]
                 else:
                     current_content.append(word)
 
         if current_content:
-            messages.append({"role": current_role, "content": " ".join(current_content)})
+            scriptlines.append(ScriptLine(text=" ".join(current_content), speaker=current_role))
 
-        return messages
+        return scriptlines
