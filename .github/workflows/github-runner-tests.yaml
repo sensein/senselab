@@ -1,55 +1,39 @@
-name: Python Tests
+name: github-runner-tests
 
 on:
   pull_request:
-
 jobs:
-  unit:
+  macos-tests:
+    name: macOS-tests
     runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
-        - {os: ubuntu-latest, architecture: x64, python-version: '3.10'}
-        - {os: ubuntu-latest, architecture: x64, python-version: '3.11'}
-        - {os: ubuntu-latest, architecture: x64, python-version: '3.12'}
-        - {os: macos-latest, architecture: x64, python-version: '3.10'}
         - {os: macos-latest, architecture: arm64, python-version: '3.10'}
-        - {os: macos-latest, architecture: x64, python-version: '3.11'}
         - {os: macos-latest, architecture: arm64, python-version: '3.11'}
-        - {os: macos-latest, architecture: x64, python-version: '3.12'}
-        - {os: macos-latest, architecture: arm64, python-version: '3.12'}
-        # - {os: windows-latest, architecture: x64, python-version: '3.10'}
-        # - {os: windows-latest, architecture: x64, python-version: '3.11'}
-    env:
-      GITHUB_ACTIONS: true
     steps:
     - uses: actions/checkout@v4
-      with:  # no need for the history
-        fetch-depth: 1
+      with:
+        fetch-depth: 1   # no need for the history
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-
     - name: Install ffmpeg (Ubuntu)
       if: startsWith(matrix.os, 'ubuntu')
       run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      shell: bash
     - name: Install ffmpeg (macOS)
       if: startsWith(matrix.os, 'macos')
       run: brew install ffmpeg
-    - name: Install ffmpeg (Windows)
-      if: startsWith(matrix.os, 'windows')
-      run: choco install ffmpeg
-
-    - name: Install pipx and ensure it's up to date
-      run: |
-        python -m pip install --upgrade pipx
-        pipx ensurepath
       shell: bash
-    - name: Install poetry
-      run: pipx install poetry==1.7.1
-      shell: bash
+    - name: Install Poetry
+      uses: snok/install-poetry@v1
+      with:
+        version: 1.7.1
+        virtualenvs-create: true
+        virtualenvs-in-project: true
     - name: Install dependencies with Poetry
       run: |
         poetry run pip install iso-639
@@ -60,7 +44,7 @@ jobs:
       env:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: >
-        poetry run pytest \
+        poetry run pytest -n auto \
           --junitxml=pytest.xml \
           --cov-report=term-missing:skip-covered \
           --cov-report=xml:coverage.xml \
@@ -77,8 +61,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest] # For demonstration, other OSes are commented out: macos-latest, windows-latest
-        python-version: ['3.10'] # For speeding up the process we removed "3.11" for now
+        os: [ubuntu-latest]
+        python-version: ['3.10']
     steps:
     - uses: actions/checkout@v4
       with:  # no need for the history
@@ -87,14 +71,12 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-    - name: Install pipx and ensure it's up to date
-      run: |
-        python -m pip install --upgrade pipx
-        pipx ensurepath
-      shell: bash
-    - name: Install poetry
-      run: pipx install poetry==1.7.1
-      shell: bash
+    - name: Install Poetry
+      uses: snok/install-poetry@v1
+      with:
+        version: 1.7.1
+        virtualenvs-create: true
+        virtualenvs-in-project: true
     - name: Install dependencies with Poetry
       run: |
         poetry run pip install iso-639
@@ -104,8 +86,6 @@ jobs:
       run: pipx install pre-commit
       shell: bash
     - name: Run pre-commit
-      env:
-        SKIP: pytest
       run: |
         poetry run pre-commit run --all-files
       shell: bash

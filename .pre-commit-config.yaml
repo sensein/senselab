@@ -73,13 +73,3 @@ repos:
     entry: YAML files must have .yaml extension.
     language: fail
     files: \.yml$
-
-- repo: local
-  hooks:
-  - id: pytest
-    name: pytest
-    entry: poetry run pytest --testmon
-    language: system
-    types: [python]
-    pass_filenames: false
-    always_run: true
