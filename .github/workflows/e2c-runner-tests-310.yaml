@@ -97,13 +97,15 @@ jobs:
         poetry run nvidia-smi -L
         poetry run nvidia-smi -q -d Memory
       shell: bash
+    - name: Prepare cache folder for pytest
+      run: mkdir -p /opt/dlami/nvme/pytest/temp
+      shell: bash
     - name: Run unit tests
       id: run-tests
       env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: >
-        mkdir -p /opt/dlami/nvme/pytest
-        mkdir -p /opt/dlami/nvme/pytest/temp
         poetry run pytest -n auto \
           --rootdir=/opt/dlami/nvme/pytest \
           --basetemp=/opt/dlami/nvme/pytest/temp \
