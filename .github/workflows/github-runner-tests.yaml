@@ -2,8 +2,11 @@ name: github-runner-tests
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
 jobs:
   macos-tests:
+    if: github.event.pull_request.draft == false && contains(github.event.pull_request.labels.*.name, 'to-test')
     name: macOS-tests
     runs-on: ${{ matrix.os }}
     strategy:
@@ -58,6 +61,7 @@ jobs:
         token: ${{ secrets.CODECOV_TOKEN }}
 
   pre-commit:
+    if: github.event.pull_request.draft == false && contains(github.event.pull_request.labels.*.name, 'to-test')
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
