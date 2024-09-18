@@ -55,6 +55,13 @@ jobs:
       run: |
         df -h
       shell: bash
+    - name: Free up space
+      run: |
+        sudo apt-get autoremove -y
+        sudo apt-get clean
+        sudo rm -rf /var/log/*.gz /var/log/*.[0-9] /var/log/*-????????
+        sudo docker system prune --all --volumes -f
+        df -h
     - uses: actions/checkout@v4
       with:
         fetch-depth: 1   # no need for the history
