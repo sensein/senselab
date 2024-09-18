@@ -1,20 +1,20 @@
 name: e2c-runner-tests-310
 
 on:
-  workflow_run:
-    workflows: [github-runner-tests]
-    types:
-    - completed
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
 
 jobs:
   start-runner:
-    if: ${{ github.event.workflow_run.conclusion == 'success' }} # Trigger only if github-runner-tests succeed
+    if: github.event.pull_request.draft == false && contains(github.event.pull_request.labels.*.name, 'to-test')
     name: start-runner
     runs-on: ubuntu-latest
     outputs:
       label: ${{ steps.start-ec2-runner.outputs.label }}
       ec2-instance-id: ${{ steps.start-ec2-runner.outputs.ec2-instance-id }}
     steps:
+    - name: Set job ran output
+      run: echo "START_RUNNER_RAN=true" >> $GITHUB_ENV
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v1
       with:
@@ -42,6 +42,8 @@ jobs:
     env:
       POETRY_CACHE_DIR: ${{ vars.POETRY_CACHE_DIR }}
     steps:
+    - name: Set job ran output
+      run: echo "UBUNTU_TESTS_RAN=true" >> $GITHUB_ENV
     - name: Check available space
       run: |
         df -h
@@ -117,7 +119,7 @@ jobs:
     - start-runner   # waits for the EC2 instance to be created
     - ubuntu-tests-310   # waits for the actual job to finish
     runs-on: ubuntu-latest
-    if: ${{ always() }} # required to stop the runner even if an error occurred in previous jobs
+    if: ${{ (env.START_RUNNER_RAN == 'true' && env.UBUNTU_TESTS_RAN == 'true') || failure() }} # required to stop the runner even if an error occurred in previous jobs
     steps:
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v1
