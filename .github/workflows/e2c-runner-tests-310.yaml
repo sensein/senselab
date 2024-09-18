@@ -45,6 +45,9 @@ jobs:
     outputs:
       job-ran: ${{ steps.set-ran.outputs.ran }}
     steps:
+    - name: Echo Poetry cache dir
+      run: echo $POETRY_CACHE_DIR
+      shell: bash
     - id: set-ran
       run: echo "::set-output name=ran::true"
     - name: Check available space
@@ -124,6 +127,10 @@ jobs:
     runs-on: ubuntu-latest
     if: ${{ needs.start-runner.outputs.job-ran == 'true' && needs.ubuntu-tests-310.outputs.job-ran == 'true' || failure() }} # required to stop the runner even if an error occurred in previous jobs
     steps:
+    - name: Check available space
+      run: |
+        df -h
+      shell: bash
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v1
       with:
