@@ -32,6 +32,7 @@ jobs:
         ec2-instance-type: ${{ vars.AWS_INSTANCE_TYPE }}
         subnet-id: ${{ vars.AWS_SUBNET }}
         security-group-id: ${{ vars.AWS_SECURITY_GROUP }}
+        runner-home-dir: ${{ vars.POETRY_CACHE_DIR }}
 
   ubuntu-tests-310:
     name: ubuntu-tests-310
