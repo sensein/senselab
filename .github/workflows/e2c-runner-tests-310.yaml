@@ -103,6 +103,7 @@ jobs:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: >
         poetry run pytest -n auto \
+          --basetemp=$POETRY_CACHE_DIR \
           --junitxml=pytest.xml \
           --cov-report=term-missing:skip-covered \
           --cov-report=xml:coverage.xml \
