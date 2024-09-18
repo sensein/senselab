@@ -33,7 +33,6 @@ jobs:
         subnet-id: ${{ vars.AWS_SUBNET }}
         security-group-id: ${{ vars.AWS_SECURITY_GROUP }}
 
-
   ubuntu-tests-310:
     name: ubuntu-tests-310
     needs: start-runner
