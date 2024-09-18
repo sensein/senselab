@@ -1,7 +1,5 @@
 """Tests for forced alignment functions."""
 
-import os
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -102,106 +100,111 @@ def test_interpolate_nans() -> None:
     assert interpolated_series.isnull().sum() == 0
 
 
-if os.getenv("GITHUB_ACTIONS") != "true":
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
+def test_get_prediction_matrix(dummy_model: tuple) -> None:
+    """Test generation of prediction matrix."""
+    model, _ = dummy_model
+    waveform_segment = torch.randn(1, 16000)
+    prediction_matrix = _get_prediction_matrix(model, waveform_segment, None, "huggingface", DeviceType.CPU)
+    assert prediction_matrix.shape[0] > 0
 
-    def test_get_prediction_matrix(dummy_model: tuple) -> None:
-        """Test generation of prediction matrix."""
-        model, _ = dummy_model
-        waveform_segment = torch.randn(1, 16000)
-        prediction_matrix = _get_prediction_matrix(model, waveform_segment, None, "huggingface", DeviceType.CPU)
-        assert prediction_matrix.shape[0] > 0
 
-    def test_align_segments(mono_audio_sample: Audio, dummy_model: tuple) -> None:
-        """Test alignment of segments."""
-        model, processor = dummy_model
-        model_dictionary = processor.tokenizer.get_vocab()
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
+def test_align_segments(mono_audio_sample: Audio, dummy_model: tuple) -> None:
+    """Test alignment of segments."""
+    model, processor = dummy_model
+    model_dictionary = processor.tokenizer.get_vocab()
 
-        # Create a sample transcript
-        transcript = [SingleSegment(start=0.0, end=1.0, text="test")]
+    # Create a sample transcript
+    transcript = [SingleSegment(start=0.0, end=1.0, text="test")]
 
-        # Preprocess the transcript segments
-        preprocessed_transcript = _preprocess_segments(
-            transcript,
-            model_dictionary,
-            model_lang=Language(language_code="en"),
-            print_progress=False,
-            combined_progress=False,
+    # Preprocess the transcript segments
+    preprocessed_transcript = _preprocess_segments(
+        transcript,
+        model_dictionary,
+        model_lang=Language(language_code="en"),
+        print_progress=False,
+        combined_progress=False,
+    )
+
+    # Ensure the model dictionary has the necessary keys
+    for char in "test":
+        if char not in model_dictionary:
+            model_dictionary[char] = len(model_dictionary)
+
+    aligned_segments, word_segments = _align_segments(
+        transcript=preprocessed_transcript,
+        model=model,
+        model_dictionary=model_dictionary,
+        model_lang=Language(language_code="en"),
+        model_type="huggingface",
+        audio=mono_audio_sample,
+        device=DeviceType.CPU,
+        max_duration=10.0,
+        return_char_alignments=False,
+        interpolate_method="nearest",
+    )
+    assert isinstance(aligned_segments, list)
+    assert isinstance(word_segments, list)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
+def test_align_transcription_faked(resampled_mono_audio_sample: Audio, dummy_model: tuple) -> None:
+    """Test alignment of transcription."""
+    model, processor = dummy_model
+    transcript = [
+        SingleSegment(
+            start=0.0,
+            end=1.0,
+            text="test",
+            clean_char=["t", "e", "s", "t"],
+            clean_cdx=[0, 1, 2, 3],
+            clean_wdx=[0],
+            sentence_spans=None,
         )
+    ]
+    aligned_result = _align_transcription(
+        transcript=transcript,
+        model=model,
+        align_model_metadata={
+            "dictionary": processor.tokenizer.get_vocab(),
+            "language": Language(language_code="en"),
+            "type": "huggingface",
+        },
+        audio=resampled_mono_audio_sample,
+        device=DeviceType.CPU,
+    )
+    assert "segments" in aligned_result
+    assert "word_segments" in aligned_result
 
-        # Ensure the model dictionary has the necessary keys
-        for char in "test":
-            if char not in model_dictionary:
-                model_dictionary[char] = len(model_dictionary)
 
-        aligned_segments, word_segments = _align_segments(
-            transcript=preprocessed_transcript,
-            model=model,
-            model_dictionary=model_dictionary,
-            model_lang=Language(language_code="en"),
-            model_type="huggingface",
-            audio=mono_audio_sample,
-            device=DeviceType.CPU,
-            max_duration=10.0,
-            return_char_alignments=False,
-            interpolate_method="nearest",
-        )
-        assert isinstance(aligned_segments, list)
-        assert isinstance(word_segments, list)
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
+def test_align_transcriptions_fixture(resampled_mono_audio_sample: Audio, script_line_fixture: ScriptLine) -> None:
+    """Test alignment of transcriptions."""
+    audios_and_transcriptions_and_language = [
+        (resampled_mono_audio_sample, script_line_fixture, Language(language_code="en")),
+        (resampled_mono_audio_sample, script_line_fixture, Language(language_code="fr")),
+    ]
+    aligned_transcriptions = align_transcriptions(audios_and_transcriptions_and_language)
+    assert len(aligned_transcriptions) == 2
+    assert len(aligned_transcriptions[0]) == 1
+    assert aligned_transcriptions[0][0].text == "test"
 
-    def test_align_transcription_faked(resampled_mono_audio_sample: Audio, dummy_model: tuple) -> None:
-        """Test alignment of transcription."""
-        model, processor = dummy_model
-        transcript = [
-            SingleSegment(
-                start=0.0,
-                end=1.0,
-                text="test",
-                clean_char=["t", "e", "s", "t"],
-                clean_cdx=[0, 1, 2, 3],
-                clean_wdx=[0],
-                sentence_spans=None,
-            )
-        ]
-        aligned_result = _align_transcription(
-            transcript=transcript,
-            model=model,
-            align_model_metadata={
-                "dictionary": processor.tokenizer.get_vocab(),
-                "language": Language(language_code="en"),
-                "type": "huggingface",
-            },
-            audio=resampled_mono_audio_sample,
-            device=DeviceType.CPU,
-        )
-        assert "segments" in aligned_result
-        assert "word_segments" in aligned_result
 
-    def test_align_transcriptions_fixture(resampled_mono_audio_sample: Audio, script_line_fixture: ScriptLine) -> None:
-        """Test alignment of transcriptions."""
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
+def test_align_transcriptions_multilingual(resampled_mono_audio_sample: Audio, script_line_fixture: ScriptLine) -> None:
+    """Test alignment of transcriptions."""
+    languages = ["de", "es"]
+    expected_text = "test"  # Replace with the appropriate expected text for your fixtures
+
+    for lang in languages:
         audios_and_transcriptions_and_language = [
-            (resampled_mono_audio_sample, script_line_fixture, Language(language_code="en")),
-            (resampled_mono_audio_sample, script_line_fixture, Language(language_code="fr")),
+            (resampled_mono_audio_sample, script_line_fixture, Language(language_code=lang))
         ]
         aligned_transcriptions = align_transcriptions(audios_and_transcriptions_and_language)
-        assert len(aligned_transcriptions) == 2
-        assert len(aligned_transcriptions[0]) == 1
-        assert aligned_transcriptions[0][0].text == "test"
-
-    def test_align_transcriptions_multilingual(
-        resampled_mono_audio_sample: Audio, script_line_fixture: ScriptLine
-    ) -> None:
-        """Test alignment of transcriptions."""
-        languages = ["de", "es"]
-        expected_text = "test"  # Replace with the appropriate expected text for your fixtures
-
-        for lang in languages:
-            audios_and_transcriptions_and_language = [
-                (resampled_mono_audio_sample, script_line_fixture, Language(language_code=lang))
-            ]
-            aligned_transcriptions = align_transcriptions(audios_and_transcriptions_and_language)
-            assert len(aligned_transcriptions) == 1, f"Failed for language: {lang}"
-            assert len(aligned_transcriptions[0]) == 1, f"Failed for language: {lang}"
-            assert aligned_transcriptions[0][0].text == expected_text, f"Failed for language: {lang}"
+        assert len(aligned_transcriptions) == 1, f"Failed for language: {lang}"
+        assert len(aligned_transcriptions[0]) == 1, f"Failed for language: {lang}"
+        assert aligned_transcriptions[0][0].text == expected_text, f"Failed for language: {lang}"
 
 
 if __name__ == "__main__":
