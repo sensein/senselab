@@ -102,6 +102,8 @@ jobs:
       env:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: >
+        mkdir -p /opt/dlami/nvme/pytest
+        mkdir -p /opt/dlami/nvme/pytest/temp
         poetry run pytest -n auto \
           --rootdir=/opt/dlami/nvme/pytest \
           --basetemp=/opt/dlami/nvme/pytest/temp \
