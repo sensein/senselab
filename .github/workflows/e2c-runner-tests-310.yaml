@@ -12,9 +12,10 @@ jobs:
     outputs:
       label: ${{ steps.start-ec2-runner.outputs.label }}
       ec2-instance-id: ${{ steps.start-ec2-runner.outputs.ec2-instance-id }}
+      job-ran: ${{ steps.set-ran.outputs.ran }}
     steps:
-    - name: Set job ran output
-      run: echo "START_RUNNER_RAN=true" >> $GITHUB_ENV
+    - id: set-ran
+      run: echo "::set-output name=ran::true"
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v1
       with:
@@ -41,9 +42,11 @@ jobs:
         python-version: ['3.10']
     env:
       POETRY_CACHE_DIR: ${{ vars.POETRY_CACHE_DIR }}
+    outputs:
+      job-ran: ${{ steps.set-ran.outputs.ran }}
     steps:
-    - name: Set job ran output
-      run: echo "UBUNTU_TESTS_RAN=true" >> $GITHUB_ENV
+    - id: set-ran
+      run: echo "::set-output name=ran::true"
     - name: Check available space
       run: |
         df -h
@@ -119,7 +122,7 @@ jobs:
     - start-runner   # waits for the EC2 instance to be created
     - ubuntu-tests-310   # waits for the actual job to finish
     runs-on: ubuntu-latest
-    if: ${{ (env.START_RUNNER_RAN == 'true' && env.UBUNTU_TESTS_RAN == 'true') || failure() }} # required to stop the runner even if an error occurred in previous jobs
+    if: ${{ needs.start-runner.outputs.job-ran == 'true' && needs.ubuntu-tests-310.outputs.job-ran == 'true' || failure() }} # required to stop the runner even if an error occurred in previous jobs
     steps:
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v1
