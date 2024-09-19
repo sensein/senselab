@@ -84,10 +84,14 @@ jobs:
     - name: Move to Poetry cache dir
       run: |
         pwd
+        ls
         cd $POETRY_CACHE_DIR
         pwd
+        ls
     - name: Install dependencies with Poetry
       run: |
+        pwd
+        ls
         poetry env use ${{ matrix.python-version }}
         poetry run pip install iso-639
         poetry install --with dev
