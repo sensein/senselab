@@ -55,13 +55,6 @@ jobs:
       run: |
         df -h
       shell: bash
-    - name: Free up space
-      run: |
-        sudo apt-get autoremove -y
-        sudo apt-get clean
-        sudo rm -rf /var/log/*.gz /var/log/*.[0-9] /var/log/*-????????
-        sudo docker system prune --all --volumes -f
-        df -h
     - uses: actions/checkout@v4
       with:
         fetch-depth: 1   # no need for the history
@@ -88,6 +81,11 @@ jobs:
         version: 1.7.1
         virtualenvs-create: true
         virtualenvs-in-project: true
+    - name: Move to Poetry cache dir
+      run: |
+        pwd
+        cd $POETRY_CACHE_DIR
+        pwd
     - name: Install dependencies with Poetry
       run: |
         poetry env use ${{ matrix.python-version }}
