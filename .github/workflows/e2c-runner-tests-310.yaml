@@ -1,11 +1,8 @@
 name: e2c-runner-tests-310
 
 on:
-  push:
-    branches:
-    - main
-#  pull_request:
-#    types: [opened, synchronize, reopened, labeled]
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
 
 jobs:
   start-runner:
@@ -128,7 +125,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: >
-        cd senselab && poetry run pytest \
+        cd senselab && poetry run pytest -n auto \
           --rootdir=$POETRY_CACHE_DIR/pytest \
           --basetemp=$POETRY_CACHE_DIR/pytest/temp \
           --junitxml=pytest.xml \
