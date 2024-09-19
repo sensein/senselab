@@ -96,7 +96,7 @@ jobs:
       run: |
         pwd
         ls
-        cd $POETRY_CACHE_DIR
+        cd senselab
         pwd
         ls
         poetry env use ${{ matrix.python-version }}
