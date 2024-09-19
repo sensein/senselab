@@ -1,8 +1,11 @@
 name: e2c-runner-tests-310
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, labeled]
+  push:
+    branches:
+    - main
+#  pull_request:
+#    types: [opened, synchronize, reopened, labeled]
 
 jobs:
   start-runner:

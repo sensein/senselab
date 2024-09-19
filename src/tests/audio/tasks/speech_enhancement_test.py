@@ -107,7 +107,6 @@ def test_enhance_audios_with_extreme_amplitude(audio_with_extreme_amplitude: Aud
     assert enhanced_audios[0].waveform.shape == audio_with_extreme_amplitude.waveform.shape
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_model_caching(resampled_mono_audio_sample: Audio) -> None:
     """Test model caching by enhancing audios with the same model multiple times."""
     SpeechBrainEnhancer.enhance_audios_with_speechbrain(audios=[resampled_mono_audio_sample])
