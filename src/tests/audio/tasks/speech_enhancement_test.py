@@ -110,6 +110,6 @@ def test_enhance_audios_with_extreme_amplitude(audio_with_extreme_amplitude: Aud
 def test_model_caching(resampled_mono_audio_sample: Audio) -> None:
     """Test model caching by enhancing audios with the same model multiple times."""
     SpeechBrainEnhancer.enhance_audios_with_speechbrain(audios=[resampled_mono_audio_sample])
-    assert len(SpeechBrainEnhancer._models) == 1
+    assert len(list(SpeechBrainEnhancer._models.keys())) == 1
     SpeechBrainEnhancer.enhance_audios_with_speechbrain(audios=[resampled_mono_audio_sample])
-    assert len(SpeechBrainEnhancer._models) == 1
+    assert len(list(SpeechBrainEnhancer._models.keys())) == 1
