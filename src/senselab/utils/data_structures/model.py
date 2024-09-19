@@ -160,8 +160,11 @@ def check_hf_repo_exists(repo_id: str, revision: str = "main", repo_type: str = 
 def check_github_repo_exists(repo_id: str, branch: str = "main") -> bool:
     """Private function to check if a GitHub repository exists with caching and authentication."""
     url = f"https://api.github.com/repos/{repo_id}/branches/{branch}"
-    token = os.getenv("GITHUB_TOKEN")
-    headers = {"Authorization": f"token {token}"}
+    token = os.getenv("GITHUB_TOKEN") or None
+
+    headers = {}
+    if token:
+        headers = {"Authorization": f"token {token}"}
 
     response = requests.get(url, headers=headers, timeout=10)
 

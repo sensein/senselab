@@ -1,19 +1,14 @@
 """Tests the transcribe_timestamped module."""
 
-import pytest
-import torch
-
 from senselab.audio.data_structures.audio import Audio
 from senselab.audio.workflows.transcribe_timestamped import transcribe_timestamped
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_transcribe_timestamped_mono(mono_audio_sample: Audio) -> None:
     """Runs the transcribe_timestamped function."""
     assert transcribe_timestamped(audios=[mono_audio_sample])
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_transcribe_timestamped_stereo(stereo_audio_sample: Audio) -> None:
     """Test transcribe_timestamped with a stereo audio sample."""
     result = transcribe_timestamped(audios=[stereo_audio_sample])
@@ -25,7 +20,6 @@ def test_transcribe_timestamped_stereo(stereo_audio_sample: Audio) -> None:
     ), "Each list in the result should contain ScriptLine objects."
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_transcribe_timestamped_resampled_mono(
     resampled_mono_audio_sample: Audio,
 ) -> None:
@@ -39,7 +33,6 @@ def test_transcribe_timestamped_resampled_mono(
     ), "Each list in the result should contain ScriptLine objects."
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_transcribe_timestamped_resampled_stereo(
     resampled_stereo_audio_sample: Audio,
 ) -> None:
@@ -53,7 +46,6 @@ def test_transcribe_timestamped_resampled_stereo(
     ), "Each list in the result should contain ScriptLine objects."
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_transcribe_timestamped_noise(audio_with_metadata: Audio) -> None:
     """Test transcribe_timestamped with a noisy audio sample."""
     result = transcribe_timestamped(audios=[audio_with_metadata])
@@ -65,7 +57,6 @@ def test_transcribe_timestamped_noise(audio_with_metadata: Audio) -> None:
     ), "Each list in the result should contain ScriptLine objects."
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_transcribe_timestamped_different_bit_depths(
     audio_with_different_bit_depths: list[Audio],
 ) -> None:
