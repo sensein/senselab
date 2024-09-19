@@ -125,7 +125,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: >
-        cd senselab && poetry run pytest -n auto \
+        cd senselab && poetry run pytest \
           --rootdir=$POETRY_CACHE_DIR/pytest \
           --basetemp=$POETRY_CACHE_DIR/pytest/temp \
           --junitxml=pytest.xml \
