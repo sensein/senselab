@@ -111,6 +111,7 @@ jobs:
       shell: bash
     - name: Check NVIDIA SMI details
       run: |
+        cd senselab
         poetry run nvidia-smi
         poetry run nvidia-smi -L
         poetry run nvidia-smi -q -d Memory
