@@ -77,7 +77,7 @@ def transcribe_timestamped(
             model=wf.lzin.model,
             language=wf.lzin.language,
         )
-    ).split("batched_audios", batched_audios=wf.inputs.batched_audios)
+    ).split("batched_audios", batched_audios=batched_audios)
 
     align_transcriptions_task = pydra.mark.task(align_transcriptions)
     wf.add(
