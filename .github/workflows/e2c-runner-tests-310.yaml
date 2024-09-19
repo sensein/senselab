@@ -86,6 +86,12 @@ jobs:
         cd $POETRY_CACHE_DIR
         pwd
         ls
+
+    - name: Move senselab directory to current directory
+      run: |
+        mv /actions-runner/_work/senselab/senselab .
+        ls
+
     - name: Install dependencies with Poetry
       run: |
         pwd
