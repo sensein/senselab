@@ -38,6 +38,10 @@ jobs:
     name: ubuntu-tests-310
     needs: start-runner
     runs-on: ${{ needs.start-runner.outputs.label }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ vars.POETRY_CACHE_DIR }}
     strategy:
       matrix:
         python-version: ['3.10']
@@ -46,15 +50,8 @@ jobs:
     outputs:
       job-ran: ${{ steps.set-ran.outputs.ran }}
     steps:
-    - name: Echo Poetry cache dir
-      run: echo $POETRY_CACHE_DIR
-      shell: bash
     - id: set-ran
       run: echo "::set-output name=ran::true"
-    - name: Check available space
-      run: |
-        df -h
-      shell: bash
     - uses: actions/checkout@v4
       with:
         fetch-depth: 1   # no need for the history
@@ -62,18 +59,9 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-    - name: Echo python info
-      run: |
-        python --version
-        which python
-      shell: bash
     - name: Install ffmpeg (Ubuntu)
       if: startsWith(matrix.os, 'ubuntu')
       run: sudo apt-get update && sudo apt-get install -y ffmpeg
-      shell: bash
-    - name: Install ffmpeg (macOS)
-      if: startsWith(matrix.os, 'macos')
-      run: brew install ffmpeg
       shell: bash
     - name: Install Poetry
       uses: snok/install-poetry@v1
@@ -81,6 +69,16 @@ jobs:
         version: 1.7.1
         virtualenvs-create: true
         virtualenvs-in-project: true
+
+    - name: Check available space
+      run: |
+        df -h
+      shell: bash
+    - name: Echo python info
+      run: |
+        python --version
+        which python
+      shell: bash
     - name: Move to Poetry cache dir
       run: |
         pwd
@@ -90,6 +88,9 @@ jobs:
         ls
     - name: Install dependencies with Poetry
       run: |
+        pwd
+        ls
+        cd $POETRY_CACHE_DIR
         pwd
         ls
         poetry env use ${{ matrix.python-version }}
