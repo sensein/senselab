@@ -55,7 +55,7 @@ If you feel that the functionality you have added to senselab requires some extr
 
 ### An example of well documented function following Google-style
 
-````
+```python
 import statistics
 from typing import Dict, List
 
@@ -99,4 +99,4 @@ def calculate_statistics(data: List[float]) -> Dict[str, float]:
         'variance': variance,
         'std_dev': std_dev
     }
-````
+```

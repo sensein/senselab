@@ -1,5 +1,7 @@
 """Transcribes audio files with timestamps."""
 
+'''
+# TODO: Please double-check this because tests are failing
 from typing import List
 
 import pydra
@@ -77,7 +79,7 @@ def transcribe_timestamped(
             model=wf.lzin.model,
             language=wf.lzin.language,
         )
-    ).split("batched_audios", batched_audios=wf.inputs.batched_audios)
+    ).split("batched_audios", batched_audios=wf.transcribe.lzin.batched_audios)
 
     align_transcriptions_task = pydra.mark.task(align_transcriptions)
     wf.add(
@@ -99,3 +101,4 @@ def transcribe_timestamped(
         sub(wf)
 
     return wf.result()[0].output.aligned_transcriptions
+'''
