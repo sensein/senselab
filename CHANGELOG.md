@@ -1,3 +1,58 @@
+# 0.14.0 (Fri Sep 20 2024)
+
+#### 🚀 Enhancement
+
+- Add audio windowing iterator [#142](https://github.com/sensein/senselab/pull/142) ([@ibevers](https://github.com/ibevers) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@ibevers](https://github.com/ibevers)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.13.0 (Fri Sep 20 2024)
+
+#### 🚀 Enhancement
+
+- GitHub wf experiments [#163](https://github.com/sensein/senselab/pull/163) ([@fabiocat93](https://github.com/fabiocat93) [@wilke0818](https://github.com/wilke0818))
+
+#### Authors: 2
+
+- [@wilke0818](https://github.com/wilke0818)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.12.0 (Thu Sep 12 2024)
+
+#### 🚀 Enhancement
+
+- Implement diaraization error rate [#152](https://github.com/sensein/senselab/pull/152) ([@wilke0818](https://github.com/wilke0818))
+
+#### Authors: 1
+
+- [@wilke0818](https://github.com/wilke0818)
+
+---
+
+# 0.11.0 (Thu Aug 22 2024)
+
+#### 🚀 Enhancement
+
+- Enhancing text to speech [#129](https://github.com/sensein/senselab/pull/129) ([@fabiocat93](https://github.com/fabiocat93) [@wilke0818](https://github.com/wilke0818))
+
+#### 🐛 Bug Fix
+
+- Add style tts dependency [#144](https://github.com/sensein/senselab/pull/144) ([@wilke0818](https://github.com/wilke0818))
+
+#### Authors: 2
+
+- [@wilke0818](https://github.com/wilke0818)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.10.0 (Fri Aug 16 2024)
 
 #### 🚀 Enhancement
