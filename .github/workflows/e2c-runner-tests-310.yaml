@@ -1,8 +1,11 @@
 name: e2c-runner-tests-310
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, labeled]
+  push:
+    branches:
+    - main
+#  pull_request:
+#    types: [opened, synchronize, reopened, labeled]
 
 jobs:
   start-runner:
@@ -41,12 +44,12 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: ${{ vars.POETRY_CACHE_DIR }}
+        working-directory: ${{ vars.WORKING_DIR }}
     strategy:
       matrix:
         python-version: ['3.10']
     env:
-      POETRY_CACHE_DIR: ${{ vars.POETRY_CACHE_DIR }}
+      WORKING_DIR: ${{ vars.WORKING_DIR }}
     outputs:
       job-ran: ${{ steps.set-ran.outputs.ran }}
     steps:
@@ -69,7 +72,6 @@ jobs:
         version: 1.7.1
         virtualenvs-create: true
         virtualenvs-in-project: true
-
     - name: Check available space
       run: |
         df -h
@@ -79,26 +81,12 @@ jobs:
         python --version
         which python
       shell: bash
-    - name: Move to Poetry cache dir
-      run: |
-        pwd
-        ls
-        cd $POETRY_CACHE_DIR
-        pwd
-        ls
-
     - name: Move senselab directory to current directory
       run: |
         mv /actions-runner/_work/senselab/senselab .
-        ls
-
     - name: Install dependencies with Poetry
       run: |
-        pwd
-        ls
         cd senselab
-        pwd
-        ls
         poetry env use ${{ matrix.python-version }}
         poetry run pip install iso-639
         poetry install --with dev
@@ -117,7 +105,7 @@ jobs:
         poetry run nvidia-smi -q -d Memory
       shell: bash
     - name: Prepare cache folder for pytest
-      run: mkdir -p $POETRY_CACHE_DIR/pytest/temp
+      run: mkdir -p $WORKING_DIR/pytest/temp
       shell: bash
     - name: Run unit tests
       id: run-tests
@@ -126,24 +114,14 @@ jobs:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: >
         cd senselab && poetry run pytest \
-          --rootdir=$POETRY_CACHE_DIR/pytest \
-          --basetemp=$POETRY_CACHE_DIR/pytest/temp \
+          --rootdir=$WORKING_DIR/pytest \
+          --basetemp=$WORKING_DIR/pytest/temp \
           --junitxml=pytest.xml \
           --cov-report=term-missing:skip-covered \
           --cov-report=xml:coverage.xml \
           --cov=src src/tests \
           --log-level=DEBUG \
           --verbose
-      shell: bash
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v4
-      with:
-        token: ${{ secrets.CODECOV_TOKEN }}
-        working-directory: ${{ vars.POETRY_CACHE_DIR }}/senselab
-        directory: ${{ vars.POETRY_CACHE_DIR }}/senselab
-    - name: Delete poetry env with python {{ matrix.python-version }}
-      run: |
-        poetry env remove ${{ matrix.python-version }}
       shell: bash
 
   stop-runner:
