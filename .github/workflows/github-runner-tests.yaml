@@ -102,6 +102,7 @@ jobs:
     needs:
     - macos-tests
     - pre-commit
+    if: ${{ needs.macos-tests.result == 'success' && needs.pre-commit.result == 'success' }}
     outputs:
       label: ${{ steps.start-ec2-runner.outputs.label }}
       ec2-instance-id: ${{ steps.start-ec2-runner.outputs.ec2-instance-id }}
@@ -125,7 +126,6 @@ jobs:
         ec2-instance-type: ${{ vars.AWS_INSTANCE_TYPE }}
         subnet-id: ${{ vars.AWS_SUBNET }}
         security-group-id: ${{ vars.AWS_SECURITY_GROUP }}
-
 
   ubuntu-tests-310:
     name: ubuntu-tests-310
@@ -194,8 +194,6 @@ jobs:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: >
         cd senselab && poetry run pytest \
-          --rootdir=$WORKING_DIR/pytest \
-          --basetemp=$WORKING_DIR/pytest/temp \
           --junitxml=pytest.xml \
           --cov-report=term-missing:skip-covered \
           --cov-report=xml:coverage.xml \
