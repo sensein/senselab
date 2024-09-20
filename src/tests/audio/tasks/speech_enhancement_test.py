@@ -21,6 +21,7 @@ def speechbrain_model() -> SpeechBrainModel:
 
 @pytest.fixture(autouse=True)
 def clear_cache() -> None:
+    """Fixture for clearing the cached models between pytest runs."""
     SpeechBrainEnhancer._models = {}
 
 
