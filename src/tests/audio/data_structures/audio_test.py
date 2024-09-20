@@ -1,5 +1,7 @@
 """Module for testing Audio data structures."""
 
+import warnings
+
 import torch
 import torchaudio
 
@@ -75,3 +77,140 @@ def test_audio_from_numpy(mono_audio_sample: Audio) -> None:
     assert torch.equal(
         mono_audio_sample.waveform, audio_from_numpy.waveform
     ), "NumPy audio should've been converted to Tensor"
+
+
+def test_window_iterator_overlap(mono_audio_sample: Audio) -> None:
+    """Tests window iterator with overlapping windows."""
+    window_size = 1024
+    step_size = 512
+    audio_length = mono_audio_sample.waveform.size(1)
+
+    windows = list(mono_audio_sample.window_iterator(window_size, step_size))
+
+    # Calculate expected windows
+    expected_windows = (audio_length - window_size) // step_size + 1
+    assert len(windows) == expected_windows, f"Should yield {expected_windows} \
+        windows when step size is less than window size."
+
+
+def test_window_iterator_exact_fit(mono_audio_sample: Audio) -> None:
+    """Tests window iterator when step size equals window size."""
+    window_size = 1024
+    step_size = 1024
+    audio_length = mono_audio_sample.waveform.size(1)
+
+    windows = list(mono_audio_sample.window_iterator(window_size, step_size))
+
+    expected_windows = (audio_length - window_size) // step_size + 1
+    assert len(windows) == expected_windows, f"Should yield {expected_windows} \
+        window when step size equals window size."
+
+
+def test_window_iterator_step_greater_than_window(mono_audio_sample: Audio) -> None:
+    """Tests window iterator when step size is greater than window size."""
+    window_size = 1024
+    step_size = 2048  # Step size greater than window size
+    audio_length = mono_audio_sample.waveform.size(1)
+
+    windows = list(mono_audio_sample.window_iterator(window_size, step_size))
+
+    expected_windows = (audio_length - window_size) // step_size + 1
+    assert len(windows) == expected_windows, f"Should yield {expected_windows} \
+        windows when step size is greater than window size."
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        list(mono_audio_sample.window_iterator(window_size, step_size))
+        assert len(w) == 1, "Should issue a warning when step size is greater than window size."
+
+
+def test_window_iterator_overlap_stereo(stereo_audio_sample: Audio) -> None:
+    """Tests window iterator with overlapping windows for stereo audio."""
+    window_size = 1024
+    step_size = 512
+    audio_length = stereo_audio_sample.waveform.size(1)
+
+    windows = list(stereo_audio_sample.window_iterator(window_size, step_size))
+
+    expected_windows = (audio_length - window_size) // step_size + 1
+    assert len(windows) == expected_windows, f"Should yield {expected_windows} \
+        windows when step size is less than window size."
+
+
+def test_window_iterator_exact_fit_stereo(stereo_audio_sample: Audio) -> None:
+    """Tests window iterator when step size equals window size for stereo audio."""
+    window_size = 1024
+    step_size = 1024
+    audio_length = stereo_audio_sample.waveform.size(1)
+
+    windows = list(stereo_audio_sample.window_iterator(window_size, step_size))
+
+    expected_windows = (audio_length - window_size) // step_size + 1
+    assert len(windows) == expected_windows, f"Should yield {expected_windows} \
+        windows when step size equals window size."
+
+
+def test_window_iterator_step_greater_than_window_stereo(stereo_audio_sample: Audio) -> None:
+    """Tests window iterator when step size is greater than window size for stereo audio."""
+    window_size = 1024
+    step_size = 2048  # Step size greater than window size
+    audio_length = stereo_audio_sample.waveform.size(1)
+
+    windows = list(stereo_audio_sample.window_iterator(window_size, step_size))
+
+    expected_windows = (audio_length - window_size) // step_size + 1
+    assert len(windows) == expected_windows, f"Should yield {expected_windows} \
+        windows when step size is greater than window size."
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        list(stereo_audio_sample.window_iterator(window_size, step_size))
+        assert len(w) == 1, "Should issue a warning when step size is greater than window size."
+
+
+def test_window_iterator_window_greater_than_audio_mono(mono_audio_sample: Audio) -> None:
+    """Tests window iterator when window size is greater than the audio length for mono audio."""
+    audio_length = mono_audio_sample.waveform.size(1)
+    window_size = audio_length + 1000  # Set window size greater than audio length
+    step_size = 512
+
+    windows = list(mono_audio_sample.window_iterator(window_size, step_size))
+
+    assert len(windows) == 0, "Should yield no windows when window size is greater than audio length."
+
+
+def test_window_iterator_window_greater_than_audio_stereo(stereo_audio_sample: Audio) -> None:
+    """Tests window iterator when window size is greater than the audio length for stereo audio."""
+    audio_length = stereo_audio_sample.waveform.size(1)
+    window_size = audio_length + 1000  # Set window size greater than audio length
+    step_size = 512
+
+    windows = list(stereo_audio_sample.window_iterator(window_size, step_size))
+
+    assert len(windows) == 0, "Should yield no windows when window size is greater than audio length."
+
+
+def test_window_iterator_step_greater_than_audio_mono(mono_audio_sample: Audio) -> None:
+    """Tests window iterator when step size is greater than the audio length for mono audio."""
+    audio_length = mono_audio_sample.waveform.size(1)
+    window_size = 1024
+    step_size = audio_length + 1000  # Step size greater than audio length
+
+    windows = list(mono_audio_sample.window_iterator(window_size, step_size))
+
+    expected_windows = (audio_length - window_size) // step_size + 1
+    assert len(windows) == expected_windows, f"Should yield {expected_windows} \
+        windows when step size is greater than audio length."
+
+
+def test_window_iterator_step_greater_than_audio_stereo(stereo_audio_sample: Audio) -> None:
+    """Tests window iterator when step size is greater than the audio length for stereo audio."""
+    audio_length = stereo_audio_sample.waveform.size(1)
+    window_size = 1024
+    step_size = audio_length + 1000  # Step size greater than audio length
+
+    windows = list(stereo_audio_sample.window_iterator(window_size, step_size))
+
+    expected_windows = (audio_length - window_size) // step_size + 1
+    assert len(windows) == expected_windows, f"Should yield {expected_windows} \
+        windows when step size is greater than audio length."
