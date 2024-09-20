@@ -46,7 +46,7 @@ def style_tts2() -> TorchModel:
 def test_synthesize_texts_with_hf_model(hf_model: HFModel) -> None:
     """Test synthesizing texts."""
     texts = ["Hello world", "Hello world again."]
-    audios = synthesize_texts(texts=texts, model=hf_model)
+    audios = synthesize_texts(texts=texts, model=hf_model, device=DeviceType.CUDA)
 
     assert len(audios) == 2
     assert isinstance(audios[0], Audio)
@@ -93,6 +93,7 @@ def test_synthesize_texts_with_mars5_model(mars5_model: TorchModel, mono_audio_s
         targets=[(target_audio, target_audio_ground_truth), (target_audio, target_audio_ground_truth)],
         model=mars5_model,
         language=language,
+        device=DeviceType.CUDA,
     )
 
     assert len(audios) == 2
