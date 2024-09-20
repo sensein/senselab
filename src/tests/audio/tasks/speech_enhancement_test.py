@@ -19,6 +19,10 @@ def speechbrain_model() -> SpeechBrainModel:
     """Fixture for Hugging Face model."""
     return SpeechBrainModel(path_or_uri="speechbrain/sepformer-wham16k-enhancement")
 
+@pytest.fixture(autouse=True)
+def clear_cache() -> None:
+    SpeechBrainEnhancer._models = {}
+
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_enhance_audios_stereo_audio(resampled_stereo_audio_sample: Audio, speechbrain_model: SpeechBrainModel) -> None:
@@ -27,7 +31,6 @@ def test_enhance_audios_stereo_audio(resampled_stereo_audio_sample: Audio, speec
         SpeechBrainEnhancer.enhance_audios_with_speechbrain(
             audios=[resampled_stereo_audio_sample], model=speechbrain_model
         )
-
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_enhance_audios(
@@ -107,12 +110,11 @@ def test_enhance_audios_with_extreme_amplitude(audio_with_extreme_amplitude: Aud
     assert enhanced_audios[0].waveform.shape == audio_with_extreme_amplitude.waveform.shape
 
 
-'''
-# TODO: Please double-check this because it is failing
 def test_model_caching(resampled_mono_audio_sample: Audio) -> None:
     """Test model caching by enhancing audios with the same model multiple times."""
     SpeechBrainEnhancer.enhance_audios_with_speechbrain(audios=[resampled_mono_audio_sample], device=DeviceType.CPU)
     assert len(list(SpeechBrainEnhancer._models.keys())) == 1
     SpeechBrainEnhancer.enhance_audios_with_speechbrain(audios=[resampled_mono_audio_sample], device=DeviceType.CPU)
     assert len(list(SpeechBrainEnhancer._models.keys())) == 1
-'''
+
+
