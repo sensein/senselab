@@ -121,6 +121,14 @@ jobs:
           --log-level=DEBUG \
           --verbose
       shell: bash
+    - name: Delete poetry env with python {{ matrix.python-version }}
+      run: |
+        poetry env remove ${{ matrix.python-version }}
+      shell: bash
+    - name: Move folder back to actions-runner
+      run: |
+        mv senselab /actions-runner/_work/senselab/senselab
+        ls /actions-runner/_work/senselab/senselab
 
   stop-runner:
     name: stop-runner
