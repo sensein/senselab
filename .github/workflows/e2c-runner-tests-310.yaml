@@ -140,6 +140,7 @@ jobs:
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
         working-directory: ${{ vars.POETRY_CACHE_DIR }}/senselab
+        directory: ${{ vars.POETRY_CACHE_DIR }}/senselab
     - name: Delete poetry env with python {{ matrix.python-version }}
       run: |
         poetry env remove ${{ matrix.python-version }}
