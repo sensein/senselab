@@ -1,3 +1,16 @@
+# 0.13.0 (Fri Sep 20 2024)
+
+#### 🚀 Enhancement
+
+- GitHub wf experiments [#163](https://github.com/sensein/senselab/pull/163) ([@fabiocat93](https://github.com/fabiocat93) [@wilke0818](https://github.com/wilke0818))
+
+#### Authors: 2
+
+- [@wilke0818](https://github.com/wilke0818)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.12.0 (Thu Sep 12 2024)
 
 #### 🚀 Enhancement
