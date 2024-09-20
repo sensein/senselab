@@ -79,9 +79,9 @@ jobs:
         python --version
         which python
       shell: bash
-    - name: Move senselab directory to current directory
+    - name: Copy senselab directory to current directory
       run: |
-        mv /actions-runner/_work/senselab/senselab .
+        cp -r /actions-runner/_work/senselab/senselab .
     - name: Install dependencies with Poetry
       run: |
         cd senselab
@@ -121,14 +121,6 @@ jobs:
           --log-level=DEBUG \
           --verbose
       shell: bash
-    - name: Delete poetry env with python {{ matrix.python-version }}
-      run: |
-        poetry env remove ${{ matrix.python-version }}
-      shell: bash
-    - name: Move folder back to actions-runner
-      run: |
-        mv senselab /actions-runner/_work/senselab/senselab
-        ls /actions-runner/_work/senselab/senselab
 
   stop-runner:
     name: stop-runner
