@@ -1,7 +1,5 @@
 """This script contains unit tests for the features extraction tasks."""
 
-import os
-
 import pytest
 import torch
 
@@ -20,6 +18,10 @@ from senselab.audio.tasks.features_extraction.torchaudio import (
     extract_mfcc_from_audios,
     extract_pitch_from_audios,
     extract_spectrogram_from_audios,
+)
+from senselab.audio.tasks.features_extraction.torchaudio_squim import (
+    extract_objective_quality_features_from_audios,
+    extract_subjective_quality_features_from_audios,
 )
 
 
@@ -168,40 +170,41 @@ def test_extract_opensmile_features_from_audios(resampled_mono_audio_sample: Aud
         assert all(isinstance(value, (float, int)) for value in features.values())
 
 
-if os.getenv("GITHUB_ACTIONS") != "true":
-    from senselab.audio.tasks.features_extraction.torchaudio_squim import (
-        extract_objective_quality_features_from_audios,
-        extract_subjective_quality_features_from_audios,
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
+def test_extract_objective_quality_features_from_audios(resampled_mono_audio_sample: Audio) -> None:
+    """Test extraction of objective quality features from audio."""
+    result = extract_objective_quality_features_from_audios([resampled_mono_audio_sample])
+    assert isinstance(result, dict)
+    assert "stoi" in result
+    assert "pesq" in result
+    assert "si_sdr" in result
+    assert all(isinstance(feature, float) for feature in result["stoi"])
+    assert all(isinstance(feature, float) for feature in result["pesq"])
+    assert all(isinstance(feature, float) for feature in result["si_sdr"])
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
+def test_extract_objective_quality_features_from_audios_invalid_audio(mono_audio_sample: Audio) -> None:
+    """Test extraction of objective quality features from invalid audio."""
+    with pytest.raises(ValueError, match="Only 16000 Hz sampling rate is supported by Torchaudio-Squim model."):
+        extract_objective_quality_features_from_audios([mono_audio_sample])
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
+def test_extract_subjective_quality_features_from_audios(resampled_mono_audio_sample: Audio) -> None:
+    """Test extraction of subjective quality features from audio."""
+    result = extract_subjective_quality_features_from_audios(
+        audio_list=[resampled_mono_audio_sample], non_matching_references=[resampled_mono_audio_sample]
     )
+    assert isinstance(result, dict)
+    assert "mos" in result
+    assert all(isinstance(feature, float) for feature in result["mos"])
 
-    def test_extract_objective_quality_features_from_audios(resampled_mono_audio_sample: Audio) -> None:
-        """Test extraction of objective quality features from audio."""
-        result = extract_objective_quality_features_from_audios([resampled_mono_audio_sample])
-        assert isinstance(result, dict)
-        assert "stoi" in result
-        assert "pesq" in result
-        assert "si_sdr" in result
-        assert all(isinstance(feature, float) for feature in result["stoi"])
-        assert all(isinstance(feature, float) for feature in result["pesq"])
-        assert all(isinstance(feature, float) for feature in result["si_sdr"])
 
-    def test_extract_objective_quality_features_from_audios_invalid_audio(mono_audio_sample: Audio) -> None:
-        """Test extraction of objective quality features from invalid audio."""
-        with pytest.raises(ValueError, match="Only 16000 Hz sampling rate is supported by Torchaudio-Squim model."):
-            extract_objective_quality_features_from_audios([mono_audio_sample])
-
-    def test_extract_subjective_quality_features_from_audios(resampled_mono_audio_sample: Audio) -> None:
-        """Test extraction of subjective quality features from audio."""
-        result = extract_subjective_quality_features_from_audios(
-            audio_list=[resampled_mono_audio_sample], non_matching_references=[resampled_mono_audio_sample]
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
+def test_extract_subjective_quality_features_invalid_audio(mono_audio_sample: Audio) -> None:
+    """Test extraction of subjective quality features from invalid audio."""
+    with pytest.raises(ValueError, match="Only 16000 Hz sampling rate is supported by Torchaudio-Squim model."):
+        extract_subjective_quality_features_from_audios(
+            audio_list=[mono_audio_sample], non_matching_references=[mono_audio_sample]
         )
-        assert isinstance(result, dict)
-        assert "mos" in result
-        assert all(isinstance(feature, float) for feature in result["mos"])
-
-    def test_extract_subjective_quality_features_invalid_audio(mono_audio_sample: Audio) -> None:
-        """Test extraction of subjective quality features from invalid audio."""
-        with pytest.raises(ValueError, match="Only 16000 Hz sampling rate is supported by Torchaudio-Squim model."):
-            extract_subjective_quality_features_from_audios(
-                audio_list=[mono_audio_sample], non_matching_references=[mono_audio_sample]
-            )
