@@ -18,6 +18,10 @@ if os.getenv("GITHUB_ACTIONS") != "true":
         """Fixture for Hugging Face model."""
         return SpeechBrainModel(path_or_uri="speechbrain/sepformer-wham16k-enhancement")
 
+    @pytest.fixture(autouse=True)
+    def clear_cache() -> None:
+        SpeechBrainEnhancer._models = {}
+
     def test_enhance_audios_stereo_audio(
         resampled_stereo_audio_sample: Audio, speechbrain_model: SpeechBrainModel
     ) -> None:
@@ -96,6 +100,9 @@ if os.getenv("GITHUB_ACTIONS") != "true":
     def test_model_caching(resampled_mono_audio_sample: Audio) -> None:
         """Test model caching by enhancing audios with the same model multiple times."""
         SpeechBrainEnhancer.enhance_audios_with_speechbrain(audios=[resampled_mono_audio_sample])
+
+        print(SpeechBrainEnhancer._models)
+        print(type(SpeechBrainEnhancer._models))
         assert len(SpeechBrainEnhancer._models) == 1
         SpeechBrainEnhancer.enhance_audios_with_speechbrain(audios=[resampled_mono_audio_sample])
         assert len(SpeechBrainEnhancer._models) == 1
