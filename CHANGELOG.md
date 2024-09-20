@@ -1,3 +1,16 @@
+# 0.14.0 (Fri Sep 20 2024)
+
+#### 🚀 Enhancement
+
+- Add audio windowing iterator [#142](https://github.com/sensein/senselab/pull/142) ([@ibevers](https://github.com/ibevers) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@ibevers](https://github.com/ibevers)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.13.0 (Fri Sep 20 2024)
 
 #### 🚀 Enhancement
