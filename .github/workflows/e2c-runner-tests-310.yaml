@@ -139,7 +139,7 @@ jobs:
       uses: codecov/codecov-action@v4
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
-        files: ${{ vars.POETRY_CACHE_DIR }}/senselab/coverage.xml
+        working-directory: ${{ vars.POETRY_CACHE_DIR }}/senselab
     - name: Delete poetry env with python {{ matrix.python-version }}
       run: |
         poetry env remove ${{ matrix.python-version }}
