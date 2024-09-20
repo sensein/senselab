@@ -5,9 +5,9 @@ on:
     types: [opened, synchronize, reopened, labeled]
 
 jobs:
-  start-runner:
+  start-runner-310:
     if: github.event.pull_request.draft == false && contains(github.event.pull_request.labels.*.name, 'to-test-gpu')
-    name: start-runner
+    name: start-runner-310
     runs-on: ubuntu-latest
     outputs:
       label: ${{ steps.start-ec2-runner.outputs.label }}
@@ -36,8 +36,8 @@ jobs:
 
   ubuntu-tests-310:
     name: ubuntu-tests-310
-    needs: start-runner
-    runs-on: ${{ needs.start-runner.outputs.label }}
+    needs: start-runner-310
+    runs-on: ${{ needs.start-runner-310.outputs.label }}
     defaults:
       run:
         shell: bash
@@ -122,13 +122,13 @@ jobs:
           --verbose
       shell: bash
 
-  stop-runner:
-    name: stop-runner
+  stop-runner-310:
+    name: stop-runner-310
     needs:
-    - start-runner   # waits for the EC2 instance to be created
+    - start-runner-310   # waits for the EC2 instance to be created
     - ubuntu-tests-310   # waits for the actual job to finish
     runs-on: ubuntu-latest
-    if: ${{ needs.start-runner.outputs.job-ran == 'true' && needs.ubuntu-tests-310.outputs.job-ran == 'true' || failure() }} # required to stop the runner even if an error occurred in previous jobs
+    if: ${{ needs.start-runner-310.outputs.job-ran == 'true' && needs.ubuntu-tests-310.outputs.job-ran == 'true' || failure() }} # required to stop the runner even if an error occurred in previous jobs
     steps:
     - name: Check available space
       run: |
@@ -145,5 +145,5 @@ jobs:
       with:
         mode: stop
         github-token: ${{ secrets.GH_TOKEN }}
-        label: ${{ needs.start-runner.outputs.label }}
-        ec2-instance-id: ${{ needs.start-runner.outputs.ec2-instance-id }}
+        label: ${{ needs.start-runner-310.outputs.label }}
+        ec2-instance-id: ${{ needs.start-runner-310.outputs.ec2-instance-id }}
