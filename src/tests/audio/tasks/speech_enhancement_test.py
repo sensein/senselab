@@ -19,6 +19,7 @@ def speechbrain_model() -> SpeechBrainModel:
     """Fixture for Hugging Face model."""
     return SpeechBrainModel(path_or_uri="speechbrain/sepformer-wham16k-enhancement")
 
+
 @pytest.fixture(autouse=True)
 def clear_cache() -> None:
     """Fixture for clearing the cached models between pytest runs."""
@@ -32,6 +33,7 @@ def test_enhance_audios_stereo_audio(resampled_stereo_audio_sample: Audio, speec
         SpeechBrainEnhancer.enhance_audios_with_speechbrain(
             audios=[resampled_stereo_audio_sample], model=speechbrain_model
         )
+
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_enhance_audios(
@@ -117,5 +119,3 @@ def test_model_caching(resampled_mono_audio_sample: Audio) -> None:
     assert len(list(SpeechBrainEnhancer._models.keys())) == 1
     SpeechBrainEnhancer.enhance_audios_with_speechbrain(audios=[resampled_mono_audio_sample], device=DeviceType.CPU)
     assert len(list(SpeechBrainEnhancer._models.keys())) == 1
-
-
