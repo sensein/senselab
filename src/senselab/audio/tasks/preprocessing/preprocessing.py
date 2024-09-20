@@ -110,6 +110,9 @@ def chunk_audios(data: List[Tuple[Audio, Tuple[float, float]]]) -> List[Audio]:
 
     Returns:
         List of Audios that have been chunked based on the provided timestamps
+
+    Todo:
+        Do we really need both chunk_audios and extract_segments?
     """
     chunked_audios = []
 
