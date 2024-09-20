@@ -47,6 +47,7 @@ jobs:
         python-version: ['3.10']
     env:
       WORKING_DIR: ${{ vars.WORKING_DIR }}
+      POETRY_CACHE_DIR: ${{ vars.WORKING_DIR }}
     outputs:
       job-ran: ${{ steps.set-ran.outputs.ran }}
     steps:
