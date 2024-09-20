@@ -23,7 +23,9 @@ def test_clone_voices_length_mismatch(resampled_mono_audio_sample: Audio, torch_
     target_audios = [resampled_mono_audio_sample, resampled_mono_audio_sample]
 
     with pytest.raises(ValueError, match="The list of source and target audios must have the same length"):
-        clone_voices(source_audios=source_audios, target_audios=target_audios, model=torch_model, device=DeviceType.CPU)
+        clone_voices(
+            source_audios=source_audios, target_audios=target_audios, model=torch_model, device=DeviceType.CUDA
+        )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
@@ -37,7 +39,7 @@ def test_clone_voices_invalid_topk(resampled_mono_audio_sample: Audio, torch_mod
             source_audios=source_audios,
             target_audios=target_audios,
             model=torch_model,
-            device=DeviceType.CPU,
+            device=DeviceType.CUDA,
             topk="invalid",  # type: ignore[arg-type]
         )
 
@@ -53,7 +55,7 @@ def test_clone_voices_invalid_prematched_vocoder(resampled_mono_audio_sample: Au
             source_audios=source_audios,
             target_audios=target_audios,
             model=torch_model,
-            device=DeviceType.CPU,
+            device=DeviceType.CUDA,
             prematched_vocoder="invalid",  # type: ignore[arg-type]
         )
 
@@ -69,7 +71,7 @@ def test_clone_voices_valid_input(resampled_mono_audio_sample: Audio, torch_mode
             source_audios=source_audios,
             target_audios=target_audios,
             model=torch_model,
-            device=DeviceType.CPU,
+            device=DeviceType.CUDA,
             topk=5,
             prematched_vocoder=False,
         )
@@ -102,7 +104,7 @@ def test_clone_voices_unsupported_model(resampled_mono_audio_sample: Audio) -> N
 
     with pytest.raises(NotImplementedError, match="Only KNNVC is supported for now."):
         clone_voices(
-            source_audios=source_audios, target_audios=target_audios, model=unsupported_model, device=DeviceType.CPU
+            source_audios=source_audios, target_audios=target_audios, model=unsupported_model, device=DeviceType.CUDA
         )
 
 
@@ -113,7 +115,9 @@ def test_clone_voices_stereo_audio(resampled_stereo_audio_sample: Audio, torch_m
     target_audios = [resampled_stereo_audio_sample]
 
     with pytest.raises(ValueError, match="Only mono audio files are supported."):
-        clone_voices(source_audios=source_audios, target_audios=target_audios, model=torch_model, device=DeviceType.CPU)
+        clone_voices(
+            source_audios=source_audios, target_audios=target_audios, model=torch_model, device=DeviceType.CUDA
+        )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
@@ -123,4 +127,6 @@ def test_clone_voices_invalid_sampling_rate(mono_audio_sample: Audio, torch_mode
     target_audios = [mono_audio_sample]
 
     with pytest.raises(ValueError, match="Only 16000 sampling rate is supported."):
-        clone_voices(source_audios=source_audios, target_audios=target_audios, model=torch_model, device=DeviceType.CPU)
+        clone_voices(
+            source_audios=source_audios, target_audios=target_audios, model=torch_model, device=DeviceType.CUDA
+        )
