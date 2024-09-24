@@ -4,10 +4,9 @@ from typing import List, Optional
 
 import torch
 
-from senselab.audio.data_structures.audio import Audio
+from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speaker_embeddings.speechbrain import SpeechBrainEmbeddings
-from senselab.utils.data_structures.device import DeviceType
-from senselab.utils.data_structures.model import SenselabModel, SpeechBrainModel
+from senselab.utils.data_structures import DeviceType, SenselabModel, SpeechBrainModel
 
 
 def extract_speaker_embeddings_from_audios(

@@ -9,7 +9,7 @@ from nltk.tokenize.punkt import PunktParameters, PunktSentenceTokenizer
 from threadpoolctl import threadpool_limits
 from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
 
-from senselab.audio.data_structures.audio import Audio
+from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.forced_alignment.constants import (
     DEFAULT_ALIGN_MODELS_HF,
     LANGUAGES_WITHOUT_SPACES,
@@ -25,11 +25,8 @@ from senselab.audio.tasks.forced_alignment.data_structures import (
     SingleSegment,
     SingleWordSegment,
 )
-from senselab.audio.tasks.preprocessing.preprocessing import extract_segments, pad_audios
-from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
-from senselab.utils.data_structures.language import Language
-from senselab.utils.data_structures.model import HFModel
-from senselab.utils.data_structures.script_line import ScriptLine
+from senselab.audio.tasks.preprocessing import extract_segments, pad_audios
+from senselab.utils.data_structures import DeviceType, HFModel, Language, ScriptLine, _select_device_and_dtype
 
 
 def _preprocess_segments(

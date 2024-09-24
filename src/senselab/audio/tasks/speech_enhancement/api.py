@@ -2,10 +2,9 @@
 
 from typing import List, Optional
 
-from senselab.audio.data_structures.audio import Audio
+from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speech_enhancement.speechbrain import SpeechBrainEnhancer
-from senselab.utils.data_structures.device import DeviceType
-from senselab.utils.data_structures.model import SenselabModel, SpeechBrainModel
+from senselab.utils.data_structures import DeviceType, SenselabModel, SpeechBrainModel
 
 
 def enhance_audios(

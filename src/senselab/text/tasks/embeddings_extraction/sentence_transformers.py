@@ -5,8 +5,7 @@ from typing import Dict, List, Optional
 import torch
 from sentence_transformers import SentenceTransformer
 
-from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
-from senselab.utils.data_structures.model import SentenceTransformersModel
+from senselab.utils.data_structures import DeviceType, SentenceTransformersModel, _select_device_and_dtype
 
 
 class SentenceTransformerFactory:
