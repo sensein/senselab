@@ -3,9 +3,9 @@
 import pytest
 import torch
 
-from senselab.audio.data_structures.audio import Audio
-from senselab.audio.tasks.voice_activity_detection.api import detect_human_voice_activity_in_audios
-from senselab.utils.data_structures.model import PyannoteAudioModel, SenselabModel
+from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.voice_activity_detection import detect_human_voice_activity_in_audios
+from senselab.utils.data_structures import PyannoteAudioModel, SenselabModel
 
 
 def test_detect_human_voice_activity_in_audios_with_invalid_model(mono_audio_sample: Audio) -> None:

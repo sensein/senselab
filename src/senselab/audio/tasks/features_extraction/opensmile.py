@@ -3,9 +3,8 @@
 from typing import Any, Dict, List
 
 import opensmile
-import pydra
 
-from senselab.audio.data_structures.audio import Audio
+from senselab.audio.data_structures import Audio
 
 
 class OpenSmileFeatureExtractorFactory:
@@ -70,6 +69,3 @@ def extract_opensmile_features_from_audios(
     smile = OpenSmileFeatureExtractorFactory.get_opensmile_extractor(feature_set, feature_level)
     features = [_extract_feats_from_audio(audio, smile) for audio in audios]
     return features
-
-
-extract_opensmile_features_from_audios_pt = pydra.mark.task(extract_opensmile_features_from_audios)

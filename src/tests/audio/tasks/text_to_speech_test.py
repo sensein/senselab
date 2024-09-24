@@ -5,12 +5,11 @@ from typing import Callable
 import pytest
 import torch
 
-from senselab.audio.data_structures.audio import Audio
-from senselab.audio.tasks.preprocessing.preprocessing import extract_segments, resample_audios
-from senselab.audio.tasks.text_to_speech.api import HuggingFaceTTS, synthesize_texts
-from senselab.utils.data_structures.device import DeviceType
-from senselab.utils.data_structures.language import Language
-from senselab.utils.data_structures.model import HFModel, SenselabModel, TorchModel
+from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.preprocessing import extract_segments, resample_audios
+from senselab.audio.tasks.text_to_speech import synthesize_texts
+from senselab.audio.tasks.text_to_speech.huggingface import HuggingFaceTTS
+from senselab.utils.data_structures import DeviceType, HFModel, Language, SenselabModel, TorchModel
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")

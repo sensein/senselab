@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Union
 import ffmpeg
 
 # import shutil
-from senselab.utils.data_structures.file import from_strings_to_files, get_common_directory
+from senselab.utils.data_structures import from_strings_to_files, get_common_directory
 from senselab.utils.tasks.input_output import read_files_from_disk
 
 

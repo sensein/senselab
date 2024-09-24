@@ -63,7 +63,6 @@ Learn more:
 
 from typing import Literal
 
-import pydra
 import torch
 import umap
 from sklearn.decomposition import PCA as sklearn_PCA
@@ -156,6 +155,3 @@ def compute_dimensionality_reduction(
         raise ValueError(f"Invalid model choice: {model}")
 
     return torch.from_numpy(reduced_data).float()
-
-
-compute_dimensionality_reduction_pt = pydra.mark.task(compute_dimensionality_reduction)

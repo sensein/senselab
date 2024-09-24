@@ -2,7 +2,6 @@
 
 from typing import Literal
 
-import pydra
 import torch
 
 
@@ -66,6 +65,3 @@ def pooling(
         return torch.min(data, dim=dimension, keepdim=keep_dimension).values
     else:
         raise ValueError("Unsupported pooling type. Choose 'max', 'avg', or 'min'.")
-
-
-pooling_pt = pydra.mark.task(pooling)

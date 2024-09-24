@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import torch
 from IPython.display import Audio, display
 
-from senselab.audio.data_structures.audio import Audio as AudioData
+from senselab.audio.data_structures import Audio as AudioData
 
 
 def plot_waveform(audio: AudioData, title: str = "Waveform", fast: bool = False) -> None:

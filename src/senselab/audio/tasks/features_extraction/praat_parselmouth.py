@@ -3,10 +3,9 @@
 from typing import Dict, List
 
 import parselmouth
-import pydra
 from parselmouth.praat import call
 
-from senselab.audio.data_structures.audio import Audio
+from senselab.audio.data_structures import Audio
 
 
 def get_audios_durations(audios: List[Audio]) -> List[Dict[str, float]]:
@@ -142,10 +141,3 @@ def get_audios_shimmer_descriptors(
         }
 
     return [get_audio_shimmer(audio, f0min, f0max) for audio in audios]
-
-
-get_audios_durations_pt = pydra.mark.task(get_audios_durations)
-get_audios_f0_descriptors_pt = pydra.mark.task(get_audios_f0_descriptors)
-get_audios_harmonicity_descriptors_pt = pydra.mark.task(get_audios_harmonicity_descriptors)
-get_audios_jitter_descriptors_pt = pydra.mark.task(get_audios_jitter_descriptors)
-get_audios_shimmer_descriptors_pt = pydra.mark.task(get_audios_shimmer_descriptors)

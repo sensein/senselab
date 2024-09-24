@@ -6,11 +6,10 @@ import pytest
 import torch
 from speechbrain.inference.separation import SepformerSeparation as separator
 
-from senselab.audio.data_structures.audio import Audio
-from senselab.audio.tasks.speech_enhancement.api import enhance_audios
+from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.speech_enhancement import enhance_audios
 from senselab.audio.tasks.speech_enhancement.speechbrain import SpeechBrainEnhancer
-from senselab.utils.data_structures.device import DeviceType
-from senselab.utils.data_structures.model import SpeechBrainModel
+from senselab.utils.data_structures import DeviceType, SpeechBrainModel
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
