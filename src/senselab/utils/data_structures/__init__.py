@@ -1,4 +1,4 @@
-"""This module provides the API of the senselab utils data structures."""
+"""This module provides the APIs of the senselab utils data structures."""
 
 from .dataset import Participant, SenselabDataset, Session  # noqa: F401
 from .device import DeviceType, _select_device_and_dtype  # noqa: F401
