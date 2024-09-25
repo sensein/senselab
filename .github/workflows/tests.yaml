@@ -35,12 +35,11 @@ jobs:
     - name: Install Poetry
       uses: snok/install-poetry@v1
       with:
-        version: 1.7.1
+        version: 1.8.3
         virtualenvs-create: true
         virtualenvs-in-project: true
     - name: Install dependencies with Poetry
       run: |
-        poetry run pip install iso-639
         poetry install --with dev
       shell: bash
     - name: Run unit tests
@@ -80,12 +79,11 @@ jobs:
     - name: Install Poetry
       uses: snok/install-poetry@v1
       with:
-        version: 1.7.1
+        version: 1.8.3
         virtualenvs-create: true
         virtualenvs-in-project: true
     - name: Install dependencies with Poetry
       run: |
-        poetry run pip install iso-639
         poetry install --with dev
       shell: bash
     - name: Install pre-commit
@@ -160,7 +158,7 @@ jobs:
     - name: Install Poetry
       uses: snok/install-poetry@v1
       with:
-        version: 1.7.1
+        version: 1.8.3
         virtualenvs-create: true
         virtualenvs-in-project: true
     - name: Check available space
@@ -179,7 +177,6 @@ jobs:
       run: |
         cd senselab
         poetry env use ${{ matrix.python-version }}
-        poetry run pip install iso-639
         poetry install --with dev
       shell: bash
     - name: Check poetry info
@@ -305,7 +302,7 @@ jobs:
     - name: Install Poetry
       uses: snok/install-poetry@v1
       with:
-        version: 1.7.1
+        version: 1.8.3
         virtualenvs-create: true
         virtualenvs-in-project: true
     - name: Check available space
@@ -324,7 +321,6 @@ jobs:
       run: |
         cd senselab
         poetry env use ${{ matrix.python-version }}
-        poetry run pip install iso-639
         poetry install --with dev
       shell: bash
     - name: Check poetry info
