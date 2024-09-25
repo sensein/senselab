@@ -1,6 +1,7 @@
 """This module implements some utilities for the model class."""
 
 import os
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional, Union
 
@@ -155,13 +156,24 @@ def check_hf_repo_exists(repo_id: str, revision: str = "main", repo_type: str = 
         return False
 
 
+@lru_cache(maxsize=128)
 def check_github_repo_exists(repo_id: str, branch: str = "main") -> bool:
-    """Private function to check if a GitHub repository exists."""
+    """Private function to check if a GitHub repository exists with caching and authentication."""
     url = f"https://api.github.com/repos/{repo_id}/branches/{branch}"
-    response = requests.get(url, timeout=10)
+    token = os.getenv("GITHUB_TOKEN") or None
+
+    headers = {}
+    if token:
+        headers = {"Authorization": f"token {token}"}
+
+    response = requests.get(url, headers=headers, timeout=10)
+
     if response.status_code == 200:
         return True
     elif response.status_code == 404:
+        return False
+    elif response.status_code == 403:  # Handle rate limit exceeded
+        print("GitHub API rate limit exceeded. Please try again later.")
         return False
     else:
         response.raise_for_status()

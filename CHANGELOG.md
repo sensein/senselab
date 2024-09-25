@@ -1,3 +1,118 @@
+# 0.14.0 (Fri Sep 20 2024)
+
+#### 🚀 Enhancement
+
+- Add audio windowing iterator [#142](https://github.com/sensein/senselab/pull/142) ([@ibevers](https://github.com/ibevers) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@ibevers](https://github.com/ibevers)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.13.0 (Fri Sep 20 2024)
+
+#### 🚀 Enhancement
+
+- GitHub wf experiments [#163](https://github.com/sensein/senselab/pull/163) ([@fabiocat93](https://github.com/fabiocat93) [@wilke0818](https://github.com/wilke0818))
+
+#### Authors: 2
+
+- [@wilke0818](https://github.com/wilke0818)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.12.0 (Thu Sep 12 2024)
+
+#### 🚀 Enhancement
+
+- Implement diaraization error rate [#152](https://github.com/sensein/senselab/pull/152) ([@wilke0818](https://github.com/wilke0818))
+
+#### Authors: 1
+
+- [@wilke0818](https://github.com/wilke0818)
+
+---
+
+# 0.11.0 (Thu Aug 22 2024)
+
+#### 🚀 Enhancement
+
+- Enhancing text to speech [#129](https://github.com/sensein/senselab/pull/129) ([@fabiocat93](https://github.com/fabiocat93) [@wilke0818](https://github.com/wilke0818))
+
+#### 🐛 Bug Fix
+
+- Add style tts dependency [#144](https://github.com/sensein/senselab/pull/144) ([@wilke0818](https://github.com/wilke0818))
+
+#### Authors: 2
+
+- [@wilke0818](https://github.com/wilke0818)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.10.0 (Fri Aug 16 2024)
+
+#### 🚀 Enhancement
+
+- 127 add timestamped transcription workflow [#138](https://github.com/sensein/senselab/pull/138) ([@ibevers](https://github.com/ibevers))
+
+#### Authors: 1
+
+- [@ibevers](https://github.com/ibevers)
+
+---
+
+# 0.9.0 (Fri Aug 16 2024)
+
+#### 🚀 Enhancement
+
+- Dataset update [#149](https://github.com/sensein/senselab/pull/149) ([@wilke0818](https://github.com/wilke0818))
+
+#### Authors: 1
+
+- [@wilke0818](https://github.com/wilke0818)
+
+---
+
+# 0.8.0 (Fri Aug 16 2024)
+
+#### 🚀 Enhancement
+
+- 110 review and test voice cloning task [#132](https://github.com/sensein/senselab/pull/132) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.7.9 (Fri Aug 09 2024)
+
+#### 🐛 Bug Fix
+
+- adding testmon as a dev dependency [#137](https://github.com/sensein/senselab/pull/137) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.7.8 (Fri Aug 09 2024)
+
+#### 🐛 Bug Fix
+
+- Adding documentation and tutorial and logger to voice activity detection and speaker diarization [#136](https://github.com/sensein/senselab/pull/136) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.7.7 (Fri Aug 09 2024)
 
 #### 🐛 Bug Fix
