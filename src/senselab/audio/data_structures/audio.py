@@ -132,12 +132,12 @@ class Audio(BaseModel):
             print("current_position:", current_position)
             # Calculate the end position of the window
             end_position = current_position + window_size
-            
+
             # If the end_position exceeds the number of samples, take the remaining samples
             if end_position > num_samples:
                 end_position = num_samples
             print("end_position:", end_position)
-            
+
             # Get the windowed waveform
             window_waveform = self.waveform[:, current_position:end_position]
 
@@ -146,9 +146,9 @@ class Audio(BaseModel):
                 waveform=window_waveform,
                 sampling_rate=self.sampling_rate,
                 orig_path_or_id=f"{self.orig_path_or_id}_{current_position}_{end_position}",
-                metadata=self.metadata
+                metadata=self.metadata,
             )
-            
+
             yield window_audio
             current_position += step_size
 
