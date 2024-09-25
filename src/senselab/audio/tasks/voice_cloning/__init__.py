@@ -1,1 +1,3 @@
-"""This module provides the API for the senselab voice cloning task."""
+""".. include:: ./doc.md"""  # noqa: D415
+
+from .api import clone_voices  # noqa: F401
