@@ -103,28 +103,53 @@ class Audio(BaseModel):
             return self.id() == other.id()
         return False
 
-    def window_generator(self, window_size: int, step_size: int) -> Generator[torch.Tensor, None, None]:
-        """Creates a sliding window generator for the audio waveform.
+    def window_generator(self, window_size: int, step_size: int) -> Generator["Audio", None, None]:
+        """Creates a sliding window generator for the audio.
+
+        Creates a generator that yields Audio objects corresponding to each window of the waveform
+        using a sliding window. The window size and step size are specified in number of samples.
+        If the audio waveform doesn't contain an exact number of windows, the remaining samples
+        will be included in the last window.
 
         Args:
             window_size: Size of each window (number of samples).
             step_size: Step size for sliding the window (number of samples).
 
-        Raises:
-            ValueError: If step_size is greater than window_size.
+        Yields:
+            Audio: Audio objects corresponding to each window of the waveform.
         """
         if step_size > window_size:
             warnings.warn(
                 "Step size is greater than window size. \
-                          Some of audio will not be included in the windows."
+                Some of the audio will not be included in the windows."
             )
 
         num_samples = self.waveform.size(-1)
+        print("num_samples:", num_samples)
         current_position = 0
 
-        while current_position < num_samples - window_size:
-            window = self.waveform[:, current_position : current_position + window_size]
-            yield window
+        while current_position < num_samples:
+            print("current_position:", current_position)
+            # Calculate the end position of the window
+            end_position = current_position + window_size
+            
+            # If the end_position exceeds the number of samples, take the remaining samples
+            if end_position > num_samples:
+                end_position = num_samples
+            print("end_position:", end_position)
+            
+            # Get the windowed waveform
+            window_waveform = self.waveform[:, current_position:end_position]
+
+            # Create a new Audio instance for this window
+            window_audio = Audio(
+                waveform=window_waveform,
+                sampling_rate=self.sampling_rate,
+                orig_path_or_id=f"{self.orig_path_or_id}_{current_position}_{end_position}",
+                metadata=self.metadata
+            )
+            
+            yield window_audio
             current_position += step_size
 
 
