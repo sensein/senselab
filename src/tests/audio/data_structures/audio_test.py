@@ -1,6 +1,5 @@
 """Module for testing Audio data structures."""
 
-import warnings
 from typing import List, Tuple
 
 import pytest
