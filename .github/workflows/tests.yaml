@@ -35,7 +35,6 @@ jobs:
     - name: Install Poetry
       uses: snok/install-poetry@v1
       with:
-        version: 1.8.3
         virtualenvs-create: true
         virtualenvs-in-project: true
     - name: Install dependencies with Poetry
@@ -79,7 +78,6 @@ jobs:
     - name: Install Poetry
       uses: snok/install-poetry@v1
       with:
-        version: 1.8.3
         virtualenvs-create: true
         virtualenvs-in-project: true
     - name: Install dependencies with Poetry
@@ -158,7 +156,6 @@ jobs:
     - name: Install Poetry
       uses: snok/install-poetry@v1
       with:
-        version: 1.8.3
         virtualenvs-create: true
         virtualenvs-in-project: true
     - name: Check available space
@@ -302,7 +299,6 @@ jobs:
     - name: Install Poetry
       uses: snok/install-poetry@v1
       with:
-        version: 1.8.3
         virtualenvs-create: true
         virtualenvs-in-project: true
     - name: Check available space
