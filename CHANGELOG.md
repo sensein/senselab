@@ -1,3 +1,30 @@
+# 0.14.2 (Thu Sep 26 2024)
+
+#### 🐛 Bug Fix
+
+- ✨Add speaker verification tutorial and documentation [#100](https://github.com/sensein/senselab/pull/100) ([@ibevers](https://github.com/ibevers) [@fabiocat93](https://github.com/fabiocat93))
+- First pr/issue wf [#166](https://github.com/sensein/senselab/pull/166) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@ibevers](https://github.com/ibevers)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.14.1 (Thu Sep 26 2024)
+
+#### 🐛 Bug Fix
+
+- fixing transformers version to 4.44.2 until they solve some issues with the text-to-speech pipeline [#167](https://github.com/sensein/senselab/pull/167) ([@fabiocat93](https://github.com/fabiocat93))
+- switch to poetry - last [#164](https://github.com/sensein/senselab/pull/164) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.14.0 (Fri Sep 20 2024)
 
 #### 🚀 Enhancement
