@@ -2,13 +2,9 @@
 
 from typing import List, Optional
 
-import pydra
-
-from senselab.audio.data_structures.audio import Audio
+from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speaker_diarization.pyannote import diarize_audios_with_pyannote
-from senselab.utils.data_structures.device import DeviceType
-from senselab.utils.data_structures.model import PyannoteAudioModel, SenselabModel
-from senselab.utils.data_structures.script_line import ScriptLine
+from senselab.utils.data_structures import DeviceType, PyannoteAudioModel, ScriptLine, SenselabModel
 
 
 def detect_human_voice_activity_in_audios(
@@ -34,6 +30,3 @@ def detect_human_voice_activity_in_audios(
         return results
     else:
         raise NotImplementedError("Only Pyannote models are supported for now.")
-
-
-detect_human_voice_activity_in_audios_pt = pydra.mark.task(detect_human_voice_activity_in_audios)

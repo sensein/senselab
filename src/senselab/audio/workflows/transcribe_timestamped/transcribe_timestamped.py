@@ -6,16 +6,16 @@ from typing import List
 
 import pydra
 
-from senselab.audio.data_structures.audio import Audio
+from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.forced_alignment.constants import SAMPLE_RATE
 from senselab.audio.tasks.forced_alignment.forced_alignment import (
     align_transcriptions,
 )
-from senselab.audio.tasks.preprocessing.preprocessing import downmix_audios_to_mono, resample_audios
-from senselab.audio.tasks.speech_to_text.api import transcribe_audios
-from senselab.utils.data_structures.language import Language
-from senselab.utils.data_structures.model import HFModel
-from senselab.utils.data_structures.script_line import ScriptLine
+from senselab.audio.tasks.preprocessing import downmix_audios_to_mono, resample_audios
+from senselab.audio.tasks.speech_to_text import transcribe_audios
+from senselab.utils.data_structures import Language
+from senselab.utils.data_structures import HFModel
+from senselab.utils.data_structures import ScriptLine
 from senselab.utils.tasks.batching import batch_list
 
 

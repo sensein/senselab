@@ -10,8 +10,8 @@ from datasets import Dataset, Features, Image, Sequence, Value
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 from transformers.image_transforms import to_pil_image
 
-from senselab.audio.data_structures.audio import Audio
-from senselab.video.data_structures.video import Video
+from senselab.audio.data_structures import Audio
+from senselab.video.data_structures import Video
 
 
 class Participant(BaseModel):

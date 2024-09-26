@@ -4,9 +4,9 @@ import pytest
 import torch
 from torch import Tensor
 
-from senselab.audio.data_structures.audio import Audio
-from senselab.audio.tasks.speaker_embeddings.api import extract_speaker_embeddings_from_audios
-from senselab.utils.data_structures.model import SenselabModel, SpeechBrainModel
+from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.speaker_embeddings import extract_speaker_embeddings_from_audios
+from senselab.utils.data_structures import SenselabModel, SpeechBrainModel
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")

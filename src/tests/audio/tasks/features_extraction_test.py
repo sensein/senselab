@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from senselab.audio.data_structures.audio import Audio
+from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.features_extraction.opensmile import extract_opensmile_features_from_audios
 from senselab.audio.tasks.features_extraction.praat_parselmouth import (
     get_audios_durations,

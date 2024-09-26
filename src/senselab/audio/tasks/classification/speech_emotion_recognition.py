@@ -5,9 +5,8 @@ from typing import Dict, List, Optional, Tuple
 
 from transformers import AutoConfig, pipeline
 
-from senselab.audio.data_structures.audio import Audio
-from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
-from senselab.utils.data_structures.model import HFModel
+from senselab.audio.data_structures import Audio
+from senselab.utils.data_structures import DeviceType, HFModel, _select_device_and_dtype
 
 
 def audio_classification_with_hf_models(

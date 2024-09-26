@@ -5,11 +5,9 @@ from typing import Dict, List, Optional, Tuple
 
 import torch
 
-from senselab.audio.data_structures.audio import Audio
-from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
-from senselab.utils.data_structures.language import Language
+from senselab.audio.data_structures import Audio
+from senselab.utils.data_structures import DeviceType, Language, TorchModel, _select_device_and_dtype
 from senselab.utils.data_structures.logging import logger
-from senselab.utils.data_structures.model import TorchModel
 
 
 class Mars5TTS:

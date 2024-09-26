@@ -5,9 +5,9 @@ from typing import Callable, List
 import pytest
 import torch
 
-from senselab.audio.data_structures.audio import Audio
-from senselab.audio.tasks.preprocessing.preprocessing import concatenate_audios, resample_audios
-from senselab.utils.data_structures.device import DeviceType
+from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.preprocessing import concatenate_audios, resample_audios
+from senselab.utils.data_structures import DeviceType
 
 # Global variables for file paths
 MONO_AUDIO_PATH = "src/tests/data_for_testing/audio_48khz_mono_16bits.wav"
