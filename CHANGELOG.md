@@ -1,3 +1,17 @@
+# 0.14.2 (Thu Sep 26 2024)
+
+#### 🐛 Bug Fix
+
+- ✨Add speaker verification tutorial and documentation [#100](https://github.com/sensein/senselab/pull/100) ([@ibevers](https://github.com/ibevers) [@fabiocat93](https://github.com/fabiocat93))
+- First pr/issue wf [#166](https://github.com/sensein/senselab/pull/166) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@ibevers](https://github.com/ibevers)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.14.1 (Thu Sep 26 2024)
 
 #### 🐛 Bug Fix
