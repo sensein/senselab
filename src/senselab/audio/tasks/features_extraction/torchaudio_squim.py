@@ -2,10 +2,9 @@
 
 from typing import Any, Dict, List
 
-import pydra
 from torchaudio.pipelines import SQUIM_OBJECTIVE, SQUIM_SUBJECTIVE
 
-from senselab.audio.data_structures.audio import Audio
+from senselab.audio.data_structures import Audio
 
 objective_model = SQUIM_OBJECTIVE.get_model()
 subjective_model = SQUIM_SUBJECTIVE.get_model()
@@ -72,7 +71,3 @@ def extract_subjective_quality_features_from_audios(
         features["mos"].append(mos.item())
 
     return features
-
-
-extract_objective_quality_features_from_audios_pt = pydra.mark.task(extract_objective_quality_features_from_audios)
-extract_subjective_quality_features_from_audios_pt = pydra.mark.task(extract_subjective_quality_features_from_audios)

@@ -9,10 +9,9 @@ from typing import List, Optional, Tuple
 
 from torch.nn.functional import cosine_similarity
 
-from senselab.audio.data_structures.audio import Audio
+from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speaker_embeddings.speechbrain import SpeechBrainEmbeddings
-from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
-from senselab.utils.data_structures.model import SpeechBrainModel
+from senselab.utils.data_structures import DeviceType, SpeechBrainModel, _select_device_and_dtype
 
 TRAINING_SAMPLE_RATE = 16000  # spkrec-ecapa-voxceleb trained on 16kHz audio
 

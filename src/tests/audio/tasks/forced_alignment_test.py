@@ -6,7 +6,7 @@ import pytest
 import torch
 from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
 
-from senselab.audio.data_structures.audio import Audio
+from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.forced_alignment.data_structures import (
     Point,
     SingleSegment,
@@ -21,9 +21,7 @@ from senselab.audio.tasks.forced_alignment.forced_alignment import (
     _preprocess_segments,
     align_transcriptions,
 )
-from senselab.utils.data_structures.device import DeviceType
-from senselab.utils.data_structures.language import Language
-from senselab.utils.data_structures.script_line import ScriptLine
+from senselab.utils.data_structures import DeviceType, Language, ScriptLine
 
 
 @pytest.fixture

@@ -3,12 +3,10 @@
 import pytest
 import torch
 
-from senselab.audio.data_structures.audio import Audio
-from senselab.audio.tasks.speaker_diarization.api import diarize_audios
+from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.speaker_diarization import diarize_audios
 from senselab.audio.tasks.speaker_diarization.pyannote import PyannoteDiarization, diarize_audios_with_pyannote
-from senselab.utils.data_structures.device import DeviceType
-from senselab.utils.data_structures.model import PyannoteAudioModel
-from senselab.utils.data_structures.script_line import ScriptLine
+from senselab.utils.data_structures import DeviceType, PyannoteAudioModel, ScriptLine
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
