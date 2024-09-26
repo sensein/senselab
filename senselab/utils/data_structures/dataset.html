@@ -177,8 +177,8 @@
 </span><span id="L-10"><a href="#L-10"><span class="linenos"> 10</span></a><span class="kn">from</span> <span class="nn">pydantic</span> <span class="kn">import</span> <span class="n">BaseModel</span><span class="p">,</span> <span class="n">Field</span><span class="p">,</span> <span class="n">ValidationInfo</span><span class="p">,</span> <span class="n">field_validator</span>
 </span><span id="L-11"><a href="#L-11"><span class="linenos"> 11</span></a><span class="kn">from</span> <span class="nn">transformers.image_transforms</span> <span class="kn">import</span> <span class="n">to_pil_image</span>
 </span><span id="L-12"><a href="#L-12"><span class="linenos"> 12</span></a>
-</span><span id="L-13"><a href="#L-13"><span class="linenos"> 13</span></a><span class="kn">from</span> <span class="nn">senselab.audio.data_structures.audio</span> <span class="kn">import</span> <span class="n">Audio</span>
-</span><span id="L-14"><a href="#L-14"><span class="linenos"> 14</span></a><span class="kn">from</span> <span class="nn">senselab.video.data_structures.video</span> <span class="kn">import</span> <span class="n">Video</span>
+</span><span id="L-13"><a href="#L-13"><span class="linenos"> 13</span></a><span class="kn">from</span> <span class="nn">senselab.audio.data_structures</span> <span class="kn">import</span> <span class="n">Audio</span>
+</span><span id="L-14"><a href="#L-14"><span class="linenos"> 14</span></a><span class="kn">from</span> <span class="nn">senselab.video.data_structures</span> <span class="kn">import</span> <span class="n">Video</span>
 </span><span id="L-15"><a href="#L-15"><span class="linenos"> 15</span></a>
 </span><span id="L-16"><a href="#L-16"><span class="linenos"> 16</span></a>
 </span><span id="L-17"><a href="#L-17"><span class="linenos"> 17</span></a><span class="k">class</span> <span class="nc">Participant</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
@@ -1424,7 +1424,7 @@ indivudal audios or videos in the dataset</li>
                             </div>
                             <div id="SenselabDataset.videos" class="classattr">
                                 <div class="attr variable">
-            <span class="name">videos</span><span class="annotation">: List[senselab.video.data_structures.video.Video]</span>
+            <span class="name">videos</span><span class="annotation">: List[<a href="../../video/data_structures/video.html#Video">senselab.video.data_structures.video.Video</a>]</span>
 
         
     </div>
@@ -1513,7 +1513,7 @@ are provided or just the list of Audios if pre-generated and passed in</li>
         <div class="decorator">@classmethod</div>
 
         <span class="def">def</span>
-        <span class="name">generate_videos_from_filepaths</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="bp">cls</span>,</span><span class="param">	<span class="n">v</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">List</span><span class="p">[</span><span class="n">senselab</span><span class="o">.</span><span class="n">video</span><span class="o">.</span><span class="n">data_structures</span><span class="o">.</span><span class="n">video</span><span class="o">.</span><span class="n">Video</span><span class="p">]]</span>,</span><span class="param">	<span class="n">_</span><span class="p">:</span> <span class="n">pydantic_core</span><span class="o">.</span><span class="n">core_schema</span><span class="o">.</span><span class="n">ValidationInfo</span></span><span class="return-annotation">) -> <span class="n">List</span><span class="p">[</span><span class="n">senselab</span><span class="o">.</span><span class="n">video</span><span class="o">.</span><span class="n">data_structures</span><span class="o">.</span><span class="n">video</span><span class="o">.</span><span class="n">Video</span><span class="p">]</span>:</span></span>
+        <span class="name">generate_videos_from_filepaths</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="bp">cls</span>,</span><span class="param">	<span class="n">v</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">List</span><span class="p">[</span><span class="n"><a href="../../video/data_structures/video.html#Video">senselab.video.data_structures.video.Video</a></span><span class="p">]]</span>,</span><span class="param">	<span class="n">_</span><span class="p">:</span> <span class="n">pydantic_core</span><span class="o">.</span><span class="n">core_schema</span><span class="o">.</span><span class="n">ValidationInfo</span></span><span class="return-annotation">) -> <span class="n">List</span><span class="p">[</span><span class="n"><a href="../../video/data_structures/video.html#Video">senselab.video.data_structures.video.Video</a></span><span class="p">]</span>:</span></span>
 
                 <label class="view-source-button" for="SenselabDataset.generate_videos_from_filepaths-view-source"><span>View Source</span></label>
 

@@ -70,45 +70,42 @@ the preferred device, and the model-specific parameters, and senselab handles th
 </span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a>
 </span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a><span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">List</span><span class="p">,</span> <span class="n">Optional</span>
 </span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a>
-</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a><span class="kn">from</span> <span class="nn">senselab.audio.data_structures.audio</span> <span class="kn">import</span> <span class="n">Audio</span>
+</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a><span class="kn">from</span> <span class="nn">senselab.audio.data_structures</span> <span class="kn">import</span> <span class="n">Audio</span>
 </span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a><span class="kn">from</span> <span class="nn">senselab.audio.tasks.speech_to_text.huggingface</span> <span class="kn">import</span> <span class="n">HuggingFaceASR</span>
-</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a><span class="kn">from</span> <span class="nn">senselab.utils.data_structures.device</span> <span class="kn">import</span> <span class="n">DeviceType</span>
-</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a><span class="kn">from</span> <span class="nn">senselab.utils.data_structures.language</span> <span class="kn">import</span> <span class="n">Language</span>
-</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a><span class="kn">from</span> <span class="nn">senselab.utils.data_structures.model</span> <span class="kn">import</span> <span class="n">HFModel</span><span class="p">,</span> <span class="n">SenselabModel</span>
-</span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a><span class="kn">from</span> <span class="nn">senselab.utils.data_structures.script_line</span> <span class="kn">import</span> <span class="n">ScriptLine</span>
-</span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a>
-</span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a>
-</span><span id="L-18"><a href="#L-18"><span class="linenos">18</span></a><span class="k">def</span> <span class="nf">transcribe_audios</span><span class="p">(</span>
-</span><span id="L-19"><a href="#L-19"><span class="linenos">19</span></a>    <span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">],</span>
-</span><span id="L-20"><a href="#L-20"><span class="linenos">20</span></a>    <span class="n">model</span><span class="p">:</span> <span class="n">SenselabModel</span><span class="p">,</span>
-</span><span id="L-21"><a href="#L-21"><span class="linenos">21</span></a>    <span class="n">language</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Language</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="L-22"><a href="#L-22"><span class="linenos">22</span></a>    <span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">DeviceType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="L-23"><a href="#L-23"><span class="linenos">23</span></a>    <span class="o">**</span><span class="n">kwargs</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>  <span class="c1"># noqa: ANN401</span>
-</span><span id="L-24"><a href="#L-24"><span class="linenos">24</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">ScriptLine</span><span class="p">]:</span>
-</span><span id="L-25"><a href="#L-25"><span class="linenos">25</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Transcribes all audios using the given model.</span>
-</span><span id="L-26"><a href="#L-26"><span class="linenos">26</span></a>
-</span><span id="L-27"><a href="#L-27"><span class="linenos">27</span></a><span class="sd">    Args:</span>
-</span><span id="L-28"><a href="#L-28"><span class="linenos">28</span></a><span class="sd">        audios (List[Audio]): The list of audio objects to be transcribed.</span>
-</span><span id="L-29"><a href="#L-29"><span class="linenos">29</span></a><span class="sd">        model (SenselabModel): The model used for transcription.</span>
-</span><span id="L-30"><a href="#L-30"><span class="linenos">30</span></a><span class="sd">        language (Optional[Language]): The language of the audio (default is None).</span>
-</span><span id="L-31"><a href="#L-31"><span class="linenos">31</span></a><span class="sd">        device (Optional[DeviceType]): The device to run the model on (default is None).</span>
-</span><span id="L-32"><a href="#L-32"><span class="linenos">32</span></a><span class="sd">        **kwargs: Additional keyword arguments to pass to the transcription function.</span>
+</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a><span class="kn">from</span> <span class="nn">senselab.utils.data_structures</span> <span class="kn">import</span> <span class="n">DeviceType</span><span class="p">,</span> <span class="n">HFModel</span><span class="p">,</span> <span class="n">Language</span><span class="p">,</span> <span class="n">ScriptLine</span><span class="p">,</span> <span class="n">SenselabModel</span>
+</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a>
+</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a>
+</span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a><span class="k">def</span> <span class="nf">transcribe_audios</span><span class="p">(</span>
+</span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a>    <span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">],</span>
+</span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a>    <span class="n">model</span><span class="p">:</span> <span class="n">SenselabModel</span><span class="p">,</span>
+</span><span id="L-18"><a href="#L-18"><span class="linenos">18</span></a>    <span class="n">language</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Language</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="L-19"><a href="#L-19"><span class="linenos">19</span></a>    <span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">DeviceType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="L-20"><a href="#L-20"><span class="linenos">20</span></a>    <span class="o">**</span><span class="n">kwargs</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>  <span class="c1"># noqa: ANN401</span>
+</span><span id="L-21"><a href="#L-21"><span class="linenos">21</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">ScriptLine</span><span class="p">]:</span>
+</span><span id="L-22"><a href="#L-22"><span class="linenos">22</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Transcribes all audios using the given model.</span>
+</span><span id="L-23"><a href="#L-23"><span class="linenos">23</span></a>
+</span><span id="L-24"><a href="#L-24"><span class="linenos">24</span></a><span class="sd">    Args:</span>
+</span><span id="L-25"><a href="#L-25"><span class="linenos">25</span></a><span class="sd">        audios (List[Audio]): The list of audio objects to be transcribed.</span>
+</span><span id="L-26"><a href="#L-26"><span class="linenos">26</span></a><span class="sd">        model (SenselabModel): The model used for transcription.</span>
+</span><span id="L-27"><a href="#L-27"><span class="linenos">27</span></a><span class="sd">        language (Optional[Language]): The language of the audio (default is None).</span>
+</span><span id="L-28"><a href="#L-28"><span class="linenos">28</span></a><span class="sd">        device (Optional[DeviceType]): The device to run the model on (default is None).</span>
+</span><span id="L-29"><a href="#L-29"><span class="linenos">29</span></a><span class="sd">        **kwargs: Additional keyword arguments to pass to the transcription function.</span>
+</span><span id="L-30"><a href="#L-30"><span class="linenos">30</span></a>
+</span><span id="L-31"><a href="#L-31"><span class="linenos">31</span></a><span class="sd">    Returns:</span>
+</span><span id="L-32"><a href="#L-32"><span class="linenos">32</span></a><span class="sd">        List[ScriptLine]: The list of script lines.</span>
 </span><span id="L-33"><a href="#L-33"><span class="linenos">33</span></a>
-</span><span id="L-34"><a href="#L-34"><span class="linenos">34</span></a><span class="sd">    Returns:</span>
-</span><span id="L-35"><a href="#L-35"><span class="linenos">35</span></a><span class="sd">        List[ScriptLine]: The list of script lines.</span>
-</span><span id="L-36"><a href="#L-36"><span class="linenos">36</span></a>
-</span><span id="L-37"><a href="#L-37"><span class="linenos">37</span></a><span class="sd">    Todo:</span>
-</span><span id="L-38"><a href="#L-38"><span class="linenos">38</span></a><span class="sd">        - Include more models (e.g., speechbrain, nvidia)</span>
-</span><span id="L-39"><a href="#L-39"><span class="linenos">39</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="L-40"><a href="#L-40"><span class="linenos">40</span></a>    <span class="k">try</span><span class="p">:</span>
-</span><span id="L-41"><a href="#L-41"><span class="linenos">41</span></a>        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">HFModel</span><span class="p">):</span>
-</span><span id="L-42"><a href="#L-42"><span class="linenos">42</span></a>            <span class="k">return</span> <span class="n">HuggingFaceASR</span><span class="o">.</span><span class="n">transcribe_audios_with_transformers</span><span class="p">(</span>
-</span><span id="L-43"><a href="#L-43"><span class="linenos">43</span></a>                <span class="n">audios</span><span class="o">=</span><span class="n">audios</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span> <span class="n">language</span><span class="o">=</span><span class="n">language</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span>
-</span><span id="L-44"><a href="#L-44"><span class="linenos">44</span></a>            <span class="p">)</span>
-</span><span id="L-45"><a href="#L-45"><span class="linenos">45</span></a>        <span class="k">else</span><span class="p">:</span>
-</span><span id="L-46"><a href="#L-46"><span class="linenos">46</span></a>            <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span><span class="s2">&quot;Only Hugging Face models are supported for now.&quot;</span><span class="p">)</span>
-</span><span id="L-47"><a href="#L-47"><span class="linenos">47</span></a>    <span class="k">except</span> <span class="ne">TypeError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
-</span><span id="L-48"><a href="#L-48"><span class="linenos">48</span></a>        <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="n">e</span><span class="p">)</span>  <span class="c1"># noqa: W0707</span>
+</span><span id="L-34"><a href="#L-34"><span class="linenos">34</span></a><span class="sd">    Todo:</span>
+</span><span id="L-35"><a href="#L-35"><span class="linenos">35</span></a><span class="sd">        - Include more models (e.g., speechbrain, nvidia)</span>
+</span><span id="L-36"><a href="#L-36"><span class="linenos">36</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="L-37"><a href="#L-37"><span class="linenos">37</span></a>    <span class="k">try</span><span class="p">:</span>
+</span><span id="L-38"><a href="#L-38"><span class="linenos">38</span></a>        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">HFModel</span><span class="p">):</span>
+</span><span id="L-39"><a href="#L-39"><span class="linenos">39</span></a>            <span class="k">return</span> <span class="n">HuggingFaceASR</span><span class="o">.</span><span class="n">transcribe_audios_with_transformers</span><span class="p">(</span>
+</span><span id="L-40"><a href="#L-40"><span class="linenos">40</span></a>                <span class="n">audios</span><span class="o">=</span><span class="n">audios</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span> <span class="n">language</span><span class="o">=</span><span class="n">language</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span>
+</span><span id="L-41"><a href="#L-41"><span class="linenos">41</span></a>            <span class="p">)</span>
+</span><span id="L-42"><a href="#L-42"><span class="linenos">42</span></a>        <span class="k">else</span><span class="p">:</span>
+</span><span id="L-43"><a href="#L-43"><span class="linenos">43</span></a>            <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span><span class="s2">&quot;Only Hugging Face models are supported for now.&quot;</span><span class="p">)</span>
+</span><span id="L-44"><a href="#L-44"><span class="linenos">44</span></a>    <span class="k">except</span> <span class="ne">TypeError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+</span><span id="L-45"><a href="#L-45"><span class="linenos">45</span></a>        <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="n">e</span><span class="p">)</span>  <span class="c1"># noqa: W0707</span>
 </span></pre></div>
 
 
@@ -124,37 +121,37 @@ the preferred device, and the model-specific parameters, and senselab handles th
 
     </div>
     <a class="headerlink" href="#transcribe_audios"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="transcribe_audios-19"><a href="#transcribe_audios-19"><span class="linenos">19</span></a><span class="k">def</span> <span class="nf">transcribe_audios</span><span class="p">(</span>
-</span><span id="transcribe_audios-20"><a href="#transcribe_audios-20"><span class="linenos">20</span></a>    <span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">],</span>
-</span><span id="transcribe_audios-21"><a href="#transcribe_audios-21"><span class="linenos">21</span></a>    <span class="n">model</span><span class="p">:</span> <span class="n">SenselabModel</span><span class="p">,</span>
-</span><span id="transcribe_audios-22"><a href="#transcribe_audios-22"><span class="linenos">22</span></a>    <span class="n">language</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Language</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="transcribe_audios-23"><a href="#transcribe_audios-23"><span class="linenos">23</span></a>    <span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">DeviceType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="transcribe_audios-24"><a href="#transcribe_audios-24"><span class="linenos">24</span></a>    <span class="o">**</span><span class="n">kwargs</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>  <span class="c1"># noqa: ANN401</span>
-</span><span id="transcribe_audios-25"><a href="#transcribe_audios-25"><span class="linenos">25</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">ScriptLine</span><span class="p">]:</span>
-</span><span id="transcribe_audios-26"><a href="#transcribe_audios-26"><span class="linenos">26</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Transcribes all audios using the given model.</span>
-</span><span id="transcribe_audios-27"><a href="#transcribe_audios-27"><span class="linenos">27</span></a>
-</span><span id="transcribe_audios-28"><a href="#transcribe_audios-28"><span class="linenos">28</span></a><span class="sd">    Args:</span>
-</span><span id="transcribe_audios-29"><a href="#transcribe_audios-29"><span class="linenos">29</span></a><span class="sd">        audios (List[Audio]): The list of audio objects to be transcribed.</span>
-</span><span id="transcribe_audios-30"><a href="#transcribe_audios-30"><span class="linenos">30</span></a><span class="sd">        model (SenselabModel): The model used for transcription.</span>
-</span><span id="transcribe_audios-31"><a href="#transcribe_audios-31"><span class="linenos">31</span></a><span class="sd">        language (Optional[Language]): The language of the audio (default is None).</span>
-</span><span id="transcribe_audios-32"><a href="#transcribe_audios-32"><span class="linenos">32</span></a><span class="sd">        device (Optional[DeviceType]): The device to run the model on (default is None).</span>
-</span><span id="transcribe_audios-33"><a href="#transcribe_audios-33"><span class="linenos">33</span></a><span class="sd">        **kwargs: Additional keyword arguments to pass to the transcription function.</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="transcribe_audios-16"><a href="#transcribe_audios-16"><span class="linenos">16</span></a><span class="k">def</span> <span class="nf">transcribe_audios</span><span class="p">(</span>
+</span><span id="transcribe_audios-17"><a href="#transcribe_audios-17"><span class="linenos">17</span></a>    <span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">],</span>
+</span><span id="transcribe_audios-18"><a href="#transcribe_audios-18"><span class="linenos">18</span></a>    <span class="n">model</span><span class="p">:</span> <span class="n">SenselabModel</span><span class="p">,</span>
+</span><span id="transcribe_audios-19"><a href="#transcribe_audios-19"><span class="linenos">19</span></a>    <span class="n">language</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Language</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="transcribe_audios-20"><a href="#transcribe_audios-20"><span class="linenos">20</span></a>    <span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">DeviceType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="transcribe_audios-21"><a href="#transcribe_audios-21"><span class="linenos">21</span></a>    <span class="o">**</span><span class="n">kwargs</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>  <span class="c1"># noqa: ANN401</span>
+</span><span id="transcribe_audios-22"><a href="#transcribe_audios-22"><span class="linenos">22</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">ScriptLine</span><span class="p">]:</span>
+</span><span id="transcribe_audios-23"><a href="#transcribe_audios-23"><span class="linenos">23</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Transcribes all audios using the given model.</span>
+</span><span id="transcribe_audios-24"><a href="#transcribe_audios-24"><span class="linenos">24</span></a>
+</span><span id="transcribe_audios-25"><a href="#transcribe_audios-25"><span class="linenos">25</span></a><span class="sd">    Args:</span>
+</span><span id="transcribe_audios-26"><a href="#transcribe_audios-26"><span class="linenos">26</span></a><span class="sd">        audios (List[Audio]): The list of audio objects to be transcribed.</span>
+</span><span id="transcribe_audios-27"><a href="#transcribe_audios-27"><span class="linenos">27</span></a><span class="sd">        model (SenselabModel): The model used for transcription.</span>
+</span><span id="transcribe_audios-28"><a href="#transcribe_audios-28"><span class="linenos">28</span></a><span class="sd">        language (Optional[Language]): The language of the audio (default is None).</span>
+</span><span id="transcribe_audios-29"><a href="#transcribe_audios-29"><span class="linenos">29</span></a><span class="sd">        device (Optional[DeviceType]): The device to run the model on (default is None).</span>
+</span><span id="transcribe_audios-30"><a href="#transcribe_audios-30"><span class="linenos">30</span></a><span class="sd">        **kwargs: Additional keyword arguments to pass to the transcription function.</span>
+</span><span id="transcribe_audios-31"><a href="#transcribe_audios-31"><span class="linenos">31</span></a>
+</span><span id="transcribe_audios-32"><a href="#transcribe_audios-32"><span class="linenos">32</span></a><span class="sd">    Returns:</span>
+</span><span id="transcribe_audios-33"><a href="#transcribe_audios-33"><span class="linenos">33</span></a><span class="sd">        List[ScriptLine]: The list of script lines.</span>
 </span><span id="transcribe_audios-34"><a href="#transcribe_audios-34"><span class="linenos">34</span></a>
-</span><span id="transcribe_audios-35"><a href="#transcribe_audios-35"><span class="linenos">35</span></a><span class="sd">    Returns:</span>
-</span><span id="transcribe_audios-36"><a href="#transcribe_audios-36"><span class="linenos">36</span></a><span class="sd">        List[ScriptLine]: The list of script lines.</span>
-</span><span id="transcribe_audios-37"><a href="#transcribe_audios-37"><span class="linenos">37</span></a>
-</span><span id="transcribe_audios-38"><a href="#transcribe_audios-38"><span class="linenos">38</span></a><span class="sd">    Todo:</span>
-</span><span id="transcribe_audios-39"><a href="#transcribe_audios-39"><span class="linenos">39</span></a><span class="sd">        - Include more models (e.g., speechbrain, nvidia)</span>
-</span><span id="transcribe_audios-40"><a href="#transcribe_audios-40"><span class="linenos">40</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="transcribe_audios-41"><a href="#transcribe_audios-41"><span class="linenos">41</span></a>    <span class="k">try</span><span class="p">:</span>
-</span><span id="transcribe_audios-42"><a href="#transcribe_audios-42"><span class="linenos">42</span></a>        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">HFModel</span><span class="p">):</span>
-</span><span id="transcribe_audios-43"><a href="#transcribe_audios-43"><span class="linenos">43</span></a>            <span class="k">return</span> <span class="n">HuggingFaceASR</span><span class="o">.</span><span class="n">transcribe_audios_with_transformers</span><span class="p">(</span>
-</span><span id="transcribe_audios-44"><a href="#transcribe_audios-44"><span class="linenos">44</span></a>                <span class="n">audios</span><span class="o">=</span><span class="n">audios</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span> <span class="n">language</span><span class="o">=</span><span class="n">language</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span>
-</span><span id="transcribe_audios-45"><a href="#transcribe_audios-45"><span class="linenos">45</span></a>            <span class="p">)</span>
-</span><span id="transcribe_audios-46"><a href="#transcribe_audios-46"><span class="linenos">46</span></a>        <span class="k">else</span><span class="p">:</span>
-</span><span id="transcribe_audios-47"><a href="#transcribe_audios-47"><span class="linenos">47</span></a>            <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span><span class="s2">&quot;Only Hugging Face models are supported for now.&quot;</span><span class="p">)</span>
-</span><span id="transcribe_audios-48"><a href="#transcribe_audios-48"><span class="linenos">48</span></a>    <span class="k">except</span> <span class="ne">TypeError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
-</span><span id="transcribe_audios-49"><a href="#transcribe_audios-49"><span class="linenos">49</span></a>        <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="n">e</span><span class="p">)</span>  <span class="c1"># noqa: W0707</span>
+</span><span id="transcribe_audios-35"><a href="#transcribe_audios-35"><span class="linenos">35</span></a><span class="sd">    Todo:</span>
+</span><span id="transcribe_audios-36"><a href="#transcribe_audios-36"><span class="linenos">36</span></a><span class="sd">        - Include more models (e.g., speechbrain, nvidia)</span>
+</span><span id="transcribe_audios-37"><a href="#transcribe_audios-37"><span class="linenos">37</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="transcribe_audios-38"><a href="#transcribe_audios-38"><span class="linenos">38</span></a>    <span class="k">try</span><span class="p">:</span>
+</span><span id="transcribe_audios-39"><a href="#transcribe_audios-39"><span class="linenos">39</span></a>        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">HFModel</span><span class="p">):</span>
+</span><span id="transcribe_audios-40"><a href="#transcribe_audios-40"><span class="linenos">40</span></a>            <span class="k">return</span> <span class="n">HuggingFaceASR</span><span class="o">.</span><span class="n">transcribe_audios_with_transformers</span><span class="p">(</span>
+</span><span id="transcribe_audios-41"><a href="#transcribe_audios-41"><span class="linenos">41</span></a>                <span class="n">audios</span><span class="o">=</span><span class="n">audios</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span> <span class="n">language</span><span class="o">=</span><span class="n">language</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span>
+</span><span id="transcribe_audios-42"><a href="#transcribe_audios-42"><span class="linenos">42</span></a>            <span class="p">)</span>
+</span><span id="transcribe_audios-43"><a href="#transcribe_audios-43"><span class="linenos">43</span></a>        <span class="k">else</span><span class="p">:</span>
+</span><span id="transcribe_audios-44"><a href="#transcribe_audios-44"><span class="linenos">44</span></a>            <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span><span class="s2">&quot;Only Hugging Face models are supported for now.&quot;</span><span class="p">)</span>
+</span><span id="transcribe_audios-45"><a href="#transcribe_audios-45"><span class="linenos">45</span></a>    <span class="k">except</span> <span class="ne">TypeError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+</span><span id="transcribe_audios-46"><a href="#transcribe_audios-46"><span class="linenos">46</span></a>        <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="n">e</span><span class="p">)</span>  <span class="c1"># noqa: W0707</span>
 </span></pre></div>
 
 
