@@ -45,11 +45,10 @@ jobs:
         pipx ensurepath
       shell: bash
     - name: Install poetry
-      run: pipx install poetry==1.7.1
+      run: pipx install poetry
       shell: bash
     - name: Install dependencies with Poetry
       run: |
-        poetry run pip install iso-639
         poetry install --with dev,docs
       shell: bash
     - name: Build docs

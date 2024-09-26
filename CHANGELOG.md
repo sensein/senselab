@@ -1,3 +1,42 @@
+# 0.14.1 (Thu Sep 26 2024)
+
+#### 🐛 Bug Fix
+
+- fixing transformers version to 4.44.2 until they solve some issues with the text-to-speech pipeline [#167](https://github.com/sensein/senselab/pull/167) ([@fabiocat93](https://github.com/fabiocat93))
+- switch to poetry - last [#164](https://github.com/sensein/senselab/pull/164) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.14.0 (Fri Sep 20 2024)
+
+#### 🚀 Enhancement
+
+- Add audio windowing iterator [#142](https://github.com/sensein/senselab/pull/142) ([@ibevers](https://github.com/ibevers) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@ibevers](https://github.com/ibevers)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.13.0 (Fri Sep 20 2024)
+
+#### 🚀 Enhancement
+
+- GitHub wf experiments [#163](https://github.com/sensein/senselab/pull/163) ([@fabiocat93](https://github.com/fabiocat93) [@wilke0818](https://github.com/wilke0818))
+
+#### Authors: 2
+
+- [@wilke0818](https://github.com/wilke0818)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.12.0 (Thu Sep 12 2024)
 
 #### 🚀 Enhancement

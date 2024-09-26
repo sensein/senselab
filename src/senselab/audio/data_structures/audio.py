@@ -7,7 +7,8 @@ ease of maintaining the codebase and offering consistent public APIs.
 
 import os
 import uuid
-from typing import Dict, List, Optional, Tuple, Union
+import warnings
+from typing import Dict, Generator, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -101,6 +102,30 @@ class Audio(BaseModel):
         if isinstance(other, Audio):
             return self.id() == other.id()
         return False
+
+    def window_generator(self, window_size: int, step_size: int) -> Generator[torch.Tensor, None, None]:
+        """Creates a sliding window generator for the audio waveform.
+
+        Args:
+            window_size: Size of each window (number of samples).
+            step_size: Step size for sliding the window (number of samples).
+
+        Raises:
+            ValueError: If step_size is greater than window_size.
+        """
+        if step_size > window_size:
+            warnings.warn(
+                "Step size is greater than window size. \
+                          Some of audio will not be included in the windows."
+            )
+
+        num_samples = self.waveform.size(-1)
+        current_position = 0
+
+        while current_position < num_samples - window_size:
+            window = self.waveform[:, current_position : current_position + window_size]
+            yield window
+            current_position += step_size
 
 
 def batch_audios(audios: List[Audio]) -> Tuple[torch.Tensor, Union[int, List[int]], List[Dict]]:

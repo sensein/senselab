@@ -78,6 +78,9 @@ class HFFactory:
         device, _ = _select_device_and_dtype(
             user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
         )
+
+        print(f"Using device: {device}")
+
         # Load tokenizer and model
         tokenizer = cls._get_tokenizer(model=model)
         ssl_model = cls._load_model(model=model, device=device)
@@ -87,13 +90,15 @@ class HFFactory:
         # Process each piece of text individually
         for text in pieces_of_text:
             # Tokenize sentence
-            encoded_input = tokenizer(text, return_tensors="pt").to(device)
+            encoded_input = tokenizer(text, return_tensors="pt").to(device.value)
 
             # Compute token embeddings
             with torch.no_grad():
                 model_output = ssl_model(**encoded_input, output_hidden_states=True)
                 hidden_states = model_output.hidden_states
-                concatenated_hidden_states = torch.cat([state.unsqueeze(0) for state in hidden_states], dim=0)
+                concatenated_hidden_states = torch.cat(
+                    [state.to(device.value).unsqueeze(0) for state in hidden_states], dim=0
+                )
                 embeddings.append(concatenated_hidden_states.squeeze())
 
         return embeddings
