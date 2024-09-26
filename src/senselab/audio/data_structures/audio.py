@@ -132,7 +132,7 @@ class Audio(BaseModel):
             end_position = current_position + window_size
 
             # If the end_position exceeds the number of samples, take the remaining samples
-            # This is not necessary since it is done automatically when slicing tensors. 
+            # This is not necessary since it is done automatically when slicing tensors.
             # However, it is more explicit.
             if end_position > num_samples:
                 end_position = num_samples
