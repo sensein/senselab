@@ -27,8 +27,8 @@ pip install git+https://github.com/sensein/senselab.git
 
 ## Quick start
 ```Python
-from senselab.audio.data_structures.audio import Audio
-from senselab.audio.tasks.preprocessing.preprocessing import resample_audios
+from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.preprocessing import resample_audios
 
 audio1 = Audio.from_filepath('path_to_audio_file.wav')
 

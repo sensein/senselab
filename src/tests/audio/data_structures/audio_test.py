@@ -5,7 +5,7 @@ import warnings
 import torch
 import torchaudio
 
-from senselab.audio.data_structures.audio import Audio
+from senselab.audio.data_structures import Audio
 from tests.audio.conftest import MONO_AUDIO_PATH, STEREO_AUDIO_PATH
 
 

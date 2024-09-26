@@ -2,11 +2,10 @@
 
 from typing import Dict, List, Optional
 
-import pydra
 import torch
 import torchaudio
 
-from senselab.audio.data_structures.audio import Audio
+from senselab.audio.data_structures import Audio
 
 
 def extract_spectrogram_from_audios(
@@ -182,10 +181,3 @@ def extract_pitch_from_audios(
             }
         )
     return pitches
-
-
-extract_spectrogram_from_audios_pt = pydra.mark.task(extract_spectrogram_from_audios)
-extract_mel_spectrogram_from_audios_pt = pydra.mark.task(extract_mel_spectrogram_from_audios)
-extract_mfcc_from_audios_pt = pydra.mark.task(extract_mfcc_from_audios)
-extract_mel_filter_bank_from_audios_pt = pydra.mark.task(extract_mel_filter_bank_from_audios)
-extract_pitch_from_audios_pt = pydra.mark.task(extract_pitch_from_audios)

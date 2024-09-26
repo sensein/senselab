@@ -5,8 +5,8 @@ from typing import List
 import pytest
 import torch
 
-from senselab.text.tasks.embeddings_extraction.api import extract_embeddings_from_text
-from senselab.utils.data_structures.model import HFModel, SentenceTransformersModel
+from senselab.text.tasks.embeddings_extraction import extract_embeddings_from_text
+from senselab.utils.data_structures import HFModel, SentenceTransformersModel
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")

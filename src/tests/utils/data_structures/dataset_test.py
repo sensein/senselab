@@ -6,9 +6,9 @@ import torch
 import torchaudio
 from datasets import load_dataset
 
-from senselab.audio.data_structures.audio import Audio
-from senselab.utils.data_structures.dataset import Participant, SenselabDataset, Session
-from senselab.video.data_structures.video import Video
+from senselab.audio.data_structures import Audio
+from senselab.utils.data_structures import Participant, SenselabDataset, Session
+from senselab.video.data_structures import Video
 
 
 def test_create_participant() -> None:

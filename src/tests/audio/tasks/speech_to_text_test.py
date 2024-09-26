@@ -5,13 +5,10 @@ from typing import Callable
 import pytest
 import torch
 
-from senselab.audio.data_structures.audio import Audio
+from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speech_to_text import transcribe_audios
 from senselab.audio.tasks.speech_to_text.huggingface import HuggingFaceASR
-from senselab.utils.data_structures.device import DeviceType
-from senselab.utils.data_structures.language import Language
-from senselab.utils.data_structures.model import HFModel
-from senselab.utils.data_structures.script_line import ScriptLine
+from senselab.utils.data_structures import DeviceType, HFModel, Language, ScriptLine
 
 
 def test_scriptline_from_dict() -> None:

@@ -1,6 +1,6 @@
 """Provides constants for align functionality."""
 
-from senselab.utils.data_structures.model import HFModel, TorchAudioModel
+from senselab.utils.data_structures import HFModel, TorchAudioModel
 
 SAMPLE_RATE = 16000
 

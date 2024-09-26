@@ -5,8 +5,7 @@ from typing import Dict, List, Optional
 import torch
 from transformers import AutoModel, AutoTokenizer
 
-from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
-from senselab.utils.data_structures.model import HFModel
+from senselab.utils.data_structures import DeviceType, HFModel, _select_device_and_dtype
 
 
 class HFFactory:

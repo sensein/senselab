@@ -10,12 +10,9 @@ from typing import Any, Dict, List, Optional
 
 from transformers import pipeline
 
-from senselab.audio.data_structures.audio import Audio
-from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
-from senselab.utils.data_structures.language import Language
+from senselab.audio.data_structures import Audio
+from senselab.utils.data_structures import DeviceType, HFModel, Language, ScriptLine, _select_device_and_dtype
 from senselab.utils.data_structures.logging import logger
-from senselab.utils.data_structures.model import HFModel
-from senselab.utils.data_structures.script_line import ScriptLine
 
 
 class HuggingFaceASR:

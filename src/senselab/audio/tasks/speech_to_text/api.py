@@ -7,12 +7,9 @@ the preferred device, and the model-specific parameters, and senselab handles th
 
 from typing import Any, List, Optional
 
-from senselab.audio.data_structures.audio import Audio
+from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speech_to_text.huggingface import HuggingFaceASR
-from senselab.utils.data_structures.device import DeviceType
-from senselab.utils.data_structures.language import Language
-from senselab.utils.data_structures.model import HFModel, SenselabModel
-from senselab.utils.data_structures.script_line import ScriptLine
+from senselab.utils.data_structures import DeviceType, HFModel, Language, ScriptLine, SenselabModel
 
 
 def transcribe_audios(
