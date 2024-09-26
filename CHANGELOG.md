@@ -1,3 +1,15 @@
+# 0.14.4 (Thu Sep 26 2024)
+
+#### 🐛 Bug Fix
+
+- adjusting windowing by returning an Audio instead of a waveform [#165](https://github.com/sensein/senselab/pull/165) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.14.3 (Thu Sep 26 2024)
 
 #### 🐛 Bug Fix
