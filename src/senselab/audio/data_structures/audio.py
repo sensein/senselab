@@ -125,18 +125,17 @@ class Audio(BaseModel):
             )
 
         num_samples = self.waveform.size(-1)
-        print("num_samples:", num_samples)
         current_position = 0
 
         while current_position < num_samples:
-            print("current_position:", current_position)
             # Calculate the end position of the window
             end_position = current_position + window_size
 
             # If the end_position exceeds the number of samples, take the remaining samples
+            # This is not necessary since it is done automatically when slicing tensors. 
+            # However, it is more explicit.
             if end_position > num_samples:
                 end_position = num_samples
-            print("end_position:", end_position)
 
             # Get the windowed waveform
             window_waveform = self.waveform[:, current_position:end_position]
