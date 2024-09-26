@@ -1,17 +1,10 @@
-"""This module implements some utilities for the speaker diarization task.
-
-# TODO: add computing DER and more evaluation metrics
-"""
+"""This module implements some utilities for the speaker diarization task."""
 
 from typing import List, Optional
 
-import pydra
-
-from senselab.audio.data_structures.audio import Audio
+from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speaker_diarization.pyannote import diarize_audios_with_pyannote
-from senselab.utils.data_structures.device import DeviceType
-from senselab.utils.data_structures.model import PyannoteAudioModel, SenselabModel
-from senselab.utils.data_structures.script_line import ScriptLine
+from senselab.utils.data_structures import DeviceType, PyannoteAudioModel, ScriptLine, SenselabModel
 
 
 def diarize_audios(
@@ -47,6 +40,3 @@ def diarize_audios(
         )
     else:
         raise NotImplementedError("Only Pyannote models are supported for now.")
-
-
-diarize_audios_pt = pydra.mark.task(diarize_audios)

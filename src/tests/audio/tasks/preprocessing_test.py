@@ -6,8 +6,8 @@ import pytest
 import torch
 from pytest import FixtureRequest
 
-from senselab.audio.data_structures.audio import Audio
-from senselab.audio.tasks.preprocessing.preprocessing import (
+from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.preprocessing import (
     chunk_audios,
     downmix_audios_to_mono,
     evenly_segment_audios,

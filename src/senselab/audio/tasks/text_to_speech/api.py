@@ -2,12 +2,10 @@
 
 from typing import Any, List, Optional, Tuple, TypeGuard
 
-from senselab.audio.data_structures.audio import Audio
+from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.text_to_speech.huggingface import HuggingFaceTTS
 from senselab.audio.tasks.text_to_speech.marstts import Mars5TTS
-from senselab.utils.data_structures.device import DeviceType
-from senselab.utils.data_structures.language import Language
-from senselab.utils.data_structures.model import HFModel, SenselabModel, TorchModel
+from senselab.utils.data_structures import DeviceType, HFModel, Language, SenselabModel, TorchModel
 
 
 def synthesize_texts(

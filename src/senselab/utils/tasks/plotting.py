@@ -5,7 +5,7 @@ from typing import List
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 
-from senselab.utils.data_structures.script_line import ScriptLine
+from senselab.utils.data_structures import ScriptLine
 
 
 def plot_transcript(transcript: ScriptLine) -> None:

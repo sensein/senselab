@@ -4,9 +4,8 @@ from typing import Any, Dict, List, Optional
 
 import torch
 
-from senselab.audio.data_structures.audio import Audio
-from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
-from senselab.utils.data_structures.model import TorchModel
+from senselab.audio.data_structures import Audio
+from senselab.utils.data_structures import DeviceType, TorchModel, _select_device_and_dtype
 
 
 class KNNVC:

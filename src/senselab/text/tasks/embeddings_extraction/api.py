@@ -6,8 +6,7 @@ import torch
 
 from senselab.text.tasks.embeddings_extraction.huggingface import HFFactory
 from senselab.text.tasks.embeddings_extraction.sentence_transformers import SentenceTransformerFactory
-from senselab.utils.data_structures.device import DeviceType
-from senselab.utils.data_structures.model import HFModel, SenselabModel, SentenceTransformersModel
+from senselab.utils.data_structures import DeviceType, HFModel, SenselabModel, SentenceTransformersModel
 
 
 def extract_embeddings_from_text(
