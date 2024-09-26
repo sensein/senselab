@@ -1,3 +1,16 @@
+# 0.14.3 (Thu Sep 26 2024)
+
+#### 🐛 Bug Fix
+
+- Update redundant imports [#128](https://github.com/sensein/senselab/pull/128) ([@fabiocat93](https://github.com/fabiocat93) [@ibevers](https://github.com/ibevers))
+
+#### Authors: 2
+
+- [@ibevers](https://github.com/ibevers)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.14.2 (Thu Sep 26 2024)
 
 #### 🐛 Bug Fix
