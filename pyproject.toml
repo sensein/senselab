@@ -55,7 +55,13 @@ numpy = "~=1.25"
 umap-learn = "~=0.5"
 scikit-learn = "~=1.5"
 nltk = "~=3.8"
+rouge-score = "~=0.1"
+tiktoken = "^0.7.0"
+sacrebleu = "^2.4.3"
+pytest-testmon = "^2.1.1"
 vocos = "~=0.1"
+deepeval = "^1.2.2"
+textstat = "^0.7.4"
 iso639 = "~=0.1.4"
 
 [tool.poetry.group.dev]
@@ -159,7 +165,7 @@ skip = [
   "docs_style/pdoc-theme/syntax-highlighting.css",
   "*.ipynb"
 ]
-ignore-words-list = ["senselab", "nd", "astroid", "wil", "SER", "te"]
+ignore-words-list = ["senselab", "nd", "astroid", "wil", "SER", "te", "ROUGE", "rouge"]
 
 [build-system]
 requires = ["poetry-core>=1.0.0", "poetry-dynamic-versioning>=1.0.0,<2.0.0"]
