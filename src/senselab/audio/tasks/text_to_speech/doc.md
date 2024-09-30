@@ -1,6 +1,6 @@
 # Text to Speech
 
-<button class="tutorial-button" onclick="window.location.href='https://github.com/sensein/senselab/blob/main/tutorials/text_to_speech.ipynb'">Tutorial</button>
+<button class="tutorial-button" onclick="window.location.href='https://github.com/sensein/senselab/blob/main/tutorials/audio/text_to_speech.ipynb'">Tutorial</button>
 
 ## Task Overview
 
