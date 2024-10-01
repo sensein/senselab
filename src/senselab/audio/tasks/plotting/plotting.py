@@ -63,6 +63,7 @@ def plot_specgram(audio: AudioData, mel_scale: bool = False, title: str = "Spect
         - Add option to save the plot
         - Add option to choose the size of the Figure
     """
+
     def _power_to_db(
         spectrogram: np.ndarray, ref: float = 1.0, amin: float = 1e-10, top_db: float = 80.0
     ) -> np.ndarray:
@@ -167,4 +168,3 @@ def play_audio(audio: AudioData) -> None:
         display(Audio((waveform[0], waveform[1]), rate=sample_rate))
     else:
         raise ValueError("Waveform with more than 2 channels are not supported.")
-    
