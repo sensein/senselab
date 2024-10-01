@@ -34,7 +34,7 @@ def test_extract_spectrogram_from_audios(resampled_mono_audio_sample: Audio) -> 
     assert all(isinstance(spec["spectrogram"], torch.Tensor) for spec in result)
     # Spectrogram shape is (freq, time)
     assert all(spec["spectrogram"].dim() == 2 for spec in result)
-    assert all(spec["spectrogram"].shape[0] == 201 for spec in result)
+    assert all(spec["spectrogram"].shape[0] == 513 for spec in result)
 
 
 def test_extract_mel_spectrogram_from_audios(resampled_mono_audio_sample: Audio) -> None:
