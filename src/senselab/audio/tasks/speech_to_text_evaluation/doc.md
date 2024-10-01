@@ -1,7 +1,7 @@
 # Speech to text evaluation
 
 
-<button class="tutorial-button" onclick="window.location.href='https://github.com/sensein/senselab/blob/main/tutorials/speech_to_text.ipynb'">Tutorial</button>
+<button class="tutorial-button" onclick="window.location.href='https://github.com/sensein/senselab/blob/main/tutorials/audiospeech_to_text.ipynb'">Tutorial</button>
 
 
 # Overview

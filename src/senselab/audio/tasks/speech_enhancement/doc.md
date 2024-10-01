@@ -1,7 +1,7 @@
 # Speech enhancement
 
 
-<button class="tutorial-button" onclick="window.location.href='https://github.com/sensein/senselab/blob/main/tutorials/speech_enhancement.ipynb'">Tutorial</button>
+<button class="tutorial-button" onclick="window.location.href='https://github.com/sensein/senselab/blob/main/tutorials/audiospeech_enhancement.ipynb'">Tutorial</button>
 
 
 ## Task Overview
