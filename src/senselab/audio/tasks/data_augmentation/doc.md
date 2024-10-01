@@ -20,6 +20,7 @@ Here are some commonly used audio data augmentation techniques:
 - [audiomentations](https://github.com/iver56/audiomentations): A CPU-based Python library offering a wide variety of audio augmentation transforms. It's inspired by albumentations and optimized for deep learning tasks, such as speech processing and noise-robustness testing. It supports both mono and multichannel audio, with an easy-to-use interface.
 
 - [torch-audiomentations](https://github.com/asteroid-team/torch-audiomentations): A GPU-accelerated augmentation library for PyTorch, allowing for efficient real-time augmentation. This is ideal for speeding up model training and reducing data loading times. It supports a subset of the techniques from audiomentations but is optimized for high-speed processing.
+Compared to `audiomentations`, `torch-audiomentations` offers a more limited set of augmentation types.
 
 In `senselab`, when these libraries run on a CPU, they utilize concurrent futures through `Pydra` for optimization.
 
