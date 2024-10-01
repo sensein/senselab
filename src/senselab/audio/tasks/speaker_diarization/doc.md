@@ -1,6 +1,6 @@
 # Speaker diarization
 
-[![Tutorial](https://img.shields.io/badge/Tutorial-Click%20Here-blue?style=for-the-badge)](https://github.com/sensein/senselab/blob/main/tutorials/speaker_diarization.ipynb)
+[![Tutorial](https://img.shields.io/badge/Tutorial-Click%20Here-blue?style=for-the-badge)](https://github.com/sensein/senselab/blob/main/tutorials/audio/speaker_diarization.ipynb)
 
 ## Task Overview
 Speaker diarization is the process of segmenting audio recordings by speaker labels, aiming to answer the question: **"Who spoke when?"**

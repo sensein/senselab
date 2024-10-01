@@ -1,7 +1,7 @@
 # Speaker Verification
 Last updated: 08/13/2024
 
-<button class="tutorial-button" onclick="window.location.href='https://github.com/sensein/senselab/blob/main/tutorials/speaker_verification.ipynb'">Tutorial</button>
+<button class="tutorial-button" onclick="window.location.href='https://github.com/sensein/senselab/blob/main/tutorials/audio/speaker_verification.ipynb'">Tutorial</button>
 
 ## Task Overview
 Speaker verification is identity authentication based on voice features.
