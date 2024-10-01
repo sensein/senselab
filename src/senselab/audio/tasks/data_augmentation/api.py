@@ -1,6 +1,6 @@
 """This module provides the API for data augmentation tasks."""
 
-from typing import List, Union
+from typing import List, Optional, Union
 
 from audiomentations import Compose as AudiomentationsCompose
 from torch_audiomentations import Compose as TorchAudiomentationsCompose
@@ -14,7 +14,7 @@ from senselab.utils.data_structures import DeviceType
 def augment_audios(
     audios: List[Audio],
     augmentation: Union[TorchAudiomentationsCompose, AudiomentationsCompose],
-    device: DeviceType = DeviceType.CPU,
+    device: Optional[DeviceType] = None,
 ) -> List[Audio]:
     """Augments all provided audios.
 
@@ -25,6 +25,7 @@ def augment_audios(
         audios: List of Audios whose data will be augmented with the given augmentations.
         augmentation: A composition of augmentations (torch-audiomentations or audiomentations).
         device: The device to use for augmenting (relevant for torch-audiomentations).
+            Defaults is None.
 
     Returns:
         List of augmented audios.
