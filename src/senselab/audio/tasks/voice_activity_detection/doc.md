@@ -1,6 +1,6 @@
 # Voice Activity Detection (VAD)
 
-[![Tutorial](https://img.shields.io/badge/Tutorial-Click%20Here-blue?style=for-the-badge)](https://github.com/sensein/senselab/blob/main/tutorials/voice_activity_detection.ipynb)
+[![Tutorial](https://img.shields.io/badge/Tutorial-Click%20Here-blue?style=for-the-badge)](https://github.com/sensein/senselab/blob/main/tutorials/audio/voice_activity_detection.ipynb)
 
 ## Task Overview
 
