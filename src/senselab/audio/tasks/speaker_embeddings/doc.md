@@ -1,7 +1,7 @@
 # Speech to text evaluation
 
 
-<button class="tutorial-button" onclick="window.location.href='https://github.com/sensein/senselab/blob/main/tutorials/extract_speaker_embeddings.ipynb'">Tutorial</button>
+<button class="tutorial-button" onclick="window.location.href='https://github.com/sensein/senselab/blob/main/tutorials/audioextract_speaker_embeddings.ipynb'">Tutorial</button>
 
 
 ## Overview

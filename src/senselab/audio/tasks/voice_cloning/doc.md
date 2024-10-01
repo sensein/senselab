@@ -1,7 +1,7 @@
 # Voice cloning
 
 
-<button class="tutorial-button" onclick="window.location.href='https://github.com/sensein/senselab/blob/main/tutorials/voice_cloning.ipynb'">Tutorial</button>
+<button class="tutorial-button" onclick="window.location.href='https://github.com/sensein/senselab/blob/main/tutorials/audiovoice_cloning.ipynb'">Tutorial</button>
 
 
 ## Task Overview
