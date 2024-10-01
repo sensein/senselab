@@ -1,6 +1,6 @@
 """This module implements some utilities for audio data augmentation with torch_audiomentations."""
 
-from typing import List
+from typing import List, Optional
 
 import pydra
 import torch
@@ -15,7 +15,7 @@ from senselab.utils.data_structures import DeviceType, _select_device_and_dtype
 
 
 def augment_audios_with_torch_audiomentations(
-    audios: List[Audio], augmentation: Compose, device: DeviceType = DeviceType.CPU
+    audios: List[Audio], augmentation: Compose, device: Optional[DeviceType] = None
 ) -> List[Audio]:
     """Augments all provided audios with a given augmentation, either individually or all batched together.
 
@@ -30,7 +30,8 @@ def augment_audios_with_torch_audiomentations(
             output_type set to "dict"
         device: The device to use for augmenting. If the chosen device
             is MPS or CUDA then the audios are all batched together, so for optimal performance, batching should
-            be done by passing a batch_size worth of audios ar a time
+            be done by passing a batch_size worth of audios ar a time.
+            Default is None, which will select the device automatically.
 
     Returns:
         List of audios that has passed the all of input audios through the provided augmentation. This does
