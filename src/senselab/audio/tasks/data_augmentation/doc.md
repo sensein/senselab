@@ -1,4 +1,4 @@
-# Audio Data Augmentation
+# Audio data augmentation
 
 <button class="tutorial-button" onclick="window.location.href='https://github.com/sensein/senselab/blob/main/tutorials/audio/audio_data_augmentation.ipynb'">Tutorial</button>
 
