@@ -1,3 +1,15 @@
+# 0.14.5 (Tue Oct 01 2024)
+
+#### 🐛 Bug Fix
+
+- adjusting verification tutorial and fixtures [#168](https://github.com/sensein/senselab/pull/168) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.14.4 (Thu Sep 26 2024)
 
 #### 🐛 Bug Fix
