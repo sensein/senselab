@@ -29,7 +29,7 @@ def augment_audios_with_torch_audiomentations(
         augmentation: A Composition of augmentations to run on each audio (uses torch-audiomentations), should have its
             output_type set to "dict"
         device: The device to use for augmenting. If the chosen device
-            is MPS or CUDA then the audios are all batched together, so for optimal performance, batching should
+            is CUDA then the audios are all batched together, so for optimal performance, batching should
             be done by passing a batch_size worth of audios ar a time.
             Default is None, which will select the device automatically.
 
@@ -40,7 +40,7 @@ def augment_audios_with_torch_audiomentations(
     """
     augmentation.output_type = "dict"
     device_type, dtype = _select_device_and_dtype(
-        user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.MPS, DeviceType.CPU]
+        user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
     )
     if device_type == DeviceType.CPU:
 
