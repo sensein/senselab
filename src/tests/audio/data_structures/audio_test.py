@@ -16,15 +16,15 @@ def load_audio(file_path: str) -> Tuple[torch.Tensor, int]:
 
 
 @pytest.mark.parametrize(
-    "audio_sample, audio_path",
+    "audio_fixture, audio_path",
     [
         ("mono_audio_sample", MONO_AUDIO_PATH),
         ("stereo_audio_sample", STEREO_AUDIO_PATH),
     ],
 )
-def test_audio_creation(audio_sample: Audio, audio_path: str, request: pytest.FixtureRequest) -> None:
+def test_audio_creation(audio_fixture: str, audio_path: str, request: pytest.FixtureRequest) -> None:
     """Tests mono and stereo audio creation."""
-    audio_sample = request.getfixturevalue(audio_sample)
+    audio_sample = request.getfixturevalue(audio_fixture)
     audio_data, audio_sr = load_audio(audio_path)
     audio = Audio(
         waveform=audio_data,
@@ -35,15 +35,15 @@ def test_audio_creation(audio_sample: Audio, audio_path: str, request: pytest.Fi
 
 
 @pytest.mark.parametrize(
-    "audio_sample, audio_path",
+    "audio_fixture, audio_path",
     [
         ("mono_audio_sample", MONO_AUDIO_PATH),
         ("stereo_audio_sample", STEREO_AUDIO_PATH),
     ],
 )
-def test_audio_creation_uuid(audio_sample: Audio, audio_path: str, request: pytest.FixtureRequest) -> None:
+def test_audio_creation_uuid(audio_fixture: str, audio_path: str, request: pytest.FixtureRequest) -> None:
     """Tests audio creation with different UUID."""
-    audio_sample = request.getfixturevalue(audio_sample)
+    audio_sample = request.getfixturevalue(audio_fixture)
     audio_data, audio_sr = load_audio(audio_path)
     audio_uuid = Audio(waveform=audio_data, sampling_rate=audio_sr)
     assert audio_sample == audio_uuid, "Audio with different IDs should still be equivalent"
@@ -59,31 +59,31 @@ def test_audio_single_tensor(mono_audio_sample: Audio) -> None:
 
 
 @pytest.mark.parametrize(
-    "audio_sample, audio_path",
+    "audio_fixture, audio_path",
     [
         ("mono_audio_sample", MONO_AUDIO_PATH),
     ],
 )
-def test_audio_from_list(audio_sample: Audio, audio_path: str, request: pytest.FixtureRequest) -> None:
+def test_audio_from_list(audio_fixture: str, audio_path: str, request: pytest.FixtureRequest) -> None:
     """Tests audio creation from list."""
-    audio_sample = request.getfixturevalue(audio_sample)
+    audio_sample = request.getfixturevalue(audio_fixture)
     audio_data, audio_sr = load_audio(audio_path)
     audio_from_list = Audio(waveform=list(audio_data[0]), sampling_rate=audio_sr)
     assert torch.equal(audio_sample.waveform, audio_from_list.waveform), "List audio should've been converted to Tensor"
 
 
 @pytest.mark.parametrize(
-    "audio_sample, window_size, step_size",
+    "audio_fixture, window_size, step_size",
     [
         ("mono_audio_sample", 1024, 512),
         ("stereo_audio_sample", 1024, 512),
     ],
 )
 def test_window_generator_overlap(
-    audio_sample: Audio, window_size: int, step_size: int, request: pytest.FixtureRequest
+    audio_fixture: str, window_size: int, step_size: int, request: pytest.FixtureRequest
 ) -> None:
     """Tests window generator with overlapping windows."""
-    audio_sample = request.getfixturevalue(audio_sample)
+    audio_sample = request.getfixturevalue(audio_fixture)
     audio_length = audio_sample.waveform.size(-1)
 
     windowed_audios: List[Audio] = list(audio_sample.window_generator(window_size, step_size))
@@ -99,17 +99,17 @@ def test_window_generator_overlap(
 
 
 @pytest.mark.parametrize(
-    "audio_sample, window_size, step_size",
+    "audio_fixture, window_size, step_size",
     [
         ("mono_audio_sample", 1024, 1024),
         ("stereo_audio_sample", 1024, 1024),
     ],
 )
 def test_window_generator_exact_fit(
-    audio_sample: Audio, window_size: int, step_size: int, request: pytest.FixtureRequest
+    audio_fixture: str, window_size: int, step_size: int, request: pytest.FixtureRequest
 ) -> None:
     """Tests window generator when step size equals window size."""
-    audio_sample = request.getfixturevalue(audio_sample)
+    audio_sample = request.getfixturevalue(audio_fixture)
     audio_length = audio_sample.waveform.size(-1)
 
     windowed_audios: List[Audio] = list(audio_sample.window_generator(window_size, step_size))
@@ -125,17 +125,17 @@ def test_window_generator_exact_fit(
 
 
 @pytest.mark.parametrize(
-    "audio_sample, window_size, step_size",
+    "audio_fixture, window_size, step_size",
     [
         ("mono_audio_sample", 1024, 2048),
         ("stereo_audio_sample", 1024, 2048),
     ],
 )
 def test_window_generator_step_greater_than_window(
-    audio_sample: Audio, window_size: int, step_size: int, request: pytest.FixtureRequest
+    audio_fixture: str, window_size: int, step_size: int, request: pytest.FixtureRequest
 ) -> None:
     """Tests window generator when step size is greater than window size."""
-    audio_sample = request.getfixturevalue(audio_sample)
+    audio_sample = request.getfixturevalue(audio_fixture)
     audio_length = audio_sample.waveform.size(-1)
 
     windowed_audios: List[Audio] = list(audio_sample.window_generator(window_size, step_size))
@@ -147,15 +147,15 @@ def test_window_generator_step_greater_than_window(
 
 
 @pytest.mark.parametrize(
-    "audio_sample",
+    "audio_fixture",
     [
         "mono_audio_sample",
         "stereo_audio_sample",
     ],
 )
-def test_window_generator_window_greater_than_audio(audio_sample: Audio, request: pytest.FixtureRequest) -> None:
+def test_window_generator_window_greater_than_audio(audio_fixture: str, request: pytest.FixtureRequest) -> None:
     """Tests window generator when window size is greater than the audio length."""
-    audio_sample = request.getfixturevalue(audio_sample)
+    audio_sample = request.getfixturevalue(audio_fixture)
     audio_length = audio_sample.waveform.size(-1)
     window_size = audio_length + 1000  # Set window size greater than audio length
     step_size = window_size
@@ -167,15 +167,15 @@ def test_window_generator_window_greater_than_audio(audio_sample: Audio, request
 
 
 @pytest.mark.parametrize(
-    "audio_sample",
+    "audio_fixture",
     [
         "mono_audio_sample",
         "stereo_audio_sample",
     ],
 )
-def test_window_generator_step_greater_than_audio(audio_sample: Audio, request: pytest.FixtureRequest) -> None:
+def test_window_generator_step_greater_than_audio(audio_fixture: str, request: pytest.FixtureRequest) -> None:
     """Tests window generator when step size is greater than the audio length."""
-    audio_sample = request.getfixturevalue(audio_sample)
+    audio_sample = request.getfixturevalue(audio_fixture)
     audio_length = audio_sample.waveform.size(1)
     window_size = 1024
     step_size = audio_length + 1000  # Step size greater than audio length
