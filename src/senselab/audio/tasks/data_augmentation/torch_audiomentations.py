@@ -42,7 +42,6 @@ def augment_audios_with_torch_audiomentations(
         user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.MPS, DeviceType.CPU]
     )
     if device_type == DeviceType.CPU:
-        print("Using CPU")
 
         def _augment_single_audio(audio: Audio, augmentation: Compose):  # noqa: ANN202
             """Augments a single audio with torch-audiomentations.
