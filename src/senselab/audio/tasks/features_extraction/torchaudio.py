@@ -10,7 +10,7 @@ from senselab.audio.data_structures import Audio
 
 def extract_spectrogram_from_audios(
     audios: List[Audio],
-    n_fft: int = 400,
+    n_fft: int = 1024,
     win_length: Optional[int] = None,
     hop_length: Optional[int] = None,
 ) -> List[Dict[str, torch.Tensor]]:
@@ -18,7 +18,7 @@ def extract_spectrogram_from_audios(
 
     Args:
         audios (List[Audio]): List of Audio objects.
-        n_fft (int): Size of FFT, creates n_fft // 2 + 1 bins. Default is 400.
+        n_fft (int): Size of FFT, creates n_fft // 2 + 1 bins. Default is 1024.
         win_length (int): Window size. Default is None, using n_fft.
         hop_length (int): Length of hop between STFT windows. Default is None, using win_length // 2.
 
@@ -42,7 +42,7 @@ def extract_spectrogram_from_audios(
 
 def extract_mel_spectrogram_from_audios(
     audios: List[Audio],
-    n_fft: Optional[int] = 400,
+    n_fft: Optional[int] = 1024,
     win_length: Optional[int] = None,
     hop_length: Optional[int] = None,
     n_mels: int = 128,
@@ -51,7 +51,7 @@ def extract_mel_spectrogram_from_audios(
 
     Args:
         audios (List[Audio]): List of Audio objects.
-        n_fft (int): Size of FFT, creates n_fft // 2 + 1 bins. Default is 400.
+        n_fft (int): Size of FFT, creates n_fft // 2 + 1 bins. Default is 1024.
         win_length (int): Window size. Default is None, using n_fft.
         hop_length (int): Length of hop between STFT windows. Default is None, using win_length // 2.
         n_mels (int): Number of mel filter banks. Default is 128.
