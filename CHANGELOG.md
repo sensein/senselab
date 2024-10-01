@@ -1,3 +1,15 @@
+# 0.15.0 (Tue Oct 01 2024)
+
+#### 🚀 Enhancement
+
+- re-organizing tutorials [#169](https://github.com/sensein/senselab/pull/169) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.14.5 (Tue Oct 01 2024)
 
 #### 🐛 Bug Fix
