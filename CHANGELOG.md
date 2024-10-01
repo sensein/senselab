@@ -1,3 +1,20 @@
+# 0.16.0 (Tue Oct 01 2024)
+
+#### 🚀 Enhancement
+
+- Bump the production-dependencies group with 6 updates [#172](https://github.com/sensein/senselab/pull/172) ([@dependabot[bot]](https://github.com/dependabot[bot]) [@fabiocat93](https://github.com/fabiocat93))
+
+#### 🔩 Dependency Updates
+
+- Bump aws-actions/configure-aws-credentials from 1 to 4 [#171](https://github.com/sensein/senselab/pull/171) ([@dependabot[bot]](https://github.com/dependabot[bot]))
+
+#### Authors: 2
+
+- [@dependabot[bot]](https://github.com/dependabot[bot])
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.15.1 (Tue Oct 01 2024)
 
 #### 🐛 Bug Fix
