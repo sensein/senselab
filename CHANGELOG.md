@@ -1,3 +1,15 @@
+# 0.15.1 (Tue Oct 01 2024)
+
+#### 🐛 Bug Fix
+
+- Adjusting utilities for plotting spectrograms [#170](https://github.com/sensein/senselab/pull/170) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.15.0 (Tue Oct 01 2024)
 
 #### 🚀 Enhancement
