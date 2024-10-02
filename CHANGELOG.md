@@ -1,3 +1,16 @@
+# 0.17.0 (Wed Oct 02 2024)
+
+#### 🚀 Enhancement
+
+- Review and test data-augmentation [#102](https://github.com/sensein/senselab/pull/102) ([@fabiocat93](https://github.com/fabiocat93) [@ibevers](https://github.com/ibevers))
+
+#### Authors: 2
+
+- [@ibevers](https://github.com/ibevers)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.16.0 (Tue Oct 01 2024)
 
 #### 🚀 Enhancement
