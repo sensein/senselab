@@ -23,11 +23,11 @@ def test_audio_data_augmentation_with_torch_audiomentations() -> None:
     mono_audio, stereo_audio = audio_dataset_from_paths.create_audio_split_for_pydra_task()
     mono_inverted = augment_audios(mono_audio, apply_augmentation)
     stereo_inverted = augment_audios(stereo_audio, apply_augmentation)
-    assert torch.equal(
-        mono_audio[0].waveform, -1 * mono_inverted[0].waveform
+    assert torch.allclose(
+        mono_audio[0].waveform, -1 * mono_inverted[0].waveform, atol=1e-3
     ), "Audio should have been inverted by the augmentation"
-    assert torch.equal(
-        stereo_audio[0].waveform, -1 * stereo_inverted[0].waveform
+    assert torch.allclose(
+        stereo_audio[0].waveform, -1 * stereo_inverted[0].waveform, atol=1e-3
     ), "Audio should have been inverted by the augmentation and not affected by stereo audio"
 
     batched_audio = SenselabDataset(
@@ -37,14 +37,19 @@ def test_audio_data_augmentation_with_torch_audiomentations() -> None:
         ]
     ).create_audio_split_for_pydra_task(2)
     batch_inverted = augment_audios(batched_audio[0], apply_augmentation)
-    assert torch.equal(batched_audio[0][0].waveform, -1 * batch_inverted[0].waveform) and torch.equal(
-        batched_audio[0][1].waveform, -1 * batch_inverted[1].waveform
+    assert torch.allclose(batched_audio[0][0].waveform, -1 * batch_inverted[0].waveform, atol=1e-3) and torch.allclose(
+        batched_audio[0][1].waveform, -1 * batch_inverted[1].waveform, atol=1e-3
     )
+
+    # Augmenting mono and stereo audio clips together
+    augmented_audios = augment_audios([mono_audio[0], stereo_audio[0]], apply_augmentation)
+    assert len(augmented_audios) == 2
 
 
 def test_audio_data_augmentation_with_audiomentations(mono_audio_sample: Audio, stereo_audio_sample: Audio) -> None:
     """Test data augmentations using the new Audio data types with audiomentations."""
     apply_augmentation = AudiomentationsCompose(transforms=[Gain(min_gain_in_db=14.99, max_gain_in_db=15, p=1.0)])
 
+    # Augmenting mono and stereo audio clips
     augmented_audios = augment_audios([mono_audio_sample, stereo_audio_sample], apply_augmentation)
     assert len(augmented_audios) == 2

@@ -2,7 +2,6 @@
 
 from typing import List, Optional
 
-import pydra
 import torch
 from torch_audiomentations import Compose
 
@@ -43,6 +42,10 @@ def augment_audios_with_torch_audiomentations(
         user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
     )
     if device_type == DeviceType.CPU:
+        '''
+        # The commented code is for parallelizing the augmentation using pydra
+        # Due to some issues with pydra, this is disabled for now
+        import pydra
 
         def _augment_single_audio(audio: Audio, augmentation: Compose):  # noqa: ANN202
             """Augments a single audio with torch-audiomentations.
@@ -76,6 +79,20 @@ def augment_audios_with_torch_audiomentations(
             submitter(wf)
         outputs = wf.result()
         return [out.output.augmented_audio for out in outputs]
+        '''
+        new_audios = []
+        for audio in audios:
+            audio_to_augment = audio.waveform.unsqueeze(0)
+            augmented_audio = augmentation(audio_to_augment, sample_rate=audio.sampling_rate).samples
+            new_audios.append(
+                Audio(
+                    waveform=torch.squeeze(augmented_audio),
+                    sampling_rate=audio.sampling_rate,
+                    metadata=audio.metadata.copy(),
+                    orig_path_or_id=audio.orig_path_or_id,
+                )
+            )
+        return new_audios
     else:
         batched_audios, sampling_rates, metadatas = batch_audios(audios)
 
