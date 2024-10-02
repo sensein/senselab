@@ -173,14 +173,38 @@ def batch_audios(audios: List[Audio]) -> Tuple[torch.Tensor, Union[int, List[int
         RuntimeError: if all of the Audios do not have the same number of channels
     """
     sampling_rates = []
+    num_channels_list = []
+    lengths = []
     batched_audio = []
     metadatas = []
+
     for audio in audios:
         sampling_rates.append(audio.sampling_rate)
-        batched_audio.append(audio.waveform)
+        num_channels_list.append(audio.waveform.shape[0])  # Assuming waveform shape is (num_channels, num_samples)
+        lengths.append(audio.waveform.shape[1])
         metadatas.append(audio.metadata)
 
-    return_sampling_rates: List[int] | int = int(sampling_rates[0]) if len(set(sampling_rates)) == 1 else sampling_rates
+    # Check if all audios have the same number of channels
+    if len(set(num_channels_list)) != 1:
+        raise RuntimeError("All audios must have the same number of channels.")
+
+    # Raise a warning if sampling rates are not the same
+    if len(set(sampling_rates)) != 1:
+        warnings.warn("Not all sampling rates are the same.", UserWarning)
+
+    # Pad waveforms to the same length
+    max_length = max(lengths)
+    for audio in audios:
+        waveform = audio.waveform
+        padding = max_length - waveform.shape[1]
+        if padding > 0:
+            pad = torch.zeros((waveform.shape[0], padding), dtype=waveform.dtype)
+            waveform = torch.cat([waveform, pad], dim=1)
+        batched_audio.append(waveform)
+
+    return_sampling_rates: Union[int, List[int]] = (
+        int(sampling_rates[0]) if len(set(sampling_rates)) == 1 else sampling_rates
+    )
 
     return torch.stack(batched_audio), return_sampling_rates, metadatas
 

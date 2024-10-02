@@ -27,7 +27,7 @@ packages = [{include = "senselab", from = "src"}]
 
 [tool.poetry.dependencies]
 python = "~=3.10"
-datasets = "*"
+datasets = "~=3"
 torch = "~=2.4"
 torchvision = "~=0.19"
 torchaudio = "~=2.4"

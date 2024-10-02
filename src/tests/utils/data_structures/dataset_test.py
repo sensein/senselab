@@ -9,6 +9,8 @@ from datasets import load_dataset
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import Participant, SenselabDataset, Session
 from senselab.video.data_structures import Video
+from tests.audio.conftest import MONO_AUDIO_PATH, STEREO_AUDIO_PATH
+from tests.video.conftest import VIDEO_PATH
 
 
 def test_create_participant() -> None:
@@ -87,25 +89,20 @@ def test_get_sessions() -> None:
 
 def test_audio_dataset_creation() -> None:
     """Tests the creation of AudioDatasets with various ways of generating them."""
-    audio_paths = [
-        "src/tests/data_for_testing/audio_48khz_mono_16bits.wav",
-        "src/tests/data_for_testing/audio_48khz_stereo_16bits.wav",
-    ]
-
-    mono_audio_data, mono_sr = torchaudio.load("src/tests/data_for_testing/audio_48khz_mono_16bits.wav")
-    stereo_audio_data, stereo_sr = torchaudio.load("src/tests/data_for_testing/audio_48khz_stereo_16bits.wav")
+    mono_audio_data, mono_sr = torchaudio.load(MONO_AUDIO_PATH)
+    stereo_audio_data, stereo_sr = torchaudio.load(STEREO_AUDIO_PATH)
     mono_audio = Audio(
         waveform=mono_audio_data,
         sampling_rate=mono_sr,
-        orig_path_or_id="src/tests/data_for_testing/audio_48khz_mono_16bits.wav",
+        orig_path_or_id=MONO_AUDIO_PATH,
     )
     stereo_audio = Audio(
         waveform=stereo_audio_data,
         sampling_rate=stereo_sr,
-        orig_path_or_id="src/tests/data_for_testing/audio_48khz_stereo_16bits.wav",
+        orig_path_or_id=STEREO_AUDIO_PATH,
     )
 
-    audio_dataset_from_paths = SenselabDataset(audios=audio_paths)
+    audio_dataset_from_paths = SenselabDataset(audios=[MONO_AUDIO_PATH, STEREO_AUDIO_PATH])
     assert (
         audio_dataset_from_paths.audios[0] == mono_audio and audio_dataset_from_paths.audios[1] == stereo_audio
     ), "Audio data generated from paths does not equal creating the individually"
@@ -122,22 +119,18 @@ def test_audio_dataset_creation() -> None:
 
 def test_audio_dataset_splits() -> None:
     """Tests the AudioDataset split functionality."""
-    audio_paths = [
-        "src/tests/data_for_testing/audio_48khz_mono_16bits.wav",
-        "src/tests/data_for_testing/audio_48khz_stereo_16bits.wav",
-    ]
-    audio_dataset = SenselabDataset(audios=audio_paths)
-    mono_audio_data, mono_sr = torchaudio.load("src/tests/data_for_testing/audio_48khz_mono_16bits.wav")
-    stereo_audio_data, stereo_sr = torchaudio.load("src/tests/data_for_testing/audio_48khz_stereo_16bits.wav")
+    audio_dataset = SenselabDataset(audios=[MONO_AUDIO_PATH, STEREO_AUDIO_PATH])
+    mono_audio_data, mono_sr = torchaudio.load(MONO_AUDIO_PATH)
+    stereo_audio_data, stereo_sr = torchaudio.load(STEREO_AUDIO_PATH)
     mono_audio = Audio(
         waveform=mono_audio_data,
         sampling_rate=mono_sr,
-        orig_path_or_id="src/tests/data_for_testing/audio_48khz_mono_16bits.wav",
+        orig_path_or_id=MONO_AUDIO_PATH,
     )
     stereo_audio = Audio(
         waveform=stereo_audio_data,
         sampling_rate=stereo_sr,
-        orig_path_or_id="src/tests/data_for_testing/audio_48khz_stereo_16bits.wav",
+        orig_path_or_id=STEREO_AUDIO_PATH,
     )
 
     no_param_cpu_split = audio_dataset.create_audio_split_for_pydra_task()
@@ -160,8 +153,8 @@ def test_audio_dataset_splits() -> None:
 def test_convert_senselab_dataset_to_hf_datasets() -> None:
     """Tests the conversion of Senselab dataset to HuggingFace."""
     dataset = SenselabDataset(
-        audios=["src/tests/data_for_testing/audio_48khz_stereo_16bits.wav"],
-        videos=["src/tests/data_for_testing/video_48khz_stereo_16bits.mp4"],
+        audios=[STEREO_AUDIO_PATH],
+        videos=[VIDEO_PATH],
     )
     # print(dataset)
     # trim the video to 5 frames to speed up unit testing
@@ -185,8 +178,8 @@ def test_convert_senselab_dataset_to_hf_datasets() -> None:
 
     audio_data = hf_datasets["audios"]
     video_data = hf_datasets["videos"]
-    test_audio = Audio.from_filepath("src/tests/data_for_testing/audio_48khz_stereo_16bits.wav")
-    test_video = Video.from_filepath("src/tests/data_for_testing/video_48khz_stereo_16bits.mp4")
+    test_audio = Audio.from_filepath(STEREO_AUDIO_PATH)
+    test_video = Video.from_filepath(VIDEO_PATH)
 
     # extracted_audio = extract_audios_from_local_videos('src/tests/data_for_testing/video_48khz_stereo_16bits.mp4')
     # extracted_audio, extract_sr = torchaudio.load(extracted_audio['audio'][0]['path'])
