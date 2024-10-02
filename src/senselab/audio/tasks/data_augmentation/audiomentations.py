@@ -2,7 +2,6 @@
 
 from typing import List
 
-import pydra
 from audiomentations import Compose
 
 from senselab.audio.data_structures import Audio
@@ -38,6 +37,12 @@ def augment_audios_with_audiomentations(audios: List[Audio], augmentation: Compo
             orig_path_or_id=audio.orig_path_or_id,
         )
 
+    """
+    # The commented code is for parallelizing the augmentation using pydra
+    # Due to some issues with pydra, this is disabled for now
+
+    import pydra
+
     _augment_single_audio_pt = pydra.mark.task(_augment_single_audio)
 
     # Create the workflow
@@ -52,3 +57,10 @@ def augment_audios_with_audiomentations(audios: List[Audio], augmentation: Compo
 
     outputs = wf.result()
     return [out.output.augmented_audio for out in outputs]
+    """
+
+    augmented_audios = []
+    for audio in audios:
+        augmented_audios.append(_augment_single_audio(audio, augmentation))
+
+    return augmented_audios
