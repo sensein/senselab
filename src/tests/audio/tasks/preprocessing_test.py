@@ -1,7 +1,6 @@
 """Module for testing the preprocessing functionality of Audios."""
 
 import math
-import os
 
 import pytest
 import torch
@@ -95,9 +94,6 @@ def test_pad_audios(resampled_mono_audio_sample: Audio, resampled_stereo_audio_s
 )
 def test_evenly_segment_audios(audio_sample_fixture: str, segment_length: int, request: FixtureRequest) -> None:
     """Test even audio segmentation."""
-    print("HAHAHAHA")
-    print(os.path.isfile(r"src/tests/data_for_testing/audio_48khz_stereo_16bits.wav"))
-
     audio_sample = request.getfixturevalue(audio_sample_fixture)
 
     segments = evenly_segment_audios([audio_sample], segment_length, pad_last_segment=True)
