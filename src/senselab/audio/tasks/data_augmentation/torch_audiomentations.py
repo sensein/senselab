@@ -96,7 +96,7 @@ def augment_audios_with_torch_audiomentations(
     else:
         batched_audios, sampling_rates, metadatas = batch_audios(audios)
 
-        batched_audios = batched_audios.to(device=torch.device(str(device_type)), dtype=dtype)
+        batched_audios = batched_audios.to(device=torch.device(device_type.value), dtype=dtype)
         sampling_rate = sampling_rates[0] if isinstance(sampling_rates, List) else sampling_rates
         augmented_audio = augmentation(batched_audios, sample_rate=sampling_rate).samples
 
