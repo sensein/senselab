@@ -1,5 +1,6 @@
 """Module for testing data augmentation on audios."""
 
+import pytest
 import torch
 from audiomentations import Compose as AudiomentationsCompose
 from audiomentations import Gain
@@ -42,8 +43,12 @@ def test_audio_data_augmentation_with_torch_audiomentations() -> None:
     )
 
     # Augmenting mono and stereo audio clips together
-    augmented_audios = augment_audios([mono_audio[0], stereo_audio[0]], apply_augmentation)
-    assert len(augmented_audios) == 2
+    if torch.cuda.is_available():
+        with pytest.raises(RuntimeError, match="All audios must have the same number of channels."):
+            augment_audios([mono_audio[0], stereo_audio[0]], apply_augmentation)
+    else:
+        augmented_audios = augment_audios([mono_audio[0], stereo_audio[0]], apply_augmentation)
+        assert len(augmented_audios) == 2
 
 
 def test_audio_data_augmentation_with_audiomentations(mono_audio_sample: Audio, stereo_audio_sample: Audio) -> None:
