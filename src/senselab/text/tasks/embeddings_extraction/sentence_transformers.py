@@ -34,7 +34,7 @@ class SentenceTransformerFactory:
         key = f"{model.path_or_uri}-{model.revision}-{device.value}"
         if key not in cls._pipelines:
             cls._pipelines[key] = SentenceTransformer(
-                model_name_or_path=model.path_or_uri,
+                model_name_or_path=str(model.path_or_uri),
                 revision=model.revision,
                 device=device.value,
             )

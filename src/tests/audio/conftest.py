@@ -10,8 +10,8 @@ from senselab.audio.tasks.preprocessing import concatenate_audios, resample_audi
 from senselab.utils.data_structures import DeviceType
 
 # Global variables for file paths
-MONO_AUDIO_PATH = "src/tests/data_for_testing/audio_48khz_mono_16bits.wav"
-STEREO_AUDIO_PATH = "src/tests/data_for_testing/audio_48khz_stereo_16bits.wav"
+MONO_AUDIO_PATH = r"src/tests/data_for_testing/audio_48khz_mono_16bits.wav"
+STEREO_AUDIO_PATH = r"src/tests/data_for_testing/audio_48khz_stereo_16bits.wav"
 
 
 @pytest.fixture

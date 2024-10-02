@@ -1,3 +1,3 @@
-"""This module provides the API of the senselab audio data augmentation."""
+""".. include:: ./doc.md"""  # noqa: D415
 
-from .data_augmentation import augment_audios  # noqa: F401
+from .api import augment_audios  # noqa: F401
