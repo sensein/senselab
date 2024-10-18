@@ -9,9 +9,9 @@ from senselab.audio.tasks.features_extraction.praat_parselmouth import (
     extract_audio_duration,
     extract_cpp,
     extract_harmonicity,
-    extract_intensity,
+    extract_intensity_descriptors,
     extract_jitter,
-    extract_pitch,
+    extract_pitch_descriptors,
     extract_pitch_values,
     extract_shimmer,
     extract_slope_tilt,
@@ -60,17 +60,17 @@ def test_extract_pitch_values(resampled_mono_audio_sample: Audio) -> None:
     assert isinstance(result["pitch_ceiling"], float)
 
 
-def test_extract_pitch(resampled_mono_audio_sample: Audio) -> None:
+def test_extract_pitch_descriptors(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of pitch features."""
-    result = extract_pitch(resampled_mono_audio_sample, floor=75.0, ceiling=500.0, frame_shift=0.01)
+    result = extract_pitch_descriptors(resampled_mono_audio_sample, floor=75.0, ceiling=500.0, frame_shift=0.01)
     assert isinstance(result, dict)
     assert all(key in result for key in ["mean_f0_hertz", "stdev_f0_Hertz"])
     assert all(isinstance(result[key], float) for key in result)
 
 
-def test_extract_intensity(resampled_mono_audio_sample: Audio) -> None:
+def test_extract_intensity_descriptors(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of intensity features."""
-    result = extract_intensity(resampled_mono_audio_sample, floor=75.0, frame_shift=0.01)
+    result = extract_intensity_descriptors(resampled_mono_audio_sample, floor=75.0, frame_shift=0.01)
     assert isinstance(result, dict)
     assert "mean_db" in result
     assert "range_db_ratio" in result
@@ -82,10 +82,10 @@ def test_extract_harmonicity(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of harmonicity features."""
     result = extract_harmonicity(resampled_mono_audio_sample, floor=75.0, frame_shift=0.01)
     assert isinstance(result, dict)
-    assert "HNR_db_mean" in result
-    assert "HNR_db_std_dev" in result
-    assert isinstance(result["HNR_db_mean"], float)
-    assert isinstance(result["HNR_db_std_dev"], float)
+    assert "hnr_db_mean" in result
+    assert "hnr_db_std_dev" in result
+    assert isinstance(result["hnr_db_mean"], float)
+    assert isinstance(result["hnr_db_std_dev"], float)
 
 
 def test_extract_slope_tilt(resampled_mono_audio_sample: Audio) -> None:
