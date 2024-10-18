@@ -6,11 +6,18 @@ import torch
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.features_extraction.opensmile import extract_opensmile_features_from_audios
 from senselab.audio.tasks.features_extraction.praat_parselmouth import (
-    get_audios_durations,
-    get_audios_f0_descriptors,
-    get_audios_harmonicity_descriptors,
-    get_audios_jitter_descriptors,
-    get_audios_shimmer_descriptors,
+    extract_audio_duration,
+    extract_cpp,
+    extract_harmonicity,
+    extract_intensity,
+    extract_jitter,
+    extract_pitch,
+    extract_pitch_values,
+    extract_shimmer,
+    extract_slope_tilt,
+    extract_Spectral_Moments,
+    extract_speech_rate,
+    measure_formants,
 )
 from senselab.audio.tasks.features_extraction.torchaudio import (
     extract_mel_filter_bank_from_audios,
@@ -23,6 +30,121 @@ from senselab.audio.tasks.features_extraction.torchaudio_squim import (
     extract_objective_quality_features_from_audios,
     extract_subjective_quality_features_from_audios,
 )
+
+
+def test_extract_audio_duration(resampled_mono_audio_sample: Audio) -> None:
+    """Test extraction of audio durations."""
+    result = extract_audio_duration(resampled_mono_audio_sample)
+    assert isinstance(result, dict)
+    assert "duration" in result
+    assert isinstance(result["duration"], float)
+
+
+def test_extract_speech_rate(resampled_mono_audio_sample: Audio) -> None:
+    """Test extraction of speech rate features."""
+    result = extract_speech_rate(resampled_mono_audio_sample)
+    assert isinstance(result, dict)
+    expected_keys = ["speaking_rate", "articulation_rate", "phonation_ratio", "pause_rate", "mean_pause_dur"]
+    assert all(key in result for key in expected_keys), f"Missing keys: {set(expected_keys) - set(result.keys())}"
+    assert all(isinstance(result[key], float) for key in result)
+
+
+def test_extract_pitch_values(resampled_mono_audio_sample: Audio) -> None:
+    """Test extraction of pitch values."""
+    result = extract_pitch_values(resampled_mono_audio_sample)
+    assert isinstance(result, dict)
+    assert "pitch_floor" in result
+    assert "pitch_ceiling" in result
+
+    assert isinstance(result["pitch_floor"], float)
+    assert isinstance(result["pitch_ceiling"], float)
+
+
+def test_extract_pitch(resampled_mono_audio_sample: Audio) -> None:
+    """Test extraction of pitch features."""
+    result = extract_pitch(resampled_mono_audio_sample, floor=75.0, ceiling=500.0, frame_shift=0.01)
+    assert isinstance(result, dict)
+    assert all(key in result for key in ["mean_f0_hertz", "stdev_f0_Hertz"])
+    assert all(isinstance(result[key], float) for key in result)
+
+
+def test_extract_intensity(resampled_mono_audio_sample: Audio) -> None:
+    """Test extraction of intensity features."""
+    result = extract_intensity(resampled_mono_audio_sample, floor=75.0, frame_shift=0.01)
+    assert isinstance(result, dict)
+    assert "mean_db" in result
+    assert "range_db_ratio" in result
+    assert isinstance(result["mean_db"], float)
+    assert isinstance(result["range_db_ratio"], float)
+
+
+def test_extract_harmonicity(resampled_mono_audio_sample: Audio) -> None:
+    """Test extraction of harmonicity features."""
+    result = extract_harmonicity(resampled_mono_audio_sample, floor=75.0, frame_shift=0.01)
+    assert isinstance(result, dict)
+    assert "HNR_db_mean" in result
+    assert "HNR_db_std_dev" in result
+    assert isinstance(result["HNR_db_mean"], float)
+    assert isinstance(result["HNR_db_std_dev"], float)
+
+
+def test_extract_slope_tilt(resampled_mono_audio_sample: Audio) -> None:
+    """Test extraction of spectral slope and tilt features."""
+    result = extract_slope_tilt(resampled_mono_audio_sample, floor=75.0, ceiling=500.0)
+    assert isinstance(result, dict)
+    assert "spc_slope" in result
+    assert "spc_tilt" in result
+    assert isinstance(result["spc_slope"], float)
+    assert isinstance(result["spc_tilt"], float)
+
+
+def test_extract_cpp(resampled_mono_audio_sample: Audio) -> None:
+    """Test extraction of cepstral peak prominence (CPP) features."""
+    result = extract_cpp(resampled_mono_audio_sample, floor=75.0, ceiling=500.0, frame_shift=0.01)
+    assert isinstance(result, dict)
+    assert "mean_cpp" in result
+    assert isinstance(result["mean_cpp"], float)
+
+
+def test_measure_formants(resampled_mono_audio_sample: Audio) -> None:
+    """Test extraction of formant frequency features."""
+    result = measure_formants(resampled_mono_audio_sample, floor=75.0, ceiling=500.0, frame_shift=0.01)
+    assert isinstance(result, dict)
+    assert all(
+        key in result for key in ["F1_mean", "F1_Std", "B1_mean", "B1_Std", "F2_mean", "F2_Std", "B2_mean", "B2_Std"]
+    )
+    assert all(isinstance(result[key], float) for key in result)
+
+
+def test_extract_spectral_moments(resampled_mono_audio_sample: Audio) -> None:
+    """Test extraction of spectral moments."""
+    result = extract_Spectral_Moments(
+        resampled_mono_audio_sample, floor=75.0, ceiling=500.0, window_size=0.025, frame_shift=0.01
+    )
+    assert isinstance(result, dict)
+    assert all(key in result for key in ["spc_gravity", "spc_std_dev", "spc_skewness", "spc_kurtosis"])
+    assert all(isinstance(result[key], float) for key in result)
+
+
+def test_extract_jitter(resampled_mono_audio_sample: Audio) -> None:
+    """Test extraction of jitter descriptors."""
+    result = extract_jitter(resampled_mono_audio_sample, floor=75.0, ceiling=500.0)
+    assert isinstance(result, dict)
+    assert all(
+        key in result for key in ["local_jitter", "localabsolute_jitter", "rap_jitter", "ppq5_jitter", "ddp_jitter"]
+    )
+    assert all(isinstance(result[key], float) for key in result)
+
+
+def test_extract_shimmer(resampled_mono_audio_sample: Audio) -> None:
+    """Test extraction of shimmer descriptors."""
+    result = extract_shimmer(resampled_mono_audio_sample, floor=75.0, ceiling=500.0)
+    assert isinstance(result, dict)
+    assert all(
+        key in result
+        for key in ["local_shimmer", "localDB_shimmer", "apq3_shimmer", "apq5_shimmer", "apq11_shimmer", "dda_shimmer"]
+    )
+    assert all(isinstance(result[key], float) for key in result)
 
 
 def test_extract_spectrogram_from_audios(resampled_mono_audio_sample: Audio) -> None:
@@ -84,73 +206,6 @@ def test_extract_pitch_from_audios(resampled_mono_audio_sample: Audio) -> None:
     assert all(pitch["pitch"].dim() == 1 for pitch in result)
 
 
-def test_get_audios_durations(resampled_mono_audio_sample: Audio) -> None:
-    """Test extraction of audio durations."""
-    result = get_audios_durations([resampled_mono_audio_sample])
-    assert isinstance(result, list)
-    assert all(isinstance(duration, dict) for duration in result)
-    assert all("duration" in duration for duration in result)
-    assert all(isinstance(duration["duration"], float) for duration in result)
-
-
-def test_get_audios_f0_descriptors(resampled_mono_audio_sample: Audio) -> None:
-    """Test extraction of fundamental frequency descriptors from audio."""
-    result = get_audios_f0_descriptors([resampled_mono_audio_sample], f0min=75.0, f0max=500.0)
-    assert isinstance(result, list)
-    assert all(isinstance(f0, dict) for f0 in result)
-    assert all("f0_mean_Hertz" in f0 for f0 in result)
-    assert all("f0_std_dev_Hertz" in f0 for f0 in result)
-    assert all(isinstance(f0["f0_mean_Hertz"], float) for f0 in result)
-    assert all(isinstance(f0["f0_std_dev_Hertz"], float) for f0 in result)
-
-
-def test_get_audios_harmonicity_descriptors(resampled_mono_audio_sample: Audio) -> None:
-    """Test extraction of harmonicity descriptors from audio."""
-    result = get_audios_harmonicity_descriptors([resampled_mono_audio_sample], f0min=75.0)
-    assert isinstance(result, list)
-    assert all(isinstance(harmonicity, dict) for harmonicity in result)
-    assert all("harmonicity_mean" in harmonicity for harmonicity in result)
-    assert all("harmonicity_std_dev" in harmonicity for harmonicity in result)
-    assert all(isinstance(harmonicity["harmonicity_mean"], float) for harmonicity in result)
-    assert all(isinstance(harmonicity["harmonicity_std_dev"], float) for harmonicity in result)
-
-
-def test_get_audios_jitter_descriptors(resampled_mono_audio_sample: Audio) -> None:
-    """Test extraction of jitter descriptors from audio."""
-    result = get_audios_jitter_descriptors([resampled_mono_audio_sample], f0min=75.0, f0max=500.0)
-    assert isinstance(result, list)
-    assert all(isinstance(jitter, dict) for jitter in result)
-    assert all("local_jitter" in jitter for jitter in result)
-    assert all("localabsolute_jitter" in jitter for jitter in result)
-    assert all("rap_jitter" in jitter for jitter in result)
-    assert all("ppq5_jitter" in jitter for jitter in result)
-    assert all("ddp_jitter" in jitter for jitter in result)
-    assert all(isinstance(jitter["local_jitter"], float) for jitter in result)
-    assert all(isinstance(jitter["localabsolute_jitter"], float) for jitter in result)
-    assert all(isinstance(jitter["rap_jitter"], float) for jitter in result)
-    assert all(isinstance(jitter["ppq5_jitter"], float) for jitter in result)
-    assert all(isinstance(jitter["ddp_jitter"], float) for jitter in result)
-
-
-def test_get_audios_shimmer_descriptors(resampled_mono_audio_sample: Audio) -> None:
-    """Test extraction of shimmer descriptors from audio."""
-    result = get_audios_shimmer_descriptors([resampled_mono_audio_sample], f0min=75.0, f0max=500.0)
-    assert isinstance(result, list)
-    assert all(isinstance(shimmer, dict) for shimmer in result)
-    assert all("local_shimmer" in shimmer for shimmer in result)
-    assert all("localDB_shimmer" in shimmer for shimmer in result)
-    assert all("apq3_shimmer" in shimmer for shimmer in result)
-    assert all("apq5_shimmer" in shimmer for shimmer in result)
-    assert all("apq11_shimmer" in shimmer for shimmer in result)
-    assert all("dda_shimmer" in shimmer for shimmer in result)
-    assert all(isinstance(shimmer["local_shimmer"], float) for shimmer in result)
-    assert all(isinstance(shimmer["localDB_shimmer"], float) for shimmer in result)
-    assert all(isinstance(shimmer["apq3_shimmer"], float) for shimmer in result)
-    assert all(isinstance(shimmer["apq5_shimmer"], float) for shimmer in result)
-    assert all(isinstance(shimmer["apq11_shimmer"], float) for shimmer in result)
-    assert all(isinstance(shimmer["dda_shimmer"], float) for shimmer in result)
-
-
 def test_extract_opensmile_features_from_audios(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of openSMILE features from audio."""
     # Perform eGeMAPSv02 and Functionals features extraction
@@ -161,7 +216,7 @@ def test_extract_opensmile_features_from_audios(resampled_mono_audio_sample: Aud
     assert all(isinstance(features, dict) for features in result)
 
     # Ensure that each dictionary contains the expected keys (e.g., certain features from eGeMAPS)
-    expected_keys = {"F0semitoneFrom27.5Hz_sma3nz_amean", "jitterLocal_sma3nz_amean", "shimmerLocaldB_sma3nz_amean"}
+    expected_keys = {"f0semitoneFrom27.5Hz_sma3nz_amean", "jitterLocal_sma3nz_amean", "shimmerLocaldB_sma3nz_amean"}
     for features in result:
         assert set(features.keys()).issuperset(expected_keys)
 
