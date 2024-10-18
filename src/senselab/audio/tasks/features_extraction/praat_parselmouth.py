@@ -136,8 +136,8 @@ def extract_speech_rate(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str,
 
         # estimate Intensity threshold
         silencedb_1 = max_99_intensity + silencedb
-        dB_adjustment = max_intensity - max_99_intensity
-        silencedb_2 = silencedb - dB_adjustment
+        db_adjustment = max_intensity - max_99_intensity
+        silencedb_2 = silencedb - db_adjustment
         if silencedb_1 < min_intensity:
             silencedb_1 = min_intensity
 
@@ -159,14 +159,14 @@ def extract_speech_rate(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str,
         silencetable = parselmouth.praat.call(silencetier, "Down to TableOfReal", "sounding")
         npauses = parselmouth.praat.call(silencetable, "Get number of rows")
 
-        Phonation_Time = 0
+        phonation_time = 0
         for ipause in range(npauses):
             pause = ipause + 1
             beginsound = parselmouth.praat.call(silencetable, "Get value", pause, 1)
             endsound = parselmouth.praat.call(silencetable, "Get value", pause, 2)
             speakingdur = endsound - beginsound
 
-            Phonation_Time += speakingdur
+            phonation_time += speakingdur
 
             # This is to remove the first (before first word) and last (after last word) silence from consideration
             if pause == 1:
@@ -260,7 +260,7 @@ def extract_speech_rate(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str,
         # ______________________________________________________________________________________________________________
         # Loop through valid peaks, count ones that are voiced (i.e., have valid pitch value at the same time)
 
-        Number_Syllables = int(0)
+        number_syllables = int(0)
         for time in range(validpeakcount):
             querytime = validtime[time]
             whichinterval = parselmouth.praat.call(textgrid, "Get interval at time", 1, querytime)
@@ -268,29 +268,29 @@ def extract_speech_rate(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str,
             value = pitch.get_value_at_time(querytime)
             if not np.isnan(value):
                 if whichlabel == "sounding":
-                    Number_Syllables += 1
+                    number_syllables += 1
 
         # ______________________________________________________________________________________________________________
         # return results
 
-        Original_Dur = end_speak - begin_speak
+        original_dur = end_speak - begin_speak
 
-        speaking_rate = Number_Syllables / Original_Dur
-        articulation_rate = Number_Syllables / Phonation_Time
-        phonation_ratio = Phonation_Time / Original_Dur
+        speaking_rate = number_syllables / original_dur
+        articulation_rate = number_syllables / phonation_time
+        phonation_ratio = phonation_time / original_dur
 
-        Number_Pauses = npauses - 1
-        Pause_Time = Original_Dur - Phonation_Time
+        number_pauses = npauses - 1
+        Pause_Time = original_dur - phonation_time
 
-        pause_rate = Number_Pauses / Original_Dur
-        Mean_Pause_Dur = Pause_Time / Number_Pauses if Number_Pauses > 0 else 0.0
+        pause_rate = number_pauses / original_dur
+        mean_pause_dur = Pause_Time / number_pauses if number_pauses > 0 else 0.0
 
         return {
             "speaking_rate": speaking_rate,
             "articulation_rate": articulation_rate,
             "phonation_ratio": phonation_ratio,
             "pause_rate": pause_rate,
-            "mean_pause_dur": Mean_Pause_Dur,
+            "mean_pause_dur": mean_pause_dur,
         }
 
     except Exception as e:
@@ -379,7 +379,7 @@ def extract_pitch_values(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str
         return {"pitch_floor": float("nan"), "pitch_ceiling": float("nan")}
 
 
-def extract_pitch(
+def extract_pitch_descriptors(
     snd: Union[parselmouth.Sound, Path, Audio], floor: float, ceiling: float, frame_shift: float, unit: str = "Hertz"
 ) -> Dict[str, float]:
     """Extract Pitch Features.
@@ -408,7 +408,7 @@ def extract_pitch(
     Examples:
         ```python
         >>> snd = parselmouth.Sound("path_to_audio.wav")
-        >>> extract_pitch(snd, 75, 500, 0.01, "Hertz")
+        >>> extract_pitch_descriptors(snd, 75, 500, 0.01, "Hertz")
         {'mean_f0_hertz': 220.5, 'stdev_f0_Hertz': 2.5}
         ```
     """
@@ -435,7 +435,7 @@ def extract_pitch(
         return {f"mean_f0_{unit.lower()}": float("nan"), f"stdev_f0_{unit.lower()}": float("nan")}
 
 
-def extract_intensity(snd: Union[parselmouth.Sound, Path, Audio], floor: float, frame_shift: float) -> Dict[str, float]:
+def extract_intensity_descriptors(snd: Union[parselmouth.Sound, Path, Audio], floor: float, frame_shift: float) -> Dict[str, float]:
     """Extract Intensity Features.
 
     Function to extract key intensity information from a given sound object.
@@ -455,7 +455,7 @@ def extract_intensity(snd: Union[parselmouth.Sound, Path, Audio], floor: float, 
     Examples:
         ```python
         >>> snd = parselmouth.Sound("path_to_audio.wav")
-        >>> extract_intensity(snd, 75, 0.01)
+        >>> extract_intensity_descriptors(snd, 75, 0.01)
         {'mean_db': 70.5, 'range_db_ratio': 2.5}
         ```
 
@@ -477,12 +477,10 @@ def extract_intensity(snd: Union[parselmouth.Sound, Path, Audio], floor: float, 
         )  # get mean - time range, time range, averaging method
         min_dB = parselmouth.praat.call(intensity, "Get minimum", 0, 0, "parabolic")  # time range, Interpolation
         max_dB = parselmouth.praat.call(intensity, "Get maximum", 0, 0, "parabolic")  # time range, Interpolation
-        range_dB_Ratio = max_dB / min_dB
+        range_db_ratio = max_dB / min_dB
 
         # Return results
-        print(
-            f"mean_db: {mean_db}, range_db_ratio: {range_dB_Ratio}")
-        return {"mean_db": mean_db, "range_db_ratio": range_dB_Ratio}
+        return {"mean_db": mean_db, "range_db_ratio": range_db_ratio}
 
     except Exception as e:
         current_frame = inspect.currentframe()
@@ -492,7 +490,7 @@ def extract_intensity(snd: Union[parselmouth.Sound, Path, Audio], floor: float, 
         return {"mean_db": float("nan"), "range_db_ratio": float("nan")}
 
 
-def extract_harmonicity(
+def extract_harmonicity_descriptors(
     snd: Union[parselmouth.Sound, Path, Audio], floor: float, frame_shift: float
 ) -> Dict[str, float]:
     """Voice Quality - HNR.
@@ -508,14 +506,14 @@ def extract_harmonicity(
     Returns:
         dict: A dictionary containing the following key:
 
-            - HNR_db_mean (float): Mean Harmonic to Noise Ratio in dB.
-            - HNR_db_std_dev (float): Harmonic to Noise Ratio standard deviation in dB.
+            - hnr_db_mean (float): Mean Harmonic to Noise Ratio in dB.
+            - hnr_db_std_dev (float): Harmonic to Noise Ratio standard deviation in dB.
 
     Examples:
         ```python
         >>> snd = parselmouth.Sound("path_to_audio.wav")
-        >>> extract_harmonicity(snd, 75, 0.01)
-        {'HNR_db_mean': 15.3, 'HNR_db_std_dev': 0.5}
+        >>> extract_harmonicity_descriptors(snd, 75, 0.01)
+        {'hnr_db_mean': 15.3, 'hnr_db_std_dev': 0.5}
         ```
 
     Notes:
@@ -532,16 +530,16 @@ def extract_harmonicity(
         )
         # Praat recommends using the CC method here: https://www.fon.hum.uva.nl/praat/manual/Sound__To_Harmonicity__cc____.html
 
-        HNR_db_mean = parselmouth.praat.call(harmonicity, "Get mean", 0, 0)
-        HNR_db_std_dev = parselmouth.praat.call(harmonicity, "Get standard deviation", 0, 0)
+        hnr_db_mean = parselmouth.praat.call(harmonicity, "Get mean", 0, 0)
+        hnr_db_std_dev = parselmouth.praat.call(harmonicity, "Get standard deviation", 0, 0)
 
-        return {"HNR_db_mean": HNR_db_mean, "HNR_db_std_dev": HNR_db_std_dev}
+        return {"hnr_db_mean": hnr_db_mean, "hnr_db_std_dev": hnr_db_std_dev}
     except Exception as e:
         current_frame = inspect.currentframe()
         if current_frame is not None:
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
-        return {"HNR_db_mean": float("nan"), "HNR_db_std_dev": float("nan")}
+        return {"hnr_db_mean": float("nan"), "hnr_db_std_dev": float("nan")}
 
 
 def extract_slope_tilt(snd: Union[parselmouth.Sound, Path, Audio], floor: float, ceiling: float) -> Dict[str, float]:
@@ -704,6 +702,7 @@ def extract_cpp(
             CPP_mean = np.nan
 
         # Return Result
+        # TODO: I have arrived here. Does it make sense to return also the std dev?
         return {"mean_cpp": CPP_mean}
 
     except Exception as e:
@@ -1055,11 +1054,11 @@ def extract_features_from_audios(audios: list,
     """
     # Mark tasks with Pydra
     extract_speech_rate_pt = pydra.mark.task(extract_speech_rate)
-    extract_intensity_pt = pydra.mark.task(extract_intensity)
-    extract_harmonicity_pt = pydra.mark.task(extract_harmonicity)
+    extract_intensity_descriptors_pt = pydra.mark.task(extract_intensity_descriptors)
+    extract_harmonicity_descriptors_pt = pydra.mark.task(extract_harmonicity_descriptors)
     measure_formants_pt = pydra.mark.task(measure_formants)
     extract_Spectral_Moments_pt = pydra.mark.task(extract_Spectral_Moments)
-    extract_pitch_pt = pydra.mark.task(extract_pitch)
+    extract_pitch_descriptors_pt = pydra.mark.task(extract_pitch_descriptors)
     extract_slope_tilt_pt = pydra.mark.task(extract_slope_tilt)
     extract_cpp_pt = pydra.mark.task(extract_cpp)
     extract_pitch_values_pt = pydra.mark.task(extract_pitch_values)
@@ -1089,8 +1088,8 @@ def extract_features_from_audios(audios: list,
     time_step = 0.005  # Feature Window Rate
     unit = "Hertz"
     wf.add(
-        extract_pitch_pt(
-            name="extract_pitch_pt",
+        extract_pitch_descriptors_pt(
+            name="extract_pitch_descriptors_pt",
             snd=wf.lzin.x,
             floor=wf._extract_pitch_floor_pt.lzout.out,
             ceiling=wf._extract_pitch_ceiling_pt.lzout.out,
@@ -1099,16 +1098,16 @@ def extract_features_from_audios(audios: list,
         )
     )
     wf.add(
-        extract_intensity_pt(
-            name="extract_intensity_pt",
+        extract_intensity_descriptors_pt(
+            name="extract_intensity_descriptors_pt",
             snd=wf.lzin.x,
             floor=wf._extract_pitch_floor_pt.lzout.out,
             frame_shift=time_step,
         )
     )
     wf.add(
-        extract_harmonicity_pt(
-            name="extract_harmonicity_pt",
+        extract_harmonicity_descriptors_pt(
+            name="extract_harmonicity_descriptors_pt",
             snd=wf.lzin.x,
             floor=wf._extract_pitch_floor_pt.lzout.out,
             frame_shift=time_step,
@@ -1158,9 +1157,9 @@ def extract_features_from_audios(audios: list,
         [
             ("speech_rate_out", wf.extract_speech_rate_pt.lzout.out),
             ("pitch_values_out", wf.extract_pitch_values_pt.lzout.out),
-            ("pitch_out", wf.extract_pitch_pt.lzout.out),
-            ("intensity_out", wf.extract_intensity_pt.lzout.out),
-            ("harmonicity_out", wf.extract_harmonicity_pt.lzout.out),
+            ("pitch_out", wf.extract_pitch_descriptors_pt.lzout.out),
+            ("intensity_out", wf.extract_intensity_descriptors_pt.lzout.out),
+            ("harmonicity_out", wf.extract_harmonicity_descriptors_pt.lzout.out),
             ("slope_tilt_out", wf.extract_slope_tilt_pt.lzout.out),
             ("cpp_out", wf.extract_cpp_pt.lzout.out),
             ("formants_out", wf.measure_formants_pt.lzout.out),
@@ -1194,7 +1193,7 @@ def extract_features_from_audios(audios: list,
             "mean_db": output.output.intensity_out["mean_db"],
             "range_ratio_db": output.output.intensity_out["range_db_ratio"],
             # Quality Features:
-            "hnr_db": output.output.harmonicity_out["HNR_db_mean"],
+            "hnr_db": output.output.harmonicity_out["hnr_db_mean"],
             "spectral_slope": output.output.slope_tilt_out["spc_slope"],
             "spectral_tilt": output.output.slope_tilt_out["spc_tilt"],
             "cepstral_peak_prominence": output.output.cpp_out["mean_cpp"],
