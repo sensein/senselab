@@ -26,7 +26,7 @@ classifiers = [
 packages = [{include = "senselab", from = "src"}]
 
 [tool.poetry.dependencies]
-python = "~=3.10"
+python = "~=3.10, <3.13"
 datasets = "~=3"
 torch = "~=2.4"
 torchvision = "~=0.19"
@@ -53,6 +53,7 @@ scikit-learn = "~=1.5"
 nltk = "~=3.9"
 vocos = "~=0.1"
 iso639 = "~=0.1"
+pylangacq = "^0.19.1"
 
 [tool.poetry.group.dev]
 optional = true

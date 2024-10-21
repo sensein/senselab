@@ -44,7 +44,10 @@ def chats_to_script_lines(
                 start = None
                 end = None
 
-            utterance_transcript = " ".join(words_in_utterance[:-1]) + words_in_utterance[-1]
+            if len(words_in_utterance) > 0:
+                utterance_transcript = " ".join(words_in_utterance[:-1]) + words_in_utterance[-1]
+            else:
+                utterance_transcript = ""
             script_lines_by_file[path].append(
                 ScriptLine(text=utterance_transcript, speaker=utterance.participant, start=start, end=end)
             )
