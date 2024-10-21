@@ -8,14 +8,14 @@ from senselab.audio.tasks.features_extraction.opensmile import extract_opensmile
 from senselab.audio.tasks.features_extraction.praat_parselmouth import (
     extract_audio_duration,
     extract_cpp_descriptors,
-    extract_harmonicity,
+    extract_harmonicity_descriptors,
     extract_intensity_descriptors,
     extract_jitter,
     extract_pitch_descriptors,
     extract_pitch_values,
     extract_shimmer,
     extract_slope_tilt,
-    extract_Spectral_Moments,
+    extract_spectral_moments,
     extract_speech_rate,
     measure_formants,
 )
@@ -64,7 +64,7 @@ def test_extract_pitch_descriptors(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of pitch features."""
     result = extract_pitch_descriptors(resampled_mono_audio_sample, floor=75.0, ceiling=500.0, frame_shift=0.01)
     assert isinstance(result, dict)
-    assert all(key in result for key in ["mean_f0_hertz", "stdev_f0_Hertz"])
+    assert all(key in result for key in ["mean_f0_hertz", "stdev_f0_hertz"])
     assert all(isinstance(result[key], float) for key in result)
 
 
@@ -78,9 +78,9 @@ def test_extract_intensity_descriptors(resampled_mono_audio_sample: Audio) -> No
     assert isinstance(result["range_db_ratio"], float)
 
 
-def test_extract_harmonicity(resampled_mono_audio_sample: Audio) -> None:
+def test_extract_harmonicity_descriptors(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of harmonicity features."""
-    result = extract_harmonicity(resampled_mono_audio_sample, floor=75.0, frame_shift=0.01)
+    result = extract_harmonicity_descriptors(resampled_mono_audio_sample, floor=75.0, frame_shift=0.01)
     assert isinstance(result, dict)
     assert "hnr_db_mean" in result
     assert "hnr_db_std_dev" in result
@@ -92,10 +92,10 @@ def test_extract_slope_tilt(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of spectral slope and tilt features."""
     result = extract_slope_tilt(resampled_mono_audio_sample, floor=75.0, ceiling=500.0)
     assert isinstance(result, dict)
-    assert "spc_slope" in result
-    assert "spc_tilt" in result
-    assert isinstance(result["spc_slope"], float)
-    assert isinstance(result["spc_tilt"], float)
+    assert "spectral_slope" in result
+    assert "spectral_tilt" in result
+    assert isinstance(result["spectral_slope"], float)
+    assert isinstance(result["spectral_tilt"], float)
 
 
 def test_extract_cpp_descriptors(resampled_mono_audio_sample: Audio) -> None:
@@ -111,18 +111,21 @@ def test_measure_formants(resampled_mono_audio_sample: Audio) -> None:
     result = measure_formants(resampled_mono_audio_sample, floor=75.0, ceiling=500.0, frame_shift=0.01)
     assert isinstance(result, dict)
     assert all(
-        key in result for key in ["F1_mean", "F1_Std", "B1_mean", "B1_Std", "F2_mean", "F2_Std", "B2_mean", "B2_Std"]
+        key in result for key in ["f1_mean", "f1_std", "b1_mean", "b1_std", "f2_mean", "f2_std", "b2_mean", "b2_std"]
     )
     assert all(isinstance(result[key], float) for key in result)
 
 
 def test_extract_spectral_moments(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of spectral moments."""
-    result = extract_Spectral_Moments(
+    result = extract_spectral_moments(
         resampled_mono_audio_sample, floor=75.0, ceiling=500.0, window_size=0.025, frame_shift=0.01
     )
     assert isinstance(result, dict)
-    assert all(key in result for key in ["spc_gravity", "spc_std_dev", "spc_skewness", "spc_kurtosis"])
+    assert all(key in result for key in ["spectral_gravity", 
+                                         "spectral_std_dev", 
+                                         "spectral_skewness", 
+                                         "spectral_kurtosis"])
     assert all(isinstance(result[key], float) for key in result)
 
 
@@ -217,8 +220,9 @@ def test_extract_opensmile_features_from_audios(resampled_mono_audio_sample: Aud
 
     # Ensure that each dictionary contains the expected keys (e.g., certain features from eGeMAPS)
     expected_keys = {"f0semitoneFrom27.5Hz_sma3nz_amean", "jitterLocal_sma3nz_amean", "shimmerLocaldB_sma3nz_amean"}
+    print(result[0].keys())
     for features in result:
-        assert set(features.keys()).issuperset(expected_keys)
+        assert set(map(str.lower, features.keys())).issuperset(map(str.lower, expected_keys))
 
     # Check the types of the values to ensure they are either floats or integers
     for features in result:
