@@ -207,9 +207,9 @@ def extract_torchaudio_features_from_audios(audios: List[Audio],
         extract_mel_spectrogram_from_audios)
     extract_spectrogram_from_audios_pt = pydra.mark.task(extract_spectrogram_from_audios)
 
-    formatted_output = [[audio] for audio in audios]
+    formatted_audios = [[audio] for audio in audios]
     wf = pydra.Workflow(name="wf", input_spec=["x"])
-    wf.split("x", x=formatted_output)
+    wf.split("x", x=formatted_audios)
     wf.add(extract_pitch_from_audios_pt(name="extract_pitch_from_audios_pt", 
                                                      audios=wf.lzin.x))
     wf.add(extract_mel_filter_bank_from_audios_pt(name="extract_mel_filter_bank_from_audios_pt", 
@@ -237,7 +237,7 @@ def extract_torchaudio_features_from_audios(audios: List[Audio],
 
     outputs = wf.result()
 
-    formatted_output = []
+    formatted_output: List[Dict[str, Any]] = []
     for output in outputs:
         formatted_output_item = {
             "torchaudio": {
@@ -252,4 +252,3 @@ def extract_torchaudio_features_from_audios(audios: List[Audio],
         formatted_output.append(formatted_output_item)
 
     return formatted_output
-
