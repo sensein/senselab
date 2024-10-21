@@ -9,6 +9,7 @@ from senselab.audio.data_structures import Audio
 objective_model = SQUIM_OBJECTIVE.get_model()
 subjective_model = SQUIM_SUBJECTIVE.get_model()
 
+
 def extract_objective_quality_features_from_audios(audio_list: List[Audio]) -> Dict[str, Any]:
     """Extracts objective audio features from a list of Audio objects.
 
