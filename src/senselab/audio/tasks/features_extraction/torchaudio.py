@@ -1,7 +1,8 @@
 """This module provides the implementation of torchaudio utilities for audio features extraction."""
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
+import pydra
 import torch
 import torchaudio
 
@@ -176,8 +177,79 @@ def extract_pitch_from_audios(
         pitches.append(
             {
                 "pitch": torchaudio.functional.detect_pitch_frequency(
-                    audio.waveform, sample_rate=audio.sampling_rate, freq_low=freq_low, freq_high=freq_high
+                    audio.waveform, 
+                    sample_rate=audio.sampling_rate, 
+                    freq_low=freq_low, 
+                    freq_high=freq_high
                 ).squeeze(0)
             }
         )
     return pitches
+
+
+
+def extract_torchaudio_features_from_audios(audios: List[Audio], 
+                                            plugin: str = "cf") -> List[Dict[str, Any]]:
+    """Extract torchaudio features from a list of audio objects.
+
+    Args:
+        audios (List[Audio]): The list of audio objects to extract features from.
+        plugin (str): The plugin to use. Default is "cf".
+
+    Returns:
+        List[Dict[str, Any]]: The list of feature dictionaries for each audio.
+    """
+    extract_pitch_from_audios_pt = pydra.mark.task(extract_pitch_from_audios)
+    extract_mel_filter_bank_from_audios_pt = pydra.mark.task(
+        extract_mel_filter_bank_from_audios)
+    extract_mfcc_from_audios_pt = pydra.mark.task(extract_mfcc_from_audios)
+    extract_mel_spectrogram_from_audios_pt = pydra.mark.task(
+        extract_mel_spectrogram_from_audios)
+    extract_spectrogram_from_audios_pt = pydra.mark.task(extract_spectrogram_from_audios)
+
+    formatted_output = [[audio] for audio in audios]
+    wf = pydra.Workflow(name="wf", input_spec=["x"])
+    wf.split("x", x=formatted_output)
+    wf.add(extract_pitch_from_audios_pt(name="extract_pitch_from_audios_pt", 
+                                                     audios=wf.lzin.x))
+    wf.add(extract_mel_filter_bank_from_audios_pt(name="extract_mel_filter_bank_from_audios_pt", 
+                                                     audios=wf.lzin.x))
+    wf.add(extract_mfcc_from_audios_pt(name="extract_mfcc_from_audios_pt", 
+                                                     audios=wf.lzin.x))
+    wf.add(extract_mel_spectrogram_from_audios_pt(name="extract_mel_spectrogram_from_audios_pt", 
+                                                     audios=wf.lzin.x))
+    wf.add(extract_spectrogram_from_audios_pt(name="extract_spectrogram_from_audios_pt", 
+                                                     audios=wf.lzin.x))
+
+    # setting multiple workflow outputs
+    wf.set_output(
+        [
+            ("pitch_out", wf.extract_pitch_from_audios_pt.lzout.out),
+            ("mel_filter_bank_out", wf.extract_mel_filter_bank_from_audios_pt.lzout.out),
+            ("mfcc_out", wf.extract_mfcc_from_audios_pt.lzout.out),
+            ("mel_spectrogram_out", wf.extract_mel_spectrogram_from_audios_pt.lzout.out),
+            ("spectrogram_out", wf.extract_spectrogram_from_audios_pt.lzout.out),
+        ]
+    )
+
+    with pydra.Submitter(plugin=plugin) as sub:
+        sub(wf)
+
+    outputs = wf.result()
+
+    formatted_output = []
+    for output in outputs:
+        formatted_output_item = {
+            "torchaudio": {
+                "pitch": output.output.pitch_out[0]['pitch'],
+                "mel_filter_bank": output.output.mel_filter_bank_out[0]['mel_filter_bank'],
+                "mfcc": output.output.mfcc_out[0]['mfcc'],
+                "mel_spectrogram": output.output.mel_spectrogram_out[0]['mel_spectrogram'],
+                "spectrogram": output.output.spectrogram_out[0]['spectrogram'],
+            }
+        }
+
+        formatted_output.append(formatted_output_item)
+
+    return formatted_output
+

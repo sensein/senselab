@@ -7,7 +7,7 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.features_extraction.opensmile import extract_opensmile_features_from_audios
 from senselab.audio.tasks.features_extraction.praat_parselmouth import (
     extract_audio_duration,
-    extract_cpp,
+    extract_cpp_descriptors,
     extract_harmonicity,
     extract_intensity_descriptors,
     extract_jitter,
@@ -98,9 +98,9 @@ def test_extract_slope_tilt(resampled_mono_audio_sample: Audio) -> None:
     assert isinstance(result["spc_tilt"], float)
 
 
-def test_extract_cpp(resampled_mono_audio_sample: Audio) -> None:
+def test_extract_cpp_descriptors(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of cepstral peak prominence (CPP) features."""
-    result = extract_cpp(resampled_mono_audio_sample, floor=75.0, ceiling=500.0, frame_shift=0.01)
+    result = extract_cpp_descriptors(resampled_mono_audio_sample, floor=75.0, ceiling=500.0, frame_shift=0.01)
     assert isinstance(result, dict)
     assert "mean_cpp" in result
     assert isinstance(result["mean_cpp"], float)
