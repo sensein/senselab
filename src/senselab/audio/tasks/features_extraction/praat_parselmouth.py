@@ -2,7 +2,7 @@
 
 import inspect
 from pathlib import Path
-from typing import Dict, Union
+from typing import Dict, List, Optional, Union
 
 import numpy as np
 import parselmouth  # type: ignore
@@ -92,24 +92,24 @@ def extract_speech_rate(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str,
 
         # Silence Threshold (dB) - standard setting to detect silence in the "To TextGrid (silences)" function.
         # The higher this number, the lower the chances of finding silent pauses
-        silencedb = -25
+        silence_db = -25
 
         # Minimum_dip_between_peaks_(dB) - if there are decreases in intensity
         # of at least this value surrounding the peak, the peak is labelled to be a syllable nucleus
         # I.e. the size of the dip between two possible peakes
         # The higher this number, the less syllables will be found
         # For clean and filtered signal use 4, if not use 2 (recommend thresholds)
-        mindip = 4
+        min_dip = 4
         # Code for determining if the signal not clean/filtered
         hnr = parselmouth.praat.call(
             snd.to_harmonicity_cc(), "Get mean", 0, 0
         )  # Note: (0,0) is the time range for extraction, setting both two zero tells praat to use the full file
         if hnr < 60:
-            mindip = 2
+            min_dip = 2
 
         # Minimum pause duration (s): How long should a pause be to be counted as a silent pause?
         # The higher this number, the fewer pauses will be found
-        minpause = 0.3  # the default for this is 0.1 in Praat, the de Jong's script has this set at 0.3
+        min_pause = 0.3  # the default for this is 0.1 in Praat, the de Jong's script has this set at 0.3
         # Based on values in: Toward an understanding of fluency:
         # A microanalysis of nonnative speaker conversations (Riggenbach)
         # – Micropause (silence of .2s or less)
@@ -135,17 +135,17 @@ def extract_speech_rate(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str,
         max_99_intensity = parselmouth.praat.call(intensity, "Get quantile", 0, 0, 0.99)
 
         # estimate Intensity threshold
-        silencedb_1 = max_99_intensity + silencedb
+        silence_db_1 = max_99_intensity + silence_db
         db_adjustment = max_intensity - max_99_intensity
-        silencedb_2 = silencedb - db_adjustment
-        if silencedb_1 < min_intensity:
-            silencedb_1 = min_intensity
+        silence_db_2 = silence_db - db_adjustment
+        if silence_db_1 < min_intensity:
+            silence_db_1 = min_intensity
 
         # ______________________________________________________________________________________________________________
         # Create a TextGrid in which the silent and sounding intervals, store these intervals
 
         textgrid = parselmouth.praat.call(
-            intensity, "To TextGrid (silences)", silencedb_2, minpause, 0.1, "silent", "sounding"
+            intensity, "To TextGrid (silences)", silence_db_2, min_pause, 0.1, "silent", "sounding"
         )
         # Hyperparameters:
         # Silence threshold (dB),
@@ -208,7 +208,7 @@ def extract_speech_rate(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str,
         intensities = []
         for i in range(numpeaks):
             value = parselmouth.praat.call(sound_from_intensity_matrix, "Get value at time", t[i], "Cubic")
-            if value > silencedb_1:
+            if value > silence_db_1:
                 peakcount += 1
                 intensities.append(value)
                 timepeaks.append(t[i])
@@ -217,7 +217,7 @@ def extract_speech_rate(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str,
         # Now find all valid peaks
 
         # fill array with valid peaks: only intensity values if preceding
-        # dip in intensity is greater than mindip
+        # dip in intensity is greater than min_dip
         validpeakcount = 0
         currenttime = timepeaks[0]
         currentint = intensities[0]
@@ -230,7 +230,7 @@ def extract_speech_rate(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str,
                 intensity, "Get minimum", currenttime, followingtime, "None"
             )  # Gets minimiun value between two time points, doesn't intepolote/filter
             diffint = abs(currentint - dip)
-            if diffint > mindip:
+            if diffint > min_dip:
                 validpeakcount += 1
                 validtime.append(timepeaks[p])
             # Update current time and intensity values for next loop
@@ -280,10 +280,10 @@ def extract_speech_rate(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str,
         phonation_ratio = phonation_time / original_dur
 
         number_pauses = npauses - 1
-        Pause_Time = original_dur - phonation_time
+        pause_time = original_dur - phonation_time
 
         pause_rate = number_pauses / original_dur
-        mean_pause_dur = Pause_Time / number_pauses if number_pauses > 0 else 0.0
+        mean_pause_dur = pause_time / number_pauses if number_pauses > 0 else 0.0
 
         return {
             "speaking_rate": speaking_rate,
@@ -409,7 +409,7 @@ def extract_pitch_descriptors(
         ```python
         >>> snd = parselmouth.Sound("path_to_audio.wav")
         >>> extract_pitch_descriptors(snd, 75, 500, 0.01, "Hertz")
-        {'mean_f0_hertz': 220.5, 'stdev_f0_Hertz': 2.5}
+        {'mean_f0_hertz': 220.5, 'stdev_f0_hertz': 2.5}
         ```
     """
     try:
@@ -432,10 +432,12 @@ def extract_pitch_descriptors(
         if current_frame is not None:
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
-        return {f"mean_f0_{unit.lower()}": float("nan"), f"stdev_f0_{unit.lower()}": float("nan")}
+        return {f"mean_f0_{unit.lower()}": float("nan"), 
+                f"stdev_f0_{unit.lower()}": float("nan")}
 
 
-def extract_intensity_descriptors(snd: Union[parselmouth.Sound, Path, Audio], floor: float, frame_shift: float) -> Dict[str, float]:
+def extract_intensity_descriptors(snd: Union[parselmouth.Sound, Path, Audio], 
+                                  floor: float, frame_shift: float) -> Dict[str, float]:
     """Extract Intensity Features.
 
     Function to extract key intensity information from a given sound object.
@@ -450,13 +452,14 @@ def extract_intensity_descriptors(snd: Union[parselmouth.Sound, Path, Audio], fl
         dict: A dictionary containing the following keys:
 
             - mean_db (float): Mean intensity in dB.
+            - std_db (float): Standard deviation in dB.
             - range_db_ratio (float): Intensity range, expressed as a ratio in dB.
 
     Examples:
         ```python
         >>> snd = parselmouth.Sound("path_to_audio.wav")
         >>> extract_intensity_descriptors(snd, 75, 0.01)
-        {'mean_db': 70.5, 'range_db_ratio': 2.5}
+        {'mean_db': 70.5, 'std_db': 0.5, 'range_db_ratio': 2.5}
         ```
 
     Notes:
@@ -475,19 +478,20 @@ def extract_intensity_descriptors(snd: Union[parselmouth.Sound, Path, Audio], fl
         mean_db = parselmouth.praat.call(
             intensity, "Get mean", 0, 0, "energy"
         )  # get mean - time range, time range, averaging method
+        std_db = parselmouth.praat.call(intensity, "Get standard deviation", 0, 0)
         min_dB = parselmouth.praat.call(intensity, "Get minimum", 0, 0, "parabolic")  # time range, Interpolation
         max_dB = parselmouth.praat.call(intensity, "Get maximum", 0, 0, "parabolic")  # time range, Interpolation
         range_db_ratio = max_dB / min_dB
 
         # Return results
-        return {"mean_db": mean_db, "range_db_ratio": range_db_ratio}
+        return {"mean_db": mean_db, "std_db": std_db, "range_db_ratio": range_db_ratio}
 
     except Exception as e:
         current_frame = inspect.currentframe()
         if current_frame is not None:
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
-        return {"mean_db": float("nan"), "range_db_ratio": float("nan")}
+        return {"mean_db": float("nan"), "std_db": float("nan"), "range_db_ratio": float("nan")}
 
 
 def extract_harmonicity_descriptors(
@@ -539,6 +543,7 @@ def extract_harmonicity_descriptors(
         if current_frame is not None:
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
+        
         return {"hnr_db_mean": float("nan"), "hnr_db_std_dev": float("nan")}
 
 
@@ -556,14 +561,14 @@ def extract_slope_tilt(snd: Union[parselmouth.Sound, Path, Audio], floor: float,
     Returns:
         dict: A dictionary containing the following keys:
 
-            - spc_slope (float): Mean spectral slope.
-            - spc_tilt (float): Mean spectral tilt.
+            - spectral_slope (float): Mean spectral slope.
+            - spectral_tilt (float): Mean spectral tilt.
 
     Examples:
         ```python
         >>> snd = parselmouth.Sound("path_to_audio.wav")
         >>> extract_slope_tilt(snd, 75, 500)
-        {'spc_slope': -0.8, 'spc_tilt': -2.5}
+        {'spectral_slope': -0.8, 'spectral_tilt': -2.5}
         ```
 
     Notes:
@@ -576,35 +581,35 @@ def extract_slope_tilt(snd: Union[parselmouth.Sound, Path, Audio], floor: float,
         if not isinstance(snd, parselmouth.Sound):
             snd = get_sound(snd)
 
-        LTAS_rep = parselmouth.praat.call(
+        ltas_rep = parselmouth.praat.call(
             snd, "To Ltas (pitch-corrected)...", floor, ceiling, 5000, 100, 0.0001, 0.02, 1.3
         )
         # Hyperparameters: Min Pitch (Hz), Max Pitch (Hz), Maximum Frequency (Hz), Bandwidth (Hz), Shortest Period (s),
         # Longest Period (s), Maximum period factor
 
-        spc_slope = parselmouth.praat.call(LTAS_rep, "Get slope", 50, 1000, 1000, 4000, "dB")
+        spectral_slope = parselmouth.praat.call(ltas_rep, "Get slope", 50, 1000, 1000, 4000, "dB")
         # Hyperparameters: f1min, f1max, f2min, f2max, averagingUnits
 
-        spc_tilt_Report = parselmouth.praat.call(LTAS_rep, "Report spectral tilt", 100, 5000, "Linear", "Robust")
+        spectral_tilt_Report = parselmouth.praat.call(ltas_rep, "Report spectral tilt", 100, 5000, "Linear", "Robust")
         # Hyperparameters: minimumFrequency, maximumFrequency, Frequency Scale (linear or logarithmic),
         # Fit method (least squares or robust)
 
-        srt_st = spc_tilt_Report.index("Slope: ") + len("Slope: ")
-        end_st = spc_tilt_Report.index("d", srt_st)
-        spc_tilt = float(spc_tilt_Report[srt_st:end_st])
+        srt_st = spectral_tilt_Report.index("Slope: ") + len("Slope: ")
+        end_st = spectral_tilt_Report.index("d", srt_st)
+        spectral_tilt = float(spectral_tilt_Report[srt_st:end_st])
 
         # Return results
-        return {"spc_slope": spc_slope, "spc_tilt": spc_tilt}
+        return {"spectral_slope": spectral_slope, "spectral_tilt": spectral_tilt}
 
     except Exception as e:
         current_frame = inspect.currentframe()
         if current_frame is not None:
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
-        return {"spc_slope": float("nan"), "spc_Tilt": float("nan")}
+        return {"spectral_slope": float("nan"), "spectral_tilt": float("nan")}
 
 
-def extract_cpp(
+def extract_cpp_descriptors(
     snd: Union[parselmouth.Sound, Path, Audio], floor: float, ceiling: float, frame_shift: float
 ) -> Dict[str, float]:
     """Extract Cepstral Peak Prominence (CPP).
@@ -622,12 +627,13 @@ def extract_cpp(
         dict: A dictionary containing the following key:
 
             - mean_cpp (float): Mean Cepstral Peak Prominence.
+            - std_dev_cpp (float): Standard deviation in Cepstral Peak Prominence.
 
     Examples:
         ```python
         >>> snd = parselmouth.Sound("path_to_audio.wav")
         >>> extract_CPP(snd, 75, 500, 0.01)
-        {'mean_cpp': 20.3}
+        {'mean_cpp': 20.3, 'std_dev_cpp': 0.5}
         ```
 
     Notes:
@@ -649,7 +655,7 @@ def extract_cpp(
         vuv_table = parselmouth.praat.call(textgrid, "Down to Table", "no", 6, "yes", "no")
         # Variables - include line number, Time decimals, include tier names, include empty intervals
 
-        CPP_List = []
+        cpp_list = []
 
         n_intervals = parselmouth.praat.call(vuv_table, "Get number of rows")
         for i in range(n_intervals):
@@ -692,25 +698,26 @@ def extract_cpp(
                     CPP_Value = np.nan
 
                 if not np.isnan(CPP_Value) and CPP_Value > 4:
-                    CPP_List.append(CPP_Value)
+                    cpp_list.append(CPP_Value)
 
         # Calculate Final Features
-        if CPP_List:
-            CPP_array = np.array(CPP_List)
+        if cpp_list:
+            CPP_array = np.array(cpp_list)
             CPP_mean = np.mean(CPP_array)
+            CPP_std = np.std(CPP_array)
         else:
             CPP_mean = np.nan
+            CPP_std = np.nan
 
         # Return Result
-        # TODO: I have arrived here. Does it make sense to return also the std dev?
-        return {"mean_cpp": CPP_mean}
+        return {"mean_cpp": CPP_mean, "std_dev_cpp": CPP_std}
 
     except Exception as e:
         current_frame = inspect.currentframe()
         if current_frame is not None:
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
-        return {"mean_cpp": float("nan")}
+        return {"mean_cpp": float("nan"), "std_dev_cpp": float("nan")}
 
 
 def measure_formants(
@@ -730,21 +737,21 @@ def measure_formants(
     Returns:
         dict: A dictionary containing the following keys:
 
-            - F1_mean (float): Mean F1 location.
-            - F1_Std (float): Standard deviation of F1 location.
-            - B1_mean (float): Mean F1 bandwidth.
-            - B1_Std (float): Standard deviation of F1 bandwidth.
-            - F2_mean (float): Mean F2 location.
-            - F2_Std (float): Standard deviation of F2 location.
-            - B2_mean (float): Mean F2 bandwidth.
-            - B2_Std (float): Standard deviation of F2 bandwidth.
+            - f1_mean (float): Mean F1 location.
+            - f1_std (float): Standard deviation of F1 location.
+            - b1_mean (float): Mean F1 bandwidth.
+            - b1_std (float): Standard deviation of F1 bandwidth.
+            - f2_mean (float): Mean F2 location.
+            - f2_std (float): Standard deviation of F2 location.
+            - b2_mean (float): Mean F2 bandwidth.
+            - b2_std (float): Standard deviation of F2 bandwidth.
 
     Examples:
         ```python
         >>> snd = parselmouth.Sound("path_to_audio.wav")
         >>> measureFormants(snd, 75, 500, 0.01)
-        {'F1_mean': 500.0, 'F1_Std': 50.0, 'B1_mean': 80.0, 'B1_Std': 10.0, 'F2_mean': 1500.0,
-        'F2_Std': 100.0, 'B2_mean': 120.0, 'B2_Std': 20.0}
+        {'f1_mean': 500.0, 'f1_std': 50.0, 'b1_mean': 80.0, 'b1_std': 10.0, 'f2_mean': 1500.0,
+        'f2_std': 100.0, 'b2_mean': 120.0, 'b2_std': 20.0}
         ```
 
     Notes:
@@ -787,20 +794,20 @@ def measure_formants(
             if not np.isnan(B2_value):
                 B2_list.append(B2_value)
 
-        F1_mean, F1_Std = (np.mean(F1_list), np.std(F1_list)) if F1_list else (np.nan, np.nan)
-        B1_mean, B1_Std = (np.mean(B1_list), np.std(B1_list)) if B1_list else (np.nan, np.nan)
-        F2_mean, F2_Std = (np.mean(F2_list), np.std(F2_list)) if F2_list else (np.nan, np.nan)
-        B2_mean, B2_Std = (np.mean(B2_list), np.std(B2_list)) if B2_list else (np.nan, np.nan)
+        f1_mean, f1_std = (np.mean(F1_list), np.std(F1_list)) if F1_list else (np.nan, np.nan)
+        b1_mean, b1_std = (np.mean(B1_list), np.std(B1_list)) if B1_list else (np.nan, np.nan)
+        f2_mean, f2_std = (np.mean(F2_list), np.std(F2_list)) if F2_list else (np.nan, np.nan)
+        b2_mean, b2_std = (np.mean(B2_list), np.std(B2_list)) if B2_list else (np.nan, np.nan)
 
         return {
-            "F1_mean": F1_mean,
-            "F1_Std": F1_Std,
-            "B1_mean": B1_mean,
-            "B1_Std": B1_Std,
-            "F2_mean": F2_mean,
-            "F2_Std": F2_Std,
-            "B2_mean": B2_mean,
-            "B2_Std": B2_Std,
+            "f1_mean": f1_mean,
+            "f1_std": f1_std,
+            "b1_mean": b1_mean,
+            "b1_std": b1_std,
+            "f2_mean": f2_mean,
+            "f2_std": f2_std,
+            "b2_mean": b2_mean,
+            "b2_std": b2_std,
         }
 
     except Exception as e:
@@ -809,18 +816,18 @@ def measure_formants(
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
         return {
-            "F1_mean": np.nan,
-            "F1_Std": np.nan,
-            "B1_mean": np.nan,
-            "B1_Std": np.nan,
-            "F2_mean": np.nan,
-            "F2_Std": np.nan,
-            "B2_mean": np.nan,
-            "B2_Std": np.nan,
+            "f1_mean": np.nan,
+            "f1_std": np.nan,
+            "b1_mean": np.nan,
+            "b1_std": np.nan,
+            "f2_mean": np.nan,
+            "f2_std": np.nan,
+            "b2_mean": np.nan,
+            "b2_std": np.nan,
         }
 
 
-def extract_Spectral_Moments(
+def extract_spectral_moments(
     snd: Union[parselmouth.Sound, Path, Audio], floor: float, ceiling: float, window_size: float, frame_shift: float
 ) -> Dict[str, float]:
     """Extract Spectral Moments.
@@ -838,16 +845,16 @@ def extract_Spectral_Moments(
     Returns:
         dict: A dictionary containing the following keys:
 
-            - spc_gravity (float): Mean spectral gravity.
-            - spc_std_dev (float): Mean spectral standard deviation.
-            - spc_skewness (float): Mean spectral skewness.
-            - spc_kurtosis (float): Mean spectral kurtosis.
+            - spectral_gravity (float): Mean spectral gravity.
+            - spectral_std_dev (float): Mean spectral standard deviation.
+            - spectral_skewness (float): Mean spectral skewness.
+            - spectral_kurtosis (float): Mean spectral kurtosis.
 
     Examples:
         ```python
         >>> snd = parselmouth.Sound("path_to_audio.wav")
-        >>> extract_Spectral_Moments(snd, 75, 500, 0.025, 0.01)
-        {'spc_gravity': 5000.0, 'spc_std_dev': 150.0, 'spc_skewness': -0.5, 'spc_kurtosis': 3.0}
+        >>> extract_spectral_moments(snd, 75, 500, 0.025, 0.01)
+        {'spectral_gravity': 5000.0, 'spectral_std_dev': 150.0, 'spectral_skewness': -0.5, 'spectral_kurtosis': 3.0}
         ```
 
     Notes:
@@ -900,16 +907,16 @@ def extract_Spectral_Moments(
                 if not np.isnan(Kurt_LLD):
                     Kurt_list.append(Kurt_LLD)
 
-        Gravity_mean = np.mean(Gravity_list) if Gravity_list else np.nan
-        STD_mean = np.mean(STD_list) if STD_list else np.nan
-        Skew_mean = np.mean(Skew_list) if Skew_list else np.nan
-        Kurt_mean = np.mean(Kurt_list) if Kurt_list else np.nan
+        gravity_mean = np.mean(Gravity_list) if Gravity_list else np.nan
+        std_mean = np.mean(STD_list) if STD_list else np.nan
+        skew_mean = np.mean(Skew_list) if Skew_list else np.nan
+        kurt_mean = np.mean(Kurt_list) if Kurt_list else np.nan
 
         return {
-            "spc_gravity": Gravity_mean,
-            "spc_std_dev": STD_mean,
-            "spc_skewness": Skew_mean,
-            "spc_kurtosis": Kurt_mean,
+            "spectral_gravity": gravity_mean,
+            "spectral_std_dev": std_mean,
+            "spectral_skewness": skew_mean,
+            "spectral_kurtosis": kurt_mean,
         }
 
     except Exception as e:
@@ -917,7 +924,10 @@ def extract_Spectral_Moments(
         if current_frame is not None:
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
-        return {"spc_gravity": np.nan, "spc_std_dev": np.nan, "spc_skewness": np.nan, "spc_kurtosis": np.nan}
+        return {"spectral_gravity": np.nan, 
+                "spectral_std_dev": np.nan, 
+                "spectral_skewness": np.nan, 
+                "spectral_kurtosis": np.nan}
 
 
 ### More functions ###
@@ -958,9 +968,6 @@ def extract_audio_duration(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[s
 
     # Return the duration in a dictionary
     return {"duration": duration}
-
-
-### OK UNTIL HERE!!!!
 
 
 def extract_jitter(snd: Union[parselmouth.Sound, Path, Audio], floor: float, ceiling: float) -> Dict[str, float]:
@@ -1037,17 +1044,15 @@ def extract_shimmer(snd: Union[parselmouth.Sound, Path, Audio], floor: float, ce
 
 
 ### Wrapper ###
-
-
-def extract_features_from_audios(audios: list, 
-                                        plugin: str = "cf",
-                                        cache_dir: str = "./.pydra_cache") -> dict:
+def extract_praat_parselmouth_features_from_audios(audios: List[Audio], 
+                                 cache_dir: Optional[str] = None,
+                                 plugin: str = "cf") -> dict:
     """Extract features from a list of Audio objects and return a JSON-like dictionary.
 
     Args:
         audios (list): List of Audio objects to extract features from.
+        cache_dir (Optional[str]): Directory to use for caching by pydra. Defaults to None.
         plugin (str): Plugin to use for feature extraction. Defaults to "cf".
-        cache_dir (str): Directory to use for caching by pydra. Defaults to "./.pydra_cache".
 
     Returns:
         dict: A JSON-like dictionary with extracted features structured under "praat_parselmouth".
@@ -1057,12 +1062,14 @@ def extract_features_from_audios(audios: list,
     extract_intensity_descriptors_pt = pydra.mark.task(extract_intensity_descriptors)
     extract_harmonicity_descriptors_pt = pydra.mark.task(extract_harmonicity_descriptors)
     measure_formants_pt = pydra.mark.task(measure_formants)
-    extract_Spectral_Moments_pt = pydra.mark.task(extract_Spectral_Moments)
+    extract_spectral_moments_pt = pydra.mark.task(extract_spectral_moments)
     extract_pitch_descriptors_pt = pydra.mark.task(extract_pitch_descriptors)
     extract_slope_tilt_pt = pydra.mark.task(extract_slope_tilt)
-    extract_cpp_pt = pydra.mark.task(extract_cpp)
+    extract_cpp_descriptors_pt = pydra.mark.task(extract_cpp_descriptors)
     extract_pitch_values_pt = pydra.mark.task(extract_pitch_values)
     extract_audio_duration_pt = pydra.mark.task(extract_audio_duration)
+    extract_jitter_pt = pydra.mark.task(extract_jitter)
+    extract_shimmer_pt = pydra.mark.task(extract_shimmer)
 
     def _extract_pitch_floor(pitch_values_out: dict) -> float:
         return pitch_values_out["pitch_floor"]
@@ -1122,8 +1129,8 @@ def extract_features_from_audios(audios: list,
         )
     )
     wf.add(
-        extract_cpp_pt(
-            name="extract_cpp_pt",
+        extract_cpp_descriptors_pt(
+            name="extract_cpp_descriptors_pt",
             snd=wf.lzin.x,
             floor=wf._extract_pitch_floor_pt.lzout.out,
             ceiling=wf._extract_pitch_ceiling_pt.lzout.out,
@@ -1141,8 +1148,8 @@ def extract_features_from_audios(audios: list,
     )
     window_length = 0.025  # Length of feature extraction window for spectrogram
     wf.add(
-        extract_Spectral_Moments_pt(
-            name="extract_Spectral_Moments_pt",
+        extract_spectral_moments_pt(
+            name="extract_spectral_moments_pt",
             snd=wf.lzin.x,
             floor=wf._extract_pitch_floor_pt.lzout.out,
             ceiling=wf._extract_pitch_ceiling_pt.lzout.out,
@@ -1151,6 +1158,22 @@ def extract_features_from_audios(audios: list,
         )
     )
     wf.add(extract_audio_duration_pt(name="extract_audio_duration_pt", snd=wf.lzin.x))
+    wf.add(
+        extract_jitter_pt(
+            name="extract_jitter_pt",
+            snd=wf.lzin.x,
+            floor=wf._extract_pitch_floor_pt.lzout.out,
+            ceiling=wf._extract_pitch_ceiling_pt.lzout.out,
+        )
+    )
+    wf.add(
+        extract_shimmer_pt(
+            name="extract_shimmer_pt",
+            snd=wf.lzin.x,
+            floor=wf._extract_pitch_floor_pt.lzout.out,
+            ceiling=wf._extract_pitch_ceiling_pt.lzout.out,
+        )
+    )
 
     # setting multiple workflow outputs
     wf.set_output(
@@ -1161,10 +1184,12 @@ def extract_features_from_audios(audios: list,
             ("intensity_out", wf.extract_intensity_descriptors_pt.lzout.out),
             ("harmonicity_out", wf.extract_harmonicity_descriptors_pt.lzout.out),
             ("slope_tilt_out", wf.extract_slope_tilt_pt.lzout.out),
-            ("cpp_out", wf.extract_cpp_pt.lzout.out),
+            ("cpp_out", wf.extract_cpp_descriptors_pt.lzout.out),
             ("formants_out", wf.measure_formants_pt.lzout.out),
-            ("spectral_moments_out", wf.extract_Spectral_Moments_pt.lzout.out),
+            ("spectral_moments_out", wf.extract_spectral_moments_pt.lzout.out),
             ("audio_duration", wf.extract_audio_duration_pt.lzout.out),
+            ("jitter_out", wf.extract_jitter_pt.lzout.out),
+            ("shimmer_out", wf.extract_shimmer_pt.lzout.out),
         ]
     )
 
@@ -1172,8 +1197,6 @@ def extract_features_from_audios(audios: list,
         sub(wf)
 
     outputs = wf.result()
-
-    print(outputs)
 
     extracted_data = []
 
@@ -1189,28 +1212,44 @@ def extract_features_from_audios(audios: list,
             "mean_pause_duration": output.output.speech_rate_out["mean_pause_dur"],
             # Pitch and Intensity:
             f"mean_f0_{unit.lower()}": output.output.pitch_out[f"mean_f0_{unit.lower()}"],
-            f"stdev_f0_{unit.lower()}": output.output.pitch_out[f"stdev_f0_{unit.lower()}"],
-            "mean_db": output.output.intensity_out["mean_db"],
-            "range_ratio_db": output.output.intensity_out["range_db_ratio"],
+            f"std_f0_{unit.lower()}": output.output.pitch_out[f"stdev_f0_{unit.lower()}"],
+            "mean_intensity_db": output.output.intensity_out["mean_db"],
+            "std_intensity_db": output.output.intensity_out["std_db"],
+            "range_ratio_intensity_db": output.output.intensity_out["range_db_ratio"],
             # Quality Features:
-            "hnr_db": output.output.harmonicity_out["hnr_db_mean"],
-            "spectral_slope": output.output.slope_tilt_out["spc_slope"],
-            "spectral_tilt": output.output.slope_tilt_out["spc_tilt"],
-            "cepstral_peak_prominence": output.output.cpp_out["mean_cpp"],
+            "mean_hnr_db": output.output.harmonicity_out["hnr_db_mean"],
+            "std_hnr_db": output.output.harmonicity_out["hnr_db_std_dev"],
+            "spectral_slope": output.output.slope_tilt_out["spectral_slope"],
+            "spectral_tilt": output.output.slope_tilt_out["spectral_tilt"],
+            "cepstral_peak_prominence_mean": output.output.cpp_out["mean_cpp"],
+            "cepstral_peak_prominence_std": output.output.cpp_out["std_dev_cpp"],
             # Formant (F1, F2):
-            "mean_f1_loc": output.output.formants_out["F1_mean"],
-            "std_f1_loc": output.output.formants_out["F1_Std"],
-            "mean_b1_loc": output.output.formants_out["B1_mean"],
-            "std_b1_loc": output.output.formants_out["B1_Std"],
-            "mean_f2_loc": output.output.formants_out["F2_mean"],
-            "std_f2_loc": output.output.formants_out["F2_Std"],
-            "mean_b2_loc": output.output.formants_out["B2_mean"],
-            "std_b2_loc": output.output.formants_out["B2_Std"],
+            "mean_f1_loc": output.output.formants_out["f1_mean"],
+            "std_f1_loc": output.output.formants_out["f1_std"],
+            "mean_b1_loc": output.output.formants_out["b1_mean"],
+            "std_b1_loc": output.output.formants_out["b1_std"],
+            "mean_f2_loc": output.output.formants_out["f2_mean"],
+            "std_f2_loc": output.output.formants_out["f2_std"],
+            "mean_b2_loc": output.output.formants_out["b2_mean"],
+            "std_b2_loc": output.output.formants_out["b2_std"],
             # Spectral Moments:
-            "spectral_gravity": output.output.spectral_moments_out["spc_gravity"],
-            "spectral_std_dev": output.output.spectral_moments_out["spc_std_dev"],
-            "spectral_skewness": output.output.spectral_moments_out["spc_skewness"],
-            "spectral_kurtosis": output.output.spectral_moments_out["spc_kurtosis"],
+            "spectral_gravity": output.output.spectral_moments_out["spectral_gravity"],
+            "spectral_std_dev": output.output.spectral_moments_out["spectral_std_dev"],
+            "spectral_skewness": output.output.spectral_moments_out["spectral_skewness"],
+            "spectral_kurtosis": output.output.spectral_moments_out["spectral_kurtosis"],
+            # Jitter Descriptors:
+            "local_jitter": output.output.jitter_out["local_jitter"],
+            "local_absolute_jitter": output.output.jitter_out["localabsolute_jitter"],
+            "rap_jitter": output.output.jitter_out["rap_jitter"],
+            "ppq5_jitter": output.output.jitter_out["ppq5_jitter"],
+            "ddp_jitter": output.output.jitter_out["ddp_jitter"],
+            # Shimmer Descriptors:
+            "local_shimmer": output.output.shimmer_out["local_shimmer"],
+            "local_db_shimmer": output.output.shimmer_out["localDB_shimmer"],
+            "apq3_shimmer": output.output.shimmer_out["apq3_shimmer"],
+            "apq5_shimmer": output.output.shimmer_out["apq5_shimmer"],
+            "apq11_shimmer": output.output.shimmer_out["apq11_shimmer"],
+            "dda_shimmer": output.output.shimmer_out["dda_shimmer"],
         }
 
         extracted_data.append(feature_data)
