@@ -122,10 +122,9 @@ def test_extract_spectral_moments(resampled_mono_audio_sample: Audio) -> None:
         resampled_mono_audio_sample, floor=75.0, ceiling=500.0, window_size=0.025, frame_shift=0.01
     )
     assert isinstance(result, dict)
-    assert all(key in result for key in ["spectral_gravity", 
-                                         "spectral_std_dev", 
-                                         "spectral_skewness", 
-                                         "spectral_kurtosis"])
+    assert all(
+        key in result for key in ["spectral_gravity", "spectral_std_dev", "spectral_skewness", "spectral_kurtosis"]
+    )
     assert all(isinstance(result[key], float) for key in result)
 
 

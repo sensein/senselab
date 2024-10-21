@@ -432,12 +432,12 @@ def extract_pitch_descriptors(
         if current_frame is not None:
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
-        return {f"mean_f0_{unit.lower()}": float("nan"), 
-                f"stdev_f0_{unit.lower()}": float("nan")}
+        return {f"mean_f0_{unit.lower()}": float("nan"), f"stdev_f0_{unit.lower()}": float("nan")}
 
 
-def extract_intensity_descriptors(snd: Union[parselmouth.Sound, Path, Audio], 
-                                  floor: float, frame_shift: float) -> Dict[str, float]:
+def extract_intensity_descriptors(
+    snd: Union[parselmouth.Sound, Path, Audio], floor: float, frame_shift: float
+) -> Dict[str, float]:
     """Extract Intensity Features.
 
     Function to extract key intensity information from a given sound object.
@@ -543,7 +543,7 @@ def extract_harmonicity_descriptors(
         if current_frame is not None:
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
-        
+
         return {"hnr_db_mean": float("nan"), "hnr_db_std_dev": float("nan")}
 
 
@@ -924,10 +924,12 @@ def extract_spectral_moments(
         if current_frame is not None:
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
-        return {"spectral_gravity": np.nan, 
-                "spectral_std_dev": np.nan, 
-                "spectral_skewness": np.nan, 
-                "spectral_kurtosis": np.nan}
+        return {
+            "spectral_gravity": np.nan,
+            "spectral_std_dev": np.nan,
+            "spectral_skewness": np.nan,
+            "spectral_kurtosis": np.nan,
+        }
 
 
 ### More functions ###
@@ -1044,9 +1046,9 @@ def extract_shimmer(snd: Union[parselmouth.Sound, Path, Audio], floor: float, ce
 
 
 ### Wrapper ###
-def extract_praat_parselmouth_features_from_audios(audios: List[Audio], 
-                                 cache_dir: Optional[str] = None,
-                                 plugin: str = "cf") -> dict:
+def extract_praat_parselmouth_features_from_audios(
+    audios: List[Audio], cache_dir: Optional[str] = None, plugin: str = "cf"
+) -> dict:
     """Extract features from a list of Audio objects and return a JSON-like dictionary.
 
     Args:
@@ -1073,10 +1075,12 @@ def extract_praat_parselmouth_features_from_audios(audios: List[Audio],
 
     def _extract_pitch_floor(pitch_values_out: dict) -> float:
         return pitch_values_out["pitch_floor"]
+
     _extract_pitch_floor_pt = pydra.mark.task(_extract_pitch_floor)
 
     def _extract_pitch_ceiling(pitch_values_out: dict) -> float:
         return pitch_values_out["pitch_ceiling"]
+
     _extract_pitch_ceiling_pt = pydra.mark.task(_extract_pitch_ceiling)
 
     # Create the workflow
@@ -1101,7 +1105,7 @@ def extract_praat_parselmouth_features_from_audios(audios: List[Audio],
             floor=wf._extract_pitch_floor_pt.lzout.out,
             ceiling=wf._extract_pitch_ceiling_pt.lzout.out,
             frame_shift=time_step,
-            unit=unit
+            unit=unit,
         )
     )
     wf.add(
