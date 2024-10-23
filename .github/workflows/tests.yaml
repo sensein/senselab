@@ -41,6 +41,10 @@ jobs:
       run: |
         poetry install --with dev
       shell: bash
+    - name: check files
+      run: |
+        ls /Users/runner/work/senselab/senselab/src/tests/data_for_testing/
+      shell: bash
     - name: Run unit tests
       id: run-tests
       env:
