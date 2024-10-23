@@ -21,5 +21,5 @@ def test_chats_to_script_lines() -> None:
     )
     exp_result = {CHA_TALK_BANK_PATH: [exp_line_1, exp_line_2, exp_line_3]}
 
-    actual_result = chats_to_script_lines(path=CHA_TALK_BANK_PATH)
+    actual_result = chats_to_script_lines(CHA_TALK_BANK_PATH)
     assert exp_result == actual_result
