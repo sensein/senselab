@@ -1,0 +1,26 @@
+@UTF8
+@PID:	0/1
+@Begin
+@Languages:	eng
+@Participants:	CHI Target_Child
+@Options:	multi
+@ID:	eng|POLER|CHI|||Chronic_Match||Target_Child|||
+@Media:	166, audio
+@Types:	cross, narrative, TD
+*CHI:	a boy named jack was watching his frog last night . 1_34881
+%mor:	det|a-Ind-Art noun|boy verb|name-Part-Past-S noun|jack aux|be-Fin-Ind-Past-S3 verb|watch-Part-Pres-S pron|his-Prs-Gen-S3 noun|frog adj|last-Pos-S1 noun|night .
+%gra:	1|2|DET 2|6|NSUBJ 3|2|ACL 4|6|NSUBJ 5|6|AUX 6|10|ROOT 7|8|NMOD-POSS 8|6|OBJ 9|10|AMOD 10|6|OBL-TMOD 11|6|PUNCT
+%xnar:	$sg=s2
+*CHI:	when he went to bed he forgot to close the lid <on> [/] <on the frog> [//] on the jar that the frog was in . 34881_50681
+%mor:	adv|when pron|he-Prs-Nom-S3 verb|go-Fin-Ind-Past-S3 adp|to noun|bed pron|he-Prs-Nom-S3 verb|forget-Fin-Ind-Past-S3 part|to verb|close-Inf-S det|the-Def-Art noun|lid adp|on det|the-Def-Art noun|jar pron|that-Rel-S1 det|the-Def-Art noun|frog aux|be-Fin-Ind-Past-S3 adv|in .
+%gra:	1|3|ADVMOD 2|3|NSUBJ 3|7|ADVCL 4|5|CASE 5|3|OBL 6|7|NSUBJ 7|19|ROOT 8|9|MARK 9|7|XCOMP 10|11|DET 11|9|OBJ 12|14|CASE 13|14|DET 14|9|OBL 15|9|ADVCL-RELCL 16|17|DET 17|19|NSUBJ 18|19|COP 19|15|ADVMOD 20|7|PUNCT
+%xsyn:	$sg=ccu; $sg=whc
+%xcoh:	$sg=ref; $sg=lex
+%xnar:	$sg=ie1
+*CHI:	so in the morning when he woke up the frog wasn't in the jar . 50681_56088
+%mor:	adv|so adp|in det|the-Def-Art noun|morning adv|when pron|he-Prs-Nom-S3 verb|wake-Fin-Ind-Past-S3 adp|up det|the-Def-Art noun|frog aux|be-Fin-Ind-Past-S3~part|not adp|in det|the-Def-Art noun|jar .
+%gra:	1|15|ADVMOD 2|4|CASE 3|4|DET 4|15|OBL 5|7|ADVMOD 6|7|NSUBJ 7|15|ADVCL 8|7|COMPOUND-PRT 9|10|DET 10|15|NSUBJ 11|15|COP 12|15|ADVMOD 13|15|CASE 14|15|DET 15|15|ROOT 16|15|PUNCT
+%xsyn:	$sg=ccu; $sg=whc
+%xcoh:	$sg=ref; $sg=lex; $sg=lex
+%xnar:	$sg=ie3; $sg=ie4
+@End
