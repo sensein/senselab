@@ -3,7 +3,7 @@
 from senselab.utils.data_structures.script_line import ScriptLine
 from senselab.utils.data_structures.talk_bank_helpers import chats_to_script_lines
 from tests.utils.conftest import CHA_TALK_BANK_PATH
-
+import os
 
 def test_chats_to_script_lines() -> None:
     """Tests the conversion of a TalkBank CHAT file to ScriptLines."""
@@ -19,9 +19,8 @@ def test_chats_to_script_lines() -> None:
     exp_line_3 = ScriptLine(
         text="so in the morning when he woke up the frog wasn't in the jar.", start=50.681, end=56.088, speaker="CHI"
     )
+
     exp_result = {CHA_TALK_BANK_PATH: [exp_line_1, exp_line_2, exp_line_3]}
 
     actual_result = chats_to_script_lines(CHA_TALK_BANK_PATH)
-    print(exp_result)
-    print(actual_result)
     assert exp_result == actual_result
