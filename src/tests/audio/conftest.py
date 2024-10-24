@@ -1,8 +1,8 @@
 """This script includes some fixtures for pytest unit testing."""
 
+import os
 from typing import Callable, List
 
-import os
 import pytest
 import torch
 
