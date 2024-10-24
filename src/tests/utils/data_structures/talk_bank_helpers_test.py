@@ -3,7 +3,7 @@
 from senselab.utils.data_structures.script_line import ScriptLine
 from senselab.utils.data_structures.talk_bank_helpers import chats_to_script_lines
 from tests.utils.conftest import CHA_TALK_BANK_PATH
-import os
+
 
 def test_chats_to_script_lines() -> None:
     """Tests the conversion of a TalkBank CHAT file to ScriptLines."""

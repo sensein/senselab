@@ -155,6 +155,7 @@ pattern = "default-unprefixed"
 skip = [
   "poetry.lock",
   "docs_style/pdoc-theme/syntax-highlighting.css",
+  "*.cha",
   "*.ipynb"
 ]
 ignore-words-list = ["senselab", "nd", "astroid", "wil", "SER", "te"]
