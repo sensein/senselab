@@ -11,7 +11,7 @@ def test_chats_to_script_lines() -> None:
         text="a boy named jack was watching his frog last night.", start=0.001, end=34.881, speaker="CHI"
     )
     exp_line_2 = ScriptLine(
-        text="when he went to bed he forgot to close the life on the jar that the frog was in.",
+        text="when he went to bed he forgot to close the lid on the jar that the frog was in.",
         start=34.881,
         end=50.681,
         speaker="CHI",
@@ -22,4 +22,6 @@ def test_chats_to_script_lines() -> None:
     exp_result = {CHA_TALK_BANK_PATH: [exp_line_1, exp_line_2, exp_line_3]}
 
     actual_result = chats_to_script_lines(CHA_TALK_BANK_PATH)
+    print(exp_result)
+    print(actual_result)
     assert exp_result == actual_result
