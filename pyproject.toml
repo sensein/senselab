@@ -60,9 +60,9 @@ optional = true
 [tool.poetry.group.dev.dependencies]
 pytest-xdist = {version = "~=3.6.1", extras = ["psutil"]}
 pytest-mock = "~=3.14"
-pytest-cov = "~=5.0"
+pytest-cov = ">=5,<7"
 mypy = "~=1.9"
-pre-commit = "~=3.7"
+pre-commit = ">=3.7,<5.0"
 ruff = "~=0.3"
 codespell = "~=2.3"
 jupyter = "~=1.0"
@@ -73,7 +73,7 @@ ipykernel = "*"
 optional = true
 
 [tool.poetry.group.docs.dependencies]
-pdoc = "~=14.4"
+pdoc = ">=14.4,<16.0"
 
 [tool.poetry.scripts]
 senselab-cli = "senselab.cli:main"
