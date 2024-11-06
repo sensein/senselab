@@ -1,1 +1,1 @@
-"""Workflow for timestamped transcription."""
+"""Workflows and pipelines for audio processing and analysis."""
