@@ -1,0 +1,16 @@
+{
+    "files": {
+        "audio": {
+            "extensions": [
+                ".wav",
+                ".mp3"
+            ]
+        },
+        "video": {
+            "extensions": [
+                ".mp4",
+                ".avi"
+            ]
+        }
+    }
+}

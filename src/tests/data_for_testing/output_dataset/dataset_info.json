@@ -1,0 +1,16 @@
+{
+    "citation": "",
+    "description": "",
+    "features": {
+        "pokemon": {
+            "dtype": "string",
+            "_type": "Value"
+        },
+        "type": {
+            "dtype": "string",
+            "_type": "Value"
+        }
+    },
+    "homepage": "",
+    "license": ""
+}
