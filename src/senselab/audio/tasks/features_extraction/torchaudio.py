@@ -37,7 +37,10 @@ def extract_spectrogram_from_audios(
     )
     spectrograms = []
     for audio in audios:
-        spectrograms.append({"spectrogram": spectrogram(audio.waveform).squeeze(0)})
+        try:
+            spectrograms.append({"spectrogram": spectrogram(audio.waveform).squeeze(0)})
+        except RuntimeError:
+            spectrograms.append({"spectrogram": torch.nan})
     return spectrograms
 
 
@@ -69,14 +72,17 @@ def extract_mel_spectrogram_from_audios(
             raise ValueError("win_length cannot be None")
     mel_spectrograms = []
     for audio in audios:
-        mel_spectrogram = torchaudio.transforms.MelSpectrogram(
-            sample_rate=audio.sampling_rate,
-            n_fft=n_fft,
-            win_length=win_length,
-            hop_length=hop_length,
-            n_mels=n_mels,
-        )(audio.waveform)
-        mel_spectrograms.append({"mel_spectrogram": mel_spectrogram.squeeze(0)})
+        try:
+            mel_spectrogram = torchaudio.transforms.MelSpectrogram(
+                sample_rate=audio.sampling_rate,
+                n_fft=n_fft,
+                win_length=win_length,
+                hop_length=hop_length,
+                n_mels=n_mels,
+            )(audio.waveform)
+            mel_spectrograms.append({"mel_spectrogram": mel_spectrogram.squeeze(0)})
+        except RuntimeError:
+            mel_spectrograms.append({"mel_spectrogram": torch.nan})
     return mel_spectrograms
 
 
@@ -110,20 +116,22 @@ def extract_mfcc_from_audios(
             raise ValueError("win_length cannot be None")
     mfccs = []
     for audio in audios:
-        mfcc_transform = torchaudio.transforms.MFCC(
-            sample_rate=audio.sampling_rate,
-            n_mfcc=n_mfcc,
-            melkwargs={"n_fft": n_ftt, "win_length": win_length, "hop_length": hop_length, "n_mels": n_mels},
-        )
-        mfccs.append({"mfcc": mfcc_transform(audio.waveform).squeeze(0)})
+        try:
+            mfcc_transform = torchaudio.transforms.MFCC(
+                sample_rate=audio.sampling_rate,
+                n_mfcc=n_mfcc,
+                melkwargs={"n_fft": n_ftt, "win_length": win_length, "hop_length": hop_length, "n_mels": n_mels},
+            )
+            mfccs.append({"mfcc": mfcc_transform(audio.waveform).squeeze(0)})
+        except RuntimeError:
+            mfccs.append({"mfcc": torch.nan})
     return mfccs
 
 
 def extract_mel_filter_bank_from_audios(
     audios: List[Audio],
     n_mels: int = 128,
-    n_stft: int = 201,
-    n_fft: int = 400,
+    n_fft: int = 1024,
     win_length: Optional[int] = None,
     hop_length: Optional[int] = None,
 ) -> List[Dict[str, torch.Tensor]]:
@@ -132,8 +140,7 @@ def extract_mel_filter_bank_from_audios(
     Args:
         audios (List[Audio]): List of Audio objects.
         n_mels (int): Number of mel filter banks. Default is 128.
-        n_stft (int): Number of bins in STFT. Default is 201.
-        n_fft (int): Size of FFT, creates n_fft // 2 + 1 bins. Default is 400.
+        n_fft (int): Size of FFT, creates n_fft // 2 + 1 bins. Default is 1024.
         win_length (int): Window size. Default is None, using n_fft.
         hop_length (int): Length of hop between STFT windows. Default is None, using win_length // 2.
 
@@ -144,20 +151,24 @@ def extract_mel_filter_bank_from_audios(
         win_length = n_fft
     if hop_length is None:
         hop_length = win_length // 2
+    n_stft = n_fft // 2 + 1
 
     spectrograms = extract_spectrogram_from_audios(audios, n_fft, win_length, hop_length)
 
     mel_filter_banks = []
     for i, audio in enumerate(audios):
-        melscale_transform = torchaudio.transforms.MelScale(
-            sample_rate=audio.sampling_rate, n_mels=n_mels, n_stft=n_stft
-        )
-        mel_filter_banks.append({"mel_filter_bank": melscale_transform(spectrograms[i]["spectrogram"]).squeeze(0)})
+        try:
+            melscale_transform = torchaudio.transforms.MelScale(
+                sample_rate=audio.sampling_rate, n_mels=n_mels, n_stft=n_stft
+            )
+            mel_filter_banks.append({"mel_filter_bank": melscale_transform(spectrograms[i]["spectrogram"]).squeeze(0)})
+        except RuntimeError:
+            mel_filter_banks.append({"mel_filter_bank": torch.nan})
     return mel_filter_banks
 
 
 def extract_pitch_from_audios(
-    audios: List[Audio], freq_low: int = 85, freq_high: int = 3400
+    audios: List[Audio], freq_low: int = 80, freq_high: int = 500
 ) -> List[Dict[str, torch.Tensor]]:
     """Extract pitch from a list of audio objects.
 
@@ -166,29 +177,56 @@ def extract_pitch_from_audios(
 
     Args:
         audios (List[Audio]): List of Audio objects.
-        freq_low (int): Lowest frequency that can be detected (Hz). Default is 85.
-        freq_high (int): Highest frequency that can be detected (Hz). Default is 3400.
+        freq_low (int): Lowest frequency that can be detected (Hz). Should be bigger than 0.
+            (Default is 80).
+        freq_high (int): Highest frequency that can be detected (Hz).
+            (Default is 500).
 
     Returns:
         List[Dict[str, torch.Tensor]]: List of Dict objects containing pitches.
     """
+    if freq_low <= 0:
+        raise ValueError("freq_low should be bigger than 0")
+
     pitches = []
     for audio in audios:
-        pitches.append(
-            {
-                "pitch": torchaudio.functional.detect_pitch_frequency(
-                    audio.waveform, sample_rate=audio.sampling_rate, freq_low=freq_low, freq_high=freq_high
-                ).squeeze(0)
-            }
-        )
+        try:
+            pitches.append(
+                {
+                    "pitch": torchaudio.functional.detect_pitch_frequency(
+                        audio.waveform, sample_rate=audio.sampling_rate, freq_low=freq_low, freq_high=freq_high
+                    ).squeeze(0)
+                }
+            )
+        except RuntimeError:
+            pitches.append({"pitch": torch.nan})
     return pitches
 
 
-def extract_torchaudio_features_from_audios(audios: List[Audio], plugin: str = "cf") -> List[Dict[str, Any]]:
+def extract_torchaudio_features_from_audios(
+    audios: List[Audio],
+    freq_low: int = 80,
+    freq_high: int = 500,
+    n_fft: int = 1024,
+    n_mels: int = 128,
+    n_mfcc: int = 40,
+    win_length: Optional[int] = None,
+    hop_length: Optional[int] = None,
+    plugin: str = "cf",
+) -> List[Dict[str, Any]]:
     """Extract torchaudio features from a list of audio objects.
 
     Args:
         audios (List[Audio]): The list of audio objects to extract features from.
+        freq_low (int): Lowest frequency that can be detected (Hz). Should be bigger than 0.
+            (Default is 80).
+        freq_high (int): Highest frequency that can be detected (Hz).
+            (Default is 500).
+        n_fft (int): Size of FFT, creates n_fft // 2 + 1 bins. Default is 1024.
+        n_mels (int): Number of mel filter banks. Default is 128.
+        n_mfcc (int): Number of MFCCs. Default is 40.
+        win_length (int): Window size. Default is None, using n_fft.
+        hop_length (int): Length of hop between STFT windows. Default is None, using win_length // 2.
         plugin (str): The plugin to use. Default is "cf".
 
     Returns:
@@ -203,11 +241,51 @@ def extract_torchaudio_features_from_audios(audios: List[Audio], plugin: str = "
     formatted_audios = [[audio] for audio in audios]
     wf = pydra.Workflow(name="wf", input_spec=["x"])
     wf.split("x", x=formatted_audios)
-    wf.add(extract_pitch_from_audios_pt(name="extract_pitch_from_audios_pt", audios=wf.lzin.x))
-    wf.add(extract_mel_filter_bank_from_audios_pt(name="extract_mel_filter_bank_from_audios_pt", audios=wf.lzin.x))
-    wf.add(extract_mfcc_from_audios_pt(name="extract_mfcc_from_audios_pt", audios=wf.lzin.x))
-    wf.add(extract_mel_spectrogram_from_audios_pt(name="extract_mel_spectrogram_from_audios_pt", audios=wf.lzin.x))
-    wf.add(extract_spectrogram_from_audios_pt(name="extract_spectrogram_from_audios_pt", audios=wf.lzin.x))
+    wf.add(
+        extract_pitch_from_audios_pt(
+            name="extract_pitch_from_audios_pt", audios=wf.lzin.x, freq_low=freq_low, freq_high=freq_high
+        )
+    )
+    wf.add(
+        extract_mel_filter_bank_from_audios_pt(
+            name="extract_mel_filter_bank_from_audios_pt",
+            audios=wf.lzin.x,
+            n_mels=n_mels,
+            n_fft=n_fft,
+            win_length=win_length,
+            hop_length=hop_length,
+        )
+    )
+    wf.add(
+        extract_mfcc_from_audios_pt(
+            name="extract_mfcc_from_audios_pt",
+            audios=wf.lzin.x,
+            n_mfcc=n_mfcc,
+            n_fft=n_fft,
+            n_mels=n_mels,
+            win_length=win_length,
+            hop_length=hop_length,
+        )
+    )
+    wf.add(
+        extract_mel_spectrogram_from_audios_pt(
+            name="extract_mel_spectrogram_from_audios_pt",
+            audios=wf.lzin.x,
+            n_mels=n_mels,
+            n_nfft=n_fft,
+            win_length=win_length,
+            hop_length=hop_length,
+        )
+    )
+    wf.add(
+        extract_spectrogram_from_audios_pt(
+            name="extract_spectrogram_from_audios_pt",
+            audios=wf.lzin.x,
+            n_nfft=n_fft,
+            win_length=win_length,
+            hop_length=hop_length,
+        )
+    )
 
     # setting multiple workflow outputs
     wf.set_output(

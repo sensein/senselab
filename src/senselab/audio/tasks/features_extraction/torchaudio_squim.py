@@ -2,6 +2,7 @@
 
 from typing import Any, Dict, List
 
+import torch
 from torchaudio.pipelines import SQUIM_OBJECTIVE, SQUIM_SUBJECTIVE
 
 from senselab.audio.data_structures import Audio
@@ -30,11 +31,15 @@ def extract_objective_quality_features_from_audios(audio_list: List[Audio]) -> D
     features: Dict[str, Any] = {"stoi": [], "pesq": [], "si_sdr": []}
 
     for audio in audio_list:
-        stoi, pesq, si_sdr = objective_model(audio.waveform)
-        features["stoi"].append(stoi.item())
-        features["pesq"].append(pesq.item())
-        features["si_sdr"].append(si_sdr.item())
-
+        try:
+            stoi, pesq, si_sdr = objective_model(audio.waveform)
+            features["stoi"].append(stoi.item())
+            features["pesq"].append(pesq.item())
+            features["si_sdr"].append(si_sdr.item())
+        except ValueError:
+            features["stoi"].append(torch.nan)
+            features["pesq"].append(torch.nan)
+            features["si_sdr"].append(torch.nan)
     return features
 
 
@@ -67,7 +72,9 @@ def extract_subjective_quality_features_from_audios(
     features: Dict[str, Any] = {"mos": []}
 
     for i, audio in enumerate(audio_list):
-        mos = subjective_model(audio.waveform, non_matching_references[i].waveform)
-        features["mos"].append(mos.item())
-
+        try:
+            mos = subjective_model(audio.waveform, non_matching_references[i].waveform)
+            features["mos"].append(mos.item())
+        except ValueError:
+            features["mos"].append(torch.nan)
     return features
