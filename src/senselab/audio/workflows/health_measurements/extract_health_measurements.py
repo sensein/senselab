@@ -11,7 +11,7 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.features_extraction.praat_parselmouth import extract_praat_parselmouth_features_from_audios
 
 
-def extract_health_measurements(audios: List[Audio], cache_dir: Optional[str] = None) -> Dict[str, Any]:
+def extract_health_measurements(audios: List[Audio], cache_dir: Optional[str] = None) -> List[Dict[str, Any]]:
     """Extract health measurements from audio files.
 
     Args:
@@ -19,7 +19,8 @@ def extract_health_measurements(audios: List[Audio], cache_dir: Optional[str] = 
         cache_dir (Optional[str]): Directory to use for caching by pydra. Defaults to None.
 
     Returns:
-        Dict[str, Any]: Dictionary containing speech and voice metrics that may be used for health monitoring.
+        List[Dict[str, Any]]: List of dictionaries containing speech and voice metrics
+        that may be used for health monitoring.
             Metrics include:
 
             - speaking_rate
@@ -89,4 +90,4 @@ def extract_health_measurements(audios: List[Audio], cache_dir: Optional[str] = 
         duration=False,
         jitter=False,
         shimmer=False,
-    )["praat_parselmouth"]
+    )

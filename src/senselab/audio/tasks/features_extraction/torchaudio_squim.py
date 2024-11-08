@@ -11,70 +11,78 @@ objective_model = SQUIM_OBJECTIVE.get_model()
 subjective_model = SQUIM_SUBJECTIVE.get_model()
 
 
-def extract_objective_quality_features_from_audios(audio_list: List[Audio]) -> Dict[str, Any]:
+def extract_objective_quality_features_from_audios(audios: List["Audio"]) -> List[Dict[str, Any]]:
     """Extracts objective audio features from a list of Audio objects.
 
     Currently, Torchaudio-Squim model only supports mono audio at 16000 Hz sampling rate.
 
     Args:
-        audio_list (List[Audio]): List of Audio objects.
+        audios (List[Audio]): List of Audio objects.
 
     Returns:
-        Dict[str, Any]: Dictionary containing extracted features.
+        List[Dict[str, Any]]: List of dictionaries, each containing extracted features for an audio input.
     """
-    if any(audio.waveform.shape[0] != 1 for audio in audio_list):
+    if any(audio.waveform.shape[0] != 1 for audio in audios):
         raise ValueError("Only mono audio is supported by Torchaudio-Squim model.")
 
-    if any(audio.sampling_rate != 16000 for audio in audio_list):
+    if any(audio.sampling_rate != 16000 for audio in audios):
         raise ValueError("Only 16000 Hz sampling rate is supported by Torchaudio-Squim model.")
 
-    features: Dict[str, Any] = {"stoi": [], "pesq": [], "si_sdr": []}
+    features_list: List[Dict[str, Any]] = []
 
-    for audio in audio_list:
+    for audio in audios:
+        audio_features = {}
         try:
             stoi, pesq, si_sdr = objective_model(audio.waveform)
-            features["stoi"].append(stoi.item())
-            features["pesq"].append(pesq.item())
-            features["si_sdr"].append(si_sdr.item())
-        except ValueError:
-            features["stoi"].append(torch.nan)
-            features["pesq"].append(torch.nan)
-            features["si_sdr"].append(torch.nan)
-    return features
+            audio_features["stoi"] = stoi.item()
+            audio_features["pesq"] = pesq.item()
+            audio_features["si_sdr"] = si_sdr.item()
+        except RuntimeError:
+            audio_features["stoi"] = torch.nan
+            audio_features["pesq"] = torch.nan
+            audio_features["si_sdr"] = torch.nan
+
+        features_list.append(audio_features)
+
+    return features_list
 
 
 def extract_subjective_quality_features_from_audios(
-    audio_list: List[Audio], non_matching_references: List[Audio]
-) -> Dict[str, Any]:
+    audios: List["Audio"], non_matching_references: List["Audio"]
+) -> List[Dict[str, Any]]:
     """Extracts subjective audio features from a list of Audio objects.
 
     Currently, Torchaudio-Squim model only supports mono audio at 16000 Hz sampling rate.
 
     Args:
-        audio_list (List[Audio]): List of Audio objects.
+        audios (List[Audio]): List of Audio objects.
         non_matching_references (List[Audio]): Reference Audio objects for the subjective model.
 
     Returns:
-        Dict[str, Any]: Dictionary containing extracted features.
+        List[Dict[str, Any]]: List of dictionaries, each containing extracted features for an audio input.
     """
     # Check if any audio is not mono
-    if any(audio.waveform.shape[0] != 1 for audio in audio_list) or any(
+    if any(audio.waveform.shape[0] != 1 for audio in audios) or any(
         ref.waveform.shape[0] != 1 for ref in non_matching_references
     ):
         raise ValueError("Only mono audio is supported by Torchaudio-Squim model.")
 
     # Check if any audio has a sampling rate other than 16000 Hz
-    if any(audio.sampling_rate != 16000 for audio in audio_list) or any(
+    if any(audio.sampling_rate != 16000 for audio in audios) or any(
         ref.sampling_rate != 16000 for ref in non_matching_references
     ):
         raise ValueError("Only 16000 Hz sampling rate is supported by Torchaudio-Squim model.")
 
-    features: Dict[str, Any] = {"mos": []}
+    features_list: List[Dict[str, Any]] = []
 
-    for i, audio in enumerate(audio_list):
+    for i, audio in enumerate(audios):
+        audio_features = {}
         try:
             mos = subjective_model(audio.waveform, non_matching_references[i].waveform)
-            features["mos"].append(mos.item())
-        except ValueError:
-            features["mos"].append(torch.nan)
-    return features
+            audio_features["mos"] = mos.item()
+        except RuntimeError:
+            audio_features["mos"] = torch.nan
+
+        features_list.append(audio_features)
+
+    return features_list
