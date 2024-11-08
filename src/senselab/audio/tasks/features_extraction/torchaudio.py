@@ -306,13 +306,11 @@ def extract_torchaudio_features_from_audios(
     formatted_output: List[Dict[str, Any]] = []
     for output in outputs:
         formatted_output_item = {
-            "torchaudio": {
-                "pitch": output.output.pitch_out[0]["pitch"],
-                "mel_filter_bank": output.output.mel_filter_bank_out[0]["mel_filter_bank"],
-                "mfcc": output.output.mfcc_out[0]["mfcc"],
-                "mel_spectrogram": output.output.mel_spectrogram_out[0]["mel_spectrogram"],
-                "spectrogram": output.output.spectrogram_out[0]["spectrogram"],
-            }
+            "pitch": output.output.pitch_out[0]["pitch"],
+            "mel_filter_bank": output.output.mel_filter_bank_out[0]["mel_filter_bank"],
+            "mfcc": output.output.mfcc_out[0]["mfcc"],
+            "mel_spectrogram": output.output.mel_spectrogram_out[0]["mel_spectrogram"],
+            "spectrogram": output.output.spectrogram_out[0]["spectrogram"],
         }
 
         formatted_output.append(formatted_output_item)

@@ -7,7 +7,7 @@ by the senselab community.
 
 import inspect
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 import parselmouth  # type: ignore
@@ -1114,7 +1114,7 @@ def extract_praat_parselmouth_features_from_audios(
     jitter: bool = True,
     shimmer: bool = True,
     plugin: str = "cf",
-) -> dict:
+) -> List[Dict[str, Any]]:
     """Extract features from a list of Audio objects and return a JSON-like dictionary.
 
     Args:
@@ -1374,7 +1374,4 @@ def extract_praat_parselmouth_features_from_audios(
 
         extracted_data.append(feature_data)
 
-    # Wrap extracted features in a dictionary under "praat_parselmouth"
-    output_json = {"praat_parselmouth": extracted_data}
-
-    return output_json
+    return extracted_data

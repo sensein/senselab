@@ -8,8 +8,6 @@ This module is currently a work in progress.
 
 from typing import Any, Dict, List, Union
 
-import pydra
-
 from senselab.audio.data_structures import Audio
 
 from .opensmile import extract_opensmile_features_from_audios
@@ -20,7 +18,6 @@ from .torchaudio_squim import extract_objective_quality_features_from_audios
 
 def extract_features_from_audios(
     audios: List[Audio],
-    plugin: str = "cf",
     opensmile: Union[Dict[str, str], bool] = True,
     parselmouth: Union[Dict[str, str], bool] = True,
     torchaudio: Union[Dict[str, str], bool] = True,
@@ -30,7 +27,6 @@ def extract_features_from_audios(
 
     Args:
         audios (List[Audio]): The list of audio objects to extract features from.
-        plugin (str): The feature extraction plugin (default is "cf").
         opensmile (Union[Dict[str, str], bool]): Parameters for OpenSMILE feature extraction.
             If False, OpenSMILE features will not be extracted. If True, uses default OpenSMILE parameters.
             If a dictionary, should contain "feature_set" and "feature_level" keys.
@@ -310,43 +306,13 @@ def extract_features_from_audios(
         'pesq': 1.3702949285507202,
         'si_sdr': 11.71167278289795}}]
     """
-    # opensmile
-    if opensmile:
-        extract_opensmile_features_from_audios_pt = pydra.mark.task(extract_opensmile_features_from_audios)
-    # praat_parselmouth
-    if parselmouth:
-        extract_praat_parselmouth_features_from_audios_pt = pydra.mark.task(
-            extract_praat_parselmouth_features_from_audios
-        )
-    # torchaudio
-    if torchaudio:
-        extract_torchaudio_features_from_audios_pt = pydra.mark.task(extract_torchaudio_features_from_audios)
-    # torchaudio_squim
-    if torchaudio_squim:
-        extract_objective_quality_features_from_audios_pt = pydra.mark.task(
-            extract_objective_quality_features_from_audios
-        )
-
-    formatted_audios = [[audio] for audio in audios]
-
-    wf = pydra.Workflow(name="wf", input_spec=["x"])
-    wf.split("x", x=formatted_audios)
     if opensmile:
         default_opensmile = {"feature_set": "eGeMAPSv02", "feature_level": "Functionals"}
-        my_opensmile = default_opensmile
         if isinstance(opensmile, dict):
-            if "feature_set" in opensmile:
-                my_opensmile["feature_set"] = opensmile["feature_set"]
-            if "feature_level" in opensmile:
-                my_opensmile["feature_level"] = opensmile["feature_level"]
-        wf.add(
-            extract_opensmile_features_from_audios_pt(
-                name="extract_opensmile_features_from_audios_pt",
-                audios=wf.lzin.x,
-                feature_set=my_opensmile["feature_set"],
-                feature_level=my_opensmile["feature_level"],
-            )
-        )
+            my_opensmile = {**default_opensmile, **opensmile}
+        else:
+            my_opensmile = default_opensmile
+        opensmile_features = extract_opensmile_features_from_audios(audios, **my_opensmile)  # type: ignore
     if parselmouth:
         default_parselmouth = {
             "time_step": 0.005,
@@ -364,27 +330,16 @@ def extract_features_from_audios(
             "duration": True,
             "jitter": True,
             "shimmer": True,
+            "plugin": "cf",
         }
-        my_parselmouth = default_parselmouth
+        # Update default_parselmouth with provided parselmouth dictionary
         if isinstance(parselmouth, dict):
-            if "time_step" in parselmouth:
-                my_parselmouth["time_step"] = parselmouth["time_step"]
-            if "window_length" in parselmouth:
-                my_parselmouth["window_length"] = parselmouth["window_length"]
-            if "pitch_unit" in parselmouth:
-                my_parselmouth["pitch_unit"] = parselmouth["pitch_unit"]
-            if "cache_dir" in parselmouth:
-                my_parselmouth["cache_dir"] = parselmouth["cache_dir"]
-        wf.add(
-            extract_praat_parselmouth_features_from_audios_pt(
-                name="extract_praat_parselmouth_features_from_audios_pt",
-                audios=wf.lzin.x,
-                time_step=my_parselmouth["time_step"],
-                window_length=my_parselmouth["window_length"],
-                pitch_unit=my_parselmouth["pitch_unit"],
-                cache_dir=my_parselmouth["cache_dir"],
-            )
-        )
+            my_parselmouth = {**default_parselmouth, **parselmouth}
+        else:
+            my_parselmouth = default_parselmouth
+
+        parselmouth_features = extract_praat_parselmouth_features_from_audios(audios=audios, **my_parselmouth)  # type: ignore
+
     if torchaudio:
         default_torchaudio = {
             "freq_low": 80,
@@ -394,103 +349,28 @@ def extract_features_from_audios(
             "n_mfcc": 40,
             "win_length": None,
             "hop_length": None,
+            "plugin": "cf",
         }
-        my_torchaudio = default_torchaudio
         if isinstance(torchaudio, dict):
-            if "freq_low" in torchaudio:
-                my_torchaudio["freq_low"] = (
-                    int(torchaudio["freq_low"])
-                    if torchaudio["freq_low"] is not None
-                    else default_torchaudio["freq_low"]
-                )
-            if "freq_high" in torchaudio:
-                my_torchaudio["freq_high"] = (
-                    int(torchaudio["freq_high"])
-                    if torchaudio["freq_high"] is not None
-                    else default_torchaudio["freq_high"]
-                )
-            if "n_fft" in torchaudio:
-                my_torchaudio["n_fft"] = (
-                    int(torchaudio["n_fft"]) if torchaudio["n_fft"] is not None else default_torchaudio["n_fft"]
-                )
-            if "n_mels" in torchaudio:
-                my_torchaudio["n_mels"] = (
-                    int(torchaudio["n_mels"]) if torchaudio["n_mels"] is not None else default_torchaudio["n_mels"]
-                )
-            if "n_mfcc" in torchaudio:
-                my_torchaudio["n_mfcc"] = (
-                    int(torchaudio["n_mfcc"]) if torchaudio["n_mfcc"] is not None else default_torchaudio["n_mfcc"]
-                )
-            if "win_length" in torchaudio:
-                my_torchaudio["win_length"] = (
-                    int(torchaudio["win_length"])
-                    if torchaudio["win_length"] is not None
-                    else default_torchaudio["win_length"]
-                )
-            if "hop_length" in torchaudio:
-                my_torchaudio["hop_length"] = (
-                    int(torchaudio["hop_length"])
-                    if torchaudio["hop_length"] is not None
-                    else default_torchaudio["hop_length"]
-                )
-        wf.add(
-            extract_torchaudio_features_from_audios_pt(
-                name="extract_torchaudio_features_from_audios_pt",
-                audios=wf.lzin.x,
-                freq_low=my_torchaudio["freq_low"],
-                freq_high=my_torchaudio["freq_high"],
-                n_fft=my_torchaudio["n_fft"],
-                n_mels=my_torchaudio["n_mels"],
-                n_mfcc=my_torchaudio["n_mfcc"],
-                win_length=my_torchaudio["win_length"],
-                hop_length=my_torchaudio["hop_length"],
-            )
-        )
+            my_torchaudio = {**default_torchaudio, **torchaudio}
+        else:
+            my_torchaudio = default_torchaudio
+
+        torchaudio_features = extract_torchaudio_features_from_audios(audios=audios, **my_torchaudio)  # type: ignore
     if torchaudio_squim:
-        wf.add(
-            extract_objective_quality_features_from_audios_pt(
-                name="extract_objective_quality_features_from_audios_pt", audio_list=wf.lzin.x
-            )
-        )
+        torchaudio_squim_features = extract_objective_quality_features_from_audios(audios=audios)
 
-    # Conditionally set workflow outputs
-    output_connections = []
-    if opensmile:
-        output_connections.append(("opensmile_out", wf.extract_opensmile_features_from_audios_pt.lzout.out))
-    if parselmouth:
-        output_connections.append(
-            ("praat_parselmouth_out", wf.extract_praat_parselmouth_features_from_audios_pt.lzout.out)
-        )
-    if torchaudio:
-        output_connections.append(("torchaudio_out", wf.extract_torchaudio_features_from_audios_pt.lzout.out))
-    if torchaudio_squim:
-        output_connections.append(
-            ("torchaudio_squim_out", wf.extract_objective_quality_features_from_audios_pt.lzout.out)
-        )
-
-    wf.set_output(output_connections)
-
-    with pydra.Submitter(plugin=plugin) as sub:
-        sub(wf)
-
-    outputs = wf.result()
-
-    formatted_output = []
-    for output in outputs:
-        formatted_output_item = {}
+    results = []
+    for i in range(len(audios)):
+        result = {}
         if opensmile:
-            formatted_output_item["opensmile"] = output.output.opensmile_out[0]
-        if torchaudio:
-            formatted_output_item["torchaudio"] = output.output.torchaudio_out[0]["torchaudio"]
+            result["opensmile"] = opensmile_features[i]
         if parselmouth:
-            formatted_output_item["parselmouth"] = (output.output.praat_parselmouth_out["praat_parselmouth"][0],)
+            result["praat_parselmouth"] = parselmouth_features[i]
+        if torchaudio:
+            result["torchaudio"] = torchaudio_features[i]
         if torchaudio_squim:
-            formatted_output_item["torchaudio_squim"] = {
-                "stoi": output.output.torchaudio_squim_out["stoi"][0],
-                "pesq": output.output.torchaudio_squim_out["pesq"][0],
-                "si_sdr": output.output.torchaudio_squim_out["si_sdr"][0],
-            }
+            result["torchaudio_squim"] = torchaudio_squim_features[i]
+        results.append(result)
 
-        formatted_output.append(formatted_output_item)
-
-    return formatted_output
+    return results
