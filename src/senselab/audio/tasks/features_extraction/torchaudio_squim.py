@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List
 
-import torch
+import numpy as np
 from torchaudio.pipelines import SQUIM_OBJECTIVE, SQUIM_SUBJECTIVE
 
 from senselab.audio.data_structures import Audio
@@ -13,6 +13,11 @@ subjective_model = SQUIM_SUBJECTIVE.get_model()
 
 def extract_objective_quality_features_from_audios(audios: List["Audio"]) -> List[Dict[str, Any]]:
     """Extracts objective audio features from a list of Audio objects.
+
+    Features include:
+    - Wideband Perceptual Estimation of Speech Quality (PESQ)
+    - Short-Time Objective Intelligibility (STOI)
+    - Scale-Invariant Signal-to-Distortion Ratio (SI-SDR)
 
     Currently, Torchaudio-Squim model only supports mono audio at 16000 Hz sampling rate.
 
@@ -28,7 +33,7 @@ def extract_objective_quality_features_from_audios(audios: List["Audio"]) -> Lis
     if any(audio.sampling_rate != 16000 for audio in audios):
         raise ValueError("Only 16000 Hz sampling rate is supported by Torchaudio-Squim model.")
 
-    features_list: List[Dict[str, Any]] = []
+    features: List[Dict[str, Any]] = []
 
     for audio in audios:
         audio_features = {}
@@ -38,13 +43,13 @@ def extract_objective_quality_features_from_audios(audios: List["Audio"]) -> Lis
             audio_features["pesq"] = pesq.item()
             audio_features["si_sdr"] = si_sdr.item()
         except RuntimeError:
-            audio_features["stoi"] = torch.nan
-            audio_features["pesq"] = torch.nan
-            audio_features["si_sdr"] = torch.nan
+            audio_features["stoi"] = np.nan
+            audio_features["pesq"] = np.nan
+            audio_features["si_sdr"] = np.nan
 
-        features_list.append(audio_features)
+        features.append(audio_features)
 
-    return features_list
+    return features
 
 
 def extract_subjective_quality_features_from_audios(
@@ -73,7 +78,7 @@ def extract_subjective_quality_features_from_audios(
     ):
         raise ValueError("Only 16000 Hz sampling rate is supported by Torchaudio-Squim model.")
 
-    features_list: List[Dict[str, Any]] = []
+    features: List[Dict[str, Any]] = []
 
     for i, audio in enumerate(audios):
         audio_features = {}
@@ -81,8 +86,8 @@ def extract_subjective_quality_features_from_audios(
             mos = subjective_model(audio.waveform, non_matching_references[i].waveform)
             audio_features["mos"] = mos.item()
         except RuntimeError:
-            audio_features["mos"] = torch.nan
+            audio_features["mos"] = np.nan
 
-        features_list.append(audio_features)
+        features.append(audio_features)
 
-    return features_list
+    return features

@@ -2,8 +2,8 @@
 
 from typing import Any, Dict, List
 
+import numpy as np
 import opensmile
-import torch
 
 from senselab.audio.data_structures import Audio
 
@@ -72,7 +72,7 @@ def extract_opensmile_features_from_audios(
             }
         except Exception as e:
             print(f"Error processing sample {sample.orig_path_or_id}: {e}")
-            return {feature: torch.nan for feature in smile.feature_names}
+            return {feature: np.nan for feature in smile.feature_names}
 
     smile = OpenSmileFeatureExtractorFactory.get_opensmile_extractor(feature_set, feature_level)
     features = [_extract_feats_from_audio(audio, smile) for audio in audios]

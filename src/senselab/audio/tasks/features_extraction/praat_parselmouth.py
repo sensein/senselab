@@ -368,14 +368,13 @@ def extract_pitch_values(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str
 
         mean_pitch = np.mean(pitch_values_filtered)
 
-        # TODO: what about children?
-        # Here there is an interesting potential solution to discuss: https://praatscripting.lingphon.net/conditionals-1.html
+        # Here there is an interesting alternative solution to discuss: https://praatscripting.lingphon.net/conditionals-1.html
         if mean_pitch < 170:
             # 'male' settings
             pitch_floor = 60.0
             pitch_ceiling = 250.0
         else:
-            # 'female' settings
+            # 'female' and 'child' settings
             pitch_floor = 100.0
             pitch_ceiling = 500.0
 
@@ -734,7 +733,7 @@ def extract_cpp_descriptors(
         return {"mean_cpp": float("nan"), "std_dev_cpp": float("nan")}
 
 
-def measure_formants(
+def measure_f1f2_formants_bandwidths(
     snd: Union[parselmouth.Sound, Path, Audio], floor: float, ceiling: float, frame_shift: float
 ) -> Dict[str, float]:
     """Extract Formant Frequency Features.
@@ -772,6 +771,9 @@ def measure_formants(
         - Formants are the resonances of the vocal tract, determined by tongue placement and vocal tract shape.
         - Mean F1 typically varies between 300 to 750 Hz, while mean F2 typically varies between 900 to 2300 Hz.
         - Formant bandwidth is measured by taking the width of the band forming 3 dB down from the formant peak.
+        - Formant extraction occurs per pitch period (pulses), meaning that the analysis identifies the points in the
+          sound where the vocal folds come together, helping to align the formant measurements precisely with the
+          pitch periods.
         - Adapted from code at this [link](https://osf.io/6dwr3/).
     """
     try:
@@ -1114,6 +1116,7 @@ def extract_praat_parselmouth_features_from_audios(
     jitter: bool = True,
     shimmer: bool = True,
     plugin: str = "cf",
+    plugin_args: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Extract features from a list of Audio objects and return a JSON-like dictionary.
 
@@ -1135,6 +1138,7 @@ def extract_praat_parselmouth_features_from_audios(
         jitter (bool): Whether to extract jitter. Defaults to True.
         shimmer (bool): Whether to extract shimmer. Defaults to True.
         plugin (str): Plugin to use for feature extraction. Defaults to "cf".
+        plugin_args (Optional[Dict[str, Any]]): Arguments for the pydra plugin. Defaults to None.
 
     Returns:
         dict: A JSON-like dictionary with extracted features structured under "praat_parselmouth".
@@ -1158,7 +1162,7 @@ def extract_praat_parselmouth_features_from_audios(
     if harmonicity_descriptors:
         extract_harmonicity_descriptors_pt = pydra.mark.task(extract_harmonicity_descriptors)
     if formants:
-        measure_formants_pt = pydra.mark.task(measure_formants)
+        measure_f1f2_formants_bandwidths_pt = pydra.mark.task(measure_f1f2_formants_bandwidths)
     if spectral_moments:
         extract_spectral_moments_pt = pydra.mark.task(extract_spectral_moments)
     if pitch:
@@ -1219,8 +1223,8 @@ def extract_praat_parselmouth_features_from_audios(
         )
     if formants:
         wf.add(
-            measure_formants_pt(
-                name="measure_formants_pt",
+            measure_f1f2_formants_bandwidths_pt(
+                name="measure_f1f2_formants_bandwidths_pt",
                 snd=wf.lzin.x,
                 floor=wf._extract_pitch_floor_pt.lzout.out,
                 ceiling=wf._extract_pitch_ceiling_pt.lzout.out,
@@ -1289,7 +1293,7 @@ def extract_praat_parselmouth_features_from_audios(
     if harmonicity_descriptors:
         output_connections.append(("harmonicity_out", wf.extract_harmonicity_descriptors_pt.lzout.out))
     if formants:
-        output_connections.append(("formants_out", wf.measure_formants_pt.lzout.out))
+        output_connections.append(("formants_out", wf.measure_f1f2_formants_bandwidths_pt.lzout.out))
     if spectral_moments:
         output_connections.append(("spectral_moments_out", wf.extract_spectral_moments_pt.lzout.out))
     if slope_tilt:
@@ -1304,7 +1308,7 @@ def extract_praat_parselmouth_features_from_audios(
         output_connections.append(("shimmer_out", wf.extract_shimmer_pt.lzout.out))
     wf.set_output(output_connections)
 
-    with pydra.Submitter(plugin=plugin) as sub:
+    with pydra.Submitter(plugin=plugin, **plugin_args) as sub:
         sub(wf)
 
     outputs = wf.result()
