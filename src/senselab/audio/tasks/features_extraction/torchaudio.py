@@ -2,6 +2,7 @@
 
 from typing import Any, Dict, List, Optional
 
+import numpy as np
 import pydra
 import torch
 import torchaudio
@@ -40,7 +41,7 @@ def extract_spectrogram_from_audios(
         try:
             spectrograms.append({"spectrogram": spectrogram(audio.waveform).squeeze(0)})
         except RuntimeError:
-            spectrograms.append({"spectrogram": torch.nan})
+            spectrograms.append({"spectrogram": np.nan})
     return spectrograms
 
 
@@ -82,7 +83,7 @@ def extract_mel_spectrogram_from_audios(
             )(audio.waveform)
             mel_spectrograms.append({"mel_spectrogram": mel_spectrogram.squeeze(0)})
         except RuntimeError:
-            mel_spectrograms.append({"mel_spectrogram": torch.nan})
+            mel_spectrograms.append({"mel_spectrogram": np.nan})
     return mel_spectrograms
 
 
@@ -124,7 +125,7 @@ def extract_mfcc_from_audios(
             )
             mfccs.append({"mfcc": mfcc_transform(audio.waveform).squeeze(0)})
         except RuntimeError:
-            mfccs.append({"mfcc": torch.nan})
+            mfccs.append({"mfcc": np.nan})
     return mfccs
 
 
@@ -163,7 +164,7 @@ def extract_mel_filter_bank_from_audios(
             )
             mel_filter_banks.append({"mel_filter_bank": melscale_transform(spectrograms[i]["spectrogram"]).squeeze(0)})
         except RuntimeError:
-            mel_filter_banks.append({"mel_filter_bank": torch.nan})
+            mel_filter_banks.append({"mel_filter_bank": np.nan})
     return mel_filter_banks
 
 
@@ -199,7 +200,7 @@ def extract_pitch_from_audios(
                 }
             )
         except RuntimeError:
-            pitches.append({"pitch": torch.nan})
+            pitches.append({"pitch": np.nan})
     return pitches
 
 
@@ -213,6 +214,7 @@ def extract_torchaudio_features_from_audios(
     win_length: Optional[int] = None,
     hop_length: Optional[int] = None,
     plugin: str = "cf",
+    plugin_args: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Extract torchaudio features from a list of audio objects.
 
@@ -228,6 +230,7 @@ def extract_torchaudio_features_from_audios(
         win_length (int): Window size. Default is None, using n_fft.
         hop_length (int): Length of hop between STFT windows. Default is None, using win_length // 2.
         plugin (str): The plugin to use. Default is "cf".
+        plugin_args (Optional[Dict[str, Any]]): The arguments to pass to the plugin. Default is None.
 
     Returns:
         List[Dict[str, Any]]: The list of feature dictionaries for each audio.
@@ -298,7 +301,7 @@ def extract_torchaudio_features_from_audios(
         ]
     )
 
-    with pydra.Submitter(plugin=plugin) as sub:
+    with pydra.Submitter(plugin=plugin, **plugin_args) as sub:
         sub(wf)
 
     outputs = wf.result()

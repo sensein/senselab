@@ -17,7 +17,7 @@ from senselab.audio.tasks.features_extraction.praat_parselmouth import (
     extract_slope_tilt,
     extract_spectral_moments,
     extract_speech_rate,
-    measure_formants,
+    measure_f1f2_formants_bandwidths,
 )
 from senselab.audio.tasks.features_extraction.torchaudio import (
     extract_mel_filter_bank_from_audios,
@@ -106,9 +106,9 @@ def test_extract_cpp_descriptors(resampled_mono_audio_sample: Audio) -> None:
     assert isinstance(result["mean_cpp"], float)
 
 
-def test_measure_formants(resampled_mono_audio_sample: Audio) -> None:
+def test_measure_f1f2_formants_bandwidths(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of formant frequency features."""
-    result = measure_formants(resampled_mono_audio_sample, floor=75.0, ceiling=500.0, frame_shift=0.01)
+    result = measure_f1f2_formants_bandwidths(resampled_mono_audio_sample, floor=75.0, ceiling=500.0, frame_shift=0.01)
     assert isinstance(result, dict)
     assert all(
         key in result for key in ["f1_mean", "f1_std", "b1_mean", "b1_std", "f2_mean", "f2_std", "b2_mean", "b2_std"]
@@ -252,7 +252,7 @@ def test_extract_objective_quality_features_from_audios_invalid_audio(mono_audio
 def test_extract_subjective_quality_features_from_audios(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of subjective quality features from audio."""
     result = extract_subjective_quality_features_from_audios(
-        audio_list=[resampled_mono_audio_sample], non_matching_references=[resampled_mono_audio_sample]
+        audios=[resampled_mono_audio_sample], non_matching_references=[resampled_mono_audio_sample]
     )
     assert isinstance(result, dict)
     assert "mos" in result
@@ -264,5 +264,5 @@ def test_extract_subjective_quality_features_invalid_audio(mono_audio_sample: Au
     """Test extraction of subjective quality features from invalid audio."""
     with pytest.raises(ValueError, match="Only 16000 Hz sampling rate is supported by Torchaudio-Squim model."):
         extract_subjective_quality_features_from_audios(
-            audio_list=[mono_audio_sample], non_matching_references=[mono_audio_sample]
+            audios=[mono_audio_sample], non_matching_references=[mono_audio_sample]
         )
