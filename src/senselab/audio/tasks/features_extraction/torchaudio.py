@@ -214,7 +214,7 @@ def extract_torchaudio_features_from_audios(
     win_length: Optional[int] = None,
     hop_length: Optional[int] = None,
     plugin: str = "cf",
-    plugin_args: Optional[Dict[str, Any]] = None,
+    plugin_args: Optional[Dict[str, Any]] = {},
 ) -> List[Dict[str, Any]]:
     """Extract torchaudio features from a list of audio objects.
 
@@ -230,7 +230,7 @@ def extract_torchaudio_features_from_audios(
         win_length (int): Window size. Default is None, using n_fft.
         hop_length (int): Length of hop between STFT windows. Default is None, using win_length // 2.
         plugin (str): The plugin to use. Default is "cf".
-        plugin_args (Optional[Dict[str, Any]]): The arguments to pass to the plugin. Default is None.
+        plugin_args (Optional[Dict[str, Any]]): The arguments to pass to the plugin. Default is {}.
 
     Returns:
         List[Dict[str, Any]]: The list of feature dictionaries for each audio.
