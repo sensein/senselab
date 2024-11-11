@@ -232,13 +232,14 @@ def test_extract_opensmile_features_from_audios(resampled_mono_audio_sample: Aud
 def test_extract_objective_quality_features_from_audios(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of objective quality features from audio."""
     result = extract_objective_quality_features_from_audios([resampled_mono_audio_sample])
-    assert isinstance(result, dict)
-    assert "stoi" in result
-    assert "pesq" in result
-    assert "si_sdr" in result
-    assert all(isinstance(feature, float) for feature in result["stoi"])
-    assert all(isinstance(feature, float) for feature in result["pesq"])
-    assert all(isinstance(feature, float) for feature in result["si_sdr"])
+    assert isinstance(result, list)
+    assert isinstance(result[0], dict)
+    assert "stoi" in result[0]
+    assert "pesq" in result[0]
+    assert "si_sdr" in result[0]
+    assert isinstance(result[0]["stoi"], float)
+    assert isinstance(result[0]["pesq"], float)
+    assert isinstance(result[0]["si_sdr"], float)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
@@ -254,9 +255,10 @@ def test_extract_subjective_quality_features_from_audios(resampled_mono_audio_sa
     result = extract_subjective_quality_features_from_audios(
         audios=[resampled_mono_audio_sample], non_matching_references=[resampled_mono_audio_sample]
     )
-    assert isinstance(result, dict)
-    assert "mos" in result
-    assert all(isinstance(feature, float) for feature in result["mos"])
+    assert isinstance(result, list)
+    assert isinstance(result[0], dict)
+    assert "mos" in result[0]
+    assert isinstance(result[0]["mos"], float)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
