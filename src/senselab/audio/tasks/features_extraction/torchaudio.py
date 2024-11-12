@@ -215,6 +215,7 @@ def extract_torchaudio_features_from_audios(
     hop_length: Optional[int] = None,
     plugin: str = "cf",
     plugin_args: Optional[Dict[str, Any]] = {},
+    cache_dir: Optional[str | os.PathLike] = None,
 ) -> List[Dict[str, Any]]:
     """Extract torchaudio features from a list of audio objects.
 
@@ -242,7 +243,7 @@ def extract_torchaudio_features_from_audios(
     extract_spectrogram_from_audios_pt = pydra.mark.task(extract_spectrogram_from_audios)
 
     formatted_audios = [[audio] for audio in audios]
-    wf = pydra.Workflow(name="wf", input_spec=["x"])
+    wf = pydra.Workflow(name="wf", input_spec=["x"], cache_dir=cache_dir)
     wf.split("x", x=formatted_audios)
     wf.add(
         extract_pitch_from_audios_pt(
