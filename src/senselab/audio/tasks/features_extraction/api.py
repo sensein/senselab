@@ -342,7 +342,7 @@ def extract_features_from_audios(
         parselmouth_features = extract_praat_parselmouth_features_from_audios(audios=audios, **my_parselmouth)  # type: ignore
 
     if torchaudio:
-        default_torchaudio = {
+        default_torchaudio: Dict[str, Any] = {
             "freq_low": 80,
             "freq_high": 500,
             "n_fft": 1024,
