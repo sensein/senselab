@@ -307,11 +307,11 @@ def extract_speech_rate(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str,
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
         return {
-            "speaking_rate": float("nan"),
-            "articulation_rate": float("nan"),
-            "phonation_ratio": float("nan"),
-            "pause_rate": float("nan"),
-            "mean_pause_dur": float("nan"),
+            "speaking_rate": np.nan,
+            "articulation_rate": np.nan,
+            "phonation_ratio": np.nan,
+            "pause_rate": np.nan,
+            "mean_pause_dur": np.nan,
         }
 
 
@@ -385,7 +385,7 @@ def extract_pitch_values(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str
         if current_frame is not None:
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
-        return {"pitch_floor": float("nan"), "pitch_ceiling": float("nan")}
+        return {"pitch_floor": np.nan, "pitch_ceiling": np.nan}
 
 
 def extract_pitch_descriptors(
@@ -446,7 +446,7 @@ def extract_pitch_descriptors(
         if current_frame is not None:
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
-        return {f"mean_f0_{unit.lower()}": float("nan"), f"stdev_f0_{unit.lower()}": float("nan")}
+        return {f"mean_f0_{unit.lower()}": np.nan, f"stdev_f0_{unit.lower()}": np.nan}
 
 
 def extract_intensity_descriptors(
@@ -505,7 +505,7 @@ def extract_intensity_descriptors(
         if current_frame is not None:
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
-        return {"mean_db": float("nan"), "std_db": float("nan"), "range_db_ratio": float("nan")}
+        return {"mean_db": np.nan, "std_db": np.nan, "range_db_ratio": np.nan}
 
 
 def extract_harmonicity_descriptors(
@@ -558,7 +558,7 @@ def extract_harmonicity_descriptors(
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
 
-        return {"hnr_db_mean": float("nan"), "hnr_db_std_dev": float("nan")}
+        return {"hnr_db_mean": np.nan, "hnr_db_std_dev": np.nan}
 
 
 def extract_slope_tilt(snd: Union[parselmouth.Sound, Path, Audio], floor: float, ceiling: float) -> Dict[str, float]:
@@ -620,7 +620,7 @@ def extract_slope_tilt(snd: Union[parselmouth.Sound, Path, Audio], floor: float,
         if current_frame is not None:
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
-        return {"spectral_slope": float("nan"), "spectral_tilt": float("nan")}
+        return {"spectral_slope": np.nan, "spectral_tilt": np.nan}
 
 
 def extract_cpp_descriptors(
@@ -731,7 +731,7 @@ def extract_cpp_descriptors(
         if current_frame is not None:
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
-        return {"mean_cpp": float("nan"), "std_dev_cpp": float("nan")}
+        return {"mean_cpp": np.nan, "std_dev_cpp": np.nan}
 
 
 def measure_f1f2_formants_bandwidths(
