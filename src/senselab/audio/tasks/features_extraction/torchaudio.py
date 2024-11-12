@@ -200,7 +200,7 @@ def extract_pitch_from_audios(
                 }
             )
         except RuntimeError:
-            pitches.append({"pitch": np.nan})
+            pitches.append({"pitch": torch.tensor(torch.nan)})
     return pitches
 
 
