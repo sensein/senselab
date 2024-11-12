@@ -1,9 +1,9 @@
 """This module provides the implementation of torchaudio utilities for audio features extraction."""
 
+import os
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-import os
 import pydra
 import torch
 import torchaudio
