@@ -8,7 +8,7 @@ ease of maintaining the codebase and offering consistent public APIs.
 import os
 import uuid
 import warnings
-from typing import Dict, Generator, List, Optional, Tuple, Union
+from typing import Dict, Generator, List, Tuple, Union
 
 import numpy as np
 import torch
