@@ -1103,7 +1103,7 @@ def extract_praat_parselmouth_features_from_audios(
     time_step: float = 0.005,
     window_length: float = 0.025,
     pitch_unit: str = "Hertz",
-    cache_dir: Optional[str] = None,
+    cache_dir: Optional[str | os.PathLike] = None,
     speech_rate: bool = True,
     intensity_descriptors: bool = True,
     harmonicity_descriptors: bool = True,

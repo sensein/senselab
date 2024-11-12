@@ -331,6 +331,7 @@ def extract_features_from_audios(
             "jitter": True,
             "shimmer": True,
             "plugin": "cf",
+            "plugin_args": {},
         }
         # Update default_parselmouth with provided parselmouth dictionary
         if isinstance(parselmouth, dict):
@@ -350,6 +351,8 @@ def extract_features_from_audios(
             "win_length": None,
             "hop_length": None,
             "plugin": "cf",
+            "plugin_args": {},
+            "cache_dir": None,
         }
         if isinstance(torchaudio, dict):
             my_torchaudio = {**default_torchaudio, **torchaudio}
