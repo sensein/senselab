@@ -233,6 +233,7 @@ def extract_torchaudio_features_from_audios(
         hop_length (int): Length of hop between STFT windows. Default is None, using win_length // 2.
         plugin (str): The plugin to use. Default is "cf".
         plugin_args (Optional[Dict[str, Any]]): The arguments to pass to the plugin. Default is {}.
+        cache_dir (Optional[str | os.PathLike]): The directory to cache the results. Default is None.
 
     Returns:
         List[Dict[str, Any]]: The list of feature dictionaries for each audio.
