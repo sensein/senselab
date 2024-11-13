@@ -307,7 +307,13 @@ def extract_features_from_audios(
         'si_sdr': 11.71167278289795}}]
     """
     if opensmile:
-        default_opensmile = {"feature_set": "eGeMAPSv02", "feature_level": "Functionals"}
+        default_opensmile = {
+            "feature_set": "eGeMAPSv02",
+            "feature_level": "Functionals",
+            "plugin": "cf",
+            "plugin_args": {},
+            "cache_dir": None,
+        }
         if isinstance(opensmile, dict):
             my_opensmile = {**default_opensmile, **opensmile}
         else:
