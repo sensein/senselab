@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="generator" content="pdoc 15.0.0"/>
-    <title>senselab.utils.data_structures API documentation</title>
+    <title>senselab.utils.data_structures.talk_bank_helpers API documentation</title>
             <link rel="icon" href="https://readthedocs.org/favicon.ico"/>
 
     <style>/*! * Bootstrap Reboot v5.0.0 (https://getbootstrap.com/) * Copyright 2011-2021 The Bootstrap Authors * Copyright 2011-2021 Twitter, Inc. * Licensed under MIT (https://github.com/twbs/bootstrap/blob/main/LICENSE) * Forked from Normalize.css, licensed MIT (https://github.com/necolas/normalize.css/blob/master/LICENSE.md) */*,::after,::before{box-sizing:border-box}@media (prefers-reduced-motion:no-preference){:root{scroll-behavior:smooth}}body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans","Liberation Sans",sans-serif,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol","Noto Color Emoji";font-size:1rem;font-weight:400;line-height:1.5;color:#212529;background-color:#fff;-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent}hr{margin:1rem 0;color:inherit;background-color:currentColor;border:0;opacity:.25}hr:not([size]){height:1px}h1,h2,h3,h4,h5,h6{margin-top:0;margin-bottom:.5rem;font-weight:500;line-height:1.2}h1{font-size:calc(1.375rem + 1.5vw)}@media (min-width:1200px){h1{font-size:2.5rem}}h2{font-size:calc(1.325rem + .9vw)}@media (min-width:1200px){h2{font-size:2rem}}h3{font-size:calc(1.3rem + .6vw)}@media (min-width:1200px){h3{font-size:1.75rem}}h4{font-size:calc(1.275rem + .3vw)}@media (min-width:1200px){h4{font-size:1.5rem}}h5{font-size:1.25rem}h6{font-size:1rem}p{margin-top:0;margin-bottom:1rem}abbr[data-bs-original-title],abbr[title]{-webkit-text-decoration:underline dotted;text-decoration:underline dotted;cursor:help;-webkit-text-decoration-skip-ink:none;text-decoration-skip-ink:none}address{margin-bottom:1rem;font-style:normal;line-height:inherit}ol,ul{padding-left:2rem}dl,ol,ul{margin-top:0;margin-bottom:1rem}ol ol,ol ul,ul ol,ul ul{margin-bottom:0}dt{font-weight:700}dd{margin-bottom:.5rem;margin-left:0}blockquote{margin:0 0 1rem}b,strong{font-weight:bolder}small{font-size:.875em}mark{padding:.2em;background-color:#fcf8e3}sub,sup{position:relative;font-size:.75em;line-height:0;vertical-align:baseline}sub{bottom:-.25em}sup{top:-.5em}a{color:#0d6efd;text-decoration:underline}a:hover{color:#0a58ca}a:not([href]):not([class]),a:not([href]):not([class]):hover{color:inherit;text-decoration:none}code,kbd,pre,samp{font-family:SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;font-size:1em;direction:ltr;unicode-bidi:bidi-override}pre{display:block;margin-top:0;margin-bottom:1rem;overflow:auto;font-size:.875em}pre code{font-size:inherit;color:inherit;word-break:normal}code{font-size:.875em;color:#d63384;word-wrap:break-word}a>code{color:inherit}kbd{padding:.2rem .4rem;font-size:.875em;color:#fff;background-color:#212529;border-radius:.2rem}kbd kbd{padding:0;font-size:1em;font-weight:700}figure{margin:0 0 1rem}img,svg{vertical-align:middle}table{caption-side:bottom;border-collapse:collapse}caption{padding-top:.5rem;padding-bottom:.5rem;color:#6c757d;text-align:left}th{text-align:inherit;text-align:-webkit-match-parent}tbody,td,tfoot,th,thead,tr{border-color:inherit;border-style:solid;border-width:0}label{display:inline-block}button{border-radius:0}button:focus:not(:focus-visible){outline:0}button,input,optgroup,select,textarea{margin:0;font-family:inherit;font-size:inherit;line-height:inherit}button,select{text-transform:none}[role=button]{cursor:pointer}select{word-wrap:normal}select:disabled{opacity:1}[list]::-webkit-calendar-picker-indicator{display:none}[type=button],[type=reset],[type=submit],button{-webkit-appearance:button}[type=button]:not(:disabled),[type=reset]:not(:disabled),[type=submit]:not(:disabled),button:not(:disabled){cursor:pointer}::-moz-focus-inner{padding:0;border-style:none}textarea{resize:vertical}fieldset{min-width:0;padding:0;margin:0;border:0}legend{float:left;width:100%;padding:0;margin-bottom:.5rem;font-size:calc(1.275rem + .3vw);line-height:inherit}@media (min-width:1200px){legend{font-size:1.5rem}}legend+*{clear:left}::-webkit-datetime-edit-day-field,::-webkit-datetime-edit-fields-wrapper,::-webkit-datetime-edit-hour-field,::-webkit-datetime-edit-minute,::-webkit-datetime-edit-month-field,::-webkit-datetime-edit-text,::-webkit-datetime-edit-year-field{padding:0}::-webkit-inner-spin-button{height:auto}[type=search]{outline-offset:-2px;-webkit-appearance:textfield}::-webkit-search-decoration{-webkit-appearance:none}::-webkit-color-swatch-wrapper{padding:0}::file-selector-button{font:inherit}::-webkit-file-upload-button{font:inherit;-webkit-appearance:button}output{display:inline-block}iframe{border:0}summary{display:list-item;cursor:pointer}progress{vertical-align:baseline}[hidden]{display:none!important}</style>
@@ -17,29 +17,24 @@
     <nav class="pdoc">
         <label id="navtoggle" for="togglestate" class="pdoc-button"><svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'><path stroke-linecap='round' stroke="currentColor" stroke-miterlimit='10' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/></svg></label>
         <input id="togglestate" type="checkbox" aria-hidden="true" tabindex="-1">
-        <div>            <a class="pdoc-button module-list-button" href="../utils.html">
+        <div>            <a class="pdoc-button module-list-button" href="../data_structures.html">
 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-box-arrow-in-left" viewBox="0 0 16 16">
   <path fill-rule="evenodd" d="M10 3.5a.5.5 0 0 0-.5-.5h-8a.5.5 0 0 0-.5.5v9a.5.5 0 0 0 .5.5h8a.5.5 0 0 0 .5-.5v-2a.5.5 0 0 1 1 0v2A1.5 1.5 0 0 1 9.5 14h-8A1.5 1.5 0 0 1 0 12.5v-9A1.5 1.5 0 0 1 1.5 2h8A1.5 1.5 0 0 1 11 3.5v2a.5.5 0 0 1-1 0v-2z"/>
   <path fill-rule="evenodd" d="M4.146 8.354a.5.5 0 0 1 0-.708l3-3a.5.5 0 1 1 .708.708L5.707 7.5H14.5a.5.5 0 0 1 0 1H5.707l2.147 2.146a.5.5 0 0 1-.708.708l-3-3z"/>
-</svg>                &nbsp;senselab.utils</a>
+</svg>                &nbsp;senselab.utils.data_structures</a>
 
 
             <input type="search" placeholder="Search..." role="searchbox" aria-label="search"
                    pattern=".+" required>
 
 
-            <h2>Submodules</h2>
-            <ul>
-                    <li><a href="data_structures/dataset.html">dataset</a></li>
-                    <li><a href="data_structures/device.html">device</a></li>
-                    <li><a href="data_structures/file.html">file</a></li>
-                    <li><a href="data_structures/language.html">language</a></li>
-                    <li><a href="data_structures/logging.html">logging</a></li>
-                    <li><a href="data_structures/model.html">model</a></li>
-                    <li><a href="data_structures/pydra_helpers.html">pydra_helpers</a></li>
-                    <li><a href="data_structures/script_line.html">script_line</a></li>
-                    <li><a href="data_structures/talk_bank_helpers.html">talk_bank_helpers</a></li>
-            </ul>
+
+            <h2>API Documentation</h2>
+                <ul class="memberlist">
+            <li>
+                    <a class="function" href="#chats_to_script_lines">chats_to_script_lines</a>
+            </li>
+    </ul>
 
 
 
@@ -53,38 +48,153 @@
     <main class="pdoc">
             <section class="module-info">
                     <h1 class="modulename">
-<a href="./../../senselab.html">senselab</a><wbr>.<a href="./../utils.html">utils</a><wbr>.data_structures    </h1>
+<a href="./../../../senselab.html">senselab</a><wbr>.<a href="./../../utils.html">utils</a><wbr>.<a href="./../data_structures.html">data_structures</a><wbr>.talk_bank_helpers    </h1>
 
-                        <div class="docstring"><p>This module provides the APIs of the senselab utils data structures.</p>
+                        <div class="docstring"><p>Functionality for interfacing with TalkBank data.</p>
 </div>
 
-                        <input id="mod-data_structures-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+                        <input id="mod-talk_bank_helpers-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 
-                        <label class="view-source-button" for="mod-data_structures-view-source"><span>View Source</span></label>
+                        <label class="view-source-button" for="mod-talk_bank_helpers-view-source"><span>View Source</span></label>
 
-                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos"> 1</span></a><span class="sd">&quot;&quot;&quot;This module provides the APIs of the senselab utils data structures.&quot;&quot;&quot;</span>
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos"> 1</span></a><span class="sd">&quot;&quot;&quot;Functionality for interfacing with TalkBank data.&quot;&quot;&quot;</span>
 </span><span id="L-2"><a href="#L-2"><span class="linenos"> 2</span></a>
-</span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a><span class="kn">from</span> <span class="nn">.dataset</span> <span class="kn">import</span> <span class="n">Participant</span><span class="p">,</span> <span class="n">SenselabDataset</span><span class="p">,</span> <span class="n">Session</span>  <span class="c1"># noqa: F401</span>
-</span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a><span class="kn">from</span> <span class="nn">.device</span> <span class="kn">import</span> <span class="n">DeviceType</span><span class="p">,</span> <span class="n">_select_device_and_dtype</span>  <span class="c1"># noqa: F401</span>
-</span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a><span class="kn">from</span> <span class="nn">.file</span> <span class="kn">import</span> <span class="n">File</span><span class="p">,</span> <span class="n">from_strings_to_files</span><span class="p">,</span> <span class="n">get_common_directory</span>  <span class="c1"># noqa: F401</span>
-</span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a><span class="kn">from</span> <span class="nn">.language</span> <span class="kn">import</span> <span class="n">Language</span>  <span class="c1"># noqa: F401</span>
-</span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a><span class="kn">from</span> <span class="nn">.logging</span> <span class="kn">import</span> <span class="n">logger</span>  <span class="c1"># noqa: F401</span>
-</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a><span class="kn">from</span> <span class="nn">.model</span> <span class="kn">import</span> <span class="p">(</span>  <span class="c1"># noqa: F401</span>
-</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a>    <span class="n">HFModel</span><span class="p">,</span>
-</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a>    <span class="n">PyannoteAudioModel</span><span class="p">,</span>
-</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a>    <span class="n">SenselabModel</span><span class="p">,</span>
-</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a>    <span class="n">SentenceTransformersModel</span><span class="p">,</span>
-</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a>    <span class="n">SpeechBrainModel</span><span class="p">,</span>
-</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a>    <span class="n">TorchAudioModel</span><span class="p">,</span>
-</span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a>    <span class="n">TorchModel</span><span class="p">,</span>
-</span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a>    <span class="n">check_hf_repo_exists</span><span class="p">,</span>
-</span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a><span class="p">)</span>
-</span><span id="L-18"><a href="#L-18"><span class="linenos">18</span></a><span class="kn">from</span> <span class="nn">.pydra_helpers</span> <span class="kn">import</span> <span class="o">*</span>  <span class="c1"># noqa: F403</span>
-</span><span id="L-19"><a href="#L-19"><span class="linenos">19</span></a><span class="kn">from</span> <span class="nn">.script_line</span> <span class="kn">import</span> <span class="n">ScriptLine</span>  <span class="c1"># noqa: F401</span>
+</span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a><span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">List</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a>
+</span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a><span class="kn">import</span> <span class="nn">pylangacq</span>
+</span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a>
+</span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a><span class="kn">from</span> <span class="nn">senselab.utils.data_structures.script_line</span> <span class="kn">import</span> <span class="n">ScriptLine</span>
+</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a>
+</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a>
+</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a><span class="k">def</span> <span class="nf">chats_to_script_lines</span><span class="p">(</span>
+</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a>    <span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a>    <span class="o">**</span><span class="n">kwargs</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>  <span class="c1"># noqa: ANN401</span>
+</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="n">ScriptLine</span><span class="p">]]:</span>
+</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Connvert .cha files to script lines.</span>
+</span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a>
+</span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a><span class="sd">    Converts .cha files to script lines using pylangacq&#39;s built-in read_chats functionality.</span>
+</span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a>
+</span><span id="L-18"><a href="#L-18"><span class="linenos">18</span></a><span class="sd">    Args:</span>
+</span><span id="L-19"><a href="#L-19"><span class="linenos">19</span></a><span class="sd">      path (str): The path to a .cha file or a directory to recursively scan and use</span>
+</span><span id="L-20"><a href="#L-20"><span class="linenos">20</span></a><span class="sd">      **kwargs (Any): key-word arguments to be used with pylangacq&#39;s read_chats. For further info,</span>
+</span><span id="L-21"><a href="#L-21"><span class="linenos">21</span></a><span class="sd">        please refer to https://pylangacq.org/api.html#pylangacq.read_chat</span>
+</span><span id="L-22"><a href="#L-22"><span class="linenos">22</span></a>
+</span><span id="L-23"><a href="#L-23"><span class="linenos">23</span></a><span class="sd">    Returns:</span>
+</span><span id="L-24"><a href="#L-24"><span class="linenos">24</span></a><span class="sd">      Dictionary mapping filepaths (e.g. individual .cha files) to a list of ScriptLines</span>
+</span><span id="L-25"><a href="#L-25"><span class="linenos">25</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="L-26"><a href="#L-26"><span class="linenos">26</span></a>    <span class="n">chats</span> <span class="o">=</span> <span class="n">pylangacq</span><span class="o">.</span><span class="n">read_chat</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+</span><span id="L-27"><a href="#L-27"><span class="linenos">27</span></a>    <span class="n">script_lines_by_file</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="n">ScriptLine</span><span class="p">]]</span> <span class="o">=</span> <span class="p">{}</span>
+</span><span id="L-28"><a href="#L-28"><span class="linenos">28</span></a>    <span class="n">paths</span> <span class="o">=</span> <span class="n">chats</span><span class="o">.</span><span class="n">file_paths</span><span class="p">()</span>
+</span><span id="L-29"><a href="#L-29"><span class="linenos">29</span></a>    <span class="n">utterances</span> <span class="o">=</span> <span class="n">chats</span><span class="o">.</span><span class="n">utterances</span><span class="p">(</span><span class="n">by_files</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="L-30"><a href="#L-30"><span class="linenos">30</span></a>    <span class="n">words</span> <span class="o">=</span> <span class="n">chats</span><span class="o">.</span><span class="n">words</span><span class="p">(</span><span class="n">by_files</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">by_utterances</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="L-31"><a href="#L-31"><span class="linenos">31</span></a>    <span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">paths</span><span class="p">)</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="n">utterances</span><span class="p">)</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">utterances</span><span class="p">)</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="n">words</span><span class="p">)</span>
+</span><span id="L-32"><a href="#L-32"><span class="linenos">32</span></a>    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">paths</span><span class="p">)):</span>
+</span><span id="L-33"><a href="#L-33"><span class="linenos">33</span></a>        <span class="n">path</span> <span class="o">=</span> <span class="n">paths</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+</span><span id="L-34"><a href="#L-34"><span class="linenos">34</span></a>        <span class="n">script_lines_by_file</span><span class="p">[</span><span class="n">path</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="L-35"><a href="#L-35"><span class="linenos">35</span></a>        <span class="n">utterances_in_file</span> <span class="o">=</span> <span class="n">utterances</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+</span><span id="L-36"><a href="#L-36"><span class="linenos">36</span></a>        <span class="n">words_in_file</span> <span class="o">=</span> <span class="n">words</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+</span><span id="L-37"><a href="#L-37"><span class="linenos">37</span></a>        <span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">words_in_file</span><span class="p">)</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="n">utterances_in_file</span><span class="p">)</span>
+</span><span id="L-38"><a href="#L-38"><span class="linenos">38</span></a>        <span class="k">for</span> <span class="n">utt_idx</span><span class="p">,</span> <span class="n">utterance</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">utterances_in_file</span><span class="p">):</span>
+</span><span id="L-39"><a href="#L-39"><span class="linenos">39</span></a>            <span class="n">words_in_utterance</span> <span class="o">=</span> <span class="n">words_in_file</span><span class="p">[</span><span class="n">utt_idx</span><span class="p">]</span>
+</span><span id="L-40"><a href="#L-40"><span class="linenos">40</span></a>            <span class="k">if</span> <span class="n">utterance</span><span class="o">.</span><span class="n">time_marks</span><span class="p">:</span>
+</span><span id="L-41"><a href="#L-41"><span class="linenos">41</span></a>                <span class="n">start</span> <span class="o">=</span> <span class="n">utterance</span><span class="o">.</span><span class="n">time_marks</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">/</span> <span class="mi">1000</span>
+</span><span id="L-42"><a href="#L-42"><span class="linenos">42</span></a>                <span class="n">end</span> <span class="o">=</span> <span class="n">utterance</span><span class="o">.</span><span class="n">time_marks</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">/</span> <span class="mi">1000</span>
+</span><span id="L-43"><a href="#L-43"><span class="linenos">43</span></a>            <span class="k">else</span><span class="p">:</span>
+</span><span id="L-44"><a href="#L-44"><span class="linenos">44</span></a>                <span class="n">start</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="L-45"><a href="#L-45"><span class="linenos">45</span></a>                <span class="n">end</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="L-46"><a href="#L-46"><span class="linenos">46</span></a>
+</span><span id="L-47"><a href="#L-47"><span class="linenos">47</span></a>            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">words_in_utterance</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+</span><span id="L-48"><a href="#L-48"><span class="linenos">48</span></a>                <span class="n">utterance_transcript</span> <span class="o">=</span> <span class="s2">&quot; &quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">words_in_utterance</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span> <span class="o">+</span> <span class="n">words_in_utterance</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+</span><span id="L-49"><a href="#L-49"><span class="linenos">49</span></a>            <span class="k">else</span><span class="p">:</span>
+</span><span id="L-50"><a href="#L-50"><span class="linenos">50</span></a>                <span class="n">utterance_transcript</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+</span><span id="L-51"><a href="#L-51"><span class="linenos">51</span></a>            <span class="n">script_lines_by_file</span><span class="p">[</span><span class="n">path</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+</span><span id="L-52"><a href="#L-52"><span class="linenos">52</span></a>                <span class="n">ScriptLine</span><span class="p">(</span><span class="n">text</span><span class="o">=</span><span class="n">utterance_transcript</span><span class="p">,</span> <span class="n">speaker</span><span class="o">=</span><span class="n">utterance</span><span class="o">.</span><span class="n">participant</span><span class="p">,</span> <span class="n">start</span><span class="o">=</span><span class="n">start</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="n">end</span><span class="p">)</span>
+</span><span id="L-53"><a href="#L-53"><span class="linenos">53</span></a>            <span class="p">)</span>
+</span><span id="L-54"><a href="#L-54"><span class="linenos">54</span></a>    <span class="k">return</span> <span class="n">script_lines_by_file</span>
 </span></pre></div>
 
 
             </section>
+                <section id="chats_to_script_lines">
+                            <input id="chats_to_script_lines-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="def">def</span>
+        <span class="name">chats_to_script_lines</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">path</span><span class="p">:</span> <span class="nb">str</span>,</span><span class="param">	<span class="o">**</span><span class="n">kwargs</span><span class="p">:</span> <span class="n">Any</span></span><span class="return-annotation">) -> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="n"><a href="script_line.html#ScriptLine">senselab.utils.data_structures.script_line.ScriptLine</a></span><span class="p">]]</span>:</span></span>
+
+                <label class="view-source-button" for="chats_to_script_lines-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#chats_to_script_lines"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="chats_to_script_lines-11"><a href="#chats_to_script_lines-11"><span class="linenos">11</span></a><span class="k">def</span> <span class="nf">chats_to_script_lines</span><span class="p">(</span>
+</span><span id="chats_to_script_lines-12"><a href="#chats_to_script_lines-12"><span class="linenos">12</span></a>    <span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+</span><span id="chats_to_script_lines-13"><a href="#chats_to_script_lines-13"><span class="linenos">13</span></a>    <span class="o">**</span><span class="n">kwargs</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>  <span class="c1"># noqa: ANN401</span>
+</span><span id="chats_to_script_lines-14"><a href="#chats_to_script_lines-14"><span class="linenos">14</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="n">ScriptLine</span><span class="p">]]:</span>
+</span><span id="chats_to_script_lines-15"><a href="#chats_to_script_lines-15"><span class="linenos">15</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Connvert .cha files to script lines.</span>
+</span><span id="chats_to_script_lines-16"><a href="#chats_to_script_lines-16"><span class="linenos">16</span></a>
+</span><span id="chats_to_script_lines-17"><a href="#chats_to_script_lines-17"><span class="linenos">17</span></a><span class="sd">    Converts .cha files to script lines using pylangacq&#39;s built-in read_chats functionality.</span>
+</span><span id="chats_to_script_lines-18"><a href="#chats_to_script_lines-18"><span class="linenos">18</span></a>
+</span><span id="chats_to_script_lines-19"><a href="#chats_to_script_lines-19"><span class="linenos">19</span></a><span class="sd">    Args:</span>
+</span><span id="chats_to_script_lines-20"><a href="#chats_to_script_lines-20"><span class="linenos">20</span></a><span class="sd">      path (str): The path to a .cha file or a directory to recursively scan and use</span>
+</span><span id="chats_to_script_lines-21"><a href="#chats_to_script_lines-21"><span class="linenos">21</span></a><span class="sd">      **kwargs (Any): key-word arguments to be used with pylangacq&#39;s read_chats. For further info,</span>
+</span><span id="chats_to_script_lines-22"><a href="#chats_to_script_lines-22"><span class="linenos">22</span></a><span class="sd">        please refer to https://pylangacq.org/api.html#pylangacq.read_chat</span>
+</span><span id="chats_to_script_lines-23"><a href="#chats_to_script_lines-23"><span class="linenos">23</span></a>
+</span><span id="chats_to_script_lines-24"><a href="#chats_to_script_lines-24"><span class="linenos">24</span></a><span class="sd">    Returns:</span>
+</span><span id="chats_to_script_lines-25"><a href="#chats_to_script_lines-25"><span class="linenos">25</span></a><span class="sd">      Dictionary mapping filepaths (e.g. individual .cha files) to a list of ScriptLines</span>
+</span><span id="chats_to_script_lines-26"><a href="#chats_to_script_lines-26"><span class="linenos">26</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="chats_to_script_lines-27"><a href="#chats_to_script_lines-27"><span class="linenos">27</span></a>    <span class="n">chats</span> <span class="o">=</span> <span class="n">pylangacq</span><span class="o">.</span><span class="n">read_chat</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+</span><span id="chats_to_script_lines-28"><a href="#chats_to_script_lines-28"><span class="linenos">28</span></a>    <span class="n">script_lines_by_file</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="n">ScriptLine</span><span class="p">]]</span> <span class="o">=</span> <span class="p">{}</span>
+</span><span id="chats_to_script_lines-29"><a href="#chats_to_script_lines-29"><span class="linenos">29</span></a>    <span class="n">paths</span> <span class="o">=</span> <span class="n">chats</span><span class="o">.</span><span class="n">file_paths</span><span class="p">()</span>
+</span><span id="chats_to_script_lines-30"><a href="#chats_to_script_lines-30"><span class="linenos">30</span></a>    <span class="n">utterances</span> <span class="o">=</span> <span class="n">chats</span><span class="o">.</span><span class="n">utterances</span><span class="p">(</span><span class="n">by_files</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="chats_to_script_lines-31"><a href="#chats_to_script_lines-31"><span class="linenos">31</span></a>    <span class="n">words</span> <span class="o">=</span> <span class="n">chats</span><span class="o">.</span><span class="n">words</span><span class="p">(</span><span class="n">by_files</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">by_utterances</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="chats_to_script_lines-32"><a href="#chats_to_script_lines-32"><span class="linenos">32</span></a>    <span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">paths</span><span class="p">)</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="n">utterances</span><span class="p">)</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">utterances</span><span class="p">)</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="n">words</span><span class="p">)</span>
+</span><span id="chats_to_script_lines-33"><a href="#chats_to_script_lines-33"><span class="linenos">33</span></a>    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">paths</span><span class="p">)):</span>
+</span><span id="chats_to_script_lines-34"><a href="#chats_to_script_lines-34"><span class="linenos">34</span></a>        <span class="n">path</span> <span class="o">=</span> <span class="n">paths</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+</span><span id="chats_to_script_lines-35"><a href="#chats_to_script_lines-35"><span class="linenos">35</span></a>        <span class="n">script_lines_by_file</span><span class="p">[</span><span class="n">path</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="chats_to_script_lines-36"><a href="#chats_to_script_lines-36"><span class="linenos">36</span></a>        <span class="n">utterances_in_file</span> <span class="o">=</span> <span class="n">utterances</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+</span><span id="chats_to_script_lines-37"><a href="#chats_to_script_lines-37"><span class="linenos">37</span></a>        <span class="n">words_in_file</span> <span class="o">=</span> <span class="n">words</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+</span><span id="chats_to_script_lines-38"><a href="#chats_to_script_lines-38"><span class="linenos">38</span></a>        <span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">words_in_file</span><span class="p">)</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="n">utterances_in_file</span><span class="p">)</span>
+</span><span id="chats_to_script_lines-39"><a href="#chats_to_script_lines-39"><span class="linenos">39</span></a>        <span class="k">for</span> <span class="n">utt_idx</span><span class="p">,</span> <span class="n">utterance</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">utterances_in_file</span><span class="p">):</span>
+</span><span id="chats_to_script_lines-40"><a href="#chats_to_script_lines-40"><span class="linenos">40</span></a>            <span class="n">words_in_utterance</span> <span class="o">=</span> <span class="n">words_in_file</span><span class="p">[</span><span class="n">utt_idx</span><span class="p">]</span>
+</span><span id="chats_to_script_lines-41"><a href="#chats_to_script_lines-41"><span class="linenos">41</span></a>            <span class="k">if</span> <span class="n">utterance</span><span class="o">.</span><span class="n">time_marks</span><span class="p">:</span>
+</span><span id="chats_to_script_lines-42"><a href="#chats_to_script_lines-42"><span class="linenos">42</span></a>                <span class="n">start</span> <span class="o">=</span> <span class="n">utterance</span><span class="o">.</span><span class="n">time_marks</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">/</span> <span class="mi">1000</span>
+</span><span id="chats_to_script_lines-43"><a href="#chats_to_script_lines-43"><span class="linenos">43</span></a>                <span class="n">end</span> <span class="o">=</span> <span class="n">utterance</span><span class="o">.</span><span class="n">time_marks</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">/</span> <span class="mi">1000</span>
+</span><span id="chats_to_script_lines-44"><a href="#chats_to_script_lines-44"><span class="linenos">44</span></a>            <span class="k">else</span><span class="p">:</span>
+</span><span id="chats_to_script_lines-45"><a href="#chats_to_script_lines-45"><span class="linenos">45</span></a>                <span class="n">start</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="chats_to_script_lines-46"><a href="#chats_to_script_lines-46"><span class="linenos">46</span></a>                <span class="n">end</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="chats_to_script_lines-47"><a href="#chats_to_script_lines-47"><span class="linenos">47</span></a>
+</span><span id="chats_to_script_lines-48"><a href="#chats_to_script_lines-48"><span class="linenos">48</span></a>            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">words_in_utterance</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+</span><span id="chats_to_script_lines-49"><a href="#chats_to_script_lines-49"><span class="linenos">49</span></a>                <span class="n">utterance_transcript</span> <span class="o">=</span> <span class="s2">&quot; &quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">words_in_utterance</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span> <span class="o">+</span> <span class="n">words_in_utterance</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+</span><span id="chats_to_script_lines-50"><a href="#chats_to_script_lines-50"><span class="linenos">50</span></a>            <span class="k">else</span><span class="p">:</span>
+</span><span id="chats_to_script_lines-51"><a href="#chats_to_script_lines-51"><span class="linenos">51</span></a>                <span class="n">utterance_transcript</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+</span><span id="chats_to_script_lines-52"><a href="#chats_to_script_lines-52"><span class="linenos">52</span></a>            <span class="n">script_lines_by_file</span><span class="p">[</span><span class="n">path</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+</span><span id="chats_to_script_lines-53"><a href="#chats_to_script_lines-53"><span class="linenos">53</span></a>                <span class="n">ScriptLine</span><span class="p">(</span><span class="n">text</span><span class="o">=</span><span class="n">utterance_transcript</span><span class="p">,</span> <span class="n">speaker</span><span class="o">=</span><span class="n">utterance</span><span class="o">.</span><span class="n">participant</span><span class="p">,</span> <span class="n">start</span><span class="o">=</span><span class="n">start</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="n">end</span><span class="p">)</span>
+</span><span id="chats_to_script_lines-54"><a href="#chats_to_script_lines-54"><span class="linenos">54</span></a>            <span class="p">)</span>
+</span><span id="chats_to_script_lines-55"><a href="#chats_to_script_lines-55"><span class="linenos">55</span></a>    <span class="k">return</span> <span class="n">script_lines_by_file</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Connvert .cha files to script lines.</p>
+
+<p>Converts .cha files to script lines using pylangacq's built-in read_chats functionality.</p>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>path (str):</strong>  The path to a .cha file or a directory to recursively scan and use</li>
+<li><strong>**kwargs (Any):</strong>  key-word arguments to be used with pylangacq's read_chats. For further info,
+please refer to <a href="https://pylangacq.org/api.html#pylangacq.read_chat">https://pylangacq.org/api.html#pylangacq.read_chat</a></li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p>Dictionary mapping filepaths (e.g. individual .cha files) to a list of ScriptLines</p>
+</blockquote>
+</div>
+
+
+                </section>
     </main>
 <script>
     function escapeHTML(html) {
@@ -138,7 +248,7 @@
                 script.async = true;
                 script.onload = () => resolve(window.pdocSearch);
                 script.onerror = (e) => reject(e);
-                script.src = "../../search.js";
+                script.src = "../../../search.js";
                 document.getElementsByTagName("head")[0].appendChild(script);
             });
         } catch (e) {
@@ -180,7 +290,7 @@
             }
             for (let result of results.slice(0, 10)) {
                 let doc = result.doc;
-                let url = `../../${doc.modulename.replaceAll(".", "/")}.html`;
+                let url = `../../../${doc.modulename.replaceAll(".", "/")}.html`;
                 if (doc.qualname) {
                     url += `#${doc.qualname}`;
                 }
