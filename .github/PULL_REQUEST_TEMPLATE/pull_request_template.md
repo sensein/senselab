@@ -21,6 +21,6 @@ Include any relevant screenshots.
 - [ ] Breaking change (fix or feature that would cause existing functionality to change)
 
 ## Checklist:
-- [ ] My code follows the code style of this project.
 - [ ] I have added tests to cover my changes.
 - [ ] All new and existing tests passed.
+- [ ] My code follows the code style of this project.
