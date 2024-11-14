@@ -1116,7 +1116,7 @@ def extract_praat_parselmouth_features_from_audios(
     jitter: bool = True,
     shimmer: bool = True,
     plugin: str = "cf",
-    plugin_args: Optional[Dict[str, Any]] = None,
+    plugin_args: Optional[Dict[str, Any]] = {},
 ) -> List[Dict[str, Any]]:
     """Extract features from a list of Audio objects and return a JSON-like dictionary.
 

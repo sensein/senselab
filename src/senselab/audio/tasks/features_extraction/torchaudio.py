@@ -172,7 +172,6 @@ def extract_mel_filter_bank_from_spectrograms(
     spectrograms: List[Dict[str, torch.Tensor]],
     sampling_rate: int,
     n_mels: int = 128,
-    n_fft: int = 1024,
 ) -> List[Dict[str, torch.Tensor]]:
     """Extract mel filter bank from a list of audio objects.
 
@@ -180,17 +179,16 @@ def extract_mel_filter_bank_from_spectrograms(
         spectrograms (List[torch.Tensor]): List of spectrograms.
         sampling_rate (int): Sampling rate of the audio.
         n_mels (int): Number of mel filter banks. Default is 128.
-        n_fft (int): Size of FFT, creates n_fft // 2 + 1 bins. Default is 1024.
 
     Returns:
         List[Dict[str, torch.Tensor]]: List of Dict objects containing mel filter banks.
     """
-    n_stft = n_fft // 2 + 1
-
     mel_filter_banks = []
     for spectrogram in spectrograms:
         try:
-            melscale_transform = torchaudio.transforms.MelScale(sample_rate=sampling_rate, n_mels=n_mels, n_stft=n_stft)
+            melscale_transform = torchaudio.transforms.MelScale(
+                sample_rate=sampling_rate, n_mels=n_mels, n_stft=spectrogram["spectrogram"].shape[0]
+            )
             mel_filter_banks.append({"mel_filter_bank": melscale_transform(spectrogram["spectrogram"]).squeeze(0)})
         except RuntimeError:
             mel_filter_banks.append({"mel_filter_bank": np.nan})
