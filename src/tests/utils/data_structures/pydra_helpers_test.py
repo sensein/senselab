@@ -18,7 +18,7 @@ def test_pydra() -> None:
     wf.add(pydra_task(name="test_task_task", test_input=wf.lzin.x))
     wf.set_output([("wf_out", wf.test_task_task.lzout.out)])
 
-    with pydra.Submitter(plugin="serial") as sub:
+    with pydra.Submitter(plugin="serial", n_procs=1) as sub:
         sub(wf)
 
     results = wf.result()

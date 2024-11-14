@@ -22,8 +22,8 @@ The primary metrics used to evaluate VAD modules are Detection Error Rate (DER) 
     DER = (false alarm + missed detection) / total duration of speech in reference
   ```
 
-  - **False alarm:** Duration of non-speech incorrectly classified as speech.
-  - **Missed detection:** Duration of speech incorrectly classified as non-speech.
+  - **False alarm:** duration of non-speech incorrectly classified as speech.
+  - **Missed detection:** duration of speech incorrectly classified as non-speech.
   - **Total:** Total duration of speech in the reference.
 
 - **Detection Cost Function (DCF):**
