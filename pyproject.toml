@@ -26,12 +26,12 @@ classifiers = [
 packages = [{include = "senselab", from = "src"}]
 
 [tool.poetry.dependencies]
-python = "~=3.10"
+python = ">=3.10,<3.12"
 datasets = "~=3"
 torch = "~=2.4"
 torchvision = "~=0.19"
 torchaudio = "~=2.4"
-transformers = "~=4.44.2"
+transformers = "~=4.46.2"
 pydra = "~=0.23"
 pydantic = "~=2.7"
 accelerate = "*"
@@ -60,9 +60,9 @@ optional = true
 [tool.poetry.group.dev.dependencies]
 pytest-xdist = {version = "~=3.6.1", extras = ["psutil"]}
 pytest-mock = "~=3.14"
-pytest-cov = "~=5.0"
+pytest-cov = "~=6.0"
 mypy = "~=1.9"
-pre-commit = "~=3.7"
+pre-commit = "~=4.0"
 ruff = "~=0.3"
 codespell = "~=2.3"
 jupyter = "~=1.0"
@@ -73,7 +73,7 @@ ipykernel = "*"
 optional = true
 
 [tool.poetry.group.docs.dependencies]
-pdoc = "~=14.4"
+pdoc = "~=15.0"
 
 [tool.poetry.scripts]
 senselab-cli = "senselab.cli:main"
