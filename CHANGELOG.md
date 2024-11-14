@@ -1,3 +1,20 @@
+# 0.19.0 (Thu Nov 14 2024)
+
+#### 🚀 Enhancement
+
+- Bump the production-dependencies group with 2 updates [#176](https://github.com/sensein/senselab/pull/176) ([@dependabot[bot]](https://github.com/dependabot[bot]) [@fabiocat93](https://github.com/fabiocat93))
+
+#### 🔩 Dependency Updates
+
+- Bump the development-dependencies group with 3 updates [#177](https://github.com/sensein/senselab/pull/177) ([@dependabot[bot]](https://github.com/dependabot[bot]) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@dependabot[bot]](https://github.com/dependabot[bot])
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.18.0 (Mon Nov 11 2024)
 
 #### 🚀 Enhancement
