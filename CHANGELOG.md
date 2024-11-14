@@ -1,3 +1,31 @@
+# 0.19.3 (Thu Nov 14 2024)
+
+#### 🐛 Bug Fix
+
+- fixing build status #2nd attempt [#190](https://github.com/sensein/senselab/pull/190) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.19.2 (Thu Nov 14 2024)
+
+#### 🐛 Bug Fix
+
+- fixing build status [#189](https://github.com/sensein/senselab/pull/189) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### ⚠️ Pushed to `main`
+
+- Update README.md ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.19.1 (Thu Nov 14 2024)
 
 #### 🐛 Bug Fix
