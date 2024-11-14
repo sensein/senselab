@@ -1,3 +1,70 @@
+# 0.19.3 (Thu Nov 14 2024)
+
+#### 🐛 Bug Fix
+
+- fixing build status #2nd attempt [#190](https://github.com/sensein/senselab/pull/190) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.19.2 (Thu Nov 14 2024)
+
+#### 🐛 Bug Fix
+
+- fixing build status [#189](https://github.com/sensein/senselab/pull/189) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### ⚠️ Pushed to `main`
+
+- Update README.md ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.19.1 (Thu Nov 14 2024)
+
+#### 🐛 Bug Fix
+
+- Update pyproject.toml [#188](https://github.com/sensein/senselab/pull/188) ([@fabiocat93](https://github.com/fabiocat93))
+- removing ACTION_PLAN.md [#187](https://github.com/sensein/senselab/pull/187) ([@fabiocat93](https://github.com/fabiocat93))
+- Testing templates [#186](https://github.com/sensein/senselab/pull/186) ([@fabiocat93](https://github.com/fabiocat93))
+- Experimenting with PR templates [#185](https://github.com/sensein/senselab/pull/185) ([@fabiocat93](https://github.com/fabiocat93))
+- Update and rename advanced.md to pull_request_template.md [#184](https://github.com/sensein/senselab/pull/184) ([@fabiocat93](https://github.com/fabiocat93))
+- Create SECURITY.md [#183](https://github.com/sensein/senselab/pull/183) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### ⚠️ Pushed to `main`
+
+- Update tests.yaml ([@fabiocat93](https://github.com/fabiocat93))
+- Rename pull_request_template.md to PULL_REQUEST_TEMPLATE.md ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.19.0 (Thu Nov 14 2024)
+
+#### 🚀 Enhancement
+
+- Bump the production-dependencies group with 2 updates [#176](https://github.com/sensein/senselab/pull/176) ([@dependabot[bot]](https://github.com/dependabot[bot]) [@fabiocat93](https://github.com/fabiocat93))
+
+#### 🔩 Dependency Updates
+
+- Bump the development-dependencies group with 3 updates [#177](https://github.com/sensein/senselab/pull/177) ([@dependabot[bot]](https://github.com/dependabot[bot]) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@dependabot[bot]](https://github.com/dependabot[bot])
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.18.0 (Mon Nov 11 2024)
 
 #### 🚀 Enhancement
