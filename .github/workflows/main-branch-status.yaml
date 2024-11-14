@@ -1,4 +1,4 @@
-name: Update Build Status
+name: main-branch-status
 
 on:
   release:

@@ -1,4 +1,4 @@
-[![Build](https://github.com/sensein/senselab/actions/workflows/main-branch-status.yaml/badge.svg?branch=main)](https://github.com/sensein/senselab/actions/workflows/main-branch-status.yaml?query=branch%3Amain)
+[![Build](https://github.com/sensein/senselab/actions/workflows/main-branch-status.yaml/badge.svg)](https://github.com/sensein/senselab/actions/workflows/main-branch-status.yaml)
 [![codecov](https://codecov.io/gh/sensein/senselab/graph/badge.svg?token=9S8WY128PO)](https://codecov.io/gh/sensein/senselab)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
