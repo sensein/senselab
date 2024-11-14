@@ -1,3 +1,16 @@
+# 0.21.0 (Thu Nov 14 2024)
+
+#### 🚀 Enhancement
+
+- added extract_mel_filter_bank_from_spectrograms [#182](https://github.com/sensein/senselab/pull/182) ([@fabiocat93](https://github.com/fabiocat93) [@satra](https://github.com/satra))
+
+#### Authors: 2
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Satrajit Ghosh ([@satra](https://github.com/satra))
+
+---
+
 # 0.20.0 (Thu Nov 14 2024)
 
 #### 🚀 Enhancement
