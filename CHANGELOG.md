@@ -1,3 +1,19 @@
+# 0.18.0 (Mon Nov 11 2024)
+
+#### 🚀 Enhancement
+
+- Features extraction [#175](https://github.com/sensein/senselab/pull/175) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### ⚠️ Pushed to `main`
+
+- Update greetings.yaml ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.17.0 (Wed Oct 02 2024)
 
 #### 🚀 Enhancement
