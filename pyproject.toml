@@ -16,7 +16,6 @@ homepage = "https://github.com/sensein/senselab"
 repository = "https://github.com/sensein/senselab"
 documentation = "https://sensein.github.io/senselab"
 keywords = ["voice", "speech", "audio"]
-requires-python = ">=3.10,<3.12"
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Programming Language :: Python :: 3.10",
@@ -27,7 +26,7 @@ classifiers = [
 packages = [{include = "senselab", from = "src"}]
 
 [tool.poetry.dependencies]
-python = "~=3.10"
+python = ">=3.10,<3.12"
 datasets = "~=3"
 torch = "~=2.4"
 torchvision = "~=0.19"
