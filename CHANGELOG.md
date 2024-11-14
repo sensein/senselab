@@ -1,3 +1,21 @@
+# 0.20.0 (Thu Nov 14 2024)
+
+#### 🚀 Enhancement
+
+- Added CHAT file reader [#174](https://github.com/sensein/senselab/pull/174) ([@wilke0818](https://github.com/wilke0818) jordanwilke@dhcp-10-29-142-117.dyn.MIT.EDU [@fabiocat93](https://github.com/fabiocat93))
+
+#### 🐛 Bug Fix
+
+- Build status final fix [#191](https://github.com/sensein/senselab/pull/191) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 3
+
+- [@wilke0818](https://github.com/wilke0818)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Jordan Wilke (jordanwilke@dhcp-10-29-142-117.dyn.MIT.EDU)
+
+---
+
 # 0.19.3 (Thu Nov 14 2024)
 
 #### 🐛 Bug Fix
