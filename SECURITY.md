@@ -12,6 +12,6 @@ The `senselab` team and community take security bugs **seriously**. We appreciat
 
 To report a security issue, please use the GitHub Security Advisory ["Report a Vulnerability"](https://github.com/sensein/senselab/security/advisories/new) tab.
 
-The ```senselab``` team will respond to your report with the next steps for handling it. After our first reply, we'll let you know how we will fix it and may ask for additional information to address the issue thoroughly.
+The `senselab` team will respond to your report with the next steps for handling it. After our first reply, we'll let you know how we will fix it and may ask for additional information to address the issue thoroughly.
 
 Please report security bugs in any third-party modules directly to the maintainer(s) of those modules.
