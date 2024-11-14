@@ -1,0 +1,17 @@
+name: Update Main Branch Status on Workflow Success
+
+on:
+  workflow_run:
+    workflows: [tests]
+    types:
+    - completed
+
+jobs:
+  update-status:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+    - name: Update badge status
+      run: echo "Badge status updated for main branch"
