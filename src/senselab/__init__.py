@@ -2,6 +2,6 @@
 
 import nest_asyncio
 
-from senselab.utils.data_structures.pydra_helpers import *  # NOQA
-
 nest_asyncio.apply()
+
+from senselab.utils.data_structures.pydra_helpers import *  # NOQA

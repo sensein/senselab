@@ -8,7 +8,7 @@ ease of maintaining the codebase and offering consistent public APIs.
 import os
 import uuid
 import warnings
-from typing import Dict, Generator, List, Optional, Tuple, Union
+from typing import Dict, Generator, List, Tuple, Union
 
 import numpy as np
 import torch
@@ -36,7 +36,7 @@ class Audio(BaseModel):
 
     waveform: torch.Tensor
     sampling_rate: int
-    orig_path_or_id: Optional[str] = None
+    orig_path_or_id: str | os.PathLike | None = None
     metadata: Dict = Field(default={})
     model_config = {"arbitrary_types_allowed": True}
 
@@ -61,7 +61,7 @@ class Audio(BaseModel):
         return temporary_tensor.to(torch.float32)
 
     @classmethod
-    def from_filepath(cls, filepath: str, metadata: Dict = {}) -> "Audio":
+    def from_filepath(cls, filepath: str | os.PathLike, metadata: Dict = {}) -> "Audio":
         """Creates an Audio instance from an audio file.
 
         Args:
@@ -72,7 +72,7 @@ class Audio(BaseModel):
 
         return cls(waveform=array, sampling_rate=sampling_rate, orig_path_or_id=filepath, metadata=metadata)
 
-    def generate_path(self) -> str:
+    def generate_path(self) -> str | os.PathLike:
         """Generate a path like string for this Audio.
 
         Generates a path like string for the Audio by either utilizing the orig_path_or_id, checking
