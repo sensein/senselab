@@ -307,7 +307,13 @@ def extract_features_from_audios(
         'si_sdr': 11.71167278289795}}]
     """
     if opensmile:
-        default_opensmile = {"feature_set": "eGeMAPSv02", "feature_level": "Functionals"}
+        default_opensmile = {
+            "feature_set": "eGeMAPSv02",
+            "feature_level": "Functionals",
+            "plugin": "serial",
+            "plugin_args": {},
+            "cache_dir": None,
+        }
         if isinstance(opensmile, dict):
             my_opensmile = {**default_opensmile, **opensmile}
         else:
@@ -330,7 +336,7 @@ def extract_features_from_audios(
             "duration": True,
             "jitter": True,
             "shimmer": True,
-            "plugin": "cf",
+            "plugin": "serial",
             "plugin_args": {},
         }
         # Update default_parselmouth with provided parselmouth dictionary
@@ -350,7 +356,7 @@ def extract_features_from_audios(
             "n_mfcc": 40,
             "win_length": None,
             "hop_length": None,
-            "plugin": "cf",
+            "plugin": "serial",
             "plugin_args": {},
             "cache_dir": None,
         }

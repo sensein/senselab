@@ -98,7 +98,6 @@ def test_interpolate_nans() -> None:
     assert interpolated_series.isnull().sum() == 0
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_get_prediction_matrix(dummy_model: tuple) -> None:
     """Test generation of prediction matrix."""
     model, _ = dummy_model
@@ -107,7 +106,6 @@ def test_get_prediction_matrix(dummy_model: tuple) -> None:
     assert prediction_matrix.shape[0] > 0
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_align_segments(mono_audio_sample: Audio, dummy_model: tuple) -> None:
     """Test alignment of segments."""
     model, processor = dummy_model
@@ -146,7 +144,6 @@ def test_align_segments(mono_audio_sample: Audio, dummy_model: tuple) -> None:
     assert isinstance(word_segments, list)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_align_transcription_faked(resampled_mono_audio_sample: Audio, dummy_model: tuple) -> None:
     """Test alignment of transcription."""
     model, processor = dummy_model
@@ -176,7 +173,6 @@ def test_align_transcription_faked(resampled_mono_audio_sample: Audio, dummy_mod
     assert "word_segments" in aligned_result
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_align_transcriptions_fixture(resampled_mono_audio_sample: Audio, script_line_fixture: ScriptLine) -> None:
     """Test alignment of transcriptions."""
     audios_and_transcriptions_and_language = [
@@ -189,7 +185,6 @@ def test_align_transcriptions_fixture(resampled_mono_audio_sample: Audio, script
     assert aligned_transcriptions[0][0].text == "test"
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_align_transcriptions_multilingual(resampled_mono_audio_sample: Audio, script_line_fixture: ScriptLine) -> None:
     """Test alignment of transcriptions."""
     languages = ["de", "es"]
