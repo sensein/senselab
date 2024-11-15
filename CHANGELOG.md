@@ -1,3 +1,20 @@
+# 0.22.0 (Fri Nov 15 2024)
+
+#### 🚀 Enhancement
+
+- Parallelize feats extraction with opensmile [#181](https://github.com/sensein/senselab/pull/181) ([@fabiocat93](https://github.com/fabiocat93) [@satra](https://github.com/satra))
+
+#### 🐛 Bug Fix
+
+- patch fixes for b2aiprep updates [#180](https://github.com/sensein/senselab/pull/180) ([@satra](https://github.com/satra) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Satrajit Ghosh ([@satra](https://github.com/satra))
+
+---
+
 # 0.21.0 (Thu Nov 14 2024)
 
 #### 🚀 Enhancement
