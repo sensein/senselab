@@ -241,7 +241,7 @@ def extract_torchaudio_features_from_audios(
     n_mfcc: int = 40,
     win_length: Optional[int] = None,
     hop_length: Optional[int] = None,
-    plugin: str = "cf",
+    plugin: str = "serial",
     plugin_args: Optional[Dict[str, Any]] = {},
     cache_dir: Optional[str | os.PathLike] = None,
 ) -> List[Dict[str, Any]]:
@@ -258,7 +258,7 @@ def extract_torchaudio_features_from_audios(
         n_mfcc (int): Number of MFCCs. Default is 40.
         win_length (int): Window size. Default is None, using n_fft.
         hop_length (int): Length of hop between STFT windows. Default is None, using win_length // 2.
-        plugin (str): The plugin to use. Default is "cf".
+        plugin (str): The plugin to use. Default is "serial".
         plugin_args (Optional[Dict[str, Any]]): The arguments to pass to the plugin. Default is {}.
         cache_dir (Optional[str | os.PathLike]): The directory to cache the results. Default is None.
 
