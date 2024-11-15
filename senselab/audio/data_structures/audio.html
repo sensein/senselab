@@ -116,7 +116,7 @@ ease of maintaining the codebase and offering consistent public APIs.</p>
 </span><span id="L-8"><a href="#L-8"><span class="linenos">  8</span></a><span class="kn">import</span> <span class="nn">os</span>
 </span><span id="L-9"><a href="#L-9"><span class="linenos">  9</span></a><span class="kn">import</span> <span class="nn">uuid</span>
 </span><span id="L-10"><a href="#L-10"><span class="linenos"> 10</span></a><span class="kn">import</span> <span class="nn">warnings</span>
-</span><span id="L-11"><a href="#L-11"><span class="linenos"> 11</span></a><span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">Generator</span><span class="p">,</span> <span class="n">List</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">,</span> <span class="n">Union</span>
+</span><span id="L-11"><a href="#L-11"><span class="linenos"> 11</span></a><span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">Generator</span><span class="p">,</span> <span class="n">List</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">,</span> <span class="n">Union</span>
 </span><span id="L-12"><a href="#L-12"><span class="linenos"> 12</span></a>
 </span><span id="L-13"><a href="#L-13"><span class="linenos"> 13</span></a><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
 </span><span id="L-14"><a href="#L-14"><span class="linenos"> 14</span></a><span class="kn">import</span> <span class="nn">torch</span>
@@ -144,7 +144,7 @@ ease of maintaining the codebase and offering consistent public APIs.</p>
 </span><span id="L-36"><a href="#L-36"><span class="linenos"> 36</span></a>
 </span><span id="L-37"><a href="#L-37"><span class="linenos"> 37</span></a>    <span class="n">waveform</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span>
 </span><span id="L-38"><a href="#L-38"><span class="linenos"> 38</span></a>    <span class="n">sampling_rate</span><span class="p">:</span> <span class="nb">int</span>
-</span><span id="L-39"><a href="#L-39"><span class="linenos"> 39</span></a>    <span class="n">orig_path_or_id</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="L-39"><a href="#L-39"><span class="linenos"> 39</span></a>    <span class="n">orig_path_or_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
 </span><span id="L-40"><a href="#L-40"><span class="linenos"> 40</span></a>    <span class="n">metadata</span><span class="p">:</span> <span class="n">Dict</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="p">{})</span>
 </span><span id="L-41"><a href="#L-41"><span class="linenos"> 41</span></a>    <span class="n">model_config</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;arbitrary_types_allowed&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">}</span>
 </span><span id="L-42"><a href="#L-42"><span class="linenos"> 42</span></a>
@@ -169,7 +169,7 @@ ease of maintaining the codebase and offering consistent public APIs.</p>
 </span><span id="L-61"><a href="#L-61"><span class="linenos"> 61</span></a>        <span class="k">return</span> <span class="n">temporary_tensor</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
 </span><span id="L-62"><a href="#L-62"><span class="linenos"> 62</span></a>
 </span><span id="L-63"><a href="#L-63"><span class="linenos"> 63</span></a>    <span class="nd">@classmethod</span>
-</span><span id="L-64"><a href="#L-64"><span class="linenos"> 64</span></a>    <span class="k">def</span> <span class="nf">from_filepath</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">filepath</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">metadata</span><span class="p">:</span> <span class="n">Dict</span> <span class="o">=</span> <span class="p">{})</span> <span class="o">-&gt;</span> <span class="s2">&quot;Audio&quot;</span><span class="p">:</span>
+</span><span id="L-64"><a href="#L-64"><span class="linenos"> 64</span></a>    <span class="k">def</span> <span class="nf">from_filepath</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">filepath</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">,</span> <span class="n">metadata</span><span class="p">:</span> <span class="n">Dict</span> <span class="o">=</span> <span class="p">{})</span> <span class="o">-&gt;</span> <span class="s2">&quot;Audio&quot;</span><span class="p">:</span>
 </span><span id="L-65"><a href="#L-65"><span class="linenos"> 65</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Creates an Audio instance from an audio file.</span>
 </span><span id="L-66"><a href="#L-66"><span class="linenos"> 66</span></a>
 </span><span id="L-67"><a href="#L-67"><span class="linenos"> 67</span></a><span class="sd">        Args:</span>
@@ -180,7 +180,7 @@ ease of maintaining the codebase and offering consistent public APIs.</p>
 </span><span id="L-72"><a href="#L-72"><span class="linenos"> 72</span></a>
 </span><span id="L-73"><a href="#L-73"><span class="linenos"> 73</span></a>        <span class="k">return</span> <span class="bp">cls</span><span class="p">(</span><span class="n">waveform</span><span class="o">=</span><span class="n">array</span><span class="p">,</span> <span class="n">sampling_rate</span><span class="o">=</span><span class="n">sampling_rate</span><span class="p">,</span> <span class="n">orig_path_or_id</span><span class="o">=</span><span class="n">filepath</span><span class="p">,</span> <span class="n">metadata</span><span class="o">=</span><span class="n">metadata</span><span class="p">)</span>
 </span><span id="L-74"><a href="#L-74"><span class="linenos"> 74</span></a>
-</span><span id="L-75"><a href="#L-75"><span class="linenos"> 75</span></a>    <span class="k">def</span> <span class="nf">generate_path</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="L-75"><a href="#L-75"><span class="linenos"> 75</span></a>    <span class="k">def</span> <span class="nf">generate_path</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">:</span>
 </span><span id="L-76"><a href="#L-76"><span class="linenos"> 76</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Generate a path like string for this Audio.</span>
 </span><span id="L-77"><a href="#L-77"><span class="linenos"> 77</span></a>
 </span><span id="L-78"><a href="#L-78"><span class="linenos"> 78</span></a><span class="sd">        Generates a path like string for the Audio by either utilizing the orig_path_or_id, checking</span>
@@ -385,7 +385,7 @@ ease of maintaining the codebase and offering consistent public APIs.</p>
 </span><span id="Audio-37"><a href="#Audio-37"><span class="linenos"> 37</span></a>
 </span><span id="Audio-38"><a href="#Audio-38"><span class="linenos"> 38</span></a>    <span class="n">waveform</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span>
 </span><span id="Audio-39"><a href="#Audio-39"><span class="linenos"> 39</span></a>    <span class="n">sampling_rate</span><span class="p">:</span> <span class="nb">int</span>
-</span><span id="Audio-40"><a href="#Audio-40"><span class="linenos"> 40</span></a>    <span class="n">orig_path_or_id</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="Audio-40"><a href="#Audio-40"><span class="linenos"> 40</span></a>    <span class="n">orig_path_or_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
 </span><span id="Audio-41"><a href="#Audio-41"><span class="linenos"> 41</span></a>    <span class="n">metadata</span><span class="p">:</span> <span class="n">Dict</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="p">{})</span>
 </span><span id="Audio-42"><a href="#Audio-42"><span class="linenos"> 42</span></a>    <span class="n">model_config</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;arbitrary_types_allowed&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">}</span>
 </span><span id="Audio-43"><a href="#Audio-43"><span class="linenos"> 43</span></a>
@@ -410,7 +410,7 @@ ease of maintaining the codebase and offering consistent public APIs.</p>
 </span><span id="Audio-62"><a href="#Audio-62"><span class="linenos"> 62</span></a>        <span class="k">return</span> <span class="n">temporary_tensor</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
 </span><span id="Audio-63"><a href="#Audio-63"><span class="linenos"> 63</span></a>
 </span><span id="Audio-64"><a href="#Audio-64"><span class="linenos"> 64</span></a>    <span class="nd">@classmethod</span>
-</span><span id="Audio-65"><a href="#Audio-65"><span class="linenos"> 65</span></a>    <span class="k">def</span> <span class="nf">from_filepath</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">filepath</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">metadata</span><span class="p">:</span> <span class="n">Dict</span> <span class="o">=</span> <span class="p">{})</span> <span class="o">-&gt;</span> <span class="s2">&quot;Audio&quot;</span><span class="p">:</span>
+</span><span id="Audio-65"><a href="#Audio-65"><span class="linenos"> 65</span></a>    <span class="k">def</span> <span class="nf">from_filepath</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">filepath</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">,</span> <span class="n">metadata</span><span class="p">:</span> <span class="n">Dict</span> <span class="o">=</span> <span class="p">{})</span> <span class="o">-&gt;</span> <span class="s2">&quot;Audio&quot;</span><span class="p">:</span>
 </span><span id="Audio-66"><a href="#Audio-66"><span class="linenos"> 66</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Creates an Audio instance from an audio file.</span>
 </span><span id="Audio-67"><a href="#Audio-67"><span class="linenos"> 67</span></a>
 </span><span id="Audio-68"><a href="#Audio-68"><span class="linenos"> 68</span></a><span class="sd">        Args:</span>
@@ -421,7 +421,7 @@ ease of maintaining the codebase and offering consistent public APIs.</p>
 </span><span id="Audio-73"><a href="#Audio-73"><span class="linenos"> 73</span></a>
 </span><span id="Audio-74"><a href="#Audio-74"><span class="linenos"> 74</span></a>        <span class="k">return</span> <span class="bp">cls</span><span class="p">(</span><span class="n">waveform</span><span class="o">=</span><span class="n">array</span><span class="p">,</span> <span class="n">sampling_rate</span><span class="o">=</span><span class="n">sampling_rate</span><span class="p">,</span> <span class="n">orig_path_or_id</span><span class="o">=</span><span class="n">filepath</span><span class="p">,</span> <span class="n">metadata</span><span class="o">=</span><span class="n">metadata</span><span class="p">)</span>
 </span><span id="Audio-75"><a href="#Audio-75"><span class="linenos"> 75</span></a>
-</span><span id="Audio-76"><a href="#Audio-76"><span class="linenos"> 76</span></a>    <span class="k">def</span> <span class="nf">generate_path</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="Audio-76"><a href="#Audio-76"><span class="linenos"> 76</span></a>    <span class="k">def</span> <span class="nf">generate_path</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">:</span>
 </span><span id="Audio-77"><a href="#Audio-77"><span class="linenos"> 77</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Generate a path like string for this Audio.</span>
 </span><span id="Audio-78"><a href="#Audio-78"><span class="linenos"> 78</span></a>
 </span><span id="Audio-79"><a href="#Audio-79"><span class="linenos"> 79</span></a><span class="sd">        Generates a path like string for the Audio by either utilizing the orig_path_or_id, checking</span>
@@ -545,7 +545,7 @@ of shape (num_channels, num_samples)</li>
                             </div>
                             <div id="Audio.orig_path_or_id" class="classattr">
                                 <div class="attr variable">
-            <span class="name">orig_path_or_id</span><span class="annotation">: Optional[str]</span>
+            <span class="name">orig_path_or_id</span><span class="annotation">: str | os.PathLike | None</span>
 
         
     </div>
@@ -624,14 +624,14 @@ of shape (num_channels, num_samples)</li>
                     <div class="decorator decorator-classmethod">@classmethod</div>
 
         <span class="def">def</span>
-        <span class="name">from_filepath</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="bp">cls</span>,</span><span class="param">	<span class="n">filepath</span><span class="p">:</span> <span class="nb">str</span>,</span><span class="param">	<span class="n">metadata</span><span class="p">:</span> <span class="n">Dict</span> <span class="o">=</span> <span class="p">{}</span></span><span class="return-annotation">) -> <span class="n"><a href="#Audio">Audio</a></span>:</span></span>
+        <span class="name">from_filepath</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="bp">cls</span>,</span><span class="param">	<span class="n">filepath</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span>,</span><span class="param">	<span class="n">metadata</span><span class="p">:</span> <span class="n">Dict</span> <span class="o">=</span> <span class="p">{}</span></span><span class="return-annotation">) -> <span class="n"><a href="#Audio">Audio</a></span>:</span></span>
 
                 <label class="view-source-button" for="Audio.from_filepath-view-source"><span>View Source</span></label>
 
     </div>
     <a class="headerlink" href="#Audio.from_filepath"></a>
             <div class="pdoc-code codehilite"><pre><span></span><span id="Audio.from_filepath-64"><a href="#Audio.from_filepath-64"><span class="linenos">64</span></a>    <span class="nd">@classmethod</span>
-</span><span id="Audio.from_filepath-65"><a href="#Audio.from_filepath-65"><span class="linenos">65</span></a>    <span class="k">def</span> <span class="nf">from_filepath</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">filepath</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">metadata</span><span class="p">:</span> <span class="n">Dict</span> <span class="o">=</span> <span class="p">{})</span> <span class="o">-&gt;</span> <span class="s2">&quot;Audio&quot;</span><span class="p">:</span>
+</span><span id="Audio.from_filepath-65"><a href="#Audio.from_filepath-65"><span class="linenos">65</span></a>    <span class="k">def</span> <span class="nf">from_filepath</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">filepath</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">,</span> <span class="n">metadata</span><span class="p">:</span> <span class="n">Dict</span> <span class="o">=</span> <span class="p">{})</span> <span class="o">-&gt;</span> <span class="s2">&quot;Audio&quot;</span><span class="p">:</span>
 </span><span id="Audio.from_filepath-66"><a href="#Audio.from_filepath-66"><span class="linenos">66</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Creates an Audio instance from an audio file.</span>
 </span><span id="Audio.from_filepath-67"><a href="#Audio.from_filepath-67"><span class="linenos">67</span></a>
 </span><span id="Audio.from_filepath-68"><a href="#Audio.from_filepath-68"><span class="linenos">68</span></a><span class="sd">        Args:</span>
@@ -661,13 +661,13 @@ of shape (num_channels, num_samples)</li>
 <div class="attr function">
             
         <span class="def">def</span>
-        <span class="name">generate_path</span><span class="signature pdoc-code condensed">(<span class="param"><span class="bp">self</span></span><span class="return-annotation">) -> <span class="nb">str</span>:</span></span>
+        <span class="name">generate_path</span><span class="signature pdoc-code condensed">(<span class="param"><span class="bp">self</span></span><span class="return-annotation">) -> <span class="nb">str</span> <span class="o">|</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span>:</span></span>
 
                 <label class="view-source-button" for="Audio.generate_path-view-source"><span>View Source</span></label>
 
     </div>
     <a class="headerlink" href="#Audio.generate_path"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="Audio.generate_path-76"><a href="#Audio.generate_path-76"><span class="linenos">76</span></a>    <span class="k">def</span> <span class="nf">generate_path</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="Audio.generate_path-76"><a href="#Audio.generate_path-76"><span class="linenos">76</span></a>    <span class="k">def</span> <span class="nf">generate_path</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">:</span>
 </span><span id="Audio.generate_path-77"><a href="#Audio.generate_path-77"><span class="linenos">77</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Generate a path like string for this Audio.</span>
 </span><span id="Audio.generate_path-78"><a href="#Audio.generate_path-78"><span class="linenos">78</span></a>
 </span><span id="Audio.generate_path-79"><a href="#Audio.generate_path-79"><span class="linenos">79</span></a><span class="sd">        Generates a path like string for the Audio by either utilizing the orig_path_or_id, checking</span>
@@ -814,7 +814,7 @@ will be included in the last window.</p>
                                 <div class="attr variable">
             <span class="name">model_fields</span><span class="annotation">: ClassVar[Dict[str, pydantic.fields.FieldInfo]]</span>        =
 <input id="Audio.model_fields-view-value" class="view-value-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
-            <label class="view-value-button pdoc-button" for="Audio.model_fields-view-value"></label><span class="default_value">{&#39;waveform&#39;: FieldInfo(annotation=Tensor, required=True), &#39;sampling_rate&#39;: FieldInfo(annotation=int, required=True), &#39;orig_path_or_id&#39;: FieldInfo(annotation=Union[str, NoneType], required=False, default=None), &#39;metadata&#39;: FieldInfo(annotation=Dict, required=False, default={})}</span>
+            <label class="view-value-button pdoc-button" for="Audio.model_fields-view-value"></label><span class="default_value">{&#39;waveform&#39;: FieldInfo(annotation=Tensor, required=True), &#39;sampling_rate&#39;: FieldInfo(annotation=int, required=True), &#39;orig_path_or_id&#39;: FieldInfo(annotation=Union[str, PathLike, NoneType], required=False, default=None), &#39;metadata&#39;: FieldInfo(annotation=Dict, required=False, default={})}</span>
 
         
     </div>
