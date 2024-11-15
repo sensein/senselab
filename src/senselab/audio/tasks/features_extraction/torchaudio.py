@@ -1,5 +1,6 @@
 """This module provides the implementation of torchaudio utilities for audio features extraction."""
 
+import os
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -227,7 +228,7 @@ def extract_pitch_from_audios(
                 }
             )
         except RuntimeError:
-            pitches.append({"pitch": np.nan})
+            pitches.append({"pitch": torch.tensor(torch.nan)})
     return pitches
 
 
@@ -242,6 +243,7 @@ def extract_torchaudio_features_from_audios(
     hop_length: Optional[int] = None,
     plugin: str = "cf",
     plugin_args: Optional[Dict[str, Any]] = {},
+    cache_dir: Optional[str | os.PathLike] = None,
 ) -> List[Dict[str, Any]]:
     """Extract torchaudio features from a list of audio objects.
 
@@ -257,7 +259,8 @@ def extract_torchaudio_features_from_audios(
         win_length (int): Window size. Default is None, using n_fft.
         hop_length (int): Length of hop between STFT windows. Default is None, using win_length // 2.
         plugin (str): The plugin to use. Default is "cf".
-        plugin_args (Optional[Dict[str, Any]]): The arguments to pass to the plugin. Default is None.
+        plugin_args (Optional[Dict[str, Any]]): The arguments to pass to the plugin. Default is {}.
+        cache_dir (Optional[str | os.PathLike]): The directory to cache the results. Default is None.
 
     Returns:
         List[Dict[str, Any]]: The list of feature dictionaries for each audio.
@@ -275,7 +278,7 @@ def extract_torchaudio_features_from_audios(
     _extract_sampling_rate_pt = pydra.mark.task(_extract_sampling_rate)
 
     formatted_audios = [[audio] for audio in audios]
-    wf = pydra.Workflow(name="wf", input_spec=["x"])
+    wf = pydra.Workflow(name="wf", input_spec=["x"], cache_dir=cache_dir)
     wf.split("x", x=formatted_audios)
     wf.add(_extract_sampling_rate_pt(name="_extract_sampling_rate_pt", audios=wf.lzin.x))
     wf.add(
