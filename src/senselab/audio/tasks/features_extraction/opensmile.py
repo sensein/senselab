@@ -53,7 +53,7 @@ def extract_opensmile_features_from_audios(
     audios: List[Audio],
     feature_set: str = "eGeMAPSv02",
     feature_level: str = "Functionals",
-    plugin: str = "serial",
+    plugin: str = "cf",
     plugin_args: Optional[Dict[str, Any]] = {},
     cache_dir: Optional[str | os.PathLike] = None,
 ) -> List[Dict[str, Any]]:
