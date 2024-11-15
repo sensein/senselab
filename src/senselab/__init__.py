@@ -8,4 +8,8 @@ nest_asyncio.apply()
 
 from senselab.utils.data_structures.pydra_helpers import *  # NOQA
 
-set_start_method("spawn", force=True)
+try:
+    set_start_method("spawn", force=True)
+except RuntimeError:
+    # Already set
+    pass
