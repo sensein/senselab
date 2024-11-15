@@ -1116,7 +1116,7 @@ def extract_praat_parselmouth_features_from_audios(
     duration: bool = True,
     jitter: bool = True,
     shimmer: bool = True,
-    plugin: str = "cf",
+    plugin: str = "serial",
     plugin_args: Dict[str, Any] = {},
 ) -> List[Dict[str, Any]]:
     """Extract features from a list of Audio objects and return a JSON-like dictionary.
@@ -1138,7 +1138,7 @@ def extract_praat_parselmouth_features_from_audios(
         duration (bool): Whether to extract duration. Defaults to True.
         jitter (bool): Whether to extract jitter. Defaults to True.
         shimmer (bool): Whether to extract shimmer. Defaults to True.
-        plugin (str): Plugin to use for feature extraction. Defaults to "cf".
+        plugin (str): Plugin to use for feature extraction. Defaults to "serial".
         plugin_args (Optional[Dict[str, Any]]): Arguments for the pydra plugin. Defaults to {}.
 
     Returns:

@@ -211,7 +211,7 @@ def test_extract_pitch_from_audios(resampled_mono_audio_sample: Audio) -> None:
 def test_extract_opensmile_features_from_audios(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of openSMILE features from audio."""
     # Perform eGeMAPSv02 and Functionals features extraction
-    result = extract_opensmile_features_from_audios([resampled_mono_audio_sample])
+    result = extract_opensmile_features_from_audios([resampled_mono_audio_sample], plugin="cf")
 
     # Assert the result is a list of dictionaries, and check each dictionary
     assert isinstance(result, list)
