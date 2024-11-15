@@ -227,7 +227,6 @@ def test_extract_opensmile_features_from_audios(resampled_mono_audio_sample: Aud
         assert all(isinstance(value, (float, int)) for value in features.values())
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_extract_objective_quality_features_from_audios(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of objective quality features from audio."""
     result = extract_objective_quality_features_from_audios([resampled_mono_audio_sample])
@@ -241,14 +240,12 @@ def test_extract_objective_quality_features_from_audios(resampled_mono_audio_sam
     assert isinstance(result[0]["si_sdr"], float)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_extract_objective_quality_features_from_audios_invalid_audio(mono_audio_sample: Audio) -> None:
     """Test extraction of objective quality features from invalid audio."""
     with pytest.raises(ValueError, match="Only 16000 Hz sampling rate is supported by Torchaudio-Squim model."):
         extract_objective_quality_features_from_audios([mono_audio_sample])
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_extract_subjective_quality_features_from_audios(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of subjective quality features from audio."""
     result = extract_subjective_quality_features_from_audios(
@@ -260,7 +257,6 @@ def test_extract_subjective_quality_features_from_audios(resampled_mono_audio_sa
     assert isinstance(result[0]["mos"], float)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_extract_subjective_quality_features_invalid_audio(mono_audio_sample: Audio) -> None:
     """Test extraction of subjective quality features from invalid audio."""
     with pytest.raises(ValueError, match="Only 16000 Hz sampling rate is supported by Torchaudio-Squim model."):
