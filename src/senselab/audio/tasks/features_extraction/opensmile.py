@@ -53,7 +53,7 @@ def extract_opensmile_features_from_audios(
     audios: List[Audio],
     feature_set: str = "eGeMAPSv02",
     feature_level: str = "Functionals",
-    plugin: str = "cf",
+    plugin: str = "serial",
     plugin_args: Optional[Dict[str, Any]] = {},
     cache_dir: Optional[str | os.PathLike] = None,
 ) -> List[Dict[str, Any]]:
@@ -67,7 +67,7 @@ def extract_opensmile_features_from_audios(
         audios (List[Audio]): The list of audio objects to extract features from.
         feature_set (str): The openSMILE feature set (default is "eGeMAPSv02").
         feature_level (str): The openSMILE feature level (default is "Functionals").
-        plugin (str): The Pydra plugin to use (default is "cf").
+        plugin (str): The Pydra plugin to use (default is "serial").
         plugin_args (Optional[Dict[str, Any]]): Additional arguments for the Pydra plugin.
         cache_dir (Optional[str | os.PathLike]): The path to the Pydra cache directory.
 
