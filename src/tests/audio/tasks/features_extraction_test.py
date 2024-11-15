@@ -219,7 +219,6 @@ def test_extract_opensmile_features_from_audios(resampled_mono_audio_sample: Aud
 
     # Ensure that each dictionary contains the expected keys (e.g., certain features from eGeMAPS)
     expected_keys = {"F0semitoneFrom27.5Hz_sma3nz_amean", "jitterLocal_sma3nz_amean", "shimmerLocaldB_sma3nz_amean"}
-    print(result[0].keys())
     for features in result:
         assert set(map(str.lower, features.keys())).issuperset(map(str.lower, expected_keys))
 
