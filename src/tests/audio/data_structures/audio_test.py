@@ -33,6 +33,18 @@ def test_audio_creation(audio_fixture: str, audio_path: str, request: pytest.Fix
     )
     assert audio == audio_sample, "Audios are not exactly equivalent"
 
+    summary = audio.summary()
+    assert "num_frames" in summary
+    assert "sampling_rate" in summary
+    assert "duration" in summary
+    assert "encoding" in summary
+    assert "bits_per_sample" in summary
+    assert "channels" in summary
+    assert "mono_stereo_estimation" in summary
+    assert summary["sampling_rate"] == 48000
+    assert summary["encoding"] == "PCM_F"
+    assert summary["bits_per_sample"] == 32
+
 
 @pytest.mark.parametrize(
     "audio_fixture, audio_path",
