@@ -1,187 +1,111 @@
-"""Module for testing Audio data structures."""
+"""Tests for pose estimation data structures and functionality."""
 
-from typing import List, Tuple
+import os
+from typing import Generator
 
+import cv2
 import pytest
 import torch
-import torchaudio
 
-from senselab.audio.data_structures import Audio
-from tests.audio.conftest import MONO_AUDIO_PATH, STEREO_AUDIO_PATH
+from senselab.video.data_structures.pose import PoseSkeleton, estimate_pose_with_mediapipe
 
-
-def load_audio(file_path: str) -> Tuple[torch.Tensor, int]:
-    """Loads audio data from the given file path."""
-    return torchaudio.load(file_path)
-
-
-@pytest.mark.parametrize(
-    "audio_fixture, audio_path",
-    [
-        ("mono_audio_sample", MONO_AUDIO_PATH),
-        ("stereo_audio_sample", STEREO_AUDIO_PATH),
-    ],
-)
-def test_audio_creation(audio_fixture: str, audio_path: str, request: pytest.FixtureRequest) -> None:
-    """Tests mono and stereo audio creation."""
-    audio_sample = request.getfixturevalue(audio_fixture)
-    audio_data, audio_sr = load_audio(audio_path)
-    audio = Audio(
-        waveform=audio_data,
-        sampling_rate=audio_sr,
-        orig_path_or_id=audio_path,
-    )
-    assert audio == audio_sample, "Audios are not exactly equivalent"
+TEST_IMAGES_DIR = "src/tests/data_for_testing/pose_data/"
+VALID_SINGLE_PERSON_IMAGE = os.path.join(TEST_IMAGES_DIR, "single_person.jpg")
+VALID_MULTIPLE_PEOPLE_IMAGE = os.path.join(TEST_IMAGES_DIR, "three_people.jpg")
+NO_PEOPLE_IMAGE = os.path.join(TEST_IMAGES_DIR, "no_people.jpeg")
+INVALID_IMAGE_PATH = "invalid/path/to/image.jpg"
 
 
-@pytest.mark.parametrize(
-    "audio_fixture, audio_path",
-    [
-        ("mono_audio_sample", MONO_AUDIO_PATH),
-        ("stereo_audio_sample", STEREO_AUDIO_PATH),
-    ],
-)
-def test_audio_creation_uuid(audio_fixture: str, audio_path: str, request: pytest.FixtureRequest) -> None:
-    """Tests audio creation with different UUID."""
-    audio_sample = request.getfixturevalue(audio_fixture)
-    audio_data, audio_sr = load_audio(audio_path)
-    audio_uuid = Audio(waveform=audio_data, sampling_rate=audio_sr)
-    assert audio_sample == audio_uuid, "Audio with different IDs should still be equivalent"
+def test_get_landmark_coordinates() -> None:
+    """Tests basic landmark retrieval for first person."""
+    result = estimate_pose_with_mediapipe(VALID_SINGLE_PERSON_IMAGE)
+
+    # Test valid landmark retrieval
+    coords = result.get_landmark_coordinates(landmark="landmark_0", person_index=0)
+    assert len(coords) == 4, "Should return [x, y, z, visibility]"
+    assert all(isinstance(x, float) for x in coords), "All coordinates should be floats"
+
+    # Test normalized vs world coordinates
+    norm_coords = result.get_landmark_coordinates(landmark="landmark_0", person_index=0, world=False)
+    world_coords = result.get_landmark_coordinates(landmark="landmark_0", person_index=0, world=True)
+    assert norm_coords != world_coords, "World and normalized coordinates should differ"
 
 
-def test_audio_single_tensor(mono_audio_sample: Audio) -> None:
-    """Tests mono audio creation with single tensor."""
-    mono_audio_data, mono_sr = load_audio(MONO_AUDIO_PATH)
-    audio_single_tensor = Audio(waveform=mono_audio_data[0], sampling_rate=mono_sr)
-    assert torch.equal(
-        mono_audio_sample.waveform, audio_single_tensor.waveform
-    ), "Mono audios of tensor shape (num_samples,) should be reshaped to (1, num_samples)"
+def test_invalid_person_index() -> None:
+    """Tests error handling for invalid person indices."""
+    result = estimate_pose_with_mediapipe(VALID_SINGLE_PERSON_IMAGE)
+
+    with pytest.raises(ValueError) as exc_info:
+        result.get_landmark_coordinates(person_index=5, landmark="landmark_0")
+    assert "Person index 5 is invalid" in str(exc_info.value)
+    assert "Image contains 1" in str(exc_info.value)
+
+    # Test with no people
+    result_empty = estimate_pose_with_mediapipe(NO_PEOPLE_IMAGE)
+    with pytest.raises(ValueError) as exc_info:
+        result_empty.get_landmark_coordinates(person_index=0, landmark="landmark_0")
+    assert "Image contains 0 people" in str(exc_info.value)
+    assert "Valid indices are none" in str(exc_info.value)
 
 
-@pytest.mark.parametrize(
-    "audio_fixture, audio_path",
-    [
-        ("mono_audio_sample", MONO_AUDIO_PATH),
-    ],
-)
-def test_audio_from_list(audio_fixture: str, audio_path: str, request: pytest.FixtureRequest) -> None:
-    """Tests audio creation from list."""
-    audio_sample = request.getfixturevalue(audio_fixture)
-    audio_data, audio_sr = load_audio(audio_path)
-    audio_from_list = Audio(waveform=list(audio_data[0]), sampling_rate=audio_sr)
-    assert torch.equal(audio_sample.waveform, audio_from_list.waveform), "List audio should've been converted to Tensor"
+def test_invalid_landmark_name() -> None:
+    """Tests error handling for invalid landmark names."""
+    result = estimate_pose_with_mediapipe(VALID_SINGLE_PERSON_IMAGE)
+
+    with pytest.raises(ValueError) as exc_info:
+        result.get_landmark_coordinates(person_index=0, landmark="nonexistent_landmark")
+    error_msg = str(exc_info.value)
+    assert "Landmark 'nonexistent_landmark' not found" in error_msg
+    assert "Available landmarks:" in error_msg
 
 
-@pytest.mark.parametrize(
-    "audio_fixture, window_size, step_size",
-    [
-        ("mono_audio_sample", 1024, 512),
-        ("stereo_audio_sample", 1024, 512),
-    ],
-)
-def test_window_generator_overlap(
-    audio_fixture: str, window_size: int, step_size: int, request: pytest.FixtureRequest
-) -> None:
-    """Tests window generator with overlapping windows."""
-    audio_sample = request.getfixturevalue(audio_fixture)
-    audio_length = audio_sample.waveform.size(-1)
-
-    windowed_audios: List[Audio] = list(audio_sample.window_generator(window_size, step_size))
-
-    # Adjust expected windows calculation to handle rounding issues
-    expected_windows = (audio_length + step_size - 1) // step_size
-    remaining_audio = audio_length - (expected_windows * step_size)
-    if remaining_audio > 0:
-        expected_windows += 1
-
-    assert len(windowed_audios) == expected_windows, f"Should yield {expected_windows} \
-        windows when step size is less than window size. Yielded {len(windowed_audios)}."
+def test_valid_image_single_person() -> None:
+    """Tests pose estimation on an image with a single person."""
+    result = estimate_pose_with_mediapipe(VALID_SINGLE_PERSON_IMAGE)
+    assert isinstance(result, PoseSkeleton), "Result should be an instance of PoseSkeleton"
+    assert len(result.normalized_landmarks) == 1, "There should be one detected person"
+    assert len(result.world_landmarks) == 1, "There should be one detected person"
+    assert (
+        result.image.shape == torch.from_numpy(cv2.imread(VALID_SINGLE_PERSON_IMAGE)).shape
+    ), "Input and output image shapes should match"
 
 
-@pytest.mark.parametrize(
-    "audio_fixture, window_size, step_size",
-    [
-        ("mono_audio_sample", 1024, 1024),
-        ("stereo_audio_sample", 1024, 1024),
-    ],
-)
-def test_window_generator_exact_fit(
-    audio_fixture: str, window_size: int, step_size: int, request: pytest.FixtureRequest
-) -> None:
-    """Tests window generator when step size equals window size."""
-    audio_sample = request.getfixturevalue(audio_fixture)
-    audio_length = audio_sample.waveform.size(-1)
-
-    windowed_audios: List[Audio] = list(audio_sample.window_generator(window_size, step_size))
-
-    expected_windows = (audio_length + step_size - 1) // step_size
-    # Check if there is any remaining audio for another window
-    remaining_audio = audio_length - (expected_windows * step_size)
-    if remaining_audio > 0:
-        expected_windows += 1
-
-    assert len(windowed_audios) == expected_windows, f"Should yield {expected_windows} \
-        windows when step size equals window size. Yielded {len(windowed_audios)}."
+def test_valid_image_multiple_people() -> None:
+    """Tests pose estimation on an image with multiple people."""
+    result = estimate_pose_with_mediapipe(VALID_MULTIPLE_PEOPLE_IMAGE, 3)
+    assert isinstance(result, PoseSkeleton), "Result should be an instance of PoseSkeleton"
+    assert len(result.normalized_landmarks) > 1, "There should be multiple detected people"
+    assert len(result.world_landmarks) > 1, "There should be multiple detected people"
 
 
-@pytest.mark.parametrize(
-    "audio_fixture, window_size, step_size",
-    [
-        ("mono_audio_sample", 1024, 2048),
-        ("stereo_audio_sample", 1024, 2048),
-    ],
-)
-def test_window_generator_step_greater_than_window(
-    audio_fixture: str, window_size: int, step_size: int, request: pytest.FixtureRequest
-) -> None:
-    """Tests window generator when step size is greater than window size."""
-    audio_sample = request.getfixturevalue(audio_fixture)
-    audio_length = audio_sample.waveform.size(-1)
-
-    windowed_audios: List[Audio] = list(audio_sample.window_generator(window_size, step_size))
-
-    # Refine expected windows calculation
-    expected_windows = (audio_length + step_size - 1) // step_size
-    assert len(windowed_audios) == expected_windows, f"Should yield {expected_windows} \
-        windows when step size is greater than window size. Yielded {len(windowed_audios)}."
+def test_no_people_in_image() -> None:
+    """Tests pose estimation on an image with no people."""
+    result = estimate_pose_with_mediapipe(NO_PEOPLE_IMAGE)
+    assert isinstance(result, PoseSkeleton), "Result should be an instance of PoseSkeleton"
+    assert len(result.normalized_landmarks) == 0, "No landmarks should be detected"
+    assert len(result.world_landmarks) == 0, "No landmarks should be detected"
 
 
-@pytest.mark.parametrize(
-    "audio_fixture",
-    [
-        "mono_audio_sample",
-        "stereo_audio_sample",
-    ],
-)
-def test_window_generator_window_greater_than_audio(audio_fixture: str, request: pytest.FixtureRequest) -> None:
-    """Tests window generator when window size is greater than the audio length."""
-    audio_sample = request.getfixturevalue(audio_fixture)
-    audio_length = audio_sample.waveform.size(-1)
-    window_size = audio_length + 1000  # Set window size greater than audio length
-    step_size = window_size
-
-    windowed_audios: List[Audio] = list(audio_sample.window_generator(window_size, step_size))
-    # Expect only 1 window in this case
-    assert len(windowed_audios) == 1, f"Should yield 1 window when window size is greater \
-                                than audio length. Yielded {len(windowed_audios)}."
+def test_invalid_image_path() -> None:
+    """Tests pose estimation on an invalid image path."""
+    with pytest.raises(Exception):
+        estimate_pose_with_mediapipe(INVALID_IMAGE_PATH)
 
 
-@pytest.mark.parametrize(
-    "audio_fixture",
-    [
-        "mono_audio_sample",
-        "stereo_audio_sample",
-    ],
-)
-def test_window_generator_step_greater_than_audio(audio_fixture: str, request: pytest.FixtureRequest) -> None:
-    """Tests window generator when step size is greater than the audio length."""
-    audio_sample = request.getfixturevalue(audio_fixture)
-    audio_length = audio_sample.waveform.size(1)
-    window_size = 1024
-    step_size = audio_length + 1000  # Step size greater than audio length
+def test_visualization_single_person() -> None:
+    """Tests visualization and saving of annotated images."""
+    result = estimate_pose_with_mediapipe(VALID_SINGLE_PERSON_IMAGE)
+    result.visualize_pose()
+    assert os.path.exists("pose_estimation_output.png"), "Annotated image should be saved"
 
-    windowed_audios: List[Audio] = list(audio_sample.window_generator(window_size, step_size))
 
-    expected_windows = (audio_length - window_size) // step_size + 1  # This is always 1
-    assert len(windowed_audios) == expected_windows, f"Should yield {expected_windows} \
-        windows when step size is greater than audio length. Yielded {len(windowed_audios)}."
+@pytest.fixture(autouse=True)
+def cleanup() -> Generator[None, None, None]:
+    """Clean up any generated files after tests.
+
+    Yields:
+        None
+    """
+    yield
+    if os.path.exists("pose_estimation_output.png"):
+        os.remove("pose_estimation_output.png")
