@@ -179,6 +179,7 @@ class Audio(BaseModel):
 
         Raises:
             ValueError: If the `Audio` waveform is not 2D, or if the sampling rate is invalid.
+            RuntimeError: If there is an error saving the audio file.
 
         Note:
             - https://pytorch.org/audio/master/generated/torchaudio.save.html
@@ -189,18 +190,27 @@ class Audio(BaseModel):
         if self.sampling_rate <= 0:
             raise ValueError("Sampling rate must be a positive integer.")
 
-        torchaudio.save(
-            uri=file_path,
-            src=self.waveform,
-            sample_rate=self.sampling_rate,
-            channels_first=True,
-            format=format,
-            encoding=encoding,
-            bits_per_sample=bits_per_sample,
-            buffer_size=buffer_size,
-            backend=backend,
-            compression=compression,
-        )
+        output_dir = os.path.dirname(file_path)
+        if not os.access(output_dir, os.W_OK):
+            raise RuntimeError(f"Output directory '{output_dir}' is not writable.")
+
+        try:
+            if not os.path.exists(output_dir):
+                os.makedirs(os.path.dirname(file_path))
+            torchaudio.save(
+                uri=file_path,
+                src=self.waveform,
+                sample_rate=self.sampling_rate,
+                channels_first=True,
+                format=format,
+                encoding=encoding,
+                bits_per_sample=bits_per_sample,
+                buffer_size=buffer_size,
+                backend=backend,
+                compression=compression,
+            )
+        except Exception as e:
+            raise RuntimeError(f"Error saving audio to file: {e}") from e
 
 
 def batch_audios(audios: List[Audio]) -> Tuple[torch.Tensor, Union[int, List[int]], List[Dict]]:
