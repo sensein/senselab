@@ -44,7 +44,11 @@ class Audio(BaseModel):
     def convert_to_tensor(
         cls, v: Union[List[float], List[List[float]], np.ndarray, torch.Tensor], _: ValidationInfo
     ) -> torch.Tensor:
-        """Converts the audio data to torch.Tensor of shape (num_channels, num_samples)."""
+        """Converts the audio data to torch.Tensor of shape (num_channels, num_samples).
+
+        Converts by default the waveform to float32 for compatibility
+        with deep learning models.
+        """
         temporary_tensor = None
         if isinstance(v, list):
             temporary_tensor = torch.tensor(v)
@@ -63,6 +67,9 @@ class Audio(BaseModel):
     @classmethod
     def from_filepath(cls, filepath: str | os.PathLike, metadata: Dict = {}) -> "Audio":
         """Creates an Audio instance from an audio file.
+
+        torchaudio.load converts by default the waveform to float32 for compatibility
+        with deep learning models.
 
         Args:
             filepath: Filepath of the audio file to read from
@@ -150,6 +157,66 @@ class Audio(BaseModel):
 
             yield window_audio
             current_position += step_size
+
+    def summary(self) -> Dict[str, Union[int, float, str]]:
+        """Generate a summary of the Audio object's properties.
+
+        Returns:
+            A dictionary containing:
+            - num_frames: The number of frames in the audio
+            - sampling_rate: The sampling rate of the audio
+            - duration: The duration of the audio in seconds
+            - encoding: The encoding of the audio object (e.g., PCM_S, PCM_F, etc.)
+                Note: this is not necessarily the same as the one of the original audio
+            - bits_per_sample: The number of bits per sample
+                Note: this is not necessarily the same as the one of the original audio
+            - channels: The number of channels in the audio
+            - mono_stereo_estimation: 'mono' if single-channel or if stereo channels are highly similar
+                (over 0.99 correlation), 'stereo' if 2 channels, '{channels}_channel_audio' otherwise
+        """
+        channels = self.waveform.size(0)
+        num_frames = self.waveform.size(-1)
+        duration = num_frames / self.sampling_rate  # in seconds
+
+        # Infer bit depth from the waveform's dtype
+        if self.waveform.dtype == torch.float32:
+            bits_per_sample = 32
+            encoding = "PCM_F"  # Floating point linear PCM
+        elif self.waveform.dtype == torch.float16:
+            bits_per_sample = 16
+            encoding = "PCM_F"  # Floating point linear PCM
+        elif self.waveform.dtype == torch.int16:
+            bits_per_sample = 16
+            encoding = "PCM_S"  # Signed integer linear PCM
+        elif self.waveform.dtype == torch.int8:
+            bits_per_sample = 8
+            encoding = "PCM_S"  # Signed integer linear PCM
+        elif self.waveform.dtype == torch.uint8:
+            bits_per_sample = 8
+            encoding = "PCM_U"  # Unsigned integer linear PCM
+        else:
+            bits_per_sample = -1
+            encoding = "UNKNOWN"
+
+        # Mono/Stereo estimation for 2-channel recordings
+        if channels == 1:
+            mono_stereo = "mono"
+        elif channels == 2:
+            # Calculate cross-correlation to determine similarity between channels
+            similarity = torch.corrcoef(self.waveform.view(2, -1))[0, 1].item()
+            mono_stereo = "mono" if similarity > 0.99 else "stereo"
+        else:
+            mono_stereo = f"{channels}_channel_audio"
+
+        return {
+            "num_frames": num_frames,
+            "sampling_rate": self.sampling_rate,
+            "duration": duration,
+            "encoding": encoding,
+            "bits_per_sample": bits_per_sample,
+            "channels": channels,
+            "mono_stereo_estimation": mono_stereo,
+        }
 
 
 def batch_audios(audios: List[Audio]) -> Tuple[torch.Tensor, Union[int, List[int]], List[Dict]]:
