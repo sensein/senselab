@@ -1,5 +1,7 @@
 """Module for testing Audio data structures."""
 
+import tempfile
+from pathlib import Path
 from typing import List, Tuple
 
 import pytest
@@ -32,6 +34,31 @@ def test_audio_creation(audio_fixture: str, audio_path: str, request: pytest.Fix
         orig_path_or_id=audio_path,
     )
     assert audio == audio_sample, "Audios are not exactly equivalent"
+
+
+@pytest.mark.parametrize(
+    "audio_fixture",
+    ["mono_audio_sample", "stereo_audio_sample"],
+)
+def test_audio_save_to_file(audio_fixture: str, request: pytest.FixtureRequest) -> None:
+    """Tests saving audio to file."""
+    # Get the audio sample from the fixture
+    audio_sample = request.getfixturevalue(audio_fixture)
+
+    # Use a temporary file for the test
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_file_path = Path(temp_dir) / "test_audio.wav"
+
+        # Call save_to_file to save the audio
+        audio_sample.save_to_file(file_path=temp_file_path, format="wav", bits_per_sample=16)
+
+        # Check if the file was created
+        assert temp_file_path.exists(), "The audio file was not saved."
+
+        # Load the saved file and verify its content
+        loaded_waveform, loaded_sampling_rate = torchaudio.load(temp_file_path)
+        assert torch.allclose(audio_sample.waveform, loaded_waveform, atol=1e-5), "Waveform data does not match."
+        assert audio_sample.sampling_rate == loaded_sampling_rate, "Sampling rate does not match."
 
 
 @pytest.mark.parametrize(

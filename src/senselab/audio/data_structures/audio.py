@@ -8,7 +8,7 @@ ease of maintaining the codebase and offering consistent public APIs.
 import os
 import uuid
 import warnings
-from typing import Dict, Generator, List, Tuple, Union
+from typing import Dict, Generator, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -150,6 +150,67 @@ class Audio(BaseModel):
 
             yield window_audio
             current_position += step_size
+
+    def save_to_file(
+        self,
+        file_path: Union[str, os.PathLike],
+        format: Optional[str] = None,
+        encoding: Optional[str] = None,
+        bits_per_sample: Optional[int] = None,
+        buffer_size: int = 4096,
+        backend: Optional[str] = None,
+        compression: Optional[Union[float, int]] = None,
+    ) -> None:
+        """Save the `Audio` object to a file using `torchaudio.save`.
+
+        Args:
+            file_path (Union[str, os.PathLike]): The path to save the audio file.
+            format (Optional[str]): Audio format to use. Valid values include "wav", "ogg", and "flac".
+                If None, the format is inferred from the file extension.
+            encoding (Optional[str]): Encoding to use. Valid options include "PCM_S", "PCM_U", "PCM_F", "ULAW", "ALAW".
+                This is effective for formats like "wav" and "flac".
+            bits_per_sample (Optional[int]): Bit depth for the audio file. Valid values are 8, 16, 24, 32, and 64.
+            buffer_size (int): Size of the buffer in bytes for processing file-like objects. Default is 4096.
+            backend (Optional[str]): I/O backend to use. Valid options include "ffmpeg", "sox", and "soundfile".
+                If None, a backend is automatically selected.
+            compression (Optional[Union[float, int]]): Compression level for supported formats like "mp3",
+            "flac", and "ogg".
+                Refer to `torchaudio.save` documentation for specific compression levels.
+
+        Raises:
+            ValueError: If the `Audio` waveform is not 2D, or if the sampling rate is invalid.
+            RuntimeError: If there is an error saving the audio file.
+
+        Note:
+            - https://pytorch.org/audio/master/generated/torchaudio.save.html
+        """
+        if self.waveform.ndim != 2:
+            raise ValueError("Waveform must be a 2D tensor with shape (num_channels, num_samples).")
+
+        if self.sampling_rate <= 0:
+            raise ValueError("Sampling rate must be a positive integer.")
+
+        output_dir = os.path.dirname(file_path)
+        if not os.access(output_dir, os.W_OK):
+            raise RuntimeError(f"Output directory '{output_dir}' is not writable.")
+
+        try:
+            if not os.path.exists(output_dir):
+                os.makedirs(os.path.dirname(file_path))
+            torchaudio.save(
+                uri=file_path,
+                src=self.waveform,
+                sample_rate=self.sampling_rate,
+                channels_first=True,
+                format=format,
+                encoding=encoding,
+                bits_per_sample=bits_per_sample,
+                buffer_size=buffer_size,
+                backend=backend,
+                compression=compression,
+            )
+        except Exception as e:
+            raise RuntimeError(f"Error saving audio to file: {e}") from e
 
 
 def batch_audios(audios: List[Audio]) -> Tuple[torch.Tensor, Union[int, List[int]], List[Dict]]:
