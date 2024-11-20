@@ -20,13 +20,14 @@ classifiers = [
   "Development Status :: 3 - Alpha",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
   "License :: OSI Approved :: Apache Software License",
   "Operating System :: OS Independent"
 ]
 packages = [{include = "senselab", from = "src"}]
 
 [tool.poetry.dependencies]
-python = ">=3.10,<3.12"
+python = ">=3.10,<3.13"
 datasets = "~=3"
 torch = "~=2.4"
 torchvision = "~=0.19"
@@ -54,7 +55,7 @@ nltk = "~=3.9"
 vocos = "~=0.1"
 iso639 = "~=0.1"
 nest-asyncio = "~=1.5"
-pylangacq = "^0.19.1"
+pylangacq = "~=0.19"
 
 [tool.poetry.group.dev]
 optional = true
