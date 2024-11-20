@@ -27,7 +27,7 @@ def read_audios(
     """
 
     @pydra.mark.task
-    def load_audio_file(file_path: str) -> Any:  # noqa: ANN401
+    def load_audio_file(file_path: str | os.PathLike) -> Any:  # noqa: ANN401
         """Load an audio file and return an Audio object.
 
         Args:
