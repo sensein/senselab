@@ -1,3 +1,15 @@
+# 0.23.0 (Wed Nov 20 2024)
+
+#### 🚀 Enhancement
+
+- 199 task audio io [#202](https://github.com/sensein/senselab/pull/202) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.22.0 (Fri Nov 15 2024)
 
 #### 🚀 Enhancement
