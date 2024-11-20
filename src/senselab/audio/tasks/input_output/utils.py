@@ -9,7 +9,7 @@ from senselab.audio.data_structures import Audio
 
 
 def read_audios(
-    file_paths: List[str],
+    file_paths: List[str | os.PathLike],
     cache_dir: Optional[Union[str, os.PathLike]] = None,
     plugin: str = "serial",
     plugin_args: Dict[str, Any] = {},
