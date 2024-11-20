@@ -21,7 +21,7 @@ from tests.audio.conftest import MONO_AUDIO_PATH, STEREO_AUDIO_PATH
         ([MONO_AUDIO_PATH, STEREO_AUDIO_PATH]),  # Test multiple files
     ],
 )
-def test_read_audios(audio_paths: List[str]) -> None:
+def test_read_audios(audio_paths: List[str | os.PathLike]) -> None:
     """Tests the read_audios function with actual mono and stereo audio files."""
     # Run the function with real audio file paths
     processed_audios = read_audios(file_paths=audio_paths, plugin="serial")
