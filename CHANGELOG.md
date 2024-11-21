@@ -1,3 +1,15 @@
+# 0.24.0 (Thu Nov 21 2024)
+
+#### 🚀 Enhancement
+
+- support Python 3.12 [#206](https://github.com/sensein/senselab/pull/206) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.23.0 (Wed Nov 20 2024)
 
 #### 🚀 Enhancement
