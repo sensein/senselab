@@ -46,12 +46,6 @@
                         <li>
                                 <a class="variable" href="#SenselabModel.model_config">model_config</a>
                         </li>
-                        <li>
-                                <a class="variable" href="#SenselabModel.model_fields">model_fields</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#SenselabModel.model_computed_fields">model_computed_fields</a>
-                        </li>
                 </ul>
 
             </li>
@@ -73,12 +67,6 @@
                         <li>
                                 <a class="variable" href="#HFModel.model_config">model_config</a>
                         </li>
-                        <li>
-                                <a class="variable" href="#HFModel.model_fields">model_fields</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#HFModel.model_computed_fields">model_computed_fields</a>
-                        </li>
                 </ul>
 
             </li>
@@ -87,12 +75,6 @@
                             <ul class="memberlist">
                         <li>
                                 <a class="variable" href="#SpeechBrainModel.model_config">model_config</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#SpeechBrainModel.model_fields">model_fields</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#SpeechBrainModel.model_computed_fields">model_computed_fields</a>
                         </li>
                 </ul>
 
@@ -103,12 +85,6 @@
                         <li>
                                 <a class="variable" href="#PyannoteAudioModel.model_config">model_config</a>
                         </li>
-                        <li>
-                                <a class="variable" href="#PyannoteAudioModel.model_fields">model_fields</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#PyannoteAudioModel.model_computed_fields">model_computed_fields</a>
-                        </li>
                 </ul>
 
             </li>
@@ -117,12 +93,6 @@
                             <ul class="memberlist">
                         <li>
                                 <a class="variable" href="#SentenceTransformersModel.model_config">model_config</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#SentenceTransformersModel.model_fields">model_fields</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#SentenceTransformersModel.model_computed_fields">model_computed_fields</a>
                         </li>
                 </ul>
 
@@ -139,12 +109,6 @@
                         <li>
                                 <a class="variable" href="#TorchModel.model_config">model_config</a>
                         </li>
-                        <li>
-                                <a class="variable" href="#TorchModel.model_fields">model_fields</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#TorchModel.model_computed_fields">model_computed_fields</a>
-                        </li>
                 </ul>
 
             </li>
@@ -159,12 +123,6 @@
                         </li>
                         <li>
                                 <a class="variable" href="#TorchAudioModel.model_config">model_config</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#TorchAudioModel.model_fields">model_fields</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#TorchAudioModel.model_computed_fields">model_computed_fields</a>
                         </li>
                 </ul>
 
@@ -511,38 +469,6 @@ It does check if the path_or_uri is not empty and if it is an existing file.</p>
 
 
                             </div>
-                            <div id="SenselabModel.model_fields" class="classattr">
-                                <div class="attr variable">
-            <span class="name">model_fields</span><span class="annotation">: ClassVar[Dict[str, pydantic.fields.FieldInfo]]</span>        =
-<input id="SenselabModel.model_fields-view-value" class="view-value-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
-            <label class="view-value-button pdoc-button" for="SenselabModel.model_fields-view-value"></label><span class="default_value">{&#39;path_or_uri&#39;: FieldInfo(annotation=Union[str, Path], required=True), &#39;revision&#39;: FieldInfo(annotation=Union[str, NoneType], required=False, default=None)}</span>
-
-        
-    </div>
-    <a class="headerlink" href="#SenselabModel.model_fields"></a>
-    
-            <div class="docstring"><p>Metadata about the fields defined on the model,
-mapping of field names to [<code>FieldInfo</code>][pydantic.fields.FieldInfo] objects.</p>
-
-<p>This replaces <code>Model.__fields__</code> from Pydantic V1.</p>
-</div>
-
-
-                            </div>
-                            <div id="SenselabModel.model_computed_fields" class="classattr">
-                                <div class="attr variable">
-            <span class="name">model_computed_fields</span><span class="annotation">: ClassVar[Dict[str, pydantic.fields.ComputedFieldInfo]]</span>        =
-<span class="default_value">{}</span>
-
-        
-    </div>
-    <a class="headerlink" href="#SenselabModel.model_computed_fields"></a>
-    
-            <div class="docstring"><p>A dictionary of computed field names and their corresponding <code>ComputedFieldInfo</code> objects.</p>
-</div>
-
-
-                            </div>
                 </section>
                 <section id="HFModel">
                             <input id="HFModel-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
@@ -687,38 +613,6 @@ It checks if the specified Hugging Face model ID and revision exist in the remot
 
 
                             </div>
-                            <div id="HFModel.model_fields" class="classattr">
-                                <div class="attr variable">
-            <span class="name">model_fields</span><span class="annotation">: ClassVar[Dict[str, pydantic.fields.FieldInfo]]</span>        =
-<input id="HFModel.model_fields-view-value" class="view-value-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
-            <label class="view-value-button pdoc-button" for="HFModel.model_fields-view-value"></label><span class="default_value">{&#39;path_or_uri&#39;: FieldInfo(annotation=Union[str, Path], required=True), &#39;revision&#39;: FieldInfo(annotation=str, required=False, default=&#39;main&#39;, validate_default=True), &#39;info&#39;: FieldInfo(annotation=Union[ModelInfo, NoneType], required=False, default=None)}</span>
-
-        
-    </div>
-    <a class="headerlink" href="#HFModel.model_fields"></a>
-    
-            <div class="docstring"><p>Metadata about the fields defined on the model,
-mapping of field names to [<code>FieldInfo</code>][pydantic.fields.FieldInfo] objects.</p>
-
-<p>This replaces <code>Model.__fields__</code> from Pydantic V1.</p>
-</div>
-
-
-                            </div>
-                            <div id="HFModel.model_computed_fields" class="classattr">
-                                <div class="attr variable">
-            <span class="name">model_computed_fields</span><span class="annotation">: ClassVar[Dict[str, pydantic.fields.ComputedFieldInfo]]</span>        =
-<span class="default_value">{}</span>
-
-        
-    </div>
-    <a class="headerlink" href="#HFModel.model_computed_fields"></a>
-    
-            <div class="docstring"><p>A dictionary of computed field names and their corresponding <code>ComputedFieldInfo</code> objects.</p>
-</div>
-
-
-                            </div>
                             <div class="inherited">
                                 <h5>Inherited Members</h5>
                                 <dl>
@@ -762,38 +656,6 @@ mapping of field names to [<code>FieldInfo</code>][pydantic.fields.FieldInfo] ob
     <a class="headerlink" href="#SpeechBrainModel.model_config"></a>
     
             <div class="docstring"><p>Configuration for the model, should be a dictionary conforming to [<code>ConfigDict</code>][pydantic.config.ConfigDict].</p>
-</div>
-
-
-                            </div>
-                            <div id="SpeechBrainModel.model_fields" class="classattr">
-                                <div class="attr variable">
-            <span class="name">model_fields</span><span class="annotation">: ClassVar[Dict[str, pydantic.fields.FieldInfo]]</span>        =
-<input id="SpeechBrainModel.model_fields-view-value" class="view-value-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
-            <label class="view-value-button pdoc-button" for="SpeechBrainModel.model_fields-view-value"></label><span class="default_value">{&#39;path_or_uri&#39;: FieldInfo(annotation=Union[str, Path], required=True), &#39;revision&#39;: FieldInfo(annotation=str, required=False, default=&#39;main&#39;, validate_default=True), &#39;info&#39;: FieldInfo(annotation=Union[ModelInfo, NoneType], required=False, default=None)}</span>
-
-        
-    </div>
-    <a class="headerlink" href="#SpeechBrainModel.model_fields"></a>
-    
-            <div class="docstring"><p>Metadata about the fields defined on the model,
-mapping of field names to [<code>FieldInfo</code>][pydantic.fields.FieldInfo] objects.</p>
-
-<p>This replaces <code>Model.__fields__</code> from Pydantic V1.</p>
-</div>
-
-
-                            </div>
-                            <div id="SpeechBrainModel.model_computed_fields" class="classattr">
-                                <div class="attr variable">
-            <span class="name">model_computed_fields</span><span class="annotation">: ClassVar[Dict[str, pydantic.fields.ComputedFieldInfo]]</span>        =
-<span class="default_value">{}</span>
-
-        
-    </div>
-    <a class="headerlink" href="#SpeechBrainModel.model_computed_fields"></a>
-    
-            <div class="docstring"><p>A dictionary of computed field names and their corresponding <code>ComputedFieldInfo</code> objects.</p>
 </div>
 
 
@@ -852,38 +714,6 @@ mapping of field names to [<code>FieldInfo</code>][pydantic.fields.FieldInfo] ob
 
 
                             </div>
-                            <div id="PyannoteAudioModel.model_fields" class="classattr">
-                                <div class="attr variable">
-            <span class="name">model_fields</span><span class="annotation">: ClassVar[Dict[str, pydantic.fields.FieldInfo]]</span>        =
-<input id="PyannoteAudioModel.model_fields-view-value" class="view-value-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
-            <label class="view-value-button pdoc-button" for="PyannoteAudioModel.model_fields-view-value"></label><span class="default_value">{&#39;path_or_uri&#39;: FieldInfo(annotation=Union[str, Path], required=True), &#39;revision&#39;: FieldInfo(annotation=str, required=False, default=&#39;main&#39;, validate_default=True), &#39;info&#39;: FieldInfo(annotation=Union[ModelInfo, NoneType], required=False, default=None)}</span>
-
-        
-    </div>
-    <a class="headerlink" href="#PyannoteAudioModel.model_fields"></a>
-    
-            <div class="docstring"><p>Metadata about the fields defined on the model,
-mapping of field names to [<code>FieldInfo</code>][pydantic.fields.FieldInfo] objects.</p>
-
-<p>This replaces <code>Model.__fields__</code> from Pydantic V1.</p>
-</div>
-
-
-                            </div>
-                            <div id="PyannoteAudioModel.model_computed_fields" class="classattr">
-                                <div class="attr variable">
-            <span class="name">model_computed_fields</span><span class="annotation">: ClassVar[Dict[str, pydantic.fields.ComputedFieldInfo]]</span>        =
-<span class="default_value">{}</span>
-
-        
-    </div>
-    <a class="headerlink" href="#PyannoteAudioModel.model_computed_fields"></a>
-    
-            <div class="docstring"><p>A dictionary of computed field names and their corresponding <code>ComputedFieldInfo</code> objects.</p>
-</div>
-
-
-                            </div>
                             <div class="inherited">
                                 <h5>Inherited Members</h5>
                                 <dl>
@@ -934,38 +764,6 @@ mapping of field names to [<code>FieldInfo</code>][pydantic.fields.FieldInfo] ob
     <a class="headerlink" href="#SentenceTransformersModel.model_config"></a>
     
             <div class="docstring"><p>Configuration for the model, should be a dictionary conforming to [<code>ConfigDict</code>][pydantic.config.ConfigDict].</p>
-</div>
-
-
-                            </div>
-                            <div id="SentenceTransformersModel.model_fields" class="classattr">
-                                <div class="attr variable">
-            <span class="name">model_fields</span><span class="annotation">: ClassVar[Dict[str, pydantic.fields.FieldInfo]]</span>        =
-<input id="SentenceTransformersModel.model_fields-view-value" class="view-value-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
-            <label class="view-value-button pdoc-button" for="SentenceTransformersModel.model_fields-view-value"></label><span class="default_value">{&#39;path_or_uri&#39;: FieldInfo(annotation=Union[str, Path], required=True), &#39;revision&#39;: FieldInfo(annotation=str, required=False, default=&#39;main&#39;, validate_default=True), &#39;info&#39;: FieldInfo(annotation=Union[ModelInfo, NoneType], required=False, default=None)}</span>
-
-        
-    </div>
-    <a class="headerlink" href="#SentenceTransformersModel.model_fields"></a>
-    
-            <div class="docstring"><p>Metadata about the fields defined on the model,
-mapping of field names to [<code>FieldInfo</code>][pydantic.fields.FieldInfo] objects.</p>
-
-<p>This replaces <code>Model.__fields__</code> from Pydantic V1.</p>
-</div>
-
-
-                            </div>
-                            <div id="SentenceTransformersModel.model_computed_fields" class="classattr">
-                                <div class="attr variable">
-            <span class="name">model_computed_fields</span><span class="annotation">: ClassVar[Dict[str, pydantic.fields.ComputedFieldInfo]]</span>        =
-<span class="default_value">{}</span>
-
-        
-    </div>
-    <a class="headerlink" href="#SentenceTransformersModel.model_computed_fields"></a>
-    
-            <div class="docstring"><p>A dictionary of computed field names and their corresponding <code>ComputedFieldInfo</code> objects.</p>
 </div>
 
 
@@ -1083,38 +881,6 @@ It checks if the specified torch model ID and revision exist in the remote Hub.<
 
 
                             </div>
-                            <div id="TorchModel.model_fields" class="classattr">
-                                <div class="attr variable">
-            <span class="name">model_fields</span><span class="annotation">: ClassVar[Dict[str, pydantic.fields.FieldInfo]]</span>        =
-<input id="TorchModel.model_fields-view-value" class="view-value-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
-            <label class="view-value-button pdoc-button" for="TorchModel.model_fields-view-value"></label><span class="default_value">{&#39;path_or_uri&#39;: FieldInfo(annotation=Union[str, Path], required=True), &#39;revision&#39;: FieldInfo(annotation=str, required=False, default=&#39;main&#39;, validate_default=True)}</span>
-
-        
-    </div>
-    <a class="headerlink" href="#TorchModel.model_fields"></a>
-    
-            <div class="docstring"><p>Metadata about the fields defined on the model,
-mapping of field names to [<code>FieldInfo</code>][pydantic.fields.FieldInfo] objects.</p>
-
-<p>This replaces <code>Model.__fields__</code> from Pydantic V1.</p>
-</div>
-
-
-                            </div>
-                            <div id="TorchModel.model_computed_fields" class="classattr">
-                                <div class="attr variable">
-            <span class="name">model_computed_fields</span><span class="annotation">: ClassVar[Dict[str, pydantic.fields.ComputedFieldInfo]]</span>        =
-<span class="default_value">{}</span>
-
-        
-    </div>
-    <a class="headerlink" href="#TorchModel.model_computed_fields"></a>
-    
-            <div class="docstring"><p>A dictionary of computed field names and their corresponding <code>ComputedFieldInfo</code> objects.</p>
-</div>
-
-
-                            </div>
                             <div class="inherited">
                                 <h5>Inherited Members</h5>
                                 <dl>
@@ -1217,38 +983,6 @@ It checks if the specified torchaudio model ID exists.</p>
     <a class="headerlink" href="#TorchAudioModel.model_config"></a>
     
             <div class="docstring"><p>Configuration for the model, should be a dictionary conforming to [<code>ConfigDict</code>][pydantic.config.ConfigDict].</p>
-</div>
-
-
-                            </div>
-                            <div id="TorchAudioModel.model_fields" class="classattr">
-                                <div class="attr variable">
-            <span class="name">model_fields</span><span class="annotation">: ClassVar[Dict[str, pydantic.fields.FieldInfo]]</span>        =
-<input id="TorchAudioModel.model_fields-view-value" class="view-value-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
-            <label class="view-value-button pdoc-button" for="TorchAudioModel.model_fields-view-value"></label><span class="default_value">{&#39;path_or_uri&#39;: FieldInfo(annotation=Union[str, Path], required=True), &#39;revision&#39;: FieldInfo(annotation=str, required=False, default=&#39;main&#39;, validate_default=True)}</span>
-
-        
-    </div>
-    <a class="headerlink" href="#TorchAudioModel.model_fields"></a>
-    
-            <div class="docstring"><p>Metadata about the fields defined on the model,
-mapping of field names to [<code>FieldInfo</code>][pydantic.fields.FieldInfo] objects.</p>
-
-<p>This replaces <code>Model.__fields__</code> from Pydantic V1.</p>
-</div>
-
-
-                            </div>
-                            <div id="TorchAudioModel.model_computed_fields" class="classattr">
-                                <div class="attr variable">
-            <span class="name">model_computed_fields</span><span class="annotation">: ClassVar[Dict[str, pydantic.fields.ComputedFieldInfo]]</span>        =
-<span class="default_value">{}</span>
-
-        
-    </div>
-    <a class="headerlink" href="#TorchAudioModel.model_computed_fields"></a>
-    
-            <div class="docstring"><p>A dictionary of computed field names and their corresponding <code>ComputedFieldInfo</code> objects.</p>
 </div>
 
 

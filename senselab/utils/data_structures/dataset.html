@@ -46,12 +46,6 @@
                         <li>
                                 <a class="variable" href="#Participant.model_config">model_config</a>
                         </li>
-                        <li>
-                                <a class="variable" href="#Participant.model_fields">model_fields</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#Participant.model_computed_fields">model_computed_fields</a>
-                        </li>
                 </ul>
 
             </li>
@@ -69,12 +63,6 @@
                         </li>
                         <li>
                                 <a class="variable" href="#Session.model_config">model_config</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#Session.model_fields">model_fields</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#Session.model_computed_fields">model_computed_fields</a>
                         </li>
                 </ul>
 
@@ -132,12 +120,6 @@
                         </li>
                         <li>
                                 <a class="variable" href="#SenselabDataset.model_config">model_config</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#SenselabDataset.model_fields">model_fields</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#SenselabDataset.model_computed_fields">model_computed_fields</a>
                         </li>
                 </ul>
 
@@ -727,38 +709,6 @@
 
 
                             </div>
-                            <div id="Participant.model_fields" class="classattr">
-                                <div class="attr variable">
-            <span class="name">model_fields</span><span class="annotation">: ClassVar[Dict[str, pydantic.fields.FieldInfo]]</span>        =
-<input id="Participant.model_fields-view-value" class="view-value-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
-            <label class="view-value-button pdoc-button" for="Participant.model_fields-view-value"></label><span class="default_value">{&#39;id&#39;: FieldInfo(annotation=str, required=False, default_factory=&lt;lambda&gt;), &#39;metadata&#39;: FieldInfo(annotation=Dict, required=False, default={})}</span>
-
-        
-    </div>
-    <a class="headerlink" href="#Participant.model_fields"></a>
-    
-            <div class="docstring"><p>Metadata about the fields defined on the model,
-mapping of field names to [<code>FieldInfo</code>][pydantic.fields.FieldInfo] objects.</p>
-
-<p>This replaces <code>Model.__fields__</code> from Pydantic V1.</p>
-</div>
-
-
-                            </div>
-                            <div id="Participant.model_computed_fields" class="classattr">
-                                <div class="attr variable">
-            <span class="name">model_computed_fields</span><span class="annotation">: ClassVar[Dict[str, pydantic.fields.ComputedFieldInfo]]</span>        =
-<span class="default_value">{}</span>
-
-        
-    </div>
-    <a class="headerlink" href="#Participant.model_computed_fields"></a>
-    
-            <div class="docstring"><p>A dictionary of computed field names and their corresponding <code>ComputedFieldInfo</code> objects.</p>
-</div>
-
-
-                            </div>
                 </section>
                 <section id="Session">
                             <input id="Session-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
@@ -862,38 +812,6 @@ mapping of field names to [<code>FieldInfo</code>][pydantic.fields.FieldInfo] ob
     <a class="headerlink" href="#Session.model_config"></a>
     
             <div class="docstring"><p>Configuration for the model, should be a dictionary conforming to [<code>ConfigDict</code>][pydantic.config.ConfigDict].</p>
-</div>
-
-
-                            </div>
-                            <div id="Session.model_fields" class="classattr">
-                                <div class="attr variable">
-            <span class="name">model_fields</span><span class="annotation">: ClassVar[Dict[str, pydantic.fields.FieldInfo]]</span>        =
-<input id="Session.model_fields-view-value" class="view-value-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
-            <label class="view-value-button pdoc-button" for="Session.model_fields-view-value"></label><span class="default_value">{&#39;id&#39;: FieldInfo(annotation=str, required=False, default_factory=&lt;lambda&gt;), &#39;metadata&#39;: FieldInfo(annotation=Dict, required=False, default={})}</span>
-
-        
-    </div>
-    <a class="headerlink" href="#Session.model_fields"></a>
-    
-            <div class="docstring"><p>Metadata about the fields defined on the model,
-mapping of field names to [<code>FieldInfo</code>][pydantic.fields.FieldInfo] objects.</p>
-
-<p>This replaces <code>Model.__fields__</code> from Pydantic V1.</p>
-</div>
-
-
-                            </div>
-                            <div id="Session.model_computed_fields" class="classattr">
-                                <div class="attr variable">
-            <span class="name">model_computed_fields</span><span class="annotation">: ClassVar[Dict[str, pydantic.fields.ComputedFieldInfo]]</span>        =
-<span class="default_value">{}</span>
-
-        
-    </div>
-    <a class="headerlink" href="#Session.model_computed_fields"></a>
-    
-            <div class="docstring"><p>A dictionary of computed field names and their corresponding <code>ComputedFieldInfo</code> objects.</p>
 </div>
 
 
@@ -2019,38 +1937,6 @@ Defaults to False.</li>
     <a class="headerlink" href="#SenselabDataset.model_config"></a>
     
             <div class="docstring"><p>Configuration for the model, should be a dictionary conforming to [<code>ConfigDict</code>][pydantic.config.ConfigDict].</p>
-</div>
-
-
-                            </div>
-                            <div id="SenselabDataset.model_fields" class="classattr">
-                                <div class="attr variable">
-            <span class="name">model_fields</span><span class="annotation">: ClassVar[Dict[str, pydantic.fields.FieldInfo]]</span>        =
-<input id="SenselabDataset.model_fields-view-value" class="view-value-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
-            <label class="view-value-button pdoc-button" for="SenselabDataset.model_fields-view-value"></label><span class="default_value">{&#39;participants&#39;: FieldInfo(annotation=Dict[str, Participant], required=False, default_factory=dict), &#39;sessions&#39;: FieldInfo(annotation=Dict[str, Session], required=False, default_factory=dict), &#39;audios&#39;: FieldInfo(annotation=List[Audio], required=False, default=[]), &#39;videos&#39;: FieldInfo(annotation=List[Video], required=False, default=[]), &#39;metadata&#39;: FieldInfo(annotation=Dict, required=False, default={})}</span>
-
-        
-    </div>
-    <a class="headerlink" href="#SenselabDataset.model_fields"></a>
-    
-            <div class="docstring"><p>Metadata about the fields defined on the model,
-mapping of field names to [<code>FieldInfo</code>][pydantic.fields.FieldInfo] objects.</p>
-
-<p>This replaces <code>Model.__fields__</code> from Pydantic V1.</p>
-</div>
-
-
-                            </div>
-                            <div id="SenselabDataset.model_computed_fields" class="classattr">
-                                <div class="attr variable">
-            <span class="name">model_computed_fields</span><span class="annotation">: ClassVar[Dict[str, pydantic.fields.ComputedFieldInfo]]</span>        =
-<span class="default_value">{}</span>
-
-        
-    </div>
-    <a class="headerlink" href="#SenselabDataset.model_computed_fields"></a>
-    
-            <div class="docstring"><p>A dictionary of computed field names and their corresponding <code>ComputedFieldInfo</code> objects.</p>
 </div>
 
 

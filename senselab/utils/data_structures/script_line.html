@@ -76,12 +76,6 @@
                         <li>
                                 <a class="variable" href="#ScriptLine.model_config">model_config</a>
                         </li>
-                        <li>
-                                <a class="variable" href="#ScriptLine.model_fields">model_fields</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#ScriptLine.model_computed_fields">model_computed_fields</a>
-                        </li>
                 </ul>
 
             </li>
@@ -731,38 +725,6 @@
     <a class="headerlink" href="#ScriptLine.model_config"></a>
     
             <div class="docstring"><p>Configuration for the model, should be a dictionary conforming to [<code>ConfigDict</code>][pydantic.config.ConfigDict].</p>
-</div>
-
-
-                            </div>
-                            <div id="ScriptLine.model_fields" class="classattr">
-                                <div class="attr variable">
-            <span class="name">model_fields</span><span class="annotation">: ClassVar[Dict[str, pydantic.fields.FieldInfo]]</span>        =
-<input id="ScriptLine.model_fields-view-value" class="view-value-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
-            <label class="view-value-button pdoc-button" for="ScriptLine.model_fields-view-value"></label><span class="default_value">{&#39;text&#39;: FieldInfo(annotation=Union[str, NoneType], required=False, default=None), &#39;speaker&#39;: FieldInfo(annotation=Union[str, NoneType], required=False, default=None), &#39;start&#39;: FieldInfo(annotation=Union[float, NoneType], required=False, default=None), &#39;end&#39;: FieldInfo(annotation=Union[float, NoneType], required=False, default=None), &#39;chunks&#39;: FieldInfo(annotation=Union[List[ScriptLine], NoneType], required=False, default=None)}</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ScriptLine.model_fields"></a>
-    
-            <div class="docstring"><p>Metadata about the fields defined on the model,
-mapping of field names to [<code>FieldInfo</code>][pydantic.fields.FieldInfo] objects.</p>
-
-<p>This replaces <code>Model.__fields__</code> from Pydantic V1.</p>
-</div>
-
-
-                            </div>
-                            <div id="ScriptLine.model_computed_fields" class="classattr">
-                                <div class="attr variable">
-            <span class="name">model_computed_fields</span><span class="annotation">: ClassVar[Dict[str, pydantic.fields.ComputedFieldInfo]]</span>        =
-<span class="default_value">{}</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ScriptLine.model_computed_fields"></a>
-    
-            <div class="docstring"><p>A dictionary of computed field names and their corresponding <code>ComputedFieldInfo</code> objects.</p>
 </div>
 
 

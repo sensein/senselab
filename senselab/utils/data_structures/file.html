@@ -46,12 +46,6 @@
                         <li>
                                 <a class="variable" href="#File.model_config">model_config</a>
                         </li>
-                        <li>
-                                <a class="variable" href="#File.model_fields">model_fields</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#File.model_computed_fields">model_computed_fields</a>
-                        </li>
                 </ul>
 
             </li>
@@ -284,37 +278,6 @@
     <a class="headerlink" href="#File.model_config"></a>
     
             <div class="docstring"><p>Configuration for the model, should be a dictionary conforming to [<code>ConfigDict</code>][pydantic.config.ConfigDict].</p>
-</div>
-
-
-                            </div>
-                            <div id="File.model_fields" class="classattr">
-                                <div class="attr variable">
-            <span class="name">model_fields</span><span class="annotation">: ClassVar[Dict[str, pydantic.fields.FieldInfo]]</span>        =
-<span class="default_value">{&#39;filepath&#39;: FieldInfo(annotation=Path, required=True, metadata=[PathType(path_type=&#39;file&#39;)])}</span>
-
-        
-    </div>
-    <a class="headerlink" href="#File.model_fields"></a>
-    
-            <div class="docstring"><p>Metadata about the fields defined on the model,
-mapping of field names to [<code>FieldInfo</code>][pydantic.fields.FieldInfo] objects.</p>
-
-<p>This replaces <code>Model.__fields__</code> from Pydantic V1.</p>
-</div>
-
-
-                            </div>
-                            <div id="File.model_computed_fields" class="classattr">
-                                <div class="attr variable">
-            <span class="name">model_computed_fields</span><span class="annotation">: ClassVar[Dict[str, pydantic.fields.ComputedFieldInfo]]</span>        =
-<span class="default_value">{}</span>
-
-        
-    </div>
-    <a class="headerlink" href="#File.model_computed_fields"></a>
-    
-            <div class="docstring"><p>A dictionary of computed field names and their corresponding <code>ComputedFieldInfo</code> objects.</p>
 </div>
 
 
