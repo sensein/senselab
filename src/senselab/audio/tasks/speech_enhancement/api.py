@@ -4,12 +4,12 @@ from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speech_enhancement.speechbrain import SpeechBrainEnhancer
-from senselab.utils.data_structures import DeviceType, SenselabModel, SpeechBrainModel
+from senselab.utils.data_structures import DeviceType, SpeechBrainModel
 
 
 def enhance_audios(
     audios: List[Audio],
-    model: SenselabModel = SpeechBrainModel(path_or_uri="speechbrain/sepformer-wham16k-enhancement", revision="main"),
+    model: Optional[SpeechBrainModel] = None,
     device: Optional[DeviceType] = None,
 ) -> List[Audio]:
     """Enhances all audios using the given model.
@@ -23,6 +23,9 @@ def enhance_audios(
     Returns:
         List[Audio]: The list of enhanced audio objects.
     """
+    if model is None:
+        model = SpeechBrainModel(path_or_uri="speechbrain/sepformer-wham16k-enhancement", revision="main")
+
     if isinstance(model, SpeechBrainModel):
         return SpeechBrainEnhancer.enhance_audios_with_speechbrain(audios=audios, model=model, device=device)
     else:

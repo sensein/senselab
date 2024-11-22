@@ -46,7 +46,7 @@ class PyannoteDiarization:
 
 def diarize_audios_with_pyannote(
     audios: List[Audio],
-    model: PyannoteAudioModel = PyannoteAudioModel(path_or_uri="pyannote/speaker-diarization-3.1", revision="main"),
+    model: Optional[PyannoteAudioModel] = None,
     device: Optional[DeviceType] = None,
     num_speakers: Optional[int] = None,
     min_speakers: Optional[int] = None,
@@ -65,6 +65,8 @@ def diarize_audios_with_pyannote(
     Returns:
         List[ScriptLine]: A list of ScriptLine objects containing the diarization results.
     """
+    if model is None:
+        model = PyannoteAudioModel(path_or_uri="pyannote/speaker-diarization-3.1", revision="main")
 
     def _annotation_to_script_lines(annotation: Annotation) -> List[ScriptLine]:
         """Convert a Pyannote annotation to a list of script lines.
