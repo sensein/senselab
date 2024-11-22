@@ -48,7 +48,7 @@ class SpeechBrainEmbeddings:
     def extract_speechbrain_speaker_embeddings_from_audios(
         cls,
         audios: List[Audio],
-        model: SpeechBrainModel = SpeechBrainModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb", revision="main"),
+        model: Optional[SpeechBrainModel] = None,
         device: Optional[DeviceType] = None,
     ) -> List[torch.Tensor]:
         """Compute the speaker embeddings of audio signals.
@@ -67,6 +67,9 @@ class SpeechBrainEmbeddings:
             - Optimizing the computation by working in batches
             - Double-checking the input size of classifier.encode_batch
         """
+        if model is None:
+            model = SpeechBrainModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb", revision="main")
+
         classifier = cls._get_speechbrain_model(model=model, device=device)
         # 16khz comes from the model cards of ecapa-tdnn, resnet, and xvector
         expected_sample_rate = 16000

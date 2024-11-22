@@ -4,12 +4,12 @@ from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speaker_diarization.pyannote import diarize_audios_with_pyannote
-from senselab.utils.data_structures import DeviceType, PyannoteAudioModel, ScriptLine, SenselabModel
+from senselab.utils.data_structures import DeviceType, PyannoteAudioModel, ScriptLine
 
 
 def diarize_audios(
     audios: List[Audio],
-    model: SenselabModel = PyannoteAudioModel(path_or_uri="pyannote/speaker-diarization-3.1", revision="main"),
+    model: Optional[PyannoteAudioModel] = None,
     num_speakers: Optional[int] = None,
     min_speakers: Optional[int] = None,
     max_speakers: Optional[int] = None,
@@ -29,6 +29,9 @@ def diarize_audios(
     Returns:
         List[List[ScriptLine]]: The list of script lines with speaker labels.
     """
+    if model is None:
+        model = PyannoteAudioModel(path_or_uri="pyannote/speaker-diarization-3.1", revision="main")
+
     if isinstance(model, PyannoteAudioModel):
         return diarize_audios_with_pyannote(
             audios=audios,

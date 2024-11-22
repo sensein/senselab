@@ -18,7 +18,7 @@ TRAINING_SAMPLE_RATE = 16000  # spkrec-ecapa-voxceleb trained on 16kHz audio
 
 def verify_speaker(
     audios: List[Tuple[Audio, Audio]],
-    model: SpeechBrainModel = SpeechBrainModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb", revision="main"),
+    model: Optional[SpeechBrainModel] = None,
     device: Optional[DeviceType] = None,
     threshold: float = 0.25,
 ) -> List[Tuple[float, bool]]:
@@ -38,6 +38,8 @@ def verify_speaker(
                                   between the two samples, and the prediction is a boolean
                                   indicating if the two samples are from the same speaker.
     """
+    if model is None:
+        model = SpeechBrainModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb", revision="main")
     device = _select_device_and_dtype(compatible_devices=[DeviceType.CPU, DeviceType.CUDA])[0]
 
     scores_and_predictions = []

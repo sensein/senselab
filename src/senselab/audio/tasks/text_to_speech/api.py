@@ -10,7 +10,7 @@ from senselab.utils.data_structures import DeviceType, HFModel, Language, Sensel
 
 def synthesize_texts(
     texts: List[str],
-    model: SenselabModel = HFModel(path_or_uri="suno/bark", revision="main"),
+    model: Optional[SenselabModel] = None,
     language: Optional[Language] = None,
     device: Optional[DeviceType] = None,
     targets: Optional[List[Audio | Tuple[Audio, str]]] = None,
@@ -43,6 +43,9 @@ def synthesize_texts(
     Returns:
         List[Audio]: The list of synthesized audio objects.
     """
+    if model is None:
+        model = HFModel(path_or_uri="suno/bark", revision="main")
+
     if targets is not None:
         assert len(targets) == len(texts), ValueError("Provided targets should be same length as texts")
 

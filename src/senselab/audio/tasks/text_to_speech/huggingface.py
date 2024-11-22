@@ -46,7 +46,7 @@ class HuggingFaceTTS:
     def synthesize_texts_with_transformers(
         cls,
         texts: List[str],
-        model: HFModel = HFModel(path_or_uri="suno/bark", revision="main"),
+        model: Optional[HFModel] = None,
         device: Optional[DeviceType] = None,
         forward_params: Optional[Dict[str, Any]] = None,
     ) -> List[Audio]:
@@ -57,7 +57,7 @@ class HuggingFaceTTS:
 
         Args:
             texts (List[str]): The list of text strings to be synthesized.
-            model (HFModel): The Hugging Face model used for synthesis.
+            model (HFModel): The Hugging Face model used for synthesis (default is `suno/bark`).
             device (Optional[DeviceType]): The device to run the model on (default is None).
             forward_params (Optional[Dict[str, Any]]): Additional parameters to pass to the forward function.
 
@@ -68,6 +68,8 @@ class HuggingFaceTTS:
             - Add speaker embeddings as they do in here:
             https://huggingface.co/docs/transformers/tasks/text-to-speech
         """
+        if model is None:
+            model = HFModel(path_or_uri="suno/bark", revision="main")
         pipe = HuggingFaceTTS._get_hf_tts_pipeline(model=model, device=device)
 
         synthesized_audios = pipe(texts, forward_params=forward_params)

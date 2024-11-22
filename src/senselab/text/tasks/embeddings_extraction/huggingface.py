@@ -59,7 +59,7 @@ class HFFactory:
     def extract_text_embeddings(
         cls,
         pieces_of_text: List[str],
-        model: HFModel = HFModel(path_or_uri="sentence-transformers/all-MiniLM-L6-v2"),
+        model: Optional[HFModel] = None,
         device: Optional[DeviceType] = None,
     ) -> List[torch.Tensor]:
         """Extracts embeddings from a list of strings using a Hugging Face model.
@@ -74,6 +74,8 @@ class HFFactory:
         Returns:
             List[torch.Tensor]: A list of embeddings for the input strings.
         """
+        if model is None:
+            model = HFModel(path_or_uri="sentence-transformers/all-MiniLM-L6-v2")
         device, _ = _select_device_and_dtype(
             user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
         )
