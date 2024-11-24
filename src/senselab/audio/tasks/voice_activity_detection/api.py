@@ -16,8 +16,8 @@ def detect_human_voice_activity_in_audios(
 
     Args:
         audios (List[Audio]): The list of audio objects to be processed.
-        model (Optional[PyannoteAudioModel]): The model used for voice activity detection
-            (default is `pyannote/speaker-diarization-3.1`).
+        model (Optional[PyannoteAudioModel]): The model used for voice activity detection.
+                If None, the default model "pyannote/speaker-diarization-3.1" is used.
         device (Optional[DeviceType]): The device to run the model on (default is None).
 
     Returns:

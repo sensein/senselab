@@ -24,7 +24,7 @@ def synthesize_texts(
     Args:
         texts (List[str]): The list of text strings to be synthesized.
         model (SenselabModel): The model used for synthesis.
-            Defaults to HFModel(path_or_uri="suno/bark", revision="main").
+                If None, the default model "suno/bark" is used.
         language (Optional[Language]): The language of the text
             (default is None).
         device (Optional[DeviceType]): The device to run the model on

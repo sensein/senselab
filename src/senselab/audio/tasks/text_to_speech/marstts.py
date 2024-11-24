@@ -75,7 +75,8 @@ class Mars5TTS:
             texts (List[str]): The list of text strings to be synthesized.
             targets (List[Tuple[Audio, str]]):
                 The list of tuples containing audio objects and transcripts.
-            model (TorchModel): The Torch model (default is "Camb-ai/mars5-tts").
+            model (TorchModel): The Torch model.
+                If None, the default model "Camb-ai/mars5-tts" is used.
             language (Optional[Language]): The language of the text (default is None).
                 The only supported language is "en" for now.
             device (DeviceType): The device to run the model on (default is None). Supported devices are CPU and CUDA.

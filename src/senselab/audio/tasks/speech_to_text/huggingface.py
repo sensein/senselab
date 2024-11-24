@@ -80,7 +80,8 @@ class HuggingFaceASR:
 
         Args:
             audios (List[Audio]): The list of audio objects to be transcribed.
-            model (HFModel): The Hugging Face model used for transcription. (default is `openai/whisper-tiny`).
+            model (HFModel): The Hugging Face model used for transcription.
+                If None, the default model "openai/whisper-tiny" is used.
             language (Optional[Language]): The language of the audio (default is None).
             return_timestamps (Optional[str]): The level of timestamp details (default is "word").
             max_new_tokens (int): The maximum number of new tokens (default is 128).

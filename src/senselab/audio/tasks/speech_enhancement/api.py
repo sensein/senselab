@@ -16,8 +16,8 @@ def enhance_audios(
 
     Args:
         audios (List[Audio]): The list of audio objects to be enhanced.
-        model (SenselabModel): The model used for enhancement
-            (default is "speechbrain/sepformer-wham16k-enhancement").
+        model (SenselabModel): The model used for enhancement.
+            If None, the default model "speechbrain/sepformer-wham16k-enhancement" is used.
         device (Optional[DeviceType]): The device to run the model on (default is None).
 
     Returns:
@@ -29,4 +29,6 @@ def enhance_audios(
     if isinstance(model, SpeechBrainModel):
         return SpeechBrainEnhancer.enhance_audios_with_speechbrain(audios=audios, model=model, device=device)
     else:
-        raise NotImplementedError("Only SpeechBrain models are supported for now.")
+        raise NotImplementedError(
+            "Only SpeechBrain models are supported for now. We aim to support more models in the future."
+        )

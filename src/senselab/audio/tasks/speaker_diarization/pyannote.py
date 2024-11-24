@@ -57,6 +57,7 @@ def diarize_audios_with_pyannote(
     Args:
         audios (List[Audio]): A list of audio files.
         model (PyannoteAudioModel): The model to use for diarization.
+            If None, the default model "pyannote/speaker-diarization-3.1" is used.
         device (Optional[DeviceType]): The device to use for diarization.
         num_speakers (Optional[int]): Number of speakers, when known.
         min_speakers (Optional[int]): Minimum number of speakers. Has no effect when `num_speakers` is provided.

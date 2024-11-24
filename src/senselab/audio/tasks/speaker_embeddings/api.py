@@ -18,8 +18,8 @@ def extract_speaker_embeddings_from_audios(
 
     Args:
         audios (List[Audio]): A list of Audio objects containing the audio signals and their properties.
-        model (SpeechBrainModel): The model used to compute the embeddings
-            (default is "speechbrain/spkrec-ecapa-voxceleb").
+        model (SpeechBrainModel): The model used to compute the embeddings.
+            If None, the default model "speechbrain/spkrec-ecapa-voxceleb" is used.
         device (Optional[DeviceType]): The device to run the model on (default is None).
 
     Returns:
@@ -43,4 +43,6 @@ def extract_speaker_embeddings_from_audios(
             audios=audios, model=model, device=device
         )
     else:
-        raise NotImplementedError("The specified model is not supported for now.")
+        raise NotImplementedError(
+            "Only SpeechBrain models are supported for now. We aim to support more models in the future."
+        )
