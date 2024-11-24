@@ -31,8 +31,8 @@ def clone_voices(
         model (TorchModel, optional): The model to use for voice cloning. Currently,
             only KNNVC (K-Nearest Neighbors Voice Conversion) is supported, encapsulated
             by the `TorchModel` class. `TorchModel` is a child class of `SenselabModel`
-            and specifies the model and revision for cloning. Defaults to
-            `TorchModel(path_or_uri="bshall/knn-vc", revision="master")`.
+            and specifies the model and revision for cloning.
+            If None, the default model "bshall/knn-vc" is used.
         device (Optional[DeviceType], optional): The device to run the model on (e.g., CPU or GPU).
             Defaults to None.
         **kwargs: Additional keyword arguments for model-specific parameters that will
@@ -63,4 +63,4 @@ def clone_voices(
             source_audios=source_audios, target_audios=target_audios, model=model, device=device, **kwargs
         )
     else:
-        raise NotImplementedError("Only KNNVC is supported for now.")
+        raise NotImplementedError("Only KNNVC is supported for now. We aim to support more models in the future.")

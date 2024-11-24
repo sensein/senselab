@@ -57,7 +57,8 @@ class HuggingFaceTTS:
 
         Args:
             texts (List[str]): The list of text strings to be synthesized.
-            model (HFModel): The Hugging Face model used for synthesis (default is `suno/bark`).
+            model (HFModel): The Hugging Face model used for synthesis.
+                If None, the default model "suno/bark" is used.
             device (Optional[DeviceType]): The device to run the model on (default is None).
             forward_params (Optional[Dict[str, Any]]): Additional parameters to pass to the forward function.
 

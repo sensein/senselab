@@ -40,6 +40,8 @@ def transcribe_audios(
                 audios=audios, model=model, language=language, device=device, **kwargs
             )
         else:
-            raise NotImplementedError("Only Hugging Face models are supported for now.")
+            raise NotImplementedError(
+                "Only Hugging Face models are supported for now. We aim to support more models in the future."
+            )
     except TypeError as e:
         raise TypeError(e)  # noqa: W0707

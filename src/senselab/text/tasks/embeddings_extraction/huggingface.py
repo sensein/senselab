@@ -67,7 +67,7 @@ class HFFactory:
         Args:
             pieces_of_text (List[str]): A list of strings to extract embeddings from.
             model (HFModel, optional): A Hugging Face model configuration.
-                Defaults to HFModel(path_or_uri="sentence-transformers/all-MiniLM-L6-v2").
+                If None, the default model "sentence-transformers/all-MiniLM-L6-v2" is used.
             device (Optional[DeviceType], optional): The device to run the model on.
                 Defaults to None.
 

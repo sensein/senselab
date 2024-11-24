@@ -27,7 +27,8 @@ def verify_speaker(
     Args:
         audios (List[Tuple[Audio, Audio]]): A list of tuples, where each tuple contains
                                             two audio samples to be compared.
-        model (SpeechBrainModel, optional): The model for speaker verification.
+        model (SpeechBrainModel, optional): The model for speaker verification..
+            If None, the default model "speechbrain/spkrec-ecapa-voxceleb" is used.
         device (DeviceType, optional): The device to run the model on. Defaults to CPU.
         threshold (float, optional): The threshold to determine same speaker.
 

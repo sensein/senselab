@@ -19,8 +19,8 @@ def diarize_audios(
 
     Args:
         audios (List[Audio]): The list of audio objects to be diarized.
-        model (SenselabModel): The model used for diarization
-            (default is "pyannote/speaker-diarization-3.1").
+        model (SenselabModel): The model used for diarization.
+            If None, the default model "pyannote/speaker-diarization-3.1" is used.
         device (Optional[DeviceType]): The device to run the model on (default is None).
         num_speakers (Optional[int]): The number of speakers (default is None).
         min_speakers (Optional[int]): The minimum number of speakers (default is None).
@@ -42,4 +42,6 @@ def diarize_audios(
             max_speakers=max_speakers,
         )
     else:
-        raise NotImplementedError("Only Pyannote models are supported for now.")
+        raise NotImplementedError(
+            "Only Pyannote models are supported for now. We aim to support more models in the future."
+        )

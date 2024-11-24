@@ -55,6 +55,7 @@ class SpeechBrainEnhancer:
         Args:
             audios (List[Audio]): The list of audio objects to be enhanced.
             model (SpeechBrainModel): The SpeechBrain model used for enhancement.
+                If None, the default model "speechbrain/sepformer-wham16k-enhancement" is used.
             device (Optional[DeviceType]): The device to run the model on (default is None).
             batch_size (int): The size of batches to use when processing on a GPU.
 

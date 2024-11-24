@@ -41,7 +41,8 @@ class StyleTTS2:
         """Get or create a StyleTTS2 model.
 
         Args:
-            model (TorchModel): The Torch model (default is "wilke0818/StyleTTS2-TorchHub:main").
+            model (TorchModel): The Torch model.
+                If None, the default model "wilke0818/StyleTTS2-TorchHub:main" is used.
             language (Optional[Language]): The language of the text (default is None).
                 The only supported language is "en" for now.
             device (DeviceType): The device to run the model on (default is None). Supported devices are CPU and CUDA.
@@ -101,7 +102,8 @@ class StyleTTS2:
                 The list of audio objects to reference.
             target_transcripts (List[Optional[str]]):
                 Transcript for each target audio
-            model (TorchModel): The Torch model (default is "wilke0818/StyleTTS2-TorchHub").
+            model (TorchModel): The Torch model.
+                If None, the default model "wilke0818/StyleTTS2-TorchHub" is used.
             language (Optional[Language]): The language of the text (default is None).
                 The only supported language is "en" for now.
             device (Optional[DeviceType]): device to run model on

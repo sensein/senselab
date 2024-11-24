@@ -55,8 +55,8 @@ class SpeechBrainEmbeddings:
 
         Args:
             audios (List[Audio]): A list of Audio objects containing the audio signals and their properties.
-            model (SpeechBrainModel): The model used to compute the embeddings
-                (default is "speechbrain/spkrec-ecapa-voxceleb").
+            model (SpeechBrainModel): The model used to compute the embeddings.
+                If None, the default model "speechbrain/spkrec-ecapa-voxceleb" is used.
             device (Optional[DeviceType]): The device to run the model on (default is None).
                 Only CPU and CUDA are supported.
 
