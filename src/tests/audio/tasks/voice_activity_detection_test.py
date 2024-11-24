@@ -12,7 +12,8 @@ def test_detect_human_voice_activity_in_audios_with_invalid_model(mono_audio_sam
     """Test detecting human voice activity with an invalid model."""
     with pytest.raises(NotImplementedError):
         detect_human_voice_activity_in_audios(
-            audios=[mono_audio_sample], model=SenselabModel(path_or_uri="some/invalid-model")
+            audios=[mono_audio_sample],
+            model=SenselabModel(path_or_uri="some/invalid-model"),  # type: ignore
         )
 
 
