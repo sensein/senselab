@@ -103,9 +103,11 @@ the preferred device, and the model-specific parameters, and senselab handles th
 </span><span id="L-40"><a href="#L-40"><span class="linenos">40</span></a>                <span class="n">audios</span><span class="o">=</span><span class="n">audios</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span> <span class="n">language</span><span class="o">=</span><span class="n">language</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span>
 </span><span id="L-41"><a href="#L-41"><span class="linenos">41</span></a>            <span class="p">)</span>
 </span><span id="L-42"><a href="#L-42"><span class="linenos">42</span></a>        <span class="k">else</span><span class="p">:</span>
-</span><span id="L-43"><a href="#L-43"><span class="linenos">43</span></a>            <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span><span class="s2">&quot;Only Hugging Face models are supported for now.&quot;</span><span class="p">)</span>
-</span><span id="L-44"><a href="#L-44"><span class="linenos">44</span></a>    <span class="k">except</span> <span class="ne">TypeError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
-</span><span id="L-45"><a href="#L-45"><span class="linenos">45</span></a>        <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="n">e</span><span class="p">)</span>  <span class="c1"># noqa: W0707</span>
+</span><span id="L-43"><a href="#L-43"><span class="linenos">43</span></a>            <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span>
+</span><span id="L-44"><a href="#L-44"><span class="linenos">44</span></a>                <span class="s2">&quot;Only Hugging Face models are supported for now. We aim to support more models in the future.&quot;</span>
+</span><span id="L-45"><a href="#L-45"><span class="linenos">45</span></a>            <span class="p">)</span>
+</span><span id="L-46"><a href="#L-46"><span class="linenos">46</span></a>    <span class="k">except</span> <span class="ne">TypeError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+</span><span id="L-47"><a href="#L-47"><span class="linenos">47</span></a>        <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="n">e</span><span class="p">)</span>  <span class="c1"># noqa: W0707</span>
 </span></pre></div>
 
 
@@ -149,9 +151,11 @@ the preferred device, and the model-specific parameters, and senselab handles th
 </span><span id="transcribe_audios-41"><a href="#transcribe_audios-41"><span class="linenos">41</span></a>                <span class="n">audios</span><span class="o">=</span><span class="n">audios</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span> <span class="n">language</span><span class="o">=</span><span class="n">language</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span>
 </span><span id="transcribe_audios-42"><a href="#transcribe_audios-42"><span class="linenos">42</span></a>            <span class="p">)</span>
 </span><span id="transcribe_audios-43"><a href="#transcribe_audios-43"><span class="linenos">43</span></a>        <span class="k">else</span><span class="p">:</span>
-</span><span id="transcribe_audios-44"><a href="#transcribe_audios-44"><span class="linenos">44</span></a>            <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span><span class="s2">&quot;Only Hugging Face models are supported for now.&quot;</span><span class="p">)</span>
-</span><span id="transcribe_audios-45"><a href="#transcribe_audios-45"><span class="linenos">45</span></a>    <span class="k">except</span> <span class="ne">TypeError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
-</span><span id="transcribe_audios-46"><a href="#transcribe_audios-46"><span class="linenos">46</span></a>        <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="n">e</span><span class="p">)</span>  <span class="c1"># noqa: W0707</span>
+</span><span id="transcribe_audios-44"><a href="#transcribe_audios-44"><span class="linenos">44</span></a>            <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span>
+</span><span id="transcribe_audios-45"><a href="#transcribe_audios-45"><span class="linenos">45</span></a>                <span class="s2">&quot;Only Hugging Face models are supported for now. We aim to support more models in the future.&quot;</span>
+</span><span id="transcribe_audios-46"><a href="#transcribe_audios-46"><span class="linenos">46</span></a>            <span class="p">)</span>
+</span><span id="transcribe_audios-47"><a href="#transcribe_audios-47"><span class="linenos">47</span></a>    <span class="k">except</span> <span class="ne">TypeError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+</span><span id="transcribe_audios-48"><a href="#transcribe_audios-48"><span class="linenos">48</span></a>        <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="n">e</span><span class="p">)</span>  <span class="c1"># noqa: W0707</span>
 </span></pre></div>
 
 
