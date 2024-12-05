@@ -630,8 +630,8 @@ def align_transcriptions(
     aligned_script_lines = []
     loaded_processors_and_models = {}
 
-    for item in audios_and_transcriptions_and_language:
-        audio, transcription, language = (*item, None)[:3]
+    for recording in audios_and_transcriptions_and_language:
+        audio, transcription, language = (*recording,)
 
         # Set default language to English if not provided
         if language is None:
