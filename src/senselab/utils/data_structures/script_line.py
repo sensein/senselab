@@ -88,6 +88,14 @@ class ScriptLine(BaseModel):
         """
         return self.chunks
 
+    def __repr__(self) -> str:
+        """Return a string representation of the ScriptLine object.
+
+        Returns:
+            str: A formatted string with the object's attributes.
+        """
+        return f"<ScriptLine(speaker={self.speaker}, text={self.text}, start={self.start}, end={self.end})>"
+
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "ScriptLine":
         """Create a ScriptLine instance from a dictionary.
