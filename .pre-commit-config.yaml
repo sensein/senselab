@@ -2,7 +2,7 @@ fail_fast: false
 
 repos:
 - repo: https://github.com/python-poetry/poetry
-  rev: 1.8.0
+  rev: 1.8.3
   hooks:
   - id: poetry-check
 
@@ -71,13 +71,3 @@ repos:
     entry: YAML files must have .yaml extension.
     language: fail
     files: \.yml$
-
-- repo: local
-  hooks:
-  - id: pytest
-    name: pytest
-    entry: poetry run pytest --testmon
-    language: system
-    types: [python]
-    pass_filenames: false
-    always_run: true

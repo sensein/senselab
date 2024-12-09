@@ -10,7 +10,7 @@ import torch
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 from torchvision.io import read_video
 
-from senselab.audio.data_structures.audio import Audio
+from senselab.audio.data_structures import Audio
 from senselab.utils.constants import SENSELAB_NAMESPACE
 
 

@@ -6,7 +6,7 @@ import torch
 from scipy import signal
 from speechbrain.augment.time_domain import Resample
 
-from senselab.audio.data_structures.audio import Audio
+from senselab.audio.data_structures import Audio
 
 
 def resample_audios(

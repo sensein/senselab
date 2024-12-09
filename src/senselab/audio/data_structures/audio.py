@@ -7,7 +7,8 @@ ease of maintaining the codebase and offering consistent public APIs.
 
 import os
 import uuid
-from typing import Dict, List, Optional, Tuple, Union
+import warnings
+from typing import Dict, Generator, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -35,7 +36,7 @@ class Audio(BaseModel):
 
     waveform: torch.Tensor
     sampling_rate: int
-    orig_path_or_id: Optional[str] = None
+    orig_path_or_id: str | os.PathLike | None = None
     metadata: Dict = Field(default={})
     model_config = {"arbitrary_types_allowed": True}
 
@@ -60,7 +61,7 @@ class Audio(BaseModel):
         return temporary_tensor.to(torch.float32)
 
     @classmethod
-    def from_filepath(cls, filepath: str, metadata: Dict = {}) -> "Audio":
+    def from_filepath(cls, filepath: str | os.PathLike, metadata: Dict = {}) -> "Audio":
         """Creates an Audio instance from an audio file.
 
         Args:
@@ -71,7 +72,7 @@ class Audio(BaseModel):
 
         return cls(waveform=array, sampling_rate=sampling_rate, orig_path_or_id=filepath, metadata=metadata)
 
-    def generate_path(self) -> str:
+    def generate_path(self) -> str | os.PathLike:
         """Generate a path like string for this Audio.
 
         Generates a path like string for the Audio by either utilizing the orig_path_or_id, checking
@@ -102,6 +103,115 @@ class Audio(BaseModel):
             return self.id() == other.id()
         return False
 
+    def window_generator(self, window_size: int, step_size: int) -> Generator["Audio", None, None]:
+        """Creates a sliding window generator for the audio.
+
+        Creates a generator that yields Audio objects corresponding to each window of the waveform
+        using a sliding window. The window size and step size are specified in number of samples.
+        If the audio waveform doesn't contain an exact number of windows, the remaining samples
+        will be included in the last window.
+
+        Args:
+            window_size: Size of each window (number of samples).
+            step_size: Step size for sliding the window (number of samples).
+
+        Yields:
+            Audio: Audio objects corresponding to each window of the waveform.
+        """
+        if step_size > window_size:
+            warnings.warn(
+                "Step size is greater than window size. \
+                Some of the audio will not be included in the windows."
+            )
+
+        num_samples = self.waveform.size(-1)
+        current_position = 0
+
+        while current_position < num_samples:
+            # Calculate the end position of the window
+            end_position = current_position + window_size
+
+            # If the end_position exceeds the number of samples, take the remaining samples
+            # This is not necessary since it is done automatically when slicing tensors.
+            # However, it is more explicit.
+            if end_position > num_samples:
+                end_position = num_samples
+
+            # Get the windowed waveform
+            window_waveform = self.waveform[:, current_position:end_position]
+
+            # Create a new Audio instance for this window
+            window_audio = Audio(
+                waveform=window_waveform,
+                sampling_rate=self.sampling_rate,
+                orig_path_or_id=f"{self.orig_path_or_id}_{current_position}_{end_position}",
+                metadata=self.metadata,
+            )
+
+            yield window_audio
+            current_position += step_size
+
+    def save_to_file(
+        self,
+        file_path: Union[str, os.PathLike],
+        format: Optional[str] = None,
+        encoding: Optional[str] = None,
+        bits_per_sample: Optional[int] = None,
+        buffer_size: int = 4096,
+        backend: Optional[str] = None,
+        compression: Optional[Union[float, int]] = None,
+    ) -> None:
+        """Save the `Audio` object to a file using `torchaudio.save`.
+
+        Args:
+            file_path (Union[str, os.PathLike]): The path to save the audio file.
+            format (Optional[str]): Audio format to use. Valid values include "wav", "ogg", and "flac".
+                If None, the format is inferred from the file extension.
+            encoding (Optional[str]): Encoding to use. Valid options include "PCM_S", "PCM_U", "PCM_F", "ULAW", "ALAW".
+                This is effective for formats like "wav" and "flac".
+            bits_per_sample (Optional[int]): Bit depth for the audio file. Valid values are 8, 16, 24, 32, and 64.
+            buffer_size (int): Size of the buffer in bytes for processing file-like objects. Default is 4096.
+            backend (Optional[str]): I/O backend to use. Valid options include "ffmpeg", "sox", and "soundfile".
+                If None, a backend is automatically selected.
+            compression (Optional[Union[float, int]]): Compression level for supported formats like "mp3",
+            "flac", and "ogg".
+                Refer to `torchaudio.save` documentation for specific compression levels.
+
+        Raises:
+            ValueError: If the `Audio` waveform is not 2D, or if the sampling rate is invalid.
+            RuntimeError: If there is an error saving the audio file.
+
+        Note:
+            - https://pytorch.org/audio/master/generated/torchaudio.save.html
+        """
+        if self.waveform.ndim != 2:
+            raise ValueError("Waveform must be a 2D tensor with shape (num_channels, num_samples).")
+
+        if self.sampling_rate <= 0:
+            raise ValueError("Sampling rate must be a positive integer.")
+
+        output_dir = os.path.dirname(file_path)
+        if not os.access(output_dir, os.W_OK):
+            raise RuntimeError(f"Output directory '{output_dir}' is not writable.")
+
+        try:
+            if not os.path.exists(output_dir):
+                os.makedirs(os.path.dirname(file_path))
+            torchaudio.save(
+                uri=file_path,
+                src=self.waveform,
+                sample_rate=self.sampling_rate,
+                channels_first=True,
+                format=format,
+                encoding=encoding,
+                bits_per_sample=bits_per_sample,
+                buffer_size=buffer_size,
+                backend=backend,
+                compression=compression,
+            )
+        except Exception as e:
+            raise RuntimeError(f"Error saving audio to file: {e}") from e
+
 
 def batch_audios(audios: List[Audio]) -> Tuple[torch.Tensor, Union[int, List[int]], List[Dict]]:
     """Batches the Audios together into a single Tensor, keeping individual Audio information separate.
@@ -124,14 +234,38 @@ def batch_audios(audios: List[Audio]) -> Tuple[torch.Tensor, Union[int, List[int
         RuntimeError: if all of the Audios do not have the same number of channels
     """
     sampling_rates = []
+    num_channels_list = []
+    lengths = []
     batched_audio = []
     metadatas = []
+
     for audio in audios:
         sampling_rates.append(audio.sampling_rate)
-        batched_audio.append(audio.waveform)
+        num_channels_list.append(audio.waveform.shape[0])  # Assuming waveform shape is (num_channels, num_samples)
+        lengths.append(audio.waveform.shape[1])
         metadatas.append(audio.metadata)
 
-    return_sampling_rates: List[int] | int = int(sampling_rates[0]) if len(set(sampling_rates)) == 1 else sampling_rates
+    # Check if all audios have the same number of channels
+    if len(set(num_channels_list)) != 1:
+        raise RuntimeError("All audios must have the same number of channels.")
+
+    # Raise a warning if sampling rates are not the same
+    if len(set(sampling_rates)) != 1:
+        warnings.warn("Not all sampling rates are the same.", UserWarning)
+
+    # Pad waveforms to the same length
+    max_length = max(lengths)
+    for audio in audios:
+        waveform = audio.waveform
+        padding = max_length - waveform.shape[1]
+        if padding > 0:
+            pad = torch.zeros((waveform.shape[0], padding), dtype=waveform.dtype)
+            waveform = torch.cat([waveform, pad], dim=1)
+        batched_audio.append(waveform)
+
+    return_sampling_rates: Union[int, List[int]] = (
+        int(sampling_rates[0]) if len(set(sampling_rates)) == 1 else sampling_rates
+    )
 
     return torch.stack(batched_audio), return_sampling_rates, metadatas
 

@@ -1,4 +1,4 @@
-[![Build](https://github.com/sensein/senselab/actions/workflows/test.yaml/badge.svg?branch=main)](https://github.com/sensein/senselab/actions/workflows/test.yaml?query=branch%3Amain)
+[![Build](https://github.com/sensein/senselab/actions/workflows/main-branch-status.yaml/badge.svg)](https://github.com/sensein/senselab/actions/workflows/main-branch-status.yaml)
 [![codecov](https://codecov.io/gh/sensein/senselab/graph/badge.svg?token=9S8WY128PO)](https://codecov.io/gh/sensein/senselab)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
@@ -27,8 +27,8 @@ pip install git+https://github.com/sensein/senselab.git
 
 ## Quick start
 ```Python
-from senselab.audio.data_structures.audio import Audio
-from senselab.audio.tasks.preprocessing.preprocessing import resample_audios
+from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.preprocessing import resample_audios
 
 audio1 = Audio.from_filepath('path_to_audio_file.wav')
 
@@ -37,7 +37,7 @@ print("The original audio has a sampling rate of {} Hz.".format(audio1.sampling_
 print("The resampled audio has a sampling rate of {} Hz.".format(audio1.sampling_rate))
 ```
 
-For more detailed information, check out our [**Getting Started Tutorial**](https://github.com/sensein/senselab/blob/main/tutorials/getting_started.ipynb).
+For more detailed information, check out our [**Getting Started Tutorial**](https://github.com/sensein/senselab/blob/main/tutorials/audio/getting_started.ipynb).
 
 
 ## Why should I use senselab?

@@ -2,13 +2,11 @@
 
 from typing import List, Optional
 
-import pydra
 import torch
 
-from senselab.audio.data_structures.audio import Audio
+from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.ssl_embeddings.self_supervised_features import SSLEmbeddingsFactory
-from senselab.utils.data_structures.device import DeviceType
-from senselab.utils.data_structures.model import HFModel, SenselabModel
+from senselab.utils.data_structures import DeviceType, HFModel, SenselabModel
 
 
 def extract_ssl_embeddings_from_audios(
@@ -47,6 +45,3 @@ def extract_ssl_embeddings_from_audios(
         )
     else:
         raise NotImplementedError("The specified model is not supported for now.")
-
-
-extract_ssl_embeddings_from_audios_pt = pydra.mark.task(extract_ssl_embeddings_from_audios)

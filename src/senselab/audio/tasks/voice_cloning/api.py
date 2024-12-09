@@ -2,16 +2,15 @@
 
 from typing import Any, List, Optional
 
-from senselab.audio.data_structures.audio import Audio
+from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.voice_cloning.knnvc import KNNVC
-from senselab.utils.data_structures.device import DeviceType
-from senselab.utils.data_structures.model import SenselabModel, TorchModel
+from senselab.utils.data_structures import DeviceType, TorchModel
 
 
 def clone_voices(
     source_audios: List[Audio],
     target_audios: List[Audio],
-    model: SenselabModel = TorchModel(path_or_uri="bshall/knn-vc", revision="master"),
+    model: Optional[TorchModel] = None,
     device: Optional[DeviceType] = None,
     **kwargs: Any,  # noqa:ANN401
 ) -> List[Audio]:
@@ -29,11 +28,11 @@ def clone_voices(
             (e.g., words) will remain the same, but the voice sounds like the target.
         target_audios (List[Audio]): A list of audio samples whose voices will be extracted
             and used to replace the voices in the corresponding source audio samples.
-        model (SenselabModel, optional): The model to use for voice cloning. Currently,
+        model (TorchModel, optional): The model to use for voice cloning. Currently,
             only KNNVC (K-Nearest Neighbors Voice Conversion) is supported, encapsulated
             by the `TorchModel` class. `TorchModel` is a child class of `SenselabModel`
-            and specifies the model and revision for cloning. Defaults to
-            `TorchModel(path_or_uri="bshall/knn-vc", revision="master")`.
+            and specifies the model and revision for cloning.
+            If None, the default model "bshall/knn-vc" is used.
         device (Optional[DeviceType], optional): The device to run the model on (e.g., CPU or GPU).
             Defaults to None.
         **kwargs: Additional keyword arguments for model-specific parameters that will
@@ -54,6 +53,8 @@ def clone_voices(
     Todo:
         Add logging with timestamps.
     """
+    if model is None:
+        model = TorchModel(path_or_uri="bshall/knn-vc", revision="master")
     if len(source_audios) != len(target_audios):
         raise ValueError("The list of source and target audios must have the same length.")
 
@@ -62,4 +63,4 @@ def clone_voices(
             source_audios=source_audios, target_audios=target_audios, model=model, device=device, **kwargs
         )
     else:
-        raise NotImplementedError("Only KNNVC is supported for now.")
+        raise NotImplementedError("Only KNNVC is supported for now. We aim to support more models in the future.")

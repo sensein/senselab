@@ -5,8 +5,7 @@ from typing import Dict, List, Optional
 import torch
 from sentence_transformers import SentenceTransformer
 
-from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
-from senselab.utils.data_structures.model import SentenceTransformersModel
+from senselab.utils.data_structures import DeviceType, SentenceTransformersModel, _select_device_and_dtype
 
 
 class SentenceTransformerFactory:
@@ -35,7 +34,7 @@ class SentenceTransformerFactory:
         key = f"{model.path_or_uri}-{model.revision}-{device.value}"
         if key not in cls._pipelines:
             cls._pipelines[key] = SentenceTransformer(
-                model_name_or_path=model.path_or_uri,
+                model_name_or_path=str(model.path_or_uri),
                 revision=model.revision,
                 device=device.value,
             )
@@ -45,9 +44,7 @@ class SentenceTransformerFactory:
     def extract_text_embeddings(
         cls,
         pieces_of_text: List[str],
-        model: SentenceTransformersModel = SentenceTransformersModel(
-            path_or_uri="sentence-transformers/all-MiniLM-L6-v2", revision="main"
-        ),
+        model: Optional[SentenceTransformersModel] = None,
         device: Optional[DeviceType] = None,
     ) -> List[torch.Tensor]:
         """Extracts embeddings from a list of strings using a SentenceTransformer model.
@@ -55,13 +52,15 @@ class SentenceTransformerFactory:
         Args:
             pieces_of_text (List[str]): A list of strings to extract embeddings from.
             model (SentenceTransformersModel, optional): A Hugging Face model configuration.
-                Defaults to SentenceTransformersModel(path_or_uri="sentence-transformers/all-MiniLM-L6-v2").
+                If None, the default model "sentence-transformers/all-MiniLM-L6-v2" is used.
             device (Optional[DeviceType], optional): The device to run the model on.
                 Defaults to None.
 
         Returns:
             List[torch.Tensor]: A list of embeddings for the input strings.
         """
+        if model is None:
+            model = SentenceTransformersModel(path_or_uri="sentence-transformers/all-MiniLM-L6-v2", revision="main")
         pipeline = cls._get_sentencetransformer_pipeline(model, device)
         embeddings = pipeline.encode(pieces_of_text, convert_to_tensor=True)
         return [embedding for embedding in embeddings]

@@ -1,7 +1,7 @@
 """Testing functions for speaker diarization evaluations."""
 
 from senselab.audio.tasks.speaker_diarization_evaluation import calculate_diarization_error_rate
-from senselab.utils.data_structures.script_line import ScriptLine
+from senselab.utils.data_structures import ScriptLine
 
 
 def test_diarization_error_rate_non_existent_speaker() -> None:

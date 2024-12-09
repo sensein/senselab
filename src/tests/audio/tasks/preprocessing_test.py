@@ -6,8 +6,8 @@ import pytest
 import torch
 from pytest import FixtureRequest
 
-from senselab.audio.data_structures.audio import Audio
-from senselab.audio.tasks.preprocessing.preprocessing import (
+from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.preprocessing import (
     chunk_audios,
     downmix_audios_to_mono,
     evenly_segment_audios,
@@ -97,7 +97,7 @@ def test_evenly_segment_audios(audio_sample_fixture: str, segment_length: int, r
     audio_sample = request.getfixturevalue(audio_sample_fixture)
 
     segments = evenly_segment_audios([audio_sample], segment_length, pad_last_segment=True)
-    for i, segment in enumerate(segments[0]):
+    for _, segment in enumerate(segments[0]):
         expected_length = int(segment_length * audio_sample.sampling_rate)
         for channel in segment.waveform:
             assert channel.shape[0] == expected_length

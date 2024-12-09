@@ -7,11 +7,9 @@ import nltk
 import numpy as np
 import torch
 
-from senselab.audio.data_structures.audio import Audio
-from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
-from senselab.utils.data_structures.language import Language
+from senselab.audio.data_structures import Audio
+from senselab.utils.data_structures import DeviceType, Language, TorchModel, _select_device_and_dtype
 from senselab.utils.data_structures.logging import logger
-from senselab.utils.data_structures.model import TorchModel
 
 
 class StyleTTS2:
@@ -34,7 +32,7 @@ class StyleTTS2:
     @classmethod
     def _get_style_tts_2_model(
         cls,
-        model: TorchModel = TorchModel(path_or_uri="wilke0818/StyleTTS2-TorchHub", revision="main"),
+        model: Optional[TorchModel] = None,
         language: Optional[Language] = None,
         device: Optional[DeviceType] = None,
         pretrain_data: Optional[Literal["LibriTTS", "LJSpeech"]] = "LibriTTS",
@@ -43,7 +41,8 @@ class StyleTTS2:
         """Get or create a StyleTTS2 model.
 
         Args:
-            model (TorchModel): The Torch model (default is "wilke0818/StyleTTS2-TorchHub:main").
+            model (TorchModel): The Torch model.
+                If None, the default model "wilke0818/StyleTTS2-TorchHub:main" is used.
             language (Optional[Language]): The language of the text (default is None).
                 The only supported language is "en" for now.
             device (DeviceType): The device to run the model on (default is None). Supported devices are CPU and CUDA.
@@ -56,6 +55,8 @@ class StyleTTS2:
         Returns:
             model: The Torch-based StyleTTS2 model.
         """
+        if model is None:
+            model = TorchModel(path_or_uri="wilke0818/StyleTTS2-TorchHub", revision="main")
         if language == Language(language_code="en"):
             model_name: str = "styletts2"  # This is the default model they have for English.
         else:
@@ -82,7 +83,7 @@ class StyleTTS2:
         texts: List[str],
         target_audios: List[Audio],
         target_transcripts: List[Optional[str]],
-        model: TorchModel = TorchModel(path_or_uri="wilke0818/StyleTTS2-TorchHub", revision="main"),
+        model: Optional[TorchModel] = None,
         language: Optional[Language] = None,
         device: Optional[DeviceType] = None,
         pretrain_data: Optional[Literal["LibriTTS", "LJSpeech"]] = "LibriTTS",
@@ -101,7 +102,8 @@ class StyleTTS2:
                 The list of audio objects to reference.
             target_transcripts (List[Optional[str]]):
                 Transcript for each target audio
-            model (TorchModel): The Torch model (default is "wilke0818/StyleTTS2-TorchHub").
+            model (TorchModel): The Torch model.
+                If None, the default model "wilke0818/StyleTTS2-TorchHub" is used.
             language (Optional[Language]): The language of the text (default is None).
                 The only supported language is "en" for now.
             device (Optional[DeviceType]): device to run model on
@@ -134,6 +136,8 @@ class StyleTTS2:
 
         The original repo of the model is: https://github.com/yl4579/StyleTTS2.
         """
+        if model is None:
+            model = TorchModel(path_or_uri="wilke0818/StyleTTS2-TorchHub", revision="main")
         nltk.download("punkt")
         nltk.download("punkt_tab")
         # Take the start time of the model initialization
