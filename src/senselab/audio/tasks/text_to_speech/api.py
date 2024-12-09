@@ -2,17 +2,15 @@
 
 from typing import Any, List, Optional, Tuple, TypeGuard
 
-from senselab.audio.data_structures.audio import Audio
+from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.text_to_speech.huggingface import HuggingFaceTTS
 from senselab.audio.tasks.text_to_speech.marstts import Mars5TTS
-from senselab.utils.data_structures.device import DeviceType
-from senselab.utils.data_structures.language import Language
-from senselab.utils.data_structures.model import HFModel, SenselabModel, TorchModel
+from senselab.utils.data_structures import DeviceType, HFModel, Language, SenselabModel, TorchModel
 
 
 def synthesize_texts(
     texts: List[str],
-    model: SenselabModel = HFModel(path_or_uri="suno/bark", revision="main"),
+    model: Optional[SenselabModel] = None,
     language: Optional[Language] = None,
     device: Optional[DeviceType] = None,
     targets: Optional[List[Audio | Tuple[Audio, str]]] = None,
@@ -26,7 +24,7 @@ def synthesize_texts(
     Args:
         texts (List[str]): The list of text strings to be synthesized.
         model (SenselabModel): The model used for synthesis.
-            Defaults to HFModel(path_or_uri="suno/bark", revision="main").
+                If None, the default model "suno/bark" is used.
         language (Optional[Language]): The language of the text
             (default is None).
         device (Optional[DeviceType]): The device to run the model on
@@ -45,6 +43,9 @@ def synthesize_texts(
     Returns:
         List[Audio]: The list of synthesized audio objects.
     """
+    if model is None:
+        model = HFModel(path_or_uri="suno/bark", revision="main")
+
     if targets is not None:
         assert len(targets) == len(texts), ValueError("Provided targets should be same length as texts")
 

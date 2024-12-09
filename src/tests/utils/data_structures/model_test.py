@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from senselab.utils.data_structures.model import HFModel, check_hf_repo_exists
+from senselab.utils.data_structures import HFModel, check_hf_repo_exists
 
 
 def test_check_hf_repo_exists_true() -> None:

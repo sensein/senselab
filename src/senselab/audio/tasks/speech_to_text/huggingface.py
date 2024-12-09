@@ -10,12 +10,9 @@ from typing import Any, Dict, List, Optional
 
 from transformers import pipeline
 
-from senselab.audio.data_structures.audio import Audio
-from senselab.utils.data_structures.device import DeviceType, _select_device_and_dtype
-from senselab.utils.data_structures.language import Language
+from senselab.audio.data_structures import Audio
+from senselab.utils.data_structures import DeviceType, HFModel, Language, ScriptLine, _select_device_and_dtype
 from senselab.utils.data_structures.logging import logger
-from senselab.utils.data_structures.model import HFModel
-from senselab.utils.data_structures.script_line import ScriptLine
 
 
 class HuggingFaceASR:
@@ -71,7 +68,7 @@ class HuggingFaceASR:
     def transcribe_audios_with_transformers(
         cls,
         audios: List[Audio],
-        model: HFModel = HFModel(path_or_uri="openai/whisper-tiny"),
+        model: Optional[HFModel] = None,
         language: Optional[Language] = None,
         return_timestamps: Optional[str] = "word",
         max_new_tokens: int = 128,
@@ -84,6 +81,7 @@ class HuggingFaceASR:
         Args:
             audios (List[Audio]): The list of audio objects to be transcribed.
             model (HFModel): The Hugging Face model used for transcription.
+                If None, the default model "openai/whisper-tiny" is used.
             language (Optional[Language]): The language of the audio (default is None).
             return_timestamps (Optional[str]): The level of timestamp details (default is "word").
             max_new_tokens (int): The maximum number of new tokens (default is 128).
@@ -94,6 +92,8 @@ class HuggingFaceASR:
         Returns:
             List[ScritpLine]: The list of script lines.
         """
+        if model is None:
+            model = HFModel(path_or_uri="openai/whisper-tiny")
 
         def _audio_to_huggingface_dict(audio: Audio) -> Dict:
             """Convert an Audio object to a dictionary that can be used by the transformers pipeline.

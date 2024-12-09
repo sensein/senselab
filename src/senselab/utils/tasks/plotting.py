@@ -5,7 +5,7 @@ from typing import List
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 
-from senselab.utils.data_structures.script_line import ScriptLine
+from senselab.utils.data_structures import ScriptLine
 
 
 def plot_transcript(transcript: ScriptLine) -> None:
@@ -45,7 +45,8 @@ def plot_transcript(transcript: ScriptLine) -> None:
     for i, text in enumerate(texts):
         if start_times[i] is not None and end_times[i] is not None:
             ax.plot([start_times[i], end_times[i]], [i, i], marker="o")
-            ax.text((start_times[i] + end_times[i]) / 2, i, text, ha="center", va="bottom")
+            if text:
+                ax.text((start_times[i] + end_times[i]) / 2, i, text, ha="center", va="bottom")
 
     # Setting labels and title
     ax.set_yticks(range(len(texts)))

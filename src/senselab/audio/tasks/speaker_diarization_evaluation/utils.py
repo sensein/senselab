@@ -5,7 +5,7 @@ from typing import Dict, List
 from pyannote.core import Annotation, Segment
 from pyannote.metrics.diarization import DiarizationErrorRate, GreedyDiarizationErrorRate
 
-from senselab.utils.data_structures.script_line import ScriptLine
+from senselab.utils.data_structures import ScriptLine
 
 
 def calculate_diarization_error_rate(

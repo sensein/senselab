@@ -1,0 +1,14 @@
+name: main-branch-status
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  update-status:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    - name: Update badge status
+      run: echo "Badge status updated for main branch"

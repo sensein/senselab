@@ -7,12 +7,9 @@ the preferred device, and the model-specific parameters, and senselab handles th
 
 from typing import Any, List, Optional
 
-from senselab.audio.data_structures.audio import Audio
+from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speech_to_text.huggingface import HuggingFaceASR
-from senselab.utils.data_structures.device import DeviceType
-from senselab.utils.data_structures.language import Language
-from senselab.utils.data_structures.model import HFModel, SenselabModel
-from senselab.utils.data_structures.script_line import ScriptLine
+from senselab.utils.data_structures import DeviceType, HFModel, Language, ScriptLine, SenselabModel
 
 
 def transcribe_audios(
@@ -43,6 +40,8 @@ def transcribe_audios(
                 audios=audios, model=model, language=language, device=device, **kwargs
             )
         else:
-            raise NotImplementedError("Only Hugging Face models are supported for now.")
+            raise NotImplementedError(
+                "Only Hugging Face models are supported for now. We aim to support more models in the future."
+            )
     except TypeError as e:
         raise TypeError(e)  # noqa: W0707

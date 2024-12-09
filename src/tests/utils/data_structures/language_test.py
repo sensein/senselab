@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from senselab.utils.data_structures.language import Language
+from senselab.utils.data_structures import Language
 
 
 def test_validate_language_valid_code_alpha_2() -> None:

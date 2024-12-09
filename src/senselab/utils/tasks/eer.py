@@ -2,7 +2,6 @@
 
 from typing import Tuple
 
-import pydra
 import torch
 from speechbrain.utils.metric_stats import EER
 
@@ -18,6 +17,3 @@ def compute_eer(predictions: torch.Tensor, targets: torch.Tensor) -> Tuple[float
         Tuple[float, float]: The EER and the threshold for the EER.
     """
     return EER(predictions, targets)
-
-
-compute_eer_pt = pydra.mark.task(compute_eer)
