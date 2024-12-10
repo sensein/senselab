@@ -44,9 +44,7 @@ class SentenceTransformerFactory:
     def extract_text_embeddings(
         cls,
         pieces_of_text: List[str],
-        model: SentenceTransformersModel = SentenceTransformersModel(
-            path_or_uri="sentence-transformers/all-MiniLM-L6-v2", revision="main"
-        ),
+        model: Optional[SentenceTransformersModel] = None,
         device: Optional[DeviceType] = None,
     ) -> List[torch.Tensor]:
         """Extracts embeddings from a list of strings using a SentenceTransformer model.
@@ -54,13 +52,15 @@ class SentenceTransformerFactory:
         Args:
             pieces_of_text (List[str]): A list of strings to extract embeddings from.
             model (SentenceTransformersModel, optional): A Hugging Face model configuration.
-                Defaults to SentenceTransformersModel(path_or_uri="sentence-transformers/all-MiniLM-L6-v2").
+                If None, the default model "sentence-transformers/all-MiniLM-L6-v2" is used.
             device (Optional[DeviceType], optional): The device to run the model on.
                 Defaults to None.
 
         Returns:
             List[torch.Tensor]: A list of embeddings for the input strings.
         """
+        if model is None:
+            model = SentenceTransformersModel(path_or_uri="sentence-transformers/all-MiniLM-L6-v2", revision="main")
         pipeline = cls._get_sentencetransformer_pipeline(model, device)
         embeddings = pipeline.encode(pieces_of_text, convert_to_tensor=True)
         return [embedding for embedding in embeddings]
