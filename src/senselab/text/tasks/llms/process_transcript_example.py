@@ -1,7 +1,8 @@
 """Example usage of llms directory to process AI responses from transcript."""
 
+import os
 import pickle
-import sys
+import time
 from pathlib import Path
 from typing import Generator, List
 
@@ -117,26 +118,31 @@ def generate_all_transcripts(
 
 
 if __name__ == "__main__":
-    transcript_dir = Path("/home/goshdam/transcripts")
-    prompt_path = Path("/home/goshdam/prompts/V2_1076.txt")
+    transcript_dir = Path("/home/goshdam/to_do")
+    prompt_path = Path("/home/goshdam/prompts/V2_1038.txt")
     temp = 0.5
     model_name = "llama3-70b"
-
     llm = LLM(model_name)
 
-    if sys.argv[1] == "run":
-        output_path = Path("/home/goshdam/outputs/outputs_llama.pkl")
-        cache_dir = Path("/home/goshdam/outputs/cache")
-        measure = True
+    timeout = 700  # in seconds
+    poll_interval = 5  # interval to check in seconds
+    start_time = time.time()
 
-        cache_dir.mkdir(parents=True, exist_ok=True)
+    while os.getenv("VLLM_STATUS") != "Running":
+        elapsed_time = time.time() - start_time
+        if elapsed_time > timeout:
+            raise TimeoutError(f"Timed out after {timeout} seconds waiting for VLLM_STATUS to be 'Running'.")
+        time.sleep(poll_interval)
 
-        outputs = generate_all_transcripts(transcript_dir, prompt_path, temp, model_name, measure, cache_dir, llm)
+    output_path = Path("/home/goshdam/outputs/outputs_llama.pkl")
+    cache_dir = Path("/home/goshdam/outputs/cache")
+    measure = False
 
-        with open(output_path, "wb") as f:
-            pickle.dump(outputs, f)
+    cache_dir.mkdir(parents=True, exist_ok=True)
 
-        print(f"Successfully saved all {len(outputs)} outputs to {output_path}")
+    outputs = generate_all_transcripts(transcript_dir, prompt_path, temp, model_name, measure, cache_dir, llm)
 
-    elif sys.argv[1] == "server":
-        llm.start_server(num_gpus=4)
+    with open(output_path, "wb") as f:
+        pickle.dump(outputs, f)
+
+    print(f"Successfully saved all {len(outputs)} outputs to {output_path}")
