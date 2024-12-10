@@ -4,6 +4,7 @@ Classes:
     LLM: A unified interface for interacting with various LLMs.
 """
 
+import os
 import time
 from subprocess import PIPE, Popen, check_output
 from typing import List, Optional, Tuple
@@ -52,7 +53,7 @@ class LLM:
 
         self._client = OpenAI(base_url=self._serving_url)
 
-    def start_server(self, num_gpus: int, timeout: int = 300) -> Optional[Popen]:
+    def start_server(self, num_gpus: int, timeout: int = 700) -> Optional[Popen]:
         """Starts the VLLM server with the specified number of GPUs and logs the output.
 
         Args:
@@ -155,8 +156,8 @@ class LLM:
             ValueError: If the model name is unsupported.
         """
         model_mapping = {
-            "llama3-70b": ("meta-llama/Meta-Llama-3.1-70B-Instruct", "http://localhost:8000/v1"),
-            "llama3-8b": ("meta-llama/Meta-Llama-3.1-8B-Instruct", "http://localhost:8000/v1"),
+            "llama3-70b": ("meta-llama/Meta-Llama-3.1-70B-Instruct", f"http://{os.getenv('VLLM_IP_ADDRESS')}:8000/v1"),
+            "llama3-8b": ("meta-llama/Meta-Llama-3.1-8B-Instruct", f"http://{os.getenv('VLLM_IP_ADDRESS')}:8000/v1"),
             "gpt-4o": ("gpt-4o", "https://api.openai.com/v1"),
         }
         if model in model_mapping:
