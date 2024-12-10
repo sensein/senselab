@@ -18,14 +18,14 @@ class Mars5TTS:
     @classmethod
     def _get_torch_tts_model(
         cls,
-        model: TorchModel = TorchModel(path_or_uri="Camb-ai/mars5-tts", revision="master"),
+        model: Optional[TorchModel] = None,
         language: Optional[Language] = Language(language_code="en"),
         device: Optional[DeviceType] = None,
     ) -> Tuple[torch.nn.Module, type]:
         """Get or create a Torch-based Mars5TTS model.
 
         Args:
-            model (TorchModel): The Torch model (default is "Camb-ai/mars5-tts").
+            model (TorchModel): The Torch model (currently only supports "Camb-ai/mars5-tts").
             language (Optional[Language]): The language of the text (default is Language(language_code="en")).
                 The only supported language is "en" for now.
             device (DeviceType): The device to run the model on (default is None). Supported devices are CPU and CUDA.
@@ -34,6 +34,9 @@ class Mars5TTS:
             model: The Torch-based Mars5TTS model.
             config_class: The configuration class used by the model.
         """
+        if model is None:
+            model = TorchModel(path_or_uri="Camb-ai/mars5-tts", revision="master")
+
         if model.path_or_uri != "Camb-ai/mars5-tts" or model.revision != "master":
             raise NotImplementedError("Only the 'Camb-ai/mars5-tts' model is supported for now.")
         if language == Language(language_code="en"):
@@ -57,7 +60,7 @@ class Mars5TTS:
         cls,
         texts: List[str],
         targets: List[Tuple[Audio, str]],
-        model: TorchModel = TorchModel(path_or_uri="Camb-ai/mars5-tts", revision="master"),
+        model: Optional[TorchModel] = None,
         language: Optional[Language] = None,
         device: Optional[DeviceType] = None,
         deep_clone: bool = True,
@@ -72,7 +75,8 @@ class Mars5TTS:
             texts (List[str]): The list of text strings to be synthesized.
             targets (List[Tuple[Audio, str]]):
                 The list of tuples containing audio objects and transcripts.
-            model (TorchModel): The Torch model (default is "Camb-ai/mars5-tts").
+            model (TorchModel): The Torch model.
+                If None, the default model "Camb-ai/mars5-tts" is used.
             language (Optional[Language]): The language of the text (default is None).
                 The only supported language is "en" for now.
             device (DeviceType): The device to run the model on (default is None). Supported devices are CPU and CUDA.
@@ -95,6 +99,9 @@ class Mars5TTS:
 
         The original repo of the model is: https://github.com/Camb-ai/MARS5-TTS.
         """
+        if model is None:
+            model = TorchModel(path_or_uri="Camb-ai/mars5-tts", revision="master")
+
         # Take the start time of the model initialization
         start_time_model = time.time()
         my_model, config_class = cls._get_torch_tts_model(model, language, device)

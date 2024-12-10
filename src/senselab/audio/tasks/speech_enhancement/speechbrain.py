@@ -46,9 +46,7 @@ class SpeechBrainEnhancer:
     def enhance_audios_with_speechbrain(
         cls,
         audios: List[Audio],
-        model: SpeechBrainModel = SpeechBrainModel(
-            path_or_uri="speechbrain/sepformer-wham16k-enhancement", revision="main"
-        ),
+        model: Optional[SpeechBrainModel] = None,
         device: Optional[DeviceType] = None,
         batch_size: int = 16,
     ) -> List[Audio]:
@@ -57,12 +55,16 @@ class SpeechBrainEnhancer:
         Args:
             audios (List[Audio]): The list of audio objects to be enhanced.
             model (SpeechBrainModel): The SpeechBrain model used for enhancement.
+                If None, the default model "speechbrain/sepformer-wham16k-enhancement" is used.
             device (Optional[DeviceType]): The device to run the model on (default is None).
             batch_size (int): The size of batches to use when processing on a GPU.
 
         Returns:
             List[Audio]: The list of enhanced audio objects.
         """
+        if model is None:
+            model = SpeechBrainModel(path_or_uri="speechbrain/sepformer-wham16k-enhancement", revision="main")
+
         # Take the start time of the model initialization
         start_time_model = time.time()
         enhancer, device, _ = cls._get_speechbrain_model(model=model, device=device)
