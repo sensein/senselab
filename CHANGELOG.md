@@ -1,3 +1,15 @@
+# 0.25.0 (Tue Dec 10 2024)
+
+#### 🚀 Enhancement
+
+- updating torch version [#217](https://github.com/sensein/senselab/pull/217) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.24.1 (Tue Dec 03 2024)
 
 #### 🐛 Bug Fix
