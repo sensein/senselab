@@ -150,7 +150,7 @@ def _get_prediction_matrix(
 
 
 def _assign_timestamps_to_characters(
-    text: str, segment: SingleSegment, char_segments: list, ratio: float, t1: float, model_lang: Language
+    segment: ScriptLine, char_segments: list, ratio: float, t1: float, model_lang: Language
 ) -> pd.DataFrame:
     """Assigns timestamps to aligned characters and organizes them into a DataFrame.
 
@@ -165,32 +165,44 @@ def _assign_timestamps_to_characters(
     Returns:
         pd.DataFrame: DataFrame containing character alignments with timestamps and word indices.
     """
-    char_segments_arr = []
-    word_idx = 0
+    # aligned_characters = ScriptLine()
+    # aligned_characters.text
+    # aligned_characters.start
+    # aligned_characters.end
+    text = segment["text"]
+    start = segment["start"]
+    end = segment["end"]
+    aligned_segment = ScriptLine(text=text, start=start, end=end)
+    current_word = None
+    current_subsegment = None
+
     for cdx, char in enumerate(text):
-        start, end, score = None, None, None
         if segment["clean_cdx"] is not None and cdx in segment["clean_cdx"]:
             char_seg = char_segments[segment["clean_cdx"].index(cdx)]
             start = round(char_seg.start * ratio + t1, 3)
             end = round(char_seg.end * ratio + t1, 3)
-            score = round(char_seg.score, 3)
+            
+            if current_word:
+                current_word.chunks.append(current_char)
+            else:
+                current_word = ScriptLine(text=curr)
 
-        char_segments_arr.append(
-            {
-                "char": char,
-                "start": start,
-                "end": end,
-                "score": score,
-                "word-idx": word_idx,
-            }
-        )
+        if model_lang.alpha_2 in LANGUAGES_WITHOUT_SPACES or cdx == len(text) - 1 or text[cdx + 1] == " ":
+            if current_subsegment:
+                current_subsegment.chunks.append(current_word)
+            else:
+                current_subsegment = ScriptLine(text=current_word.text, chunks=[current_word])
+            
+            # update to store start and end of word
+            current_word = ScriptLine()
 
-        if model_lang.alpha_2 in LANGUAGES_WITHOUT_SPACES:
-            word_idx += 1
-        elif cdx == len(text) - 1 or text[cdx + 1] == " ":
-            word_idx += 1
-
-    return pd.DataFrame(char_segments_arr)
+        if char == ".":
+            if 
+            segment.chunks.append(current_subsegment)
+            # update to store start and end of subsegment
+            current_subsegment = ScriptLine()
+    print(segment)
+    hi = 10
 
 
 def _align_subsegments(
@@ -214,7 +226,7 @@ def _align_subsegments(
     Returns:
         None: The function modifies the word_segments and aligned_subsegments lists in place.
     """
-    for sdx, (sstart, send) in enumerate(segment["sentence_spans"] or []):
+    for sdx, (sstart, send) in enumerate(segment["sentence_spans"] or []): 
         curr_chars = char_segments_df.loc[(char_segments_df.index >= sstart) & (char_segments_df.index <= send)]
         char_segments_df.loc[(char_segments_df.index >= sstart) & (char_segments_df.index <= send), "sentence-idx"] = (
             sdx
@@ -295,11 +307,9 @@ def _align_single_segment(
     """
     text_clean = "".join(segment["clean_char"] or [])
     tokens = [model_dictionary[c] for c in text_clean]
-
     extracted_segment = extract_segments([(audio, [(t1, t2)])])[0][0]
     lengths = torch.tensor([extracted_segment.waveform.shape[-1]])
     waveform_segment = pad_audios([extracted_segment], MINIMUM_SEGMENT_SIZE)[0].waveform
-
     emissions = _get_prediction_matrix(
         model=model, waveform_segment=waveform_segment, lengths=lengths, model_type=model_type, device=device
     )
@@ -319,12 +329,26 @@ def _align_single_segment(
         return
 
     char_segments = _merge_repeats(path, text_clean)
+
     duration = t2 - t1
     ratio = duration * waveform_segment.size(0) / (trellis.size(0) - 1)
-    char_segments_df = _assign_timestamps_to_characters(segment["text"], segment, char_segments, ratio, t1, model_lang)
+    char_segments_df = _assign_timestamps_to_characters(segment, char_segments, ratio, t1, model_lang)
+    # one pass over chars
+    # initialize
+        # segment: subsegments: words: chars
+
+    # for each char:
+        # if word index same, then new word
+        # if ., new subsegment
+
+
+    # 
     # script line native
+    # align chars
     # align words
     # align subsegments
+    # align segment
+
     for word_idx in char_segments_df["word-idx"].unique():
         word_chars = char_segments_df[char_segments_df["word-idx"] == word_idx]
         word_text = "".join(word_chars["char"].tolist()).strip()
@@ -510,11 +534,7 @@ def _align_segments(
         t2 = segment["end"]
         text = segment["text"]
 
-        aligned_segment: SingleAlignedSegment = {"start": t1, "end": t2, "text": text, "words": [], "chars": None}
-
-        if return_char_alignments:
-            aligned_segment["chars"] = []
-
+        aligned_segment = ScriptLine(text=text, start=t1, end=t2)
         if _can_align_segment(segment, model_dictionary, t1, max_duration):
             _align_single_segment(
                 segment,
