@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from pydantic import BaseModel, ValidationInfo, field_validator, model_validator
+from pydantic import BaseModel, ValidationInfo, field_validator
 
 
 class ScriptLine(BaseModel):
@@ -19,13 +19,6 @@ class ScriptLine(BaseModel):
     start: Optional[float] = None
     end: Optional[float] = None
     chunks: Optional[List["ScriptLine"]] = None
-
-    @model_validator(mode="before")
-    def validate_text_and_speaker(cls, values: Dict[str, Any], _: ValidationInfo) -> Dict[str, Any]:
-        """Validate that at least one of text or speaker is provided."""
-        if not values.get("text") and not values.get("speaker"):
-            raise ValueError("At least text or speaker must be provided.")
-        return values
 
     @field_validator("text", "speaker")
     def strings_must_be_stripped(cls, v: str, _: ValidationInfo) -> str:
