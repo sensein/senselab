@@ -172,35 +172,22 @@ def _assign_timestamps_to_characters(
     text = segment["text"]
     start = segment["start"]
     end = segment["end"]
-    aligned_segment = ScriptLine(text=text, start=start, end=end)
-    current_word = None
-    current_subsegment = None
 
+    aligned_segment_dict = {"text": text, "timestamps": [start, end], "chunks": []}
+    current_subsegment_dict, current_word_dict = {"text": None, "timestamps": [], "chunks": []}
     for cdx, char in enumerate(text):
         if segment["clean_cdx"] is not None and cdx in segment["clean_cdx"]:
             char_seg = char_segments[segment["clean_cdx"].index(cdx)]
-            start = round(char_seg.start * ratio + t1, 3)
-            end = round(char_seg.end * ratio + t1, 3)
-            
-            if current_word:
-                current_word.chunks.append(current_char)
-            else:
-                current_word = ScriptLine(text=curr)
+            char_dict = {"text": char, "timestamps": [round(x * ratio + t1, 3) for x in [char_seg.end.char_seg.end]]}
+            current_word_dict["chunks"].append(char_dict)
 
         if model_lang.alpha_2 in LANGUAGES_WITHOUT_SPACES or cdx == len(text) - 1 or text[cdx + 1] == " ":
-            if current_subsegment:
-                current_subsegment.chunks.append(current_word)
-            else:
-                current_subsegment = ScriptLine(text=current_word.text, chunks=[current_word])
-            
-            # update to store start and end of word
-            current_word = ScriptLine()
+            current_subsegment_dict["chunks"].append(current_word_dict)
+            current_word_dict = {"text": None, "timestamps": [], "chunks": []}
 
         if char == ".":
-            if 
-            segment.chunks.append(current_subsegment)
-            # update to store start and end of subsegment
-            current_subsegment = ScriptLine()
+            aligned_segment_dict.chunks.append(current_subsegment_dict)
+            current_subsegment_dict = {"text": None, "timestamps": [], "chunks": []}
     print(segment)
     hi = 10
 
@@ -226,7 +213,7 @@ def _align_subsegments(
     Returns:
         None: The function modifies the word_segments and aligned_subsegments lists in place.
     """
-    for sdx, (sstart, send) in enumerate(segment["sentence_spans"] or []): 
+    for sdx, (sstart, send) in enumerate(segment["sentence_spans"] or []):
         curr_chars = char_segments_df.loc[(char_segments_df.index >= sstart) & (char_segments_df.index <= send)]
         char_segments_df.loc[(char_segments_df.index >= sstart) & (char_segments_df.index <= send), "sentence-idx"] = (
             sdx
@@ -335,14 +322,13 @@ def _align_single_segment(
     char_segments_df = _assign_timestamps_to_characters(segment, char_segments, ratio, t1, model_lang)
     # one pass over chars
     # initialize
-        # segment: subsegments: words: chars
+    # segment: subsegments: words: chars
 
     # for each char:
-        # if word index same, then new word
-        # if ., new subsegment
+    # if word index same, then new word
+    # if ., new subsegment
 
-
-    # 
+    #
     # script line native
     # align chars
     # align words
@@ -534,7 +520,7 @@ def _align_segments(
         t2 = segment["end"]
         text = segment["text"]
 
-        aligned_segment = ScriptLine(text=text, start=t1, end=t2)
+        aligned_segment = None
         if _can_align_segment(segment, model_dictionary, t1, max_duration):
             _align_single_segment(
                 segment,
