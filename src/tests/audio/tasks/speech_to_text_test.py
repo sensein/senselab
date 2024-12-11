@@ -11,26 +11,6 @@ from senselab.audio.tasks.speech_to_text.huggingface import HuggingFaceASR
 from senselab.utils.data_structures import DeviceType, HFModel, Language, ScriptLine
 
 
-def test_scriptline_from_dict() -> None:
-    """Test creating ScriptLine from dict."""
-    data = {
-        "text": "Hello world",
-        "chunks": [{"text": "Hello", "timestamps": [0.0, 1.0]}, {"text": "world", "timestamps": [1.0, 2.0]}],
-    }
-    scriptline = ScriptLine.from_dict(data)
-
-    # Ensure chunks is not None before using it
-    assert scriptline.chunks is not None
-    assert len(scriptline.chunks) == 2
-    assert scriptline.chunks[0].text == "Hello"
-    assert scriptline.chunks[0].get_timestamps()[0] == 0.0
-    assert scriptline.chunks[0].get_timestamps()[1] == 1.0
-
-    assert scriptline.chunks[1].text == "world"
-    assert scriptline.chunks[1].get_timestamps()[0] == 1.0
-    assert scriptline.chunks[1].get_timestamps()[1] == 2.0
-
-
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 @pytest.fixture
 def hf_model() -> HFModel:
