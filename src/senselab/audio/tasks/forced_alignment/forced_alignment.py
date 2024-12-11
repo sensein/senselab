@@ -68,7 +68,7 @@ def _preprocess_segments(
 
         clean_char, clean_cdx = [], []
         for cdx, char in enumerate(text):
-            char_ = char.lower()
+            char_ = char.upper()
             if model_lang.alpha_2 not in LANGUAGES_WITHOUT_SPACES:
                 char_ = char_.replace(" ", "|")
 
@@ -319,11 +319,20 @@ def _align_single_segment(
         return
 
     char_segments = _merge_repeats(path, text_clean)
-
     duration = t2 - t1
     ratio = duration * waveform_segment.size(0) / (trellis.size(0) - 1)
-
     char_segments_df = _assign_timestamps_to_characters(segment["text"], segment, char_segments, ratio, t1, model_lang)
+    # script line native
+    # align words
+    # align subsegments
+    for word_idx in char_segments_df["word-idx"].unique():
+        word_chars = char_segments_df[char_segments_df["word-idx"] == word_idx]
+        word_text = "".join(word_chars["char"].tolist()).strip()
+        if len(word_text) == 0:
+            continue
+
+        # word_start = word_chars["start"].min()
+        # word_end = word_chars["end"].max()
 
     aligned_subsegments: List[SingleAlignedSegment] = []
     if isinstance(char_segments_df, pd.DataFrame):
@@ -631,13 +640,13 @@ def align_transcriptions(
     loaded_processors_and_models = {}
 
     for recording in audios_and_transcriptions_and_language:
-        audio, transcription, language = (*recording,)
+        audio, transcription, language = (*recording, None)[:3]
 
         # Set default language to English if not provided
         if language is None:
             language = Language(language_code="en")
 
-        # Define the language code and load model
+        # Load language-specific model, defaulting to English
         device = _select_device_and_dtype()[0]  # DeviceType object
         model_variant = DEFAULT_ALIGN_MODELS_HF.get(language.language_code, DEFAULT_ALIGN_MODELS_HF["en"])
 
