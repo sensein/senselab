@@ -68,7 +68,7 @@ def _preprocess_segments(
 
         clean_char, clean_cdx = [], []
         for cdx, char in enumerate(text):
-            char_ = char.lower()
+            char_ = char.upper()
             if model_lang.alpha_2 not in LANGUAGES_WITHOUT_SPACES:
                 char_ = char_.replace(" ", "|")
 
@@ -150,7 +150,7 @@ def _get_prediction_matrix(
 
 
 def _assign_timestamps_to_characters(
-    text: str, segment: SingleSegment, char_segments: list, ratio: float, t1: float, model_lang: Language
+    segment: ScriptLine, char_segments: list, ratio: float, t1: float, model_lang: Language
 ) -> pd.DataFrame:
     """Assigns timestamps to aligned characters and organizes them into a DataFrame.
 
@@ -165,32 +165,31 @@ def _assign_timestamps_to_characters(
     Returns:
         pd.DataFrame: DataFrame containing character alignments with timestamps and word indices.
     """
-    char_segments_arr = []
-    word_idx = 0
+    # aligned_characters = ScriptLine()
+    # aligned_characters.text
+    # aligned_characters.start
+    # aligned_characters.end
+    text = segment["text"]
+    start = segment["start"]
+    end = segment["end"]
+
+    aligned_segment_dict = {"text": text, "timestamps": [start, end], "chunks": []}
+    current_subsegment_dict, current_word_dict = {"text": None, "timestamps": [], "chunks": []}
     for cdx, char in enumerate(text):
-        start, end, score = None, None, None
         if segment["clean_cdx"] is not None and cdx in segment["clean_cdx"]:
             char_seg = char_segments[segment["clean_cdx"].index(cdx)]
-            start = round(char_seg.start * ratio + t1, 3)
-            end = round(char_seg.end * ratio + t1, 3)
-            score = round(char_seg.score, 3)
+            char_dict = {"text": char, "timestamps": [round(x * ratio + t1, 3) for x in [char_seg.end.char_seg.end]]}
+            current_word_dict["chunks"].append(char_dict)
 
-        char_segments_arr.append(
-            {
-                "char": char,
-                "start": start,
-                "end": end,
-                "score": score,
-                "word-idx": word_idx,
-            }
-        )
+        if model_lang.alpha_2 in LANGUAGES_WITHOUT_SPACES or cdx == len(text) - 1 or text[cdx + 1] == " ":
+            current_subsegment_dict["chunks"].append(current_word_dict)
+            current_word_dict = {"text": None, "timestamps": [], "chunks": []}
 
-        if model_lang.alpha_2 in LANGUAGES_WITHOUT_SPACES:
-            word_idx += 1
-        elif cdx == len(text) - 1 or text[cdx + 1] == " ":
-            word_idx += 1
-
-    return pd.DataFrame(char_segments_arr)
+        if char == ".":
+            aligned_segment_dict.chunks.append(current_subsegment_dict)
+            current_subsegment_dict = {"text": None, "timestamps": [], "chunks": []}
+    print(segment)
+    hi = 10
 
 
 def _align_subsegments(
@@ -295,11 +294,9 @@ def _align_single_segment(
     """
     text_clean = "".join(segment["clean_char"] or [])
     tokens = [model_dictionary[c] for c in text_clean]
-
     extracted_segment = extract_segments([(audio, [(t1, t2)])])[0][0]
     lengths = torch.tensor([extracted_segment.waveform.shape[-1]])
     waveform_segment = pad_audios([extracted_segment], MINIMUM_SEGMENT_SIZE)[0].waveform
-
     emissions = _get_prediction_matrix(
         model=model, waveform_segment=waveform_segment, lengths=lengths, model_type=model_type, device=device
     )
@@ -322,8 +319,30 @@ def _align_single_segment(
 
     duration = t2 - t1
     ratio = duration * waveform_segment.size(0) / (trellis.size(0) - 1)
+    char_segments_df = _assign_timestamps_to_characters(segment, char_segments, ratio, t1, model_lang)
+    # one pass over chars
+    # initialize
+    # segment: subsegments: words: chars
 
-    char_segments_df = _assign_timestamps_to_characters(segment["text"], segment, char_segments, ratio, t1, model_lang)
+    # for each char:
+    # if word index same, then new word
+    # if ., new subsegment
+
+    #
+    # script line native
+    # align chars
+    # align words
+    # align subsegments
+    # align segment
+
+    for word_idx in char_segments_df["word-idx"].unique():
+        word_chars = char_segments_df[char_segments_df["word-idx"] == word_idx]
+        word_text = "".join(word_chars["char"].tolist()).strip()
+        if len(word_text) == 0:
+            continue
+
+        # word_start = word_chars["start"].min()
+        # word_end = word_chars["end"].max()
 
     aligned_subsegments: List[SingleAlignedSegment] = []
     if isinstance(char_segments_df, pd.DataFrame):
@@ -501,11 +520,7 @@ def _align_segments(
         t2 = segment["end"]
         text = segment["text"]
 
-        aligned_segment: SingleAlignedSegment = {"start": t1, "end": t2, "text": text, "words": [], "chars": None}
-
-        if return_char_alignments:
-            aligned_segment["chars"] = []
-
+        aligned_segment = None
         if _can_align_segment(segment, model_dictionary, t1, max_duration):
             _align_single_segment(
                 segment,
@@ -630,14 +645,14 @@ def align_transcriptions(
     aligned_script_lines = []
     loaded_processors_and_models = {}
 
-    for item in audios_and_transcriptions_and_language:
-        audio, transcription, language = (*item, None)[:3]
+    for recording in audios_and_transcriptions_and_language:
+        audio, transcription, language = (*recording, None)[:3]
 
         # Set default language to English if not provided
         if language is None:
             language = Language(language_code="en")
 
-        # Define the language code and load model
+        # Load language-specific model, defaulting to English
         device = _select_device_and_dtype()[0]  # DeviceType object
         model_variant = DEFAULT_ALIGN_MODELS_HF.get(language.language_code, DEFAULT_ALIGN_MODELS_HF["en"])
 
