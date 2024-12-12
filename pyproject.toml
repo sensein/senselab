@@ -29,9 +29,9 @@ packages = [{include = "senselab", from = "src"}]
 [tool.poetry.dependencies]
 python = ">=3.10,<3.13"
 datasets = "~=3"
-torch = "~=2.5"
-torchvision = "~=0.20"
-torchaudio = "~=2.5"
+torch = "~=2.2"
+torchvision = "~=0.17"
+torchaudio = "~=2.2"
 transformers = "~=4.46.2"
 pydra = "~=0.25"
 pydantic = "~=2.7"
