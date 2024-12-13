@@ -328,63 +328,8 @@ def _align_single_segment(
 
     duration = t2 - t1
     ratio = duration * waveform_segment.size(0) / (trellis.size(0) - 1)
-    char_segments_df = _assign_timestamps_to_characters(segment, char_segments, ratio, t1, model_lang)
-    # one pass over chars
-    # initialize
-    # segment: subsegments: words: chars
-
-    # for each char:
-    # if word index same, then new word
-    # if ., new subsegment
-
-    #
-    # script line native
-    # align chars
-    # align words
-    # align subsegments
-    # align segment
-
-    for word_idx in char_segments_df["word-idx"].unique():
-        word_chars = char_segments_df[char_segments_df["word-idx"] == word_idx]
-        word_text = "".join(word_chars["char"].tolist()).strip()
-        if len(word_text) == 0:
-            continue
-
-        # word_start = word_chars["start"].min()
-        # word_end = word_chars["end"].max()
-
-    aligned_subsegments: List[SingleAlignedSegment] = []
-    if isinstance(char_segments_df, pd.DataFrame):
-        char_segments_df["sentence-idx"] = None
-    else:
-        raise TypeError("char_segments_df must be a pandas DataFrame.")
-
-    if segment["sentence_spans"] is not None:
-        _align_subsegments(
-            segment=segment,
-            char_segments_df=char_segments_df,
-            text=segment["text"],
-            word_segments=word_segments,
-            aligned_subsegments=aligned_subsegments,
-            return_char_alignments=True,
-        )
-
-        if aligned_subsegments:
-            aligned_subsegments_df = pd.DataFrame(aligned_subsegments)
-
-            aligned_subsegments_df["start"] = _interpolate_nans(
-                aligned_subsegments_df["start"], method=interpolate_method
-            )
-            aligned_subsegments_df["end"] = _interpolate_nans(aligned_subsegments_df["end"], method=interpolate_method)
-            agg_dict = {"text": " ".join, "words": "sum"}
-            if model_lang.alpha_2 in LANGUAGES_WITHOUT_SPACES:
-                agg_dict["text"] = "".join
-            if return_char_alignments:
-                agg_dict["chars"] = "sum"
-            aligned_subsegments_df.groupby(["start", "end"], as_index=False).agg(agg_dict)
-            aligned_subsegments = aligned_subsegments_df.to_dict("records")
-
-    aligned_segments.extend(aligned_subsegments)
+    aligned_segment = _assign_timestamps_to_characters(segment, char_segments, ratio, t1, model_lang)
+    aligned_segments.extend(aligned_segment)
 
 
 def _get_trellis(emission: torch.Tensor, tokens: List[int], blank_id: int = 0) -> torch.Tensor:
