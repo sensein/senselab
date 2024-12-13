@@ -165,31 +165,40 @@ def _assign_timestamps_to_characters(
     Returns:
         pd.DataFrame: DataFrame containing character alignments with timestamps and word indices.
     """
-    # aligned_characters = ScriptLine()
-    # aligned_characters.text
-    # aligned_characters.start
-    # aligned_characters.end
     text = segment["text"]
     start = segment["start"]
     end = segment["end"]
 
     aligned_segment_dict = {"text": text, "timestamps": [start, end], "chunks": []}
-    current_subsegment_dict, current_word_dict = {"text": None, "timestamps": [], "chunks": []}
+    current_word_dict = {"text": "", "timestamps": [], "chunks": []}
+    current_subsegment_dict = {"text": "", "timestamps": [], "chunks": []}
     for cdx, char in enumerate(text):
+        print(char)
         if segment["clean_cdx"] is not None and cdx in segment["clean_cdx"]:
             char_seg = char_segments[segment["clean_cdx"].index(cdx)]
-            char_dict = {"text": char, "timestamps": [round(x * ratio + t1, 3) for x in [char_seg.end.char_seg.end]]}
+            char_dict = {"text": char, "timestamps": [round(x * ratio + t1, 3) for x in [char_seg.start, char_seg.end]]}
             current_word_dict["chunks"].append(char_dict)
+            current_word_dict["text"] += char
 
+        # finished word
         if model_lang.alpha_2 in LANGUAGES_WITHOUT_SPACES or cdx == len(text) - 1 or text[cdx + 1] == " ":
+            merged_timestamps = [t for c in current_word_dict["chunks"] for t in c["timestamps"]]
+            current_word_dict["timestamps"] = [min(merged_timestamps), max(merged_timestamps)]
+            current_subsegment_dict["text"] += current_word_dict["text"]
             current_subsegment_dict["chunks"].append(current_word_dict)
-            current_word_dict = {"text": None, "timestamps": [], "chunks": []}
+            current_word_dict = {"text": "", "timestamps": [], "chunks": []}
 
-        if char == ".":
-            aligned_segment_dict.chunks.append(current_subsegment_dict)
-            current_subsegment_dict = {"text": None, "timestamps": [], "chunks": []}
-    print(segment)
-    hi = 10
+        # finished sentence
+        if char == "." or cdx == len(text) - 1:
+            merged_timestamps = [t for c in current_subsegment_dict["chunks"] for t in c["timestamps"]]
+            current_subsegment_dict["timestamps"] = [min(merged_timestamps), max(merged_timestamps)]
+            aligned_segment_dict["chunks"].append(current_subsegment_dict)
+            current_subsegment_dict = {"text": "", "timestamps": [], "chunks": []}
+
+    for subsegment in aligned_segment_dict["chunks"]:
+        subsegment["text"] = subsegment["text"].lstrip().rstrip() + "."
+        for word in subsegment["chunks"]:
+            word["text"] = word["text"].lstrip().rstrip()
 
 
 def _align_subsegments(
