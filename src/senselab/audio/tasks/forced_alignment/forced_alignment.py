@@ -199,7 +199,8 @@ def _assign_timestamps_to_characters(
         subsegment["text"] = subsegment["text"].lstrip().rstrip() + "."
         for word in subsegment["chunks"]:
             word["text"] = word["text"].lstrip().rstrip()
-
+    
+    return aligned_segment_dict
 
 def _align_subsegments(
     segment: SingleSegment,
@@ -263,7 +264,6 @@ def _align_subsegments(
             curr_chars = [{key: val for key, val in char.items() if val != -1} for char in curr_chars]
             aligned_subsegments[-1]["chars"] = curr_chars
 
-
 def _align_single_segment(
     segment: SingleSegment,
     model: torch.nn.Module,
@@ -274,11 +274,6 @@ def _align_single_segment(
     device: DeviceType,
     t1: float,
     t2: float,
-    return_char_alignments: bool,
-    interpolate_method: str,
-    aligned_segment: SingleAlignedSegment,
-    aligned_segments: List[SingleAlignedSegment],
-    word_segments: List[SingleWordSegment],
 ) -> None:
     """Processes and aligns a single segment.
 
@@ -321,15 +316,14 @@ def _align_single_segment(
 
     if path is None:
         print(f'Failed to align segment ("{segment["text"]}"): backtrack failed, resorting to original...')
-        aligned_segments.append(aligned_segment)
+        aligned_segments.append(None)
         return
 
     char_segments = _merge_repeats(path, text_clean)
-
     duration = t2 - t1
     ratio = duration * waveform_segment.size(0) / (trellis.size(0) - 1)
     aligned_segment = _assign_timestamps_to_characters(segment, char_segments, ratio, t1, model_lang)
-    aligned_segments.extend(aligned_segment)
+    return aligned_segment
 
 
 def _get_trellis(emission: torch.Tensor, tokens: List[int], blank_id: int = 0) -> torch.Tensor:
@@ -446,8 +440,6 @@ def _align_segments(
     audio: Audio,
     device: DeviceType,
     max_duration: float,
-    return_char_alignments: bool,
-    interpolate_method: str,
 ) -> Tuple[List[SingleAlignedSegment], List[SingleWordSegment]]:
     """Align segments based on the predictions.
 
@@ -476,7 +468,7 @@ def _align_segments(
 
         aligned_segment = None
         if _can_align_segment(segment, model_dictionary, t1, max_duration):
-            _align_single_segment(
+            aligned_segment = _align_single_segment(
                 segment,
                 model,
                 model_dictionary,
@@ -486,17 +478,11 @@ def _align_segments(
                 device,
                 t1,
                 t2,
-                return_char_alignments,
-                interpolate_method,
-                aligned_segment,
-                aligned_segments,
-                word_segments,
             )
         else:
             print(f'Failed to align segment ("{segment["text"]}"), skipping...')
-            aligned_segments.append(aligned_segment)
-
-    return (aligned_segments, word_segments)
+        aligned_segments.append(aligned_segment)
+    return aligned_segments
 
 
 def _convert_to_scriptline(data: AlignedTranscriptionResult) -> List[ScriptLine]:
@@ -533,8 +519,6 @@ def _align_transcription(
     align_model_metadata: Dict[str, Any],
     audio: Audio,
     device: DeviceType,
-    interpolate_method: str = "nearest",
-    return_char_alignments: bool = False,
     print_progress: bool = False,
     combined_progress: bool = False,
 ) -> AlignedTranscriptionResult:
@@ -568,7 +552,7 @@ def _align_transcription(
         combined_progress,
     )
 
-    aligned_segments, word_segments = _align_segments(
+    aligned_segments = _align_segments(
         transcript=transcript,
         model=model,
         model_dictionary=model_dictionary,
@@ -577,10 +561,8 @@ def _align_transcription(
         audio=audio,
         device=device,
         max_duration=max_duration,
-        return_char_alignments=return_char_alignments,
-        interpolate_method=interpolate_method,
     )
-    return {"segments": aligned_segments, "word_segments": word_segments}
+    return aligned_segments
 
 
 def align_transcriptions(
@@ -645,7 +627,6 @@ def align_transcriptions(
                 },
                 audio=audio,
                 device=device,
-                return_char_alignments=True,
             )
             aligned_script_lines.append(_convert_to_scriptline(alignment))
 
