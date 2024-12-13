@@ -199,8 +199,9 @@ def _assign_timestamps_to_characters(
         subsegment["text"] = subsegment["text"].lstrip().rstrip() + "."
         for word in subsegment["chunks"]:
             word["text"] = word["text"].lstrip().rstrip()
-    
+
     return aligned_segment_dict
+
 
 def _align_subsegments(
     segment: SingleSegment,
@@ -263,6 +264,7 @@ def _align_subsegments(
             curr_chars = curr_chars.to_dict("records")
             curr_chars = [{key: val for key, val in char.items() if val != -1} for char in curr_chars]
             aligned_subsegments[-1]["chars"] = curr_chars
+
 
 def _align_single_segment(
     segment: SingleSegment,
@@ -481,36 +483,9 @@ def _align_segments(
             )
         else:
             print(f'Failed to align segment ("{segment["text"]}"), skipping...')
-        aligned_segments.append(aligned_segment)
+        aligned_segments.append(ScriptLine.from_dict(aligned_segment))
     return aligned_segments
 
-
-def _convert_to_scriptline(data: AlignedTranscriptionResult) -> List[ScriptLine]:
-    """Convert a dictionary of segments and word segments to a list of ScriptLine objects.
-
-    Args:
-        data (AlignedTranscriptionResult): The input dictionary with segments and word segments.
-
-    Returns:
-        List[ScriptLine]: The list of ScriptLine objects.
-    """
-    segments = data["segments"]
-    script_lines = []
-
-    for segment in segments:
-        words = segment["words"]
-        word_chunks = [ScriptLine(text=word["word"]) for word in words]
-
-        # Handle 'nan' end values by setting them to None
-        start = segment["start"]
-        end: Optional[float] = segment["end"]
-        if end is not None and (isinstance(end, float) and math.isnan(end)):
-            end = None
-
-        script_line = ScriptLine(text=segment["text"], start=start, end=end, chunks=word_chunks)
-        script_lines.append(script_line)
-
-    return script_lines
 
 
 def _align_transcription(
@@ -628,7 +603,7 @@ def align_transcriptions(
                 audio=audio,
                 device=device,
             )
-            aligned_script_lines.append(_convert_to_scriptline(alignment))
+            aligned_script_lines.append(alignment)
 
     return aligned_script_lines
 
