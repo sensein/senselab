@@ -156,18 +156,7 @@ def _assign_timestamps_to_characters(
         model_lang (Language): The language configuration, used to determine word boundaries.
 
     Returns:
-        Dict[str, Any]: A dictionary containing:
-            - "text": The original segment text.
-            - "timestamps": A list with [start_time, end_time] of the full segment.
-            - "chunks": A list of sentence-level dictionaries, each with:
-                - "text": The sentence text.
-                - "timestamps": [start_time, end_time] for the sentence.
-                - "chunks": A list of word-level dictionaries, each with:
-                    - "text": The word text.
-                    - "timestamps": [start_time, end_time] for the word.
-                    - "chunks": A list of character-level dictionaries with:
-                        - "text": The character.
-                        - "timestamps": [start_time, end_time] for the character.
+        Dict[str, Any]: A nested structure with aligned sentence, word, and character chunks.
     """
     text = segment["text"]
     start = segment["start"]
