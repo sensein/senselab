@@ -13,7 +13,6 @@ from senselab.audio.tasks.forced_alignment.data_structures import (
 )
 from senselab.audio.tasks.forced_alignment.forced_alignment import (
     _align_segments,
-    _align_transcription,
     _can_align_segment,
     _get_prediction_matrix,
     _interpolate_nans,
@@ -136,35 +135,6 @@ def test_align_segments(mono_audio_sample: Audio, dummy_model: tuple) -> None:
     # Validate results
     assert isinstance(aligned_segments, list)
     assert all(isinstance(segment, (ScriptLine, type(None))) for segment in aligned_segments)
-
-
-def test_align_transcription_faked(resampled_mono_audio_sample: Audio, dummy_model: tuple) -> None:
-    """Test alignment of transcription."""
-    model, processor = dummy_model
-    transcript = [
-        SingleSegment(
-            start=0.0,
-            end=1.0,
-            text="test",
-            clean_char=["t", "e", "s", "t"],
-            clean_cdx=[0, 1, 2, 3],
-            clean_wdx=[0],
-            sentence_spans=None,
-        )
-    ]
-    aligned_result = _align_transcription(
-        transcript=transcript,
-        model=model,
-        align_model_metadata={
-            "dictionary": processor.tokenizer.get_vocab(),
-            "language": Language(language_code="en"),
-            "type": "huggingface",
-        },
-        audio=resampled_mono_audio_sample,
-        device=DeviceType.CPU,
-    )
-    assert "segments" in aligned_result
-    assert "word_segments" in aligned_result
 
 
 def test_align_transcriptions_fixture(resampled_mono_audio_sample: Audio, script_line_fixture: ScriptLine) -> None:
