@@ -13,6 +13,7 @@ from senselab.utils.data_structures import DeviceType
 # Global variables for file paths
 MONO_AUDIO_PATH = os.path.abspath(r"src/tests/data_for_testing/audio_48khz_mono_16bits.wav")
 STEREO_AUDIO_PATH = os.path.abspath(r"src/tests/data_for_testing/audio_48khz_stereo_16bits.wav")
+HAD_THAT_CURIOSITY_PATH = os.path.abspath(r"src/tests/data_for_testing/had_that_curiosity.wav")
 
 
 @pytest.fixture
@@ -37,6 +38,14 @@ def resampled_mono_audio_sample(mono_audio_sample: Audio, resampling_rate: int =
 def resampled_stereo_audio_sample(stereo_audio_sample: Audio, resampling_rate: int = 16000) -> Audio:
     """Fixture for resampled stereo audio sample."""
     return resample_audios([stereo_audio_sample], resampling_rate)[0]
+
+
+@pytest.fixture
+def resampled_had_that_curiosity_audio_sample(
+    had_that_curiosity_audio_sample: Audio, resampling_rate: int = 16000
+) -> Audio:
+    """Fixture for resampled 'had that curiosity' audio sample."""
+    return resample_audios([had_that_curiosity_audio_sample], resampling_rate)[0]
 
 
 @pytest.fixture
