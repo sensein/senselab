@@ -191,5 +191,18 @@ def test_align_transcriptions_multilingual(resampled_mono_audio_sample: Audio, s
             assert aligned_transcriptions[0][0].text == expected_text, f"Failed for language: {lang}"
 
 
+def test_align_transcriptions_curiosity_audio_fixture(
+    resampled_had_that_curiosity_audio_sample: Audio, script_line_fixture_curiosity: ScriptLine
+) -> None:
+    """Test alignment of transcriptions using the 'had that curiosity' audio sample and fixture."""
+    audios_and_transcriptions_and_language = [
+        (resampled_had_that_curiosity_audio_sample, script_line_fixture_curiosity, Language(language_code="en"))
+    ]
+    aligned_transcriptions = align_transcriptions(audios_and_transcriptions_and_language)
+    assert len(aligned_transcriptions[0]) == 1
+    if aligned_transcriptions[0][0]:
+        assert aligned_transcriptions[0][0].text == "I had that curiosity beside me at this moment"
+
+
 if __name__ == "__main__":
     pytest.main()
