@@ -55,7 +55,8 @@ nltk = "~=3.9"
 vocos = "~=0.1"
 iso639 = "~=0.1"
 nest-asyncio = "~=1.5"
-pylangacq = "~=0.19"
+pylangacq = "^0.19.1"
+mediapipe = "~=0.10.18"
 
 [tool.poetry.group.dev]
 optional = true
