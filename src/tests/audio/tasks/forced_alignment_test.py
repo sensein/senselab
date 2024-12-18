@@ -66,6 +66,31 @@ def script_line_fixture() -> ScriptLine:
     return ScriptLine.from_dict(data)
 
 
+@pytest.fixture
+def script_line_fixture_curiosity() -> ScriptLine:
+    """Fixture for a ScriptLine of: "I had that curiosity beside me at this moment".
+
+    Source: https://pytorch.org/audio/main/tutorials/ctc_forced_alignment_api_tutorial.html
+    Note: This example was not manually aligned; the timings are from automatic alignment.
+    """
+    return ScriptLine(
+        text="I had that curiosity beside me at this moment",
+        start=0.644,
+        end=3.138,
+        chunks=[
+            ScriptLine(text="i", start=0.644, end=0.664),
+            ScriptLine(text="had", start=0.704, end=0.845),
+            ScriptLine(text="that", start=0.885, end=1.026),
+            ScriptLine(text="curiosity", start=1.086, end=1.790),
+            ScriptLine(text="beside", start=1.871, end=2.314),
+            ScriptLine(text="me", start=2.334, end=2.414),
+            ScriptLine(text="at", start=2.495, end=2.575),
+            ScriptLine(text="this", start=2.595, end=2.756),
+            ScriptLine(text="moment", start=2.837, end=3.138),
+        ],
+    )
+
+
 def test_preprocess_segments() -> None:
     """Test preprocessing of segments."""
     transcript = [SingleSegment(start=0.0, end=1.0, text="test")]
