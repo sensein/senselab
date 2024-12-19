@@ -200,8 +200,8 @@ def test_align_transcriptions_curiosity_audio_fixture(
     ]
     aligned_transcriptions = align_transcriptions(audios_and_transcriptions_and_language)
     assert len(aligned_transcriptions[0]) == 1
-    if aligned_transcriptions[0][0]:
-        assert aligned_transcriptions[0][0].text == "I had that curiosity beside me at this moment"
+    if aligned_transcriptions[0][0] is not None:
+        assert aligned_transcriptions[0][0].text == script_line_fixture_curiosity.text
 
 
 if __name__ == "__main__":
