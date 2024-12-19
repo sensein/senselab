@@ -143,7 +143,7 @@ def _get_prediction_matrix(
     return emissions
 
 
-def _assign_timestamps_to_characters(
+def _assign_timestamps(
     segment: SingleSegment, char_segments: List[Segment], ratio: float, t1: float, model_lang: Language
 ) -> Dict[str, Any]:
     """Assign timestamps to each character, grouping them into words and sentences.
@@ -321,7 +321,7 @@ def _align_single_segment(
     char_segments = _merge_repeats(path, text_clean)
     duration = t2 - t1
     ratio = duration * waveform_segment.size(0) / (trellis.size(0) - 1)
-    aligned_segment = _assign_timestamps_to_characters(segment, char_segments, ratio, t1, model_lang)
+    aligned_segment = _assign_timestamps(segment, char_segments, ratio, t1, model_lang)
     return aligned_segment
 
 
