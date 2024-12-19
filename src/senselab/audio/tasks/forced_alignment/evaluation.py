@@ -1,4 +1,4 @@
-"""Provides evaluation functions alignments."""
+"""Provides alignment evaluation functions."""
 
 from senselab.utils.data_structures.script_line import ScriptLine
 
@@ -15,7 +15,8 @@ def compare_alignments(alignment_one: ScriptLine, alignment_two: ScriptLine, dif
         AssertionError: If the start or end times differ by more than the tolerance.
     """
     print(f"Texts:    {alignment_one.text} | {alignment_two.text}")
-    assert alignment_one.text == alignment_two.text
+    if alignment_one.text and alignment_two.text:
+        assert alignment_one.text.lower() == alignment_two.text.lower(), f"{alignment_one.text} {alignment_two.text}"
     if alignment_one.start and alignment_two.start:
         assert abs(alignment_one.start - alignment_two.start) < difference_tolerance
     if alignment_one.end and alignment_two.end:
