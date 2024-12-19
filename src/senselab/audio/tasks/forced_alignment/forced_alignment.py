@@ -166,12 +166,10 @@ def _assign_timestamps_to_characters(
     clean_cdx = segment["clean_cdx"] or []
 
     aligned_segment_dict: Dict[str, Any] = {"text": text, "timestamps": [start, end], "chunks": []}
-
     current_word_dict: Dict[str, Any] = {"text": "", "timestamps": [], "chunks": []}
     current_subsegment_dict: Dict[str, Any] = {"text": "", "timestamps": [], "chunks": []}
 
     for cdx, char in enumerate(text):
-        print(char)
         if cdx in clean_cdx:
             char_seg_index = clean_cdx.index(cdx)
             char_seg = char_segments[char_seg_index]
@@ -204,6 +202,9 @@ def _assign_timestamps_to_characters(
         for word in subsegment["chunks"]:
             word["text"] = word["text"].strip()
 
+    # Adjust segment timestamps
+    aligned_segment_dict["timestamps"][0] = aligned_segment_dict["chunks"][0]["timestamps"][0]
+    aligned_segment_dict["timestamps"][1] = aligned_segment_dict["chunks"][-1]["timestamps"][1]
     return aligned_segment_dict
 
 
@@ -531,7 +532,6 @@ def align_transcriptions(
 
     for recording in audios_and_transcriptions_and_language:
         audio, transcription, language = (*recording, None)[:3]
-
         if language is None:
             language = Language(language_code="en")
 
