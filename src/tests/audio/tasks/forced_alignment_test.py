@@ -11,6 +11,7 @@ from senselab.audio.tasks.forced_alignment.data_structures import (
     Point,
     SingleSegment,
 )
+from senselab.audio.tasks.forced_alignment.evaluation import compare_alignments
 from senselab.audio.tasks.forced_alignment.forced_alignment import (
     _align_segments,
     _can_align_segment,
@@ -200,8 +201,11 @@ def test_align_transcriptions_curiosity_audio_fixture(
     ]
     aligned_transcriptions = align_transcriptions(audios_and_transcriptions_and_language)
     assert len(aligned_transcriptions[0]) == 1
-    if aligned_transcriptions[0][0] is not None:
-        assert aligned_transcriptions[0][0].text == script_line_fixture_curiosity.text
+    if aligned_transcriptions[0][0] is not None and aligned_transcriptions[0][0].chunks:
+        aligned_transcription = aligned_transcriptions[0][0].chunks[0]  # fixture corresponds subsegment
+        if aligned_transcription.text:
+            aligned_transcription.text = aligned_transcription.text.strip(".")
+        compare_alignments(aligned_transcription, script_line_fixture_curiosity, difference_tolerance=0.1)
 
 
 if __name__ == "__main__":

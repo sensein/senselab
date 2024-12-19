@@ -17,9 +17,9 @@ def compare_alignments(alignment_one: ScriptLine, alignment_two: ScriptLine, dif
     print(f"Texts:    {alignment_one.text} | {alignment_two.text}")
     if alignment_one.text and alignment_two.text:
         assert alignment_one.text.lower() == alignment_two.text.lower(), f"{alignment_one.text} {alignment_two.text}"
-    if alignment_one.start and alignment_two.start:
+    if alignment_one.start is not None and alignment_two.start is not None:
         assert abs(alignment_one.start - alignment_two.start) < difference_tolerance
-    if alignment_one.end and alignment_two.end:
+    if alignment_one.end is not None and alignment_two.end is not None:
         assert abs(alignment_one.end - alignment_two.end) < difference_tolerance
     if alignment_one.chunks and alignment_two.chunks and len(alignment_one.chunks) == len(alignment_two.chunks):
         for a1, a2 in zip(alignment_one.chunks, alignment_two.chunks):
