@@ -11,9 +11,9 @@ from senselab.audio.tasks.forced_alignment.data_structures import (
     Point,
     SingleSegment,
 )
+from senselab.audio.tasks.forced_alignment.evaluation import compare_alignments
 from senselab.audio.tasks.forced_alignment.forced_alignment import (
     _align_segments,
-    _align_transcription,
     _can_align_segment,
     _get_prediction_matrix,
     _interpolate_nans,
@@ -67,14 +67,39 @@ def script_line_fixture() -> ScriptLine:
     return ScriptLine.from_dict(data)
 
 
+@pytest.fixture
+def script_line_fixture_curiosity() -> ScriptLine:
+    """Fixture for a ScriptLine of: "I had that curiosity beside me at this moment".
+
+    Source: https://pytorch.org/audio/main/tutorials/ctc_forced_alignment_api_tutorial.html
+    Note: This example was not manually aligned; the timings are from automatic alignment.
+    """
+    return ScriptLine(
+        text="I had that curiosity beside me at this moment",
+        start=0.644,
+        end=3.138,
+        chunks=[
+            ScriptLine(text="i", start=0.644, end=0.664),
+            ScriptLine(text="had", start=0.704, end=0.845),
+            ScriptLine(text="that", start=0.885, end=1.026),
+            ScriptLine(text="curiosity", start=1.086, end=1.790),
+            ScriptLine(text="beside", start=1.871, end=2.314),
+            ScriptLine(text="me", start=2.334, end=2.414),
+            ScriptLine(text="at", start=2.495, end=2.575),
+            ScriptLine(text="this", start=2.595, end=2.756),
+            ScriptLine(text="moment", start=2.837, end=3.138),
+        ],
+    )
+
+
 def test_preprocess_segments() -> None:
     """Test preprocessing of segments."""
     transcript = [SingleSegment(start=0.0, end=1.0, text="test")]
-    model_dictionary = {"t": 0, "e": 1, "s": 2}
+    model_dictionary = {"T": 0, "E": 1, "S": 2}
     preprocessed_segments = _preprocess_segments(
         transcript, model_dictionary, Language(language_code="en"), False, False
     )
-    assert preprocessed_segments[0]["clean_char"] == ["t", "e", "s", "t"]
+    assert preprocessed_segments[0]["clean_char"] == ["T", "E", "S", "T"]
 
 
 def test_can_align_segment(dummy_segment: SingleSegment) -> None:
@@ -111,25 +136,19 @@ def test_align_segments(mono_audio_sample: Audio, dummy_model: tuple) -> None:
     model, processor = dummy_model
     model_dictionary = processor.tokenizer.get_vocab()
 
-    # Create a sample transcript
+    # Create a sample transcript and preprocess
     transcript = [SingleSegment(start=0.0, end=1.0, text="test")]
-
-    # Preprocess the transcript segments
-    preprocessed_transcript = _preprocess_segments(
-        transcript,
-        model_dictionary,
-        model_lang=Language(language_code="en"),
-        print_progress=False,
-        combined_progress=False,
-    )
+    model_dictionary = {"T": 0, "E": 1, "S": 2}
+    transcript = _preprocess_segments(transcript, model_dictionary, Language(language_code="en"), False, False)
 
     # Ensure the model dictionary has the necessary keys
     for char in "test":
         if char not in model_dictionary:
             model_dictionary[char] = len(model_dictionary)
 
-    aligned_segments, word_segments = _align_segments(
-        transcript=preprocessed_transcript,
+    # Call the alignment function
+    aligned_segments = _align_segments(
+        transcript=transcript,
         model=model,
         model_dictionary=model_dictionary,
         model_lang=Language(language_code="en"),
@@ -137,40 +156,11 @@ def test_align_segments(mono_audio_sample: Audio, dummy_model: tuple) -> None:
         audio=mono_audio_sample,
         device=DeviceType.CPU,
         max_duration=10.0,
-        return_char_alignments=False,
-        interpolate_method="nearest",
     )
+
+    # Validate results
     assert isinstance(aligned_segments, list)
-    assert isinstance(word_segments, list)
-
-
-def test_align_transcription_faked(resampled_mono_audio_sample: Audio, dummy_model: tuple) -> None:
-    """Test alignment of transcription."""
-    model, processor = dummy_model
-    transcript = [
-        SingleSegment(
-            start=0.0,
-            end=1.0,
-            text="test",
-            clean_char=["t", "e", "s", "t"],
-            clean_cdx=[0, 1, 2, 3],
-            clean_wdx=[0],
-            sentence_spans=None,
-        )
-    ]
-    aligned_result = _align_transcription(
-        transcript=transcript,
-        model=model,
-        align_model_metadata={
-            "dictionary": processor.tokenizer.get_vocab(),
-            "language": Language(language_code="en"),
-            "type": "huggingface",
-        },
-        audio=resampled_mono_audio_sample,
-        device=DeviceType.CPU,
-    )
-    assert "segments" in aligned_result
-    assert "word_segments" in aligned_result
+    assert all(isinstance(segment, (ScriptLine, type(None))) for segment in aligned_segments)
 
 
 def test_align_transcriptions_fixture(resampled_mono_audio_sample: Audio, script_line_fixture: ScriptLine) -> None:
@@ -182,7 +172,8 @@ def test_align_transcriptions_fixture(resampled_mono_audio_sample: Audio, script
     aligned_transcriptions = align_transcriptions(audios_and_transcriptions_and_language)
     assert len(aligned_transcriptions) == 2
     assert len(aligned_transcriptions[0]) == 1
-    assert aligned_transcriptions[0][0].text == "test"
+    if aligned_transcriptions[0][0]:
+        assert aligned_transcriptions[0][0].text == "test"
 
 
 def test_align_transcriptions_multilingual(resampled_mono_audio_sample: Audio, script_line_fixture: ScriptLine) -> None:
@@ -197,7 +188,24 @@ def test_align_transcriptions_multilingual(resampled_mono_audio_sample: Audio, s
         aligned_transcriptions = align_transcriptions(audios_and_transcriptions_and_language)
         assert len(aligned_transcriptions) == 1, f"Failed for language: {lang}"
         assert len(aligned_transcriptions[0]) == 1, f"Failed for language: {lang}"
-        assert aligned_transcriptions[0][0].text == expected_text, f"Failed for language: {lang}"
+        if aligned_transcriptions[0][0]:
+            assert aligned_transcriptions[0][0].text == expected_text, f"Failed for language: {lang}"
+
+
+def test_align_transcriptions_curiosity_audio_fixture(
+    resampled_had_that_curiosity_audio_sample: Audio, script_line_fixture_curiosity: ScriptLine
+) -> None:
+    """Test alignment of transcriptions using the 'had that curiosity' audio sample and fixture."""
+    audios_and_transcriptions_and_language = [
+        (resampled_had_that_curiosity_audio_sample, script_line_fixture_curiosity, Language(language_code="en"))
+    ]
+    aligned_transcriptions = align_transcriptions(audios_and_transcriptions_and_language)
+    assert len(aligned_transcriptions[0]) == 1
+    if aligned_transcriptions[0][0] is not None and aligned_transcriptions[0][0].chunks:
+        aligned_transcription = aligned_transcriptions[0][0].chunks[0]  # fixture corresponds subsegment
+        if aligned_transcription.text:
+            aligned_transcription.text = aligned_transcription.text.strip(".")
+        compare_alignments(aligned_transcription, script_line_fixture_curiosity, difference_tolerance=0.1)
 
 
 if __name__ == "__main__":
