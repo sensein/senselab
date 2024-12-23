@@ -1,3 +1,16 @@
+# 0.26.0 (Mon Dec 23 2024)
+
+#### 🚀 Enhancement
+
+- Bump the production-dependencies group across 1 directory with 3 updates [#218](https://github.com/sensein/senselab/pull/218) ([@dependabot[bot]](https://github.com/dependabot[bot]) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@dependabot[bot]](https://github.com/dependabot[bot])
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.25.0 (Tue Dec 10 2024)
 
 #### 🚀 Enhancement
