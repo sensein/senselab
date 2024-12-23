@@ -1,3 +1,28 @@
+# 0.25.0 (Tue Dec 10 2024)
+
+#### 🚀 Enhancement
+
+- updating torch version [#217](https://github.com/sensein/senselab/pull/217) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.24.1 (Tue Dec 03 2024)
+
+#### 🐛 Bug Fix
+
+- 146 bug voice activity detection import fails [#208](https://github.com/sensein/senselab/pull/208) (mbsilva@node098.ib.cluster [@900miles](https://github.com/900miles))
+
+#### Authors: 2
+
+- [@900miles](https://github.com/900miles)
+- Miles B Silva (mbsilva@node098.ib.cluster)
+
+---
+
 # 0.24.0 (Thu Nov 21 2024)
 
 #### 🚀 Enhancement
