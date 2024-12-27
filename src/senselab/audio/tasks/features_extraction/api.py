@@ -307,7 +307,13 @@ def extract_features_from_audios(
         'si_sdr': 11.71167278289795}}]
     """
     if opensmile:
-        default_opensmile = {"feature_set": "eGeMAPSv02", "feature_level": "Functionals"}
+        default_opensmile = {
+            "feature_set": "eGeMAPSv02",
+            "feature_level": "Functionals",
+            "plugin": "serial",
+            "plugin_args": {},
+            "cache_dir": None,
+        }
         if isinstance(opensmile, dict):
             my_opensmile = {**default_opensmile, **opensmile}
         else:
@@ -330,7 +336,8 @@ def extract_features_from_audios(
             "duration": True,
             "jitter": True,
             "shimmer": True,
-            "plugin": "cf",
+            "plugin": "serial",
+            "plugin_args": {},
         }
         # Update default_parselmouth with provided parselmouth dictionary
         if isinstance(parselmouth, dict):
@@ -341,7 +348,7 @@ def extract_features_from_audios(
         parselmouth_features = extract_praat_parselmouth_features_from_audios(audios=audios, **my_parselmouth)  # type: ignore
 
     if torchaudio:
-        default_torchaudio = {
+        default_torchaudio: Dict[str, Any] = {
             "freq_low": 80,
             "freq_high": 500,
             "n_fft": 1024,
@@ -349,7 +356,9 @@ def extract_features_from_audios(
             "n_mfcc": 40,
             "win_length": None,
             "hop_length": None,
-            "plugin": "cf",
+            "plugin": "serial",
+            "plugin_args": {},
+            "cache_dir": None,
         }
         if isinstance(torchaudio, dict):
             my_torchaudio = {**default_torchaudio, **torchaudio}

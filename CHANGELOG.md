@@ -1,3 +1,163 @@
+# 0.26.0 (Mon Dec 23 2024)
+
+#### 🚀 Enhancement
+
+- Bump the production-dependencies group across 1 directory with 3 updates [#218](https://github.com/sensein/senselab/pull/218) ([@dependabot[bot]](https://github.com/dependabot[bot]) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@dependabot[bot]](https://github.com/dependabot[bot])
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.25.0 (Tue Dec 10 2024)
+
+#### 🚀 Enhancement
+
+- updating torch version [#217](https://github.com/sensein/senselab/pull/217) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.24.1 (Tue Dec 03 2024)
+
+#### 🐛 Bug Fix
+
+- 146 bug voice activity detection import fails [#208](https://github.com/sensein/senselab/pull/208) (mbsilva@node098.ib.cluster [@900miles](https://github.com/900miles))
+
+#### Authors: 2
+
+- [@900miles](https://github.com/900miles)
+- Miles B Silva (mbsilva@node098.ib.cluster)
+
+---
+
+# 0.24.0 (Thu Nov 21 2024)
+
+#### 🚀 Enhancement
+
+- support Python 3.12 [#206](https://github.com/sensein/senselab/pull/206) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.23.0 (Wed Nov 20 2024)
+
+#### 🚀 Enhancement
+
+- 199 task audio io [#202](https://github.com/sensein/senselab/pull/202) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.22.0 (Fri Nov 15 2024)
+
+#### 🚀 Enhancement
+
+- Parallelize feats extraction with opensmile [#181](https://github.com/sensein/senselab/pull/181) ([@fabiocat93](https://github.com/fabiocat93) [@satra](https://github.com/satra))
+
+#### 🐛 Bug Fix
+
+- patch fixes for b2aiprep updates [#180](https://github.com/sensein/senselab/pull/180) ([@satra](https://github.com/satra) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Satrajit Ghosh ([@satra](https://github.com/satra))
+
+---
+
+# 0.21.0 (Thu Nov 14 2024)
+
+#### 🚀 Enhancement
+
+- added extract_mel_filter_bank_from_spectrograms [#182](https://github.com/sensein/senselab/pull/182) ([@fabiocat93](https://github.com/fabiocat93) [@satra](https://github.com/satra))
+
+#### Authors: 2
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Satrajit Ghosh ([@satra](https://github.com/satra))
+
+---
+
+# 0.20.0 (Thu Nov 14 2024)
+
+#### 🚀 Enhancement
+
+- Added CHAT file reader [#174](https://github.com/sensein/senselab/pull/174) ([@wilke0818](https://github.com/wilke0818) jordanwilke@dhcp-10-29-142-117.dyn.MIT.EDU [@fabiocat93](https://github.com/fabiocat93))
+
+#### 🐛 Bug Fix
+
+- Build status final fix [#191](https://github.com/sensein/senselab/pull/191) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 3
+
+- [@wilke0818](https://github.com/wilke0818)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Jordan Wilke (jordanwilke@dhcp-10-29-142-117.dyn.MIT.EDU)
+
+---
+
+# 0.19.3 (Thu Nov 14 2024)
+
+#### 🐛 Bug Fix
+
+- fixing build status #2nd attempt [#190](https://github.com/sensein/senselab/pull/190) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.19.2 (Thu Nov 14 2024)
+
+#### 🐛 Bug Fix
+
+- fixing build status [#189](https://github.com/sensein/senselab/pull/189) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### ⚠️ Pushed to `main`
+
+- Update README.md ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.19.1 (Thu Nov 14 2024)
+
+#### 🐛 Bug Fix
+
+- Update pyproject.toml [#188](https://github.com/sensein/senselab/pull/188) ([@fabiocat93](https://github.com/fabiocat93))
+- removing ACTION_PLAN.md [#187](https://github.com/sensein/senselab/pull/187) ([@fabiocat93](https://github.com/fabiocat93))
+- Testing templates [#186](https://github.com/sensein/senselab/pull/186) ([@fabiocat93](https://github.com/fabiocat93))
+- Experimenting with PR templates [#185](https://github.com/sensein/senselab/pull/185) ([@fabiocat93](https://github.com/fabiocat93))
+- Update and rename advanced.md to pull_request_template.md [#184](https://github.com/sensein/senselab/pull/184) ([@fabiocat93](https://github.com/fabiocat93))
+- Create SECURITY.md [#183](https://github.com/sensein/senselab/pull/183) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### ⚠️ Pushed to `main`
+
+- Update tests.yaml ([@fabiocat93](https://github.com/fabiocat93))
+- Rename pull_request_template.md to PULL_REQUEST_TEMPLATE.md ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.19.0 (Thu Nov 14 2024)
 
 #### 🚀 Enhancement

@@ -20,19 +20,20 @@ classifiers = [
   "Development Status :: 3 - Alpha",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
   "License :: OSI Approved :: Apache Software License",
   "Operating System :: OS Independent"
 ]
 packages = [{include = "senselab", from = "src"}]
 
 [tool.poetry.dependencies]
-python = "~=3.10"
+python = ">=3.10,<3.13"
 datasets = "~=3"
-torch = "~=2.4"
-torchvision = "~=0.19"
-torchaudio = "~=2.4"
-transformers = "~=4.46.2"
-pydra = "~=0.23"
+torch = "~=2.5"
+torchvision = "~=0.20"
+torchaudio = "~=2.5"
+transformers = "~=4.47"
+pydra = "~=0.25"
 pydantic = "~=2.7"
 accelerate = "*"
 huggingface-hub = "~=0.23"
@@ -42,7 +43,7 @@ torch-audiomentations = "~=0.11"
 sentence-transformers = "~=3.1"
 jiwer = "~=3.0"
 speechbrain = "~=1"
-pyav = "~=13"
+pyav = "~=14.0"
 pyannote-audio = "~=3.3"
 pycountry = "~=24.6"
 types-requests = "~=2.32"
@@ -53,6 +54,8 @@ scikit-learn = "~=1.5"
 nltk = "~=3.9"
 vocos = "~=0.1"
 iso639 = "~=0.1"
+nest-asyncio = "~=1.5"
+pylangacq = "~=0.19"
 
 [tool.poetry.group.dev]
 optional = true
@@ -154,6 +157,7 @@ pattern = "default-unprefixed"
 skip = [
   "poetry.lock",
   "docs_style/pdoc-theme/syntax-highlighting.css",
+  "*.cha",
   "*.ipynb"
 ]
 ignore-words-list = ["senselab", "nd", "astroid", "wil", "SER", "te"]

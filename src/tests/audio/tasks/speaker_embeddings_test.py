@@ -115,7 +115,8 @@ def test_error_wrong_model(resampled_mono_audio_sample: Audio) -> None:
         )
     with pytest.raises(NotImplementedError):
         extract_speaker_embeddings_from_audios(
-            audios=[resampled_mono_audio_sample], model=SenselabModel(path_or_uri="nonexistent---")
+            audios=[resampled_mono_audio_sample],
+            model=SenselabModel(path_or_uri="nonexistent---"),  # type: ignore
         )
 
 
