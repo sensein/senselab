@@ -53,7 +53,7 @@ class KNNVC:
         cls,
         source_audios: List[Audio],
         target_audios: List[Audio],
-        model: TorchModel = TorchModel(path_or_uri="bshall/knn-vc", revision="master"),
+        model: Optional[TorchModel] = None,
         prematched_vocoder: bool = True,
         topk: int = 4,
         device: Optional[DeviceType] = None,
@@ -64,7 +64,7 @@ class KNNVC:
             source_audios (List[Audio]): List of source audio objects.
             target_audios (List[Audio]): List of target audio objects.
             model (TorchModel, optional): The Torch model to use for the KNNVC pipeline.
-                Defaults to TorchModel(path_or_uri="bshall/knn-vc", revision="master").
+                If None, the default model "bshall/knn-vc" is used.
             prematched_vocoder (bool, optional): Flag indicating whether to use a pre-matched vocoder. Defaults to True.
             topk (int, optional): The number of top matches to consider. Defaults to 4.
             device (Optional[DeviceType], optional): The device to run the pipeline on. Defaults to None.
@@ -75,6 +75,8 @@ class KNNVC:
         Raises:
             ValueError: If the audio files are not mono or if the sampling rates are not supported.
         """
+        if model is None:
+            model = TorchModel(path_or_uri="bshall/knn-vc", revision="master")
         if not isinstance(prematched_vocoder, bool):
             raise TypeError("prematched_vocoder must be a boolean.")
 
