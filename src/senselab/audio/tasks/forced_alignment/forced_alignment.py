@@ -24,7 +24,7 @@ from senselab.audio.tasks.forced_alignment.data_structures import (
     SingleWordSegment,
 )
 from senselab.audio.tasks.preprocessing import extract_segments, pad_audios
-from senselab.utils.data_structures import DeviceType, HFModel, Language, ScriptLine, _select_device_and_dtype
+from senselab.utils.data_structures import DeviceType, HFModel, Language, ScriptLine
 
 
 def _preprocess_segments(
@@ -516,6 +516,7 @@ def _align_transcription(
 
 def align_transcriptions(
     audios_and_transcriptions_and_language: List[Tuple[Audio, ScriptLine, Language]],
+    device: DeviceType = DeviceType.CPU,
 ) -> List[List[ScriptLine | None]]:
     """Align multiple transcriptions with their respective audios using a wav2vec2.0 model.
 
@@ -523,6 +524,7 @@ def align_transcriptions(
         audios_and_transcriptions_and_language (List[Tuple[Audio, ScriptLine, Language]]):
             Each tuple contains an Audio object, a ScriptLine with transcription,
             and an optional Language (default is English).
+        device (DeviceType): Device to run the alignment on (e.g., CPU, MPS, or GPU).
 
     Returns:
         List[List[ScriptLine]]: A list of aligned results for each audio.
@@ -535,7 +537,6 @@ def align_transcriptions(
         if language is None:
             language = Language(language_code="en")
 
-        device = _select_device_and_dtype()[0]
         model_variant = DEFAULT_ALIGN_MODELS_HF.get(language.language_code, DEFAULT_ALIGN_MODELS_HF["en"])
 
         if model_variant.path_or_uri not in loaded_processors_and_models:
