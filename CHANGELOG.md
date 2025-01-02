@@ -1,3 +1,63 @@
+# 0.26.1 (Mon Dec 30 2024)
+
+#### 🐛 Bug Fix
+
+- Update model.py [#228](https://github.com/sensein/senselab/pull/228) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### 📝 Documentation
+
+- Updating tutorial files [#210](https://github.com/sensein/senselab/pull/210) ([@900miles](https://github.com/900miles) [@fabiocat93](https://github.com/fabiocat93))
+
+#### 🔩 Dependency Updates
+
+- Bump codecov/codecov-action from 4 to 5 [#211](https://github.com/sensein/senselab/pull/211) ([@dependabot[bot]](https://github.com/dependabot[bot]) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 3
+
+- [@900miles](https://github.com/900miles)
+- [@dependabot[bot]](https://github.com/dependabot[bot])
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.26.0 (Mon Dec 23 2024)
+
+#### 🚀 Enhancement
+
+- Bump the production-dependencies group across 1 directory with 3 updates [#218](https://github.com/sensein/senselab/pull/218) ([@dependabot[bot]](https://github.com/dependabot[bot]) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@dependabot[bot]](https://github.com/dependabot[bot])
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.25.0 (Tue Dec 10 2024)
+
+#### 🚀 Enhancement
+
+- updating torch version [#217](https://github.com/sensein/senselab/pull/217) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.24.1 (Tue Dec 03 2024)
+
+#### 🐛 Bug Fix
+
+- 146 bug voice activity detection import fails [#208](https://github.com/sensein/senselab/pull/208) (mbsilva@node098.ib.cluster [@900miles](https://github.com/900miles))
+
+#### Authors: 2
+
+- [@900miles](https://github.com/900miles)
+- Miles B Silva (mbsilva@node098.ib.cluster)
+
+---
+
 # 0.24.0 (Thu Nov 21 2024)
 
 #### 🚀 Enhancement
