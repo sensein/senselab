@@ -59,7 +59,11 @@ class HFModel(SenselabModel):
         if not isinstance(path_or_uri, Path):
             if not check_hf_repo_exists(repo_id=str(path_or_uri), revision=value, repo_type="model"):
                 raise ValueError(
-                    f"path_or_uri ({path_or_uri}) or specified revision ({value})" " is not a valid Hugging Face model"
+                    f"The huggingface model: path_or_uri ({path_or_uri}) or specified revision ({value}) "
+                    "cannot be found.\n"
+                    "Please check the model ID and revision. If the model is private or restricted access, "
+                    "make sure you have access to it and have exported your huggingface token "
+                    "in your environment variables."
                 )
         return value
 
@@ -149,7 +153,10 @@ def check_hf_repo_exists(repo_id: str, revision: str = "main", repo_type: str = 
     """Private function to check if a Hugging Face repository exists."""
     api = HfApi()
     try:
-        api.list_repo_commits(repo_id=repo_id, revision=revision, repo_type=repo_type)
+        if repo_type == "model":
+            api.model_info(repo_id=repo_id, revision=revision)
+        else:
+            api.list_repo_commits(repo_id=repo_id, revision=revision, repo_type=repo_type)
         return True
     except Exception:
         # raise RuntimeError(f"An error occurred: {e}")
