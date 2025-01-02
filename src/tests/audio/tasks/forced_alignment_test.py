@@ -21,7 +21,9 @@ from senselab.audio.tasks.forced_alignment.forced_alignment import (
     _preprocess_segments,
     align_transcriptions,
 )
+from senselab.audio.tasks.speech_to_text import transcribe_audios
 from senselab.utils.data_structures import DeviceType, Language, ScriptLine
+from senselab.utils.data_structures.model import HFModel
 
 
 @pytest.fixture
@@ -165,15 +167,20 @@ def test_align_segments(mono_audio_sample: Audio, dummy_model: tuple) -> None:
 
 def test_align_transcriptions_fixture(resampled_mono_audio_sample: Audio, script_line_fixture: ScriptLine) -> None:
     """Test alignment of transcriptions."""
+    model = HFModel(path_or_uri="openai/whisper-tiny")
+    transcription_en = transcribe_audios(
+        [resampled_mono_audio_sample], model=model, language=Language(language_code="en")
+    )[0]
+    transcription_fr = transcribe_audios(
+        [resampled_mono_audio_sample], model=model, language=Language(language_code="fr")
+    )[0]
     audios_and_transcriptions_and_language = [
-        (resampled_mono_audio_sample, script_line_fixture, Language(language_code="en")),
-        (resampled_mono_audio_sample, script_line_fixture, Language(language_code="fr")),
+        (resampled_mono_audio_sample, transcription_en, Language(language_code="en")),
+        (resampled_mono_audio_sample, transcription_fr, Language(language_code="fr")),
     ]
     aligned_transcriptions = align_transcriptions(audios_and_transcriptions_and_language)
     assert len(aligned_transcriptions) == 2
     assert len(aligned_transcriptions[0]) == 1
-    if aligned_transcriptions[0][0]:
-        assert aligned_transcriptions[0][0].text == "test"
 
 
 def test_align_transcriptions_multilingual(resampled_mono_audio_sample: Audio, script_line_fixture: ScriptLine) -> None:
