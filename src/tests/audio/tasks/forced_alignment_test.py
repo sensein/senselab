@@ -94,6 +94,258 @@ def script_line_fixture_curiosity() -> ScriptLine:
     )
 
 
+@pytest.fixture
+def aligned_scriptline_fixture_resampled_mono_audio() -> ScriptLine:
+    """Fixture for an aligned ScriptLine of resampled_mono_audio_fixture.
+
+    Generated with the align_transcriptions function.
+    """
+    return ScriptLine(
+        text="This is Peter. This is Johnny. Kenny. And Joe. We just wanted to take a minute to thank you.",
+        start=0.10,
+        end=4.88,
+        chunks=[
+            ScriptLine(
+                text="This is Peter.",
+                start=0.10,
+                end=0.70,
+                chunks=[
+                    ScriptLine(
+                        text="This",
+                        start=0.10,
+                        end=0.22,
+                        chunks=[
+                            ScriptLine(text="T", start=0.10, end=0.12),
+                            ScriptLine(text="h", start=0.12, end=0.14),
+                            ScriptLine(text="i", start=0.14, end=0.16),
+                            ScriptLine(text="s", start=0.16, end=0.22),
+                        ],
+                    ),
+                    ScriptLine(
+                        text="is",
+                        start=0.22,
+                        end=0.34,
+                        chunks=[
+                            ScriptLine(text="i", start=0.26, end=0.30),
+                            ScriptLine(text="s", start=0.30, end=0.34),
+                        ],
+                    ),
+                    ScriptLine(
+                        text="Peter",
+                        start=0.34,
+                        end=0.70,
+                        chunks=[
+                            ScriptLine(text="P", start=0.40, end=0.46),
+                            ScriptLine(text="e", start=0.46, end=0.54),
+                            ScriptLine(text="t", start=0.54, end=0.56),
+                            ScriptLine(text="e", start=0.56, end=0.64),
+                            ScriptLine(text="r", start=0.64, end=0.70),
+                        ],
+                    ),
+                ],
+            ),
+            ScriptLine(
+                text="This is Johnny.",
+                start=0.70,
+                end=1.67,
+                chunks=[
+                    ScriptLine(
+                        text="This",
+                        start=0.70,
+                        end=1.14,
+                        chunks=[
+                            ScriptLine(text="T", start=1.00, end=1.02),
+                            ScriptLine(text="h", start=1.02, end=1.06),
+                            ScriptLine(text="i", start=1.06, end=1.08),
+                            ScriptLine(text="s", start=1.08, end=1.14),
+                        ],
+                    ),
+                    ScriptLine(
+                        text="is",
+                        start=1.14,
+                        end=1.28,
+                        chunks=[
+                            ScriptLine(text="i", start=1.21, end=1.25),
+                            ScriptLine(text="s", start=1.25, end=1.28),
+                        ],
+                    ),
+                    ScriptLine(
+                        text="Johnny",
+                        start=1.28,
+                        end=1.67,
+                        chunks=[
+                            ScriptLine(text="J", start=1.32, end=1.47),
+                            ScriptLine(text="o", start=1.47, end=1.49),
+                            ScriptLine(text="h", start=1.49, end=1.51),
+                            ScriptLine(text="n", start=1.51, end=1.55),
+                            ScriptLine(text="n", start=1.55, end=1.59),
+                            ScriptLine(text="y", start=1.59, end=1.67),
+                        ],
+                    ),
+                ],
+            ),
+            ScriptLine(
+                text="Kenny.",
+                start=1.67,
+                end=2.11,
+                chunks=[
+                    ScriptLine(
+                        text="Kenny",
+                        start=1.67,
+                        end=2.11,
+                        chunks=[
+                            ScriptLine(text="K", start=1.83, end=1.91),
+                            ScriptLine(text="e", start=1.91, end=1.93),
+                            ScriptLine(text="n", start=1.93, end=1.99),
+                            ScriptLine(text="n", start=1.99, end=2.05),
+                            ScriptLine(text="y", start=2.05, end=2.11),
+                        ],
+                    ),
+                ],
+            ),
+            ScriptLine(
+                text="And Joe.",
+                start=2.11,
+                end=2.89,
+                chunks=[
+                    ScriptLine(
+                        text="And",
+                        start=2.11,
+                        end=2.53,
+                        chunks=[
+                            ScriptLine(text="A", start=2.45, end=2.47),
+                            ScriptLine(text="n", start=2.47, end=2.51),
+                            ScriptLine(text="d", start=2.51, end=2.53),
+                        ],
+                    ),
+                    ScriptLine(
+                        text="Joe",
+                        start=2.53,
+                        end=2.89,
+                        chunks=[
+                            ScriptLine(text="J", start=2.57, end=2.69),
+                            ScriptLine(text="o", start=2.69, end=2.87),
+                            ScriptLine(text="e", start=2.87, end=2.89),
+                        ],
+                    ),
+                ],
+            ),
+            ScriptLine(
+                text="We just wanted to take a minute to thank you.",
+                start=2.89,
+                end=4.88,
+                chunks=[
+                    ScriptLine(
+                        text="We",
+                        start=2.89,
+                        end=3.51,
+                        chunks=[
+                            ScriptLine(text="W", start=3.41, end=3.43),
+                            ScriptLine(text="e", start=3.43, end=3.51),
+                        ],
+                    ),
+                    ScriptLine(
+                        text="just",
+                        start=3.51,
+                        end=3.67,
+                        chunks=[
+                            ScriptLine(text="j", start=3.53, end=3.58),
+                            ScriptLine(text="u", start=3.58, end=3.62),
+                            ScriptLine(text="s", start=3.62, end=3.63),
+                            ScriptLine(text="t", start=3.63, end=3.67),
+                        ],
+                    ),
+                    ScriptLine(
+                        text="wanted",
+                        start=3.67,
+                        end=3.92,
+                        chunks=[
+                            ScriptLine(text="w", start=3.69, end=3.73),
+                            ScriptLine(text="a", start=3.73, end=3.75),
+                            ScriptLine(text="n", start=3.75, end=3.79),
+                            ScriptLine(text="t", start=3.79, end=3.86),
+                            ScriptLine(text="e", start=3.86, end=3.88),
+                            ScriptLine(text="d", start=3.88, end=3.92),
+                        ],
+                    ),
+                    ScriptLine(
+                        text="to",
+                        start=3.92,
+                        end=4.00,
+                        chunks=[
+                            ScriptLine(text="t", start=3.94, end=3.96),
+                            ScriptLine(text="o", start=3.96, end=4.00),
+                        ],
+                    ),
+                    ScriptLine(
+                        text="take",
+                        start=4.00,
+                        end=4.20,
+                        chunks=[
+                            ScriptLine(text="t", start=4.04, end=4.10),
+                            ScriptLine(text="a", start=4.10, end=4.14),
+                            ScriptLine(text="k", start=4.14, end=4.16),
+                            ScriptLine(text="e", start=4.16, end=4.20),
+                        ],
+                    ),
+                    ScriptLine(
+                        text="a",
+                        start=4.20,
+                        end=4.26,
+                        chunks=[
+                            ScriptLine(text="a", start=4.24, end=4.26),
+                        ],
+                    ),
+                    ScriptLine(
+                        text="minute",
+                        start=4.26,
+                        end=4.50,
+                        chunks=[
+                            ScriptLine(text="m", start=4.30, end=4.34),
+                            ScriptLine(text="i", start=4.34, end=4.36),
+                            ScriptLine(text="n", start=4.36, end=4.40),
+                            ScriptLine(text="u", start=4.40, end=4.44),
+                            ScriptLine(text="t", start=4.44, end=4.46),
+                            ScriptLine(text="e", start=4.46, end=4.50),
+                        ],
+                    ),
+                    ScriptLine(
+                        text="to",
+                        start=4.50,
+                        end=4.60,
+                        chunks=[
+                            ScriptLine(text="t", start=4.52, end=4.56),
+                            ScriptLine(text="o", start=4.56, end=4.60),
+                        ],
+                    ),
+                    ScriptLine(
+                        text="thank",
+                        start=4.60,
+                        end=4.80,
+                        chunks=[
+                            ScriptLine(text="t", start=4.66, end=4.68),
+                            ScriptLine(text="h", start=4.68, end=4.72),
+                            ScriptLine(text="a", start=4.72, end=4.74),
+                            ScriptLine(text="n", start=4.74, end=4.78),
+                            ScriptLine(text="k", start=4.78, end=4.80),
+                        ],
+                    ),
+                    ScriptLine(
+                        text="you",
+                        start=4.80,
+                        end=4.88,
+                        chunks=[
+                            ScriptLine(text="y", start=4.82, end=4.84),
+                            ScriptLine(text="o", start=4.84, end=4.86),
+                            ScriptLine(text="u", start=4.86, end=4.88),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    )
+
+
 def test_preprocess_segments() -> None:
     """Test preprocessing of segments."""
     transcript = [SingleSegment(start=0.0, end=1.0, text="test")]
