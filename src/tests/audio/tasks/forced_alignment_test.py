@@ -417,7 +417,9 @@ def test_align_segments(mono_audio_sample: Audio, dummy_model: tuple) -> None:
     assert all(isinstance(segment, (ScriptLine, type(None))) for segment in aligned_segments)
 
 
-def test_align_transcriptions_fixture(resampled_mono_audio_sample: Audio, script_line_fixture: ScriptLine) -> None:
+def test_align_transcriptions_multilingual(
+    resampled_mono_audio_sample: Audio, aligned_scriptline_fixture_resampled_mono_audio: ScriptLine
+) -> None:
     """Test alignment of transcriptions."""
     model = HFModel(path_or_uri="openai/whisper-tiny")
     transcription_en = transcribe_audios(
@@ -433,22 +435,14 @@ def test_align_transcriptions_fixture(resampled_mono_audio_sample: Audio, script
     aligned_transcriptions = align_transcriptions(audios_and_transcriptions_and_language)
     assert len(aligned_transcriptions) == 2
     assert len(aligned_transcriptions[0]) == 1
-
-
-def test_align_transcriptions_multilingual(resampled_mono_audio_sample: Audio, script_line_fixture: ScriptLine) -> None:
-    """Test alignment of transcriptions."""
-    languages = ["de", "es"]
-    expected_text = "test"  # Replace with the appropriate expected text for your fixtures
-
-    for lang in languages:
-        audios_and_transcriptions_and_language = [
-            (resampled_mono_audio_sample, script_line_fixture, Language(language_code=lang))
-        ]
-        aligned_transcriptions = align_transcriptions(audios_and_transcriptions_and_language)
-        assert len(aligned_transcriptions) == 1, f"Failed for language: {lang}"
-        assert len(aligned_transcriptions[0]) == 1, f"Failed for language: {lang}"
-        if aligned_transcriptions[0][0]:
-            assert aligned_transcriptions[0][0].text == expected_text, f"Failed for language: {lang}"
+    assert len(aligned_transcriptions[1]) == 1
+    aligned_transcription_en = aligned_transcriptions[0][0] or None
+    if isinstance(aligned_transcription_en, ScriptLine):
+        compare_alignments(
+            aligned_scriptline_fixture_resampled_mono_audio, aligned_transcription_en, difference_tolerance=0.001
+        )
+    else:
+        raise ValueError("aligned_transcription_en is not a ScriptLine")
 
 
 def test_align_transcriptions_curiosity_audio_fixture(
