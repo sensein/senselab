@@ -57,6 +57,8 @@ iso639 = "~=0.1"
 nest-asyncio = "~=1.5"
 pylangacq = "^0.19.1"
 mediapipe = "~=0.10.18"
+opencv-python = "^4.10.0.84"
+ultralytics = "^8.3.57"
 
 [tool.poetry.group.dev]
 optional = true
