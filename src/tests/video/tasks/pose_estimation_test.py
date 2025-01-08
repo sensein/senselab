@@ -1,5 +1,9 @@
 """Module for testing Pose Estimation tasks."""
 
+import os
+import shutil
+from typing import Generator
+
 import pytest
 
 from senselab.video.data_structures.pose import ImagePose, IndividualPose
@@ -12,24 +16,32 @@ NO_PEOPLE_IMAGE = "src/tests/data_for_testing/pose_data/no_people.jpeg"
 INVALID_IMAGE_PATH = "invalid/path/to/image.jpg"
 
 
+# Model folder path (used for cleanup)
+MODEL_PATH = "src/senselab/video/tasks/pose_estimation/models"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def cleanup_models() -> Generator[None, None, None]:
+    """Cleanup downloaded models the test session."""
+    yield
+    if os.path.exists(MODEL_PATH):
+        shutil.rmtree(MODEL_PATH)
+
+
 @pytest.mark.parametrize(
-    "estimator_class, estimator_kwargs, num_individuals",
+    "estimator_class, model_type, num_individuals",
     [
-        (
-            MediaPipePoseEstimator,
-            {"model_path": "src/senselab/video/tasks/pose_estimation/models/pose_landmarker.task"},
-            2,
-        ),
-        (YOLOPoseEstimator, {"model_path": "yolov8n-pose.pt"}, None),  # YOLO doesn't use `num_individuals`
+        (MediaPipePoseEstimator, "lite", 2),
+        (YOLOPoseEstimator, "8n", None),  # YOLO doesn't use `num_individuals`
     ],
 )
 class TestPoseEstimators:
-    """Refactored test suite for pose estimators."""
+    """Test suite for pose estimators."""
 
     @pytest.fixture
-    def estimator(self, estimator_class: type[PoseEstimator], estimator_kwargs: dict) -> PoseEstimator:
+    def estimator(self, estimator_class: type[PoseEstimator], model_type: str) -> PoseEstimator:
         """Create a pose estimator for testing."""
-        return estimator_class(**estimator_kwargs)
+        return estimator_class(model_type)
 
     def test_valid_image(self, estimator: PoseEstimator, num_individuals: int) -> None:
         """Test pose estimation on a valid image."""
@@ -85,3 +97,28 @@ class TestPoseEstimators:
                 estimator.estimate_from_path(INVALID_IMAGE_PATH, num_individuals=num_individuals)
             else:
                 estimator.estimate_from_path(INVALID_IMAGE_PATH)
+
+
+@pytest.mark.parametrize(
+    "estimator_class, valid_model_types, invalid_model_types",
+    [
+        (MediaPipePoseEstimator, ["full", "heavy"], ["invalid", "11n", 123]),
+        (YOLOPoseEstimator, ["8s", "11n"], ["8r", "full", 123]),
+    ],
+)
+def test_model_types(
+    estimator_class: type[PoseEstimator],
+    valid_model_types: list,
+    invalid_model_types: list,
+) -> None:
+    """Test valid and invalid model types for each estimator."""
+    # Test valid models
+    for model_type in valid_model_types:
+        estimator = estimator_class(model_type)
+        assert isinstance(estimator, PoseEstimator)
+        assert os.path.exists(estimator.model_path)
+
+    # Test invalid models
+    for invalid_model_type in invalid_model_types:
+        with pytest.raises(ValueError):
+            estimator_class(invalid_model_type)
