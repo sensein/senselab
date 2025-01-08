@@ -18,16 +18,34 @@ from senselab.video.data_structures.pose import (
     PoseModel,
     YOLOPoseLandmark,
 )
-from senselab.video.tasks.pose_estimation.utils import MEDIAPIPE_KEYPOINT_MAPPING, YOLO_KEYPOINT_MAPPING
+from senselab.video.tasks.pose_estimation.utils import (
+    MEDIAPIPE_KEYPOINT_MAPPING,
+    YOLO_KEYPOINT_MAPPING,
+    get_model,
+)
 
 
 class PoseEstimator(ABC):
     """Abstract base class for pose estimation models.
 
+    Attributes:
+        model_path (str): Path to the PoesEstimator model file.
+
     Methods:
         estimate(image): Estimate poses in the given image.
         estimate_from_path(image_path): Estimate poses in the image loaded from the specified path.
     """
+
+    model_path: str
+
+    @abstractmethod
+    def __init__(self, model_type: str) -> None:
+        """Initialize the PoseEstimato.
+
+        Args:
+            model_type (str): Type of model to use.
+        """
+        pass
 
     @abstractmethod
     def estimate(self, image: np.ndarray) -> ImagePose:
@@ -62,15 +80,13 @@ class MediaPipePoseEstimator(PoseEstimator):
         num_individuals (int): Number of individuals to detect.
     """
 
-    def __init__(
-        self, model_path: str = "src/senselab/video/tasks/pose_estimation/models/pose_landmarker.task"
-    ) -> None:
+    def __init__(self, model_type: str = "lite") -> None:
         """Initialize the MediaPipePoseEstimator.
 
         Args:
-            model_path (str): Path to the MediaPipe model file.
+            model_type (str): Type of MediaPipe model to use ('lite', 'full', 'heavy').
         """
-        self.model_path = model_path
+        self.model_path = get_model("mediapipe", model_type)
         self.num_individuals = 1
         self._detector = None
 
@@ -85,14 +101,9 @@ class MediaPipePoseEstimator(PoseEstimator):
         """
         if self._detector is None or self.num_individuals != num_individuals:
             base_options = python.BaseOptions(model_asset_path=self.model_path)
-
-            # Dynamically set num_poses only if num_individuals is not None
-            if num_individuals is not None:
-                options = vision.PoseLandmarkerOptions(
-                    base_options=base_options, output_segmentation_masks=True, num_poses=num_individuals
-                )
-            else:
-                options = vision.PoseLandmarkerOptions(base_options=base_options, output_segmentation_masks=True)
+            options = vision.PoseLandmarkerOptions(
+                base_options=base_options, output_segmentation_masks=True, num_poses=num_individuals
+            )
             self.num_individuals = num_individuals
             self._detector = vision.PoseLandmarker.create_from_options(options)
         return self._detector
@@ -183,15 +194,20 @@ class MediaPipePoseEstimator(PoseEstimator):
 
 
 class YOLOPoseEstimator(PoseEstimator):
-    """YOLO implementation of pose estimation."""
+    """YOLO implementation of pose estimation.
 
-    def __init__(self, model_path: str = "yolov8n-pose.pt") -> None:
+    Attributes:
+        model_path (str): Path to the YOLO model file.
+    """
+
+    def __init__(self, model_type: str = "8n") -> None:
         """Initialize the YOLOPoseEstimator.
 
         Args:
-            model_path (str): Path to the YOLO model file.
+            model_type (str): Type of YOLO model to use (e.g. '8n', '11p', '11s').
         """
-        self.model = YOLO(model_path)
+        self.model_path = get_model("yolo", model_type)
+        self._model = YOLO(self.model_path)
 
     def estimate(self, image: np.ndarray) -> ImagePose:
         """Estimate poses using YOLO.
@@ -202,7 +218,7 @@ class YOLOPoseEstimator(PoseEstimator):
         Returns:
             ImagePose: An object containing detected poses and metadata.
         """
-        results = self.model(image, verbose=False)
+        results = self._model(image, verbose=False)
 
         if results[0].keypoints is None or results[0].keypoints.data.numel() == 0:
             # No individuals detected
