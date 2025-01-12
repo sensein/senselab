@@ -40,7 +40,7 @@ class PoseEstimator(ABC):
 
     @abstractmethod
     def __init__(self, model_type: str) -> None:
-        """Initialize the PoseEstimato.
+        """Initialize the PoseEstimator.
 
         Args:
             model_type (str): Type of model to use.
