@@ -49,7 +49,11 @@ def _select_device_and_dtype(
         available_devices.append(DeviceType.CUDA)
 
     if torch.backends.mps.is_available():
-        available_devices.append(DeviceType.MPS)
+        try:
+            torch.empty(0, device="mps")
+            available_devices.append(DeviceType.MPS)
+        except Exception as e:
+            print(f"MPS is available but encountered an error: {e}")
 
     # Check compatible and available
     useable_devices = []
