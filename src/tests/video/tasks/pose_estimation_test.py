@@ -15,7 +15,7 @@ from senselab.video.data_structures.pose import (
     YOLOPoseLandmark,
 )
 from senselab.video.tasks.pose_estimation.estimate import MediaPipePoseEstimator, PoseEstimator, YOLOPoseEstimator
-from senselab.video.tasks.pose_estimation.visualization import visualize_pose
+from senselab.video.tasks.pose_estimation.visualization import visualize
 
 # Test data
 VALID_IMAGE = "src/tests/data_for_testing/pose_data/single_person.jpg"
@@ -92,7 +92,7 @@ class TestPoseEstimators:
     def _run_estimation(self, estimator: PoseEstimator, image_path: str, num_individuals: Optional[int]) -> ImagePose:
         """Helper function to run pose estimation."""
         if isinstance(estimator, MediaPipePoseEstimator):
-            return estimator.estimate_from_path(image_path, num_individuals=num_individuals or 1)
+            return estimator.estimate_from_path(image_path, num_individuals=num_individuals)  # type: ignore[arg-type]
         return estimator.estimate_from_path(image_path)
 
     @pytest.mark.parametrize(
@@ -165,7 +165,7 @@ def test_visualize_pose(sample_pose: ImagePose, request: pytest.FixtureRequest, 
     """Test the visualization of poses for both MediaPipe and YOLO."""
     pose = request.getfixturevalue(sample_pose)
     output_path = os.path.join(tmpdir, f"{pose.model.name.lower()}.png")
-    annotated_image = visualize_pose(pose, output_path=output_path)
+    annotated_image = visualize(pose, output_path=output_path)
 
     # Check the annotated image type
     assert isinstance(annotated_image, np.ndarray)
