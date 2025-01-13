@@ -11,7 +11,7 @@ from mediapipe.framework.formats import landmark_pb2
 from senselab.video.data_structures.pose import ImagePose, PoseModel
 
 
-def visualize_pose(pose_image: ImagePose, output_path: Optional[str] = None) -> np.ndarray:
+def visualize(pose_image: ImagePose, output_path: Optional[str] = None) -> np.ndarray:
     """Visualize detected poses.
 
     Args:
