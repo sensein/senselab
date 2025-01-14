@@ -53,7 +53,7 @@ class HuggingFaceAudioClassifier:
                 top_k=top_k,
                 function_to_apply=function_to_apply,
                 device=device.value,
-                torch_dtype=torch_dtype,
+                # torch_dtype=torch_dtype,
             )
         return cls._pipelines[key]
 
