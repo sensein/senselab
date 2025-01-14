@@ -91,6 +91,7 @@ video = [
   "opencv-python",
   "ultralytics"
 ]
+deepface = "^0.0.93"
 
 [tool.poetry.group.dev]
 optional = true
