@@ -4,7 +4,9 @@ import pytest
 import torch
 
 from senselab.audio.data_structures import Audio
-from senselab.audio.tasks.classification.speech_emotion_recognition import speech_emotion_recognition_with_hf_models
+from senselab.audio.tasks.classification.speech_emotion_recognition.speech_emotion_recognition import (
+    speech_emotion_recognition_with_hf_models,
+)
 from senselab.audio.tasks.preprocessing import resample_audios
 from senselab.utils.data_structures import HFModel
 from tests.audio.conftest import MONO_AUDIO_PATH
