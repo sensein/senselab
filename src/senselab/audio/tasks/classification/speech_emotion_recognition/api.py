@@ -60,9 +60,10 @@ def classify_emotions_from_speech(
                 + "'audio_classification_with_hf_models' function."
             )
 
+        updated_kwargs: dict[str, Any] = {}
         if ser_type == SERType.CONTINUOUS:
-            updated_kwargs: dict[str, Any] = {"function_to_apply": "none"}
-            updated_kwargs.update(kwargs)
+            updated_kwargs["function_to_apply"] = "none"
+        updated_kwargs.update(kwargs)
 
         return HuggingFaceAudioClassifier.classify_audios_with_transformers(
             audios=audios, model=model, device=device, **updated_kwargs

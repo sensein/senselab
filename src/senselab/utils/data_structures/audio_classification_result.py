@@ -1,6 +1,6 @@
 """This module contains the definition of the AudioClassificationResult class."""
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 from pydantic import BaseModel, model_validator
 
@@ -61,32 +61,35 @@ class AudioClassificationResult(BaseModel):
         """
         return list(zip(self.labels, self.scores))
 
-    def top_label(self, k: Optional[int]) -> str | List[str]:
+    def top_label(self) -> str:
+        """Gets the top label based on the highest score."""
+        return self.labels[0]
+
+    def top_score(self) -> float:
+        """Gets the top score, based on highest value."""
+        return self.scores[0]
+
+    def top(self) -> Tuple[str, float]:
+        """Gets the top label/score pairing, based on highest score value."""
+        return self.labels[0], self.scores[0]
+
+    def top_k_labels(self, k: int = 1) -> List[str]:
         """Gets the top k label(s) based on the highest score."""
-        if k:
-            if k < 1 or k > len(self.labels):
-                raise ValueError("k needs to be between 1 and the number of labels the model classifies over.")
-            return self.labels[0:k]
-        else:
-            return self.labels[0]
+        if k < 1 or k > len(self.labels):
+            raise ValueError("k needs to be between 1 and the number of labels the model classifies over.")
+        return self.labels[0:k]
 
-    def top_score(self, k: Optional[int]) -> float | List[float]:
+    def top_k_score(self, k: int = 1) -> List[float]:
         """Gets the top k score(s), based on highest value."""
-        if k:
-            if k < 1 or k > len(self.scores):
-                raise ValueError("k needs to be between 1 and the number of labels the model classifies over.")
-            return self.scores[0:k]
-        else:
-            return self.scores[0]
+        if k < 1 or k > len(self.scores):
+            raise ValueError("k needs to be between 1 and the number of labels the model classifies over.")
+        return self.scores[0:k]
 
-    def top(self, k: Optional[int]) -> Tuple[str, float] | List[Tuple[str, float]]:
+    def top_k(self, k: int = 1) -> List[Tuple[str, float]]:
         """Gets the top k label/score pairing(s), based on highest score value."""
-        if k:
-            if k < 1 or k > len(self.labels):
-                raise ValueError("k needs to be between 1 and the number of labels the model classifies over.")
-            return list(zip(self.labels, self.scores))[0:k]
-        else:
-            return self.labels[0], self.scores[0]
+        if k < 1 or k > len(self.labels):
+            raise ValueError("k needs to be between 1 and the number of labels the model classifies over.")
+        return list(zip(self.labels, self.scores))[0:k]
 
     @classmethod
     def from_hf_classification_pipeline(cls, results: List[Dict]) -> "AudioClassificationResult":
