@@ -18,14 +18,14 @@ from senselab.video.tasks.pose_estimation import estimate_pose, visualize_pose
 from senselab.video.tasks.pose_estimation.estimate import MediaPipePoseEstimator, PoseEstimator, YOLOPoseEstimator
 
 # Test data
-VALID_IMAGE = "src/tests/data_for_testing/pose_data/single_person.jpg"
-MULTIPLE_PEOPLE_IMAGE = "src/tests/data_for_testing/pose_data/three_people.jpg"
-NO_PEOPLE_IMAGE = "src/tests/data_for_testing/pose_data/no_people.jpeg"
+VALID_IMAGE = os.path.abspath("src/tests/data_for_testing/pose_data/single_person.jpg")
+MULTIPLE_PEOPLE_IMAGE = os.path.abspath("src/tests/data_for_testing/pose_data/three_people.jpg")
+NO_PEOPLE_IMAGE = os.path.abspath("src/tests/data_for_testing/pose_data/no_people.jpeg")
 INVALID_IMAGE_PATH = "invalid/path/to/image.jpg"
 
 
 # Saved file paths (used for cleanup)
-MODEL_PATH = "src/senselab/video/tasks/pose_estimation/models"
+MODEL_PATH = os.path.abspath("src/senselab/video/tasks/pose_estimation/models")
 
 # Parameters for testing
 MEDIAPIPE_VALID_MODELS = ["full", "heavy"]
