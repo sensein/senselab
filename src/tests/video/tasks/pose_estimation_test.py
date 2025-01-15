@@ -2,7 +2,7 @@
 
 import os
 import shutil
-from typing import Generator, Optional
+from typing import Dict, Generator, Optional, Union
 
 import cv2
 import numpy as np
@@ -14,8 +14,8 @@ from senselab.video.data_structures.pose import (
     PoseModel,
     YOLOPoseLandmark,
 )
+from senselab.video.tasks.pose_estimation import estimate_pose, visualize_pose
 from senselab.video.tasks.pose_estimation.estimate import MediaPipePoseEstimator, PoseEstimator, YOLOPoseEstimator
-from senselab.video.tasks.pose_estimation.visualization import visualize
 
 # Test data
 VALID_IMAGE = "src/tests/data_for_testing/pose_data/single_person.jpg"
@@ -27,7 +27,7 @@ INVALID_IMAGE_PATH = "invalid/path/to/image.jpg"
 # Saved file paths (used for cleanup)
 MODEL_PATH = "src/senselab/video/tasks/pose_estimation/models"
 
-
+# Parameters for testing
 MEDIAPIPE_VALID_MODELS = ["full", "heavy"]
 YOLO_VALID_MODELS = ["8s", "11l"]
 MEDIAPIPE_INVALID_MODELS = ["invalid", "11n", 123]
@@ -75,25 +75,23 @@ def sample_pose_yolo() -> ImagePose:
 
 
 @pytest.mark.parametrize(
-    "estimator_class, model_type, num_individuals",
+    "model, model_type, num_individuals",
     [
-        (MediaPipePoseEstimator, "lite", 2),
-        (YOLOPoseEstimator, "8n", None),  # YOLO doesn't use `num_individuals`
+        ("mediapipe", "lite", 2),
+        ("yolo", "8n", None),  # YOLO doesn't use `num_individuals`
     ],
 )
 class TestPoseEstimators:
     """Test suite for pose estimators."""
 
-    @pytest.fixture
-    def estimator(self, estimator_class: type[PoseEstimator], model_type: str) -> PoseEstimator:
-        """Create a pose estimator for testing."""
-        return estimator_class(model_type)
-
-    def _run_estimation(self, estimator: PoseEstimator, image_path: str, num_individuals: Optional[int]) -> ImagePose:
-        """Helper function to run pose estimation."""
-        if isinstance(estimator, MediaPipePoseEstimator):
-            return estimator.estimate_from_path(image_path, num_individuals=num_individuals)  # type: ignore[arg-type]
-        return estimator.estimate_from_path(image_path)
+    def _run_estimation(
+        self, model: str, image_path: str, model_type: str, num_individuals: Optional[int]
+    ) -> ImagePose:
+        """Helper function to run pose estimation using the API."""
+        kwargs: Dict[str, Union[str, int]] = {"model_type": model_type}
+        if num_individuals is not None:
+            kwargs["num_individuals"] = num_individuals
+        return estimate_pose(image_path, model, **{k: v for k, v in kwargs.items() if v is not None})
 
     @pytest.mark.parametrize(
         "image_path, expected_count",
@@ -104,10 +102,10 @@ class TestPoseEstimators:
         ],
     )
     def test_pose_estimation(
-        self, estimator: PoseEstimator, image_path: str, expected_count: int, num_individuals: int
+        self, model: str, model_type: str, image_path: str, expected_count: int, num_individuals: int
     ) -> None:
-        """Test pose estimation on various images."""
-        result = self._run_estimation(estimator, image_path, num_individuals)
+        """Test pose estimation on various images using the API."""
+        result = self._run_estimation(model, image_path, model_type, num_individuals)
         assert isinstance(result, ImagePose)
         expected_count = min(num_individuals, expected_count) if num_individuals else expected_count
         assert len(result.individuals) == expected_count
@@ -119,20 +117,20 @@ class TestPoseEstimators:
 
     @pytest.mark.parametrize(
         "invalid_num_individuals",
-        [None, -1, "3", 1.5],
+        [-1, "3", 1.5],
     )
     def test_invalid_num_individuals(
-        self, estimator: PoseEstimator, invalid_num_individuals: int, num_individuals: int
+        self, model: str, model_type: str, invalid_num_individuals: int, num_individuals: int
     ) -> None:
-        """Test error handling for invalid number of individuals."""
-        if isinstance(estimator, MediaPipePoseEstimator):
+        """Test error handling for invalid number of individuals using the API."""
+        if model == "mediapipe":
             with pytest.raises(ValueError):
-                self._run_estimation(estimator, MULTIPLE_PEOPLE_IMAGE, invalid_num_individuals)  # type: ignore[arg-type]
+                self._run_estimation(model, MULTIPLE_PEOPLE_IMAGE, model_type, invalid_num_individuals)
 
-    def test_invalid_image_path(self, estimator: PoseEstimator, num_individuals: int) -> None:
-        """Test error handling for invalid image paths."""
+    def test_invalid_image_path(self, model: str, model_type: str, num_individuals: int) -> None:
+        """Test error handling for invalid image paths using the API."""
         with pytest.raises(FileNotFoundError):
-            self._run_estimation(estimator, INVALID_IMAGE_PATH, num_individuals)
+            self._run_estimation(model, INVALID_IMAGE_PATH, model_type, num_individuals)
 
 
 @pytest.mark.parametrize(
@@ -165,7 +163,7 @@ def test_visualize_pose(sample_pose: ImagePose, request: pytest.FixtureRequest, 
     """Test the visualization of poses for both MediaPipe and YOLO."""
     pose = request.getfixturevalue(sample_pose)
     output_path = os.path.join(tmpdir, f"{pose.model.name.lower()}.png")
-    annotated_image = visualize(pose, output_path=output_path)
+    annotated_image = visualize_pose(pose, output_path=output_path)
 
     # Check the annotated image type
     assert isinstance(annotated_image, np.ndarray)
