@@ -2,6 +2,8 @@
 
 from typing import Any, Optional
 
+import numpy as np
+
 from senselab.video.data_structures.pose import ImagePose
 from senselab.video.tasks.pose_estimation.estimate import (
     MediaPipePoseEstimator,
@@ -21,7 +23,7 @@ def estimate_pose(image_path: str, model: str, **kwargs: Any) -> ImagePose:  # n
                 - model_type (str): Type of MediaPipe model ('lite', 'full', 'heavy'). Defaults to 'lite'.
                 - num_individuals (int): Maximum number of individuals to detect. Defaults to 1.
             - For YOLO:
-                - model_type (str): Type of YOLO model ('8n', '8s', etc.). Defaults to '8n'.
+                - model_type (str): Type of YOLO model ('8n', '8s', '11l', etc.). Defaults to '8n'.
 
     Returns:
         ImagePose: An object containing the estimated poses.
@@ -58,11 +60,14 @@ def estimate_pose(image_path: str, model: str, **kwargs: Any) -> ImagePose:  # n
         raise ValueError(f"Unsupported model: {model}")
 
 
-def visualize_pose(pose_image: ImagePose, output_path: Optional[str] = None) -> None:
+def visualize_pose(pose_image: ImagePose, output_path: Optional[str] = None) -> np.ndarray:
     """Visualize pose estimation results.
 
     Args:
         pose_image (ImagePose): The pose estimation result.
         output_path (str): Optional path to save the visualized image.
+
+    Returns:
+        np.ndarray: Annotated image.
     """
-    visualize(pose_image, output_path=output_path)
+    return visualize(pose_image, output_path=output_path)
