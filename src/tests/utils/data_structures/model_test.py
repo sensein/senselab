@@ -9,7 +9,7 @@ from senselab.utils.data_structures import HFModel, check_hf_repo_exists
 
 def test_check_hf_repo_exists_true() -> None:
     """Test HF repo exists."""
-    with patch("huggingface_hub.HfApi.list_repo_commits") as mock_list_repo_commits:
+    with patch("huggingface_hub.HfApi.model_info") as mock_list_repo_commits:
         mock_list_repo_commits.return_value = True
         assert check_hf_repo_exists("valid_repo") is True
 
