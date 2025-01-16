@@ -5,6 +5,7 @@ Users can specify the audio clips to classify, the classification model, the pre
 and the model-specific parameters, and senselab handles the rest.
 """
 
+import warnings
 from enum import Enum
 from typing import Any, List, Optional
 
@@ -12,7 +13,7 @@ from transformers import AutoConfig
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.classification.huggingface import HuggingFaceAudioClassifier
-from senselab.utils.data_structures import AudioClassificationResult, DeviceType, HFModel, SenselabModel
+from senselab.utils.data_structures import AudioClassificationResult, DeviceType, HFModel, SenselabModel, logger
 
 
 class SERType(Enum):
@@ -60,13 +61,21 @@ def classify_emotions_from_speech(
                 + "'audio_classification_with_hf_models' function."
             )
 
-        updated_kwargs: dict[str, Any] = {}
         if ser_type == SERType.CONTINUOUS:
-            updated_kwargs["function_to_apply"] = "none"
-        updated_kwargs.update(kwargs)
-
+            output_function_to_apply = kwargs.get("function_to_apply", None)
+            if output_function_to_apply:
+                if output_function_to_apply != "none":
+                    warnings.warn("""Senselab predicts that you are using a continuous SER model but have
+                                  specified the parameter `function_to_apply` as something other than none. This
+                                  might create side effects when dealing with continuous values that do not
+                                  necessarily represent probabilities.""")
+            else:
+                kwargs["function_to_apply"] = "none"
+                logger.info("""Senselab predicts that you are using a continuous SER and have not specified the
+                            parameter `function_to_apply`. We are setting this to none such that the model
+                            outputs are reported directly rather than being passed through a softmax or sigmoid.""")
         return HuggingFaceAudioClassifier.classify_audios_with_transformers(
-            audios=audios, model=model, device=device, **updated_kwargs
+            audios=audios, model=model, device=device, **kwargs
         )
     else:
         raise NotImplementedError(

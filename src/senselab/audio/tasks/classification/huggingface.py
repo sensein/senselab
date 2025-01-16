@@ -41,7 +41,7 @@ class HuggingFaceAudioClassifier:
         Returns:
             pipeline: The Audio Classification pipeline.
         """
-        device, torch_dtype = _select_device_and_dtype(
+        device, _ = _select_device_and_dtype(
             user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
         )
         key = f"{model.path_or_uri}-{model.revision}-{top_k}-" f"{function_to_apply}-{batch_size}-{device.value}"
@@ -50,10 +50,11 @@ class HuggingFaceAudioClassifier:
                 "audio-classification",
                 model=model.path_or_uri,
                 revision=model.revision,
-                top_k=top_k,
-                function_to_apply=function_to_apply,
+                # top_k=top_k, #TODO: this causes a bug in the pipeline that has been reported to transformers
+                # https://github.com/huggingface/transformers/issues/35736
+                function_to_apply=function_to_apply,  # TODO: parameter ignored in transformer code, bug reported
+                # https://github.com/huggingface/transformers/issues/35739
                 device=device.value,
-                # torch_dtype=torch_dtype,
             )
         return cls._pipelines[key]
 
@@ -136,7 +137,7 @@ class HuggingFaceAudioClassifier:
         # Take the start time of the transcription
         start_time_transcription = time.time()
         # Run the pipeline
-        classifications = pipe(formatted_audios)
+        classifications = pipe(formatted_audios, top_k=top_k, function_to_apply=function_to_apply)
 
         # Take the end time of the classification
         end_time_transcription = time.time()
