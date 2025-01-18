@@ -2,6 +2,8 @@
 
 from typing import Any, Optional
 
+import cv2
+import matplotlib.pyplot as plt
 import numpy as np
 
 from senselab.video.data_structures.pose import ImagePose
@@ -61,7 +63,7 @@ def estimate_pose(image_path: str, model: str, **kwargs: Any) -> ImagePose:  # n
 
 
 def visualize_pose(pose_image: ImagePose, output_path: Optional[str] = None) -> np.ndarray:
-    """Visualize pose estimation results.
+    """Visualize pose estimation results and optionally save the image.
 
     Args:
         pose_image (ImagePose): The pose estimation result.
@@ -70,4 +72,16 @@ def visualize_pose(pose_image: ImagePose, output_path: Optional[str] = None) -> 
     Returns:
         np.ndarray: Annotated image.
     """
-    return visualize(pose_image, output_path=output_path)
+    annotated_image = visualize(pose_image, output_path=output_path)
+
+    plt.imshow(cv2.cvtColor(annotated_image, cv2.COLOR_BGR2RGB))
+    plt.axis("off")
+    plt.show()
+
+    return annotated_image
+
+
+if __name__ == "__main__":
+    image_path = "src/tests/data_for_testing/pose_data/single_person.jpg"
+    pose_image = estimate_pose(image_path, model="mediapipe", model_type="lite", num_individuals=1)
+    visualize_pose(pose_image, "annotate/mp.jpg")
