@@ -60,15 +60,17 @@ def estimate_pose(image_path: str, model: str, **kwargs: Any) -> ImagePose:  # n
         raise ValueError(f"Unsupported model: {model}")
 
 
-def visualize_pose(pose_image: ImagePose, output_path: Optional[str] = None) -> np.ndarray:
-    """Visualize pose estimation results and optionally save the image.
+def visualize_pose(pose_image: ImagePose, output_path: Optional[str] = None, plot: bool = False) -> np.ndarray:
+    """Visualize detected poses by drawing landmarks and connections on the image.
 
     Args:
-        pose_image (ImagePose): The pose estimation result.
-        output_path (str): Optional path to save the visualized image.
+        pose_image (ImagePose): The pose estimation result containing detected poses.
+        output_path (str): Optional path to save the visualized image. If provided, saves the
+            annotated image to this location.
+        plot (bool): Whether to display the annotated image using matplotlib.
 
     Returns:
-        np.ndarray: Annotated image.
+        np.ndarray: The input image with pose landmarks and connections drawn on it.
     """
-    annotated_image = visualize(pose_image, output_path=output_path)
+    annotated_image = visualize(pose_image, output_path=output_path, plot=plot)
     return annotated_image
