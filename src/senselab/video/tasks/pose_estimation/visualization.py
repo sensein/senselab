@@ -4,6 +4,7 @@ import os
 from typing import Optional
 
 import cv2
+import matplotlib.pyplot as plt
 import numpy as np
 from mediapipe import solutions
 from mediapipe.framework.formats import landmark_pb2
@@ -49,5 +50,10 @@ def visualize(pose_image: ImagePose, output_path: Optional[str] = None) -> np.nd
         print(f"Saving visualization to {output_path}")
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         cv2.imwrite(output_path, cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR))
+
+    plt.imshow(annotated_image)
+    plt.axis("off")
+    plt.show()
+    plt.close()
 
     return annotated_image
