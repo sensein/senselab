@@ -4,64 +4,103 @@ import os
 
 import requests
 
+# Path where models are stored
 MODEL_PATH = "src/senselab/video/tasks/pose_estimation/models"
 
-YOLO_KEYPOINT_MAPPING = {
+# Senselab Pose Estimation keypoint mapping
+SENSELAB_KEYPOINT_MAPPING = {
     0: "Nose",
-    1: "Left Eye",
-    2: "Right Eye",
-    3: "Left Ear",
-    4: "Right Ear",
-    5: "Left Shoulder",
-    6: "Right Shoulder",
-    7: "Left Elbow",
-    8: "Right Elbow",
-    9: "Left Wrist",
-    10: "Right Wrist",
-    11: "Left Hip",
-    12: "Right Hip",
-    13: "Left Knee",
-    14: "Right Knee",
-    15: "Left Ankle",
-    16: "Right Ankle",
+    1: "Left Eye Inner",
+    2: "Left Eye",
+    3: "Left Eye Outer",
+    4: "Right Eye Inner",
+    5: "Right Eye",
+    6: "Right Eye Outer",
+    7: "Left Ear",
+    8: "Right Ear",
+    9: "Mouth Left",
+    10: "Mouth Right",
+    11: "Left Shoulder",
+    12: "Right Shoulder",
+    13: "Left Elbow",
+    14: "Right Elbow",
+    15: "Left Wrist",
+    16: "Right Wrist",
+    17: "Left Pinky",
+    18: "Right Pinky",
+    19: "Left Index",
+    20: "Right Index",
+    21: "Left Thumb",
+    22: "Right Thumb",
+    23: "Left Hip",
+    24: "Right Hip",
+    25: "Left Knee",
+    26: "Right Knee",
+    27: "Left Ankle",
+    28: "Right Ankle",
+    29: "Left Heel",
+    30: "Right Heel",
+    31: "Left Foot Index",
+    32: "Right Foot Index",
+}
+
+YOLO_KEYPOINT_MAPPING = {
+    0: SENSELAB_KEYPOINT_MAPPING[0],  # Nose
+    1: SENSELAB_KEYPOINT_MAPPING[2],  # Left Eye
+    2: SENSELAB_KEYPOINT_MAPPING[5],  # Right Eye
+    3: SENSELAB_KEYPOINT_MAPPING[7],  # Left Ear
+    4: SENSELAB_KEYPOINT_MAPPING[8],  # Right Ear
+    5: SENSELAB_KEYPOINT_MAPPING[11],  # Left Shoulder
+    6: SENSELAB_KEYPOINT_MAPPING[12],  # Right Shoulder
+    7: SENSELAB_KEYPOINT_MAPPING[13],  # Left Elbow
+    8: SENSELAB_KEYPOINT_MAPPING[14],  # Right Elbow
+    9: SENSELAB_KEYPOINT_MAPPING[15],  # Left Wrist
+    10: SENSELAB_KEYPOINT_MAPPING[16],  # Right Wrist
+    11: SENSELAB_KEYPOINT_MAPPING[23],  # Left Hip
+    12: SENSELAB_KEYPOINT_MAPPING[24],  # Right Hip
+    13: SENSELAB_KEYPOINT_MAPPING[25],  # Left Knee
+    14: SENSELAB_KEYPOINT_MAPPING[26],  # Right Knee
+    15: SENSELAB_KEYPOINT_MAPPING[27],  # Left Ankle
+    16: SENSELAB_KEYPOINT_MAPPING[28],  # Right Ankle
 }
 
 MEDIAPIPE_KEYPOINT_MAPPING = {
-    0: "nose",
-    1: "left_eye_inner",
-    2: "left_eye",
-    3: "left_eye_outer",
-    4: "right_eye_inner",
-    5: "right_eye",
-    6: "right_eye_outer",
-    7: "left_ear",
-    8: "right_ear",
-    9: "mouth_left",
-    10: "mouth_right",
-    11: "left_shoulder",
-    12: "right_shoulder",
-    13: "left_elbow",
-    14: "right_elbow",
-    15: "left_wrist",
-    16: "right_wrist",
-    17: "left_pinky",
-    18: "right_pinky",
-    19: "left_index",
-    20: "right_index",
-    21: "left_thumb",
-    22: "right_thumb",
-    23: "left_hip",
-    24: "right_hip",
-    25: "left_knee",
-    26: "right_knee",
-    27: "left_ankle",
-    28: "right_ankle",
-    29: "left_heel",
-    30: "right_heel",
-    31: "left_foot_index",
-    32: "right_foot_index",
+    0: SENSELAB_KEYPOINT_MAPPING[0],  # Nose
+    1: SENSELAB_KEYPOINT_MAPPING[1],  # Left Eye Inner
+    2: SENSELAB_KEYPOINT_MAPPING[2],  # Left Eye
+    3: SENSELAB_KEYPOINT_MAPPING[3],  # Left Eye Outer
+    4: SENSELAB_KEYPOINT_MAPPING[4],  # Right Eye Inner
+    5: SENSELAB_KEYPOINT_MAPPING[5],  # Right Eye
+    6: SENSELAB_KEYPOINT_MAPPING[6],  # Right Eye Outer
+    7: SENSELAB_KEYPOINT_MAPPING[7],  # Left Ear
+    8: SENSELAB_KEYPOINT_MAPPING[8],  # Right Ear
+    9: SENSELAB_KEYPOINT_MAPPING[9],  # Mouth Left
+    10: SENSELAB_KEYPOINT_MAPPING[10],  # Mouth Right
+    11: SENSELAB_KEYPOINT_MAPPING[11],  # Left Shoulder
+    12: SENSELAB_KEYPOINT_MAPPING[12],  # Right Shoulder
+    13: SENSELAB_KEYPOINT_MAPPING[13],  # Left Elbow
+    14: SENSELAB_KEYPOINT_MAPPING[14],  # Right Elbow
+    15: SENSELAB_KEYPOINT_MAPPING[15],  # Left Wrist
+    16: SENSELAB_KEYPOINT_MAPPING[16],  # Right Wrist
+    17: SENSELAB_KEYPOINT_MAPPING[17],  # Left Pinky
+    18: SENSELAB_KEYPOINT_MAPPING[18],  # Right Pinky
+    19: SENSELAB_KEYPOINT_MAPPING[19],  # Left Index
+    20: SENSELAB_KEYPOINT_MAPPING[20],  # Right Index
+    21: SENSELAB_KEYPOINT_MAPPING[21],  # Left Thumb
+    22: SENSELAB_KEYPOINT_MAPPING[22],  # Right Thumb
+    23: SENSELAB_KEYPOINT_MAPPING[23],  # Left Hip
+    24: SENSELAB_KEYPOINT_MAPPING[24],  # Right Hip
+    25: SENSELAB_KEYPOINT_MAPPING[25],  # Left Knee
+    26: SENSELAB_KEYPOINT_MAPPING[26],  # Right Knee
+    27: SENSELAB_KEYPOINT_MAPPING[27],  # Left Ankle
+    28: SENSELAB_KEYPOINT_MAPPING[28],  # Right Ankle
+    29: SENSELAB_KEYPOINT_MAPPING[29],  # Left Heel
+    30: SENSELAB_KEYPOINT_MAPPING[30],  # Right Heel
+    31: SENSELAB_KEYPOINT_MAPPING[31],  # Left Foot Index
+    32: SENSELAB_KEYPOINT_MAPPING[32],  # Right Foot Index
 }
 
+# Available models
 MODELS = {
     "mediapipe": {
         "lite": "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",

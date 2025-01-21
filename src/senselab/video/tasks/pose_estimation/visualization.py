@@ -8,7 +8,8 @@ import numpy as np
 from mediapipe import solutions
 from mediapipe.framework.formats import landmark_pb2
 
-from senselab.video.data_structures.pose import ImagePose, PoseModel
+from senselab.video.data_structures.pose import ImagePose
+from senselab.video.tasks.pose_estimation.utils import SENSELAB_KEYPOINT_MAPPING
 
 
 def visualize(pose_image: ImagePose, output_path: Optional[str] = None) -> np.ndarray:
@@ -23,30 +24,29 @@ def visualize(pose_image: ImagePose, output_path: Optional[str] = None) -> np.nd
     """
     annotated_image = pose_image.image.copy()
 
-    if pose_image.model == PoseModel.MEDIAPIPE:
-        for individual in pose_image.individuals:
-            pose_landmarks_proto = landmark_pb2.NormalizedLandmarkList()
-            landmarks = [
-                landmark_pb2.NormalizedLandmark(x=lm.x, y=lm.y, z=lm.z)  # type: ignore[attr-defined]
-                for lm in individual.normalized_landmarks.values()
-            ]
-            pose_landmarks_proto.landmark.extend(landmarks)
-            solutions.drawing_utils.draw_landmarks(
-                annotated_image,
-                pose_landmarks_proto,
-                solutions.pose.POSE_CONNECTIONS,
-                solutions.drawing_styles.get_default_pose_landmarks_style(),
-            )
-
-    elif pose_image.model == PoseModel.YOLO:
-        height, width, _ = annotated_image.shape
-        for individual in pose_image.individuals:
-            for landmark in individual.normalized_landmarks.values():
-                x = int(landmark.x * width)  # type: ignore[attr-defined]
-                y = int(landmark.y * height)  # type: ignore[attr-defined]
-                cv2.circle(annotated_image, (x, y), 3, (0, 255, 0), -1)
+    for individual in pose_image.individuals:
+        pose_landmarks_proto = landmark_pb2.NormalizedLandmarkList()
+        landmarks = []
+        pose_lm = individual.normalized_landmarks
+        # Filter out landmarks with low confidence
+        landmarks = [
+            landmark_pb2.NormalizedLandmark(
+                x=getattr(pose_lm[lm], "x", 0), y=getattr(pose_lm[lm], "y", 0), z=getattr(pose_lm[lm], "z", 0)
+            )  # type: ignore[attr-defined]
+            if (lm in pose_lm and getattr(pose_lm[lm], "confidence", 1) > 0.5)
+            else landmark_pb2.NormalizedLandmark(x=0, y=0, z=0, visibility=0)
+            for lm in SENSELAB_KEYPOINT_MAPPING.values()
+        ]
+        pose_landmarks_proto.landmark.extend(landmarks)
+        solutions.drawing_utils.draw_landmarks(
+            annotated_image,
+            pose_landmarks_proto,
+            solutions.pose.POSE_CONNECTIONS,
+            solutions.drawing_styles.get_default_pose_landmarks_style(),
+        )
 
     if output_path:
+        print(f"Saving visualization to {output_path}")
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         cv2.imwrite(output_path, cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR))
 
