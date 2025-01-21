@@ -78,9 +78,3 @@ def visualize_pose(pose_image: ImagePose, output_path: Optional[str] = None) -> 
     plt.show()
 
     return annotated_image
-
-
-if __name__ == "__main__":
-    image_path = "src/tests/data_for_testing/pose_data/single_person.jpg"
-    pose_image = estimate_pose(image_path, model="mediapipe", model_type="lite", num_individuals=1)
-    visualize_pose(pose_image, "annotate/mp.jpg")
