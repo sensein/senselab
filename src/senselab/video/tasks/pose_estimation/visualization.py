@@ -13,15 +13,17 @@ from senselab.video.data_structures.pose import ImagePose
 from senselab.video.tasks.pose_estimation.utils import SENSELAB_KEYPOINT_MAPPING
 
 
-def visualize(pose_image: ImagePose, output_path: Optional[str] = None) -> np.ndarray:
-    """Visualize detected poses.
+def visualize(pose_image: ImagePose, output_path: Optional[str] = None, plot: bool = False) -> np.ndarray:
+    """Visualize detected poses by drawing landmarks and connections on the image.
 
     Args:
-        pose_image: ImagePose object containing detections.
-        output_path: Optional path to save visualization.
+        pose_image (ImagePose): The pose estimation result containing detected poses.
+        output_path (str): Optional path to save the visualized image. If provided, saves the
+            annotated image to this location.
+        plot (bool): Whether to display the annotated image using matplotlib.
 
     Returns:
-        Annotated image.
+        np.ndarray: The input image with pose landmarks and connections drawn on it.
     """
     annotated_image = pose_image.image.copy()
 
@@ -51,9 +53,10 @@ def visualize(pose_image: ImagePose, output_path: Optional[str] = None) -> np.nd
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         cv2.imwrite(output_path, cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR))
 
-    plt.imshow(annotated_image)
-    plt.axis("off")
-    plt.show()
-    plt.close()
+    if plot:
+        plt.imshow(annotated_image)
+        plt.axis("off")
+        plt.show()
+        plt.close()
 
     return annotated_image
