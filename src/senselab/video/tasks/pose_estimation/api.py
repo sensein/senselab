@@ -2,7 +2,6 @@
 
 from typing import Any, Optional
 
-import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -74,7 +73,7 @@ def visualize_pose(pose_image: ImagePose, output_path: Optional[str] = None) -> 
     """
     annotated_image = visualize(pose_image, output_path=output_path)
 
-    plt.imshow(cv2.cvtColor(annotated_image, cv2.COLOR_BGR2RGB))
+    plt.imshow(annotated_image)
     plt.axis("off")
     plt.show()
 
