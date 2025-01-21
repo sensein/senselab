@@ -2,7 +2,6 @@
 
 from typing import Any, Optional
 
-import matplotlib.pyplot as plt
 import numpy as np
 
 from senselab.video.data_structures.pose import ImagePose
@@ -73,8 +72,8 @@ def visualize_pose(pose_image: ImagePose, output_path: Optional[str] = None) -> 
     """
     annotated_image = visualize(pose_image, output_path=output_path)
 
-    plt.imshow(annotated_image)
-    plt.axis("off")
-    plt.show()
+    # plt.imshow(annotated_image)
+    # plt.axis("off")
+    # plt.show()
 
     return annotated_image
