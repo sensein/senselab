@@ -71,9 +71,4 @@ def visualize_pose(pose_image: ImagePose, output_path: Optional[str] = None) -> 
         np.ndarray: Annotated image.
     """
     annotated_image = visualize(pose_image, output_path=output_path)
-
-    # plt.imshow(annotated_image)
-    # plt.axis("off")
-    # plt.show()
-
     return annotated_image
