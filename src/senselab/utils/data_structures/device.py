@@ -9,9 +9,9 @@ import torch
 class DeviceType(Enum):
     """Device types for PyTorch operations."""
 
-    CPU: str = "cpu"
-    CUDA: str = "cuda"
-    MPS: str = "mps"
+    CPU = "cpu"
+    CUDA = "cuda"
+    MPS = "mps"
 
 
 DTYPE_MAP = {DeviceType.CPU: torch.float32, DeviceType.CUDA: torch.float16, DeviceType.MPS: torch.float32}
