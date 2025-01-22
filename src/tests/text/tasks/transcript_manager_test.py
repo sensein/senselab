@@ -94,7 +94,9 @@ if os.getenv("GITHUB_ACTIONS") != "true":
     def test_response_opportunities_extraction(sample_transcript: Path) -> None:
         """Test the extraction of response opportunities."""
         transcript = Transcript(sample_transcript)
+        print(transcript)
         opportunities = transcript.extract_response_opportunities()
+        print(opportunities)
 
         assert len(opportunities) == 2, "Expected two response opportunities"
         assert opportunities[0][-1].speaker == "user", "Expected last message to be first message from user"
