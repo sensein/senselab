@@ -1,3 +1,16 @@
+# 0.27.1 (Wed Jan 22 2025)
+
+#### 🐛 Bug Fix
+
+- Test Device Truly Available by Creating Trivial Object [#234](https://github.com/sensein/senselab/pull/234) ([@ibevers](https://github.com/ibevers) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@ibevers](https://github.com/ibevers)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.27.0 (Wed Jan 22 2025)
 
 #### 🚀 Enhancement
