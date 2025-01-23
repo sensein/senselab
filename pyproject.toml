@@ -32,7 +32,7 @@ datasets = "~=3"
 torch = "~=2.5"
 torchvision = "~=0.20"
 torchaudio = "~=2.5"
-transformers = "~=4.46.2"
+transformers = "~=4.47"
 pydra = "~=0.25"
 pydantic = "~=2.7"
 accelerate = "*"
@@ -43,7 +43,7 @@ torch-audiomentations = "~=0.11"
 sentence-transformers = "~=3.1"
 jiwer = "~=3.0"
 speechbrain = "~=1"
-pyav = "~=13"
+pyav = "~=14.0"
 pyannote-audio = "~=3.3"
 pycountry = "~=24.6"
 types-requests = "~=2.32"
@@ -130,10 +130,7 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["ANN", "D", "E", "F", "I"]
-ignore = [
-  "ANN101",  # self should not be annotated.
-  "ANN102"  # cls should not be annotated.
-]
+ignore = []
 fixable = ["ALL"]
 unfixable = []
 dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"

@@ -27,9 +27,9 @@ def Rouge(*args: List, **kwargs: Dict) -> rouge_scorer.RougeScorer:
 Rouge.__doc__ = rouge_scorer.RougeScorer.__doc__
 
 
-def sentence_bleu_sacre(*args: List, **kwargs: Dict) -> BLEUScore:
+def sentence_bleu_sacre(*args: List) -> List[BLEUScore]:
     """Wrapper for sacrebleu's sentence_bleu function."""
-    return sb.sentence_bleu(*args, **kwargs)
+    return [sb.sentence_bleu(str(item), str(ref)) for item, ref in args]
 
 
 sentence_bleu_sacre.__doc__ = sb.sentence_bleu.__doc__
