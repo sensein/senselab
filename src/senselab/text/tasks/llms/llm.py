@@ -41,7 +41,7 @@ class LLM:
         Starts the VLLM server with the specified number of GPUs.
     """
 
-    def __init__(self, model_name: str) -> None:
+    def __init__(self: "LLM", model_name: str) -> None:
         """Initializes the LLM instance with a model name and OpenAI client.
 
         Args:
@@ -53,7 +53,7 @@ class LLM:
 
         self._client = OpenAI(base_url=self._serving_url)
 
-    def start_server(self, num_gpus: int, timeout: int = 700) -> Optional[Popen]:
+    def start_server(self: "LLM", num_gpus: int, timeout: int = 700) -> Optional[Popen]:
         """Starts the VLLM server with the specified number of GPUs and logs the output.
 
         Args:
@@ -97,7 +97,7 @@ class LLM:
             return None
 
     def call(
-        self,
+        self: "LLM",
         messages: List[ScriptLine],
         system_instruction: Optional[str] = "",
         max_tokens: Optional[int] = 100,
@@ -114,7 +114,7 @@ class LLM:
             measure (Optional[bool]): Whether to measure token counts and latency.
 
         Returns:
-            LLMResponse: Named tuple with model's response, token counts, and latency (if measured).
+            LLMResponse: dataclass with model's response, with token counts and latency if measured.
         """
         openai_messages = [{"role": msg.speaker, "content": msg.text} for msg in messages]
 
@@ -141,9 +141,9 @@ class LLM:
             latency = time.time() - start_time
             out_tokens = len(self._tokenizer.encode(content))
 
-        return LLMResponse(content=content, latency=latency, in_tokens=in_tokens, out_tokens=out_tokens)
+        return LLMResponse(speaker="AI", text=content, latency=latency, in_tokens=in_tokens, out_tokens=out_tokens)
 
-    def _get_model(self, model: str) -> Tuple[str, str]:
+    def _get_model(self: "LLM", model: str) -> Tuple[str, str]:
         """Maps a model name to the corresponding model identifier and url.
 
         Args:

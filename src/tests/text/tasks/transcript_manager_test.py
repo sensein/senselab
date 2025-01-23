@@ -1,4 +1,4 @@
-"""Test cases for the transcript manager module."""
+"""Test cases for the transcript_input data structure class."""
 
 import json
 import os
@@ -7,8 +7,8 @@ from typing import List
 
 import pytest
 
-from senselab.text.tasks.llms.transcript_manager import Transcript
 from senselab.utils.data_structures.script_line import ScriptLine
+from senselab.utils.data_structures.transcript_input import TranscriptInput
 
 if os.getenv("GITHUB_ACTIONS") != "true":
 
@@ -67,7 +67,7 @@ if os.getenv("GITHUB_ACTIONS") != "true":
 
     def test_convert_json_to_messages(sample_json_obj: dict, expected_messages: List[ScriptLine]) -> None:
         """Test the conversion of JSON conversation segments to message objects."""
-        result = Transcript.convert_json_to_scriptlines(sample_json_obj)
+        result = TranscriptInput.convert_json_to_scriptlines(sample_json_obj)
         assert result == expected_messages
 
     def test_missing_word_or_speaker_field() -> None:
@@ -83,17 +83,17 @@ if os.getenv("GITHUB_ACTIONS") != "true":
             ]
         }
         with pytest.raises(ValueError, match="Invalid word structure"):
-            Transcript.convert_json_to_scriptlines(invalid_json)
+            TranscriptInput.convert_json_to_scriptlines(invalid_json)
 
     def test_get_num_tokens(sample_transcript: Path) -> None:
         """Test the ability of the program to return the correct number of expected tokens."""
-        transcript = Transcript(sample_transcript)  # Initialize the transcript
+        transcript = TranscriptInput(sample_transcript)  # Initialize the transcript
         result = transcript.get_num_tokens()  # Get the token count
         assert result == 10
 
     def test_response_opportunities_extraction(sample_transcript: Path) -> None:
         """Test the extraction of response opportunities."""
-        transcript = Transcript(sample_transcript)
+        transcript = TranscriptInput(sample_transcript)
         print(transcript)
         opportunities = transcript.extract_response_opportunities()
         print(opportunities)

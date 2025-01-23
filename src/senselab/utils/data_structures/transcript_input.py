@@ -9,7 +9,7 @@ import tiktoken
 from senselab.utils.data_structures.script_line import ScriptLine
 
 
-class Transcript:
+class TranscriptInput:
     """Manages message data for interactions with a LLM.
 
     Provides methods to load transcripts, convert JSON data to message objects,
@@ -27,7 +27,7 @@ class Transcript:
         convert_json_to_scriptlines(json_obj: Dict) -> List[ScriptLine]: Converts transcript format to LLM format.
     """
 
-    def __init__(self: "Transcript", transcript_path: Path) -> None:
+    def __init__(self: "TranscriptInput", transcript_path: Path) -> None:
         """Initializes the manager with a transcript file path.
 
         Args:
@@ -38,12 +38,12 @@ class Transcript:
         json_obj = self._load_transcript(transcript_path)
         self.scriptlines = self.convert_json_to_scriptlines(json_obj)
 
-    def print_human_readable(self: "Transcript") -> None:
+    def print_human_readable(self: "TranscriptInput") -> None:
         """Prints the stored scriptlines in a human-readable format."""
         for message in self.scriptlines:
             print(f"{message.speaker}:\t\t{message.text}\n")
 
-    def get_num_tokens(self: "Transcript") -> int:
+    def get_num_tokens(self: "TranscriptInput") -> int:
         """Returns the total number of OpenAI tokens in the conversation.
 
         Returns:
@@ -56,7 +56,7 @@ class Transcript:
                 c += len(encoding.encode(message.text))
         return c
 
-    def extract_response_opportunities(self: "Transcript") -> List[List[ScriptLine]]:
+    def extract_response_opportunities(self: "TranscriptInput") -> List[List[ScriptLine]]:
         """Extract consecutive sublists from the messages list, ending after every 'user' response.
 
         This is used to compare AI responses to a human's response
@@ -71,7 +71,7 @@ class Transcript:
         sublists = []
 
         for i, message in enumerate(self.scriptlines):
-            if message.speaker == "user" and i >= 0:
+            if message.speaker == "user":
                 sublist = self.scriptlines[0 : i + 1]
                 sublists.append(sublist)
 
