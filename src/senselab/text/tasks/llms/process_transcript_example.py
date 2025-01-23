@@ -6,12 +6,11 @@ import time
 from pathlib import Path
 from typing import Generator, List
 
-import pandas as pd
 from tqdm import tqdm
 
 from senselab.text.tasks.llms.llm import LLM
-from senselab.text.tasks.llms.transcript_manager import Transcript
 from senselab.utils.data_structures.llm_response import LLMResponse
+from senselab.utils.data_structures.transcript_input import TranscriptInput
 from senselab.utils.data_structures.transcript_output import TranscriptOutput
 
 
@@ -32,7 +31,7 @@ def generate_ai_conversation(
     Returns:
         TranscriptOutput: The resulting transcript and data as a `TranscriptOutput` object.
     """
-    manager = Transcript(transcript_path)
+    manager = TranscriptInput(transcript_path)
 
     with open(prompt_path, "r") as f:
         system_instruction = f.read()
@@ -65,29 +64,20 @@ def generate_ai_conversation(
 
     gen = response_gen()
 
-    df = pd.DataFrame(columns=["student", "teacher", "AI", "in_tokens", "out_tokens", "latency"])
-    j = 0  # student-response pair number
+    conversation = []
+
     for i, message in enumerate(manager.scriptlines):
         content = message.text
         if message.speaker == "assistant":
+            conversation.append({"speaker": "Tutor", "text": content})
             if i > 0:
                 response_content = next(gen)
-                df.at[j, "teacher"] = content
-                df.at[j, "AI"] = response_content.content
-                if measure:
-                    df.at[j, "in_tokens"] = response_content.in_tokens
-                    df.at[j, "out_tokens"] = response_content.out_tokens
-                    df.at[j, "latency"] = response_content.latency
-            else:
-                df.at[j, "teacher"] = content
-            j += 1
+                conversation.append(response_content.to_dict())
         else:
-            df.at[j, "student"] = content
-
-    df.fillna("", inplace=True)
+            conversation.append({"speaker": "Student", "text": content})
 
     return TranscriptOutput(
-        temp=temp, model=model_name, prompt=prompt_path.name, transcript=transcript_path.name, data=df
+        temp=temp, model=model_name, prompt=prompt_path.name, transcript=transcript_path.name, data=conversation
     )
 
 
@@ -134,7 +124,7 @@ if __name__ == "__main__":
             raise TimeoutError(f"Timed out after {timeout} seconds waiting for VLLM_STATUS to be 'Running'.")
         time.sleep(poll_interval)
 
-    output_path = Path("/home/goshdam/outputs/outputs_llama.pkl")
+    output_path = Path("/home/goshdam/outputs/ai_outputs")
     cache_dir = Path("/home/goshdam/outputs/cache")
     measure = False
 
@@ -142,7 +132,7 @@ if __name__ == "__main__":
 
     outputs = generate_all_transcripts(transcript_dir, prompt_path, temp, model_name, measure, cache_dir, llm)
 
-    with open(output_path, "wb") as f:
-        pickle.dump(outputs, f)
+    for output in outputs:
+        output.save_to_json(output_path / f"{output.transcript}.json")
 
     print(f"Successfully saved all {len(outputs)} outputs to {output_path}")
