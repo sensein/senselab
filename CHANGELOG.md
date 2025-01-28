@@ -1,3 +1,34 @@
+# 0.27.1 (Wed Jan 22 2025)
+
+#### 🐛 Bug Fix
+
+- Test Device Truly Available by Creating Trivial Object [#234](https://github.com/sensein/senselab/pull/234) ([@ibevers](https://github.com/ibevers) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@ibevers](https://github.com/ibevers)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.27.0 (Wed Jan 22 2025)
+
+#### 🚀 Enhancement
+
+- Media Pipe Pose Estimation + Visualization [#203](https://github.com/sensein/senselab/pull/203) ([@brukew](https://github.com/brukew) [@fabiocat93](https://github.com/fabiocat93))
+
+#### 📝 Documentation
+
+- fixing import in the speaker emebeddings tutorial [#242](https://github.com/sensein/senselab/pull/242) ([@fabiocat93](https://github.com/fabiocat93))
+- fixing broken colab link [#241](https://github.com/sensein/senselab/pull/241) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- Bruke Wossenseged ([@brukew](https://github.com/brukew))
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.26.1 (Mon Dec 30 2024)
 
 #### 🐛 Bug Fix

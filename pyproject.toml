@@ -60,6 +60,9 @@ textstat = "^0.7.4"
 iso639 = "~=0.1"
 nest-asyncio = "~=1.5"
 pylangacq = "~=0.19"
+mediapipe = "~=0.10"
+opencv-python = "~=4.10"
+ultralytics = "~=8.3"
 
 [tool.poetry.group.dev]
 optional = true
