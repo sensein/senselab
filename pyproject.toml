@@ -152,7 +152,7 @@ skip-magic-trailing-comma = false
 line-ending = "auto"
 
 [tool.poetry-dynamic-versioning]
-enable = false
+enable = true
 vcs = "git"
 bump = true
 style = "pep440"
