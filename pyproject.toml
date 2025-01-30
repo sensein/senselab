@@ -55,7 +55,8 @@ nltk = "~=3.9"
 sacrebleu = "^2.4.3"
 pytest-testmon = "^2.1.1"
 vocos = "~=0.1"
-deepeval = "^1.2.2"
+deepeval = "~=2.2.6"
+rouge-score = "~=0.1.2"
 textstat = "^0.7.4"
 iso639 = "~=0.1"
 nest-asyncio = "~=1.5"
@@ -151,7 +152,7 @@ skip-magic-trailing-comma = false
 line-ending = "auto"
 
 [tool.poetry-dynamic-versioning]
-enable = true
+enable = false
 vcs = "git"
 bump = true
 style = "pep440"

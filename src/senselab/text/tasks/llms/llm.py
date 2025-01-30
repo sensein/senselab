@@ -137,6 +137,8 @@ class LLM:
         )
         content = completion.choices[0].message.content
 
+        assert content is not None
+
         if measure:
             latency = time.time() - start_time
             out_tokens = len(self._tokenizer.encode(content))
