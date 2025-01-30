@@ -14,7 +14,7 @@ class TranscriptOutput:
     model: str
     prompt: str
     transcript: str
-    data: list[dict]  # list[dict[speaker, text, latency, in_tokens, out_tokens]]
+    data: list[dict]  # list[dict[speaker, text, latency, in_tokens, out_tokens, metrics]]
 
     def __str__(self: "TranscriptOutput") -> str:
         """Return a formatted string representation of the transcript.
