@@ -116,6 +116,7 @@ class SpeechBrainEnhancer:
                 # TODO: decide what to do with metadata
 
             enhanced_audio = concatenate_audios(enhanced_segments)
+            enhanced_audio.metadata = audio.metadata
             enhanced_audios.append(enhanced_audio)
 
         end_time_enhancement = time.time()
