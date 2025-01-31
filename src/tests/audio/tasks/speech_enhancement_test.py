@@ -26,6 +26,12 @@ def speechbrain_model2() -> SpeechBrainModel:
     return SpeechBrainModel(path_or_uri="speechbrain/metricgan-plus-voicebank", revision="main")
 
 
+@pytest.fixture
+def speechbrain_model(request: pytest.FixtureRequest) -> SpeechBrainModel:
+    """Fixture that dynamically returns test a SpeechBrain model."""
+    return request.getfixturevalue(request.param)
+
+
 @pytest.fixture(autouse=True)
 def clear_cache() -> None:
     """Fixture for clearing the cached models between pytest runs."""
@@ -88,7 +94,11 @@ def test_enhance_audios_with_speechbrain(
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
-@pytest.mark.parametrize("speechbrain_model", ["speechbrain_model1"], indirect=True)
+@pytest.mark.parametrize(
+    "speechbrain_model",
+    ["speechbrain_model1"],
+    indirect=True,
+)
 def test_enhance_audios_incorrect_sampling_rate(mono_audio_sample: Audio, speechbrain_model: SpeechBrainModel) -> None:
     """Test enhancing audios with incorrect sampling rate."""
     mono_audio_sample.sampling_rate = 8000  # Incorrect sample rate for this model
