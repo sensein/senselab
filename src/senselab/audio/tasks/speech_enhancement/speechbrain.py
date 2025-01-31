@@ -1,12 +1,14 @@
 """This module provides the Speechbrain interface for speech enhancement."""
 
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import torch
+from speechbrain.inference.enhancement import SpectralMaskEnhancement as enhance_model
 from speechbrain.inference.separation import SepformerSeparation as separator
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.preprocessing import concatenate_audios, evenly_segment_audios
 from senselab.utils.data_structures import DeviceType, SpeechBrainModel, _select_device_and_dtype
 from senselab.utils.data_structures.logging import logger
 
@@ -14,7 +16,8 @@ from senselab.utils.data_structures.logging import logger
 class SpeechBrainEnhancer:
     """A factory for managing SpeechBrain enhancement pipelines."""
 
-    _models: Dict[str, separator] = {}
+    MAX_DURATION_SECONDS = 60  # Maximum duration per segment in seconds
+    _models: Dict[str, Union[separator, enhance_model]] = {}
 
     @classmethod
     def _get_speechbrain_model(
@@ -39,18 +42,26 @@ class SpeechBrainEnhancer:
         )
         key = f"{model.path_or_uri}-{model.revision}-{device.value}"
         if key not in cls._models:
-            cls._models[key] = separator.from_hparams(source=model.path_or_uri, run_opts={"device": device.value})
+            try:
+                cls._models[key] = enhance_model.from_hparams(
+                    source=model.path_or_uri, run_opts={"device": device.value}
+                )
+            except Exception as e:
+                print("Failed to load SpeechBrain model as a SpectralMaskEnhancement model:", e)
+                print("Trying to load as a SepformerSeparation model...")
+                cls._models[key] = separator.from_hparams(source=model.path_or_uri, run_opts={"device": device.value})
+
         return cls._models[key], device, dtype
 
     @classmethod
     def enhance_audios_with_speechbrain(
-        cls,
-        audios: List[Audio],
-        model: Optional[SpeechBrainModel] = None,
-        device: Optional[DeviceType] = None,
-        batch_size: int = 16,
+        cls, audios: List[Audio], model: Optional[SpeechBrainModel] = None, device: Optional[DeviceType] = None
     ) -> List[Audio]:
         """Enhances all audio samples using the given speechbrain model.
+
+        Audio clips longer than MAX_DURATION_SECONDS (= 60s) will be split into segments,
+        and each segment will be enhanced separately and then concatenated.
+        This is because the speechbrain model is not able to handle long clips.
 
         Args:
             audios (List[Audio]): The list of audio objects to be enhanced.
@@ -87,25 +98,27 @@ class SpeechBrainEnhancer:
 
         # Take the start time of the enhancement
         start_time_enhancement = time.time()
-        # Check that all audio objects have the correct sampling rate
+        enhanced_audios = []
+
         for audio in audios:
-            if audio.waveform.shape[0] != 1:
-                raise ValueError(f"Audio waveform must be mono (1 channel), but got {audio.waveform.shape[0]} channels")
-            if audio.sampling_rate != expected_sample_rate:
-                raise ValueError(
-                    "Audio sampling rate "
-                    + str(audio.sampling_rate)
-                    + " does not match expected "
-                    + str(expected_sample_rate)
+            segments = evenly_segment_audios([audio], cls.MAX_DURATION_SECONDS, pad_last_segment=False)[0]
+            enhanced_segments = []
+
+            for segment in segments:
+                if isinstance(enhancer, enhance_model):
+                    enhanced_waveform = enhancer.enhance_batch(segment.waveform, lengths=torch.tensor([1.0]))
+                else:
+                    enhanced_waveform = enhancer.separate_batch(segment.waveform)
+
+                enhanced_segments.append(
+                    Audio(waveform=enhanced_waveform.reshape(1, -1), sampling_rate=segment.sampling_rate)
                 )
+                # TODO: decide what to do with metadata
 
-            # Enhance waveforms in a batch
-            enhanced_waveform = enhancer.separate_batch(audio.waveform)
-
-            audio.waveform = enhanced_waveform.reshape(1, -1)
+            enhanced_audio = concatenate_audios(enhanced_segments)
+            enhanced_audios.append(enhanced_audio)
 
         end_time_enhancement = time.time()
-        elapsed_time_enhancement = end_time_enhancement - start_time_enhancement
-        logger.info(f"Time taken for enhancing the audios: {elapsed_time_enhancement:.2f} seconds")
+        logger.info(f"Time taken for enhancing the audios: {end_time_enhancement - start_time_enhancement:.2f} seconds")
 
-        return audios
+        return enhanced_audios
