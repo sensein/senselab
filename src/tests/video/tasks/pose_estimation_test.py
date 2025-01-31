@@ -1,8 +1,7 @@
 """Module for testing Pose Estimation tasks."""
 
 import os
-import shutil
-from typing import Dict, Generator, Optional, Union
+from typing import Dict, Optional, Union
 
 import cv2
 import numpy as np
