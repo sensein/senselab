@@ -34,14 +34,6 @@ MEDIAPIPE_INVALID_MODELS = ["invalid", "11n", 123]
 YOLO_INVALID_MODELS = ["8r", "full", 123]
 
 
-@pytest.fixture(scope="session", autouse=True)
-def cleanup_models() -> Generator[None, None, None]:
-    """Cleanup downloaded models the test session."""
-    yield
-    if os.path.exists(MODEL_PATH):
-        shutil.rmtree(MODEL_PATH)
-
-
 @pytest.fixture
 def sample_pose_mediapipe() -> ImagePose:
     """Create a MediaPipe ImagePose for testing."""
