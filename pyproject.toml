@@ -29,7 +29,7 @@ packages = [{include = "senselab", from = "src"}]
 [tool.poetry.dependencies]
 python = ">=3.10,<3.13"
 datasets = "~=3"
-torch = "~=2.5"
+torch = ">=2.5,<2.6"
 torchvision = "~=0.20"
 torchaudio = "~=2.5"
 transformers = "~=4.47"
@@ -59,6 +59,7 @@ pylangacq = "~=0.19"
 mediapipe = "~=0.10"
 opencv-python = "~=4.10"
 ultralytics = "~=8.3"
+rouge-score = "~=0.1"
 
 [tool.poetry.group.dev]
 optional = true
