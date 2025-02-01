@@ -73,7 +73,7 @@ class HuggingFaceASR:
         return_timestamps: Optional[str] = "word",
         max_new_tokens: int = 128,
         chunk_length_s: int = 30,
-        batch_size: int = 16,
+        batch_size: int = 1,
         device: Optional[DeviceType] = None,
     ) -> List[ScriptLine]:
         """Transcribes all audio samples in the dataset.
@@ -86,7 +86,10 @@ class HuggingFaceASR:
             return_timestamps (Optional[str]): The level of timestamp details (default is "word").
             max_new_tokens (int): The maximum number of new tokens (default is 128).
             chunk_length_s (int): The length of audio chunks in seconds (default is 30).
-            batch_size (int): The batch size for processing (default is 16).
+            batch_size (int): The batch size for processing (default is 1).
+                Note: Issues have been observed with long audio recordings and timestamped transcript
+                if the batch_size is high - not exactly clear what high means
+                (https://github.com/huggingface/transformers/issues/2615#issuecomment-656923205).
             device (Optional[DeviceType]): The device to run the model on (default is None).
 
         Returns:
