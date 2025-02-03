@@ -38,6 +38,30 @@ class DeepFaceAnalysis:
         self.backend = backend
         self.align = align
 
+    @classmethod
+    def from_dict(cls, config: Optional[Dict] = None) -> "DeepFaceAnalysis":
+        """Create a DeepFaceAnalysis instance from a dictionary of configuration parameters.
+
+        Args:
+            config (Optional[Dict]): A dictionary of optional configuration parameters. Valid keys are:
+                - "model_name" (str): The DeepFace model to use.
+                - "distance_metric" (str): The distance metric for face verification.
+                - "backend" (str): The face detection backend (e.g., "opencv", "mtcnn").
+                - "align" (bool): Whether to align faces before analysis.
+            If no config or an empty config is provided, default parameters will be used.
+
+        Returns:
+            DeepFaceAnalysis: An instance of DeepFaceAnalysis with any specified parameters applied.
+        """
+        if config is None:
+            config = {}
+        return cls(
+            model_name=config.get("model_name"),
+            distance_metric=config.get("distance_metric"),
+            backend=config.get("backend"),
+            align=config.get("align"),
+        )
+
     def get_kwargs(self) -> Dict:
         """Get the keyword arguments for the DeepFace constructor.
 
@@ -103,7 +127,7 @@ class DeepFaceAnalysis:
                 (default: ['age', 'gender', 'emotion', 'race']).
 
         Returns:
-            Dict: Analysis results for the image.
+            List[Dict]: List of analysis results for each detected face in the image.
         """
         if actions is None:
             actions = ["age", "gender", "emotion", "race"]
