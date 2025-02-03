@@ -1,3 +1,27 @@
+# 0.28.1 (Sat Feb 01 2025)
+
+#### 🐛 Bug Fix
+
+- Fixing  timestamped-ASR with long audio recordings [#246](https://github.com/sensein/senselab/pull/246) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.28.0 (Fri Jan 31 2025)
+
+#### 🚀 Enhancement
+
+- enhancing speech enhancement [#244](https://github.com/sensein/senselab/pull/244) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.27.1 (Wed Jan 22 2025)
 
 #### 🐛 Bug Fix

@@ -1,8 +1,7 @@
 """Module for testing Pose Estimation tasks."""
 
 import os
-import shutil
-from typing import Dict, Generator, Optional, Union
+from typing import Dict, Optional, Union
 
 import cv2
 import numpy as np
@@ -32,14 +31,6 @@ MEDIAPIPE_VALID_MODELS = ["full", "heavy"]
 YOLO_VALID_MODELS = ["8s", "11l"]
 MEDIAPIPE_INVALID_MODELS = ["invalid", "11n", 123]
 YOLO_INVALID_MODELS = ["8r", "full", 123]
-
-
-@pytest.fixture(scope="session", autouse=True)
-def cleanup_models() -> Generator[None, None, None]:
-    """Cleanup downloaded models the test session."""
-    yield
-    if os.path.exists(MODEL_PATH):
-        shutil.rmtree(MODEL_PATH)
 
 
 @pytest.fixture

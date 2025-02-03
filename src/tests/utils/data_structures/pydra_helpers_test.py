@@ -22,6 +22,6 @@ def test_pydra() -> None:
         sub(wf)
 
     results = wf.result()
-
+    print("results", results)
     assert results[0].output.wf_out.equal(torch.tensor([[5, 6], [7, 8]]))
     assert results[1].output.wf_out.equal(torch.tensor([[2, 3], [3, 4]]))
