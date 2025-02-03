@@ -17,6 +17,7 @@ class SpeechBrainEnhancer:
     """A factory for managing SpeechBrain enhancement pipelines."""
 
     MAX_DURATION_SECONDS = 60  # Maximum duration per segment in seconds
+    MIN_LENGTH = 16 # kernel size for speechbrain/sepformer-wham16k-enhancement
     _models: Dict[str, Union[separator, enhance_model]] = {}
 
     @classmethod
@@ -105,16 +106,21 @@ class SpeechBrainEnhancer:
             enhanced_segments = []
 
             for segment in segments:
-                if isinstance(enhancer, enhance_model):
-                    enhanced_waveform = enhancer.enhance_batch(segment.waveform, lengths=torch.tensor([1.0]))
+                if segment.waveform.shape[-1] < cls.MIN_LENGTH:
+                    print(f"Skipping segment with length {segment.waveform.shape[-1]}")
+                    # Append it as it is
+                    enhanced_segments.append(segment)
                 else:
-                    enhanced_waveform = enhancer.separate_batch(segment.waveform)
-
-                enhanced_segments.append(
-                    Audio(waveform=enhanced_waveform.reshape(1, -1), sampling_rate=segment.sampling_rate)
-                )
-                # TODO: decide what to do with metadata
-
+                    if isinstance(enhancer, enhance_model):
+                        enhanced_waveform = enhancer.enhance_batch(segment.waveform, lengths=torch.tensor([1.0]))
+                    else:
+                        enhanced_waveform = enhancer.separate_batch(segment.waveform)
+    
+                    enhanced_segments.append(
+                        Audio(waveform=enhanced_waveform.reshape(1, -1), sampling_rate=segment.sampling_rate)
+                    )
+                    
+            # TODO: decide what to do with metadata
             enhanced_audio = concatenate_audios(enhanced_segments)
             enhanced_audio.metadata = audio.metadata
             enhanced_audios.append(enhanced_audio)
