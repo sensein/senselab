@@ -1,3 +1,84 @@
+# 0.28.3 (Tue Feb 04 2025)
+
+#### 🐛 Bug Fix
+
+- Fix/workaround to Pydra serialization issue while keeping torch up to date [#248](https://github.com/sensein/senselab/pull/248) (jordanwilke@Jordans-MacBook-Air.local [@fabiocat93](https://github.com/fabiocat93) [@wilke0818](https://github.com/wilke0818))
+
+#### Authors: 3
+
+- [@wilke0818](https://github.com/wilke0818)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Jordan Wilke (jordanwilke@Jordans-MacBook-Air.local)
+
+---
+
+# 0.28.2 (Mon Feb 03 2025)
+
+#### 🐛 Bug Fix
+
+- Fixing enhancement with segment duration < kernel size [#250](https://github.com/sensein/senselab/pull/250) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.28.1 (Sat Feb 01 2025)
+
+#### 🐛 Bug Fix
+
+- Fixing  timestamped-ASR with long audio recordings [#246](https://github.com/sensein/senselab/pull/246) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.28.0 (Fri Jan 31 2025)
+
+#### 🚀 Enhancement
+
+- enhancing speech enhancement [#244](https://github.com/sensein/senselab/pull/244) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.27.1 (Wed Jan 22 2025)
+
+#### 🐛 Bug Fix
+
+- Test Device Truly Available by Creating Trivial Object [#234](https://github.com/sensein/senselab/pull/234) ([@ibevers](https://github.com/ibevers) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@ibevers](https://github.com/ibevers)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.27.0 (Wed Jan 22 2025)
+
+#### 🚀 Enhancement
+
+- Media Pipe Pose Estimation + Visualization [#203](https://github.com/sensein/senselab/pull/203) ([@brukew](https://github.com/brukew) [@fabiocat93](https://github.com/fabiocat93))
+
+#### 📝 Documentation
+
+- fixing import in the speaker emebeddings tutorial [#242](https://github.com/sensein/senselab/pull/242) ([@fabiocat93](https://github.com/fabiocat93))
+- fixing broken colab link [#241](https://github.com/sensein/senselab/pull/241) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- Bruke Wossenseged ([@brukew](https://github.com/brukew))
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.26.1 (Mon Dec 30 2024)
 
 #### 🐛 Bug Fix
