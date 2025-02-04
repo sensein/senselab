@@ -1,3 +1,17 @@
+# 0.28.3 (Tue Feb 04 2025)
+
+#### 🐛 Bug Fix
+
+- Fix/workaround to Pydra serialization issue while keeping torch up to date [#248](https://github.com/sensein/senselab/pull/248) (jordanwilke@Jordans-MacBook-Air.local [@fabiocat93](https://github.com/fabiocat93) [@wilke0818](https://github.com/wilke0818))
+
+#### Authors: 3
+
+- [@wilke0818](https://github.com/wilke0818)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Jordan Wilke (jordanwilke@Jordans-MacBook-Air.local)
+
+---
+
 # 0.28.2 (Mon Feb 03 2025)
 
 #### 🐛 Bug Fix
