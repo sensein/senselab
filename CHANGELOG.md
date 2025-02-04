@@ -1,3 +1,21 @@
+# 0.29.0 (Tue Feb 04 2025)
+
+#### 🚀 Enhancement
+
+- Created SER tutorial [#201](https://github.com/sensein/senselab/pull/201) (jordanwilke@dhcp-10-31-174-110.dyn.MIT.EDU [@wilke0818](https://github.com/wilke0818) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 7
+
+- [@wilke0818](https://github.com/wilke0818)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Jordan Wilke (jordanwilke@dhcp-10-29-150-110.dyn.mit.edu)
+- Jordan Wilke (jordanwilke@dhcp-10-29-183-7.dyn.mit.edu)
+- Jordan Wilke (jordanwilke@dhcp-10-29-183-7.dyn.MIT.EDU)
+- Jordan Wilke (jordanwilke@dhcp-10-31-174-110.dyn.MIT.EDU)
+- Jordan Wilke (jordanwilke@Jordans-MacBook-Air.local)
+
+---
+
 # 0.28.3 (Tue Feb 04 2025)
 
 #### 🐛 Bug Fix
