@@ -1,3 +1,15 @@
+# 0.28.2 (Mon Feb 03 2025)
+
+#### 🐛 Bug Fix
+
+- Fixing enhancement with segment duration < kernel size [#250](https://github.com/sensein/senselab/pull/250) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.28.1 (Sat Feb 01 2025)
 
 #### 🐛 Bug Fix
