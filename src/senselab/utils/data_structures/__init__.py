@@ -1,5 +1,6 @@
 """This module provides the APIs of the senselab utils data structures."""
 
+from .audio_classification_result import AudioClassificationResult  # noqa: F401
 from .dataset import Participant, SenselabDataset, Session  # noqa: F401
 from .device import DeviceType, _select_device_and_dtype  # noqa: F401
 from .file import File, from_strings_to_files, get_common_directory  # noqa: F401
