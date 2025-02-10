@@ -5,6 +5,7 @@ import torch
 
 
 @pydra.mark.task
+@pydra.mark.annotate({"return": {"out": torch.Tensor}})
 def pydra_task(test_input: torch.Tensor) -> torch.Tensor:
     """Task function for Pydra workflow to run."""
     return test_input + 2
@@ -22,6 +23,9 @@ def test_pydra() -> None:
         sub(wf)
 
     results = wf.result()
-
-    assert results[0].output.wf_out.equal(torch.tensor([[5, 6], [7, 8]]))
-    assert results[1].output.wf_out.equal(torch.tensor([[2, 3], [3, 4]]))
+    assert results[0].output.wf_out.equal(
+        torch.tensor([[5, 6], [7, 8]])
+    ), f"Expected Tensor of [[5,6],[7,8]] but got {results[0].output.wf_out}"
+    assert results[1].output.wf_out.equal(
+        torch.tensor([[2, 3], [3, 4]])
+    ), f"Expected Tensor of [[2,3],[3,4]] but got {results[1].output.wf_out}"
