@@ -52,7 +52,12 @@ numpy = "~=1.26"
 umap-learn = "~=0.5"
 scikit-learn = "~=1.5"
 nltk = "~=3.9"
+sacrebleu = "^2.4.3"
+pytest-testmon = "^2.1.1"
 vocos = "~=0.1"
+deepeval = "~=2.2.6"
+rouge-score = "~=0.1.2"
+textstat = "^0.7.4"
 iso639 = "~=0.1"
 nest-asyncio = "~=1.5"
 pylangacq = "~=0.19"
@@ -130,10 +135,7 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["ANN", "D", "E", "F", "I"]
-ignore = [
-  "ANN101",  # self should not be annotated.
-  "ANN102"  # cls should not be annotated.
-]
+ignore = []
 fixable = ["ALL"]
 unfixable = []
 dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
@@ -164,7 +166,7 @@ skip = [
   "*.cha",
   "*.ipynb"
 ]
-ignore-words-list = ["senselab", "nd", "astroid", "wil", "SER", "te"]
+ignore-words-list = ["senselab", "nd", "astroid", "wil", "SER", "te", "ROUGE", "rouge"]
 
 [build-system]
 requires = ["poetry-core>=1.0.0", "poetry-dynamic-versioning>=1.0.0,<2.0.0"]
