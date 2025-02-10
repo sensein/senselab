@@ -24,7 +24,7 @@ from senselab.audio.tasks.forced_alignment.data_structures import (
     SingleWordSegment,
 )
 from senselab.audio.tasks.preprocessing import extract_segments, pad_audios
-from senselab.utils.data_structures import DeviceType, HFModel, Language, ScriptLine
+from senselab.utils.data_structures import DeviceType, HFModel, Language, ScriptLine, _select_device_and_dtype
 
 
 def _preprocess_segments(
@@ -516,7 +516,6 @@ def _align_transcription(
 
 def align_transcriptions(
     audios_and_transcriptions_and_language: List[Tuple[Audio, ScriptLine, Language]],
-    device: DeviceType = DeviceType.CPU,
 ) -> List[List[ScriptLine | None]]:
     """Align multiple transcriptions with their respective audios using a wav2vec2.0 model.
 
@@ -531,6 +530,7 @@ def align_transcriptions(
     """
     aligned_script_lines = []
     loaded_processors_and_models = {}
+    device = _select_device_and_dtype()[0]
 
     for recording in audios_and_transcriptions_and_language:
         audio, transcription, language = (*recording, None)[:3]
