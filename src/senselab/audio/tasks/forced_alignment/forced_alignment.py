@@ -19,9 +19,7 @@ from senselab.audio.tasks.forced_alignment.constants import (
 from senselab.audio.tasks.forced_alignment.data_structures import (
     Point,
     Segment,
-    SingleAlignedSegment,
     SingleSegment,
-    SingleWordSegment,
 )
 from senselab.audio.tasks.preprocessing import extract_segments, pad_audios
 from senselab.utils.data_structures import DeviceType, HFModel, Language, ScriptLine, _select_device_and_dtype
@@ -206,67 +204,6 @@ def _assign_timestamps(
     aligned_segment_dict["timestamps"][0] = aligned_segment_dict["chunks"][0]["timestamps"][0]
     aligned_segment_dict["timestamps"][1] = aligned_segment_dict["chunks"][-1]["timestamps"][1]
     return aligned_segment_dict
-
-
-def _align_subsegments(
-    segment: SingleSegment,
-    char_segments_df: pd.DataFrame,
-    text: str,
-    word_segments: List[SingleWordSegment],
-    aligned_subsegments: List[SingleAlignedSegment],
-    return_char_alignments: bool,
-) -> None:
-    """Align sentence spans within a segment and update word/subsegment alignments.
-
-    Args:
-        segment (SingleSegment): The segment with sentence spans.
-        char_segments_df (pd.DataFrame): Character-level alignments.
-        text (str): The segment text.
-        word_segments (List[SingleWordSegment]): Accumulator for word-level segments.
-        aligned_subsegments (List[SingleAlignedSegment]): Accumulator for aligned subsegments.
-        return_char_alignments (bool): If True, include character-level data in results.
-
-    Returns:
-        None
-    """
-    # Docstring updated to match actual arguments and functionality.
-    for sdx, (sstart, send) in enumerate(segment["sentence_spans"] or []):
-        curr_chars = char_segments_df.loc[(char_segments_df.index >= sstart) & (char_segments_df.index <= send)]
-        char_segments_df.loc[(char_segments_df.index >= sstart) & (char_segments_df.index <= send), "sentence-idx"] = (
-            sdx
-        )
-        sentence_text = text[sstart:send]
-        sentence_start = curr_chars["start"].min()
-        end_chars = curr_chars[curr_chars["char"] != " "]
-        sentence_end = end_chars["end"].max()
-        sentence_words = []
-
-        for word_idx in curr_chars["word-idx"].unique():
-            word_chars = curr_chars.loc[curr_chars["word-idx"] == word_idx]
-            word_text = "".join(word_chars["char"].tolist()).strip()
-            if len(word_text) == 0:
-                continue
-
-            word_chars = word_chars[word_chars["char"] != " "]
-            word_start = word_chars["start"].min()
-            word_end = word_chars["end"].max()
-            word_score = round(word_chars["score"].mean(), 3)
-            word_segment = SingleWordSegment(word=word_text, start=word_start, end=word_end, score=word_score)
-
-            sentence_words.append(word_segment)
-            word_segments.append(word_segment)
-
-        aligned_subsegment = SingleAlignedSegment(
-            text=sentence_text, start=sentence_start, end=sentence_end, words=sentence_words, chars=word_chars
-        )
-        aligned_subsegments.append(aligned_subsegment)
-
-        if return_char_alignments:
-            curr_chars = curr_chars[["char", "start", "end", "score"]]
-            curr_chars.fillna(-1, inplace=True)
-            curr_chars = curr_chars.to_dict("records")
-            curr_chars = [{key: val for key, val in char.items() if val != -1} for char in curr_chars]
-            aligned_subsegments[-1]["chars"] = curr_chars
 
 
 def _align_single_segment(
