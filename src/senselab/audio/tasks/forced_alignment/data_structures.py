@@ -51,13 +51,6 @@ class TranscriptionResult(TypedDict):
     language: str
 
 
-class AlignedTranscriptionResult(TypedDict):
-    """A list of segments and word segments of a speech."""
-
-    segments: List[SingleAlignedSegment]
-    word_segments: List[SingleWordSegment]
-
-
 @dataclass
 class Point:
     """Represents a point in the alignment path.
