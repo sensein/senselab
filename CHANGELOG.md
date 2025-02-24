@@ -1,3 +1,15 @@
+# 0.29.1 (Mon Feb 24 2025)
+
+#### 🐛 Bug Fix
+
+- adding python-ffmpeg to the dependencies and updating audiomentations version [#254](https://github.com/sensein/senselab/pull/254) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.29.0 (Tue Feb 04 2025)
 
 #### 🚀 Enhancement
