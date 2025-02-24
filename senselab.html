@@ -86,8 +86,8 @@ senselab    </h1>
 <h2 id="quick-start">Quick start</h2>
 
 <div class="pdoc-code codehilite">
-<pre><span></span><code><span class="kn">from</span> <span class="nn"><a href="senselab/audio/data_structures.html">senselab.audio.data_structures</a></span> <span class="kn">import</span> <span class="n">Audio</span>
-<span class="kn">from</span> <span class="nn"><a href="senselab/audio/tasks/preprocessing.html">senselab.audio.tasks.preprocessing</a></span> <span class="kn">import</span> <span class="n">resample_audios</span>
+<pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn"><a href="senselab/audio/data_structures.html">senselab.audio.data_structures</a></span><span class="w"> </span><span class="kn">import</span> <span class="n">Audio</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn"><a href="senselab/audio/tasks/preprocessing.html">senselab.audio.tasks.preprocessing</a></span><span class="w"> </span><span class="kn">import</span> <span class="n">resample_audios</span>
 
 <span class="n">audio1</span> <span class="o">=</span> <span class="n">Audio</span><span class="o">.</span><span class="n">from_filepath</span><span class="p">(</span><span class="s1">&#39;path_to_audio_file.wav&#39;</span><span class="p">)</span>
 
@@ -125,13 +125,13 @@ senselab    </h1>
 
                         <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos"> 1</span></a><span class="sd">&quot;&quot;&quot;.. include:: ../../README.md&quot;&quot;&quot;</span>  <span class="c1"># noqa: D415</span>
 </span><span id="L-2"><a href="#L-2"><span class="linenos"> 2</span></a>
-</span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a><span class="kn">from</span> <span class="nn">multiprocessing</span> <span class="kn">import</span> <span class="n">set_start_method</span>
+</span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">multiprocessing</span><span class="w"> </span><span class="kn">import</span> <span class="n">set_start_method</span>
 </span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a>
-</span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a><span class="kn">import</span> <span class="nn">nest_asyncio</span>
+</span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">nest_asyncio</span>
 </span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a>
 </span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a><span class="n">nest_asyncio</span><span class="o">.</span><span class="n">apply</span><span class="p">()</span>
 </span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a>
-</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a><span class="kn">from</span> <span class="nn">senselab.utils.data_structures.pydra_helpers</span> <span class="kn">import</span> <span class="o">*</span>  <span class="c1"># NOQA</span>
+</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">senselab.utils.data_structures.pydra_helpers</span><span class="w"> </span><span class="kn">import</span> <span class="o">*</span>  <span class="c1"># NOQA</span>
 </span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a>
 </span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a><span class="k">try</span><span class="p">:</span>
 </span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a>    <span class="n">set_start_method</span><span class="p">(</span><span class="s2">&quot;spawn&quot;</span><span class="p">,</span> <span class="n">force</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>

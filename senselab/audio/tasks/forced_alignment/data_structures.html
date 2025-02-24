@@ -206,11 +206,11 @@
 
                         <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">  1</span></a><span class="sd">&quot;&quot;&quot;Provides data structures for align functionality.&quot;&quot;&quot;</span>
 </span><span id="L-2"><a href="#L-2"><span class="linenos">  2</span></a>
-</span><span id="L-3"><a href="#L-3"><span class="linenos">  3</span></a><span class="kn">from</span> <span class="nn">dataclasses</span> <span class="kn">import</span> <span class="n">dataclass</span>
-</span><span id="L-4"><a href="#L-4"><span class="linenos">  4</span></a><span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">List</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">,</span> <span class="n">TypedDict</span>
+</span><span id="L-3"><a href="#L-3"><span class="linenos">  3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos">  4</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">List</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">,</span> <span class="n">TypedDict</span>
 </span><span id="L-5"><a href="#L-5"><span class="linenos">  5</span></a>
 </span><span id="L-6"><a href="#L-6"><span class="linenos">  6</span></a>
-</span><span id="L-7"><a href="#L-7"><span class="linenos">  7</span></a><span class="k">class</span> <span class="nc">SingleWordSegment</span><span class="p">(</span><span class="n">TypedDict</span><span class="p">):</span>
+</span><span id="L-7"><a href="#L-7"><span class="linenos">  7</span></a><span class="k">class</span><span class="w"> </span><span class="nc">SingleWordSegment</span><span class="p">(</span><span class="n">TypedDict</span><span class="p">):</span>
 </span><span id="L-8"><a href="#L-8"><span class="linenos">  8</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;A single word of a speech.&quot;&quot;&quot;</span>
 </span><span id="L-9"><a href="#L-9"><span class="linenos">  9</span></a>
 </span><span id="L-10"><a href="#L-10"><span class="linenos"> 10</span></a>    <span class="n">word</span><span class="p">:</span> <span class="nb">str</span>
@@ -219,7 +219,7 @@
 </span><span id="L-13"><a href="#L-13"><span class="linenos"> 13</span></a>    <span class="n">score</span><span class="p">:</span> <span class="nb">float</span>
 </span><span id="L-14"><a href="#L-14"><span class="linenos"> 14</span></a>
 </span><span id="L-15"><a href="#L-15"><span class="linenos"> 15</span></a>
-</span><span id="L-16"><a href="#L-16"><span class="linenos"> 16</span></a><span class="k">class</span> <span class="nc">SingleCharSegment</span><span class="p">(</span><span class="n">TypedDict</span><span class="p">):</span>
+</span><span id="L-16"><a href="#L-16"><span class="linenos"> 16</span></a><span class="k">class</span><span class="w"> </span><span class="nc">SingleCharSegment</span><span class="p">(</span><span class="n">TypedDict</span><span class="p">):</span>
 </span><span id="L-17"><a href="#L-17"><span class="linenos"> 17</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;A single char of a speech.&quot;&quot;&quot;</span>
 </span><span id="L-18"><a href="#L-18"><span class="linenos"> 18</span></a>
 </span><span id="L-19"><a href="#L-19"><span class="linenos"> 19</span></a>    <span class="n">char</span><span class="p">:</span> <span class="nb">str</span>
@@ -228,7 +228,7 @@
 </span><span id="L-22"><a href="#L-22"><span class="linenos"> 22</span></a>    <span class="n">score</span><span class="p">:</span> <span class="nb">float</span>
 </span><span id="L-23"><a href="#L-23"><span class="linenos"> 23</span></a>
 </span><span id="L-24"><a href="#L-24"><span class="linenos"> 24</span></a>
-</span><span id="L-25"><a href="#L-25"><span class="linenos"> 25</span></a><span class="k">class</span> <span class="nc">SingleSegment</span><span class="p">(</span><span class="n">TypedDict</span><span class="p">,</span> <span class="n">total</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+</span><span id="L-25"><a href="#L-25"><span class="linenos"> 25</span></a><span class="k">class</span><span class="w"> </span><span class="nc">SingleSegment</span><span class="p">(</span><span class="n">TypedDict</span><span class="p">,</span> <span class="n">total</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
 </span><span id="L-26"><a href="#L-26"><span class="linenos"> 26</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;A single segment (up to multiple sentences) of a speech.&quot;&quot;&quot;</span>
 </span><span id="L-27"><a href="#L-27"><span class="linenos"> 27</span></a>
 </span><span id="L-28"><a href="#L-28"><span class="linenos"> 28</span></a>    <span class="n">start</span><span class="p">:</span> <span class="nb">float</span>
@@ -240,7 +240,7 @@
 </span><span id="L-34"><a href="#L-34"><span class="linenos"> 34</span></a>    <span class="n">sentence_spans</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]]</span>
 </span><span id="L-35"><a href="#L-35"><span class="linenos"> 35</span></a>
 </span><span id="L-36"><a href="#L-36"><span class="linenos"> 36</span></a>
-</span><span id="L-37"><a href="#L-37"><span class="linenos"> 37</span></a><span class="k">class</span> <span class="nc">SingleAlignedSegment</span><span class="p">(</span><span class="n">TypedDict</span><span class="p">):</span>
+</span><span id="L-37"><a href="#L-37"><span class="linenos"> 37</span></a><span class="k">class</span><span class="w"> </span><span class="nc">SingleAlignedSegment</span><span class="p">(</span><span class="n">TypedDict</span><span class="p">):</span>
 </span><span id="L-38"><a href="#L-38"><span class="linenos"> 38</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;A single segment (up to multiple sentences) of a speech with word alignment.&quot;&quot;&quot;</span>
 </span><span id="L-39"><a href="#L-39"><span class="linenos"> 39</span></a>
 </span><span id="L-40"><a href="#L-40"><span class="linenos"> 40</span></a>    <span class="n">start</span><span class="p">:</span> <span class="nb">float</span>
@@ -250,14 +250,14 @@
 </span><span id="L-44"><a href="#L-44"><span class="linenos"> 44</span></a>    <span class="n">chars</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="n">SingleCharSegment</span><span class="p">]]</span>
 </span><span id="L-45"><a href="#L-45"><span class="linenos"> 45</span></a>
 </span><span id="L-46"><a href="#L-46"><span class="linenos"> 46</span></a>
-</span><span id="L-47"><a href="#L-47"><span class="linenos"> 47</span></a><span class="k">class</span> <span class="nc">TranscriptionResult</span><span class="p">(</span><span class="n">TypedDict</span><span class="p">):</span>
+</span><span id="L-47"><a href="#L-47"><span class="linenos"> 47</span></a><span class="k">class</span><span class="w"> </span><span class="nc">TranscriptionResult</span><span class="p">(</span><span class="n">TypedDict</span><span class="p">):</span>
 </span><span id="L-48"><a href="#L-48"><span class="linenos"> 48</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;A list of segments and word segments of a speech.&quot;&quot;&quot;</span>
 </span><span id="L-49"><a href="#L-49"><span class="linenos"> 49</span></a>
 </span><span id="L-50"><a href="#L-50"><span class="linenos"> 50</span></a>    <span class="n">segments</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">SingleSegment</span><span class="p">]</span>
 </span><span id="L-51"><a href="#L-51"><span class="linenos"> 51</span></a>    <span class="n">language</span><span class="p">:</span> <span class="nb">str</span>
 </span><span id="L-52"><a href="#L-52"><span class="linenos"> 52</span></a>
 </span><span id="L-53"><a href="#L-53"><span class="linenos"> 53</span></a>
-</span><span id="L-54"><a href="#L-54"><span class="linenos"> 54</span></a><span class="k">class</span> <span class="nc">AlignedTranscriptionResult</span><span class="p">(</span><span class="n">TypedDict</span><span class="p">):</span>
+</span><span id="L-54"><a href="#L-54"><span class="linenos"> 54</span></a><span class="k">class</span><span class="w"> </span><span class="nc">AlignedTranscriptionResult</span><span class="p">(</span><span class="n">TypedDict</span><span class="p">):</span>
 </span><span id="L-55"><a href="#L-55"><span class="linenos"> 55</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;A list of segments and word segments of a speech.&quot;&quot;&quot;</span>
 </span><span id="L-56"><a href="#L-56"><span class="linenos"> 56</span></a>
 </span><span id="L-57"><a href="#L-57"><span class="linenos"> 57</span></a>    <span class="n">segments</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">SingleAlignedSegment</span><span class="p">]</span>
@@ -265,7 +265,7 @@
 </span><span id="L-59"><a href="#L-59"><span class="linenos"> 59</span></a>
 </span><span id="L-60"><a href="#L-60"><span class="linenos"> 60</span></a>
 </span><span id="L-61"><a href="#L-61"><span class="linenos"> 61</span></a><span class="nd">@dataclass</span>
-</span><span id="L-62"><a href="#L-62"><span class="linenos"> 62</span></a><span class="k">class</span> <span class="nc">Point</span><span class="p">:</span>
+</span><span id="L-62"><a href="#L-62"><span class="linenos"> 62</span></a><span class="k">class</span><span class="w"> </span><span class="nc">Point</span><span class="p">:</span>
 </span><span id="L-63"><a href="#L-63"><span class="linenos"> 63</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Represents a point in the alignment path.</span>
 </span><span id="L-64"><a href="#L-64"><span class="linenos"> 64</span></a>
 </span><span id="L-65"><a href="#L-65"><span class="linenos"> 65</span></a><span class="sd">    Attributes:</span>
@@ -280,7 +280,7 @@
 </span><span id="L-74"><a href="#L-74"><span class="linenos"> 74</span></a>
 </span><span id="L-75"><a href="#L-75"><span class="linenos"> 75</span></a>
 </span><span id="L-76"><a href="#L-76"><span class="linenos"> 76</span></a><span class="nd">@dataclass</span>
-</span><span id="L-77"><a href="#L-77"><span class="linenos"> 77</span></a><span class="k">class</span> <span class="nc">Segment</span><span class="p">:</span>
+</span><span id="L-77"><a href="#L-77"><span class="linenos"> 77</span></a><span class="k">class</span><span class="w"> </span><span class="nc">Segment</span><span class="p">:</span>
 </span><span id="L-78"><a href="#L-78"><span class="linenos"> 78</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Represents a segment of aligned text.</span>
 </span><span id="L-79"><a href="#L-79"><span class="linenos"> 79</span></a>
 </span><span id="L-80"><a href="#L-80"><span class="linenos"> 80</span></a><span class="sd">    Attributes:</span>
@@ -295,7 +295,7 @@
 </span><span id="L-89"><a href="#L-89"><span class="linenos"> 89</span></a>    <span class="n">end</span><span class="p">:</span> <span class="nb">int</span>
 </span><span id="L-90"><a href="#L-90"><span class="linenos"> 90</span></a>    <span class="n">score</span><span class="p">:</span> <span class="nb">float</span>
 </span><span id="L-91"><a href="#L-91"><span class="linenos"> 91</span></a>
-</span><span id="L-92"><a href="#L-92"><span class="linenos"> 92</span></a>    <span class="k">def</span> <span class="fm">__repr__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="L-92"><a href="#L-92"><span class="linenos"> 92</span></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__repr__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 </span><span id="L-93"><a href="#L-93"><span class="linenos"> 93</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Provides a string representation of the segment.</span>
 </span><span id="L-94"><a href="#L-94"><span class="linenos"> 94</span></a>
 </span><span id="L-95"><a href="#L-95"><span class="linenos"> 95</span></a><span class="sd">        Returns:</span>
@@ -304,7 +304,7 @@
 </span><span id="L-98"><a href="#L-98"><span class="linenos"> 98</span></a>        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">label</span><span class="si">}</span><span class="se">\t</span><span class="s2">(</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">score</span><span class="si">:</span><span class="s2">4.2f</span><span class="si">}</span><span class="s2">): [</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">start</span><span class="si">:</span><span class="s2">5d</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">end</span><span class="si">:</span><span class="s2">5d</span><span class="si">}</span><span class="s2">)&quot;</span>
 </span><span id="L-99"><a href="#L-99"><span class="linenos"> 99</span></a>
 </span><span id="L-100"><a href="#L-100"><span class="linenos">100</span></a>    <span class="nd">@property</span>
-</span><span id="L-101"><a href="#L-101"><span class="linenos">101</span></a>    <span class="k">def</span> <span class="nf">length</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+</span><span id="L-101"><a href="#L-101"><span class="linenos">101</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">length</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
 </span><span id="L-102"><a href="#L-102"><span class="linenos">102</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Calculates the length of the segment.&quot;&quot;&quot;</span>
 </span><span id="L-103"><a href="#L-103"><span class="linenos">103</span></a>        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">end</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">start</span>
 </span></pre></div>
@@ -322,7 +322,7 @@
 
     </div>
     <a class="headerlink" href="#SingleWordSegment"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="SingleWordSegment-8"><a href="#SingleWordSegment-8"><span class="linenos"> 8</span></a><span class="k">class</span> <span class="nc">SingleWordSegment</span><span class="p">(</span><span class="n">TypedDict</span><span class="p">):</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="SingleWordSegment-8"><a href="#SingleWordSegment-8"><span class="linenos"> 8</span></a><span class="k">class</span><span class="w"> </span><span class="nc">SingleWordSegment</span><span class="p">(</span><span class="n">TypedDict</span><span class="p">):</span>
 </span><span id="SingleWordSegment-9"><a href="#SingleWordSegment-9"><span class="linenos"> 9</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;A single word of a speech.&quot;&quot;&quot;</span>
 </span><span id="SingleWordSegment-10"><a href="#SingleWordSegment-10"><span class="linenos">10</span></a>
 </span><span id="SingleWordSegment-11"><a href="#SingleWordSegment-11"><span class="linenos">11</span></a>    <span class="n">word</span><span class="p">:</span> <span class="nb">str</span>
@@ -392,7 +392,7 @@
 
     </div>
     <a class="headerlink" href="#SingleCharSegment"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="SingleCharSegment-17"><a href="#SingleCharSegment-17"><span class="linenos">17</span></a><span class="k">class</span> <span class="nc">SingleCharSegment</span><span class="p">(</span><span class="n">TypedDict</span><span class="p">):</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="SingleCharSegment-17"><a href="#SingleCharSegment-17"><span class="linenos">17</span></a><span class="k">class</span><span class="w"> </span><span class="nc">SingleCharSegment</span><span class="p">(</span><span class="n">TypedDict</span><span class="p">):</span>
 </span><span id="SingleCharSegment-18"><a href="#SingleCharSegment-18"><span class="linenos">18</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;A single char of a speech.&quot;&quot;&quot;</span>
 </span><span id="SingleCharSegment-19"><a href="#SingleCharSegment-19"><span class="linenos">19</span></a>
 </span><span id="SingleCharSegment-20"><a href="#SingleCharSegment-20"><span class="linenos">20</span></a>    <span class="n">char</span><span class="p">:</span> <span class="nb">str</span>
@@ -462,7 +462,7 @@
 
     </div>
     <a class="headerlink" href="#SingleSegment"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="SingleSegment-26"><a href="#SingleSegment-26"><span class="linenos">26</span></a><span class="k">class</span> <span class="nc">SingleSegment</span><span class="p">(</span><span class="n">TypedDict</span><span class="p">,</span> <span class="n">total</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="SingleSegment-26"><a href="#SingleSegment-26"><span class="linenos">26</span></a><span class="k">class</span><span class="w"> </span><span class="nc">SingleSegment</span><span class="p">(</span><span class="n">TypedDict</span><span class="p">,</span> <span class="n">total</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
 </span><span id="SingleSegment-27"><a href="#SingleSegment-27"><span class="linenos">27</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;A single segment (up to multiple sentences) of a speech.&quot;&quot;&quot;</span>
 </span><span id="SingleSegment-28"><a href="#SingleSegment-28"><span class="linenos">28</span></a>
 </span><span id="SingleSegment-29"><a href="#SingleSegment-29"><span class="linenos">29</span></a>    <span class="n">start</span><span class="p">:</span> <span class="nb">float</span>
@@ -568,7 +568,7 @@
 
     </div>
     <a class="headerlink" href="#SingleAlignedSegment"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="SingleAlignedSegment-38"><a href="#SingleAlignedSegment-38"><span class="linenos">38</span></a><span class="k">class</span> <span class="nc">SingleAlignedSegment</span><span class="p">(</span><span class="n">TypedDict</span><span class="p">):</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="SingleAlignedSegment-38"><a href="#SingleAlignedSegment-38"><span class="linenos">38</span></a><span class="k">class</span><span class="w"> </span><span class="nc">SingleAlignedSegment</span><span class="p">(</span><span class="n">TypedDict</span><span class="p">):</span>
 </span><span id="SingleAlignedSegment-39"><a href="#SingleAlignedSegment-39"><span class="linenos">39</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;A single segment (up to multiple sentences) of a speech with word alignment.&quot;&quot;&quot;</span>
 </span><span id="SingleAlignedSegment-40"><a href="#SingleAlignedSegment-40"><span class="linenos">40</span></a>
 </span><span id="SingleAlignedSegment-41"><a href="#SingleAlignedSegment-41"><span class="linenos">41</span></a>    <span class="n">start</span><span class="p">:</span> <span class="nb">float</span>
@@ -650,7 +650,7 @@
 
     </div>
     <a class="headerlink" href="#TranscriptionResult"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="TranscriptionResult-48"><a href="#TranscriptionResult-48"><span class="linenos">48</span></a><span class="k">class</span> <span class="nc">TranscriptionResult</span><span class="p">(</span><span class="n">TypedDict</span><span class="p">):</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="TranscriptionResult-48"><a href="#TranscriptionResult-48"><span class="linenos">48</span></a><span class="k">class</span><span class="w"> </span><span class="nc">TranscriptionResult</span><span class="p">(</span><span class="n">TypedDict</span><span class="p">):</span>
 </span><span id="TranscriptionResult-49"><a href="#TranscriptionResult-49"><span class="linenos">49</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;A list of segments and word segments of a speech.&quot;&quot;&quot;</span>
 </span><span id="TranscriptionResult-50"><a href="#TranscriptionResult-50"><span class="linenos">50</span></a>
 </span><span id="TranscriptionResult-51"><a href="#TranscriptionResult-51"><span class="linenos">51</span></a>    <span class="n">segments</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">SingleSegment</span><span class="p">]</span>
@@ -696,7 +696,7 @@
 
     </div>
     <a class="headerlink" href="#AlignedTranscriptionResult"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="AlignedTranscriptionResult-55"><a href="#AlignedTranscriptionResult-55"><span class="linenos">55</span></a><span class="k">class</span> <span class="nc">AlignedTranscriptionResult</span><span class="p">(</span><span class="n">TypedDict</span><span class="p">):</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="AlignedTranscriptionResult-55"><a href="#AlignedTranscriptionResult-55"><span class="linenos">55</span></a><span class="k">class</span><span class="w"> </span><span class="nc">AlignedTranscriptionResult</span><span class="p">(</span><span class="n">TypedDict</span><span class="p">):</span>
 </span><span id="AlignedTranscriptionResult-56"><a href="#AlignedTranscriptionResult-56"><span class="linenos">56</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;A list of segments and word segments of a speech.&quot;&quot;&quot;</span>
 </span><span id="AlignedTranscriptionResult-57"><a href="#AlignedTranscriptionResult-57"><span class="linenos">57</span></a>
 </span><span id="AlignedTranscriptionResult-58"><a href="#AlignedTranscriptionResult-58"><span class="linenos">58</span></a>    <span class="n">segments</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">SingleAlignedSegment</span><span class="p">]</span>
@@ -744,7 +744,7 @@
     </div>
     <a class="headerlink" href="#Point"></a>
             <div class="pdoc-code codehilite"><pre><span></span><span id="Point-62"><a href="#Point-62"><span class="linenos">62</span></a><span class="nd">@dataclass</span>
-</span><span id="Point-63"><a href="#Point-63"><span class="linenos">63</span></a><span class="k">class</span> <span class="nc">Point</span><span class="p">:</span>
+</span><span id="Point-63"><a href="#Point-63"><span class="linenos">63</span></a><span class="k">class</span><span class="w"> </span><span class="nc">Point</span><span class="p">:</span>
 </span><span id="Point-64"><a href="#Point-64"><span class="linenos">64</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Represents a point in the alignment path.</span>
 </span><span id="Point-65"><a href="#Point-65"><span class="linenos">65</span></a>
 </span><span id="Point-66"><a href="#Point-66"><span class="linenos">66</span></a><span class="sd">    Attributes:</span>
@@ -830,7 +830,7 @@
     </div>
     <a class="headerlink" href="#Segment"></a>
             <div class="pdoc-code codehilite"><pre><span></span><span id="Segment-77"><a href="#Segment-77"><span class="linenos"> 77</span></a><span class="nd">@dataclass</span>
-</span><span id="Segment-78"><a href="#Segment-78"><span class="linenos"> 78</span></a><span class="k">class</span> <span class="nc">Segment</span><span class="p">:</span>
+</span><span id="Segment-78"><a href="#Segment-78"><span class="linenos"> 78</span></a><span class="k">class</span><span class="w"> </span><span class="nc">Segment</span><span class="p">:</span>
 </span><span id="Segment-79"><a href="#Segment-79"><span class="linenos"> 79</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Represents a segment of aligned text.</span>
 </span><span id="Segment-80"><a href="#Segment-80"><span class="linenos"> 80</span></a>
 </span><span id="Segment-81"><a href="#Segment-81"><span class="linenos"> 81</span></a><span class="sd">    Attributes:</span>
@@ -845,7 +845,7 @@
 </span><span id="Segment-90"><a href="#Segment-90"><span class="linenos"> 90</span></a>    <span class="n">end</span><span class="p">:</span> <span class="nb">int</span>
 </span><span id="Segment-91"><a href="#Segment-91"><span class="linenos"> 91</span></a>    <span class="n">score</span><span class="p">:</span> <span class="nb">float</span>
 </span><span id="Segment-92"><a href="#Segment-92"><span class="linenos"> 92</span></a>
-</span><span id="Segment-93"><a href="#Segment-93"><span class="linenos"> 93</span></a>    <span class="k">def</span> <span class="fm">__repr__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="Segment-93"><a href="#Segment-93"><span class="linenos"> 93</span></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__repr__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 </span><span id="Segment-94"><a href="#Segment-94"><span class="linenos"> 94</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Provides a string representation of the segment.</span>
 </span><span id="Segment-95"><a href="#Segment-95"><span class="linenos"> 95</span></a>
 </span><span id="Segment-96"><a href="#Segment-96"><span class="linenos"> 96</span></a><span class="sd">        Returns:</span>
@@ -854,7 +854,7 @@
 </span><span id="Segment-99"><a href="#Segment-99"><span class="linenos"> 99</span></a>        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">label</span><span class="si">}</span><span class="se">\t</span><span class="s2">(</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">score</span><span class="si">:</span><span class="s2">4.2f</span><span class="si">}</span><span class="s2">): [</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">start</span><span class="si">:</span><span class="s2">5d</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">end</span><span class="si">:</span><span class="s2">5d</span><span class="si">}</span><span class="s2">)&quot;</span>
 </span><span id="Segment-100"><a href="#Segment-100"><span class="linenos">100</span></a>
 </span><span id="Segment-101"><a href="#Segment-101"><span class="linenos">101</span></a>    <span class="nd">@property</span>
-</span><span id="Segment-102"><a href="#Segment-102"><span class="linenos">102</span></a>    <span class="k">def</span> <span class="nf">length</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+</span><span id="Segment-102"><a href="#Segment-102"><span class="linenos">102</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">length</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
 </span><span id="Segment-103"><a href="#Segment-103"><span class="linenos">103</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Calculates the length of the segment.&quot;&quot;&quot;</span>
 </span><span id="Segment-104"><a href="#Segment-104"><span class="linenos">104</span></a>        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">end</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">start</span>
 </span></pre></div>
@@ -939,7 +939,7 @@
     </div>
     <a class="headerlink" href="#Segment.length"></a>
             <div class="pdoc-code codehilite"><pre><span></span><span id="Segment.length-101"><a href="#Segment.length-101"><span class="linenos">101</span></a>    <span class="nd">@property</span>
-</span><span id="Segment.length-102"><a href="#Segment.length-102"><span class="linenos">102</span></a>    <span class="k">def</span> <span class="nf">length</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+</span><span id="Segment.length-102"><a href="#Segment.length-102"><span class="linenos">102</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">length</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
 </span><span id="Segment.length-103"><a href="#Segment.length-103"><span class="linenos">103</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Calculates the length of the segment.&quot;&quot;&quot;</span>
 </span><span id="Segment.length-104"><a href="#Segment.length-104"><span class="linenos">104</span></a>        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">end</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">start</span>
 </span></pre></div>

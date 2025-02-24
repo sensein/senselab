@@ -65,21 +65,21 @@
 
                         <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos"> 1</span></a><span class="sd">&quot;&quot;&quot;This module implements some utilities for the text-to-speech task.&quot;&quot;&quot;</span>
 </span><span id="L-2"><a href="#L-2"><span class="linenos"> 2</span></a>
-</span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a><span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">List</span><span class="p">,</span> <span class="n">Optional</span>
+</span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">List</span><span class="p">,</span> <span class="n">Optional</span>
 </span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a>
-</span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a><span class="kn">from</span> <span class="nn">transformers</span> <span class="kn">import</span> <span class="n">pipeline</span>
+</span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">transformers</span><span class="w"> </span><span class="kn">import</span> <span class="n">pipeline</span>
 </span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a>
-</span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a><span class="kn">from</span> <span class="nn">senselab.audio.data_structures</span> <span class="kn">import</span> <span class="n">Audio</span>
-</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a><span class="kn">from</span> <span class="nn">senselab.utils.data_structures</span> <span class="kn">import</span> <span class="n">DeviceType</span><span class="p">,</span> <span class="n">HFModel</span><span class="p">,</span> <span class="n">_select_device_and_dtype</span>
+</span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">senselab.audio.data_structures</span><span class="w"> </span><span class="kn">import</span> <span class="n">Audio</span>
+</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">senselab.utils.data_structures</span><span class="w"> </span><span class="kn">import</span> <span class="n">DeviceType</span><span class="p">,</span> <span class="n">HFModel</span><span class="p">,</span> <span class="n">_select_device_and_dtype</span>
 </span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a>
 </span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a>
-</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a><span class="k">class</span> <span class="nc">HuggingFaceTTS</span><span class="p">:</span>
+</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a><span class="k">class</span><span class="w"> </span><span class="nc">HuggingFaceTTS</span><span class="p">:</span>
 </span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;A factory for managing Hugging Face TTS pipelines.&quot;&quot;&quot;</span>
 </span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a>
 </span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a>    <span class="n">_pipelines</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">pipeline</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
 </span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a>
 </span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a>    <span class="nd">@classmethod</span>
-</span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a>    <span class="k">def</span> <span class="nf">_get_hf_tts_pipeline</span><span class="p">(</span>
+</span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_get_hf_tts_pipeline</span><span class="p">(</span>
 </span><span id="L-18"><a href="#L-18"><span class="linenos">18</span></a>        <span class="bp">cls</span><span class="p">,</span>
 </span><span id="L-19"><a href="#L-19"><span class="linenos">19</span></a>        <span class="n">model</span><span class="p">:</span> <span class="n">HFModel</span><span class="p">,</span>
 </span><span id="L-20"><a href="#L-20"><span class="linenos">20</span></a>        <span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">DeviceType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
@@ -108,7 +108,7 @@
 </span><span id="L-43"><a href="#L-43"><span class="linenos">43</span></a>        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_pipelines</span><span class="p">[</span><span class="n">key</span><span class="p">]</span>
 </span><span id="L-44"><a href="#L-44"><span class="linenos">44</span></a>
 </span><span id="L-45"><a href="#L-45"><span class="linenos">45</span></a>    <span class="nd">@classmethod</span>
-</span><span id="L-46"><a href="#L-46"><span class="linenos">46</span></a>    <span class="k">def</span> <span class="nf">synthesize_texts_with_transformers</span><span class="p">(</span>
+</span><span id="L-46"><a href="#L-46"><span class="linenos">46</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">synthesize_texts_with_transformers</span><span class="p">(</span>
 </span><span id="L-47"><a href="#L-47"><span class="linenos">47</span></a>        <span class="bp">cls</span><span class="p">,</span>
 </span><span id="L-48"><a href="#L-48"><span class="linenos">48</span></a>        <span class="n">texts</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
 </span><span id="L-49"><a href="#L-49"><span class="linenos">49</span></a>        <span class="n">model</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">HFModel</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
@@ -159,13 +159,13 @@
 
     </div>
     <a class="headerlink" href="#HuggingFaceTTS"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="HuggingFaceTTS-12"><a href="#HuggingFaceTTS-12"><span class="linenos">12</span></a><span class="k">class</span> <span class="nc">HuggingFaceTTS</span><span class="p">:</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="HuggingFaceTTS-12"><a href="#HuggingFaceTTS-12"><span class="linenos">12</span></a><span class="k">class</span><span class="w"> </span><span class="nc">HuggingFaceTTS</span><span class="p">:</span>
 </span><span id="HuggingFaceTTS-13"><a href="#HuggingFaceTTS-13"><span class="linenos">13</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;A factory for managing Hugging Face TTS pipelines.&quot;&quot;&quot;</span>
 </span><span id="HuggingFaceTTS-14"><a href="#HuggingFaceTTS-14"><span class="linenos">14</span></a>
 </span><span id="HuggingFaceTTS-15"><a href="#HuggingFaceTTS-15"><span class="linenos">15</span></a>    <span class="n">_pipelines</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">pipeline</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
 </span><span id="HuggingFaceTTS-16"><a href="#HuggingFaceTTS-16"><span class="linenos">16</span></a>
 </span><span id="HuggingFaceTTS-17"><a href="#HuggingFaceTTS-17"><span class="linenos">17</span></a>    <span class="nd">@classmethod</span>
-</span><span id="HuggingFaceTTS-18"><a href="#HuggingFaceTTS-18"><span class="linenos">18</span></a>    <span class="k">def</span> <span class="nf">_get_hf_tts_pipeline</span><span class="p">(</span>
+</span><span id="HuggingFaceTTS-18"><a href="#HuggingFaceTTS-18"><span class="linenos">18</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_get_hf_tts_pipeline</span><span class="p">(</span>
 </span><span id="HuggingFaceTTS-19"><a href="#HuggingFaceTTS-19"><span class="linenos">19</span></a>        <span class="bp">cls</span><span class="p">,</span>
 </span><span id="HuggingFaceTTS-20"><a href="#HuggingFaceTTS-20"><span class="linenos">20</span></a>        <span class="n">model</span><span class="p">:</span> <span class="n">HFModel</span><span class="p">,</span>
 </span><span id="HuggingFaceTTS-21"><a href="#HuggingFaceTTS-21"><span class="linenos">21</span></a>        <span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">DeviceType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
@@ -194,7 +194,7 @@
 </span><span id="HuggingFaceTTS-44"><a href="#HuggingFaceTTS-44"><span class="linenos">44</span></a>        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_pipelines</span><span class="p">[</span><span class="n">key</span><span class="p">]</span>
 </span><span id="HuggingFaceTTS-45"><a href="#HuggingFaceTTS-45"><span class="linenos">45</span></a>
 </span><span id="HuggingFaceTTS-46"><a href="#HuggingFaceTTS-46"><span class="linenos">46</span></a>    <span class="nd">@classmethod</span>
-</span><span id="HuggingFaceTTS-47"><a href="#HuggingFaceTTS-47"><span class="linenos">47</span></a>    <span class="k">def</span> <span class="nf">synthesize_texts_with_transformers</span><span class="p">(</span>
+</span><span id="HuggingFaceTTS-47"><a href="#HuggingFaceTTS-47"><span class="linenos">47</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">synthesize_texts_with_transformers</span><span class="p">(</span>
 </span><span id="HuggingFaceTTS-48"><a href="#HuggingFaceTTS-48"><span class="linenos">48</span></a>        <span class="bp">cls</span><span class="p">,</span>
 </span><span id="HuggingFaceTTS-49"><a href="#HuggingFaceTTS-49"><span class="linenos">49</span></a>        <span class="n">texts</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
 </span><span id="HuggingFaceTTS-50"><a href="#HuggingFaceTTS-50"><span class="linenos">50</span></a>        <span class="n">model</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">HFModel</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
@@ -250,7 +250,7 @@
     </div>
     <a class="headerlink" href="#HuggingFaceTTS.synthesize_texts_with_transformers"></a>
             <div class="pdoc-code codehilite"><pre><span></span><span id="HuggingFaceTTS.synthesize_texts_with_transformers-46"><a href="#HuggingFaceTTS.synthesize_texts_with_transformers-46"><span class="linenos">46</span></a>    <span class="nd">@classmethod</span>
-</span><span id="HuggingFaceTTS.synthesize_texts_with_transformers-47"><a href="#HuggingFaceTTS.synthesize_texts_with_transformers-47"><span class="linenos">47</span></a>    <span class="k">def</span> <span class="nf">synthesize_texts_with_transformers</span><span class="p">(</span>
+</span><span id="HuggingFaceTTS.synthesize_texts_with_transformers-47"><a href="#HuggingFaceTTS.synthesize_texts_with_transformers-47"><span class="linenos">47</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">synthesize_texts_with_transformers</span><span class="p">(</span>
 </span><span id="HuggingFaceTTS.synthesize_texts_with_transformers-48"><a href="#HuggingFaceTTS.synthesize_texts_with_transformers-48"><span class="linenos">48</span></a>        <span class="bp">cls</span><span class="p">,</span>
 </span><span id="HuggingFaceTTS.synthesize_texts_with_transformers-49"><a href="#HuggingFaceTTS.synthesize_texts_with_transformers-49"><span class="linenos">49</span></a>        <span class="n">texts</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
 </span><span id="HuggingFaceTTS.synthesize_texts_with_transformers-50"><a href="#HuggingFaceTTS.synthesize_texts_with_transformers-50"><span class="linenos">50</span></a>        <span class="n">model</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">HFModel</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>

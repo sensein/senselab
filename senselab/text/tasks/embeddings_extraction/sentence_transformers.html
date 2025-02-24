@@ -65,21 +65,21 @@
 
                         <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos"> 1</span></a><span class="sd">&quot;&quot;&quot;This module implements some utilities for using Sentence Transformers for embeddings extraction.&quot;&quot;&quot;</span>
 </span><span id="L-2"><a href="#L-2"><span class="linenos"> 2</span></a>
-</span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a><span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">List</span><span class="p">,</span> <span class="n">Optional</span>
+</span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">List</span><span class="p">,</span> <span class="n">Optional</span>
 </span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a>
-</span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a><span class="kn">import</span> <span class="nn">torch</span>
-</span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a><span class="kn">from</span> <span class="nn">sentence_transformers</span> <span class="kn">import</span> <span class="n">SentenceTransformer</span>
+</span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+</span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">sentence_transformers</span><span class="w"> </span><span class="kn">import</span> <span class="n">SentenceTransformer</span>
 </span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a>
-</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a><span class="kn">from</span> <span class="nn">senselab.utils.data_structures</span> <span class="kn">import</span> <span class="n">DeviceType</span><span class="p">,</span> <span class="n">SentenceTransformersModel</span><span class="p">,</span> <span class="n">_select_device_and_dtype</span>
+</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">senselab.utils.data_structures</span><span class="w"> </span><span class="kn">import</span> <span class="n">DeviceType</span><span class="p">,</span> <span class="n">SentenceTransformersModel</span><span class="p">,</span> <span class="n">_select_device_and_dtype</span>
 </span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a>
 </span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a>
-</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a><span class="k">class</span> <span class="nc">SentenceTransformerFactory</span><span class="p">:</span>
+</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a><span class="k">class</span><span class="w"> </span><span class="nc">SentenceTransformerFactory</span><span class="p">:</span>
 </span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;A factory for managing SentenceTransformer pipelines for text embeddings.&quot;&quot;&quot;</span>
 </span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a>
 </span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a>    <span class="n">_pipelines</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">SentenceTransformer</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
 </span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a>
 </span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a>    <span class="nd">@classmethod</span>
-</span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a>    <span class="k">def</span> <span class="nf">_get_sentencetransformer_pipeline</span><span class="p">(</span>
+</span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_get_sentencetransformer_pipeline</span><span class="p">(</span>
 </span><span id="L-18"><a href="#L-18"><span class="linenos">18</span></a>        <span class="bp">cls</span><span class="p">,</span>
 </span><span id="L-19"><a href="#L-19"><span class="linenos">19</span></a>        <span class="n">model</span><span class="p">:</span> <span class="n">SentenceTransformersModel</span><span class="p">,</span>
 </span><span id="L-20"><a href="#L-20"><span class="linenos">20</span></a>        <span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">DeviceType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
@@ -106,7 +106,7 @@
 </span><span id="L-41"><a href="#L-41"><span class="linenos">41</span></a>        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_pipelines</span><span class="p">[</span><span class="n">key</span><span class="p">]</span>
 </span><span id="L-42"><a href="#L-42"><span class="linenos">42</span></a>
 </span><span id="L-43"><a href="#L-43"><span class="linenos">43</span></a>    <span class="nd">@classmethod</span>
-</span><span id="L-44"><a href="#L-44"><span class="linenos">44</span></a>    <span class="k">def</span> <span class="nf">extract_text_embeddings</span><span class="p">(</span>
+</span><span id="L-44"><a href="#L-44"><span class="linenos">44</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">extract_text_embeddings</span><span class="p">(</span>
 </span><span id="L-45"><a href="#L-45"><span class="linenos">45</span></a>        <span class="bp">cls</span><span class="p">,</span>
 </span><span id="L-46"><a href="#L-46"><span class="linenos">46</span></a>        <span class="n">pieces_of_text</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
 </span><span id="L-47"><a href="#L-47"><span class="linenos">47</span></a>        <span class="n">model</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">SentenceTransformersModel</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
@@ -144,13 +144,13 @@
 
     </div>
     <a class="headerlink" href="#SentenceTransformerFactory"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="SentenceTransformerFactory-12"><a href="#SentenceTransformerFactory-12"><span class="linenos">12</span></a><span class="k">class</span> <span class="nc">SentenceTransformerFactory</span><span class="p">:</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="SentenceTransformerFactory-12"><a href="#SentenceTransformerFactory-12"><span class="linenos">12</span></a><span class="k">class</span><span class="w"> </span><span class="nc">SentenceTransformerFactory</span><span class="p">:</span>
 </span><span id="SentenceTransformerFactory-13"><a href="#SentenceTransformerFactory-13"><span class="linenos">13</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;A factory for managing SentenceTransformer pipelines for text embeddings.&quot;&quot;&quot;</span>
 </span><span id="SentenceTransformerFactory-14"><a href="#SentenceTransformerFactory-14"><span class="linenos">14</span></a>
 </span><span id="SentenceTransformerFactory-15"><a href="#SentenceTransformerFactory-15"><span class="linenos">15</span></a>    <span class="n">_pipelines</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">SentenceTransformer</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
 </span><span id="SentenceTransformerFactory-16"><a href="#SentenceTransformerFactory-16"><span class="linenos">16</span></a>
 </span><span id="SentenceTransformerFactory-17"><a href="#SentenceTransformerFactory-17"><span class="linenos">17</span></a>    <span class="nd">@classmethod</span>
-</span><span id="SentenceTransformerFactory-18"><a href="#SentenceTransformerFactory-18"><span class="linenos">18</span></a>    <span class="k">def</span> <span class="nf">_get_sentencetransformer_pipeline</span><span class="p">(</span>
+</span><span id="SentenceTransformerFactory-18"><a href="#SentenceTransformerFactory-18"><span class="linenos">18</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_get_sentencetransformer_pipeline</span><span class="p">(</span>
 </span><span id="SentenceTransformerFactory-19"><a href="#SentenceTransformerFactory-19"><span class="linenos">19</span></a>        <span class="bp">cls</span><span class="p">,</span>
 </span><span id="SentenceTransformerFactory-20"><a href="#SentenceTransformerFactory-20"><span class="linenos">20</span></a>        <span class="n">model</span><span class="p">:</span> <span class="n">SentenceTransformersModel</span><span class="p">,</span>
 </span><span id="SentenceTransformerFactory-21"><a href="#SentenceTransformerFactory-21"><span class="linenos">21</span></a>        <span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">DeviceType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
@@ -177,7 +177,7 @@
 </span><span id="SentenceTransformerFactory-42"><a href="#SentenceTransformerFactory-42"><span class="linenos">42</span></a>        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_pipelines</span><span class="p">[</span><span class="n">key</span><span class="p">]</span>
 </span><span id="SentenceTransformerFactory-43"><a href="#SentenceTransformerFactory-43"><span class="linenos">43</span></a>
 </span><span id="SentenceTransformerFactory-44"><a href="#SentenceTransformerFactory-44"><span class="linenos">44</span></a>    <span class="nd">@classmethod</span>
-</span><span id="SentenceTransformerFactory-45"><a href="#SentenceTransformerFactory-45"><span class="linenos">45</span></a>    <span class="k">def</span> <span class="nf">extract_text_embeddings</span><span class="p">(</span>
+</span><span id="SentenceTransformerFactory-45"><a href="#SentenceTransformerFactory-45"><span class="linenos">45</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">extract_text_embeddings</span><span class="p">(</span>
 </span><span id="SentenceTransformerFactory-46"><a href="#SentenceTransformerFactory-46"><span class="linenos">46</span></a>        <span class="bp">cls</span><span class="p">,</span>
 </span><span id="SentenceTransformerFactory-47"><a href="#SentenceTransformerFactory-47"><span class="linenos">47</span></a>        <span class="n">pieces_of_text</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
 </span><span id="SentenceTransformerFactory-48"><a href="#SentenceTransformerFactory-48"><span class="linenos">48</span></a>        <span class="n">model</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">SentenceTransformersModel</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
@@ -220,7 +220,7 @@
     </div>
     <a class="headerlink" href="#SentenceTransformerFactory.extract_text_embeddings"></a>
             <div class="pdoc-code codehilite"><pre><span></span><span id="SentenceTransformerFactory.extract_text_embeddings-44"><a href="#SentenceTransformerFactory.extract_text_embeddings-44"><span class="linenos">44</span></a>    <span class="nd">@classmethod</span>
-</span><span id="SentenceTransformerFactory.extract_text_embeddings-45"><a href="#SentenceTransformerFactory.extract_text_embeddings-45"><span class="linenos">45</span></a>    <span class="k">def</span> <span class="nf">extract_text_embeddings</span><span class="p">(</span>
+</span><span id="SentenceTransformerFactory.extract_text_embeddings-45"><a href="#SentenceTransformerFactory.extract_text_embeddings-45"><span class="linenos">45</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">extract_text_embeddings</span><span class="p">(</span>
 </span><span id="SentenceTransformerFactory.extract_text_embeddings-46"><a href="#SentenceTransformerFactory.extract_text_embeddings-46"><span class="linenos">46</span></a>        <span class="bp">cls</span><span class="p">,</span>
 </span><span id="SentenceTransformerFactory.extract_text_embeddings-47"><a href="#SentenceTransformerFactory.extract_text_embeddings-47"><span class="linenos">47</span></a>        <span class="n">pieces_of_text</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
 </span><span id="SentenceTransformerFactory.extract_text_embeddings-48"><a href="#SentenceTransformerFactory.extract_text_embeddings-48"><span class="linenos">48</span></a>        <span class="n">model</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">SentenceTransformersModel</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>

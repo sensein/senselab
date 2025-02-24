@@ -71,12 +71,12 @@
 
                         <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos"> 1</span></a><span class="sd">&quot;&quot;&quot;This module implements some utilities for evaluating a transcription.&quot;&quot;&quot;</span>
 </span><span id="L-2"><a href="#L-2"><span class="linenos"> 2</span></a>
-</span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a><span class="kn">import</span> <span class="nn">jiwer</span>
+</span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">jiwer</span>
 </span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a>
 </span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a><span class="c1"># TODO: add more metrics which take into account the meaning/intention</span>
 </span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a>
 </span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a>
-</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a><span class="k">def</span> <span class="nf">calculate_wer</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a><span class="k">def</span><span class="w"> </span><span class="nf">calculate_wer</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
 </span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Calculate the Word Error Rate (WER) between the reference and hypothesis.</span>
 </span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a>
 </span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a><span class="sd">    Args:</span>
@@ -93,7 +93,7 @@
 </span><span id="L-22"><a href="#L-22"><span class="linenos">22</span></a>    <span class="k">return</span> <span class="n">jiwer</span><span class="o">.</span><span class="n">wer</span><span class="p">(</span><span class="n">reference</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">)</span>
 </span><span id="L-23"><a href="#L-23"><span class="linenos">23</span></a>
 </span><span id="L-24"><a href="#L-24"><span class="linenos">24</span></a>
-</span><span id="L-25"><a href="#L-25"><span class="linenos">25</span></a><span class="k">def</span> <span class="nf">calculate_mer</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+</span><span id="L-25"><a href="#L-25"><span class="linenos">25</span></a><span class="k">def</span><span class="w"> </span><span class="nf">calculate_mer</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
 </span><span id="L-26"><a href="#L-26"><span class="linenos">26</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Calculate the Match Error Rate (MER) between the reference and hypothesis.</span>
 </span><span id="L-27"><a href="#L-27"><span class="linenos">27</span></a>
 </span><span id="L-28"><a href="#L-28"><span class="linenos">28</span></a><span class="sd">    Args:</span>
@@ -110,7 +110,7 @@
 </span><span id="L-39"><a href="#L-39"><span class="linenos">39</span></a>    <span class="k">return</span> <span class="n">jiwer</span><span class="o">.</span><span class="n">mer</span><span class="p">(</span><span class="n">reference</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">)</span>
 </span><span id="L-40"><a href="#L-40"><span class="linenos">40</span></a>
 </span><span id="L-41"><a href="#L-41"><span class="linenos">41</span></a>
-</span><span id="L-42"><a href="#L-42"><span class="linenos">42</span></a><span class="k">def</span> <span class="nf">calculate_wil</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+</span><span id="L-42"><a href="#L-42"><span class="linenos">42</span></a><span class="k">def</span><span class="w"> </span><span class="nf">calculate_wil</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
 </span><span id="L-43"><a href="#L-43"><span class="linenos">43</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Calculate the Word Information Lost (WIL) between the reference and hypothesis.</span>
 </span><span id="L-44"><a href="#L-44"><span class="linenos">44</span></a>
 </span><span id="L-45"><a href="#L-45"><span class="linenos">45</span></a><span class="sd">    Args:</span>
@@ -127,7 +127,7 @@
 </span><span id="L-56"><a href="#L-56"><span class="linenos">56</span></a>    <span class="k">return</span> <span class="n">jiwer</span><span class="o">.</span><span class="n">wil</span><span class="p">(</span><span class="n">reference</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">)</span>
 </span><span id="L-57"><a href="#L-57"><span class="linenos">57</span></a>
 </span><span id="L-58"><a href="#L-58"><span class="linenos">58</span></a>
-</span><span id="L-59"><a href="#L-59"><span class="linenos">59</span></a><span class="k">def</span> <span class="nf">calculate_wip</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+</span><span id="L-59"><a href="#L-59"><span class="linenos">59</span></a><span class="k">def</span><span class="w"> </span><span class="nf">calculate_wip</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
 </span><span id="L-60"><a href="#L-60"><span class="linenos">60</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Calculate the Word Information Preserved (WIP) between the reference and hypothesis.</span>
 </span><span id="L-61"><a href="#L-61"><span class="linenos">61</span></a>
 </span><span id="L-62"><a href="#L-62"><span class="linenos">62</span></a><span class="sd">    Args:</span>
@@ -144,7 +144,7 @@
 </span><span id="L-73"><a href="#L-73"><span class="linenos">73</span></a>    <span class="k">return</span> <span class="n">jiwer</span><span class="o">.</span><span class="n">wip</span><span class="p">(</span><span class="n">reference</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">)</span>
 </span><span id="L-74"><a href="#L-74"><span class="linenos">74</span></a>
 </span><span id="L-75"><a href="#L-75"><span class="linenos">75</span></a>
-</span><span id="L-76"><a href="#L-76"><span class="linenos">76</span></a><span class="k">def</span> <span class="nf">calculate_cer</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+</span><span id="L-76"><a href="#L-76"><span class="linenos">76</span></a><span class="k">def</span><span class="w"> </span><span class="nf">calculate_cer</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
 </span><span id="L-77"><a href="#L-77"><span class="linenos">77</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Calculate the Character Error Rate (CER) between the reference and hypothesis.</span>
 </span><span id="L-78"><a href="#L-78"><span class="linenos">78</span></a>
 </span><span id="L-79"><a href="#L-79"><span class="linenos">79</span></a><span class="sd">    Args:</span>
@@ -174,7 +174,7 @@
 
     </div>
     <a class="headerlink" href="#calculate_wer"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="calculate_wer-9"><a href="#calculate_wer-9"><span class="linenos"> 9</span></a><span class="k">def</span> <span class="nf">calculate_wer</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="calculate_wer-9"><a href="#calculate_wer-9"><span class="linenos"> 9</span></a><span class="k">def</span><span class="w"> </span><span class="nf">calculate_wer</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
 </span><span id="calculate_wer-10"><a href="#calculate_wer-10"><span class="linenos">10</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Calculate the Word Error Rate (WER) between the reference and hypothesis.</span>
 </span><span id="calculate_wer-11"><a href="#calculate_wer-11"><span class="linenos">11</span></a>
 </span><span id="calculate_wer-12"><a href="#calculate_wer-12"><span class="linenos">12</span></a><span class="sd">    Args:</span>
@@ -231,7 +231,7 @@
 
     </div>
     <a class="headerlink" href="#calculate_mer"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="calculate_mer-26"><a href="#calculate_mer-26"><span class="linenos">26</span></a><span class="k">def</span> <span class="nf">calculate_mer</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="calculate_mer-26"><a href="#calculate_mer-26"><span class="linenos">26</span></a><span class="k">def</span><span class="w"> </span><span class="nf">calculate_mer</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
 </span><span id="calculate_mer-27"><a href="#calculate_mer-27"><span class="linenos">27</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Calculate the Match Error Rate (MER) between the reference and hypothesis.</span>
 </span><span id="calculate_mer-28"><a href="#calculate_mer-28"><span class="linenos">28</span></a>
 </span><span id="calculate_mer-29"><a href="#calculate_mer-29"><span class="linenos">29</span></a><span class="sd">    Args:</span>
@@ -288,7 +288,7 @@
 
     </div>
     <a class="headerlink" href="#calculate_wil"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="calculate_wil-43"><a href="#calculate_wil-43"><span class="linenos">43</span></a><span class="k">def</span> <span class="nf">calculate_wil</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="calculate_wil-43"><a href="#calculate_wil-43"><span class="linenos">43</span></a><span class="k">def</span><span class="w"> </span><span class="nf">calculate_wil</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
 </span><span id="calculate_wil-44"><a href="#calculate_wil-44"><span class="linenos">44</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Calculate the Word Information Lost (WIL) between the reference and hypothesis.</span>
 </span><span id="calculate_wil-45"><a href="#calculate_wil-45"><span class="linenos">45</span></a>
 </span><span id="calculate_wil-46"><a href="#calculate_wil-46"><span class="linenos">46</span></a><span class="sd">    Args:</span>
@@ -345,7 +345,7 @@
 
     </div>
     <a class="headerlink" href="#calculate_wip"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="calculate_wip-60"><a href="#calculate_wip-60"><span class="linenos">60</span></a><span class="k">def</span> <span class="nf">calculate_wip</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="calculate_wip-60"><a href="#calculate_wip-60"><span class="linenos">60</span></a><span class="k">def</span><span class="w"> </span><span class="nf">calculate_wip</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
 </span><span id="calculate_wip-61"><a href="#calculate_wip-61"><span class="linenos">61</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Calculate the Word Information Preserved (WIP) between the reference and hypothesis.</span>
 </span><span id="calculate_wip-62"><a href="#calculate_wip-62"><span class="linenos">62</span></a>
 </span><span id="calculate_wip-63"><a href="#calculate_wip-63"><span class="linenos">63</span></a><span class="sd">    Args:</span>
@@ -402,7 +402,7 @@
 
     </div>
     <a class="headerlink" href="#calculate_cer"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="calculate_cer-77"><a href="#calculate_cer-77"><span class="linenos">77</span></a><span class="k">def</span> <span class="nf">calculate_cer</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="calculate_cer-77"><a href="#calculate_cer-77"><span class="linenos">77</span></a><span class="k">def</span><span class="w"> </span><span class="nf">calculate_cer</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
 </span><span id="calculate_cer-78"><a href="#calculate_cer-78"><span class="linenos">78</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Calculate the Character Error Rate (CER) between the reference and hypothesis.</span>
 </span><span id="calculate_cer-79"><a href="#calculate_cer-79"><span class="linenos">79</span></a>
 </span><span id="calculate_cer-80"><a href="#calculate_cer-80"><span class="linenos">80</span></a><span class="sd">    Args:</span>

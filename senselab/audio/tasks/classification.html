@@ -27,9 +27,21 @@
             <input type="search" placeholder="Search..." role="searchbox" aria-label="search"
                    pattern=".+" required>
 
+            <h2>Contents</h2>
+            <ul>
+  <li><a href="#audio-classification">Audio Classification</a>
+  <ul>
+    <li><a href="#task-overview">Task Overview</a></li>
+    <li><a href="#models">Models</a></li>
+    <li><a href="#evaluation">Evaluation</a></li>
+  </ul></li>
+</ul>
+
 
             <h2>Submodules</h2>
             <ul>
+                    <li><a href="classification/api.html">api</a></li>
+                    <li><a href="classification/huggingface.html">huggingface</a></li>
                     <li><a href="classification/speech_emotion_recognition.html">speech_emotion_recognition</a></li>
             </ul>
 
@@ -47,14 +59,91 @@
                     <h1 class="modulename">
 <a href="./../../../senselab.html">senselab</a><wbr>.<a href="./../../audio.html">audio</a><wbr>.<a href="./../tasks.html">tasks</a><wbr>.classification    </h1>
 
-                        <div class="docstring"><p>This module defines the APIs for doing generalized audio classification tasks.</p>
+                        <div class="docstring"><h1 id="audio-classification">Audio Classification</h1>
+
+<h2 id="task-overview">Task Overview</h2>
+
+<p>Audio Classification refers to the broad category of tasks of processing audio inputs and assigning a label over a set of possible classes. The technology has a wide range applications, including identifying speaker intent, language classification, and even animal species by their sounds.</p>
+
+<h2 id="models">Models</h2>
+
+<p>A variety of models are supported by <code><a href="../../../senselab.html">senselab</a></code> for audio classification tasks. They can be explored on the <a href="https://huggingface.co/models?library=transformers&pipeline_tag=audio-classification&sort=downloads">Hugging Face Hub</a>. Each model varies in performance, size, license, language support, and more. Like with many models and tasks, performance may also vary depending on who the speaker is in the processed audio clips (there may be differences in terms of age, dialects, disfluencies). It is recommended to review the model card for each model before use. Also, always refer to the most recent literature for an informed decision. Unlike other tasks, the exact classification task will be based off of the dataset and class labels used to train the model, such that even two models using the same dataset might classify the audios into different categories (e.g. the LibriSpeech dataset could be used to classify age and/or gender based on the audio clips).</p>
+
+<h6 id="some-popular-models-for-different-classifications-include">Some popular models for different classifications include:</h6>
+
+<blockquote>
+  <ul>
+  <li><a href="https://huggingface.co/audeering/wav2vec2-large-robust-24-ft-age-gender">Age</a></li>
+  <li><a href="https://huggingface.co/alefiury/wav2vec2-large-xlsr-53-gender-recognition-librispeech">Gender</a></li>
+  <li><a href="https://huggingface.co/agercas/distilhubert-finetuned-gtzan/blob/main/config.json">Music Genre</a></li>
+  <li><a href="https://huggingface.co/bookbot/wav2vec2-adult-child-cls">Adult vs. Child Speech</a></li>
+  <li><a href="https://huggingface.co/ehcalabres/wav2vec2-lg-xlsr-en-speech-emotion-recognition">Emotion Recognition</a></li>
+  </ul>
+</blockquote>
+
+<h2 id="evaluation">Evaluation</h2>
+
+<h3 id="metrics">Metrics</h3>
+
+<p>The primary evaluation metric for audio classification is accuracy. This can be unweighted (the number of correct labels over the total number of labels) or weighted (where each class is weighted accordingly to how much of the whole dataset the class label represents).</p>
+
+<p>Other important metrics include:</p>
+
+<ul>
+<li><strong>Area Under the Curve (AUC)</strong></li>
+<li><strong>Precision</strong></li>
+<li><strong>Recall</strong></li>
+<li><strong>F1-Score</strong></li>
+</ul>
+
+<p>More information about the different metrics related to classification can be found <a href="https://developers.google.com/machine-learning/crash-course/classification/accuracy-precision-recall">here</a> as well as a common function for understanding the results of a classification can be found in <a href="https://scikit-learn.org/1.5/modules/generated/sklearn.metrics.classification_report.html">scikit-learn</a>.</p>
+
+<h3 id="datasets">Datasets</h3>
+
+<p>The following table lists the datasets included in the <a href="https://arxiv.org/abs/2210.13352">English Speech Benchmark (ESB)</a>, which are generally used for evaluating ASR models in English:</p>
+
+<table>
+<thead>
+<tr>
+  <th>Dataset</th>
+  <th>Domain</th>
+  <th>Amount of Data (h)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>AudioSet</td>
+  <td>Audio Events/Ontology</td>
+  <td>5.8 thousand</td>
+</tr>
+<tr>
+  <td>ICBHI Respiratory Sound Database</td>
+  <td>Medical/Respiratory</td>
+  <td>5.5</td>
+</tr>
+<tr>
+  <td>ESC-50</td>
+  <td>Environmental Audio</td>
+  <td>2.77</td>
+</tr>
+<tr>
+  <td>MSP Podcast</td>
+  <td>Speech Emotion Recognition</td>
+  <td>238</td>
+</tr>
+</tbody>
+</table>
+
+<p>Note that this list of datasets is not exhaustive. If you are interested in benchmarking models in different languages or under specific conditions, consult the relevant literature.</p>
 </div>
 
                         <input id="mod-classification-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 
                         <label class="view-source-button" for="mod-classification-view-source"><span>View Source</span></label>
 
-                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;This module defines the APIs for doing generalized audio classification tasks.&quot;&quot;&quot;</span>
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;.. include:: ./doc.md&quot;&quot;&quot;</span>  <span class="c1"># noqa: D415</span>
+</span><span id="L-2"><a href="#L-2"><span class="linenos">2</span></a>
+</span><span id="L-3"><a href="#L-3"><span class="linenos">3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.api</span><span class="w"> </span><span class="kn">import</span> <span class="n">classify_audios</span>  <span class="c1"># noqa: F401</span>
 </span></pre></div>
 
 

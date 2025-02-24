@@ -65,23 +65,23 @@
 
                         <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">  1</span></a><span class="sd">&quot;&quot;&quot;This module contains functions for extracting features from pre-trained self-supervised models.&quot;&quot;&quot;</span>
 </span><span id="L-2"><a href="#L-2"><span class="linenos">  2</span></a>
-</span><span id="L-3"><a href="#L-3"><span class="linenos">  3</span></a><span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">List</span><span class="p">,</span> <span class="n">Optional</span>
+</span><span id="L-3"><a href="#L-3"><span class="linenos">  3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">List</span><span class="p">,</span> <span class="n">Optional</span>
 </span><span id="L-4"><a href="#L-4"><span class="linenos">  4</span></a>
-</span><span id="L-5"><a href="#L-5"><span class="linenos">  5</span></a><span class="kn">import</span> <span class="nn">torch</span>
-</span><span id="L-6"><a href="#L-6"><span class="linenos">  6</span></a><span class="kn">from</span> <span class="nn">transformers</span> <span class="kn">import</span> <span class="n">AutoFeatureExtractor</span><span class="p">,</span> <span class="n">AutoModel</span>
+</span><span id="L-5"><a href="#L-5"><span class="linenos">  5</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+</span><span id="L-6"><a href="#L-6"><span class="linenos">  6</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">transformers</span><span class="w"> </span><span class="kn">import</span> <span class="n">AutoFeatureExtractor</span><span class="p">,</span> <span class="n">AutoModel</span>
 </span><span id="L-7"><a href="#L-7"><span class="linenos">  7</span></a>
-</span><span id="L-8"><a href="#L-8"><span class="linenos">  8</span></a><span class="kn">from</span> <span class="nn">senselab.audio.data_structures</span> <span class="kn">import</span> <span class="n">Audio</span>
-</span><span id="L-9"><a href="#L-9"><span class="linenos">  9</span></a><span class="kn">from</span> <span class="nn">senselab.utils.data_structures</span> <span class="kn">import</span> <span class="n">DeviceType</span><span class="p">,</span> <span class="n">HFModel</span><span class="p">,</span> <span class="n">_select_device_and_dtype</span>
+</span><span id="L-8"><a href="#L-8"><span class="linenos">  8</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">senselab.audio.data_structures</span><span class="w"> </span><span class="kn">import</span> <span class="n">Audio</span>
+</span><span id="L-9"><a href="#L-9"><span class="linenos">  9</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">senselab.utils.data_structures</span><span class="w"> </span><span class="kn">import</span> <span class="n">DeviceType</span><span class="p">,</span> <span class="n">HFModel</span><span class="p">,</span> <span class="n">_select_device_and_dtype</span>
 </span><span id="L-10"><a href="#L-10"><span class="linenos"> 10</span></a>
 </span><span id="L-11"><a href="#L-11"><span class="linenos"> 11</span></a>
-</span><span id="L-12"><a href="#L-12"><span class="linenos"> 12</span></a><span class="k">class</span> <span class="nc">SSLEmbeddingsFactory</span><span class="p">:</span>
+</span><span id="L-12"><a href="#L-12"><span class="linenos"> 12</span></a><span class="k">class</span><span class="w"> </span><span class="nc">SSLEmbeddingsFactory</span><span class="p">:</span>
 </span><span id="L-13"><a href="#L-13"><span class="linenos"> 13</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;A factory for managing self-supervised models.&quot;&quot;&quot;</span>
 </span><span id="L-14"><a href="#L-14"><span class="linenos"> 14</span></a>
 </span><span id="L-15"><a href="#L-15"><span class="linenos"> 15</span></a>    <span class="n">_feat_extractor</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">AutoFeatureExtractor</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
 </span><span id="L-16"><a href="#L-16"><span class="linenos"> 16</span></a>    <span class="n">_model</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">AutoModel</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
 </span><span id="L-17"><a href="#L-17"><span class="linenos"> 17</span></a>
 </span><span id="L-18"><a href="#L-18"><span class="linenos"> 18</span></a>    <span class="nd">@classmethod</span>
-</span><span id="L-19"><a href="#L-19"><span class="linenos"> 19</span></a>    <span class="k">def</span> <span class="nf">_get_feature_extractor</span><span class="p">(</span>
+</span><span id="L-19"><a href="#L-19"><span class="linenos"> 19</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_get_feature_extractor</span><span class="p">(</span>
 </span><span id="L-20"><a href="#L-20"><span class="linenos"> 20</span></a>        <span class="bp">cls</span><span class="p">,</span>
 </span><span id="L-21"><a href="#L-21"><span class="linenos"> 21</span></a>        <span class="n">model</span><span class="p">:</span> <span class="n">HFModel</span><span class="p">,</span>
 </span><span id="L-22"><a href="#L-22"><span class="linenos"> 22</span></a>        <span class="n">cache_dir</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;~/&quot;</span><span class="p">,</span>
@@ -103,7 +103,7 @@
 </span><span id="L-38"><a href="#L-38"><span class="linenos"> 38</span></a>        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_feat_extractor</span><span class="p">[</span><span class="n">key</span><span class="p">]</span>
 </span><span id="L-39"><a href="#L-39"><span class="linenos"> 39</span></a>
 </span><span id="L-40"><a href="#L-40"><span class="linenos"> 40</span></a>    <span class="nd">@classmethod</span>
-</span><span id="L-41"><a href="#L-41"><span class="linenos"> 41</span></a>    <span class="k">def</span> <span class="nf">_load_model</span><span class="p">(</span>
+</span><span id="L-41"><a href="#L-41"><span class="linenos"> 41</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_load_model</span><span class="p">(</span>
 </span><span id="L-42"><a href="#L-42"><span class="linenos"> 42</span></a>        <span class="bp">cls</span><span class="p">,</span>
 </span><span id="L-43"><a href="#L-43"><span class="linenos"> 43</span></a>        <span class="n">model</span><span class="p">:</span> <span class="n">HFModel</span><span class="p">,</span>
 </span><span id="L-44"><a href="#L-44"><span class="linenos"> 44</span></a>        <span class="n">device</span><span class="p">:</span> <span class="n">DeviceType</span><span class="p">,</span>
@@ -127,7 +127,7 @@
 </span><span id="L-62"><a href="#L-62"><span class="linenos"> 62</span></a>        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_model</span><span class="p">[</span><span class="n">key</span><span class="p">]</span>
 </span><span id="L-63"><a href="#L-63"><span class="linenos"> 63</span></a>
 </span><span id="L-64"><a href="#L-64"><span class="linenos"> 64</span></a>    <span class="nd">@classmethod</span>
-</span><span id="L-65"><a href="#L-65"><span class="linenos"> 65</span></a>    <span class="k">def</span> <span class="nf">extract_ssl_embeddings</span><span class="p">(</span>
+</span><span id="L-65"><a href="#L-65"><span class="linenos"> 65</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">extract_ssl_embeddings</span><span class="p">(</span>
 </span><span id="L-66"><a href="#L-66"><span class="linenos"> 66</span></a>        <span class="bp">cls</span><span class="p">,</span>
 </span><span id="L-67"><a href="#L-67"><span class="linenos"> 67</span></a>        <span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">],</span>
 </span><span id="L-68"><a href="#L-68"><span class="linenos"> 68</span></a>        <span class="n">model</span><span class="p">:</span> <span class="n">HFModel</span><span class="p">,</span>
@@ -191,14 +191,14 @@
 
     </div>
     <a class="headerlink" href="#SSLEmbeddingsFactory"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="SSLEmbeddingsFactory-13"><a href="#SSLEmbeddingsFactory-13"><span class="linenos"> 13</span></a><span class="k">class</span> <span class="nc">SSLEmbeddingsFactory</span><span class="p">:</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="SSLEmbeddingsFactory-13"><a href="#SSLEmbeddingsFactory-13"><span class="linenos"> 13</span></a><span class="k">class</span><span class="w"> </span><span class="nc">SSLEmbeddingsFactory</span><span class="p">:</span>
 </span><span id="SSLEmbeddingsFactory-14"><a href="#SSLEmbeddingsFactory-14"><span class="linenos"> 14</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;A factory for managing self-supervised models.&quot;&quot;&quot;</span>
 </span><span id="SSLEmbeddingsFactory-15"><a href="#SSLEmbeddingsFactory-15"><span class="linenos"> 15</span></a>
 </span><span id="SSLEmbeddingsFactory-16"><a href="#SSLEmbeddingsFactory-16"><span class="linenos"> 16</span></a>    <span class="n">_feat_extractor</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">AutoFeatureExtractor</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
 </span><span id="SSLEmbeddingsFactory-17"><a href="#SSLEmbeddingsFactory-17"><span class="linenos"> 17</span></a>    <span class="n">_model</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">AutoModel</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
 </span><span id="SSLEmbeddingsFactory-18"><a href="#SSLEmbeddingsFactory-18"><span class="linenos"> 18</span></a>
 </span><span id="SSLEmbeddingsFactory-19"><a href="#SSLEmbeddingsFactory-19"><span class="linenos"> 19</span></a>    <span class="nd">@classmethod</span>
-</span><span id="SSLEmbeddingsFactory-20"><a href="#SSLEmbeddingsFactory-20"><span class="linenos"> 20</span></a>    <span class="k">def</span> <span class="nf">_get_feature_extractor</span><span class="p">(</span>
+</span><span id="SSLEmbeddingsFactory-20"><a href="#SSLEmbeddingsFactory-20"><span class="linenos"> 20</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_get_feature_extractor</span><span class="p">(</span>
 </span><span id="SSLEmbeddingsFactory-21"><a href="#SSLEmbeddingsFactory-21"><span class="linenos"> 21</span></a>        <span class="bp">cls</span><span class="p">,</span>
 </span><span id="SSLEmbeddingsFactory-22"><a href="#SSLEmbeddingsFactory-22"><span class="linenos"> 22</span></a>        <span class="n">model</span><span class="p">:</span> <span class="n">HFModel</span><span class="p">,</span>
 </span><span id="SSLEmbeddingsFactory-23"><a href="#SSLEmbeddingsFactory-23"><span class="linenos"> 23</span></a>        <span class="n">cache_dir</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;~/&quot;</span><span class="p">,</span>
@@ -220,7 +220,7 @@
 </span><span id="SSLEmbeddingsFactory-39"><a href="#SSLEmbeddingsFactory-39"><span class="linenos"> 39</span></a>        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_feat_extractor</span><span class="p">[</span><span class="n">key</span><span class="p">]</span>
 </span><span id="SSLEmbeddingsFactory-40"><a href="#SSLEmbeddingsFactory-40"><span class="linenos"> 40</span></a>
 </span><span id="SSLEmbeddingsFactory-41"><a href="#SSLEmbeddingsFactory-41"><span class="linenos"> 41</span></a>    <span class="nd">@classmethod</span>
-</span><span id="SSLEmbeddingsFactory-42"><a href="#SSLEmbeddingsFactory-42"><span class="linenos"> 42</span></a>    <span class="k">def</span> <span class="nf">_load_model</span><span class="p">(</span>
+</span><span id="SSLEmbeddingsFactory-42"><a href="#SSLEmbeddingsFactory-42"><span class="linenos"> 42</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_load_model</span><span class="p">(</span>
 </span><span id="SSLEmbeddingsFactory-43"><a href="#SSLEmbeddingsFactory-43"><span class="linenos"> 43</span></a>        <span class="bp">cls</span><span class="p">,</span>
 </span><span id="SSLEmbeddingsFactory-44"><a href="#SSLEmbeddingsFactory-44"><span class="linenos"> 44</span></a>        <span class="n">model</span><span class="p">:</span> <span class="n">HFModel</span><span class="p">,</span>
 </span><span id="SSLEmbeddingsFactory-45"><a href="#SSLEmbeddingsFactory-45"><span class="linenos"> 45</span></a>        <span class="n">device</span><span class="p">:</span> <span class="n">DeviceType</span><span class="p">,</span>
@@ -244,7 +244,7 @@
 </span><span id="SSLEmbeddingsFactory-63"><a href="#SSLEmbeddingsFactory-63"><span class="linenos"> 63</span></a>        <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_model</span><span class="p">[</span><span class="n">key</span><span class="p">]</span>
 </span><span id="SSLEmbeddingsFactory-64"><a href="#SSLEmbeddingsFactory-64"><span class="linenos"> 64</span></a>
 </span><span id="SSLEmbeddingsFactory-65"><a href="#SSLEmbeddingsFactory-65"><span class="linenos"> 65</span></a>    <span class="nd">@classmethod</span>
-</span><span id="SSLEmbeddingsFactory-66"><a href="#SSLEmbeddingsFactory-66"><span class="linenos"> 66</span></a>    <span class="k">def</span> <span class="nf">extract_ssl_embeddings</span><span class="p">(</span>
+</span><span id="SSLEmbeddingsFactory-66"><a href="#SSLEmbeddingsFactory-66"><span class="linenos"> 66</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">extract_ssl_embeddings</span><span class="p">(</span>
 </span><span id="SSLEmbeddingsFactory-67"><a href="#SSLEmbeddingsFactory-67"><span class="linenos"> 67</span></a>        <span class="bp">cls</span><span class="p">,</span>
 </span><span id="SSLEmbeddingsFactory-68"><a href="#SSLEmbeddingsFactory-68"><span class="linenos"> 68</span></a>        <span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">],</span>
 </span><span id="SSLEmbeddingsFactory-69"><a href="#SSLEmbeddingsFactory-69"><span class="linenos"> 69</span></a>        <span class="n">model</span><span class="p">:</span> <span class="n">HFModel</span><span class="p">,</span>
@@ -313,7 +313,7 @@
     </div>
     <a class="headerlink" href="#SSLEmbeddingsFactory.extract_ssl_embeddings"></a>
             <div class="pdoc-code codehilite"><pre><span></span><span id="SSLEmbeddingsFactory.extract_ssl_embeddings-65"><a href="#SSLEmbeddingsFactory.extract_ssl_embeddings-65"><span class="linenos"> 65</span></a>    <span class="nd">@classmethod</span>
-</span><span id="SSLEmbeddingsFactory.extract_ssl_embeddings-66"><a href="#SSLEmbeddingsFactory.extract_ssl_embeddings-66"><span class="linenos"> 66</span></a>    <span class="k">def</span> <span class="nf">extract_ssl_embeddings</span><span class="p">(</span>
+</span><span id="SSLEmbeddingsFactory.extract_ssl_embeddings-66"><a href="#SSLEmbeddingsFactory.extract_ssl_embeddings-66"><span class="linenos"> 66</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">extract_ssl_embeddings</span><span class="p">(</span>
 </span><span id="SSLEmbeddingsFactory.extract_ssl_embeddings-67"><a href="#SSLEmbeddingsFactory.extract_ssl_embeddings-67"><span class="linenos"> 67</span></a>        <span class="bp">cls</span><span class="p">,</span>
 </span><span id="SSLEmbeddingsFactory.extract_ssl_embeddings-68"><a href="#SSLEmbeddingsFactory.extract_ssl_embeddings-68"><span class="linenos"> 68</span></a>        <span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">],</span>
 </span><span id="SSLEmbeddingsFactory.extract_ssl_embeddings-69"><a href="#SSLEmbeddingsFactory.extract_ssl_embeddings-69"><span class="linenos"> 69</span></a>        <span class="n">model</span><span class="p">:</span> <span class="n">HFModel</span><span class="p">,</span>

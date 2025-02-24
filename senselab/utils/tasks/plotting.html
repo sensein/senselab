@@ -62,15 +62,15 @@
 
                         <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">  1</span></a><span class="sd">&quot;&quot;&quot;This module implements plotting methods for utilities.&quot;&quot;&quot;</span>
 </span><span id="L-2"><a href="#L-2"><span class="linenos">  2</span></a>
-</span><span id="L-3"><a href="#L-3"><span class="linenos">  3</span></a><span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">List</span>
+</span><span id="L-3"><a href="#L-3"><span class="linenos">  3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">List</span>
 </span><span id="L-4"><a href="#L-4"><span class="linenos">  4</span></a>
-</span><span id="L-5"><a href="#L-5"><span class="linenos">  5</span></a><span class="kn">import</span> <span class="nn">matplotlib.cm</span> <span class="k">as</span> <span class="nn">cm</span>
-</span><span id="L-6"><a href="#L-6"><span class="linenos">  6</span></a><span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
+</span><span id="L-5"><a href="#L-5"><span class="linenos">  5</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.cm</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cm</span>
+</span><span id="L-6"><a href="#L-6"><span class="linenos">  6</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
 </span><span id="L-7"><a href="#L-7"><span class="linenos">  7</span></a>
-</span><span id="L-8"><a href="#L-8"><span class="linenos">  8</span></a><span class="kn">from</span> <span class="nn">senselab.utils.data_structures</span> <span class="kn">import</span> <span class="n">ScriptLine</span>
+</span><span id="L-8"><a href="#L-8"><span class="linenos">  8</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">senselab.utils.data_structures</span><span class="w"> </span><span class="kn">import</span> <span class="n">ScriptLine</span>
 </span><span id="L-9"><a href="#L-9"><span class="linenos">  9</span></a>
 </span><span id="L-10"><a href="#L-10"><span class="linenos"> 10</span></a>
-</span><span id="L-11"><a href="#L-11"><span class="linenos"> 11</span></a><span class="k">def</span> <span class="nf">plot_transcript</span><span class="p">(</span><span class="n">transcript</span><span class="p">:</span> <span class="n">ScriptLine</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="L-11"><a href="#L-11"><span class="linenos"> 11</span></a><span class="k">def</span><span class="w"> </span><span class="nf">plot_transcript</span><span class="p">(</span><span class="n">transcript</span><span class="p">:</span> <span class="n">ScriptLine</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 </span><span id="L-12"><a href="#L-12"><span class="linenos"> 12</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Plots the transcript visualization over time.</span>
 </span><span id="L-13"><a href="#L-13"><span class="linenos"> 13</span></a>
 </span><span id="L-14"><a href="#L-14"><span class="linenos"> 14</span></a><span class="sd">    Args:</span>
@@ -120,7 +120,7 @@
 </span><span id="L-58"><a href="#L-58"><span class="linenos"> 58</span></a>    <span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
 </span><span id="L-59"><a href="#L-59"><span class="linenos"> 59</span></a>
 </span><span id="L-60"><a href="#L-60"><span class="linenos"> 60</span></a>
-</span><span id="L-61"><a href="#L-61"><span class="linenos"> 61</span></a><span class="k">def</span> <span class="nf">plot_segment</span><span class="p">(</span><span class="n">segments</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">ScriptLine</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="L-61"><a href="#L-61"><span class="linenos"> 61</span></a><span class="k">def</span><span class="w"> </span><span class="nf">plot_segment</span><span class="p">(</span><span class="n">segments</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">ScriptLine</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 </span><span id="L-62"><a href="#L-62"><span class="linenos"> 62</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Plots the segments of the transcript over time.</span>
 </span><span id="L-63"><a href="#L-63"><span class="linenos"> 63</span></a>
 </span><span id="L-64"><a href="#L-64"><span class="linenos"> 64</span></a><span class="sd">    Args:</span>
@@ -186,7 +186,7 @@
 
     </div>
     <a class="headerlink" href="#plot_transcript"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="plot_transcript-12"><a href="#plot_transcript-12"><span class="linenos">12</span></a><span class="k">def</span> <span class="nf">plot_transcript</span><span class="p">(</span><span class="n">transcript</span><span class="p">:</span> <span class="n">ScriptLine</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="plot_transcript-12"><a href="#plot_transcript-12"><span class="linenos">12</span></a><span class="k">def</span><span class="w"> </span><span class="nf">plot_transcript</span><span class="p">(</span><span class="n">transcript</span><span class="p">:</span> <span class="n">ScriptLine</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 </span><span id="plot_transcript-13"><a href="#plot_transcript-13"><span class="linenos">13</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Plots the transcript visualization over time.</span>
 </span><span id="plot_transcript-14"><a href="#plot_transcript-14"><span class="linenos">14</span></a>
 </span><span id="plot_transcript-15"><a href="#plot_transcript-15"><span class="linenos">15</span></a><span class="sd">    Args:</span>
@@ -275,7 +275,7 @@
 
     </div>
     <a class="headerlink" href="#plot_segment"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="plot_segment-62"><a href="#plot_segment-62"><span class="linenos"> 62</span></a><span class="k">def</span> <span class="nf">plot_segment</span><span class="p">(</span><span class="n">segments</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">ScriptLine</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="plot_segment-62"><a href="#plot_segment-62"><span class="linenos"> 62</span></a><span class="k">def</span><span class="w"> </span><span class="nf">plot_segment</span><span class="p">(</span><span class="n">segments</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">ScriptLine</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 </span><span id="plot_segment-63"><a href="#plot_segment-63"><span class="linenos"> 63</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Plots the segments of the transcript over time.</span>
 </span><span id="plot_segment-64"><a href="#plot_segment-64"><span class="linenos"> 64</span></a>
 </span><span id="plot_segment-65"><a href="#plot_segment-65"><span class="linenos"> 65</span></a><span class="sd">    Args:</span>
