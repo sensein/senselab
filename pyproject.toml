@@ -1,17 +1,18 @@
-[tool.poetry]
+[project]
 name = "senselab"
 version = "0.0.1"
 description = "Senselab is a Python package that simplifies building pipelines for speech and voice analysis."
 authors = [
-  "Fabio Catania <fabiocat@mit.edu>",
-  "Satra Ghosh <satra@mit.edu>"
+  { name = "Fabio Catania", email = "fabiocat@mit.edu" },
+  { name = "Satra Ghosh", email = "satra@mit.edu" }
 ]
 maintainers = [
-  "Fabio Catania <fabiocat@mit.edu>",
-  "Satra Ghosh <satra@mit.edu>"
+  { name = "Fabio Catania", email = "fabiocat@mit.edu" },
+  { name = "Satra Ghosh", email = "satra@mit.edu" }
 ]
-license = "Apache-2.0"
+license = { text = "Apache-2.0" }
 readme = "README.md"
+requires-python = ">=3.10,<3.13"
 homepage = "https://github.com/sensein/senselab"
 repository = "https://github.com/sensein/senselab"
 documentation = "https://sensein.github.io/senselab"
@@ -24,7 +25,10 @@ classifiers = [
   "License :: OSI Approved :: Apache Software License",
   "Operating System :: OS Independent"
 ]
+
+[tool.poetry]
 packages = [{include = "senselab", from = "src"}]
+requires-poetry = ">=2.0"
 
 [tool.poetry.dependencies]
 python = ">=3.10,<3.13"
@@ -83,7 +87,7 @@ optional = true
 [tool.poetry.group.docs.dependencies]
 pdoc = "~=15.0"
 
-[tool.poetry.scripts]
+[poetry.scripts]
 senselab-cli = "senselab.cli:main"
 
 [tool.pytest.ini_options]
@@ -131,10 +135,7 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["ANN", "D", "E", "F", "I"]
-ignore = [
-  "ANN101",  # self should not be annotated.
-  "ANN102"  # cls should not be annotated.
-]
+ignore = ["F401"]
 fixable = ["ALL"]
 unfixable = []
 dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
@@ -168,5 +169,5 @@ skip = [
 ignore-words-list = ["senselab", "nd", "astroid", "wil", "SER", "te"]
 
 [build-system]
-requires = ["poetry-core>=1.0.0", "poetry-dynamic-versioning>=1.0.0,<2.0.0"]
-build-backend = "poetry_dynamic_versioning.backend"
+requires = ["poetry-core>=2.0", "poetry-dynamic-versioning>=1.0.0,<2.0.0"]
+build-backend = "poetry.core.masonry.api"
