@@ -1,3 +1,59 @@
+# 0.29.1 (Mon Feb 24 2025)
+
+#### 🐛 Bug Fix
+
+- adding python-ffmpeg to the dependencies and updating audiomentations version [#254](https://github.com/sensein/senselab/pull/254) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.29.0 (Tue Feb 04 2025)
+
+#### 🚀 Enhancement
+
+- Created SER tutorial [#201](https://github.com/sensein/senselab/pull/201) (jordanwilke@dhcp-10-31-174-110.dyn.MIT.EDU [@wilke0818](https://github.com/wilke0818) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 7
+
+- [@wilke0818](https://github.com/wilke0818)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Jordan Wilke (jordanwilke@dhcp-10-29-150-110.dyn.mit.edu)
+- Jordan Wilke (jordanwilke@dhcp-10-29-183-7.dyn.mit.edu)
+- Jordan Wilke (jordanwilke@dhcp-10-29-183-7.dyn.MIT.EDU)
+- Jordan Wilke (jordanwilke@dhcp-10-31-174-110.dyn.MIT.EDU)
+- Jordan Wilke (jordanwilke@Jordans-MacBook-Air.local)
+
+---
+
+# 0.28.3 (Tue Feb 04 2025)
+
+#### 🐛 Bug Fix
+
+- Fix/workaround to Pydra serialization issue while keeping torch up to date [#248](https://github.com/sensein/senselab/pull/248) (jordanwilke@Jordans-MacBook-Air.local [@fabiocat93](https://github.com/fabiocat93) [@wilke0818](https://github.com/wilke0818))
+
+#### Authors: 3
+
+- [@wilke0818](https://github.com/wilke0818)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Jordan Wilke (jordanwilke@Jordans-MacBook-Air.local)
+
+---
+
+# 0.28.2 (Mon Feb 03 2025)
+
+#### 🐛 Bug Fix
+
+- Fixing enhancement with segment duration < kernel size [#250](https://github.com/sensein/senselab/pull/250) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.28.1 (Sat Feb 01 2025)
 
 #### 🐛 Bug Fix

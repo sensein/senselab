@@ -53,7 +53,7 @@ def test_audio_data_augmentation_with_torch_audiomentations() -> None:
 
 def test_audio_data_augmentation_with_audiomentations(mono_audio_sample: Audio, stereo_audio_sample: Audio) -> None:
     """Test data augmentations using the new Audio data types with audiomentations."""
-    apply_augmentation = AudiomentationsCompose(transforms=[Gain(min_gain_in_db=14.99, max_gain_in_db=15, p=1.0)])
+    apply_augmentation = AudiomentationsCompose(transforms=[Gain(min_gain_db=14.99, max_gain_db=15, p=1.0)])
 
     # Augmenting mono and stereo audio clips
     augmented_audios = augment_audios([mono_audio_sample, stereo_audio_sample], apply_augmentation)

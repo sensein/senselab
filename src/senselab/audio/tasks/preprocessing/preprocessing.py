@@ -246,7 +246,7 @@ def concatenate_audios(audios: List[Audio]) -> Audio:
         if audio.waveform.shape[0] != num_channels:
             raise ValueError("All audios must have the same number of channels (mono or stereo) to concatenate.")
 
-    concatenated_waveform = torch.cat([audio.waveform for audio in audios], dim=1)
+    concatenated_waveform = torch.cat([audio.waveform.cpu() for audio in audios], dim=1)
 
     # TODO: do we want to concatenate metadata? TBD
 
