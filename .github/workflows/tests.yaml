@@ -34,10 +34,8 @@ jobs:
       run: brew install ffmpeg
       shell: bash
     - name: Install Poetry
-      uses: snok/install-poetry@v1
-      with:
-        virtualenvs-create: true
-        virtualenvs-in-project: true
+      run: pipx install poetry==2.1.1
+      shell: bash
     - name: Install dependencies with Poetry
       run: |
         poetry install --with dev
@@ -84,10 +82,8 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
     - name: Install Poetry
-      uses: snok/install-poetry@v1
-      with:
-        virtualenvs-create: true
-        virtualenvs-in-project: true
+      run: pipx install poetry==2.1.1
+      shell: bash
     - name: Install dependencies with Poetry
       run: |
         poetry install --with dev
@@ -162,10 +158,8 @@ jobs:
       run: sudo apt-get update && sudo apt-get install -y ffmpeg
       shell: bash
     - name: Install Poetry
-      uses: snok/install-poetry@v1
-      with:
-        virtualenvs-create: true
-        virtualenvs-in-project: true
+      run: pipx install poetry==2.1.1
+      shell: bash
     - name: Check available space
       run: |
         df -h
@@ -305,10 +299,8 @@ jobs:
       run: sudo apt-get update && sudo apt-get install -y ffmpeg
       shell: bash
     - name: Install Poetry
-      uses: snok/install-poetry@v1
-      with:
-        virtualenvs-create: true
-        virtualenvs-in-project: true
+      run: pipx install poetry==2.1.1
+      shell: bash
     - name: Check available space
       run: |
         df -h
@@ -449,10 +441,8 @@ jobs:
       run: sudo apt-get update && sudo apt-get install -y ffmpeg
       shell: bash
     - name: Install Poetry
-      uses: snok/install-poetry@v1
-      with:
-        virtualenvs-create: true
-        virtualenvs-in-project: true
+      run: pipx install poetry==2.1.1
+      shell: bash
     - name: Check available space
       run: |
         df -h
