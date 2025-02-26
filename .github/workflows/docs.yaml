@@ -45,7 +45,7 @@ jobs:
         pipx ensurepath
       shell: bash
     - name: Install poetry
-      run: pipx install poetry
+      run: pipx install poetry==2.1.1
       shell: bash
     - name: Install dependencies with Poetry
       run: |

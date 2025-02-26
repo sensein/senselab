@@ -33,7 +33,7 @@ requires-poetry = ">=2.0"
 [tool.poetry.dependencies]
 python = ">=3.10,<3.13"
 datasets = "~=3"
-torch = "~=2.6"
+torch = { version = "~=2.6", markers = "sys_platform != 'darwin' or platform_machine == 'arm64'" }
 torchvision = "~=0.20"
 torchaudio = "~=2.5"
 transformers = "~=4.48"
