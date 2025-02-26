@@ -11,18 +11,32 @@ BIOACOUSTIC_TASK_TAXONOMY = {
                     "sigh": None,
                 },
                 "exhalation": {
-                    "cough": {"voluntary": None, "reflexive": None},
+                    "cough": {
+                        "voluntary": None,
+                        "reflexive": None,
+                    },
                 },
-                "inhalation": {"sniff": None, "gasp": None},
+                "inhalation": {
+                    "sniff": None,
+                    "gasp": None,
+                },
             },
             "vocalization": {
                 "speech": {
                     "spontaneous_speech": None,
                     "read_speech": None,
-                    "repetitive_speech": {"diadochokinesis": None, "counting": None},
+                    "repetitive_speech": {
+                        "diadochokinesis": None,
+                        "counting": None,
+                    },
                     "sustained_phonation": None,
                 },
-                "non_speech": {"laughter": None, "crying": None, "humming": None, "throat_clearing": None},
+                "non_speech": {
+                    "laughter": None,
+                    "crying": None,
+                    "humming": None,
+                    "throat_clearing": None,
+                },
             },
         }
     }
