@@ -1,7 +1,7 @@
 """Taxonomy of bioacoustic tasks emphasizing human tasks."""
 
 BIOACOUSTIC_TASK_TREE = {
-    "bioacoustic_task": {
+    "bioacoustic": {
         "human": {
             "respiration": {
                 "breathing": {
