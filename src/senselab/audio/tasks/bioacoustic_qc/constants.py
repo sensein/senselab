@@ -1,5 +1,7 @@
 """Taxonomy of bioacoustic tasks emphasizing human tasks."""
 
+from senselab.audio.tasks.bioacoustic_qc.checks import audio_intensity_positive_check, audio_length_positive_check
+
 BIOACOUSTIC_TASK_TREE = {
     "bioacoustic": {
         "checks": None,
@@ -73,4 +75,11 @@ BIOACOUSTIC_TASK_TREE = {
             }
         },
     }
+}
+
+
+COMPUTATIONAL_COMPLEXITY_TO_CHECK = {
+    "low": [audio_intensity_positive_check, audio_length_positive_check],
+    "medium": [],
+    "high": [],
 }

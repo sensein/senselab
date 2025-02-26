@@ -5,7 +5,7 @@ import torch
 from senselab.audio.data_structures import Audio
 
 
-def check_audio_length(audio: Audio) -> bool:
+def audio_length_positive_check(audio: Audio) -> bool:
     """Checks if an Audio object has a positive length.
 
     Args:
@@ -23,7 +23,7 @@ def check_audio_length(audio: Audio) -> bool:
     return audio.waveform.shape[1] > 0
 
 
-def check_audio_intensity(audio: Audio) -> bool:
+def audio_intensity_positive_check(audio: Audio) -> bool:
     """Checks if an Audio object has nonzero intensity.
 
     Args:
