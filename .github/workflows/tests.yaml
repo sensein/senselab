@@ -38,7 +38,9 @@ jobs:
       shell: bash
     - name: Install dependencies with Poetry
       run: |
+        poetry env use ${{ matrix.python-version }}
         poetry install --with dev
+        poetry env info
       shell: bash
     - name: check files
       run: |
@@ -86,7 +88,9 @@ jobs:
       shell: bash
     - name: Install dependencies with Poetry
       run: |
+        poetry env use ${{ matrix.python-version }}
         poetry install --with dev
+        poetry env info
       shell: bash
     - name: Install pre-commit
       run: pipx install pre-commit
@@ -156,6 +160,15 @@ jobs:
     - name: Install ffmpeg (Ubuntu)
       if: startsWith(matrix.os, 'ubuntu')
       run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      shell: bash
+    - name: Install pipx
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y python3-pip
+        python3 -m pip install --user pipx
+        python3 -m pipx ensurepath
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+        source ~/.bashrc
       shell: bash
     - name: Install Poetry
       run: pipx install poetry==2.1.1
@@ -298,6 +311,15 @@ jobs:
       if: startsWith(matrix.os, 'ubuntu')
       run: sudo apt-get update && sudo apt-get install -y ffmpeg
       shell: bash
+    - name: Install pipx
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y python3-pip
+        python3 -m pip install --user pipx
+        python3 -m pipx ensurepath
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+        source ~/.bashrc
+      shell: bash
     - name: Install Poetry
       run: pipx install poetry==2.1.1
       shell: bash
@@ -439,6 +461,15 @@ jobs:
     - name: Install ffmpeg (Ubuntu)
       if: startsWith(matrix.os, 'ubuntu')
       run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      shell: bash
+    - name: Install pipx
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y python3-pip
+        python3 -m pip install --user pipx
+        python3 -m pipx ensurepath
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+        source ~/.bashrc
       shell: bash
     - name: Install Poetry
       run: pipx install poetry==2.1.1
