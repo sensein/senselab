@@ -32,7 +32,7 @@ def taxonomy_subtree_to_pydra_workflow(subtree: Dict) -> Workflow:
     pass
 
 
-def check_quality(audios: List[Audio]) -> None:
+def check_quality(audios: List[Audio], complexity: str = "low") -> None:
     """Runs quality checks on audio data."""
     # audios_to_task_dict
     # for each key in task_dict:
