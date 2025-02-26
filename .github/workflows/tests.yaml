@@ -167,8 +167,14 @@ jobs:
         sudo apt-get install -y python3-pip
         python3 -m pip install --user pipx
         python3 -m pipx ensurepath
+        export PATH="$HOME/.local/bin:$PATH"
         echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.profile
         source ~/.bashrc
+        source ~/.profile
+        echo $PATH
+        which pipx
+        pipx --version
       shell: bash
     - name: Install Poetry
       run: pipx install poetry==2.1.1
@@ -317,8 +323,14 @@ jobs:
         sudo apt-get install -y python3-pip
         python3 -m pip install --user pipx
         python3 -m pipx ensurepath
+        export PATH="$HOME/.local/bin:$PATH"
         echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.profile
         source ~/.bashrc
+        source ~/.profile
+        echo $PATH
+        which pipx
+        pipx --version
       shell: bash
     - name: Install Poetry
       run: pipx install poetry==2.1.1
@@ -468,8 +480,14 @@ jobs:
         sudo apt-get install -y python3-pip
         python3 -m pip install --user pipx
         python3 -m pipx ensurepath
+        export PATH="$HOME/.local/bin:$PATH"
         echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.profile
         source ~/.bashrc
+        source ~/.profile
+        echo $PATH
+        which pipx
+        pipx --version
       shell: bash
     - name: Install Poetry
       run: pipx install poetry==2.1.1
