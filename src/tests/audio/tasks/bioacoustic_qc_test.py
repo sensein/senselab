@@ -4,7 +4,7 @@ from collections import Counter
 
 import pytest
 
-from senselab.audio.tasks.bioacoustic_qc.taxonomy import BIOACOUSTIC_TASK_TREE
+from senselab.audio.tasks.bioacoustic_qc.constants import BIOACOUSTIC_TASK_TREE
 
 
 @pytest.mark.parametrize(
