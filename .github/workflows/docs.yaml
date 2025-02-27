@@ -5,13 +5,9 @@ permissions:
   pages: write
   id-token: write
 
-#on:
-#  release:
-#    types: [published]
-
 on:
-  pull_request:
-
+  release:
+    types: [published]
 
 jobs:
   build-docs:
