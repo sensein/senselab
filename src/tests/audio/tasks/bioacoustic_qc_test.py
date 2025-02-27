@@ -6,7 +6,12 @@ from typing import Dict, List
 import pytest
 
 from senselab.audio.data_structures import Audio
-from senselab.audio.tasks.bioacoustic_qc import audios_to_task_dict, task_to_taxonomy_tree_path
+from senselab.audio.tasks.bioacoustic_qc import (
+    audios_to_task_dict,
+    task_dict_to_dataset_taxonomy_subtree,
+    task_to_taxonomy_tree_path,
+)
+from senselab.audio.tasks.bioacoustic_qc.checks import audio_intensity_positive_check, audio_length_positive_check
 from senselab.audio.tasks.bioacoustic_qc.constants import BIOACOUSTIC_TASK_TREE
 
 
@@ -103,3 +108,100 @@ def test_task_to_taxonomy_tree_path() -> None:
     # Test task not in taxonomy
     with pytest.raises(ValueError, match="Task 'nonexistent_task' not found in taxonomy tree."):
         task_to_taxonomy_tree_path("nonexistent_task")
+
+
+def test_task_dict_to_dataset_taxonomy_subtree(mono_audio_sample: Audio) -> None:
+    """Tests that the function correctly prunes the taxonomy based on dataset tasks."""
+    # Case 1: Valid task in the taxonomy (should return a pruned tree with 'sigh')
+    task_dict = {"sigh": [mono_audio_sample]}
+    expected_subtree = {
+        "bioacoustic": {
+            "checks": [audio_intensity_positive_check, audio_length_positive_check],
+            "subclass": {
+                "human": {
+                    "checks": None,
+                    "subclass": {
+                        "respiration": {
+                            "checks": None,
+                            "subclass": {
+                                "breathing": {"checks": None, "subclass": {"sigh": {"checks": None, "subclass": None}}}
+                            },
+                        }
+                    },
+                }
+            },
+        }
+    }
+    pruned_tree = task_dict_to_dataset_taxonomy_subtree(task_dict)
+    assert pruned_tree == expected_subtree, f"Expected {expected_subtree}, but got {pruned_tree}"
+
+    # Case 2: Task not in the taxonomy (should raise ValueError)
+    task_dict = {"nonexistent_task": [mono_audio_sample]}
+    with pytest.raises(ValueError, match="Task 'nonexistent_task' not found in taxonomy tree."):
+        task_dict_to_dataset_taxonomy_subtree(task_dict)
+
+    # Case 3: Empty task_dict (should return 'bioacoustic' with empty subclass)
+    task_dict = {}
+    expected_empty_tree = {
+        "bioacoustic": {"checks": [audio_intensity_positive_check, audio_length_positive_check], "subclass": None}
+    }
+    pruned_tree = task_dict_to_dataset_taxonomy_subtree(task_dict)
+    assert pruned_tree == expected_empty_tree, f"Expected {expected_empty_tree}, but got {pruned_tree}"
+
+    # Case 4: Multiple valid tasks ('sigh' and 'cough')
+    task_dict = {"sigh": [mono_audio_sample], "cough": [mono_audio_sample]}
+    expected_subtree_multiple = {
+        "bioacoustic": {
+            "checks": [audio_intensity_positive_check, audio_length_positive_check],
+            "subclass": {
+                "human": {
+                    "checks": None,
+                    "subclass": {
+                        "respiration": {
+                            "checks": None,
+                            "subclass": {
+                                "breathing": {"checks": None, "subclass": {"sigh": {"checks": None, "subclass": None}}},
+                                "exhalation": {
+                                    "checks": None,
+                                    "subclass": {"cough": {"checks": None, "subclass": None}},
+                                },
+                            },
+                        }
+                    },
+                }
+            },
+        }
+    }
+    pruned_tree = task_dict_to_dataset_taxonomy_subtree(task_dict)
+    assert pruned_tree == expected_subtree_multiple, f"Expected {expected_subtree_multiple}, but got {pruned_tree}"
+
+    # Case 5: Deeply nested task ('voluntary cough')
+    task_dict = {"voluntary": [mono_audio_sample]}
+    expected_subtree_deep = {
+        "bioacoustic": {
+            "checks": [audio_intensity_positive_check, audio_length_positive_check],
+            "subclass": {
+                "human": {
+                    "checks": None,
+                    "subclass": {
+                        "respiration": {
+                            "checks": None,
+                            "subclass": {
+                                "exhalation": {
+                                    "checks": None,
+                                    "subclass": {
+                                        "cough": {
+                                            "checks": None,
+                                            "subclass": {"voluntary": {"checks": None, "subclass": None}},
+                                        }
+                                    },
+                                }
+                            },
+                        }
+                    },
+                }
+            },
+        }
+    }
+    pruned_tree = task_dict_to_dataset_taxonomy_subtree(task_dict)
+    assert pruned_tree == expected_subtree_deep, f"Expected {expected_subtree_deep}, but got {pruned_tree}"
