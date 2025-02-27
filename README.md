@@ -12,6 +12,24 @@ Welcome to ```senselab```! This is a Python package for streamlining the process
 
 **Caution:**: this package is still under development and may change rapidly over the next few weeks.
 
+## ⚠️ System Requirements
+**If on macOS, this package requires an ARM64 architecture** due to PyTorch 2.2.2+ dropping support for x86-64 on macOS.
+
+❌ Unsupported systems include:
+- macOS (Intel x86-64)
+- Other platforms where dependencies are unavailable
+
+To check your system compatibility, please run this command:
+```bash
+python -c "import platform; print(platform.machine())"
+```
+
+If the output is:
+- "arm64" → ✅ Your system is compatible.
+- "x86_64" → ❌ Your system is not supported.
+
+If you attempt to install this package on an unsupported system, the installation or execution will fail.
+
 ## Installation
 Install this package via:
 

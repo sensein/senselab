@@ -1,17 +1,18 @@
-[tool.poetry]
+[project]
 name = "senselab"
-version = "0.0.1"
+dynamic = ["version"]
 description = "Senselab is a Python package that simplifies building pipelines for speech and voice analysis."
 authors = [
-  "Fabio Catania <fabiocat@mit.edu>",
-  "Satra Ghosh <satra@mit.edu>"
+  {name = "Fabio Catania", email = "fabiocat@mit.edu"},
+  {name = "Satra Ghosh", email = "satra@mit.edu"}
 ]
 maintainers = [
-  "Fabio Catania <fabiocat@mit.edu>",
-  "Satra Ghosh <satra@mit.edu>"
+  {name = "Fabio Catania", email = "fabiocat@mit.edu"},
+  {name = "Satra Ghosh", email = "satra@mit.edu"}
 ]
-license = "Apache-2.0"
+license = {text = "Apache-2.0"}
 readme = "README.md"
+requires-python = ">=3.10,<3.13"
 homepage = "https://github.com/sensein/senselab"
 repository = "https://github.com/sensein/senselab"
 documentation = "https://sensein.github.io/senselab"
@@ -24,12 +25,16 @@ classifiers = [
   "License :: OSI Approved :: Apache Software License",
   "Operating System :: OS Independent"
 ]
+
+[tool.poetry]
 packages = [{include = "senselab", from = "src"}]
+requires-poetry = ">=2.0"
+version = "0.0.0"
 
 [tool.poetry.dependencies]
 python = ">=3.10,<3.13"
 datasets = "~=3"
-torch = "~=2.6"
+torch = {version = "~=2.6", markers = "sys_platform != 'darwin' or platform_machine == 'arm64'"}
 torchvision = "~=0.20"
 torchaudio = "~=2.5"
 transformers = "~=4.48"
@@ -83,8 +88,8 @@ optional = true
 [tool.poetry.group.docs.dependencies]
 pdoc = "~=15.0"
 
-[tool.poetry.scripts]
-senselab-cli = "senselab.cli:main"
+[tool.poetry.requires-plugins]
+poetry-dynamic-versioning = {version = ">=1.0.0,<2.0.0", extras = ["plugin"]}
 
 [tool.pytest.ini_options]
 pythonpath = [
@@ -131,10 +136,7 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["ANN", "D", "E", "F", "I"]
-ignore = [
-  "ANN101",  # self should not be annotated.
-  "ANN102"  # cls should not be annotated.
-]
+ignore = ["ANN101", "ANN102", "F401"]
 fixable = ["ALL"]
 unfixable = []
 dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
@@ -167,6 +169,9 @@ skip = [
 ]
 ignore-words-list = ["senselab", "nd", "astroid", "wil", "SER", "te"]
 
+[poetry.scripts]
+senselab-cli = "senselab.cli:main"
+
 [build-system]
-requires = ["poetry-core>=1.0.0", "poetry-dynamic-versioning>=1.0.0,<2.0.0"]
+requires = ["poetry-core>=2.0", "poetry-dynamic-versioning>=1.0.0,<2.0.0"]
 build-backend = "poetry_dynamic_versioning.backend"
