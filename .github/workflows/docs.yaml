@@ -5,9 +5,13 @@ permissions:
   pages: write
   id-token: write
 
+#on:
+#  release:
+#    types: [published]
+
 on:
-  release:
-    types: [published]
+  pull_request:
+
 
 jobs:
   build-docs:
@@ -30,9 +34,6 @@ jobs:
     - uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-    - name: Install ffmpeg (Ubuntu)
-      if: startsWith(matrix.os, 'ubuntu')
-      run: sudo apt-get update && sudo apt-get install -y ffmpeg
     - name: Install poetry
       run: |
         which python
