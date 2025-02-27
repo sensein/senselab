@@ -1,3 +1,15 @@
+# 0.30.0 (Thu Feb 27 2025)
+
+#### 🚀 Enhancement
+
+- migrating to poetry 2 and ensuring arm arch on mac [#255](https://github.com/sensein/senselab/pull/255) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.29.1 (Mon Feb 24 2025)
 
 #### 🐛 Bug Fix
