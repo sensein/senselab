@@ -6,7 +6,7 @@ from typing import Dict, List
 import pytest
 
 from senselab.audio.data_structures import Audio
-from senselab.audio.tasks.bioacoustic_qc import audios_to_task_dict
+from senselab.audio.tasks.bioacoustic_qc import audios_to_task_dict, task_to_taxonomy_tree_path
 from senselab.audio.tasks.bioacoustic_qc.constants import BIOACOUSTIC_TASK_TREE
 
 
@@ -70,3 +70,36 @@ def test_no_duplicate_subclass_keys(taxonomy_tree: Dict) -> None:
     duplicates = {key: count for key, count in subclass_counts.items() if count > 1}
 
     assert not duplicates, f"Duplicate subclass keys found: {duplicates}"
+
+
+def test_task_to_taxonomy_tree_path() -> None:
+    """Tests that the function correctly retrieves the taxonomy path for a given task."""
+    # Test valid task paths
+    assert task_to_taxonomy_tree_path("sigh") == [
+        "bioacoustic",
+        "human",
+        "respiration",
+        "breathing",
+        "sigh",
+    ], "Incorrect path for 'sigh'"
+
+    assert task_to_taxonomy_tree_path("cough") == [
+        "bioacoustic",
+        "human",
+        "respiration",
+        "exhalation",
+        "cough",
+    ], "Incorrect path for 'cough'"
+
+    assert task_to_taxonomy_tree_path("diadochokinesis") == [
+        "bioacoustic",
+        "human",
+        "vocalization",
+        "speech",
+        "repetitive_speech",
+        "diadochokinesis",
+    ], "Incorrect path for 'diadochokinesis'"
+
+    # Test task not in taxonomy
+    with pytest.raises(ValueError, match="Task 'nonexistent_task' not found in taxonomy tree."):
+        task_to_taxonomy_tree_path("nonexistent_task")
