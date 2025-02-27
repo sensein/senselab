@@ -34,7 +34,7 @@ jobs:
       run: brew install ffmpeg
       shell: bash
     - name: Install Poetry
-      run: pipx install poetry==2.1.1
+      run: pip install poetry==2.1.1
       shell: bash
     - name: Install dependencies with Poetry
       run: |
@@ -84,7 +84,7 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
     - name: Install Poetry
-      run: pipx install poetry==2.1.1
+      run: pip install poetry==2.1.1
       shell: bash
     - name: Install dependencies with Poetry
       run: |
@@ -93,7 +93,7 @@ jobs:
         poetry env info
       shell: bash
     - name: Install pre-commit
-      run: pipx install pre-commit
+      run: pip install pre-commit
       shell: bash
     - name: Run pre-commit
       run: |
@@ -162,6 +162,8 @@ jobs:
       shell: bash
     - name: Install Poetry
       run: |
+        which python
+        python --version
         pip install poetry==2.1.1
         which poetry
         poetry --version
@@ -184,12 +186,6 @@ jobs:
         cd senselab
         poetry env use ${{ matrix.python-version }}
         poetry install --with dev
-      shell: bash
-    - name: Check poetry info
-      run: |
-        cd senselab
-        poetry env info
-        poetry --version
       shell: bash
     - name: Check NVIDIA SMI details
       run: |
@@ -301,36 +297,20 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-    - name: Install ffmpeg (Ubuntu)
-      if: startsWith(matrix.os, 'ubuntu')
+    - name: Install ffmpeg
       run: sudo apt-get update && sudo apt-get install -y ffmpeg
       shell: bash
-    - name: Install pipx
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y python3-pip
-        python3 -m pip install --user pipx
-        python3 -m pipx ensurepath
-        export PATH="$HOME/.local/bin:$PATH"
-        echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-        echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.profile
-        source ~/.bashrc
-        source ~/.profile
-        echo $PATH
-        which pipx
-        pipx --version
-      shell: bash
     - name: Install Poetry
-      run: python -m pipx install poetry==2.1.1
+      run: |
+        which python
+        python --version
+        pip install poetry==2.1.1
+        which poetry
+        poetry --version
       shell: bash
     - name: Check available space
       run: |
         df -h
-      shell: bash
-    - name: Echo python info
-      run: |
-        python --version
-        which python
       shell: bash
     - name: Copy senselab directory to current directory
       run: |
@@ -338,21 +318,21 @@ jobs:
     - name: Install dependencies with Poetry
       run: |
         cd senselab
-        python -m poetry env use ${{ matrix.python-version }}
-        python -m poetry install --with dev
+        poetry env use ${{ matrix.python-version }}
+        poetry install --with dev
       shell: bash
     - name: Check poetry info
       run: |
         cd senselab
-        python -m poetry env info
-        python -m poetry --version
+        poetry env info
+        poetry --version
       shell: bash
     - name: Check NVIDIA SMI details
       run: |
         cd senselab
-        python -m poetry run nvidia-smi
-        python -m poetry run nvidia-smi -L
-        python -m poetry run nvidia-smi -q -d Memory
+        poetry run nvidia-smi
+        poetry run nvidia-smi -L
+        poetry run nvidia-smi -q -d Memory
       shell: bash
     - name: Prepare cache folder for pytest
       run: mkdir -p $WORKING_DIR/pytest/temp
@@ -363,7 +343,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: >
-        cd senselab && python -m poetry run pytest \
+        cd senselab && poetry run pytest \
           --rootdir=$WORKING_DIR/pytest \
           --basetemp=$WORKING_DIR/pytest/temp \
           --junitxml=pytest.xml \
@@ -458,36 +438,20 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-    - name: Install ffmpeg (Ubuntu)
-      if: startsWith(matrix.os, 'ubuntu')
+    - name: Install ffmpeg
       run: sudo apt-get update && sudo apt-get install -y ffmpeg
       shell: bash
-    - name: Install pipx
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y python3-pip
-        python3 -m pip install --user pipx
-        python3 -m pipx ensurepath
-        export PATH="$HOME/.local/bin:$PATH"
-        echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-        echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.profile
-        source ~/.bashrc
-        source ~/.profile
-        echo $PATH
-        which pipx
-        pipx --version
-      shell: bash
     - name: Install Poetry
-      run: python -m pipx install poetry==2.1.1
+      run: |
+        which python
+        python --version
+        pip install poetry==2.1.1
+        which poetry
+        poetry --version
       shell: bash
     - name: Check available space
       run: |
         df -h
-      shell: bash
-    - name: Echo python info
-      run: |
-        python --version
-        which python
       shell: bash
     - name: Copy senselab directory to current directory
       run: |
@@ -495,21 +459,21 @@ jobs:
     - name: Install dependencies with Poetry
       run: |
         cd senselab
-        python -m poetry env use ${{ matrix.python-version }}
-        python -m poetry install --with dev
+        poetry env use ${{ matrix.python-version }}
+        poetry install --with dev
       shell: bash
     - name: Check poetry info
       run: |
         cd senselab
-        python -m poetry env info
-        python -m poetry --version
+        poetry env info
+        poetry --version
       shell: bash
     - name: Check NVIDIA SMI details
       run: |
         cd senselab
-        python -m poetry run nvidia-smi
-        python -m poetry run nvidia-smi -L
-        python -m poetry run nvidia-smi -q -d Memory
+        poetry run nvidia-smi
+        poetry run nvidia-smi -L
+        poetry run nvidia-smi -q -d Memory
       shell: bash
     - name: Prepare cache folder for pytest
       run: mkdir -p $WORKING_DIR/pytest/temp
@@ -520,7 +484,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: >
-        cd senselab && python -m poetry run pytest \
+        cd senselab && poetry run pytest \
           --rootdir=$WORKING_DIR/pytest \
           --basetemp=$WORKING_DIR/pytest/temp \
           --junitxml=pytest.xml \
