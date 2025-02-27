@@ -8,11 +8,19 @@ from senselab.audio.data_structures import Audio
 
 
 def audios_to_task_dict(audios: List[Audio]) -> Dict[str, List[Audio]]:
-    """Creates a dict of tasks to audios."""
-    # for each audio:
-    # if task type not in audio
-    # append to "bioacoustic"
-    pass
+    """Creates a dictionary mapping tasks to their corresponding Audio objects.
+
+    If an Audio object does not have a task type in its metadata, it is assigned to "bioacoustic".
+    """
+    task_dict: Dict[str, List[Audio]] = {}
+
+    for audio in audios:
+        task = audio.metadata.get("task", "bioacoustic")  # Default to "bioacoustic" if no task
+        if task not in task_dict:
+            task_dict[task] = []
+        task_dict[task].append(audio)
+
+    return task_dict
 
 
 def tasks_to_taxonomy_tree_path(task: str) -> List[str]:
