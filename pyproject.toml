@@ -1,6 +1,6 @@
 [project]
 name = "senselab"
-version = "0.0.1"
+dynamic = ["version"]
 description = "Senselab is a Python package that simplifies building pipelines for speech and voice analysis."
 authors = [
   {name = "Fabio Catania", email = "fabiocat@mit.edu"},
@@ -27,6 +27,7 @@ classifiers = [
 ]
 
 [tool.poetry]
+version = "0.0.0"
 packages = [{include = "senselab", from = "src"}]
 requires-poetry = ">=2.0"
 
@@ -86,6 +87,9 @@ optional = true
 
 [tool.poetry.group.docs.dependencies]
 pdoc = "~=15.0"
+
+[tool.poetry.requires-plugins]
+poetry-dynamic-versioning = {version = ">=1.0.0,<2.0.0", extras = ["plugin"]}
 
 [tool.pytest.ini_options]
 pythonpath = [
