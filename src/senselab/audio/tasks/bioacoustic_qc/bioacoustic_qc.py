@@ -10,7 +10,22 @@ from senselab.audio.data_structures import Audio
 def audios_to_task_dict(audios: List[Audio]) -> Dict[str, List[Audio]]:
     """Creates a dictionary mapping tasks to their corresponding Audio objects.
 
-    If an Audio object does not have a task type in its metadata, it is assigned to "bioacoustic".
+    Each Audio object is assigned to a task category based on the `"task"` field in its metadata.
+    If an Audio object does not contain a `"task"` field, it is categorized under `"bioacoustic"`.
+
+    Args:
+        audios (List[Audio]): A list of Audio objects.
+
+    Returns:
+        Dict[str, List[Audio]]: A dictionary where keys are task names and values are lists of
+        Audio objects belonging to that task.
+
+    Example:
+        >>> audio1 = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000, metadata={"task": "breathing"})
+        >>> audio2 = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000, metadata={"task": "cough"})
+        >>> audio3 = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000, metadata={})  # No task
+        >>> audios_to_task_dict([audio1, audio2, audio3])
+        {'breathing': [audio1], 'cough': [audio2], 'bioacoustic': [audio3]}
     """
     task_dict: Dict[str, List[Audio]] = {}
 
