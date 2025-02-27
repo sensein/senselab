@@ -157,11 +157,10 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-    - name: Echo os info
+    - name: Echo OS Info
       run: |
-        echo ${{ matrix.os }}
-        echo ${{ matrix.architecture }}
-        echo startsWith(matrix.os, 'ubuntu')
+        echo "${{ matrix.os }}"
+        echo "${{ matrix.architecture }}"
       shell: bash
     - name: Install ffmpeg (Ubuntu)
       if: startsWith(matrix.os, 'ubuntu')
@@ -193,6 +192,7 @@ jobs:
       run: |
         python --version
         which python
+        which poetry
       shell: bash
     - name: Copy senselab directory to current directory
       run: |
@@ -200,21 +200,21 @@ jobs:
     - name: Install dependencies with Poetry
       run: |
         cd senselab
-        python -m poetry env use ${{ matrix.python-version }}
-        python -m poetry install --with dev
+        poetry env use ${{ matrix.python-version }}
+        poetry install --with dev
       shell: bash
     - name: Check poetry info
       run: |
         cd senselab
-        python -m poetry env info
-        python -m poetry --version
+        poetry env info
+        poetry --version
       shell: bash
     - name: Check NVIDIA SMI details
       run: |
         cd senselab
-        python -m poetry run nvidia-smi
-        python -m poetry run nvidia-smi -L
-        python -m poetry run nvidia-smi -q -d Memory
+        poetry run nvidia-smi
+        poetry run nvidia-smi -L
+        poetry run nvidia-smi -q -d Memory
       shell: bash
     - name: Prepare cache folder for pytest
       run: mkdir -p $WORKING_DIR/pytest/temp
@@ -225,7 +225,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: >
-        cd senselab && python -m poetry run pytest \
+        cd senselab && poetry run pytest \
           --rootdir=$WORKING_DIR/pytest \
           --basetemp=$WORKING_DIR/pytest/temp \
           --junitxml=pytest.xml \
