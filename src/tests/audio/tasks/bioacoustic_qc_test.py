@@ -1,6 +1,7 @@
 """Module for testing bioacoustic quality control."""
 
 from collections import Counter
+from typing import Dict, List
 
 import pytest
 
@@ -11,24 +12,26 @@ from senselab.audio.tasks.bioacoustic_qc.constants import BIOACOUSTIC_TASK_TREE
     "taxonomy_tree",
     [BIOACOUSTIC_TASK_TREE],
 )
-def test_unique_leaf_nodes(taxonomy_tree: dict) -> None:
-    """Tests that all leaf nodes (keys with value None) in the taxonomy are unique."""
+def test_no_duplicate_subclass_keys(taxonomy_tree: Dict) -> None:
+    """Tests that all subclass keys in the taxonomy are unique."""
 
-    def get_leaf_nodes(tree: dict) -> list[str]:
-        """Recursively extract all leaf nodes (keys with value None) from the taxonomy tree."""
-        leaf_nodes = []
+    def get_all_subclass_keys(tree: Dict) -> List[str]:
+        """Recursively extract all subclass keys from the taxonomy tree."""
+        subclass_keys = []
 
-        def traverse(subtree: dict) -> None:
+        def traverse(subtree: Dict) -> None:
             for key, value in subtree.items():
-                if isinstance(value, dict):
-                    traverse(value)
-                elif value is None:
-                    leaf_nodes.append(key)  # Append instead of adding to a set
+                subclass_keys.append(key)  # Collect every key (task category)
+                if isinstance(value, Dict) and "subclass" in value and value["subclass"] is not None:
+                    traverse(value["subclass"])  # Continue traversal on non-null subclass
 
         traverse(tree)
-        return leaf_nodes
+        return subclass_keys
 
-    leaf_nodes = get_leaf_nodes(taxonomy_tree)
-    leaf_counts = Counter(leaf_nodes)
-    duplicates = {node: count for node, count in leaf_counts.items() if count > 1}
-    assert not duplicates, f"Duplicate leaf nodes found: {duplicates}"
+    subclass_keys = get_all_subclass_keys(taxonomy_tree)
+
+    # Ensure there are no duplicate subclass keys
+    subclass_counts = Counter(subclass_keys)
+    duplicates = {key: count for key, count in subclass_counts.items() if count > 1}
+
+    assert not duplicates, f"Duplicate subclass keys found: {duplicates}"
