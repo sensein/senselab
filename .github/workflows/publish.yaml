@@ -19,16 +19,17 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-    - name: Install pipx and ensure it's up to date
-      run: |
-        python -m pip install --upgrade pipx
-        pipx ensurepath
-      shell: bash
     - name: Install poetry
-      run: pipx install poetry==2.1.1
+      run: |
+        which python
+        python --version
+        pip install poetry==2.1.1
+        which poetry
+        poetry --version
       shell: bash
-    - name: Install poetry dynamic versioning tool
-      run: pipx inject poetry "poetry-dynamic-versioning[plugin]"
+    - name: Install dependencies with Poetry
+      run: |
+        poetry install
       shell: bash
     - name: Build package
       run: poetry build
