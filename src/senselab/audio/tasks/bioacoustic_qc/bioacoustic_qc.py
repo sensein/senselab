@@ -39,7 +39,7 @@ def audios_to_task_dict(audios: List[Audio]) -> Dict[str, List[Audio]]:
     return task_dict
 
 
-def tasks_to_taxonomy_tree_path(task: str) -> List[str]:
+def task_to_taxonomy_tree_path(task: str) -> List[str]:
     """Gets the taxonomy tree path for a given task.
 
     Args:
