@@ -157,6 +157,12 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
+    - name: Echo os info
+      run: |
+        echo ${{ matrix.os }}
+        echo ${{ matrix.architecture }}
+        echo startsWith(matrix.os, 'ubuntu')
+      shell: bash
     - name: Install ffmpeg (Ubuntu)
       if: startsWith(matrix.os, 'ubuntu')
       run: sudo apt-get update && sudo apt-get install -y ffmpeg
@@ -194,21 +200,21 @@ jobs:
     - name: Install dependencies with Poetry
       run: |
         cd senselab
-        poetry env use ${{ matrix.python-version }}
-        poetry install --with dev
+        python -m poetry env use ${{ matrix.python-version }}
+        python -m poetry install --with dev
       shell: bash
     - name: Check poetry info
       run: |
         cd senselab
-        poetry env info
-        poetry --version
+        python -m poetry env info
+        python -m poetry --version
       shell: bash
     - name: Check NVIDIA SMI details
       run: |
         cd senselab
-        poetry run nvidia-smi
-        poetry run nvidia-smi -L
-        poetry run nvidia-smi -q -d Memory
+        python -m poetry run nvidia-smi
+        python -m poetry run nvidia-smi -L
+        python -m poetry run nvidia-smi -q -d Memory
       shell: bash
     - name: Prepare cache folder for pytest
       run: mkdir -p $WORKING_DIR/pytest/temp
@@ -219,7 +225,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: >
-        cd senselab && poetry run pytest \
+        cd senselab && python -m poetry run pytest \
           --rootdir=$WORKING_DIR/pytest \
           --basetemp=$WORKING_DIR/pytest/temp \
           --junitxml=pytest.xml \
@@ -350,21 +356,21 @@ jobs:
     - name: Install dependencies with Poetry
       run: |
         cd senselab
-        poetry env use ${{ matrix.python-version }}
-        poetry install --with dev
+        python -m poetry env use ${{ matrix.python-version }}
+        python -m poetry install --with dev
       shell: bash
     - name: Check poetry info
       run: |
         cd senselab
-        poetry env info
-        poetry --version
+        python -m poetry env info
+        python -m poetry --version
       shell: bash
     - name: Check NVIDIA SMI details
       run: |
         cd senselab
-        poetry run nvidia-smi
-        poetry run nvidia-smi -L
-        poetry run nvidia-smi -q -d Memory
+        python -m poetry run nvidia-smi
+        python -m poetry run nvidia-smi -L
+        python -m poetry run nvidia-smi -q -d Memory
       shell: bash
     - name: Prepare cache folder for pytest
       run: mkdir -p $WORKING_DIR/pytest/temp
@@ -375,7 +381,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: >
-        cd senselab && poetry run pytest \
+        cd senselab && python -m poetry run pytest \
           --rootdir=$WORKING_DIR/pytest \
           --basetemp=$WORKING_DIR/pytest/temp \
           --junitxml=pytest.xml \
@@ -507,21 +513,21 @@ jobs:
     - name: Install dependencies with Poetry
       run: |
         cd senselab
-        poetry env use ${{ matrix.python-version }}
-        poetry install --with dev
+        python -m poetry env use ${{ matrix.python-version }}
+        python -m poetry install --with dev
       shell: bash
     - name: Check poetry info
       run: |
         cd senselab
-        poetry env info
-        poetry --version
+        python -m poetry env info
+        python -m poetry --version
       shell: bash
     - name: Check NVIDIA SMI details
       run: |
         cd senselab
-        poetry run nvidia-smi
-        poetry run nvidia-smi -L
-        poetry run nvidia-smi -q -d Memory
+        python -m poetry run nvidia-smi
+        python -m poetry run nvidia-smi -L
+        python -m poetry run nvidia-smi -q -d Memory
       shell: bash
     - name: Prepare cache folder for pytest
       run: mkdir -p $WORKING_DIR/pytest/temp
@@ -532,7 +538,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: >
-        cd senselab && poetry run pytest \
+        cd senselab && python -m poetry run pytest \
           --rootdir=$WORKING_DIR/pytest \
           --basetemp=$WORKING_DIR/pytest/temp \
           --junitxml=pytest.xml \
