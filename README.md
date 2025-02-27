@@ -25,8 +25,8 @@ python -c "import platform; print(platform.machine())"
 ```
 
 If the output is:
-- "arm64" → ✅ Your system is compatible.
-- "x86_64" → ❌ Your system is not supported.
+- `arm64` → ✅ Your system is compatible.
+- `x86_64` → ❌ Your system is not supported.
 
 If you attempt to install this package on an unsupported system, the installation or execution will fail.
 
