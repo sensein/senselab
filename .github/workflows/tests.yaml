@@ -182,7 +182,9 @@ jobs:
         pipx --version
       shell: bash
     - name: Install Poetry
-      run: python -m pipx install poetry==2.1.1
+      run: |
+        python -m pipx install poetry==2.1.1
+        which poetry
       shell: bash
     - name: Check available space
       run: |
@@ -192,7 +194,6 @@ jobs:
       run: |
         python --version
         which python
-        which poetry
       shell: bash
     - name: Copy senselab directory to current directory
       run: |
