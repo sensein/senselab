@@ -157,34 +157,14 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-    - name: Echo OS Info
-      run: |
-        echo "${{ matrix.os }}"
-        echo "${{ matrix.architecture }}"
-      shell: bash
-    - name: Install ffmpeg (Ubuntu)
-      if: startsWith(matrix.os, 'ubuntu')
+    - name: Install ffmpeg
       run: sudo apt-get update && sudo apt-get install -y ffmpeg
-      shell: bash
-    - name: Install pipx
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y python3-pip
-        python3 -m pip install --user pipx
-        python3 -m pipx ensurepath
-        export PATH="$HOME/.local/bin:$PATH"
-        echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-        echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.profile
-        source ~/.bashrc
-        source ~/.profile
-        echo $PATH
-        which pipx
-        pipx --version
       shell: bash
     - name: Install Poetry
       run: |
-        python -m pipx install poetry==2.1.1
-        $HOME/.local/bin/poetry --version
+        pip install poetry==2.1.1
+        which poetry
+        poetry --version
       shell: bash
     - name: Check available space
       run: |
