@@ -34,7 +34,7 @@ jobs:
       run: brew install ffmpeg
       shell: bash
     - name: Install Poetry
-      run: python -m pipx install poetry==2.1.1
+      run: pipx install poetry==2.1.1
       shell: bash
     - name: Install dependencies with Poetry
       run: |
@@ -84,7 +84,7 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
     - name: Install Poetry
-      run: python -m pipx install poetry==2.1.1
+      run: pipx install poetry==2.1.1
       shell: bash
     - name: Install dependencies with Poetry
       run: |
@@ -93,7 +93,7 @@ jobs:
         poetry env info
       shell: bash
     - name: Install pre-commit
-      run: python -m pipx install pre-commit
+      run: pipx install pre-commit
       shell: bash
     - name: Run pre-commit
       run: |
