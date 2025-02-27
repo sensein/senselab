@@ -1,6 +1,7 @@
 """Runs bioacoustic task recording quality control on a set of Audio objects."""
 
-from typing import Dict, List, Optional
+from copy import deepcopy
+from typing import Dict, List, Optional, Set
 
 from pydra.engine.core import Workflow  # Assuming you're using Pydra workflows
 
@@ -72,10 +73,62 @@ def task_to_taxonomy_tree_path(task: str) -> List[str]:
 
 
 def task_dict_to_dataset_taxonomy_subtree(task_dict: Dict[str, List[Audio]]) -> Dict:
-    """Constructs a sub-tree of the taxonomy based on tasks in the dataset."""
-    # get keys in task_dict
-    # traverse the taxonomy tree, deleting paths that don't correspond to tasks
-    pass
+    """Constructs a sub-tree of the taxonomy based on tasks in the dataset.
+
+    Args:
+        task_dict (Dict[str, List[Audio]]): A dictionary mapping task names to lists of Audio objects.
+
+    Returns:
+        Dict: A pruned version of the taxonomy tree that only contains the relevant tasks.
+
+    Raises:
+        ValueError: If none of the provided tasks exist in the taxonomy.
+    """
+    task_keys = list(task_dict.keys())  # Ensure keys are a list
+    task_paths = [task_to_taxonomy_tree_path(task) for task in task_keys]
+
+    # Get a set of all valid nodes in the taxonomy tree paths
+    unique_nodes: Set[str] = set(node for path in task_paths for node in path)
+
+    # Deep copy the taxonomy tree to avoid modifying the original
+    pruned_tree: Dict = deepcopy(BIOACOUSTIC_TASK_TREE)
+
+    # Ensure 'subclass' exists and is a dictionary before pruning
+    subclass_tree = pruned_tree.get("bioacoustic", {}).get("subclass", None)
+    if not isinstance(subclass_tree, dict):
+        raise TypeError("Expected 'subclass' to be a dictionary in the taxonomy tree.")
+
+    def prune_tree(subtree: Dict[str, Dict]) -> bool:
+        """Recursively prunes the taxonomy tree, keeping only relevant branches.
+
+        Args:
+            subtree (Dict[str, Dict]): The current subtree being processed.
+
+        Returns:
+            bool: True if the subtree contains relevant tasks, False otherwise.
+        """
+        keys_to_delete = []
+
+        for key in list(subtree.keys()):  # Copy keys to avoid modifying while iterating
+            value = subtree[key]
+            if isinstance(value, dict) and "subclass" in value and isinstance(value["subclass"], dict):
+                keep_branch = prune_tree(value["subclass"])
+                if not keep_branch:
+                    keys_to_delete.append(key)
+            elif key not in unique_nodes:
+                keys_to_delete.append(key)
+
+        # Remove non-matching branches
+        for key in keys_to_delete:
+            del subtree[key]
+
+        return bool(subtree)
+
+    # Start pruning at the correct level of the tree
+    if not prune_tree(subclass_tree):
+        raise ValueError("None of the provided tasks exist in the taxonomy tree.")
+
+    return pruned_tree
 
 
 def taxonomy_subtree_to_pydra_workflow(subtree: Dict) -> Workflow:
