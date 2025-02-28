@@ -84,49 +84,46 @@ def task_dict_to_dataset_taxonomy_subtree(task_dict: Dict[str, List[Audio]]) -> 
     Raises:
         ValueError: If none of the provided tasks exist in the taxonomy.
     """
-    task_keys = list(task_dict.keys())  # Ensure keys are a list
+    task_keys = list(task_dict.keys())
     task_paths = [task_to_taxonomy_tree_path(task) for task in task_keys]
+    valid_nodes: Set[str] = set(node for path in task_paths for node in path)
 
-    # Get a set of all valid nodes in the taxonomy tree paths
-    unique_nodes: Set[str] = set(node for path in task_paths for node in path)
-
-    # Deep copy the taxonomy tree to avoid modifying the original
     pruned_tree: Dict = deepcopy(BIOACOUSTIC_TASK_TREE)
 
-    # Ensure 'subclass' exists and is a dictionary before pruning
-    subclass_tree = pruned_tree.get("bioacoustic", {}).get("subclass", None)
-    if not isinstance(subclass_tree, dict):
-        raise TypeError("Expected 'subclass' to be a dictionary in the taxonomy tree.")
-
-    def prune_tree(subtree: Dict[str, Dict]) -> bool:
+    def prune_tree(subtree: Dict) -> bool:
         """Recursively prunes the taxonomy tree, keeping only relevant branches.
 
         Args:
-            subtree (Dict[str, Dict]): The current subtree being processed.
+            subtree (Dict): The current subtree being processed.
 
         Returns:
             bool: True if the subtree contains relevant tasks, False otherwise.
         """
         keys_to_delete = []
 
-        for key in list(subtree.keys()):  # Copy keys to avoid modifying while iterating
+        # Determine keys to delete
+        for key in list(subtree.keys()):
             value = subtree[key]
+
             if isinstance(value, dict) and "subclass" in value and isinstance(value["subclass"], dict):
                 keep_branch = prune_tree(value["subclass"])
-                if not keep_branch:
+                if not value["subclass"]:
+                    value["subclass"] = None
+                if not keep_branch and key not in valid_nodes:
                     keys_to_delete.append(key)
-            elif key not in unique_nodes:
+            elif key not in valid_nodes:
                 keys_to_delete.append(key)
 
-        # Remove non-matching branches
+        # Remove unwanted nodes
         for key in keys_to_delete:
             del subtree[key]
 
-        return bool(subtree)
+        return bool(subtree)  # Return True if subtree contains relevant data
 
-    # Start pruning at the correct level of the tree
+    subclass_tree = pruned_tree["bioacoustic"].get("subclass", None)
+
     if not prune_tree(subclass_tree):
-        raise ValueError("None of the provided tasks exist in the taxonomy tree.")
+        pruned_tree["bioacoustic"]["subclass"] = None  # Ensure "bioacoustic" key remains
 
     return pruned_tree
 
