@@ -154,7 +154,7 @@ def check_node(audios: List[Audio], tree: Dict[str, Any]) -> Dict[str, Any]:
     return checked_audios
 
 
-def run_taxonomy_subtree_checks_recursively(dataset: [Audio], dataset_tree: Dict) -> Dict:
+def run_taxonomy_subtree_checks_recursively(dataset: List[Audio], dataset_tree: Dict) -> Dict:
     """Runs checks in order for a subtree and stores the results in the tree."""
     # for each node:
     # construct list of audio files that are relevant
