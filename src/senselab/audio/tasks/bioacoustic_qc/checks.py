@@ -20,7 +20,7 @@ import torch
 from senselab.audio.data_structures import Audio
 
 
-def audio_length_positive_check(audio: Audio) -> Tuple[Dict[str, List[Audio] | None], List[Audio]]:
+def audio_length_positive_check(audio: Audio) -> Tuple[Dict[str, List[Audio]], List[Audio]]:
     """Checks if an Audio object has a positive length.
 
     Args:
@@ -41,10 +41,10 @@ def audio_length_positive_check(audio: Audio) -> Tuple[Dict[str, List[Audio] | N
     else:
         passed.append(audio)
 
-    return {"exclude": exclude, "review": None}, passed
+    return {"exclude": exclude, "review": []}, passed
 
 
-def audio_intensity_positive_check(audio: Audio) -> Tuple[Dict[str, List[Audio] | None], List[Audio]]:
+def audio_intensity_positive_check(audio: Audio) -> Tuple[Dict[str, List[Audio]], List[Audio]]:
     """Checks if an Audio object has nonzero intensity.
 
     Args:
@@ -55,7 +55,7 @@ def audio_intensity_positive_check(audio: Audio) -> Tuple[Dict[str, List[Audio] 
             - A dictionary with:
                 - "exclude": A list of Audio objects that failed the check.
                 - "review": Always None (not used in this check).
-            - A list of Audio objects that passed the check.
+            - A list of Audio objects that pasgised the check.
     """
     exclude = []
     passed = []
@@ -65,4 +65,4 @@ def audio_intensity_positive_check(audio: Audio) -> Tuple[Dict[str, List[Audio] 
     else:
         passed.append(audio)
 
-    return {"exclude": exclude, "review": None}, passed
+    return {"exclude": exclude, "review": []}, passed
