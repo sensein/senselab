@@ -20,11 +20,11 @@ import torch
 from senselab.audio.data_structures import Audio
 
 
-def audio_length_positive_check(audio: Audio) -> Tuple[Dict[str, List[Audio]], List[Audio]]:
+def audio_length_positive_check(audios: List[Audio]) -> Tuple[Dict[str, List[Audio]], List[Audio]]:
     """Checks if an Audio object has a positive length.
 
     Args:
-        audio (Audio): The Audio object to validate.
+        audios (Audio): The Audio object to validate.
 
     Returns:
         Tuple[Dict[str, List[Audio] | None], List[Audio]]: A tuple containing:
@@ -36,19 +36,20 @@ def audio_length_positive_check(audio: Audio) -> Tuple[Dict[str, List[Audio]], L
     exclude = []
     passed = []
 
-    if audio.waveform.numel() == 0:  # No samples
-        exclude.append(audio)
-    else:
-        passed.append(audio)
+    for audio in audios:
+        if audio.waveform.numel() == 0:  # No samples
+            exclude.append(audio)
+        else:
+            passed.append(audio)
 
     return {"exclude": exclude, "review": []}, passed
 
 
-def audio_intensity_positive_check(audio: Audio) -> Tuple[Dict[str, List[Audio]], List[Audio]]:
+def audio_intensity_positive_check(audios: List[Audio]) -> Tuple[Dict[str, List[Audio]], List[Audio]]:
     """Checks if an Audio object has nonzero intensity.
 
     Args:
-        audio (Audio): The Audio object to validate.
+        audios (Audio): The Audio object to validate.
 
     Returns:
         Tuple[Dict[str, List[Audio] | None], List[Audio]]: A tuple containing:
@@ -60,9 +61,10 @@ def audio_intensity_positive_check(audio: Audio) -> Tuple[Dict[str, List[Audio]]
     exclude = []
     passed = []
 
-    if torch.sum(torch.abs(audio.waveform)) == 0:  # Use sum instead of mean to check for silence
-        exclude.append(audio)  # Exclude silent or empty audio
-    else:
-        passed.append(audio)
+    for audio in audios:
+        if torch.sum(torch.abs(audio.waveform)) == 0:
+            exclude.append(audio)
+        else:
+            passed.append(audio)
 
     return {"exclude": exclude, "review": []}, passed
