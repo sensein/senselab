@@ -39,6 +39,7 @@ def audio_length_positive_check(audios: List[Audio]) -> Tuple[Dict[str, List[Aud
     for audio in audios:
         if audio.waveform.numel() == 0:  # No samples
             exclude.append(audio)
+            audios.remove(audio)
         else:
             passed.append(audio)
 
@@ -64,6 +65,7 @@ def audio_intensity_positive_check(audios: List[Audio]) -> Tuple[Dict[str, List[
     for audio in audios:
         if torch.sum(torch.abs(audio.waveform)) == 0:
             exclude.append(audio)
+            audios.remove(audio)
         else:
             passed.append(audio)
 
