@@ -149,9 +149,9 @@ def check_node(audios: List[Audio], tree: Dict[str, Any]) -> Dict[str, Any]:
     check_results: Dict[str, Any] = {}
     for check in tree.get("checks", []):
         if callable(check):
-            check_result = check(audios)
-            check_results[check.__name__] = check_result
-    return check_results
+            check_results[check.__name__], checked_audios = check(audios)
+    tree["checks_results"] = check_results
+    return checked_audios
 
 
 def run_taxonomy_subtree_checks_recursively(dataset: [Audio], dataset_tree: Dict) -> Dict:
