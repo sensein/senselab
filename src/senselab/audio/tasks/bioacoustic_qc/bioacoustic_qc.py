@@ -1,7 +1,7 @@
 """Runs bioacoustic task recording quality control on a set of Audio objects."""
 
 from copy import deepcopy
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 from pydra.engine.core import Workflow  # Assuming you're using Pydra workflows
 
@@ -133,8 +133,41 @@ def taxonomy_subtree_to_pydra_workflow(subtree: Dict) -> Workflow:
     pass
 
 
-def check_quality(audios: List[Audio], complexity: str = "low") -> None:
-    """Runs quality checks on audio data."""
+def check_node(audios: List[Audio], tree: Dict[str, Any]) -> Dict[str, Any]:
+    """Runs checks on a given taxonomy tree node and processes audio files accordingly.
+
+    This function applies all checks defined in the node to the provided list of audio files.
+    It returns the results of each check, mapping check function names to their results.
+
+    Args:
+        audios (List[Any]): A list of audio files to be checked.
+        tree (Dict[str, Any]): The taxonomy tree node containing a "checks" key with check functions.
+
+    Returns:
+        Dict[str, Any]: A dictionary mapping check function names to their results.
+    """
+    check_results: Dict[str, Any] = {}
+    for check in tree.get("checks", []):
+        if callable(check):
+            check_result = check(audios)
+            check_results[check.__name__] = check_result
+    return check_results
+
+
+def run_taxonomy_subtree_checks_recursively(dataset: [Audio], dataset_tree: Dict) -> Dict:
+    """Runs checks in order for a subtree and stores the results in the tree."""
+    # for each node:
+    # construct list of audio files that are relevant
+    # run checks
+    # return tree with excluded and review audios, audio files that passed
+    pass
+
+
+def check_quality(audios: List[Audio], complexity: str = "low", review=False) -> None:
+    """Runs quality checks on audio data.
+    continue
+
+    """
     # audios_to_task_dict
     # for each key in task_dict:
     # replace key with tasks_to_taxonomy_tree_path
