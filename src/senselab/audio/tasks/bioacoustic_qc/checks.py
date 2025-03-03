@@ -20,7 +20,7 @@ import torch
 from senselab.audio.data_structures import Audio
 
 
-def audio_length_positive_check(audios: List[Audio], task_audios: List[Audio]) -> Dict[str, List[Audio]]:
+def audio_length_positive_check(audios: List[Audio], task_audios: List[Audio]) -> Dict:
     """Checks if an Audio object has a positive length.
 
     Args:
@@ -38,16 +38,17 @@ def audio_length_positive_check(audios: List[Audio], task_audios: List[Audio]) -
     passed = []
 
     for audio in task_audios:  # iterate over task_audios
-        if audio.waveform.numel() == 0:  # No samples
-            exclude.append(audio)
-            audios.remove(audio)  # remove from all audios
-        else:
-            passed.append(audio)
+        if audio in audios:
+            if audio.waveform.numel() == 0:  # No samples
+                exclude.append(audio)
+                audios.remove(audio)  # remove from all audios
+            else:
+                passed.append(audio)
 
     return {"exclude": exclude, "review": [], "passed": passed}
 
 
-def audio_intensity_positive_check(audios: List[Audio], task_audios: List[Audio]) -> Dict[str, List[Audio]]:
+def audio_intensity_positive_check(audios: List[Audio], task_audios: List[Audio]) -> Dict:
     """Checks if each Audio object has nonzero intensity.
 
     Args:
@@ -65,10 +66,11 @@ def audio_intensity_positive_check(audios: List[Audio], task_audios: List[Audio]
     passed = []
 
     for audio in task_audios:
-        if torch.sum(torch.abs(audio.waveform)) == 0:
-            exclude.append(audio)
-            audios.remove(audio)
-        else:
-            passed.append(audio)
+        if audio in audios:
+            if torch.sum(torch.abs(audio.waveform)) == 0:
+                exclude.append(audio)
+                audios.remove(audio)
+            else:
+                passed.append(audio)
 
     return {"exclude": exclude, "review": [], "passed": passed}
