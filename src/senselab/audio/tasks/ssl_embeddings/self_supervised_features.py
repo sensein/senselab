@@ -1,6 +1,7 @@
 """This module contains functions for extracting features from pre-trained self-supervised models."""
 
-from typing import Dict, List, Optional
+import os
+from typing import Dict, List, Optional, Union
 
 import torch
 from transformers import AutoFeatureExtractor, AutoModel
@@ -19,13 +20,13 @@ class SSLEmbeddingsFactory:
     def _get_feature_extractor(
         cls,
         model: HFModel,
-        cache_dir: str = "~/",
+        cache_dir: Optional[Union[str, os.PathLike]] = None,
     ) -> AutoFeatureExtractor:
         """Get or create a feature extractor for SSL model.
 
         Args:
             model (HFModel): The HuggingFace model.
-            cache_dir (str): The path to where the model's weights will be saved.
+            cache_dir (Optional[str, os.PathLike]): The path to where the model's weights will be saved.
 
         Returns:
             AutoFeatureExtractor: The feature extractor for the model.
@@ -42,13 +43,13 @@ class SSLEmbeddingsFactory:
         cls,
         model: HFModel,
         device: DeviceType,
-        cache_dir: str = "~/",
+        cache_dir: Optional[Union[str, os.PathLike]] = None,
     ) -> AutoModel:
         """Load weights of SSL model.
 
         Args:
             model (HFModel): The Hugging Face model.
-            cache_dir (str): The path to where the model's weights will be saved.
+            cache_dir (Optional[os.PathLike, str]): The path to where the model's weights will be saved.
             device (DeviceType): The device to run the model on.
 
         Returns:
@@ -66,7 +67,7 @@ class SSLEmbeddingsFactory:
         cls,
         audios: List[Audio],
         model: HFModel,
-        cache_dir: str = "~/",
+        cache_dir: Optional[Union[str, os.PathLike]] = None,
         device: Optional[DeviceType] = None,
     ) -> List[torch.Tensor]:
         """Compute the ssl embeddings of audio signals.
@@ -75,7 +76,7 @@ class SSLEmbeddingsFactory:
             audios (List[Audio]): A list of Audio objects containing the audio signals and their properties.
             model (HFModel): The model used to compute the embeddings
                 (default is "facebook/wav2vec2-base").
-            cache_dir (str): The path to where the model's weights will be saved.
+            cache_dir (Optional[str, os.PathLike]): The path to where the model's weights will be saved.
             device (Optional[DeviceType]): The device to run the model on (default is None).
                 Only CPU and CUDA are supported.
 
