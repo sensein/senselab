@@ -10,6 +10,7 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.bioacoustic_qc import (
     audios_to_task_dict,
     check_node,
+    check_quality,
     run_taxonomy_subtree_checks_recursively,
     task_dict_to_dataset_taxonomy_subtree,
     task_to_taxonomy_tree_path,
@@ -119,7 +120,7 @@ def test_task_dict_to_dataset_taxonomy_subtree(mono_audio_sample: Audio) -> None
     task_dict = {"sigh": [mono_audio_sample]}
     expected_subtree = {
         "bioacoustic": {
-            "checks": [audio_intensity_positive_check, audio_length_positive_check],
+            "checks": [audio_length_positive_check, audio_intensity_positive_check],
             "subclass": {
                 "human": {
                     "checks": None,
@@ -135,27 +136,27 @@ def test_task_dict_to_dataset_taxonomy_subtree(mono_audio_sample: Audio) -> None
             },
         }
     }
-    pruned_tree = task_dict_to_dataset_taxonomy_subtree(task_dict)
+    pruned_tree = task_dict_to_dataset_taxonomy_subtree(task_dict, task_tree=BIOACOUSTIC_TASK_TREE)
     assert pruned_tree == expected_subtree, f"Expected {expected_subtree}, but got {pruned_tree}"
 
     # Case 2: Task not in the taxonomy (should raise ValueError)
     task_dict = {"nonexistent_task": [mono_audio_sample]}
     with pytest.raises(ValueError, match="Task 'nonexistent_task' not found in taxonomy tree."):
-        task_dict_to_dataset_taxonomy_subtree(task_dict)
+        task_dict_to_dataset_taxonomy_subtree(task_dict, task_tree=BIOACOUSTIC_TASK_TREE)
 
     # Case 3: Empty task_dict (should return 'bioacoustic' with empty subclass)
     task_dict = {}
     expected_empty_tree = {
-        "bioacoustic": {"checks": [audio_intensity_positive_check, audio_length_positive_check], "subclass": None}
+        "bioacoustic": {"checks": [audio_length_positive_check, audio_intensity_positive_check], "subclass": None}
     }
-    pruned_tree = task_dict_to_dataset_taxonomy_subtree(task_dict)
+    pruned_tree = task_dict_to_dataset_taxonomy_subtree(task_dict, task_tree=BIOACOUSTIC_TASK_TREE)
     assert pruned_tree == expected_empty_tree, f"Expected {expected_empty_tree}, but got {pruned_tree}"
 
     # Case 4: Multiple valid tasks ('sigh' and 'cough')
     task_dict = {"sigh": [mono_audio_sample], "cough": [mono_audio_sample]}
     expected_subtree_multiple = {
         "bioacoustic": {
-            "checks": [audio_intensity_positive_check, audio_length_positive_check],
+            "checks": [audio_length_positive_check, audio_intensity_positive_check],
             "subclass": {
                 "human": {
                     "checks": None,
@@ -175,14 +176,14 @@ def test_task_dict_to_dataset_taxonomy_subtree(mono_audio_sample: Audio) -> None
             },
         }
     }
-    pruned_tree = task_dict_to_dataset_taxonomy_subtree(task_dict)
+    pruned_tree = task_dict_to_dataset_taxonomy_subtree(task_dict, task_tree=BIOACOUSTIC_TASK_TREE)
     assert pruned_tree == expected_subtree_multiple, f"Expected {expected_subtree_multiple}, but got {pruned_tree}"
 
     # Case 5: Deeply nested task ('voluntary cough')
     task_dict = {"voluntary": [mono_audio_sample]}
     expected_subtree_deep = {
         "bioacoustic": {
-            "checks": [audio_intensity_positive_check, audio_length_positive_check],
+            "checks": [audio_length_positive_check, audio_intensity_positive_check],
             "subclass": {
                 "human": {
                     "checks": None,
@@ -206,7 +207,7 @@ def test_task_dict_to_dataset_taxonomy_subtree(mono_audio_sample: Audio) -> None
             },
         }
     }
-    pruned_tree = task_dict_to_dataset_taxonomy_subtree(task_dict)
+    pruned_tree = task_dict_to_dataset_taxonomy_subtree(task_dict, task_tree=BIOACOUSTIC_TASK_TREE)
     assert pruned_tree == expected_subtree_deep, f"Expected {expected_subtree_deep}, but got {pruned_tree}"
 
 
@@ -319,3 +320,42 @@ def test_run_taxonomy_subtree_checks_recursively(mono_audio_sample: Audio) -> No
     # Verify passing audio
     assert mono_audio_sample in length_check_results["passed"], "Valid audio should pass length check."
     assert mono_audio_sample in intensity_check_results["passed"], "Valid audio should pass intensity check."
+
+
+def test_check_quality() -> None:
+    """Tests that `check_quality` correctly applies quality checks and updates the taxonomy tree."""
+    # Create valid and invalid audio samples
+    valid_audio = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000, metadata={"task": "breathing"})
+    empty_audio = Audio(waveform=torch.tensor([]), sampling_rate=16000, metadata={"task": "breathing"})
+    silent_audio = Audio(waveform=torch.zeros(1, 16000), sampling_rate=16000, metadata={"task": "breathing"})
+
+    # Run check_quality
+    updated_tree, remaining_audios = check_quality([valid_audio, empty_audio, silent_audio])
+
+    # Ensure `checks_results` is stored only at the bioacoustic level
+    bioacoustic_node = updated_tree["bioacoustic"]
+    assert "checks_results" in bioacoustic_node, "Check results should be stored at the 'bioacoustic' level."
+
+    # Verify the correct checks were applied
+    assert audio_length_positive_check.__name__ in bioacoustic_node["checks_results"], "Audio length check missing."
+    assert (
+        audio_intensity_positive_check.__name__ in bioacoustic_node["checks_results"]
+    ), "Audio intensity check missing."
+
+    # Ensure no check results exist at lower levels
+    breathing_node = updated_tree["bioacoustic"]["subclass"]["human"]["subclass"]["respiration"]["subclass"][
+        "breathing"
+    ]
+    assert breathing_node["checks_results"] == {}
+
+    # Verify that excluded audios were correctly filtered out
+    length_check_results = bioacoustic_node["checks_results"][audio_length_positive_check.__name__]
+    intensity_check_results = bioacoustic_node["checks_results"][audio_intensity_positive_check.__name__]
+
+    assert empty_audio in length_check_results["exclude"], "Empty audio should be excluded for length."
+    assert silent_audio in intensity_check_results["exclude"], "Silent audio should be excluded for intensity."
+
+    # Verify passing audio remains in `remaining_audios`
+    assert valid_audio in remaining_audios, "Valid audio should not be excluded."
+    assert empty_audio not in remaining_audios, "Empty audio should be removed from the final list."
+    assert silent_audio not in remaining_audios, "Silent audio should be removed from the final list."

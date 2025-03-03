@@ -4,7 +4,7 @@ from senselab.audio.tasks.bioacoustic_qc.checks import audio_intensity_positive_
 
 BIOACOUSTIC_TASK_TREE = {
     "bioacoustic": {
-        "checks": [audio_intensity_positive_check, audio_length_positive_check],
+        "checks": [audio_length_positive_check, audio_intensity_positive_check],
         "subclass": {
             "human": {
                 "checks": None,
