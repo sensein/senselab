@@ -172,7 +172,7 @@ def run_taxonomy_subtree_checks_recursively(audios: List[Audio], dataset_tree: D
     return dataset_tree
 
 
-def check_quality(audios: List[Audio], complexity: str = "low", review: bool = False) -> None:
+def check_quality(audios: List[Audio], complexity: str = "low") -> None:
     """Runs quality checks on audio data."""
     # audios_to_task_dict
     # for each key in task_dict:
