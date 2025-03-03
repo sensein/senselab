@@ -1,7 +1,7 @@
 """Runs bioacoustic task recording quality control on a set of Audio objects."""
 
 from copy import deepcopy
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from pydra.engine.core import Workflow  # Assuming you're using Pydra workflows
 
@@ -72,14 +72,18 @@ def task_to_taxonomy_tree_path(task: str) -> List[str]:
     return path
 
 
-def task_dict_to_dataset_taxonomy_subtree(task_dict: Dict[str, List[Audio]]) -> Dict:
-    """Constructs a sub-tree of the taxonomy based on tasks in the dataset.
+def task_dict_to_dataset_taxonomy_subtree(task_dict: Dict[str, List[Audio]], task_tree: Dict) -> Dict:
+    """Constructs a pruned taxonomy tree containing only relevant tasks.
+
+    This function takes a mapping of tasks to audio files and removes irrelevant branches from a given taxonomy tree,
+    keeping only tasks that exist in `task_dict`.
 
     Args:
         task_dict (Dict[str, List[Audio]]): A dictionary mapping task names to lists of Audio objects.
+        task_tree (Dict): The full taxonomy tree defining the task hierarchy.
 
     Returns:
-        Dict: A pruned version of the taxonomy tree that only contains the relevant tasks.
+        Dict: A pruned version of `task_tree` that retains only tasks present in `task_dict`.
 
     Raises:
         ValueError: If none of the provided tasks exist in the taxonomy.
@@ -88,7 +92,7 @@ def task_dict_to_dataset_taxonomy_subtree(task_dict: Dict[str, List[Audio]]) -> 
     task_paths = [task_to_taxonomy_tree_path(task) for task in task_keys]
     valid_nodes: Set[str] = set(node for path in task_paths for node in path)
 
-    pruned_tree: Dict = deepcopy(BIOACOUSTIC_TASK_TREE)
+    pruned_tree: Dict = deepcopy(task_tree)
 
     def prune_tree(subtree: Dict) -> bool:
         """Recursively prunes the taxonomy tree, keeping only relevant branches.
@@ -196,13 +200,23 @@ def run_taxonomy_subtree_checks_recursively(audios: List[Audio], dataset_tree: D
     return dataset_tree
 
 
-def check_quality(audios: List[Audio], complexity: str = "low") -> None:
-    """Runs quality checks on audio data."""
-    # audios_to_task_dict
-    # for each key in task_dict:
-    # replace key with tasks_to_taxonomy_tree_path
-    # task_dict_to_dataset_taxonomy_subtree
-    # taxonomy_subtree_to_pydra_workflow
-    # run workflow
-    # save results
-    pass
+def check_quality(
+    audios: List[Audio], task_tree: Dict = BIOACOUSTIC_TASK_TREE, complexity: str = "low"
+) -> Tuple[Dict, List[Audio]]:
+    """Runs quality checks on audio files and updates the taxonomy tree.
+
+    Maps `Audio` objects to tasks, prunes the taxonomy tree, and applies quality checks recursively. Returns the
+    updated taxonomy tree and the modified list of audios.
+
+    Args:
+        audios (List[Audio]): Audio files to analyze.
+        task_tree (Dict, optional): Taxonomy tree defining task hierarchy. Defaults to `BIOACOUSTIC_TASK_TREE`.
+        complexity (str, optional): Processing complexity level (unused, reserved for future use). Defaults to `"low"`.
+
+    Returns:
+        Tuple[Dict, List[Audio]]: The updated taxonomy tree with `checks_results` and the list of audios not excluded.
+    """
+    task_dict = audios_to_task_dict(audios)
+    dataset_tree = task_dict_to_dataset_taxonomy_subtree(task_dict, task_tree=task_tree)
+    run_taxonomy_subtree_checks_recursively(audios, dataset_tree=dataset_tree, task_dict=task_dict)
+    return dataset_tree, audios
