@@ -10,6 +10,7 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.bioacoustic_qc import (
     audios_to_task_dict,
     check_node,
+    run_taxonomy_subtree_checks_recursively,
     task_dict_to_dataset_taxonomy_subtree,
     task_to_taxonomy_tree_path,
 )
@@ -236,6 +237,81 @@ def test_check_node(mono_audio_sample: Audio) -> None:
 
     length_check_results = tree["checks_results"][audio_length_positive_check.__name__]
     intensity_check_results = tree["checks_results"][audio_intensity_positive_check.__name__]
+
+    assert empty_audio in length_check_results["exclude"], "Empty audio should be excluded for length."
+    assert silent_audio in intensity_check_results["exclude"], "Silent audio should be excluded for intensity."
+
+    # Verify passing audio
+    assert mono_audio_sample in length_check_results["passed"], "Valid audio should pass length check."
+    assert mono_audio_sample in intensity_check_results["passed"], "Valid audio should pass intensity check."
+
+
+def test_run_taxonomy_subtree_checks_recursively(mono_audio_sample: Audio) -> None:
+    """Tests that checks correctly applied."""
+    # Create test taxonomy tree with sample checks
+    test_tree = {
+        "bioacoustic": {
+            "checks": [audio_length_positive_check, audio_intensity_positive_check],
+            "subclass": {
+                "human": {
+                    "checks": None,
+                    "subclass": {
+                        "respiration": {
+                            "checks": None,
+                            "subclass": {
+                                "breathing": {
+                                    "checks": None,
+                                    "subclass": {"sigh": {"checks": None, "subclass": None}},
+                                }
+                            },
+                        }
+                    },
+                }
+            },
+        }
+    }
+
+    # Create valid and invalid audio samples
+    empty_audio = Audio(waveform=torch.tensor([]), sampling_rate=16000, metadata={"task": "sigh"})
+    silent_audio = Audio(waveform=torch.zeros(1, 16000), sampling_rate=16000, metadata={"task": "sigh"})
+
+    # Create task_dict mapping tasks to audios
+    task_dict = {"sigh": [mono_audio_sample, empty_audio, silent_audio]}
+
+    # Run the function
+    updated_tree = run_taxonomy_subtree_checks_recursively(
+        audios=[mono_audio_sample, empty_audio, silent_audio],
+        dataset_tree=test_tree,
+        task_dict=task_dict,
+    )
+
+    # Verify that check results were added **only at the bioacoustic level**
+    bioacoustic_node = updated_tree["bioacoustic"]
+    assert "checks_results" in bioacoustic_node, "Check results should be stored at the 'bioacoustic' level."
+
+    # Ensure the correct check functions were applied at `bioacoustic`
+    assert audio_length_positive_check.__name__ in bioacoustic_node["checks_results"], "Audio length check missing."
+    assert (
+        audio_intensity_positive_check.__name__ in bioacoustic_node["checks_results"]
+    ), "Audio intensity check missing."
+
+    # Ensure all lower levels contain **empty check results (`{}`)** if no checks are defined
+    lower_nodes = [
+        updated_tree["bioacoustic"]["subclass"]["human"],
+        updated_tree["bioacoustic"]["subclass"]["human"]["subclass"]["respiration"],
+        updated_tree["bioacoustic"]["subclass"]["human"]["subclass"]["respiration"]["subclass"]["breathing"],
+        updated_tree["bioacoustic"]["subclass"]["human"]["subclass"]["respiration"]["subclass"]["breathing"][
+            "subclass"
+        ]["sigh"],
+    ]
+
+    for node in lower_nodes:
+        assert "checks_results" in node, f"'checks_results' missing in {node}."
+        assert node["checks_results"] == {}, f"Expected empty check results at this level: {node}"
+
+    # Verify excluded audios at the correct level (`bioacoustic`)
+    length_check_results = bioacoustic_node["checks_results"][audio_length_positive_check.__name__]
+    intensity_check_results = bioacoustic_node["checks_results"][audio_intensity_positive_check.__name__]
 
     assert empty_audio in length_check_results["exclude"], "Empty audio should be excluded for length."
     assert silent_audio in intensity_check_results["exclude"], "Silent audio should be excluded for intensity."

@@ -144,11 +144,17 @@ def check_node(audios: List[Audio], task_audios: List[Audio], tree: Dict[str, An
         task_audios (List[Audio]): The subset of `audios` relevant to the current taxonomy node.
         tree (Dict[str, Any]): The taxonomy tree node containing a "checks" key with check functions.
     """
-    check_results: Dict[str, Any] = {}
-    for check in tree.get("checks", []):
+    # Ensure "checks_results" is always a dictionary
+    tree.setdefault("checks_results", {})
+
+    # Only iterate over checks if it's a list
+    checks = tree.get("checks")
+    if not isinstance(checks, list):
+        return  # Exit early if there are no checks
+
+    for check in checks:
         if callable(check):
-            check_results[check.__name__] = check(audios=audios, task_audios=task_audios)
-    tree["checks_results"] = check_results
+            tree["checks_results"][check.__name__] = check(audios=audios, task_audios=task_audios)
 
 
 def run_taxonomy_subtree_checks_recursively(audios: List[Audio], dataset_tree: Dict, task_dict: Dict) -> Dict:
