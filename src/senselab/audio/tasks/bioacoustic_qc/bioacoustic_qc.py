@@ -128,11 +128,6 @@ def task_dict_to_dataset_taxonomy_subtree(task_dict: Dict[str, List[Audio]]) -> 
     return pruned_tree
 
 
-def taxonomy_subtree_to_pydra_workflow(subtree: Dict) -> Workflow:
-    """Constructs a Pydra workflow that corresponds to a dataset taxonomy subtree."""
-    pass
-
-
 def check_node(audios: List[Audio], task_audios: List[Audio], tree: Dict[str, Any]) -> None:
     """Runs quality checks on a given taxonomy tree node and updates the tree with results.
 
@@ -157,14 +152,37 @@ def check_node(audios: List[Audio], task_audios: List[Audio], tree: Dict[str, An
             tree["checks_results"][check.__name__] = check(audios=audios, task_audios=task_audios)
 
 
+def taxonomy_subtree_to_pydra_workflow(subtree: Dict) -> Workflow:
+    """Constructs a Pydra workflow that corresponds to a dataset taxonomy subtree."""
+    pass
+
+
 def run_taxonomy_subtree_checks_recursively(audios: List[Audio], dataset_tree: Dict, task_dict: Dict) -> Dict:
-    """Runs checks in order for a subtree and stores the results in the tree."""
+    """Runs quality checks recursively on a taxonomy subtree and updates the tree with results.
+
+    This function iterates over a hierarchical taxonomy structure and applies quality control
+    checks at each relevant node. It determines the relevant audios for each taxonomy node,
+    applies the appropriate checks, and updates the `dataset_tree` with check results.
+
+    Args:
+        audios (List[Audio]): The full list of audio files to be checked.
+        dataset_tree (Dict): The taxonomy tree representing the dataset structure, which will be modified in-place.
+        task_dict (Dict[str, List[Audio]]): A dictionary mapping task names to lists of associated `Audio` objects.
+
+    Returns:
+        Dict: The updated taxonomy tree with quality check results stored in the `checks_results` field
+        at relevant levels.
+    """
     task_to_tree_path_dict = {task: task_to_taxonomy_tree_path(task) for task in task_dict}
 
     def check_subtree_nodes(subtree: Dict) -> None:
-        """Recursively process each node in the subtree."""
+        """Recursively processes each node in the subtree, applying checks where applicable.
+
+        Args:
+            subtree (Dict): The current subtree being processed.
+        """
         for key, node in subtree.items():
-            # Construct task audios for the current node
+            # Construct task-specific audio list for the current node
             task_audios = [
                 audio for task in task_dict if key in task_to_tree_path_dict[task] for audio in task_dict[task]
             ]
