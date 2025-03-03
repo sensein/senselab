@@ -18,4 +18,5 @@ __all__ = [
     "taxonomy_subtree_to_pydra_workflow",
     "check_node",
     "run_taxonomy_subtree_checks_recursively",
+    "check_quality",
 ]
