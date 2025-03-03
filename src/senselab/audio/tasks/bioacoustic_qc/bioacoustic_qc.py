@@ -133,34 +133,43 @@ def taxonomy_subtree_to_pydra_workflow(subtree: Dict) -> Workflow:
     pass
 
 
-def check_node(audios: List[Audio], tree: Dict[str, Any]) -> Dict[str, Any]:
-    """Runs checks on a given taxonomy tree node and processes audio files accordingly.
+def check_node(audios: List[Audio], task_audios: List[Audio], tree: Dict[str, Any]) -> None:
+    """Runs quality checks on a given taxonomy tree node and updates the tree with results.
 
-    This function applies all checks defined in the node to the provided list of audio files.
-    It returns the results of each check, mapping check function names to their results.
+    This function applies all checks defined in the node to the provided `task_audios` list.
+    It modifies `audios` by removing excluded files and updates `tree` with check results.
 
     Args:
-        audios (List[Any]): A list of audio files to be checked.
+        audios (List[Audio]): The full list of audio files, which may be modified if files are excluded.
+        task_audios (List[Audio]): The subset of `audios` relevant to the current taxonomy node.
         tree (Dict[str, Any]): The taxonomy tree node containing a "checks" key with check functions.
-
-    Returns:
-        Dict[str, Any]: A dictionary mapping check function names to their results.
     """
     check_results: Dict[str, Any] = {}
     for check in tree.get("checks", []):
         if callable(check):
-            check_results[check.__name__], checked_audios = check(audios)
+            check_results[check.__name__] = check(audios=audios, task_audios=task_audios)
     tree["checks_results"] = check_results
-    return checked_audios
 
 
-def run_taxonomy_subtree_checks_recursively(dataset: List[Audio], dataset_tree: Dict) -> Dict:
+def run_taxonomy_subtree_checks_recursively(audios: List[Audio], dataset_tree: Dict, task_dict: Dict) -> Dict:
     """Runs checks in order for a subtree and stores the results in the tree."""
-    # for each node:
-    # construct list of audio files that are relevant
-    # run checks
-    # return tree with excluded and review audios, audio files that passed
-    return {}
+    task_to_tree_path_dict = {task: task_to_taxonomy_tree_path(task) for task in task_dict}
+
+    def check_subtree_nodes(subtree: Dict) -> None:
+        """Recursively process each node in the subtree."""
+        for key, node in subtree.items():
+            # Construct task audios for the current node
+            task_audios = [
+                audio for task in task_dict if key in task_to_tree_path_dict[task] for audio in task_dict[task]
+            ]
+            check_node(audios=audios, task_audios=task_audios, tree=node)
+
+            # Recursively process subclasses if they exist
+            if isinstance(node.get("subclass"), dict):  # Ensure subclass exists
+                check_subtree_nodes(node["subclass"])  # Recurse on actual subtree
+
+    check_subtree_nodes(dataset_tree)  # Start recursion from root
+    return dataset_tree
 
 
 def check_quality(audios: List[Audio], complexity: str = "low", review: bool = False) -> None:
