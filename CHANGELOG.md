@@ -1,3 +1,18 @@
+# 0.30.1 (Tue Mar 04 2025)
+
+#### 🐛 Bug Fix
+
+- Fixing cache pointer [#260](https://github.com/sensein/senselab/pull/260) (jordanwilke@dhcp-10-29-168-254.dyn.MIT.EDU [@wilke0818](https://github.com/wilke0818))
+- experimenting with fixing seg fault during doc build [#257](https://github.com/sensein/senselab/pull/257) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 3
+
+- [@wilke0818](https://github.com/wilke0818)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Jordan Wilke (jordanwilke@dhcp-10-29-168-254.dyn.MIT.EDU)
+
+---
+
 # 0.30.0 (Thu Feb 27 2025)
 
 #### 🚀 Enhancement
