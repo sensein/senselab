@@ -451,6 +451,35 @@ def _align_transcription(
     return aligned_segments
 
 
+def filter_chunks(scriptlines: List[List[Optional[ScriptLine]]]) -> List[List[Optional[ScriptLine]]]:
+    """Extracts only sentence-level ScriptLine objects while preserving None values.
+
+    Args:
+        scriptlines (List[List[Optional[ScriptLine]]]): A nested list of ScriptLine objects, where some may be None.
+
+    Returns:
+        List[List[Optional[ScriptLine]]]: A nested list of sentence-level ScriptLine objects, maintaining None values.
+    """
+    result: List[List[Optional[ScriptLine]]] = []
+
+    for scriptline_list in scriptlines:
+        if not scriptline_list:
+            result.append([])  # Maintain structure
+            continue
+
+        scriptline = scriptline_list[0]
+        sentences: List[Optional[ScriptLine]] = []
+
+        if scriptline is not None and hasattr(scriptline, "chunks"):
+            for sentence_scriptline in scriptline.chunks or []:
+                sentence_scriptline.chunks = []
+                sentences.append(sentence_scriptline)
+
+        result.append(sentences if sentences else [None])  # Ensure None is retained when no sentences exist
+
+    return result
+
+
 def align_transcriptions(
     audios_and_transcriptions_and_language: List[Tuple[Audio, ScriptLine, Language]],
 ) -> List[List[ScriptLine | None]]:
@@ -510,6 +539,8 @@ def align_transcriptions(
             )
             aligned_script_lines.append(alignment)
 
+    if aligned_script_lines is not None:
+        aligned_script_lines = filter_chunks(aligned_script_lines)
     return aligned_script_lines
 
 
