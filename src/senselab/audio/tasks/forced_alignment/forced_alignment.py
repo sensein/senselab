@@ -451,12 +451,15 @@ def _align_transcription(
     return aligned_segments
 
 
-def remove_chunks_by_level(scriptline: Optional[ScriptLine], level: int) -> Union[List[ScriptLine], ScriptLine, None]:
+def remove_chunks_by_level(
+    scriptline: Optional[ScriptLine], level: int, keep_lower: bool = True
+) -> Union[List[ScriptLine], ScriptLine, None]:
     """Recursively removes chunks from a ScriptLine object at a given depth level.
 
     Args:
         scriptline (Optional[ScriptLine]): The root ScriptLine object to modify.
         level (int): The depth level at which to remove chunks.
+        keep_lower (bool): Whether to keep chunks lower than level.
 
     Returns:
         Union[List[ScriptLine], ScriptLine, None]:
@@ -464,12 +467,14 @@ def remove_chunks_by_level(scriptline: Optional[ScriptLine], level: int) -> Unio
             - Otherwise, modifies scriptline in place and returns it.
     """
     if level == 0 and scriptline is not None:
+        if not keep_lower:
+            return None
         return scriptline.chunks  # Return chunks at the target level
 
     if scriptline and scriptline.chunks:
         updated_chunks: List[ScriptLine] = []
         for chunk in scriptline.chunks:
-            updated = remove_chunks_by_level(chunk, level - 1)
+            updated = remove_chunks_by_level(chunk, level - 1, keep_lower)
             if isinstance(updated, list):
                 updated_chunks.extend(updated)  # Flatten nested lists
             elif updated is not None:
@@ -540,10 +545,10 @@ def align_transcriptions(
                 device=device,
             )
             aligned_script_lines.append(alignment)
-    # aligned_script_lines[0][0] = remove_chunk_level(aligned_script_lines[0][0], 3)
+    # aligned_script_lines[0][0] = remove_chunks_by_level(aligned_script_lines[0][0], level=2, keep_lower=False)
     # if aligned_script_lines is not None:
     #     aligned_script_lines = filter_chunks(aligned_script_lines, levels_to_keep)
-    print(aligned_script_lines[0][0])
+    # print(aligned_script_lines[0][0])
     return aligned_script_lines
 
 
