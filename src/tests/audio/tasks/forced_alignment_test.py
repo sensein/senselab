@@ -82,7 +82,7 @@ def script_line_fixture() -> ScriptLine:
     return ScriptLine.from_dict(data)
 
 
-@pytest.mark.skipif(not NLTK_AVAILABLE or not TORCHAUDIO_AVAILABLE, reason="nltk or torchaudio are not installed")
+@pytest.mark.skipif(NLTK_AVAILABLE and TORCHAUDIO_AVAILABLE, reason="nltk and torchaudio are both installed")
 def test_preprocess_segments_nltk_not_installed() -> None:
     """Test preprocessing of segments when nltk is not installed."""
     transcript = [SingleSegment(start=0.0, end=1.0, text="test")]
