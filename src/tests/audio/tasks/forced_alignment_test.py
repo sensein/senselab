@@ -20,6 +20,7 @@ from senselab.audio.tasks.forced_alignment.forced_alignment import (
     _merge_repeats,
     _preprocess_segments,
     align_transcriptions,
+    remove_chunks_by_level,
 )
 from senselab.audio.tasks.speech_to_text import transcribe_audios
 from senselab.utils.data_structures import DeviceType, Language, ScriptLine
@@ -434,8 +435,8 @@ def test_align_transcriptions_multilingual(
     ]
     aligned_transcriptions = align_transcriptions(audios_and_transcriptions_and_language)
     assert len(aligned_transcriptions) == 2
-    assert len(aligned_transcriptions[0]) == 1
-    assert len(aligned_transcriptions[1]) == 1
+    assert len(aligned_transcriptions[0]) == 5
+    assert len(aligned_transcriptions[1]) == 5
     aligned_transcription_en = aligned_transcriptions[0][0] or None
     if isinstance(aligned_transcription_en, ScriptLine):
         compare_alignments(
@@ -459,6 +460,103 @@ def test_align_transcriptions_curiosity_audio_fixture(
         if aligned_transcription.text:
             aligned_transcription.text = aligned_transcription.text.strip(".")
         compare_alignments(aligned_transcription, script_line_fixture_curiosity, difference_tolerance=0.1)
+
+
+@pytest.fixture
+def nested_scriptline() -> ScriptLine:
+    """Creates a nested ScriptLine structure for testing."""
+    return ScriptLine(
+        text="root",
+        chunks=[
+            ScriptLine(
+                text="level 1 - chunk 1",
+                chunks=[
+                    ScriptLine(text="level 2 - chunk 1"),
+                    ScriptLine(text="level 2 - chunk 2"),
+                ],
+            ),
+            ScriptLine(
+                text="level 1 - chunk 2",
+                chunks=[
+                    ScriptLine(
+                        text="level 2 - chunk 3",
+                        chunks=[ScriptLine(text="level 3 - chunk 1")],
+                    )
+                ],
+            ),
+        ],
+    )
+
+
+def test_remove_chunks_by_level_level_0(nested_scriptline: ScriptLine) -> None:
+    """Test removing chunks at level 0 (should return chunks directly)."""
+    result = remove_chunks_by_level(nested_scriptline, level=0)
+    assert isinstance(result, list)
+    assert len(result) == 2
+    assert result[0].text == "level 1 - chunk 1"
+    assert result[1].text == "level 1 - chunk 2"
+
+
+def test_remove_chunks_by_level_level_1(nested_scriptline: ScriptLine) -> None:
+    """Test removing chunks at level 1 (should flatten level 2 chunks into root)."""
+    result = remove_chunks_by_level(nested_scriptline, level=1)
+    assert isinstance(result, ScriptLine)
+    assert result.chunks is not None
+    assert len(result.chunks) == 3
+    assert result.chunks[0].text == "level 2 - chunk 1"
+    assert result.chunks[1].text == "level 2 - chunk 2"
+    assert result.chunks[2].text == "level 2 - chunk 3"
+
+
+def test_remove_chunks_by_level_level_2(nested_scriptline: ScriptLine) -> None:
+    """Test removing chunks at level 2 (should flatten level 3 chunks into level 1)."""
+    result = remove_chunks_by_level(nested_scriptline, level=2)
+    assert isinstance(result, ScriptLine)
+    assert result.chunks is not None
+    assert len(result.chunks) == 2
+    assert result.chunks[0].text == "level 1 - chunk 1"
+    assert result.chunks[1].text == "level 1 - chunk 2"
+    assert result.chunks[1].chunks is not None
+    assert len(result.chunks[1].chunks) == 1
+    assert result.chunks[1].chunks[0].text == "level 3 - chunk 1"
+
+
+def test_remove_chunks_by_level_no_scriptline() -> None:
+    """Test passing None as scriptline (should return None)."""
+    assert remove_chunks_by_level(None, level=1) is None
+
+
+def test_remove_chunks_by_level_keep_lower_false(nested_scriptline: ScriptLine) -> None:
+    """Test removing chunks with keep_lower=False (should return None at level 0)."""
+    result = remove_chunks_by_level(nested_scriptline, level=0, keep_lower=False)
+    assert result is None
+
+
+def test_remove_chunks_by_level_keep_lower_false_at_level_1(nested_scriptline: ScriptLine) -> None:
+    """Test removing chunks at level 1 with keep_lower=False (should remove all level 2 chunks)."""
+    result = remove_chunks_by_level(nested_scriptline, level=1, keep_lower=False)
+    assert isinstance(result, ScriptLine)
+    assert result.chunks is not None
+    assert len(result.chunks) == 0
+    assert result.text == "root"
+
+
+def test_remove_chunks_by_level_keep_lower_false_at_level_2(nested_scriptline: ScriptLine) -> None:
+    """Test removing chunks at level 2 with keep_lower=False (should remove all level 2 chunks)."""
+    result = remove_chunks_by_level(nested_scriptline, level=2, keep_lower=False)
+    assert isinstance(result, ScriptLine)
+    assert result.chunks is not None
+    assert len(result.chunks) == 2
+    assert result.chunks[0].text == "level 1 - chunk 1"
+    assert result.chunks[1].text == "level 1 - chunk 2"
+    assert all(chunk.chunks is not None and len(chunk.chunks) == 0 for chunk in result.chunks)
+    # assert all(len(chunk.chunks) == 0 for chunk in result.chunks)  # Level 2 should be removed
+
+
+def test_remove_chunks_by_level_deep_removal(nested_scriptline: ScriptLine) -> None:
+    """Test removing chunks at a level deeper than existing structure (should not modify)."""
+    result = remove_chunks_by_level(nested_scriptline, level=5)
+    assert result == nested_scriptline  # Should be unchanged
 
 
 if __name__ == "__main__":
