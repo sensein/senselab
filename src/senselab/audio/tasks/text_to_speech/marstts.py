@@ -147,7 +147,7 @@ class Mars5TTS:
                     "It is recommended to be between 1 second and 12 seconds."
                 )
 
-            _, wav_out = my_model.tts(text, target_audio.waveform, target_transcript, cfg=cfg)
+            _, wav_out = my_model.tts(text, target_audio.waveform, target_transcript, cfg=cfg)  # type: ignore
             audios.append(Audio(waveform=wav_out, sampling_rate=my_model.sr))
 
         # Take the end time of the text-to-speech synthesis
