@@ -1,6 +1,6 @@
 """Align function based on WhisperX implementation."""
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
 import torch
@@ -451,37 +451,38 @@ def _align_transcription(
     return aligned_segments
 
 
-def filter_chunks(scriptlines: List[List[Optional[ScriptLine]]]) -> List[List[Optional[ScriptLine]]]:
-    """Extracts only sentence-level ScriptLine objects while preserving None values.
+def remove_chunks_by_level(scriptline: Optional[ScriptLine], level: int) -> Union[List[ScriptLine], ScriptLine, None]:
+    """Recursively removes chunks from a ScriptLine object at a given depth level.
 
     Args:
-        scriptlines (List[List[Optional[ScriptLine]]]): A nested list of ScriptLine objects, where some may be None.
+        scriptline (Optional[ScriptLine]): The root ScriptLine object to modify.
+        level (int): The depth level at which to remove chunks.
 
     Returns:
-        List[List[Optional[ScriptLine]]]: A nested list of sentence-level ScriptLine objects, maintaining None values.
+        Union[List[ScriptLine], ScriptLine, None]:
+            - If level == 0, returns the list of chunks.
+            - Otherwise, modifies scriptline in place and returns it.
     """
-    result: List[List[Optional[ScriptLine]]] = []
+    if level == 0 and scriptline is not None:
+        return scriptline.chunks  # Return chunks at the target level
 
-    for scriptline_list in scriptlines:
-        if not scriptline_list:
-            result.append([])  # Maintain structure
-            continue
+    if scriptline and scriptline.chunks:
+        updated_chunks: List[ScriptLine] = []
+        for chunk in scriptline.chunks:
+            updated = remove_chunks_by_level(chunk, level - 1)
+            if isinstance(updated, list):
+                updated_chunks.extend(updated)  # Flatten nested lists
+            elif updated is not None:
+                updated_chunks.append(updated)
 
-        scriptline = scriptline_list[0]
-        sentences: List[Optional[ScriptLine]] = []
+        scriptline.chunks = updated_chunks  # Replace with updated chunk list
 
-        if scriptline is not None and hasattr(scriptline, "chunks"):
-            for sentence_scriptline in scriptline.chunks or []:
-                sentence_scriptline.chunks = []
-                sentences.append(sentence_scriptline)
-
-        result.append(sentences if sentences else [None])  # Ensure None is retained when no sentences exist
-
-    return result
+    return scriptline
 
 
 def align_transcriptions(
     audios_and_transcriptions_and_language: List[Tuple[Audio, ScriptLine, Language]],
+    levels_to_keep: Dict = {"utterance": False, "word": False, "char": False},
 ) -> List[List[ScriptLine | None]]:
     """Align multiple transcriptions with their respective audios using a wav2vec2.0 model.
 
@@ -490,6 +491,7 @@ def align_transcriptions(
             Each tuple contains an Audio object, a ScriptLine with transcription,
             and an optional Language (default is English).
         device (DeviceType): Device to run the alignment on (e.g., CPU, MPS, or GPU).
+        levels_to_keep (Dict): Levels of transcription to keep in output.
 
     Returns:
         List[List[ScriptLine]]: A list of aligned results for each audio.
@@ -538,9 +540,10 @@ def align_transcriptions(
                 device=device,
             )
             aligned_script_lines.append(alignment)
-
-    if aligned_script_lines is not None:
-        aligned_script_lines = filter_chunks(aligned_script_lines)
+    # aligned_script_lines[0][0] = remove_chunk_level(aligned_script_lines[0][0], 3)
+    # if aligned_script_lines is not None:
+    #     aligned_script_lines = filter_chunks(aligned_script_lines, levels_to_keep)
+    print(aligned_script_lines[0][0])
     return aligned_script_lines
 
 
