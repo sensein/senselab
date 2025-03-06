@@ -1,10 +1,26 @@
 """This module contains unit tests for the EER function."""
 
+import pytest
 import torch
 
 from senselab.utils.tasks.eer import compute_eer
 
+try:
+    import speechbrain
 
+    SPEECHBRAIN_AVAILABLE = True
+except ImportError:
+    SPEECHBRAIN_AVAILABLE = False
+
+
+@pytest.mark.skipif(SPEECHBRAIN_AVAILABLE, reason="SpeechBrain is installed")
+def test_compute_eer_import_error() -> None:
+    """Test that an ImportError is raised when SpeechBrain is not installed."""
+    with pytest.raises(ImportError):
+        compute_eer(torch.tensor([0.1, 0.2, 0.3]), torch.tensor([0.4, 0.5, 0.6]))
+
+
+@pytest.mark.skipif(not SPEECHBRAIN_AVAILABLE, reason="SpeechBrain is not installed")
 def test_compute_eer() -> None:
     """Test that the EER is computed correctly for perfectly separable data."""
     predictions = torch.tensor([0.6, 0.7, 0.8, 0.5])
@@ -15,6 +31,7 @@ def test_compute_eer() -> None:
     assert 0 <= threshold <= 1, "Threshold should be between 0 and 1"
 
 
+@pytest.mark.skipif(not SPEECHBRAIN_AVAILABLE, reason="SpeechBrain is not installed")
 def test_compute_eer_random() -> None:
     """Test that the EER is computed correctly for random predictions and targets."""
     # Set random seed for reproducibility

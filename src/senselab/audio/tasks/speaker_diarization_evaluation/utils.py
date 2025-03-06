@@ -2,10 +2,15 @@
 
 from typing import Dict, List
 
-from pyannote.core import Annotation, Segment
-from pyannote.metrics.diarization import DiarizationErrorRate, GreedyDiarizationErrorRate
-
 from senselab.utils.data_structures import ScriptLine
+
+try:
+    from pyannote.core import Annotation, Segment
+    from pyannote.metrics.diarization import DiarizationErrorRate, GreedyDiarizationErrorRate
+
+    PYANNOTEAUDIO_AVAILABLE = True
+except ImportError:
+    PYANNOTEAUDIO_AVAILABLE = False
 
 
 def calculate_diarization_error_rate(
@@ -33,6 +38,11 @@ def calculate_diarization_error_rate(
         A dictionary with at least the diarization error rate, its components if detailed was true, and the
           speaker mapping if return_speaker_mapping was given.
     """
+    if not PYANNOTEAUDIO_AVAILABLE:
+        raise ImportError(
+            "`pyannote-audio` is not installed. Please install it using:\n\n" "    pip install senselab['audio']"
+        )
+
     hypothesis_annotation = Annotation()
     reference_annotation = Annotation()
 

@@ -4,25 +4,31 @@ import time
 from typing import Dict, List, Optional, Union
 
 import torch
-from pyannote.audio import Pipeline
-from pyannote.core import Annotation
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, PyannoteAudioModel, ScriptLine, _select_device_and_dtype
 from senselab.utils.data_structures.logging import logger
 
+try:
+    from pyannote.audio import Pipeline
+    from pyannote.core import Annotation
+
+    PYANNOTEAUDIO_AVAILABLE = True
+except ImportError:
+    PYANNOTEAUDIO_AVAILABLE = False
+
 
 class PyannoteDiarization:
     """A factory for managing Pyannote Diarization pipelines."""
 
-    _pipelines: Dict[str, Pipeline] = {}
+    _pipelines: Dict[str, "Pipeline"] = {}
 
     @classmethod
     def _get_pyannote_diarization_pipeline(
         cls,
         model: PyannoteAudioModel,
         device: Union[DeviceType, None],
-    ) -> Pipeline:
+    ) -> "Pipeline":
         """Get or create a Pyannote Diarization pipeline.
 
         Args:
@@ -32,6 +38,10 @@ class PyannoteDiarization:
         Returns:
             Pipeline: The diarization pipeline.
         """
+        if not PYANNOTEAUDIO_AVAILABLE:
+            raise ImportError(
+                "`pyannote-audio` is not installed. Please install it using:\n\n" "    pip install senselab['audio']"
+            )
         device, _ = _select_device_and_dtype(
             user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
         )
@@ -66,10 +76,8 @@ def diarize_audios_with_pyannote(
     Returns:
         List[ScriptLine]: A list of ScriptLine objects containing the diarization results.
     """
-    if model is None:
-        model = PyannoteAudioModel(path_or_uri="pyannote/speaker-diarization-3.1", revision="main")
 
-    def _annotation_to_script_lines(annotation: Annotation) -> List[ScriptLine]:
+    def _annotation_to_script_lines(annotation: "Annotation") -> List[ScriptLine]:
         """Convert a Pyannote annotation to a list of script lines.
 
         Args:
@@ -82,6 +90,14 @@ def diarize_audios_with_pyannote(
         for segment, _, label in annotation.itertracks(yield_label=True):
             diarization_list.append(ScriptLine(speaker=label, start=segment.start, end=segment.end))
         return diarization_list
+
+    if not PYANNOTEAUDIO_AVAILABLE:
+        raise ImportError(
+            "`pyannote-audio` is not installed. Please install it using:\n\n" "    pip install senselab['audio']"
+        )
+
+    if model is None:
+        model = PyannoteAudioModel(path_or_uri="pyannote/speaker-diarization-3.1", revision="main")
 
     # 16khz comes from the model cards of pyannote/speaker-diarization-3.1
     expected_sample_rate = 16000

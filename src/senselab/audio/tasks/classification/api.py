@@ -7,9 +7,9 @@ and the model-specific parameters, and senselab handles the rest.
 
 from typing import Any, List, Optional
 
-from senselab.audio.data_structures import Audio
+from senselab.audio.data_structures import Audio, AudioClassificationResult
 from senselab.audio.tasks.classification.huggingface import HuggingFaceAudioClassifier
-from senselab.utils.data_structures import AudioClassificationResult, DeviceType, HFModel, SenselabModel
+from senselab.utils.data_structures import DeviceType, HFModel, SenselabModel
 
 
 def classify_audios(

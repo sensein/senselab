@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from senselab.utils.data_structures import AudioClassificationResult
+from senselab.audio.data_structures import AudioClassificationResult
 
 
 def test_audio_classification_result_sorts() -> None:

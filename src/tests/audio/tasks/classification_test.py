@@ -11,7 +11,15 @@ from senselab.audio.tasks.preprocessing import resample_audios
 from senselab.utils.data_structures import HFModel
 from tests.audio.conftest import MONO_AUDIO_PATH
 
+try:
+    import torchaudio  # noqa: F401
 
+    TORCHAUDIO_AVAILABLE = True
+except ImportError:
+    TORCHAUDIO_AVAILABLE = False
+
+
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not available")
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_speech_emotion_recognition() -> None:
     """Tests speech emotion recognition."""

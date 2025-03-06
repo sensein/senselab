@@ -4,13 +4,19 @@ import time
 from typing import Dict, List, Optional, Tuple, Union
 
 import torch
-from speechbrain.inference.enhancement import SpectralMaskEnhancement as enhance_model
-from speechbrain.inference.separation import SepformerSeparation as separator
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.preprocessing import concatenate_audios, evenly_segment_audios
 from senselab.utils.data_structures import DeviceType, SpeechBrainModel, _select_device_and_dtype
 from senselab.utils.data_structures.logging import logger
+
+try:
+    from speechbrain.inference.enhancement import SpectralMaskEnhancement as enhance_model
+    from speechbrain.inference.separation import SepformerSeparation as separator
+
+    SPEECHBRAIN_AVAILABLE = True
+except ImportError:
+    SPEECHBRAIN_AVAILABLE = False
 
 
 class SpeechBrainEnhancer:
@@ -18,14 +24,14 @@ class SpeechBrainEnhancer:
 
     MAX_DURATION_SECONDS = 60  # Maximum duration per segment in seconds
     MIN_LENGTH = 16  # kernel size for speechbrain/sepformer-wham16k-enhancement
-    _models: Dict[str, Union[separator, enhance_model]] = {}
+    _models: Dict[str, Union["separator", "enhance_model"]] = {}
 
     @classmethod
     def _get_speechbrain_model(
         cls,
         model: SpeechBrainModel,
         device: Optional[DeviceType] = None,
-    ) -> Tuple[separator, DeviceType, torch.dtype]:
+    ) -> Tuple["separator", DeviceType, torch.dtype]:
         """Get or create a SpeechBrain enhancement model.
 
         Args:
@@ -38,6 +44,10 @@ class SpeechBrainEnhancer:
             device: The device used for the model.
             dtype: The dtype used for the model.
         """
+        if not SPEECHBRAIN_AVAILABLE:
+            raise ImportError(
+                "`speechbrain` is not installed. Please install it using:\n\n" "    pip install senselab['audio']"
+            )
         device, dtype = _select_device_and_dtype(
             user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
         )
@@ -74,6 +84,10 @@ class SpeechBrainEnhancer:
         Returns:
             List[Audio]: The list of enhanced audio objects.
         """
+        if not SPEECHBRAIN_AVAILABLE:
+            raise ImportError(
+                "`speechbrain` is not installed. Please install it using:\n\n" "    pip install senselab['audio']"
+            )
         if model is None:
             model = SpeechBrainModel(path_or_uri="speechbrain/sepformer-wham16k-enhancement", revision="main")
 

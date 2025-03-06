@@ -34,13 +34,22 @@ If you attempt to install this package on an unsupported system, the installatio
 Install this package via:
 
 ```sh
-pip install senselab
+pip install senselab['all']
 ```
 
 Or get the newest development version via:
 
 ```sh
 pip install git+https://github.com/sensein/senselab.git
+```
+
+If you want to install only audio dependencies, you do:
+```sh
+pip install senselab['audio']
+```
+To install video and text extras, please do:
+```sh
+pip install senselab[video,text]
 ```
 
 ## Quick start

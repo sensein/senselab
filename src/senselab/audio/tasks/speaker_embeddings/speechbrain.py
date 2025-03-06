@@ -4,23 +4,29 @@ from typing import Dict, List, Optional
 
 import torch
 import torch.nn.functional as F
-from speechbrain.inference.speaker import EncoderClassifier
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, SpeechBrainModel, _select_device_and_dtype
+
+try:
+    from speechbrain.inference.speaker import EncoderClassifier
+
+    SPEECHBRAIN_AVAILABLE = True
+except ImportError:
+    SPEECHBRAIN_AVAILABLE = False
 
 
 class SpeechBrainEmbeddings:
     """A factory for extracting speaker embeddings using speechbrain models."""
 
-    _models: Dict[str, EncoderClassifier] = {}
+    _models: Dict[str, "EncoderClassifier"] = {}
 
     @classmethod
     def _get_speechbrain_model(
         cls,
         model: SpeechBrainModel,
         device: Optional[DeviceType] = None,
-    ) -> EncoderClassifier:
+    ) -> "EncoderClassifier":
         """Get or create a SpeechBrain model.
 
         Args:
@@ -34,6 +40,10 @@ class SpeechBrainEmbeddings:
         Todo:
             - Adding savedir for storing models
         """
+        if not SPEECHBRAIN_AVAILABLE:
+            raise ImportError(
+                "`speechbrain` is not installed. Please install it using:\n\n" "    pip install senselab['audio']"
+            )
         device, _ = _select_device_and_dtype(
             user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
         )
@@ -67,6 +77,11 @@ class SpeechBrainEmbeddings:
             - Optimizing the computation by working in batches
             - Double-checking the input size of classifier.encode_batch
         """
+        if not SPEECHBRAIN_AVAILABLE:
+            raise ImportError(
+                "`speechbrain` is not installed. Please install it using:\n\n" "    pip install senselab['audio']"
+            )
+
         if model is None:
             model = SpeechBrainModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb", revision="main")
 
