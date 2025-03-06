@@ -102,7 +102,7 @@ jobs:
 
 
   start-runner-310-core:
-    if: github.event.pull_request.draft == false && contains(github.event.pull_request.labels.*.name, 'to-test-gpu-core') && success()
+    if: github.event.pull_request.draft == false && contains(github.event.pull_request.labels.*.name, 'to-test-gpu') && success()
     needs:
     - pre-commit
     - macos-tests
