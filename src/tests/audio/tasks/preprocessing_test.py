@@ -16,7 +16,25 @@ from senselab.audio.tasks.preprocessing import (
     select_channel_from_audios,
 )
 
+try:
+    from speechbrain.augment.time_domain import Resample
 
+    SPEECHBRAIN_AVAILABLE = True
+except ImportError:
+    SPEECHBRAIN_AVAILABLE = False
+
+try:
+    import torchaudio
+
+    TORCHAUDIO_AVAILABLE = True
+except ImportError:
+    TORCHAUDIO_AVAILABLE = False
+
+
+@pytest.mark.skipif(
+    not SPEECHBRAIN_AVAILABLE or not TORCHAUDIO_AVAILABLE,
+    reason="SpeechBrain or torchaudio are not available.",
+)
 def test_resample_audios(
     mono_audio_sample: Audio,
     stereo_audio_sample: Audio,
@@ -35,6 +53,10 @@ def test_resample_audios(
         ), f"Expected size {math.ceil(expected_size)}, but got {resampled_sample.waveform.shape[1]}"
 
 
+@pytest.mark.skipif(
+    not TORCHAUDIO_AVAILABLE,
+    reason="torchaudio is not available.",
+)
 def test_downmix_audios(mono_audio_sample: Audio, stereo_audio_sample: Audio) -> None:
     """Tests functionality for downmixing Audio objects."""
     for sample in [mono_audio_sample, stereo_audio_sample]:
@@ -50,6 +72,10 @@ def test_downmix_audios(mono_audio_sample: Audio, stereo_audio_sample: Audio) ->
             ).all(), "Downmixed audio should be the mean of the stereo channels"
 
 
+@pytest.mark.skipif(
+    not TORCHAUDIO_AVAILABLE,
+    reason="torchaudio is not available.",
+)
 def test_select_channel_from_audios(mono_audio_sample: Audio, stereo_audio_sample: Audio) -> None:
     """Tests functionality for selecting a specific channel from Audio objects."""
     for sample in [mono_audio_sample, stereo_audio_sample]:
@@ -64,6 +90,10 @@ def test_select_channel_from_audios(mono_audio_sample: Audio, stereo_audio_sampl
             ), "Selected channel audio should match the original selected channel"
 
 
+@pytest.mark.skipif(
+    not TORCHAUDIO_AVAILABLE,
+    reason="torchaudio is not available.",
+)
 def test_extract_segments(resampled_mono_audio_sample: Audio) -> None:
     """Test segment extraction."""
     segments = [(0.0, 2.0), (2.0, 4.0)]
@@ -74,6 +104,10 @@ def test_extract_segments(resampled_mono_audio_sample: Audio) -> None:
         print(f"Extracted segment {i+1} has correct length: {segment.waveform.shape[1]} samples")
 
 
+@pytest.mark.skipif(
+    not TORCHAUDIO_AVAILABLE,
+    reason="torchaudio is not available.",
+)
 def test_pad_audios(resampled_mono_audio_sample: Audio, resampled_stereo_audio_sample: Audio) -> None:
     """Test audio padding."""
     desired_samples = 1000000
@@ -85,6 +119,10 @@ def test_pad_audios(resampled_mono_audio_sample: Audio, resampled_stereo_audio_s
     assert len(padded_stereo_audio.waveform[1]) == desired_samples
 
 
+@pytest.mark.skipif(
+    not TORCHAUDIO_AVAILABLE,
+    reason="torchaudio is not available.",
+)
 @pytest.mark.parametrize(
     "audio_sample_fixture, segment_length",
     [
@@ -103,6 +141,10 @@ def test_evenly_segment_audios(audio_sample_fixture: str, segment_length: int, r
             assert channel.shape[0] == expected_length
 
 
+@pytest.mark.skipif(
+    not TORCHAUDIO_AVAILABLE,
+    reason="torchaudio is not available.",
+)
 def test_chunk_audios(mono_audio_sample: Audio) -> None:
     """Tests functionality for chunking Audio objects."""
     audio_duration = mono_audio_sample.waveform.shape[1] / mono_audio_sample.sampling_rate
@@ -129,6 +171,10 @@ def test_chunk_audios(mono_audio_sample: Audio) -> None:
     assert chunked_audio.waveform.shape[1] == mono_audio_sample.waveform.shape[1]
 
 
+@pytest.mark.skipif(
+    not TORCHAUDIO_AVAILABLE,
+    reason="torchaudio is not available.",
+)
 def test_concatenate_audios(resampled_mono_audio_sample: Audio, resampled_mono_audio_sample_x2: Audio) -> None:
     """Tests functionality for concatenating Audio objects."""
     assert torch.equal(

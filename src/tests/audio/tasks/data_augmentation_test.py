@@ -2,16 +2,43 @@
 
 import pytest
 import torch
-from audiomentations import Compose as AudiomentationsCompose
-from audiomentations import Gain
-from torch_audiomentations import Compose, PolarityInversion
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.data_augmentation import augment_audios
 from senselab.utils.data_structures import SenselabDataset
 from tests.audio.conftest import MONO_AUDIO_PATH, STEREO_AUDIO_PATH
 
+try:
+    from audiomentations import Compose as AudiomentationsCompose
+    from audiomentations import Gain
 
+    AUDIOMENTATIONS_AVAILABLE = True
+except ImportError:
+    AUDIOMENTATIONS_AVAILABLE = False
+
+try:
+    from torch_audiomentations import Compose, PolarityInversion
+
+    TORCH_AUDIOMENTATIONS_AVAILABLE = True
+except ImportError:
+    TORCH_AUDIOMENTATIONS_AVAILABLE = False
+
+
+@pytest.mark.skipif(AUDIOMENTATIONS_AVAILABLE, reason="audiomentations is installed.")
+def test_audio_data_augmentation_without_audiomentations() -> None:
+    """Test data augmentations without audiomentations."""
+    with pytest.raises(NameError):
+        _ = AudiomentationsCompose(transforms=[Gain(min_gain_db=14.99, max_gain_db=15, p=1.0)])
+
+
+@pytest.mark.skipif(TORCH_AUDIOMENTATIONS_AVAILABLE, reason="torch-audiomentations is installed.")
+def test_audio_data_augmentation_without_torch_audiomentations() -> None:
+    """Test data augmentations without torch-audiomentations."""
+    with pytest.raises(NameError):
+        _ = Compose(transforms=[PolarityInversion(p=1, output_type="dict")], output_type="dict")
+
+
+@pytest.mark.skipif(not TORCH_AUDIOMENTATIONS_AVAILABLE, reason="audiomentations is not installed.")
 def test_audio_data_augmentation_with_torch_audiomentations() -> None:
     """Test data augmentations using the new Audio data types with torch-audiomentations."""
     apply_augmentation = Compose(transforms=[PolarityInversion(p=1, output_type="dict")], output_type="dict")
@@ -51,6 +78,7 @@ def test_audio_data_augmentation_with_torch_audiomentations() -> None:
         assert len(augmented_audios) == 2
 
 
+@pytest.mark.skipif(not AUDIOMENTATIONS_AVAILABLE, reason="audiomentations is not installed.")
 def test_audio_data_augmentation_with_audiomentations(mono_audio_sample: Audio, stereo_audio_sample: Audio) -> None:
     """Test data augmentations using the new Audio data types with audiomentations."""
     apply_augmentation = AudiomentationsCompose(transforms=[Gain(min_gain_db=14.99, max_gain_db=15, p=1.0)])

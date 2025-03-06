@@ -4,12 +4,30 @@ import os
 from abc import ABC, abstractmethod
 from typing import List
 
-import cv2
-import mediapipe as mp
 import numpy as np
-from mediapipe.tasks import python
-from mediapipe.tasks.python import vision
-from ultralytics import YOLO
+
+try:
+    import cv2
+
+    CV2_AVAILABLE = True
+except ImportError:
+    CV2_AVAILABLE = False
+
+try:
+    import mediapipe as mp
+    from mediapipe.tasks import python
+    from mediapipe.tasks.python import vision
+
+    MEDIAPIPE_AVAILABLE = True
+except ImportError:
+    MEDIAPIPE_AVAILABLE = False
+
+try:
+    from ultralytics import YOLO
+
+    YOLO_AVAILABLE = True
+except ImportError:
+    YOLO_AVAILABLE = False
 
 from senselab.video.data_structures.pose import (
     ImagePose,
@@ -86,11 +104,15 @@ class MediaPipePoseEstimator(PoseEstimator):
         Args:
             model_type (str): Type of MediaPipe model to use ('lite', 'full', 'heavy').
         """
+        if not MEDIAPIPE_AVAILABLE:
+            raise ImportError(
+                "`mediapipe` is not installed. Please install it using:\n\n" "    pip install senselab['video']"
+            )
         self.model_path = get_model("mediapipe", model_type)
         self.num_individuals = 1
         self._detector = None
 
-    def detector(self, num_individuals: int = 1) -> vision.PoseLandmarker:
+    def detector(self, num_individuals: int = 1) -> "vision.PoseLandmarker":
         """Initialization of the MediaPipe detector.
 
         Args:
@@ -149,6 +171,11 @@ class MediaPipePoseEstimator(PoseEstimator):
             FileNotFoundError: If the specified image file does not exist.
             ValueError: If `num_individuals` is not a positive integer.
         """
+        if not CV2_AVAILABLE:
+            raise ImportError(
+                "`opencv-python` is not installed. Please install it using:\n\n" "    pip install senselab['video']"
+            )
+
         if not os.path.exists(image_path):
             raise FileNotFoundError(f"Image not found at: {image_path}")
 
@@ -157,7 +184,7 @@ class MediaPipePoseEstimator(PoseEstimator):
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         return self.estimate(image, num_individuals)
 
-    def extract_landmarks(self, detection_result: vision.PoseLandmarkerResult) -> List[IndividualPose]:
+    def extract_landmarks(self, detection_result: "vision.PoseLandmarkerResult") -> List[IndividualPose]:
         """Extract normalized and world landmarks from the detection result.
 
         Args:
@@ -206,6 +233,10 @@ class YOLOPoseEstimator(PoseEstimator):
         Args:
             model_type (str): Type of YOLO model to use (e.g. '8n', '11p', '11s').
         """
+        if not YOLO_AVAILABLE:
+            raise ImportError(
+                "`yolo` is not installed. Please install it using:\n\n" "    pip install senselab['video']"
+            )
         self.model_path = get_model("yolo", model_type)
         self._model = YOLO(self.model_path)
 
@@ -263,6 +294,11 @@ class YOLOPoseEstimator(PoseEstimator):
         Raises:
             FileNotFoundError: If the specified image file does not exist.
         """
+        if not CV2_AVAILABLE:
+            raise ImportError(
+                "`opencv-python` is not installed. Please install it using:\n\n" "    pip install senselab['video']"
+            )
+
         if not os.path.exists(image_path):
             raise FileNotFoundError(f"Image not found at: {image_path}")
 

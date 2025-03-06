@@ -1,5 +1,7 @@
 """This script contains unit tests for the features extraction tasks."""
 
+from pathlib import Path
+
 import pytest
 import torch
 
@@ -17,6 +19,7 @@ from senselab.audio.tasks.features_extraction.praat_parselmouth import (
     extract_slope_tilt,
     extract_spectral_moments,
     extract_speech_rate,
+    get_sound,
     measure_f1f2_formants_bandwidths,
 )
 from senselab.audio.tasks.features_extraction.torchaudio import (
@@ -25,13 +28,59 @@ from senselab.audio.tasks.features_extraction.torchaudio import (
     extract_mfcc_from_audios,
     extract_pitch_from_audios,
     extract_spectrogram_from_audios,
+    extract_torchaudio_features_from_audios,
 )
 from senselab.audio.tasks.features_extraction.torchaudio_squim import (
     extract_objective_quality_features_from_audios,
     extract_subjective_quality_features_from_audios,
 )
 
+try:
+    import opensmile
 
+    OPENSMILE_AVAILABLE = True
+except ImportError:
+    OPENSMILE_AVAILABLE = False
+
+try:
+    import parselmouth
+
+    PARSELMOUTH_AVAILABLE = True
+except ImportError:
+    PARSELMOUTH_AVAILABLE = False
+
+try:
+    import torchaudio
+
+    TORCHAUDIO_AVAILABLE = True
+except ImportError:
+    TORCHAUDIO_AVAILABLE = False
+
+
+@pytest.mark.skipif(OPENSMILE_AVAILABLE, reason="openSMILE is installed.")
+def test_missing_opensmile_dependency() -> None:
+    """Test that an ImportError is raised when openSMILE is not installed."""
+    with pytest.raises(ImportError):
+        from senselab.audio.tasks.features_extraction.opensmile import OpenSmileFeatureExtractorFactory
+
+        OpenSmileFeatureExtractorFactory.get_opensmile_extractor("eGeMAPSv02", "Functionals")
+
+
+@pytest.mark.skipif(PARSELMOUTH_AVAILABLE, reason="Praat-Parselmouth is installed.")
+def test_missing_parselmouth_dependency() -> None:
+    """Test that an ImportError is raised when Praat-Parselmouth is not installed."""
+    with pytest.raises(ImportError):
+        get_sound(audio=Path("path/to/audio.wav"))
+
+
+@pytest.mark.skipif(TORCHAUDIO_AVAILABLE, reason="torchaudio is installed.")
+def test_missing_torchaudio_dependency() -> None:
+    """Test that an ImportError is raised when torchaudio is not installed."""
+    with pytest.raises(ImportError):
+        extract_torchaudio_features_from_audios([Audio(waveform=torch.rand(1, 16000), sampling_rate=16000)])
+
+
+@pytest.mark.skipif(not PARSELMOUTH_AVAILABLE, reason="Praat-Parselmouth is not installed.")
 def test_extract_audio_duration(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of audio durations."""
     result = extract_audio_duration(resampled_mono_audio_sample)
@@ -40,6 +89,7 @@ def test_extract_audio_duration(resampled_mono_audio_sample: Audio) -> None:
     assert isinstance(result["duration"], float)
 
 
+@pytest.mark.skipif(not PARSELMOUTH_AVAILABLE, reason="Praat-Parselmouth is not installed.")
 def test_extract_speech_rate(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of speech rate features."""
     result = extract_speech_rate(resampled_mono_audio_sample)
@@ -49,6 +99,7 @@ def test_extract_speech_rate(resampled_mono_audio_sample: Audio) -> None:
     assert all(isinstance(result[key], float) for key in result)
 
 
+@pytest.mark.skipif(not PARSELMOUTH_AVAILABLE, reason="Praat-Parselmouth is not installed.")
 def test_extract_pitch_values(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of pitch values."""
     result = extract_pitch_values(resampled_mono_audio_sample)
@@ -60,6 +111,7 @@ def test_extract_pitch_values(resampled_mono_audio_sample: Audio) -> None:
     assert isinstance(result["pitch_ceiling"], float)
 
 
+@pytest.mark.skipif(not PARSELMOUTH_AVAILABLE, reason="Praat-Parselmouth is not installed.")
 def test_extract_pitch_descriptors(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of pitch features."""
     result = extract_pitch_descriptors(resampled_mono_audio_sample, floor=75.0, ceiling=500.0, frame_shift=0.01)
@@ -68,6 +120,7 @@ def test_extract_pitch_descriptors(resampled_mono_audio_sample: Audio) -> None:
     assert all(isinstance(result[key], float) for key in result)
 
 
+@pytest.mark.skipif(not PARSELMOUTH_AVAILABLE, reason="Praat-Parselmouth is not installed.")
 def test_extract_intensity_descriptors(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of intensity features."""
     result = extract_intensity_descriptors(resampled_mono_audio_sample, floor=75.0, frame_shift=0.01)
@@ -78,6 +131,7 @@ def test_extract_intensity_descriptors(resampled_mono_audio_sample: Audio) -> No
     assert isinstance(result["range_db_ratio"], float)
 
 
+@pytest.mark.skipif(not PARSELMOUTH_AVAILABLE, reason="Praat-Parselmouth is not installed.")
 def test_extract_harmonicity_descriptors(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of harmonicity features."""
     result = extract_harmonicity_descriptors(resampled_mono_audio_sample, floor=75.0, frame_shift=0.01)
@@ -88,6 +142,7 @@ def test_extract_harmonicity_descriptors(resampled_mono_audio_sample: Audio) -> 
     assert isinstance(result["hnr_db_std_dev"], float)
 
 
+@pytest.mark.skipif(not PARSELMOUTH_AVAILABLE, reason="Praat-Parselmouth is not installed.")
 def test_extract_slope_tilt(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of spectral slope and tilt features."""
     result = extract_slope_tilt(resampled_mono_audio_sample, floor=75.0, ceiling=500.0)
@@ -98,6 +153,7 @@ def test_extract_slope_tilt(resampled_mono_audio_sample: Audio) -> None:
     assert isinstance(result["spectral_tilt"], float)
 
 
+@pytest.mark.skipif(not PARSELMOUTH_AVAILABLE, reason="Praat-Parselmouth is not installed.")
 def test_extract_cpp_descriptors(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of cepstral peak prominence (CPP) features."""
     result = extract_cpp_descriptors(resampled_mono_audio_sample, floor=75.0, ceiling=500.0, frame_shift=0.01)
@@ -106,6 +162,7 @@ def test_extract_cpp_descriptors(resampled_mono_audio_sample: Audio) -> None:
     assert isinstance(result["mean_cpp"], float)
 
 
+@pytest.mark.skipif(not PARSELMOUTH_AVAILABLE, reason="Praat-Parselmouth is not installed.")
 def test_measure_f1f2_formants_bandwidths(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of formant frequency features."""
     result = measure_f1f2_formants_bandwidths(resampled_mono_audio_sample, floor=75.0, ceiling=500.0, frame_shift=0.01)
@@ -116,6 +173,7 @@ def test_measure_f1f2_formants_bandwidths(resampled_mono_audio_sample: Audio) ->
     assert all(isinstance(result[key], float) for key in result)
 
 
+@pytest.mark.skipif(not PARSELMOUTH_AVAILABLE, reason="Praat-Parselmouth is not installed.")
 def test_extract_spectral_moments(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of spectral moments."""
     result = extract_spectral_moments(
@@ -128,6 +186,7 @@ def test_extract_spectral_moments(resampled_mono_audio_sample: Audio) -> None:
     assert all(isinstance(result[key], float) for key in result)
 
 
+@pytest.mark.skipif(not PARSELMOUTH_AVAILABLE, reason="Praat-Parselmouth is not installed.")
 def test_extract_jitter(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of jitter descriptors."""
     result = extract_jitter(resampled_mono_audio_sample, floor=75.0, ceiling=500.0)
@@ -138,6 +197,7 @@ def test_extract_jitter(resampled_mono_audio_sample: Audio) -> None:
     assert all(isinstance(result[key], float) for key in result)
 
 
+@pytest.mark.skipif(not PARSELMOUTH_AVAILABLE, reason="Praat-Parselmouth is not installed.")
 def test_extract_shimmer(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of shimmer descriptors."""
     result = extract_shimmer(resampled_mono_audio_sample, floor=75.0, ceiling=500.0)
@@ -149,6 +209,7 @@ def test_extract_shimmer(resampled_mono_audio_sample: Audio) -> None:
     assert all(isinstance(result[key], float) for key in result)
 
 
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 def test_extract_spectrogram_from_audios(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of spectrogram from audio."""
     result = extract_spectrogram_from_audios([resampled_mono_audio_sample])
@@ -161,6 +222,7 @@ def test_extract_spectrogram_from_audios(resampled_mono_audio_sample: Audio) -> 
     assert all(spec["spectrogram"].shape[0] == 513 for spec in result)
 
 
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 def test_extract_mel_spectrogram_from_audios(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of mel spectrogram from audio."""
     result = extract_mel_spectrogram_from_audios([resampled_mono_audio_sample])
@@ -173,6 +235,7 @@ def test_extract_mel_spectrogram_from_audios(resampled_mono_audio_sample: Audio)
     assert all(spec["mel_spectrogram"].shape[0] == 128 for spec in result)
 
 
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 def test_extract_mfcc_from_audios(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of MFCC from audio."""
     result = extract_mfcc_from_audios([resampled_mono_audio_sample])
@@ -185,6 +248,7 @@ def test_extract_mfcc_from_audios(resampled_mono_audio_sample: Audio) -> None:
     assert all(mfcc["mfcc"].shape[0] == 40 for mfcc in result)
 
 
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 def test_extract_mel_filter_bank(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of mel filter bank from audio."""
     result = extract_mel_filter_bank_from_audios([resampled_mono_audio_sample])
@@ -197,6 +261,7 @@ def test_extract_mel_filter_bank(resampled_mono_audio_sample: Audio) -> None:
     assert all(mel_fb["mel_filter_bank"].shape[0] == 128 for mel_fb in result)
 
 
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 def test_extract_pitch_from_audios(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of pitch from audio."""
     result = extract_pitch_from_audios([resampled_mono_audio_sample])
@@ -208,6 +273,7 @@ def test_extract_pitch_from_audios(resampled_mono_audio_sample: Audio) -> None:
     assert all(pitch["pitch"].dim() == 1 for pitch in result)
 
 
+@pytest.mark.skipif(not OPENSMILE_AVAILABLE, reason="openSMILE is not installed.")
 def test_extract_opensmile_features_from_audios(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of openSMILE features from audio."""
     # Perform eGeMAPSv02 and Functionals features extraction
@@ -227,6 +293,7 @@ def test_extract_opensmile_features_from_audios(resampled_mono_audio_sample: Aud
         assert all(isinstance(value, (float, int)) for value in features.values())
 
 
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 def test_extract_objective_quality_features_from_audios(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of objective quality features from audio."""
     result = extract_objective_quality_features_from_audios([resampled_mono_audio_sample])
@@ -240,12 +307,14 @@ def test_extract_objective_quality_features_from_audios(resampled_mono_audio_sam
     assert isinstance(result[0]["si_sdr"], float)
 
 
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 def test_extract_objective_quality_features_from_audios_invalid_audio(mono_audio_sample: Audio) -> None:
     """Test extraction of objective quality features from invalid audio."""
     with pytest.raises(ValueError, match="Only 16000 Hz sampling rate is supported by Torchaudio-Squim model."):
         extract_objective_quality_features_from_audios([mono_audio_sample])
 
 
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 def test_extract_subjective_quality_features_from_audios(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of subjective quality features from audio."""
     result = extract_subjective_quality_features_from_audios(
@@ -257,6 +326,7 @@ def test_extract_subjective_quality_features_from_audios(resampled_mono_audio_sa
     assert isinstance(result[0]["mos"], float)
 
 
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 def test_extract_subjective_quality_features_invalid_audio(mono_audio_sample: Audio) -> None:
     """Test extraction of subjective quality features from invalid audio."""
     with pytest.raises(ValueError, match="Only 16000 Hz sampling rate is supported by Torchaudio-Squim model."):

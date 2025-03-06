@@ -1,5 +1,12 @@
 """This module implements some utilities for the model class."""
 
+try:
+    import torchaudio
+
+    TORCHAUDIO_AVAILABLE = True
+except ImportError:
+    TORCHAUDIO_AVAILABLE = False
+
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -7,7 +14,6 @@ from typing import Optional, Union
 
 import requests
 import torch
-import torchaudio
 from huggingface_hub import HfApi
 from huggingface_hub.hf_api import ModelInfo
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
@@ -69,6 +75,8 @@ class HFModel(SenselabModel):
 
     def get_model_info(self) -> ModelInfo:
         """Gets the model info using the HuggingFace API and saves it as a property."""
+        if isinstance(self.path_or_uri, Path):
+            raise ValueError("Model info is only available for remote resources and not for files.")
         if not self.info:
             api = HfApi()
             self.info = api.model_info(repo_id=self.path_or_uri, revision=self.revision)
@@ -133,6 +141,10 @@ class TorchAudioModel(SenselabModel):
 
 def check_torchaudio_model_exists(model_id: str) -> bool:
     """Private function to check if a torchaudio model exists."""
+    if not TORCHAUDIO_AVAILABLE:
+        raise ImportError(
+            "torchaudio is not installed. " "Please install torchaudio using `pip install senselab['audio']`."
+        )
     try:
         _ = getattr(torchaudio.pipelines, model_id)
         return True

@@ -7,14 +7,21 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.voice_cloning import clone_voices
 from senselab.utils.data_structures import DeviceType, TorchModel
 
+try:
+    import torchaudio  # noqa: F401
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
+    TORCHAUDIO_AVAILABLE = True
+except ImportError:
+    TORCHAUDIO_AVAILABLE = False
+
+
 @pytest.fixture
 def torch_model() -> TorchModel:
     """Fixture for torch model."""
     return TorchModel(path_or_uri="bshall/knn-vc", revision="master")
 
 
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not available")
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_clone_voices_length_mismatch(resampled_mono_audio_sample: Audio, torch_model: TorchModel) -> None:
     """Test length mismatch in source and target audios."""
@@ -27,6 +34,7 @@ def test_clone_voices_length_mismatch(resampled_mono_audio_sample: Audio, torch_
         )
 
 
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not available")
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_clone_voices_invalid_topk(resampled_mono_audio_sample: Audio, torch_model: TorchModel) -> None:
     """Test invalid topk value."""
@@ -43,6 +51,7 @@ def test_clone_voices_invalid_topk(resampled_mono_audio_sample: Audio, torch_mod
         )
 
 
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not available")
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_clone_voices_invalid_prematched_vocoder(resampled_mono_audio_sample: Audio, torch_model: TorchModel) -> None:
     """Test invalid prematched_vocoder value."""
@@ -59,6 +68,7 @@ def test_clone_voices_invalid_prematched_vocoder(resampled_mono_audio_sample: Au
         )
 
 
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not available")
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_clone_voices_valid_input(resampled_mono_audio_sample: Audio, torch_model: TorchModel) -> None:
     """Test cloning voices with valid input."""
@@ -93,6 +103,7 @@ def test_clone_voices_valid_input(resampled_mono_audio_sample: Audio, torch_mode
         pytest.fail(f"An unexpected exception occurred: {e}")
 
 
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not available")
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_clone_voices_unsupported_model(resampled_mono_audio_sample: Audio) -> None:
     """Test unsupported model."""
@@ -107,6 +118,7 @@ def test_clone_voices_unsupported_model(resampled_mono_audio_sample: Audio) -> N
         )
 
 
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not available")
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_clone_voices_stereo_audio(resampled_stereo_audio_sample: Audio, torch_model: TorchModel) -> None:
     """Test unsupported stereo audio."""
@@ -119,6 +131,7 @@ def test_clone_voices_stereo_audio(resampled_stereo_audio_sample: Audio, torch_m
         )
 
 
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not available")
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_clone_voices_invalid_sampling_rate(mono_audio_sample: Audio, torch_model: TorchModel) -> None:
     """Test unsupported sampling rate."""
