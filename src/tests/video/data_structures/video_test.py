@@ -14,7 +14,8 @@ try:
 except ImportError:
     PYAV_AVAILABLE = False
 
-filepath = "src/tests/data_for_testing/video_48khz_stereo_16bits.mp4"
+
+filepath = os.path.abspath("src/tests/data_for_testing/video_48khz_stereo_16bits.mp4")
 
 
 @pytest.mark.skipif(PYAV_AVAILABLE, reason="PyAV is available.")
