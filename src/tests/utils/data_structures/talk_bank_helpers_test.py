@@ -1,10 +1,27 @@
 """Tests functionality for interfacing with TalkBank datasets."""
 
+import pytest
+
 from senselab.utils.data_structures.script_line import ScriptLine
 from senselab.utils.data_structures.talk_bank_helpers import chats_to_script_lines
 from tests.utils.conftest import CHA_TALK_BANK_PATH
 
+try:
+    import pylangacq
 
+    PYLANGACQ_AVAILABLE = True
+except ImportError:
+    PYLANGACQ_AVAILABLE = False
+
+
+@pytest.mark.skipif(PYLANGACQ_AVAILABLE, reason="pylangacq is installed")
+def test_chats_to_script_lines_import_error() -> None:
+    """Tests that an ImportError is raised when pylangacq is not installed."""
+    with pytest.raises(ImportError):
+        chats_to_script_lines(CHA_TALK_BANK_PATH)
+
+
+@pytest.mark.skipif(not PYLANGACQ_AVAILABLE, reason="pylangacq is not installed")
 def test_chats_to_script_lines() -> None:
     """Tests the conversion of a TalkBank CHAT file to ScriptLines."""
     exp_line_1 = ScriptLine(

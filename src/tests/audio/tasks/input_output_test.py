@@ -12,7 +12,28 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.input_output import read_audios, save_audios
 from tests.audio.conftest import MONO_AUDIO_PATH, STEREO_AUDIO_PATH
 
+try:
+    import torchaudio  # noqa: F401
 
+    TORCHAUDIO_AVAILABLE = True
+except ImportError:
+    TORCHAUDIO_AVAILABLE = False
+
+
+@pytest.mark.skipif(
+    TORCHAUDIO_AVAILABLE,
+    reason="Torchaudio is available.",
+)
+def test_read_audios_torchaudio_not_installed() -> None:
+    """Tests the read_audios function when torchaudio is not installed."""
+    with pytest.raises(ImportError):
+        read_audios(file_paths=[MONO_AUDIO_PATH], plugin="serial")
+
+
+@pytest.mark.skipif(
+    not TORCHAUDIO_AVAILABLE,
+    reason="Torchaudio is not available.",
+)
 @pytest.mark.parametrize(
     "audio_paths",
     [
@@ -42,6 +63,10 @@ def test_read_audios(audio_paths: List[str | os.PathLike]) -> None:
         ), f"Sampling rate for file {audio_paths[idx]} does not match the expected."
 
 
+@pytest.mark.skipif(
+    not TORCHAUDIO_AVAILABLE,
+    reason="Torchaudio is not available.",
+)
 def test_save_audios() -> None:
     """Test the `save_audios` function."""
     # Create temporary directory for saving audio files

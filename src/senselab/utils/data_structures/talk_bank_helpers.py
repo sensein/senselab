@@ -2,9 +2,14 @@
 
 from typing import Any, Dict, List
 
-import pylangacq
-
 from senselab.utils.data_structures.script_line import ScriptLine
+
+try:
+    import pylangacq
+
+    PYLANGACQ_AVAILABLE = True
+except ImportError:
+    PYLANGACQ_AVAILABLE = False
 
 
 def chats_to_script_lines(
@@ -23,6 +28,10 @@ def chats_to_script_lines(
     Returns:
       Dictionary mapping filepaths (e.g. individual .cha files) to a list of ScriptLines
     """
+    if not PYLANGACQ_AVAILABLE:
+        raise ImportError(
+            "`pylangacq` is not installed. Please install it using:\n\n" "    pip install senselab['text']"
+        )
     chats = pylangacq.read_chat(path, **kwargs)
     script_lines_by_file: Dict[str, List[ScriptLine]] = {}
     paths = chats.file_paths()
