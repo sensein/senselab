@@ -1,6 +1,7 @@
 """This module implements some utilities to extract embeddings from self-supervised models."""
 
-from typing import List, Optional
+import os
+from typing import List, Optional, Union
 
 import torch
 
@@ -12,7 +13,7 @@ from senselab.utils.data_structures import DeviceType, HFModel, SenselabModel
 def extract_ssl_embeddings_from_audios(
     audios: List[Audio],
     model: SenselabModel,
-    cache_dir: str = "~/",
+    cache_dir: Optional[Union[str, os.PathLike]] = None,
     device: Optional[DeviceType] = None,
 ) -> List[torch.Tensor]:
     """Extract embedding of audio signals from pre-trained SSL models.
@@ -20,7 +21,7 @@ def extract_ssl_embeddings_from_audios(
     Args:
         audios (List[Audio]): A list of Audio objects containing the audio signals and their properties.
         model (SenselabModel): The model used to extract their embeddings.
-        cache_dir (str): The path to where the model's weights will be saved.
+        cache_dir (Optional[str, os.PathLike]): The path to where the model's weights will be saved.
         device (Optional[DeviceType]): The device to run the model on (default is None).
 
     Returns:
