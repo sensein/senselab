@@ -550,7 +550,6 @@ def test_remove_chunks_by_level_keep_lower_false_at_level_2(nested_scriptline: S
     assert result.chunks[0].text == "level 1 - chunk 1"
     assert result.chunks[1].text == "level 1 - chunk 2"
     assert all(chunk.chunks is not None and len(chunk.chunks) == 0 for chunk in result.chunks)
-    # assert all(len(chunk.chunks) == 0 for chunk in result.chunks)  # Level 2 should be removed
 
 
 def test_remove_chunks_by_level_deep_removal(nested_scriptline: ScriptLine) -> None:
