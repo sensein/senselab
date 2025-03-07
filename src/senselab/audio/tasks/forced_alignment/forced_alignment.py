@@ -485,6 +485,71 @@ def remove_chunks_by_level(
     return scriptline
 
 
+def flatten_script_lines(nested: list[ScriptLine | None]) -> List[ScriptLine | None]:
+    """Flattens a list by unpacking any inner lists of `ScriptLine` while keeping `None` values.
+
+    Args:
+        nested (List[Union[ScriptLine, List[ScriptLine], None]]):
+            A list that may contain `ScriptLine` objects, lists of `ScriptLine`, or `None`.
+
+    Returns:
+        List[ScriptLine | None]: A flattened list where all `ScriptLine` objects are at the top level,
+        with `None` values preserved.
+    """
+    flattened: List[ScriptLine | None] = []
+
+    for item in nested:
+        if isinstance(item, list):
+            flattened.extend(item)  # Unpack the nested list
+        else:
+            flattened.append(item)  # Keep ScriptLine | None as-is
+
+    return flattened
+
+
+def filter_aligned_script_lines(
+    aligned_script_lines: List[List[ScriptLine | None]], levels_to_keep: Dict[str, bool]
+) -> list[list[ScriptLine | None]]:
+    """Filters aligned script lines by removing specific chunk levels based on `levels_to_keep`.
+
+    Args:
+        aligned_script_lines (List[List[Union[ScriptLine, List[ScriptLine], None]]]):
+            A list of lists containing `ScriptLine` objects or lists of `ScriptLine`s.
+        levels_to_keep (Dict[str, bool]):
+            A dictionary specifying which levels to retain:
+            - "utterance" (bool): Whether to keep utterance-level chunks.
+            - "word" (bool): Whether to keep word-level chunks.
+            - "char" (bool): Whether to keep character-level chunks.
+
+    Returns:
+        list[list[ScriptLine | None]]: The filtered aligned script lines.
+    """
+    for i, scriptline_list in enumerate(aligned_script_lines):
+        updated_scriptline_list: list[ScriptLine | None] = []
+        for j, scriptline in enumerate(scriptline_list):
+            if scriptline is None or isinstance(scriptline, list):
+                continue  # Skip None or list cases
+
+            updated_scriptline: Union[list[ScriptLine], ScriptLine, None] = scriptline
+            if not levels_to_keep["word"] and not levels_to_keep["char"]:
+                updated_scriptline = remove_chunks_by_level(scriptline, level=2, keep_lower=False)
+            elif not levels_to_keep["word"] and levels_to_keep["char"]:
+                updated_scriptline = remove_chunks_by_level(scriptline, level=2)
+            elif levels_to_keep["word"] and not levels_to_keep["char"]:
+                updated_scriptline = remove_chunks_by_level(scriptline, level=3)
+
+            if not levels_to_keep["utterance"]:
+                updated_scriptline = remove_chunks_by_level(scriptline, level=0)
+
+            if isinstance(updated_scriptline, list):
+                updated_scriptline_list.extend(updated_scriptline)
+            elif updated_scriptline is not None:
+                updated_scriptline_list.append(updated_scriptline)
+
+        aligned_script_lines[i] = updated_scriptline_list
+    return [flatten_script_lines(scriptline_list) for scriptline_list in aligned_script_lines]
+
+
 def align_transcriptions(
     audios_and_transcriptions_and_language: List[Tuple[Audio, ScriptLine, Language]],
     levels_to_keep: Dict = {"utterance": False, "word": False, "char": False},
@@ -501,7 +566,7 @@ def align_transcriptions(
     Returns:
         List[List[ScriptLine]]: A list of aligned results for each audio.
     """
-    aligned_script_lines = []
+    aligned_script_lines: list[list[ScriptLine | None]] = []
     loaded_processors_and_models = {}
     device = _select_device_and_dtype()[0]
 
@@ -544,11 +609,10 @@ def align_transcriptions(
                 audio=audio,
                 device=device,
             )
-            aligned_script_lines.append(alignment)
-    # aligned_script_lines[0][0] = remove_chunks_by_level(aligned_script_lines[0][0], level=2, keep_lower=False)
-    # if aligned_script_lines is not None:
-    #     aligned_script_lines = filter_chunks(aligned_script_lines, levels_to_keep)
-    # print(aligned_script_lines[0][0])
+
+            # aligned_script_lines.append(alignment)
+            aligned_script_lines.append([item if isinstance(item, ScriptLine) else None for item in alignment])
+    aligned_script_lines = filter_aligned_script_lines(aligned_script_lines, levels_to_keep)
     return aligned_script_lines
 
 
