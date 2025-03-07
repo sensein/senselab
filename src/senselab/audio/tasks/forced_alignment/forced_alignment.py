@@ -44,7 +44,6 @@ def _preprocess_segments(
     Returns:
         List[SingleSegment]: The preprocessed transcription segments.
     """
-    # Docstring updated to reflect actual preprocessing steps.
     total_segments = len(transcript)
 
     for sdx, segment in enumerate(transcript):
@@ -160,7 +159,6 @@ def _assign_timestamps(
     start = segment["start"]
     end = segment["end"]
 
-    # Ensure we have lists to work with
     clean_cdx = segment["clean_cdx"] or []
 
     aligned_segment_dict: Dict[str, Any] = {"text": text, "timestamps": [start, end], "chunks": []}
@@ -175,7 +173,6 @@ def _assign_timestamps(
             current_word_dict["chunks"].append(char_dict)
             current_word_dict["text"] += char
 
-        # Check if we need to close out a word
         is_end_of_text = cdx == len(text) - 1
         next_is_space = (not is_end_of_text) and (text[cdx + 1] == " ")
         if (model_lang.alpha_2 in LANGUAGES_WITHOUT_SPACES) or is_end_of_text or next_is_space:
@@ -186,7 +183,6 @@ def _assign_timestamps(
             current_subsegment_dict["chunks"].append(current_word_dict)
             current_word_dict = {"text": "", "timestamps": [], "chunks": []}
 
-        # Check if we need to close out a sentence
         if char == "." or is_end_of_text:
             if current_subsegment_dict["chunks"]:
                 merged_timestamps = [t for c in current_subsegment_dict["chunks"] for t in c["timestamps"]]
@@ -194,13 +190,11 @@ def _assign_timestamps(
             aligned_segment_dict["chunks"].append(current_subsegment_dict)
             current_subsegment_dict = {"text": "", "timestamps": [], "chunks": []}
 
-    # Final cleanup: strip spaces
     for subsegment in aligned_segment_dict["chunks"]:
         subsegment["text"] = subsegment["text"].strip() + "."
         for word in subsegment["chunks"]:
             word["text"] = word["text"].strip()
 
-    # Adjust segment timestamps
     aligned_segment_dict["timestamps"][0] = aligned_segment_dict["chunks"][0]["timestamps"][0]
     aligned_segment_dict["timestamps"][1] = aligned_segment_dict["chunks"][-1]["timestamps"][1]
     return aligned_segment_dict
@@ -430,7 +424,7 @@ def _align_transcription(
         combined_progress (bool): If True, combine progress percentages.
 
     Returns:
-        List[SingleAlignedSegment]: Aligned transcription segments.
+        List[ScriptLine | None]: Aligned transcription segments.
     """
     max_duration = audio.waveform.shape[1] / audio.sampling_rate
     model_dictionary = align_model_metadata["dictionary"]
@@ -469,18 +463,18 @@ def remove_chunks_by_level(
     if level == 0 and scriptline is not None:
         if not keep_lower:
             return None
-        return scriptline.chunks  # Return chunks at the target level
+        return scriptline.chunks
 
     if scriptline and scriptline.chunks:
         updated_chunks: List[ScriptLine] = []
         for chunk in scriptline.chunks:
             updated = remove_chunks_by_level(chunk, level - 1, keep_lower)
             if isinstance(updated, list):
-                updated_chunks.extend(updated)  # Flatten nested lists
+                updated_chunks.extend(updated)
             elif updated is not None:
                 updated_chunks.append(updated)
 
-        scriptline.chunks = updated_chunks  # Replace with updated chunk list
+        scriptline.chunks = updated_chunks
 
     return scriptline
 
@@ -489,8 +483,8 @@ def flatten_script_lines(nested: list[ScriptLine | None]) -> List[ScriptLine | N
     """Flattens a list by unpacking any inner lists of `ScriptLine` while keeping `None` values.
 
     Args:
-        nested (List[Union[ScriptLine, List[ScriptLine], None]]):
-            A list that may contain `ScriptLine` objects, lists of `ScriptLine`, or `None`.
+        nested (list[ScriptLine | None]):
+            A list that may contain `ScriptLine | None` elements, or lists of `ScriptLine`.
 
     Returns:
         List[ScriptLine | None]: A flattened list where all `ScriptLine` objects are at the top level,
@@ -500,9 +494,9 @@ def flatten_script_lines(nested: list[ScriptLine | None]) -> List[ScriptLine | N
 
     for item in nested:
         if isinstance(item, list):
-            flattened.extend(item)  # Unpack the nested list
+            flattened.extend(item)
         else:
-            flattened.append(item)  # Keep ScriptLine | None as-is
+            flattened.append(item)
 
     return flattened
 
@@ -513,8 +507,8 @@ def filter_aligned_script_lines(
     """Filters aligned script lines by removing specific chunk levels based on `levels_to_keep`.
 
     Args:
-        aligned_script_lines (List[List[Union[ScriptLine, List[ScriptLine], None]]]):
-            A list of lists containing `ScriptLine` objects or lists of `ScriptLine`s.
+        aligned_script_lines (List[List[ScriptLine | None]]):
+            A list of lists containing `ScriptLine | None` elements.
         levels_to_keep (Dict[str, bool]):
             A dictionary specifying which levels to retain:
             - "utterance" (bool): Whether to keep utterance-level chunks.
@@ -528,7 +522,7 @@ def filter_aligned_script_lines(
         updated_scriptline_list: list[ScriptLine | None] = []
         for j, scriptline in enumerate(scriptline_list):
             if scriptline is None or isinstance(scriptline, list):
-                continue  # Skip None or list cases
+                continue
 
             updated_scriptline: Union[list[ScriptLine], ScriptLine, None] = scriptline
             if not levels_to_keep["word"] and not levels_to_keep["char"]:
@@ -560,11 +554,10 @@ def align_transcriptions(
         audios_and_transcriptions_and_language (List[Tuple[Audio, ScriptLine, Language]]):
             Each tuple contains an Audio object, a ScriptLine with transcription,
             and an optional Language (default is English).
-        device (DeviceType): Device to run the alignment on (e.g., CPU, MPS, or GPU).
         levels_to_keep (Dict): Levels of transcription to keep in output.
 
     Returns:
-        List[List[ScriptLine]]: A list of aligned results for each audio.
+        List[List[ScriptLine | None]]: A list of aligned results for each audio.
     """
     aligned_script_lines: list[list[ScriptLine | None]] = []
     loaded_processors_and_models = {}
@@ -610,7 +603,6 @@ def align_transcriptions(
                 device=device,
             )
 
-            # aligned_script_lines.append(alignment)
             aligned_script_lines.append([item if isinstance(item, ScriptLine) else None for item in alignment])
     aligned_script_lines = filter_aligned_script_lines(aligned_script_lines, levels_to_keep)
     return aligned_script_lines
