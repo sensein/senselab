@@ -433,17 +433,27 @@ def test_align_transcriptions_multilingual(
         (resampled_mono_audio_sample, transcription_en, Language(language_code="en")),
         (resampled_mono_audio_sample, transcription_fr, Language(language_code="fr")),
     ]
-    aligned_transcriptions = align_transcriptions(audios_and_transcriptions_and_language)
-    assert len(aligned_transcriptions) == 2
-    assert len(aligned_transcriptions[0]) == 5
-    assert len(aligned_transcriptions[1]) == 5
+    aligned_transcriptions = align_transcriptions(
+        audios_and_transcriptions_and_language, levels_to_keep={"utterance": False, "word": True, "char": True}
+    )
+    assert len(aligned_transcriptions) == 2, (
+        f"Expected 2 transcriptions, but got {len(aligned_transcriptions)}: " f"{aligned_transcriptions}"
+    )
+    assert len(aligned_transcriptions[0]) == 5, (
+        f"Expected 5 items in aligned_transcriptions[0], but got "
+        f"{len(aligned_transcriptions[0])}: {aligned_transcriptions[0]}"
+    )
+    assert len(aligned_transcriptions[1]) == 5, (
+        f"Expected 5 items in aligned_transcriptions[1], but got "
+        f"{len(aligned_transcriptions[1])}: {aligned_transcriptions[1]}"
+    )
     aligned_transcription_en = aligned_transcriptions[0][0] or None
     if isinstance(aligned_transcription_en, ScriptLine):
         compare_alignments(
             aligned_scriptline_fixture_resampled_mono_audio, aligned_transcription_en, difference_tolerance=0.001
         )
     else:
-        raise ValueError("aligned_transcription_en is not a ScriptLine")
+        raise ValueError(f"aligned_transcription_en is not a ScriptLine. Got: {aligned_transcription_en}")
 
 
 def test_align_transcriptions_curiosity_audio_fixture(
