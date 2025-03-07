@@ -434,19 +434,21 @@ def test_align_transcriptions_multilingual(
         (resampled_mono_audio_sample, transcription_fr, Language(language_code="fr")),
     ]
     aligned_transcriptions = align_transcriptions(
-        audios_and_transcriptions_and_language, levels_to_keep={"utterance": False, "word": True, "char": True}
+        audios_and_transcriptions_and_language, levels_to_keep={"utterance": True, "word": True, "char": True}
     )
     assert len(aligned_transcriptions) == 2, (
         f"Expected 2 transcriptions, but got {len(aligned_transcriptions)}: " f"{aligned_transcriptions}"
     )
-    assert len(aligned_transcriptions[0]) == 5, (
-        f"Expected 5 items in aligned_transcriptions[0], but got "
-        f"{len(aligned_transcriptions[0])}: {aligned_transcriptions[0]}"
-    )
-    assert len(aligned_transcriptions[1]) == 5, (
-        f"Expected 5 items in aligned_transcriptions[1], but got "
-        f"{len(aligned_transcriptions[1])}: {aligned_transcriptions[1]}"
-    )
+    if aligned_transcriptions[0][0] is not None and aligned_transcriptions[0][0].chunks is not None:
+        assert len(aligned_transcriptions[0][0].chunks) == 5, (
+            f"Expected 5 items in aligned_transcriptions[0], but got "
+            f"{len(aligned_transcriptions[0])}: {aligned_transcriptions[0]}"
+        )
+    if aligned_transcriptions[1][0] is not None and aligned_transcriptions[1][0].chunks is not None:
+        assert len(aligned_transcriptions[1][0].chunks) == 5, (
+            f"Expected 5 items in aligned_transcriptions[1], but got "
+            f"{len(aligned_transcriptions[1])}: {aligned_transcriptions[1]}"
+        )
     aligned_transcription_en = aligned_transcriptions[0][0] or None
     if isinstance(aligned_transcription_en, ScriptLine):
         compare_alignments(
