@@ -12,14 +12,14 @@ try:
     import speechbrain  # noqa: F401
 
     SPEECHBRAIN_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     SPEECHBRAIN_AVAILABLE = False
 
 try:
     import torchaudio  # noqa: F401
 
     TORCHAUDIO_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     TORCHAUDIO_AVAILABLE = False
 
 

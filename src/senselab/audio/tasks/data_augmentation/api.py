@@ -11,14 +11,14 @@ try:
     from audiomentations import Compose as AudiomentationsCompose
 
     AUDIOMENTATIONS_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     AUDIOMENTATIONS_AVAILABLE = False
 
 try:
     from torch_audiomentations import Compose as TorchAudiomentationsCompose
 
     TORCH_AUDIOMENTATIONS_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     TORCH_AUDIOMENTATIONS_AVAILABLE = False
 
 
@@ -42,12 +42,14 @@ def augment_audios(
         List of augmented audios.
     """
     if not AUDIOMENTATIONS_AVAILABLE:
-        raise ImportError(
-            "`audiomentations` is not installed. Please install it using:\n\n" "    pip install senselab['audio']"
+        raise ModuleNotFoundError(
+            "`audiomentations` is not installed. "
+            "Please install senselab audio dependencies using `pip install senselab['audio']`"
         )
     if not TORCH_AUDIOMENTATIONS_AVAILABLE:
-        raise ImportError(
-            "`torch-audiomentations` is not installed. Please install it using:\n\n" "    pip install senselab['audio']"
+        raise ModuleNotFoundError(
+            "`torch-audiomentations` is not installed. "
+            "Please install senselab audio dependencies using `pip install senselab['audio']`"
         )
     if isinstance(augmentation, TorchAudiomentationsCompose):
         return augment_audios_with_torch_audiomentations(audios, augmentation, device)

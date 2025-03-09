@@ -10,7 +10,7 @@ try:
     from sentence_transformers import SentenceTransformer
 
     SENTENCETRANSFORMERS_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     SENTENCETRANSFORMERS_AVAILABLE = False
 
 
@@ -35,9 +35,9 @@ class SentenceTransformerFactory:
             SentenceTransformer: The SentenceTransformer pipeline.
         """
         if not SENTENCETRANSFORMERS_AVAILABLE:
-            raise ImportError(
-                "`sentence-transformers` is not installed. Please install it using:\n\n"
-                "    pip install senselab['text']"
+            raise ModuleNotFoundError(
+                "`sentence-transformers` is not installed. "
+                "Please install senselab text dependencies using `pip install senselab['text']`."
             )
 
         device, _ = _select_device_and_dtype(
@@ -72,9 +72,9 @@ class SentenceTransformerFactory:
             List[torch.Tensor]: A list of embeddings for the input strings.
         """
         if not SENTENCETRANSFORMERS_AVAILABLE:
-            raise ImportError(
-                "`sentence-transformers` is not installed. Please install it using:\n\n"
-                "    pip install senselab['text']"
+            raise ModuleNotFoundError(
+                "`sentence-transformers` is not installed. "
+                "Please install senselab text dependencies using `pip install senselab['text']`."
             )
 
         if model is None:

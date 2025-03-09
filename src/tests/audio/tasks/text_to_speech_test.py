@@ -15,7 +15,7 @@ try:
     import vocos
 
     VOCOS_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     VOCOS_AVAILABLE = False
 
 

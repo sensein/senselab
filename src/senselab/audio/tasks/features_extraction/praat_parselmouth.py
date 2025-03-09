@@ -20,7 +20,7 @@ try:
     import parselmouth  # type: ignore
 
     PARSELMOUTH_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     PARSELMOUTH_AVAILABLE = False
 
 
@@ -38,7 +38,10 @@ def get_sound(audio: Union[Path, Audio], sampling_rate: int = 16000) -> "parselm
         FileNotFoundError: If the file is not found at the given path.
     """
     if not PARSELMOUTH_AVAILABLE:
-        raise ImportError("Parselmouth is not installed." "Please install it with `pip install senselab['audio']`.")
+        raise ModuleNotFoundError(
+            "`parselmouth` is not installed. "
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+        )
 
     try:
         # Loading the sound
@@ -99,7 +102,11 @@ def extract_speech_rate(snd: Union["parselmouth.Sound", Path, Audio]) -> Dict[st
         - (2021 paper) https://doi.org/10.1080/0969594X.2021.1951162
     """
     if not PARSELMOUTH_AVAILABLE:
-        raise ImportError("Parselmouth is not installed." "Please install it with `pip install senselab['audio']`.")
+        raise ModuleNotFoundError(
+            "`parselmouth` is not installed. "
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+        )
+
     try:
         # _____________________________________________________________________________________________________________
         # Load the sound object into parselmouth if it is an Audio object
@@ -365,7 +372,11 @@ def extract_pitch_values(snd: Union["parselmouth.Sound", Path, Audio]) -> Dict[s
         ```
     """
     if not PARSELMOUTH_AVAILABLE:
-        raise ImportError("Parselmouth is not installed." "Please install it with `pip install senselab['audio']`.")
+        raise ModuleNotFoundError(
+            "`parselmouth` is not installed. "
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+        )
+
     try:
         if not isinstance(snd, parselmouth.Sound):
             snd = get_sound(snd)
@@ -440,7 +451,11 @@ def extract_pitch_descriptors(
         ```
     """
     if not PARSELMOUTH_AVAILABLE:
-        raise ImportError("Parselmouth is not installed." "Please install it with `pip install senselab['audio']`.")
+        raise ModuleNotFoundError(
+            "`parselmouth` is not installed. "
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+        )
+
     try:
         if not isinstance(snd, parselmouth.Sound):
             snd = get_sound(snd)
@@ -496,7 +511,11 @@ def extract_intensity_descriptors(
         - For notes on extracting mean settings: https://www.fon.hum.uva.nl/praat/manual/Intro_6_2__Configuring_the_intensity_contour.html
     """
     if not PARSELMOUTH_AVAILABLE:
-        raise ImportError("Parselmouth is not installed." "Please install it with `pip install senselab['audio']`.")
+        raise ModuleNotFoundError(
+            "`parselmouth` is not installed. "
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+        )
+
     try:
         if not isinstance(snd, parselmouth.Sound):
             snd = get_sound(snd)
@@ -556,7 +575,11 @@ def extract_harmonicity_descriptors(
         - Default settings can be found at: https://www.fon.hum.uva.nl/praat/manual/Sound__To_Harmonicity__ac____.html
     """
     if not PARSELMOUTH_AVAILABLE:
-        raise ImportError("Parselmouth is not installed." "Please install it with `pip install senselab['audio']`.")
+        raise ModuleNotFoundError(
+            "`parselmouth` is not installed. "
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+        )
+
     try:
         if not isinstance(snd, parselmouth.Sound):
             snd = get_sound(snd)
@@ -611,7 +634,11 @@ def extract_slope_tilt(snd: Union["parselmouth.Sound", Path, Audio], floor: floa
         https://www.fon.hum.uva.nl/paul/papers/BoersmaKovacic2006.pdf
     """
     if not PARSELMOUTH_AVAILABLE:
-        raise ImportError("Parselmouth is not installed." "Please install it with `pip install senselab['audio']`.")
+        raise ModuleNotFoundError(
+            "`parselmouth` is not installed. "
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+        )
+
     try:
         if not isinstance(snd, parselmouth.Sound):
             snd = get_sound(snd)
@@ -677,7 +704,11 @@ def extract_cpp_descriptors(
         - Adapted from: https://osf.io/ctwgr and http://phonetics.linguistics.ucla.edu/facilities/acoustic/voiced_extract_auto.txt
     """
     if not PARSELMOUTH_AVAILABLE:
-        raise ImportError("Parselmouth is not installed." "Please install it with `pip install senselab['audio']`.")
+        raise ModuleNotFoundError(
+            "`parselmouth` is not installed. "
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+        )
+
     try:
         if not isinstance(snd, parselmouth.Sound):
             snd = get_sound(snd)
@@ -801,7 +832,11 @@ def measure_f1f2_formants_bandwidths(
         - Adapted from code at this [link](https://osf.io/6dwr3/).
     """
     if not PARSELMOUTH_AVAILABLE:
-        raise ImportError("Parselmouth is not installed." "Please install it with `pip install senselab['audio']`.")
+        raise ModuleNotFoundError(
+            "`parselmouth` is not installed. "
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+        )
+
     try:
         if not isinstance(snd, parselmouth.Sound):
             snd = get_sound(snd)
@@ -911,7 +946,10 @@ def extract_spectral_moments(
         - Details: https://www.fon.hum.uva.nl/praat/manual/Spectrum__Get_central_moment___.html
     """
     if not PARSELMOUTH_AVAILABLE:
-        raise ImportError("Parselmouth is not installed." "Please install it with `pip install senselab['audio']`.")
+        raise ModuleNotFoundError(
+            "`parselmouth` is not installed. "
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+        )
 
     try:
         if not isinstance(snd, parselmouth.Sound):
@@ -1007,7 +1045,10 @@ def extract_audio_duration(snd: Union["parselmouth.Sound", Path, Audio]) -> Dict
         ```
     """
     if not PARSELMOUTH_AVAILABLE:
-        raise ImportError("Parselmouth is not installed." "Please install it with `pip install senselab['audio']`.")
+        raise ModuleNotFoundError(
+            "`parselmouth` is not installed. "
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+        )
 
     # Check if the input is a Path, in which case we load the audio from the file
     if not isinstance(snd, parselmouth.Sound):
@@ -1047,7 +1088,10 @@ def extract_jitter(snd: Union["parselmouth.Sound", Path, Audio], floor: float, c
         return parselmouth.praat.call(point_process, f"Get jitter ({type})", 0, 0, 0.0001, 0.02, 1.3)
 
     if not PARSELMOUTH_AVAILABLE:
-        raise ImportError("Parselmouth is not installed." "Please install it with `pip install senselab['audio']`.")
+        raise ModuleNotFoundError(
+            "`parselmouth` is not installed. "
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+        )
 
     # Check if the input is a Path or Audio, and convert to Parselmouth Sound if necessary
     if not isinstance(snd, parselmouth.Sound):
@@ -1100,7 +1144,10 @@ def extract_shimmer(snd: Union["parselmouth.Sound", Path, Audio], floor: float, 
         return parselmouth.praat.call([sound, point_process], f"Get shimmer ({type})", 0, 0, 0.0001, 0.02, 1.3, 1.6)
 
     if not PARSELMOUTH_AVAILABLE:
-        raise ImportError("Parselmouth is not installed." "Please install it with `pip install senselab['audio']`.")
+        raise ModuleNotFoundError(
+            "`parselmouth` is not installed. "
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+        )
 
     # Check if the input is a Path or Audio, and convert to Parselmouth Sound if necessary
     if not isinstance(snd, parselmouth.Sound):

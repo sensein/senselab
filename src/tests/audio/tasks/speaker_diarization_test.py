@@ -12,14 +12,14 @@ try:
     import pyannote.audio
 
     PYANNOTE_INSTALLED = True
-except ImportError:
+except ModuleNotFoundError:
     PYANNOTE_INSTALLED = False
 
 try:
     import torchaudio
 
     TORCHAUDIO_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     TORCHAUDIO_AVAILABLE = False
 
 
@@ -32,7 +32,7 @@ def pyannote_model() -> PyannoteAudioModel:
 @pytest.mark.skipif(PYANNOTE_INSTALLED, reason="Pyannote is installed")
 def test_pyannote_not_installed(pyannote_model: PyannoteAudioModel) -> None:
     """Test Pyannote not installed."""
-    with pytest.raises(ImportError):
+    with pytest.raises(ModuleNotFoundError):
         _ = diarize_audios(audios=[Audio(waveform=torch.rand(1, 16000), sampling_rate=16000)], model=pyannote_model)
 
 

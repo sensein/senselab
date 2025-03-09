@@ -16,7 +16,7 @@ try:
     import torchaudio  # noqa: F401
 
     TORCHAUDIO_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     TORCHAUDIO_AVAILABLE = False
 
 
@@ -26,7 +26,7 @@ except ImportError:
 )
 def test_read_audios_torchaudio_not_installed() -> None:
     """Tests the read_audios function when torchaudio is not installed."""
-    with pytest.raises(ImportError):
+    with pytest.raises(ModuleNotFoundError):
         read_audios(file_paths=[MONO_AUDIO_PATH], plugin="serial")
 
 

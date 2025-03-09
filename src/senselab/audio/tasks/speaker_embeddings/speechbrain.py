@@ -12,7 +12,7 @@ try:
     from speechbrain.inference.speaker import EncoderClassifier
 
     SPEECHBRAIN_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     SPEECHBRAIN_AVAILABLE = False
 
 
@@ -41,9 +41,11 @@ class SpeechBrainEmbeddings:
             - Adding savedir for storing models
         """
         if not SPEECHBRAIN_AVAILABLE:
-            raise ImportError(
-                "`speechbrain` is not installed. Please install it using:\n\n" "    pip install senselab['audio']"
+            raise ModuleNotFoundError(
+                "`speechbrain` is not installed. "
+                "Please install senselab audio dependencies using `pip install senselab['audio']`."
             )
+
         device, _ = _select_device_and_dtype(
             user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
         )
@@ -78,8 +80,9 @@ class SpeechBrainEmbeddings:
             - Double-checking the input size of classifier.encode_batch
         """
         if not SPEECHBRAIN_AVAILABLE:
-            raise ImportError(
-                "`speechbrain` is not installed. Please install it using:\n\n" "    pip install senselab['audio']"
+            raise ModuleNotFoundError(
+                "`speechbrain` is not installed. "
+                "Please install senselab audio dependencies using `pip install senselab['audio']`."
             )
 
         if model is None:

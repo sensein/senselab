@@ -19,21 +19,21 @@ try:
     import cv2
 
     CV2_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     CV2_AVAILABLE = False
 
 try:
     import mediapipe
 
     MEDIAPIPE_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     MEDIAPIPE_AVAILABLE = False
 
 try:
     from ultralytics import YOLO
 
     YOLO_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     YOLO_AVAILABLE = False
 
 
@@ -89,14 +89,14 @@ def sample_pose_yolo() -> ImagePose:
 @pytest.mark.skipif(MEDIAPIPE_AVAILABLE, reason="MediaPipe is installed.")
 def test_media_pipe_unavailable() -> None:
     """Test MediaPipePoseEstimator import error."""
-    with pytest.raises(ImportError):
+    with pytest.raises(ModuleNotFoundError):
         MediaPipePoseEstimator("full")
 
 
 @pytest.mark.skipif(YOLO_AVAILABLE, reason="YOLO is installed.")
 def test_yolo_unavailable() -> None:
     """Test YOLOPoseEstimator import error."""
-    with pytest.raises(ImportError):
+    with pytest.raises(ModuleNotFoundError):
         YOLOPoseEstimator("8n")
 
 

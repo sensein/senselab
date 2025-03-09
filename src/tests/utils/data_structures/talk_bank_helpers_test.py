@@ -10,14 +10,14 @@ try:
     import pylangacq
 
     PYLANGACQ_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     PYLANGACQ_AVAILABLE = False
 
 
 @pytest.mark.skipif(PYLANGACQ_AVAILABLE, reason="pylangacq is installed")
 def test_chats_to_script_lines_import_error() -> None:
     """Tests that an ImportError is raised when pylangacq is not installed."""
-    with pytest.raises(ImportError):
+    with pytest.raises(ModuleNotFoundError):
         chats_to_script_lines(CHA_TALK_BANK_PATH)
 
 

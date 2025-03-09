@@ -11,7 +11,7 @@ try:
     import av  # noqa: F401
 
     PYAV_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     PYAV_AVAILABLE = False
 
 
@@ -21,7 +21,7 @@ filepath = os.path.abspath("src/tests/data_for_testing/video_48khz_stereo_16bits
 @pytest.mark.skipif(PYAV_AVAILABLE, reason="PyAV is available.")
 def test_video_import_error() -> None:
     """Test Video import error."""
-    with pytest.raises(ImportError):
+    with pytest.raises(ModuleNotFoundError):
         Video.from_filepath(filepath)
 
 

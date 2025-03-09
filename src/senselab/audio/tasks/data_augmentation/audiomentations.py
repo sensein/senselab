@@ -8,7 +8,7 @@ try:
     from audiomentations import Compose
 
     AUDIOMENTATIONS_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     AUDIOMENTATIONS_AVAILABLE = False
 
 
@@ -43,9 +43,9 @@ def augment_audios_with_audiomentations(audios: List[Audio], augmentation: "Comp
         )
 
     if not AUDIOMENTATIONS_AVAILABLE:
-        raise ImportError(
+        raise ModuleNotFoundError(
             "`audiomentations` is not installed. "
-            "Please, install senselab audio dependencies using `pip install senselab['audio']`."
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
         )
 
     """

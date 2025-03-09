@@ -12,7 +12,7 @@ try:
     objective_model = SQUIM_OBJECTIVE.get_model()
     subjective_model = SQUIM_SUBJECTIVE.get_model()
     TORCHAUDIO_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     TORCHAUDIO_AVAILABLE = False
 
 
@@ -33,9 +33,9 @@ def extract_objective_quality_features_from_audios(audios: List["Audio"]) -> Lis
         List[Dict[str, Any]]: List of dictionaries, each containing extracted features for an audio input.
     """
     if not TORCHAUDIO_AVAILABLE:
-        raise ImportError(
+        raise ModuleNotFoundError(
             "`torchaudio` is not installed. "
-            "Please, install senselab audio dependencies using `pip install senselab['audio']`."
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
         )
 
     if any(audio.waveform.shape[0] != 1 for audio in audios):
@@ -78,9 +78,9 @@ def extract_subjective_quality_features_from_audios(
         List[Dict[str, Any]]: List of dictionaries, each containing extracted features for an audio input.
     """
     if not TORCHAUDIO_AVAILABLE:
-        raise ImportError(
+        raise ModuleNotFoundError(
             "`torchaudio` is not installed. "
-            "Please, install senselab audio dependencies using `pip install senselab['audio']`."
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
         )
 
     # Check if any audio is not mono

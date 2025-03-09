@@ -13,14 +13,14 @@ try:
     from audiomentations import Gain
 
     AUDIOMENTATIONS_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     AUDIOMENTATIONS_AVAILABLE = False
 
 try:
     from torch_audiomentations import Compose, PolarityInversion
 
     TORCH_AUDIOMENTATIONS_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     TORCH_AUDIOMENTATIONS_AVAILABLE = False
 
 

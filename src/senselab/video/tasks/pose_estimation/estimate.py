@@ -10,7 +10,7 @@ try:
     import cv2
 
     CV2_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     CV2_AVAILABLE = False
 
 try:
@@ -19,14 +19,14 @@ try:
     from mediapipe.tasks.python import vision
 
     MEDIAPIPE_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     MEDIAPIPE_AVAILABLE = False
 
 try:
     from ultralytics import YOLO
 
     YOLO_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     YOLO_AVAILABLE = False
 
 from senselab.video.data_structures.pose import (
@@ -105,9 +105,11 @@ class MediaPipePoseEstimator(PoseEstimator):
             model_type (str): Type of MediaPipe model to use ('lite', 'full', 'heavy').
         """
         if not MEDIAPIPE_AVAILABLE:
-            raise ImportError(
-                "`mediapipe` is not installed. Please install it using:\n\n" "    pip install senselab['video']"
+            raise ModuleNotFoundError(
+                "`mediapipe` is not installed. "
+                "Please install senselab video dependencies using `pip install senselab['video']`."
             )
+
         self.model_path = get_model("mediapipe", model_type)
         self.num_individuals = 1
         self._detector = None
@@ -172,8 +174,9 @@ class MediaPipePoseEstimator(PoseEstimator):
             ValueError: If `num_individuals` is not a positive integer.
         """
         if not CV2_AVAILABLE:
-            raise ImportError(
-                "`opencv-python` is not installed. Please install it using:\n\n" "    pip install senselab['video']"
+            raise ModuleNotFoundError(
+                "`opencv-python` is not installed. "
+                "Please install senselab video dependencies using `pip install senselab['video']`."
             )
 
         if not os.path.exists(image_path):
@@ -234,9 +237,11 @@ class YOLOPoseEstimator(PoseEstimator):
             model_type (str): Type of YOLO model to use (e.g. '8n', '11p', '11s').
         """
         if not YOLO_AVAILABLE:
-            raise ImportError(
-                "`yolo` is not installed. Please install it using:\n\n" "    pip install senselab['video']"
+            raise ModuleNotFoundError(
+                "`ultralytics` is not installed. "
+                "Please install senselab video dependencies using `pip install senselab['video']`."
             )
+
         self.model_path = get_model("yolo", model_type)
         self._model = YOLO(self.model_path)
 
@@ -295,8 +300,9 @@ class YOLOPoseEstimator(PoseEstimator):
             FileNotFoundError: If the specified image file does not exist.
         """
         if not CV2_AVAILABLE:
-            raise ImportError(
-                "`opencv-python` is not installed. Please install it using:\n\n" "    pip install senselab['video']"
+            raise ModuleNotFoundError(
+                "`opencv-python` is not installed. "
+                "Please install senselab video dependencies using `pip install senselab['video']`."
             )
 
         if not os.path.exists(image_path):

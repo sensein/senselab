@@ -10,14 +10,14 @@ try:
     import torchaudio
 
     TORCHAUDIO_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     TORCHAUDIO_AVAILABLE = False
 
 
 @pytest.mark.skipif(TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 def test_check_torchaudio_model_init() -> None:
     """Test torchaudio model initialization."""
-    with pytest.raises(ImportError):
+    with pytest.raises(ModuleNotFoundError):
         from senselab.utils.data_structures.model import TorchAudioModel
 
         TorchAudioModel(path_or_uri="torchaudio_model", revision="main")

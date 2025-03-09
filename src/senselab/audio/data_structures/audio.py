@@ -9,7 +9,7 @@ try:
     import torchaudio
 
     TORCHAUDIO_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     TORCHAUDIO_AVAILABLE = False
 
 import os
@@ -75,9 +75,9 @@ class Audio(BaseModel):
             metadata: Additional information associated with the audio file
         """
         if not TORCHAUDIO_AVAILABLE:
-            raise ImportError(
+            raise ModuleNotFoundError(
                 "`torchaudio` is not installed. "
-                "Please, install senselab audio dependencies using `pip install senselab['audio']`."
+                "Please install senselab audio dependencies using `pip install senselab['audio']`."
             )
 
         if not os.path.exists(filepath):
@@ -200,9 +200,9 @@ class Audio(BaseModel):
             - https://pytorch.org/audio/master/generated/torchaudio.save.html
         """
         if not TORCHAUDIO_AVAILABLE:
-            raise ImportError(
+            raise ModuleNotFoundError(
                 "`torchaudio` is not installed. "
-                "Please, install senselab audio dependencies using `pip install senselab['audio']`."
+                "Please install senselab audio dependencies using `pip install senselab['audio']`."
             )
 
         if self.waveform.ndim != 2:
