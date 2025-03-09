@@ -39,28 +39,28 @@ try:
     import opensmile
 
     OPENSMILE_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     OPENSMILE_AVAILABLE = False
 
 try:
     import parselmouth
 
     PARSELMOUTH_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     PARSELMOUTH_AVAILABLE = False
 
 try:
     import torchaudio
 
     TORCHAUDIO_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     TORCHAUDIO_AVAILABLE = False
 
 
 @pytest.mark.skipif(OPENSMILE_AVAILABLE, reason="openSMILE is installed.")
 def test_missing_opensmile_dependency() -> None:
-    """Test that an ImportError is raised when openSMILE is not installed."""
-    with pytest.raises(ImportError):
+    """Test that a ModuleNotFoundError is raised when openSMILE is not installed."""
+    with pytest.raises(ModuleNotFoundError):
         from senselab.audio.tasks.features_extraction.opensmile import OpenSmileFeatureExtractorFactory
 
         OpenSmileFeatureExtractorFactory.get_opensmile_extractor("eGeMAPSv02", "Functionals")
@@ -68,15 +68,15 @@ def test_missing_opensmile_dependency() -> None:
 
 @pytest.mark.skipif(PARSELMOUTH_AVAILABLE, reason="Praat-Parselmouth is installed.")
 def test_missing_parselmouth_dependency() -> None:
-    """Test that an ImportError is raised when Praat-Parselmouth is not installed."""
-    with pytest.raises(ImportError):
+    """Test that a ModuleNotFoundError is raised when Praat-Parselmouth is not installed."""
+    with pytest.raises(ModuleNotFoundError):
         get_sound(audio=Path("path/to/audio.wav"))
 
 
 @pytest.mark.skipif(TORCHAUDIO_AVAILABLE, reason="torchaudio is installed.")
 def test_missing_torchaudio_dependency() -> None:
-    """Test that an ImportError is raised when torchaudio is not installed."""
-    with pytest.raises(ImportError):
+    """Test that a ModuleNotFoundError is raised when torchaudio is not installed."""
+    with pytest.raises(ModuleNotFoundError):
         extract_torchaudio_features_from_audios([Audio(waveform=torch.rand(1, 16000), sampling_rate=16000)])
 
 

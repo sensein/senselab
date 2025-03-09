@@ -14,7 +14,7 @@ try:
     from pyannote.core import Annotation
 
     PYANNOTEAUDIO_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     PYANNOTEAUDIO_AVAILABLE = False
 
 
@@ -39,9 +39,11 @@ class PyannoteDiarization:
             Pipeline: The diarization pipeline.
         """
         if not PYANNOTEAUDIO_AVAILABLE:
-            raise ImportError(
-                "`pyannote-audio` is not installed. Please install it using:\n\n" "    pip install senselab['audio']"
+            raise ModuleNotFoundError(
+                "`pyannote-audio` is not installed. "
+                "Please install senselab audio dependencies using `pip install senselab['audio']`."
             )
+
         device, _ = _select_device_and_dtype(
             user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
         )
@@ -92,8 +94,9 @@ def diarize_audios_with_pyannote(
         return diarization_list
 
     if not PYANNOTEAUDIO_AVAILABLE:
-        raise ImportError(
-            "`pyannote-audio` is not installed. Please install it using:\n\n" "    pip install senselab['audio']"
+        raise ModuleNotFoundError(
+            "`pyannote-audio` is not installed. "
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
         )
 
     if model is None:

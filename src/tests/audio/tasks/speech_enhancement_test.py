@@ -14,14 +14,14 @@ try:
     from speechbrain.inference.separation import SepformerSeparation as separator
 
     SPEECHBRAIN_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     SPEECHBRAIN_AVAILABLE = False
 
 try:
     import torchaudio  # noqa: F401
 
     TORCHAUDIO_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     TORCHAUDIO_AVAILABLE = False
 
 

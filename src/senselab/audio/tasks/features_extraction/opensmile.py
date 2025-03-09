@@ -12,7 +12,7 @@ try:
     import opensmile
 
     OPENSMILE_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     OPENSMILE_AVAILABLE = False
 
 import os
@@ -46,9 +46,9 @@ class OpenSmileFeatureExtractorFactory:
             opensmile.Smile: The openSMILE feature extractor.
         """
         if not OPENSMILE_AVAILABLE:
-            raise ImportError(
-                "`opensmile` is not installed. Please install the necessary dependencies using:\n"
-                "`pip install senselab['audio']`"
+            raise ModuleNotFoundError(
+                "`opensmile` is not installed. "
+                "Please install senselab audio dependencies using `pip install senselab['audio']`"
             )
 
         key = f"{feature_set}-{feature_level}"  # Unique key for each feature extractor
@@ -87,7 +87,7 @@ def extract_opensmile_features_from_audios(
         List[Dict[str, Any]]: A list of dictionaries, each containing extracted features.
     """
     if not OPENSMILE_AVAILABLE:
-        raise ImportError(
+        raise ModuleNotFoundError(
             "`opensmile` is not installed. Please install the necessary dependencies using:\n"
             "`pip install senselab['audio']`"
         )

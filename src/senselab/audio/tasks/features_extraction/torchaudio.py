@@ -11,7 +11,7 @@ try:
     import torchaudio
 
     TORCHAUDIO_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     TORCHAUDIO_AVAILABLE = False
 
 from senselab.audio.data_structures import Audio
@@ -35,9 +35,9 @@ def extract_spectrogram_from_audios(
         List[Dict[str, torch.Tensor]]: List of Dict objects containing spectrograms.
     """
     if not TORCHAUDIO_AVAILABLE:
-        raise ImportError(
+        raise ModuleNotFoundError(
             "`torchaudio` is not installed. "
-            "Please, install senselab audio dependencies using `pip install senselab['audio']`."
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
         )
 
     if win_length is None:
@@ -78,9 +78,9 @@ def extract_mel_spectrogram_from_audios(
         List[Dict[str, torch.Tensor]]: List of Dict objects containing mel spectrograms.
     """
     if not TORCHAUDIO_AVAILABLE:
-        raise ImportError(
+        raise ModuleNotFoundError(
             "`torchaudio` is not installed. "
-            "Please, install senselab audio dependencies using `pip install senselab['audio']`."
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
         )
 
     if win_length is None:
@@ -128,9 +128,9 @@ def extract_mfcc_from_audios(
         List[Dict[str, torch.Tensor]]: List of Dict objects containing MFCCs.
     """
     if not TORCHAUDIO_AVAILABLE:
-        raise ImportError(
+        raise ModuleNotFoundError(
             "`torchaudio` is not installed. "
-            "Please, install senselab audio dependencies using `pip install senselab['audio']`."
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
         )
 
     if win_length is None:
@@ -174,9 +174,9 @@ def extract_mel_filter_bank_from_audios(
         List[Dict[str, torch.Tensor]]: List of Dict objects containing mel filter banks.
     """
     if not TORCHAUDIO_AVAILABLE:
-        raise ImportError(
+        raise ModuleNotFoundError(
             "`torchaudio` is not installed. "
-            "Please, install senselab audio dependencies using `pip install senselab['audio']`."
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
         )
 
     if win_length is None:
@@ -215,9 +215,9 @@ def extract_mel_filter_bank_from_spectrograms(
         List[Dict[str, torch.Tensor]]: List of Dict objects containing mel filter banks.
     """
     if not TORCHAUDIO_AVAILABLE:
-        raise ImportError(
+        raise ModuleNotFoundError(
             "`torchaudio` is not installed. "
-            "Please, install senselab audio dependencies using `pip install senselab['audio']`."
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
         )
 
     mel_filter_banks = []
@@ -251,9 +251,9 @@ def extract_pitch_from_audios(
         List[Dict[str, torch.Tensor]]: List of Dict objects containing pitches.
     """
     if not TORCHAUDIO_AVAILABLE:
-        raise ImportError(
+        raise ModuleNotFoundError(
             "`torchaudio` is not installed. "
-            "Please, install senselab audio dependencies using `pip install senselab['audio']`."
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
         )
 
     if freq_low <= 0:

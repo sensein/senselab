@@ -31,7 +31,7 @@ try:
     from nltk.tokenize.punkt import PunktParameters, PunktSentenceTokenizer
 
     NLTK_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     NLTK_AVAILABLE = False
 
 
@@ -55,7 +55,10 @@ def _preprocess_segments(
         List[SingleSegment]: The preprocessed transcription segments.
     """
     if not NLTK_AVAILABLE:
-        raise ImportError("NLTK is not available. Please install it with `pip install senselab['audio']`.")
+        raise ModuleNotFoundError(
+            "`nltk` is not installed. "
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+        )
 
     total_segments = len(transcript)
 

@@ -13,7 +13,7 @@ try:
     import cv2
 
     CV2_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     CV2_AVAILABLE = False
 
 try:
@@ -21,7 +21,7 @@ try:
     from mediapipe.framework.formats import landmark_pb2
 
     MEDIAPIPE_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     MEDIAPIPE_AVAILABLE = False
 
 
@@ -38,13 +38,16 @@ def visualize(pose_image: ImagePose, output_path: Optional[str] = None, plot: bo
         np.ndarray: The input image with pose landmarks and connections drawn on it.
     """
     if not CV2_AVAILABLE:
-        raise ImportError(
-            "`opencv-python` is not installed. Please install it using:\n\n" "    pip install senselab['video']"
+        raise ModuleNotFoundError(
+            "`opencv-python` is not installed. "
+            "Please install senselab video dependencies using `pip install senselab['video']`."
         )
     if not MEDIAPIPE_AVAILABLE:
-        raise ImportError(
-            "`mediapipe` is not installed. Please install it using:\n\n" "    pip install senselab['video']"
+        raise ModuleNotFoundError(
+            "`mediapipe` is not installed. "
+            "Please install senselab video dependencies using `pip install senselab['video']`."
         )
+
     annotated_image = pose_image.image.copy()
 
     for individual in pose_image.individuals:

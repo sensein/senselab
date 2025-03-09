@@ -17,7 +17,7 @@ try:
     import av  # noqa: F401
 
     PYAV_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     PYAV_AVAILABLE = False
 
 
@@ -93,7 +93,10 @@ class Video(BaseModel):
             metadata: Additional information associated with the video file
         """
         if not PYAV_AVAILABLE:
-            raise ImportError("PyAV is not installed. Please install PyAV using `pip install senselab['video']`.")
+            raise ModuleNotFoundError(
+                "`pyav` is not installed. "
+                "Please install senselab video dependencies using `pip install senselab['video']`."
+            )
 
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"File {filepath} does not exist.")

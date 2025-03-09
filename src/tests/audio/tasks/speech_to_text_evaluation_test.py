@@ -14,14 +14,14 @@ try:
     import jiwer  # noqa: F401
 
     JIWER_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     JIWER_AVAILABLE = False
 
 
 @pytest.mark.skipif(JIWER_AVAILABLE, reason="jiwer is available")
 def test_jiwer_not_available() -> None:
-    """Tests that an ImportError is raised when jiwer is not available."""
-    with pytest.raises(ImportError, match="JIWER is not installed"):
+    """Tests that an ModuleNotFoundError is raised when jiwer is not available."""
+    with pytest.raises(ModuleNotFoundError):
         calculate_cer("hello world", "hello duck")
 
 

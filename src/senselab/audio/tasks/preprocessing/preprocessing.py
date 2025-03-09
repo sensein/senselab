@@ -4,7 +4,7 @@ try:
     from speechbrain.augment.time_domain import Resample
 
     SPEECHBRAIN_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     SPEECHBRAIN_AVAILABLE = False
 
 
@@ -34,10 +34,9 @@ def resample_audios(
         List[Audio]: Resampled audio objects.
     """
     if not SPEECHBRAIN_AVAILABLE:
-        raise ImportError(
-            "`speechbrain` is not installed. Please install it using:\n\n"
-            "    pip install senselab['audio']\n\n"
-            "This is required for audio resampling."
+        raise ModuleNotFoundError(
+            "`speechbrain` is not installed. "
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
         )
 
     resampled_audios = []
