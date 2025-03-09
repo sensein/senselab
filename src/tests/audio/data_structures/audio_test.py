@@ -14,7 +14,7 @@ try:
     import torchaudio
 
     TORCHAUDIO_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     TORCHAUDIO_AVAILABLE = False
 
 
@@ -26,7 +26,7 @@ def load_audio(file_path: str) -> Tuple[torch.Tensor, int]:
 @pytest.mark.skipif(TORCHAUDIO_AVAILABLE, reason="torchaudio is installed.")
 def test_audio_creation_error() -> None:
     """Tests audio creation with invalid input."""
-    with pytest.raises(ImportError):
+    with pytest.raises(ModuleNotFoundError):
         Audio.from_filepath("placeholder.wav")
 
 

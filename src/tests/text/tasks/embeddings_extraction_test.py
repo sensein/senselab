@@ -12,7 +12,7 @@ try:
     from sentence_transformers import SentenceTransformer
 
     SENTENCETRANSFORMERS_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     SENTENCETRANSFORMERS_AVAILABLE = False
 
 
@@ -31,7 +31,7 @@ def sentencetransformers_model() -> SentenceTransformersModel:
 @pytest.mark.skipif(SENTENCETRANSFORMERS_AVAILABLE, reason="SentenceTransformers is installed")
 def test_extract_sentencetransformers_embeddings_from_text_import_error() -> None:
     """Test extract_embeddings_from_text import error."""
-    with pytest.raises(ImportError):
+    with pytest.raises(ModuleNotFoundError):
         extract_embeddings_from_text(
             ["test"], SentenceTransformersModel(path_or_uri="sentence-transformers/all-MiniLM-L6-v2", revision="main")
         )

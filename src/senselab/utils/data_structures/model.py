@@ -4,7 +4,7 @@ try:
     import torchaudio
 
     TORCHAUDIO_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     TORCHAUDIO_AVAILABLE = False
 
 import os
@@ -142,9 +142,11 @@ class TorchAudioModel(SenselabModel):
 def check_torchaudio_model_exists(model_id: str) -> bool:
     """Private function to check if a torchaudio model exists."""
     if not TORCHAUDIO_AVAILABLE:
-        raise ImportError(
-            "torchaudio is not installed. " "Please install torchaudio using `pip install senselab['audio']`."
+        raise ModuleNotFoundError(
+            "`torchaudio` is not installed. "
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
         )
+
     try:
         _ = getattr(torchaudio.pipelines, model_id)
         return True

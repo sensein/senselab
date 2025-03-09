@@ -9,7 +9,7 @@ try:
     from pyannote.metrics.diarization import DiarizationErrorRate, GreedyDiarizationErrorRate
 
     PYANNOTEAUDIO_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     PYANNOTEAUDIO_AVAILABLE = False
 
 
@@ -39,8 +39,9 @@ def calculate_diarization_error_rate(
           speaker mapping if return_speaker_mapping was given.
     """
     if not PYANNOTEAUDIO_AVAILABLE:
-        raise ImportError(
-            "`pyannote-audio` is not installed. Please install it using:\n\n" "    pip install senselab['audio']"
+        raise ModuleNotFoundError(
+            "`pyannote-audio` is not installed. "
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
         )
 
     hypothesis_annotation = Annotation()

@@ -15,7 +15,7 @@ try:
     from speechbrain.inference.separation import SepformerSeparation as separator
 
     SPEECHBRAIN_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     SPEECHBRAIN_AVAILABLE = False
 
 
@@ -45,9 +45,11 @@ class SpeechBrainEnhancer:
             dtype: The dtype used for the model.
         """
         if not SPEECHBRAIN_AVAILABLE:
-            raise ImportError(
-                "`speechbrain` is not installed. Please install it using:\n\n" "    pip install senselab['audio']"
+            raise ModuleNotFoundError(
+                "`speechbrain` is not installed. "
+                "Please install senselab audio dependencies using `pip install senselab['audio']`."
             )
+
         device, dtype = _select_device_and_dtype(
             user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
         )
@@ -85,9 +87,11 @@ class SpeechBrainEnhancer:
             List[Audio]: The list of enhanced audio objects.
         """
         if not SPEECHBRAIN_AVAILABLE:
-            raise ImportError(
-                "`speechbrain` is not installed. Please install it using:\n\n" "    pip install senselab['audio']"
+            raise ModuleNotFoundError(
+                "`speechbrain` is not installed. "
+                "Please install senselab audio dependencies using `pip install senselab['audio']`."
             )
+
         if model is None:
             model = SpeechBrainModel(path_or_uri="speechbrain/sepformer-wham16k-enhancement", revision="main")
 

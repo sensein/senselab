@@ -10,7 +10,7 @@ try:
     import opensmile
 
     OPENSMILE_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     OPENSMILE_AVAILABLE = False
 
 

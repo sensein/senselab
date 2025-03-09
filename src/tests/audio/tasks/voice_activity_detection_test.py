@@ -11,21 +11,21 @@ try:
     import pyannote.audio
 
     PYANNOTE_INSTALLED = True
-except ImportError:
+except ModuleNotFoundError:
     PYANNOTE_INSTALLED = False
 
 try:
     import torchaudio
 
     TORCHAUDIO_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     TORCHAUDIO_AVAILABLE = False
 
 
 @pytest.mark.skipif(PYANNOTE_INSTALLED, reason="Pyannote is installed")
 def test_detect_human_voice_activity_in_audios_import_error() -> None:
-    """Test that an ImportError is raised when Pyannote is not installed."""
-    with pytest.raises(ImportError):
+    """Test that a ModuleNotFoundError is raised when Pyannote is not installed."""
+    with pytest.raises(ModuleNotFoundError):
         detect_human_voice_activity_in_audios(audios=[Audio(waveform=torch.rand(1, 16000), sampling_rate=16000)])
 
 

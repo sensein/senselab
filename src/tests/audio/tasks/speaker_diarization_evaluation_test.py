@@ -9,14 +9,14 @@ try:
     import pyannote.audio  # noqa: F401
 
     PYANNOTEAUDIO_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     PYANNOTEAUDIO_AVAILABLE = False
 
 
 @pytest.mark.skipif(PYANNOTEAUDIO_AVAILABLE, reason="Pyannote Audio is installed.")
 def test_diarization_error_rate_no_pyannote_audio() -> None:
     """Tests speaker diarization error rate when Pyannote Audio is not installed."""
-    with pytest.raises(ImportError):
+    with pytest.raises(ModuleNotFoundError):
         calculate_diarization_error_rate([], [])
 
 

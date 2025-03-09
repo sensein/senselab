@@ -15,14 +15,14 @@ try:
     import torchaudio
 
     TORCHAUDIO_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     TORCHAUDIO_AVAILABLE = False
 
 try:
     import librosa
 
     LIBROSA_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     LIBROSA_AVAILABLE = False
 
 
@@ -103,7 +103,7 @@ def test_get_sessions() -> None:
 @pytest.mark.skipif(TORCHAUDIO_AVAILABLE, reason="torchaudio is installed")
 def test_audio_dataset_creation_import_error() -> None:
     """Tests that an ImportError is raised when torchaudio is not installed."""
-    with pytest.raises(ImportError):
+    with pytest.raises(ModuleNotFoundError):
         SenselabDataset(audios=[MONO_AUDIO_PATH, STEREO_AUDIO_PATH])
 
 

@@ -15,7 +15,7 @@ try:
     from torch_audiomentations import Compose
 
     TORCH_AUDIOMENTATIONS_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     TORCH_AUDIOMENTATIONS_AVAILABLE = False
 
 
@@ -44,8 +44,9 @@ def augment_audios_with_torch_audiomentations(
             see the torch-audiomentations documentation.
     """
     if not TORCH_AUDIOMENTATIONS_AVAILABLE:
-        raise ImportError(
-            "`torch-audiomentations` is not installed. Please install it using:\n\n" "    pip install senselab['audio']"
+        raise ModuleNotFoundError(
+            "`torch-audiomentations` is not installed. "
+            "Please install senselab audio dependencies using `pip install senselab['audio']`"
         )
 
     augmentation.output_type = "dict"

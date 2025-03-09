@@ -9,14 +9,14 @@ try:
     import speechbrain
 
     SPEECHBRAIN_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     SPEECHBRAIN_AVAILABLE = False
 
 
 @pytest.mark.skipif(SPEECHBRAIN_AVAILABLE, reason="SpeechBrain is installed")
 def test_compute_eer_import_error() -> None:
-    """Test that an ImportError is raised when SpeechBrain is not installed."""
-    with pytest.raises(ImportError):
+    """Test that a ModuleNotFoundError is raised when SpeechBrain is not installed."""
+    with pytest.raises(ModuleNotFoundError):
         compute_eer(torch.tensor([0.1, 0.2, 0.3]), torch.tensor([0.4, 0.5, 0.6]))
 
 

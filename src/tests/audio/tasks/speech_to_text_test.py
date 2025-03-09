@@ -14,7 +14,7 @@ try:
     import torchaudio  # noqa: F401
 
     TORCHAUDIO_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     TORCHAUDIO_AVAILABLE = False
 
 

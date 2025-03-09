@@ -8,7 +8,7 @@ try:
     from speechbrain.utils.metric_stats import EER
 
     SPEECHBRAIN_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     SPEECHBRAIN_AVAILABLE = False
 
 
@@ -23,7 +23,9 @@ def compute_eer(predictions: torch.Tensor, targets: torch.Tensor) -> Tuple[float
         Tuple[float, float]: The EER and the threshold for the EER.
     """
     if not SPEECHBRAIN_AVAILABLE:
-        raise ImportError(
-            "`speechbrain` is not installed. Please install it using:\n\n" "    pip install senselab['audio']"
+        raise ModuleNotFoundError(
+            "`speechbrain` is not installed. "
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
         )
+
     return EER(predictions, targets)

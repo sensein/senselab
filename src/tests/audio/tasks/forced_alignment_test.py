@@ -13,7 +13,7 @@ try:
     import nltk  # noqa: F401
 
     NLTK_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     NLTK_AVAILABLE = False
 
 try:
@@ -35,7 +35,7 @@ try:
     )
 
     TORCHAUDIO_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     TORCHAUDIO_AVAILABLE = False
 
 
