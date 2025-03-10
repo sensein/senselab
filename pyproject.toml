@@ -57,7 +57,7 @@ speechbrain = {version = "~=1", optional = true}
 pyannote-audio = {version = "~=3.3", optional = true}
 opensmile = {version = "~=2.5", optional = true}
 vocos = {version = "~=0.1", optional = true}
-coqui-tts = {git = "https://github.com/idiap/coqui-ai-TTS.git", optional = true}
+coqui-tts = {version = "~=0.26", optional = true}
 jiwer = {version = "~=3.0", optional = true}
 nltk = {version = "~=3.9", optional = true}
 sentence-transformers = {version = "~=3.1", optional = true}
