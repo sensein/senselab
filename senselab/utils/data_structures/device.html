@@ -83,9 +83,9 @@
 </span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a><span class="k">class</span><span class="w"> </span><span class="nc">DeviceType</span><span class="p">(</span><span class="n">Enum</span><span class="p">):</span>
 </span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Device types for PyTorch operations.&quot;&quot;&quot;</span>
 </span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a>
-</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a>    <span class="n">CPU</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;cpu&quot;</span>
-</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a>    <span class="n">CUDA</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;cuda&quot;</span>
-</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a>    <span class="n">MPS</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;mps&quot;</span>
+</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a>    <span class="n">CPU</span> <span class="o">=</span> <span class="s2">&quot;cpu&quot;</span>
+</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a>    <span class="n">CUDA</span> <span class="o">=</span> <span class="s2">&quot;cuda&quot;</span>
+</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a>    <span class="n">MPS</span> <span class="o">=</span> <span class="s2">&quot;mps&quot;</span>
 </span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a>
 </span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a>
 </span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a><span class="n">DTYPE_MAP</span> <span class="o">=</span> <span class="p">{</span><span class="n">DeviceType</span><span class="o">.</span><span class="n">CPU</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span> <span class="n">DeviceType</span><span class="o">.</span><span class="n">CUDA</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">,</span> <span class="n">DeviceType</span><span class="o">.</span><span class="n">MPS</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">}</span>
@@ -179,9 +179,9 @@
             <div class="pdoc-code codehilite"><pre><span></span><span id="DeviceType-10"><a href="#DeviceType-10"><span class="linenos">10</span></a><span class="k">class</span><span class="w"> </span><span class="nc">DeviceType</span><span class="p">(</span><span class="n">Enum</span><span class="p">):</span>
 </span><span id="DeviceType-11"><a href="#DeviceType-11"><span class="linenos">11</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Device types for PyTorch operations.&quot;&quot;&quot;</span>
 </span><span id="DeviceType-12"><a href="#DeviceType-12"><span class="linenos">12</span></a>
-</span><span id="DeviceType-13"><a href="#DeviceType-13"><span class="linenos">13</span></a>    <span class="n">CPU</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;cpu&quot;</span>
-</span><span id="DeviceType-14"><a href="#DeviceType-14"><span class="linenos">14</span></a>    <span class="n">CUDA</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;cuda&quot;</span>
-</span><span id="DeviceType-15"><a href="#DeviceType-15"><span class="linenos">15</span></a>    <span class="n">MPS</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;mps&quot;</span>
+</span><span id="DeviceType-13"><a href="#DeviceType-13"><span class="linenos">13</span></a>    <span class="n">CPU</span> <span class="o">=</span> <span class="s2">&quot;cpu&quot;</span>
+</span><span id="DeviceType-14"><a href="#DeviceType-14"><span class="linenos">14</span></a>    <span class="n">CUDA</span> <span class="o">=</span> <span class="s2">&quot;cuda&quot;</span>
+</span><span id="DeviceType-15"><a href="#DeviceType-15"><span class="linenos">15</span></a>    <span class="n">MPS</span> <span class="o">=</span> <span class="s2">&quot;mps&quot;</span>
 </span></pre></div>
 
 
@@ -191,7 +191,7 @@
 
                             <div id="DeviceType.CPU" class="classattr">
                                 <div class="attr variable">
-            <span class="name">CPU</span><span class="annotation">: str</span>        =
+            <span class="name">CPU</span>        =
 <span class="default_value">&lt;<a href="#DeviceType.CPU">DeviceType.CPU</a>: &#39;cpu&#39;&gt;</span>
 
         
@@ -203,7 +203,7 @@
                             </div>
                             <div id="DeviceType.CUDA" class="classattr">
                                 <div class="attr variable">
-            <span class="name">CUDA</span><span class="annotation">: str</span>        =
+            <span class="name">CUDA</span>        =
 <span class="default_value">&lt;<a href="#DeviceType.CUDA">DeviceType.CUDA</a>: &#39;cuda&#39;&gt;</span>
 
         
@@ -215,7 +215,7 @@
                             </div>
                             <div id="DeviceType.MPS" class="classattr">
                                 <div class="attr variable">
-            <span class="name">MPS</span><span class="annotation">: str</span>        =
+            <span class="name">MPS</span>        =
 <span class="default_value">&lt;<a href="#DeviceType.MPS">DeviceType.MPS</a>: &#39;mps&#39;&gt;</span>
 
         

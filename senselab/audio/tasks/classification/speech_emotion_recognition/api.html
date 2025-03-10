@@ -92,18 +92,18 @@ and the model-specific parameters, and senselab handles the rest.</p>
 </span><span id="L-11"><a href="#L-11"><span class="linenos"> 11</span></a>
 </span><span id="L-12"><a href="#L-12"><span class="linenos"> 12</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">transformers</span><span class="w"> </span><span class="kn">import</span> <span class="n">AutoConfig</span>
 </span><span id="L-13"><a href="#L-13"><span class="linenos"> 13</span></a>
-</span><span id="L-14"><a href="#L-14"><span class="linenos"> 14</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">senselab.audio.data_structures</span><span class="w"> </span><span class="kn">import</span> <span class="n">Audio</span>
+</span><span id="L-14"><a href="#L-14"><span class="linenos"> 14</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">senselab.audio.data_structures</span><span class="w"> </span><span class="kn">import</span> <span class="n">Audio</span><span class="p">,</span> <span class="n">AudioClassificationResult</span>
 </span><span id="L-15"><a href="#L-15"><span class="linenos"> 15</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">senselab.audio.tasks.classification.huggingface</span><span class="w"> </span><span class="kn">import</span> <span class="n">HuggingFaceAudioClassifier</span>
-</span><span id="L-16"><a href="#L-16"><span class="linenos"> 16</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">senselab.utils.data_structures</span><span class="w"> </span><span class="kn">import</span> <span class="n">AudioClassificationResult</span><span class="p">,</span> <span class="n">DeviceType</span><span class="p">,</span> <span class="n">HFModel</span><span class="p">,</span> <span class="n">SenselabModel</span><span class="p">,</span> <span class="n">logger</span>
+</span><span id="L-16"><a href="#L-16"><span class="linenos"> 16</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">senselab.utils.data_structures</span><span class="w"> </span><span class="kn">import</span> <span class="n">DeviceType</span><span class="p">,</span> <span class="n">HFModel</span><span class="p">,</span> <span class="n">SenselabModel</span><span class="p">,</span> <span class="n">logger</span>
 </span><span id="L-17"><a href="#L-17"><span class="linenos"> 17</span></a>
 </span><span id="L-18"><a href="#L-18"><span class="linenos"> 18</span></a>
 </span><span id="L-19"><a href="#L-19"><span class="linenos"> 19</span></a><span class="k">class</span><span class="w"> </span><span class="nc">SERType</span><span class="p">(</span><span class="n">Enum</span><span class="p">):</span>
 </span><span id="L-20"><a href="#L-20"><span class="linenos"> 20</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;SER types for determining model output behaviors.&quot;&quot;&quot;</span>
 </span><span id="L-21"><a href="#L-21"><span class="linenos"> 21</span></a>
-</span><span id="L-22"><a href="#L-22"><span class="linenos"> 22</span></a>    <span class="n">DISCRETE</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;discrete&quot;</span>
-</span><span id="L-23"><a href="#L-23"><span class="linenos"> 23</span></a>    <span class="n">CONTINUOUS</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;continuous&quot;</span>
-</span><span id="L-24"><a href="#L-24"><span class="linenos"> 24</span></a>    <span class="n">VALENCE</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;valence&quot;</span>
-</span><span id="L-25"><a href="#L-25"><span class="linenos"> 25</span></a>    <span class="n">NOT_RECOGNIZED</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;not recognized&quot;</span>
+</span><span id="L-22"><a href="#L-22"><span class="linenos"> 22</span></a>    <span class="n">DISCRETE</span> <span class="o">=</span> <span class="s2">&quot;discrete&quot;</span>
+</span><span id="L-23"><a href="#L-23"><span class="linenos"> 23</span></a>    <span class="n">CONTINUOUS</span> <span class="o">=</span> <span class="s2">&quot;continuous&quot;</span>
+</span><span id="L-24"><a href="#L-24"><span class="linenos"> 24</span></a>    <span class="n">VALENCE</span> <span class="o">=</span> <span class="s2">&quot;valence&quot;</span>
+</span><span id="L-25"><a href="#L-25"><span class="linenos"> 25</span></a>    <span class="n">NOT_RECOGNIZED</span> <span class="o">=</span> <span class="s2">&quot;not recognized&quot;</span>
 </span><span id="L-26"><a href="#L-26"><span class="linenos"> 26</span></a>
 </span><span id="L-27"><a href="#L-27"><span class="linenos"> 27</span></a>
 </span><span id="L-28"><a href="#L-28"><span class="linenos"> 28</span></a><span class="k">def</span><span class="w"> </span><span class="nf">classify_emotions_from_speech</span><span class="p">(</span>
@@ -128,7 +128,7 @@ and the model-specific parameters, and senselab handles the rest.</p>
 </span><span id="L-47"><a href="#L-47"><span class="linenos"> 47</span></a><span class="sd">    &quot;&quot;&quot;</span>
 </span><span id="L-48"><a href="#L-48"><span class="linenos"> 48</span></a>    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">HFModel</span><span class="p">):</span>
 </span><span id="L-49"><a href="#L-49"><span class="linenos"> 49</span></a>        <span class="n">model_info</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">get_model_info</span><span class="p">()</span>
-</span><span id="L-50"><a href="#L-50"><span class="linenos"> 50</span></a>        <span class="n">tags</span> <span class="o">=</span> <span class="n">model_info</span><span class="o">.</span><span class="n">tags</span>
+</span><span id="L-50"><a href="#L-50"><span class="linenos"> 50</span></a>        <span class="n">tags</span> <span class="o">=</span> <span class="n">model_info</span><span class="o">.</span><span class="n">tags</span> <span class="ow">or</span> <span class="p">[]</span>
 </span><span id="L-51"><a href="#L-51"><span class="linenos"> 51</span></a>
 </span><span id="L-52"><a href="#L-52"><span class="linenos"> 52</span></a>        <span class="n">ser_type</span> <span class="o">=</span> <span class="n">_get_ser_type</span><span class="p">(</span><span class="n">model</span><span class="p">)</span>
 </span><span id="L-53"><a href="#L-53"><span class="linenos"> 53</span></a>
@@ -211,10 +211,10 @@ and the model-specific parameters, and senselab handles the rest.</p>
             <div class="pdoc-code codehilite"><pre><span></span><span id="SERType-20"><a href="#SERType-20"><span class="linenos">20</span></a><span class="k">class</span><span class="w"> </span><span class="nc">SERType</span><span class="p">(</span><span class="n">Enum</span><span class="p">):</span>
 </span><span id="SERType-21"><a href="#SERType-21"><span class="linenos">21</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;SER types for determining model output behaviors.&quot;&quot;&quot;</span>
 </span><span id="SERType-22"><a href="#SERType-22"><span class="linenos">22</span></a>
-</span><span id="SERType-23"><a href="#SERType-23"><span class="linenos">23</span></a>    <span class="n">DISCRETE</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;discrete&quot;</span>
-</span><span id="SERType-24"><a href="#SERType-24"><span class="linenos">24</span></a>    <span class="n">CONTINUOUS</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;continuous&quot;</span>
-</span><span id="SERType-25"><a href="#SERType-25"><span class="linenos">25</span></a>    <span class="n">VALENCE</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;valence&quot;</span>
-</span><span id="SERType-26"><a href="#SERType-26"><span class="linenos">26</span></a>    <span class="n">NOT_RECOGNIZED</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;not recognized&quot;</span>
+</span><span id="SERType-23"><a href="#SERType-23"><span class="linenos">23</span></a>    <span class="n">DISCRETE</span> <span class="o">=</span> <span class="s2">&quot;discrete&quot;</span>
+</span><span id="SERType-24"><a href="#SERType-24"><span class="linenos">24</span></a>    <span class="n">CONTINUOUS</span> <span class="o">=</span> <span class="s2">&quot;continuous&quot;</span>
+</span><span id="SERType-25"><a href="#SERType-25"><span class="linenos">25</span></a>    <span class="n">VALENCE</span> <span class="o">=</span> <span class="s2">&quot;valence&quot;</span>
+</span><span id="SERType-26"><a href="#SERType-26"><span class="linenos">26</span></a>    <span class="n">NOT_RECOGNIZED</span> <span class="o">=</span> <span class="s2">&quot;not recognized&quot;</span>
 </span></pre></div>
 
 
@@ -224,7 +224,7 @@ and the model-specific parameters, and senselab handles the rest.</p>
 
                             <div id="SERType.DISCRETE" class="classattr">
                                 <div class="attr variable">
-            <span class="name">DISCRETE</span><span class="annotation">: str</span>        =
+            <span class="name">DISCRETE</span>        =
 <span class="default_value">&lt;<a href="#SERType.DISCRETE">SERType.DISCRETE</a>: &#39;discrete&#39;&gt;</span>
 
         
@@ -236,7 +236,7 @@ and the model-specific parameters, and senselab handles the rest.</p>
                             </div>
                             <div id="SERType.CONTINUOUS" class="classattr">
                                 <div class="attr variable">
-            <span class="name">CONTINUOUS</span><span class="annotation">: str</span>        =
+            <span class="name">CONTINUOUS</span>        =
 <span class="default_value">&lt;<a href="#SERType.CONTINUOUS">SERType.CONTINUOUS</a>: &#39;continuous&#39;&gt;</span>
 
         
@@ -248,7 +248,7 @@ and the model-specific parameters, and senselab handles the rest.</p>
                             </div>
                             <div id="SERType.VALENCE" class="classattr">
                                 <div class="attr variable">
-            <span class="name">VALENCE</span><span class="annotation">: str</span>        =
+            <span class="name">VALENCE</span>        =
 <span class="default_value">&lt;<a href="#SERType.VALENCE">SERType.VALENCE</a>: &#39;valence&#39;&gt;</span>
 
         
@@ -260,7 +260,7 @@ and the model-specific parameters, and senselab handles the rest.</p>
                             </div>
                             <div id="SERType.NOT_RECOGNIZED" class="classattr">
                                 <div class="attr variable">
-            <span class="name">NOT_RECOGNIZED</span><span class="annotation">: str</span>        =
+            <span class="name">NOT_RECOGNIZED</span>        =
 <span class="default_value">&lt;<a href="#SERType.NOT_RECOGNIZED">SERType.NOT_RECOGNIZED</a>: &#39;not recognized&#39;&gt;</span>
 
         
@@ -276,7 +276,7 @@ and the model-specific parameters, and senselab handles the rest.</p>
 <div class="attr function">
             
         <span class="def">def</span>
-        <span class="name">classify_emotions_from_speech</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n"><a href="../../../data_structures/audio.html#Audio">senselab.audio.data_structures.audio.Audio</a></span><span class="p">]</span>,</span><span class="param">	<span class="n">model</span><span class="p">:</span> <span class="n"><a href="../../../../utils/data_structures/model.html#SenselabModel">senselab.utils.data_structures.model.SenselabModel</a></span>,</span><span class="param">	<span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n"><a href="../../../../utils/data_structures/device.html#DeviceType">senselab.utils.data_structures.device.DeviceType</a></span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="o">**</span><span class="n">kwargs</span><span class="p">:</span> <span class="n">Any</span></span><span class="return-annotation">) -> <span class="n">List</span><span class="p">[</span><span class="n"><a href="../../../../utils/data_structures/audio_classification_result.html#AudioClassificationResult">senselab.utils.data_structures.audio_classification_result.AudioClassificationResult</a></span><span class="p">]</span>:</span></span>
+        <span class="name">classify_emotions_from_speech</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n"><a href="../../../data_structures/audio.html#Audio">senselab.audio.data_structures.audio.Audio</a></span><span class="p">]</span>,</span><span class="param">	<span class="n">model</span><span class="p">:</span> <span class="n"><a href="../../../../utils/data_structures/model.html#SenselabModel">senselab.utils.data_structures.model.SenselabModel</a></span>,</span><span class="param">	<span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n"><a href="../../../../utils/data_structures/device.html#DeviceType">senselab.utils.data_structures.device.DeviceType</a></span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="o">**</span><span class="n">kwargs</span><span class="p">:</span> <span class="n">Any</span></span><span class="return-annotation">) -> <span class="n">List</span><span class="p">[</span><span class="n"><a href="../../../data_structures/audio_classification_result.html#AudioClassificationResult">senselab.audio.data_structures.audio_classification_result.AudioClassificationResult</a></span><span class="p">]</span>:</span></span>
 
                 <label class="view-source-button" for="classify_emotions_from_speech-view-source"><span>View Source</span></label>
 
@@ -304,7 +304,7 @@ and the model-specific parameters, and senselab handles the rest.</p>
 </span><span id="classify_emotions_from_speech-48"><a href="#classify_emotions_from_speech-48"><span class="linenos">48</span></a><span class="sd">    &quot;&quot;&quot;</span>
 </span><span id="classify_emotions_from_speech-49"><a href="#classify_emotions_from_speech-49"><span class="linenos">49</span></a>    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">HFModel</span><span class="p">):</span>
 </span><span id="classify_emotions_from_speech-50"><a href="#classify_emotions_from_speech-50"><span class="linenos">50</span></a>        <span class="n">model_info</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">get_model_info</span><span class="p">()</span>
-</span><span id="classify_emotions_from_speech-51"><a href="#classify_emotions_from_speech-51"><span class="linenos">51</span></a>        <span class="n">tags</span> <span class="o">=</span> <span class="n">model_info</span><span class="o">.</span><span class="n">tags</span>
+</span><span id="classify_emotions_from_speech-51"><a href="#classify_emotions_from_speech-51"><span class="linenos">51</span></a>        <span class="n">tags</span> <span class="o">=</span> <span class="n">model_info</span><span class="o">.</span><span class="n">tags</span> <span class="ow">or</span> <span class="p">[]</span>
 </span><span id="classify_emotions_from_speech-52"><a href="#classify_emotions_from_speech-52"><span class="linenos">52</span></a>
 </span><span id="classify_emotions_from_speech-53"><a href="#classify_emotions_from_speech-53"><span class="linenos">53</span></a>        <span class="n">ser_type</span> <span class="o">=</span> <span class="n">_get_ser_type</span><span class="p">(</span><span class="n">model</span><span class="p">)</span>
 </span><span id="classify_emotions_from_speech-54"><a href="#classify_emotions_from_speech-54"><span class="linenos">54</span></a>
