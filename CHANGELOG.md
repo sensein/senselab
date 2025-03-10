@@ -1,3 +1,19 @@
+# 0.31.1 (Mon Mar 10 2025)
+
+#### 🐛 Bug Fix
+
+- Initialize HF models using their preferred data type [#264](https://github.com/sensein/senselab/pull/264) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### ⚠️ Pushed to `main`
+
+- fixing docs ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.31.0 (Mon Mar 10 2025)
 
 #### 🚀 Enhancement
