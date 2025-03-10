@@ -39,7 +39,7 @@ jobs:
     - name: Install dependencies with Poetry
       run: |
         poetry env use ${{ matrix.python-version }}
-        poetry install --with dev
+        poetry install --extras "audio text video" --with dev
         poetry env info
       shell: bash
     - name: check files
@@ -89,7 +89,7 @@ jobs:
     - name: Install dependencies with Poetry
       run: |
         poetry env use ${{ matrix.python-version }}
-        poetry install --with dev
+        poetry install --extras "audio text video" --with dev
         poetry env info
       shell: bash
     - name: Install pre-commit
@@ -99,6 +99,148 @@ jobs:
       run: |
         poetry run pre-commit run --all-files
       shell: bash
+
+
+  start-runner-310-core:
+    if: github.event.pull_request.draft == false && contains(github.event.pull_request.labels.*.name, 'to-test-gpu') && success()
+    needs:
+    - pre-commit
+    - macos-tests
+    name: start-runner-310-core
+    runs-on: ubuntu-latest
+    outputs:
+      label: ${{ steps.start-ec2-runner.outputs.label }}
+      ec2-instance-id: ${{ steps.start-ec2-runner.outputs.ec2-instance-id }}
+      job-ran: ${{ steps.set-ran.outputs.ran }}
+    steps:
+    - id: set-ran
+      run: echo "::set-output name=ran::true"
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_KEY_SECRET }}
+        aws-region: ${{ vars.AWS_REGION }}
+    - name: Start EC2 runner
+      id: start-ec2-runner
+      uses: machulav/ec2-github-runner@v2
+      with:
+        mode: start
+        github-token: ${{ secrets.GH_TOKEN }}
+        ec2-image-id: ${{ vars.AWS_IMAGE_ID }}
+        ec2-instance-type: ${{ vars.AWS_INSTANCE_TYPE }}
+        subnet-id: ${{ vars.AWS_SUBNET }}
+        security-group-id: ${{ vars.AWS_SECURITY_GROUP }}
+
+  ubuntu-tests-310-core:
+    name: ubuntu-tests-310-core
+    needs: start-runner-310-core
+    runs-on: ${{ needs.start-runner-310-core.outputs.label }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ vars.WORKING_DIR }}
+    strategy:
+      matrix:
+        python-version: ['3.10']
+    env:
+      WORKING_DIR: ${{ vars.WORKING_DIR }}
+      POETRY_CACHE_DIR: ${{ vars.WORKING_DIR }}
+    outputs:
+      job-ran: ${{ steps.set-ran.outputs.ran }}
+    steps:
+    - id: set-ran
+      run: echo "::set-output name=ran::true"
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 1   # no need for the history
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Install ffmpeg
+      run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      shell: bash
+    - name: Install Poetry
+      run: |
+        which python
+        python --version
+        pip install poetry==2.1.1
+        which poetry
+        poetry --version
+      shell: bash
+    - name: Check available space
+      run: |
+        df -h
+      shell: bash
+    - name: Echo python info
+      run: |
+        python --version
+        which python
+        which poetry
+      shell: bash
+    - name: Copy senselab directory to current directory
+      run: |
+        cp -r /actions-runner/_work/senselab/senselab .
+    - name: Install dependencies with Poetry (Core only)
+      run: |
+        cd senselab
+        poetry env use ${{ matrix.python-version }}
+        poetry install --with dev
+      shell: bash
+    - name: Check NVIDIA SMI details
+      run: |
+        cd senselab
+        poetry run nvidia-smi
+        poetry run nvidia-smi -L
+        poetry run nvidia-smi -q -d Memory
+      shell: bash
+    - name: Prepare cache folder for pytest
+      run: mkdir -p $WORKING_DIR/pytest/temp
+      shell: bash
+    - name: Run unit tests
+      id: run-tests
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      run: >
+        cd senselab && poetry run pytest \
+          --rootdir=$WORKING_DIR/pytest \
+          --basetemp=$WORKING_DIR/pytest/temp \
+          --junitxml=pytest.xml \
+          --cov-report=term-missing:skip-covered \
+          --cov-report=xml:coverage.xml \
+          --cov=src src/tests \
+          --log-level=DEBUG \
+          --verbose
+      shell: bash
+
+  stop-runner-310-core:
+    name: stop-runner-310-core
+    needs:
+    - start-runner-310-core   # waits for the EC2 instance to be created
+    - ubuntu-tests-310-core   # waits for the actual job to finish
+    runs-on: ubuntu-latest
+    if: ${{ needs.start-runner-310-core.outputs.job-ran == 'true' && needs.ubuntu-tests-310-core.outputs.job-ran == 'true' || failure() }} # required to stop the runner even if an error occurred in previous jobs
+    steps:
+    - name: Check available space
+      run: |
+        df -h
+      shell: bash
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_KEY_SECRET }}
+        aws-region: ${{ vars.AWS_REGION }}
+    - name: Stop EC2 runner
+      uses: machulav/ec2-github-runner@v2
+      with:
+        mode: stop
+        github-token: ${{ secrets.GH_TOKEN }}
+        label: ${{ needs.start-runner-310-core.outputs.label }}
+        ec2-instance-id: ${{ needs.start-runner-310-core.outputs.ec2-instance-id }}
+
 
   start-runner-310:
     if: github.event.pull_request.draft == false && contains(github.event.pull_request.labels.*.name, 'to-test-gpu') && success()
@@ -185,7 +327,7 @@ jobs:
       run: |
         cd senselab
         poetry env use ${{ matrix.python-version }}
-        poetry install --with dev
+        poetry install --extras "audio text video" --with dev
       shell: bash
     - name: Check NVIDIA SMI details
       run: |
@@ -319,7 +461,7 @@ jobs:
       run: |
         cd senselab
         poetry env use ${{ matrix.python-version }}
-        poetry install --with dev
+        poetry install --extras "audio text video" --with dev
       shell: bash
     - name: Check poetry info
       run: |
@@ -460,7 +602,7 @@ jobs:
       run: |
         cd senselab
         poetry env use ${{ matrix.python-version }}
-        poetry install --with dev
+        poetry install --extras "audio text video" --with dev
       shell: bash
     - name: Check poetry info
       run: |

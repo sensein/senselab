@@ -11,33 +11,30 @@ from senselab.audio.tasks.text_to_speech import synthesize_texts
 from senselab.audio.tasks.text_to_speech.huggingface import HuggingFaceTTS
 from senselab.utils.data_structures import DeviceType, HFModel, Language, SenselabModel, TorchModel
 
+try:
+    import vocos
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
+    VOCOS_AVAILABLE = True
+except ModuleNotFoundError:
+    VOCOS_AVAILABLE = False
+
+
 @pytest.fixture
 def hf_model() -> HFModel:
     """Fixture for the HF model."""
     return HFModel(path_or_uri="suno/bark-small", revision="main")
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 @pytest.fixture
 def hf_model2() -> HFModel:
     """Fixture for HF model."""
     return HFModel(path_or_uri="facebook/mms-tts-eng", revision="main")
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 @pytest.fixture
 def mars5_model() -> TorchModel:
     """Fixture for MARS5 model."""
     return TorchModel(path_or_uri="Camb-ai/mars5-tts", revision="master")
-
-
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
-@pytest.fixture
-def style_tts2() -> TorchModel:
-    """Fixture for StyleTTS2 model."""
-    return TorchModel(path_or_uri="wilke0818/StyleTTS2-TorchHub", revision="main")
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
@@ -53,30 +50,7 @@ def test_synthesize_texts_with_hf_model(hf_model: HFModel) -> None:
     assert audios[0].sampling_rate > 0
 
 
-# TODO: create support for StyleTTS2 which currently has some dependency issues
-# def test_synthesize_texts_with_styletts2_model(style_tts2: TorchModel, mono_audio_sample: Audio) -> None:
-#     """Test synthesizing texts."""
-#     texts_to_synthesize = ["Hello world", "Hello world again."]
-#     terget_audio_resampling_rate = 24000
-#     target_audio_ground_truth = "This is Peter."
-#     language = Language(language_code="en")
-
-#     resampled_mono_audio_sample = resample_audios([mono_audio_sample], terget_audio_resampling_rate)[0]
-#     target_audio = extract_segments([(resampled_mono_audio_sample, [(0.0, 1.0)])])[0][0]
-#     audios = synthesize_texts(
-#         texts=texts_to_synthesize,
-#         target=[(target_audio, target_audio_ground_truth), (target_audio, target_audio_ground_truth)],
-#         model=style_tts2,
-#         language=language,
-#         force_reload=True,
-#     )
-
-# assert len(audios) == 2
-# assert isinstance(audios[0], Audio)
-# assert audios[0].waveform is not None
-# assert audios[0].sampling_rate == terget_audio_resampling_rate
-
-
+@pytest.mark.skipif(not VOCOS_AVAILABLE, reason="Vocos is not available (dependency for mars5tts)")
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_synthesize_texts_with_mars5_model(mars5_model: TorchModel, mono_audio_sample: Audio) -> None:
     """Test synthesizing texts."""

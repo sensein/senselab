@@ -3,7 +3,6 @@
 from typing import List, Optional
 
 import torch
-from torch_audiomentations import Compose
 
 from senselab.audio.data_structures import (
     Audio,
@@ -12,9 +11,16 @@ from senselab.audio.data_structures import (
 )
 from senselab.utils.data_structures import DeviceType, _select_device_and_dtype
 
+try:
+    from torch_audiomentations import Compose
+
+    TORCH_AUDIOMENTATIONS_AVAILABLE = True
+except ModuleNotFoundError:
+    TORCH_AUDIOMENTATIONS_AVAILABLE = False
+
 
 def augment_audios_with_torch_audiomentations(
-    audios: List[Audio], augmentation: Compose, device: Optional[DeviceType] = None
+    audios: List[Audio], augmentation: "Compose", device: Optional[DeviceType] = None
 ) -> List[Audio]:
     """Augments all provided audios with a given augmentation, either individually or all batched together.
 
@@ -37,6 +43,12 @@ def augment_audios_with_torch_audiomentations(
             not necessarily mean that the augmentation has been run on every audio. For more information,
             see the torch-audiomentations documentation.
     """
+    if not TORCH_AUDIOMENTATIONS_AVAILABLE:
+        raise ModuleNotFoundError(
+            "`torch-audiomentations` is not installed. "
+            "Please install senselab audio dependencies using `pip install senselab['audio']`"
+        )
+
     augmentation.output_type = "dict"
     device_type, dtype = _select_device_and_dtype(
         user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
