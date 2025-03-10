@@ -1,3 +1,15 @@
+# 0.31.0 (Mon Mar 10 2025)
+
+#### 🚀 Enhancement
+
+- Restructuring senselab in submodules (audio, text, video) [#258](https://github.com/sensein/senselab/pull/258) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.30.1 (Tue Mar 04 2025)
 
 #### 🐛 Bug Fix
