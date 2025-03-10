@@ -13,6 +13,13 @@ from torchvision.io import read_video
 from senselab.audio.data_structures import Audio
 from senselab.utils.constants import SENSELAB_NAMESPACE
 
+try:
+    import av  # noqa: F401
+
+    PYAV_AVAILABLE = True
+except ModuleNotFoundError:
+    PYAV_AVAILABLE = False
+
 
 class Video(BaseModel):
     """Pydantic model for video and its corresponding metadata.
@@ -85,6 +92,14 @@ class Video(BaseModel):
             filepath: Filepath of the video file to read from
             metadata: Additional information associated with the video file
         """
+        if not PYAV_AVAILABLE:
+            raise ModuleNotFoundError(
+                "`pyav` is not installed. "
+                "Please install senselab video dependencies using `pip install senselab['video']`."
+            )
+
+        if not os.path.exists(filepath):
+            raise FileNotFoundError(f"File {filepath} does not exist.")
         v_frames, a_frames, v_metadata = read_video(filename=filepath, pts_unit="sec")
         v_fps = v_metadata["video_fps"]
         a_fps = v_metadata["audio_fps"]

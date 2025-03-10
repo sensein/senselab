@@ -5,6 +5,13 @@ file and its corresponding metadata. Other functionality and abstract data types
 ease of maintaining the codebase and offering consistent public APIs.
 """
 
+try:
+    import torchaudio
+
+    TORCHAUDIO_AVAILABLE = True
+except ModuleNotFoundError:
+    TORCHAUDIO_AVAILABLE = False
+
 import os
 import uuid
 import warnings
@@ -12,7 +19,6 @@ from typing import Dict, Generator, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
-import torchaudio
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 from senselab.utils.constants import SENSELAB_NAMESPACE
@@ -68,6 +74,15 @@ class Audio(BaseModel):
             filepath: Filepath of the audio file to read from
             metadata: Additional information associated with the audio file
         """
+        if not TORCHAUDIO_AVAILABLE:
+            raise ModuleNotFoundError(
+                "`torchaudio` is not installed. "
+                "Please install senselab audio dependencies using `pip install senselab['audio']`."
+            )
+
+        if not os.path.exists(filepath):
+            raise FileNotFoundError(f"File {filepath} does not exist.")
+
         array, sampling_rate = torchaudio.load(filepath)
 
         return cls(waveform=array, sampling_rate=sampling_rate, orig_path_or_id=filepath, metadata=metadata)
@@ -184,6 +199,12 @@ class Audio(BaseModel):
         Note:
             - https://pytorch.org/audio/master/generated/torchaudio.save.html
         """
+        if not TORCHAUDIO_AVAILABLE:
+            raise ModuleNotFoundError(
+                "`torchaudio` is not installed. "
+                "Please install senselab audio dependencies using `pip install senselab['audio']`."
+            )
+
         if self.waveform.ndim != 2:
             raise ValueError("Waveform must be a 2D tensor with shape (num_channels, num_samples).")
 

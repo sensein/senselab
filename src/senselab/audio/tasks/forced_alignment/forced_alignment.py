@@ -5,7 +5,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 import torch
-from nltk.tokenize.punkt import PunktParameters, PunktSentenceTokenizer
 from threadpoolctl import threadpool_limits
 from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
 
@@ -28,6 +27,13 @@ from senselab.audio.tasks.forced_alignment.data_structures import (
 from senselab.audio.tasks.preprocessing import extract_segments, pad_audios
 from senselab.utils.data_structures import DeviceType, HFModel, Language, ScriptLine, _select_device_and_dtype
 
+try:
+    from nltk.tokenize.punkt import PunktParameters, PunktSentenceTokenizer
+
+    NLTK_AVAILABLE = True
+except ModuleNotFoundError:
+    NLTK_AVAILABLE = False
+
 
 def _preprocess_segments(
     transcript: List[SingleSegment],
@@ -48,6 +54,12 @@ def _preprocess_segments(
     Returns:
         List[SingleSegment]: The preprocessed transcription segments.
     """
+    if not NLTK_AVAILABLE:
+        raise ModuleNotFoundError(
+            "`nltk` is not installed. "
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+        )
+
     total_segments = len(transcript)
 
     for sdx, segment in enumerate(transcript):

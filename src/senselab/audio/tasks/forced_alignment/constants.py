@@ -10,6 +10,8 @@ PUNKT_ABBREVIATIONS = ["dr", "vs", "mr", "mrs", "prof"]
 
 LANGUAGES_WITHOUT_SPACES = ["ja", "zh"]
 
+# TODO: models shouldn't be initialized here, but only in the align function
+
 DEFAULT_ALIGN_MODELS_TORCH = {
     "fr": TorchAudioModel(path_or_uri="VOXPOPULI_ASR_BASE_10K_FR", revision="main"),
     "de": TorchAudioModel(path_or_uri="VOXPOPULI_ASR_BASE_10K_DE", revision="main"),
