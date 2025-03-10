@@ -41,7 +41,6 @@ jobs:
     - name: Install dependencies with Poetry
       run: |
         poetry install --extras "audio text video" --with dev,docs
-        poetry install['audio,text,video'] --with dev,docs
       shell: bash
     - name: Build docs
       env:
