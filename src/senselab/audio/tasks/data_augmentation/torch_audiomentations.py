@@ -50,7 +50,7 @@ def augment_audios_with_torch_audiomentations(
         )
 
     augmentation.output_type = "dict"
-    device_type, dtype = _select_device_and_dtype(
+    device_type, _ = _select_device_and_dtype(
         user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
     )
     if device_type == DeviceType.CPU:
@@ -108,7 +108,7 @@ def augment_audios_with_torch_audiomentations(
     else:
         batched_audios, sampling_rates, metadatas = batch_audios(audios)
 
-        batched_audios = batched_audios.to(device=torch.device(device_type.value), dtype=dtype)
+        batched_audios = batched_audios.to(device=torch.device(device_type.value))
         sampling_rate = sampling_rates[0] if isinstance(sampling_rates, List) else sampling_rates
         augmented_audio = augmentation(batched_audios, sample_rate=sampling_rate).samples
 
