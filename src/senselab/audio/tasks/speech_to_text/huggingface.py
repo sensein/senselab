@@ -43,7 +43,7 @@ class HuggingFaceASR:
         Returns:
             pipeline: The ASR pipeline.
         """
-        device, torch_dtype = _select_device_and_dtype(
+        device, _ = _select_device_and_dtype(
             user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
         )
         key = (
@@ -60,7 +60,6 @@ class HuggingFaceASR:
                 chunk_length_s=chunk_length_s,
                 batch_size=batch_size,
                 device=device.value,
-                torch_dtype=torch_dtype,
             )
         return cls._pipelines[key]
 
