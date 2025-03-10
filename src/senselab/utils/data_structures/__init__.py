@@ -21,5 +21,11 @@ try:
 except ImportError:
     pass
 
+# Conditionally import CoquiTTSModel only if coqui-tts is available
+try:
+    from .model import CoquiTTSModel
+except ImportError:
+    pass
+
 from .pydra_helpers import *  # noqa: F403
 from .script_line import ScriptLine  # noqa: F401

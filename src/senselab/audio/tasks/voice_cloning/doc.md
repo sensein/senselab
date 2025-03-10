@@ -12,7 +12,7 @@ Any-to-any voice cloning aims to transform a source speech into a target voice u
 ## Models
 We have explored several models for voice cloning:
 - [speechT5](https://huggingface.co/microsoft/speecht5_vc) (not included in ```senselab``` as it did not meet our expectations),
-- [FREEVC](https://github.com/OlaWod/FreeVC) (planned to be included in ```senselab``` soon)
+- [FREEVC](https://github.com/OlaWod/FreeVC) (Already included in ```senselab```),
 - [KNNVC](https://github.com/bshall/knn-vc) (Already included in ```senselab```).
 
 
