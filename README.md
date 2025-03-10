@@ -49,7 +49,7 @@ pip install senselab['audio']
 ```
 To install video and text extras, please do:
 ```sh
-pip install senselab[video,text]
+pip install senselab['video,text']
 ```
 
 ## Quick start
