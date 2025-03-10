@@ -28,7 +28,7 @@ class HuggingFaceTTS:
         Returns:
             pipeline: The TTS pipeline.
         """
-        device, torch_dtype = _select_device_and_dtype(
+        device, _ = _select_device_and_dtype(
             user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
         )
         key = f"{model.path_or_uri}-{model.revision}-{device.value}"
@@ -38,7 +38,6 @@ class HuggingFaceTTS:
                 model=model.path_or_uri,
                 revision=model.revision,
                 device=device.value,
-                torch_dtype=torch_dtype,
             )
         return cls._pipelines[key]
 
