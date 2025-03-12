@@ -85,8 +85,14 @@
 </span><span id="L-21"><a href="#L-21"><span class="linenos">21</span></a><span class="k">except</span> <span class="ne">ImportError</span><span class="p">:</span>
 </span><span id="L-22"><a href="#L-22"><span class="linenos">22</span></a>    <span class="k">pass</span>
 </span><span id="L-23"><a href="#L-23"><span class="linenos">23</span></a>
-</span><span id="L-24"><a href="#L-24"><span class="linenos">24</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.pydra_helpers</span><span class="w"> </span><span class="kn">import</span> <span class="o">*</span>  <span class="c1"># noqa: F403</span>
-</span><span id="L-25"><a href="#L-25"><span class="linenos">25</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.script_line</span><span class="w"> </span><span class="kn">import</span> <span class="n">ScriptLine</span>  <span class="c1"># noqa: F401</span>
+</span><span id="L-24"><a href="#L-24"><span class="linenos">24</span></a><span class="c1"># Conditionally import CoquiTTSModel only if coqui-tts is available</span>
+</span><span id="L-25"><a href="#L-25"><span class="linenos">25</span></a><span class="k">try</span><span class="p">:</span>
+</span><span id="L-26"><a href="#L-26"><span class="linenos">26</span></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">.model</span><span class="w"> </span><span class="kn">import</span> <span class="n">CoquiTTSModel</span>
+</span><span id="L-27"><a href="#L-27"><span class="linenos">27</span></a><span class="k">except</span> <span class="ne">ImportError</span><span class="p">:</span>
+</span><span id="L-28"><a href="#L-28"><span class="linenos">28</span></a>    <span class="k">pass</span>
+</span><span id="L-29"><a href="#L-29"><span class="linenos">29</span></a>
+</span><span id="L-30"><a href="#L-30"><span class="linenos">30</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.pydra_helpers</span><span class="w"> </span><span class="kn">import</span> <span class="o">*</span>  <span class="c1"># noqa: F403</span>
+</span><span id="L-31"><a href="#L-31"><span class="linenos">31</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.script_line</span><span class="w"> </span><span class="kn">import</span> <span class="n">ScriptLine</span>  <span class="c1"># noqa: F401</span>
 </span></pre></div>
 
 
