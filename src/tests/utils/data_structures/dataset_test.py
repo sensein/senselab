@@ -25,6 +25,13 @@ try:
 except ModuleNotFoundError:
     LIBROSA_AVAILABLE = False
 
+try:
+    import av
+
+    PYAV_AVAILABLE = True
+except ModuleNotFoundError:
+    PYAV_AVAILABLE = False
+
 
 def test_create_participant() -> None:
     """Test creating a participant."""
@@ -172,7 +179,7 @@ def test_audio_dataset_splits() -> None:
     ], "Excess GPU split should generate a list with one list of all of the audios, unpadded"
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed")
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE or not PYAV_AVAILABLE, reason="torchaudio or pyav are not installed")
 def test_convert_senselab_dataset_to_hf_datasets() -> None:
     """Tests the conversion of Senselab dataset to HuggingFace."""
     dataset = SenselabDataset(
