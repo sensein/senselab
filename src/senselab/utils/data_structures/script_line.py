@@ -114,3 +114,27 @@ class ScriptLine(BaseModel):
             end=end,
             chunks=[cls.from_dict(c) for c in d["chunks"]] if "chunks" in d else None,
         )
+
+
+def print_scriptline(scriptline: ScriptLine, indent: int = 2) -> None:
+    """Nicely prints a ScriptLine object with its nested chunks.
+
+    Args:
+        scriptline (ScriptLine): The ScriptLine instance to print.
+        indent (int): Current indentation level for nested chunks.
+    """
+    def format_timestamp(start: Optional[float], end: Optional[float]) -> str:
+        if start is not None and end is not None:
+            return f" [{start:.2f} - {end:.2f}]"
+        return ""
+
+    indent_space = "    " * indent  # Four spaces per indentation level
+    speaker_part = f"{scriptline.speaker}: " if scriptline.speaker else ""
+    timestamp_part = format_timestamp(scriptline.start, scriptline.end)
+    text_part = scriptline.text or "<No Text>"
+
+    print(f"{indent_space}{speaker_part}{text_part}{timestamp_part}")
+
+    if scriptline.chunks:
+        for chunk in scriptline.chunks:
+            print_scriptline(chunk, indent=indent + 1)
