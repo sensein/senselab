@@ -51,6 +51,11 @@ class CoquiVoiceCloner:
             source_audios (List[Audio]): List of source audio objects.
             target_audios (List[Audio]): List of target audio objects.
             model (CoquiTTSModel, optional): The Coqui TTS model to use for voice conversion.
+                All Coqui TTS models are supported, including
+                "voice_conversion_models/multilingual/multi-dataset/knnvc",
+                "voice_conversion_models/multilingual/vctk/freevc24",
+                "voice_conversion_models/multilingual/multi-dataset/openvoice_v1",
+                "voice_conversion_models/multilingual/multi-dataset/openvoice_v2".
                 If None, the default model "voice_conversion_models/multilingual/multi-dataset/knnvc" is used.
             device (Optional[DeviceType], optional): The device to run the model on.
                 Defaults to None.
