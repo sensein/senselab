@@ -181,6 +181,7 @@ jobs:
       shell: bash
     - name: Copy senselab directory to current directory
       run: |
+        pwd
         cp -r /actions-runner/_work/senselab/senselab .
     - name: Install dependencies with Poetry (Core only)
       run: |
@@ -322,6 +323,7 @@ jobs:
       shell: bash
     - name: Copy senselab directory to current directory
       run: |
+        pwd
         cp -r /actions-runner/_work/senselab/senselab .
     - name: Install dependencies with Poetry
       run: |
@@ -456,6 +458,7 @@ jobs:
       shell: bash
     - name: Copy senselab directory to current directory
       run: |
+        pwd
         cp -r /actions-runner/_work/senselab/senselab .
     - name: Install dependencies with Poetry
       run: |
@@ -597,6 +600,7 @@ jobs:
       shell: bash
     - name: Copy senselab directory to current directory
       run: |
+        pwd
         cp -r /actions-runner/_work/senselab/senselab .
     - name: Install dependencies with Poetry
       run: |
