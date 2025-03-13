@@ -5,8 +5,8 @@ from typing import Dict, List, Optional, Union
 import numpy as np
 import pandas as pd
 
-from ..data_structures.video import Video
-from .deepface_utils import DeepFaceAnalysis
+from senselab.video.data_structures.video import Video
+from senselab.video.tasks.face_analysis.deepface_utils import DeepFaceAnalysis
 
 
 def recognize_faces(

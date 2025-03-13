@@ -114,7 +114,8 @@ class DeepFaceAnalysis:
         Returns:
             List[Dict]: A list of embeddings for the faces in the image.
         """
-        return DeepFace.represent(img_path=img_path, **self.get_kwargs())
+        kwargs = {key: value for key, value in self.get_kwargs() if key in ["model_name", "detector_backend", "align"]}
+        return DeepFace.represent(img_path=img_path, **kwargs)
 
     def analyze_face_attributes(
         self, img_path: Union[str, np.ndarray], actions: Optional[List[str]] = None
@@ -131,4 +132,5 @@ class DeepFaceAnalysis:
         """
         if actions is None:
             actions = ["age", "gender", "emotion", "race"]
-        return DeepFace.analyze(img_path=img_path, actions=actions, **self.get_kwargs())
+        kwargs = {key: value for key, value in self.get_kwargs() if key in ["detector_backend", "align"]}
+        return DeepFace.analyze(img_path=img_path, actions=actions, **kwargs)
