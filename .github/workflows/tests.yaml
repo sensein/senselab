@@ -292,9 +292,20 @@ jobs:
     steps:
     - id: set-ran
       run: echo "::set-output name=ran::true"
+    - name: Check available space before execution
+      run: df -h
+      shell: bash
     - uses: actions/checkout@v4
       with:
         fetch-depth: 1   # no need for the history
+    - name: Cleanup disk space
+      run: |
+        echo "Cleaning up disk space..."
+        rm -rf ~/.cache
+        rm -rf ~/.npm
+        rm -rf ~/.poetry
+        df -h
+      shell: bash
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
       with:
