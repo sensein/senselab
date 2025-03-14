@@ -286,7 +286,8 @@ jobs:
         python-version: ['3.10']
     env:
       WORKING_DIR: ${{ vars.WORKING_DIR }}
-      POETRY_CACHE_DIR: ${{ vars.WORKING_DIR }}
+      POETRY_CACHE_DIR: "${{ vars.WORKING_DIR }}/poetry"
+      HF_HOME: "${{ vars.WORKING_DIR }}/huggingface"
     outputs:
       job-ran: ${{ steps.set-ran.outputs.ran }}
     steps:
@@ -305,6 +306,11 @@ jobs:
         rm -rf ~/.npm
         rm -rf ~/.poetry
         df -h
+      shell: bash
+    - name: Create cache directories
+      run: |
+        mkdir -p "$POETRY_CACHE_DIR" "$HF_HOME"
+        ls -lah ${{ vars.WORKING_DIR }}
       shell: bash
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
