@@ -359,39 +359,46 @@ def test_run_taxonomy_subtree_checks_recursively(mono_audio_sample: Audio) -> No
 
 
 def test_check_quality() -> None:
-    """Tests that `check_quality` correctly applies quality checks and updates the taxonomy tree."""
-    # Create valid and invalid audio samples
-    valid_audio = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000, metadata={"activity": "breathing"})
-    empty_audio = Audio(waveform=torch.tensor([]), sampling_rate=16000, metadata={"activity": "breathing"})
-    silent_audio = Audio(waveform=torch.zeros(1, 16000), sampling_rate=16000, metadata={"activity": "breathing"})
+    """Tests that `check_quality` produces a DataFrame with correct boolean columns."""
+    # Create valid/invalid Audio samples
+    valid_audio = Audio(
+        waveform=torch.rand(1, 16000),
+        sampling_rate=16000,
+        metadata={"activity": "breathing"},
+    )
+    empty_audio = Audio(
+        waveform=torch.tensor([]),
+        sampling_rate=16000,
+        metadata={"activity": "breathing"},
+    )
+    silent_audio = Audio(
+        waveform=torch.zeros(1, 16000),
+        sampling_rate=16000,
+        metadata={"activity": "breathing"},
+    )
 
-    # Run check_quality
-    updated_tree, remaining_audios = check_quality([valid_audio, empty_audio, silent_audio])
+    # Assign identifiers for the DataFrame
+    valid_audio.orig_path_or_id = "valid"
+    empty_audio.orig_path_or_id = "empty"
+    silent_audio.orig_path_or_id = "silent"
 
-    # Ensure `checks_results` is stored only at the bioacoustic level
-    bioacoustic_node = updated_tree["bioacoustic"]
-    assert "checks_results" in bioacoustic_node, "Check results should be stored at the 'bioacoustic' level."
+    # Create the initial DataFrame
+    df = pd.DataFrame({"audio_path_or_id": ["valid", "empty", "silent"]})
 
-    # Verify the correct checks were applied
-    assert audio_length_positive_check.__name__ in bioacoustic_node["checks_results"], "Audio length check missing."
-    assert (
-        audio_intensity_positive_check.__name__ in bioacoustic_node["checks_results"]
-    ), "Audio intensity check missing."
+    # Run check_quality, which returns the updated DataFrame
+    results_df = check_quality(audios=[valid_audio, empty_audio, silent_audio], audio_df=df)
 
-    # Ensure no check results exist at lower levels
-    breathing_node = updated_tree["bioacoustic"]["subclass"]["human"]["subclass"]["respiration"]["subclass"][
-        "breathing"
-    ]
-    assert breathing_node["checks_results"] == {}
+    # Ensure columns for the two checks exist
+    for col in ["audio_length_positive_check", "audio_intensity_positive_check"]:
+        assert col in results_df.columns, f"Expected column {col} not found in results DataFrame."
 
-    # Verify that excluded audios were correctly filtered out
-    length_check_results = bioacoustic_node["checks_results"][audio_length_positive_check.__name__]
-    intensity_check_results = bioacoustic_node["checks_results"][audio_intensity_positive_check.__name__]
+    # Extract booleans from each column
+    length_vals = results_df["audio_length_positive_check"].tolist()
+    intensity_vals = results_df["audio_intensity_positive_check"].tolist()
 
-    assert empty_audio in length_check_results["exclude"], "Empty audio should be excluded for length."
-    assert silent_audio in intensity_check_results["exclude"], "Silent audio should be excluded for intensity."
-
-    # Verify passing audio remains in `remaining_audios`
-    assert valid_audio in remaining_audios, "Valid audio should not be excluded."
-    assert empty_audio not in remaining_audios, "Empty audio should be removed from the final list."
-    assert silent_audio not in remaining_audios, "Silent audio should be removed from the final list."
+    # For [valid, empty, silent]:
+    # valid => length=True, intensity=True
+    # empty => length=False, intensity=False (no samples)
+    # silent => length=True, intensity=False (samples, but all zeros)
+    assert length_vals == [True, False, True], f"Unexpected length results: {length_vals}"
+    assert intensity_vals == [True, False, False], f"Unexpected intensity results: {intensity_vals}"
