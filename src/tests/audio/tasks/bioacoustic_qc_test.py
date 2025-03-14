@@ -292,8 +292,8 @@ def test_evaluate_node(mono_audio_sample: Audio) -> None:
 
 
 def test_run_taxonomy_subtree_checks_recursively(mono_audio_sample: Audio) -> None:
-    """Tests that checks correctly applied."""
-    # Create test taxonomy tree with sample checks
+    """Tests that checks are correctly applied across the taxonomy subtree, storing results in a DataFrame."""
+    # Create a minimal taxonomy tree with sample checks
     test_tree = {
         "bioacoustic": {
             "checks": [audio_length_positive_check, audio_intensity_positive_check],
@@ -310,13 +310,7 @@ def test_run_taxonomy_subtree_checks_recursively(mono_audio_sample: Audio) -> No
                                 "breathing": {
                                     "checks": [],
                                     "metrics": [],
-                                    "subclass": {
-                                        "sigh": {
-                                            "checks": [],
-                                            "metrics": [],
-                                            "subclass": None,
-                                        }
-                                    },
+                                    "subclass": {"sigh": {"checks": [], "metrics": [], "subclass": None}},
                                 }
                             },
                         }
@@ -326,54 +320,42 @@ def test_run_taxonomy_subtree_checks_recursively(mono_audio_sample: Audio) -> No
         }
     }
 
-    # Create valid and invalid audio samples
+    # Create valid/invalid audio
     empty_audio = Audio(waveform=torch.tensor([]), sampling_rate=16000, metadata={"activity": "sigh"})
     silent_audio = Audio(waveform=torch.zeros(1, 16000), sampling_rate=16000, metadata={"activity": "sigh"})
+    mono_audio_sample.metadata["activity"] = "sigh"
 
-    # Create activity_dict mapping activities to audios
+    # Assign IDs to each audio and build a DataFrame for storing check results
+    mono_audio_sample.orig_path_or_id = "valid"
+    empty_audio.orig_path_or_id = "empty"
+    silent_audio.orig_path_or_id = "silent"
+    df = pd.DataFrame({"audio_path_or_id": ["valid", "empty", "silent"]})
+
+    # Create the activity_dict
     activity_dict = {"sigh": [mono_audio_sample, empty_audio, silent_audio]}
 
-    # Run the function
-    updated_tree = run_taxonomy_subtree_checks_recursively(
+    # Run the function, now providing `results_df=df`
+    results_df = run_taxonomy_subtree_checks_recursively(
         audios=[mono_audio_sample, empty_audio, silent_audio],
         dataset_tree=test_tree,
         activity_dict=activity_dict,
+        results_df=df,
     )
 
-    # Verify that check results were added **only at the bioacoustic level**
-    bioacoustic_node = updated_tree["bioacoustic"]
-    assert "checks_results" in bioacoustic_node, "Check results should be stored at the 'bioacoustic' level."
+    # Verify the DataFrame contains columns for each check
+    for col in ["audio_length_positive_check", "audio_intensity_positive_check"]:
+        assert col in results_df.columns, f"Missing column {col} in results DataFrame."
 
-    # Ensure the correct check functions were applied at `bioacoustic`
-    assert audio_length_positive_check.__name__ in bioacoustic_node["checks_results"], "Audio length check missing."
-    assert (
-        audio_intensity_positive_check.__name__ in bioacoustic_node["checks_results"]
-    ), "Audio intensity check missing."
+    # Check the boolean values
+    length_vals = results_df["audio_length_positive_check"].tolist()
+    intensity_vals = results_df["audio_intensity_positive_check"].tolist()
 
-    # Ensure all lower levels contain **empty check results (`{}`)** if no checks are defined
-    lower_nodes = [
-        updated_tree["bioacoustic"]["subclass"]["human"],
-        updated_tree["bioacoustic"]["subclass"]["human"]["subclass"]["respiration"],
-        updated_tree["bioacoustic"]["subclass"]["human"]["subclass"]["respiration"]["subclass"]["breathing"],
-        updated_tree["bioacoustic"]["subclass"]["human"]["subclass"]["respiration"]["subclass"]["breathing"][
-            "subclass"
-        ]["sigh"],
-    ]
-
-    for node in lower_nodes:
-        assert "checks_results" in node, f"'checks_results' missing in {node}."
-        assert node["checks_results"] == {}, f"Expected empty check results at this level: {node}"
-
-    # Verify excluded audios at the correct level (`bioacoustic`)
-    length_check_results = bioacoustic_node["checks_results"][audio_length_positive_check.__name__]
-    intensity_check_results = bioacoustic_node["checks_results"][audio_intensity_positive_check.__name__]
-
-    assert empty_audio in length_check_results["exclude"], "Empty audio should be excluded for length."
-    assert silent_audio in intensity_check_results["exclude"], "Silent audio should be excluded for intensity."
-
-    # Verify passing audio
-    assert mono_audio_sample in length_check_results["passed"], "Valid audio should pass length check."
-    assert mono_audio_sample in intensity_check_results["passed"], "Valid audio should pass intensity check."
+    # For [valid, empty, silent]:
+    # - valid => length=True, intensity=True
+    # - empty => length=False, intensity=False (no samples)
+    # - silent => length=True, intensity=False (samples but all zeros)
+    assert length_vals == [True, False, True], "Unexpected length check booleans."
+    assert intensity_vals == [True, False, False], "Unexpected intensity check booleans."
 
 
 def test_check_quality() -> None:
