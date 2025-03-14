@@ -4,7 +4,11 @@ import pytest
 import torch
 
 from senselab.audio.data_structures import Audio
-from senselab.audio.tasks.bioacoustic_qc.metrics import proportion_silence_at_beginning_metric, proportion_silent_metric
+from senselab.audio.tasks.bioacoustic_qc.metrics import (
+    proportion_silence_at_beginning_metric,
+    proportion_silence_at_end_metric,
+    proportion_silent_metric,
+)
 
 
 @pytest.mark.parametrize(
@@ -39,3 +43,20 @@ def test_proportion_silence_at_beginning(waveform: torch.Tensor, expected_silenc
     assert (
         silence_start_proportion == expected_silence_start_proportion
     ), f"Expected {expected_silence_start_proportion}, got {silence_start_proportion}"
+
+
+@pytest.mark.parametrize(
+    "waveform, expected_silence_end_proportion",
+    [
+        (torch.tensor([[0.1, 0.2, 0.0, 0.0]]), 0.5),  # 50% silence at the end
+        (torch.tensor([[0.0, 0.0, 0.0, 0.0]]), 1.0),  # Entirely silent audio
+        (torch.tensor([[0.1, 0.2, 0.3, 0.4]]), 0.0),  # No trailing silence
+    ],
+)
+def test_proportion_silence_at_end(waveform: torch.Tensor, expected_silence_end_proportion: float) -> None:
+    """Tests proportion_silence_at_end_metric function."""
+    audio = Audio(waveform=waveform, sampling_rate=16000)
+    silence_end_proportion = proportion_silence_at_end_metric(audio, silence_threshold=0.05)
+    assert (
+        silence_end_proportion == expected_silence_end_proportion
+    ), f"Expected {expected_silence_end_proportion}, got {silence_end_proportion}"
