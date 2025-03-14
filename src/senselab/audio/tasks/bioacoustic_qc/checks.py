@@ -21,25 +21,6 @@ from pandas import pd
 from senselab.audio.data_structures import Audio
 
 
-def apply_audio_quality_check(
-    df: pd.DataFrame, activity_audios: List[Audio], condition: Callable[[Audio], bool]
-) -> pd.DataFrame:
-    """Applies a condition to each audio and stores results in a new column with the function name.
-
-    Args:
-        df (pd.DataFrame): DataFrame containing audio metadata with an 'audio_path_or_id' column.
-        activity_audios (List[Audio]): List of Audio objects to check.
-        condition (Callable[[Audio], bool]): Function that evaluates an Audio object and returns a bool.
-
-    Returns:
-        pd.DataFrame: Updated DataFrame with a new column for the check results.
-    """
-    column_name = condition.__name__
-    audio_dict = {audio.orig_path_or_id: condition(audio) for audio in activity_audios}
-    df[column_name] = df["audio_path_or_id"].map(audio_dict).fillna(float("nan"))
-    return df
-
-
 def audio_length_positive_check(audio: Audio) -> bool:
     """Checks if an Audio object has a positive length."""
     return audio.waveform.numel() == 0
