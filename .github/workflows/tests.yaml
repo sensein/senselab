@@ -273,6 +273,14 @@ jobs:
         subnet-id: ${{ vars.AWS_SUBNET }}
         security-group-id: ${{ vars.AWS_SECURITY_GROUP }}
 
+
+
+
+
+
+
+
+
   ubuntu-tests-310:
     name: ubuntu-tests-310
     needs: start-runner-310
@@ -286,8 +294,8 @@ jobs:
         python-version: ['3.10']
     env:
       WORKING_DIR: ${{ vars.WORKING_DIR }}
-      POETRY_CACHE_DIR: "${{ vars.WORKING_DIR }}/poetry"
-      HF_HOME: "${{ vars.WORKING_DIR }}/huggingface"
+      POETRY_CACHE_DIR: ${{ vars.WORKING_DIR }}/poetry
+      HF_HOME: ${{ vars.WORKING_DIR }}/huggingface
     outputs:
       job-ran: ${{ steps.set-ran.outputs.ran }}
     steps:
