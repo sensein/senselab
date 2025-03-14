@@ -152,7 +152,7 @@ def activity_dict_to_dataset_taxonomy_subtree(activity_dict: Dict[str, List[Audi
     return pruned_tree
 
 
-def evaluate_node(audios: List[Audio], activity_audios: List[Audio], tree: Dict[str, Any]) -> None:
+def evaluate_node(audios: List[Audio], activity_audios: List[Audio], tree: Dict[str, Any], results_df: pd.DataFrame) -> None:
     """Runs quality checks on a given taxonomy tree node and updates the tree with results.
 
     This function applies all checks defined in the node to the provided `activity_audios` list.
@@ -163,20 +163,17 @@ def evaluate_node(audios: List[Audio], activity_audios: List[Audio], tree: Dict[
         activity_audios (List[Audio]): The subset of `audios` relevant to the current taxonomy node.
         tree (Dict[str, Any]): The taxonomy tree node containing a "checks" key with check functions.
     """
-    # Ensure "checks_results" is always a dictionary
-    tree.setdefault("checks_results", {})
-
     # Calculate metrics
-    # metrics = tree.get("metrics")
-    # if isinstance(checks, list):
+    metrics = tree.get("metrics")
+    if isinstance(metrics, list):
+        for metric in metrics:
+            results_df = apply_audio_quality_function(results_df, activity_audios, function=metric)
 
-    # Only iterate over checks if it's a listc
+    # Only iterate over checks if it's a list
     checks = tree.get("checks")
-
     if isinstance(checks, list):
         for check in checks:
-            if callable(check):
-                tree["checks_results"][check.__name__] = check(audios=audios, activity_audios=activity_audios)
+            results_df = apply_audio_quality_function(results_df, activity_audios, function=check)
 
 
 def taxonomy_subtree_to_pydra_workflow(subtree: Dict) -> Workflow:
