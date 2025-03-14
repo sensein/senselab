@@ -15,17 +15,17 @@ All checks take a list of Audio objects as input and return:
 
 from typing import Callable, Dict, List
 
+import pandas as pd
 import torch
-from pandas import pd
 
 from senselab.audio.data_structures import Audio
 
 
 def audio_length_positive_check(audio: Audio) -> bool:
     """Checks if an Audio object has a positive length."""
-    return audio.waveform.numel() == 0
+    return audio.waveform.numel() != 0
 
 
 def audio_intensity_positive_check(audio: Audio) -> bool:
     """Checks if an Audio object has nonzero intensity."""
-    return torch.sum(torch.abs(audio.waveform)) == 0
+    return torch.sum(torch.abs(audio.waveform)) != 0

@@ -3,6 +3,7 @@
 from collections import Counter
 from typing import Dict, List
 
+import pandas as pd
 import pytest
 import torch
 
@@ -257,39 +258,37 @@ def test_activity_dict_to_dataset_taxonomy_subtree(mono_audio_sample: Audio) -> 
 
 
 def test_evaluate_node(mono_audio_sample: Audio) -> None:
-    """Tests that `evaluate_node` correctly applies checks and updates the taxonomy tree."""
-    # Create a test tree node with sample checks
+    """Tests that `evaluate_node` applies checks and updates the node dict with results."""
     tree = {"checks": [audio_length_positive_check, audio_intensity_positive_check]}
-
-    # Create valid and invalid audio samples
     empty_audio = Audio(waveform=torch.tensor([]), sampling_rate=16000, metadata={})
     silent_audio = Audio(waveform=torch.zeros(1, 16000), sampling_rate=16000, metadata={})
 
-    # List of audio files for testing
     audios = [mono_audio_sample, empty_audio, silent_audio]
     activity_audios = [mono_audio_sample, empty_audio, silent_audio]
 
-    # Run the evaluate_node function
-    evaluate_node(audios=audios, activity_audios=activity_audios, tree=tree)
+    # For the new code, we need a DataFrame to store results
+    df = pd.DataFrame({"audio_path_or_id": ["valid", "empty", "silent"]})
+    mono_audio_sample.orig_path_or_id = "valid"
+    empty_audio.orig_path_or_id = "empty"
+    silent_audio.orig_path_or_id = "silent"
 
-    # Verify the check results are stored in the tree
-    assert "checks_results" in tree, "Check results should be stored in the tree."
-    assert audio_length_positive_check.__name__ in tree["checks_results"], "Audio length check missing."
-    assert audio_intensity_positive_check.__name__ in tree["checks_results"], "Audio intensity check missing."
+    updated_df = evaluate_node(audios, activity_audios, tree, df)
 
-    # Verify excluded audios
-    if not isinstance(tree["checks_results"], dict):
-        raise TypeError("Expected 'checks_results' to be a dict.")
+    # The tree itself doesn't hold "checks_results" now; the DataFrame does
+    # but let's confirm we have columns for each check
+    assert "audio_length_positive_check" in updated_df.columns
+    assert "audio_intensity_positive_check" in updated_df.columns
 
-    length_check_results = tree["checks_results"][audio_length_positive_check.__name__]
-    intensity_check_results = tree["checks_results"][audio_intensity_positive_check.__name__]
+    # Check values
+    length_vals = updated_df["audio_length_positive_check"].values
+    intensity_vals = updated_df["audio_intensity_positive_check"].values
 
-    assert empty_audio in length_check_results["exclude"], "Empty audio should be excluded for length."
-    assert silent_audio in intensity_check_results["exclude"], "Silent audio should be excluded for intensity."
-
-    # Verify passing audio
-    assert mono_audio_sample in length_check_results["passed"], "Valid audio should pass length check."
-    assert mono_audio_sample in intensity_check_results["passed"], "Valid audio should pass intensity check."
+    # Expected booleans:
+    # - valid (waveform rand): True length, True intensity
+    # - empty (waveform=[]): False length, False intensity
+    # - silent (waveform=all zeros): True length, False intensity
+    assert list(length_vals) == [True, False, True], "Unexpected length check booleans"
+    assert list(intensity_vals) == [True, False, False], "Unexpected intensity check booleans"
 
 
 def test_run_taxonomy_subtree_checks_recursively(mono_audio_sample: Audio) -> None:
