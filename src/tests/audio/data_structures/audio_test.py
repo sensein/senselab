@@ -235,3 +235,23 @@ def test_window_generator_step_greater_than_audio(audio_fixture: str, request: p
     expected_windows = (audio_length - window_size) // step_size + 1  # This is always 1
     assert len(windowed_audios) == expected_windows, f"Should yield {expected_windows} \
         windows when step size is greater than audio length. Yielded {len(windowed_audios)}."
+
+
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
+@pytest.mark.parametrize("audio_fixture", ["mono_audio_sample", "stereo_audio_sample"])
+def test_audio_normalize(audio_fixture: str, request: pytest.FixtureRequest) -> None:
+    """Tests the normalize method to ensure peak is 1.0 after normalization."""
+    audio_sample = request.getfixturevalue(audio_fixture)
+
+    # Check original max amplitude
+    original_max = audio_sample.waveform.abs().max()
+    assert original_max != 0, "Test assumes audio has non-zero values."
+
+    # Normalize
+    audio_sample.normalize()
+    new_max = audio_sample.waveform.abs().max()
+
+    assert torch.isclose(new_max, torch.tensor(1.0), atol=1e-6), "Waveform not normalized to peak=1.0."
+    assert (
+        audio_sample.waveform.shape == audio_sample.waveform.shape
+    ), "Normalization should not change the waveform shape."
