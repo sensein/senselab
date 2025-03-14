@@ -52,10 +52,7 @@ def test_audios_to_activity_dict(
     assert len(activity_dict["bioacoustic"]) == 1, "Expected one audio under 'bioacoustic'"
 
 
-@pytest.mark.parametrize(
-    "taxonomy_tree",
-    [BIOACOUSTIC_ACTIVITY_TAXONOMY],
-)
+@pytest.mark.parametrize("taxonomy_tree", [BIOACOUSTIC_ACTIVITY_TAXONOMY])
 def test_no_duplicate_subclass_keys(taxonomy_tree: Dict) -> None:
     """Tests that all subclass keys in the taxonomy are unique."""
 
@@ -121,14 +118,27 @@ def test_activity_dict_to_dataset_taxonomy_subtree(mono_audio_sample: Audio) -> 
     expected_subtree = {
         "bioacoustic": {
             "checks": [audio_length_positive_check, audio_intensity_positive_check],
+            "metrics": [],
             "subclass": {
                 "human": {
-                    "checks": None,
+                    "checks": [],
+                    "metrics": [],
                     "subclass": {
                         "respiration": {
-                            "checks": None,
+                            "checks": [],
+                            "metrics": [],
                             "subclass": {
-                                "breathing": {"checks": None, "subclass": {"sigh": {"checks": None, "subclass": None}}}
+                                "breathing": {
+                                    "checks": [],
+                                    "metrics": [],
+                                    "subclass": {
+                                        "sigh": {
+                                            "checks": [],
+                                            "metrics": [],
+                                            "subclass": None,
+                                        }
+                                    },
+                                }
                             },
                         }
                     },
@@ -147,7 +157,11 @@ def test_activity_dict_to_dataset_taxonomy_subtree(mono_audio_sample: Audio) -> 
     # Case 3: Empty activity_dict (should return 'bioacoustic' with empty subclass)
     activity_dict = {}
     expected_empty_tree = {
-        "bioacoustic": {"checks": [audio_length_positive_check, audio_intensity_positive_check], "subclass": None}
+        "bioacoustic": {
+            "checks": [audio_length_positive_check, audio_intensity_positive_check],
+            "metrics": [],
+            "subclass": None,
+        }
     }
     pruned_tree = activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=BIOACOUSTIC_ACTIVITY_TAXONOMY)
     assert pruned_tree == expected_empty_tree, f"Expected {expected_empty_tree}, but got {pruned_tree}"
@@ -157,17 +171,37 @@ def test_activity_dict_to_dataset_taxonomy_subtree(mono_audio_sample: Audio) -> 
     expected_subtree_multiple = {
         "bioacoustic": {
             "checks": [audio_length_positive_check, audio_intensity_positive_check],
+            "metrics": [],
             "subclass": {
                 "human": {
-                    "checks": None,
+                    "checks": [],
+                    "metrics": [],
                     "subclass": {
                         "respiration": {
-                            "checks": None,
+                            "checks": [],
+                            "metrics": [],
                             "subclass": {
-                                "breathing": {"checks": None, "subclass": {"sigh": {"checks": None, "subclass": None}}},
+                                "breathing": {
+                                    "checks": [],
+                                    "metrics": [],
+                                    "subclass": {
+                                        "sigh": {
+                                            "checks": [],
+                                            "metrics": [],
+                                            "subclass": None,
+                                        }
+                                    },
+                                },
                                 "exhalation": {
-                                    "checks": None,
-                                    "subclass": {"cough": {"checks": None, "subclass": None}},
+                                    "checks": [],
+                                    "metrics": [],
+                                    "subclass": {
+                                        "cough": {
+                                            "checks": [],
+                                            "metrics": [],
+                                            "subclass": None,
+                                        }
+                                    },
                                 },
                             },
                         }
@@ -184,19 +218,30 @@ def test_activity_dict_to_dataset_taxonomy_subtree(mono_audio_sample: Audio) -> 
     expected_subtree_deep = {
         "bioacoustic": {
             "checks": [audio_length_positive_check, audio_intensity_positive_check],
+            "metrics": [],
             "subclass": {
                 "human": {
-                    "checks": None,
+                    "checks": [],
+                    "metrics": [],
                     "subclass": {
                         "respiration": {
-                            "checks": None,
+                            "checks": [],
+                            "metrics": [],
                             "subclass": {
                                 "exhalation": {
-                                    "checks": None,
+                                    "checks": [],
+                                    "metrics": [],
                                     "subclass": {
                                         "cough": {
-                                            "checks": None,
-                                            "subclass": {"voluntary": {"checks": None, "subclass": None}},
+                                            "checks": [],
+                                            "metrics": [],
+                                            "subclass": {
+                                                "voluntary": {
+                                                    "checks": [],
+                                                    "metrics": [],
+                                                    "subclass": None,
+                                                }
+                                            },
                                         }
                                     },
                                 }
@@ -253,16 +298,26 @@ def test_run_taxonomy_subtree_checks_recursively(mono_audio_sample: Audio) -> No
     test_tree = {
         "bioacoustic": {
             "checks": [audio_length_positive_check, audio_intensity_positive_check],
+            "metrics": [],
             "subclass": {
                 "human": {
-                    "checks": None,
+                    "checks": [],
+                    "metrics": [],
                     "subclass": {
                         "respiration": {
-                            "checks": None,
+                            "checks": [],
+                            "metrics": [],
                             "subclass": {
                                 "breathing": {
-                                    "checks": None,
-                                    "subclass": {"sigh": {"checks": None, "subclass": None}},
+                                    "checks": [],
+                                    "metrics": [],
+                                    "subclass": {
+                                        "sigh": {
+                                            "checks": [],
+                                            "metrics": [],
+                                            "subclass": None,
+                                        }
+                                    },
                                 }
                             },
                         }
