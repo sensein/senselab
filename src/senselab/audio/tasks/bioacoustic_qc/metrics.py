@@ -19,9 +19,8 @@ def proportion_silent_metric(audio: Audio, silence_threshold: float = 0.01) -> f
     assert waveform.ndim == 2, "Expected waveform to have shape (num_channels, num_samples)"
 
     # Normalize waveform to [-1, 1] if not already normalized
-    max_val = waveform.abs().max()
-    if max_val > 0:  # Avoid division by zero
-        waveform = waveform / max_val  # Normalize
+    if not audio.normalized:
+        audio.normalize()
 
     # Count silent samples (absolute amplitude below threshold)
     silent_samples = (waveform.abs() < silence_threshold).sum().item()
