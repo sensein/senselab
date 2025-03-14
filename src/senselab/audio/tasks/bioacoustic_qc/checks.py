@@ -16,37 +16,28 @@ All checks take a list of Audio objects as input and return:
 from typing import Callable, Dict, List
 
 import torch
+from pandas import pd
 
 from senselab.audio.data_structures import Audio
 
 
-def audio_quality_check(audios: List[Audio], activity_audios: List[Audio], condition: Callable[[Audio], bool]) -> Dict:
-    """Generic function to check audio quality based on a given condition.
+def apply_audio_quality_check(
+    df: pd.DataFrame, activity_audios: List[Audio], condition: Callable[[Audio], bool]
+) -> pd.DataFrame:
+    """Applies a condition to each audio and stores results in a new column with the function name.
 
     Args:
-        audios (List[Audio]): The complete dataset of Audio objects.
-        activity_audios (List[Audio]): The subset of Audio objects to check.
-        condition (Callable[[Audio], bool]): A function that returns True if the
-            audio fails the check (should be excluded).
+        df (pd.DataFrame): DataFrame containing audio metadata with an 'audio_path_or_id' column.
+        activity_audios (List[Audio]): List of Audio objects to check.
+        condition (Callable[[Audio], bool]): Function that evaluates an Audio object and returns a bool.
 
     Returns:
-        Dict[str, List[Audio]]: A dictionary containing:
-            - "exclude": List of Audio objects that failed the check.
-            - "review": Always an empty list (not used in these checks).
-            - "passed": List of Audio objects that passed the check.
+        pd.DataFrame: Updated DataFrame with a new column for the check results.
     """
-    exclude = []
-    passed = []
-
-    for audio in activity_audios:
-        if audio in audios:
-            if condition(audio):
-                exclude.append(audio)
-                audios.remove(audio)
-            else:
-                passed.append(audio)
-
-    return {"exclude": exclude, "review": [], "passed": passed}
+    column_name = condition.__name__
+    audio_dict = {audio.orig_path_or_id: condition(audio) for audio in activity_audios}
+    df[column_name] = df["audio_path_or_id"].map(audio_dict).fillna(float("nan"))
+    return df
 
 
 def audio_length_positive_check(audio: Audio) -> bool:
