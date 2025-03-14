@@ -8,53 +8,53 @@ import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.bioacoustic_qc import (
-    audios_to_task_dict,
+    activity_dict_to_dataset_taxonomy_subtree,
+    activity_to_taxonomy_tree_path,
+    audios_to_activity_dict,
     check_node,
     check_quality,
     run_taxonomy_subtree_checks_recursively,
-    task_dict_to_dataset_taxonomy_subtree,
-    task_to_taxonomy_tree_path,
 )
 from senselab.audio.tasks.bioacoustic_qc.checks import audio_intensity_positive_check, audio_length_positive_check
-from senselab.audio.tasks.bioacoustic_qc.constants import BIOACOUSTIC_TASK_TREE
+from senselab.audio.tasks.bioacoustic_qc.constants import BIOACOUSTIC_ACTIVITY_TAXONOMY
 
 
-def test_audios_to_task_dict(
+def test_audios_to_activity_dict(
     mono_audio_sample: Audio,
     stereo_audio_sample: Audio,
     resampled_mono_audio_sample: Audio,
     resampled_stereo_audio_sample: Audio,
 ) -> None:
-    """Tests the function that assigns Audio objects to task categories."""
-    # Assign task metadata
-    mono_audio_sample.metadata["task"] = "breathing"
-    stereo_audio_sample.metadata["task"] = "cough"
-    resampled_mono_audio_sample.metadata["task"] = "speech"
+    """Tests the function that assigns Audio objects to activity categories."""
+    # Assign activity metadata
+    mono_audio_sample.metadata["activity"] = "breathing"
+    stereo_audio_sample.metadata["activity"] = "cough"
+    resampled_mono_audio_sample.metadata["activity"] = "speech"
 
     audios: List[Audio] = [mono_audio_sample, stereo_audio_sample, resampled_mono_audio_sample]
 
-    task_dict: Dict[str, List[Audio]] = audios_to_task_dict(audios)
+    activity_dict: Dict[str, List[Audio]] = audios_to_activity_dict(audios)
     expected_keys = {"breathing", "cough", "speech"}
 
     # Ensure the function returns the expected structure
-    assert set(task_dict.keys()) == expected_keys, f"Unexpected task keys: {task_dict.keys()}"
+    assert set(activity_dict.keys()) == expected_keys, f"Unexpected activity keys: {activity_dict.keys()}"
 
-    # Ensure each task has at least one Audio object
-    for task, audio_list in task_dict.items():
-        assert isinstance(audio_list, list), f"Expected list for task {task}, got {type(audio_list)}"
-        assert len(audio_list) > 0, f"Expected at least one audio for task {task}"
+    # Ensure each activity has at least one Audio object
+    for activity, audio_list in activity_dict.items():
+        assert isinstance(audio_list, list), f"Expected list for activity {activity}, got {type(audio_list)}"
+        assert len(audio_list) > 0, f"Expected at least one audio for activity {activity}"
 
-    # Test case where an audio has no task metadata (should default to "bioacoustic")
-    resampled_stereo_audio_sample.metadata = {}  # Remove task metadata
-    task_dict = audios_to_task_dict([resampled_stereo_audio_sample])
+    # Test case where an audio has no activity metadata (should default to "bioacoustic")
+    resampled_stereo_audio_sample.metadata = {}  # Remove activity metadata
+    activity_dict = audios_to_activity_dict([resampled_stereo_audio_sample])
 
-    assert "bioacoustic" in task_dict, "Audio without task metadata should be assigned to 'bioacoustic'"
-    assert len(task_dict["bioacoustic"]) == 1, "Expected one audio under 'bioacoustic'"
+    assert "bioacoustic" in activity_dict, "Audio without activity metadata should be assigned to 'bioacoustic'"
+    assert len(activity_dict["bioacoustic"]) == 1, "Expected one audio under 'bioacoustic'"
 
 
 @pytest.mark.parametrize(
     "taxonomy_tree",
-    [BIOACOUSTIC_TASK_TREE],
+    [BIOACOUSTIC_ACTIVITY_TAXONOMY],
 )
 def test_no_duplicate_subclass_keys(taxonomy_tree: Dict) -> None:
     """Tests that all subclass keys in the taxonomy are unique."""
@@ -65,7 +65,7 @@ def test_no_duplicate_subclass_keys(taxonomy_tree: Dict) -> None:
 
         def traverse(subtree: Dict) -> None:
             for key, value in subtree.items():
-                subclass_keys.append(key)  # Collect every key (task category)
+                subclass_keys.append(key)  # Collect every key (activity category)
                 if isinstance(value, Dict) and "subclass" in value and value["subclass"] is not None:
                     traverse(value["subclass"])  # Continue traversal on non-null subclass
 
@@ -81,10 +81,10 @@ def test_no_duplicate_subclass_keys(taxonomy_tree: Dict) -> None:
     assert not duplicates, f"Duplicate subclass keys found: {duplicates}"
 
 
-def test_task_to_taxonomy_tree_path() -> None:
-    """Tests that the function correctly retrieves the taxonomy path for a given task."""
-    # Test valid task paths
-    assert task_to_taxonomy_tree_path("sigh") == [
+def test_activity_to_taxonomy_tree_path() -> None:
+    """Tests that the function correctly retrieves the taxonomy path for a given activity."""
+    # Test valid activity paths
+    assert activity_to_taxonomy_tree_path("sigh") == [
         "bioacoustic",
         "human",
         "respiration",
@@ -92,7 +92,7 @@ def test_task_to_taxonomy_tree_path() -> None:
         "sigh",
     ], "Incorrect path for 'sigh'"
 
-    assert task_to_taxonomy_tree_path("cough") == [
+    assert activity_to_taxonomy_tree_path("cough") == [
         "bioacoustic",
         "human",
         "respiration",
@@ -100,7 +100,7 @@ def test_task_to_taxonomy_tree_path() -> None:
         "cough",
     ], "Incorrect path for 'cough'"
 
-    assert task_to_taxonomy_tree_path("diadochokinesis") == [
+    assert activity_to_taxonomy_tree_path("diadochokinesis") == [
         "bioacoustic",
         "human",
         "vocalization",
@@ -109,15 +109,15 @@ def test_task_to_taxonomy_tree_path() -> None:
         "diadochokinesis",
     ], "Incorrect path for 'diadochokinesis'"
 
-    # Test task not in taxonomy
-    with pytest.raises(ValueError, match="Task 'nonexistent_task' not found in taxonomy tree."):
-        task_to_taxonomy_tree_path("nonexistent_task")
+    # Test activity not in taxonomy
+    with pytest.raises(ValueError, match="Activity 'nonexistent_activity' not found in taxonomy tree."):
+        activity_to_taxonomy_tree_path("nonexistent_activity")
 
 
-def test_task_dict_to_dataset_taxonomy_subtree(mono_audio_sample: Audio) -> None:
-    """Tests that the function correctly prunes the taxonomy based on dataset tasks."""
-    # Case 1: Valid task in the taxonomy (should return a pruned tree with 'sigh')
-    task_dict = {"sigh": [mono_audio_sample]}
+def test_activity_dict_to_dataset_taxonomy_subtree(mono_audio_sample: Audio) -> None:
+    """Tests that the function correctly prunes the taxonomy based on dataset activities."""
+    # Case 1: Valid activity in the taxonomy (should return a pruned tree with 'sigh')
+    activity_dict = {"sigh": [mono_audio_sample]}
     expected_subtree = {
         "bioacoustic": {
             "checks": [audio_length_positive_check, audio_intensity_positive_check],
@@ -136,24 +136,24 @@ def test_task_dict_to_dataset_taxonomy_subtree(mono_audio_sample: Audio) -> None
             },
         }
     }
-    pruned_tree = task_dict_to_dataset_taxonomy_subtree(task_dict, task_tree=BIOACOUSTIC_TASK_TREE)
+    pruned_tree = activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=BIOACOUSTIC_ACTIVITY_TAXONOMY)
     assert pruned_tree == expected_subtree, f"Expected {expected_subtree}, but got {pruned_tree}"
 
-    # Case 2: Task not in the taxonomy (should raise ValueError)
-    task_dict = {"nonexistent_task": [mono_audio_sample]}
-    with pytest.raises(ValueError, match="Task 'nonexistent_task' not found in taxonomy tree."):
-        task_dict_to_dataset_taxonomy_subtree(task_dict, task_tree=BIOACOUSTIC_TASK_TREE)
+    # Case 2: Activity not in the taxonomy (should raise ValueError)
+    activity_dict = {"nonexistent_activity": [mono_audio_sample]}
+    with pytest.raises(ValueError, match="Activity 'nonexistent_activity' not found in taxonomy tree."):
+        activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=BIOACOUSTIC_ACTIVITY_TAXONOMY)
 
-    # Case 3: Empty task_dict (should return 'bioacoustic' with empty subclass)
-    task_dict = {}
+    # Case 3: Empty activity_dict (should return 'bioacoustic' with empty subclass)
+    activity_dict = {}
     expected_empty_tree = {
         "bioacoustic": {"checks": [audio_length_positive_check, audio_intensity_positive_check], "subclass": None}
     }
-    pruned_tree = task_dict_to_dataset_taxonomy_subtree(task_dict, task_tree=BIOACOUSTIC_TASK_TREE)
+    pruned_tree = activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=BIOACOUSTIC_ACTIVITY_TAXONOMY)
     assert pruned_tree == expected_empty_tree, f"Expected {expected_empty_tree}, but got {pruned_tree}"
 
-    # Case 4: Multiple valid tasks ('sigh' and 'cough')
-    task_dict = {"sigh": [mono_audio_sample], "cough": [mono_audio_sample]}
+    # Case 4: Multiple valid activities ('sigh' and 'cough')
+    activity_dict = {"sigh": [mono_audio_sample], "cough": [mono_audio_sample]}
     expected_subtree_multiple = {
         "bioacoustic": {
             "checks": [audio_length_positive_check, audio_intensity_positive_check],
@@ -176,11 +176,11 @@ def test_task_dict_to_dataset_taxonomy_subtree(mono_audio_sample: Audio) -> None
             },
         }
     }
-    pruned_tree = task_dict_to_dataset_taxonomy_subtree(task_dict, task_tree=BIOACOUSTIC_TASK_TREE)
+    pruned_tree = activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=BIOACOUSTIC_ACTIVITY_TAXONOMY)
     assert pruned_tree == expected_subtree_multiple, f"Expected {expected_subtree_multiple}, but got {pruned_tree}"
 
-    # Case 5: Deeply nested task ('voluntary cough')
-    task_dict = {"voluntary": [mono_audio_sample]}
+    # Case 5: Deeply nested activity ('voluntary cough')
+    activity_dict = {"voluntary": [mono_audio_sample]}
     expected_subtree_deep = {
         "bioacoustic": {
             "checks": [audio_length_positive_check, audio_intensity_positive_check],
@@ -207,7 +207,7 @@ def test_task_dict_to_dataset_taxonomy_subtree(mono_audio_sample: Audio) -> None
             },
         }
     }
-    pruned_tree = task_dict_to_dataset_taxonomy_subtree(task_dict, task_tree=BIOACOUSTIC_TASK_TREE)
+    pruned_tree = activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=BIOACOUSTIC_ACTIVITY_TAXONOMY)
     assert pruned_tree == expected_subtree_deep, f"Expected {expected_subtree_deep}, but got {pruned_tree}"
 
 
@@ -222,10 +222,10 @@ def test_check_node(mono_audio_sample: Audio) -> None:
 
     # List of audio files for testing
     audios = [mono_audio_sample, empty_audio, silent_audio]
-    task_audios = [mono_audio_sample, empty_audio, silent_audio]
+    activity_audios = [mono_audio_sample, empty_audio, silent_audio]
 
     # Run the check_node function
-    check_node(audios=audios, task_audios=task_audios, tree=tree)
+    check_node(audios=audios, activity_audios=activity_audios, tree=tree)
 
     # Verify the check results are stored in the tree
     assert "checks_results" in tree, "Check results should be stored in the tree."
@@ -273,17 +273,17 @@ def test_run_taxonomy_subtree_checks_recursively(mono_audio_sample: Audio) -> No
     }
 
     # Create valid and invalid audio samples
-    empty_audio = Audio(waveform=torch.tensor([]), sampling_rate=16000, metadata={"task": "sigh"})
-    silent_audio = Audio(waveform=torch.zeros(1, 16000), sampling_rate=16000, metadata={"task": "sigh"})
+    empty_audio = Audio(waveform=torch.tensor([]), sampling_rate=16000, metadata={"activity": "sigh"})
+    silent_audio = Audio(waveform=torch.zeros(1, 16000), sampling_rate=16000, metadata={"activity": "sigh"})
 
-    # Create task_dict mapping tasks to audios
-    task_dict = {"sigh": [mono_audio_sample, empty_audio, silent_audio]}
+    # Create activity_dict mapping activities to audios
+    activity_dict = {"sigh": [mono_audio_sample, empty_audio, silent_audio]}
 
     # Run the function
     updated_tree = run_taxonomy_subtree_checks_recursively(
         audios=[mono_audio_sample, empty_audio, silent_audio],
         dataset_tree=test_tree,
-        task_dict=task_dict,
+        activity_dict=activity_dict,
     )
 
     # Verify that check results were added **only at the bioacoustic level**
@@ -325,9 +325,9 @@ def test_run_taxonomy_subtree_checks_recursively(mono_audio_sample: Audio) -> No
 def test_check_quality() -> None:
     """Tests that `check_quality` correctly applies quality checks and updates the taxonomy tree."""
     # Create valid and invalid audio samples
-    valid_audio = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000, metadata={"task": "breathing"})
-    empty_audio = Audio(waveform=torch.tensor([]), sampling_rate=16000, metadata={"task": "breathing"})
-    silent_audio = Audio(waveform=torch.zeros(1, 16000), sampling_rate=16000, metadata={"task": "breathing"})
+    valid_audio = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000, metadata={"activity": "breathing"})
+    empty_audio = Audio(waveform=torch.tensor([]), sampling_rate=16000, metadata={"activity": "breathing"})
+    silent_audio = Audio(waveform=torch.zeros(1, 16000), sampling_rate=16000, metadata={"activity": "breathing"})
 
     # Run check_quality
     updated_tree, remaining_audios = check_quality([valid_audio, empty_audio, silent_audio])

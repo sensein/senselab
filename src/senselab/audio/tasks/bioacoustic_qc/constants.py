@@ -1,8 +1,8 @@
-"""Taxonomy of bioacoustic tasks emphasizing human tasks."""
+"""Taxonomy of bioacoustic activities emphasizing human activities."""
 
 from senselab.audio.tasks.bioacoustic_qc.checks import audio_intensity_positive_check, audio_length_positive_check
 
-BIOACOUSTIC_TASK_TREE = {
+BIOACOUSTIC_ACTIVITY_TAXONOMY = {
     "bioacoustic": {
         "checks": [audio_length_positive_check, audio_intensity_positive_check],
         "subclass": {

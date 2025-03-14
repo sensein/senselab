@@ -20,12 +20,12 @@ import torch
 from senselab.audio.data_structures import Audio
 
 
-def audio_length_positive_check(audios: List[Audio], task_audios: List[Audio]) -> Dict:
+def audio_length_positive_check(audios: List[Audio], activity_audios: List[Audio]) -> Dict:
     """Checks if an Audio object has a positive length.
 
     Args:
         audios (Audio): The Audio object to validate.
-        task_audios (List[Audio]): The subset of Audio objects to check.
+        activity_audios (List[Audio]): The subset of Audio objects to check.
 
     Returns:
         Dict[str, List[Audio]]: A tuple containing:
@@ -37,7 +37,7 @@ def audio_length_positive_check(audios: List[Audio], task_audios: List[Audio]) -
     exclude = []
     passed = []
 
-    for audio in task_audios:  # iterate over task_audios
+    for audio in activity_audios:  # iterate over activity_audios
         if audio in audios:
             if audio.waveform.numel() == 0:  # No samples
                 exclude.append(audio)
@@ -48,12 +48,12 @@ def audio_length_positive_check(audios: List[Audio], task_audios: List[Audio]) -
     return {"exclude": exclude, "review": [], "passed": passed}
 
 
-def audio_intensity_positive_check(audios: List[Audio], task_audios: List[Audio]) -> Dict:
+def audio_intensity_positive_check(audios: List[Audio], activity_audios: List[Audio]) -> Dict:
     """Checks if each Audio object has nonzero intensity.
 
     Args:
         audios (List[Audio]): The complete dataset of Audio objects.
-        task_audios (List[Audio]): The subset of Audio objects to check.
+        activity_audios (List[Audio]): The subset of Audio objects to check.
 
     Returns:
         Dict[str, List[Audio]]: A tuple containing:
@@ -65,7 +65,7 @@ def audio_intensity_positive_check(audios: List[Audio], task_audios: List[Audio]
     exclude = []
     passed = []
 
-    for audio in task_audios:
+    for audio in activity_audios:
         if audio in audios:
             if torch.sum(torch.abs(audio.waveform)) == 0:
                 exclude.append(audio)
