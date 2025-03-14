@@ -3,22 +3,28 @@
 from typing import Dict, List, Optional
 
 import torch
-from sentence_transformers import SentenceTransformer
 
 from senselab.utils.data_structures import DeviceType, SentenceTransformersModel, _select_device_and_dtype
+
+try:
+    from sentence_transformers import SentenceTransformer
+
+    SENTENCETRANSFORMERS_AVAILABLE = True
+except ModuleNotFoundError:
+    SENTENCETRANSFORMERS_AVAILABLE = False
 
 
 class SentenceTransformerFactory:
     """A factory for managing SentenceTransformer pipelines for text embeddings."""
 
-    _pipelines: Dict[str, SentenceTransformer] = {}
+    _pipelines: Dict[str, "SentenceTransformer"] = {}
 
     @classmethod
     def _get_sentencetransformer_pipeline(
         cls,
         model: SentenceTransformersModel,
         device: Optional[DeviceType] = None,
-    ) -> SentenceTransformer:
+    ) -> "SentenceTransformer":
         """Get or create a SentenceTransformer pipeline.
 
         Args:
@@ -28,6 +34,12 @@ class SentenceTransformerFactory:
         Returns:
             SentenceTransformer: The SentenceTransformer pipeline.
         """
+        if not SENTENCETRANSFORMERS_AVAILABLE:
+            raise ModuleNotFoundError(
+                "`sentence-transformers` is not installed. "
+                "Please install senselab text dependencies using `pip install senselab['text']`."
+            )
+
         device, _ = _select_device_and_dtype(
             user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
         )
@@ -59,6 +71,12 @@ class SentenceTransformerFactory:
         Returns:
             List[torch.Tensor]: A list of embeddings for the input strings.
         """
+        if not SENTENCETRANSFORMERS_AVAILABLE:
+            raise ModuleNotFoundError(
+                "`sentence-transformers` is not installed. "
+                "Please install senselab text dependencies using `pip install senselab['text']`."
+            )
+
         if model is None:
             model = SentenceTransformersModel(path_or_uri="sentence-transformers/all-MiniLM-L6-v2", revision="main")
         pipeline = cls._get_sentencetransformer_pipeline(model, device)

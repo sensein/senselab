@@ -1,10 +1,17 @@
 """This module implements some utilities for the preprocessing task."""
 
+try:
+    from speechbrain.augment.time_domain import Resample
+
+    SPEECHBRAIN_AVAILABLE = True
+except ModuleNotFoundError:
+    SPEECHBRAIN_AVAILABLE = False
+
+
 from typing import List, Optional, Tuple
 
 import torch
 from scipy import signal
-from speechbrain.augment.time_domain import Resample
 
 from senselab.audio.data_structures import Audio
 
@@ -26,6 +33,12 @@ def resample_audios(
     Returns:
         List[Audio]: Resampled audio objects.
     """
+    if not SPEECHBRAIN_AVAILABLE:
+        raise ModuleNotFoundError(
+            "`speechbrain` is not installed. "
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+        )
+
     resampled_audios = []
     for audio in audios:
         if lowcut is None:

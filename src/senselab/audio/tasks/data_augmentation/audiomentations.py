@@ -2,12 +2,17 @@
 
 from typing import List
 
-from audiomentations import Compose
-
 from senselab.audio.data_structures import Audio
 
+try:
+    from audiomentations import Compose
 
-def augment_audios_with_audiomentations(audios: List[Audio], augmentation: Compose) -> List[Audio]:
+    AUDIOMENTATIONS_AVAILABLE = True
+except ModuleNotFoundError:
+    AUDIOMENTATIONS_AVAILABLE = False
+
+
+def augment_audios_with_audiomentations(audios: List[Audio], augmentation: "Compose") -> List[Audio]:
     """Augments all provided audios with audiomentations library.
 
     Args:
@@ -18,7 +23,7 @@ def augment_audios_with_audiomentations(audios: List[Audio], augmentation: Compo
         List of audios that have passed through the provided augmentation.
     """
 
-    def _augment_single_audio(audio: Audio, augmentation: Compose):  # noqa: ANN202
+    def _augment_single_audio(audio: Audio, augmentation: "Compose"):  # noqa: ANN202
         """Augments a single audio with audiomentations.
 
         Args:
@@ -35,6 +40,12 @@ def augment_audios_with_audiomentations(audios: List[Audio], augmentation: Compo
             sampling_rate=audio.sampling_rate,
             metadata=audio.metadata.copy(),
             orig_path_or_id=audio.orig_path_or_id,
+        )
+
+    if not AUDIOMENTATIONS_AVAILABLE:
+        raise ModuleNotFoundError(
+            "`audiomentations` is not installed. "
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
         )
 
     """

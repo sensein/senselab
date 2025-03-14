@@ -6,10 +6,16 @@ from typing import List, Tuple
 
 import pytest
 import torch
-import torchaudio
 
 from senselab.audio.data_structures import Audio
 from tests.audio.conftest import MONO_AUDIO_PATH, STEREO_AUDIO_PATH
+
+try:
+    import torchaudio
+
+    TORCHAUDIO_AVAILABLE = True
+except ModuleNotFoundError:
+    TORCHAUDIO_AVAILABLE = False
 
 
 def load_audio(file_path: str) -> Tuple[torch.Tensor, int]:
@@ -17,6 +23,14 @@ def load_audio(file_path: str) -> Tuple[torch.Tensor, int]:
     return torchaudio.load(file_path)
 
 
+@pytest.mark.skipif(TORCHAUDIO_AVAILABLE, reason="torchaudio is installed.")
+def test_audio_creation_error() -> None:
+    """Tests audio creation with invalid input."""
+    with pytest.raises(ModuleNotFoundError):
+        Audio.from_filepath("placeholder.wav")
+
+
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 @pytest.mark.parametrize(
     "audio_fixture, audio_path",
     [
@@ -36,6 +50,7 @@ def test_audio_creation(audio_fixture: str, audio_path: str, request: pytest.Fix
     assert audio == audio_sample, "Audios are not exactly equivalent"
 
 
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 @pytest.mark.parametrize(
     "audio_fixture",
     ["mono_audio_sample", "stereo_audio_sample"],
@@ -61,6 +76,7 @@ def test_audio_save_to_file(audio_fixture: str, request: pytest.FixtureRequest) 
         assert audio_sample.sampling_rate == loaded_sampling_rate, "Sampling rate does not match."
 
 
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 @pytest.mark.parametrize(
     "audio_fixture, audio_path",
     [
@@ -76,6 +92,7 @@ def test_audio_creation_uuid(audio_fixture: str, audio_path: str, request: pytes
     assert audio_sample == audio_uuid, "Audio with different IDs should still be equivalent"
 
 
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 def test_audio_single_tensor(mono_audio_sample: Audio) -> None:
     """Tests mono audio creation with single tensor."""
     mono_audio_data, mono_sr = load_audio(MONO_AUDIO_PATH)
@@ -85,6 +102,7 @@ def test_audio_single_tensor(mono_audio_sample: Audio) -> None:
     ), "Mono audios of tensor shape (num_samples,) should be reshaped to (1, num_samples)"
 
 
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 @pytest.mark.parametrize(
     "audio_fixture, audio_path",
     [
@@ -99,6 +117,7 @@ def test_audio_from_list(audio_fixture: str, audio_path: str, request: pytest.Fi
     assert torch.equal(audio_sample.waveform, audio_from_list.waveform), "List audio should've been converted to Tensor"
 
 
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 @pytest.mark.parametrize(
     "audio_fixture, window_size, step_size",
     [
@@ -125,6 +144,7 @@ def test_window_generator_overlap(
         windows when step size is less than window size. Yielded {len(windowed_audios)}."
 
 
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 @pytest.mark.parametrize(
     "audio_fixture, window_size, step_size",
     [
@@ -151,6 +171,7 @@ def test_window_generator_exact_fit(
         windows when step size equals window size. Yielded {len(windowed_audios)}."
 
 
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 @pytest.mark.parametrize(
     "audio_fixture, window_size, step_size",
     [
@@ -173,6 +194,7 @@ def test_window_generator_step_greater_than_window(
         windows when step size is greater than window size. Yielded {len(windowed_audios)}."
 
 
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 @pytest.mark.parametrize(
     "audio_fixture",
     [
@@ -193,6 +215,7 @@ def test_window_generator_window_greater_than_audio(audio_fixture: str, request:
                                 than audio length. Yielded {len(windowed_audios)}."
 
 
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 @pytest.mark.parametrize(
     "audio_fixture",
     [
