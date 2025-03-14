@@ -49,11 +49,11 @@ def audio_quality_check(audios: List[Audio], activity_audios: List[Audio], condi
     return {"exclude": exclude, "review": [], "passed": passed}
 
 
-def audio_length_positive_check(audios: List[Audio], activity_audios: List[Audio]) -> Dict:
+def audio_length_positive_check(audio: Audio) -> bool:
     """Checks if an Audio object has a positive length."""
-    return audio_quality_check(audios, activity_audios, lambda audio: audio.waveform.numel() == 0)
+    return audio.waveform.numel() == 0
 
 
-def audio_intensity_positive_check(audios: List[Audio], activity_audios: List[Audio]) -> Dict:
+def audio_intensity_positive_check(audio: Audio) -> bool:
     """Checks if an Audio object has nonzero intensity."""
-    return audio_quality_check(audios, activity_audios, lambda audio: torch.sum(torch.abs(audio.waveform)) == 0)
+    return torch.sum(torch.abs(audio.waveform)) == 0
