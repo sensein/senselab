@@ -1,3 +1,15 @@
+# 0.33.0 (Fri Mar 14 2025)
+
+#### 🚀 Enhancement
+
+- Added sparc for voice cloning [#273](https://github.com/sensein/senselab/pull/273) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.32.0 (Wed Mar 12 2025)
 
 #### 🚀 Enhancement
