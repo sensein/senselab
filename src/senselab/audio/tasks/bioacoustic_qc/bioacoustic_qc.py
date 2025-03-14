@@ -1,12 +1,32 @@
 """Runs bioacoustic activity recording quality control on a set of Audio objects."""
 
 from copy import deepcopy
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
+import pandas as pd
 from pydra.engine.core import Workflow  # Assuming you're using Pydra workflows
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.bioacoustic_qc.constants import BIOACOUSTIC_ACTIVITY_TAXONOMY
+
+
+def apply_audio_quality_function(
+    df: pd.DataFrame, activity_audios: List[Audio], function: Callable[[Audio], bool]
+) -> pd.DataFrame:
+    """Applies a function to each audio and stores results in a new column with the function name.
+
+    Args:
+        df (pd.DataFrame): DataFrame containing audio metadata with an 'audio_path_or_id' column.
+        activity_audios (List[Audio]): List of Audio objects to check.
+        function (Callable[[Audio], bool]): Function that evaluates an Audio object and returns a bool.
+
+    Returns:
+        pd.DataFrame: Updated DataFrame with a new column for the check results.
+    """
+    column_name = function.__name__
+    audio_dict = {audio.orig_path_or_id: function(audio) for audio in activity_audios}
+    df[column_name] = df["audio_path_or_id"].map(audio_dict)
+    return df
 
 
 def audios_to_activity_dict(audios: List[Audio]) -> Dict[str, List[Audio]]:
@@ -146,14 +166,17 @@ def evaluate_node(audios: List[Audio], activity_audios: List[Audio], tree: Dict[
     # Ensure "checks_results" is always a dictionary
     tree.setdefault("checks_results", {})
 
-    # Only iterate over checks if it's a list
-    checks = tree.get("checks")
-    if not isinstance(checks, list):
-        return  # Exit early if there are no checks
+    # Calculate metrics
+    # metrics = tree.get("metrics")
+    # if isinstance(checks, list):
 
-    for check in checks:
-        if callable(check):
-            tree["checks_results"][check.__name__] = check(audios=audios, activity_audios=activity_audios)
+    # Only iterate over checks if it's a listc
+    checks = tree.get("checks")
+
+    if isinstance(checks, list):
+        for check in checks:
+            if callable(check):
+                tree["checks_results"][check.__name__] = check(audios=audios, activity_audios=activity_audios)
 
 
 def taxonomy_subtree_to_pydra_workflow(subtree: Dict) -> Workflow:
