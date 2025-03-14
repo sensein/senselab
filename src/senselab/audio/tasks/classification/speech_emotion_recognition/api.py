@@ -11,18 +11,18 @@ from typing import Any, List, Optional
 
 from transformers import AutoConfig
 
-from senselab.audio.data_structures import Audio
+from senselab.audio.data_structures import Audio, AudioClassificationResult
 from senselab.audio.tasks.classification.huggingface import HuggingFaceAudioClassifier
-from senselab.utils.data_structures import AudioClassificationResult, DeviceType, HFModel, SenselabModel, logger
+from senselab.utils.data_structures import DeviceType, HFModel, SenselabModel, logger
 
 
 class SERType(Enum):
     """SER types for determining model output behaviors."""
 
-    DISCRETE: str = "discrete"
-    CONTINUOUS: str = "continuous"
-    VALENCE: str = "valence"
-    NOT_RECOGNIZED: str = "not recognized"
+    DISCRETE = "discrete"
+    CONTINUOUS = "continuous"
+    VALENCE = "valence"
+    NOT_RECOGNIZED = "not recognized"
 
 
 def classify_emotions_from_speech(
@@ -47,7 +47,7 @@ def classify_emotions_from_speech(
     """
     if isinstance(model, HFModel):
         model_info = model.get_model_info()
-        tags = model_info.tags
+        tags = model_info.tags or []
 
         ser_type = _get_ser_type(model)
 

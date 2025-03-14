@@ -19,7 +19,7 @@ def synthesize_texts(
     """Synthesizes speech from all texts using the given model.
 
     This function synthesizes speech from a list of text strings using the specified text-to-speech (TTS) model.
-    It supports models from HuggingFace and `Mars5TTS` and `StyleTTS2` for now.
+    It supports models from HuggingFace and `Mars5TTS` for now.
 
     Args:
         texts (List[str]): The list of text strings to be synthesized.
@@ -34,8 +34,6 @@ def synthesize_texts(
             Depending on the model being used, the `target` input may need to be provided in a specific format:
             - Hugging Face models do not require a `target` input at all.
             - `Mars5TTS` requires both `Audio` and a transcript for all inputs.
-            - `StyleTTS2` will support both simple (`Audio`) and complex (`Audio`, `str`) target inputs,
-                using the appropriate generation method in each case.
         **kwargs: Additional keyword arguments to pass to the synthesis function.
             Depending on the model used (e.g., HFModel), additional arguments
             may be required. Refer to the model-specific documentation for details.
@@ -68,27 +66,6 @@ def synthesize_texts(
                 )
             else:
                 raise ValueError("Mars5-TTS requires target audios and their corresponding transcripts.")
-        # TODO: write support for StyleTTS2 and other models that are not easily incorporable through Python
-        elif (
-            model.path_or_uri == "wilke0818/StyleTTS2-TorchHub"
-        ):  # TODO: this model/code should probably live in a shared Github
-            raise NotImplementedError(
-                "StyleTTS2 support is currently in progress. If the other models don't support \
-                                      your needs, feel free to learn more about contributing to our project to help \
-                                      get StyleTTS2 supported faster."
-            )
-        #     # TODO Texts like the above should be stored in a common utils/constants file such that
-        #     # they only need to be changed in one place
-        #     # StyleTTS2 offers a method for just text/target audios (calls inference), a method for
-        #     # style transfer text/target audios/transcript (STinference), and longform narration
-        #     return StyleTTS2.synthesize_texts_with_style_tts_2(
-        #         texts=texts,
-        #         target_audios=target_audios,
-        #         target_transcripts=target_transcripts,
-        #         language=language,
-        #         device=device,
-        #         **kwargs,
-        #     )
         else:
             raise NotImplementedError(f"{model.path_or_uri} is currently not a supported Torch model. \
                                       Feel free to reach out to us about integrating this model into senselab.")

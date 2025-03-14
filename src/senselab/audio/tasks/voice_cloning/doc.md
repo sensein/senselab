@@ -6,14 +6,16 @@
 
 ## Task Overview
 
-Any-to-any voice cloning aims to transform a source speech into a target voice using just one or a few examples of the target speaker's voice as references. Traditional voice conversion systems attempt to separate the speaker's identity from the speech content. This allows the replacement of speaker information to convert the voice to a target speaker. However, learning such disentangled representations is complex and poses significant challenges.
+Any-to-any voice cloning aims to transform a source speech into a target voice using just one or a few examples of the target speaker's voice as references. Traditional voice conversion systems attempt to separate the speaker's identity from the speech content. This allows the replacement of speaker information to convert the voice to a target speaker. However, learning such disentangled representations is complex and poses significant challenges. Also, how speech attributes (e.g., pitch, speed, and style) are preserved or transformed depends on the specific model used.
 
 
 ## Models
 We have explored several models for voice cloning:
 - [speechT5](https://huggingface.co/microsoft/speecht5_vc) (not included in ```senselab``` as it did not meet our expectations),
-- [FREEVC](https://github.com/OlaWod/FreeVC) (planned to be included in ```senselab``` soon)
-- [KNNVC](https://github.com/bshall/knn-vc) (Already included in ```senselab```).
+- [FREEVC](https://github.com/OlaWod/FreeVC) (included in ```senselab```),
+- [KNNVC](https://github.com/bshall/knn-vc) (included in ```senselab```).
+- [OpenVoice](https://github.com/myshell-ai/OpenVoice) (included in ```senselab```),
+- [SPARC](https://github.com/Berkeley-Speech-Group/Speech-Articulatory-Coding) (included in ```senselab```).
 
 
 ## Evaluation

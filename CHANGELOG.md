@@ -1,3 +1,82 @@
+# 0.33.0 (Fri Mar 14 2025)
+
+#### 🚀 Enhancement
+
+- Added sparc for voice cloning [#273](https://github.com/sensein/senselab/pull/273) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.32.0 (Wed Mar 12 2025)
+
+#### 🚀 Enhancement
+
+- adding freevc, openvoice and knnvc (new implementation) for voice cloning [#265](https://github.com/sensein/senselab/pull/265) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.31.2 (Mon Mar 10 2025)
+
+#### 🐛 Bug Fix
+
+- Fix docs [#266](https://github.com/sensein/senselab/pull/266) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.31.1 (Mon Mar 10 2025)
+
+#### 🐛 Bug Fix
+
+- Initialize HF models using their preferred data type [#264](https://github.com/sensein/senselab/pull/264) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### ⚠️ Pushed to `main`
+
+- fixing docs ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.31.0 (Mon Mar 10 2025)
+
+#### 🚀 Enhancement
+
+- Restructuring senselab in submodules (audio, text, video) [#258](https://github.com/sensein/senselab/pull/258) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.30.1 (Tue Mar 04 2025)
+
+#### 🐛 Bug Fix
+
+- Fixing cache pointer [#260](https://github.com/sensein/senselab/pull/260) (jordanwilke@dhcp-10-29-168-254.dyn.MIT.EDU [@wilke0818](https://github.com/wilke0818))
+- experimenting with fixing seg fault during doc build [#257](https://github.com/sensein/senselab/pull/257) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 3
+
+- [@wilke0818](https://github.com/wilke0818)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Jordan Wilke (jordanwilke@dhcp-10-29-168-254.dyn.MIT.EDU)
+
+---
+
 # 0.30.0 (Thu Feb 27 2025)
 
 #### 🚀 Enhancement
