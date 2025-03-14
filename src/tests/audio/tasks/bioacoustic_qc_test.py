@@ -11,8 +11,8 @@ from senselab.audio.tasks.bioacoustic_qc import (
     activity_dict_to_dataset_taxonomy_subtree,
     activity_to_taxonomy_tree_path,
     audios_to_activity_dict,
-    check_node,
     check_quality,
+    evaluate_node,
     run_taxonomy_subtree_checks_recursively,
 )
 from senselab.audio.tasks.bioacoustic_qc.checks import audio_intensity_positive_check, audio_length_positive_check
@@ -211,8 +211,8 @@ def test_activity_dict_to_dataset_taxonomy_subtree(mono_audio_sample: Audio) -> 
     assert pruned_tree == expected_subtree_deep, f"Expected {expected_subtree_deep}, but got {pruned_tree}"
 
 
-def test_check_node(mono_audio_sample: Audio) -> None:
-    """Tests that `check_node` correctly applies checks and updates the taxonomy tree."""
+def test_evaluate_node(mono_audio_sample: Audio) -> None:
+    """Tests that `evaluate_node` correctly applies checks and updates the taxonomy tree."""
     # Create a test tree node with sample checks
     tree = {"checks": [audio_length_positive_check, audio_intensity_positive_check]}
 
@@ -224,8 +224,8 @@ def test_check_node(mono_audio_sample: Audio) -> None:
     audios = [mono_audio_sample, empty_audio, silent_audio]
     activity_audios = [mono_audio_sample, empty_audio, silent_audio]
 
-    # Run the check_node function
-    check_node(audios=audios, activity_audios=activity_audios, tree=tree)
+    # Run the evaluate_node function
+    evaluate_node(audios=audios, activity_audios=activity_audios, tree=tree)
 
     # Verify the check results are stored in the tree
     assert "checks_results" in tree, "Check results should be stored in the tree."

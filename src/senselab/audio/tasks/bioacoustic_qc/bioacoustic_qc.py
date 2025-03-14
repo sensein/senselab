@@ -132,7 +132,7 @@ def activity_dict_to_dataset_taxonomy_subtree(activity_dict: Dict[str, List[Audi
     return pruned_tree
 
 
-def check_node(audios: List[Audio], activity_audios: List[Audio], tree: Dict[str, Any]) -> None:
+def evaluate_node(audios: List[Audio], activity_audios: List[Audio], tree: Dict[str, Any]) -> None:
     """Runs quality checks on a given taxonomy tree node and updates the tree with results.
 
     This function applies all checks defined in the node to the provided `activity_audios` list.
@@ -186,14 +186,14 @@ def run_taxonomy_subtree_checks_recursively(audios: List[Audio], dataset_tree: D
             subtree (Dict): The current subtree being processed.
         """
         for key, node in subtree.items():
-            # Construct activity -specific audio list for the current node
+            # Construct activity-specific audio list for the current node
             activity_audios = [
                 audio
                 for activity in activity_dict
                 if key in activity_to_tree_path_dict[activity]
                 for audio in activity_dict[activity]
             ]
-            check_node(audios=audios, activity_audios=activity_audios, tree=node)
+            evaluate_node(audios=audios, activity_audios=activity_audios, tree=node)
 
             # Recursively process subclasses if they exist
             if isinstance(node.get("subclass"), dict):  # Ensure subclass exists
