@@ -32,7 +32,7 @@ def audios_to_activity_dict(audios: List[Audio]) -> Dict[str, List[Audio]]:
     activity_dict: Dict[str, List[Audio]] = {}
 
     for audio in audios:
-        activity = audio.metadata.get("activity ", "bioacoustic")  # Default to "bioacoustic" if no activity
+        activity = audio.metadata.get("activity", "bioacoustic")  # Default to "bioacoustic" if no activity
         if activity not in activity_dict:
             activity_dict[activity] = []
         activity_dict[activity].append(audio)
@@ -67,7 +67,7 @@ def activity_to_taxonomy_tree_path(activity: str) -> List[str]:
 
     path = find_activity_path(BIOACOUSTIC_ACTIVITY_TAXONOMY, [])
     if path is None:
-        raise ValueError(f"Activity  '{activity }' not found in taxonomy tree.")
+        raise ValueError(f"Activity '{activity}' not found in taxonomy tree.")
 
     return path
 
