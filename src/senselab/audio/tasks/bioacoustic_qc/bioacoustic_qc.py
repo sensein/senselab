@@ -1,12 +1,32 @@
 """Runs bioacoustic activity recording quality control on a set of Audio objects."""
 
 from copy import deepcopy
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
+import pandas as pd
 from pydra.engine.core import Workflow  # Assuming you're using Pydra workflows
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.bioacoustic_qc.constants import BIOACOUSTIC_ACTIVITY_TAXONOMY
+
+
+def apply_audio_quality_function(
+    df: pd.DataFrame, activity_audios: List[Audio], function: Callable[[Audio], bool]
+) -> pd.DataFrame:
+    """Applies a function to each audio and stores results in a new column with the function name.
+
+    Args:
+        df (pd.DataFrame): DataFrame containing audio metadata with an 'audio_path_or_id' column.
+        activity_audios (List[Audio]): List of Audio objects to check.
+        function (Callable[[Audio], bool]): Function that evaluates an Audio object and returns a bool.
+
+    Returns:
+        pd.DataFrame: Updated DataFrame with a new column for the check results.
+    """
+    column_name = function.__name__
+    audio_dict = {audio.orig_path_or_id: function(audio) for audio in activity_audios}
+    df[column_name] = df["audio_path_or_id"].map(audio_dict)
+    return df
 
 
 def audios_to_activity_dict(audios: List[Audio]) -> Dict[str, List[Audio]]:
@@ -132,28 +152,33 @@ def activity_dict_to_dataset_taxonomy_subtree(activity_dict: Dict[str, List[Audi
     return pruned_tree
 
 
-def check_node(audios: List[Audio], activity_audios: List[Audio], tree: Dict[str, Any]) -> None:
+def evaluate_node(
+    audios: List[Audio], activity_audios: List[Audio], tree: Dict[str, Any], results_df: pd.DataFrame
+) -> pd.DataFrame:
     """Runs quality checks on a given taxonomy tree node and updates the tree with results.
-
-    This function applies all checks defined in the node to the provided `activity_audios` list.
-    It modifies `audios` by removing excluded files and updates `tree` with check results.
 
     Args:
         audios (List[Audio]): The full list of audio files, which may be modified if files are excluded.
         activity_audios (List[Audio]): The subset of `audios` relevant to the current taxonomy node.
         tree (Dict[str, Any]): The taxonomy tree node containing a "checks" key with check functions.
+        results_df (pd.DataFrame): DataFrame to store results of the quality checks.
+
+    Returns:
+        pd.DataFrame: Updated results DataFrame.
     """
-    # Ensure "checks_results" is always a dictionary
-    tree.setdefault("checks_results", {})
+    # Calculate metrics
+    metrics = tree.get("metrics")
+    if isinstance(metrics, list):
+        for metric in metrics:
+            results_df = apply_audio_quality_function(results_df, activity_audios, function=metric)
 
-    # Only iterate over checks if it's a list
+    # Evaluate checks
     checks = tree.get("checks")
-    if not isinstance(checks, list):
-        return  # Exit early if there are no checks
+    if isinstance(checks, list):
+        for check in checks:
+            results_df = apply_audio_quality_function(results_df, activity_audios, function=check)
 
-    for check in checks:
-        if callable(check):
-            tree["checks_results"][check.__name__] = check(audios=audios, activity_audios=activity_audios)
+    return results_df
 
 
 def taxonomy_subtree_to_pydra_workflow(subtree: Dict) -> Workflow:
@@ -161,51 +186,59 @@ def taxonomy_subtree_to_pydra_workflow(subtree: Dict) -> Workflow:
     pass
 
 
-def run_taxonomy_subtree_checks_recursively(audios: List[Audio], dataset_tree: Dict, activity_dict: Dict) -> Dict:
-    """Runs quality checks recursively on a taxonomy subtree and updates the tree with results.
+def run_taxonomy_subtree_checks_recursively(
+    audios: List[Audio], dataset_tree: Dict, activity_dict: Dict, results_df: pd.DataFrame
+) -> pd.DataFrame:
+    """Runs quality checks recursively on a taxonomy subtree and updates the results DataFrame.
 
     This function iterates over a hierarchical taxonomy structure and applies quality control
     checks at each relevant node. It determines the relevant audios for each taxonomy node,
-    applies the appropriate checks, and updates the `dataset_tree` with check results.
+    applies the appropriate checks, and updates the `results_df` with check results.
 
     Args:
         audios (List[Audio]): The full list of audio files to be checked.
         dataset_tree (Dict): The taxonomy tree representing the dataset structure, which will be modified in-place.
         activity_dict (Dict[str, List[Audio]]): A dictionary mapping activity names to lists of `Audio` objects.
+        results_df (pd.DataFrame): DataFrame to store quality check results.
 
     Returns:
-        Dict: The updated taxonomy tree with quality check results stored in the `checks_results` field
-        at relevant levels.
+        pd.DataFrame: Updated DataFrame with quality check results for each audio file.
     """
     activity_to_tree_path_dict = {activity: activity_to_taxonomy_tree_path(activity) for activity in activity_dict}
 
-    def check_subtree_nodes(subtree: Dict) -> None:
+    def check_subtree_nodes(subtree: Dict, results_df: pd.DataFrame) -> pd.DataFrame:
         """Recursively processes each node in the subtree, applying checks where applicable.
 
         Args:
             subtree (Dict): The current subtree being processed.
+            results_df (pd.DataFrame): DataFrame to store quality check results.
         """
         for key, node in subtree.items():
-            # Construct activity -specific audio list for the current node
+            # Construct activity-specific audio list for the current node
             activity_audios = [
                 audio
                 for activity in activity_dict
                 if key in activity_to_tree_path_dict[activity]
                 for audio in activity_dict[activity]
             ]
-            check_node(audios=audios, activity_audios=activity_audios, tree=node)
+
+            results_df = evaluate_node(audios=audios, activity_audios=activity_audios, tree=node, results_df=results_df)
 
             # Recursively process subclasses if they exist
             if isinstance(node.get("subclass"), dict):  # Ensure subclass exists
-                check_subtree_nodes(node["subclass"])  # Recurse on actual subtree
+                check_subtree_nodes(node["subclass"], results_df=results_df)  # Recurse on actual subtree
+        return results_df
 
-    check_subtree_nodes(dataset_tree)  # Start recursion from root
-    return dataset_tree
+    check_subtree_nodes(dataset_tree, results_df=results_df)  # Start recursion from root
+    return results_df
 
 
 def check_quality(
-    audios: List[Audio], activity_tree: Dict = BIOACOUSTIC_ACTIVITY_TAXONOMY, complexity: str = "low"
-) -> Tuple[Dict, List[Audio]]:
+    audios: List[Audio],
+    activity_tree: Dict = BIOACOUSTIC_ACTIVITY_TAXONOMY,
+    complexity: str = "low",
+    audio_df: pd.DataFrame = None,
+) -> pd.DataFrame:
     """Runs quality checks on audio files and updates the taxonomy tree.
 
     Maps `Audio` objects to activities, prunes the taxonomy tree, and applies quality checks recursively. Returns the
@@ -215,11 +248,15 @@ def check_quality(
         audios (List[Audio]): Audio files to analyze.
         activity_tree (Dict, optional): Taxonomy tree defining hierarchy. Defaults to `BIOACOUSTIC_ACTIVITY_TAXONOMY`.
         complexity (str, optional): Processing complexity level (unused, reserved for future use). Defaults to `"low"`.
+        audio_df (pd.DataFrame, optional): DataFrame to store quality check results. Defaults to None.
 
     Returns:
-        Tuple[Dict, List[Audio]]: The updated taxonomy tree with `checks_results` and the list of audios not excluded.
+        pd.DataFrame: DataFrame to store quality check results.
     """
     activity_dict = audios_to_activity_dict(audios)
     dataset_tree = activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=activity_tree)
-    run_taxonomy_subtree_checks_recursively(audios, dataset_tree=dataset_tree, activity_dict=activity_dict)
-    return dataset_tree, audios
+    results_df = audio_df
+    results_df = run_taxonomy_subtree_checks_recursively(
+        audios, dataset_tree=dataset_tree, activity_dict=activity_dict, results_df=results_df
+    )
+    return results_df
