@@ -1,4 +1,4 @@
-"""Runs bioacoustic task recording quality control on a set of Audio objects."""
+"""Runs bioacoustic activity recording quality control on a set of Audio objects."""
 
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -6,93 +6,93 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from pydra.engine.core import Workflow  # Assuming you're using Pydra workflows
 
 from senselab.audio.data_structures import Audio
-from senselab.audio.tasks.bioacoustic_qc.constants import BIOACOUSTIC_TASK_TREE
+from senselab.audio.tasks.bioacoustic_qc.constants import BIOACOUSTIC_ACTIVITY_TAXONOMY
 
 
-def audios_to_task_dict(audios: List[Audio]) -> Dict[str, List[Audio]]:
-    """Creates a dictionary mapping tasks to their corresponding Audio objects.
+def audios_to_activity_dict(audios: List[Audio]) -> Dict[str, List[Audio]]:
+    """Creates a dictionary mapping activities to their corresponding Audio objects.
 
-    Each Audio object is assigned to a task category based on the `"task"` field in its metadata.
-    If an Audio object does not contain a `"task"` field, it is categorized under `"bioacoustic"`.
+    Each Audio object is assigned to a activity category based on the `"activity "` field in its metadata.
+    If an Audio object does not contain a `"activity "` field, it is categorized under `"bioacoustic"`.
 
     Args:
         audios (List[Audio]): A list of Audio objects.
 
     Returns:
-        Dict[str, List[Audio]]: A dictionary where keys are task names and values are lists of
-        Audio objects belonging to that task.
+        Dict[str, List[Audio]]: A dictionary where keys are activity names and values are lists of
+        Audio objects belonging to that activity .
 
     Example:
-        >>> audio1 = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000, metadata={"task": "breathing"})
-        >>> audio2 = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000, metadata={"task": "cough"})
-        >>> audio3 = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000, metadata={})  # No task
-        >>> audios_to_task_dict([audio1, audio2, audio3])
+        >>> audio1 = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000, metadata={"activity ": "breathing"})
+        >>> audio2 = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000, metadata={"activity ": "cough"})
+        >>> audio3 = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000, metadata={})  # No activity
+        >>> audios_to_activity_dict([audio1, audio2, audio3])
         {'breathing': [audio1], 'cough': [audio2], 'bioacoustic': [audio3]}
     """
-    task_dict: Dict[str, List[Audio]] = {}
+    activity_dict: Dict[str, List[Audio]] = {}
 
     for audio in audios:
-        task = audio.metadata.get("task", "bioacoustic")  # Default to "bioacoustic" if no task
-        if task not in task_dict:
-            task_dict[task] = []
-        task_dict[task].append(audio)
+        activity = audio.metadata.get("activity ", "bioacoustic")  # Default to "bioacoustic" if no activity
+        if activity not in activity_dict:
+            activity_dict[activity] = []
+        activity_dict[activity].append(audio)
 
-    return task_dict
+    return activity_dict
 
 
-def task_to_taxonomy_tree_path(task: str) -> List[str]:
-    """Gets the taxonomy tree path for a given task.
+def activity_to_taxonomy_tree_path(activity: str) -> List[str]:
+    """Gets the taxonomy tree path for a given activity .
 
     Args:
-        task (str): The task name to find in the taxonomy tree.
+        activity (str): The activity name to find in the taxonomy tree.
 
     Returns:
-        List[str]: A list representing the path from the root to the given task.
+        List[str]: A list representing the path from the root to the given activity .
 
     Raises:
-        ValueError: If the task is not found in the taxonomy tree.
+        ValueError: If the activity is not found in the taxonomy tree.
     """
 
-    def find_task_path(tree: Dict, path: List[str]) -> Optional[List[str]]:
-        """Recursively searches for the task in the taxonomy tree."""
+    def find_activity_path(tree: Dict, path: List[str]) -> Optional[List[str]]:
+        """Recursively searches for the activity in the taxonomy tree."""
         for key, value in tree.items():
             new_path = path + [key]  # Extend path
-            if key == task:
-                return new_path  # Task found, return path
+            if key == activity:
+                return new_path  # Activity  found, return path
             if isinstance(value, dict) and "subclass" in value and isinstance(value["subclass"], dict):
-                result = find_task_path(value["subclass"], new_path)
+                result = find_activity_path(value["subclass"], new_path)
                 if result:
                     return result
         return None
 
-    path = find_task_path(BIOACOUSTIC_TASK_TREE, [])
+    path = find_activity_path(BIOACOUSTIC_ACTIVITY_TAXONOMY, [])
     if path is None:
-        raise ValueError(f"Task '{task}' not found in taxonomy tree.")
+        raise ValueError(f"Activity  '{activity }' not found in taxonomy tree.")
 
     return path
 
 
-def task_dict_to_dataset_taxonomy_subtree(task_dict: Dict[str, List[Audio]], task_tree: Dict) -> Dict:
-    """Constructs a pruned taxonomy tree containing only relevant tasks.
+def activity_dict_to_dataset_taxonomy_subtree(activity_dict: Dict[str, List[Audio]], activity_tree: Dict) -> Dict:
+    """Constructs a pruned taxonomy tree containing only relevant activities.
 
-    This function takes a mapping of tasks to audio files and removes irrelevant branches from a given taxonomy tree,
-    keeping only tasks that exist in `task_dict`.
+    This function takes a mapping of activities to audio files and removes irrelevant branches from a given taxonomy
+    tree, keeping only activities that exist in `activity_dict`.
 
     Args:
-        task_dict (Dict[str, List[Audio]]): A dictionary mapping task names to lists of Audio objects.
-        task_tree (Dict): The full taxonomy tree defining the task hierarchy.
+        activity_dict (Dict[str, List[Audio]]): A dictionary mapping activity names to lists of Audio objects.
+        activity_tree (Dict): The full taxonomy tree defining the activity hierarchy.
 
     Returns:
-        Dict: A pruned version of `task_tree` that retains only tasks present in `task_dict`.
+        Dict: A pruned version of `activity_tree` that retains only activities present in `activity_dict`.
 
     Raises:
-        ValueError: If none of the provided tasks exist in the taxonomy.
+        ValueError: If none of the provided activities exist in the taxonomy.
     """
-    task_keys = list(task_dict.keys())
-    task_paths = [task_to_taxonomy_tree_path(task) for task in task_keys]
-    valid_nodes: Set[str] = set(node for path in task_paths for node in path)
+    activity_keys = list(activity_dict.keys())
+    activity_paths = [activity_to_taxonomy_tree_path(activity) for activity in activity_keys]
+    valid_nodes: Set[str] = set(node for path in activity_paths for node in path)
 
-    pruned_tree: Dict = deepcopy(task_tree)
+    pruned_tree: Dict = deepcopy(activity_tree)
 
     def prune_tree(subtree: Dict) -> bool:
         """Recursively prunes the taxonomy tree, keeping only relevant branches.
@@ -101,7 +101,7 @@ def task_dict_to_dataset_taxonomy_subtree(task_dict: Dict[str, List[Audio]], tas
             subtree (Dict): The current subtree being processed.
 
         Returns:
-            bool: True if the subtree contains relevant tasks, False otherwise.
+            bool: True if the subtree contains relevant activities, False otherwise.
         """
         keys_to_delete = []
 
@@ -132,15 +132,15 @@ def task_dict_to_dataset_taxonomy_subtree(task_dict: Dict[str, List[Audio]], tas
     return pruned_tree
 
 
-def check_node(audios: List[Audio], task_audios: List[Audio], tree: Dict[str, Any]) -> None:
+def check_node(audios: List[Audio], activity_audios: List[Audio], tree: Dict[str, Any]) -> None:
     """Runs quality checks on a given taxonomy tree node and updates the tree with results.
 
-    This function applies all checks defined in the node to the provided `task_audios` list.
+    This function applies all checks defined in the node to the provided `activity_audios` list.
     It modifies `audios` by removing excluded files and updates `tree` with check results.
 
     Args:
         audios (List[Audio]): The full list of audio files, which may be modified if files are excluded.
-        task_audios (List[Audio]): The subset of `audios` relevant to the current taxonomy node.
+        activity_audios (List[Audio]): The subset of `audios` relevant to the current taxonomy node.
         tree (Dict[str, Any]): The taxonomy tree node containing a "checks" key with check functions.
     """
     # Ensure "checks_results" is always a dictionary
@@ -153,7 +153,7 @@ def check_node(audios: List[Audio], task_audios: List[Audio], tree: Dict[str, An
 
     for check in checks:
         if callable(check):
-            tree["checks_results"][check.__name__] = check(audios=audios, task_audios=task_audios)
+            tree["checks_results"][check.__name__] = check(audios=audios, activity_audios=activity_audios)
 
 
 def taxonomy_subtree_to_pydra_workflow(subtree: Dict) -> Workflow:
@@ -161,7 +161,7 @@ def taxonomy_subtree_to_pydra_workflow(subtree: Dict) -> Workflow:
     pass
 
 
-def run_taxonomy_subtree_checks_recursively(audios: List[Audio], dataset_tree: Dict, task_dict: Dict) -> Dict:
+def run_taxonomy_subtree_checks_recursively(audios: List[Audio], dataset_tree: Dict, activity_dict: Dict) -> Dict:
     """Runs quality checks recursively on a taxonomy subtree and updates the tree with results.
 
     This function iterates over a hierarchical taxonomy structure and applies quality control
@@ -171,13 +171,13 @@ def run_taxonomy_subtree_checks_recursively(audios: List[Audio], dataset_tree: D
     Args:
         audios (List[Audio]): The full list of audio files to be checked.
         dataset_tree (Dict): The taxonomy tree representing the dataset structure, which will be modified in-place.
-        task_dict (Dict[str, List[Audio]]): A dictionary mapping task names to lists of associated `Audio` objects.
+        activity_dict (Dict[str, List[Audio]]): A dictionary mapping activity names to lists of `Audio` objects.
 
     Returns:
         Dict: The updated taxonomy tree with quality check results stored in the `checks_results` field
         at relevant levels.
     """
-    task_to_tree_path_dict = {task: task_to_taxonomy_tree_path(task) for task in task_dict}
+    activity_to_tree_path_dict = {activity: activity_to_taxonomy_tree_path(activity) for activity in activity_dict}
 
     def check_subtree_nodes(subtree: Dict) -> None:
         """Recursively processes each node in the subtree, applying checks where applicable.
@@ -186,11 +186,14 @@ def run_taxonomy_subtree_checks_recursively(audios: List[Audio], dataset_tree: D
             subtree (Dict): The current subtree being processed.
         """
         for key, node in subtree.items():
-            # Construct task-specific audio list for the current node
-            task_audios = [
-                audio for task in task_dict if key in task_to_tree_path_dict[task] for audio in task_dict[task]
+            # Construct activity -specific audio list for the current node
+            activity_audios = [
+                audio
+                for activity in activity_dict
+                if key in activity_to_tree_path_dict[activity]
+                for audio in activity_dict[activity]
             ]
-            check_node(audios=audios, task_audios=task_audios, tree=node)
+            check_node(audios=audios, activity_audios=activity_audios, tree=node)
 
             # Recursively process subclasses if they exist
             if isinstance(node.get("subclass"), dict):  # Ensure subclass exists
@@ -201,22 +204,22 @@ def run_taxonomy_subtree_checks_recursively(audios: List[Audio], dataset_tree: D
 
 
 def check_quality(
-    audios: List[Audio], task_tree: Dict = BIOACOUSTIC_TASK_TREE, complexity: str = "low"
+    audios: List[Audio], activity_tree: Dict = BIOACOUSTIC_ACTIVITY_TAXONOMY, complexity: str = "low"
 ) -> Tuple[Dict, List[Audio]]:
     """Runs quality checks on audio files and updates the taxonomy tree.
 
-    Maps `Audio` objects to tasks, prunes the taxonomy tree, and applies quality checks recursively. Returns the
+    Maps `Audio` objects to activities, prunes the taxonomy tree, and applies quality checks recursively. Returns the
     updated taxonomy tree and the modified list of audios.
 
     Args:
         audios (List[Audio]): Audio files to analyze.
-        task_tree (Dict, optional): Taxonomy tree defining task hierarchy. Defaults to `BIOACOUSTIC_TASK_TREE`.
+        activity_tree (Dict, optional): Taxonomy tree defining hierarchy. Defaults to `BIOACOUSTIC_ACTIVITY_TAXONOMY`.
         complexity (str, optional): Processing complexity level (unused, reserved for future use). Defaults to `"low"`.
 
     Returns:
         Tuple[Dict, List[Audio]]: The updated taxonomy tree with `checks_results` and the list of audios not excluded.
     """
-    task_dict = audios_to_task_dict(audios)
-    dataset_tree = task_dict_to_dataset_taxonomy_subtree(task_dict, task_tree=task_tree)
-    run_taxonomy_subtree_checks_recursively(audios, dataset_tree=dataset_tree, task_dict=task_dict)
+    activity_dict = audios_to_activity_dict(audios)
+    dataset_tree = activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=activity_tree)
+    run_taxonomy_subtree_checks_recursively(audios, dataset_tree=dataset_tree, activity_dict=activity_dict)
     return dataset_tree, audios
