@@ -14,7 +14,6 @@ import torch
 from openai import OpenAI
 from transformers import AutoTokenizer  # type: ignore
 
-from senselab.utils.data_structures.llm_response import LLMResponse
 from senselab.utils.data_structures.script_line import ScriptLine
 
 
@@ -102,8 +101,7 @@ class LLM:
         system_instruction: Optional[str] = "",
         max_tokens: Optional[int] = 100,
         temperature: Optional[float] = 0.3,
-        measure: Optional[bool] = False,
-    ) -> LLMResponse:
+    ) -> ScriptLine:
         """Invokes the model with a given message and system instruction.
 
         Args:
@@ -114,20 +112,13 @@ class LLM:
             measure (Optional[bool]): Whether to measure token counts and latency.
 
         Returns:
-            LLMResponse: dataclass with model's response, with token counts and latency if measured.
+            ScriptLine: Contains text and speaker of response.
         """
         openai_messages = [{"role": msg.speaker, "content": msg.text} for msg in messages]
 
         if system_instruction:
             system_message = {"role": "system", "content": system_instruction}  # type: ignore
             openai_messages.insert(0, system_message)  # type: ignore
-
-        in_tokens = out_tokens = latency = None
-
-        # initialize latency measurements
-        if measure:
-            in_tokens = sum(len(self._tokenizer.encode(message["content"])) for message in openai_messages)
-            start_time = time.time()
 
         completion = self._client.chat.completions.create(
             model=self._model_name,
@@ -139,11 +130,7 @@ class LLM:
 
         assert content is not None
 
-        if measure:
-            latency = time.time() - start_time
-            out_tokens = len(self._tokenizer.encode(content))
-
-        return LLMResponse(speaker="AI", text=content, latency=latency, in_tokens=in_tokens, out_tokens=out_tokens)
+        return ScriptLine(speaker="AI", text=content)
 
     def _get_model(self: "LLM", model: str) -> Tuple[str, str]:
         """Maps a model name to the corresponding model identifier and url.
