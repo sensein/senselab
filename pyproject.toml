@@ -58,6 +58,7 @@ pyannote-audio = {version = "~=3.3", optional = true}
 opensmile = {version = "~=2.5", optional = true}
 vocos = {version = "~=0.1", optional = true}
 coqui-tts = {version = "~=0.26", optional = true}
+speech-articulatory-coding = {version = "~=0.1", optional = true}
 jiwer = {version = "~=3.0", optional = true}
 nltk = {version = "~=3.9", optional = true}
 sentence-transformers = {version = "~=3.1", optional = true}
@@ -80,7 +81,8 @@ audio = [
   "vocos",
   "jiwer",
   "nltk",
-  "coqui-tts"
+  "coqui-tts",
+  "speech-articulatory-coding"
 ]
 text = [
   "sentence-transformers",
@@ -194,7 +196,7 @@ skip = [
   "*.cha",
   "*.ipynb"
 ]
-ignore-words-list = ["senselab", "nd", "astroid", "wil", "SER", "te"]
+ignore-words-list = ["senselab", "nd", "astroid", "wil", "SER", "te", "EXPRESSO"]
 
 [poetry.scripts]
 senselab-cli = "senselab.cli:main"
