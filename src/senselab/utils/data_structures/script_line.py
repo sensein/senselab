@@ -1,6 +1,6 @@
 """This module contains the definition of the ScriptLine class."""
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Type, Union
 
 from pydantic import BaseModel, ValidationInfo, field_validator, model_validator
 
@@ -21,14 +21,14 @@ class ScriptLine(BaseModel):
     chunks: Optional[List["ScriptLine"]] = None
 
     @model_validator(mode="before")
-    def validate_text_and_speaker(cls, values: Dict[str, Any], _: ValidationInfo) -> Dict[str, Any]:
+    def validate_text_and_speaker(cls: Type["ScriptLine"], values: Dict[str, Any], _: ValidationInfo) -> Dict[str, Any]:
         """Validate that at least one of text or speaker is provided."""
         if not values.get("text") and not values.get("speaker"):
             raise ValueError("At least text or speaker must be provided.")
         return values
 
     @field_validator("text", "speaker")
-    def strings_must_be_stripped(cls, v: str, _: ValidationInfo) -> str:
+    def strings_must_be_stripped(cls: Type["ScriptLine"], v: str, _: ValidationInfo) -> str:
         """Strip the string of leading and trailing whitespace.
 
         Args:
@@ -42,7 +42,7 @@ class ScriptLine(BaseModel):
         return v
 
     @field_validator("start", "end")
-    def timestamps_must_be_positive(cls, v: float, _: ValidationInfo) -> float:
+    def timestamps_must_be_positive(cls: Type["ScriptLine"], v: float, _: ValidationInfo) -> float:
         """Validate that the start and end timestamps are positive.
 
         Args:
@@ -56,7 +56,7 @@ class ScriptLine(BaseModel):
                 raise ValueError("Timestamps must be non-negative")
         return v
 
-    def get_text(self) -> Union[str, None]:
+    def get_text(self: "ScriptLine") -> Union[str, None]:
         """Get the full text of the script line.
 
         Returns:
@@ -64,7 +64,7 @@ class ScriptLine(BaseModel):
         """
         return self.text
 
-    def get_speaker(self) -> Optional[str]:
+    def get_speaker(self: "ScriptLine") -> Optional[str]:
         """Get the speaker of the script line.
 
         Returns:
@@ -72,7 +72,7 @@ class ScriptLine(BaseModel):
         """
         return self.speaker
 
-    def get_timestamps(self) -> Tuple[Optional[float], Optional[float]]:
+    def get_timestamps(self: "ScriptLine") -> Tuple[Optional[float], Optional[float]]:
         """Get the start and end timestamps of the script line.
 
         Returns:
@@ -80,7 +80,7 @@ class ScriptLine(BaseModel):
         """
         return self.start, self.end
 
-    def get_chunks(self) -> Optional[List["ScriptLine"]]:
+    def get_chunks(self: "ScriptLine") -> Optional[List["ScriptLine"]]:
         """Get the list of chunks in the script line.
 
         Returns:
@@ -88,7 +88,7 @@ class ScriptLine(BaseModel):
         """
         return self.chunks
 
-    def __repr__(self) -> str:
+    def __repr__(self: "ScriptLine") -> str:
         """Return a string representation of the ScriptLine object.
 
         Returns:
@@ -96,8 +96,27 @@ class ScriptLine(BaseModel):
         """
         return f"<ScriptLine(speaker={self.speaker}, text={self.text}, start={self.start}, end={self.end})>"
 
+    def to_dict(self: "ScriptLine") -> Dict[str, Any]:
+        """Convert the ScriptLine instance to a dictionary.
+
+        Returns:
+            Dict[str, Any]: A dictionary representation of the ScriptLine object.
+        """
+        result: Dict[str, Any] = {}
+
+        if self.text is not None:
+            result["text"] = self.text
+        if self.speaker is not None:
+            result["speaker"] = self.speaker
+        if self.start is not None and self.end is not None:
+            result["timestamps"] = [self.start, self.end]
+        if self.chunks is not None:
+            result["chunks"] = [chunk.to_dict() for chunk in self.chunks]
+
+        return result
+
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "ScriptLine":
+    def from_dict(cls: Type["ScriptLine"], d: Dict[str, Any]) -> "ScriptLine":
         """Create a ScriptLine instance from a dictionary.
 
         Args:

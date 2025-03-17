@@ -9,13 +9,13 @@ from typing import Generator, List
 from tqdm import tqdm
 
 from senselab.text.tasks.llms.llm import LLM
-from senselab.utils.data_structures.llm_response import LLMResponse
+from senselab.utils.data_structures.script_line import ScriptLine
 from senselab.utils.data_structures.transcript_input import TranscriptInput
 from senselab.utils.data_structures.transcript_output import TranscriptOutput
 
 
 def generate_ai_conversation(
-    transcript_path: Path, prompt_path: Path, temp: float, model_name: str, measure: bool, cache_path: Path, llm: LLM
+    transcript_path: Path, prompt_path: Path, temp: float, model_name: str, cache_path: Path, llm: LLM
 ) -> TranscriptOutput:
     """Generates an AI conversation based on transcript and prompt data.
 
@@ -24,7 +24,6 @@ def generate_ai_conversation(
         prompt_path (Path): Path to the prompt file.
         temp (float): Temperature parameter for the LLM.
         model_name (str): Name of the model to use.
-        measure (bool): Whether to measure performance (e.g., tokens, latency).
         cache_path (Path): Path to store the cached responses.
         llm (LLM): instantiated model being used.
 
@@ -45,20 +44,14 @@ def generate_ai_conversation(
         print(f"Loaded cached responses for {transcript_path.name}")
     else:
         responses = [
-            llm.call(
-                messages=messages,
-                system_instruction=system_instruction,
-                max_tokens=200,
-                temperature=temp,
-                measure=measure,
-            )
+            llm.call(messages=messages, system_instruction=system_instruction, max_tokens=200, temperature=temp)
             for messages in tqdm(all_messages, desc=f"Processing: {transcript_path.name}")
         ]
 
         with open(cache_path, "wb") as f:  # type: ignore
             pickle.dump(responses, f)  # type: ignore
 
-    def response_gen() -> Generator[LLMResponse, None, None]:
+    def response_gen() -> Generator[ScriptLine, None, None]:
         """Generates responses from the cached or newly generated data."""
         yield from responses
 
@@ -82,7 +75,7 @@ def generate_ai_conversation(
 
 
 def generate_all_transcripts(
-    transcript_dir: Path, prompt_path: Path, temp: float, model_name: str, measure: bool, cache_dir: Path, llm: LLM
+    transcript_dir: Path, prompt_path: Path, temp: float, model_name: str, cache_dir: Path, llm: LLM
 ) -> List[TranscriptOutput]:
     """Generates AI conversations for all transcripts in a directory.
 
@@ -91,7 +84,6 @@ def generate_all_transcripts(
         prompt_path (Path): Path to the prompt file.
         temp (float): Temperature parameter for the LLM.
         model_name (str): Name of the model to use.
-        measure (bool): Whether to measure performance (e.g., tokens, latency).
         cache_dir (Path): Directory to store cached responses.
         llm (LLM): instantiated model being used.
 
@@ -101,9 +93,7 @@ def generate_all_transcripts(
     outputs = []
     for transcript_path in transcript_dir.iterdir():
         cache_path = cache_dir / f"{transcript_path.stem}_cache.pkl"
-        outputs.append(
-            generate_ai_conversation(transcript_path, prompt_path, temp, model_name, measure, cache_path, llm)
-        )
+        outputs.append(generate_ai_conversation(transcript_path, prompt_path, temp, model_name, cache_path, llm))
     return outputs
 
 
@@ -126,11 +116,10 @@ if __name__ == "__main__":
 
     output_path = Path("/home/goshdam/outputs/ai_outputs")
     cache_dir = Path("/home/goshdam/outputs/cache")
-    measure = False
 
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    outputs = generate_all_transcripts(transcript_dir, prompt_path, temp, model_name, measure, cache_dir, llm)
+    outputs = generate_all_transcripts(transcript_dir, prompt_path, temp, model_name, cache_dir, llm)
 
     for output in outputs:
         output.save_to_json(output_path / f"{output.transcript}.json")
