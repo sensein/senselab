@@ -32,9 +32,11 @@ jobs:
         echo 'export PATH="/opt/homebrew/opt/ffmpeg@6/bin:$PATH"' >> ~/.bash_profile
         echo 'export PATH="/opt/homebrew/opt/ffmpeg@6/bin:$PATH"' >> ~/.zshrc
         echo 'export PATH="/opt/homebrew/opt/ffmpeg@6/bin:$PATH"' >> ~/.bashrc
+        echo 'export PATH="/opt/homebrew/opt/ffmpeg@6/bin:$PATH"' >> ~/.profile
         source ~/.bash_profile  # Load the updated PATH immediately
         source ~/.zshrc
         source ~/.bashrc
+        source ~/.profile
         echo $PATH
         ffmpeg -version
       shell: bash
