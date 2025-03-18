@@ -30,8 +30,10 @@ jobs:
       run: |
         brew install ffmpeg@6
         echo 'export PATH="/opt/homebrew/opt/ffmpeg@6/bin:$PATH"' >> $GITHUB_ENV
-        ffmpeg -version
+        echo $PATH
       shell: bash
+    - name: Verify FFmpeg installation
+      run: ffmpeg -version
     - name: Install Poetry
       run: pip install poetry==2.1.1
       shell: bash
