@@ -31,43 +31,43 @@ jobs:
         auto-update-conda: true
         python-version: ${{ matrix.python-version }}
     - name: Conda info
-      shell: bash -el {0}
       run: conda info
+      shell: bash -el {0}
     - name: Install FFmpeg v6 via Conda
-      shell: bash -l {0}  # Ensures Conda is loaded
       run: |
         conda install -c conda-forge ffmpeg=6.* --yes
+      shell: bash -l {0}
     - name: Verify ffmpeg
       run: |
         which ffmpeg
         ffmpeg -version
-      shell: bash
+      shell: bash -l {0}
     - name: Install Poetry
       run: pip install poetry==2.1.1
-      shell: bash
+      shell: bash -l {0}
     - name: Install dependencies with Poetry
       run: |
         poetry env use ${{ matrix.python-version }}
         poetry install --extras "audio text video" --with dev
         poetry env info
-      shell: bash
+      shell: bash -l {0}
     - name: Debug FFmpeg Python Import
       run: |
         poetry run python -c "import ffmpeg; print(ffmpeg.__version__)"
-      shell: bash
+      shell: bash -l {0}
     - name: check files
       run: |
         ls /Users/runner/work/senselab/senselab/src/tests/data_for_testing/
-      shell: bash
+      shell: bash -l {0}
     - name: check pwd
       run: pwd
-      shell: bash
+      shell: bash -l {0}
     - name: Verify FFmpeg Installation
       run: |
         echo "PATH: $PATH"
         which ffmpeg
         ffmpeg -version
-      shell: bash
+      shell: bash -l {0}
     - name: Run unit tests
       id: run-tests
       env:
@@ -83,7 +83,7 @@ jobs:
           --cov=src src/tests \
           --log-level=DEBUG \
           --verbose
-      shell: bash
+      shell: bash -l {0}
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v5
       with:
