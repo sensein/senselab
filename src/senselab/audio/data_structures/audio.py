@@ -137,63 +137,6 @@ class Audio(BaseModel):
             waveform=array, sampling_rate=sampling_rate, orig_path_or_id=filepath, metadata=metadata if metadata else {}
         )
 
-    @classmethod
-    def from_stream(
-        cls,
-        stream_source: Union[str, os.PathLike, bytes],
-        chunk_size: int = 4096,
-        metadata: Optional[Dict] = None,
-    ) -> Generator["Audio", None, None]:
-        """Yields Audio objects from a live stream (RTSP, HTTP, stdin, etc.).
-
-        This function requires ffmpeg to be installed on the system to work (as a torchaudio requirement -
-        see https://pytorch.org/audio/stable/installation.html#optional-dependencies).
-
-        Args:
-            stream_source: Filepath or URL of the stream or input source
-                (e.g., "http://...", "rtsp://...", sys.stdin.buffer).
-            chunk_size: Number of audio frames per chunk to read.
-            metadata: Additional metadata associated with the audio.
-
-        Yields:
-            Audio: An instance containing each streamed audio chunk.
-        """
-        if not TORCHAUDIO_AVAILABLE:
-            raise ModuleNotFoundError(
-                "`torchaudio` is not installed."
-                "Please install senselab audio dependencies using `pip install senselab['audio']`."
-            )
-
-        if isinstance(stream_source, os.PathLike) and not os.path.exists(stream_source):
-            raise FileNotFoundError(f"File {stream_source} does not exist.")
-
-        # Initialize the stream reader
-        streamer = torchaudio.io.StreamReader(stream_source)
-
-        # Add an audio stream
-        streamer.add_basic_audio_stream(frames_per_chunk=chunk_size)
-
-        # Get the sample rate (if available)
-        sampling_rate = streamer.get_src_stream_info(0).sample_rate
-
-        # Read and process chunks dynamically
-        for chunk in streamer.stream():
-            if isinstance(chunk, list) and len(chunk) == 1 and isinstance(chunk[0], torch.Tensor):
-                chunk = chunk[0]._elem.squeeze()  # type: ignore
-                if chunk.dim() == 2:
-                    channels, frames = chunk.shape
-                    if channels > frames:
-                        chunk = chunk.T  # Transpose to fix frames and channels order
-                elif chunk.dim() > 2:
-                    raise ValueError("Audio chunk has more than 2 dimensions.")
-
-                yield cls(
-                    waveform=chunk,
-                    sampling_rate=sampling_rate,
-                    orig_path_or_id=stream_source,
-                    metadata=metadata if metadata else {},
-                )
-
     def generate_path(self) -> str | os.PathLike:
         """Generate a path like string for this Audio.
 

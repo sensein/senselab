@@ -25,57 +25,42 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-    - name: Install Miniconda
-      uses: conda-incubator/setup-miniconda@v3
-      with:
-        auto-update-conda: true
-        python-version: ${{ matrix.python-version }}
-    - name: Conda info
-      run: conda info
-      shell: bash -el {0}
-    - name: Install FFmpeg v6 via Conda
+    - name: Install ffmpeg
       run: |
-        conda install -c conda-forge ffmpeg=6.* --yes
-      shell: bash -l {0}
+        brew install ffmpeg
+      shell: bash
     - name: Verify ffmpeg
       run: |
-        which ffmpeg
         ffmpeg -version
-      shell: bash -l {0}
+      shell: bash
     - name: Install Poetry
       run: pip install poetry==2.1.1
-      shell: bash -l {0}
+      shell: bash
     - name: Install dependencies with Poetry
       run: |
         poetry env use ${{ matrix.python-version }}
         poetry install --extras "audio text video" --with dev
         poetry env info
-      shell: bash -l {0}
-    - name: Debug FFmpeg Python Import
-      run: |
-        poetry run python -c "import ffmpeg; print(ffmpeg.__version__)"
-      shell: bash -l {0}
+      shell: bash
     - name: check files
       run: |
         ls /Users/runner/work/senselab/senselab/src/tests/data_for_testing/
-      shell: bash -l {0}
+      shell: bash
     - name: check pwd
       run: pwd
-      shell: bash -l {0}
+      shell: bash
     - name: Verify FFmpeg Installation
       run: |
         echo "PATH: $PATH"
         which ffmpeg
         ffmpeg -version
-      shell: bash -l {0}
+      shell: bash
     - name: Run unit tests
       id: run-tests
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: |
-        which ffmpeg
-        ffmpeg -version
         poetry run pytest -n auto \
           --junitxml=pytest.xml \
           --cov-report=term-missing:skip-covered \
@@ -83,7 +68,7 @@ jobs:
           --cov=src src/tests \
           --log-level=DEBUG \
           --verbose
-      shell: bash -l {0}
+      shell: bash
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v5
       with:
