@@ -28,7 +28,6 @@ jobs:
     - name: Install ffmpeg v6 (macOS)
       if: startsWith(matrix.os, 'macos')
       run: |
-        brew doctor
         brew install ffmpeg@6
         echo 'export PATH="/opt/homebrew/opt/ffmpeg@6/bin:$PATH"' >> ~/.bash_profile
         echo 'export PATH="/opt/homebrew/opt/ffmpeg@6/bin:$PATH"' >> ~/.zshrc
