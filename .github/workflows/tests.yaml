@@ -38,10 +38,6 @@ jobs:
         ffmpeg -version
         ls -lah /opt/homebrew/bin/ffmpeg
       shell: bash
-    - name: Debug FFmpeg Python Import
-      run: |
-        poetry run python -c "import ffmpeg; print(ffmpeg.__version__)"
-      shell: bash
     - name: Install Poetry
       run: pip install poetry==2.1.1
       shell: bash
@@ -50,6 +46,10 @@ jobs:
         poetry env use ${{ matrix.python-version }}
         poetry install --extras "audio text video" --with dev
         poetry env info
+      shell: bash
+    - name: Debug FFmpeg Python Import
+      run: |
+        poetry run python -c "import ffmpeg; print(ffmpeg.__version__)"
       shell: bash
     - name: check files
       run: |
