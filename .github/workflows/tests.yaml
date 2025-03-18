@@ -25,13 +25,11 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-    - name: Install ffmpeg (Ubuntu)
-      if: startsWith(matrix.os, 'ubuntu')
-      run: sudo apt-get update && sudo apt-get install -y ffmpeg
-      shell: bash
-    - name: Install ffmpeg (macOS)
+    - name: Install ffmpeg v6 (macOS)
       if: startsWith(matrix.os, 'macos')
-      run: brew install ffmpeg
+      run: |
+        brew install ffmpeg@6
+        ffmpeg -version
       shell: bash
     - name: Install Poetry
       run: pip install poetry==2.1.1
@@ -164,8 +162,10 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-    - name: Install ffmpeg
-      run: sudo apt-get update && sudo apt-get install -y ffmpeg
+    - name: Install ffmpeg v6
+      run: |
+        sudo apt-get update && sudo apt-get install -y ffmpeg=6.*
+        ffmpeg -version
       shell: bash
     - name: Install Poetry
       run: |
@@ -323,8 +323,10 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-    - name: Install ffmpeg
-      run: sudo apt-get update && sudo apt-get install -y ffmpeg
+    - name: Install ffmpeg v6
+      run: |
+        sudo apt-get update && sudo apt-get install -y ffmpeg=6.*
+        ffmpeg -version
       shell: bash
     - name: Install Poetry
       run: |
@@ -469,8 +471,10 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-    - name: Install ffmpeg
-      run: sudo apt-get update && sudo apt-get install -y ffmpeg
+    - name: Install ffmpeg v6
+      run: |
+        sudo apt-get update && sudo apt-get install -y ffmpeg=6.*
+        ffmpeg -version
       shell: bash
     - name: Install Poetry
       run: |
@@ -616,8 +620,10 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-    - name: Install ffmpeg
-      run: sudo apt-get update && sudo apt-get install -y ffmpeg
+    - name: Install ffmpeg v6
+      run: |
+        sudo apt-get update && sudo apt-get install -y ffmpeg=6.*
+        ffmpeg -version
       shell: bash
     - name: Install Poetry
       run: |

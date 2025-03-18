@@ -67,12 +67,30 @@ class Audio(BaseModel):
         return temporary_tensor.to(torch.float32)
 
     @classmethod
-    def from_filepath(cls, filepath: str | os.PathLike, metadata: Dict = {}) -> "Audio":
+    def from_filepath(
+        cls,
+        filepath: str | os.PathLike,
+        offset_in_sec: float = 0.0,
+        duration_in_sec: float = -1.0,
+        metadata: Optional[Dict] = None,
+        backend: Optional[str] = None,
+    ) -> "Audio":
         """Creates an Audio instance from an audio file.
 
         Args:
-            filepath: Filepath of the audio file to read from
-            metadata: Additional information associated with the audio file
+            filepath: Filepath of the audio file to read from.
+            offset_in_sec: Offset in seconds to start reading the audio file.
+                Default is 0.0 (start from the beginning).
+            duration_in_sec: Duration in seconds to read from the audio file.
+                This function may return a shorter audio if there is not enough seconds in the given file.
+                Default is -1.0 (read the entire audio file).
+            metadata: Additional information associated with the audio file.
+                Default is an empty dictionary.
+            backend: I/O backend to use. Valid options include "ffmpeg", "sox", and "soundfile".
+                If None, a backend is automatically selected among available options.
+
+        Returns:
+            Audio: An instance containing the audio data and its corresponding metadata
         """
         if not TORCHAUDIO_AVAILABLE:
             raise ModuleNotFoundError(
@@ -83,9 +101,98 @@ class Audio(BaseModel):
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"File {filepath} does not exist.")
 
-        array, sampling_rate = torchaudio.load(filepath)
+        if offset_in_sec < 0:
+            raise ValueError("Offset must be a non-negative value.")
+        if duration_in_sec < -1:
+            raise ValueError("Duration must be -1 (to read full file) or a positive value.")
 
-        return cls(waveform=array, sampling_rate=sampling_rate, orig_path_or_id=filepath, metadata=metadata)
+        # Retrieve audio metadata
+        try:
+            info = torchaudio.info(filepath)
+            sampling_rate = info.sample_rate
+            total_frames = info.num_frames
+        except Exception as e:
+            raise ValueError(f"Failed to retrieve audio metadata for file {filepath}: {str(e)}") from e
+
+        # Convert time-based offset and duration to frame-based values
+        frame_offset = int(offset_in_sec * sampling_rate)
+        if frame_offset > total_frames:
+            raise ValueError(
+                f"Offset ({offset_in_sec} seconds) exceeds the duration of the audio file ({filepath}): "
+                f"{total_frames / sampling_rate} seconds."
+            )
+
+        num_frames = int(duration_in_sec * sampling_rate) if duration_in_sec > 0 else -1
+
+        # Ensure num_frames are within bounds
+        if num_frames > 0:
+            num_frames = min(num_frames, total_frames - frame_offset)
+
+        # Load the specified portion of the audio
+        array, sampling_rate = torchaudio.load(
+            filepath, frame_offset=frame_offset, num_frames=num_frames, backend=backend
+        )
+
+        return cls(
+            waveform=array, sampling_rate=sampling_rate, orig_path_or_id=filepath, metadata=metadata if metadata else {}
+        )
+
+    @classmethod
+    def from_stream(
+        cls,
+        stream_source: Union[str, os.PathLike, bytes],
+        chunk_size: int = 4096,
+        metadata: Optional[Dict] = None,
+    ) -> Generator["Audio", None, None]:
+        """Yields Audio objects from a live stream (RTSP, HTTP, stdin, etc.).
+
+        This function requires ffmpeg to be installed on the system to work (as a torchaudio requirement -
+        see https://pytorch.org/audio/stable/installation.html#optional-dependencies).
+
+        Args:
+            stream_source: Filepath or URL of the stream or input source
+                (e.g., "http://...", "rtsp://...", sys.stdin.buffer).
+            chunk_size: Number of audio frames per chunk to read.
+            metadata: Additional metadata associated with the audio.
+
+        Yields:
+            Audio: An instance containing each streamed audio chunk.
+        """
+        if not TORCHAUDIO_AVAILABLE:
+            raise ModuleNotFoundError(
+                "`torchaudio` is not installed."
+                "Please install senselab audio dependencies using `pip install senselab['audio']`."
+            )
+
+        if isinstance(stream_source, os.PathLike) and not os.path.exists(stream_source):
+            raise FileNotFoundError(f"File {stream_source} does not exist.")
+
+        # Initialize the stream reader
+        streamer = torchaudio.io.StreamReader(stream_source)
+
+        # Add an audio stream
+        streamer.add_basic_audio_stream(frames_per_chunk=chunk_size)
+
+        # Get the sample rate (if available)
+        sampling_rate = streamer.get_src_stream_info(0).sample_rate
+
+        # Read and process chunks dynamically
+        for chunk in streamer.stream():
+            if isinstance(chunk, list) and len(chunk) == 1 and isinstance(chunk[0], torch.Tensor):
+                chunk = chunk[0]._elem.squeeze()  # type: ignore
+                if chunk.dim() == 2:
+                    channels, frames = chunk.shape
+                    if channels > frames:
+                        chunk = chunk.T  # Transpose to fix frames and channels order
+                elif chunk.dim() > 2:
+                    raise ValueError("Audio chunk has more than 2 dimensions.")
+
+                yield cls(
+                    waveform=chunk,
+                    sampling_rate=sampling_rate,
+                    orig_path_or_id=stream_source,
+                    metadata=metadata if metadata else {},
+                )
 
     def generate_path(self) -> str | os.PathLike:
         """Generate a path like string for this Audio.

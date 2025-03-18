@@ -23,11 +23,109 @@ def load_audio(file_path: str) -> Tuple[torch.Tensor, int]:
     return torchaudio.load(file_path)
 
 
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
+def test_audio_creation_full_file() -> None:
+    """Tests loading the full audio file without offset or duration."""
+    audio = Audio.from_filepath(MONO_AUDIO_PATH)
+    assert audio is not None
+    assert audio.waveform is not None
+    assert audio.waveform.shape[1] > 0
+    assert isinstance(audio.sampling_rate, int)
+    assert audio.sampling_rate == 48000
+
+
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
+def test_audio_creation_with_offset() -> None:
+    """Tests loading audio with a positive offset."""
+    audio = Audio.from_filepath(MONO_AUDIO_PATH, offset_in_sec=1.0)
+    assert audio is not None
+    assert audio.waveform is not None
+    assert audio.waveform.shape[1] > 0
+    assert isinstance(audio.sampling_rate, int)
+    assert audio.sampling_rate == 48000
+
+
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
+def test_audio_creation_with_offset_exceeding_duration() -> None:
+    """Tests that an excessive offset raises an error."""
+    info = torchaudio.info(MONO_AUDIO_PATH)
+    file_duration = info.num_frames / info.sample_rate
+
+    with pytest.raises(ValueError, match="Offset .* exceeds the duration of the audio file"):
+        Audio.from_filepath(MONO_AUDIO_PATH, offset_in_sec=file_duration + 1.0)
+
+
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
+def test_audio_creation_with_duration() -> None:
+    """Tests loading a specific duration of an audio file."""
+    audio = Audio.from_filepath(MONO_AUDIO_PATH, duration_in_sec=2.0)
+    assert audio is not None
+    assert audio.waveform is not None
+    assert audio.waveform.shape[1] > 0
+    assert isinstance(audio.sampling_rate, int)
+    assert audio.sampling_rate == 48000
+
+
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
+def test_audio_creation_with_offset_and_duration() -> None:
+    """Tests loading audio with both an offset and a duration."""
+    audio = Audio.from_filepath(MONO_AUDIO_PATH, offset_in_sec=1.0, duration_in_sec=2.0)
+    assert audio is not None
+    assert audio.waveform is not None
+    assert audio.waveform.shape[1] > 0
+    assert isinstance(audio.sampling_rate, int)
+    assert audio.sampling_rate == 48000
+
+
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
+def test_audio_creation_negative_offset() -> None:
+    """Tests that a negative offset raises an error."""
+    with pytest.raises(ValueError, match="Offset must be a non-negative value"):
+        Audio.from_filepath(MONO_AUDIO_PATH, offset_in_sec=-1.0)
+
+
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
+def test_audio_creation_negative_duration() -> None:
+    """Tests that a negative duration (except -1) raises an error."""
+    with pytest.raises(ValueError, match="Duration must be -1 .* or a positive value"):
+        Audio.from_filepath(MONO_AUDIO_PATH, duration_in_sec=-2.0)
+
+
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
+def test_audio_creation_full_duration() -> None:
+    """Tests loading the full audio file with duration=-1."""
+    audio = Audio.from_filepath(MONO_AUDIO_PATH, duration_in_sec=-1)
+    assert audio is not None
+    assert audio.waveform is not None
+    assert audio.waveform.shape[1] > 0
+    assert isinstance(audio.sampling_rate, int)
+    assert audio.sampling_rate == 48000
+
+
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
+def test_audio_creation_stereo_audio() -> None:
+    """Tests loading a stereo audio file."""
+    audio = Audio.from_filepath(STEREO_AUDIO_PATH)
+    assert audio is not None
+    assert audio.waveform is not None
+    assert audio.waveform.shape[1] > 0
+    assert audio.waveform.shape[0] == 2
+    assert isinstance(audio.sampling_rate, int)
+    assert audio.sampling_rate == 48000
+
+
 @pytest.mark.skipif(TORCHAUDIO_AVAILABLE, reason="torchaudio is installed.")
 def test_audio_creation_error() -> None:
     """Tests audio creation with invalid input."""
     with pytest.raises(ModuleNotFoundError):
         Audio.from_filepath("placeholder.wav")
+
+
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
+def test_audio_creation_invalid_backend() -> None:
+    """Tests that an invalid backend raises an error."""
+    with pytest.raises(ValueError, match="Unsupported backend"):
+        Audio.from_filepath(MONO_AUDIO_PATH, backend="invalid_backend")
 
 
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
@@ -48,6 +146,20 @@ def test_audio_creation(audio_fixture: str, audio_path: str, request: pytest.Fix
         orig_path_or_id=audio_path,
     )
     assert audio == audio_sample, "Audios are not exactly equivalent"
+
+
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
+@pytest.mark.parametrize(
+    "audio_path",
+    [MONO_AUDIO_PATH, STEREO_AUDIO_PATH],
+)
+def test_audio_stream(audio_path: str) -> None:
+    """Tests mono and stereo audio creation from stream."""
+    audio_chunks = Audio.from_stream(audio_path)
+    for audio_chunk in audio_chunks:
+        assert isinstance(audio_chunk, Audio), "Audio chunks should be of type Audio"
+        assert audio_chunk.sampling_rate == 48000, "Audio chunks should have a sampling rate of 48000"
+        assert audio_chunk.waveform.shape[1] <= 4096, "Audio chunks should have a shape of (*, 4096) or less"
 
 
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
