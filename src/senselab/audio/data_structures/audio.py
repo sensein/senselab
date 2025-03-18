@@ -12,6 +12,13 @@ try:
 except ModuleNotFoundError:
     TORCHAUDIO_AVAILABLE = False
 
+try:
+    import soundfile as sf
+
+    SOUNDFILE_AVAILABLE = True
+except ModuleNotFoundError:
+    SOUNDFILE_AVAILABLE = False
+
 import os
 import uuid
 import warnings
@@ -136,6 +143,47 @@ class Audio(BaseModel):
         return cls(
             waveform=array, sampling_rate=sampling_rate, orig_path_or_id=filepath, metadata=metadata if metadata else {}
         )
+
+    @classmethod
+    def from_stream(
+        cls,
+        stream_source: Union[str, os.PathLike, bytes],
+        chunk_size: int = 4096,
+        metadata: Optional[Dict] = None,
+    ) -> Generator["Audio", None, None]:
+        """Yields Audio objects from a live stream (file, stdin, etc.).
+
+        Args:
+            stream_source: Filepath or input stream.
+            chunk_size: Number of audio frames per chunk to read.
+            metadata: Additional metadata associated with the audio.
+
+        Yields:
+            Audio: An instance containing each streamed audio chunk.
+        """
+        if not SOUNDFILE_AVAILABLE:
+            raise ModuleNotFoundError(
+                "`soundfile` is not installed."
+                "Please install senselab audio dependencies using `pip install senselab['audio']`."
+            )
+
+        if isinstance(stream_source, os.PathLike) and not os.path.exists(stream_source):
+            raise FileNotFoundError(f"File {stream_source} does not exist.")
+
+        # Open the audio stream
+        with sf.SoundFile(stream_source, "r") as audio_file:
+            sampling_rate = audio_file.samplerate
+
+            while True:
+                chunk = audio_file.read(frames=chunk_size, dtype="float32", always_2d=True)
+                if chunk.shape[0] == 0:
+                    break  # Stop when there are no more frames to read
+                yield cls(
+                    waveform=chunk.T,
+                    sampling_rate=sampling_rate,
+                    orig_path_or_id=stream_source,
+                    metadata=metadata if metadata else {},
+                )
 
     def generate_path(self) -> str | os.PathLike:
         """Generate a path like string for this Audio.
