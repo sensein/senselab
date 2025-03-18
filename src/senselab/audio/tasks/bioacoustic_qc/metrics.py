@@ -18,9 +18,6 @@ def proportion_silent_metric(audio: Audio, silence_threshold: float = 0.01) -> f
     waveform = audio.waveform
     assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
 
-    if not audio.normalized:
-        audio.normalize()
-
     silent_samples = (waveform.abs() < silence_threshold).sum().item()
     return silent_samples / waveform.numel()
 
@@ -37,9 +34,6 @@ def proportion_silence_at_beginning_metric(audio: Audio, silence_threshold: floa
     """
     waveform = audio.waveform
     assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
-
-    if not audio.normalized:
-        audio.normalize()
 
     all_channels_silent = (waveform.abs() < silence_threshold).all(dim=0)
     total_samples = waveform.size(-1)
@@ -63,9 +57,6 @@ def proportion_silence_at_end_metric(audio: Audio, silence_threshold: float = 0.
     """
     waveform = audio.waveform
     assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
-
-    if not audio.normalized:
-        audio.normalize()
 
     all_channels_silent = (waveform.abs() < silence_threshold).all(dim=0)
     total_samples = waveform.size(-1)
@@ -109,7 +100,7 @@ def amplitude_toeroom_metric(audio: Audio) -> float:
     """Calculates the amplitude toeroom.
 
     Amplitude toeroom represents how far the lowest sample is from -1.0.
-    It is calculated as `-1.0 - min_amplitude`, where `min_amplitude` is 
+    It is calculated as `-1.0 - min_amplitude`, where `min_amplitude` is
     the smallest sample value.
 
     Args:
@@ -131,4 +122,3 @@ def amplitude_toeroom_metric(audio: Audio) -> float:
         raise ValueError(f"Audio contains samples under -1.0. Min amplitude = {min_amplitude:.4f}")
 
     return -1.0 - min_amplitude
-
