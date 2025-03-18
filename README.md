@@ -30,7 +30,7 @@ Welcome to ```senselab```! This is a Python package for streamlining the process
 
     If you attempt to install this package on an unsupported system, the installation or execution will fail.
 
-2. `FFmpeg` is required to use `torchaudio.io` module, which is used under the hood by `senselab` for some audio I/O functionalities (e.g., reading an audio stream). Specifically, starting version 2.1, `torchaudio` official binary distributions are compatible with `FFmpeg` >=4.4, <7. `FFmpeg` is also needed by some video dependencies of `senselab`. Please make sure you have `FFmpeg` properly installed on your machine before installing and using `senselab` (see [here](https://www.ffmpeg.org/download.html) for detailed platform-dependent instructions).
+2. `FFmpeg` is required by some audio and video dependencies (e.g., `torchaudio`). Please make sure you have `FFmpeg` properly installed on your machine before installing and using `senselab` (see [here](https://www.ffmpeg.org/download.html) for detailed platform-dependent instructions).
 
 ## Installation
 Install this package via:
