@@ -29,21 +29,13 @@ jobs:
       if: startsWith(matrix.os, 'macos')
       run: |
         brew install ffmpeg@6
-        echo 'export PATH="/opt/homebrew/opt/ffmpeg@6/bin:$PATH"' >> ~/.bash_profile
-        echo 'export PATH="/opt/homebrew/opt/ffmpeg@6/bin:$PATH"' >> ~/.zshrc
-        echo 'export PATH="/opt/homebrew/opt/ffmpeg@6/bin:$PATH"' >> ~/.bashrc
-        echo 'export PATH="/opt/homebrew/opt/ffmpeg@6/bin:$PATH"' >> ~/.profile
-        echo 'export PATH="/opt/homebrew/opt/ffmpeg@6/bin:$PATH"' >> /Users/runner/.bash_profile
-        source ~/.bash_profile  # Load the updated PATH immediately
-        source ~/.zshrc
-        source ~/.bashrc
-        source ~/.profile
-        source /Users/runner/.bash_profile
+        export PATH="/opt/homebrew/opt/ffmpeg@6/bin:$PATH"
         echo $PATH
         ffmpeg -version
       shell: bash
     - name: Verify FFmpeg installation
       run: |
+        export PATH="/opt/homebrew/opt/ffmpeg@6/bin:$PATH"
         echo $PATH
         ffmpeg -version
       shell: bash
