@@ -7,6 +7,7 @@ from pytest import approx
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.bioacoustic_qc.metrics import (
     amplitude_headroom_metric,
+    amplitude_toeroom_metric,
     proportion_silence_at_beginning_metric,
     proportion_silence_at_end_metric,
     proportion_silent_metric,
@@ -77,3 +78,27 @@ def test_amplitude_headroom_metric(waveform: torch.Tensor, expected_headroom: fl
     audio = Audio(waveform=waveform, sampling_rate=16000)
     headroom = amplitude_headroom_metric(audio)
     assert headroom == approx(expected_headroom, rel=1e-6), f"Expected {expected_headroom}, got {headroom}"
+
+
+@pytest.mark.parametrize(
+    "waveform, expected_toeroom",
+    [
+        (torch.tensor([[0.5, -0.5, -0.8, 0.8]]), -0.2),  # Min amplitude -0.8 → Toeroom = -1.0 - (-0.8) = 0.2
+        (torch.tensor([[0.1, -0.1, -0.3, 0.3]]), -0.7),  # Min amplitude -0.3 → Toeroom = 0.7
+        (torch.tensor([[1.0, -1.0, 0.5, -0.5]]), 0.0),  # Min amplitude -1.0 → Toeroom = 0.0
+    ],
+)
+def test_amplitude_toeroom_metric(waveform: torch.Tensor, expected_toeroom: float) -> None:
+    """Tests amplitude_toeroom_metric function."""
+    audio = Audio(waveform=waveform, sampling_rate=16000)
+    toeroom = amplitude_toeroom_metric(audio)
+    assert toeroom == approx(expected_toeroom, rel=1e-6), f"Expected {expected_toeroom}, got {toeroom}"
+
+
+def test_amplitude_toeroom_clipping_error() -> None:
+    """Tests that amplitude_toeroom_metric raises an error when samples are below -1.0."""
+    waveform = torch.tensor([[0.5, -1.1, -0.9, 0.8]])  # Min amplitude -1.1
+    audio = Audio(waveform=waveform, sampling_rate=16000)
+
+    with pytest.raises(ValueError, match="Audio contains samples under -1.0"):
+        amplitude_toeroom_metric(audio)
