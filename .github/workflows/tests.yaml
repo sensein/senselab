@@ -40,7 +40,7 @@ jobs:
       shell: bash
     - name: Debug FFmpeg Python Import
       run: |
-        python -c "import ffmpeg; print(ffmpeg.__version__)"
+        poetry run python -c "import ffmpeg; print(ffmpeg.__version__)"
       shell: bash
     - name: Install Poetry
       run: pip install poetry==2.1.1
