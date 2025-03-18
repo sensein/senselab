@@ -39,12 +39,11 @@ jobs:
       shell: bash
     - name: Ensure Git is Installed
       run: |
-        command -v git
+        brew install git
         git --version
       shell: bash
     - name: Install dependencies with Poetry
       run: |
-        command -v git
         git --version
         poetry env use ${{ matrix.python-version }}
         poetry install --extras "audio text video" --with dev
