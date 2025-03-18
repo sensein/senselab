@@ -25,6 +25,9 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
+    - name: Ensure Git is Installed
+      run: sudo apt-get update && sudo apt-get install git -y
+      shell: bash
     - name: Install ffmpeg v6 (macOS)
       if: startsWith(matrix.os, 'macos')
       run: |
