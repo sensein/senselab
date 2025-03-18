@@ -31,6 +31,15 @@ jobs:
         brew install ffmpeg@6
         brew link ffmpeg@6 --force --overwrite
       shell: bash
+    - name: Verify ffmpeg
+      run: |
+        brew list --versions ffmpeg@6
+        which ffmpeg
+        ffmpeg -version
+        ls -lah /opt/homebrew/bin/ffmpeg
+        ls -lah /usr/local/bin/ffmpeg
+        ls -lah /opt/homebrew/opt/ffmpeg@6/bin/
+        ls -lah /opt/homebrew/Cellar/ffmpeg@6/
     - name: Install Poetry
       run: pip install poetry==2.1.1
       shell: bash
