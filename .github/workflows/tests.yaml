@@ -29,7 +29,7 @@ jobs:
       if: startsWith(matrix.os, 'macos')
       run: |
         brew install ffmpeg@6
-        echo "PATH=/opt/homebrew/opt/ffmpeg@6/bin:\$PATH" >> $GITHUB_ENV
+        export PATH="/usr/local/bin:$PATH"
         echo $PATH
       shell: bash
     - name: Verify FFmpeg installation
