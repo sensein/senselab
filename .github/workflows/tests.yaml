@@ -29,27 +29,12 @@ jobs:
       if: startsWith(matrix.os, 'macos')
       run: |
         brew install ffmpeg@6
-        export PATH="/opt/homebrew/opt/ffmpeg@6/bin:$PATH"
-        echo $PATH
-        ffmpeg -version
-      shell: bash
-    - name: Verify FFmpeg installation
-      run: |
-        export PATH="/opt/homebrew/opt/ffmpeg@6/bin:$PATH"
-        echo $PATH
-        ffmpeg -version
       shell: bash
     - name: Install Poetry
       run: pip install poetry==2.1.1
       shell: bash
-    - name: Ensure Git is Installed
-      run: |
-        brew install git
-        git --version
-      shell: bash
     - name: Install dependencies with Poetry
       run: |
-        git --version
         poetry env use ${{ matrix.python-version }}
         poetry install --extras "audio text video" --with dev
         poetry env info
@@ -66,7 +51,8 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      run: >
+      run: |
+        export PATH="/opt/homebrew/opt/ffmpeg@6/bin:$PATH"
         poetry run pytest -n auto \
           --junitxml=pytest.xml \
           --cov-report=term-missing:skip-covered \
