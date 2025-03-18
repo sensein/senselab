@@ -37,9 +37,11 @@ jobs:
         which ffmpeg
         ffmpeg -version
         ls -lah /opt/homebrew/bin/ffmpeg
-        ls -lah /usr/local/bin/ffmpeg
-        ls -lah /opt/homebrew/opt/ffmpeg@6/bin/
-        ls -lah /opt/homebrew/Cellar/ffmpeg@6/
+      shell: bash
+    - name: Debug FFmpeg Python Import
+      run: |
+        python -c "import ffmpeg; print(ffmpeg.__version__)"
+      shell: bash
     - name: Install Poetry
       run: pip install poetry==2.1.1
       shell: bash
@@ -55,6 +57,12 @@ jobs:
       shell: bash
     - name: check pwd
       run: pwd
+      shell: bash
+    - name: Verify FFmpeg Installation
+      run: |
+        echo "PATH: $PATH"
+        which ffmpeg
+        ffmpeg -version
       shell: bash
     - name: Run unit tests
       id: run-tests
