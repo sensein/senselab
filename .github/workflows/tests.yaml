@@ -28,6 +28,7 @@ jobs:
     - name: Ensure Git is Installed
       run: |
         which git
+        git --version
       shell: bash
     - name: Install ffmpeg v6 (macOS)
       if: startsWith(matrix.os, 'macos')
