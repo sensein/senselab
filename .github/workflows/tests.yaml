@@ -25,18 +25,14 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-    - name: Install ffmpeg v6 (macOS)
-      if: startsWith(matrix.os, 'macos')
+    - name: Install ffmpeg v6
       run: |
-        brew install ffmpeg@6
-        brew link ffmpeg@6 --force --overwrite
+        conda install -c conda-forge ffmpeg=6.*
       shell: bash
     - name: Verify ffmpeg
       run: |
-        brew list --versions ffmpeg@6
         which ffmpeg
         ffmpeg -version
-        ls -lah /opt/homebrew/bin/ffmpeg
       shell: bash
     - name: Install Poetry
       run: pip install poetry==2.1.1
