@@ -27,7 +27,6 @@ jobs:
         python-version: ${{ matrix.python-version }}
     - name: Ensure Git is Installed
       run: |
-        brew install git
         which git
       shell: bash
     - name: Install ffmpeg v6 (macOS)
