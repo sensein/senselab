@@ -53,6 +53,8 @@ jobs:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: |
         export PATH="/opt/homebrew/opt/ffmpeg@6/bin:$PATH"
+        which ffmpeg
+        ffmpeg -version
         poetry run pytest -n auto \
           --junitxml=pytest.xml \
           --cov-report=term-missing:skip-covered \
