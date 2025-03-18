@@ -76,3 +76,30 @@ def proportion_silence_at_end_metric(audio: Audio, silence_threshold: float = 0.
 
     last_non_silent_idx = non_silent_indices[-1].item()
     return (total_samples - last_non_silent_idx - 1) / total_samples
+
+
+def amplitude_headroom_metric(audio: Audio) -> float:
+    """Calculates the amplitude headroom.
+
+    Amplitude headroom is the difference between the highest amplitude sample
+    and the clipping threshold (1.0). If max amplitude > 1.0, an error is raised.
+
+    Args:
+        audio (Audio): The SenseLab Audio object.
+
+    Returns:
+        float: The amplitude headroom, i.e., `1.0 - max_amplitude`.
+
+    Raises:
+        ValueError: If the waveform contains values greater than 1.0.
+        TypeError: If the waveform is not of type `torch.float32`.
+    """
+    if audio.waveform.dtype != torch.float32:
+        raise TypeError(f"Expected waveform dtype torch.float32, but got {audio.waveform.dtype}")
+
+    max_amplitude = audio.waveform.abs().max().item()
+
+    if max_amplitude > 1.0:
+        raise ValueError(f"Audio contains clipping! Max amplitude = {max_amplitude:.4f}")
+
+    return 1.0 - max_amplitude
