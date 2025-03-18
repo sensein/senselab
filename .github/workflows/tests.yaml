@@ -39,7 +39,10 @@ jobs:
         ffmpeg -version
       shell: bash
     - name: Verify FFmpeg installation
-      run: ffmpeg -version
+      run: |
+        echo $PATH
+        ffmpeg -version
+      shell: bash
     - name: Install Poetry
       run: pip install poetry==2.1.1
       shell: bash
