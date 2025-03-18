@@ -97,9 +97,38 @@ def amplitude_headroom_metric(audio: Audio) -> float:
     if audio.waveform.dtype != torch.float32:
         raise TypeError(f"Expected waveform dtype torch.float32, but got {audio.waveform.dtype}")
 
-    max_amplitude = audio.waveform.abs().max().item()
+    max_amplitude = audio.waveform.max().item()
 
     if max_amplitude > 1.0:
-        raise ValueError(f"Audio contains clipping! Max amplitude = {max_amplitude:.4f}")
+        raise ValueError(f"Audio contains samples over 1.0. Max amplitude = {max_amplitude:.4f}")
 
     return 1.0 - max_amplitude
+
+
+def amplitude_toeroom_metric(audio: Audio) -> float:
+    """Calculates the amplitude toeroom.
+
+    Amplitude toeroom represents how far the lowest sample is from -1.0.
+    It is calculated as `-1.0 - min_amplitude`, where `min_amplitude` is 
+    the smallest sample value.
+
+    Args:
+        audio (Audio): The SenseLab Audio object.
+
+    Returns:
+        float: The amplitude toeroom, i.e., `-1.0 - min_amplitude`.
+
+    Raises:
+        TypeError: If the waveform is not of type `torch.float32`.
+        ValueError: If the minimum amplitude is less than -1.0.
+    """
+    if audio.waveform.dtype != torch.float32:
+        raise TypeError(f"Expected waveform dtype torch.float32, but got {audio.waveform.dtype}")
+
+    min_amplitude = audio.waveform.min().item()
+
+    if min_amplitude < -1.0:
+        raise ValueError(f"Audio contains samples under -1.0. Min amplitude = {min_amplitude:.4f}")
+
+    return -1.0 - min_amplitude
+
