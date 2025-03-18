@@ -29,6 +29,7 @@ jobs:
       if: startsWith(matrix.os, 'macos')
       run: |
         brew install ffmpeg@6
+        echo 'export PATH="/opt/homebrew/opt/ffmpeg@6/bin:$PATH"' >> $GITHUB_ENV
         ffmpeg -version
       shell: bash
     - name: Install Poetry
