@@ -2,9 +2,11 @@
 
 import pytest
 import torch
+from pytest import approx
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.bioacoustic_qc.metrics import (
+    amplitude_headroom_metric,
     proportion_silence_at_beginning_metric,
     proportion_silence_at_end_metric,
     proportion_silent_metric,
@@ -60,3 +62,18 @@ def test_proportion_silence_at_end(waveform: torch.Tensor, expected_silence_end_
     assert (
         silence_end_proportion == expected_silence_end_proportion
     ), f"Expected {expected_silence_end_proportion}, got {silence_end_proportion}"
+
+
+@pytest.mark.parametrize(
+    "waveform, expected_headroom",
+    [
+        (torch.tensor([[0.5, -0.5, 0.8, -0.8]]), 0.2),
+        (torch.tensor([[0.1, -0.1, 0.3, -0.3]]), 0.7),
+        (torch.tensor([[1.0, -1.0, 0.5, -0.5]]), 0.0),
+    ],
+)
+def test_amplitude_headroom_metric(waveform: torch.Tensor, expected_headroom: float) -> None:
+    """Tests amplitude_headroom_metric function."""
+    audio = Audio(waveform=waveform, sampling_rate=16000)
+    headroom = amplitude_headroom_metric(audio)
+    assert headroom == approx(expected_headroom, rel=1e-6), f"Expected {expected_headroom}, got {headroom}"
