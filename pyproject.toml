@@ -67,7 +67,8 @@ mediapipe = {version = "~=0.10", optional = true}
 opencv-python = {version = "~=4.10", optional = true}
 ultralytics = {version = "~=8.3", optional = true}
 pyav = {version = "~=14.2", optional = true}
-deepface = {version = "^0.0.93", optional = true}
+deepface = {version = "~=0", optional = true}
+tf-keras = {version = "~=2.19", optional = true}
 
 [tool.poetry.extras]
 audio = [
@@ -93,7 +94,8 @@ video = [
   "mediapipe",
   "opencv-python",
   "ultralytics",
-  "deepface"
+  "deepface",
+  "tf-keras"
 ]
 
 [tool.poetry.group.dev]

@@ -3,8 +3,6 @@
 import platform
 from multiprocessing import set_start_method
 
-from deepface import DeepFace
-
 if platform.system() == "Darwin" and platform.machine() != "arm64":
     raise RuntimeError(
         "Error: This package requires an ARM64 architecture on macOS "

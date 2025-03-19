@@ -8,7 +8,6 @@ import torch
 from datasets import Audio as HFAudio
 from datasets import Dataset, Features, Image, Sequence, Value
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
-from transformers.image_transforms import to_pil_image
 
 from senselab.audio.data_structures import Audio
 from senselab.video.data_structures import Video
@@ -291,6 +290,8 @@ class SenselabDataset(BaseModel):
             audio_metadata.append(audio.metadata.copy())
         audio_data["audio"] = audio_waveform_data
         audio_data["metadata"] = audio_metadata
+
+        from transformers.image_transforms import to_pil_image
 
         for video in self.videos:
             video_frames_data.append({"image": [to_pil_image(frame.numpy()) for frame in list(video.frames)]})
