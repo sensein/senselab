@@ -22,11 +22,24 @@ IMAGE_2_PATH = DB_DIR / "sally_1.jpg"
 GROUP_IMAGE_PATH = DB_DIR / "group_of_people.jpg"
 
 
+try:
+    from deepface import DeepFace
+
+    DEEPFACE_AVAILABLE = True
+except ImportError:
+    DEEPFACE_AVAILABLE = False
+
+try:
+    import cv2
+
+    CV2_AVAILABLE = True
+except ImportError:
+    CV2_AVAILABLE = False
+
+
 @pytest.fixture
 def sample_image_array() -> np.array:
     """Convert the test image to numpy array."""
-    import cv2
-
     return cv2.imread(str(IMAGE_PATH))
 
 
@@ -38,6 +51,7 @@ def sample_image_array() -> np.array:
 #     return Video(frames=frames, frame_rate=25.0, audio=None)
 
 
+@pytest.mark.skipif(not DEEPFACE_AVAILABLE or not CV2_AVAILABLE, reason="DeepFace or cv2 not available.")
 def test_recognize_faces_str() -> None:
     """Test recognize_faces with a single face image path."""
     # Call the function with the real image path
@@ -56,6 +70,7 @@ def test_recognize_faces_str() -> None:
         assert isinstance(inner_result[0], pd.DataFrame)
 
 
+@pytest.mark.skipif(not DEEPFACE_AVAILABLE or not CV2_AVAILABLE, reason="DeepFace or cv2 not available.")
 def test_recognize_faces_group() -> None:
     """Test recognize_faces with a group photo that may have multiple faces."""
     results = recognize_faces(str(GROUP_IMAGE_PATH), db_path=str(DB_DIR))
@@ -72,6 +87,7 @@ def test_recognize_faces_group() -> None:
         assert isinstance(inner_result[0], pd.DataFrame)
 
 
+@pytest.mark.skipif(not DEEPFACE_AVAILABLE or not CV2_AVAILABLE, reason="DeepFace or cv2 not available.")
 def test_recognize_faces_ndarray(sample_image_array: np.array) -> None:
     """Test recognize_faces with a numpy array image."""
     results = recognize_faces(sample_image_array, db_path=str(DB_DIR))
@@ -95,6 +111,7 @@ def test_recognize_faces_ndarray(sample_image_array: np.array) -> None:
 #         assert isinstance(frame_result, list)
 
 
+@pytest.mark.skipif(not DEEPFACE_AVAILABLE or not CV2_AVAILABLE, reason="DeepFace or cv2 not available.")
 def test_verify_faces_same() -> None:
     """Test verify_faces function with the same image (should be verified)."""
     # Comparing an image with itself should return verified=True
@@ -105,6 +122,7 @@ def test_verify_faces_same() -> None:
     assert result["verified"] is True
 
 
+@pytest.mark.skipif(not DEEPFACE_AVAILABLE or not CV2_AVAILABLE, reason="DeepFace or cv2 not available.")
 def test_verify_faces_different() -> None:
     """Test verify_faces function with two different images of the same person.
 
@@ -117,6 +135,7 @@ def test_verify_faces_different() -> None:
     assert "verified" in result
 
 
+@pytest.mark.skipif(not DEEPFACE_AVAILABLE or not CV2_AVAILABLE, reason="DeepFace or cv2 not available.")
 def test_extract_face_embeddings_str() -> None:
     """Test extract_face_embeddings with a single face image."""
     results = extract_face_embeddings(str(IMAGE_PATH))
@@ -136,6 +155,7 @@ def test_extract_face_embeddings_str() -> None:
         assert all(isinstance(x, (int, float)) for x in face_embedding["embedding"])
 
 
+@pytest.mark.skipif(not DEEPFACE_AVAILABLE or not CV2_AVAILABLE, reason="DeepFace or cv2 not available.")
 def test_extract_face_embeddings_group() -> None:
     """Test extract_face_embeddings with a group photo."""
     results = extract_face_embeddings(str(GROUP_IMAGE_PATH))
@@ -170,6 +190,7 @@ def test_extract_face_embeddings_group() -> None:
 #         assert isinstance(frame_result, list)
 
 
+@pytest.mark.skipif(not DEEPFACE_AVAILABLE or not CV2_AVAILABLE, reason="DeepFace or cv2 not available.")
 def test_analyze_face_attributes_single() -> None:
     """Test analyze_face_attributes with a single face image."""
     results = analyze_face_attributes(str(IMAGE_PATH), actions=["age", "gender"])
@@ -188,6 +209,7 @@ def test_analyze_face_attributes_single() -> None:
         assert "gender" in face_attributes
 
 
+@pytest.mark.skipif(not DEEPFACE_AVAILABLE or not CV2_AVAILABLE, reason="DeepFace or cv2 not available.")
 def test_analyze_face_attributes_all() -> None:
     """Test analyze_face_attributes with all possible attributes."""
     # Test with all default actions
@@ -206,6 +228,7 @@ def test_analyze_face_attributes_all() -> None:
         assert "race" in face_attributes
 
 
+@pytest.mark.skipif(not DEEPFACE_AVAILABLE or not CV2_AVAILABLE, reason="DeepFace or cv2 not available.")
 def test_analyze_face_attributes_group() -> None:
     """Test analyze_face_attributes with a group photo."""
     results = analyze_face_attributes(str(GROUP_IMAGE_PATH), actions=["age", "gender"])

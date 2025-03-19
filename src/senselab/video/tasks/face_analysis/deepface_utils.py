@@ -3,7 +3,13 @@
 from typing import Dict, List, Optional, Union
 
 import numpy as np
-from deepface import DeepFace
+
+try:
+    from deepface import DeepFace
+
+    DEEPFACE_AVAILABLE = True
+except ImportError:
+    DEEPFACE_AVAILABLE = False
 
 
 class DeepFaceAnalysis:
@@ -33,6 +39,11 @@ class DeepFaceAnalysis:
 
         If None is passed, the default is used.
         """
+        if not DEEPFACE_AVAILABLE:
+            raise ImportError(
+                "DeepFace is not available. "
+                "Please install senselab video dependencies using `pip install senselab['video']`."
+            )
         self.model_name = model_name
         self.distance_metric = distance_metric
         self.backend = backend
@@ -53,6 +64,12 @@ class DeepFaceAnalysis:
         Returns:
             DeepFaceAnalysis: An instance of DeepFaceAnalysis with any specified parameters applied.
         """
+        if not DEEPFACE_AVAILABLE:
+            raise ImportError(
+                "DeepFace is not available. "
+                "Please install senselab video dependencies using `pip install senselab['video']`."
+            )
+
         if config is None:
             config = {}
         return cls(
@@ -91,6 +108,11 @@ class DeepFaceAnalysis:
             List[Dict]: A list of pandas DataFrames for each face in the input image.
                 Each DataFrame maps detected faces to their closest matches in the database.
         """
+        if not DEEPFACE_AVAILABLE:
+            raise ImportError(
+                "DeepFace is not available. "
+                "Please install senselab video dependencies using `pip install senselab['video']`."
+            )
         return DeepFace.find(img_path=img_path, db_path=db_path, **self.get_kwargs())
 
     def verify_faces(self, img1_path: Union[str, np.ndarray], img2_path: Union[str, np.ndarray]) -> Dict:
@@ -103,6 +125,12 @@ class DeepFaceAnalysis:
         Returns:
             Dict: Verification result
         """
+        if not DEEPFACE_AVAILABLE:
+            raise ImportError(
+                "DeepFace is not available. "
+                "Please install senselab video dependencies using `pip install senselab['video']`."
+            )
+
         return DeepFace.verify(img1_path=img1_path, img2_path=img2_path, **self.get_kwargs())
 
     def extract_face_embeddings(self, img_path: Union[str, np.ndarray]) -> List[Dict]:
@@ -114,6 +142,12 @@ class DeepFaceAnalysis:
         Returns:
             List[Dict]: A list of embeddings for the faces in the image.
         """
+        if not DEEPFACE_AVAILABLE:
+            raise ImportError(
+                "DeepFace is not available. "
+                "Please install senselab video dependencies using `pip install senselab['video']`."
+            )
+
         kwargs = {key: value for key, value in self.get_kwargs() if key in ["model_name", "detector_backend", "align"]}
         return DeepFace.represent(img_path=img_path, **kwargs)
 
@@ -130,6 +164,12 @@ class DeepFaceAnalysis:
         Returns:
             List[Dict]: List of analysis results for each detected face in the image.
         """
+        if not DEEPFACE_AVAILABLE:
+            raise ImportError(
+                "DeepFace is not available. "
+                "Please install senselab video dependencies using `pip install senselab['video']`."
+            )
+
         if actions is None:
             actions = ["age", "gender", "emotion", "race"]
         kwargs = {key: value for key, value in self.get_kwargs() if key in ["detector_backend", "align"]}
