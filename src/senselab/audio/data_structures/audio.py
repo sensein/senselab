@@ -110,7 +110,7 @@ class Audio(BaseModel):
 
         if offset_in_sec < 0:
             raise ValueError("Offset must be a non-negative value.")
-        if duration_in_sec < -1:
+        if duration_in_sec != -1 and duration_in_sec <= 0:
             raise ValueError("Duration must be -1 (to read full file) or a positive value.")
 
         # Retrieve audio metadata
