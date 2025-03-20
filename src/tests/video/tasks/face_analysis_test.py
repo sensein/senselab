@@ -1,6 +1,7 @@
 """Module for testing Face Analysis tasks with real data."""
 
 from pathlib import Path
+from typing import Dict, Optional
 
 import numpy as np
 import pandas as pd
@@ -52,20 +53,26 @@ def sample_image_array() -> np.array:
 
 
 @pytest.mark.skipif(not DEEPFACE_AVAILABLE or not CV2_AVAILABLE, reason="DeepFace or cv2 not available.")
-def test_recognize_faces_str() -> None:
-    """Test recognize_faces with a single face image path."""
-    # Call the function with the real image path
-    results = recognize_faces(str(IMAGE_PATH), db_path=str(DB_DIR))
+@pytest.mark.parametrize(
+    "model_config",
+    [
+        {"model_name": "Facenet"},
+        {"model_name": "VGG-Face"},
+        {"model_name": "OpenFace"},
+    ],
+    ids=["Facenet", "VGG-Face", "OpenFace"],
+)
+def test_recognize_faces_with_model_variations(model_config: Dict) -> None:
+    """Test recognize_faces with various DeepFace model configurations."""
+    results = recognize_faces(str(IMAGE_PATH), db_path=str(DB_DIR), deepface_args=model_config)
 
     # Verify results structure
     assert isinstance(results, list)
     assert len(results) == 1  # One result for the single image
 
-    # The inner result should be a list of DataFrames for found faces
     inner_result = results[0]
     assert isinstance(inner_result, list)
 
-    # If faces are found, check the DataFrame structure
     if inner_result:
         assert isinstance(inner_result[0], pd.DataFrame)
 
@@ -262,31 +269,3 @@ def test_analyze_face_attributes_group() -> None:
 #     # Each frame result should be a list of attribute dictionaries
 #     for frame_result in results:
 #         assert isinstance(frame_result, list)
-
-
-# def test_model_variations():
-#     """
-#     Test different model configurations using the deepface_args parameter.
-#     """
-#     # Test with different detection and recognition models
-#     models_to_test = [
-#         {"model_name": "Facenet"},
-#         {"model_name": "VGG-Face"},
-#         {"model_name": "OpenFace"},
-#         {"model_name": "DeepFace"}
-#     ]
-
-#     for model_config in models_to_test:
-#         try:
-#             result = verify_faces(str(IMAGE_PATH), str(IMAGE_PATH), deepface_args=model_config)
-
-#             assert isinstance(result, dict)
-#             assert "verified" in result
-#             assert result["verified"] is True
-#             # Print success message
-#             print(f"Successfully tested model: {model_config['model_name']}")
-
-#         except Exception as e:
-#             # Some models might not be available, so we'll just log the error
-#             print(f"Error with model {model_config['model_name']}: {str(e)}")
-#             continue
