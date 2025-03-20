@@ -23,6 +23,7 @@ try:
         Point,
         SingleSegment,
     )
+    from senselab.audio.tasks.forced_alignment.evaluation import compare_alignments
     from senselab.audio.tasks.forced_alignment.forced_alignment import (
         _align_segments,
         _align_transcription,
@@ -32,7 +33,10 @@ try:
         _merge_repeats,
         _preprocess_segments,
         align_transcriptions,
+        remove_chunks_by_level,
     )
+    from senselab.audio.tasks.speech_to_text import transcribe_audios
+    from senselab.utils.data_structures.model import HFModel
 
     TORCHAUDIO_AVAILABLE = True
 except ModuleNotFoundError:
@@ -436,6 +440,7 @@ def test_align_segments(mono_audio_sample: Audio, dummy_model: tuple) -> None:
     assert all(isinstance(segment, (ScriptLine, type(None))) for segment in aligned_segments)
 
 
+@pytest.mark.skipif(not NLTK_AVAILABLE or not TORCHAUDIO_AVAILABLE, reason="nltk or torchaudio are not installed")
 def test_align_transcriptions_multilingual(
     resampled_mono_audio_sample: Audio, aligned_scriptline_fixture_resampled_mono_audio: ScriptLine
 ) -> None:
@@ -474,6 +479,8 @@ def test_align_transcriptions_multilingual(
         )
     else:
         raise ValueError(f"aligned_transcription_en is not a ScriptLine. Got: {aligned_transcription_en}")
+
+
 @pytest.mark.skipif(not NLTK_AVAILABLE or not TORCHAUDIO_AVAILABLE, reason="nltk or torchaudio are not installed")
 def test_align_transcription_faked(resampled_mono_audio_sample: Audio, dummy_model: tuple) -> None:
     """Test alignment of transcription."""
@@ -500,17 +507,15 @@ def test_align_transcription_faked(resampled_mono_audio_sample: Audio, dummy_mod
         audio=resampled_mono_audio_sample,
         device=DeviceType.CPU,
     )
-    assert "segments" in aligned_result
-    assert "word_segments" in aligned_result
+    assert aligned_result[0] is not None
+    assert aligned_result[0].text == "test"
 
 
+@pytest.mark.skipif(not NLTK_AVAILABLE or not TORCHAUDIO_AVAILABLE, reason="nltk or torchaudio are not installed")
 def test_align_transcriptions_curiosity_audio_fixture(
     resampled_had_that_curiosity_audio_sample: Audio, script_line_fixture_curiosity: ScriptLine
 ) -> None:
     """Test alignment of transcriptions using the 'had that curiosity' audio sample and fixture."""
-@pytest.mark.skipif(not NLTK_AVAILABLE or not TORCHAUDIO_AVAILABLE, reason="nltk or torchaudio are not installed")
-def test_align_transcriptions_fixture(resampled_mono_audio_sample: Audio, script_line_fixture: ScriptLine) -> None:
-    """Test alignment of transcriptions."""
     audios_and_transcriptions_and_language = [
         (resampled_had_that_curiosity_audio_sample, script_line_fixture_curiosity, Language(language_code="en"))
     ]
@@ -617,23 +622,6 @@ def test_remove_chunks_by_level_deep_removal(nested_scriptline: ScriptLine) -> N
     """Test removing chunks at a level deeper than existing structure (should not modify)."""
     result = remove_chunks_by_level(nested_scriptline, level=5)
     assert result == nested_scriptline  # Should be unchanged
-    assert aligned_transcriptions[0][0].text == "test"
-
-
-@pytest.mark.skipif(not NLTK_AVAILABLE or not TORCHAUDIO_AVAILABLE, reason="nltk or torchaudio are not installed")
-def test_align_transcriptions_multilingual(resampled_mono_audio_sample: Audio, script_line_fixture: ScriptLine) -> None:
-    """Test alignment of transcriptions."""
-    languages = ["de", "es"]
-    expected_text = "test"  # Replace with the appropriate expected text for your fixtures
-
-    for lang in languages:
-        audios_and_transcriptions_and_language = [
-            (resampled_mono_audio_sample, script_line_fixture, Language(language_code=lang))
-        ]
-        aligned_transcriptions = align_transcriptions(audios_and_transcriptions_and_language)
-        assert len(aligned_transcriptions) == 1, f"Failed for language: {lang}"
-        assert len(aligned_transcriptions[0]) == 1, f"Failed for language: {lang}"
-        assert aligned_transcriptions[0][0].text == expected_text, f"Failed for language: {lang}"
 
 
 if __name__ == "__main__":
