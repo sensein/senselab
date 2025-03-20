@@ -3,12 +3,17 @@
 from typing import Any, Dict, List
 
 import numpy as np
-from torchaudio.pipelines import SQUIM_OBJECTIVE, SQUIM_SUBJECTIVE
 
 from senselab.audio.data_structures import Audio
 
-objective_model = SQUIM_OBJECTIVE.get_model()
-subjective_model = SQUIM_SUBJECTIVE.get_model()
+try:
+    from torchaudio.pipelines import SQUIM_OBJECTIVE, SQUIM_SUBJECTIVE
+
+    objective_model = SQUIM_OBJECTIVE.get_model()
+    subjective_model = SQUIM_SUBJECTIVE.get_model()
+    TORCHAUDIO_AVAILABLE = True
+except ModuleNotFoundError:
+    TORCHAUDIO_AVAILABLE = False
 
 
 def extract_objective_quality_features_from_audios(audios: List["Audio"]) -> List[Dict[str, Any]]:
@@ -27,6 +32,12 @@ def extract_objective_quality_features_from_audios(audios: List["Audio"]) -> Lis
     Returns:
         List[Dict[str, Any]]: List of dictionaries, each containing extracted features for an audio input.
     """
+    if not TORCHAUDIO_AVAILABLE:
+        raise ModuleNotFoundError(
+            "`torchaudio` is not installed. "
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+        )
+
     if any(audio.waveform.shape[0] != 1 for audio in audios):
         raise ValueError("Only mono audio is supported by Torchaudio-Squim model.")
 
@@ -66,6 +77,12 @@ def extract_subjective_quality_features_from_audios(
     Returns:
         List[Dict[str, Any]]: List of dictionaries, each containing extracted features for an audio input.
     """
+    if not TORCHAUDIO_AVAILABLE:
+        raise ModuleNotFoundError(
+            "`torchaudio` is not installed. "
+            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+        )
+
     # Check if any audio is not mono
     if any(audio.waveform.shape[0] != 1 for audio in audios) or any(
         ref.waveform.shape[0] != 1 for ref in non_matching_references

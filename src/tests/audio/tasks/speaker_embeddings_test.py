@@ -8,28 +8,42 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speaker_embeddings import extract_speaker_embeddings_from_audios
 from senselab.utils.data_structures import SenselabModel, SpeechBrainModel
 
+try:
+    import speechbrain  # noqa: F401
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
+    SPEECHBRAIN_AVAILABLE = True
+except ModuleNotFoundError:
+    SPEECHBRAIN_AVAILABLE = False
+
+try:
+    import torchaudio  # noqa: F401
+
+    TORCHAUDIO_AVAILABLE = True
+except ModuleNotFoundError:
+    TORCHAUDIO_AVAILABLE = False
+
+
 @pytest.fixture
 def ecapa_model() -> SpeechBrainModel:
     """Fixture for the ECAPA-TDNN model."""
     return SpeechBrainModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb", revision="main")
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 @pytest.fixture
 def xvector_model() -> SpeechBrainModel:
     """Fixture for the xvector model."""
     return SpeechBrainModel(path_or_uri="speechbrain/spkrec-xvect-voxceleb", revision="main")
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 @pytest.fixture
 def resnet_model() -> SpeechBrainModel:
     """Fixture for the ResNet model."""
     return SpeechBrainModel(path_or_uri="speechbrain/spkrec-resnet-voxceleb", revision="main")
 
 
+@pytest.mark.skipif(
+    not TORCHAUDIO_AVAILABLE or not SPEECHBRAIN_AVAILABLE, reason="SpeechBrain or torchaudio are not installed"
+)
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_extract_speaker_embeddings_from_audio(
     resampled_mono_audio_sample: Audio,
@@ -51,6 +65,9 @@ def test_extract_speaker_embeddings_from_audio(
     assert all(embedding.size(0) == 256 for embedding in embeddings)
 
 
+@pytest.mark.skipif(
+    not TORCHAUDIO_AVAILABLE or not SPEECHBRAIN_AVAILABLE, reason="SpeechBrain or torchaudio are not installed"
+)
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_extract_speaker_embeddings_from_multiple_audios(
     resampled_mono_audio_sample: Audio,
@@ -78,6 +95,9 @@ def test_extract_speaker_embeddings_from_multiple_audios(
     assert all(embedding.size(0) == 256 for embedding in embeddings)
 
 
+@pytest.mark.skipif(
+    not TORCHAUDIO_AVAILABLE or not SPEECHBRAIN_AVAILABLE, reason="SpeechBrain or torchaudio are not installed"
+)
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_extract_speaker_embeddings_from_multiple_audios_different_sizes(
     resampled_mono_audio_sample: Audio,
@@ -106,6 +126,7 @@ def test_extract_speaker_embeddings_from_multiple_audios_different_sizes(
     assert all(embedding.size(0) == 256 for embedding in embeddings)
 
 
+@pytest.mark.skipif(not SPEECHBRAIN_AVAILABLE, reason="torchaudio is not installed")
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_error_wrong_model(resampled_mono_audio_sample: Audio) -> None:
     """Test raising error when using a non-existent model."""
@@ -120,6 +141,9 @@ def test_error_wrong_model(resampled_mono_audio_sample: Audio) -> None:
         )
 
 
+@pytest.mark.skipif(
+    not TORCHAUDIO_AVAILABLE or not SPEECHBRAIN_AVAILABLE, reason="SpeechBrain or torchaudio are not installed"
+)
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_extract_speechbrain_speaker_embeddings_from_audio_resampled(
     mono_audio_sample: Audio,
@@ -141,6 +165,9 @@ def test_extract_speechbrain_speaker_embeddings_from_audio_resampled(
         extract_speaker_embeddings_from_audios(audios=[mono_audio_sample], model=resnet_model)
 
 
+@pytest.mark.skipif(
+    not TORCHAUDIO_AVAILABLE or not SPEECHBRAIN_AVAILABLE, reason="SpeechBrain or torchaudio are not installed"
+)
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_extract_speechbrain_speaker_embeddings_from_stereo_audio(
     stereo_audio_sample: Audio,

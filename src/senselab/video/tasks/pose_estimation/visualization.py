@@ -3,14 +3,26 @@
 import os
 from typing import Optional
 
-import cv2
 import matplotlib.pyplot as plt
 import numpy as np
-from mediapipe import solutions
-from mediapipe.framework.formats import landmark_pb2
 
 from senselab.video.data_structures.pose import ImagePose
 from senselab.video.tasks.pose_estimation.utils import SENSELAB_KEYPOINT_MAPPING
+
+try:
+    import cv2
+
+    CV2_AVAILABLE = True
+except ModuleNotFoundError:
+    CV2_AVAILABLE = False
+
+try:
+    from mediapipe import solutions
+    from mediapipe.framework.formats import landmark_pb2
+
+    MEDIAPIPE_AVAILABLE = True
+except ModuleNotFoundError:
+    MEDIAPIPE_AVAILABLE = False
 
 
 def visualize(pose_image: ImagePose, output_path: Optional[str] = None, plot: bool = False) -> np.ndarray:
@@ -25,6 +37,17 @@ def visualize(pose_image: ImagePose, output_path: Optional[str] = None, plot: bo
     Returns:
         np.ndarray: The input image with pose landmarks and connections drawn on it.
     """
+    if not CV2_AVAILABLE:
+        raise ModuleNotFoundError(
+            "`opencv-python` is not installed. "
+            "Please install senselab video dependencies using `pip install senselab['video']`."
+        )
+    if not MEDIAPIPE_AVAILABLE:
+        raise ModuleNotFoundError(
+            "`mediapipe` is not installed. "
+            "Please install senselab video dependencies using `pip install senselab['video']`."
+        )
+
     annotated_image = pose_image.image.copy()
 
     for individual in pose_image.individuals:
