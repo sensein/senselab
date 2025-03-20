@@ -22,11 +22,11 @@ except ModuleNotFoundError:
 import os
 import uuid
 import warnings
-from typing import Dict, Generator, List, Optional, Tuple, Union
+from typing import Any, Dict, Generator, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
-from pydantic import BaseModel, Field, ValidationInfo, field_validator
+from pydantic import BaseModel, Field, PrivateAttr, ValidationInfo, field_validator
 
 from senselab.utils.constants import SENSELAB_NAMESPACE
 
@@ -47,16 +47,63 @@ class Audio(BaseModel):
             (e.g. participant demographics, audio settings, location information)
     """
 
-    waveform: torch.Tensor
+    _file_path: str | os.PathLike = PrivateAttr(default="")
+    _waveform: Optional[torch.Tensor] = PrivateAttr(default=None)  # Allows user input
+    _num_frames: int = PrivateAttr(default=-1)
+    _frame_offset: int = PrivateAttr(default=0)
+    _backend: str | None = PrivateAttr(default=None)
     sampling_rate: int
     orig_path_or_id: str | os.PathLike | None = None
     metadata: Dict = Field(default={})
     model_config = {"arbitrary_types_allowed": True}
 
-    @field_validator("waveform", mode="before")
-    def convert_to_tensor(
-        cls, v: Union[List[float], List[List[float]], np.ndarray, torch.Tensor], _: ValidationInfo
-    ) -> torch.Tensor:
+    def __init__(
+        self,
+        **data: Any,  # noqa: ANN401
+    ) -> None:
+        """Custom init to handle waveform as an optional user-provided input."""
+        waveform = data.pop("waveform", None)  # Extract waveform if provided
+        filepath = data.pop("filepath", None)
+        frame_offset = data.pop("frame_offset", None)
+        num_frames = data.pop("num_frames", None)
+        backend = data.pop("backend", None)
+
+        super().__init__(**data)  # Initialize Pydantic model
+        if waveform is not None:
+            self._waveform = self.convert_to_tensor(waveform)  # Convert & store waveform
+        else:
+            if not filepath:
+                raise ValueError(
+                    "Waveform required for constructing Audio object when not constructed from valid filepath"
+                )
+            else:  # Only needed when waveform is not provided
+                self._file_path = filepath
+
+        if frame_offset is not None:
+            self._frame_offset = frame_offset
+        if num_frames is not None:
+            self._num_frames = num_frames
+        if backend is not None:
+            self._backend = backend
+
+    @property
+    def waveform(self) -> torch.Tensor:
+        """Lazy load audio contents if not provided on init."""
+        if self._waveform is None:
+            print("Lazy loading file data...")
+            self._waveform = self.convert_to_tensor(
+                self._lazy_load_data_from_filepath(self._file_path)
+            )  # Read and validate
+        return self._waveform
+
+    @waveform.setter
+    def waveform(self, value: Union[List[float], List[List[float]], np.ndarray, torch.Tensor]) -> None:
+        """Manually set waveform, overriding lazy loading."""
+        print("Setting file data manually...")
+        self._waveform = self.convert_to_tensor(value)  # Cache new value
+
+    @classmethod
+    def convert_to_tensor(cls, v: Union[List[float], List[List[float]], np.ndarray, torch.Tensor]) -> torch.Tensor:
         """Converts the audio data to torch.Tensor of shape (num_channels, num_samples)."""
         temporary_tensor = None
         if isinstance(v, list):
@@ -64,7 +111,7 @@ class Audio(BaseModel):
         elif isinstance(v, np.ndarray):
             temporary_tensor = torch.tensor(v)
         elif isinstance(v, torch.Tensor):
-            temporary_tensor = v
+            temporary_tensor = v.clone()
         else:
             raise ValueError("Unsupported data type")
 
@@ -72,6 +119,21 @@ class Audio(BaseModel):
             # make the audio data [channels=1, samples]
             temporary_tensor = temporary_tensor.unsqueeze(0)
         return temporary_tensor.to(torch.float32)
+
+    def _lazy_load_data_from_filepath(self, filepath: str | os.PathLike) -> torch.Tensor:
+        """From a given Audio instance, loads the data from the audio file."""
+        if not TORCHAUDIO_AVAILABLE:
+            raise ModuleNotFoundError(
+                "`torchaudio` is not installed. "
+                "Please install senselab audio dependencies using `pip install senselab['audio']`."
+            )
+
+        # Load the specified portion of the audio
+        array, _ = torchaudio.load(
+            filepath, frame_offset=self._frame_offset, num_frames=self._num_frames, backend=self._backend
+        )
+
+        return array
 
     @classmethod
     def from_filepath(
@@ -135,13 +197,17 @@ class Audio(BaseModel):
         if num_frames > 0:
             num_frames = min(num_frames, total_frames - frame_offset)
 
-        # Load the specified portion of the audio
-        array, sampling_rate = torchaudio.load(
-            filepath, frame_offset=frame_offset, num_frames=num_frames, backend=backend
-        )
+        if backend and backend not in torchaudio.list_audio_backends():
+            raise ValueError("Unsupported backend")
 
         return cls(
-            waveform=array, sampling_rate=sampling_rate, orig_path_or_id=filepath, metadata=metadata if metadata else {}
+            sampling_rate=sampling_rate,
+            orig_path_or_id=filepath,
+            metadata=metadata if metadata else {},
+            filepath=filepath,
+            num_frames=num_frames,
+            frame_offset=frame_offset,
+            backend=backend,
         )
 
     @classmethod
@@ -167,7 +233,7 @@ class Audio(BaseModel):
                 "Please install senselab audio dependencies using `pip install senselab['audio']`."
             )
 
-        if isinstance(stream_source, os.PathLike) and not os.path.exists(stream_source):
+        if isinstance(stream_source, (os.PathLike, str)) and not os.path.exists(stream_source):
             raise FileNotFoundError(f"File {stream_source} does not exist.")
 
         # Open the audio stream

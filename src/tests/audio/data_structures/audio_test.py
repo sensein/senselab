@@ -3,6 +3,7 @@
 import tempfile
 from pathlib import Path
 from typing import List, Tuple
+from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
@@ -37,6 +38,29 @@ def check_basic_audio_properties(audio: Audio) -> None:
     assert audio.waveform.shape[1] > 0
     assert isinstance(audio.sampling_rate, int)
     assert audio.sampling_rate == 48000
+
+
+@patch("torchaudio.load")  # Mock torchaudio.load
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
+def test_audio_lazy_loading(mock_torchaudio_load: MagicMock) -> None:
+    """Test lazy audio loading by mocking torchaudio.load."""
+    # Mock `torchaudio.load` to return a fake waveform tensor and sample rate
+    fake_waveform = torch.tensor([[1.0, 2.0, 3.0, 4.0]])
+    fake_sample_rate = 48000
+    mock_torchaudio_load.return_value = (fake_waveform, fake_sample_rate)
+
+    audio = Audio.from_filepath(MONO_AUDIO_PATH)
+
+    mock_torchaudio_load.assert_not_called()
+    assert audio.sampling_rate == 48000, "Sampling rate should be set even if the audio is not loaded"
+
+    _ = audio.waveform
+    mock_torchaudio_load.assert_called_once_with(MONO_AUDIO_PATH, frame_offset=0, num_frames=-1, backend=None)
+
+    _ = audio.waveform
+    mock_torchaudio_load.assert_called_once()
+
+    assert torch.equal(audio.waveform, fake_waveform)
 
 
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
@@ -244,6 +268,15 @@ def test_audio_single_tensor(mono_audio_sample: Audio) -> None:
     assert torch.equal(
         mono_audio_sample.waveform, audio_single_tensor.waveform
     ), "Mono audios of tensor shape (num_samples,) should be reshaped to (1, num_samples)"
+
+
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
+def test_audio_no_waveform() -> None:
+    """Lazy audio changes allow for no waveform to be passed so test that error is raised."""
+    _, mono_sr = load_audio(MONO_AUDIO_PATH)
+
+    with pytest.raises(ValueError, match="Waveform required for constructing Audio object"):
+        _ = Audio(sampling_rate=mono_sr)
 
 
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
