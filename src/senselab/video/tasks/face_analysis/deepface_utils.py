@@ -62,7 +62,7 @@ class DeepFaceAnalysis:
             If no config or an empty config is provided, default parameters will be used.
 
         Returns:
-            DeepFaceAnalysis: An instance of DeepFaceAnalysis with any specified parameters applied.
+            DeepFaceAnalysis: An instance of DeepFaceAnalysis with specified parameters applied.
         """
         if not DEEPFACE_AVAILABLE:
             raise ImportError(

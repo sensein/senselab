@@ -53,18 +53,10 @@ def sample_image_array() -> np.array:
 
 
 @pytest.mark.skipif(not DEEPFACE_AVAILABLE or not CV2_AVAILABLE, reason="DeepFace or cv2 not available.")
-@pytest.mark.parametrize(
-    "model_config",
-    [
-        {"model_name": "Facenet"},
-        {"model_name": "VGG-Face"},
-        {"model_name": "OpenFace"},
-    ],
-    ids=["Facenet", "VGG-Face", "OpenFace"],
-)
-def test_recognize_faces_with_model_variations(model_config: Dict) -> None:
+@pytest.mark.parametrize("model_name", ["Facenet", "VGG-Face", "OpenFace"])
+def test_recognize_faces_with_model_variations(model_name: str) -> None:
     """Test recognize_faces with various DeepFace model configurations."""
-    results = recognize_faces(str(IMAGE_PATH), db_path=str(DB_DIR), deepface_args=model_config)
+    results = recognize_faces(str(IMAGE_PATH), db_path=str(DB_DIR), model_name=model_name)
 
     # Verify results structure
     assert isinstance(results, list)

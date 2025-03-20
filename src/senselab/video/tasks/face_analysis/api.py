@@ -10,159 +10,129 @@ from senselab.video.tasks.face_analysis.deepface_utils import DeepFaceAnalysis
 
 
 def recognize_faces(
-    input_media: Union[str, np.ndarray, Video], db_path: str, deepface_args: Optional[Dict] = None
+    input_media: Union[str, np.ndarray, Video],
+    db_path: str,
+    model_name: Optional[str] = None,
+    distance_metric: Optional[str] = None,
+    backend: Optional[str] = None,
+    align: Optional[bool] = None,
 ) -> List[List[pd.DataFrame]]:
-    """Perform face recognition on an image, Video, or specific video frames against a database of faces.
+    """Perform face recognition against a database of faces.
 
     Args:
-        input_media (Union[str, np.ndarray, Video]):
-            - str: Path to an image file.
-            - np.ndarray: Image array.
-            - Video: Video object; analyze all frames in the video.
+        input_media (str | np.ndarray | Video): Media to recognize face(s) from.
         db_path (str): Path to the face database for recognition.
-        deepface_args (Optional[Dict]): Optional dictionary of arguments
-            to pass to DeepFaceAnalysis.
+        model_name (Optional[str]): Face recognition model name (e.g., 'Facenet').
+        distance_metric (Optional[str]): Distance metric ('cosine', 'euclidean', etc.).
+        backend (Optional[str]): Face detection backend ('opencv', 'mtcnn', etc.).
+        align (Optional[bool]): Align faces before analysis.
 
     Returns:
-        List[List[pd.DataFrame]]:
-            A list where each element is a list of pandas DataFrames
-            corresponding to a single image or frame. Each list of
-            DataFrames maps detected faces to their closest matches
-            in the database.
-
-    Raises:
-        ValueError: If the input_media type is not supported.
+        List[List[pd.DataFrame]]: Nested list of DataFrames mapping detected faces to
+            database matches for each image or Video frame.
     """
-    face_analyzer = DeepFaceAnalysis.from_dict(deepface_args)
+    face_analyzer = DeepFaceAnalysis(model_name, distance_metric, backend, align)
 
-    # Handle single image by path or array
     if isinstance(input_media, (str, np.ndarray)):
-        dfs_for_faces = face_analyzer.recognize_faces(img_path=input_media, db_path=db_path)
-        return [dfs_for_faces]
+        return [face_analyzer.recognize_faces(img_path=input_media, db_path=db_path)]
 
-    # Handle Video: loop through frames
     elif isinstance(input_media, Video):
-        results_for_frames = []
+        return [
+            face_analyzer.recognize_faces(img_path=frame.numpy() if hasattr(frame, "numpy") else frame, db_path=db_path)
+            for frame in input_media.frames
+        ]
 
-        for frame_idx in range(input_media.frames.shape[0]):
-            frame = input_media.frames[frame_idx]
-
-            # Convert to NumPy if it's a torch.Tensor
-            if hasattr(frame, "numpy"):
-                frame = frame.numpy()
-
-            # Each frame call returns a List[pd.DataFrame]
-            dfs_for_faces = face_analyzer.recognize_faces(img_path=frame, db_path=db_path)
-            results_for_frames.append(dfs_for_faces)
-
-        return results_for_frames
-
-    else:
-        raise ValueError(
-            "Unsupported input_media type. Must be a file path (str), "
-            "an image array (np.ndarray), or a Video object."
-        )
+    raise ValueError(
+        "Unsupported input_media type. Must be a file path (str), an image array (np.ndarray), or a Video object."
+    )
 
 
 def verify_faces(
     img1: Union[str, np.ndarray],
     img2: Union[str, np.ndarray],
-    deepface_args: Optional[Dict] = None,
+    model_name: Optional[str] = None,
+    distance_metric: Optional[str] = None,
+    backend: Optional[str] = None,
+    align: Optional[bool] = None,
 ) -> Dict:
-    """Perform face verification between two images.
+    """Verify if two images contain the same person's face.
 
     Args:
         img1 (Union[str, np.ndarray]): Path or array for the first image.
         img2 (Union[str, np.ndarray]): Path or array for the second image.
-        deepface_args (Optional[Dict]): Optional dictionary of arguments to pass to DeepFaceAnalysis.
+        model_name (Optional[str]): Face recognition model name.
+        distance_metric (Optional[str]): Distance metric for verification.
+        backend (Optional[str]): Face detection backend.
+        align (Optional[bool]): Align faces before verification.
 
     Returns:
         Dict: Verification result containing similarity and match.
     """
-    face_analyzer = DeepFaceAnalysis.from_dict(deepface_args)
+    face_analyzer = DeepFaceAnalysis(model_name, distance_metric, backend, align)
     return face_analyzer.verify_faces(img1_path=img1, img2_path=img2)
 
 
 def extract_face_embeddings(
-    input_media: Union[str, np.ndarray, Video], deepface_args: Optional[Dict] = None
+    input_media: Union[str, np.ndarray, Video],
+    model_name: Optional[str] = None,
+    backend: Optional[str] = None,
+    align: Optional[bool] = None,
 ) -> List[List[Dict]]:
     """Extract face embeddings from an image or video.
 
     Args:
-        input_media (Union[str, np.ndarray, Video]):
-            - str: Path to an image file.
-            - np.ndarray: Image array.
-            - Video: Video object; analyze all frames in the video.
-        deepface_args (Optional[Dict]): Optional dictionary of arguments to pass to DeepFaceAnalysis.
+        input_media (str | np.ndarray | Video): Media to extract face embeddings from.
+        model_name (Optional[str]): Embedding extraction model name.
+        backend (Optional[str]): Face detection backend.
+        align (Optional[bool]): Align faces before extraction.
 
     Returns:
-        List[List[Dict]]: A nested list containing face embeddings for each image/frame.
+        List[List[Dict]]: Nested list of embeddings per face.
     """
-    face_analyzer = DeepFaceAnalysis.from_dict(deepface_args)
+    face_analyzer = DeepFaceAnalysis(model_name, backend=backend, align=align)
 
-    # Single image
     if isinstance(input_media, (str, np.ndarray)):
-        embeddings = face_analyzer.extract_face_embeddings(input_media)
-        return [embeddings]
+        return [face_analyzer.extract_face_embeddings(input_media)]
 
-    # Video
     elif isinstance(input_media, Video):
-        results_for_frames = []
-        for frame_idx in range(input_media.frames.shape[0]):
-            frame = input_media.frames[frame_idx]
-            if hasattr(frame, "numpy"):
-                frame = frame.numpy()
-            embeddings = face_analyzer.extract_face_embeddings(frame)
-            results_for_frames.append(embeddings)
-        return results_for_frames
+        return [
+            face_analyzer.extract_face_embeddings(frame.numpy() if hasattr(frame, "numpy") else frame)
+            for frame in input_media.frames
+        ]
 
-    else:
-        raise ValueError(
-            "Unsupported input_media type. Must be a file path (str), "
-            "an image array (np.ndarray), or a Video object."
-        )
+    raise ValueError(
+        "Unsupported input_media type. Must be a file path (str), an image array (np.ndarray), or a Video object."
+    )
 
 
 def analyze_face_attributes(
     input_media: Union[str, np.ndarray, Video],
     actions: Optional[List[str]] = None,
-    deepface_args: Optional[Dict] = None,
+    backend: Optional[str] = None,
+    align: Optional[bool] = None,
 ) -> List[List[Dict]]:
-    """Analyze facial attributes (age, gender, emotion, race) for an image or video.
+    """Analyze facial attributes (age, gender, emotion, race).
 
     Args:
-        input_media (Union[str, np.ndarray, Video]):
-            - str: Path to an image file.
-            - np.ndarray: Image array.
-            - Video: Video object; analyze all frames in the video.
-        actions (Optional[List[str]]): List of attributes to analyze.
-            Defaults to ['age', 'gender', 'emotion', 'race'].
-        deepface_args (Optional[Dict]): Optional dictionary of arguments to pass to DeepFaceAnalysis.
+        input_media (str | np.ndarray | Video): Media to analyze face attributes from.
+        actions (Optional[List[str]]): Attributes to analyze (default: ['age', 'gender', 'emotion', 'race']).
+        backend (Optional[str]): Face detection backend.
+        align (Optional[bool]): Align faces before analysis.
 
     Returns:
-        List[List[Dict]]: A list of lists. The top-level list corresponds to each image or frame,
-        and each sub-list contains a dictionary of analysis results for each face.
+        List[List[Dict]]: Nested list of attribute dictionaries per face.
     """
-    face_analyzer = DeepFaceAnalysis.from_dict(deepface_args)
+    face_analyzer = DeepFaceAnalysis(backend=backend, align=align)
 
-    # Single image
     if isinstance(input_media, (str, np.ndarray)):
-        analysis = face_analyzer.analyze_face_attributes(img_path=input_media, actions=actions)
-        return [analysis]
+        return [face_analyzer.analyze_face_attributes(input_media, actions)]
 
-    # Video
     elif isinstance(input_media, Video):
-        results_for_frames = []
-        for frame_idx in range(input_media.frames.shape[0]):
-            frame = input_media.frames[frame_idx]
-            if hasattr(frame, "numpy"):
-                frame = frame.numpy()
-            analysis = face_analyzer.analyze_face_attributes(img_path=frame, actions=actions)
-            results_for_frames.append(analysis)
-        return results_for_frames
+        return [
+            face_analyzer.analyze_face_attributes(frame.numpy() if hasattr(frame, "numpy") else frame, actions)
+            for frame in input_media.frames
+        ]
 
-    else:
-        raise ValueError(
-            "Unsupported input_media type. Must be a file path (str), "
-            "an image array (np.ndarray), or a Video object."
-        )
+    raise ValueError(
+        "Unsupported input_media type. Must be a file path (str), an image array (np.ndarray), or a Video object."
+    )
