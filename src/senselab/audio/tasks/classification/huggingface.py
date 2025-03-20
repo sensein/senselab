@@ -10,8 +10,8 @@ from typing import Dict, List, Literal, Optional
 
 from transformers import pipeline
 
-from senselab.audio.data_structures import Audio
-from senselab.utils.data_structures import AudioClassificationResult, DeviceType, HFModel, _select_device_and_dtype
+from senselab.audio.data_structures import Audio, AudioClassificationResult
+from senselab.utils.data_structures import DeviceType, HFModel, _select_device_and_dtype
 from senselab.utils.data_structures.logging import logger
 
 

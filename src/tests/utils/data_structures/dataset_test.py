@@ -3,7 +3,6 @@
 import numpy as np
 import pytest
 import torch
-import torchaudio
 from datasets import load_dataset
 
 from senselab.audio.data_structures import Audio
@@ -11,6 +10,27 @@ from senselab.utils.data_structures import Participant, SenselabDataset, Session
 from senselab.video.data_structures import Video
 from tests.audio.conftest import MONO_AUDIO_PATH, STEREO_AUDIO_PATH
 from tests.video.conftest import VIDEO_PATH
+
+try:
+    import torchaudio
+
+    TORCHAUDIO_AVAILABLE = True
+except ModuleNotFoundError:
+    TORCHAUDIO_AVAILABLE = False
+
+try:
+    import librosa
+
+    LIBROSA_AVAILABLE = True
+except ModuleNotFoundError:
+    LIBROSA_AVAILABLE = False
+
+try:
+    import av
+
+    PYAV_AVAILABLE = True
+except ModuleNotFoundError:
+    PYAV_AVAILABLE = False
 
 
 def test_create_participant() -> None:
@@ -87,6 +107,14 @@ def test_get_sessions() -> None:
     assert session2 in sessions
 
 
+@pytest.mark.skipif(TORCHAUDIO_AVAILABLE, reason="torchaudio is installed")
+def test_audio_dataset_creation_import_error() -> None:
+    """Tests that an ImportError is raised when torchaudio is not installed."""
+    with pytest.raises(ModuleNotFoundError):
+        SenselabDataset(audios=[MONO_AUDIO_PATH, STEREO_AUDIO_PATH])
+
+
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed")
 def test_audio_dataset_creation() -> None:
     """Tests the creation of AudioDatasets with various ways of generating them."""
     mono_audio_data, mono_sr = torchaudio.load(MONO_AUDIO_PATH)
@@ -117,6 +145,7 @@ def test_audio_dataset_creation() -> None:
     assert audio_dataset_from_paths == audio_dataset_from_data, "Audio datasets should be equivalent"
 
 
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed")
 def test_audio_dataset_splits() -> None:
     """Tests the AudioDataset split functionality."""
     audio_dataset = SenselabDataset(audios=[MONO_AUDIO_PATH, STEREO_AUDIO_PATH])
@@ -150,6 +179,7 @@ def test_audio_dataset_splits() -> None:
     ], "Excess GPU split should generate a list with one list of all of the audios, unpadded"
 
 
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE or not PYAV_AVAILABLE, reason="torchaudio or pyav are not installed")
 def test_convert_senselab_dataset_to_hf_datasets() -> None:
     """Tests the conversion of Senselab dataset to HuggingFace."""
     dataset = SenselabDataset(
@@ -223,6 +253,7 @@ def test_convert_senselab_dataset_to_hf_datasets() -> None:
     assert reconverted_dataset.videos[0].frame_rate == dataset.videos[0].frame_rate
 
 
+@pytest.mark.skipif(not LIBROSA_AVAILABLE, reason="librosa is not installed")
 def test_convert_hf_dataset_to_senselab_dataset() -> None:
     """Use an existing HF dataset to show that Senselab properly converts and maintains a HF Dataset."""
     ravdness = load_dataset("xbgoose/ravdess", split="train")

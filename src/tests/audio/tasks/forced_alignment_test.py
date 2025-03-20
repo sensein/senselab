@@ -7,28 +7,40 @@ import torch
 from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
 
 from senselab.audio.data_structures import Audio
-from senselab.audio.tasks.forced_alignment.data_structures import (
-    Point,
-    SingleSegment,
-)
-from senselab.audio.tasks.forced_alignment.evaluation import compare_alignments
-from senselab.audio.tasks.forced_alignment.forced_alignment import (
-    _align_segments,
-    _can_align_segment,
-    _get_prediction_matrix,
-    _interpolate_nans,
-    _merge_repeats,
-    _preprocess_segments,
-    align_transcriptions,
-    remove_chunks_by_level,
-)
-from senselab.audio.tasks.speech_to_text import transcribe_audios
 from senselab.utils.data_structures import DeviceType, Language, ScriptLine
-from senselab.utils.data_structures.model import HFModel
+
+try:
+    import nltk  # noqa: F401
+
+    NLTK_AVAILABLE = True
+except ModuleNotFoundError:
+    NLTK_AVAILABLE = False
+
+try:
+    import torchaudio  # noqa: F401
+
+    from senselab.audio.tasks.forced_alignment.data_structures import (
+        Point,
+        SingleSegment,
+    )
+    from senselab.audio.tasks.forced_alignment.forced_alignment import (
+        _align_segments,
+        _align_transcription,
+        _can_align_segment,
+        _get_prediction_matrix,
+        _interpolate_nans,
+        _merge_repeats,
+        _preprocess_segments,
+        align_transcriptions,
+    )
+
+    TORCHAUDIO_AVAILABLE = True
+except ModuleNotFoundError:
+    TORCHAUDIO_AVAILABLE = False
 
 
 @pytest.fixture
-def dummy_segment() -> SingleSegment:
+def dummy_segment() -> "SingleSegment":
     """Fixture for a dummy segment."""
     return SingleSegment(
         start=0.0,
@@ -347,6 +359,7 @@ def aligned_scriptline_fixture_resampled_mono_audio() -> ScriptLine:
     )
 
 
+@pytest.mark.skipif(not NLTK_AVAILABLE or not TORCHAUDIO_AVAILABLE, reason="nltk or torchaudio are not installed")
 def test_preprocess_segments() -> None:
     """Test preprocessing of segments."""
     transcript = [SingleSegment(start=0.0, end=1.0, text="test")]
@@ -357,12 +370,14 @@ def test_preprocess_segments() -> None:
     assert preprocessed_segments[0]["clean_char"] == ["T", "E", "S", "T"]
 
 
-def test_can_align_segment(dummy_segment: SingleSegment) -> None:
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed")
+def test_can_align_segment(dummy_segment: "SingleSegment") -> None:
     """Test if a segment can be aligned."""
     model_dictionary = {"t": 0, "e": 1, "s": 2}
     assert _can_align_segment(dummy_segment, model_dictionary, 0.0, 10.0)
 
 
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed")
 def test_merge_repeats() -> None:
     """Test merging of repeated tokens."""
     path = [Point(0, 0, 1.0), Point(0, 1, 1.0), Point(1, 2, 1.0)]
@@ -371,6 +386,7 @@ def test_merge_repeats() -> None:
     assert len(segments) == 2
 
 
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed")
 def test_interpolate_nans() -> None:
     """Test interpolation of NaN values."""
     series = pd.Series([0.0, np.nan, 2.0])
@@ -378,6 +394,7 @@ def test_interpolate_nans() -> None:
     assert interpolated_series.isnull().sum() == 0
 
 
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed")
 def test_get_prediction_matrix(dummy_model: tuple) -> None:
     """Test generation of prediction matrix."""
     model, _ = dummy_model
@@ -386,6 +403,7 @@ def test_get_prediction_matrix(dummy_model: tuple) -> None:
     assert prediction_matrix.shape[0] > 0
 
 
+@pytest.mark.skipif(not NLTK_AVAILABLE or not TORCHAUDIO_AVAILABLE, reason="nltk or torchaudio are not installed")
 def test_align_segments(mono_audio_sample: Audio, dummy_model: tuple) -> None:
     """Test alignment of segments."""
     model, processor = dummy_model
@@ -456,12 +474,43 @@ def test_align_transcriptions_multilingual(
         )
     else:
         raise ValueError(f"aligned_transcription_en is not a ScriptLine. Got: {aligned_transcription_en}")
+@pytest.mark.skipif(not NLTK_AVAILABLE or not TORCHAUDIO_AVAILABLE, reason="nltk or torchaudio are not installed")
+def test_align_transcription_faked(resampled_mono_audio_sample: Audio, dummy_model: tuple) -> None:
+    """Test alignment of transcription."""
+    model, processor = dummy_model
+    transcript = [
+        SingleSegment(
+            start=0.0,
+            end=1.0,
+            text="test",
+            clean_char=["t", "e", "s", "t"],
+            clean_cdx=[0, 1, 2, 3],
+            clean_wdx=[0],
+            sentence_spans=None,
+        )
+    ]
+    aligned_result = _align_transcription(
+        transcript=transcript,
+        model=model,
+        align_model_metadata={
+            "dictionary": processor.tokenizer.get_vocab(),
+            "language": Language(language_code="en"),
+            "type": "huggingface",
+        },
+        audio=resampled_mono_audio_sample,
+        device=DeviceType.CPU,
+    )
+    assert "segments" in aligned_result
+    assert "word_segments" in aligned_result
 
 
 def test_align_transcriptions_curiosity_audio_fixture(
     resampled_had_that_curiosity_audio_sample: Audio, script_line_fixture_curiosity: ScriptLine
 ) -> None:
     """Test alignment of transcriptions using the 'had that curiosity' audio sample and fixture."""
+@pytest.mark.skipif(not NLTK_AVAILABLE or not TORCHAUDIO_AVAILABLE, reason="nltk or torchaudio are not installed")
+def test_align_transcriptions_fixture(resampled_mono_audio_sample: Audio, script_line_fixture: ScriptLine) -> None:
+    """Test alignment of transcriptions."""
     audios_and_transcriptions_and_language = [
         (resampled_had_that_curiosity_audio_sample, script_line_fixture_curiosity, Language(language_code="en"))
     ]
@@ -568,6 +617,23 @@ def test_remove_chunks_by_level_deep_removal(nested_scriptline: ScriptLine) -> N
     """Test removing chunks at a level deeper than existing structure (should not modify)."""
     result = remove_chunks_by_level(nested_scriptline, level=5)
     assert result == nested_scriptline  # Should be unchanged
+    assert aligned_transcriptions[0][0].text == "test"
+
+
+@pytest.mark.skipif(not NLTK_AVAILABLE or not TORCHAUDIO_AVAILABLE, reason="nltk or torchaudio are not installed")
+def test_align_transcriptions_multilingual(resampled_mono_audio_sample: Audio, script_line_fixture: ScriptLine) -> None:
+    """Test alignment of transcriptions."""
+    languages = ["de", "es"]
+    expected_text = "test"  # Replace with the appropriate expected text for your fixtures
+
+    for lang in languages:
+        audios_and_transcriptions_and_language = [
+            (resampled_mono_audio_sample, script_line_fixture, Language(language_code=lang))
+        ]
+        aligned_transcriptions = align_transcriptions(audios_and_transcriptions_and_language)
+        assert len(aligned_transcriptions) == 1, f"Failed for language: {lang}"
+        assert len(aligned_transcriptions[0]) == 1, f"Failed for language: {lang}"
+        assert aligned_transcriptions[0][0].text == expected_text, f"Failed for language: {lang}"
 
 
 if __name__ == "__main__":

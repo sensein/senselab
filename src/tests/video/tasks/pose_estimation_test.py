@@ -3,7 +3,6 @@
 import os
 from typing import Dict, Optional, Union
 
-import cv2
 import numpy as np
 import pytest
 
@@ -15,6 +14,28 @@ from senselab.video.data_structures.pose import (
 )
 from senselab.video.tasks.pose_estimation import estimate_pose, visualize_pose
 from senselab.video.tasks.pose_estimation.estimate import MediaPipePoseEstimator, PoseEstimator, YOLOPoseEstimator
+
+try:
+    import cv2
+
+    CV2_AVAILABLE = True
+except ModuleNotFoundError:
+    CV2_AVAILABLE = False
+
+try:
+    import mediapipe
+
+    MEDIAPIPE_AVAILABLE = True
+except ModuleNotFoundError:
+    MEDIAPIPE_AVAILABLE = False
+
+try:
+    from ultralytics import YOLO
+
+    YOLO_AVAILABLE = True
+except ModuleNotFoundError:
+    YOLO_AVAILABLE = False
+
 
 # Test data
 VALID_IMAGE = os.path.abspath("src/tests/data_for_testing/pose_data/single_person.jpg")
@@ -65,6 +86,21 @@ def sample_pose_yolo() -> ImagePose:
     return ImagePose(image=image, individuals=individuals, model=PoseModel.YOLO)
 
 
+@pytest.mark.skipif(MEDIAPIPE_AVAILABLE, reason="MediaPipe is installed.")
+def test_media_pipe_unavailable() -> None:
+    """Test MediaPipePoseEstimator import error."""
+    with pytest.raises(ModuleNotFoundError):
+        MediaPipePoseEstimator("full")
+
+
+@pytest.mark.skipif(YOLO_AVAILABLE, reason="YOLO is installed.")
+def test_yolo_unavailable() -> None:
+    """Test YOLOPoseEstimator import error."""
+    with pytest.raises(ModuleNotFoundError):
+        YOLOPoseEstimator("8n")
+
+
+@pytest.mark.skipif(not MEDIAPIPE_AVAILABLE or not YOLO_AVAILABLE, reason="MediaPipe or YOLO are not installed.")
 @pytest.mark.parametrize(
     "model, model_type, num_individuals",
     [
@@ -124,6 +160,7 @@ class TestPoseEstimators:
             self._run_estimation(model, INVALID_IMAGE_PATH, model_type, num_individuals)
 
 
+@pytest.mark.skipif(not MEDIAPIPE_AVAILABLE or not YOLO_AVAILABLE, reason="MediaPipe or YOLO are not installed.")
 @pytest.mark.parametrize(
     "estimator_class, valid_model_types, invalid_model_types",
     [
@@ -149,11 +186,12 @@ def test_model_types(
             estimator_class(invalid_model_type)
 
 
+@pytest.mark.skipif(not MEDIAPIPE_AVAILABLE or not YOLO_AVAILABLE, reason="MediaPipe or YOLO are not installed.")
 @pytest.mark.parametrize("sample_pose", ["sample_pose_mediapipe", "sample_pose_yolo"])
-def test_visualize_pose(sample_pose: ImagePose, request: pytest.FixtureRequest, tmpdir: pytest.TempPathFactory) -> None:
+def test_visualize_pose(sample_pose: str, request: pytest.FixtureRequest, tmpdir: pytest.TempPathFactory) -> None:
     """Test the visualization of poses for both MediaPipe and YOLO."""
     pose = request.getfixturevalue(sample_pose)
-    output_path = os.path.join(tmpdir, f"{pose.model.name.lower()}.png")
+    output_path = os.path.join(str(tmpdir), f"{pose.model.name.lower()}.png")
     annotated_image = visualize_pose(pose, output_path=output_path)
 
     # Check the annotated image type
