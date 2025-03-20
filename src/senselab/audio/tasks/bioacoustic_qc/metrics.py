@@ -1,6 +1,8 @@
 """Contains audio quality metrics used in various checks."""
 
 import torch
+import numpy as np
+import librosa
 
 from senselab.audio.data_structures import Audio
 
@@ -122,3 +124,38 @@ def amplitude_toeroom_metric(audio: Audio) -> float:
         raise ValueError(f"Audio contains samples under -1.0. Min amplitude = {min_amplitude:.4f}")
 
     return -1.0 - min_amplitude
+
+
+def spectral_gating_snr(audio: Audio, frame_length=2048, hop_length=512, percentile=10) -> float:
+    """
+    Computes segmental SNR using the spectral gating approach.
+
+    Parameters:
+        audio (Audio): Audio object containing waveform and metadata.
+        frame_length (int): Frame size for STFT.
+        hop_length (int): Hop size for moving window.
+        percentile (int): Percentage of lowest-energy frequency bins used for noise estimation.
+
+    Returns:
+        float: Estimated segmental SNR in dB.
+    """
+
+    waveform = audio.waveform  # Shape: (num_channels, num_samples)
+    if isinstance(waveform, torch.Tensor):
+        waveform = waveform.numpy()
+
+    # Convert stereo/multi-channel to mono by averaging channels
+    if waveform.shape[0] > 1:
+        waveform = np.mean(waveform, axis=0)
+
+    # Compute STFT (Short-Time Fourier Transform)
+    stft = np.abs(librosa.stft(waveform, n_fft=frame_length, hop_length=hop_length))
+
+    # Estimate noise by taking the lowest percentile of STFT energy per frequency bin
+    noise_estimate = np.percentile(stft, percentile, axis=1)
+
+    # Compute SNR per frequency band
+    snr_per_freq = 10 * np.log10((np.mean(stft**2, axis=1) + 1e-10) / (noise_estimate**2 + 1e-10))
+
+    # Return average SNR over all frequency bands
+    return np.mean(snr_per_freq)
