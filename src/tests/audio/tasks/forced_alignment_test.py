@@ -399,6 +399,7 @@ def test_interpolate_nans() -> None:
 
 
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed")
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_get_prediction_matrix(dummy_model: tuple) -> None:
     """Test generation of prediction matrix."""
     model, _ = dummy_model
@@ -408,6 +409,7 @@ def test_get_prediction_matrix(dummy_model: tuple) -> None:
 
 
 @pytest.mark.skipif(not NLTK_AVAILABLE or not TORCHAUDIO_AVAILABLE, reason="nltk or torchaudio are not installed")
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_align_segments(mono_audio_sample: Audio, dummy_model: tuple) -> None:
     """Test alignment of segments."""
     model, processor = dummy_model
@@ -441,6 +443,7 @@ def test_align_segments(mono_audio_sample: Audio, dummy_model: tuple) -> None:
 
 
 @pytest.mark.skipif(not NLTK_AVAILABLE or not TORCHAUDIO_AVAILABLE, reason="nltk or torchaudio are not installed")
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_align_transcriptions_multilingual(
     resampled_mono_audio_sample: Audio, aligned_scriptline_fixture_resampled_mono_audio: ScriptLine
 ) -> None:
@@ -482,6 +485,7 @@ def test_align_transcriptions_multilingual(
 
 
 @pytest.mark.skipif(not NLTK_AVAILABLE or not TORCHAUDIO_AVAILABLE, reason="nltk or torchaudio are not installed")
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_align_transcription_faked(resampled_mono_audio_sample: Audio, dummy_model: tuple) -> None:
     """Test alignment of transcription."""
     model, processor = dummy_model
@@ -512,6 +516,7 @@ def test_align_transcription_faked(resampled_mono_audio_sample: Audio, dummy_mod
 
 
 @pytest.mark.skipif(not NLTK_AVAILABLE or not TORCHAUDIO_AVAILABLE, reason="nltk or torchaudio are not installed")
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_align_transcriptions_curiosity_audio_fixture(
     resampled_had_that_curiosity_audio_sample: Audio, script_line_fixture_curiosity: ScriptLine
 ) -> None:
