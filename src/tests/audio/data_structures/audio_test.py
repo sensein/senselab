@@ -30,26 +30,35 @@ def load_audio(file_path: str) -> Tuple[torch.Tensor, int]:
     return torchaudio.load(file_path)
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
-def test_audio_creation_full_file() -> None:
-    """Tests loading the full audio file without offset or duration."""
-    audio = Audio.from_filepath(MONO_AUDIO_PATH)
+def check_basic_audio_properties(audio: Audio) -> None:
+    """Helper function for testing basic audio properties, based off MONO_AUDIO_PATH."""
     assert audio is not None
     assert audio.waveform is not None
     assert audio.waveform.shape[1] > 0
     assert isinstance(audio.sampling_rate, int)
     assert audio.sampling_rate == 48000
+
+
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
+def test_audio_creation_full_file() -> None:
+    """Tests loading the full audio file without offset or duration."""
+    audio = Audio.from_filepath(MONO_AUDIO_PATH)
+    check_basic_audio_properties(audio)
 
 
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 def test_audio_creation_with_offset() -> None:
     """Tests loading audio with a positive offset."""
-    audio = Audio.from_filepath(MONO_AUDIO_PATH, offset_in_sec=1.0)
-    assert audio is not None
-    assert audio.waveform is not None
-    assert audio.waveform.shape[1] > 0
-    assert isinstance(audio.sampling_rate, int)
-    assert audio.sampling_rate == 48000
+    test_offset = 1.0
+
+    audio = Audio.from_filepath(MONO_AUDIO_PATH, offset_in_sec=test_offset)
+    check_basic_audio_properties(audio)
+
+    audio_no_offset = Audio.from_filepath(MONO_AUDIO_PATH)
+    manual_audio_offset = int(audio.sampling_rate * test_offset)
+    assert torch.equal(
+        audio.waveform, audio_no_offset.waveform[:, manual_audio_offset:]
+    ), "Audio offset not equivalent to manually offsetting"
 
 
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
@@ -65,23 +74,35 @@ def test_audio_creation_with_offset_exceeding_duration() -> None:
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 def test_audio_creation_with_duration() -> None:
     """Tests loading a specific duration of an audio file."""
-    audio = Audio.from_filepath(MONO_AUDIO_PATH, duration_in_sec=2.0)
-    assert audio is not None
-    assert audio.waveform is not None
-    assert audio.waveform.shape[1] > 0
-    assert isinstance(audio.sampling_rate, int)
-    assert audio.sampling_rate == 48000
+    test_duration = 2.0
+
+    audio = Audio.from_filepath(MONO_AUDIO_PATH, duration_in_sec=test_duration)
+    check_basic_audio_properties(audio)
+
+    audio_no_trunc = Audio.from_filepath(MONO_AUDIO_PATH)
+    manual_audio_duration = int(audio.sampling_rate * test_duration)
+
+    assert torch.equal(
+        audio.waveform, audio_no_trunc.waveform[:, :manual_audio_duration]
+    ), "Audio with duration not equivalent to manually truncating"
 
 
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 def test_audio_creation_with_offset_and_duration() -> None:
     """Tests loading audio with both an offset and a duration."""
-    audio = Audio.from_filepath(MONO_AUDIO_PATH, offset_in_sec=1.0, duration_in_sec=2.0)
-    assert audio is not None
-    assert audio.waveform is not None
-    assert audio.waveform.shape[1] > 0
-    assert isinstance(audio.sampling_rate, int)
-    assert audio.sampling_rate == 48000
+    test_duration = 2.0
+    test_offset = 1.0
+
+    audio = Audio.from_filepath(MONO_AUDIO_PATH, offset_in_sec=test_offset, duration_in_sec=test_duration)
+    check_basic_audio_properties(audio)
+
+    default_audio = Audio.from_filepath(MONO_AUDIO_PATH)
+    audio_start = int(test_offset * audio.sampling_rate)
+    audio_end = int((test_duration + test_offset) * audio.sampling_rate)
+
+    assert torch.equal(
+        audio.waveform, default_audio.waveform[:, audio_start:audio_end]
+    ), "Audio with offset and duration not equivalent to manual version"
 
 
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
@@ -95,30 +116,25 @@ def test_audio_creation_negative_offset() -> None:
 def test_audio_creation_negative_duration() -> None:
     """Tests that a negative duration (except -1) raises an error."""
     with pytest.raises(ValueError, match="Duration must be -1 .* or a positive value"):
-        Audio.from_filepath(MONO_AUDIO_PATH, duration_in_sec=-2.0)
+        Audio.from_filepath(MONO_AUDIO_PATH, duration_in_sec=-0.5)
 
 
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 def test_audio_creation_full_duration() -> None:
     """Tests loading the full audio file with duration=-1."""
     audio = Audio.from_filepath(MONO_AUDIO_PATH, duration_in_sec=-1)
-    assert audio is not None
-    assert audio.waveform is not None
-    assert audio.waveform.shape[1] > 0
-    assert isinstance(audio.sampling_rate, int)
-    assert audio.sampling_rate == 48000
+    check_basic_audio_properties(audio)
+
+    full_audio = Audio.from_filepath(MONO_AUDIO_PATH)
+    assert audio == full_audio, "Setting duration manually to -1 fails to return full audio"
 
 
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 def test_audio_creation_stereo_audio() -> None:
     """Tests loading a stereo audio file."""
     audio = Audio.from_filepath(STEREO_AUDIO_PATH)
-    assert audio is not None
-    assert audio.waveform is not None
-    assert audio.waveform.shape[1] > 0
+    check_basic_audio_properties(audio)
     assert audio.waveform.shape[0] == 2
-    assert isinstance(audio.sampling_rate, int)
-    assert audio.sampling_rate == 48000
 
 
 @pytest.mark.skipif(TORCHAUDIO_AVAILABLE, reason="torchaudio is installed.")
@@ -163,10 +179,19 @@ def test_audio_creation(audio_fixture: str, audio_path: str, request: pytest.Fix
 def test_audio_stream(audio_path: str) -> None:
     """Tests mono and stereo audio creation from stream."""
     audio_chunks = Audio.from_stream(audio_path)
-    for audio_chunk in audio_chunks:
+
+    non_streamed_audio = Audio.from_filepath(audio_path)
+
+    for i, audio_chunk in enumerate(audio_chunks):
         assert isinstance(audio_chunk, Audio), "Audio chunks should be of type Audio"
         assert audio_chunk.sampling_rate == 48000, "Audio chunks should have a sampling rate of 48000"
         assert audio_chunk.waveform.shape[1] <= 4096, "Audio chunks should have a shape of (*, 4096) or less"
+
+        current_chunk_end = min((i + 1) * 4096, non_streamed_audio.waveform.shape[1])
+
+        assert torch.equal(
+            audio_chunk.waveform, non_streamed_audio.waveform[:, i * 4096 : current_chunk_end]
+        ), "Audio stream does not match sliding window of equivalent size and step"
 
 
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
