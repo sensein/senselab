@@ -19,6 +19,7 @@ from senselab.audio.tasks.bioacoustic_qc.metrics import (
     dynamic_range_metric,
     mean_absolute_amplitude_metric,
     mean_absolute_deviation_metric,
+    peak_snr_from_spectral_metric,
     proportion_clipped_metric,
     proportion_silence_at_beginning_metric,
     proportion_silence_at_end_metric,
@@ -314,3 +315,18 @@ def test_crest_factor_metric(audio_fixture: str, request: pytest.FixtureRequest)
     assert not math.isnan(cf), "Crest factor should not be NaN"
     assert cf >= 1.0, f"Expected crest factor ≥1, got {cf}"
     assert not math.isinf(cf), "Crest factor should be finite for non‑silent audio"
+
+
+@pytest.mark.parametrize(
+    "audio_fixture",
+    ["mono_audio_sample", "stereo_audio_sample"],
+)
+def test_peak_snr_from_spectral_metric(audio_fixture: str, request: pytest.FixtureRequest) -> None:
+    """Tests peak_snr_from_spectral_metric returns a valid float ≥ 0 for real audio fixtures."""
+    audio: Audio = request.getfixturevalue(audio_fixture)
+    snr = peak_snr_from_spectral_metric(audio)
+
+    assert isinstance(snr, float), "Peak SNR must be a float"
+    assert not math.isnan(snr), "Peak SNR should not be NaN"
+    assert snr >= 0.0, f"Expected peak SNR ≥ 0, got {snr}"
+    assert not math.isinf(snr), "Peak SNR should be finite for non-silent audio"
