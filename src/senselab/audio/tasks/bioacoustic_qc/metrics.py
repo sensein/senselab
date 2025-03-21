@@ -2,6 +2,7 @@
 
 import librosa
 import numpy as np
+import scipy
 import torch
 
 from senselab.audio.data_structures import Audio
@@ -163,33 +164,31 @@ def clipping_present_metric(audio: Audio, clip_threshold: float = 1.0) -> bool:
 
 
 def amplitude_modulation_depth_metric(audio: Audio) -> float:
-    """Calculates the amplitude modulation depth of the audio signal.
+    """Calculates the amplitude modulation depth of an audio signal.
 
     Args:
         audio (Audio): The SenseLab Audio object.
 
     Returns:
-        float: Modulation depth as a value between 0.0 and 1.0.
+        float: Amplitude modulation depth.
     """
     waveform = audio.waveform
     assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
 
-    # Convert waveform to numpy array if it's a torch.Tensor
+    # Convert to numpy array if it's a torch tensor
     if isinstance(waveform, torch.Tensor):
         waveform = waveform.numpy()
 
-    # Compute the analytic signal using the Hilbert transform
-    analytic_signal = librosa.core.hilbert(waveform, axis=1)
+    # Compute the analytic signal
+    analytic_signal = scipy.signal.hilbert(waveform, axis=-1)
+
+    # Compute the amplitude envelope
     amplitude_envelope = np.abs(analytic_signal)
 
-    # Calculate maximum and minimum of the amplitude envelope
-    a_max = np.max(amplitude_envelope)
-    a_min = np.min(amplitude_envelope)
+    # Calculate modulation depth
+    max_env = np.max(amplitude_envelope, axis=-1)
+    min_env = np.min(amplitude_envelope, axis=-1)
+    modulation_depth = (max_env - min_env) / (max_env + min_env + 1e-10)  # Adding epsilon to avoid division by zero
 
-    # Avoid division by zero
-    if a_max + a_min == 0:
-        return 0.0
-
-    # Compute modulation depth
-    modulation_depth = (a_max - a_min) / (a_max + a_min)
-    return modulation_depth
+    # Return the mean modulation depth across channels
+    return float(np.mean(modulation_depth))
