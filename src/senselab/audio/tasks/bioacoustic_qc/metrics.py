@@ -127,3 +127,20 @@ def spectral_gating_snr_metric(
     snr_per_freq: np.ndarray = 10 * np.log10((np.mean(stft**2, axis=1) + 1e-10) / (noise_estimate**2 + 1e-10))
 
     return float(np.mean(snr_per_freq))
+
+
+def proportion_clipped_metric(audio: Audio, clip_threshold: float = 1.0) -> float:
+    """Calculates the proportion of clipped samples.
+
+    Args:
+        audio (Audio): The SenseLab Audio object.
+        clip_threshold (float): Threshold at or above which a sample is considered clipped.
+
+    Returns:
+        float: Proportion of samples that are clipped.
+    """
+    waveform = audio.waveform
+    assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
+
+    clipped_samples = (waveform.abs() >= clip_threshold).sum().item()
+    return clipped_samples / waveform.numel()
