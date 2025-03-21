@@ -3,6 +3,7 @@
 import inspect
 from typing import Pattern, Type, Union
 
+import numpy as np
 import pytest
 import torch
 from pytest import approx
@@ -21,6 +22,7 @@ from senselab.audio.tasks.bioacoustic_qc.metrics import (
     proportion_silence_at_end_metric,
     proportion_silent_metric,
     root_mean_square_energy_metric,
+    shannon_entropy_metric,
     signal_variance_metric,
     zero_crossing_rate_metric,
 )
@@ -279,3 +281,19 @@ def test_mean_absolute_deviation_metric(waveform: torch.Tensor, expected_mad: fl
     audio = Audio(waveform=waveform, sampling_rate=16000)
     result = mean_absolute_deviation_metric(audio)
     assert result == approx(expected_mad, rel=1e-6), f"Expected {expected_mad}, got {result}"
+
+
+@pytest.mark.parametrize(
+    "audio_fixture",
+    ["mono_audio_sample", "stereo_audio_sample"],
+)
+def test_shannon_entropy_metric(audio_fixture: str, request: pytest.FixtureRequest) -> None:
+    """Tests Shannon entropy metric on mono and stereo audio samples."""
+    audio_sample = request.getfixturevalue(audio_fixture)
+
+    entropy = shannon_entropy_metric(audio_sample)
+
+    # Shannon entropy should be >= 0 and not NaN
+    assert isinstance(entropy, float), "Entropy output is not a float."
+    assert not np.isnan(entropy), "Entropy is NaN."
+    assert entropy >= 0.0, "Entropy should be non-negative."
