@@ -302,7 +302,7 @@ def mean_absolute_deviation_metric(audio: Audio) -> float:
     return float(torch.mean(mad))
 
 
-def shannon_entropy_metric(audio: "Audio", num_bins: int = 256) -> float:
+def shannon_entropy_amplitude_metric(audio: "Audio", num_bins: int = 256) -> float:
     """Calculates the Shannon entropy of the audio signal's amplitude distribution.
 
     Args:
