@@ -245,3 +245,24 @@ def signal_variance_metric(audio: Audio) -> float:
     waveform = audio.waveform
     assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
     return float(torch.var(waveform))
+
+
+def dynamic_range_metric(audio: Audio) -> float:
+    """Calculates the dynamic range of the audio signal.
+
+    Dynamic range is defined as the difference between the maximum and minimum
+    amplitude values in the signal.
+
+    Args:
+        audio (Audio): The SenseLab Audio object.
+
+    Returns:
+        float: The dynamic range (max amplitude minus min amplitude).
+    """
+    waveform = audio.waveform
+    assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
+
+    # Compute the overall dynamic range across all channels
+    max_amp = waveform.max().item()
+    min_amp = waveform.min().item()
+    return float(max_amp - min_amp)
