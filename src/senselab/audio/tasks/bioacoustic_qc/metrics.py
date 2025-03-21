@@ -101,7 +101,9 @@ def amplitude_headroom_metric(audio: Audio) -> float:
     return min(pos_headroom, neg_headroom)
 
 
-def spectral_gating_snr(audio: Audio, frame_length: int = 2048, hop_length: int = 512, percentile: int = 10) -> float:
+def spectral_gating_snr_metric(
+    audio: Audio, frame_length: int = 2048, hop_length: int = 512, percentile: int = 10
+) -> float:
     """Computes segmental SNR using the spectral gating approach.
 
     Parameters:

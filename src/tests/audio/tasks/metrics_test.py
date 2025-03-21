@@ -1,17 +1,27 @@
 """Tests audio quality metric functions."""
 
+import inspect
+from typing import Pattern, Type, Union
+
 import pytest
 import torch
 from pytest import approx
 
+import senselab.audio.tasks.bioacoustic_qc.metrics as metrics
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.bioacoustic_qc.metrics import (
     amplitude_headroom_metric,
-    amplitude_toeroom_metric,
     proportion_silence_at_beginning_metric,
     proportion_silence_at_end_metric,
     proportion_silent_metric,
 )
+
+
+def test_metric_function_names_end_with_metric() -> None:
+    """Ensure all public functions in metrics module end with 'metric'."""
+    funcs = inspect.getmembers(metrics, inspect.isfunction)
+    for name, _ in funcs:
+        assert name.endswith("metric"), f"Function '{name}' does not end with 'metric'"
 
 
 @pytest.mark.parametrize(
@@ -74,31 +84,23 @@ def test_proportion_silence_at_end(waveform: torch.Tensor, expected_silence_end_
     ],
 )
 def test_amplitude_headroom_metric(waveform: torch.Tensor, expected_headroom: float) -> None:
-    """Tests amplitude_headroom_metric function."""
+    """Tests amplitude_headroom_metric with valid inputs."""
     audio = Audio(waveform=waveform, sampling_rate=16000)
     headroom = amplitude_headroom_metric(audio)
     assert headroom == approx(expected_headroom, rel=1e-6), f"Expected {expected_headroom}, got {headroom}"
 
 
 @pytest.mark.parametrize(
-    "waveform, expected_toeroom",
+    "waveform, expected_error, match",
     [
-        (torch.tensor([[0.5, -0.5, -0.8, 0.8]]), -0.2),  # Min amplitude -0.8 → Toeroom = -1.0 - (-0.8) = 0.2
-        (torch.tensor([[0.1, -0.1, -0.3, 0.3]]), -0.7),  # Min amplitude -0.3 → Toeroom = 0.7
-        (torch.tensor([[1.0, -1.0, 0.5, -0.5]]), 0.0),  # Min amplitude -1.0 → Toeroom = 0.0
+        (torch.tensor([[1.1, -0.5]]), ValueError, "over 1.0"),
+        (torch.tensor([[0.2, -1.2]]), ValueError, "under -1.0"),
     ],
 )
-def test_amplitude_toeroom_metric(waveform: torch.Tensor, expected_toeroom: float) -> None:
-    """Tests amplitude_toeroom_metric function."""
+def test_amplitude_headroom_metric_errors(
+    waveform: torch.Tensor, expected_error: Type[BaseException], match: Union[str, Pattern[str]]
+) -> None:
+    """Tests amplitude_headroom_metric with invalid inputs."""
     audio = Audio(waveform=waveform, sampling_rate=16000)
-    toeroom = amplitude_toeroom_metric(audio)
-    assert toeroom == approx(expected_toeroom, rel=1e-6), f"Expected {expected_toeroom}, got {toeroom}"
-
-
-def test_amplitude_toeroom_clipping_error() -> None:
-    """Tests that amplitude_toeroom_metric raises an error when samples are below -1.0."""
-    waveform = torch.tensor([[0.5, -1.1, -0.9, 0.8]])  # Min amplitude -1.1
-    audio = Audio(waveform=waveform, sampling_rate=16000)
-
-    with pytest.raises(ValueError, match="Audio contains samples under -1.0"):
-        amplitude_toeroom_metric(audio)
+    with pytest.raises(expected_error, match=match):
+        amplitude_headroom_metric(audio)
