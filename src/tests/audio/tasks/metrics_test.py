@@ -15,6 +15,7 @@ from senselab.audio.tasks.bioacoustic_qc.metrics import (
     clipping_present_metric,
     dynamic_range_metric,
     mean_absolute_amplitude_metric,
+    mean_absolute_deviation_metric,
     proportion_clipped_metric,
     proportion_silence_at_beginning_metric,
     proportion_silence_at_end_metric,
@@ -254,3 +255,27 @@ def test_mean_absolute_amplitude_metric(waveform: torch.Tensor, expected_mean_ab
     audio = Audio(waveform=waveform, sampling_rate=16000)
     result = mean_absolute_amplitude_metric(audio)
     assert result == approx(expected_mean_abs, rel=1e-6), f"Expected {expected_mean_abs}, got {result}"
+
+
+@pytest.mark.parametrize(
+    "waveform, expected_mad",
+    [
+        # Constant signal: MAD should be 0
+        (torch.tensor([[1.0, 1.0, 1.0, 1.0]]), 0.0),
+        # Single channel with two distinct values:
+        # [1, -1] -> mean = 0, deviations = [1, 1] -> MAD = 1.0
+        (torch.tensor([[1.0, -1.0]]), 1.0),
+        # Single channel: [1, 0, -1, 0] -> mean = 0, deviations = [1, 0, 1, 0] -> MAD = 0.5
+        (torch.tensor([[1.0, 0.0, -1.0, 0.0]]), 0.5),
+        # Multi-channel: two channels with symmetric values.
+        # Channel 1: [1, 2, 3, 4] -> mean = 2.5, deviations = [1.5, 0.5, 0.5, 1.5] -> MAD = 1.0
+        # Channel 2: [-1, -2, -3, -4] -> mean = -2.5, deviations = [1.5, 0.5, 0.5, 1.5] -> MAD = 1.0
+        # Overall MAD = (1.0 + 1.0) / 2 = 1.0
+        (torch.tensor([[1.0, 2.0, 3.0, 4.0], [-1.0, -2.0, -3.0, -4.0]]), 1.0),
+    ],
+)
+def test_mean_absolute_deviation_metric(waveform: torch.Tensor, expected_mad: float) -> None:
+    """Tests the mean_absolute_deviation_metric function."""
+    audio = Audio(waveform=waveform, sampling_rate=16000)
+    result = mean_absolute_deviation_metric(audio)
+    assert result == approx(expected_mad, rel=1e-6), f"Expected {expected_mad}, got {result}"
