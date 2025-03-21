@@ -192,3 +192,19 @@ def amplitude_modulation_depth_metric(audio: Audio) -> float:
 
     # Return the mean modulation depth across channels
     return float(np.mean(modulation_depth))
+
+
+def root_mean_square_energy_metric(audio: Audio) -> float:
+    """Calculates the root mean square (RMS) energy of the audio signal.
+
+    Args:
+        audio (Audio): The SenseLab Audio object.
+
+    Returns:
+        float: RMS energy averaged across channels.
+    """
+    waveform = audio.waveform
+    assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
+
+    rms_per_channel = torch.sqrt(torch.mean(waveform**2, dim=1))
+    return float(torch.mean(rms_per_channel))
