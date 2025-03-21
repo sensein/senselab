@@ -13,6 +13,7 @@ from senselab.audio.tasks.bioacoustic_qc.metrics import (
     amplitude_headroom_metric,
     amplitude_modulation_depth_metric,
     clipping_present_metric,
+    dynamic_range_metric,
     proportion_clipped_metric,
     proportion_silence_at_beginning_metric,
     proportion_silence_at_end_metric,
@@ -209,3 +210,23 @@ def test_signal_variance_metric(waveform: torch.Tensor, expected: float) -> None
     audio = Audio(waveform=waveform, sampling_rate=16000)
     result = signal_variance_metric(audio)
     assert result == approx(expected, rel=1e-6), f"Expected {expected}, got {result}"
+
+
+@pytest.mark.parametrize(
+    "waveform, expected_range",
+    [
+        # Constant signal: dynamic range = 1.0 - 1.0 = 0.0
+        (torch.tensor([[1.0, 1.0, 1.0, 1.0]]), 0.0),
+        # Increasing signal: dynamic range = 4.0 - 1.0 = 3.0
+        (torch.tensor([[1.0, 2.0, 3.0, 4.0]]), 3.0),
+        # Mixed signal: e.g., min = -0.5, max = 1.0 → dynamic range = 1.0 - (-0.5) = 1.5
+        (torch.tensor([[0.0, 0.5, 1.0, -0.5]]), 1.5),
+        # Multi-channel signal: overall min = -1.0, overall max = 0.8 → dynamic range = 0.8 - (-1.0) = 1.8
+        (torch.tensor([[-0.5, 0.3, 0.8], [-1.0, 0.0, 0.5]]), 1.8),
+    ],
+)
+def test_dynamic_range_metric(waveform: torch.Tensor, expected_range: float) -> None:
+    """Tests dynamic_range_metric function."""
+    audio = Audio(waveform=waveform, sampling_rate=16000)
+    result = dynamic_range_metric(audio)
+    assert result == approx(expected_range, rel=1e-6), f"Expected {expected_range}, got {result}"
