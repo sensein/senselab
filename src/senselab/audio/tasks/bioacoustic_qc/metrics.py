@@ -231,3 +231,19 @@ def zero_crossing_rate_metric(audio: Audio) -> float:
     # Mean ZCR per channel, then average
     zcr_per_channel = crossings.float().mean(dim=1)
     return float(zcr_per_channel.mean())
+
+
+def spectral_flatness_metric(audio: Audio) -> float:
+    """Computes spectral flatness of the audio signal.
+
+    Args:
+        audio (Audio): The SenseLab Audio object.
+
+    Returns:
+        float: Spectral flatness averaged across frames.
+    """
+    waveform = audio.waveform.numpy()
+    assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
+    stft = np.abs(librosa.stft(waveform, n_fft=2048, hop_length=512))
+    flatness = librosa.feature.spectral_flatness(S=stft)
+    return float(np.mean(flatness))
