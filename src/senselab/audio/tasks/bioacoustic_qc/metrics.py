@@ -144,3 +144,19 @@ def proportion_clipped_metric(audio: Audio, clip_threshold: float = 1.0) -> floa
 
     clipped_samples = (waveform.abs() >= clip_threshold).sum().item()
     return clipped_samples / waveform.numel()
+
+
+def clipping_present_metric(audio: Audio, clip_threshold: float = 1.0) -> bool:
+    """Checks whether any clipping is present in the audio.
+
+    Args:
+        audio (Audio): The SenseLab Audio object.
+        clip_threshold (float): Amplitude at or above which a sample is considered clipped.
+
+    Returns:
+        bool: True if any sample is clipped, False otherwise.
+    """
+    waveform = audio.waveform
+    assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
+
+    return (waveform.abs() >= clip_threshold).any().item()
