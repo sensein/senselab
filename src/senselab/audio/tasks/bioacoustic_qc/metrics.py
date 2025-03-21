@@ -300,3 +300,26 @@ def mean_absolute_deviation_metric(audio: Audio) -> float:
     mean_val = torch.mean(waveform, dim=1, keepdim=True)
     mad = torch.mean(torch.abs(waveform - mean_val), dim=1)
     return float(torch.mean(mad))
+
+
+def shannon_entropy_metric(audio: "Audio", num_bins: int = 256) -> float:
+    """Calculates the Shannon entropy of the audio signal's amplitude distribution.
+
+    Args:
+        audio (Audio): The SenseLab Audio object.
+        num_bins (int): Number of bins to discretize the amplitude values.
+
+    Returns:
+        float: Shannon entropy.
+    """
+    waveform = audio.waveform
+    assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
+    samples = waveform.flatten().cpu().numpy()
+
+    # Histogram to approximate the probability distribution
+    hist, bin_edges = np.histogram(samples, bins=num_bins, density=True)
+    hist = hist[hist > 0]  # Remove zero probabilities
+
+    # Compute entropy
+    entropy = -np.sum(hist * np.log2(hist))
+    return float(entropy)
