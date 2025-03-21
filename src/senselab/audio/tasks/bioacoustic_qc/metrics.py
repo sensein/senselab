@@ -312,14 +312,17 @@ def shannon_entropy_metric(audio: "Audio", num_bins: int = 256) -> float:
     Returns:
         float: Shannon entropy.
     """
-    waveform = audio.waveform
-    assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
-    samples = waveform.flatten().cpu().numpy()
+    waveform = audio.waveform.flatten().numpy()
 
-    # Histogram to approximate the probability distribution
-    hist, bin_edges = np.histogram(samples, bins=num_bins, density=True)
-    hist = hist[hist > 0]  # Remove zero probabilities
+    # Get histogram counts
+    hist, _ = np.histogram(waveform, bins=num_bins)
+
+    # Normalize to get a probability distribution
+    prob = hist / np.sum(hist)
+
+    # Remove zero entries to avoid log2(0)
+    prob = prob[prob > 0]
 
     # Compute entropy
-    entropy = -np.sum(hist * np.log2(hist))
+    entropy = -np.sum(prob * np.log2(prob))
     return float(entropy)
