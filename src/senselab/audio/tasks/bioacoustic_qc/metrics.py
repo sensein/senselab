@@ -208,3 +208,26 @@ def root_mean_square_energy_metric(audio: Audio) -> float:
 
     rms_per_channel = torch.sqrt(torch.mean(waveform**2, dim=1))
     return float(torch.mean(rms_per_channel))
+
+
+def zero_crossing_rate_metric(audio: Audio) -> float:
+    """Estimates the zero-crossing rate of the audio signal.
+
+    Args:
+        audio (Audio): The SenseLab Audio object.
+
+    Returns:
+        float: Average zero-crossing rate across channels.
+    """
+    waveform = audio.waveform
+    assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
+
+    # Compute sign of samples: +1 for positive, -1 for negative, 0 for zero
+    signs = torch.sign(waveform)
+
+    # Zero-crossings occur where the sign changes
+    crossings = (signs[:, 1:] * signs[:, :-1]) < 0  # shape: (channels, samples - 1)
+
+    # Mean ZCR per channel, then average
+    zcr_per_channel = crossings.float().mean(dim=1)
+    return float(zcr_per_channel.mean())
