@@ -349,3 +349,38 @@ def crest_factor_metric(audio: Audio) -> float:
         return float("inf")  # silent signal → infinite crest factor
 
     return peak / rms
+
+
+def peak_snr_from_spectral_metric(
+    audio: Audio, frame_length: int = 2048, hop_length: int = 512, percentile: int = 10
+) -> float:
+    """Estimates Peak‑SNR (dB) using spectral gating to estimate the noise floor.
+
+    Args:
+        audio (Audio): The SenseLab Audio object.
+        frame_length (int): STFT window size.
+        hop_length (int): STFT hop size.
+        percentile (int): Percentile used for noise floor estimation.
+
+    Returns:
+        float: Peak‑SNR in decibels.
+    """
+    waveform = audio.waveform
+    if isinstance(waveform, torch.Tensor):
+        waveform = waveform.numpy()
+
+    # Collapse to mono if multi-channel
+    if waveform.ndim == 2 and waveform.shape[0] > 1:
+        waveform = np.mean(waveform, axis=0)
+
+    # Get magnitude spectrogram
+    stft_mag = np.abs(librosa.stft(waveform, n_fft=frame_length, hop_length=hop_length))
+
+    # Estimate noise floor from quietest bins
+    noise_floor = np.percentile(stft_mag, percentile, axis=1)
+    noise_rms = np.sqrt(np.mean(noise_floor**2) + 1e-10)
+
+    # Get peak signal amplitude from time-domain
+    peak = np.max(np.abs(waveform))
+
+    return 20 * np.log10(peak / noise_rms)
