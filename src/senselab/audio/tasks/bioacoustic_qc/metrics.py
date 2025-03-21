@@ -283,3 +283,20 @@ def mean_absolute_amplitude_metric(audio: Audio) -> float:
     # Compute the mean absolute amplitude across all samples and channels
     mean_abs = torch.mean(waveform.abs())
     return float(mean_abs)
+
+
+def mean_absolute_deviation_metric(audio: Audio) -> float:
+    """Calculates the mean absolute deviation (MAD) of the audio signal.
+
+    Args:
+        audio (Audio): The SenseLab Audio object.
+
+    Returns:
+        float: MAD averaged across channels.
+    """
+    waveform = audio.waveform
+    assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
+
+    mean_val = torch.mean(waveform, dim=1, keepdim=True)
+    mad = torch.mean(torch.abs(waveform - mean_val), dim=1)
+    return float(torch.mean(mad))
