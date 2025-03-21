@@ -326,3 +326,26 @@ def shannon_entropy_amplitude_metric(audio: "Audio", num_bins: int = 256) -> flo
     # Compute entropy
     entropy = -np.sum(prob * np.log2(prob))
     return float(entropy)
+
+
+def crest_factor_metric(audio: Audio) -> float:
+    """Calculates the crest factor (peak‑to‑RMS ratio) of the audio signal.
+
+    Args:
+        audio (Audio): The SenseLab Audio object.
+
+    Returns:
+        float: Crest factor (unitless).
+    """
+    waveform = audio.waveform
+    assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
+
+    # Peak absolute amplitude across all channels
+    peak = waveform.abs().max().item()
+
+    # RMS across all samples and channels
+    rms = torch.sqrt(torch.mean(waveform**2)).item()
+    if rms == 0:
+        return float("inf")  # silent signal → infinite crest factor
+
+    return peak / rms
