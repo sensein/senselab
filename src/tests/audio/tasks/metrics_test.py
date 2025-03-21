@@ -11,6 +11,7 @@ import senselab.audio.tasks.bioacoustic_qc.metrics as metrics
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.bioacoustic_qc.metrics import (
     amplitude_headroom_metric,
+    amplitude_modulation_depth_metric,
     clipping_present_metric,
     proportion_clipped_metric,
     proportion_silence_at_beginning_metric,
@@ -137,3 +138,20 @@ def test_clipping_present_metric(waveform: torch.Tensor, expected_clipping: bool
     audio = Audio(waveform=waveform, sampling_rate=16000)
     result = clipping_present_metric(audio, clip_threshold=1.0)
     assert result == expected_clipping, f"Expected {expected_clipping}, got {result}"
+
+
+@pytest.mark.parametrize(
+    "waveform, expected_depth",
+    [
+        (torch.tensor([[0.5, 0.5, 0.5, 0.5]]), 0.0),
+        (torch.tensor([[0.1, 0.9, 0.1, 0.9]]), 0.8),
+        (torch.tensor([[0.0, 0.0, 0.0, 0.0]]), 0.0),
+        (torch.tensor([[-0.1, 0.9, -0.1, 0.9]]), 0.8),
+        (torch.tensor([[-0.5, -0.5, -0.5, -0.5]]), 0.0),
+    ],
+)
+def test_amplitude_modulation_depth_metric(waveform: torch.Tensor, expected_depth: float) -> None:
+    """Tests amplitude_modulation_depth_metric function including negative values."""
+    audio = Audio(waveform=waveform, sampling_rate=16000)
+    depth = amplitude_modulation_depth_metric(audio)
+    assert depth == approx(expected_depth, rel=1e-6), f"Expected {expected_depth}, got {depth}"
