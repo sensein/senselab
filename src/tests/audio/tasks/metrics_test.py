@@ -17,6 +17,7 @@ from senselab.audio.tasks.bioacoustic_qc.metrics import (
     proportion_silence_at_beginning_metric,
     proportion_silence_at_end_metric,
     proportion_silent_metric,
+    root_mean_square_energy_metric,
 )
 
 
@@ -155,3 +156,20 @@ def test_amplitude_modulation_depth_metric(waveform: torch.Tensor, expected_dept
     audio = Audio(waveform=waveform, sampling_rate=16000)
     depth = amplitude_modulation_depth_metric(audio)
     assert depth == approx(expected_depth, rel=1e-6), f"Expected {expected_depth}, got {depth}"
+
+
+@pytest.mark.parametrize(
+    "waveform, expected",
+    [
+        (torch.tensor([[1.0, 1.0, 1.0, 1.0]]), 1.0),
+        (torch.tensor([[0.0, 0.0, 0.0, 0.0]]), 0.0),
+        (torch.tensor([[1.0, -1.0, 1.0, -1.0]]), 1.0),
+        (torch.tensor([[1.0, 0.0, 1.0, 0.0]]), (0.5) ** 0.5),
+        (torch.tensor([[1.0, 1.0], [0.0, 0.0]]), 0.5),
+    ],
+)
+def test_root_mean_square_energy_metric(waveform: torch.Tensor, expected: float) -> None:
+    """Test RMS energy metric against expected values."""
+    audio = Audio(waveform=waveform, sampling_rate=16000)
+    result = root_mean_square_energy_metric(audio)
+    assert result == approx(expected, rel=1e-6), f"Expected {expected}, got {result}"
