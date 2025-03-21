@@ -266,3 +266,20 @@ def dynamic_range_metric(audio: Audio) -> float:
     max_amp = waveform.max().item()
     min_amp = waveform.min().item()
     return float(max_amp - min_amp)
+
+
+def mean_absolute_amplitude_metric(audio: Audio) -> float:
+    """Calculates the mean absolute amplitude of the audio signal.
+
+    Args:
+        audio (Audio): The SenseLab Audio object.
+
+    Returns:
+        float: Mean absolute amplitude averaged across channels.
+    """
+    waveform = audio.waveform
+    assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
+
+    # Compute the mean absolute amplitude across all samples and channels
+    mean_abs = torch.mean(waveform.abs())
+    return float(mean_abs)
