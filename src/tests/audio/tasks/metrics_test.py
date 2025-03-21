@@ -14,6 +14,7 @@ from senselab.audio.tasks.bioacoustic_qc.metrics import (
     amplitude_modulation_depth_metric,
     clipping_present_metric,
     dynamic_range_metric,
+    mean_absolute_amplitude_metric,
     proportion_clipped_metric,
     proportion_silence_at_beginning_metric,
     proportion_silence_at_end_metric,
@@ -230,3 +231,26 @@ def test_dynamic_range_metric(waveform: torch.Tensor, expected_range: float) -> 
     audio = Audio(waveform=waveform, sampling_rate=16000)
     result = dynamic_range_metric(audio)
     assert result == approx(expected_range, rel=1e-6), f"Expected {expected_range}, got {result}"
+
+
+@pytest.mark.parametrize(
+    "waveform, expected_mean_abs",
+    [
+        # Constant positive signal: mean abs = 1.0
+        (torch.tensor([[1.0, 1.0, 1.0, 1.0]]), 1.0),
+        # Alternating positive and negative: mean abs = 1.0
+        (torch.tensor([[1.0, -1.0, 1.0, -1.0]]), 1.0),
+        # Zero signal: mean abs = 0.0
+        (torch.tensor([[0.0, 0.0, 0.0, 0.0]]), 0.0),
+        # Multi-channel signal:
+        # Channel 1: [1.0, 0.0, -1.0, 0.0] -> mean abs = (1+0+1+0)/4 = 0.5
+        # Channel 2: [2.0, 2.0, 2.0, 2.0] -> mean abs = 2.0
+        # Overall average = (0.5 + 2.0)/2 = 1.25
+        (torch.tensor([[1.0, 0.0, -1.0, 0.0], [2.0, 2.0, 2.0, 2.0]]), 1.25),
+    ],
+)
+def test_mean_absolute_amplitude_metric(waveform: torch.Tensor, expected_mean_abs: float) -> None:
+    """Tests the mean_absolute_amplitude_metric function."""
+    audio = Audio(waveform=waveform, sampling_rate=16000)
+    result = mean_absolute_amplitude_metric(audio)
+    assert result == approx(expected_mean_abs, rel=1e-6), f"Expected {expected_mean_abs}, got {result}"
