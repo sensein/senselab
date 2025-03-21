@@ -18,6 +18,7 @@ from senselab.audio.tasks.bioacoustic_qc.metrics import (
     proportion_silence_at_end_metric,
     proportion_silent_metric,
     root_mean_square_energy_metric,
+    zero_crossing_rate_metric,
 )
 
 
@@ -173,3 +174,21 @@ def test_root_mean_square_energy_metric(waveform: torch.Tensor, expected: float)
     audio = Audio(waveform=waveform, sampling_rate=16000)
     result = root_mean_square_energy_metric(audio)
     assert result == approx(expected, rel=1e-6), f"Expected {expected}, got {result}"
+
+
+@pytest.mark.parametrize(
+    "waveform, expected_zcr",
+    [
+        (torch.tensor([[1.0, 1.0, 1.0, 1.0]]), 0.0),
+        (torch.tensor([[1.0, 1.0, -1.0, -1.0]]), 1 / 3),
+        (torch.tensor([[1.0, -1.0, 1.0, -1.0]]), 1.0),
+        (torch.tensor([[1.0, 0.0, -1.0, 0.0]]), 0),  # intermediate 0 doesn't count
+        # Multi-channel: one has 1 crossing, other 0 → avg = 0.5
+        (torch.tensor([[1.0, -1.0, -1.0], [0.5, 0.5, 0.5]]), 0.25),
+    ],
+)
+def test_zero_crossing_rate_metric(waveform: torch.Tensor, expected_zcr: float) -> None:
+    """Tests zero_crossing_rate_metric function."""
+    audio = Audio(waveform=waveform, sampling_rate=16000)
+    result = zero_crossing_rate_metric(audio)
+    assert result == approx(expected_zcr, rel=1e-6), f"Expected {expected_zcr}, got {result}"
