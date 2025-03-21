@@ -11,6 +11,7 @@ import senselab.audio.tasks.bioacoustic_qc.metrics as metrics
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.bioacoustic_qc.metrics import (
     amplitude_headroom_metric,
+    proportion_clipped_metric,
     proportion_silence_at_beginning_metric,
     proportion_silence_at_end_metric,
     proportion_silent_metric,
@@ -104,3 +105,18 @@ def test_amplitude_headroom_metric_errors(
     audio = Audio(waveform=waveform, sampling_rate=16000)
     with pytest.raises(expected_error, match=match):
         amplitude_headroom_metric(audio)
+
+
+@pytest.mark.parametrize(
+    "waveform, expected_proportion",
+    [
+        (torch.tensor([[0.0, 0.5, 1.0, -1.0]]), 0.5),  # 2/4 clipped
+        (torch.tensor([[0.0, 0.4, 0.6, -0.9]]), 0.0),  # No clipped samples
+        (torch.tensor([[1.0, 1.0, -1.0, -1.0]]), 1.0),  # All clipped
+    ],
+)
+def test_proportion_clipped_metric(waveform: torch.Tensor, expected_proportion: float) -> None:
+    """Tests proportion_clipped_metric function."""
+    audio = Audio(waveform=waveform, sampling_rate=16000)
+    proportion = proportion_clipped_metric(audio, clip_threshold=1.0)
+    assert proportion == approx(expected_proportion, rel=1e-6), f"Expected {expected_proportion}, got {proportion}"
