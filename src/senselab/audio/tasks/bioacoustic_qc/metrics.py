@@ -160,3 +160,36 @@ def clipping_present_metric(audio: Audio, clip_threshold: float = 1.0) -> bool:
     assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
 
     return (waveform.abs() >= clip_threshold).any().item()
+
+
+def amplitude_modulation_depth_metric(audio: Audio) -> float:
+    """Calculates the amplitude modulation depth of the audio signal.
+
+    Args:
+        audio (Audio): The SenseLab Audio object.
+
+    Returns:
+        float: Modulation depth as a value between 0.0 and 1.0.
+    """
+    waveform = audio.waveform
+    assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
+
+    # Convert waveform to numpy array if it's a torch.Tensor
+    if isinstance(waveform, torch.Tensor):
+        waveform = waveform.numpy()
+
+    # Compute the analytic signal using the Hilbert transform
+    analytic_signal = librosa.core.hilbert(waveform, axis=1)
+    amplitude_envelope = np.abs(analytic_signal)
+
+    # Calculate maximum and minimum of the amplitude envelope
+    a_max = np.max(amplitude_envelope)
+    a_min = np.min(amplitude_envelope)
+
+    # Avoid division by zero
+    if a_max + a_min == 0:
+        return 0.0
+
+    # Compute modulation depth
+    modulation_depth = (a_max - a_min) / (a_max + a_min)
+    return modulation_depth
