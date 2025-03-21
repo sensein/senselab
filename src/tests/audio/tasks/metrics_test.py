@@ -1,6 +1,7 @@
 """Tests audio quality metric functions."""
 
 import inspect
+import math
 from typing import Pattern, Type, Union
 
 import numpy as np
@@ -14,6 +15,7 @@ from senselab.audio.tasks.bioacoustic_qc.metrics import (
     amplitude_headroom_metric,
     amplitude_modulation_depth_metric,
     clipping_present_metric,
+    crest_factor_metric,
     dynamic_range_metric,
     mean_absolute_amplitude_metric,
     mean_absolute_deviation_metric,
@@ -22,7 +24,7 @@ from senselab.audio.tasks.bioacoustic_qc.metrics import (
     proportion_silence_at_end_metric,
     proportion_silent_metric,
     root_mean_square_energy_metric,
-    shannon_entropy_metric,
+    shannon_entropy_amplitude_metric,
     signal_variance_metric,
     zero_crossing_rate_metric,
 )
@@ -287,13 +289,28 @@ def test_mean_absolute_deviation_metric(waveform: torch.Tensor, expected_mad: fl
     "audio_fixture",
     ["mono_audio_sample", "stereo_audio_sample"],
 )
-def test_shannon_entropy_metric(audio_fixture: str, request: pytest.FixtureRequest) -> None:
+def test_shannon_entropy_amplitude_metric(audio_fixture: str, request: pytest.FixtureRequest) -> None:
     """Tests Shannon entropy metric on mono and stereo audio samples."""
     audio_sample = request.getfixturevalue(audio_fixture)
 
-    entropy = shannon_entropy_metric(audio_sample)
+    entropy = shannon_entropy_amplitude_metric(audio_sample)
 
     # Shannon entropy should be >= 0 and not NaN
     assert isinstance(entropy, float), "Entropy output is not a float."
     assert not np.isnan(entropy), "Entropy is NaN."
     assert entropy >= 0.0, "Entropy should be non-negative."
+
+
+@pytest.mark.parametrize(
+    "audio_fixture",
+    ["mono_audio_sample", "stereo_audio_sample"],
+)
+def test_crest_factor_metric(audio_fixture: str, request: pytest.FixtureRequest) -> None:
+    """Tests crest_factor_metric returns a finite value ≥1 for real audio fixtures."""
+    audio = request.getfixturevalue(audio_fixture)
+    cf = crest_factor_metric(audio)
+
+    assert isinstance(cf, float), "Crest factor must be a float"
+    assert not math.isnan(cf), "Crest factor should not be NaN"
+    assert cf >= 1.0, f"Expected crest factor ≥1, got {cf}"
+    assert not math.isinf(cf), "Crest factor should be finite for non‑silent audio"
