@@ -4,6 +4,7 @@ import librosa
 import numpy as np
 import scipy
 import torch
+from scipy.stats import iqr, kurtosis, skew
 
 from senselab.audio.data_structures import Audio
 
@@ -384,3 +385,17 @@ def peak_snr_from_spectral_metric(
     peak = np.max(np.abs(waveform))
 
     return 20 * np.log10(peak / noise_rms)
+
+
+def amplitude_skew_metric(audio: Audio) -> float:
+    """Calculates the skew of the audio signal amplitude.
+
+    Args:
+        audio (Audio): The SenseLab Audio object.
+
+    Returns:
+        float: Skew of the flattened amplitude distribution.
+    """
+    waveform = audio.waveform
+    assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
+    return float(skew(waveform.flatten().numpy()))
