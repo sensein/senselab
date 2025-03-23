@@ -13,6 +13,7 @@ import senselab.audio.tasks.bioacoustic_qc.metrics as metrics
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.bioacoustic_qc.metrics import (
     amplitude_headroom_metric,
+    amplitude_interquartile_range_metric,
     amplitude_kurtosis_metric,
     amplitude_modulation_depth_metric,
     amplitude_skew_metric,
@@ -370,3 +371,18 @@ def test_amplitude_kurtosis_metric(audio_fixture: str, request: pytest.FixtureRe
     assert isinstance(kurt, float), "Kurtosis must be a float"
     assert not math.isnan(kurt), "Kurtosis should not be NaN"
     assert not math.isinf(kurt), "Kurtosis should be finite"
+
+
+@pytest.mark.parametrize(
+    "audio_fixture",
+    ["mono_audio_sample", "stereo_audio_sample"],
+)
+def test_amplitude_interquartile_range_metric(audio_fixture: str, request: pytest.FixtureRequest) -> None:
+    """Tests amplitude_interquartile_range_metric returns a valid finite float value."""
+    audio = request.getfixturevalue(audio_fixture)
+    iqr_value = amplitude_interquartile_range_metric(audio)
+
+    assert isinstance(iqr_value, float), "IQR must be a float"
+    assert not torch.isnan(torch.tensor(iqr_value)), "IQR should not be NaN"
+    assert not torch.isinf(torch.tensor(iqr_value)), "IQR should be finite"
+    assert iqr_value >= 0, f"Expected IQR to be non-negative, got {iqr_value}"
