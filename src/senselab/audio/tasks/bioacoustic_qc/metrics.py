@@ -4,7 +4,6 @@ import librosa
 import numpy as np
 import scipy
 import torch
-from scipy.stats import iqr, kurtosis, skew
 
 from senselab.audio.data_structures import Audio
 
@@ -398,4 +397,4 @@ def amplitude_skew_metric(audio: Audio) -> float:
     """
     waveform = audio.waveform
     assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
-    return float(skew(waveform.flatten().numpy()))
+    return float(scipy.stats.skew(waveform.flatten().numpy()))
