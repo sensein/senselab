@@ -398,3 +398,17 @@ def amplitude_skew_metric(audio: Audio) -> float:
     waveform = audio.waveform
     assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
     return float(scipy.stats.skew(waveform.flatten().numpy()))
+
+
+def amplitude_kurtosis_metric(audio: Audio) -> float:
+    """Calculates the kurtosis of the audio signal amplitude.
+
+    Args:
+        audio (Audio): The SenseLab Audio object.
+
+    Returns:
+        float: Kurtosis of the flattened amplitude distribution.
+    """
+    waveform = audio.waveform
+    assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
+    return float(scipy.stats.kurtosis(waveform.flatten().numpy()))
