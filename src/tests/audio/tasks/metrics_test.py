@@ -13,6 +13,7 @@ import senselab.audio.tasks.bioacoustic_qc.metrics as metrics
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.bioacoustic_qc.metrics import (
     amplitude_headroom_metric,
+    amplitude_kurtosis_metric,
     amplitude_modulation_depth_metric,
     amplitude_skew_metric,
     clipping_present_metric,
@@ -350,3 +351,22 @@ def test_amplitude_skew_metric(audio_fixture: str, request: pytest.FixtureReques
     assert isinstance(skewness, float), "Skewness must be a float"
     assert not math.isnan(skewness), "Skewness should not be NaN"
     assert not math.isinf(skewness), "Skewness should be finite"
+
+
+@pytest.mark.parametrize(
+    "audio_fixture",
+    ["mono_audio_sample", "stereo_audio_sample"],
+)
+def test_amplitude_kurtosis_metric(audio_fixture: str, request: pytest.FixtureRequest) -> None:
+    """Tests kurtosis_amplitude_metric returns a finite float for real audio fixtures.
+
+    Args:
+        audio_fixture (str): Name of the audio fixture.
+        request (pytest.FixtureRequest): Pytest request object for accessing fixtures.
+    """
+    audio: Audio = request.getfixturevalue(audio_fixture)
+    kurt = amplitude_kurtosis_metric(audio)
+
+    assert isinstance(kurt, float), "Kurtosis must be a float"
+    assert not math.isnan(kurt), "Kurtosis should not be NaN"
+    assert not math.isinf(kurt), "Kurtosis should be finite"
