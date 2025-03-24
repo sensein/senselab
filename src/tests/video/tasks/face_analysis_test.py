@@ -18,9 +18,10 @@ from senselab.video.tasks.face_analysis.api import (
 # Define constants for test paths
 TEST_IMAGES_DIR = Path("src/tests/data_for_testing/face_data")
 DB_DIR = TEST_IMAGES_DIR / "db"
-IMAGE_PATH = TEST_IMAGES_DIR / "sally_2.jpg"
-IMAGE_2_PATH = DB_DIR / "sally_1.jpg"
+IMAGE_PATH = TEST_IMAGES_DIR / "sally_1.jpg"
+IMAGE_2_PATH = DB_DIR / "sally_2.jpg"
 GROUP_IMAGE_PATH = DB_DIR / "group_of_people.jpg"
+VIDEO_PATH = TEST_IMAGES_DIR.parent / "video_48khz_stereo_16bits.mp4"
 
 
 try:
@@ -44,12 +45,10 @@ def sample_image_array() -> np.array:
     return cv2.imread(str(IMAGE_PATH))
 
 
-# @pytest.fixture
-# def sample_video(sample_image_array) -> Video:
-#     """Create a sample video from the test image."""
-#     # Create a simple 2-frame video from the same image (duplicated)
-#     frames = [sample_image_array, sample_image_array]
-#     return Video(frames=frames, frame_rate=25.0, audio=None)
+@pytest.fixture
+def sample_video() -> Video:
+    """Load the test video into a Video object."""
+    return Video.from_filepath(str(VIDEO_PATH))
 
 
 @pytest.mark.skipif(not DEEPFACE_AVAILABLE or not CV2_AVAILABLE, reason="DeepFace or cv2 not available.")
@@ -95,19 +94,16 @@ def test_recognize_faces_ndarray(sample_image_array: np.array) -> None:
     assert len(results) == 1  # One result for the single image
 
 
-# def test_recognize_faces_video(sample_video):
-#     """
-#     Test recognize_faces with a Video object.
-#     """
-#     results = recognize_faces(sample_video, db_path=str(DB_DIR))
+def test_recognize_faces_video(sample_video: Video) -> None:
+    """Test recognize_faces with a Video object."""
+    results = recognize_faces(sample_video, db_path=str(DB_DIR))
 
-#     # We should get a list with length equal to the number of frames
-#     assert isinstance(results, list)
-#     assert len(results) == len(sample_video.frames)
+    # Should get a list with length equal to the number of frames
+    assert isinstance(results, list)
+    assert len(results) == len(sample_video.frames)
 
-#     # Each frame result should be a list (possibly empty if no faces found)
-#     for frame_result in results:
-#         assert isinstance(frame_result, list)
+    for frame_result in results:
+        assert isinstance(frame_result, list)
 
 
 @pytest.mark.skipif(not DEEPFACE_AVAILABLE or not CV2_AVAILABLE, reason="DeepFace or cv2 not available.")
@@ -174,19 +170,16 @@ def test_extract_face_embeddings_group() -> None:
             assert "embedding" in face_embedding
 
 
-# def test_extract_face_embeddings_video(sample_video):
-#     """
-#     Test extract_face_embeddings with a Video object.
-#     """
-#     results = extract_face_embeddings(sample_video)
+def test_extract_face_embeddings_video(sample_video: Video) -> None:
+    """Test extract_face_embeddings with a Video object."""
+    results = extract_face_embeddings(sample_video)
 
-#     # There should be results for each frame
-#     assert isinstance(results, list)
-#     assert len(results) == len(sample_video.frames)
+    # There should be results for each frame
+    assert isinstance(results, list)
+    assert len(results) == len(sample_video.frames)
 
-#     # Each frame result should be a list of embeddings
-#     for frame_result in results:
-#         assert isinstance(frame_result, list)
+    for frame_result in results:
+        assert isinstance(frame_result, list)
 
 
 @pytest.mark.skipif(not DEEPFACE_AVAILABLE or not CV2_AVAILABLE, reason="DeepFace or cv2 not available.")
@@ -248,16 +241,13 @@ def test_analyze_face_attributes_group() -> None:
             assert "gender" in face_attributes
 
 
-# def test_analyze_face_attributes_video(sample_video):
-#     """
-#     Test analyze_face_attributes with a Video object.
-#     """
-#     results = analyze_face_attributes(sample_video, actions=["age", "gender"])
+def test_analyze_face_attributes_video(sample_video: Video) -> None:
+    """Test analyze_face_attributes with a Video object."""
+    results = analyze_face_attributes(sample_video, actions=["age", "gender"])
 
-#     # There should be results for each frame
-#     assert isinstance(results, list)
-#     assert len(results) == len(sample_video.frames)
+    # There should be results for each frame
+    assert isinstance(results, list)
+    assert len(results) == len(sample_video.frames)
 
-#     # Each frame result should be a list of attribute dictionaries
-#     for frame_result in results:
-#         assert isinstance(frame_result, list)
+    for frame_result in results:
+        assert isinstance(frame_result, list)
