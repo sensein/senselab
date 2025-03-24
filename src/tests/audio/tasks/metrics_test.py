@@ -23,6 +23,7 @@ from senselab.audio.tasks.bioacoustic_qc.metrics import (
     mean_absolute_amplitude_metric,
     mean_absolute_deviation_metric,
     peak_snr_from_spectral_metric,
+    phase_correlation_metric,
     proportion_clipped_metric,
     proportion_silence_at_beginning_metric,
     proportion_silence_at_end_metric,
@@ -386,3 +387,57 @@ def test_amplitude_interquartile_range_metric(audio_fixture: str, request: pytes
     assert not torch.isnan(torch.tensor(iqr_value)), "IQR should not be NaN"
     assert not torch.isinf(torch.tensor(iqr_value)), "IQR should be finite"
     assert iqr_value >= 0, f"Expected IQR to be non-negative, got {iqr_value}"
+
+
+@pytest.mark.parametrize(
+    "waveform, expected_correlation",
+    [
+        (torch.tensor([[0.1, 0.2, 0.3, 0.4], [0.1, 0.2, 0.3, 0.4]]), 1.0),  # Identical channels -> perfect correlation
+        (
+            torch.tensor([[0.1, 0.2, 0.3, 0.4], [-0.1, -0.2, -0.3, -0.4]]),
+            -1.0,
+        ),  # Inverted channels -> negative correlation
+        (torch.tensor([[0.1, 0.2, 0.3, 0.4], [0.4, 0.3, 0.2, 0.1]]), -1.0),  # Reversed channels -> negative correlation
+        (torch.tensor([[0.1, 0.2, 0.3, 0.4], [0.0, 0.0, 0.0, 0.0]]), 0.0),  # One silent channel -> no correlation
+        (torch.tensor([[1.0, 1.0, 1.0, 1.0], [0.5, 0.6, 0.7, 0.8]]), 0.0),  # Constant channel -> no correlation
+    ],
+)
+def test_phase_correlation_metric(waveform: torch.Tensor, expected_correlation: float) -> None:
+    """Tests phase_correlation_metric with different stereo channel relationships."""
+    audio = Audio(waveform=waveform, sampling_rate=16000)
+    # Using a small frame_length to match our test waveforms
+    correlation = phase_correlation_metric(audio, frame_length=4, hop_length=4)
+    assert correlation == pytest.approx(
+        expected_correlation, rel=1e-6
+    ), f"Expected {expected_correlation}, got {correlation}"
+
+
+@pytest.mark.parametrize(
+    "waveform, expected_error, match",
+    [
+        (torch.tensor([[0.1, 0.2, 0.3, 0.4]]), ValueError, "Expected stereo audio"),  # Mono audio (1 channel)
+        (torch.tensor([[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]), ValueError, "Expected stereo audio"),  # 3 channels
+    ],
+)
+def test_phase_correlation_metric_errors(
+    waveform: torch.Tensor, expected_error: Type[BaseException], match: Union[str, Pattern[str]]
+) -> None:
+    """Tests phase_correlation_metric with invalid inputs (non-stereo audio)."""
+    audio = Audio(waveform=waveform, sampling_rate=16000)
+    with pytest.raises(expected_error, match=match):
+        phase_correlation_metric(audio)
+
+
+@pytest.mark.parametrize(
+    "audio_fixture",
+    ["stereo_audio_sample"],
+)
+def test_phase_correlation_metric_real_audio(audio_fixture: str, request: pytest.FixtureRequest) -> None:
+    """Tests phase_correlation_metric returns a valid float between -1.0 and 1.0 for real audio fixtures."""
+    audio: Audio = request.getfixturevalue(audio_fixture)
+    correlation = phase_correlation_metric(audio)
+
+    assert isinstance(correlation, float), "Correlation must be a float"
+    assert not math.isnan(correlation), "Correlation should not be NaN"
+    assert not math.isinf(correlation), "Correlation should be finite"
+    assert -1.0 <= correlation <= 1.0, f"Expected correlation between -1.0 and 1.0, got {correlation}"
