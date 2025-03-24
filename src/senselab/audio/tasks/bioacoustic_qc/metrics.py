@@ -426,3 +426,64 @@ def amplitude_interquartile_range_metric(audio: Audio) -> float:
     waveform = audio.waveform
     assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
     return float(scipy.stats.iqr(waveform.flatten().numpy()))
+
+
+def phase_correlation_metric(audio: Audio, frame_length: int = 2048, hop_length: int = 512) -> float:
+    """Calculates the phase correlation between stereo channels.
+
+    This metric measures the coherence between left and right channels in stereo audio.
+    Values close to 1.0 indicate strong positive correlation (in-phase),
+    values close to -1.0 indicate strong negative correlation (out-of-phase),
+    and values near 0.0 indicate uncorrelated channels.
+
+    Args:
+        audio (Audio): The SenseLab Audio object.
+        frame_length (int): Frame size for analysis.
+        hop_length (int): Hop size for moving window.
+
+    Returns:
+        float: Average phase correlation coefficient between channels.
+
+    Raises:
+        ValueError: If the audio is not stereo (doesn't have exactly 2 channels).
+    """
+    waveform = audio.waveform
+
+    # Check if the audio is stereo
+    if waveform.ndim != 2 or waveform.shape[0] != 2:
+        raise ValueError(f"Expected stereo audio (2 channels), but got {waveform.shape[0]} channels")
+
+    # Convert to numpy if it's a torch tensor
+    if isinstance(waveform, torch.Tensor):
+        waveform = waveform.numpy()
+
+    left_channel = waveform[0]
+    right_channel = waveform[1]
+
+    # Calculate the correlation coefficient for each frame and average
+    num_frames = 1 + (left_channel.shape[0] - frame_length) // hop_length
+    correlation_values = []
+
+    for i in range(num_frames):
+        start_idx = i * hop_length
+        end_idx = start_idx + frame_length
+
+        if end_idx > left_channel.shape[0]:
+            end_idx = left_channel.shape[0]
+
+        left_frame = left_channel[start_idx:end_idx]
+        right_frame = right_channel[start_idx:end_idx]
+
+        # Calculate Pearson correlation coefficient, handling edge cases
+        if np.std(left_frame) == 0 or np.std(right_frame) == 0:
+            corr = 0
+        else:
+            corr = np.corrcoef(left_frame, right_frame)[0, 1]
+
+            # Handle NaN values (can happen with very low amplitude signals)
+            if np.isnan(corr):
+                corr = 0
+
+        correlation_values.append(corr)
+    mean_correlation = np.mean(correlation_values)
+    return float(mean_correlation)
