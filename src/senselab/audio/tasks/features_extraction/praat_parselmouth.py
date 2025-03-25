@@ -24,7 +24,7 @@ except ModuleNotFoundError:
     PARSELMOUTH_AVAILABLE = False
 
 
-def get_sound(audio: Union[Path, Audio], sampling_rate: int = 16000) -> "parselmouth.Sound":
+def get_sound(audio: Union[Path, Audio], sampling_rate: int = 16000) -> parselmouth.Sound:
     """Get a sound object from a given audio file or Audio object.
 
     Args:
@@ -66,7 +66,7 @@ def get_sound(audio: Union[Path, Audio], sampling_rate: int = 16000) -> "parselm
     return snd_full
 
 
-def extract_speech_rate(snd: Union["parselmouth.Sound", Path, Audio]) -> Dict[str, float]:
+def extract_speech_rate(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str, float]:
     """Extract speech timing and pausing features from a given sound object.
 
     Args:
@@ -333,7 +333,7 @@ def extract_speech_rate(snd: Union["parselmouth.Sound", Path, Audio]) -> Dict[st
         }
 
 
-def extract_pitch_values(snd: Union["parselmouth.Sound", Path, Audio]) -> Dict[str, float]:
+def extract_pitch_values(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str, float]:
     """Estimate Pitch Range.
 
     Calculates the mean pitch using a wide range and uses this to shorten the range for future pitch extraction
@@ -413,7 +413,7 @@ def extract_pitch_values(snd: Union["parselmouth.Sound", Path, Audio]) -> Dict[s
 
 
 def extract_pitch_descriptors(
-    snd: Union["parselmouth.Sound", Path, Audio],
+    snd: Union[parselmouth.Sound, Path, Audio],
     floor: float,
     ceiling: float,
     frame_shift: float = 0.005,
@@ -480,7 +480,7 @@ def extract_pitch_descriptors(
 
 
 def extract_intensity_descriptors(
-    snd: Union["parselmouth.Sound", Path, Audio], floor: float, frame_shift: float
+    snd: Union[parselmouth.Sound, Path, Audio], floor: float, frame_shift: float
 ) -> Dict[str, float]:
     """Extract Intensity Features.
 
@@ -545,7 +545,7 @@ def extract_intensity_descriptors(
 
 
 def extract_harmonicity_descriptors(
-    snd: Union["parselmouth.Sound", Path, Audio], floor: float, frame_shift: float
+    snd: Union[parselmouth.Sound, Path, Audio], floor: float, frame_shift: float
 ) -> Dict[str, float]:
     """Voice Quality - HNR.
 
@@ -603,7 +603,7 @@ def extract_harmonicity_descriptors(
         return {"hnr_db_mean": np.nan, "hnr_db_std_dev": np.nan}
 
 
-def extract_slope_tilt(snd: Union["parselmouth.Sound", Path, Audio], floor: float, ceiling: float) -> Dict[str, float]:
+def extract_slope_tilt(snd: Union[parselmouth.Sound, Path, Audio], floor: float, ceiling: float) -> Dict[str, float]:
     """Voice Quality - Spectral Slope/Tilt.
 
     Function to extract spectral slope and tilt from a given sound object. This function is based on default
@@ -672,7 +672,7 @@ def extract_slope_tilt(snd: Union["parselmouth.Sound", Path, Audio], floor: floa
 
 
 def extract_cpp_descriptors(
-    snd: Union["parselmouth.Sound", Path, Audio], floor: float, ceiling: float, frame_shift: float
+    snd: Union[parselmouth.Sound, Path, Audio], floor: float, ceiling: float, frame_shift: float
 ) -> Dict[str, float]:
     """Extract Cepstral Peak Prominence (CPP).
 
@@ -789,7 +789,7 @@ def extract_cpp_descriptors(
 
 
 def measure_f1f2_formants_bandwidths(
-    snd: Union["parselmouth.Sound", Path, Audio], floor: float, ceiling: float, frame_shift: float
+    snd: Union[parselmouth.Sound, Path, Audio], floor: float, ceiling: float, frame_shift: float
 ) -> Dict[str, float]:
     """Extract Formant Frequency Features.
 
@@ -905,7 +905,7 @@ def measure_f1f2_formants_bandwidths(
 
 
 def extract_spectral_moments(
-    snd: Union["parselmouth.Sound", Path, Audio], floor: float, ceiling: float, window_size: float, frame_shift: float
+    snd: Union[parselmouth.Sound, Path, Audio], floor: float, ceiling: float, window_size: float, frame_shift: float
 ) -> Dict[str, float]:
     """Extract Spectral Moments.
 
@@ -1018,7 +1018,7 @@ def extract_spectral_moments(
 ### More functions ###
 
 
-def extract_audio_duration(snd: Union["parselmouth.Sound", Path, Audio]) -> Dict[str, float]:
+def extract_audio_duration(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str, float]:
     """Get the duration of a given audio file or Audio object.
 
     This function calculates the total duration of an audio file or audio object
@@ -1068,7 +1068,7 @@ def extract_audio_duration(snd: Union["parselmouth.Sound", Path, Audio]) -> Dict
         return {"duration": np.nan}
 
 
-def extract_jitter(snd: Union["parselmouth.Sound", Path, Audio], floor: float, ceiling: float) -> Dict[str, float]:
+def extract_jitter(snd: Union[parselmouth.Sound, Path, Audio], floor: float, ceiling: float) -> Dict[str, float]:
     """Returns the jitter descriptors for the given sound or audio file.
 
     Args:
@@ -1124,7 +1124,7 @@ def extract_jitter(snd: Union["parselmouth.Sound", Path, Audio], floor: float, c
         }
 
 
-def extract_shimmer(snd: Union["parselmouth.Sound", Path, Audio], floor: float, ceiling: float) -> Dict[str, float]:
+def extract_shimmer(snd: Union[parselmouth.Sound, Path, Audio], floor: float, ceiling: float) -> Dict[str, float]:
     """Returns the shimmer descriptors for the given sound or audio file.
 
     Args:
