@@ -221,6 +221,7 @@ def test_extract_spectrogram_from_audios(resampled_mono_audio_sample: Audio) -> 
     assert all(spec["spectrogram"].dim() == 2 for spec in result)
     assert all(spec["spectrogram"].shape[0] == 513 for spec in result)
 
+
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 def test_extract_spectrogram_from_audios_specify_n_fft(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of spectrogram from audio."""
