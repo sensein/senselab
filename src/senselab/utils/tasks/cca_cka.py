@@ -1,6 +1,7 @@
 """This module computes CCA and CKA."""
 
 from enum import Enum
+
 import torch
 
 
@@ -19,14 +20,15 @@ def compute_cca(features_x: torch.Tensor, features_y: torch.Tensor) -> float:
     features_y = (features_y - features_y.mean(0)) / (features_y.std(0) + 1e-8)
 
     # Reduced QR decomposition for efficiency and stability
-    qx, _ = torch.linalg.qr(features_x, mode='reduced')
-    qy, _ = torch.linalg.qr(features_y, mode='reduced')
+    qx, _ = torch.linalg.qr(features_x, mode="reduced")
+    qy, _ = torch.linalg.qr(features_y, mode="reduced")
     result = torch.norm(qx.t() @ qy) ** 2 / min(features_x.shape[1], features_y.shape[1])
     return float(result)
 
 
 class CKAKernelType(Enum):
     """CKA kernel types."""
+
     LINEAR = "linear"
     RBF = "rbf"
 
@@ -75,7 +77,7 @@ def compute_cka(
         sq_distances = -2 * dot_products + sq_norms[:, None] + sq_norms[None, :]
         # Ensure non-zero median to avoid division by zero
         sq_median = torch.median(sq_distances).clamp_min(1e-10)
-        return torch.exp(-sq_distances / (2 * (threshold ** 2) * sq_median))
+        return torch.exp(-sq_distances / (2 * (threshold**2) * sq_median))
 
     def _center_gram(gram: torch.Tensor) -> torch.Tensor:
         """Center the Gram matrix using Tikhonov regularization."""
