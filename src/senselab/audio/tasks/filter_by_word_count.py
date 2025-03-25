@@ -19,6 +19,8 @@ def is_num_words_in_range(audio: Audio, range: tuple, model: HFModel) -> bool:
     True or False (bool): True if the number of words in the audio falls within the range, and False otherwise
     """
     transcript = transcribe_audios([audio], model)[0]
+    if not (transcript or transcript.text):
+        raise AttributeError("No words were said during this audio sample.")
     if transcript and transcript.text:
         num_words = len(transcript.text.split())
         return not (num_words < range[0] or num_words > range[-1])
