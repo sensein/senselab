@@ -1,3 +1,20 @@
+# 0.33.1 (Tue Mar 25 2025)
+
+#### 🐛 Bug Fix
+
+- Fixed but where n_fft defaults to 1024 [#291](https://github.com/sensein/senselab/pull/291) ([@Evan8456](https://github.com/Evan8456) [@fabiocat93](https://github.com/fabiocat93))
+
+#### ⚠️ Pushed to `main`
+
+- Update README.md ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- Evan Ng ([@Evan8456](https://github.com/Evan8456))
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.33.0 (Fri Mar 14 2025)
 
 #### 🚀 Enhancement
