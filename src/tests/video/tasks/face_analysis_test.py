@@ -1,7 +1,6 @@
 """Module for testing Face Analysis tasks with real data."""
 
 from pathlib import Path
-from typing import Dict, Optional
 
 import numpy as np
 import pandas as pd
@@ -9,6 +8,9 @@ import pytest
 
 from senselab.video.data_structures.video import Video
 from senselab.video.tasks.face_analysis.api import (
+    DetectedFace,
+    FaceAttributes,
+    FaceMatch,
     analyze_face_attributes,
     extract_face_embeddings,
     recognize_faces,
@@ -57,15 +59,9 @@ def test_recognize_faces_with_model_variations(model_name: str) -> None:
     """Test recognize_faces with various DeepFace model configurations."""
     results = recognize_faces(str(IMAGE_PATH), db_path=str(DB_DIR), model_name=model_name)
 
-    # Verify results structure
     assert isinstance(results, list)
-    assert len(results) == 1  # One result for the single image
-
-    inner_result = results[0]
-    assert isinstance(inner_result, list)
-
-    if inner_result:
-        assert isinstance(inner_result[0], pd.DataFrame)
+    assert len(results) == 1
+    assert all(isinstance(face, DetectedFace) for face in results[0])
 
 
 @pytest.mark.skipif(not DEEPFACE_AVAILABLE or not CV2_AVAILABLE, reason="DeepFace or cv2 not available.")
@@ -74,15 +70,8 @@ def test_recognize_faces_group() -> None:
     results = recognize_faces(str(GROUP_IMAGE_PATH), db_path=str(DB_DIR))
 
     assert isinstance(results, list)
-    assert len(results) == 1  # One result for the single image
-
-    # The inner result should be a list of DataFrames for found faces
-    inner_result = results[0]
-    assert isinstance(inner_result, list)
-
-    # Group photo may have multiple face results
-    if inner_result:
-        assert isinstance(inner_result[0], pd.DataFrame)
+    assert len(results) == 1
+    assert all(isinstance(face, DetectedFace) for face in results[0])
 
 
 @pytest.mark.skipif(not DEEPFACE_AVAILABLE or not CV2_AVAILABLE, reason="DeepFace or cv2 not available.")
@@ -91,19 +80,17 @@ def test_recognize_faces_ndarray(sample_image_array: np.array) -> None:
     results = recognize_faces(sample_image_array, db_path=str(DB_DIR))
 
     assert isinstance(results, list)
-    assert len(results) == 1  # One result for the single image
+    assert len(results) == 1
+    assert all(isinstance(face, DetectedFace) for face in results[0])
 
 
 def test_recognize_faces_video(sample_video: Video) -> None:
     """Test recognize_faces with a Video object."""
     results = recognize_faces(sample_video, db_path=str(DB_DIR))
 
-    # Should get a list with length equal to the number of frames
     assert isinstance(results, list)
     assert len(results) == len(sample_video.frames)
-
-    for frame_result in results:
-        assert isinstance(frame_result, list)
+    assert all(isinstance(face, DetectedFace) for face in results[0])
 
 
 @pytest.mark.skipif(not DEEPFACE_AVAILABLE or not CV2_AVAILABLE, reason="DeepFace or cv2 not available.")
@@ -112,22 +99,23 @@ def test_verify_faces_same() -> None:
     # Comparing an image with itself should return verified=True
     result = verify_faces(str(IMAGE_PATH), str(IMAGE_PATH))
 
-    assert isinstance(result, dict)
-    assert "verified" in result
-    assert result["verified"] is True
+    assert isinstance(result, DetectedFace)
+    assert isinstance(result.face_match, list)
+    assert len(result.face_match) == 1
+    assert isinstance(result.face_match[0], FaceMatch)
+    assert result.face_match[0].verified is True
 
 
 @pytest.mark.skipif(not DEEPFACE_AVAILABLE or not CV2_AVAILABLE, reason="DeepFace or cv2 not available.")
 def test_verify_faces_different() -> None:
-    """Test verify_faces function with two different images of the same person.
-
-    Note: This might pass or fail depending on how similar the images are
-    and the threshold settings.
-    """
+    """Test verify_faces function with two different images of the same person."""
     result = verify_faces(str(IMAGE_PATH), str(IMAGE_2_PATH))
 
-    assert isinstance(result, dict)
-    assert "verified" in result
+    assert isinstance(result, DetectedFace)
+    assert isinstance(result.face_match, list)
+    assert len(result.face_match) == 1
+    assert isinstance(result.face_match[0], FaceMatch)
+    assert result.face_match[0].verified is True
 
 
 @pytest.mark.skipif(not DEEPFACE_AVAILABLE or not CV2_AVAILABLE, reason="DeepFace or cv2 not available.")
@@ -136,18 +124,9 @@ def test_extract_face_embeddings_str() -> None:
     results = extract_face_embeddings(str(IMAGE_PATH))
 
     assert isinstance(results, list)
-    assert len(results) == 1  # One result for the single image
-
-    # Check embedding structure if a face was found
-    inner_result = results[0]
-    assert isinstance(inner_result, list)
-
-    if inner_result:
-        face_embedding = inner_result[0]
-        assert isinstance(face_embedding, dict)
-        assert "embedding" in face_embedding
-        assert isinstance(face_embedding["embedding"], list)
-        assert all(isinstance(x, (int, float)) for x in face_embedding["embedding"])
+    assert len(results) == 1
+    assert all(isinstance(face, DetectedFace) for face in results[0])
+    assert all(isinstance(face.embedding, list) for face in results[0])
 
 
 @pytest.mark.skipif(not DEEPFACE_AVAILABLE or not CV2_AVAILABLE, reason="DeepFace or cv2 not available.")
@@ -156,30 +135,23 @@ def test_extract_face_embeddings_group() -> None:
     results = extract_face_embeddings(str(GROUP_IMAGE_PATH))
 
     assert isinstance(results, list)
-    assert len(results) == 1  # One result for the single image
+    assert len(results) == 1
 
-    # Check embedding structure
-    inner_result = results[0]
-    assert isinstance(inner_result, list)
-
-    # Group photo may have multiple face embeddings
-    if inner_result:
-        assert len(inner_result) >= 1  # Should find at least one face
-        for face_embedding in inner_result:
-            assert isinstance(face_embedding, dict)
-            assert "embedding" in face_embedding
+    # Group photo should have multiple face embeddings
+    assert len(results[0]) >= 1
+    assert all(isinstance(face, DetectedFace) for face in results[0])
+    assert all(isinstance(face.embedding, list) for face in results[0])
 
 
 def test_extract_face_embeddings_video(sample_video: Video) -> None:
     """Test extract_face_embeddings with a Video object."""
     results = extract_face_embeddings(sample_video)
 
-    # There should be results for each frame
     assert isinstance(results, list)
     assert len(results) == len(sample_video.frames)
 
-    for frame_result in results:
-        assert isinstance(frame_result, list)
+    assert all(isinstance(face, DetectedFace) for face in results[0])
+    assert all(isinstance(face.embedding, list) for face in results[0])
 
 
 @pytest.mark.skipif(not DEEPFACE_AVAILABLE or not CV2_AVAILABLE, reason="DeepFace or cv2 not available.")
@@ -188,17 +160,12 @@ def test_analyze_face_attributes_single() -> None:
     results = analyze_face_attributes(str(IMAGE_PATH), actions=["age", "gender"])
 
     assert isinstance(results, list)
-    assert len(results) == 1  # One result for the single image
-
-    # Check attributes structure
-    inner_result = results[0]
-    assert isinstance(inner_result, list)
-
-    if inner_result:
-        face_attributes = inner_result[0]
-        assert isinstance(face_attributes, dict)
-        assert "age" in face_attributes
-        assert "gender" in face_attributes
+    assert len(results) == 1
+    assert all(isinstance(face, DetectedFace) for face in results[0])
+    for face in results[0]:
+        assert face.attributes is not None
+        assert isinstance(face.attributes.age, int)
+        assert isinstance(face.attributes.dominant_gender, str)
 
 
 @pytest.mark.skipif(not DEEPFACE_AVAILABLE or not CV2_AVAILABLE, reason="DeepFace or cv2 not available.")
@@ -208,46 +175,24 @@ def test_analyze_face_attributes_all() -> None:
     results = analyze_face_attributes(str(IMAGE_PATH), actions=["age", "gender", "emotion", "race"])
 
     assert isinstance(results, list)
-    inner_result = results[0]
-
-    if inner_result:
-        face_attributes = inner_result[0]
-        assert isinstance(face_attributes, dict)
-        # Check that all requested attributes are present
-        assert "age" in face_attributes
-        assert "gender" in face_attributes
-        assert "emotion" in face_attributes
-        assert "race" in face_attributes
-
-
-@pytest.mark.skipif(not DEEPFACE_AVAILABLE or not CV2_AVAILABLE, reason="DeepFace or cv2 not available.")
-def test_analyze_face_attributes_group() -> None:
-    """Test analyze_face_attributes with a group photo."""
-    results = analyze_face_attributes(str(GROUP_IMAGE_PATH), actions=["age", "gender"])
-
-    assert isinstance(results, list)
-    assert len(results) == 1  # One result for the single image
-
-    # Check attributes structure
-    inner_result = results[0]
-    assert isinstance(inner_result, list)
-
-    # Group photo should have multiple face results
-    if inner_result:
-        assert len(inner_result) >= 1  # Should find at least one face
-        for face_attributes in inner_result:
-            assert isinstance(face_attributes, dict)
-            assert "age" in face_attributes
-            assert "gender" in face_attributes
+    assert len(results) == 1
+    assert all(isinstance(face, DetectedFace) for face in results[0])
+    for face in results[0]:
+        assert face.attributes is not None
+        assert isinstance(face.attributes.age, int)
+        assert isinstance(face.attributes.dominant_gender, str)
+        assert isinstance(face.attributes.dominant_emotion, str)
+        assert isinstance(face.attributes.dominant_race, str)
 
 
 def test_analyze_face_attributes_video(sample_video: Video) -> None:
     """Test analyze_face_attributes with a Video object."""
     results = analyze_face_attributes(sample_video, actions=["age", "gender"])
 
-    # There should be results for each frame
     assert isinstance(results, list)
     assert len(results) == len(sample_video.frames)
-
-    for frame_result in results:
-        assert isinstance(frame_result, list)
+    assert all(isinstance(face, DetectedFace) for face in results[0])
+    for face in results[0]:
+        assert face.attributes is not None
+        assert isinstance(face.attributes.age, int)
+        assert isinstance(face.attributes.dominant_gender, str)
