@@ -36,7 +36,7 @@ class FaceAttributes:
 
 @dataclass
 class FaceMatch:
-    """Information about a recognized face matched from the database."""
+    """Information about a matched face."""
 
     identity: str
     distance: float
@@ -59,27 +59,46 @@ class DetectedFace:
 def recognize_faces(
     input_media: Union[str, np.ndarray, Video],
     db_path: str,
-    model_name: Optional[str] = None,
-    distance_metric: Optional[str] = None,
-    backend: Optional[str] = None,
-    align: Optional[bool] = None,
+    model_name: str = "VGG-Face",
+    distance_metric: str = "cosine",
+    detector_backend: str = "opencv",
+    align: bool = True,
+    enforce_detection: bool = True,
+    threshold: Optional[float] = None,
 ) -> List[List[DetectedFace]]:
     """Perform face recognition against a database of faces.
 
     Args:
         input_media (str | np.ndarray | Video): Media to recognize face(s) from.
+
         db_path (str): Path to the face database for recognition.
-        model_name (Optional[str]): Face recognition model name (e.g., 'Facenet').
-        distance_metric (Optional[str]): Distance metric ('cosine', 'euclidean', etc.).
-        backend (Optional[str]): Face detection backend ('opencv', 'mtcnn', etc.).
-        align (Optional[bool]): Align faces before analysis.
+
+        model_name (str): Model for face recognition. Options: VGG-Face, Facenet, Facenet512,
+            OpenFace, DeepFace, DeepID, Dlib, ArcFace, SFace and GhostFaceNet
+
+        distance_metric (string): Metric for measuring similarity. Options: 'cosine',
+            'euclidean', 'euclidean_l2'.
+
+        detector_backend (str): face detector backend. Options: 'opencv', 'retinaface',
+            'mtcnn', 'ssd', 'dlib', 'mediapipe', 'yolov8', 'yolov11n', 'yolov11s',
+            'yolov11m', 'centerface' or 'skip'.
+
+        align (bool): Perform alignment based on the eye positions.
+
+        enforce_detection (boolean): If no face is detected in an image, raise an exception.
+            Default is True. Set to False to avoid the exception for low-resolution images.
+
+        threshold (float): Specify a threshold to determine whether a pair represents the same
+            person or different individuals. This threshold is used for comparing distances.
+            If left unset, default pre-tuned threshold values will be applied based on the specified
+            model name and distance metric (default is None).
 
     Returns:
         List[List[DetectedFace]]: Nested list containing `DetectedFace` objects for each frame.
             Each `DetectedFace` includes matched identities (`FaceMatch`) found in the face database,
             sorted by similarity distance.
     """
-    face_analyzer = DeepFaceAnalysis(model_name, distance_metric, backend, align)
+    face_analyzer = DeepFaceAnalysis(model_name, distance_metric, detector_backend, align, enforce_detection, threshold)
 
     if isinstance(input_media, (str, np.ndarray)):
         recognized_frames = [face_analyzer.recognize_faces(img_path=input_media, db_path=db_path)]
@@ -136,26 +155,45 @@ def recognize_faces(
 def verify_faces(
     img1: Union[str, np.ndarray],
     img2: Union[str, np.ndarray],
-    model_name: Optional[str] = None,
-    distance_metric: Optional[str] = None,
-    backend: Optional[str] = None,
-    align: Optional[bool] = None,
+    model_name: str = "VGG-Face",
+    distance_metric: str = "cosine",
+    detector_backend: str = "opencv",
+    align: bool = True,
+    enforce_detection: bool = True,
+    threshold: Optional[float] = None,
 ) -> DetectedFace:
     """Verify if two images contain the same person's face.
 
     Args:
-        img1 (Union[str, np.ndarray]): Path or array for the first image.
-        img2 (Union[str, np.ndarray]): Path or array for the second image.
-        model_name (Optional[str]): Face recognition model name.
-        distance_metric (Optional[str]): Distance metric for verification.
-        backend (Optional[str]): Face detection backend.
-        align (Optional[bool]): Align faces before verification.
+        img1 (Union[str, np.ndarray]): Path to the first image.
+
+        img2 (Union[str, np.ndarray]): Path to the second image.
+
+        model_name (Optional[str]): Model for face recognition. Options: VGG-Face, Facenet, Facenet512,
+            OpenFace, DeepFace, DeepID, Dlib, ArcFace, SFace and GhostFaceNet
+
+        distance_metric (string): Metric for measuring similarity. Options: 'cosine',
+            'euclidean', 'euclidean_l2'.
+
+        detector_backend (Optional[str]): face detector backend. Options: 'opencv', 'retinaface',
+            'mtcnn', 'ssd', 'dlib', 'mediapipe', 'yolov8', 'yolov11n', 'yolov11s',
+            'yolov11m', 'centerface' or 'skip'.
+
+        align (Optional[bool]): Perform alignment based on the eye positions.
+
+        enforce_detection (Optional[boolean]): If no face is detected in an image, raise an exception.
+            Default is True. Set to False to avoid the exception for low-resolution images.
+
+        threshold (float): Specify a threshold to determine whether a pair represents the same
+            person or different individuals. This threshold is used for comparing distances.
+            If left unset, default pre-tuned threshold values will be applied based on the specified
+            model name and distance metric (default is None).
 
     Returns:
         DetectedFace: DetectedFace object for `img1`, containing a `FaceMatch`
             representing the verification result against `img2`.
     """
-    face_analyzer = DeepFaceAnalysis(model_name, distance_metric, backend, align)
+    face_analyzer = DeepFaceAnalysis(model_name, distance_metric, detector_backend, align, enforce_detection, threshold)
     result = face_analyzer.verify_faces(img1_path=img1, img2_path=img2)
 
     return DetectedFace(
@@ -191,23 +229,35 @@ def verify_faces(
 
 def extract_face_embeddings(
     input_media: Union[str, np.ndarray, Video],
-    model_name: Optional[str] = None,
-    backend: Optional[str] = None,
-    align: Optional[bool] = None,
+    model_name: str = "VGG-Face",
+    detector_backend: str = "opencv",
+    align: bool = True,
+    enforce_detection: bool = True,
 ) -> List[List[DetectedFace]]:
     """Extract face embeddings from an image or video.
 
     Args:
         input_media (str | np.ndarray | Video): Media to extract face embeddings from.
-        model_name (Optional[str]): Embedding extraction model name.
-        backend (Optional[str]): Face detection backend.
-        align (Optional[bool]): Align faces before extraction.
+
+        model_name (str): Model for face recognition. Options: VGG-Face, Facenet, Facenet512,
+            OpenFace, DeepFace, DeepID, Dlib, ArcFace, SFace and GhostFaceNet
+
+        detector_backend (string): face detector backend. Options: 'opencv', 'retinaface',
+            'mtcnn', 'ssd', 'dlib', 'mediapipe', 'yolov8', 'yolov11n', 'yolov11s',
+            'yolov11m', 'centerface' or 'skip'.
+
+        align (boolean): Perform alignment based on the eye positions.
+
+        enforce_detection (boolean): If no face is detected in an image, raise an exception.
+            Default is True. Set to False to avoid the exception for low-resolution images.
 
     Returns:
         List[List[DetectedFace]]: Nested list containing `DetectedFace` objects for each frame.
             Each `DetectedFace` includes its corresponding embedding.
     """
-    face_analyzer = DeepFaceAnalysis(model_name, backend=backend, align=align)
+    face_analyzer = DeepFaceAnalysis(
+        model_name, detector_backend=detector_backend, align=align, enforce_detection=enforce_detection
+    )
 
     if isinstance(input_media, (str, np.ndarray)):
         embeddings = [face_analyzer.extract_face_embeddings(input_media)]
@@ -247,23 +297,34 @@ def extract_face_embeddings(
 
 def analyze_face_attributes(
     input_media: Union[str, np.ndarray, Video],
-    actions: Optional[List[str]] = None,
-    backend: Optional[str] = None,
-    align: Optional[bool] = None,
+    actions: List[str] = ["age", "gender", "emotion", "race"],
+    detector_backend: str = "opencv",
+    align: bool = True,
+    enforce_detection: bool = True,
 ) -> List[List[DetectedFace]]:
     """Analyze facial attributes (age, gender, emotion, race).
 
     Args:
         input_media (str | np.ndarray | Video): Media to analyze face attributes from.
+
         actions (Optional[List[str]]): Attributes to analyze (default: ['age', 'gender', 'emotion', 'race']).
-        backend (Optional[str]): Face detection backend.
-        align (Optional[bool]): Align faces before analysis.
+
+        detector_backend (string): face detector backend. Options: 'opencv', 'retinaface',
+            'mtcnn', 'ssd', 'dlib', 'mediapipe', 'yolov8', 'yolov11n', 'yolov11s', 'yolov11m',
+            'centerface' or 'skip' (default is opencv).
+
+        align (boolean): Perform alignment based on the eye positions (default is True).
+
+        enforce_detection (boolean): If no face is detected in an image, raise an exception.
+            Set to False to avoid the exception for low-resolution images (default is True).
 
     Returns:
         List[List[DetectedFace]]: List of `DetectedFace` objects for each frame.
             Each `DetectedFace` includes the chosen attributes.
     """
-    face_analyzer = DeepFaceAnalysis(backend=backend, align=align)
+    face_analyzer = DeepFaceAnalysis(
+        detector_backend=detector_backend, align=align, enforce_detection=enforce_detection
+    )
 
     if isinstance(input_media, (str, np.ndarray)):
         analyzed_frames = [face_analyzer.analyze_face_attributes(input_media, actions)]
