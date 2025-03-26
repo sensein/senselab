@@ -332,7 +332,7 @@ def extract_torchaudio_features_from_audios(
         extract_spectrogram_from_audios_pt(
             name="extract_spectrogram_from_audios_pt",
             audios=wf.lzin.x,
-            n_nfft=n_fft,
+            n_fft=n_fft,
             win_length=win_length,
             hop_length=hop_length,
         )
@@ -342,7 +342,7 @@ def extract_torchaudio_features_from_audios(
             name="extract_mel_spectrogram_from_audios_pt",
             audios=wf.lzin.x,
             n_mels=n_mels,
-            n_nfft=n_fft,
+            n_fft=n_fft,
             win_length=win_length,
             hop_length=hop_length,
         )
@@ -353,7 +353,7 @@ def extract_torchaudio_features_from_audios(
             spectrograms=wf.extract_spectrogram_from_audios_pt.lzout.out,
             sampling_rate=wf._extract_sampling_rate_pt.lzout.out,
             n_mels=n_mels,
-            n_nfft=n_fft,
+            n_fft=n_fft,
         )
     )
     wf.add(
