@@ -3,6 +3,7 @@
 from typing import Dict, List, Optional, Union
 
 import numpy as np
+import pandas as pd
 
 try:
     from deepface import DeepFace
@@ -97,7 +98,7 @@ class DeepFaceAnalysis:
             if value is not None
         }
 
-    def recognize_faces(self, img_path: Union[str, np.ndarray], db_path: str) -> List[Dict]:
+    def recognize_faces(self, img_path: Union[str, np.ndarray], db_path: str) -> List[pd.DataFrame]:
         """Perform face recognition on an image against a database of faces.
 
         Args:
@@ -105,7 +106,7 @@ class DeepFaceAnalysis:
             db_path (str): Path to the face database for recognition.
 
         Returns:
-            List[Dict]: A list of pandas DataFrames for each face in the input image.
+            List[pd.DataFrame]: A list of pandas DataFrames for each face in the input image.
                 Each DataFrame maps detected faces to their closest matches in the database.
         """
         if not DEEPFACE_AVAILABLE:
