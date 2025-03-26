@@ -5,68 +5,79 @@ from senselab.audio.tasks.bioacoustic_qc.checks import audio_intensity_positive_
 BIOACOUSTIC_ACTIVITY_TAXONOMY = {
     "bioacoustic": {
         "checks": [audio_length_positive_check, audio_intensity_positive_check],
+        "metrics": [],
         "subclass": {
             "human": {
-                "checks": None,
+                "checks": [],
+                "metrics": [],
                 "subclass": {
                     "respiration": {
-                        "checks": None,
+                        "checks": [],
+                        "metrics": [],
                         "subclass": {
                             "breathing": {
-                                "checks": None,
+                                "checks": [],
+                                "metrics": [],
                                 "subclass": {
-                                    "quiet": {"checks": None, "subclass": None},
-                                    "deep": {"checks": None, "subclass": None},
-                                    "rapid": {"checks": None, "subclass": None},
-                                    "sigh": {"checks": None, "subclass": None},
+                                    "quiet": {"checks": [], "metrics": [], "subclass": None},
+                                    "deep": {"checks": [], "metrics": [], "subclass": None},
+                                    "rapid": {"checks": [], "metrics": [], "subclass": None},
+                                    "sigh": {"checks": [], "metrics": [], "subclass": None},
                                 },
                             },
                             "exhalation": {
-                                "checks": None,
+                                "checks": [],
+                                "metrics": [],
                                 "subclass": {
                                     "cough": {
-                                        "checks": None,
+                                        "checks": [],
+                                        "metrics": [],
                                         "subclass": {
-                                            "voluntary": {"checks": None, "subclass": None},
-                                            "reflexive": {"checks": None, "subclass": None},
+                                            "voluntary": {"checks": [], "metrics": [], "subclass": None},
+                                            "reflexive": {"checks": [], "metrics": [], "subclass": None},
                                         },
                                     }
                                 },
                             },
                             "inhalation": {
-                                "checks": None,
+                                "checks": [],
+                                "metrics": [],
                                 "subclass": {
-                                    "sniff": {"checks": None, "subclass": None},
-                                    "gasp": {"checks": None, "subclass": None},
+                                    "sniff": {"checks": [], "metrics": [], "subclass": None},
+                                    "gasp": {"checks": [], "metrics": [], "subclass": None},
                                 },
                             },
                         },
                     },
                     "vocalization": {
-                        "checks": None,
+                        "checks": [],
+                        "metrics": [],
                         "subclass": {
                             "speech": {
-                                "checks": None,
+                                "checks": [],
+                                "metrics": [],
                                 "subclass": {
-                                    "spontaneous_speech": {"checks": None, "subclass": None},
-                                    "read_speech": {"checks": None, "subclass": None},
+                                    "spontaneous_speech": {"checks": [], "metrics": [], "subclass": None},
+                                    "read_speech": {"checks": [], "metrics": [], "subclass": None},
                                     "repetitive_speech": {
-                                        "checks": None,
+                                        "checks": [],
+                                        "metrics": [],
                                         "subclass": {
-                                            "diadochokinesis": {"checks": None, "subclass": None},
-                                            "counting": {"checks": None, "subclass": None},
+                                            "diadochokinesis": {"checks": [], "metrics": [], "subclass": None},
+                                            "counting": {"checks": [], "metrics": [], "subclass": None},
                                         },
                                     },
-                                    "sustained_phonation": {"checks": None, "subclass": None},
+                                    "sustained_phonation": {"checks": [], "metrics": [], "subclass": None},
                                 },
                             },
                             "non_speech": {
-                                "checks": None,
+                                "checks": [],
+                                "metrics": [],
                                 "subclass": {
-                                    "laughter": {"checks": None, "subclass": None},
-                                    "crying": {"checks": None, "subclass": None},
-                                    "humming": {"checks": None, "subclass": None},
-                                    "throat_clearing": {"checks": None, "subclass": None},
+                                    "laughter": {"checks": [], "metrics": [], "subclass": None},
+                                    "crying": {"checks": [], "metrics": [], "subclass": None},
+                                    "humming": {"checks": [], "metrics": [], "subclass": None},
+                                    "throat_clearing": {"checks": [], "metrics": [], "subclass": None},
                                 },
                             },
                         },
