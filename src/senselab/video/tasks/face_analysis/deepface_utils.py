@@ -25,20 +25,37 @@ class DeepFaceAnalysis:
 
     def __init__(
         self,
-        model_name: Optional[str] = None,
-        distance_metric: Optional[str] = None,
-        backend: Optional[str] = None,
-        align: Optional[bool] = None,
+        model_name: str = "VGG-Face",
+        distance_metric: str = "cosine",
+        detector_backend: str = "opencv",
+        align: bool = True,
+        enforce_detection: bool = True,
+        threshold: Optional[float] = None,
     ) -> None:
-        """Initialize the DeepFaceAnalysis class with optional configurations.
+        """Initialize the DeepFaceAnalysis class with configurations.
 
         Args:
             model_name (Optional[str]): The name of the DeepFace model to use.
-            distance_metric (Optional[str]): The distance metric to use for comparisons.
-            backend (Optional[str]): The face detection backend to use.
-            align (Optional[bool]): Whether to align faces before analysis.
 
-        If None is passed, the default is used.
+             model_name (str): Model for face recognition. Options: VGG-Face, Facenet, Facenet512,
+            OpenFace, DeepFace, DeepID, Dlib, ArcFace, SFace and GhostFaceNet
+
+            distance_metric (string): Metric for measuring similarity. Options: 'cosine',
+                'euclidean', 'euclidean_l2'.
+
+            detector_backend (str): face detector backend. Options: 'opencv', 'retinaface',
+                'mtcnn', 'ssd', 'dlib', 'mediapipe', 'yolov8', 'yolov11n', 'yolov11s',
+                'yolov11m', 'centerface' or 'skip'.
+
+            align (bool): Perform alignment based on the eye positions.
+
+            enforce_detection (boolean): If no face is detected in an image, raise an exception.
+                Default is True. Set to False to avoid the exception for low-resolution images.
+
+            threshold (float): Specify a threshold to determine whether a pair represents the same
+                person or different individuals. This threshold is used for comparing distances.
+                If left unset, default pre-tuned threshold values will be applied based on the specified
+                model name and distance metric (default is None).
         """
         if not DEEPFACE_AVAILABLE:
             raise ImportError(
@@ -47,56 +64,10 @@ class DeepFaceAnalysis:
             )
         self.model_name = model_name
         self.distance_metric = distance_metric
-        self.backend = backend
+        self.detector_backend = detector_backend
         self.align = align
-
-    @classmethod
-    def from_dict(cls, config: Optional[Dict] = None) -> "DeepFaceAnalysis":
-        """Create a DeepFaceAnalysis instance from a dictionary of configuration parameters.
-
-        Args:
-            config (Optional[Dict]): A dictionary of optional configuration parameters. Valid keys are:
-                - "model_name" (str): The DeepFace model to use.
-                - "distance_metric" (str): The distance metric for face verification.
-                - "backend" (str): The face detection backend (e.g., "opencv", "mtcnn").
-                - "align" (bool): Whether to align faces before analysis.
-            If no config or an empty config is provided, default parameters will be used.
-
-        Returns:
-            DeepFaceAnalysis: An instance of DeepFaceAnalysis with specified parameters applied.
-        """
-        if not DEEPFACE_AVAILABLE:
-            raise ImportError(
-                "DeepFace is not available. "
-                "Please install senselab video dependencies using `pip install senselab['video']`."
-            )
-
-        if config is None:
-            config = {}
-        return cls(
-            model_name=config.get("model_name"),
-            distance_metric=config.get("distance_metric"),
-            backend=config.get("backend"),
-            align=config.get("align"),
-        )
-
-    def get_kwargs(self) -> Dict:
-        """Get the keyword arguments for the DeepFace constructor.
-
-        Returns:
-            Dict: The keyword arguments for the DeepFace constructor, excluding any that are None.
-        """
-        # ensures that default DeepFace values are used when no value is passed
-        return {
-            key: value
-            for key, value in {
-                "model_name": self.model_name,
-                "distance_metric": self.distance_metric,
-                "detector_backend": self.backend,
-                "align": self.align,
-            }.items()
-            if value is not None
-        }
+        self.enforce_detection = enforce_detection
+        self.threshold = threshold
 
     def recognize_faces(self, img_path: Union[str, np.ndarray], db_path: str) -> List[pd.DataFrame]:
         """Perform face recognition on an image against a database of faces.
@@ -114,7 +85,16 @@ class DeepFaceAnalysis:
                 "DeepFace is not available. "
                 "Please install senselab video dependencies using `pip install senselab['video']`."
             )
-        return DeepFace.find(img_path=img_path, db_path=db_path, **self.get_kwargs())
+        return DeepFace.find(
+            img_path=img_path,
+            db_path=db_path,
+            model_name=self.model_name,
+            distance_metric=self.distance_metric,
+            detector_backend=self.detector_backend,
+            align=self.align,
+            enforce_detection=self.enforce_detection,
+            threshold=self.threshold,
+        )
 
     def verify_faces(self, img1_path: Union[str, np.ndarray], img2_path: Union[str, np.ndarray]) -> Dict:
         """Perform face verification between two images.
@@ -132,7 +112,16 @@ class DeepFaceAnalysis:
                 "Please install senselab video dependencies using `pip install senselab['video']`."
             )
 
-        return DeepFace.verify(img1_path=img1_path, img2_path=img2_path, **self.get_kwargs())
+        return DeepFace.verify(
+            img1_path=img1_path,
+            img2_path=img2_path,
+            model_name=self.model_name,
+            distance_metric=self.distance_metric,
+            detector_backend=self.detector_backend,
+            align=self.align,
+            enforce_detection=self.enforce_detection,
+            threshold=self.threshold,
+        )
 
     def extract_face_embeddings(self, img_path: Union[str, np.ndarray]) -> List[Dict]:
         """Extract face embeddings from an image.
@@ -149,17 +138,22 @@ class DeepFaceAnalysis:
                 "Please install senselab video dependencies using `pip install senselab['video']`."
             )
 
-        kwargs = {key: value for key, value in self.get_kwargs() if key in ["model_name", "detector_backend", "align"]}
-        return DeepFace.represent(img_path=img_path, **kwargs)
+        return DeepFace.represent(
+            img_path=img_path,
+            model_name=self.model_name,
+            detector_backend=self.detector_backend,
+            align=self.align,
+            enforce_detection=self.enforce_detection,
+        )
 
     def analyze_face_attributes(
-        self, img_path: Union[str, np.ndarray], actions: Optional[List[str]] = None
+        self, img_path: Union[str, np.ndarray], actions: List[str] = ["age", "gender", "emotion", "race"]
     ) -> List[Dict]:
         """Analyze facial attributes (age, gender, emotion, race) for faces in an image.
 
         Args:
             img_path (str or np.ndarray): The path to the image to analyze.
-            actions (Optional[List[str]]): List of attributes to analyze
+            actions (List[str]): List of attributes to analyze
                 (default: ['age', 'gender', 'emotion', 'race']).
 
         Returns:
@@ -171,7 +165,10 @@ class DeepFaceAnalysis:
                 "Please install senselab video dependencies using `pip install senselab['video']`."
             )
 
-        if actions is None:
-            actions = ["age", "gender", "emotion", "race"]
-        kwargs = {key: value for key, value in self.get_kwargs() if key in ["detector_backend", "align"]}
-        return DeepFace.analyze(img_path=img_path, actions=actions, **kwargs)
+        return DeepFace.analyze(
+            img_path=img_path,
+            actions=actions,
+            detector_backend=self.detector_backend,
+            align=self.align,
+            enforce_detection=self.enforce_detection,
+        )
