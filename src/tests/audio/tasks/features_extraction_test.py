@@ -223,6 +223,20 @@ def test_extract_spectrogram_from_audios(resampled_mono_audio_sample: Audio) -> 
 
 
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
+def test_extract_spectrogram_from_audios_specify_n_fft(resampled_mono_audio_sample: Audio) -> None:
+    """Test extraction of spectrogram from audio."""
+    n_fft = 400
+    result = extract_spectrogram_from_audios([resampled_mono_audio_sample], n_fft)
+    assert isinstance(result, list)
+    assert all(isinstance(spec, dict) for spec in result)
+    assert all("spectrogram" in spec for spec in result)
+    assert all(isinstance(spec["spectrogram"], torch.Tensor) for spec in result)
+    # Spectrogram shape is (freq, time)
+    assert all(spec["spectrogram"].dim() == 2 for spec in result)
+    assert all(spec["spectrogram"].shape[0] == 201 for spec in result)
+
+
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 def test_extract_mel_spectrogram_from_audios(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of mel spectrogram from audio."""
     result = extract_mel_spectrogram_from_audios([resampled_mono_audio_sample])
