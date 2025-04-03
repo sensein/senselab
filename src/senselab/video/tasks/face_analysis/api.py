@@ -7,6 +7,7 @@ import numpy as np
 
 from senselab.video.data_structures.video import Video
 from senselab.video.tasks.face_analysis.deepface_utils import DeepFaceAnalysis
+from senselab.video.tasks.face_analysis.utils import get_sampled_frames
 
 
 @dataclass
@@ -50,6 +51,7 @@ class DetectedFace:
     """Container for all information related to a detected face."""
 
     bbox: BoundingBox
+    frame_ix: Optional[float] = None
     face_confidence: Optional[float] = None
     attributes: Optional[FaceAttributes] = None
     embedding: Optional[List[float]] = None
@@ -65,6 +67,7 @@ def recognize_faces(
     align: bool = True,
     enforce_detection: bool = True,
     threshold: Optional[float] = None,
+    frame_sample_rate: Optional[float] = None,
 ) -> List[List[DetectedFace]]:
     """Perform face recognition against a database of faces.
 
@@ -93,6 +96,9 @@ def recognize_faces(
             If left unset, default pre-tuned threshold values will be applied based on the specified
             model name and distance metric (default is None).
 
+        frame_sample_rate (float): The desired number of frames per second to sample.
+            If None or greater than the video's native frame rate, processes all frames. (default is None)
+
     Returns:
         List[List[DetectedFace]]: Nested list containing `DetectedFace` objects for each frame.
             Each `DetectedFace` includes matched identities (`FaceMatch`) found in the face database,
@@ -101,12 +107,18 @@ def recognize_faces(
     face_analyzer = DeepFaceAnalysis(model_name, distance_metric, detector_backend, align, enforce_detection, threshold)
 
     if isinstance(input_media, (str, np.ndarray)):
-        recognized_frames = [face_analyzer.recognize_faces(img_path=input_media, db_path=db_path)]
+        recognized_frames = [(face_analyzer.recognize_faces(img_path=input_media, db_path=db_path), 0)]
 
     elif isinstance(input_media, Video):
+        sampled_frames = get_sampled_frames(input_media, frame_sample_rate)
         recognized_frames = [
-            face_analyzer.recognize_faces(img_path=frame.numpy() if hasattr(frame, "numpy") else frame, db_path=db_path)
-            for frame in input_media.frames
+            (
+                face_analyzer.recognize_faces(
+                    img_path=frame.numpy() if hasattr(frame, "numpy") else frame, db_path=db_path
+                ),
+                frame_ix,
+            )
+            for frame_ix, frame in sampled_frames
         ]
 
     else:
@@ -144,11 +156,12 @@ def recognize_faces(
                     ],
                     key=lambda fm: fm.distance,
                 ),
+                frame_ix=frame_ix if isinstance(input_media, Video) else None,
             )
             for face_df in frame
             if not face_df.empty
         ]
-        for frame in recognized_frames
+        for frame, frame_ix in recognized_frames
     ]
 
 
@@ -233,6 +246,7 @@ def extract_face_embeddings(
     detector_backend: str = "opencv",
     align: bool = True,
     enforce_detection: bool = True,
+    frame_sample_rate: Optional[float] = None,
 ) -> List[List[DetectedFace]]:
     """Extract face embeddings from an image or video.
 
@@ -251,6 +265,9 @@ def extract_face_embeddings(
         enforce_detection (boolean): If no face is detected in an image, raise an exception.
             Default is True. Set to False to avoid the exception for low-resolution images.
 
+        frame_sample_rate (float): The desired number of frames per second to sample.
+            If None or greater than the video's native frame rate, processes all frames. (default is None)
+
     Returns:
         List[List[DetectedFace]]: Nested list containing `DetectedFace` objects for each frame.
             Each `DetectedFace` includes its corresponding embedding.
@@ -260,12 +277,13 @@ def extract_face_embeddings(
     )
 
     if isinstance(input_media, (str, np.ndarray)):
-        embeddings = [face_analyzer.extract_face_embeddings(input_media)]
+        embeddings = [(face_analyzer.extract_face_embeddings(input_media), 0)]
 
     elif isinstance(input_media, Video):
+        sampled_frames = get_sampled_frames(input_media, frame_sample_rate)
         embeddings = [
-            face_analyzer.extract_face_embeddings(frame.numpy() if hasattr(frame, "numpy") else frame)
-            for frame in input_media.frames
+            (face_analyzer.extract_face_embeddings(frame.numpy() if hasattr(frame, "numpy") else frame), frame_ix)
+            for frame_ix, frame in sampled_frames
         ]
 
     else:
@@ -288,10 +306,11 @@ def extract_face_embeddings(
                 attributes=None,
                 embedding=face["embedding"],
                 face_match=None,
+                frame_ix=frame_ix if isinstance(input_media, Video) else None,
             )
-            for face in frame
+            for face in frame_data
         ]
-        for frame in embeddings
+        for frame_data, frame_ix in embeddings
     ]
 
 
@@ -301,6 +320,7 @@ def analyze_face_attributes(
     detector_backend: str = "opencv",
     align: bool = True,
     enforce_detection: bool = True,
+    frame_sample_rate: Optional[float] = None,
 ) -> List[List[DetectedFace]]:
     """Analyze facial attributes (age, gender, emotion, race).
 
@@ -318,6 +338,9 @@ def analyze_face_attributes(
         enforce_detection (boolean): If no face is detected in an image, raise an exception.
             Set to False to avoid the exception for low-resolution images (default is True).
 
+        frame_sample_rate (float): The desired number of frames per second to sample.
+            If None or greater than the video's native frame rate, processes all frames. (default is None)
+
     Returns:
         List[List[DetectedFace]]: List of `DetectedFace` objects for each frame.
             Each `DetectedFace` includes the chosen attributes.
@@ -327,12 +350,13 @@ def analyze_face_attributes(
     )
 
     if isinstance(input_media, (str, np.ndarray)):
-        analyzed_frames = [face_analyzer.analyze_face_attributes(input_media, actions)]
+        analyzed_frames = [(face_analyzer.analyze_face_attributes(input_media, actions), 0)]
 
     elif isinstance(input_media, Video):
+        sampled_frames = get_sampled_frames(input_media, frame_sample_rate)
         analyzed_frames = [
-            face_analyzer.analyze_face_attributes(frame.numpy() if hasattr(frame, "numpy") else frame, actions)
-            for frame in input_media.frames
+            (face_analyzer.analyze_face_attributes(frame.numpy() if hasattr(frame, "numpy") else frame), frame_ix)
+            for frame_ix, frame in sampled_frames
         ]
 
     else:
@@ -363,8 +387,14 @@ def analyze_face_attributes(
                 ),
                 embedding=None,
                 face_match=None,
+                frame_ix=frame_ix if isinstance(input_media, Video) else None,
             )
             for face in frame
         ]
-        for frame in analyzed_frames
+        for frame, frame_ix in analyzed_frames
     ]
+
+
+def visualize_face_analysis(face: DetectedFace) -> None:
+    """Visualize outputs of face analysis methods."""
+    raise NotImplementedError
