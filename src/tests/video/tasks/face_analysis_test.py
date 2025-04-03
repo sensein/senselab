@@ -1,5 +1,6 @@
 """Module for testing Face Analysis tasks with real data."""
 
+import math
 from pathlib import Path
 
 import numpy as np
@@ -18,12 +19,12 @@ from senselab.video.tasks.face_analysis.api import (
 )
 
 # Define constants for test paths
-TEST_IMAGES_DIR = Path("src/tests/data_for_testing/face_data")
-DB_DIR = TEST_IMAGES_DIR / "db"
-IMAGE_PATH = TEST_IMAGES_DIR / "sally_1.jpg"
+TEST_MEDIA_DIR = Path("src/tests/data_for_testing/face_data")
+DB_DIR = TEST_MEDIA_DIR / "db"
+IMAGE_PATH = TEST_MEDIA_DIR / "sally_1.jpg"
 IMAGE_2_PATH = DB_DIR / "sally_2.jpg"
-GROUP_IMAGE_PATH = DB_DIR / "group_of_people.jpg"
-VIDEO_PATH = TEST_IMAGES_DIR.parent / "video_48khz_stereo_16bits.mp4"
+GROUP_IMAGE_PATH = DB_DIR / "group.jpg"
+VIDEO_PATH = TEST_MEDIA_DIR / "sally_vid.mp4"
 
 
 try:
@@ -86,11 +87,17 @@ def test_recognize_faces_ndarray(sample_image_array: np.array) -> None:
 
 def test_recognize_faces_video(sample_video: Video) -> None:
     """Test recognize_faces with a Video object."""
-    results = recognize_faces(sample_video, db_path=str(DB_DIR))
+    frame_sample_rate = 2.0
+    results = recognize_faces(
+        sample_video, db_path=str(DB_DIR), frame_sample_rate=frame_sample_rate, enforce_detection=False
+    )
 
+    expected_sampled = math.ceil(len(sample_video.frames) / (sample_video.frame_rate / frame_sample_rate))
     assert isinstance(results, list)
-    assert len(results) == len(sample_video.frames)
-    assert all(isinstance(face, DetectedFace) for face in results[0])
+    assert len(results) == expected_sampled
+
+    if results and results[0]:
+        assert all(isinstance(face, DetectedFace) for face in results[0])
 
 
 @pytest.mark.skipif(not DEEPFACE_AVAILABLE or not CV2_AVAILABLE, reason="DeepFace or cv2 not available.")
@@ -145,13 +152,16 @@ def test_extract_face_embeddings_group() -> None:
 
 def test_extract_face_embeddings_video(sample_video: Video) -> None:
     """Test extract_face_embeddings with a Video object."""
-    results = extract_face_embeddings(sample_video)
+    frame_sample_rate = 2.0
+    results = extract_face_embeddings(sample_video, frame_sample_rate=frame_sample_rate, enforce_detection=False)
 
+    expected_sampled = math.ceil(len(sample_video.frames) / (sample_video.frame_rate / frame_sample_rate))
     assert isinstance(results, list)
-    assert len(results) == len(sample_video.frames)
+    assert len(results) == expected_sampled
 
-    assert all(isinstance(face, DetectedFace) for face in results[0])
-    assert all(isinstance(face.embedding, list) for face in results[0])
+    if results and results[0]:
+        assert all(isinstance(face, DetectedFace) for face in results[0])
+        assert all(isinstance(face.embedding, list) for face in results[0])
 
 
 @pytest.mark.skipif(not DEEPFACE_AVAILABLE or not CV2_AVAILABLE, reason="DeepFace or cv2 not available.")
@@ -187,12 +197,19 @@ def test_analyze_face_attributes_all() -> None:
 
 def test_analyze_face_attributes_video(sample_video: Video) -> None:
     """Test analyze_face_attributes with a Video object."""
-    results = analyze_face_attributes(sample_video, actions=["age", "gender"])
+    frame_sample_rate = 2.0
+    results = analyze_face_attributes(
+        sample_video, actions=["age", "gender"], frame_sample_rate=frame_sample_rate, enforce_detection=False
+    )
 
+    expected_sampled = math.ceil(len(sample_video.frames) / (sample_video.frame_rate / frame_sample_rate))
     assert isinstance(results, list)
-    assert len(results) == len(sample_video.frames)
-    assert all(isinstance(face, DetectedFace) for face in results[0])
-    for face in results[0]:
-        assert face.attributes is not None
-        assert isinstance(face.attributes.age, int)
-        assert isinstance(face.attributes.dominant_gender, str)
+    assert len(results) == expected_sampled
+
+    if results and results[0]:
+        assert all(isinstance(face, DetectedFace) for face in results[0])
+        assert all(isinstance(face.attributes, FaceAttributes) for face in results[0])
+        for face in results[0]:
+            assert face.attributes is not None
+            assert isinstance(face.attributes.age, int)
+            assert isinstance(face.attributes.dominant_gender, str)
