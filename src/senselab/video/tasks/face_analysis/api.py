@@ -355,7 +355,12 @@ def analyze_face_attributes(
     elif isinstance(input_media, Video):
         sampled_frames = get_sampled_frames(input_media, frame_sample_rate)
         analyzed_frames = [
-            (face_analyzer.analyze_face_attributes(frame.numpy() if hasattr(frame, "numpy") else frame), frame_ix)
+            (
+                face_analyzer.analyze_face_attributes(
+                    frame.numpy() if hasattr(frame, "numpy") else frame, actions=actions
+                ),
+                frame_ix,
+            )
             for frame_ix, frame in sampled_frames
         ]
 
