@@ -146,12 +146,14 @@ def test_proportion_clipped_metric(waveform: torch.Tensor, expected_proportion: 
         (torch.tensor([[0.0, 1.0, -0.5]]), True),  # One sample clipped
         (torch.tensor([[1.01, -1.0]]), True),  # Sample above threshold
         (torch.tensor([[1.0, -1.0, 1.0]]), True),  # All clipped
+        (torch.tensor([[0.5, 0.5, 0.5, -0.5, 0.5, 0.5]]), True),  # absolute plateau
+        (torch.tensor([[0.5, 0.5, 0.5, -0.4, 0.5, 0.5]]), False),
     ],
 )
 def test_clipping_present_metric(waveform: torch.Tensor, expected_clipping: bool) -> None:
     """Tests clipping_present_metric function."""
     audio = Audio(waveform=waveform, sampling_rate=16000)
-    result = clipping_present_metric(audio, clip_threshold=1.0)
+    result = clipping_present_metric(audio)
     assert result == expected_clipping, f"Expected {expected_clipping}, got {result}"
 
 
