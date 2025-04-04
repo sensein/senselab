@@ -264,6 +264,8 @@ def check_quality(
     dataset_tree = activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=activity_tree)
     if results_df is None:
         results_df = pd.DataFrame([audio.orig_path_or_id for audio in audios], columns=["audio_path_or_id"])
+    elif "audio_path_or_id" not in results_df.columns:
+        results_df["audio_path_or_id"] = [audio.orig_path_or_id for audio in audios]
     results_df = run_taxonomy_subtree_checks_recursively(
         audios, dataset_tree=dataset_tree, activity_dict=activity_dict, results_df=results_df
     )
