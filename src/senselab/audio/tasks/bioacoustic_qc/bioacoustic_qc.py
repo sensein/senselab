@@ -234,12 +234,6 @@ def run_taxonomy_subtree_checks_recursively(
     return results_df
 
 
-def load_wav_files(directory: str | os.PathLike) -> List[Audio]:
-    """Load all .wav files in a directory into Audio objects."""
-    wav_files = [os.path.join(directory, fname) for fname in os.listdir(directory) if fname.lower().endswith(".wav")]
-    return [Audio.from_filepath(fpath) for fpath in wav_files]
-
-
 def check_quality(
     audio_dir: Union[str, os.PathLike],
     activity_tree: Dict = BIOACOUSTIC_ACTIVITY_TAXONOMY,
@@ -255,9 +249,13 @@ def check_quality(
         for fname in files
         if fname.lower().endswith(audio_extensions)
     ]
+    audio_paths = audio_paths[:100]
+    print("Audio paths loaded.")
 
+    total_batches = (len(audio_paths) + batch_size - 1) // batch_size
     batch_aqm_dataframes = []
     for i in range(0, len(audio_paths), batch_size):
+        batch_idx = i // batch_size
         batch_paths = audio_paths[i : i + batch_size]
         batch_audios = [Audio.from_filepath(p) for p in batch_paths]
 
@@ -271,6 +269,7 @@ def check_quality(
             activity_dict=activity_dict,
             results_df=results_df,
         )
+        print(f"{batch_idx + 1}/{total_batches} batches processed")
         batch_aqm_dataframes.append(results_df)
 
         del batch_audios  # Free memory
@@ -278,4 +277,5 @@ def check_quality(
     all_aqms = pd.concat(batch_aqm_dataframes, ignore_index=True)
     if save_path:
         all_aqms.to_csv(save_path)
+        print(f"Check results saved to: {save_path}")
     return all_aqms
