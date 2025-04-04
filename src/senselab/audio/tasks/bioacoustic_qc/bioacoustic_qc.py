@@ -2,7 +2,7 @@
 
 import os
 from copy import deepcopy
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
 import pandas as pd
 from pydra.engine.core import Workflow  # Assuming you're using Pydra workflows
@@ -241,7 +241,7 @@ def load_wav_files(directory: str | os.PathLike) -> List[Audio]:
 
 
 def check_quality(
-    audios: List[Audio],
+    audios: Union[List[Audio], str, os.PathLike],
     activity_tree: Dict = BIOACOUSTIC_ACTIVITY_TAXONOMY,
     complexity: str = "low",
     results_df: pd.DataFrame = None,
@@ -252,7 +252,7 @@ def check_quality(
     updated taxonomy tree and the modified list of audios.
 
     Args:
-        audios (List[Audio]): Audio files to analyze.
+        audios (List[Audio] | str | os.PathLike): Audio files or audio file directory to analyze.
         activity_tree (Dict, optional): Taxonomy tree defining hierarchy. Defaults to `BIOACOUSTIC_ACTIVITY_TAXONOMY`.
         complexity (str, optional): Processing complexity level (unused, reserved for future use). Defaults to `"low"`.
         results_df (pd.DataFrame, optional): DataFrame to store quality check results. Defaults to None.
@@ -260,12 +260,27 @@ def check_quality(
     Returns:
         pd.DataFrame: DataFrame to store quality check results.
     """
+    if isinstance(audios, (str, os.PathLike)) and os.path.isdir(str(audios)):
+        audio_extensions = (".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac")
+        audio_paths = [
+            os.path.join(root, fname)
+            for root, _, files in os.walk(str(audios))
+            for fname in files
+            if fname.lower().endswith(audio_extensions)
+        ]
+        audios = [Audio.from_filepath(fpath) for fpath in audio_paths]
+
+    # Ensure type is now List[Audio]
+    assert isinstance(audios, list) and all(isinstance(a, Audio) for a in audios)
+
     activity_dict = audios_to_activity_dict(audios)
     dataset_tree = activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=activity_tree)
+
     if results_df is None:
         results_df = pd.DataFrame([audio.orig_path_or_id for audio in audios], columns=["audio_path_or_id"])
     elif "audio_path_or_id" not in results_df.columns:
         results_df["audio_path_or_id"] = [audio.orig_path_or_id for audio in audios]
+
     results_df = run_taxonomy_subtree_checks_recursively(
         audios, dataset_tree=dataset_tree, activity_dict=activity_dict, results_df=results_df
     )
