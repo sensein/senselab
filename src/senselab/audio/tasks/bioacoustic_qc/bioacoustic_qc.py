@@ -1,5 +1,6 @@
 """Runs bioacoustic activity recording quality control on a set of Audio objects."""
 
+import os
 from copy import deepcopy
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
@@ -232,14 +233,10 @@ def run_taxonomy_subtree_checks_recursively(
     check_subtree_nodes(dataset_tree, results_df=results_df)  # Start recursion from root
     return results_df
 
-import os
+
 def load_wav_files(directory: str | os.PathLike) -> List[Audio]:
     """Load all .wav files in a directory into Audio objects."""
-    wav_files = [
-        os.path.join(directory, fname)
-        for fname in os.listdir(directory)
-        if fname.lower().endswith(".wav")
-    ]
+    wav_files = [os.path.join(directory, fname) for fname in os.listdir(directory) if fname.lower().endswith(".wav")]
     return [Audio.from_filepath(fpath) for fpath in wav_files]
 
 
@@ -265,6 +262,8 @@ def check_quality(
     """
     activity_dict = audios_to_activity_dict(audios)
     dataset_tree = activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=activity_tree)
+    if results_df is None:
+        results_df = pd.DataFrame([audio.orig_path_or_id for audio in audios], columns=["audio_path_or_id"])
     results_df = run_taxonomy_subtree_checks_recursively(
         audios, dataset_tree=dataset_tree, activity_dict=activity_dict, results_df=results_df
     )
