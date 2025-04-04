@@ -241,47 +241,41 @@ def load_wav_files(directory: str | os.PathLike) -> List[Audio]:
 
 
 def check_quality(
-    audios: Union[List[Audio], str, os.PathLike],
+    audio_dir: Union[str, os.PathLike],
     activity_tree: Dict = BIOACOUSTIC_ACTIVITY_TAXONOMY,
     complexity: str = "low",
-    results_df: pd.DataFrame = None,
+    batch_size: int = 8,
+    save_path: Union[str, os.PathLike, None] = None,
 ) -> pd.DataFrame:
-    """Runs quality checks on audio files and updates the taxonomy tree.
+    """Runs quality checks on audio files in batches and updates the taxonomy tree."""
+    audio_extensions = (".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac")
+    audio_paths = [
+        os.path.join(root, fname)
+        for root, _, files in os.walk(str(audio_dir))
+        for fname in files
+        if fname.lower().endswith(audio_extensions)
+    ]
 
-    Maps `Audio` objects to activities, prunes the taxonomy tree, and applies quality checks recursively. Returns the
-    updated taxonomy tree and the modified list of audios.
+    batch_aqm_dataframes = []
+    for i in range(0, len(audio_paths), batch_size):
+        batch_paths = audio_paths[i : i + batch_size]
+        batch_audios = [Audio.from_filepath(p) for p in batch_paths]
 
-    Args:
-        audios (List[Audio] | str | os.PathLike): Audio files or audio file directory to analyze.
-        activity_tree (Dict, optional): Taxonomy tree defining hierarchy. Defaults to `BIOACOUSTIC_ACTIVITY_TAXONOMY`.
-        complexity (str, optional): Processing complexity level (unused, reserved for future use). Defaults to `"low"`.
-        results_df (pd.DataFrame, optional): DataFrame to store quality check results. Defaults to None.
+        activity_dict = audios_to_activity_dict(batch_audios)
+        dataset_tree = activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=activity_tree)
 
-    Returns:
-        pd.DataFrame: DataFrame to store quality check results.
-    """
-    if isinstance(audios, (str, os.PathLike)) and os.path.isdir(str(audios)):
-        audio_extensions = (".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac")
-        audio_paths = [
-            os.path.join(root, fname)
-            for root, _, files in os.walk(str(audios))
-            for fname in files
-            if fname.lower().endswith(audio_extensions)
-        ]
-        audios = [Audio.from_filepath(fpath) for fpath in audio_paths]
+        results_df = pd.DataFrame([a.orig_path_or_id for a in batch_audios], columns=["audio_path_or_id"])
+        results_df = run_taxonomy_subtree_checks_recursively(
+            audios=batch_audios,
+            dataset_tree=dataset_tree,
+            activity_dict=activity_dict,
+            results_df=results_df,
+        )
+        batch_aqm_dataframes.append(results_df)
 
-    # Ensure type is now List[Audio]
-    assert isinstance(audios, list) and all(isinstance(a, Audio) for a in audios)
+        del batch_audios  # Free memory
 
-    activity_dict = audios_to_activity_dict(audios)
-    dataset_tree = activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=activity_tree)
-
-    if results_df is None:
-        results_df = pd.DataFrame([audio.orig_path_or_id for audio in audios], columns=["audio_path_or_id"])
-    elif "audio_path_or_id" not in results_df.columns:
-        results_df["audio_path_or_id"] = [audio.orig_path_or_id for audio in audios]
-
-    results_df = run_taxonomy_subtree_checks_recursively(
-        audios, dataset_tree=dataset_tree, activity_dict=activity_dict, results_df=results_df
-    )
-    return results_df
+    all_aqms = pd.concat(batch_aqm_dataframes, ignore_index=True)
+    if save_path:
+        all_aqms.to_csv(save_path)
+    return all_aqms
