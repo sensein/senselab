@@ -238,7 +238,7 @@ def check_quality(
     audio_dir: Union[str, os.PathLike],
     activity_tree: Dict = BIOACOUSTIC_ACTIVITY_TAXONOMY,
     complexity: str = "low",
-    batch_size: int = 8,
+    batch_size: int = 1,
     save_path: Union[str, os.PathLike, None] = None,
 ) -> pd.DataFrame:
     """Runs quality checks on audio files in batches and updates the taxonomy tree."""
