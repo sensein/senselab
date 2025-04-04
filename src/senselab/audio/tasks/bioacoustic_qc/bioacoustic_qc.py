@@ -232,12 +232,22 @@ def run_taxonomy_subtree_checks_recursively(
     check_subtree_nodes(dataset_tree, results_df=results_df)  # Start recursion from root
     return results_df
 
+import os
+def load_wav_files(directory: str | os.PathLike) -> List[Audio]:
+    """Load all .wav files in a directory into Audio objects."""
+    wav_files = [
+        os.path.join(directory, fname)
+        for fname in os.listdir(directory)
+        if fname.lower().endswith(".wav")
+    ]
+    return [Audio.from_filepath(fpath) for fpath in wav_files]
+
 
 def check_quality(
     audios: List[Audio],
     activity_tree: Dict = BIOACOUSTIC_ACTIVITY_TAXONOMY,
     complexity: str = "low",
-    audio_df: pd.DataFrame = None,
+    results_df: pd.DataFrame = None,
 ) -> pd.DataFrame:
     """Runs quality checks on audio files and updates the taxonomy tree.
 
@@ -248,14 +258,13 @@ def check_quality(
         audios (List[Audio]): Audio files to analyze.
         activity_tree (Dict, optional): Taxonomy tree defining hierarchy. Defaults to `BIOACOUSTIC_ACTIVITY_TAXONOMY`.
         complexity (str, optional): Processing complexity level (unused, reserved for future use). Defaults to `"low"`.
-        audio_df (pd.DataFrame, optional): DataFrame to store quality check results. Defaults to None.
+        results_df (pd.DataFrame, optional): DataFrame to store quality check results. Defaults to None.
 
     Returns:
         pd.DataFrame: DataFrame to store quality check results.
     """
     activity_dict = audios_to_activity_dict(audios)
     dataset_tree = activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=activity_tree)
-    results_df = audio_df
     results_df = run_taxonomy_subtree_checks_recursively(
         audios, dataset_tree=dataset_tree, activity_dict=activity_dict, results_df=results_df
     )
