@@ -5,6 +5,7 @@ from copy import deepcopy
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
 import pandas as pd
+from joblib import Parallel, delayed
 from pydra.engine.core import Workflow  # Assuming you're using Pydra workflows
 
 from senselab.audio.data_structures import Audio
@@ -238,8 +239,10 @@ def check_quality(
     audio_dir: Union[str, os.PathLike],
     activity_tree: Dict = BIOACOUSTIC_ACTIVITY_TAXONOMY,
     complexity: str = "low",
-    batch_size: int = 1,
+    batch_size: int = 8,
     save_path: Union[str, os.PathLike, None] = None,
+    n_jobs: int = -1,
+    verbosity: int = 20,
 ) -> pd.DataFrame:
     """Runs quality checks on audio files in batches and updates the taxonomy tree."""
     audio_extensions = (".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac")
@@ -252,12 +255,10 @@ def check_quality(
     print("Audio paths loaded.")
 
     total_batches = (len(audio_paths) + batch_size - 1) // batch_size
-    batch_aqm_dataframes = []
-    for i in range(0, len(audio_paths), batch_size):
-        batch_idx = i // batch_size
-        batch_paths = audio_paths[i : i + batch_size]
-        batch_audios = [Audio.from_filepath(p) for p in batch_paths]
+    print(f"{total_batches} batches of size {batch_size}")
 
+    def process_batch(batch_paths: List[str], batch_idx: int) -> pd.DataFrame:
+        batch_audios = [Audio.from_filepath(p) for p in batch_paths]
         activity_dict = audios_to_activity_dict(batch_audios)
         dataset_tree = activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=activity_tree)
 
@@ -268,10 +269,13 @@ def check_quality(
             activity_dict=activity_dict,
             results_df=results_df,
         )
-        print(f"{batch_idx + 1}/{total_batches} batches processed")
-        batch_aqm_dataframes.append(results_df)
+        del batch_audios
+        return results_df
 
-        del batch_audios  # Free memory
+    batches = [audio_paths[i : i + batch_size] for i in range(0, len(audio_paths), batch_size)]
+    batch_aqm_dataframes = Parallel(n_jobs=n_jobs, verbose=verbosity)(
+        delayed(process_batch)(batch, idx) for idx, batch in enumerate(batches)
+    )
 
     all_aqms = pd.concat(batch_aqm_dataframes, ignore_index=True)
     if save_path:
