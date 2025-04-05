@@ -252,6 +252,7 @@ def check_quality(
         for fname in files
         if fname.lower().endswith(audio_extensions)
     ]
+
     print("Audio paths loaded.")
 
     total_batches = (len(audio_paths) + batch_size - 1) // batch_size
@@ -278,6 +279,7 @@ def check_quality(
     )
 
     all_aqms = pd.concat(batch_aqm_dataframes, ignore_index=True)
+    all_aqms["audio_path_or_id"] = all_aqms["audio_path_or_id"].apply(os.path.basename)
     if save_path:
         all_aqms.to_csv(save_path)
         print(f"Results saved to: {save_path}")
