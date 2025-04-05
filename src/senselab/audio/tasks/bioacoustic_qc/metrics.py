@@ -473,7 +473,7 @@ def phase_correlation_metric(audio: Audio, frame_length: int = 2048, hop_length:
 
     # Check if the audio is stereo
     if waveform.ndim != 2 or waveform.shape[0] != 2:
-        raise ValueError(f"Expected stereo audio (2 channels), but got {waveform.shape[0]} channels")
+        return 1
 
     # Convert to numpy if it's a torch tensor
     if isinstance(waveform, torch.Tensor):
