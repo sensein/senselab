@@ -83,7 +83,8 @@ senselab    </h1>
 
 <h2 id="system-requirements">⚠️ System Requirements</h2>
 
-<p><strong>If on macOS, this package requires an ARM64 architecture</strong> due to PyTorch 2.2.2+ dropping support for x86-64 on macOS.</p>
+<ol>
+<li><p><strong>If on macOS, this package requires an ARM64 architecture</strong> due to PyTorch 2.2.2+ dropping support for x86-64 on macOS.</p>
 
 <p>❌ Unsupported systems include:</p>
 
@@ -106,7 +107,9 @@ senselab    </h1>
 <li><code>x86_64</code> → ❌ Your system is not supported.</li>
 </ul>
 
-<p>If you attempt to install this package on an unsupported system, the installation or execution will fail.</p>
+<p>If you attempt to install this package on an unsupported system, the installation or execution will fail.</p></li>
+<li><p><code>FFmpeg</code> is required by some audio and video dependencies (e.g., <code>torchaudio</code>). Please make sure you have <code>FFmpeg</code> properly installed on your machine before installing and using <code><a href="">senselab</a></code> (see <a href="https://www.ffmpeg.org/download.html">here</a> for detailed platform-dependent instructions).</p></li>
+</ol>
 
 <h2 id="installation">Installation</h2>
 
