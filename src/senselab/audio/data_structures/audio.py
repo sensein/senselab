@@ -84,6 +84,8 @@ class Audio(BaseModel):
             # otherwise, a valid filepath is required for lazy loading.
             if not filepath:
                 raise ValueError("Either a waveform or a valid filepath must be provided to construct an Audio object.")
+            elif not os.path.exists(filepath):
+                raise FileNotFoundError(f"File {filepath} does not exist.")
             else:
                 self._file_path = filepath
 
@@ -116,6 +118,7 @@ class Audio(BaseModel):
         if self._waveform is None:
             # print("Lazy loading audio data from file...")
             self._waveform = self.convert_to_tensor(self._lazy_load_data_from_filepath(self._file_path))
+        assert self._waveform is not None, "Failed to load audio data."
         return self._waveform
 
     @property
@@ -130,6 +133,7 @@ class Audio(BaseModel):
                 self._sampling_rate = info.sample_rate
             else:
                 raise ValueError("Sampling rate is not available.")
+        assert self._sampling_rate is not None, "Sampling rate should be set."
         return self._sampling_rate
 
     @classmethod
