@@ -115,7 +115,7 @@ def extract_opensmile_features_from_audios(
             }
         except Exception as e:
             # Log error and return NaNs if feature extraction fails
-            print(f"Error processing sample {sample.orig_path_or_id}: {e}")
+            print(f"Error processing sample {sample.generate_id()}: {e}")
             return {feature: np.nan for feature in smile.feature_names}
 
     # Decorate the feature extraction function for Pydra

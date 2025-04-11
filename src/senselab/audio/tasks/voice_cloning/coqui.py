@@ -96,15 +96,15 @@ class CoquiVoiceCloner:
             if source_audio.waveform.squeeze().dim() != 1 or target_audio.waveform.squeeze().dim() != 1:
                 raise ValueError(
                     "Only mono audio files are supported. "
-                    f"Source ({source_audio.orig_path_or_id}) shape: {source_audio.waveform.shape}, "
-                    f"Target ({target_audio.orig_path_or_id}) shape: {target_audio.waveform.shape}"
+                    f"Source ({source_audio.generate_id()}) shape: {source_audio.waveform.shape}, "
+                    f"Target ({target_audio.generate_id()}) shape: {target_audio.waveform.shape}"
                 )
 
             if source_audio.sampling_rate != expected_sample_rate or target_audio.sampling_rate != expected_sample_rate:
                 raise ValueError(
                     f"Expected input sample rate {expected_sample_rate}, but got "
-                    f"{source_audio.sampling_rate} (source = {source_audio.orig_path_or_id}) "
-                    f"and {target_audio.sampling_rate} (target = {target_audio.orig_path_or_id})."
+                    f"{source_audio.sampling_rate} (source = {source_audio.generate_id()}) "
+                    f"and {target_audio.sampling_rate} (target = {target_audio.generate_id()})."
                 )
 
             # Ensure mono audio

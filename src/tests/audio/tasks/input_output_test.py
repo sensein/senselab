@@ -52,7 +52,7 @@ def test_read_audios(audio_paths: List[str | os.PathLike]) -> None:
 
     for idx, processed_audio in enumerate(processed_audios):
         # Load the same file directly using the Audio class for comparison
-        reference_audio = Audio.from_filepath(audio_paths[idx])
+        reference_audio = Audio(filepath=audio_paths[idx])
 
         # Verify the processed Audio matches the reference
         assert torch.equal(
