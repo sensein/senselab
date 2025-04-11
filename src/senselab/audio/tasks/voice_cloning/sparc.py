@@ -86,14 +86,14 @@ class SparcVoiceCloner:
             if source_audio.waveform.squeeze().dim() != 1 or target_audio.waveform.squeeze().dim() != 1:
                 raise ValueError(
                     "Error with the pair of source and target audios: "
-                    f"{source_audio.orig_path_or_id} and {target_audio.orig_path_or_id}. "
+                    f"{source_audio.generate_id()} and {target_audio.generate_id()}. "
                     "Only mono audio files are supported."
                 )
 
             if source_audio.sampling_rate != expected_sample_rate or target_audio.sampling_rate != expected_sample_rate:
                 raise ValueError(
                     "Error with the pair of source and target audios: "
-                    f"{source_audio.orig_path_or_id} and {target_audio.orig_path_or_id}. "
+                    f"{source_audio.generate_id()} and {target_audio.generate_id()}. "
                     f"Expected sample rate {expected_sample_rate}, but got "
                     f"{source_audio.sampling_rate} (source) and {target_audio.sampling_rate} (target)."
                 )

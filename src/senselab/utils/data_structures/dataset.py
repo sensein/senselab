@@ -104,7 +104,7 @@ class SenselabDataset(BaseModel):
                 if isinstance(audio, Audio):
                     audio_list.append(audio)
                 else:
-                    audio_list.append(Audio.from_filepath(audio))
+                    audio_list.append(Audio(filepath=audio))
         return audio_list
 
     @field_validator("videos", mode="before")
@@ -285,7 +285,6 @@ class SenselabDataset(BaseModel):
                 {
                     "array": audio.waveform.T,
                     "sampling_rate": audio.sampling_rate,
-                    "path": audio.generate_path(),
                 }
             )
             audio_metadata.append(audio.metadata.copy())
@@ -303,7 +302,6 @@ class SenselabDataset(BaseModel):
                 else {
                     "array": video.audio.waveform.T.to(torch.float32).numpy(),
                     "sampling_rate": video.audio.sampling_rate,
-                    "path": video.audio.generate_path(),
                 }
             )
             video_audio_metadata.append(None if not video.audio else video.audio.metadata.copy())
@@ -396,7 +394,6 @@ class SenselabDataset(BaseModel):
                     Audio(
                         waveform=audio["audio"]["array"],
                         sampling_rate=audio["audio"]["sampling_rate"],
-                        orig_path_or_id=audio["audio"]["path"],
                         metadata=audio_metadata,
                     )
                 )
@@ -425,7 +422,6 @@ class SenselabDataset(BaseModel):
                         audio=Audio(  # Assumes audio metadata is stored a level higher within the video's metadata
                             waveform=video["audio"]["array"],
                             sampling_rate=video["audio"]["sampling_rate"],
-                            orig_path_or_id=video["audio"]["path"],
                         )
                         if video["audio"]
                         else None,

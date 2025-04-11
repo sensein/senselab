@@ -75,7 +75,6 @@ def augment_audios_with_torch_audiomentations(
                 waveform=torch.squeeze(augmented_waveform),
                 sampling_rate=audio.sampling_rate,
                 metadata=audio.metadata.copy(),
-                orig_path_or_id=audio.orig_path_or_id,
             )
 
         _augment_single_audio_pt = pydra.mark.task(_augment_single_audio)
@@ -101,7 +100,6 @@ def augment_audios_with_torch_audiomentations(
                     waveform=torch.squeeze(augmented_audio),
                     sampling_rate=audio.sampling_rate,
                     metadata=audio.metadata.copy(),
-                    orig_path_or_id=audio.orig_path_or_id,
                 )
             )
         return new_audios
