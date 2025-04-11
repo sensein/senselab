@@ -5,19 +5,22 @@ from enum import Enum
 import torch
 
 
-def compute_cca(features_x: torch.Tensor, features_y: torch.Tensor) -> float:
+def compute_cca(features_x: torch.Tensor, features_y: torch.Tensor, standardize: bool = True) -> float:
     """Compute the mean squared CCA correlation (R^2_{CCA}).
 
     Args:
         features_x (torch.Tensor): A num_examples x num_features matrix of features.
         features_y (torch.Tensor): A num_examples x num_features matrix of features.
+        standardize (bool): Whether to perform z-score standardization on input features.
+                            Defaults to True.
 
     Returns:
         float: The mean squared CCA correlations between X and Y.
     """
-    # Standardize inputs to unit variance (improves numerical stability)
-    features_x = (features_x - features_x.mean(0)) / (features_x.std(0) + 1e-8)
-    features_y = (features_y - features_y.mean(0)) / (features_y.std(0) + 1e-8)
+    if standardize:
+        # Standardize inputs to unit variance (improves numerical stability)
+        features_x = (features_x.clone() - features_x.mean(0)) / (features_x.std(0) + 1e-8)
+        features_y = (features_y.clone() - features_y.mean(0)) / (features_y.std(0) + 1e-8)
 
     # Reduced QR decomposition for efficiency and stability
     qx, _ = torch.linalg.qr(features_x, mode="reduced")
@@ -39,6 +42,7 @@ def compute_cka(
     kernel: CKAKernelType = CKAKernelType.LINEAR,
     threshold: float = 1.0,
     reg: float = 1e-6,
+    standardize: bool = True,  # Use 'standardize' to clarify the operation
 ) -> float:
     """Compute Centered Kernel Alignment (CKA) with enhanced numerical stability.
 
@@ -55,6 +59,8 @@ def compute_cka(
         threshold (float): Fraction of median Euclidean distance to use as RBF kernel bandwidth.
                            Ignored for LINEAR kernel.
         reg (float): Regularization term added to the Gram matrix diagonal for stability.
+        standardize (bool): Whether to perform z-score standardization on input features.
+                            Defaults to True.
 
     Returns:
         float: CKA similarity ∈ [0,1] where 1 = identical representations.
@@ -62,9 +68,10 @@ def compute_cka(
     Raises:
         ValueError: If an unsupported kernel type is provided.
     """
-    # Standardize inputs to unit variance (critical for stability)
-    features_x = (features_x - features_x.mean(0)) / (features_x.std(0) + 1e-8)
-    features_y = (features_y - features_y.mean(0)) / (features_y.std(0) + 1e-8)
+    if standardize:
+        # Standardize inputs to unit variance (improves numerical stability)
+        features_x = (features_x.clone() - features_x.mean(0)) / (features_x.std(0) + 1e-8)
+        features_y = (features_y.clone() - features_y.mean(0)) / (features_y.std(0) + 1e-8)
 
     def _gram_linear(x: torch.Tensor) -> torch.Tensor:
         """Compute Gram matrix for a linear kernel."""
@@ -75,36 +82,35 @@ def compute_cka(
         dot_products = x @ x.t()
         sq_norms = torch.diag(dot_products)
         sq_distances = -2 * dot_products + sq_norms[:, None] + sq_norms[None, :]
-        # Ensure non-zero median to avoid division by zero
         sq_median = torch.median(sq_distances).clamp_min(1e-10)
         return torch.exp(-sq_distances / (2 * (threshold**2) * sq_median))
 
     def _center_gram(gram: torch.Tensor) -> torch.Tensor:
         """Center the Gram matrix using Tikhonov regularization."""
         n = gram.size(0)
-        # Add regularization to the diagonal for numerical stability
+        # Add regularization to the diagonal for numerical stability.
         gram = gram + reg * torch.eye(n, device=gram.device)
-        # Force symmetrization
+        # Enforce symmetry.
         gram = (gram + gram.t()) / 2
         H = torch.eye(n, device=gram.device) - torch.ones(n, n, device=gram.device) / n
         return H @ gram @ H
 
     def _cka(gram_x: torch.Tensor, gram_y: torch.Tensor) -> torch.Tensor:
-        """Core CKA computation with epsilon protection and clipping."""
+        """Core CKA computation with epsilon protection and value clipping."""
         gram_x = _center_gram(gram_x)
         gram_y = _center_gram(gram_y)
         numerator = torch.sum(gram_x * gram_y)
         denominator = torch.norm(gram_x) * torch.norm(gram_y) + 1e-8  # epsilon guard
-        return (numerator / denominator).clamp(max=1.0)  # enforce theoretical upper bound
+        return (numerator / denominator).clamp(max=1.0)  # enforce upper bound
 
-    # Select kernel and compute corresponding Gram matrices
+    # Select kernel type and compute the corresponding Gram matrices.
     if kernel == CKAKernelType.LINEAR:
         gram_x = _gram_linear(features_x)
         gram_y = _gram_linear(features_y)
     elif kernel == CKAKernelType.RBF:
         gram_x = _gram_rbf(features_x, threshold)
         gram_y = _gram_rbf(features_y, threshold)
-        # Enforce symmetry to avoid issues during centering
+        # Enforce symmetry to avoid potential issues during centering.
         gram_x = (gram_x + gram_x.t()) / 2
         gram_y = (gram_y + gram_y.t()) / 2
     else:
