@@ -12,6 +12,13 @@ try:
 except ModuleNotFoundError:
     TORCHAUDIO_AVAILABLE = False
 
+try:
+    import soundfile as sf
+
+    SOUNDFILE_AVAILABLE = True
+except ModuleNotFoundError:
+    SOUNDFILE_AVAILABLE = False
+
 import os
 import uuid
 import warnings
@@ -50,7 +57,7 @@ class Audio(BaseModel):
     def convert_to_tensor(
         cls, v: Union[List[float], List[List[float]], np.ndarray, torch.Tensor], _: ValidationInfo
     ) -> torch.Tensor:
-        """Converts the audio data to torch.Tensor of shape (num_channels, num_samples)."""
+        """Converts the audio data to a torch.Tensor of shape (num_channels, num_samples)."""
         temporary_tensor = None
         if isinstance(v, list):
             temporary_tensor = torch.tensor(v)
@@ -67,12 +74,37 @@ class Audio(BaseModel):
         return temporary_tensor.to(torch.float32)
 
     @classmethod
-    def from_filepath(cls, filepath: str | os.PathLike, metadata: Dict = {}) -> "Audio":
+    def from_filepath(
+        cls,
+        filepath: str | os.PathLike,
+        offset_in_sec: float = 0.0,
+        duration_in_sec: Optional[float] = None,
+        metadata: Optional[Dict] = None,
+        backend: Optional[str] = None,
+    ) -> "Audio":
         """Creates an Audio instance from an audio file.
 
         Args:
-            filepath: Filepath of the audio file to read from
-            metadata: Additional information associated with the audio file
+            filepath: Filepath of the audio file to read from.
+            offset_in_sec: Offset in seconds to start reading the audio file.
+                Must be a non-negative value. Defaults to 0.0 (start from the beginning).
+            duration_in_sec: Duration in seconds to read from the audio file.
+                Defaults to None, which is interpreted as -1 (read the entire file).
+            metadata: Additional information associated with the audio file.
+                Defaults to an empty dictionary.
+            backend: I/O backend to use. Valid options include "ffmpeg", "sox", and "soundfile".
+                If None, a backend is automatically selected among available options.
+
+        Raises:
+            ModuleNotFoundError: If torchaudio is not installed.
+            FileNotFoundError: If the specified filepath does not exist.
+            ValueError: If offset_in_sec is negative.
+            ValueError: If duration_in_sec is provided and is neither -1 nor a positive value.
+            ValueError: If the offset exceeds the duration of the audio.
+            ValueError: If audio metadata retrieval fails.
+
+        Returns:
+            Audio: An instance containing the audio data and its corresponding metadata.
         """
         if not TORCHAUDIO_AVAILABLE:
             raise ModuleNotFoundError(
@@ -83,16 +115,105 @@ class Audio(BaseModel):
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"File {filepath} does not exist.")
 
-        array, sampling_rate = torchaudio.load(filepath)
+        if offset_in_sec < 0:
+            raise ValueError("Offset must be a non-negative value.")
 
-        return cls(waveform=array, sampling_rate=sampling_rate, orig_path_or_id=filepath, metadata=metadata)
+        # If duration is None, use -1 to indicate the full file
+        if duration_in_sec is None:
+            duration_in_sec = -1.0
+
+        # Allow duration to be either -1 (full file) or strictly positive.
+        if duration_in_sec != -1 and duration_in_sec <= 0:
+            raise ValueError("Duration must be -1 (to read full file) or a positive value.")
+
+        # Retrieve audio metadata
+        try:
+            info = torchaudio.info(filepath)
+            sampling_rate = info.sample_rate
+            total_frames = info.num_frames
+        except Exception as e:
+            raise ValueError(f"Failed to retrieve audio metadata for file {filepath}: {str(e)}") from e
+
+        # Convert time-based offset and duration to frame-based values
+        frame_offset = int(offset_in_sec * sampling_rate)
+        if frame_offset > total_frames:
+            raise ValueError(
+                f"Offset ({offset_in_sec} seconds) exceeds the duration of the audio file ({filepath}): "
+                f"{total_frames / sampling_rate} seconds."
+            )
+
+        num_frames = int(duration_in_sec * sampling_rate) if duration_in_sec > 0 else -1
+
+        # Ensure num_frames is within the bounds of the file
+        if num_frames > 0:
+            num_frames = min(num_frames, total_frames - frame_offset)
+
+        # Load the specified portion of the audio
+        array, sampling_rate = torchaudio.load(
+            filepath, frame_offset=frame_offset, num_frames=num_frames, backend=backend
+        )
+
+        return cls(
+            waveform=array,
+            sampling_rate=sampling_rate,
+            orig_path_or_id=filepath,
+            metadata=metadata if metadata else {},
+        )
+
+    @classmethod
+    def from_stream(
+        cls,
+        stream_source: Union[str, os.PathLike, bytes],
+        chunk_duration: float = 1.0,
+        metadata: Optional[Dict] = None,
+    ) -> Generator["Audio", None, None]:
+        """Yields Audio objects from a live stream (file, stdin, etc.) in fixed-duration chunks.
+
+        Args:
+            stream_source: Filepath or input stream.
+            chunk_duration: Duration (in seconds) of each audio chunk to read.
+            metadata: Additional metadata associated with the audio chunk.
+
+        Raises:
+            ModuleNotFoundError: If soundfile is not installed.
+            FileNotFoundError: If the specified stream_source does not exist (when provided as a path).
+            RuntimeError: If an error occurs while reading from the stream.
+
+        Yields:
+            Audio: An instance containing each streamed audio chunk.
+        """
+        if not SOUNDFILE_AVAILABLE:
+            raise ModuleNotFoundError(
+                "`soundfile` is not installed. "
+                "Please install senselab audio dependencies using `pip install senselab['audio']`."
+            )
+
+        if isinstance(stream_source, os.PathLike) and not os.path.exists(stream_source):
+            raise FileNotFoundError(f"File {stream_source} does not exist.")
+
+        # Open the audio stream
+        with sf.SoundFile(stream_source, "r") as audio_file:
+            sampling_rate = audio_file.samplerate
+            # Convert chunk duration (in seconds) to frames
+            chunk_frames = int(chunk_duration * sampling_rate)
+
+            while True:
+                chunk = audio_file.read(frames=chunk_frames, dtype="float32", always_2d=True)
+                if chunk.shape[0] == 0:
+                    break  # Stop when there are no more frames to read
+                yield cls(
+                    waveform=chunk.T,
+                    sampling_rate=sampling_rate,
+                    orig_path_or_id=stream_source,
+                    metadata=metadata if metadata else {},
+                )
 
     def generate_path(self) -> str | os.PathLike:
-        """Generate a path like string for this Audio.
+        """Generate a path-like string for this Audio.
 
-        Generates a path like string for the Audio by either utilizing the orig_path_or_id, checking
-        if it is a path (has an extension), otherwise using the id if orig_path_or_id is not an ID
-        and giving an extension and relative to the current directory.
+        Generates a path-like string for the Audio by either utilizing the orig_path_or_id, checking
+        if it is a path (has an extension), otherwise using the id if orig_path_or_id is not an ID,
+        and giving an extension relative to the current directory.
         """
         if self.orig_path_or_id:
             if os.path.splitext(self.orig_path_or_id)[-1].lower():
@@ -108,7 +229,8 @@ class Audio(BaseModel):
         Generate a unique identifier for the Audio where equivalent waveforms and sampling
         rates generate the same IDs.
 
-        Returns: String UUID of the Audio generated by an MD5 hash of the waveform and the sampling_rate
+        Returns:
+            str: The UUID of the Audio generated by an MD5 hash of the waveform and the sampling_rate.
         """
         return str(uuid.uuid3(uuid.uuid3(SENSELAB_NAMESPACE, str(self.waveform)), str(self.sampling_rate)))
 
@@ -135,8 +257,7 @@ class Audio(BaseModel):
         """
         if step_size > window_size:
             warnings.warn(
-                "Step size is greater than window size. \
-                Some of the audio will not be included in the windows."
+                "Step size is greater than window size. Some of the audio will not be included in the windows."
             )
 
         num_samples = self.waveform.size(-1)
@@ -146,9 +267,7 @@ class Audio(BaseModel):
             # Calculate the end position of the window
             end_position = current_position + window_size
 
-            # If the end_position exceeds the number of samples, take the remaining samples
-            # This is not necessary since it is done automatically when slicing tensors.
-            # However, it is more explicit.
+            # Adjust end_position if it exceeds total samples
             if end_position > num_samples:
                 end_position = num_samples
 
