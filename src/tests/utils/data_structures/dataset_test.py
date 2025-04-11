@@ -111,7 +111,8 @@ def test_get_sessions() -> None:
 def test_audio_dataset_creation_import_error() -> None:
     """Tests that an ImportError is raised when torchaudio is not installed."""
     with pytest.raises(ModuleNotFoundError):
-        SenselabDataset(audios=[MONO_AUDIO_PATH, STEREO_AUDIO_PATH])
+        dataset = SenselabDataset(audios=[MONO_AUDIO_PATH, STEREO_AUDIO_PATH])
+        dataset.audios[0].waveform
 
 
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed")

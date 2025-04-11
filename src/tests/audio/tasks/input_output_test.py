@@ -27,7 +27,8 @@ except ModuleNotFoundError:
 def test_read_audios_torchaudio_not_installed() -> None:
     """Tests the read_audios function when torchaudio is not installed."""
     with pytest.raises(ModuleNotFoundError):
-        read_audios(file_paths=[MONO_AUDIO_PATH], plugin="serial")
+        audios = read_audios(file_paths=[MONO_AUDIO_PATH], plugin="serial")
+        audios[0].waveform
 
 
 @pytest.mark.skipif(

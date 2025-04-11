@@ -22,7 +22,7 @@ filepath = os.path.abspath("src/tests/data_for_testing/video_48khz_stereo_16bits
 def test_video_import_error() -> None:
     """Test Video import error."""
     with pytest.raises(ModuleNotFoundError):
-        Video(filepath=filepath)
+        Video(filepath=filepath).frames
 
 
 @pytest.mark.skipif(not PYAV_AVAILABLE, reason="PyAV is not available.")
