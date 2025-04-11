@@ -1,3 +1,15 @@
+# 0.34.0 (Fri Apr 11 2025)
+
+#### 🚀 Enhancement
+
+- Added Audio.from_stream + enhanced Audio.from_filepath [#284](https://github.com/sensein/senselab/pull/284) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.33.1 (Tue Mar 25 2025)
 
 #### 🐛 Bug Fix
