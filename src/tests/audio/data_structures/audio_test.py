@@ -153,9 +153,9 @@ def test_audio_creation_stereo_audio() -> None:
 
 @pytest.mark.skipif(TORCHAUDIO_AVAILABLE, reason="torchaudio is installed.")
 def test_audio_creation_error() -> None:
-    """Tests audio creation with invalid input."""
+    """Tests audio creation with missing torchaudio."""
     with pytest.raises(ModuleNotFoundError):
-        Audio(filepath="placeholder.wav")
+        Audio(filepath=MONO_AUDIO_PATH).waveform
 
 
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
