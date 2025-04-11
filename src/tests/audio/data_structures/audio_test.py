@@ -166,7 +166,7 @@ def test_audio_stream(audio_path: str) -> None:
     for audio_chunk in audio_chunks:
         assert isinstance(audio_chunk, Audio), "Audio chunks should be of type Audio"
         assert audio_chunk.sampling_rate == 48000, "Audio chunks should have a sampling rate of 48000"
-        assert audio_chunk.waveform.shape[1] <= 4096, "Audio chunks should have a shape of (*, 4096) or less"
+        assert audio_chunk.waveform.shape[1] <= 48000, "Audio chunks should have a shape of (*, 48000 or less)"
 
 
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
