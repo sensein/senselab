@@ -1,6 +1,5 @@
 """Transcribes audio files with timestamps."""
 
-'''
 # TODO: Please double-check this because tests are failing
 from typing import List
 
@@ -101,4 +100,3 @@ def transcribe_timestamped(
         sub(wf)
 
     return wf.result()[0].output.aligned_transcriptions
-'''
