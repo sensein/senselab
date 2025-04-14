@@ -1,3 +1,45 @@
+# 0.34.1 (Sun Apr 13 2025)
+
+#### 🐛 Bug Fix
+
+- Enhanced stability for cca and cka [#294](https://github.com/sensein/senselab/pull/294) ([@fabiocat93](https://github.com/fabiocat93) [@satra](https://github.com/satra))
+
+#### Authors: 2
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Satrajit Ghosh ([@satra](https://github.com/satra))
+
+---
+
+# 0.34.0 (Fri Apr 11 2025)
+
+#### 🚀 Enhancement
+
+- Added Audio.from_stream + enhanced Audio.from_filepath [#284](https://github.com/sensein/senselab/pull/284) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.33.1 (Tue Mar 25 2025)
+
+#### 🐛 Bug Fix
+
+- Fixed but where n_fft defaults to 1024 [#291](https://github.com/sensein/senselab/pull/291) ([@Evan8456](https://github.com/Evan8456) [@fabiocat93](https://github.com/fabiocat93))
+
+#### ⚠️ Pushed to `main`
+
+- Update README.md ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- Evan Ng ([@Evan8456](https://github.com/Evan8456))
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.33.0 (Fri Mar 14 2025)
 
 #### 🚀 Enhancement
