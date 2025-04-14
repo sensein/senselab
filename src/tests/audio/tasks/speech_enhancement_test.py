@@ -127,9 +127,9 @@ def test_enhance_audios_with_speechbrain(
 )
 def test_enhance_audios_incorrect_sampling_rate(mono_audio_sample: Audio, speechbrain_model: SpeechBrainModel) -> None:
     """Test enhancing audios with incorrect sampling rate."""
-    mono_audio_sample.sampling_rate = 8000  # Incorrect sample rate for this model
+    new_audio = Audio(waveform=mono_audio_sample.waveform, sampling_rate=8000)  # Incorrect sample rate for this model
     with pytest.raises(ValueError, match="Audio sampling rate 8000 does not match expected 16000"):
-        SpeechBrainEnhancer.enhance_audios_with_speechbrain(audios=[mono_audio_sample], model=speechbrain_model)
+        SpeechBrainEnhancer.enhance_audios_with_speechbrain(audios=[new_audio], model=speechbrain_model)
 
 
 @pytest.mark.skipif(
@@ -169,7 +169,7 @@ def test_enhance_audios_with_extreme_amplitude(audio_with_extreme_amplitude: Aud
     assert enhanced_audios[0].waveform.shape == audio_with_extreme_amplitude.waveform.shape
 
 
-@pytest.mark.skipif(not SPEECHBRAIN_AVAILABLE, reason="torchaudio is not installed")
+@pytest.mark.skipif(not SPEECHBRAIN_AVAILABLE, reason="SpeechBrain is not installed")
 def test_model_caching(resampled_mono_audio_sample: Audio) -> None:
     """Test model caching by enhancing audios with the same model multiple times."""
     SpeechBrainEnhancer.enhance_audios_with_speechbrain(audios=[resampled_mono_audio_sample], device=DeviceType.CPU)

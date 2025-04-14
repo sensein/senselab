@@ -69,11 +69,11 @@ pip install senselab['video,text']
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.preprocessing import resample_audios
 
-audio1 = Audio.from_filepath('path_to_audio_file.wav')
+audio = Audio(filepath='path_to_audio_file.wav')
 
-print("The original audio has a sampling rate of {} Hz.".format(audio1.sampling_rate))
-[audio1] = resample_audios([audio1], resample_rate=16000)
-print("The resampled audio has a sampling rate of {} Hz.".format(audio1.sampling_rate))
+print("The original audio has a sampling rate of {} Hz.".format(audio.sampling_rate))
+[audio] = resample_audios([audio], resample_rate=16000)
+print("The resampled audio has a sampling rate of {} Hz.".format(audio.sampling_rate))
 ```
 
 For more detailed information, check out our [**Getting Started Tutorial**](https://github.com/sensein/senselab/blob/main/tutorials/audio/getting_started.ipynb).

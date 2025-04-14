@@ -92,19 +92,28 @@ class CoquiVoiceCloner:
         if len(source_audios) != len(target_audios):
             raise ValueError("Number of source and target audios must be the same.")
 
-        for source_audio, target_audio in zip(source_audios, target_audios):
+        for i, (source_audio, target_audio) in enumerate(zip(source_audios, target_audios)):
+            source_path = (
+                source_audio.filepath() if hasattr(source_audio, "filepath") and source_audio.filepath() else ""
+            )
+            target_path = (
+                target_audio.filepath() if hasattr(target_audio, "filepath") and target_audio.filepath() else ""
+            )
+
+            source_desc = f"{source_audio.generate_id()}{f' ({source_path})' if source_path else ''}"
+            target_desc = f"{target_audio.generate_id()}{f' ({target_path})' if target_path else ''}"
+
             if source_audio.waveform.squeeze().dim() != 1 or target_audio.waveform.squeeze().dim() != 1:
                 raise ValueError(
-                    "Only mono audio files are supported. "
-                    f"Source ({source_audio.orig_path_or_id}) shape: {source_audio.waveform.shape}, "
-                    f"Target ({target_audio.orig_path_or_id}) shape: {target_audio.waveform.shape}"
+                    f"[Pair index {i}] Only mono audio files are supported. "
+                    f"Source: {source_desc}, Target: {target_desc}."
                 )
 
             if source_audio.sampling_rate != expected_sample_rate or target_audio.sampling_rate != expected_sample_rate:
                 raise ValueError(
-                    f"Expected input sample rate {expected_sample_rate}, but got "
-                    f"{source_audio.sampling_rate} (source = {source_audio.orig_path_or_id}) "
-                    f"and {target_audio.sampling_rate} (target = {target_audio.orig_path_or_id})."
+                    f"[Pair index {i}] Expected sample rate {expected_sample_rate}, but got "
+                    f"{source_audio.sampling_rate} (source) and {target_audio.sampling_rate} (target). "
+                    f"Source: {source_desc}, Target: {target_desc}."
                 )
 
             # Ensure mono audio
