@@ -98,42 +98,41 @@
 </span><span id="L-39"><a href="#L-39"><span class="linenos">39</span></a>            <span class="n">waveform</span><span class="o">=</span><span class="n">augmented_waveform</span><span class="p">,</span>
 </span><span id="L-40"><a href="#L-40"><span class="linenos">40</span></a>            <span class="n">sampling_rate</span><span class="o">=</span><span class="n">audio</span><span class="o">.</span><span class="n">sampling_rate</span><span class="p">,</span>
 </span><span id="L-41"><a href="#L-41"><span class="linenos">41</span></a>            <span class="n">metadata</span><span class="o">=</span><span class="n">audio</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">copy</span><span class="p">(),</span>
-</span><span id="L-42"><a href="#L-42"><span class="linenos">42</span></a>            <span class="n">orig_path_or_id</span><span class="o">=</span><span class="n">audio</span><span class="o">.</span><span class="n">orig_path_or_id</span><span class="p">,</span>
-</span><span id="L-43"><a href="#L-43"><span class="linenos">43</span></a>        <span class="p">)</span>
-</span><span id="L-44"><a href="#L-44"><span class="linenos">44</span></a>
-</span><span id="L-45"><a href="#L-45"><span class="linenos">45</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">AUDIOMENTATIONS_AVAILABLE</span><span class="p">:</span>
-</span><span id="L-46"><a href="#L-46"><span class="linenos">46</span></a>        <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
-</span><span id="L-47"><a href="#L-47"><span class="linenos">47</span></a>            <span class="s2">&quot;`audiomentations` is not installed. &quot;</span>
-</span><span id="L-48"><a href="#L-48"><span class="linenos">48</span></a>            <span class="s2">&quot;Please install senselab audio dependencies using `pip install senselab[&#39;audio&#39;]`.&quot;</span>
-</span><span id="L-49"><a href="#L-49"><span class="linenos">49</span></a>        <span class="p">)</span>
-</span><span id="L-50"><a href="#L-50"><span class="linenos">50</span></a>
-</span><span id="L-51"><a href="#L-51"><span class="linenos">51</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-</span><span id="L-52"><a href="#L-52"><span class="linenos">52</span></a><span class="sd">    # The commented code is for parallelizing the augmentation using pydra</span>
-</span><span id="L-53"><a href="#L-53"><span class="linenos">53</span></a><span class="sd">    # Due to some issues with pydra, this is disabled for now</span>
-</span><span id="L-54"><a href="#L-54"><span class="linenos">54</span></a>
-</span><span id="L-55"><a href="#L-55"><span class="linenos">55</span></a><span class="sd">    import pydra</span>
-</span><span id="L-56"><a href="#L-56"><span class="linenos">56</span></a>
-</span><span id="L-57"><a href="#L-57"><span class="linenos">57</span></a><span class="sd">    _augment_single_audio_pt = pydra.mark.task(_augment_single_audio)</span>
-</span><span id="L-58"><a href="#L-58"><span class="linenos">58</span></a>
-</span><span id="L-59"><a href="#L-59"><span class="linenos">59</span></a><span class="sd">    # Create the workflow</span>
-</span><span id="L-60"><a href="#L-60"><span class="linenos">60</span></a><span class="sd">    wf = pydra.Workflow(name=&quot;audio_augmentation_wf&quot;, input_spec=[&quot;y&quot;])</span>
-</span><span id="L-61"><a href="#L-61"><span class="linenos">61</span></a><span class="sd">    wf.split(&quot;y&quot;, y=audios)</span>
-</span><span id="L-62"><a href="#L-62"><span class="linenos">62</span></a><span class="sd">    wf.add(_augment_single_audio_pt(name=&quot;augment_audio&quot;, audio=wf.lzin.y, augmentation=augmentation))</span>
-</span><span id="L-63"><a href="#L-63"><span class="linenos">63</span></a><span class="sd">    wf.set_output([(&quot;augmented_audio&quot;, wf.augment_audio.lzout.out)])</span>
-</span><span id="L-64"><a href="#L-64"><span class="linenos">64</span></a>
-</span><span id="L-65"><a href="#L-65"><span class="linenos">65</span></a><span class="sd">    # Execute the workflow</span>
-</span><span id="L-66"><a href="#L-66"><span class="linenos">66</span></a><span class="sd">    with pydra.Submitter(plugin=&quot;cf&quot;) as submitter:</span>
-</span><span id="L-67"><a href="#L-67"><span class="linenos">67</span></a><span class="sd">        submitter(wf)</span>
-</span><span id="L-68"><a href="#L-68"><span class="linenos">68</span></a>
-</span><span id="L-69"><a href="#L-69"><span class="linenos">69</span></a><span class="sd">    outputs = wf.result()</span>
-</span><span id="L-70"><a href="#L-70"><span class="linenos">70</span></a><span class="sd">    return [out.output.augmented_audio for out in outputs]</span>
-</span><span id="L-71"><a href="#L-71"><span class="linenos">71</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="L-72"><a href="#L-72"><span class="linenos">72</span></a>
-</span><span id="L-73"><a href="#L-73"><span class="linenos">73</span></a>    <span class="n">augmented_audios</span> <span class="o">=</span> <span class="p">[]</span>
-</span><span id="L-74"><a href="#L-74"><span class="linenos">74</span></a>    <span class="k">for</span> <span class="n">audio</span> <span class="ow">in</span> <span class="n">audios</span><span class="p">:</span>
-</span><span id="L-75"><a href="#L-75"><span class="linenos">75</span></a>        <span class="n">augmented_audios</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">_augment_single_audio</span><span class="p">(</span><span class="n">audio</span><span class="p">,</span> <span class="n">augmentation</span><span class="p">))</span>
-</span><span id="L-76"><a href="#L-76"><span class="linenos">76</span></a>
-</span><span id="L-77"><a href="#L-77"><span class="linenos">77</span></a>    <span class="k">return</span> <span class="n">augmented_audios</span>
+</span><span id="L-42"><a href="#L-42"><span class="linenos">42</span></a>        <span class="p">)</span>
+</span><span id="L-43"><a href="#L-43"><span class="linenos">43</span></a>
+</span><span id="L-44"><a href="#L-44"><span class="linenos">44</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">AUDIOMENTATIONS_AVAILABLE</span><span class="p">:</span>
+</span><span id="L-45"><a href="#L-45"><span class="linenos">45</span></a>        <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
+</span><span id="L-46"><a href="#L-46"><span class="linenos">46</span></a>            <span class="s2">&quot;`audiomentations` is not installed. &quot;</span>
+</span><span id="L-47"><a href="#L-47"><span class="linenos">47</span></a>            <span class="s2">&quot;Please install senselab audio dependencies using `pip install senselab[&#39;audio&#39;]`.&quot;</span>
+</span><span id="L-48"><a href="#L-48"><span class="linenos">48</span></a>        <span class="p">)</span>
+</span><span id="L-49"><a href="#L-49"><span class="linenos">49</span></a>
+</span><span id="L-50"><a href="#L-50"><span class="linenos">50</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="L-51"><a href="#L-51"><span class="linenos">51</span></a><span class="sd">    # The commented code is for parallelizing the augmentation using pydra</span>
+</span><span id="L-52"><a href="#L-52"><span class="linenos">52</span></a><span class="sd">    # Due to some issues with pydra, this is disabled for now</span>
+</span><span id="L-53"><a href="#L-53"><span class="linenos">53</span></a>
+</span><span id="L-54"><a href="#L-54"><span class="linenos">54</span></a><span class="sd">    import pydra</span>
+</span><span id="L-55"><a href="#L-55"><span class="linenos">55</span></a>
+</span><span id="L-56"><a href="#L-56"><span class="linenos">56</span></a><span class="sd">    _augment_single_audio_pt = pydra.mark.task(_augment_single_audio)</span>
+</span><span id="L-57"><a href="#L-57"><span class="linenos">57</span></a>
+</span><span id="L-58"><a href="#L-58"><span class="linenos">58</span></a><span class="sd">    # Create the workflow</span>
+</span><span id="L-59"><a href="#L-59"><span class="linenos">59</span></a><span class="sd">    wf = pydra.Workflow(name=&quot;audio_augmentation_wf&quot;, input_spec=[&quot;y&quot;])</span>
+</span><span id="L-60"><a href="#L-60"><span class="linenos">60</span></a><span class="sd">    wf.split(&quot;y&quot;, y=audios)</span>
+</span><span id="L-61"><a href="#L-61"><span class="linenos">61</span></a><span class="sd">    wf.add(_augment_single_audio_pt(name=&quot;augment_audio&quot;, audio=wf.lzin.y, augmentation=augmentation))</span>
+</span><span id="L-62"><a href="#L-62"><span class="linenos">62</span></a><span class="sd">    wf.set_output([(&quot;augmented_audio&quot;, wf.augment_audio.lzout.out)])</span>
+</span><span id="L-63"><a href="#L-63"><span class="linenos">63</span></a>
+</span><span id="L-64"><a href="#L-64"><span class="linenos">64</span></a><span class="sd">    # Execute the workflow</span>
+</span><span id="L-65"><a href="#L-65"><span class="linenos">65</span></a><span class="sd">    with pydra.Submitter(plugin=&quot;cf&quot;) as submitter:</span>
+</span><span id="L-66"><a href="#L-66"><span class="linenos">66</span></a><span class="sd">        submitter(wf)</span>
+</span><span id="L-67"><a href="#L-67"><span class="linenos">67</span></a>
+</span><span id="L-68"><a href="#L-68"><span class="linenos">68</span></a><span class="sd">    outputs = wf.result()</span>
+</span><span id="L-69"><a href="#L-69"><span class="linenos">69</span></a><span class="sd">    return [out.output.augmented_audio for out in outputs]</span>
+</span><span id="L-70"><a href="#L-70"><span class="linenos">70</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="L-71"><a href="#L-71"><span class="linenos">71</span></a>
+</span><span id="L-72"><a href="#L-72"><span class="linenos">72</span></a>    <span class="n">augmented_audios</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="L-73"><a href="#L-73"><span class="linenos">73</span></a>    <span class="k">for</span> <span class="n">audio</span> <span class="ow">in</span> <span class="n">audios</span><span class="p">:</span>
+</span><span id="L-74"><a href="#L-74"><span class="linenos">74</span></a>        <span class="n">augmented_audios</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">_augment_single_audio</span><span class="p">(</span><span class="n">audio</span><span class="p">,</span> <span class="n">augmentation</span><span class="p">))</span>
+</span><span id="L-75"><a href="#L-75"><span class="linenos">75</span></a>
+</span><span id="L-76"><a href="#L-76"><span class="linenos">76</span></a>    <span class="k">return</span> <span class="n">augmented_audios</span>
 </span></pre></div>
 
 
@@ -176,42 +175,41 @@
 </span><span id="augment_audios_with_audiomentations-40"><a href="#augment_audios_with_audiomentations-40"><span class="linenos">40</span></a>            <span class="n">waveform</span><span class="o">=</span><span class="n">augmented_waveform</span><span class="p">,</span>
 </span><span id="augment_audios_with_audiomentations-41"><a href="#augment_audios_with_audiomentations-41"><span class="linenos">41</span></a>            <span class="n">sampling_rate</span><span class="o">=</span><span class="n">audio</span><span class="o">.</span><span class="n">sampling_rate</span><span class="p">,</span>
 </span><span id="augment_audios_with_audiomentations-42"><a href="#augment_audios_with_audiomentations-42"><span class="linenos">42</span></a>            <span class="n">metadata</span><span class="o">=</span><span class="n">audio</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">copy</span><span class="p">(),</span>
-</span><span id="augment_audios_with_audiomentations-43"><a href="#augment_audios_with_audiomentations-43"><span class="linenos">43</span></a>            <span class="n">orig_path_or_id</span><span class="o">=</span><span class="n">audio</span><span class="o">.</span><span class="n">orig_path_or_id</span><span class="p">,</span>
-</span><span id="augment_audios_with_audiomentations-44"><a href="#augment_audios_with_audiomentations-44"><span class="linenos">44</span></a>        <span class="p">)</span>
-</span><span id="augment_audios_with_audiomentations-45"><a href="#augment_audios_with_audiomentations-45"><span class="linenos">45</span></a>
-</span><span id="augment_audios_with_audiomentations-46"><a href="#augment_audios_with_audiomentations-46"><span class="linenos">46</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">AUDIOMENTATIONS_AVAILABLE</span><span class="p">:</span>
-</span><span id="augment_audios_with_audiomentations-47"><a href="#augment_audios_with_audiomentations-47"><span class="linenos">47</span></a>        <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
-</span><span id="augment_audios_with_audiomentations-48"><a href="#augment_audios_with_audiomentations-48"><span class="linenos">48</span></a>            <span class="s2">&quot;`audiomentations` is not installed. &quot;</span>
-</span><span id="augment_audios_with_audiomentations-49"><a href="#augment_audios_with_audiomentations-49"><span class="linenos">49</span></a>            <span class="s2">&quot;Please install senselab audio dependencies using `pip install senselab[&#39;audio&#39;]`.&quot;</span>
-</span><span id="augment_audios_with_audiomentations-50"><a href="#augment_audios_with_audiomentations-50"><span class="linenos">50</span></a>        <span class="p">)</span>
-</span><span id="augment_audios_with_audiomentations-51"><a href="#augment_audios_with_audiomentations-51"><span class="linenos">51</span></a>
-</span><span id="augment_audios_with_audiomentations-52"><a href="#augment_audios_with_audiomentations-52"><span class="linenos">52</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-</span><span id="augment_audios_with_audiomentations-53"><a href="#augment_audios_with_audiomentations-53"><span class="linenos">53</span></a><span class="sd">    # The commented code is for parallelizing the augmentation using pydra</span>
-</span><span id="augment_audios_with_audiomentations-54"><a href="#augment_audios_with_audiomentations-54"><span class="linenos">54</span></a><span class="sd">    # Due to some issues with pydra, this is disabled for now</span>
-</span><span id="augment_audios_with_audiomentations-55"><a href="#augment_audios_with_audiomentations-55"><span class="linenos">55</span></a>
-</span><span id="augment_audios_with_audiomentations-56"><a href="#augment_audios_with_audiomentations-56"><span class="linenos">56</span></a><span class="sd">    import pydra</span>
-</span><span id="augment_audios_with_audiomentations-57"><a href="#augment_audios_with_audiomentations-57"><span class="linenos">57</span></a>
-</span><span id="augment_audios_with_audiomentations-58"><a href="#augment_audios_with_audiomentations-58"><span class="linenos">58</span></a><span class="sd">    _augment_single_audio_pt = pydra.mark.task(_augment_single_audio)</span>
-</span><span id="augment_audios_with_audiomentations-59"><a href="#augment_audios_with_audiomentations-59"><span class="linenos">59</span></a>
-</span><span id="augment_audios_with_audiomentations-60"><a href="#augment_audios_with_audiomentations-60"><span class="linenos">60</span></a><span class="sd">    # Create the workflow</span>
-</span><span id="augment_audios_with_audiomentations-61"><a href="#augment_audios_with_audiomentations-61"><span class="linenos">61</span></a><span class="sd">    wf = pydra.Workflow(name=&quot;audio_augmentation_wf&quot;, input_spec=[&quot;y&quot;])</span>
-</span><span id="augment_audios_with_audiomentations-62"><a href="#augment_audios_with_audiomentations-62"><span class="linenos">62</span></a><span class="sd">    wf.split(&quot;y&quot;, y=audios)</span>
-</span><span id="augment_audios_with_audiomentations-63"><a href="#augment_audios_with_audiomentations-63"><span class="linenos">63</span></a><span class="sd">    wf.add(_augment_single_audio_pt(name=&quot;augment_audio&quot;, audio=wf.lzin.y, augmentation=augmentation))</span>
-</span><span id="augment_audios_with_audiomentations-64"><a href="#augment_audios_with_audiomentations-64"><span class="linenos">64</span></a><span class="sd">    wf.set_output([(&quot;augmented_audio&quot;, wf.augment_audio.lzout.out)])</span>
-</span><span id="augment_audios_with_audiomentations-65"><a href="#augment_audios_with_audiomentations-65"><span class="linenos">65</span></a>
-</span><span id="augment_audios_with_audiomentations-66"><a href="#augment_audios_with_audiomentations-66"><span class="linenos">66</span></a><span class="sd">    # Execute the workflow</span>
-</span><span id="augment_audios_with_audiomentations-67"><a href="#augment_audios_with_audiomentations-67"><span class="linenos">67</span></a><span class="sd">    with pydra.Submitter(plugin=&quot;cf&quot;) as submitter:</span>
-</span><span id="augment_audios_with_audiomentations-68"><a href="#augment_audios_with_audiomentations-68"><span class="linenos">68</span></a><span class="sd">        submitter(wf)</span>
-</span><span id="augment_audios_with_audiomentations-69"><a href="#augment_audios_with_audiomentations-69"><span class="linenos">69</span></a>
-</span><span id="augment_audios_with_audiomentations-70"><a href="#augment_audios_with_audiomentations-70"><span class="linenos">70</span></a><span class="sd">    outputs = wf.result()</span>
-</span><span id="augment_audios_with_audiomentations-71"><a href="#augment_audios_with_audiomentations-71"><span class="linenos">71</span></a><span class="sd">    return [out.output.augmented_audio for out in outputs]</span>
-</span><span id="augment_audios_with_audiomentations-72"><a href="#augment_audios_with_audiomentations-72"><span class="linenos">72</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="augment_audios_with_audiomentations-73"><a href="#augment_audios_with_audiomentations-73"><span class="linenos">73</span></a>
-</span><span id="augment_audios_with_audiomentations-74"><a href="#augment_audios_with_audiomentations-74"><span class="linenos">74</span></a>    <span class="n">augmented_audios</span> <span class="o">=</span> <span class="p">[]</span>
-</span><span id="augment_audios_with_audiomentations-75"><a href="#augment_audios_with_audiomentations-75"><span class="linenos">75</span></a>    <span class="k">for</span> <span class="n">audio</span> <span class="ow">in</span> <span class="n">audios</span><span class="p">:</span>
-</span><span id="augment_audios_with_audiomentations-76"><a href="#augment_audios_with_audiomentations-76"><span class="linenos">76</span></a>        <span class="n">augmented_audios</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">_augment_single_audio</span><span class="p">(</span><span class="n">audio</span><span class="p">,</span> <span class="n">augmentation</span><span class="p">))</span>
-</span><span id="augment_audios_with_audiomentations-77"><a href="#augment_audios_with_audiomentations-77"><span class="linenos">77</span></a>
-</span><span id="augment_audios_with_audiomentations-78"><a href="#augment_audios_with_audiomentations-78"><span class="linenos">78</span></a>    <span class="k">return</span> <span class="n">augmented_audios</span>
+</span><span id="augment_audios_with_audiomentations-43"><a href="#augment_audios_with_audiomentations-43"><span class="linenos">43</span></a>        <span class="p">)</span>
+</span><span id="augment_audios_with_audiomentations-44"><a href="#augment_audios_with_audiomentations-44"><span class="linenos">44</span></a>
+</span><span id="augment_audios_with_audiomentations-45"><a href="#augment_audios_with_audiomentations-45"><span class="linenos">45</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">AUDIOMENTATIONS_AVAILABLE</span><span class="p">:</span>
+</span><span id="augment_audios_with_audiomentations-46"><a href="#augment_audios_with_audiomentations-46"><span class="linenos">46</span></a>        <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
+</span><span id="augment_audios_with_audiomentations-47"><a href="#augment_audios_with_audiomentations-47"><span class="linenos">47</span></a>            <span class="s2">&quot;`audiomentations` is not installed. &quot;</span>
+</span><span id="augment_audios_with_audiomentations-48"><a href="#augment_audios_with_audiomentations-48"><span class="linenos">48</span></a>            <span class="s2">&quot;Please install senselab audio dependencies using `pip install senselab[&#39;audio&#39;]`.&quot;</span>
+</span><span id="augment_audios_with_audiomentations-49"><a href="#augment_audios_with_audiomentations-49"><span class="linenos">49</span></a>        <span class="p">)</span>
+</span><span id="augment_audios_with_audiomentations-50"><a href="#augment_audios_with_audiomentations-50"><span class="linenos">50</span></a>
+</span><span id="augment_audios_with_audiomentations-51"><a href="#augment_audios_with_audiomentations-51"><span class="linenos">51</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="augment_audios_with_audiomentations-52"><a href="#augment_audios_with_audiomentations-52"><span class="linenos">52</span></a><span class="sd">    # The commented code is for parallelizing the augmentation using pydra</span>
+</span><span id="augment_audios_with_audiomentations-53"><a href="#augment_audios_with_audiomentations-53"><span class="linenos">53</span></a><span class="sd">    # Due to some issues with pydra, this is disabled for now</span>
+</span><span id="augment_audios_with_audiomentations-54"><a href="#augment_audios_with_audiomentations-54"><span class="linenos">54</span></a>
+</span><span id="augment_audios_with_audiomentations-55"><a href="#augment_audios_with_audiomentations-55"><span class="linenos">55</span></a><span class="sd">    import pydra</span>
+</span><span id="augment_audios_with_audiomentations-56"><a href="#augment_audios_with_audiomentations-56"><span class="linenos">56</span></a>
+</span><span id="augment_audios_with_audiomentations-57"><a href="#augment_audios_with_audiomentations-57"><span class="linenos">57</span></a><span class="sd">    _augment_single_audio_pt = pydra.mark.task(_augment_single_audio)</span>
+</span><span id="augment_audios_with_audiomentations-58"><a href="#augment_audios_with_audiomentations-58"><span class="linenos">58</span></a>
+</span><span id="augment_audios_with_audiomentations-59"><a href="#augment_audios_with_audiomentations-59"><span class="linenos">59</span></a><span class="sd">    # Create the workflow</span>
+</span><span id="augment_audios_with_audiomentations-60"><a href="#augment_audios_with_audiomentations-60"><span class="linenos">60</span></a><span class="sd">    wf = pydra.Workflow(name=&quot;audio_augmentation_wf&quot;, input_spec=[&quot;y&quot;])</span>
+</span><span id="augment_audios_with_audiomentations-61"><a href="#augment_audios_with_audiomentations-61"><span class="linenos">61</span></a><span class="sd">    wf.split(&quot;y&quot;, y=audios)</span>
+</span><span id="augment_audios_with_audiomentations-62"><a href="#augment_audios_with_audiomentations-62"><span class="linenos">62</span></a><span class="sd">    wf.add(_augment_single_audio_pt(name=&quot;augment_audio&quot;, audio=wf.lzin.y, augmentation=augmentation))</span>
+</span><span id="augment_audios_with_audiomentations-63"><a href="#augment_audios_with_audiomentations-63"><span class="linenos">63</span></a><span class="sd">    wf.set_output([(&quot;augmented_audio&quot;, wf.augment_audio.lzout.out)])</span>
+</span><span id="augment_audios_with_audiomentations-64"><a href="#augment_audios_with_audiomentations-64"><span class="linenos">64</span></a>
+</span><span id="augment_audios_with_audiomentations-65"><a href="#augment_audios_with_audiomentations-65"><span class="linenos">65</span></a><span class="sd">    # Execute the workflow</span>
+</span><span id="augment_audios_with_audiomentations-66"><a href="#augment_audios_with_audiomentations-66"><span class="linenos">66</span></a><span class="sd">    with pydra.Submitter(plugin=&quot;cf&quot;) as submitter:</span>
+</span><span id="augment_audios_with_audiomentations-67"><a href="#augment_audios_with_audiomentations-67"><span class="linenos">67</span></a><span class="sd">        submitter(wf)</span>
+</span><span id="augment_audios_with_audiomentations-68"><a href="#augment_audios_with_audiomentations-68"><span class="linenos">68</span></a>
+</span><span id="augment_audios_with_audiomentations-69"><a href="#augment_audios_with_audiomentations-69"><span class="linenos">69</span></a><span class="sd">    outputs = wf.result()</span>
+</span><span id="augment_audios_with_audiomentations-70"><a href="#augment_audios_with_audiomentations-70"><span class="linenos">70</span></a><span class="sd">    return [out.output.augmented_audio for out in outputs]</span>
+</span><span id="augment_audios_with_audiomentations-71"><a href="#augment_audios_with_audiomentations-71"><span class="linenos">71</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="augment_audios_with_audiomentations-72"><a href="#augment_audios_with_audiomentations-72"><span class="linenos">72</span></a>
+</span><span id="augment_audios_with_audiomentations-73"><a href="#augment_audios_with_audiomentations-73"><span class="linenos">73</span></a>    <span class="n">augmented_audios</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="augment_audios_with_audiomentations-74"><a href="#augment_audios_with_audiomentations-74"><span class="linenos">74</span></a>    <span class="k">for</span> <span class="n">audio</span> <span class="ow">in</span> <span class="n">audios</span><span class="p">:</span>
+</span><span id="augment_audios_with_audiomentations-75"><a href="#augment_audios_with_audiomentations-75"><span class="linenos">75</span></a>        <span class="n">augmented_audios</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">_augment_single_audio</span><span class="p">(</span><span class="n">audio</span><span class="p">,</span> <span class="n">augmentation</span><span class="p">))</span>
+</span><span id="augment_audios_with_audiomentations-76"><a href="#augment_audios_with_audiomentations-76"><span class="linenos">76</span></a>
+</span><span id="augment_audios_with_audiomentations-77"><a href="#augment_audios_with_audiomentations-77"><span class="linenos">77</span></a>    <span class="k">return</span> <span class="n">augmented_audios</span>
 </span></pre></div>
 
 

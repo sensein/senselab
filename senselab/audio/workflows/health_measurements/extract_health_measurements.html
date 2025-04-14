@@ -120,7 +120,7 @@ by the senselab community.</p>
 </span><span id="L-57"><a href="#L-57"><span class="linenos">57</span></a><span class="sd">            - spectral_kurtosis</span>
 </span><span id="L-58"><a href="#L-58"><span class="linenos">58</span></a>
 </span><span id="L-59"><a href="#L-59"><span class="linenos">59</span></a><span class="sd">    Examples:</span>
-</span><span id="L-60"><a href="#L-60"><span class="linenos">60</span></a><span class="sd">        &gt;&gt;&gt; audios = [Audio.from_filepath(&quot;sample.wav&quot;)]</span>
+</span><span id="L-60"><a href="#L-60"><span class="linenos">60</span></a><span class="sd">        &gt;&gt;&gt; audios = [Audio(filepath=&quot;sample.wav&quot;)]</span>
 </span><span id="L-61"><a href="#L-61"><span class="linenos">61</span></a><span class="sd">        &gt;&gt;&gt; extract_health_measurements(audios)</span>
 </span><span id="L-62"><a href="#L-62"><span class="linenos">62</span></a><span class="sd">        [{&#39;speaking_rate&#39;: 3.874983349680919,</span>
 </span><span id="L-63"><a href="#L-63"><span class="linenos">63</span></a><span class="sd">        &#39;articulation_rate&#39;: 3.874983349680919,</span>
@@ -221,7 +221,7 @@ by the senselab community.</p>
 </span><span id="extract_health_measurements-58"><a href="#extract_health_measurements-58"><span class="linenos"> 58</span></a><span class="sd">            - spectral_kurtosis</span>
 </span><span id="extract_health_measurements-59"><a href="#extract_health_measurements-59"><span class="linenos"> 59</span></a>
 </span><span id="extract_health_measurements-60"><a href="#extract_health_measurements-60"><span class="linenos"> 60</span></a><span class="sd">    Examples:</span>
-</span><span id="extract_health_measurements-61"><a href="#extract_health_measurements-61"><span class="linenos"> 61</span></a><span class="sd">        &gt;&gt;&gt; audios = [Audio.from_filepath(&quot;sample.wav&quot;)]</span>
+</span><span id="extract_health_measurements-61"><a href="#extract_health_measurements-61"><span class="linenos"> 61</span></a><span class="sd">        &gt;&gt;&gt; audios = [Audio(filepath=&quot;sample.wav&quot;)]</span>
 </span><span id="extract_health_measurements-62"><a href="#extract_health_measurements-62"><span class="linenos"> 62</span></a><span class="sd">        &gt;&gt;&gt; extract_health_measurements(audios)</span>
 </span><span id="extract_health_measurements-63"><a href="#extract_health_measurements-63"><span class="linenos"> 63</span></a><span class="sd">        [{&#39;speaking_rate&#39;: 3.874983349680919,</span>
 </span><span id="extract_health_measurements-64"><a href="#extract_health_measurements-64"><span class="linenos"> 64</span></a><span class="sd">        &#39;articulation_rate&#39;: 3.874983349680919,</span>
@@ -317,7 +317,7 @@ by the senselab community.</p>
 
 <blockquote>
   <div class="pdoc-code codehilite">
-<pre><span></span><code><span class="gp">&gt;&gt;&gt; </span><span class="n">audios</span> <span class="o">=</span> <span class="p">[</span><span class="n">Audio</span><span class="o">.</span><span class="n">from_filepath</span><span class="p">(</span><span class="s2">&quot;sample.wav&quot;</span><span class="p">)]</span>
+<pre><span></span><code><span class="gp">&gt;&gt;&gt; </span><span class="n">audios</span> <span class="o">=</span> <span class="p">[</span><span class="n">Audio</span><span class="p">(</span><span class="n">filepath</span><span class="o">=</span><span class="s2">&quot;sample.wav&quot;</span><span class="p">)]</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">extract_health_measurements</span><span class="p">(</span><span class="n">audios</span><span class="p">)</span>
 <span class="go">[{&#39;speaking_rate&#39;: 3.874983349680919,</span>
 <span class="go">&#39;articulation_rate&#39;: 3.874983349680919,</span>

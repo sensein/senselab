@@ -90,7 +90,7 @@
 </span><span id="L-31"><a href="#L-31"><span class="linenos">31</span></a><span class="sd">        NotImplementedError: If the model is not a Hugging Face model.</span>
 </span><span id="L-32"><a href="#L-32"><span class="linenos">32</span></a>
 </span><span id="L-33"><a href="#L-33"><span class="linenos">33</span></a><span class="sd">    Examples:</span>
-</span><span id="L-34"><a href="#L-34"><span class="linenos">34</span></a><span class="sd">        &gt;&gt;&gt; audios = [Audio.from_filepath(&quot;sample.wav&quot;)]</span>
+</span><span id="L-34"><a href="#L-34"><span class="linenos">34</span></a><span class="sd">        &gt;&gt;&gt; audios = [Audio(filepath=&quot;sample.wav&quot;)]</span>
 </span><span id="L-35"><a href="#L-35"><span class="linenos">35</span></a><span class="sd">        &gt;&gt;&gt; model = HFModel(path_or_uri=&quot;facebook/wav2vec2-base&quot;, revision=&quot;main&quot;)</span>
 </span><span id="L-36"><a href="#L-36"><span class="linenos">36</span></a><span class="sd">        &gt;&gt;&gt; embeddings = extract_ssl_embeddings_from_audios(audios, model, cache_dir=&quot;./&quot;, device=DeviceType.CUDA)</span>
 </span><span id="L-37"><a href="#L-37"><span class="linenos">37</span></a><span class="sd">        &gt;&gt;&gt; print(embeddings[0].shape)</span>
@@ -141,7 +141,7 @@
 </span><span id="extract_ssl_embeddings_from_audios-32"><a href="#extract_ssl_embeddings_from_audios-32"><span class="linenos">32</span></a><span class="sd">        NotImplementedError: If the model is not a Hugging Face model.</span>
 </span><span id="extract_ssl_embeddings_from_audios-33"><a href="#extract_ssl_embeddings_from_audios-33"><span class="linenos">33</span></a>
 </span><span id="extract_ssl_embeddings_from_audios-34"><a href="#extract_ssl_embeddings_from_audios-34"><span class="linenos">34</span></a><span class="sd">    Examples:</span>
-</span><span id="extract_ssl_embeddings_from_audios-35"><a href="#extract_ssl_embeddings_from_audios-35"><span class="linenos">35</span></a><span class="sd">        &gt;&gt;&gt; audios = [Audio.from_filepath(&quot;sample.wav&quot;)]</span>
+</span><span id="extract_ssl_embeddings_from_audios-35"><a href="#extract_ssl_embeddings_from_audios-35"><span class="linenos">35</span></a><span class="sd">        &gt;&gt;&gt; audios = [Audio(filepath=&quot;sample.wav&quot;)]</span>
 </span><span id="extract_ssl_embeddings_from_audios-36"><a href="#extract_ssl_embeddings_from_audios-36"><span class="linenos">36</span></a><span class="sd">        &gt;&gt;&gt; model = HFModel(path_or_uri=&quot;facebook/wav2vec2-base&quot;, revision=&quot;main&quot;)</span>
 </span><span id="extract_ssl_embeddings_from_audios-37"><a href="#extract_ssl_embeddings_from_audios-37"><span class="linenos">37</span></a><span class="sd">        &gt;&gt;&gt; embeddings = extract_ssl_embeddings_from_audios(audios, model, cache_dir=&quot;./&quot;, device=DeviceType.CUDA)</span>
 </span><span id="extract_ssl_embeddings_from_audios-38"><a href="#extract_ssl_embeddings_from_audios-38"><span class="linenos">38</span></a><span class="sd">        &gt;&gt;&gt; print(embeddings[0].shape)</span>
@@ -186,7 +186,7 @@
 
 <blockquote>
   <div class="pdoc-code codehilite">
-<pre><span></span><code><span class="gp">&gt;&gt;&gt; </span><span class="n">audios</span> <span class="o">=</span> <span class="p">[</span><span class="n">Audio</span><span class="o">.</span><span class="n">from_filepath</span><span class="p">(</span><span class="s2">&quot;sample.wav&quot;</span><span class="p">)]</span>
+<pre><span></span><code><span class="gp">&gt;&gt;&gt; </span><span class="n">audios</span> <span class="o">=</span> <span class="p">[</span><span class="n">Audio</span><span class="p">(</span><span class="n">filepath</span><span class="o">=</span><span class="s2">&quot;sample.wav&quot;</span><span class="p">)]</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">model</span> <span class="o">=</span> <span class="n">HFModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="s2">&quot;facebook/wav2vec2-base&quot;</span><span class="p">,</span> <span class="n">revision</span><span class="o">=</span><span class="s2">&quot;main&quot;</span><span class="p">)</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">embeddings</span> <span class="o">=</span> <span class="n">extract_ssl_embeddings_from_audios</span><span class="p">(</span><span class="n">audios</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">cache_dir</span><span class="o">=</span><span class="s2">&quot;./&quot;</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DeviceType</span><span class="o">.</span><span class="n">CUDA</span><span class="p">)</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">embeddings</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>

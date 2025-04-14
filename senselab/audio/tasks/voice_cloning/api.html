@@ -113,8 +113,8 @@
 </span><span id="L-54"><a href="#L-54"><span class="linenos">54</span></a><span class="sd">            Currently, only SPARC and Coqui TTS models are supported.</span>
 </span><span id="L-55"><a href="#L-55"><span class="linenos">55</span></a>
 </span><span id="L-56"><a href="#L-56"><span class="linenos">56</span></a><span class="sd">    Examples:</span>
-</span><span id="L-57"><a href="#L-57"><span class="linenos">57</span></a><span class="sd">        &gt;&gt;&gt; source_audios = [Audio.from_filepath(&quot;source1.wav&quot;), Audio.from_filepath(&quot;source2.wav&quot;)]</span>
-</span><span id="L-58"><a href="#L-58"><span class="linenos">58</span></a><span class="sd">        &gt;&gt;&gt; target_audios = [Audio.from_filepath(&quot;target1.wav&quot;), Audio.from_filepath(&quot;target2.wav&quot;)]</span>
+</span><span id="L-57"><a href="#L-57"><span class="linenos">57</span></a><span class="sd">        &gt;&gt;&gt; source_audios = [Audio(filepath=&quot;source1.wav&quot;), Audio(filepath=&quot;source2.wav&quot;)]</span>
+</span><span id="L-58"><a href="#L-58"><span class="linenos">58</span></a><span class="sd">        &gt;&gt;&gt; target_audios = [Audio(filepath=&quot;target1.wav&quot;), Audio(filepath=&quot;target2.wav&quot;)]</span>
 </span><span id="L-59"><a href="#L-59"><span class="linenos">59</span></a><span class="sd">        &gt;&gt;&gt; cloned_audios = clone_voices(source_audios, target_audios)</span>
 </span><span id="L-60"><a href="#L-60"><span class="linenos">60</span></a><span class="sd">    &quot;&quot;&quot;</span>
 </span><span id="L-61"><a href="#L-61"><span class="linenos">61</span></a>    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">source_audios</span><span class="p">)</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="n">target_audios</span><span class="p">):</span>
@@ -192,8 +192,8 @@
 </span><span id="clone_voices-55"><a href="#clone_voices-55"><span class="linenos">55</span></a><span class="sd">            Currently, only SPARC and Coqui TTS models are supported.</span>
 </span><span id="clone_voices-56"><a href="#clone_voices-56"><span class="linenos">56</span></a>
 </span><span id="clone_voices-57"><a href="#clone_voices-57"><span class="linenos">57</span></a><span class="sd">    Examples:</span>
-</span><span id="clone_voices-58"><a href="#clone_voices-58"><span class="linenos">58</span></a><span class="sd">        &gt;&gt;&gt; source_audios = [Audio.from_filepath(&quot;source1.wav&quot;), Audio.from_filepath(&quot;source2.wav&quot;)]</span>
-</span><span id="clone_voices-59"><a href="#clone_voices-59"><span class="linenos">59</span></a><span class="sd">        &gt;&gt;&gt; target_audios = [Audio.from_filepath(&quot;target1.wav&quot;), Audio.from_filepath(&quot;target2.wav&quot;)]</span>
+</span><span id="clone_voices-58"><a href="#clone_voices-58"><span class="linenos">58</span></a><span class="sd">        &gt;&gt;&gt; source_audios = [Audio(filepath=&quot;source1.wav&quot;), Audio(filepath=&quot;source2.wav&quot;)]</span>
+</span><span id="clone_voices-59"><a href="#clone_voices-59"><span class="linenos">59</span></a><span class="sd">        &gt;&gt;&gt; target_audios = [Audio(filepath=&quot;target1.wav&quot;), Audio(filepath=&quot;target2.wav&quot;)]</span>
 </span><span id="clone_voices-60"><a href="#clone_voices-60"><span class="linenos">60</span></a><span class="sd">        &gt;&gt;&gt; cloned_audios = clone_voices(source_audios, target_audios)</span>
 </span><span id="clone_voices-61"><a href="#clone_voices-61"><span class="linenos">61</span></a><span class="sd">    &quot;&quot;&quot;</span>
 </span><span id="clone_voices-62"><a href="#clone_voices-62"><span class="linenos">62</span></a>    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">source_audios</span><span class="p">)</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="n">target_audios</span><span class="p">):</span>
@@ -264,8 +264,8 @@ Currently, only SPARC and Coqui TTS models are supported.</li>
 
 <blockquote>
   <div class="pdoc-code codehilite">
-<pre><span></span><code><span class="gp">&gt;&gt;&gt; </span><span class="n">source_audios</span> <span class="o">=</span> <span class="p">[</span><span class="n">Audio</span><span class="o">.</span><span class="n">from_filepath</span><span class="p">(</span><span class="s2">&quot;source1.wav&quot;</span><span class="p">),</span> <span class="n">Audio</span><span class="o">.</span><span class="n">from_filepath</span><span class="p">(</span><span class="s2">&quot;source2.wav&quot;</span><span class="p">)]</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">target_audios</span> <span class="o">=</span> <span class="p">[</span><span class="n">Audio</span><span class="o">.</span><span class="n">from_filepath</span><span class="p">(</span><span class="s2">&quot;target1.wav&quot;</span><span class="p">),</span> <span class="n">Audio</span><span class="o">.</span><span class="n">from_filepath</span><span class="p">(</span><span class="s2">&quot;target2.wav&quot;</span><span class="p">)]</span>
+<pre><span></span><code><span class="gp">&gt;&gt;&gt; </span><span class="n">source_audios</span> <span class="o">=</span> <span class="p">[</span><span class="n">Audio</span><span class="p">(</span><span class="n">filepath</span><span class="o">=</span><span class="s2">&quot;source1.wav&quot;</span><span class="p">),</span> <span class="n">Audio</span><span class="p">(</span><span class="n">filepath</span><span class="o">=</span><span class="s2">&quot;source2.wav&quot;</span><span class="p">)]</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">target_audios</span> <span class="o">=</span> <span class="p">[</span><span class="n">Audio</span><span class="p">(</span><span class="n">filepath</span><span class="o">=</span><span class="s2">&quot;target1.wav&quot;</span><span class="p">),</span> <span class="n">Audio</span><span class="p">(</span><span class="n">filepath</span><span class="o">=</span><span class="s2">&quot;target2.wav&quot;</span><span class="p">)]</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">cloned_audios</span> <span class="o">=</span> <span class="n">clone_voices</span><span class="p">(</span><span class="n">source_audios</span><span class="p">,</span> <span class="n">target_audios</span><span class="p">)</span>
 </code></pre>
   </div>
