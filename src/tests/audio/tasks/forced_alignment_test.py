@@ -7,6 +7,7 @@ import torch
 from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.forced_alignment.forced_alignment import remove_chunks_by_level
 from senselab.utils.data_structures import DeviceType, Language, ScriptLine
 
 try:
@@ -33,7 +34,6 @@ try:
         _merge_repeats,
         _preprocess_segments,
         align_transcriptions,
-        remove_chunks_by_level,
     )
     from senselab.audio.tasks.speech_to_text import transcribe_audios
     from senselab.utils.data_structures.model import HFModel
