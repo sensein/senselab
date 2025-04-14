@@ -206,6 +206,12 @@ class Audio(BaseModel):
         )
         return array
 
+    def filepath(self) -> Union[str, None]:
+        """Returns the file path of the audio if available."""
+        if self._file_path:
+            return str(self._file_path)
+        return None
+
     def generate_id(self) -> str:
         """Generates a unique identifier for the Audio.
 
