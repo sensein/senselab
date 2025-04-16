@@ -1,3 +1,15 @@
+# 0.35.1 (Wed Apr 16 2025)
+
+#### 🐛 Bug Fix
+
+- fixing extract_praat_parselmouth_features_from_audios [#309](https://github.com/sensein/senselab/pull/309) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.35.0 (Mon Apr 14 2025)
 
 #### 🚀 Enhancement
