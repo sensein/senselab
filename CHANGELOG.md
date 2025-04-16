@@ -1,3 +1,15 @@
+# 0.35.2 (Wed Apr 16 2025)
+
+#### 🐛 Bug Fix
+
+- Feats documentation refactor [#310](https://github.com/sensein/senselab/pull/310) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.35.1 (Wed Apr 16 2025)
 
 #### 🐛 Bug Fix
