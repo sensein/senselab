@@ -13,6 +13,7 @@ try:
     TTS_AVAILABLE = True
 except ModuleNotFoundError:
     TTS_AVAILABLE = False
+    TTS = None  # This is to avoid errors during pdoc documentation generation
 
 import os
 from functools import lru_cache
