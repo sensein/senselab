@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="generator" content="pdoc 15.0.1"/>
+    <meta name="generator" content="pdoc 15.0.2"/>
     <title>senselab.audio.data_structures.audio API documentation</title>
             <link rel="icon" href="https://readthedocs.org/favicon.ico"/>
 
@@ -281,7 +281,7 @@
 </span><span id="L-177"><a href="#L-177"><span class="linenos">177</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">TORCHAUDIO_AVAILABLE</span><span class="p">:</span>
 </span><span id="L-178"><a href="#L-178"><span class="linenos">178</span></a>            <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
 </span><span id="L-179"><a href="#L-179"><span class="linenos">179</span></a>                <span class="s2">&quot;`torchaudio` is not installed. &quot;</span>
-</span><span id="L-180"><a href="#L-180"><span class="linenos">180</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install senselab[&#39;audio&#39;]`.&quot;</span>
+</span><span id="L-180"><a href="#L-180"><span class="linenos">180</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`.&quot;</span>
 </span><span id="L-181"><a href="#L-181"><span class="linenos">181</span></a>            <span class="p">)</span>
 </span><span id="L-182"><a href="#L-182"><span class="linenos">182</span></a>
 </span><span id="L-183"><a href="#L-183"><span class="linenos">183</span></a>        <span class="n">info</span> <span class="o">=</span> <span class="n">torchaudio</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="n">filepath</span><span class="p">)</span>
@@ -399,7 +399,7 @@
 </span><span id="L-295"><a href="#L-295"><span class="linenos">295</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">TORCHAUDIO_AVAILABLE</span><span class="p">:</span>
 </span><span id="L-296"><a href="#L-296"><span class="linenos">296</span></a>            <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
 </span><span id="L-297"><a href="#L-297"><span class="linenos">297</span></a>                <span class="s2">&quot;`torchaudio` is not installed. &quot;</span>
-</span><span id="L-298"><a href="#L-298"><span class="linenos">298</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install senselab[&#39;audio&#39;]`.&quot;</span>
+</span><span id="L-298"><a href="#L-298"><span class="linenos">298</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`.&quot;</span>
 </span><span id="L-299"><a href="#L-299"><span class="linenos">299</span></a>            <span class="p">)</span>
 </span><span id="L-300"><a href="#L-300"><span class="linenos">300</span></a>
 </span><span id="L-301"><a href="#L-301"><span class="linenos">301</span></a>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">waveform</span><span class="o">.</span><span class="n">ndim</span> <span class="o">!=</span> <span class="mi">2</span><span class="p">:</span>
@@ -449,7 +449,7 @@
 </span><span id="L-345"><a href="#L-345"><span class="linenos">345</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">SOUNDFILE_AVAILABLE</span><span class="p">:</span>
 </span><span id="L-346"><a href="#L-346"><span class="linenos">346</span></a>            <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
 </span><span id="L-347"><a href="#L-347"><span class="linenos">347</span></a>                <span class="s2">&quot;`soundfile` is not installed. &quot;</span>
-</span><span id="L-348"><a href="#L-348"><span class="linenos">348</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install senselab[&#39;audio&#39;]`.&quot;</span>
+</span><span id="L-348"><a href="#L-348"><span class="linenos">348</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`.&quot;</span>
 </span><span id="L-349"><a href="#L-349"><span class="linenos">349</span></a>            <span class="p">)</span>
 </span><span id="L-350"><a href="#L-350"><span class="linenos">350</span></a>
 </span><span id="L-351"><a href="#L-351"><span class="linenos">351</span></a>        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">stream_source</span><span class="p">,</span> <span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">,</span> <span class="nb">str</span><span class="p">))</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">stream_source</span><span class="p">):</span>
@@ -714,7 +714,7 @@
 </span><span id="Audio-178"><a href="#Audio-178"><span class="linenos">178</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">TORCHAUDIO_AVAILABLE</span><span class="p">:</span>
 </span><span id="Audio-179"><a href="#Audio-179"><span class="linenos">179</span></a>            <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
 </span><span id="Audio-180"><a href="#Audio-180"><span class="linenos">180</span></a>                <span class="s2">&quot;`torchaudio` is not installed. &quot;</span>
-</span><span id="Audio-181"><a href="#Audio-181"><span class="linenos">181</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install senselab[&#39;audio&#39;]`.&quot;</span>
+</span><span id="Audio-181"><a href="#Audio-181"><span class="linenos">181</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`.&quot;</span>
 </span><span id="Audio-182"><a href="#Audio-182"><span class="linenos">182</span></a>            <span class="p">)</span>
 </span><span id="Audio-183"><a href="#Audio-183"><span class="linenos">183</span></a>
 </span><span id="Audio-184"><a href="#Audio-184"><span class="linenos">184</span></a>        <span class="n">info</span> <span class="o">=</span> <span class="n">torchaudio</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="n">filepath</span><span class="p">)</span>
@@ -832,7 +832,7 @@
 </span><span id="Audio-296"><a href="#Audio-296"><span class="linenos">296</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">TORCHAUDIO_AVAILABLE</span><span class="p">:</span>
 </span><span id="Audio-297"><a href="#Audio-297"><span class="linenos">297</span></a>            <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
 </span><span id="Audio-298"><a href="#Audio-298"><span class="linenos">298</span></a>                <span class="s2">&quot;`torchaudio` is not installed. &quot;</span>
-</span><span id="Audio-299"><a href="#Audio-299"><span class="linenos">299</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install senselab[&#39;audio&#39;]`.&quot;</span>
+</span><span id="Audio-299"><a href="#Audio-299"><span class="linenos">299</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`.&quot;</span>
 </span><span id="Audio-300"><a href="#Audio-300"><span class="linenos">300</span></a>            <span class="p">)</span>
 </span><span id="Audio-301"><a href="#Audio-301"><span class="linenos">301</span></a>
 </span><span id="Audio-302"><a href="#Audio-302"><span class="linenos">302</span></a>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">waveform</span><span class="o">.</span><span class="n">ndim</span> <span class="o">!=</span> <span class="mi">2</span><span class="p">:</span>
@@ -882,7 +882,7 @@
 </span><span id="Audio-346"><a href="#Audio-346"><span class="linenos">346</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">SOUNDFILE_AVAILABLE</span><span class="p">:</span>
 </span><span id="Audio-347"><a href="#Audio-347"><span class="linenos">347</span></a>            <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
 </span><span id="Audio-348"><a href="#Audio-348"><span class="linenos">348</span></a>                <span class="s2">&quot;`soundfile` is not installed. &quot;</span>
-</span><span id="Audio-349"><a href="#Audio-349"><span class="linenos">349</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install senselab[&#39;audio&#39;]`.&quot;</span>
+</span><span id="Audio-349"><a href="#Audio-349"><span class="linenos">349</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`.&quot;</span>
 </span><span id="Audio-350"><a href="#Audio-350"><span class="linenos">350</span></a>            <span class="p">)</span>
 </span><span id="Audio-351"><a href="#Audio-351"><span class="linenos">351</span></a>
 </span><span id="Audio-352"><a href="#Audio-352"><span class="linenos">352</span></a>        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">stream_source</span><span class="p">,</span> <span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">,</span> <span class="nb">str</span><span class="p">))</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">stream_source</span><span class="p">):</span>
@@ -1320,7 +1320,7 @@ This must be provided if a waveform is supplied.</li>
 </span><span id="Audio.save_to_file-296"><a href="#Audio.save_to_file-296"><span class="linenos">296</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">TORCHAUDIO_AVAILABLE</span><span class="p">:</span>
 </span><span id="Audio.save_to_file-297"><a href="#Audio.save_to_file-297"><span class="linenos">297</span></a>            <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
 </span><span id="Audio.save_to_file-298"><a href="#Audio.save_to_file-298"><span class="linenos">298</span></a>                <span class="s2">&quot;`torchaudio` is not installed. &quot;</span>
-</span><span id="Audio.save_to_file-299"><a href="#Audio.save_to_file-299"><span class="linenos">299</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install senselab[&#39;audio&#39;]`.&quot;</span>
+</span><span id="Audio.save_to_file-299"><a href="#Audio.save_to_file-299"><span class="linenos">299</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`.&quot;</span>
 </span><span id="Audio.save_to_file-300"><a href="#Audio.save_to_file-300"><span class="linenos">300</span></a>            <span class="p">)</span>
 </span><span id="Audio.save_to_file-301"><a href="#Audio.save_to_file-301"><span class="linenos">301</span></a>
 </span><span id="Audio.save_to_file-302"><a href="#Audio.save_to_file-302"><span class="linenos">302</span></a>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">waveform</span><span class="o">.</span><span class="n">ndim</span> <span class="o">!=</span> <span class="mi">2</span><span class="p">:</span>
@@ -1409,7 +1409,7 @@ This must be provided if a waveform is supplied.</li>
 </span><span id="Audio.from_stream-346"><a href="#Audio.from_stream-346"><span class="linenos">346</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">SOUNDFILE_AVAILABLE</span><span class="p">:</span>
 </span><span id="Audio.from_stream-347"><a href="#Audio.from_stream-347"><span class="linenos">347</span></a>            <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
 </span><span id="Audio.from_stream-348"><a href="#Audio.from_stream-348"><span class="linenos">348</span></a>                <span class="s2">&quot;`soundfile` is not installed. &quot;</span>
-</span><span id="Audio.from_stream-349"><a href="#Audio.from_stream-349"><span class="linenos">349</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install senselab[&#39;audio&#39;]`.&quot;</span>
+</span><span id="Audio.from_stream-349"><a href="#Audio.from_stream-349"><span class="linenos">349</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`.&quot;</span>
 </span><span id="Audio.from_stream-350"><a href="#Audio.from_stream-350"><span class="linenos">350</span></a>            <span class="p">)</span>
 </span><span id="Audio.from_stream-351"><a href="#Audio.from_stream-351"><span class="linenos">351</span></a>
 </span><span id="Audio.from_stream-352"><a href="#Audio.from_stream-352"><span class="linenos">352</span></a>        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">stream_source</span><span class="p">,</span> <span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">,</span> <span class="nb">str</span><span class="p">))</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">stream_source</span><span class="p">):</span>

@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="generator" content="pdoc 15.0.1"/>
+    <meta name="generator" content="pdoc 15.0.2"/>
     <title>senselab.utils.tasks.eer API documentation</title>
             <link rel="icon" href="https://readthedocs.org/favicon.ico"/>
 
@@ -84,7 +84,7 @@
 </span><span id="L-25"><a href="#L-25"><span class="linenos">25</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">SPEECHBRAIN_AVAILABLE</span><span class="p">:</span>
 </span><span id="L-26"><a href="#L-26"><span class="linenos">26</span></a>        <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
 </span><span id="L-27"><a href="#L-27"><span class="linenos">27</span></a>            <span class="s2">&quot;`speechbrain` is not installed. &quot;</span>
-</span><span id="L-28"><a href="#L-28"><span class="linenos">28</span></a>            <span class="s2">&quot;Please install senselab audio dependencies using `pip install senselab[&#39;audio&#39;]`.&quot;</span>
+</span><span id="L-28"><a href="#L-28"><span class="linenos">28</span></a>            <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`.&quot;</span>
 </span><span id="L-29"><a href="#L-29"><span class="linenos">29</span></a>        <span class="p">)</span>
 </span><span id="L-30"><a href="#L-30"><span class="linenos">30</span></a>
 </span><span id="L-31"><a href="#L-31"><span class="linenos">31</span></a>    <span class="k">return</span> <span class="n">EER</span><span class="p">(</span><span class="n">predictions</span><span class="p">,</span> <span class="n">targets</span><span class="p">)</span>
@@ -116,7 +116,7 @@
 </span><span id="compute_eer-26"><a href="#compute_eer-26"><span class="linenos">26</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">SPEECHBRAIN_AVAILABLE</span><span class="p">:</span>
 </span><span id="compute_eer-27"><a href="#compute_eer-27"><span class="linenos">27</span></a>        <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
 </span><span id="compute_eer-28"><a href="#compute_eer-28"><span class="linenos">28</span></a>            <span class="s2">&quot;`speechbrain` is not installed. &quot;</span>
-</span><span id="compute_eer-29"><a href="#compute_eer-29"><span class="linenos">29</span></a>            <span class="s2">&quot;Please install senselab audio dependencies using `pip install senselab[&#39;audio&#39;]`.&quot;</span>
+</span><span id="compute_eer-29"><a href="#compute_eer-29"><span class="linenos">29</span></a>            <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`.&quot;</span>
 </span><span id="compute_eer-30"><a href="#compute_eer-30"><span class="linenos">30</span></a>        <span class="p">)</span>
 </span><span id="compute_eer-31"><a href="#compute_eer-31"><span class="linenos">31</span></a>
 </span><span id="compute_eer-32"><a href="#compute_eer-32"><span class="linenos">32</span></a>    <span class="k">return</span> <span class="n">EER</span><span class="p">(</span><span class="n">predictions</span><span class="p">,</span> <span class="n">targets</span><span class="p">)</span>

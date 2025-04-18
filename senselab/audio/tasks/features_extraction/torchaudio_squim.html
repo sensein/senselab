@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="generator" content="pdoc 15.0.1"/>
+    <meta name="generator" content="pdoc 15.0.2"/>
     <title>senselab.audio.tasks.features_extraction.torchaudio_squim API documentation</title>
             <link rel="icon" href="https://readthedocs.org/favicon.ico"/>
 
@@ -97,7 +97,7 @@
 </span><span id="L-35"><a href="#L-35"><span class="linenos"> 35</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">TORCHAUDIO_AVAILABLE</span><span class="p">:</span>
 </span><span id="L-36"><a href="#L-36"><span class="linenos"> 36</span></a>        <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
 </span><span id="L-37"><a href="#L-37"><span class="linenos"> 37</span></a>            <span class="s2">&quot;`torchaudio` is not installed. &quot;</span>
-</span><span id="L-38"><a href="#L-38"><span class="linenos"> 38</span></a>            <span class="s2">&quot;Please install senselab audio dependencies using `pip install senselab[&#39;audio&#39;]`.&quot;</span>
+</span><span id="L-38"><a href="#L-38"><span class="linenos"> 38</span></a>            <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`.&quot;</span>
 </span><span id="L-39"><a href="#L-39"><span class="linenos"> 39</span></a>        <span class="p">)</span>
 </span><span id="L-40"><a href="#L-40"><span class="linenos"> 40</span></a>
 </span><span id="L-41"><a href="#L-41"><span class="linenos"> 41</span></a>    <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">audio</span><span class="o">.</span><span class="n">waveform</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">1</span> <span class="k">for</span> <span class="n">audio</span> <span class="ow">in</span> <span class="n">audios</span><span class="p">):</span>
@@ -142,7 +142,7 @@
 </span><span id="L-80"><a href="#L-80"><span class="linenos"> 80</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">TORCHAUDIO_AVAILABLE</span><span class="p">:</span>
 </span><span id="L-81"><a href="#L-81"><span class="linenos"> 81</span></a>        <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
 </span><span id="L-82"><a href="#L-82"><span class="linenos"> 82</span></a>            <span class="s2">&quot;`torchaudio` is not installed. &quot;</span>
-</span><span id="L-83"><a href="#L-83"><span class="linenos"> 83</span></a>            <span class="s2">&quot;Please install senselab audio dependencies using `pip install senselab[&#39;audio&#39;]`.&quot;</span>
+</span><span id="L-83"><a href="#L-83"><span class="linenos"> 83</span></a>            <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`.&quot;</span>
 </span><span id="L-84"><a href="#L-84"><span class="linenos"> 84</span></a>        <span class="p">)</span>
 </span><span id="L-85"><a href="#L-85"><span class="linenos"> 85</span></a>
 </span><span id="L-86"><a href="#L-86"><span class="linenos"> 86</span></a>    <span class="c1"># Check if any audio is not mono</span>
@@ -204,7 +204,7 @@
 </span><span id="extract_objective_quality_features_from_audios-36"><a href="#extract_objective_quality_features_from_audios-36"><span class="linenos">36</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">TORCHAUDIO_AVAILABLE</span><span class="p">:</span>
 </span><span id="extract_objective_quality_features_from_audios-37"><a href="#extract_objective_quality_features_from_audios-37"><span class="linenos">37</span></a>        <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
 </span><span id="extract_objective_quality_features_from_audios-38"><a href="#extract_objective_quality_features_from_audios-38"><span class="linenos">38</span></a>            <span class="s2">&quot;`torchaudio` is not installed. &quot;</span>
-</span><span id="extract_objective_quality_features_from_audios-39"><a href="#extract_objective_quality_features_from_audios-39"><span class="linenos">39</span></a>            <span class="s2">&quot;Please install senselab audio dependencies using `pip install senselab[&#39;audio&#39;]`.&quot;</span>
+</span><span id="extract_objective_quality_features_from_audios-39"><a href="#extract_objective_quality_features_from_audios-39"><span class="linenos">39</span></a>            <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`.&quot;</span>
 </span><span id="extract_objective_quality_features_from_audios-40"><a href="#extract_objective_quality_features_from_audios-40"><span class="linenos">40</span></a>        <span class="p">)</span>
 </span><span id="extract_objective_quality_features_from_audios-41"><a href="#extract_objective_quality_features_from_audios-41"><span class="linenos">41</span></a>
 </span><span id="extract_objective_quality_features_from_audios-42"><a href="#extract_objective_quality_features_from_audios-42"><span class="linenos">42</span></a>    <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">audio</span><span class="o">.</span><span class="n">waveform</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">1</span> <span class="k">for</span> <span class="n">audio</span> <span class="ow">in</span> <span class="n">audios</span><span class="p">):</span>
@@ -288,7 +288,7 @@
 </span><span id="extract_subjective_quality_features_from_audios-81"><a href="#extract_subjective_quality_features_from_audios-81"><span class="linenos"> 81</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">TORCHAUDIO_AVAILABLE</span><span class="p">:</span>
 </span><span id="extract_subjective_quality_features_from_audios-82"><a href="#extract_subjective_quality_features_from_audios-82"><span class="linenos"> 82</span></a>        <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
 </span><span id="extract_subjective_quality_features_from_audios-83"><a href="#extract_subjective_quality_features_from_audios-83"><span class="linenos"> 83</span></a>            <span class="s2">&quot;`torchaudio` is not installed. &quot;</span>
-</span><span id="extract_subjective_quality_features_from_audios-84"><a href="#extract_subjective_quality_features_from_audios-84"><span class="linenos"> 84</span></a>            <span class="s2">&quot;Please install senselab audio dependencies using `pip install senselab[&#39;audio&#39;]`.&quot;</span>
+</span><span id="extract_subjective_quality_features_from_audios-84"><a href="#extract_subjective_quality_features_from_audios-84"><span class="linenos"> 84</span></a>            <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`.&quot;</span>
 </span><span id="extract_subjective_quality_features_from_audios-85"><a href="#extract_subjective_quality_features_from_audios-85"><span class="linenos"> 85</span></a>        <span class="p">)</span>
 </span><span id="extract_subjective_quality_features_from_audios-86"><a href="#extract_subjective_quality_features_from_audios-86"><span class="linenos"> 86</span></a>
 </span><span id="extract_subjective_quality_features_from_audios-87"><a href="#extract_subjective_quality_features_from_audios-87"><span class="linenos"> 87</span></a>    <span class="c1"># Check if any audio is not mono</span>

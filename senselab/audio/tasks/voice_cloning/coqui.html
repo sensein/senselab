@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="generator" content="pdoc 15.0.1"/>
+    <meta name="generator" content="pdoc 15.0.2"/>
     <title>senselab.audio.tasks.voice_cloning.coqui API documentation</title>
             <link rel="icon" href="https://readthedocs.org/favicon.ico"/>
 
@@ -91,7 +91,7 @@
 </span><span id="L-26"><a href="#L-26"><span class="linenos"> 26</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">TTS_AVAILABLE</span><span class="p">:</span>
 </span><span id="L-27"><a href="#L-27"><span class="linenos"> 27</span></a>            <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
 </span><span id="L-28"><a href="#L-28"><span class="linenos"> 28</span></a>                <span class="s2">&quot;`coqui-tts` is not available. &quot;</span>
-</span><span id="L-29"><a href="#L-29"><span class="linenos"> 29</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install senselab[&#39;audio&#39;]`.&quot;</span>
+</span><span id="L-29"><a href="#L-29"><span class="linenos"> 29</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`.&quot;</span>
 </span><span id="L-30"><a href="#L-30"><span class="linenos"> 30</span></a>            <span class="p">)</span>
 </span><span id="L-31"><a href="#L-31"><span class="linenos"> 31</span></a>        <span class="n">device</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">_select_device_and_dtype</span><span class="p">(</span>
 </span><span id="L-32"><a href="#L-32"><span class="linenos"> 32</span></a>            <span class="n">user_preference</span><span class="o">=</span><span class="n">user_preference</span><span class="p">,</span> <span class="n">compatible_devices</span><span class="o">=</span><span class="p">[</span><span class="n">DeviceType</span><span class="o">.</span><span class="n">CUDA</span><span class="p">,</span> <span class="n">DeviceType</span><span class="o">.</span><span class="n">CPU</span><span class="p">]</span>
@@ -221,7 +221,7 @@
 </span><span id="CoquiVoiceCloner-27"><a href="#CoquiVoiceCloner-27"><span class="linenos"> 27</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">TTS_AVAILABLE</span><span class="p">:</span>
 </span><span id="CoquiVoiceCloner-28"><a href="#CoquiVoiceCloner-28"><span class="linenos"> 28</span></a>            <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
 </span><span id="CoquiVoiceCloner-29"><a href="#CoquiVoiceCloner-29"><span class="linenos"> 29</span></a>                <span class="s2">&quot;`coqui-tts` is not available. &quot;</span>
-</span><span id="CoquiVoiceCloner-30"><a href="#CoquiVoiceCloner-30"><span class="linenos"> 30</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install senselab[&#39;audio&#39;]`.&quot;</span>
+</span><span id="CoquiVoiceCloner-30"><a href="#CoquiVoiceCloner-30"><span class="linenos"> 30</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`.&quot;</span>
 </span><span id="CoquiVoiceCloner-31"><a href="#CoquiVoiceCloner-31"><span class="linenos"> 31</span></a>            <span class="p">)</span>
 </span><span id="CoquiVoiceCloner-32"><a href="#CoquiVoiceCloner-32"><span class="linenos"> 32</span></a>        <span class="n">device</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">_select_device_and_dtype</span><span class="p">(</span>
 </span><span id="CoquiVoiceCloner-33"><a href="#CoquiVoiceCloner-33"><span class="linenos"> 33</span></a>            <span class="n">user_preference</span><span class="o">=</span><span class="n">user_preference</span><span class="p">,</span> <span class="n">compatible_devices</span><span class="o">=</span><span class="p">[</span><span class="n">DeviceType</span><span class="o">.</span><span class="n">CUDA</span><span class="p">,</span> <span class="n">DeviceType</span><span class="o">.</span><span class="n">CPU</span><span class="p">]</span>

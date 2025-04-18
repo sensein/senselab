@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="generator" content="pdoc 15.0.1"/>
+    <meta name="generator" content="pdoc 15.0.2"/>
     <title>senselab.video.data_structures.video API documentation</title>
             <link rel="icon" href="https://readthedocs.org/favicon.ico"/>
 
@@ -253,7 +253,7 @@
 </span><span id="L-164"><a href="#L-164"><span class="linenos">164</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">PYAV_AVAILABLE</span><span class="p">:</span>
 </span><span id="L-165"><a href="#L-165"><span class="linenos">165</span></a>            <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
 </span><span id="L-166"><a href="#L-166"><span class="linenos">166</span></a>                <span class="s2">&quot;`pyav` is not installed. &quot;</span>
-</span><span id="L-167"><a href="#L-167"><span class="linenos">167</span></a>                <span class="s2">&quot;Please install senselab video dependencies using `pip install senselab[&#39;video&#39;]`.&quot;</span>
+</span><span id="L-167"><a href="#L-167"><span class="linenos">167</span></a>                <span class="s2">&quot;Please install senselab video dependencies using `pip install &#39;senselab[video]&#39;`.&quot;</span>
 </span><span id="L-168"><a href="#L-168"><span class="linenos">168</span></a>            <span class="p">)</span>
 </span><span id="L-169"><a href="#L-169"><span class="linenos">169</span></a>        <span class="c1"># Load video frames, audio frames, and metadata.</span>
 </span><span id="L-170"><a href="#L-170"><span class="linenos">170</span></a>        <span class="n">v_frames</span><span class="p">,</span> <span class="n">a_frames</span><span class="p">,</span> <span class="n">v_metadata</span> <span class="o">=</span> <span class="n">read_video</span><span class="p">(</span><span class="n">filename</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_file_path</span><span class="p">,</span> <span class="n">pts_unit</span><span class="o">=</span><span class="s2">&quot;sec&quot;</span><span class="p">)</span>
@@ -440,7 +440,7 @@
 </span><span id="Video-165"><a href="#Video-165"><span class="linenos">165</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">PYAV_AVAILABLE</span><span class="p">:</span>
 </span><span id="Video-166"><a href="#Video-166"><span class="linenos">166</span></a>            <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
 </span><span id="Video-167"><a href="#Video-167"><span class="linenos">167</span></a>                <span class="s2">&quot;`pyav` is not installed. &quot;</span>
-</span><span id="Video-168"><a href="#Video-168"><span class="linenos">168</span></a>                <span class="s2">&quot;Please install senselab video dependencies using `pip install senselab[&#39;video&#39;]`.&quot;</span>
+</span><span id="Video-168"><a href="#Video-168"><span class="linenos">168</span></a>                <span class="s2">&quot;Please install senselab video dependencies using `pip install &#39;senselab[video]&#39;`.&quot;</span>
 </span><span id="Video-169"><a href="#Video-169"><span class="linenos">169</span></a>            <span class="p">)</span>
 </span><span id="Video-170"><a href="#Video-170"><span class="linenos">170</span></a>        <span class="c1"># Load video frames, audio frames, and metadata.</span>
 </span><span id="Video-171"><a href="#Video-171"><span class="linenos">171</span></a>        <span class="n">v_frames</span><span class="p">,</span> <span class="n">a_frames</span><span class="p">,</span> <span class="n">v_metadata</span> <span class="o">=</span> <span class="n">read_video</span><span class="p">(</span><span class="n">filename</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_file_path</span><span class="p">,</span> <span class="n">pts_unit</span><span class="o">=</span><span class="s2">&quot;sec&quot;</span><span class="p">)</span>

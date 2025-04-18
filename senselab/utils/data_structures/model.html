@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="generator" content="pdoc 15.0.1"/>
+    <meta name="generator" content="pdoc 15.0.2"/>
     <title>senselab.utils.data_structures.model API documentation</title>
             <link rel="icon" href="https://readthedocs.org/favicon.ico"/>
 
@@ -303,7 +303,7 @@
 </span><span id="L-124"><a href="#L-124"><span class="linenos">124</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">TTS_AVAILABLE</span><span class="p">:</span>
 </span><span id="L-125"><a href="#L-125"><span class="linenos">125</span></a>            <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
 </span><span id="L-126"><a href="#L-126"><span class="linenos">126</span></a>                <span class="s2">&quot;`coqui-tts` is not installed. &quot;</span>
-</span><span id="L-127"><a href="#L-127"><span class="linenos">127</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install senselab[&#39;audio&#39;]`.&quot;</span>
+</span><span id="L-127"><a href="#L-127"><span class="linenos">127</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`.&quot;</span>
 </span><span id="L-128"><a href="#L-128"><span class="linenos">128</span></a>            <span class="p">)</span>
 </span><span id="L-129"><a href="#L-129"><span class="linenos">129</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">Path</span><span class="p">):</span>
 </span><span id="L-130"><a href="#L-130"><span class="linenos">130</span></a>            <span class="n">model_ids</span> <span class="o">=</span> <span class="n">TTS</span><span class="p">()</span><span class="o">.</span><span class="n">list_models</span><span class="p">()</span>
@@ -357,7 +357,7 @@
 </span><span id="L-178"><a href="#L-178"><span class="linenos">178</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">TORCHAUDIO_AVAILABLE</span><span class="p">:</span>
 </span><span id="L-179"><a href="#L-179"><span class="linenos">179</span></a>        <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
 </span><span id="L-180"><a href="#L-180"><span class="linenos">180</span></a>            <span class="s2">&quot;`torchaudio` is not installed. &quot;</span>
-</span><span id="L-181"><a href="#L-181"><span class="linenos">181</span></a>            <span class="s2">&quot;Please install senselab audio dependencies using `pip install senselab[&#39;audio&#39;]`.&quot;</span>
+</span><span id="L-181"><a href="#L-181"><span class="linenos">181</span></a>            <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`.&quot;</span>
 </span><span id="L-182"><a href="#L-182"><span class="linenos">182</span></a>        <span class="p">)</span>
 </span><span id="L-183"><a href="#L-183"><span class="linenos">183</span></a>
 </span><span id="L-184"><a href="#L-184"><span class="linenos">184</span></a>    <span class="k">try</span><span class="p">:</span>
@@ -894,7 +894,7 @@ It checks if the specified Hugging Face model ID and revision exist in the remot
 </span><span id="CoquiTTSModel-125"><a href="#CoquiTTSModel-125"><span class="linenos">125</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">TTS_AVAILABLE</span><span class="p">:</span>
 </span><span id="CoquiTTSModel-126"><a href="#CoquiTTSModel-126"><span class="linenos">126</span></a>            <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
 </span><span id="CoquiTTSModel-127"><a href="#CoquiTTSModel-127"><span class="linenos">127</span></a>                <span class="s2">&quot;`coqui-tts` is not installed. &quot;</span>
-</span><span id="CoquiTTSModel-128"><a href="#CoquiTTSModel-128"><span class="linenos">128</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install senselab[&#39;audio&#39;]`.&quot;</span>
+</span><span id="CoquiTTSModel-128"><a href="#CoquiTTSModel-128"><span class="linenos">128</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`.&quot;</span>
 </span><span id="CoquiTTSModel-129"><a href="#CoquiTTSModel-129"><span class="linenos">129</span></a>            <span class="p">)</span>
 </span><span id="CoquiTTSModel-130"><a href="#CoquiTTSModel-130"><span class="linenos">130</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">Path</span><span class="p">):</span>
 </span><span id="CoquiTTSModel-131"><a href="#CoquiTTSModel-131"><span class="linenos">131</span></a>            <span class="n">model_ids</span> <span class="o">=</span> <span class="n">TTS</span><span class="p">()</span><span class="o">.</span><span class="n">list_models</span><span class="p">()</span>
@@ -932,7 +932,7 @@ It checks if the specified Hugging Face model ID and revision exist in the remot
 </span><span id="CoquiTTSModel.validate_path_or_uri-125"><a href="#CoquiTTSModel.validate_path_or_uri-125"><span class="linenos">125</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">TTS_AVAILABLE</span><span class="p">:</span>
 </span><span id="CoquiTTSModel.validate_path_or_uri-126"><a href="#CoquiTTSModel.validate_path_or_uri-126"><span class="linenos">126</span></a>            <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
 </span><span id="CoquiTTSModel.validate_path_or_uri-127"><a href="#CoquiTTSModel.validate_path_or_uri-127"><span class="linenos">127</span></a>                <span class="s2">&quot;`coqui-tts` is not installed. &quot;</span>
-</span><span id="CoquiTTSModel.validate_path_or_uri-128"><a href="#CoquiTTSModel.validate_path_or_uri-128"><span class="linenos">128</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install senselab[&#39;audio&#39;]`.&quot;</span>
+</span><span id="CoquiTTSModel.validate_path_or_uri-128"><a href="#CoquiTTSModel.validate_path_or_uri-128"><span class="linenos">128</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`.&quot;</span>
 </span><span id="CoquiTTSModel.validate_path_or_uri-129"><a href="#CoquiTTSModel.validate_path_or_uri-129"><span class="linenos">129</span></a>            <span class="p">)</span>
 </span><span id="CoquiTTSModel.validate_path_or_uri-130"><a href="#CoquiTTSModel.validate_path_or_uri-130"><span class="linenos">130</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">Path</span><span class="p">):</span>
 </span><span id="CoquiTTSModel.validate_path_or_uri-131"><a href="#CoquiTTSModel.validate_path_or_uri-131"><span class="linenos">131</span></a>            <span class="n">model_ids</span> <span class="o">=</span> <span class="n">TTS</span><span class="p">()</span><span class="o">.</span><span class="n">list_models</span><span class="p">()</span>
@@ -1249,7 +1249,7 @@ It checks if the specified torchaudio model ID exists.</p>
 </span><span id="check_torchaudio_model_exists-179"><a href="#check_torchaudio_model_exists-179"><span class="linenos">179</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">TORCHAUDIO_AVAILABLE</span><span class="p">:</span>
 </span><span id="check_torchaudio_model_exists-180"><a href="#check_torchaudio_model_exists-180"><span class="linenos">180</span></a>        <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
 </span><span id="check_torchaudio_model_exists-181"><a href="#check_torchaudio_model_exists-181"><span class="linenos">181</span></a>            <span class="s2">&quot;`torchaudio` is not installed. &quot;</span>
-</span><span id="check_torchaudio_model_exists-182"><a href="#check_torchaudio_model_exists-182"><span class="linenos">182</span></a>            <span class="s2">&quot;Please install senselab audio dependencies using `pip install senselab[&#39;audio&#39;]`.&quot;</span>
+</span><span id="check_torchaudio_model_exists-182"><a href="#check_torchaudio_model_exists-182"><span class="linenos">182</span></a>            <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`.&quot;</span>
 </span><span id="check_torchaudio_model_exists-183"><a href="#check_torchaudio_model_exists-183"><span class="linenos">183</span></a>        <span class="p">)</span>
 </span><span id="check_torchaudio_model_exists-184"><a href="#check_torchaudio_model_exists-184"><span class="linenos">184</span></a>
 </span><span id="check_torchaudio_model_exists-185"><a href="#check_torchaudio_model_exists-185"><span class="linenos">185</span></a>    <span class="k">try</span><span class="p">:</span>
