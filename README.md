@@ -46,7 +46,7 @@ Welcome to ```senselab```! This is a Python package for streamlining the process
 Install this package via:
 
 ```sh
-pip install senselab['all']
+pip install 'senselab[all]'
 ```
 
 Or get the newest development version via:
@@ -57,11 +57,11 @@ pip install git+https://github.com/sensein/senselab.git
 
 If you want to install only audio dependencies, you do:
 ```sh
-pip install senselab['audio']
+pip install 'senselab[audio]'
 ```
 To install video and text extras, please do:
 ```sh
-pip install senselab['video,text']
+pip install 'senselab[video,text]'
 ```
 
 ## Quick start
