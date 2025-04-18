@@ -43,7 +43,7 @@ def resampled_stereo_audio_sample(stereo_audio_sample: Audio, resampling_rate: i
 @pytest.fixture
 def resampled_had_that_curiosity_audio_sample(resampling_rate: int = 16000) -> Audio:
     """Fixture for resampled 'had that curiosity' audio sample."""
-    return resample_audios([Audio.from_filepath(HAD_THAT_CURIOSITY_PATH)], resampling_rate)[0]
+    return resample_audios([Audio(filepath=HAD_THAT_CURIOSITY_PATH)], resampling_rate)[0]
 
 
 @pytest.fixture
