@@ -56,4 +56,57 @@ Forced alignment models are evaluated on datasets with trusted word or phoneme t
   Conversational English with detailed alignments. Harder than TIMIT due to casual speech and disfluencies. Used to test aligners on natural dialogue.
 
 ### Benchmarks
+
+#### Table 1: TIMIT Word-Level Alignment Accuracy (%)
+**Correctly detected word boundaries within time thresholds (ms)**
+
+| System     | ≤10ms | ≤25ms | ≤50ms | ≤100ms |
+|------------|-------|--------|--------|---------|
+| MFA        | 41.6  | 72.8   | 89.4   | 97.4    |
+| MMS        | 18.6  | 43.5   | 75.7   | 94.7    |
+| WhisperX   | 22.4  | 52.7   | 82.4   | 94.2    |
+
+---
+
+#### Table 2: Buckeye Word-Level Alignment Accuracy (%)
+**Correctly detected word boundaries within time thresholds (ms); `Thresh500` indicates alignments within ±500ms**
+
+| System     | Thresh500 | ≤10ms | ≤25ms | ≤50ms | ≤100ms |
+|------------|-----------|--------|--------|--------|---------|
+| MFA        | -         | 39.8   | 69.9   | 84.9   | 91.8    |
+| MMS        | -         | 25.0   | 52.7   | 75.0   | 87.9    |
+| WhisperX   | -         | 18.8   | 43.1   | 67.4   | 77.4    |
+| MFA        | +         | 41.1   | 72.2   | 87.6   | 94.8    |
+| MMS        | +         | 25.8   | 54.2   | 77.2   | 90.5    |
+| WhisperX   | +         | 22.8   | 52.3   | 81.8   | 93.9    |
+
+---
+
+#### Table 3: Alignment Shift and F1@20ms
+**Mean/median boundary shift (ms) and F1-score within 20ms window**
+
+| Method     | Dataset  | Thresh500 | Level | Mean   | Median | F1@20 |
+|------------|----------|-----------|--------|--------|--------|--------|
+| MFA        | TIMIT    | -         | phon   | 133.4  | 12.5   | 66.0   |
+| MFA        | Buckeye  | -         | phon   | 1085.9 | 15.9   | 56.2   |
+| MFA        | TIMIT    | -         | word   | 21.9   | 12.5   | 65.7   |
+| MMS        | TIMIT    | -         | word   | 68.5   | 29.3   | 35.4   |
+| WhisperX   | TIMIT    | -         | word   | 34.3   | 23.5   | 43.5   |
+| MFA        | Buckeye  | -         | word   | 976.5  | 13.6   | 63.4   |
+| MMS        | Buckeye  | -         | word   | 208.3  | 23.1   | 45.0   |
+| WhisperX   | Buckeye  | -         | word   | 11685.3| 30.1   | 35.6   |
+| MFA        | Buckeye  | +         | word   | 27.8   | 12.9   | 65.4   |
+| MMS        | Buckeye  | +         | word   | 41.0   | 22.2   | 46.3   |
+| WhisperX   | Buckeye  | +         | word   | 36.4   | 23.7   | 43.3   |
+
+---
+
+#### Table 4: Phone-Level Alignment Accuracy (%) — MFA Only
+**Percentage of correctly detected phone boundaries within time thresholds**
+
+| Dataset  | ≤10ms | ≤25ms | ≤50ms | ≤100ms |
+|----------|--------|--------|--------|---------|
+| TIMIT    | 38.6   | 72.3   | 81.1   | 84.6    |
+| Buckeye  | 35.3   | 60.6   | 68.9   | 72.7    |
+
 ## Notes
