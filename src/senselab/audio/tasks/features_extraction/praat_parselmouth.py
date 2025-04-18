@@ -62,7 +62,7 @@ def get_sound(audio: Union[Path, Audio], sampling_rate: int = 16000) -> parselmo
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
             "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
         )
 
     try:
@@ -126,7 +126,7 @@ def extract_speech_rate(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str,
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
             "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
         )
 
     try:
@@ -396,7 +396,7 @@ def extract_pitch_values(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
             "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
         )
 
     try:
@@ -475,7 +475,7 @@ def extract_pitch_descriptors(
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
             "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
         )
 
     try:
@@ -535,7 +535,7 @@ def extract_intensity_descriptors(
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
             "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
         )
 
     try:
@@ -599,7 +599,7 @@ def extract_harmonicity_descriptors(
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
             "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
         )
 
     try:
@@ -658,7 +658,7 @@ def extract_slope_tilt(snd: Union[parselmouth.Sound, Path, Audio], floor: float,
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
             "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
         )
 
     try:
@@ -728,7 +728,7 @@ def extract_cpp_descriptors(
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
             "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
         )
 
     try:
@@ -856,7 +856,7 @@ def measure_f1f2_formants_bandwidths(
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
             "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
         )
 
     try:
@@ -970,7 +970,7 @@ def extract_spectral_moments(
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
             "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
         )
 
     try:
@@ -1069,7 +1069,7 @@ def extract_audio_duration(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[s
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
             "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
         )
 
     # Check if the input is a Path, in which case we load the audio from the file
@@ -1112,7 +1112,7 @@ def extract_jitter(snd: Union[parselmouth.Sound, Path, Audio], floor: float, cei
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
             "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
         )
 
     # Check if the input is a Path or Audio, and convert to Parselmouth Sound if necessary
@@ -1168,7 +1168,7 @@ def extract_shimmer(snd: Union[parselmouth.Sound, Path, Audio], floor: float, ce
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
             "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
         )
 
     # Check if the input is a Path or Audio, and convert to Parselmouth Sound if necessary

@@ -41,7 +41,7 @@ class PyannoteDiarization:
         if not PYANNOTEAUDIO_AVAILABLE:
             raise ModuleNotFoundError(
                 "`pyannote-audio` is not installed. "
-                "Please install senselab audio dependencies using `pip install senselab['audio']`."
+                "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
             )
 
         device, _ = _select_device_and_dtype(
@@ -96,7 +96,7 @@ def diarize_audios_with_pyannote(
     if not PYANNOTEAUDIO_AVAILABLE:
         raise ModuleNotFoundError(
             "`pyannote-audio` is not installed. "
-            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
         )
 
     if model is None:

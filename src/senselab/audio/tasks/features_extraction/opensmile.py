@@ -64,7 +64,7 @@ class OpenSmileFeatureExtractorFactory:
         if not OPENSMILE_AVAILABLE:
             raise ModuleNotFoundError(
                 "`opensmile` is not installed. "
-                "Please install senselab audio dependencies using `pip install senselab['audio']`"
+                "Please install senselab audio dependencies using `pip install 'senselab[audio]'`"
             )
 
         key = f"{feature_set}-{feature_level}"  # Unique key for each feature extractor
@@ -105,7 +105,7 @@ def extract_opensmile_features_from_audios(
     if not OPENSMILE_AVAILABLE:
         raise ModuleNotFoundError(
             "`opensmile` is not installed. Please install the necessary dependencies using:\n"
-            "`pip install senselab['audio']`"
+            "`pip install 'senselab[audio]'`"
         )
 
     def _extract_feats_from_audio(sample: Audio, smile: opensmile.Smile) -> Dict[str, Any]:
