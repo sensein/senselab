@@ -9,7 +9,7 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.preprocessing import extract_segments, resample_audios
 from senselab.audio.tasks.text_to_speech import synthesize_texts
 from senselab.audio.tasks.text_to_speech.huggingface import HuggingFaceTTS
-from senselab.utils.data_structures import DeviceType, HFModel, Language, SenselabModel, TorchModel
+from senselab.utils.data_structures import CoquiTTSModel, DeviceType, HFModel, Language, SenselabModel, TorchModel
 
 try:
     import vocos
@@ -17,6 +17,14 @@ try:
     VOCOS_AVAILABLE = True
 except ModuleNotFoundError:
     VOCOS_AVAILABLE = False
+
+# Try to import Coqui TTS
+try:
+    from TTS.api import TTS
+
+    TTS_AVAILABLE = True
+except ModuleNotFoundError:
+    TTS_AVAILABLE = False
 
 
 @pytest.fixture
@@ -37,12 +45,33 @@ def mars5_model() -> TorchModel:
     return TorchModel(path_or_uri="Camb-ai/mars5-tts", revision="master")
 
 
+@pytest.fixture
+def coqui_tts_model() -> CoquiTTSModel:
+    """Fixture for Coqui TTS model."""
+    return CoquiTTSModel(path_or_uri="tts_models/multilingual/multi-dataset/xtts_v2", revision="main")
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 @pytest.mark.parametrize("hf_model", ["hf_model", "hf_model2"], indirect=True)
 def test_synthesize_texts_with_hf_model(hf_model: HFModel) -> None:
     """Test synthesizing texts."""
     texts = ["Hello world", "Hello world again."]
     audios = synthesize_texts(texts=texts, model=hf_model, device=DeviceType.CUDA)
+
+    assert len(audios) == 2
+    assert isinstance(audios[0], Audio)
+    assert audios[0].waveform is not None
+    assert audios[0].sampling_rate > 0
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
+@pytest.mark.skipif(not TTS_AVAILABLE, reason="Coqui TTS is not available")
+def test_synthesize_texts_with_coqui_model(coqui_tts_model: CoquiTTSModel) -> None:
+    """Test synthesizing texts."""
+    texts = ["Hello world", "Hello world again."]
+    audios = synthesize_texts(
+        texts=texts, model=coqui_tts_model, device=DeviceType.CUDA, language=Language(language_code="en")
+    )
 
     assert len(audios) == 2
     assert isinstance(audios[0], Audio)
