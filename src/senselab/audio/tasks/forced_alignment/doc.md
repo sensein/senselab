@@ -110,3 +110,15 @@ Forced alignment models are evaluated on datasets with trusted word or phoneme t
 | Buckeye  | 35.3   | 60.6   | 68.9   | 72.7    |
 
 ## Notes
+
+- **Fine-tuning**: Many aligners (e.g., MFA, Wav2Vec2) support retraining on domain-specific data, improving accuracy for accents, jargon, or speaker-specific speech.
+
+- **Multilingual support**: Tools like WhisperX and MMS support many languages out-of-the-box. MFA supports multiple languages but requires language-specific models and lexicons.
+
+- **Transcript and audio quality**: Accurate, verbatim transcripts and clean, single-speaker audio are essential. Major transcript mismatches or overlapping speech can cause alignment failures.
+
+- **Audio preprocessing**: Most aligners expect 16kHz mono audio. Segment long recordings using voice activity detection (VAD) to improve alignment stability and speed.
+
+- **Phoneme alignment**: Lexicon-based aligners like MFA require pronunciation dictionaries. End-to-end models don’t, but won’t produce phoneme-level alignments unless adapted.
+
+- **Performance**: CTC models are fast and GPU-friendly. MFA can be slower on large datasets but offers high precision. Always verify output visually or by spot-checking timestamps.
