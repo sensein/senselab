@@ -24,6 +24,21 @@ Use traditional acoustic models (e.g., GMM-HMM triphone models) and pronunciatio
 
 ## Evaluation
 ### Metrics
+Forced alignment quality is typically assessed using:
+
+- **Alignment Error Rate (AER)**
+  Measures alignment accuracy by comparing predicted and reference word-to-time mappings. Defined as `1 - F1 score`, it penalizes both false and missed alignments. Lower is better.
+
+- **Mean Absolute Error (MAE)**
+  Average absolute timing difference (in seconds or ms) between predicted and reference boundaries. Sensitive to outliers. Lower values indicate tighter alignment.
+
+- **Boundary Deviation**
+  Often synonymous with MAE. Sometimes reported as mean/median boundary error or success rate within a tolerance (e.g., % within ±20ms).
+
+- **Other Metrics**
+  - **F1@tolerance**: Combines precision/recall for boundaries within a given window.
+  - **Phone Error Rate (PER)**: At phoneme level—counts insertions, deletions, substitutions.
+
 ### Datasets
 ### Benchmarks
 ## Notes
