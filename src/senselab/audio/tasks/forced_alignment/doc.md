@@ -19,7 +19,7 @@ Several types of models and tools are used for forced alignment, each with diffe
 
 - **CTC-Based Models** (e.g., Wav2Vec2, Massively Multilingual Speech (MMS), NeMo Forced Aligner (NFA)): These models align transcript tokens to audio using CTC decoding. They are efficient and support long audio, with many hosted on Hugging Face. They output character or token timestamps, requiring aggregation for word-level alignment.
 
-- **Dedicated Aligners** (e.g., Montreal Forced Aligner):
+- **Dedicated Aligners** (e.g., Montreal Forced Aligner (MFA)):
 Use traditional acoustic models (e.g., GMM-HMM triphone models) and pronunciation lexicons to align transcripts at the word or phoneme level.
 
 ## Evaluation
@@ -40,5 +40,20 @@ Forced alignment quality is typically assessed using:
   - **Phone Error Rate (PER)**: At phoneme level—counts insertions, deletions, substitutions.
 
 ### Datasets
+
+Forced alignment models are evaluated on datasets with trusted word or phoneme timestamps:
+
+- **TIMIT**
+  Classic corpus with precise phoneme and word boundaries. Ideal for phoneme-level evaluation under clean, read-speech conditions. High-quality aligners often reach ~20ms MAE.
+
+- **LibriSpeech Alignments**
+  Audiobook dataset with full alignments from MFA released for all 980 hours of LibriSpeech. Tests scalability and robustness on real speech.
+
+- **Common Voice**
+  Multilingual, crowd-sourced speech with transcripts. Often used to test multilingual alignment. Lacks gold standard timestamps but helps evaluate performance on diverse accents and languages.
+
+- **Buckeye Corpus**
+  Conversational English with detailed alignments. Harder than TIMIT due to casual speech and disfluencies. Used to test aligners on natural dialogue.
+
 ### Benchmarks
 ## Notes
