@@ -37,7 +37,7 @@ class SentenceTransformerFactory:
         if not SENTENCETRANSFORMERS_AVAILABLE:
             raise ModuleNotFoundError(
                 "`sentence-transformers` is not installed. "
-                "Please install senselab text dependencies using `pip install senselab['text']`."
+                "Please install senselab text dependencies using `pip install 'senselab[text]'`."
             )
 
         device, _ = _select_device_and_dtype(
@@ -74,7 +74,7 @@ class SentenceTransformerFactory:
         if not SENTENCETRANSFORMERS_AVAILABLE:
             raise ModuleNotFoundError(
                 "`sentence-transformers` is not installed. "
-                "Please install senselab text dependencies using `pip install senselab['text']`."
+                "Please install senselab text dependencies using `pip install 'senselab[text]'`."
             )
 
         if model is None:
