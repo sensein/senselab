@@ -164,7 +164,7 @@ class Video(BaseModel):
         if not PYAV_AVAILABLE:
             raise ModuleNotFoundError(
                 "`pyav` is not installed. "
-                "Please install senselab video dependencies using `pip install senselab['video']`."
+                "Please install senselab video dependencies using `pip install 'senselab[video]'`."
             )
         # Load video frames, audio frames, and metadata.
         v_frames, a_frames, v_metadata = read_video(filename=self._file_path, pts_unit="sec")
