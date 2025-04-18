@@ -1,3 +1,19 @@
+# 0.36.0 (Fri Apr 18 2025)
+
+#### 🚀 Enhancement
+
+- added coqui-tts for text to speech [#313](https://github.com/sensein/senselab/pull/313) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### 📝 Documentation
+
+- fixing install command to make it compatible with zsh, bash, and fish [#312](https://github.com/sensein/senselab/pull/312) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.35.2 (Wed Apr 16 2025)
 
 #### 🐛 Bug Fix
