@@ -15,6 +15,22 @@ try:
 except ModuleNotFoundError:
     OPENSMILE_AVAILABLE = False
 
+    class DummyOpenSmile:
+        """Dummy class to represent openSMILE when it's not available."""
+
+        def __init__(self) -> None:
+            """Dummy constructor for when openSMILE is not available."""
+            self.__dict__ = {}
+
+        class Smile:
+            """Dummy class to represent openSMILE when it's not available."""
+
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                """Dummy class for when openSMILE is not available."""
+                pass
+
+    opensmile = DummyOpenSmile()
+
 import os
 from typing import Any, Dict, List, Optional
 
@@ -32,10 +48,10 @@ class OpenSmileFeatureExtractorFactory:
     exists per unique combination of `feature_set` and `feature_level`.
     """
 
-    _extractors: Dict[str, "opensmile.Smile"] = {}  # Cache for feature extractors
+    _extractors: Dict[str, opensmile.Smile] = {}  # Cache for feature extractors
 
     @classmethod
-    def get_opensmile_extractor(cls, feature_set: str, feature_level: str) -> "opensmile.Smile":
+    def get_opensmile_extractor(cls, feature_set: str, feature_level: str) -> opensmile.Smile:
         """Get or create an openSMILE feature extractor.
 
         Args:
@@ -115,7 +131,9 @@ def extract_opensmile_features_from_audios(
             }
         except Exception as e:
             # Log error and return NaNs if feature extraction fails
-            print(f"Error processing sample {sample.orig_path_or_id}: {e}")
+            filepath = sample.filepath() if hasattr(sample, "filepath") and sample.filepath() else ""
+            desc = f"{sample.generate_id()}{f' ({filepath})' if filepath else ''}"
+            print(f"Error processing sample {desc}: {e}")
             return {feature: np.nan for feature in smile.feature_names}
 
     # Decorate the feature extraction function for Pydra
