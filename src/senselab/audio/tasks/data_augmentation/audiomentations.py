@@ -44,7 +44,7 @@ def augment_audios_with_audiomentations(audios: List[Audio], augmentation: "Comp
     if not AUDIOMENTATIONS_AVAILABLE:
         raise ModuleNotFoundError(
             "`audiomentations` is not installed. "
-            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
         )
 
     """

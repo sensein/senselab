@@ -177,7 +177,7 @@ class Audio(BaseModel):
         if not TORCHAUDIO_AVAILABLE:
             raise ModuleNotFoundError(
                 "`torchaudio` is not installed. "
-                "Please install senselab audio dependencies using `pip install senselab['audio']`."
+                "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
             )
 
         info = torchaudio.info(filepath)
@@ -295,7 +295,7 @@ class Audio(BaseModel):
         if not TORCHAUDIO_AVAILABLE:
             raise ModuleNotFoundError(
                 "`torchaudio` is not installed. "
-                "Please install senselab audio dependencies using `pip install senselab['audio']`."
+                "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
             )
 
         if self.waveform.ndim != 2:
@@ -345,7 +345,7 @@ class Audio(BaseModel):
         if not SOUNDFILE_AVAILABLE:
             raise ModuleNotFoundError(
                 "`soundfile` is not installed. "
-                "Please install senselab audio dependencies using `pip install senselab['audio']`."
+                "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
             )
 
         if isinstance(stream_source, (os.PathLike, str)) and not os.path.exists(stream_source):
