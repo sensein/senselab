@@ -6,6 +6,7 @@ import pytest
 import torch
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.features_extraction import extract_features_from_audios
 from senselab.audio.tasks.features_extraction.opensmile import extract_opensmile_features_from_audios
 from senselab.audio.tasks.features_extraction.praat_parselmouth import (
     extract_audio_duration,
@@ -347,3 +348,29 @@ def test_extract_subjective_quality_features_invalid_audio(mono_audio_sample: Au
         extract_subjective_quality_features_from_audios(
             audios=[mono_audio_sample], non_matching_references=[mono_audio_sample]
         )
+
+
+@pytest.mark.skipif(
+    not (OPENSMILE_AVAILABLE and PARSELMOUTH_AVAILABLE and TORCHAUDIO_AVAILABLE),
+    reason="One or more required dependencies (openSMILE, Praat-Parselmouth, or torchaudio) are not installed.",
+)
+def test_extract_features_from_audios(resampled_mono_audio_sample: Audio) -> None:
+    """Simple test for extract_features_from_audios.
+
+    This test verifies that given a valid list of audio samples,
+    the extract_features_from_audios function returns a list of dictionaries (one per audio)
+    containing non-empty feature data.
+    """
+    audios = [resampled_mono_audio_sample]
+    features = extract_features_from_audios(
+        audios=audios, opensmile=True, parselmouth=True, torchaudio=True, torchaudio_squim=True
+    )
+
+    # Check that the output is a list and that it has one feature dict per audio.
+    assert isinstance(features, list)
+    assert len(features) == len(audios)
+
+    # Check that each feature extraction result is a non-empty dictionary.
+    for feat in features:
+        assert isinstance(feat, dict)
+        assert feat, "The feature dictionary should not be empty."
