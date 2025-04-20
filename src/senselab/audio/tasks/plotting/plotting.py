@@ -3,6 +3,7 @@
 from typing import Any
 
 import matplotlib.pyplot as plt
+from matplotlib.pyplot import Figure
 import numpy as np
 import torch
 
@@ -14,7 +15,7 @@ from senselab.audio.tasks.features_extraction.torchaudio import (
 from senselab.utils.data_structures import logger
 
 
-def plot_waveform(audio: AudioData, title: str = "Waveform", fast: bool = False) -> None:
+def plot_waveform(audio: AudioData, title: str = "Waveform", fast: bool = False) -> Figure:
     """Plots the waveform of an Audio object.
 
     Args:
@@ -50,7 +51,7 @@ def plot_waveform(audio: AudioData, title: str = "Waveform", fast: bool = False)
     return figure
 
 
-def plot_specgram(audio: AudioData, mel_scale: bool = False, title: str = "Spectrogram", **spect_kwargs: Any) -> None:  # noqa : ANN401
+def plot_specgram(audio: AudioData, mel_scale: bool = False, title: str = "Spectrogram", **spect_kwargs: Any) -> Figure:  # noqa : ANN401
     """Plots the spectrogram of an Audio object.
 
     Args:
