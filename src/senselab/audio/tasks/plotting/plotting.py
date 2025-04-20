@@ -47,6 +47,7 @@ def plot_waveform(audio: AudioData, title: str = "Waveform", fast: bool = False)
     figure.suptitle(title)
     plt.xlabel("Time [s]")
     plt.show(block=False)
+    return figure
 
 
 def plot_specgram(audio: AudioData, mel_scale: bool = False, title: str = "Spectrogram", **spect_kwargs: Any) -> None:  # noqa : ANN401
@@ -133,7 +134,7 @@ def plot_specgram(audio: AudioData, mel_scale: bool = False, title: str = "Spect
     else:
         freq_axis = torch.linspace(0, audio.sampling_rate / 2, num_freq_bins)
 
-    plt.figure(figsize=(10, 4))
+    figure = plt.figure(figsize=(10, 4))
     plt.imshow(
         _power_to_db(spectrogram.numpy()),
         aspect="auto",
@@ -146,6 +147,7 @@ def plot_specgram(audio: AudioData, mel_scale: bool = False, title: str = "Spect
     plt.ylabel(y_axis_label)
     plt.xlabel("Time [Sec]")
     plt.show(block=False)
+    return figure
 
 
 def play_audio(audio: AudioData) -> None:
