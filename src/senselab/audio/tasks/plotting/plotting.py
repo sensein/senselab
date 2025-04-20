@@ -135,7 +135,7 @@ def plot_specgram(audio: AudioData, mel_scale: bool = False, title: str = "Spect
     else:
         freq_axis = torch.linspace(0, audio.sampling_rate / 2, num_freq_bins)
 
-    figure = plt.figure(figsize=(10, 4))
+    figure = plt.figure(figsize=(12, 4))
     plt.imshow(
         _power_to_db(spectrogram.numpy()),
         aspect="auto",
