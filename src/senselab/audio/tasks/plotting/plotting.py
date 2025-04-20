@@ -5,7 +5,6 @@ from typing import Any
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from IPython.display import Audio, display
 
 from senselab.audio.data_structures import Audio as AudioData
 from senselab.audio.tasks.features_extraction.torchaudio import (
@@ -158,6 +157,8 @@ def play_audio(audio: AudioData) -> None:
     Raises:
         ValueError: If the number of channels is more than 2.
     """
+    from IPython.display import Audio, display
+
     waveform = audio.waveform.numpy()
     sample_rate = audio.sampling_rate
 
