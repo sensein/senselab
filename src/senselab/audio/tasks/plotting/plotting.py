@@ -1,11 +1,11 @@
 """This module contains functions for plotting audio-related data."""
 
-from typing import Any
-
-import matplotlib.pyplot as plt
 from matplotlib.pyplot import Figure
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
+
+from typing import Any
 
 from senselab.audio.data_structures import Audio as AudioData
 from senselab.audio.tasks.features_extraction.torchaudio import (
