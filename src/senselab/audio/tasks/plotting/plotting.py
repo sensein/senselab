@@ -157,7 +157,8 @@ def play_audio(audio: Audio) -> None:
     Raises:
         ValueError: If the number of channels is more than 2.
     """
-    from IPython.display import Audio as DisplayAudio, display
+    from IPython.display import Audio as DisplayAudio
+    from IPython.display import display
 
     waveform = audio.waveform.numpy()
     sample_rate = audio.sampling_rate
