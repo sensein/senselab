@@ -76,7 +76,7 @@ print("The original audio has a sampling rate of {} Hz.".format(audio.sampling_r
 print("The resampled audio has a sampling rate of {} Hz.".format(audio.sampling_rate))
 ```
 
-For more detailed information, check out our [**Getting Started Tutorial**](https://github.com/sensein/senselab/blob/main/tutorials/audio/getting_started.ipynb).
+For more detailed information, check out our [**Getting Started Tutorial**](https://github.com/sensein/senselab/blob/main/tutorials/audio/00_getting_started.ipynb).
 
 
 ## Contributing
