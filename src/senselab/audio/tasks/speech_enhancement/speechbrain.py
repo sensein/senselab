@@ -47,7 +47,7 @@ class SpeechBrainEnhancer:
         if not SPEECHBRAIN_AVAILABLE:
             raise ModuleNotFoundError(
                 "`speechbrain` is not installed. "
-                "Please install senselab audio dependencies using `pip install senselab['audio']`."
+                "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
             )
 
         device, dtype = _select_device_and_dtype(
@@ -89,7 +89,7 @@ class SpeechBrainEnhancer:
         if not SPEECHBRAIN_AVAILABLE:
             raise ModuleNotFoundError(
                 "`speechbrain` is not installed. "
-                "Please install senselab audio dependencies using `pip install senselab['audio']`."
+                "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
             )
 
         if model is None:
