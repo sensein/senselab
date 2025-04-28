@@ -4,7 +4,7 @@
 
 ## Task Overview
 Task Overview
-Forced alignment is the process of aligning units of a transcription (e.g. words, phonemes, characters) with its corresponding audio by determining precise timestamps for each unit​.
+[Forced alignment](https://montreal-forced-aligner.readthedocs.io/en/stable/user_guide/index.html) is the process of aligning units of a transcription (e.g. words, phonemes, characters) with its corresponding audio by determining precise timestamps for each unit​.
 
 Common use cases include:
 - **Subtitling and Captioning**: Automatically generating timestamps for subtitles or closed captions in videos​.
@@ -12,21 +12,21 @@ Common use cases include:
 - **Dataset Preparation**: Segmenting long audio recordings by sentence or word, which is useful for creating automatic speech recognition (ASR) training datasets or extracting exact utterances​.
 - **Other Downstream Tasks**: Enabling applications like word-level audio editing, precise audio search, or improving text-to-speech (TTS) modeling by providing exact durations for each phonetic unit​.
 
-Forced alignment typically uses automatic speech recognition (ASR) models or acoustic models in a constrained decoding mode. Many modern aligners use connectionist temporal classification (CTC) decoding or similar sequence alignment algorithms to obtain token timing. In CTC alignment, the ASR model’s output probabilities (including “blank” tokens for silence) are used to find the most likely alignment for the reference text​. Other systems use sequence alignment techniques (e.g. Viterbi algorithm in an hidden Markov model) to force-match the audio frames to the given word sequence​.
+[Forced alignment typically uses automatic speech recognition (ASR)](https://research.nvidia.com/labs/conv-ai/blogs/2023/2023-08-forced-alignment/#the-naive-way-but-listing-all-the-possible-paths-using-a-graph) models or acoustic models in a constrained decoding mode. Many modern aligners use connectionist temporal classification (CTC) decoding or similar sequence alignment algorithms to obtain token timing. In CTC alignment, the ASR model’s output probabilities (including “blank” tokens for silence) are used to find the most likely alignment for the reference text​. Other systems use sequence alignment techniques (e.g. Viterbi algorithm in an hidden Markov model) to force-match the audio frames to the given word sequence​.
 
 ## Models
 Several types of models and tools are used for forced alignment, each with different strengths:
 
-- **CTC-Based Models** (e.g., Wav2Vec2, Massively Multilingual Speech (MMS), NeMo Forced Aligner (NFA)): These models align transcript tokens to audio using CTC decoding. They are efficient and support long audio, with many hosted on Hugging Face. They output character or token timestamps, requiring aggregation for word-level alignment.
+- **CTC-Based Models** (e.g., [Wav2Vec2](https://huggingface.co/docs/transformers/en/model_doc/wav2vec2), [Massively Multilingual Speech (MMS)](https://huggingface.co/docs/transformers/en/model_doc/mms), [NeMo Forced Aligner (NFA)](https://docs.nvidia.com/nemo-framework/user-guide/latest/nemotoolkit/tools/nemo_forced_aligner.html)): These models align transcript tokens to audio using CTC decoding. They are efficient and support long audio, with many hosted on Hugging Face. They output character or token timestamps, requiring aggregation for word-level alignment.
 
-- **Dedicated Aligners** (e.g., Montreal Forced Aligner (MFA)):
+- **Dedicated Aligners** (e.g., [Montreal Forced Aligner (MFA)](https://montreal-forced-aligner.readthedocs.io/en/latest/)):
 Use traditional acoustic models (e.g., GMM-HMM triphone models) and pronunciation lexicons to align transcripts at the word or phoneme level.
 
 ## Evaluation
 ### Metrics
 Forced alignment quality is typically assessed using:
 
-- **Alignment Error Rate (AER)**
+- **[Alignment Error Rate (AER)](https://www.nltk.org/howto/align.html)**
   Measures alignment accuracy by comparing predicted and reference word-to-time mappings. Defined as `1 - F1 score`, it penalizes both false and missed alignments. Lower is better.
 
 - **Mean Absolute Error (MAE)**
@@ -37,25 +37,26 @@ Forced alignment quality is typically assessed using:
 
 - **Other Metrics**
   - **F1@tolerance**: Combines precision/recall for boundaries within a given window.
-  - **Phone Error Rate (PER)**: At phoneme level—counts insertions, deletions, substitutions.
+  - **[Phone Error Rate (PER)](https://montreal-forced-aligner.readthedocs.io/en/v2.2.17/user_guide/implementations/alignment_evaluation.html)**: At phoneme level—counts insertions, deletions, substitutions.
 
 ### Datasets
 
 Forced alignment models are evaluated on datasets with trusted word or phoneme timestamps:
 
-- **TIMIT**
+- **[TIMIT](https://catalog.ldc.upenn.edu/LDC93S1)**
   Classic corpus with precise phoneme and word boundaries. Ideal for phoneme-level evaluation under clean, read-speech conditions. High-quality aligners often reach ~20ms MAE.
 
-- **LibriSpeech Alignments**
+- **[LibriSpeech Alignments](https://zenodo.org/records/2619474)**
   Audiobook dataset with full alignments from MFA released for all 980 hours of LibriSpeech. Tests scalability and robustness on real speech.
 
-- **Common Voice**
+- **[Common Voice](https://commonvoice.mozilla.org/en/datasets)**
   Multilingual, crowd-sourced speech with transcripts. Often used to test multilingual alignment. Lacks gold standard timestamps but helps evaluate performance on diverse accents and languages.
 
-- **Buckeye Corpus**
+- **[Buckeye Corpus](https://buckeyecorpus.osu.edu/)**
   Conversational English with detailed alignments. Harder than TIMIT due to casual speech and disfluencies. Used to test aligners on natural dialogue.
 
-### Benchmarks
+### [Benchmarks](https://arxiv.org/html/2406.19363v1)
+
 
 #### Table 1: TIMIT Word-Level Alignment Accuracy (%)
 **Correctly detected word boundaries within time thresholds (ms)**
