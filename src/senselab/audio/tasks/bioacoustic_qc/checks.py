@@ -27,11 +27,6 @@ def audio_length_positive_check(audio: Audio) -> bool:
     return audio.waveform.numel() != 0
 
 
-def audio_intensity_positive_check(audio: Audio) -> bool:
-    """Checks if an Audio object has nonzero intensity."""
-    return torch.sum(torch.abs(audio.waveform)).item() != 0
-
-
 def proportion_clipped_check(audio: Audio, threshold: float = 0.0001) -> bool:
     """Checks if an Audio object has less than 0.01% clipped samples."""
     return proportion_clipped_metric(audio) < threshold
@@ -40,3 +35,8 @@ def proportion_clipped_check(audio: Audio, threshold: float = 0.0001) -> bool:
 def completely_silent_check(audio: Audio, silence_threshold: float = 0.01) -> bool:
     """Checks if an Audio object is completely silent."""
     return proportion_silent_metric(audio, silence_threshold=silence_threshold) < 1.0
+
+
+def mostly_silent_check(audio: Audio, silence_threshold: float = 0.01, max_silent_proportion: float = 0.95) -> bool:
+    """Checks if an Audio object is completely silent."""
+    return proportion_silent_metric(audio, silence_threshold=silence_threshold) < max_silent_proportion
