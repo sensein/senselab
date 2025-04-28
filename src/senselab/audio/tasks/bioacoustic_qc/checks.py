@@ -19,6 +19,7 @@ import pandas as pd
 import torch
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.bioacoustic_qc.metrics import proportion_clipped_metric
 
 
 def audio_length_positive_check(audio: Audio) -> bool:
@@ -29,3 +30,8 @@ def audio_length_positive_check(audio: Audio) -> bool:
 def audio_intensity_positive_check(audio: Audio) -> bool:
     """Checks if an Audio object has nonzero intensity."""
     return torch.sum(torch.abs(audio.waveform)).item() != 0
+
+
+def proportion_clipped_check(audio: Audio, threshold: float = 0.0001) -> bool:
+    """Checks if an Audio object has less than 0.01% clipped samples."""
+    return proportion_clipped_metric(audio) < threshold
