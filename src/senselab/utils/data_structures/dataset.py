@@ -104,7 +104,7 @@ class SenselabDataset(BaseModel):
                 if isinstance(audio, Audio):
                     audio_list.append(audio)
                 else:
-                    audio_list.append(Audio.from_filepath(audio))
+                    audio_list.append(Audio(filepath=audio))
         return audio_list
 
     @field_validator("videos", mode="before")
@@ -130,7 +130,7 @@ class SenselabDataset(BaseModel):
                 if isinstance(video, Video):
                     video_list.append(video)
                 elif isinstance(video, str):
-                    video_list.append(Video.from_filepath(video))
+                    video_list.append(Video(filepath=video))
 
                 else:
                     raise ValueError("Unsupported video list")
@@ -264,7 +264,6 @@ class SenselabDataset(BaseModel):
 
         video_frames_data = []
         video_fps_data = []
-        video_path_data = []
         video_metadata = []
         video_audio_data = []
         video_audio_metadata = []
@@ -285,7 +284,6 @@ class SenselabDataset(BaseModel):
                 {
                     "array": audio.waveform.T,
                     "sampling_rate": audio.sampling_rate,
-                    "path": audio.generate_path(),
                 }
             )
             audio_metadata.append(audio.metadata.copy())
@@ -295,7 +293,6 @@ class SenselabDataset(BaseModel):
         for video in self.videos:
             video_frames_data.append({"image": [to_pil_image(frame.numpy()) for frame in list(video.frames)]})
             video_fps_data.append(video.frame_rate)
-            video_path_data.append(video.generate_path())
             video_metadata.append(video.metadata.copy())
             video_audio_data.append(
                 None
@@ -303,14 +300,12 @@ class SenselabDataset(BaseModel):
                 else {
                     "array": video.audio.waveform.T.to(torch.float32).numpy(),
                     "sampling_rate": video.audio.sampling_rate,
-                    "path": video.audio.generate_path(),
                 }
             )
             video_audio_metadata.append(None if not video.audio else video.audio.metadata.copy())
 
         video_data["frames"] = video_frames_data
         video_data["frame_rate"] = video_fps_data
-        video_data["path"] = video_path_data
         video_data["metadata"] = video_metadata
         video_data["audio"] = video_audio_data
         video_data["audio_metadata"] = video_audio_metadata
@@ -334,7 +329,6 @@ class SenselabDataset(BaseModel):
             {
                 "frames": {"image": Sequence(feature=Image())},
                 "frame_rate": Value("float32"),
-                "path": Value("string"),
                 "metadata": {},
                 "audio": HFAudio(mono=False, sampling_rate=48000),
                 "audio_metadata": Value("string"),
@@ -396,7 +390,6 @@ class SenselabDataset(BaseModel):
                     Audio(
                         waveform=audio["audio"]["array"],
                         sampling_rate=audio["audio"]["sampling_rate"],
-                        orig_path_or_id=audio["audio"]["path"],
                         metadata=audio_metadata,
                     )
                 )
@@ -411,7 +404,6 @@ class SenselabDataset(BaseModel):
                             feature == "metadata"
                             or feature == "frames"
                             or feature == "frame_rate"
-                            or feature == "path"
                             or feature == "audio"
                         ):
                             continue
@@ -421,11 +413,9 @@ class SenselabDataset(BaseModel):
                         frames=video["frames"]["image"],
                         frame_rate=video["frame_rate"],
                         metadata=video_metadata,
-                        orig_path_or_id=video["path"],
                         audio=Audio(  # Assumes audio metadata is stored a level higher within the video's metadata
                             waveform=video["audio"]["array"],
                             sampling_rate=video["audio"]["sampling_rate"],
-                            orig_path_or_id=video["audio"]["path"],
                         )
                         if video["audio"]
                         else None,

@@ -57,7 +57,7 @@ def extract_health_measurements(
             - spectral_kurtosis
 
     Examples:
-        >>> audios = [Audio.from_filepath("sample.wav")]
+        >>> audios = [Audio(filepath="sample.wav")]
         >>> extract_health_measurements(audios)
         [{'speaking_rate': 3.874983349680919,
         'articulation_rate': 3.874983349680919,

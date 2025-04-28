@@ -36,7 +36,7 @@ def read_audios(
         Returns:
             Audio: An instance of the Audio class containing the waveform and sample rate.
         """
-        return Audio.from_filepath(file_path)
+        return Audio(filepath=file_path)
 
     # Create the workflow
     wf = pydra.Workflow(name="read_audio_files_workflow", input_spec=["x"], cache_dir=cache_dir)

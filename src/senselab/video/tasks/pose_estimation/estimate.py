@@ -107,7 +107,7 @@ class MediaPipePoseEstimator(PoseEstimator):
         if not MEDIAPIPE_AVAILABLE:
             raise ModuleNotFoundError(
                 "`mediapipe` is not installed. "
-                "Please install senselab video dependencies using `pip install senselab['video']`."
+                "Please install senselab video dependencies using `pip install 'senselab[video]'`."
             )
 
         self.model_path = get_model("mediapipe", model_type)
@@ -176,7 +176,7 @@ class MediaPipePoseEstimator(PoseEstimator):
         if not CV2_AVAILABLE:
             raise ModuleNotFoundError(
                 "`opencv-python` is not installed. "
-                "Please install senselab video dependencies using `pip install senselab['video']`."
+                "Please install senselab video dependencies using `pip install 'senselab[video]'`."
             )
 
         if not os.path.exists(image_path):
@@ -239,7 +239,7 @@ class YOLOPoseEstimator(PoseEstimator):
         if not YOLO_AVAILABLE:
             raise ModuleNotFoundError(
                 "`ultralytics` is not installed. "
-                "Please install senselab video dependencies using `pip install senselab['video']`."
+                "Please install senselab video dependencies using `pip install 'senselab[video]'`."
             )
 
         self.model_path = get_model("yolo", model_type)
@@ -302,7 +302,7 @@ class YOLOPoseEstimator(PoseEstimator):
         if not CV2_AVAILABLE:
             raise ModuleNotFoundError(
                 "`opencv-python` is not installed. "
-                "Please install senselab video dependencies using `pip install senselab['video']`."
+                "Please install senselab video dependencies using `pip install 'senselab[video]'`."
             )
 
         if not os.path.exists(image_path):

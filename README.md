@@ -23,28 +23,30 @@ Welcome to ```senselab```! This is a Python package for streamlining the process
 **Caution:**: this package is still under development and may change rapidly over the next few weeks.
 
 ## ⚠️ System Requirements
-**If on macOS, this package requires an ARM64 architecture** due to PyTorch 2.2.2+ dropping support for x86-64 on macOS.
+1. **If on macOS, this package requires an ARM64 architecture** due to PyTorch 2.2.2+ dropping support for x86-64 on macOS.
 
-❌ Unsupported systems include:
-- macOS (Intel x86-64)
-- Other platforms where dependencies are unavailable
+    ❌ Unsupported systems include:
+    - macOS (Intel x86-64)
+    - Other platforms where dependencies are unavailable
 
-To check your system compatibility, please run this command:
-```bash
-python -c "import platform; print(platform.machine())"
-```
+    To check your system compatibility, please run this command:
+    ```bash
+    python -c "import platform; print(platform.machine())"
+    ```
 
-If the output is:
-- `arm64` → ✅ Your system is compatible.
-- `x86_64` → ❌ Your system is not supported.
+    If the output is:
+    - `arm64` → ✅ Your system is compatible.
+    - `x86_64` → ❌ Your system is not supported.
 
-If you attempt to install this package on an unsupported system, the installation or execution will fail.
+    If you attempt to install this package on an unsupported system, the installation or execution will fail.
+
+2. `FFmpeg` is required by some audio and video dependencies (e.g., `torchaudio`). Please make sure you have `FFmpeg` properly installed on your machine before installing and using `senselab` (see [here](https://www.ffmpeg.org/download.html) for detailed platform-dependent instructions).
 
 ## Installation
 Install this package via:
 
 ```sh
-pip install senselab['all']
+pip install 'senselab[all]'
 ```
 
 Or get the newest development version via:
@@ -55,11 +57,11 @@ pip install git+https://github.com/sensein/senselab.git
 
 If you want to install only audio dependencies, you do:
 ```sh
-pip install senselab['audio']
+pip install 'senselab[audio]'
 ```
 To install video and text extras, please do:
 ```sh
-pip install senselab['video,text']
+pip install 'senselab[video,text]'
 ```
 
 ## Quick start
@@ -67,14 +69,14 @@ pip install senselab['video,text']
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.preprocessing import resample_audios
 
-audio1 = Audio.from_filepath('path_to_audio_file.wav')
+audio = Audio(filepath='path_to_audio_file.wav')
 
-print("The original audio has a sampling rate of {} Hz.".format(audio1.sampling_rate))
-[audio1] = resample_audios([audio1], resample_rate=16000)
-print("The resampled audio has a sampling rate of {} Hz.".format(audio1.sampling_rate))
+print("The original audio has a sampling rate of {} Hz.".format(audio.sampling_rate))
+[audio] = resample_audios([audio], resample_rate=16000)
+print("The resampled audio has a sampling rate of {} Hz.".format(audio.sampling_rate))
 ```
 
-For more detailed information, check out our [**Getting Started Tutorial**](https://github.com/sensein/senselab/blob/main/tutorials/audio/getting_started.ipynb).
+For more detailed information, check out our [**Getting Started Tutorial**](https://github.com/sensein/senselab/blob/main/tutorials/audio/00_getting_started.ipynb).
 
 
 ## Contributing

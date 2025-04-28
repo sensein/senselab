@@ -195,7 +195,7 @@ skip = [
   "*.cha",
   "*.ipynb"
 ]
-ignore-words-list = ["senselab", "nd", "astroid", "wil", "SER", "te", "EXPRESSO"]
+ignore-words-list = ["senselab", "nd", "astroid", "wil", "SER", "te", "EXPRESSO", "VAI"]
 
 [poetry.scripts]
 senselab-cli = "senselab.cli:main"
