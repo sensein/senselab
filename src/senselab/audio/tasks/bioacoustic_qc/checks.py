@@ -23,6 +23,7 @@ from senselab.audio.tasks.bioacoustic_qc.metrics import (
     amplitude_headroom_metric,
     amplitude_interquartile_range_metric,
     amplitude_kurtosis_metric,
+    amplitude_modulation_depth_metric,
     proportion_clipped_metric,
     proportion_silent_metric,
 )
@@ -76,3 +77,8 @@ def very_low_amplitude_kurtosis_check(audio: Audio, threshold: float = -100) -> 
 def very_high_amplitude_kurtosis_check(audio: Audio, threshold: float = 100) -> bool:
     """Checks if an Audio object has very high amplitude kurtosis."""
     return amplitude_interquartile_range_metric(audio) > threshold
+
+
+def very_low_amplitude_modulation_depth_check(audio: Audio, threshold: float = 0.1) -> bool:
+    """Checks if an Audio object has very low amplitude modulation depth."""
+    return amplitude_modulation_depth_metric(audio) < threshold
