@@ -1,3 +1,20 @@
+# 0.36.1 (Tue Apr 22 2025)
+
+#### 🐛 Bug Fix
+
+- prevent model loading while importing plot_waveform. [#318](https://github.com/sensein/senselab/pull/318) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### 📝 Documentation
+
+- Update README.md getting started link [#314](https://github.com/sensein/senselab/pull/314) ([@satra](https://github.com/satra))
+
+#### Authors: 2
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Satrajit Ghosh ([@satra](https://github.com/satra))
+
+---
+
 # 0.36.0 (Fri Apr 18 2025)
 
 #### 🚀 Enhancement

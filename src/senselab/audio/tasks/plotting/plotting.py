@@ -7,19 +7,15 @@ import torch
 
 from typing import Any
 
-from senselab.audio.data_structures import Audio as AudioData
-from senselab.audio.tasks.features_extraction.torchaudio import (
-    extract_mel_spectrogram_from_audios,
-    extract_spectrogram_from_audios,
-)
+from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import logger
 
 
-def plot_waveform(audio: AudioData, title: str = "Waveform", fast: bool = False) -> Figure:
+def plot_waveform(audio: Audio, title: str = "Waveform", fast: bool = False) -> Figure:
     """Plots the waveform of an Audio object.
 
     Args:
-        audio (AudioData): An instance of Audio containing waveform data and sampling rate.
+        audio (Audio): An instance of Audio containing waveform data and sampling rate.
         title (str): Title of the plot.
         fast (bool): If True, plots a downsampled version for a faster but less detailed view.
 
@@ -51,11 +47,11 @@ def plot_waveform(audio: AudioData, title: str = "Waveform", fast: bool = False)
     return figure
 
 
-def plot_specgram(audio: AudioData, mel_scale: bool = False, title: str = "Spectrogram", **spect_kwargs: Any) -> Figure:  # noqa : ANN401
+def plot_specgram(audio: Audio, mel_scale: bool = False, title: str = "Spectrogram", **spect_kwargs: Any) -> Figure:  # noqa : ANN401
     """Plots the spectrogram of an Audio object.
 
     Args:
-        audio: (AudioData): An instance of Audio containing waveform data and sampling rate.
+        audio: (Audio): An instance of Audio containing waveform data and sampling rate.
         mel_scale (bool): Whether to plot a mel spectrogram or a regular spectrogram.
         title (str): Title of the spectrogram plot.
         **spect_kwargs: Additional keyword arguments to pass to the spectrogram function.
@@ -113,9 +109,13 @@ def plot_specgram(audio: AudioData, mel_scale: bool = False, title: str = "Spect
 
     # Extract the spectrogram
     if mel_scale:
+        from senselab.audio.tasks.features_extraction.torchaudio import extract_mel_spectrogram_from_audios
+
         spectrogram = extract_mel_spectrogram_from_audios([audio], **spect_kwargs)[0]["mel_spectrogram"]
         y_axis_label = "Mel Frequency"
     else:
+        from senselab.audio.tasks.features_extraction.torchaudio import extract_spectrogram_from_audios
+
         spectrogram = extract_spectrogram_from_audios([audio], **spect_kwargs)[0]["spectrogram"]
         y_axis_label = "Frequency [Hz]"
 
@@ -151,24 +151,25 @@ def plot_specgram(audio: AudioData, mel_scale: bool = False, title: str = "Spect
     return figure
 
 
-def play_audio(audio: AudioData) -> None:
+def play_audio(audio: Audio) -> None:
     """Plays an audio file.
 
     Args:
-        audio (AudioData): An instance of Audio containing waveform data and sampling rate.
+        audio (Audio): An instance of Audio containing waveform data and sampling rate.
 
     Raises:
         ValueError: If the number of channels is more than 2.
     """
-    from IPython.display import Audio, display
+    from IPython.display import Audio as DisplayAudio
+    from IPython.display import display
 
     waveform = audio.waveform.numpy()
     sample_rate = audio.sampling_rate
 
     num_channels = waveform.shape[0]
     if num_channels == 1:
-        display(Audio(waveform[0], rate=sample_rate))
+        display(DisplayAudio(waveform[0], rate=sample_rate))
     elif num_channels == 2:
-        display(Audio((waveform[0], waveform[1]), rate=sample_rate))
+        display(DisplayAudio((waveform[0], waveform[1]), rate=sample_rate))
     else:
         raise ValueError("Waveform with more than 2 channels are not supported.")
