@@ -49,3 +49,8 @@ def mostly_silent_check(audio: Audio, silence_threshold: float = 0.01, max_silen
 def very_low_headroom_check(audio: Audio, headroom_threshold: float = 0.005) -> bool:
     """Checks if an Audio object has very low headroom."""
     return amplitude_headroom_metric(audio) < headroom_threshold
+
+
+def very_high_headroom_check(audio: Audio, headroom_threshold: float = 0.95) -> bool:
+    """Checks if an Audio object has very low headroom."""
+    return amplitude_headroom_metric(audio) > headroom_threshold
