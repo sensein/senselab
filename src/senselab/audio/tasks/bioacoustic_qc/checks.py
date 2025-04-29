@@ -21,6 +21,7 @@ import torch
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.bioacoustic_qc.metrics import (
     amplitude_headroom_metric,
+    amplitude_interquartile_range_metric,
     proportion_clipped_metric,
     proportion_silent_metric,
 )
@@ -52,5 +53,15 @@ def very_low_headroom_check(audio: Audio, headroom_threshold: float = 0.005) -> 
 
 
 def very_high_headroom_check(audio: Audio, headroom_threshold: float = 0.95) -> bool:
-    """Checks if an Audio object has very low headroom."""
+    """Checks if an Audio object has very high headroom."""
     return amplitude_headroom_metric(audio) > headroom_threshold
+
+
+def very_low_amplitude_interquartile_range_check(audio: Audio, threshold: float = 0.01) -> bool:
+    """Checks if an Audio object has very low IQR."""
+    return amplitude_interquartile_range_metric(audio) < threshold
+
+
+def very_high_amplitude_interquartile_range_check(audio: Audio, threshold: float = 1.5) -> bool:
+    """Checks if an Audio object has very high IQR."""
+    return amplitude_interquartile_range_metric(audio) > threshold
