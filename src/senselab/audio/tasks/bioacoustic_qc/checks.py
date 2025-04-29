@@ -22,6 +22,7 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.bioacoustic_qc.metrics import (
     amplitude_headroom_metric,
     amplitude_interquartile_range_metric,
+    amplitude_kurtosis_metric,
     proportion_clipped_metric,
     proportion_silent_metric,
 )
@@ -64,4 +65,14 @@ def very_low_amplitude_interquartile_range_check(audio: Audio, threshold: float 
 
 def very_high_amplitude_interquartile_range_check(audio: Audio, threshold: float = 1.5) -> bool:
     """Checks if an Audio object has very high IQR."""
+    return amplitude_interquartile_range_metric(audio) > threshold
+
+
+def very_low_amplitude_kurtosis_check(audio: Audio, threshold: float = -100) -> bool:
+    """Checks if an Audio object has very low amplitude kurtosis."""
+    return amplitude_interquartile_range_metric(audio) < threshold
+
+
+def very_high_amplitude_kurtosis_check(audio: Audio, threshold: float = 100) -> bool:
+    """Checks if an Audio object has very high amplitude kurtosis."""
     return amplitude_interquartile_range_metric(audio) > threshold
