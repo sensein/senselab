@@ -19,7 +19,11 @@ import pandas as pd
 import torch
 
 from senselab.audio.data_structures import Audio
-from senselab.audio.tasks.bioacoustic_qc.metrics import proportion_clipped_metric, proportion_silent_metric
+from senselab.audio.tasks.bioacoustic_qc.metrics import (
+    amplitude_headroom_metric,
+    proportion_clipped_metric,
+    proportion_silent_metric,
+)
 
 
 def audio_length_positive_check(audio: Audio) -> bool:
@@ -40,3 +44,8 @@ def completely_silent_check(audio: Audio, silence_threshold: float = 0.01) -> bo
 def mostly_silent_check(audio: Audio, silence_threshold: float = 0.01, max_silent_proportion: float = 0.95) -> bool:
     """Checks if an Audio object is completely silent."""
     return proportion_silent_metric(audio, silence_threshold=silence_threshold) < max_silent_proportion
+
+
+def very_low_headroom_check(audio: Audio, headroom_threshold: float = 0.005) -> bool:
+    """Checks if an Audio object has very low headroom."""
+    return amplitude_headroom_metric(audio) < headroom_threshold
