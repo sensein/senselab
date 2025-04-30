@@ -82,3 +82,9 @@ def very_high_amplitude_kurtosis_check(audio: Audio, threshold: float = 100) -> 
 def very_low_amplitude_modulation_depth_check(audio: Audio, threshold: float = 0.1) -> bool:
     """Checks if an Audio object has very low amplitude modulation depth."""
     return amplitude_modulation_depth_metric(audio) < threshold
+
+
+def low_amplitude_modulation_depth_check(audio: Audio, min: float = 0.1, max: float = 0.3) -> bool:
+    """Checks if an Audio object has very low amplitude modulation depth."""
+    modulation_depth = amplitude_modulation_depth_metric(audio)
+    return min <= modulation_depth and modulation_depth < max
