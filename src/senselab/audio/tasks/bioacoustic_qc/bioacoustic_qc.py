@@ -207,6 +207,11 @@ def taxonomy_subtree_to_pydra_workflow(subtree: Dict) -> Workflow:
     # in check_quality, batch audio files
     # run separate workflow for each batch
     # at the end of each batch, update CSV with all evaluations
+
+    # make crucial checks that automatically exclude audio if not passed
+    # Run these first. Don't run anything else after if these fail.
+    # Make them customizable. 
+    # Then run review checks. If any of these don't pass, run all other checks, but label review at the end.
     
     pass
 
