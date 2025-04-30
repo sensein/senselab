@@ -32,6 +32,7 @@ def apply_audio_quality_function(
 
 
 def audios_to_activity_dict(audios: List[Audio]) -> Dict[str, List[Audio]]:
+ 
     """Creates a dictionary mapping activities to their corresponding Audio objects.
 
     Each Audio object is assigned to a activity category based on the `"activity "` field in its metadata.
@@ -182,9 +183,31 @@ def evaluate_node(
 
     return results_df
 
+def evaluate_audio():
+    """Runs evaluations for one audio. Saves to file. Don't run if the audio files features file already exists.
+    
+    Run efficiently without duplicating metrics or checks.
+
+    in: 
+        activity2evaluations dict
+        audio_path
+        save_path
+    """
+
 
 def taxonomy_subtree_to_pydra_workflow(subtree: Dict) -> Workflow:
     """Constructs a Pydra workflow that corresponds to a dataset taxonomy subtree."""
+
+    # use activity2evaluations dict
+    # split across audio paths
+    # run evaluate_audio
+    # collect all the outputs
+
+
+    # in check_quality, batch audio files
+    # run separate workflow for each batch
+    # at the end of each batch, update CSV with all evaluations
+    
     pass
 
 
