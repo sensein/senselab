@@ -264,15 +264,17 @@ def run_taxonomy_subtree_checks_recursively(
 
 
 def check_quality(
-    audio_dir: Union[str, os.PathLike],
+    audio_paths: Union[str, os.PathLike],
     activity_tree: Dict = BIOACOUSTIC_ACTIVITY_TAXONOMY,
-    complexity: str = "low",
-    batch_size: int = 8,
+    audio_paths_to_activities: Dict = None,
     save_path: Union[str, os.PathLike, None] = None,
-    n_jobs: int = -1,
-    verbosity: int = 20,
 ) -> pd.DataFrame:
     """Runs quality checks on audio files in batches and updates the taxonomy tree."""
+    # get the paths to activity dict
+    # create activity to evaluations dict
+    # create workflow for all audio files
+    # run workflow
+    # create final metadata files
     audio_extensions = (".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac")
     audio_paths = [
         os.path.join(root, fname)
