@@ -36,7 +36,6 @@ def proportion_silence_at_beginning_metric(audio: Audio, silence_threshold: floa
         float: Proportion of silence at the start.
     """
     waveform = audio.waveform
-    assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
 
     all_channels_silent = (waveform.abs() < silence_threshold).all(dim=0)
     total_samples = waveform.size(-1)
