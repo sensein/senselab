@@ -31,37 +31,24 @@ def apply_audio_quality_function(
     return df
 
 
-def audios_to_activity_dict(audios: List[Audio]) -> Dict[str, List[Audio]]:
- 
-    """Creates a dictionary mapping activities to their corresponding Audio objects.
-
-    Each Audio object is assigned to a activity category based on the `"activity "` field in its metadata.
-    If an Audio object does not contain a `"activity "` field, it is categorized under `"bioacoustic"`.
+def audio_path_to_activity_dict(
+    audio_paths: List[str],
+    audio_path_to_activity_dict: Optional[Dict[str, str]] = None
+) -> Dict[str, str]:
+    """Maps each audio path to an activity, defaulting to 'bioacoustic' if not provided.
 
     Args:
-        audios (List[Audio]): A list of Audio objects.
+        audio_paths (List[str]): List of audio file paths.
+        path_to_activity (Optional[Dict[str, str]]): Optional mapping of paths to activity names.
 
     Returns:
-        Dict[str, List[Audio]]: A dictionary where keys are activity names and values are lists of
-        Audio objects belonging to that activity .
-
-    Example:
-        >>> audio1 = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000, metadata={"activity ": "breathing"})
-        >>> audio2 = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000, metadata={"activity ": "cough"})
-        >>> audio3 = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000, metadata={})  # No activity
-        >>> audios_to_activity_dict([audio1, audio2, audio3])
-        {'breathing': [audio1], 'cough': [audio2], 'bioacoustic': [audio3]}
+        Dict[str, str]: Dictionary mapping each audio path to its activity.
     """
-    activity_dict: Dict[str, List[Audio]] = {}
-
-    for audio in audios:
-        activity = audio.metadata.get("activity", "bioacoustic")  # Default to "bioacoustic" if no activity
-        if activity not in activity_dict:
-            activity_dict[activity] = []
-        activity_dict[activity].append(audio)
-
-    return activity_dict
-
+    return {
+        path: audio_path_to_activity_dict.get(path, "bioacoustic") 
+        if audio_path_to_activity_dict else "bioacoustic"
+        for path in audio_paths
+    }
 
 def activity_to_taxonomy_tree_path(activity: str) -> List[str]:
     """Gets the taxonomy tree path for a given activity .
@@ -183,12 +170,13 @@ def evaluate_node(
 
     return results_df
 
+
 def evaluate_audio():
     """Runs evaluations for one audio. Saves to file. Don't run if the audio files features file already exists.
-    
+
     Run efficiently without duplicating metrics or checks.
 
-    in: 
+    in:
         activity2evaluations dict
         audio_path
         save_path
@@ -203,16 +191,15 @@ def taxonomy_subtree_to_pydra_workflow(subtree: Dict) -> Workflow:
     # run evaluate_audio
     # collect all the outputs
 
-
     # in check_quality, batch audio files
     # run separate workflow for each batch
     # at the end of each batch, update CSV with all evaluations
 
     # make crucial checks that automatically exclude audio if not passed
     # Run these first. Don't run anything else after if these fail.
-    # Make them customizable. 
+    # Make them customizable.
     # Then run review checks. If any of these don't pass, run all other checks, but label review at the end.
-    
+
     pass
 
 
@@ -271,46 +258,59 @@ def check_quality(
 ) -> pd.DataFrame:
     """Runs quality checks on audio files in batches and updates the taxonomy tree."""
     # get the paths to activity dict
+    audios_to_activity_dict = audios_to_activity_dict(audio_paths=audio_paths)
+    for path in audio_paths:
+        if 
     # create activity to evaluations dict
     # create workflow for all audio files
     # run workflow
     # create final metadata files
-    audio_extensions = (".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac")
-    audio_paths = [
-        os.path.join(root, fname)
-        for root, _, files in os.walk(str(audio_dir))
-        for fname in files
-        if fname.lower().endswith(audio_extensions)
-    ]
 
-    print("Audio paths loaded.")
 
-    total_batches = (len(audio_paths) + batch_size - 1) // batch_size
-    print(f"{total_batches} batches of size {batch_size}")
 
-    def process_batch(batch_paths: List[str], batch_idx: int) -> pd.DataFrame:
-        batch_audios = [Audio.from_filepath(p) for p in batch_paths]
-        activity_dict = audios_to_activity_dict(batch_audios)
-        dataset_tree = activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=activity_tree)
 
-        results_df = pd.DataFrame([a.orig_path_or_id for a in batch_audios], columns=["audio_path_or_id"])
-        results_df = run_taxonomy_subtree_checks_recursively(
-            audios=batch_audios,
-            dataset_tree=dataset_tree,
-            activity_dict=activity_dict,
-            results_df=results_df,
-        )
-        del batch_audios
-        return results_df
 
-    batches = [audio_paths[i : i + batch_size] for i in range(0, len(audio_paths), batch_size)]
-    batch_aqm_dataframes = Parallel(n_jobs=n_jobs, verbose=verbosity)(
-        delayed(process_batch)(batch, idx) for idx, batch in enumerate(batches)
-    )
 
-    all_aqms = pd.concat(batch_aqm_dataframes, ignore_index=True)
-    all_aqms["audio_path_or_id"] = all_aqms["audio_path_or_id"].apply(os.path.basename)
-    if save_path:
-        all_aqms.to_csv(save_path)
-        print(f"Results saved to: {save_path}")
-    return all_aqms
+
+
+
+
+    # audio_extensions = (".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac")
+    # audio_paths = [
+    #     os.path.join(root, fname)
+    #     for root, _, files in os.walk(str(audio_dir))
+    #     for fname in files
+    #     if fname.lower().endswith(audio_extensions)
+    # ]
+
+    # print("Audio paths loaded.")
+
+    # total_batches = (len(audio_paths) + batch_size - 1) // batch_size
+    # print(f"{total_batches} batches of size {batch_size}")
+
+    # def process_batch(batch_paths: List[str], batch_idx: int) -> pd.DataFrame:
+    #     batch_audios = [Audio.from_filepath(p) for p in batch_paths]
+    #     activity_dict = audios_to_activity_dict(batch_audios)
+    #     dataset_tree = activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=activity_tree)
+
+    #     results_df = pd.DataFrame([a.orig_path_or_id for a in batch_audios], columns=["audio_path_or_id"])
+    #     results_df = run_taxonomy_subtree_checks_recursively(
+    #         audios=batch_audios,
+    #         dataset_tree=dataset_tree,
+    #         activity_dict=activity_dict,
+    #         results_df=results_df,
+    #     )
+    #     del batch_audios
+    #     return results_df
+
+    # batches = [audio_paths[i : i + batch_size] for i in range(0, len(audio_paths), batch_size)]
+    # batch_aqm_dataframes = Parallel(n_jobs=n_jobs, verbose=verbosity)(
+    #     delayed(process_batch)(batch, idx) for idx, batch in enumerate(batches)
+    # )
+
+    # all_aqms = pd.concat(batch_aqm_dataframes, ignore_index=True)
+    # all_aqms["audio_path_or_id"] = all_aqms["audio_path_or_id"].apply(os.path.basename)
+    # if save_path:
+    #     all_aqms.to_csv(save_path)
+    #     print(f"Results saved to: {save_path}")
+    # return all_aqms
