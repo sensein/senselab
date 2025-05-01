@@ -140,6 +140,8 @@ class Audio(BaseModel):
     def convert_to_tensor(cls, v: Union[List[float], List[List[float]], np.ndarray, torch.Tensor]) -> torch.Tensor:
         """Converts input audio data to a torch.Tensor with shape (num_channels, num_samples).
 
+        Ensuring the waveform is a float and normalized to [-1, 1].
+
         Args:
             v: Audio data in the form of a list, NumPy array, or torch.Tensor.
 
@@ -157,7 +159,15 @@ class Audio(BaseModel):
 
         if temporary_tensor.ndim == 1:
             temporary_tensor = temporary_tensor.unsqueeze(0)
-        return temporary_tensor.to(torch.float32)
+
+        temporary_tensor = temporary_tensor.to(torch.float32)
+
+        # Normalize if needed
+        max_val = temporary_tensor.abs().max()
+        if max_val > 1.0:
+            temporary_tensor = temporary_tensor / max_val
+
+        return temporary_tensor
 
     def _lazy_load_data_from_filepath(self, filepath: Union[str, os.PathLike]) -> torch.Tensor:
         """Lazy-loads audio data from the given filepath.
