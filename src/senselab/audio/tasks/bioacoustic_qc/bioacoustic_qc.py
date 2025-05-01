@@ -172,9 +172,9 @@ def evaluate_audio():
         save_path
     """
 
-
-def taxonomy_subtree_to_pydra_workflow(subtree: Dict) -> Workflow:
-    """Constructs a Pydra workflow that corresponds to a dataset taxonomy subtree."""
+def run_evaluations(audio_path_to_activity: Dict, activity_to_evaluations: Dict, save_path, n_batches: int):
+    """Constructs a Pydra workflow for running evaluations. Batches audio files. Splits over n_batches.
+    """
 
     # use activity2evaluations dict
     # split across audio paths
@@ -236,15 +236,26 @@ def check_quality(
     audio_path_to_activity: Dict = None,
     activity_tree: Dict = BIOACOUSTIC_ACTIVITY_TAXONOMY,
     save_path: Union[str, os.PathLike, None] = None,
+    n_batches: int = 1
 ) -> pd.DataFrame:
-    """Runs quality checks on audio files in batches and updates the taxonomy tree."""
+    """Runs quality checks on audio files in n_batches and updates the taxonomy tree."""
     # get the paths to activity dict
-    audio_to_activity = audio_path_to_activity(audio_paths, audio_path_to_activity)
+    audio_path_to_activity = audio_path_to_activity(audio_paths, audio_path_to_activity)
 
     # create activity to evaluations dict
-    activity_to_evaluations = create_activity_to_evaluations(audio_to_activity)
+    activity_to_evaluations = create_activity_to_evaluations(audio_path_to_activity)
 
-    # create workflow for all audio files
+    # run_evaluations
+    run_evaluations(audio_path_to_activity, activity_to_evaluations, save_path, n_batches)
+
+    # construct evaluations csv
+    # label include, exclude, review
+
+
+
+
+
+
     # run workflow
     # create final metadata files
 
@@ -258,8 +269,8 @@ def check_quality(
 
     # print("Audio paths loaded.")
 
-    # total_batches = (len(audio_paths) + batch_size - 1) // batch_size
-    # print(f"{total_batches} batches of size {batch_size}")
+    # total_n_batches = (len(audio_paths) + batch_size - 1) // batch_size
+    # print(f"{total_n_batches} n_batches of size {batch_size}")
 
     # def process_batch(batch_paths: List[str], batch_idx: int) -> pd.DataFrame:
     #     batch_audios = [Audio.from_filepath(p) for p in batch_paths]
@@ -276,9 +287,9 @@ def check_quality(
     #     del batch_audios
     #     return results_df
 
-    # batches = [audio_paths[i : i + batch_size] for i in range(0, len(audio_paths), batch_size)]
+    # n_batches = [audio_paths[i : i + batch_size] for i in range(0, len(audio_paths), batch_size)]
     # batch_aqm_dataframes = Parallel(n_jobs=n_jobs, verbose=verbosity)(
-    #     delayed(process_batch)(batch, idx) for idx, batch in enumerate(batches)
+    #     delayed(process_batch)(batch, idx) for idx, batch in enumerate(n_batches)
     # )
 
     # all_aqms = pd.concat(batch_aqm_dataframes, ignore_index=True)
