@@ -31,9 +31,6 @@ def apply_audio_quality_function(
     return df
 
 
-
-
-
 def activity_to_taxonomy_tree_path(activity: str) -> List[str]:
     """Gets the taxonomy tree path for a given activity .
 
@@ -187,61 +184,8 @@ def taxonomy_subtree_to_pydra_workflow(subtree: Dict) -> Workflow:
     pass
 
 
-def run_taxonomy_subtree_checks_recursively(
-    audios: List[Audio], dataset_tree: Dict, activity_dict: Dict, results_df: pd.DataFrame
-) -> pd.DataFrame:
-    """Runs quality checks recursively on a taxonomy subtree and updates the results DataFrame.
-
-    This function iterates over a hierarchical taxonomy structure and applies quality control
-    checks at each relevant node. It determines the relevant audios for each taxonomy node,
-    applies the appropriate checks, and updates the `results_df` with check results.
-
-    Args:
-        audios (List[Audio]): The full list of audio files to be checked.
-        dataset_tree (Dict): The taxonomy tree representing the dataset structure, which will be modified in-place.
-        activity_dict (Dict[str, List[Audio]]): A dictionary mapping activity names to lists of `Audio` objects.
-        results_df (pd.DataFrame): DataFrame to store quality check results.
-
-    Returns:
-        pd.DataFrame: Updated DataFrame with quality check results for each audio file.
-    """
-    activity_to_tree_path_dict = {activity: activity_to_taxonomy_tree_path(activity) for activity in activity_dict}
-
-    def check_subtree_nodes(subtree: Dict, results_df: pd.DataFrame) -> pd.DataFrame:
-        """Recursively processes each node in the subtree, applying checks where applicable.
-
-        Args:
-            subtree (Dict): The current subtree being processed.
-            results_df (pd.DataFrame): DataFrame to store quality check results.
-        """
-        for key, node in subtree.items():
-            # Construct activity-specific audio list for the current node
-            activity_audios = [
-                audio
-                for activity in activity_dict
-                if key in activity_to_tree_path_dict[activity]
-                for audio in activity_dict[activity]
-            ]
-
-            results_df = evaluate_node(audios=audios, activity_audios=activity_audios, tree=node, results_df=results_df)
-
-            # Recursively process subclasses if they exist
-            if isinstance(node.get("subclass"), dict):  # Ensure subclass exists
-                check_subtree_nodes(node["subclass"], results_df=results_df)  # Recurse on actual subtree
-        return results_df
-
-    check_subtree_nodes(dataset_tree, results_df=results_df)  # Start recursion from root
-    return results_df
-
-
-
-
-def create_activity_to_evaluations(
-    audio_to_activity: Dict[str, str],
-    activity_tree: Dict
-) -> Dict[str, List[str]]:
-    """
-    """
+def create_activity_to_evaluations(audio_to_activity: Dict[str, str], activity_tree: Dict) -> Dict[str, List[str]]:
+    """ """
     # get unique activities
     # for each activity:
     #   get subtree
@@ -249,7 +193,7 @@ def create_activity_to_evaluations(
     #   append
     # activity_dict_to_dataset_taxonomy_subtree
     # return activity_to_evaluations
-    
+
 
 def create_audio_path_to_activity(
     audio_paths: List[str], audio_path_to_activity: Optional[Dict[str, str]] = None
