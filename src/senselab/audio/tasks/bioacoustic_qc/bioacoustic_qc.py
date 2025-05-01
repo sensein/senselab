@@ -1,9 +1,11 @@
 """Runs bioacoustic activity recording quality control on a set of Audio objects."""
 
+import os
 from copy import deepcopy
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
 import pandas as pd
+from joblib import Parallel, delayed
 from pydra.engine.core import Workflow  # Assuming you're using Pydra workflows
 
 from senselab.audio.data_structures import Audio
@@ -234,29 +236,51 @@ def run_taxonomy_subtree_checks_recursively(
 
 
 def check_quality(
-    audios: List[Audio],
+    audio_dir: Union[str, os.PathLike],
     activity_tree: Dict = BIOACOUSTIC_ACTIVITY_TAXONOMY,
     complexity: str = "low",
-    audio_df: pd.DataFrame = None,
+    batch_size: int = 8,
+    save_path: Union[str, os.PathLike, None] = None,
+    n_jobs: int = -1,
+    verbosity: int = 20,
 ) -> pd.DataFrame:
-    """Runs quality checks on audio files and updates the taxonomy tree.
+    """Runs quality checks on audio files in batches and updates the taxonomy tree."""
+    audio_extensions = (".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac")
+    audio_paths = [
+        os.path.join(root, fname)
+        for root, _, files in os.walk(str(audio_dir))
+        for fname in files
+        if fname.lower().endswith(audio_extensions)
+    ]
 
-    Maps `Audio` objects to activities, prunes the taxonomy tree, and applies quality checks recursively. Returns the
-    updated taxonomy tree and the modified list of audios.
+    print("Audio paths loaded.")
 
-    Args:
-        audios (List[Audio]): Audio files to analyze.
-        activity_tree (Dict, optional): Taxonomy tree defining hierarchy. Defaults to `BIOACOUSTIC_ACTIVITY_TAXONOMY`.
-        complexity (str, optional): Processing complexity level (unused, reserved for future use). Defaults to `"low"`.
-        audio_df (pd.DataFrame, optional): DataFrame to store quality check results. Defaults to None.
+    total_batches = (len(audio_paths) + batch_size - 1) // batch_size
+    print(f"{total_batches} batches of size {batch_size}")
 
-    Returns:
-        pd.DataFrame: DataFrame to store quality check results.
-    """
-    activity_dict = audios_to_activity_dict(audios)
-    dataset_tree = activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=activity_tree)
-    results_df = audio_df
-    results_df = run_taxonomy_subtree_checks_recursively(
-        audios, dataset_tree=dataset_tree, activity_dict=activity_dict, results_df=results_df
+    def process_batch(batch_paths: List[str], batch_idx: int) -> pd.DataFrame:
+        batch_audios = [Audio.from_filepath(p) for p in batch_paths]
+        activity_dict = audios_to_activity_dict(batch_audios)
+        dataset_tree = activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=activity_tree)
+
+        results_df = pd.DataFrame([a.orig_path_or_id for a in batch_audios], columns=["audio_path_or_id"])
+        results_df = run_taxonomy_subtree_checks_recursively(
+            audios=batch_audios,
+            dataset_tree=dataset_tree,
+            activity_dict=activity_dict,
+            results_df=results_df,
+        )
+        del batch_audios
+        return results_df
+
+    batches = [audio_paths[i : i + batch_size] for i in range(0, len(audio_paths), batch_size)]
+    batch_aqm_dataframes = Parallel(n_jobs=n_jobs, verbose=verbosity)(
+        delayed(process_batch)(batch, idx) for idx, batch in enumerate(batches)
     )
-    return results_df
+
+    all_aqms = pd.concat(batch_aqm_dataframes, ignore_index=True)
+    all_aqms["audio_path_or_id"] = all_aqms["audio_path_or_id"].apply(os.path.basename)
+    if save_path:
+        all_aqms.to_csv(save_path)
+        print(f"Results saved to: {save_path}")
+    return all_aqms
