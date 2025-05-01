@@ -28,4 +28,4 @@ def audio_length_positive_check(audio: Audio) -> bool:
 
 def audio_intensity_positive_check(audio: Audio) -> bool:
     """Checks if an Audio object has nonzero intensity."""
-    return torch.sum(torch.abs(audio.waveform)) != 0
+    return torch.sum(torch.abs(audio.waveform)).item() != 0
