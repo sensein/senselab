@@ -40,12 +40,12 @@ def visualize(pose_image: ImagePose, output_path: Optional[str] = None, plot: bo
     if not CV2_AVAILABLE:
         raise ModuleNotFoundError(
             "`opencv-python` is not installed. "
-            "Please install senselab video dependencies using `pip install senselab['video']`."
+            "Please install senselab video dependencies using `pip install 'senselab[video]'`."
         )
     if not MEDIAPIPE_AVAILABLE:
         raise ModuleNotFoundError(
             "`mediapipe` is not installed. "
-            "Please install senselab video dependencies using `pip install senselab['video']`."
+            "Please install senselab video dependencies using `pip install 'senselab[video]'`."
         )
 
     annotated_image = pose_image.image.copy()
