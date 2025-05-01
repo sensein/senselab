@@ -63,25 +63,24 @@ def activity_to_taxonomy_tree_path(activity: str) -> List[str]:
     return path
 
 
-def activity_dict_to_dataset_taxonomy_subtree(
-    audio_paths_to_activities: Dict[str, str],
+def activity_to_dataset_taxonomy_subtree(
+    activity_name: str,
     activity_tree: Dict
 ) -> Dict:
-    """Constructs a pruned taxonomy tree containing only relevant activities.
+    """Constructs a pruned taxonomy tree containing only the specified activity.
 
     Args:
-        audio_paths_to_activities (Dict[str, str]): Maps audio file paths to activity names.
+        activity_name (str): Activity name to retain.
         activity_tree (Dict): Full taxonomy tree defining the activity hierarchy.
 
     Returns:
-        Dict: Pruned taxonomy tree with only relevant activities.
+        Dict: Pruned taxonomy tree with only relevant branches for the given activity.
 
     Raises:
-        ValueError: If none of the provided activities exist in the taxonomy.
+        ValueError: If the activity does not exist in the taxonomy.
     """
-    activity_keys = list(set(audio_paths_to_activities.values()))
-    activity_paths = [activity_to_taxonomy_tree_path(activity) for activity in activity_keys]
-    valid_nodes: Set[str] = set(node for path in activity_paths for node in path)
+    activity_path = activity_to_taxonomy_tree_path(activity_name)
+    valid_nodes: Set[str] = set(activity_path)
 
     pruned_tree: Dict = deepcopy(activity_tree)
 
@@ -106,6 +105,7 @@ def activity_dict_to_dataset_taxonomy_subtree(
         pruned_tree["bioacoustic"]["subclass"] = None
 
     return pruned_tree
+
 
 def evaluate_node(
     audios: List[Audio], activity_audios: List[Audio], tree: Dict[str, Any], results_df: pd.DataFrame
