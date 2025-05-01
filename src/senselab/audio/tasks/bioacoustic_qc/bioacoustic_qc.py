@@ -31,9 +31,9 @@ def apply_audio_quality_function(
     return df
 
 
-def audio_path_to_activity_dict(
+def audio_path_to_activity(
     audio_paths: List[str],
-    audio_path_to_activity_dict: Optional[Dict[str, str]] = None
+    audio_path_to_activity: Optional[Dict[str, str]] = None
 ) -> Dict[str, str]:
     """Maps each audio path to an activity, defaulting to 'bioacoustic' if not provided.
 
@@ -45,8 +45,8 @@ def audio_path_to_activity_dict(
         Dict[str, str]: Dictionary mapping each audio path to its activity.
     """
     return {
-        path: audio_path_to_activity_dict.get(path, "bioacoustic") 
-        if audio_path_to_activity_dict else "bioacoustic"
+        path: audio_path_to_activity.get(path, "bioacoustic")
+        if audio_path_to_activity else "bioacoustic"
         for path in audio_paths
     }
 
@@ -253,14 +253,13 @@ def run_taxonomy_subtree_checks_recursively(
 def check_quality(
     audio_paths: Union[str, os.PathLike],
     activity_tree: Dict = BIOACOUSTIC_ACTIVITY_TAXONOMY,
-    audio_paths_to_activities: Dict = None,
+    audio_path_to_activity: Dict = None,
     save_path: Union[str, os.PathLike, None] = None,
 ) -> pd.DataFrame:
     """Runs quality checks on audio files in batches and updates the taxonomy tree."""
     # get the paths to activity dict
-    audios_to_activity_dict = audios_to_activity_dict(audio_paths=audio_paths)
-    for path in audio_paths:
-        if 
+    audios_to_activity = audio_path_to_activity(audio_paths, audio_path_to_activity)
+
     # create activity to evaluations dict
     # create workflow for all audio files
     # run workflow
