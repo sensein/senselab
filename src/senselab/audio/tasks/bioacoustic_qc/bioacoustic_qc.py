@@ -31,37 +31,6 @@ def apply_audio_quality_function(
     return df
 
 
-def audios_to_activity_dict(audios: List[Audio]) -> Dict[str, List[Audio]]:
-    """Creates a dictionary mapping activities to their corresponding Audio objects.
-
-    Each Audio object is assigned to a activity category based on the `"activity "` field in its metadata.
-    If an Audio object does not contain a `"activity "` field, it is categorized under `"bioacoustic"`.
-
-    Args:
-        audios (List[Audio]): A list of Audio objects.
-
-    Returns:
-        Dict[str, List[Audio]]: A dictionary where keys are activity names and values are lists of
-        Audio objects belonging to that activity .
-
-    Example:
-        >>> audio1 = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000, metadata={"activity ": "breathing"})
-        >>> audio2 = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000, metadata={"activity ": "cough"})
-        >>> audio3 = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000, metadata={})  # No activity
-        >>> audios_to_activity_dict([audio1, audio2, audio3])
-        {'breathing': [audio1], 'cough': [audio2], 'bioacoustic': [audio3]}
-    """
-    activity_dict: Dict[str, List[Audio]] = {}
-
-    for audio in audios:
-        activity = audio.metadata.get("activity", "bioacoustic")  # Default to "bioacoustic" if no activity
-        if activity not in activity_dict:
-            activity_dict[activity] = []
-        activity_dict[activity].append(audio)
-
-    return activity_dict
-
-
 def activity_to_taxonomy_tree_path(activity: str) -> List[str]:
     """Gets the taxonomy tree path for a given activity .
 
@@ -94,43 +63,56 @@ def activity_to_taxonomy_tree_path(activity: str) -> List[str]:
     return path
 
 
-def activity_dict_to_dataset_taxonomy_subtree(activity_dict: Dict[str, List[Audio]], activity_tree: Dict) -> Dict:
-    """Constructs a pruned taxonomy tree containing only relevant activities.
-
-    This function takes a mapping of activities to audio files and removes irrelevant branches from a given taxonomy
-    tree, keeping only activities that exist in `activity_dict`.
+def subtree_to_evaluations(subtree: Dict) -> List[Callable[[Audio], bool]]:
+    """Recursively extracts all evaluation functions (metrics and checks) from a taxonomy subtree.
 
     Args:
-        activity_dict (Dict[str, List[Audio]]): A dictionary mapping activity names to lists of Audio objects.
-        activity_tree (Dict): The full taxonomy tree defining the activity hierarchy.
+        subtree (Dict): A pruned or full subtree of the taxonomy.
 
     Returns:
-        Dict: A pruned version of `activity_tree` that retains only activities present in `activity_dict`.
+        List[Callable[[Audio], bool]]: Ordered list of unique evaluation functions to run.
+    """
+    evaluations = []
+
+    def collect_evaluations(node: Dict):
+        if not isinstance(node, dict):
+            return
+        metrics = node.get("metrics", [])
+        checks = node.get("checks", [])
+        for fn in metrics + checks:
+            if fn not in evaluations:
+                evaluations.append(fn)
+        subclass = node.get("subclass")
+        if isinstance(subclass, dict):
+            for child in subclass.values():
+                collect_evaluations(child)
+
+    collect_evaluations(subtree)
+    return evaluations
+
+
+def activity_to_dataset_taxonomy_subtree(activity_name: str, activity_tree: Dict) -> Dict:
+    """Constructs a pruned taxonomy tree containing only the specified activity.
+
+    Args:
+        activity_name (str): Activity name to retain.
+        activity_tree (Dict): Full taxonomy tree defining the activity hierarchy.
+
+    Returns:
+        Dict: Pruned taxonomy tree with only relevant branches for the given activity.
 
     Raises:
-        ValueError: If none of the provided activities exist in the taxonomy.
+        ValueError: If the activity does not exist in the taxonomy.
     """
-    activity_keys = list(activity_dict.keys())
-    activity_paths = [activity_to_taxonomy_tree_path(activity) for activity in activity_keys]
-    valid_nodes: Set[str] = set(node for path in activity_paths for node in path)
+    activity_path = activity_to_taxonomy_tree_path(activity_name)
+    valid_nodes: Set[str] = set(activity_path)
 
     pruned_tree: Dict = deepcopy(activity_tree)
 
     def prune_tree(subtree: Dict) -> bool:
-        """Recursively prunes the taxonomy tree, keeping only relevant branches.
-
-        Args:
-            subtree (Dict): The current subtree being processed.
-
-        Returns:
-            bool: True if the subtree contains relevant activities, False otherwise.
-        """
         keys_to_delete = []
-
-        # Determine keys to delete
         for key in list(subtree.keys()):
             value = subtree[key]
-
             if isinstance(value, dict) and "subclass" in value and isinstance(value["subclass"], dict):
                 keep_branch = prune_tree(value["subclass"])
                 if not value["subclass"]:
@@ -139,17 +121,13 @@ def activity_dict_to_dataset_taxonomy_subtree(activity_dict: Dict[str, List[Audi
                     keys_to_delete.append(key)
             elif key not in valid_nodes:
                 keys_to_delete.append(key)
-
-        # Remove unwanted nodes
         for key in keys_to_delete:
             del subtree[key]
-
-        return bool(subtree)  # Return True if subtree contains relevant data
+        return bool(subtree)
 
     subclass_tree = pruned_tree["bioacoustic"].get("subclass", None)
-
     if not prune_tree(subclass_tree):
-        pruned_tree["bioacoustic"]["subclass"] = None  # Ensure "bioacoustic" key remains
+        pruned_tree["bioacoustic"]["subclass"] = None
 
     return pruned_tree
 
@@ -183,104 +161,140 @@ def evaluate_node(
     return results_df
 
 
-def taxonomy_subtree_to_pydra_workflow(subtree: Dict) -> Workflow:
-    """Constructs a Pydra workflow that corresponds to a dataset taxonomy subtree."""
+def evaluate_audio():
+    """Runs evaluations for one audio. Saves to file. Don't run if the audio files features file already exists.
+
+    Run efficiently without duplicating metrics or checks.
+
+    in:
+        activity2evaluations dict
+        audio_path
+        save_path
+    """
+
+def run_evaluations(audio_path_to_activity: Dict, activity_to_evaluations: Dict, save_path, n_batches: int):
+    """Constructs a Pydra workflow for running evaluations. Batches audio files. Splits over n_batches.
+    """
+
+    # use activity2evaluations dict
+    # split across audio paths
+    # run evaluate_audio
+    # collect all the outputs
+
+    # in check_quality, batch audio files
+    # run separate workflow for each batch
+    # at the end of each batch, update CSV with all evaluations
+
+    # make crucial checks that automatically exclude audio if not passed
+    # Run these first. Don't run anything else after if these fail.
+    # Make them customizable.
+    # Then run review checks. If any of these don't pass, run all other checks, but label review at the end.
+
     pass
 
 
-def run_taxonomy_subtree_checks_recursively(
-    audios: List[Audio], dataset_tree: Dict, activity_dict: Dict, results_df: pd.DataFrame
-) -> pd.DataFrame:
-    """Runs quality checks recursively on a taxonomy subtree and updates the results DataFrame.
-
-    This function iterates over a hierarchical taxonomy structure and applies quality control
-    checks at each relevant node. It determines the relevant audios for each taxonomy node,
-    applies the appropriate checks, and updates the `results_df` with check results.
+def create_activity_to_evaluations(audio_to_activity: Dict[str, str], activity_tree: Dict) -> Dict[str, List[str]]:
+    """Generates a mapping from each activity to the list of evaluation functions (metrics and checks)
+    that should be applied, based on the activity's corresponding subtree in the taxonomy.
 
     Args:
-        audios (List[Audio]): The full list of audio files to be checked.
-        dataset_tree (Dict): The taxonomy tree representing the dataset structure, which will be modified in-place.
-        activity_dict (Dict[str, List[Audio]]): A dictionary mapping activity names to lists of `Audio` objects.
-        results_df (pd.DataFrame): DataFrame to store quality check results.
+        audio_to_activity (Dict[str, str]): Mapping of audio file paths to activity labels.
+        activity_tree (Dict): Full taxonomy tree defining activity hierarchies and associated evaluations.
 
     Returns:
-        pd.DataFrame: Updated DataFrame with quality check results for each audio file.
+        Dict[str, List[str]]: Mapping from activity names to ordered lists of evaluation functions.
     """
-    activity_to_tree_path_dict = {activity: activity_to_taxonomy_tree_path(activity) for activity in activity_dict}
+    unique_activities = set(audio_to_activity.values())
+    activity_to_evaluations = {}
+    for activity in unique_activities:
+        subtree = activity_to_dataset_taxonomy_subtree(activity, activity_tree)
+        evaluations = subtree_to_evaluations(subtree)
+        activity_to_evaluations[activity] = evaluations
+    return activity_to_evaluations
 
-    def check_subtree_nodes(subtree: Dict, results_df: pd.DataFrame) -> pd.DataFrame:
-        """Recursively processes each node in the subtree, applying checks where applicable.
 
-        Args:
-            subtree (Dict): The current subtree being processed.
-            results_df (pd.DataFrame): DataFrame to store quality check results.
-        """
-        for key, node in subtree.items():
-            # Construct activity-specific audio list for the current node
-            activity_audios = [
-                audio
-                for activity in activity_dict
-                if key in activity_to_tree_path_dict[activity]
-                for audio in activity_dict[activity]
-            ]
+def create_audio_path_to_activity(
+    audio_paths: List[str], audio_path_to_activity: Optional[Dict[str, str]] = None
+) -> Dict[str, str]:
+    """Maps each audio path to an activity, defaulting to 'bioacoustic' if not provided.
 
-            results_df = evaluate_node(audios=audios, activity_audios=activity_audios, tree=node, results_df=results_df)
+    Args:
+        audio_paths (List[str]): List of audio file paths.
+        path_to_activity (Optional[Dict[str, str]]): Optional mapping of paths to activity names.
 
-            # Recursively process subclasses if they exist
-            if isinstance(node.get("subclass"), dict):  # Ensure subclass exists
-                check_subtree_nodes(node["subclass"], results_df=results_df)  # Recurse on actual subtree
-        return results_df
-
-    check_subtree_nodes(dataset_tree, results_df=results_df)  # Start recursion from root
-    return results_df
+    Returns:
+        Dict[str, str]: Dictionary mapping each audio path to its activity.
+    """
+    return {
+        path: audio_path_to_activity.get(path, "bioacoustic") if audio_path_to_activity else "bioacoustic"
+        for path in audio_paths
+    }
 
 
 def check_quality(
-    audio_dir: Union[str, os.PathLike],
+    audio_paths: Union[str, os.PathLike],
+    audio_path_to_activity: Dict = None,
     activity_tree: Dict = BIOACOUSTIC_ACTIVITY_TAXONOMY,
-    complexity: str = "low",
-    batch_size: int = 8,
     save_path: Union[str, os.PathLike, None] = None,
-    n_jobs: int = -1,
-    verbosity: int = 20,
+    n_batches: int = 1
 ) -> pd.DataFrame:
-    """Runs quality checks on audio files in batches and updates the taxonomy tree."""
-    audio_extensions = (".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac")
-    audio_paths = [
-        os.path.join(root, fname)
-        for root, _, files in os.walk(str(audio_dir))
-        for fname in files
-        if fname.lower().endswith(audio_extensions)
-    ]
+    """Runs quality checks on audio files in n_batches and updates the taxonomy tree."""
+    # get the paths to activity dict
+    audio_path_to_activity = audio_path_to_activity(audio_paths, audio_path_to_activity)
 
-    print("Audio paths loaded.")
+    # create activity to evaluations dict
+    activity_to_evaluations = create_activity_to_evaluations(audio_path_to_activity)
 
-    total_batches = (len(audio_paths) + batch_size - 1) // batch_size
-    print(f"{total_batches} batches of size {batch_size}")
+    # run_evaluations
+    run_evaluations(audio_path_to_activity, activity_to_evaluations, save_path, n_batches)
 
-    def process_batch(batch_paths: List[str], batch_idx: int) -> pd.DataFrame:
-        batch_audios = [Audio.from_filepath(p) for p in batch_paths]
-        activity_dict = audios_to_activity_dict(batch_audios)
-        dataset_tree = activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=activity_tree)
+    # construct evaluations csv
+    # label include, exclude, review
 
-        results_df = pd.DataFrame([a.orig_path_or_id for a in batch_audios], columns=["audio_path_or_id"])
-        results_df = run_taxonomy_subtree_checks_recursively(
-            audios=batch_audios,
-            dataset_tree=dataset_tree,
-            activity_dict=activity_dict,
-            results_df=results_df,
-        )
-        del batch_audios
-        return results_df
 
-    batches = [audio_paths[i : i + batch_size] for i in range(0, len(audio_paths), batch_size)]
-    batch_aqm_dataframes = Parallel(n_jobs=n_jobs, verbose=verbosity)(
-        delayed(process_batch)(batch, idx) for idx, batch in enumerate(batches)
-    )
 
-    all_aqms = pd.concat(batch_aqm_dataframes, ignore_index=True)
-    all_aqms["audio_path_or_id"] = all_aqms["audio_path_or_id"].apply(os.path.basename)
-    if save_path:
-        all_aqms.to_csv(save_path)
-        print(f"Results saved to: {save_path}")
-    return all_aqms
+
+
+
+    # run workflow
+    # create final metadata files
+
+    # audio_extensions = (".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac")
+    # audio_paths = [
+    #     os.path.join(root, fname)
+    #     for root, _, files in os.walk(str(audio_dir))
+    #     for fname in files
+    #     if fname.lower().endswith(audio_extensions)
+    # ]
+
+    # print("Audio paths loaded.")
+
+    # total_n_batches = (len(audio_paths) + batch_size - 1) // batch_size
+    # print(f"{total_n_batches} n_batches of size {batch_size}")
+
+    # def process_batch(batch_paths: List[str], batch_idx: int) -> pd.DataFrame:
+    #     batch_audios = [Audio.from_filepath(p) for p in batch_paths]
+    #     activity_dict = audios_to_activity_dict(batch_audios)
+    #     dataset_tree = activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=activity_tree)
+
+    #     results_df = pd.DataFrame([a.orig_path_or_id for a in batch_audios], columns=["audio_path_or_id"])
+    #     results_df = run_taxonomy_subtree_checks_recursively(
+    #         audios=batch_audios,
+    #         dataset_tree=dataset_tree,
+    #         activity_dict=activity_dict,
+    #         results_df=results_df,
+    #     )
+    #     del batch_audios
+    #     return results_df
+
+    # n_batches = [audio_paths[i : i + batch_size] for i in range(0, len(audio_paths), batch_size)]
+    # batch_aqm_dataframes = Parallel(n_jobs=n_jobs, verbose=verbosity)(
+    #     delayed(process_batch)(batch, idx) for idx, batch in enumerate(n_batches)
+    # )
+
+    # all_aqms = pd.concat(batch_aqm_dataframes, ignore_index=True)
+    # all_aqms["audio_path_or_id"] = all_aqms["audio_path_or_id"].apply(os.path.basename)
+    # if save_path:
+    #     all_aqms.to_csv(save_path)
+    #     print(f"Results saved to: {save_path}")
+    # return all_aqms
