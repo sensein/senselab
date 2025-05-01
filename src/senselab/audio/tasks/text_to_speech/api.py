@@ -3,9 +3,10 @@
 from typing import Any, List, Optional, Tuple, TypeGuard
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.text_to_speech.coqui import CoquiTTS
 from senselab.audio.tasks.text_to_speech.huggingface import HuggingFaceTTS
 from senselab.audio.tasks.text_to_speech.marstts import Mars5TTS
-from senselab.utils.data_structures import DeviceType, HFModel, Language, SenselabModel, TorchModel
+from senselab.utils.data_structures import CoquiTTSModel, DeviceType, HFModel, Language, SenselabModel, TorchModel
 
 
 def synthesize_texts(
@@ -19,7 +20,7 @@ def synthesize_texts(
     """Synthesizes speech from all texts using the given model.
 
     This function synthesizes speech from a list of text strings using the specified text-to-speech (TTS) model.
-    It supports models from HuggingFace and `Mars5TTS` for now.
+    It supports models from HuggingFace, coqui-tts, and `Mars5TTS`.
 
     Args:
         texts (List[str]): The list of text strings to be synthesized.
@@ -47,7 +48,7 @@ def synthesize_texts(
     if targets is not None:
         assert len(targets) == len(texts), ValueError("Provided targets should be same length as texts")
 
-        for i, target in targets:
+        for i, target in enumerate(targets):
             if isinstance(target, tuple):
                 assert len(target[1]) > 0, ValueError(f"{i}th target was expected to have a transcript, but was empty.")
 
@@ -69,6 +70,16 @@ def synthesize_texts(
         else:
             raise NotImplementedError(f"{model.path_or_uri} is currently not a supported Torch model. \
                                       Feel free to reach out to us about integrating this model into senselab.")
+    elif isinstance(model, CoquiTTSModel):
+        coqui_targets: Optional[List[Audio]] = None
+        if targets is not None:
+            coqui_targets = [
+                t if isinstance(t, Audio) else t[0]  # extract Audio from (Audio, str)
+                for t in targets
+            ]
+        return CoquiTTS.synthesize_texts_with_coqui(
+            texts=texts, targets=coqui_targets, model=model, device=device, language=language, **kwargs
+        )
     else:
         raise NotImplementedError("Only Hugging Face models and select Torch models are supported for now.")
 

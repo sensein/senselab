@@ -36,7 +36,7 @@ def resample_audios(
     if not SPEECHBRAIN_AVAILABLE:
         raise ModuleNotFoundError(
             "`speechbrain` is not installed. "
-            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
         )
 
     resampled_audios = []
@@ -58,7 +58,6 @@ def resample_audios(
                 waveform=resampled_waveform,
                 sampling_rate=resample_rate,
                 metadata=audio.metadata.copy(),
-                orig_path_or_id=audio.orig_path_or_id,
             )
         )
     return resampled_audios
@@ -81,7 +80,6 @@ def downmix_audios_to_mono(audios: List[Audio]) -> List[Audio]:
                 waveform=audio.waveform.mean(dim=0, keepdim=True),
                 sampling_rate=audio.sampling_rate,
                 metadata=audio.metadata.copy(),
-                orig_path_or_id=audio.orig_path_or_id,
             )
         )
 
@@ -109,7 +107,6 @@ def select_channel_from_audios(audios: List[Audio], channel_index: int) -> List[
                 waveform=audio.waveform[channel_index, :],
                 sampling_rate=audio.sampling_rate,
                 metadata=audio.metadata.copy(),
-                orig_path_or_id=audio.orig_path_or_id,
             )
         )
     return mono_channel_audios
@@ -145,7 +142,6 @@ def chunk_audios(data: List[Tuple[Audio, Tuple[float, float]]]) -> List[Audio]:
                 waveform=chunked_waveform,
                 sampling_rate=audio.sampling_rate,
                 metadata=audio.metadata.copy(),
-                orig_path_or_id=audio.orig_path_or_id,
             )
         )
     return chunked_audios
@@ -192,7 +188,6 @@ def pad_audios(audios: List[Audio], desired_samples: int) -> List[Audio]:
             waveform=padded_waveform,
             sampling_rate=audio.sampling_rate,
             metadata=audio.metadata.copy(),
-            orig_path_or_id=audio.orig_path_or_id,
         )
         padded_audios.append(padded_audio)
     return padded_audios
