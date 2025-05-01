@@ -84,9 +84,6 @@ def amplitude_headroom_metric(audio: Audio) -> float:
         ValueError: If amplitude exceeds [-1.0, 1.0].
         TypeError: If the waveform is not of type `torch.float32`.
     """
-    if audio.waveform.dtype != torch.float32:
-        raise TypeError(f"Expected waveform dtype torch.float32, but got {audio.waveform.dtype}")
-
     max_amp = audio.waveform.max().item()
     min_amp = audio.waveform.min().item()
 
