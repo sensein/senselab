@@ -63,10 +63,35 @@ def activity_to_taxonomy_tree_path(activity: str) -> List[str]:
     return path
 
 
-def activity_to_dataset_taxonomy_subtree(
-    activity_name: str,
-    activity_tree: Dict
-) -> Dict:
+def subtree_to_evaluations(subtree: Dict) -> List[Callable[[Audio], bool]]:
+    """Recursively extracts all evaluation functions (metrics and checks) from a taxonomy subtree.
+
+    Args:
+        subtree (Dict): A pruned or full subtree of the taxonomy.
+
+    Returns:
+        List[Callable[[Audio], bool]]: Ordered list of unique evaluation functions to run.
+    """
+    evaluations = []
+
+    def collect_evaluations(node: Dict):
+        if not isinstance(node, dict):
+            return
+        metrics = node.get("metrics", [])
+        checks = node.get("checks", [])
+        for fn in metrics + checks:
+            if fn not in evaluations:
+                evaluations.append(fn)
+        subclass = node.get("subclass")
+        if isinstance(subclass, dict):
+            for child in subclass.values():
+                collect_evaluations(child)
+
+    collect_evaluations(subtree)
+    return evaluations
+
+
+def activity_to_dataset_taxonomy_subtree(activity_name: str, activity_tree: Dict) -> Dict:
     """Constructs a pruned taxonomy tree containing only the specified activity.
 
     Args:
@@ -169,14 +194,23 @@ def taxonomy_subtree_to_pydra_workflow(subtree: Dict) -> Workflow:
 
 
 def create_activity_to_evaluations(audio_to_activity: Dict[str, str], activity_tree: Dict) -> Dict[str, List[str]]:
-    """ """
-    # get unique activities
-    # for each activity:
-    #   get subtree
-    #   create evaluations list in order
-    #   append
-    # activity_dict_to_dataset_taxonomy_subtree
-    # return activity_to_evaluations
+    """Generates a mapping from each activity to the list of evaluation functions (metrics and checks)
+    that should be applied, based on the activity's corresponding subtree in the taxonomy.
+
+    Args:
+        audio_to_activity (Dict[str, str]): Mapping of audio file paths to activity labels.
+        activity_tree (Dict): Full taxonomy tree defining activity hierarchies and associated evaluations.
+
+    Returns:
+        Dict[str, List[str]]: Mapping from activity names to ordered lists of evaluation functions.
+    """
+    unique_activities = set(audio_to_activity.values())
+    activity_to_evaluations = {}
+    for activity in unique_activities:
+        subtree = activity_to_dataset_taxonomy_subtree(activity, activity_tree)
+        evaluations = subtree_to_evaluations(subtree)
+        activity_to_evaluations[activity] = evaluations
+    return activity_to_evaluations
 
 
 def create_audio_path_to_activity(
@@ -208,6 +242,7 @@ def check_quality(
     audio_to_activity = audio_path_to_activity(audio_paths, audio_path_to_activity)
 
     # create activity to evaluations dict
+    activity_to_evaluations = create_activity_to_evaluations(audio_to_activity)
 
     # create workflow for all audio files
     # run workflow
