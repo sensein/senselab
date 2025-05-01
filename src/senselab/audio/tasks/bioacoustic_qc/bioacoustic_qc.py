@@ -63,43 +63,32 @@ def activity_to_taxonomy_tree_path(activity: str) -> List[str]:
     return path
 
 
-def activity_dict_to_dataset_taxonomy_subtree(activity_dict: Dict[str, List[Audio]], activity_tree: Dict) -> Dict:
+def activity_dict_to_dataset_taxonomy_subtree(
+    audio_paths_to_activities: Dict[str, str],
+    activity_tree: Dict
+) -> Dict:
     """Constructs a pruned taxonomy tree containing only relevant activities.
 
-    This function takes a mapping of activities to audio files and removes irrelevant branches from a given taxonomy
-    tree, keeping only activities that exist in `activity_dict`.
-
     Args:
-        activity_dict (Dict[str, List[Audio]]): A dictionary mapping activity names to lists of Audio objects.
-        activity_tree (Dict): The full taxonomy tree defining the activity hierarchy.
+        audio_paths_to_activities (Dict[str, str]): Maps audio file paths to activity names.
+        activity_tree (Dict): Full taxonomy tree defining the activity hierarchy.
 
     Returns:
-        Dict: A pruned version of `activity_tree` that retains only activities present in `activity_dict`.
+        Dict: Pruned taxonomy tree with only relevant activities.
 
     Raises:
         ValueError: If none of the provided activities exist in the taxonomy.
     """
-    activity_keys = list(activity_dict.keys())
+    activity_keys = list(set(audio_paths_to_activities.values()))
     activity_paths = [activity_to_taxonomy_tree_path(activity) for activity in activity_keys]
     valid_nodes: Set[str] = set(node for path in activity_paths for node in path)
 
     pruned_tree: Dict = deepcopy(activity_tree)
 
     def prune_tree(subtree: Dict) -> bool:
-        """Recursively prunes the taxonomy tree, keeping only relevant branches.
-
-        Args:
-            subtree (Dict): The current subtree being processed.
-
-        Returns:
-            bool: True if the subtree contains relevant activities, False otherwise.
-        """
         keys_to_delete = []
-
-        # Determine keys to delete
         for key in list(subtree.keys()):
             value = subtree[key]
-
             if isinstance(value, dict) and "subclass" in value and isinstance(value["subclass"], dict):
                 keep_branch = prune_tree(value["subclass"])
                 if not value["subclass"]:
@@ -108,20 +97,15 @@ def activity_dict_to_dataset_taxonomy_subtree(activity_dict: Dict[str, List[Audi
                     keys_to_delete.append(key)
             elif key not in valid_nodes:
                 keys_to_delete.append(key)
-
-        # Remove unwanted nodes
         for key in keys_to_delete:
             del subtree[key]
-
-        return bool(subtree)  # Return True if subtree contains relevant data
+        return bool(subtree)
 
     subclass_tree = pruned_tree["bioacoustic"].get("subclass", None)
-
     if not prune_tree(subclass_tree):
-        pruned_tree["bioacoustic"]["subclass"] = None  # Ensure "bioacoustic" key remains
+        pruned_tree["bioacoustic"]["subclass"] = None
 
     return pruned_tree
-
 
 def evaluate_node(
     audios: List[Audio], activity_audios: List[Audio], tree: Dict[str, Any], results_df: pd.DataFrame
