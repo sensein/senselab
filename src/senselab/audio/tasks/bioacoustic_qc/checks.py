@@ -200,20 +200,21 @@ def low_crest_factor_check(
 ) -> bool:
     return get_metric(audio, crest_factor_metric, df) <= threshold
 
-def very_low_dynamic_range_check(audio: Audio, threshold: float = 0.1) -> bool:
-    """Checks whether the dynamic range is too low.
+def very_low_dynamic_range_check(
+    audio: Audio,
+    threshold: float = 0.1,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    return get_metric(audio, dynamic_range_metric, df) < threshold
 
-    Returns True if dynamic range < threshold.
-    """
-    return dynamic_range_metric(audio) < threshold
 
+def very_high_dynamic_range_check(
+    audio: Audio,
+    threshold: float = 1.9,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    return get_metric(audio, dynamic_range_metric, df) > threshold
 
-def very_high_dynamic_range_check(audio: Audio, threshold: float = 1.9) -> bool:
-    """Checks whether the dynamic range is too high.
-
-    Returns True if dynamic range > threshold.
-    """
-    return dynamic_range_metric(audio) > threshold
 
 
 def very_low_mean_absolute_deviation_check(audio: Audio, threshold: float = 0.001) -> bool:
