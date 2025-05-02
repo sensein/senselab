@@ -141,14 +141,21 @@ def low_amplitude_modulation_depth_check(
 
 
 
-def proportion_clipped_check(audio: Audio, threshold: float = 0.0001) -> bool:
-    """Checks if an Audio object has less than 0.01% clipped samples."""
-    return proportion_clipped_metric(audio) < threshold
+
+def proportion_clipped_check(
+    audio: Audio,
+    threshold: float = 0.0001,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    return get_metric(audio, proportion_clipped_metric, df) < threshold
 
 
-def clipping_present_check(audio: Audio) -> bool:
-    """Checks if an Audio object has clipped samples."""
-    return proportion_clipped_metric(audio) > 0
+def clipping_present_check(
+    audio: Audio,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    return get_metric(audio, proportion_clipped_metric, df) > 0
+
 
 
 def completely_silent_check(audio: Audio, silence_threshold: float = 0.01) -> bool:
