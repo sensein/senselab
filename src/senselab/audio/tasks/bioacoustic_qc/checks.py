@@ -234,29 +234,31 @@ def very_high_mean_absolute_deviation_check(
     return get_metric(audio, mean_absolute_deviation_metric, df) > threshold
 
 
-
-def very_low_peak_snr_from_spectral_check(audio: Audio, threshold: float = 10.0) -> bool:
-    """Returns True if peak SNR is below the specified very low threshold (too noisy or silent)."""
-    return peak_snr_from_spectral_metric(audio) < threshold
-
-
-def low_peak_snr_from_spectral_check(audio: Audio, lower: float = 10.0, upper: float = 20.0) -> bool:
-    """Returns True if peak SNR is between lower and upper thresholds (noisy).
-
-    Args:
-        audio (Audio): The SenseLab Audio object.
-        lower (float): Lower bound for SNR (inclusive).
-        upper (float): Upper bound for SNR (exclusive).
-
-    Returns:
-        bool: True if lower <= SNR < upper, False otherwise.
-    """
-    return lower <= peak_snr_from_spectral_metric(audio) < upper
+def very_low_peak_snr_from_spectral_check(
+    audio: Audio,
+    threshold: float = 10.0,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    return get_metric(audio, peak_snr_from_spectral_metric, df) < threshold
 
 
-def very_high_peak_snr_from_spectral_check(audio: Audio, threshold: float = 60.0) -> bool:
-    """Returns True if peak SNR is above the specified very high threshold (possible artifact or clipping)."""
-    return peak_snr_from_spectral_metric(audio) > threshold
+def low_peak_snr_from_spectral_check(
+    audio: Audio,
+    lower: float = 10.0,
+    upper: float = 20.0,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    snr = get_metric(audio, peak_snr_from_spectral_metric, df)
+    return lower <= snr < upper
+
+
+def very_high_peak_snr_from_spectral_check(
+    audio: Audio,
+    threshold: float = 60.0,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    return get_metric(audio, peak_snr_from_spectral_metric, df) > threshold
+
 
 
 def low_phase_correlation_check(audio: Audio, threshold: float = 0.99) -> bool:
