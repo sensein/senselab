@@ -189,3 +189,16 @@ def low_peak_snr_from_spectral_check(audio: Audio, lower: float = 10.0, upper: f
 def very_high_peak_snr_from_spectral_check(audio: Audio, threshold: float = 60.0) -> bool:
     """Returns True if peak SNR is above the specified very high threshold (possible artifact or clipping)."""
     return peak_snr_from_spectral_metric(audio) > threshold
+
+
+def low_phase_correlation_check(audio: Audio, threshold: float = 0.99) -> bool:
+    """Returns True if phase correlation is below the specified threshold (indicating weak stereo coherence).
+
+    Args:
+        audio (Audio): The SenseLab Audio object.
+        threshold (float): Minimum acceptable phase correlation.
+
+    Returns:
+        bool: True if phase correlation < threshold, False otherwise.
+    """
+    return phase_correlation_metric(audio) < threshold
