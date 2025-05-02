@@ -185,25 +185,20 @@ def high_amplitude_skew_magnitude_check(
 
 
 
-def high_crest_factor_check(audio: Audio, threshold: float = 20.0) -> bool:
-    """Checks whether the crest factor of the audio is greater than the specified threshold.
-
-    Args:
-        audio (Audio): The SenseLab Audio object.
-        threshold (float): Maximum acceptable crest factor.
-    """
-    return crest_factor_metric(audio) >= threshold
+def high_crest_factor_check(
+    audio: Audio,
+    threshold: float = 20.0,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    return get_metric(audio, crest_factor_metric, df) >= threshold
 
 
-def low_crest_factor_check(audio: Audio, threshold: float = 1.5) -> bool:
-    """Checks whether the crest factor of the audio is less than the specified minimum threshold.
-
-    Args:
-        audio (Audio): The SenseLab Audio object.
-        threshold (float): Minimum acceptable crest factor.
-    """
-    return crest_factor_metric(audio) <= threshold
-
+def low_crest_factor_check(
+    audio: Audio,
+    threshold: float = 1.5,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    return get_metric(audio, crest_factor_metric, df) <= threshold
 
 def very_low_dynamic_range_check(audio: Audio, threshold: float = 0.1) -> bool:
     """Checks whether the dynamic range is too low.
