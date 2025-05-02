@@ -174,17 +174,15 @@ def mostly_silent_check(
     return get_metric(audio, proportion_silent_metric, df) > silent_proportion
 
 
-def high_amplitude_skew_magnitude_check(audio: Audio, magnitude: float = 5.0) -> bool:
-    """Checks whether the absolute amplitude skew is within a specified magnitude.
 
-    Args:
-        audio (Audio): The SenseLab Audio object.
-        magnitude (float): Maximum acceptable absolute skew.
+def high_amplitude_skew_magnitude_check(
+    audio: Audio,
+    magnitude: float = 5.0,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    return abs(get_metric(audio, amplitude_skew_metric, df)) <= magnitude
 
-    Returns:
-        bool: True if abs(skew) <= magnitude, False otherwise.
-    """
-    return abs(amplitude_skew_metric(audio)) <= magnitude
+
 
 
 def high_crest_factor_check(audio: Audio, threshold: float = 20.0) -> bool:
