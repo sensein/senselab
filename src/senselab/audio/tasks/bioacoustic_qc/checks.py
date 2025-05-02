@@ -105,14 +105,21 @@ def very_high_amplitude_interquartile_range_check(
     return get_metric(audio, amplitude_interquartile_range_metric, df) > threshold
 
 
-def very_low_amplitude_kurtosis_check(audio: Audio, threshold: float = -100) -> bool:
-    """Checks if an Audio object has very low amplitude kurtosis."""
-    return amplitude_kurtosis_metric(audio) < threshold
+def very_low_amplitude_kurtosis_check(
+    audio: Audio,
+    threshold: float = -100,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    return get_metric(audio, amplitude_kurtosis_metric, df) < threshold
 
 
-def very_high_amplitude_kurtosis_check(audio: Audio, threshold: float = 100) -> bool:
-    """Checks if an Audio object has very high amplitude kurtosis."""
-    return amplitude_kurtosis_metric(audio) > threshold
+def very_high_amplitude_kurtosis_check(
+    audio: Audio,
+    threshold: float = 100,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    return get_metric(audio, amplitude_kurtosis_metric, df) > threshold
+
 
 
 def very_low_amplitude_modulation_depth_check(audio: Audio, threshold: float = 0.1) -> bool:
