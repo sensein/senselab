@@ -306,3 +306,29 @@ def high_signal_variance_check(audio: Audio, threshold: float = 0.3) -> bool:
         bool: True if variance > threshold, False otherwise.
     """
     return signal_variance_metric(audio) > threshold
+
+
+def low_spectral_gating_snr_check(audio: Audio, threshold: float = 10.0) -> bool:
+    """Returns True if spectral gating SNR is below the specified threshold (too noisy or silent).
+
+    Args:
+        audio (Audio): The SenseLab Audio object.
+        threshold (float): Minimum acceptable SNR (dB).
+
+    Returns:
+        bool: True if SNR < threshold, False otherwise.
+    """
+    return spectral_gating_snr_metric(audio) < threshold
+
+
+def high_spectral_gating_snr_check(audio: Audio, threshold: float = 60.0) -> bool:
+    """Returns True if spectral gating SNR is above the specified threshold (possibly artificial or clipped).
+
+    Args:
+        audio (Audio): The SenseLab Audio object.
+        threshold (float): Maximum acceptable SNR (dB).
+
+    Returns:
+        bool: True if SNR > threshold, False otherwise.
+    """
+    return spectral_gating_snr_metric(audio) > threshold
