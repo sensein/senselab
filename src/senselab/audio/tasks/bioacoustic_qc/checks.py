@@ -217,14 +217,22 @@ def very_high_dynamic_range_check(
 
 
 
-def very_low_mean_absolute_deviation_check(audio: Audio, threshold: float = 0.001) -> bool:
-    """Returns True if mean absolute deviation is below the threshold (too flat)."""
-    return mean_absolute_deviation_metric(audio) < threshold
+
+def very_low_mean_absolute_deviation_check(
+    audio: Audio,
+    threshold: float = 0.001,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    return get_metric(audio, mean_absolute_deviation_metric, df) < threshold
 
 
-def very_high_mean_absolute_deviation_check(audio: Audio, threshold: float = 0.5) -> bool:
-    """Returns True if mean absolute deviation is above the threshold (too variable)."""
-    return mean_absolute_deviation_metric(audio) > threshold
+def very_high_mean_absolute_deviation_check(
+    audio: Audio,
+    threshold: float = 0.5,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    return get_metric(audio, mean_absolute_deviation_metric, df) > threshold
+
 
 
 def very_low_peak_snr_from_spectral_check(audio: Audio, threshold: float = 10.0) -> bool:
