@@ -13,7 +13,8 @@ All checks take a list of Audio objects as input and return:
     - A list of Audio objects that passed the check.
 """
 
-from typing import Callable, Dict, List
+import os
+from typing import Callable, Dict, List, Optional
 
 import pandas as pd
 import torch
@@ -40,6 +41,32 @@ from senselab.audio.tasks.bioacoustic_qc.metrics import (
     spectral_gating_snr_metric,
     zero_crossing_rate_metric,
 )
+
+
+def get_metric(audio: Audio, metric_func: Callable[[Audio], float], df: Optional[pd.DataFrame] = None) -> float:
+    """Returns the metric value from a DataFrame if available; otherwise computes it.
+
+    The metric column is inferred from the name of the function (e.g., 'zero_crossing_rate_metric').
+
+    Args:
+        audio (Audio): The SenseLab Audio object.
+        metric_func (Callable): Function to compute the metric.
+        df (Optional[pd.DataFrame]): DataFrame with precomputed metrics.
+            Must contain 'audio_path_or_id' column and metric_func.__name__ column.
+
+    Returns:
+        float: The metric value.
+    """
+    metric_name = metric_func.__name__
+
+    filepath = audio.filepath()
+    if df is not None and filepath:
+        audio_file_name = os.path.basename(filepath)
+        row = df[df["audio_path_or_id"] == audio_file_name]
+        if not row.empty and metric_name in row.columns:
+            return row[metric_name].iloc[0]
+
+    return metric_func(audio)
 
 
 def audio_length_positive_check(audio: Audio) -> bool:
