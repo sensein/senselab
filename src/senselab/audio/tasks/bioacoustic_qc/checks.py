@@ -1,23 +1,18 @@
 """Audio Quality Control Checks.
 
-Each check function processes a list of Audio objects and returns a dictionary
-indicating which files should be excluded or reviewed, along with a list of
-audio files that passed the check.
+This module defines a set of boolean functions that evaluate individual `Audio` objects
+based on specific quality metrics (e.g., clipping, dynamic range, SNR, entropy).
 
-All checks take a list of Audio objects as input and return:
-    - A dictionary with the structure:
-        {
-            "exclude": [Audio],  # List of Audio objects that failed the check
-            "review": [Audio]    # List of Audio objects that need manual review
-        }
-    - A list of Audio objects that passed the check.
+Each check is designed to return `True` when a defined failure condition is met,
+enabling easy filtering of problematic recordings.
+
+All checks accept an `Audio` object and optionally a DataFrame of cached metric values.
 """
 
 import os
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Optional
 
 import pandas as pd
-import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.bioacoustic_qc.metrics import (
