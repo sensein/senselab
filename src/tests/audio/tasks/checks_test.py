@@ -5,6 +5,8 @@ If a test fails, the assertion message shows the metric value that triggered it.
 
 from __future__ import annotations
 
+import os
+
 import pandas as pd
 
 from senselab.audio.data_structures import Audio
@@ -81,9 +83,13 @@ def test_get_metric_computes_directly(stereo_audio_sample: Audio) -> None:
 def test_get_metric_uses_dataframe_cache(stereo_audio_sample: Audio) -> None:
     """Should return cached value when DataFrame is valid."""
     cached_value = 0.1234
+    filepath = stereo_audio_sample.filepath()
+    filename = None
+    if filepath:
+        filename = os.path.basename(filepath)
     df = pd.DataFrame(
         {
-            "audio_path_or_id": ["test.wav"],
+            "audio_path_or_id": [filename],
             "zero_crossing_rate_metric": [cached_value],
         }
     )
