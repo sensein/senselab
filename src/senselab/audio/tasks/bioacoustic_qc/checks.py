@@ -93,6 +93,11 @@ def proportion_clipped_check(audio: Audio, threshold: float = 0.0001) -> bool:
     return proportion_clipped_metric(audio) < threshold
 
 
+def clipping_present_check(audio: Audio) -> bool:
+    """Checks if an Audio object has clipped samples."""
+    return proportion_clipped_metric(audio) > 0
+
+
 def completely_silent_check(audio: Audio, silence_threshold: float = 0.01) -> bool:
     """Checks if an Audio object is completely silent."""
     return proportion_silent_metric(audio, silence_threshold=silence_threshold) < 1.0
