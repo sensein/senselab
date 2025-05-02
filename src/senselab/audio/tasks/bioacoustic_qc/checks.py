@@ -89,15 +89,20 @@ def very_high_headroom_check(
 ) -> bool:
     return get_metric(audio, amplitude_headroom_metric, df) > headroom_threshold
 
+def very_low_amplitude_interquartile_range_check(
+    audio: Audio,
+    threshold: float = 0.01,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    return get_metric(audio, amplitude_interquartile_range_metric, df) < threshold
 
-def very_low_amplitude_interquartile_range_check(audio: Audio, threshold: float = 0.01) -> bool:
-    """Checks if an Audio object has very low IQR."""
-    return amplitude_interquartile_range_metric(audio) < threshold
 
-
-def very_high_amplitude_interquartile_range_check(audio: Audio, threshold: float = 1.5) -> bool:
-    """Checks if an Audio object has very high IQR."""
-    return amplitude_interquartile_range_metric(audio) > threshold
+def very_high_amplitude_interquartile_range_check(
+    audio: Audio,
+    threshold: float = 1.5,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    return get_metric(audio, amplitude_interquartile_range_metric, df) > threshold
 
 
 def very_low_amplitude_kurtosis_check(audio: Audio, threshold: float = -100) -> bool:
