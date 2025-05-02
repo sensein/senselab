@@ -132,3 +132,16 @@ def high_crest_factor_check(audio: Audio, threshold: float = 20.0) -> bool:
         bool: True if crest factor <= threshold, False otherwise.
     """
     return crest_factor_metric(audio) <= threshold
+
+
+def low_crest_factor_check(audio: Audio, threshold: float = 1.5) -> bool:
+    """Checks whether the crest factor of the audio is greater than the specified minimum threshold.
+
+    Args:
+        audio (Audio): The SenseLab Audio object.
+        threshold (float): Minimum acceptable crest factor.
+
+    Returns:
+        bool: True if crest factor >= threshold, False otherwise.
+    """
+    return crest_factor_metric(audio) >= threshold
