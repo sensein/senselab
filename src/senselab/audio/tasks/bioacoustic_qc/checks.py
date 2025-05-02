@@ -336,30 +336,21 @@ def high_signal_variance_check(
     return get_metric(audio, signal_variance_metric, df) > threshold
 
 
-def low_spectral_gating_snr_check(audio: Audio, threshold: float = 10.0) -> bool:
-    """Returns True if spectral gating SNR is below the specified threshold (too noisy or silent).
-
-    Args:
-        audio (Audio): The SenseLab Audio object.
-        threshold (float): Minimum acceptable SNR (dB).
-
-    Returns:
-        bool: True if SNR < threshold, False otherwise.
-    """
-    return spectral_gating_snr_metric(audio) < threshold
+def low_spectral_gating_snr_check(
+    audio: Audio,
+    threshold: float = 10.0,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    return get_metric(audio, spectral_gating_snr_metric, df) < threshold
 
 
-def high_spectral_gating_snr_check(audio: Audio, threshold: float = 60.0) -> bool:
-    """Returns True if spectral gating SNR is above the specified threshold (possibly artificial or clipped).
+def high_spectral_gating_snr_check(
+    audio: Audio,
+    threshold: float = 60.0,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    return get_metric(audio, spectral_gating_snr_metric, df) > threshold
 
-    Args:
-        audio (Audio): The SenseLab Audio object.
-        threshold (float): Maximum acceptable SNR (dB).
-
-    Returns:
-        bool: True if SNR > threshold, False otherwise.
-    """
-    return spectral_gating_snr_metric(audio) > threshold
 
 
 def low_zero_crossing_rate_metric_check(audio: Audio, threshold: float = 0.01) -> bool:
