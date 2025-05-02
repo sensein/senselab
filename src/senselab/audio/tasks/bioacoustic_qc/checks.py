@@ -280,3 +280,29 @@ def high_shannon_entropy_amplitude_check(audio: Audio, threshold: float = 7.5) -
         bool: True if entropy > threshold, False otherwise.
     """
     return shannon_entropy_amplitude_metric(audio) > threshold
+
+
+def low_signal_variance_check(audio: Audio, threshold: float = 1e-4) -> bool:
+    """Returns True if signal variance is below the specified threshold (too flat).
+
+    Args:
+        audio (Audio): The SenseLab Audio object.
+        threshold (float): Minimum acceptable signal variance.
+
+    Returns:
+        bool: True if variance < threshold, False otherwise.
+    """
+    return signal_variance_metric(audio) < threshold
+
+
+def high_signal_variance_check(audio: Audio, threshold: float = 0.3) -> bool:
+    """Returns True if signal variance is above the specified threshold (possibly distorted or noisy).
+
+    Args:
+        audio (Audio): The SenseLab Audio object.
+        threshold (float): Maximum acceptable signal variance.
+
+    Returns:
+        bool: True if variance > threshold, False otherwise.
+    """
+    return signal_variance_metric(audio) > threshold
