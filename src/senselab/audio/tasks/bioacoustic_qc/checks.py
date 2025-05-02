@@ -320,30 +320,20 @@ def high_shannon_entropy_amplitude_check(
 
 
 
-def low_signal_variance_check(audio: Audio, threshold: float = 1e-4) -> bool:
-    """Returns True if signal variance is below the specified threshold (too flat).
-
-    Args:
-        audio (Audio): The SenseLab Audio object.
-        threshold (float): Minimum acceptable signal variance.
-
-    Returns:
-        bool: True if variance < threshold, False otherwise.
-    """
-    return signal_variance_metric(audio) < threshold
+def low_signal_variance_check(
+    audio: Audio,
+    threshold: float = 1e-4,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    return get_metric(audio, signal_variance_metric, df) < threshold
 
 
-def high_signal_variance_check(audio: Audio, threshold: float = 0.3) -> bool:
-    """Returns True if signal variance is above the specified threshold (possibly distorted or noisy).
-
-    Args:
-        audio (Audio): The SenseLab Audio object.
-        threshold (float): Maximum acceptable signal variance.
-
-    Returns:
-        bool: True if variance > threshold, False otherwise.
-    """
-    return signal_variance_metric(audio) > threshold
+def high_signal_variance_check(
+    audio: Audio,
+    threshold: float = 0.3,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    return get_metric(audio, signal_variance_metric, df) > threshold
 
 
 def low_spectral_gating_snr_check(audio: Audio, threshold: float = 10.0) -> bool:
