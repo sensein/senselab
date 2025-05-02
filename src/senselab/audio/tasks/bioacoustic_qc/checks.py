@@ -155,3 +155,13 @@ def very_high_dynamic_range_check(audio: Audio, threshold: float = 1.9) -> bool:
     Returns True if dynamic range > threshold.
     """
     return dynamic_range_metric(audio) > threshold
+
+
+def very_low_mean_absolute_deviation_check(audio: Audio, threshold: float = 0.001) -> bool:
+    """Returns True if mean absolute deviation is below the threshold (too flat)."""
+    return mean_absolute_deviation_metric(audio) < threshold
+
+
+def very_high_mean_absolute_deviation_check(audio: Audio, threshold: float = 0.5) -> bool:
+    """Returns True if mean absolute deviation is above the threshold (too variable)."""
+    return mean_absolute_deviation_metric(audio) > threshold
