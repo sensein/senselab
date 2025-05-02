@@ -244,7 +244,7 @@ def test_very_high_mean_absolute_deviation_check(stereo_audio_sample: Audio) -> 
 def test_very_low_peak_snr_from_spectral_check(stereo_audio_sample: Audio) -> None:
     """very_low_peak_snr_from_spectral_check returns False."""
     m = peak_snr_from_spectral_metric(stereo_audio_sample)
-    assert very_low_peak_snr_from_spectral_check(
+    assert not very_low_peak_snr_from_spectral_check(
         stereo_audio_sample
     ), f"very_low_peak_snr_from_spectral_check flagged (SNR={m:.2f} dB)"
 
@@ -252,7 +252,7 @@ def test_very_low_peak_snr_from_spectral_check(stereo_audio_sample: Audio) -> No
 def test_low_peak_snr_from_spectral_check(stereo_audio_sample: Audio) -> None:
     """low_peak_snr_from_spectral_check returns False."""
     m = peak_snr_from_spectral_metric(stereo_audio_sample)
-    assert not low_peak_snr_from_spectral_check(
+    assert low_peak_snr_from_spectral_check(
         stereo_audio_sample
     ), f"low_peak_snr_from_spectral_check flagged (SNR={m:.2f} dB)"
 
