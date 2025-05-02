@@ -122,15 +122,23 @@ def very_high_amplitude_kurtosis_check(
 
 
 
-def very_low_amplitude_modulation_depth_check(audio: Audio, threshold: float = 0.1) -> bool:
-    """Checks if an Audio object has very low amplitude modulation depth."""
-    return amplitude_modulation_depth_metric(audio) < threshold
+def very_low_amplitude_modulation_depth_check(
+    audio: Audio,
+    threshold: float = 0.1,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    return get_metric(audio, amplitude_modulation_depth_metric, df) < threshold
 
 
-def low_amplitude_modulation_depth_check(audio: Audio, min: float = 0.1, max: float = 0.3) -> bool:
-    """Checks if an Audio object has very low amplitude modulation depth."""
-    modulation_depth = amplitude_modulation_depth_metric(audio)
-    return min <= modulation_depth and modulation_depth < max
+def low_amplitude_modulation_depth_check(
+    audio: Audio,
+    min: float = 0.1,
+    max: float = 0.3,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    depth = get_metric(audio, amplitude_modulation_depth_metric, df)
+    return min <= depth < max
+
 
 
 def proportion_clipped_check(audio: Audio, threshold: float = 0.0001) -> bool:
