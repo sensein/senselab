@@ -25,7 +25,6 @@ from senselab.audio.tasks.bioacoustic_qc.metrics import (
     amplitude_kurtosis_metric,
     amplitude_modulation_depth_metric,
     amplitude_skew_metric,
-    clipping_present_metric,
     crest_factor_metric,
     dynamic_range_metric,
     mean_absolute_deviation_metric,
