@@ -70,9 +70,6 @@ from senselab.audio.tasks.bioacoustic_qc.metrics import (
 )
 
 
-# ──────────────────────────────
-# Positive-length sanity check
-# ──────────────────────────────
 def test_audio_length_positive_check(stereo_audio_sample: Audio) -> None:
     """audio_length_positive_check returns True."""
     n = stereo_audio_sample.waveform.numel()
@@ -81,9 +78,6 @@ def test_audio_length_positive_check(stereo_audio_sample: Audio) -> None:
     ), f"audio_length_positive_check returned False (num_samples={n})"
 
 
-# ──────────────────────────────
-# Headroom
-# ──────────────────────────────
 def test_very_low_headroom_check(stereo_audio_sample: Audio) -> None:
     """very_low_headroom_check returns False."""
     m = amplitude_headroom_metric(stereo_audio_sample)
@@ -100,9 +94,6 @@ def test_very_high_headroom_check(stereo_audio_sample: Audio) -> None:
     ), f"very_high_headroom_check flagged sample (headroom={m:.4f})"
 
 
-# ──────────────────────────────
-# IQR
-# ──────────────────────────────
 def test_very_low_amplitude_interquartile_range_check(stereo_audio_sample: Audio) -> None:
     """very_low_amplitude_interquartile_range_check returns False."""
     m = amplitude_interquartile_range_metric(stereo_audio_sample)
@@ -119,9 +110,6 @@ def test_very_high_amplitude_interquartile_range_check(stereo_audio_sample: Audi
     ), f"very_high_amplitude_interquartile_range_check flagged (IQR={m:.4f})"
 
 
-# ──────────────────────────────
-# Kurtosis
-# ──────────────────────────────
 def test_very_low_amplitude_kurtosis_check(stereo_audio_sample: Audio) -> None:
     """very_low_amplitude_kurtosis_check returns False."""
     m = amplitude_kurtosis_metric(stereo_audio_sample)
@@ -138,9 +126,6 @@ def test_very_high_amplitude_kurtosis_check(stereo_audio_sample: Audio) -> None:
     ), f"very_high_amplitude_kurtosis_check flagged (kurtosis={m:.2f})"
 
 
-# ──────────────────────────────
-# Modulation depth
-# ──────────────────────────────
 def test_very_low_amplitude_modulation_depth_check(stereo_audio_sample: Audio) -> None:
     """very_low_amplitude_modulation_depth_check returns False."""
     m = amplitude_modulation_depth_metric(stereo_audio_sample)
@@ -157,9 +142,6 @@ def test_low_amplitude_modulation_depth_check(stereo_audio_sample: Audio) -> Non
     ), f"low_amplitude_modulation_depth_check flagged (mod_depth={m:.4f})"
 
 
-# ──────────────────────────────
-# Clipping proportion
-# ──────────────────────────────
 def test_high_proportion_clipped_check(stereo_audio_sample: Audio) -> None:
     """high_proportion_clipped_check returns False."""
     m = proportion_clipped_metric(stereo_audio_sample)
@@ -174,9 +156,6 @@ def test_clipping_present_check(stereo_audio_sample: Audio) -> None:
     assert not clipping_present_check(stereo_audio_sample), f"clipping_present_check flagged (clip_prop={m:.6f})"
 
 
-# ──────────────────────────────
-# Silence proportion
-# ──────────────────────────────
 def test_completely_silent_check(stereo_audio_sample: Audio) -> None:
     """completely_silent_check returns False."""
     m = proportion_silent_metric(stereo_audio_sample)
@@ -189,9 +168,6 @@ def test_mostly_silent_check(stereo_audio_sample: Audio) -> None:
     assert not mostly_silent_check(stereo_audio_sample), f"mostly_silent_check flagged (silent_prop={m:.4f})"
 
 
-# ──────────────────────────────
-# Skew
-# ──────────────────────────────
 def test_high_amplitude_skew_magnitude_check(stereo_audio_sample: Audio) -> None:
     """high_amplitude_skew_magnitude_check returns False."""
     m = amplitude_skew_metric(stereo_audio_sample)
@@ -200,9 +176,6 @@ def test_high_amplitude_skew_magnitude_check(stereo_audio_sample: Audio) -> None
     ), f"high_amplitude_skew_magnitude_check flagged (skew={m:.4f})"
 
 
-# ──────────────────────────────
-# Crest factor
-# ──────────────────────────────
 def test_high_crest_factor_check(stereo_audio_sample: Audio) -> None:
     """high_crest_factor_check returns False."""
     m = crest_factor_metric(stereo_audio_sample)
@@ -215,9 +188,6 @@ def test_low_crest_factor_check(stereo_audio_sample: Audio) -> None:
     assert not low_crest_factor_check(stereo_audio_sample), f"low_crest_factor_check flagged (crest={m:.2f})"
 
 
-# ──────────────────────────────
-# Dynamic range
-# ──────────────────────────────
 def test_very_low_dynamic_range_check(stereo_audio_sample: Audio) -> None:
     """very_low_dynamic_range_check returns False."""
     m = dynamic_range_metric(stereo_audio_sample)
@@ -234,9 +204,6 @@ def test_very_high_dynamic_range_check(stereo_audio_sample: Audio) -> None:
     ), f"very_high_dynamic_range_check flagged (dyn_range={m:.4f})"
 
 
-# ──────────────────────────────
-# MAD
-# ──────────────────────────────
 def test_very_low_mean_absolute_deviation_check(stereo_audio_sample: Audio) -> None:
     """very_low_mean_absolute_deviation_check returns False."""
     m = mean_absolute_deviation_metric(stereo_audio_sample)
@@ -253,9 +220,6 @@ def test_very_high_mean_absolute_deviation_check(stereo_audio_sample: Audio) -> 
     ), f"very_high_mean_absolute_deviation_check flagged (MAD={m:.6f})"
 
 
-# ──────────────────────────────
-# Peak SNR
-# ──────────────────────────────
 def test_very_low_peak_snr_from_spectral_check(stereo_audio_sample: Audio) -> None:
     """very_low_peak_snr_from_spectral_check returns False."""
     m = peak_snr_from_spectral_metric(stereo_audio_sample)
@@ -280,18 +244,12 @@ def test_very_high_peak_snr_from_spectral_check(stereo_audio_sample: Audio) -> N
     ), f"very_high_peak_snr_from_spectral_check flagged (SNR={m:.2f} dB)"
 
 
-# ──────────────────────────────
-# Phase correlation
-# ──────────────────────────────
 def test_low_phase_correlation_check(stereo_audio_sample: Audio) -> None:
     """low_phase_correlation_check returns False."""
     m = phase_correlation_metric(stereo_audio_sample)
     assert not low_phase_correlation_check(stereo_audio_sample), f"low_phase_correlation_check flagged (corr={m:.4f})"
 
 
-# ──────────────────────────────
-# Segmental SNR (spectral-gating)
-# ──────────────────────────────
 def test_low_spectral_gating_snr_check(stereo_audio_sample: Audio) -> None:
     """low_spectral_gating_snr_check returns False."""
     m = spectral_gating_snr_metric(stereo_audio_sample)
@@ -308,9 +266,6 @@ def test_high_spectral_gating_snr_check(stereo_audio_sample: Audio) -> None:
     ), f"high_spectral_gating_snr_check flagged (SNR={m:.2f} dB)"
 
 
-# ──────────────────────────────
-# Leading and trailing silence
-# ──────────────────────────────
 def test_high_proportion_silence_at_beginning_check(stereo_audio_sample: Audio) -> None:
     """high_proportion_silence_at_beginning_check returns False."""
     m = proportion_silence_at_beginning_metric(stereo_audio_sample)
@@ -327,9 +282,6 @@ def test_high_proportion_silence_at_end_check(stereo_audio_sample: Audio) -> Non
     ), f"high_proportion_silence_at_end_check flagged (trail_silence={m:.4f})"
 
 
-# ──────────────────────────────
-# RMS energy
-# ──────────────────────────────
 def test_very_low_root_mean_square_energy_check(stereo_audio_sample: Audio) -> None:
     """very_low_root_mean_square_energy_check returns False."""
     m = root_mean_square_energy_metric(stereo_audio_sample)
@@ -346,9 +298,6 @@ def test_very_high_root_mean_square_energy_check(stereo_audio_sample: Audio) -> 
     ), f"very_high_root_mean_square_energy_check flagged (RMS={m:.5f})"
 
 
-# ──────────────────────────────
-# Entropy
-# ──────────────────────────────
 def test_low_shannon_entropy_amplitude_check(stereo_audio_sample: Audio) -> None:
     """low_shannon_entropy_amplitude_check returns False."""
     m = shannon_entropy_amplitude_metric(stereo_audio_sample)
@@ -365,9 +314,6 @@ def test_high_shannon_entropy_amplitude_check(stereo_audio_sample: Audio) -> Non
     ), f"high_shannon_entropy_amplitude_check flagged (entropy={m:.2f} bits)"
 
 
-# ──────────────────────────────
-# Variance
-# ──────────────────────────────
 def test_low_signal_variance_check(stereo_audio_sample: Audio) -> None:
     """low_signal_variance_check returns False."""
     m = signal_variance_metric(stereo_audio_sample)
@@ -380,9 +326,6 @@ def test_high_signal_variance_check(stereo_audio_sample: Audio) -> None:
     assert not high_signal_variance_check(stereo_audio_sample), f"high_signal_variance_check flagged (var={m:.6f})"
 
 
-# ──────────────────────────────
-# Zero-crossing rate
-# ──────────────────────────────
 def test_low_zero_crossing_rate_metric_check(stereo_audio_sample: Audio) -> None:
     """low_zero_crossing_rate_metric_check returns False."""
     m = zero_crossing_rate_metric(stereo_audio_sample)
