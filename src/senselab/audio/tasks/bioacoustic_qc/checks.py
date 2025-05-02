@@ -1,4 +1,4 @@
-"""Audio Quality Control Checks.
+"""Contains tests for bioacoustic quality control checks.
 
 This module defines a set of boolean functions that evaluate individual `Audio` objects
 based on specific quality metrics (e.g., clipping, dynamic range, SNR, entropy).
