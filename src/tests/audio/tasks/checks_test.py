@@ -45,153 +45,142 @@ from senselab.audio.tasks.bioacoustic_qc.checks import (
     very_high_zero_crossing_rate_metric_check,
 )
 
-# ---------------------------------------------------------------------
-# Helper that makes one test function per check
-# ---------------------------------------------------------------------
-def _assert_false(check_fn: callable, audio: Audio) -> None:
-    """Assert the QC check returns False for `audio`."""
-    assert not check_fn(audio), f"{check_fn.__name__} flagged stereo_audio_sample"
-
-
-# ---------------------------------------------------------------------
-# === Individual smoke tests (auto-generated) ===
-# ---------------------------------------------------------------------
 
 def test_very_low_headroom_check(stereo_audio_sample: Audio):
-    _assert_false(very_low_headroom_check, stereo_audio_sample)
+    assert not very_low_headroom_check(stereo_audio_sample), "very_low_headroom_check flagged stereo_audio_sample"
 
 
 def test_very_high_headroom_check(stereo_audio_sample: Audio):
-    _assert_false(very_high_headroom_check, stereo_audio_sample)
+    assert not very_high_headroom_check(stereo_audio_sample), "very_high_headroom_check flagged stereo_audio_sample"
 
 
 def test_very_low_amplitude_interquartile_range_check(stereo_audio_sample: Audio):
-    _assert_false(very_low_amplitude_interquartile_range_check, stereo_audio_sample)
+    assert not very_low_amplitude_interquartile_range_check(stereo_audio_sample), "very_low_amplitude_interquartile_range_check flagged stereo_audio_sample"
 
 
 def test_very_high_amplitude_interquartile_range_check(stereo_audio_sample: Audio):
-    _assert_false(very_high_amplitude_interquartile_range_check, stereo_audio_sample)
+    assert not very_high_amplitude_interquartile_range_check(stereo_audio_sample), "very_high_amplitude_interquartile_range_check flagged stereo_audio_sample"
 
 
 def test_very_low_amplitude_kurtosis_check(stereo_audio_sample: Audio):
-    _assert_false(very_low_amplitude_kurtosis_check, stereo_audio_sample)
+    assert not very_low_amplitude_kurtosis_check(stereo_audio_sample), "very_low_amplitude_kurtosis_check flagged stereo_audio_sample"
 
 
 def test_very_high_amplitude_kurtosis_check(stereo_audio_sample: Audio):
-    _assert_false(very_high_amplitude_kurtosis_check, stereo_audio_sample)
+    assert not very_high_amplitude_kurtosis_check(stereo_audio_sample), "very_high_amplitude_kurtosis_check flagged stereo_audio_sample"
 
 
 def test_very_low_amplitude_modulation_depth_check(stereo_audio_sample: Audio):
-    _assert_false(very_low_amplitude_modulation_depth_check, stereo_audio_sample)
+    assert not very_low_amplitude_modulation_depth_check(stereo_audio_sample), "very_low_amplitude_modulation_depth_check flagged stereo_audio_sample"
 
 
 def test_low_amplitude_modulation_depth_check(stereo_audio_sample: Audio):
-    _assert_false(low_amplitude_modulation_depth_check, stereo_audio_sample)
+    assert not low_amplitude_modulation_depth_check(stereo_audio_sample), "low_amplitude_modulation_depth_check flagged stereo_audio_sample"
 
 
 def test_high_proportion_clipped_check(stereo_audio_sample: Audio):
-    _assert_false(high_proportion_clipped_check, stereo_audio_sample)
+    assert not high_proportion_clipped_check(stereo_audio_sample), "high_proportion_clipped_check flagged stereo_audio_sample"
 
 
 def test_clipping_present_check(stereo_audio_sample: Audio):
-    _assert_false(clipping_present_check, stereo_audio_sample)
+    assert not clipping_present_check(stereo_audio_sample), "clipping_present_check flagged stereo_audio_sample"
 
 
 def test_completely_silent_check(stereo_audio_sample: Audio):
-    _assert_false(completely_silent_check, stereo_audio_sample)
+    assert not completely_silent_check(stereo_audio_sample), "completely_silent_check flagged stereo_audio_sample"
 
 
 def test_mostly_silent_check(stereo_audio_sample: Audio):
-    _assert_false(mostly_silent_check, stereo_audio_sample)
+    assert not mostly_silent_check(stereo_audio_sample), "mostly_silent_check flagged stereo_audio_sample"
 
 
 def test_high_amplitude_skew_magnitude_check(stereo_audio_sample: Audio):
-    _assert_false(high_amplitude_skew_magnitude_check, stereo_audio_sample)
+    assert not high_amplitude_skew_magnitude_check(stereo_audio_sample), "high_amplitude_skew_magnitude_check flagged stereo_audio_sample"
 
 
 def test_high_crest_factor_check(stereo_audio_sample: Audio):
-    _assert_false(high_crest_factor_check, stereo_audio_sample)
+    assert not high_crest_factor_check(stereo_audio_sample), "high_crest_factor_check flagged stereo_audio_sample"
 
 
 def test_low_crest_factor_check(stereo_audio_sample: Audio):
-    _assert_false(low_crest_factor_check, stereo_audio_sample)
+    assert not low_crest_factor_check(stereo_audio_sample), "low_crest_factor_check flagged stereo_audio_sample"
 
 
 def test_very_low_dynamic_range_check(stereo_audio_sample: Audio):
-    _assert_false(very_low_dynamic_range_check, stereo_audio_sample)
+    assert not very_low_dynamic_range_check(stereo_audio_sample), "very_low_dynamic_range_check flagged stereo_audio_sample"
 
 
 def test_very_high_dynamic_range_check(stereo_audio_sample: Audio):
-    _assert_false(very_high_dynamic_range_check, stereo_audio_sample)
+    assert not very_high_dynamic_range_check(stereo_audio_sample), "very_high_dynamic_range_check flagged stereo_audio_sample"
 
 
 def test_very_low_mean_absolute_deviation_check(stereo_audio_sample: Audio):
-    _assert_false(very_low_mean_absolute_deviation_check, stereo_audio_sample)
+    assert not very_low_mean_absolute_deviation_check(stereo_audio_sample), "very_low_mean_absolute_deviation_check flagged stereo_audio_sample"
 
 
 def test_very_high_mean_absolute_deviation_check(stereo_audio_sample: Audio):
-    _assert_false(very_high_mean_absolute_deviation_check, stereo_audio_sample)
+    assert not very_high_mean_absolute_deviation_check(stereo_audio_sample), "very_high_mean_absolute_deviation_check flagged stereo_audio_sample"
 
 
 def test_very_low_peak_snr_from_spectral_check(stereo_audio_sample: Audio):
-    _assert_false(very_low_peak_snr_from_spectral_check, stereo_audio_sample)
+    assert not very_low_peak_snr_from_spectral_check(stereo_audio_sample), "very_low_peak_snr_from_spectral_check flagged stereo_audio_sample"
 
 
 def test_low_phase_correlation_check(stereo_audio_sample: Audio):
-    _assert_false(low_phase_correlation_check, stereo_audio_sample)
+    assert not low_phase_correlation_check(stereo_audio_sample), "low_phase_correlation_check flagged stereo_audio_sample"
 
 
 def test_low_spectral_gating_snr_check(stereo_audio_sample: Audio):
-    _assert_false(low_spectral_gating_snr_check, stereo_audio_sample)
+    assert not low_spectral_gating_snr_check(stereo_audio_sample), "low_spectral_gating_snr_check flagged stereo_audio_sample"
 
 
 def test_high_spectral_gating_snr_check(stereo_audio_sample: Audio):
-    _assert_false(high_spectral_gating_snr_check, stereo_audio_sample)
+    assert not high_spectral_gating_snr_check(stereo_audio_sample), "high_spectral_gating_snr_check flagged stereo_audio_sample"
 
 
 def test_very_high_peak_snr_from_spectral_check(stereo_audio_sample: Audio):
-    _assert_false(very_high_peak_snr_from_spectral_check, stereo_audio_sample)
+    assert not very_high_peak_snr_from_spectral_check(stereo_audio_sample), "very_high_peak_snr_from_spectral_check flagged stereo_audio_sample"
 
 
 def test_high_proportion_silence_at_beginning_check(stereo_audio_sample: Audio):
-    _assert_false(high_proportion_silence_at_beginning_check, stereo_audio_sample)
+    assert not high_proportion_silence_at_beginning_check(stereo_audio_sample), "high_proportion_silence_at_beginning_check flagged stereo_audio_sample"
 
 
 def test_high_proportion_silence_at_end_check(stereo_audio_sample: Audio):
-    _assert_false(high_proportion_silence_at_end_check, stereo_audio_sample)
+    assert not high_proportion_silence_at_end_check(stereo_audio_sample), "high_proportion_silence_at_end_check flagged stereo_audio_sample"
 
 
 def test_very_low_root_mean_square_energy_check(stereo_audio_sample: Audio):
-    _assert_false(very_low_root_mean_square_energy_check, stereo_audio_sample)
+    assert not very_low_root_mean_square_energy_check(stereo_audio_sample), "very_low_root_mean_square_energy_check flagged stereo_audio_sample"
 
 
 def test_very_high_root_mean_square_energy_check(stereo_audio_sample: Audio):
-    _assert_false(very_high_root_mean_square_energy_check, stereo_audio_sample)
+    assert not very_high_root_mean_square_energy_check(stereo_audio_sample), "very_high_root_mean_square_energy_check flagged stereo_audio_sample"
 
 
 def test_low_shannon_entropy_amplitude_check(stereo_audio_sample: Audio):
-    _assert_false(low_shannon_entropy_amplitude_check, stereo_audio_sample)
+    assert not low_shannon_entropy_amplitude_check(stereo_audio_sample), "low_shannon_entropy_amplitude_check flagged stereo_audio_sample"
 
 
 def test_high_shannon_entropy_amplitude_check(stereo_audio_sample: Audio):
-    _assert_false(high_shannon_entropy_amplitude_check, stereo_audio_sample)
+    assert not high_shannon_entropy_amplitude_check(stereo_audio_sample), "high_shannon_entropy_amplitude_check flagged stereo_audio_sample"
 
 
 def test_low_signal_variance_check(stereo_audio_sample: Audio):
-    _assert_false(low_signal_variance_check, stereo_audio_sample)
+    assert not low_signal_variance_check(stereo_audio_sample), "low_signal_variance_check flagged stereo_audio_sample"
 
 
 def test_high_signal_variance_check(stereo_audio_sample: Audio):
-    _assert_false(high_signal_variance_check, stereo_audio_sample)
+    assert not high_signal_variance_check(stereo_audio_sample), "high_signal_variance_check flagged stereo_audio_sample"
 
 
 def test_low_zero_crossing_rate_metric_check(stereo_audio_sample: Audio):
-    _assert_false(low_zero_crossing_rate_metric_check, stereo_audio_sample)
+    assert not low_zero_crossing_rate_metric_check(stereo_audio_sample), "low_zero_crossing_rate_metric_check flagged stereo_audio_sample"
 
 
 def test_high_zero_crossing_rate_metric_check(stereo_audio_sample: Audio):
-    _assert_false(high_zero_crossing_rate_metric_check, stereo_audio_sample)
+    assert not high_zero_crossing_rate_metric_check(stereo_audio_sample), "high_zero_crossing_rate_metric_check flagged stereo_audio_sample"
 
 
 def test_very_high_zero_crossing_rate_metric_check(stereo_audio_sample: Audio):
-    _assert_false(very_high_zero_crossing_rate_metric_check, stereo_audio_sample)
+    assert not very_high_zero_crossing_rate_metric_check(stereo_audio_sample), "very_high_zero_crossing_rate_metric_check flagged stereo_audio_sample"
