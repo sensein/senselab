@@ -34,21 +34,6 @@ def audio_length_positive_check(audio: Audio) -> bool:
     return audio.waveform.numel() != 0
 
 
-def proportion_clipped_check(audio: Audio, threshold: float = 0.0001) -> bool:
-    """Checks if an Audio object has less than 0.01% clipped samples."""
-    return proportion_clipped_metric(audio) < threshold
-
-
-def completely_silent_check(audio: Audio, silence_threshold: float = 0.01) -> bool:
-    """Checks if an Audio object is completely silent."""
-    return proportion_silent_metric(audio, silence_threshold=silence_threshold) < 1.0
-
-
-def mostly_silent_check(audio: Audio, silence_threshold: float = 0.01, max_silent_proportion: float = 0.95) -> bool:
-    """Checks if an Audio object is completely silent."""
-    return proportion_silent_metric(audio, silence_threshold=silence_threshold) < max_silent_proportion
-
-
 def very_low_headroom_check(audio: Audio, headroom_threshold: float = 0.005) -> bool:
     """Checks if an Audio object has very low headroom."""
     return amplitude_headroom_metric(audio) < headroom_threshold
@@ -71,12 +56,12 @@ def very_high_amplitude_interquartile_range_check(audio: Audio, threshold: float
 
 def very_low_amplitude_kurtosis_check(audio: Audio, threshold: float = -100) -> bool:
     """Checks if an Audio object has very low amplitude kurtosis."""
-    return amplitude_interquartile_range_metric(audio) < threshold
+    return amplitude_kurtosis_metric(audio) < threshold
 
 
 def very_high_amplitude_kurtosis_check(audio: Audio, threshold: float = 100) -> bool:
     """Checks if an Audio object has very high amplitude kurtosis."""
-    return amplitude_interquartile_range_metric(audio) > threshold
+    return amplitude_kurtosis_metric(audio) > threshold
 
 
 def very_low_amplitude_modulation_depth_check(audio: Audio, threshold: float = 0.1) -> bool:
@@ -88,3 +73,18 @@ def low_amplitude_modulation_depth_check(audio: Audio, min: float = 0.1, max: fl
     """Checks if an Audio object has very low amplitude modulation depth."""
     modulation_depth = amplitude_modulation_depth_metric(audio)
     return min <= modulation_depth and modulation_depth < max
+
+
+def proportion_clipped_check(audio: Audio, threshold: float = 0.0001) -> bool:
+    """Checks if an Audio object has less than 0.01% clipped samples."""
+    return proportion_clipped_metric(audio) < threshold
+
+
+def completely_silent_check(audio: Audio, silence_threshold: float = 0.01) -> bool:
+    """Checks if an Audio object is completely silent."""
+    return proportion_silent_metric(audio, silence_threshold=silence_threshold) < 1.0
+
+
+def mostly_silent_check(audio: Audio, silence_threshold: float = 0.01, max_silent_proportion: float = 0.95) -> bool:
+    """Checks if an Audio object is completely silent."""
+    return proportion_silent_metric(audio, silence_threshold=silence_threshold) < max_silent_proportion
