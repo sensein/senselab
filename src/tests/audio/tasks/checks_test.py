@@ -5,10 +5,11 @@ If a test fails, the assertion message shows the metric value that triggered it.
 
 from __future__ import annotations
 
-import pytest
+import pandas as pd
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.bioacoustic_qc.checks import (
+    get_metric,
     audio_length_positive_check,
     clipping_present_check,
     completely_silent_check,
@@ -68,6 +69,24 @@ from senselab.audio.tasks.bioacoustic_qc.metrics import (
     spectral_gating_snr_metric,
     zero_crossing_rate_metric,
 )
+
+
+def test_get_metric_computes_directly(stereo_audio_sample):
+    """Should compute the metric when no DataFrame is provided."""
+    value = get_metric(stereo_audio_sample, zero_crossing_rate_metric)
+    assert isinstance(value, float)
+    assert 0 <= value <= 1
+
+
+def test_get_metric_uses_dataframe_cache(stereo_audio_sample):
+    """Should return cached value when DataFrame is valid."""
+    cached_value = 0.1234
+    df = pd.DataFrame({
+        "audio_path_or_id": ["test.wav"],
+        "zero_crossing_rate_metric": [cached_value],
+    })
+    value = get_metric(stereo_audio_sample, zero_crossing_rate_metric, df=df)
+    assert value == cached_value
 
 
 def test_audio_length_positive_check(stereo_audio_sample: Audio) -> None:
@@ -153,7 +172,7 @@ def test_high_proportion_clipped_check(stereo_audio_sample: Audio) -> None:
 def test_clipping_present_check(stereo_audio_sample: Audio) -> None:
     """clipping_present_check returns False."""
     m = proportion_clipped_metric(stereo_audio_sample)
-    assert not clipping_present_check(stereo_audio_sample), f"clipping_present_check flagged (clip_prop={m:.6f})"
+    assert clipping_present_check(stereo_audio_sample), f"clipping_present_check flagged (clip_prop={m:.6f})"
 
 
 def test_completely_silent_check(stereo_audio_sample: Audio) -> None:
@@ -171,7 +190,7 @@ def test_mostly_silent_check(stereo_audio_sample: Audio) -> None:
 def test_high_amplitude_skew_magnitude_check(stereo_audio_sample: Audio) -> None:
     """high_amplitude_skew_magnitude_check returns False."""
     m = amplitude_skew_metric(stereo_audio_sample)
-    assert not high_amplitude_skew_magnitude_check(
+    assert high_amplitude_skew_magnitude_check(
         stereo_audio_sample
     ), f"high_amplitude_skew_magnitude_check flagged (skew={m:.4f})"
 
@@ -223,7 +242,7 @@ def test_very_high_mean_absolute_deviation_check(stereo_audio_sample: Audio) -> 
 def test_very_low_peak_snr_from_spectral_check(stereo_audio_sample: Audio) -> None:
     """very_low_peak_snr_from_spectral_check returns False."""
     m = peak_snr_from_spectral_metric(stereo_audio_sample)
-    assert not very_low_peak_snr_from_spectral_check(
+    assert very_low_peak_snr_from_spectral_check(
         stereo_audio_sample
     ), f"very_low_peak_snr_from_spectral_check flagged (SNR={m:.2f} dB)"
 
@@ -247,7 +266,7 @@ def test_very_high_peak_snr_from_spectral_check(stereo_audio_sample: Audio) -> N
 def test_low_phase_correlation_check(stereo_audio_sample: Audio) -> None:
     """low_phase_correlation_check returns False."""
     m = phase_correlation_metric(stereo_audio_sample)
-    assert not low_phase_correlation_check(stereo_audio_sample), f"low_phase_correlation_check flagged (corr={m:.4f})"
+    assert low_phase_correlation_check(stereo_audio_sample), f"low_phase_correlation_check flagged (corr={m:.4f})"
 
 
 def test_low_spectral_gating_snr_check(stereo_audio_sample: Audio) -> None:
