@@ -353,26 +353,27 @@ def high_spectral_gating_snr_check(
 
 
 
-def low_zero_crossing_rate_metric_check(audio: Audio, threshold: float = 0.01) -> bool:
-    """Returns True if zero-crossing rate is below the specified threshold (possibly silent or DC offset)."""
-    return zero_crossing_rate_metric(audio) < threshold
+def low_zero_crossing_rate_metric_check(
+    audio: Audio,
+    threshold: float = 0.01,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    return get_metric(audio, zero_crossing_rate_metric, df) < threshold
 
 
-def high_zero_crossing_rate_metric_check(audio: Audio, lower: float = 0.15, upper: float = 0.3) -> bool:
-    """Returns True if zero-crossing rate is between the specified lower and upper thresholds.
-
-    Args:
-        audio (Audio): The SenseLab Audio object.
-        lower (float): Lower bound of high ZCR range (inclusive).
-        upper (float): Upper bound of high ZCR range (exclusive).
-
-    Returns:
-        bool: True if lower <= ZCR < upper, False otherwise.
-    """
-    zcr = zero_crossing_rate_metric(audio)
+def high_zero_crossing_rate_metric_check(
+    audio: Audio,
+    lower: float = 0.15,
+    upper: float = 0.3,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    zcr = get_metric(audio, zero_crossing_rate_metric, df)
     return lower <= zcr < upper
 
 
-def very_high_zero_crossing_rate_metric_check(audio: Audio, threshold: float = 0.3) -> bool:
-    """Returns True if zero-crossing rate is far above normal range (likely noise or corrupted)."""
-    return zero_crossing_rate_metric(audio) > threshold
+def very_high_zero_crossing_rate_metric_check(
+    audio: Audio,
+    threshold: float = 0.3,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    return get_metric(audio, zero_crossing_rate_metric, df) > threshold
