@@ -140,49 +140,17 @@ def proportion_clipped_metric(audio: Audio, clip_threshold: float = 1.0) -> floa
     Returns:
         float: Proportion of samples that are clipped.
     """
-    if not clipping_present_metric(audio):
-        return 0.0
-    else:
-        waveform = audio.waveform
-        assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
-        waveform = waveform.abs()
-
-        clipped_proportion_by_channel = []
-        for channel in waveform:
-            max_val = torch.max(channel)
-            clipped_samples = torch.isclose(channel, max_val).sum().item()
-            clipped_proportion_by_channel.append(clipped_samples / channel.numel())
-
-        return float(np.mean(clipped_proportion_by_channel))
-
-
-def clipping_present_metric(audio: Audio, plateau_length: int = 5) -> bool:
-    """Detects clipping by looking for flat plateaus of high-amplitude samples.
-
-    Args:
-        audio (Audio): The SenseLab Audio object.
-        plateau_length (float): Length of maximum-valued samples that determine clipping status.
-
-    Returns:
-        bool: True if clipping is present, False otherwise.
-    """
     waveform = audio.waveform
     assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
     waveform = waveform.abs()
-    if (waveform >= 1.0).any().item():
-        return True
 
+    clipped_proportion_by_channel = []
     for channel in waveform:
-        count = 0
         max_val = torch.max(channel)
-        for val in channel:
-            if torch.isclose(val, max_val):
-                count += 1
-            else:
-                count = 0
-            if count >= plateau_length:
-                return True
-    return False
+        clipped_samples = torch.isclose(channel, max_val).sum().item()
+        clipped_proportion_by_channel.append(clipped_samples / channel.numel())
+
+    return float(np.mean(clipped_proportion_by_channel))
 
 
 def amplitude_modulation_depth_metric(audio: Audio) -> float:
