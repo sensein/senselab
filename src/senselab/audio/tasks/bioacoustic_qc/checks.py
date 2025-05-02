@@ -230,12 +230,12 @@ def low_amplitude_modulation_depth_check(
     return min <= depth < max
 
 
-def proportion_clipped_check(
+def high_proportion_clipped_check(
     audio: Audio,
     threshold: float = 0.0001,
     df: Optional[pd.DataFrame] = None,
 ) -> bool:
-    """Pass audio with at most ``threshold`` clipped samples.
+    """Detect audio with a high proportion of clipped samples.
 
     Args:
         audio: Audio object to evaluate.
@@ -245,7 +245,7 @@ def proportion_clipped_check(
     Returns:
         True when clipped proportion < ``threshold``.
     """
-    return get_metric(audio, proportion_clipped_metric, df) < threshold
+    return get_metric(audio, proportion_clipped_metric, df) > threshold
 
 
 def clipping_present_check(
