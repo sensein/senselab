@@ -139,3 +139,19 @@ def low_crest_factor_check(audio: Audio, threshold: float = 1.5) -> bool:
         threshold (float): Minimum acceptable crest factor.
     """
     return crest_factor_metric(audio) <= threshold
+
+
+def very_low_dynamic_range_check(audio: Audio, threshold: float = 0.1) -> bool:
+    """Checks whether the dynamic range is too low.
+
+    Returns True if dynamic range < threshold.
+    """
+    return dynamic_range_metric(audio) < threshold
+
+
+def very_high_dynamic_range_check(audio: Audio, threshold: float = 1.9) -> bool:
+    """Checks whether the dynamic range is too high.
+
+    Returns True if dynamic range > threshold.
+    """
+    return dynamic_range_metric(audio) > threshold
