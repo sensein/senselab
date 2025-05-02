@@ -102,3 +102,16 @@ def completely_silent_check(audio: Audio, silence_threshold: float = 0.01) -> bo
 def mostly_silent_check(audio: Audio, silence_threshold: float = 0.01, max_silent_proportion: float = 0.95) -> bool:
     """Checks if an Audio object is completely silent."""
     return proportion_silent_metric(audio, silence_threshold=silence_threshold) < max_silent_proportion
+
+
+def high_amplitude_skew_magnitude_check(audio: Audio, magnitude: float = 5.0) -> bool:
+    """Checks whether the absolute amplitude skew is within a specified magnitude.
+
+    Args:
+        audio (Audio): The SenseLab Audio object.
+        magnitude (float): Maximum acceptable absolute skew.
+
+    Returns:
+        bool: True if abs(skew) <= magnitude, False otherwise.
+    """
+    return abs(amplitude_skew_metric(audio)) <= magnitude
