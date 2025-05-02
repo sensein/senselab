@@ -24,8 +24,22 @@ from senselab.audio.tasks.bioacoustic_qc.metrics import (
     amplitude_interquartile_range_metric,
     amplitude_kurtosis_metric,
     amplitude_modulation_depth_metric,
+    amplitude_skew_metric,
+    clipping_present_metric,
+    crest_factor_metric,
+    dynamic_range_metric,
+    mean_absolute_deviation_metric,
+    peak_snr_from_spectral_metric,
+    phase_correlation_metric,
     proportion_clipped_metric,
+    proportion_silence_at_beginning_metric,
+    proportion_silence_at_end_metric,
     proportion_silent_metric,
+    root_mean_square_energy_metric,
+    shannon_entropy_amplitude_metric,
+    signal_variance_metric,
+    spectral_gating_snr_metric,
+    zero_crossing_rate_metric,
 )
 
 
