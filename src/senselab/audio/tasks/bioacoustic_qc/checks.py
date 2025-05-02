@@ -202,3 +202,16 @@ def low_phase_correlation_check(audio: Audio, threshold: float = 0.99) -> bool:
         bool: True if phase correlation < threshold, False otherwise.
     """
     return phase_correlation_metric(audio) < threshold
+
+
+def high_proportion_silence_at_beginning_check(audio: Audio, threshold: float = 0.2) -> bool:
+    """Returns True if the proportion of silence at the beginning exceeds the threshold.
+
+    Args:
+        audio (Audio): The SenseLab Audio object.
+        threshold (float): Maximum acceptable proportion of silence at start.
+
+    Returns:
+        bool: True if proportion_silence_at_beginning > threshold, False otherwise.
+    """
+    return proportion_silence_at_beginning_metric(audio) > threshold
