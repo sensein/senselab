@@ -302,30 +302,22 @@ def very_high_root_mean_square_energy_check(
     return get_metric(audio, root_mean_square_energy_metric, df) > threshold
 
 
-def low_shannon_entropy_amplitude_check(audio: Audio, threshold: float = 2.0) -> bool:
-    """Returns True if Shannon entropy of amplitude is below the specified threshold.
 
-    Args:
-        audio (Audio): The SenseLab Audio object.
-        threshold (float): Minimum acceptable entropy (bits).
-
-    Returns:
-        bool: True if entropy < threshold, False otherwise.
-    """
-    return shannon_entropy_amplitude_metric(audio) < threshold
+def low_shannon_entropy_amplitude_check(
+    audio: Audio,
+    threshold: float = 2.0,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    return get_metric(audio, shannon_entropy_amplitude_metric, df) < threshold
 
 
-def high_shannon_entropy_amplitude_check(audio: Audio, threshold: float = 7.5) -> bool:
-    """Returns True if Shannon entropy of amplitude is above the specified threshold.
+def high_shannon_entropy_amplitude_check(
+    audio: Audio,
+    threshold: float = 7.5,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    return get_metric(audio, shannon_entropy_amplitude_metric, df) > threshold
 
-    Args:
-        audio (Audio): The SenseLab Audio object.
-        threshold (float): Maximum acceptable entropy (bits).
-
-    Returns:
-        bool: True if entropy > threshold, False otherwise.
-    """
-    return shannon_entropy_amplitude_metric(audio) > threshold
 
 
 def low_signal_variance_check(audio: Audio, threshold: float = 1e-4) -> bool:
