@@ -158,14 +158,20 @@ def clipping_present_check(
 
 
 
-def completely_silent_check(audio: Audio, silence_threshold: float = 0.01) -> bool:
-    """Checks if an Audio object is completely silent."""
-    return proportion_silent_metric(audio, silence_threshold=silence_threshold) < 1.0
+def completely_silent_check(
+    audio: Audio,
+    silent_proportion: float = 1.0,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    return get_metric(audio, proportion_silent_metric, df) >= silent_proportion
 
 
-def mostly_silent_check(audio: Audio, silence_threshold: float = 0.01, max_silent_proportion: float = 0.95) -> bool:
-    """Checks if an Audio object is completely silent."""
-    return proportion_silent_metric(audio, silence_threshold=silence_threshold) < max_silent_proportion
+def mostly_silent_check(
+    audio: Audio,
+    silent_proportion: float = 0.95,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    return get_metric(audio, proportion_silent_metric, df) > silent_proportion
 
 
 def high_amplitude_skew_magnitude_check(audio: Audio, magnitude: float = 5.0) -> bool:
