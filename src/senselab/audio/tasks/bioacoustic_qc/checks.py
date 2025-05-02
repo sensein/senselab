@@ -43,9 +43,6 @@ from senselab.audio.tasks.bioacoustic_qc.metrics import (
 )
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Generic helper
-# ──────────────────────────────────────────────────────────────────────
 def get_metric(
     audio: Audio,
     metric_func: Callable[[Audio], float],
@@ -78,9 +75,6 @@ def get_metric(
     return metric_func(audio)
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Simple sanity check
-# ──────────────────────────────────────────────────────────────────────
 def audio_length_positive_check(audio: Audio) -> bool:
     """Check that the waveform is not empty.
 
@@ -93,9 +87,6 @@ def audio_length_positive_check(audio: Audio) -> bool:
     return audio.waveform.numel() != 0
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Headroom checks
-# ──────────────────────────────────────────────────────────────────────
 def very_low_headroom_check(
     audio: Audio,
     headroom_threshold: float = 0.005,
@@ -133,9 +124,6 @@ def very_high_headroom_check(
     return get_metric(audio, amplitude_headroom_metric, df) > headroom_threshold
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Amplitude IQR
-# ──────────────────────────────────────────────────────────────────────
 def very_low_amplitude_interquartile_range_check(
     audio: Audio,
     threshold: float = 0.01,
@@ -172,9 +160,6 @@ def very_high_amplitude_interquartile_range_check(
     return get_metric(audio, amplitude_interquartile_range_metric, df) > threshold
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Amplitude kurtosis
-# ──────────────────────────────────────────────────────────────────────
 def very_low_amplitude_kurtosis_check(
     audio: Audio,
     threshold: float = -100,
@@ -211,9 +196,6 @@ def very_high_amplitude_kurtosis_check(
     return get_metric(audio, amplitude_kurtosis_metric, df) > threshold
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Amplitude modulation depth
-# ──────────────────────────────────────────────────────────────────────
 def very_low_amplitude_modulation_depth_check(
     audio: Audio,
     threshold: float = 0.1,
@@ -253,9 +235,6 @@ def low_amplitude_modulation_depth_check(
     return min <= depth < max
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Clipping metrics
-# ──────────────────────────────────────────────────────────────────────
 def proportion_clipped_check(
     audio: Audio,
     threshold: float = 0.0001,
@@ -290,9 +269,6 @@ def clipping_present_check(
     return get_metric(audio, proportion_clipped_metric, df) > 0
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Silence proportion (overall)
-# ──────────────────────────────────────────────────────────────────────
 def completely_silent_check(
     audio: Audio,
     silent_proportion: float = 1.0,
@@ -331,9 +307,6 @@ def mostly_silent_check(
     return get_metric(audio, proportion_silent_metric, df) > silent_proportion
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Amplitude skew magnitude
-# ──────────────────────────────────────────────────────────────────────
 def high_amplitude_skew_magnitude_check(
     audio: Audio,
     magnitude: float = 5.0,
@@ -352,9 +325,6 @@ def high_amplitude_skew_magnitude_check(
     return abs(get_metric(audio, amplitude_skew_metric, df)) <= magnitude
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Crest factor
-# ──────────────────────────────────────────────────────────────────────
 def high_crest_factor_check(
     audio: Audio,
     threshold: float = 20.0,
@@ -391,9 +361,6 @@ def low_crest_factor_check(
     return get_metric(audio, crest_factor_metric, df) <= threshold
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Dynamic range
-# ──────────────────────────────────────────────────────────────────────
 def very_low_dynamic_range_check(
     audio: Audio,
     threshold: float = 0.1,
@@ -430,9 +397,6 @@ def very_high_dynamic_range_check(
     return get_metric(audio, dynamic_range_metric, df) > threshold
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Mean absolute deviation
-# ──────────────────────────────────────────────────────────────────────
 def very_low_mean_absolute_deviation_check(
     audio: Audio,
     threshold: float = 0.001,
@@ -469,9 +433,6 @@ def very_high_mean_absolute_deviation_check(
     return get_metric(audio, mean_absolute_deviation_metric, df) > threshold
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Peak-SNR (spectral)
-# ──────────────────────────────────────────────────────────────────────
 def very_low_peak_snr_from_spectral_check(
     audio: Audio,
     threshold: float = 10.0,
@@ -529,9 +490,6 @@ def very_high_peak_snr_from_spectral_check(
     return get_metric(audio, peak_snr_from_spectral_metric, df) > threshold
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Phase correlation
-# ──────────────────────────────────────────────────────────────────────
 def low_phase_correlation_check(
     audio: Audio,
     threshold: float = 0.99,
@@ -550,9 +508,6 @@ def low_phase_correlation_check(
     return get_metric(audio, phase_correlation_metric, df) < threshold
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Leading / trailing silence
-# ──────────────────────────────────────────────────────────────────────
 def high_proportion_silence_at_beginning_check(
     audio: Audio,
     threshold: float = 0.2,
@@ -588,9 +543,6 @@ def high_proportion_silence_at_end_check(
     return proportion_silence_at_end_metric(audio) > threshold
 
 
-# ──────────────────────────────────────────────────────────────────────
-# RMS energy
-# ──────────────────────────────────────────────────────────────────────
 def very_low_root_mean_square_energy_check(
     audio: Audio,
     threshold: float = 0.005,
@@ -627,9 +579,6 @@ def very_high_root_mean_square_energy_check(
     return get_metric(audio, root_mean_square_energy_metric, df) > threshold
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Shannon entropy of amplitude
-# ──────────────────────────────────────────────────────────────────────
 def low_shannon_entropy_amplitude_check(
     audio: Audio,
     threshold: float = 2.0,
@@ -666,9 +615,6 @@ def high_shannon_entropy_amplitude_check(
     return get_metric(audio, shannon_entropy_amplitude_metric, df) > threshold
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Signal variance
-# ──────────────────────────────────────────────────────────────────────
 def low_signal_variance_check(
     audio: Audio,
     threshold: float = 1e-4,
@@ -705,9 +651,6 @@ def high_signal_variance_check(
     return get_metric(audio, signal_variance_metric, df) > threshold
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Spectral-gating SNR
-# ──────────────────────────────────────────────────────────────────────
 def low_spectral_gating_snr_check(
     audio: Audio,
     threshold: float = 10.0,
@@ -744,9 +687,6 @@ def high_spectral_gating_snr_check(
     return get_metric(audio, spectral_gating_snr_metric, df) > threshold
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Zero-crossing rate
-# ──────────────────────────────────────────────────────────────────────
 def low_zero_crossing_rate_metric_check(
     audio: Audio,
     threshold: float = 0.01,
