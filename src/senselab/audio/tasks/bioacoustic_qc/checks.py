@@ -74,14 +74,20 @@ def audio_length_positive_check(audio: Audio) -> bool:
     return audio.waveform.numel() != 0
 
 
-def very_low_headroom_check(audio: Audio, headroom_threshold: float = 0.005) -> bool:
-    """Checks if an Audio object has very low headroom."""
-    return amplitude_headroom_metric(audio) < headroom_threshold
+def very_low_headroom_check(
+    audio: Audio,
+    headroom_threshold: float = 0.005,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    return get_metric(audio, amplitude_headroom_metric, df) < headroom_threshold
 
 
-def very_high_headroom_check(audio: Audio, headroom_threshold: float = 0.95) -> bool:
-    """Checks if an Audio object has very high headroom."""
-    return amplitude_headroom_metric(audio) > headroom_threshold
+def very_high_headroom_check(
+    audio: Audio,
+    headroom_threshold: float = 0.95,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    return get_metric(audio, amplitude_headroom_metric, df) > headroom_threshold
 
 
 def very_low_amplitude_interquartile_range_check(audio: Audio, threshold: float = 0.01) -> bool:
