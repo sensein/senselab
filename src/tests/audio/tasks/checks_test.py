@@ -1,7 +1,5 @@
 """Individual smoke tests: every QC check must be False on a clean stereo sample."""
 
-from __future__ import annotations
-
 import pytest
 
 from senselab.audio.data_structures import Audio
@@ -44,6 +42,7 @@ from senselab.audio.tasks.bioacoustic_qc.checks import (
     high_zero_crossing_rate_metric_check,
     very_high_zero_crossing_rate_metric_check,
 )
+
 
 def test_audio_length_positive_check(stereo_audio_sample: Audio):
     """audio_length_positive_check should succeed (return True) for a valid file."""
@@ -158,7 +157,9 @@ def test_very_low_peak_snr_from_spectral_check(stereo_audio_sample: Audio):
 
 def test_low_peak_snr_from_spectral_check(stereo_audio_sample: Audio):
     """A clean stereo sample should *not* fall in the “low SNR” band."""
-    assert not low_peak_snr_from_spectral_check(stereo_audio_sample), "low_peak_snr_from_spectral_check flagged stereo_audio_sample"
+    assert not low_peak_snr_from_spectral_check(
+        stereo_audio_sample
+    ), "low_peak_snr_from_spectral_check flagged stereo_audio_sample"
 
 
 def test_low_phase_correlation_check(stereo_audio_sample: Audio):
