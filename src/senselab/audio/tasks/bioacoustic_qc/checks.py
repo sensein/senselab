@@ -286,30 +286,20 @@ def high_proportion_silence_at_end_check(
 
 
 
-def very_low_root_mean_square_energy_check(audio: Audio, threshold: float = 0.005) -> bool:
-    """Returns True if root mean square energy is below the very low threshold.
-
-    Args:
-        audio (Audio): The SenseLab Audio object.
-        threshold (float): Minimum acceptable RMS energy.
-
-    Returns:
-        bool: True if RMS energy < threshold, False otherwise.
-    """
-    return root_mean_square_energy_metric(audio) < threshold
+def very_low_root_mean_square_energy_check(
+    audio: Audio,
+    threshold: float = 0.005,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    return get_metric(audio, root_mean_square_energy_metric, df) < threshold
 
 
-def very_high_root_mean_square_energy_check(audio: Audio, threshold: float = 0.5) -> bool:
-    """Returns True if root mean square energy is above the very high threshold.
-
-    Args:
-        audio (Audio): The SenseLab Audio object.
-        threshold (float): Maximum acceptable RMS energy.
-
-    Returns:
-        bool: True if RMS energy > threshold, False otherwise.
-    """
-    return root_mean_square_energy_metric(audio) > threshold
+def very_high_root_mean_square_energy_check(
+    audio: Audio,
+    threshold: float = 0.5,
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    return get_metric(audio, root_mean_square_energy_metric, df) > threshold
 
 
 def low_shannon_entropy_amplitude_check(audio: Audio, threshold: float = 2.0) -> bool:
