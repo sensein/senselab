@@ -56,7 +56,7 @@ def get_metric(
     Returns:
         The metric value for this ``audio`` item. If ``df`` is provided and
         contains the value, that cached value is returned; otherwise the metric
-        is computed directly.
+        is computed directly and optionally added to ``df``.
     """
     metric_name = metric_function.__name__
 
@@ -72,8 +72,14 @@ def get_metric(
         row = df[df["audio_path_or_id"] == audio_file_name]
         if not row.empty and metric_name in row.columns:
             metric = row[metric_name].iloc[0]
-    elif isinstance(audio_or_path, Audio):
-        return metric_function(audio_or_path)
+
+    if metric is None and isinstance(audio_or_path, Audio):
+        metric = metric_function(audio_or_path)
+        if df is not None and filepath:
+            audio_file_name = os.path.basename(filepath)
+            if metric_name not in df.columns:
+                df[metric_name] = pd.NA
+            df.loc[df["audio_path_or_id"] == audio_file_name, metric_name] = metric
 
     if metric is None:
         raise ValueError("Expected metric to be non-None.")
