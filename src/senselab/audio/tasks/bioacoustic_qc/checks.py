@@ -703,7 +703,7 @@ def high_spectral_gating_snr_check(
     return get_metric(audio_or_path, spectral_gating_snr_metric, df) > threshold
 
 
-def low_zero_crossing_rate_metric_check(
+def low_zero_crossing_rate_check(
     audio_or_path: Union[Audio, str],
     threshold: float = 0.01,
     df: Optional[pd.DataFrame] = None,
@@ -721,7 +721,7 @@ def low_zero_crossing_rate_metric_check(
     return get_metric(audio_or_path, zero_crossing_rate_metric, df) < threshold
 
 
-def high_zero_crossing_rate_metric_check(
+def high_zero_crossing_rate_check(
     audio_or_path: Union[Audio, str],
     lower: float = 0.15,
     upper: float = 0.3,
@@ -742,7 +742,7 @@ def high_zero_crossing_rate_metric_check(
     return lower <= zcr < upper
 
 
-def very_high_zero_crossing_rate_metric_check(
+def very_high_zero_crossing_rate_check(
     audio_or_path: Union[Audio, str],
     threshold: float = 0.3,
     df: Optional[pd.DataFrame] = None,
