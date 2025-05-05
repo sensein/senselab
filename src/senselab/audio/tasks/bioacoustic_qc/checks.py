@@ -63,17 +63,22 @@ def get_metric(
     filepath = None
     if isinstance(audio_or_path, str):
         filepath = audio_or_path
-        audio = Audio(filepath=audio_or_path)
     else:
         filepath = audio_or_path.filepath()
 
+    metric = None
     if df is not None and filepath:
         audio_file_name = os.path.basename(filepath)
         row = df[df["audio_path_or_id"] == audio_file_name]
         if not row.empty and metric_name in row.columns:
-            return row[metric_name].iloc[0]
+            metric = row[metric_name].iloc[0]
+    elif isinstance(audio_or_path, Audio):
+        return metric_function(audio_or_path)
 
-    return metric_function(audio)
+    if metric is None:
+        raise ValueError("Expected metric to be non-None.")
+
+    return metric
 
 
 def audio_length_positive_check(audio: Audio) -> bool:
@@ -323,7 +328,7 @@ def high_amplitude_skew_magnitude_check(
     Returns:
         True when |skew| ≤ ``magnitude``.
     """
-    return abs(get_metric(audio_or_path, amplitude_skew_metric, df)) <= magnitude
+    return abs(get_metric(audio_or_path, amplitude_skew_metric, df)) > magnitude
 
 
 def high_crest_factor_check(
