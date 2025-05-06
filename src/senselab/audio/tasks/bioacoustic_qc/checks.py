@@ -136,24 +136,6 @@ def very_high_headroom_check(
     return get_metric(audio_or_path, amplitude_headroom_metric, df) > headroom_threshold
 
 
-def very_low_amplitude_interquartile_range_check(
-    audio_or_path: Union[Audio, str],
-    threshold: float = 0.01,
-    df: Optional[pd.DataFrame] = None,
-) -> bool:
-    """Detect nearly flat audio via an extremely low amplitude IQR.
-
-    Args:
-        audio_or_path: An Audio instance or filepath to the audio file.
-        threshold: Maximum IQR considered *very low*.
-        df: Optional DataFrame containing ``amplitude_interquartile_range_metric``.
-
-    Returns:
-        True when IQR < ``threshold``.
-    """
-    return get_metric(audio_or_path, amplitude_interquartile_range_metric, df) < threshold
-
-
 def very_high_amplitude_interquartile_range_check(
     audio_or_path: Union[Audio, str],
     threshold: float = 1.5,
