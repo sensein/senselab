@@ -173,6 +173,7 @@ def proportion_clipped_metric(audio: Audio, clip_threshold: float = 1.0) -> floa
         return proportion >= min_proportion
 
     for channel in waveform:
+        clipped_samples = 0
         max_val = torch.max(channel)
         if torch.isclose(max_val, torch.tensor(1.0)) or is_likely_clipped(channel):
             clipped_samples = torch.isclose(channel, max_val).sum().item()
