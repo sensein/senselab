@@ -26,7 +26,7 @@ def apply_audio_quality_function(
         pd.DataFrame: Updated DataFrame with a new column for the check results.
     """
     column_name = function.__name__
-    audio_dict = {audio.orig_path_or_id: function(audio) for audio in activity_audios}
+    audio_dict = {audio.filepath(): function(audio) for audio in activity_audios}
     df[column_name] = df["audio_path_or_id"].map(audio_dict)
     return df
 
@@ -259,11 +259,11 @@ def check_quality(
     print(f"{total_batches} batches of size {batch_size}")
 
     def process_batch(batch_paths: List[str], batch_idx: int) -> pd.DataFrame:
-        batch_audios = [Audio.from_filepath(p) for p in batch_paths]
+        batch_audios = [Audio(filepath=p) for p in batch_paths]
         activity_dict = audios_to_activity_dict(batch_audios)
         dataset_tree = activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=activity_tree)
 
-        results_df = pd.DataFrame([a.orig_path_or_id for a in batch_audios], columns=["audio_path_or_id"])
+        results_df = pd.DataFrame([a.filepath() for a in batch_audios], columns=["audio_path_or_id"])
         results_df = run_taxonomy_subtree_checks_recursively(
             audios=batch_audios,
             dataset_tree=dataset_tree,
