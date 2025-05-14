@@ -455,61 +455,33 @@ def amplitude_interquartile_range_metric(audio: Audio) -> float:
 
 
 def phase_correlation_metric(audio: Audio, frame_length: int = 2048, hop_length: int = 512) -> float:
-    """Calculates the phase correlation between stereo channels.
-
-    This metric measures the coherence between left and right channels in stereo audio.
-    Values close to 1.0 indicate strong positive correlation (in-phase),
-    values close to -1.0 indicate strong negative correlation (out-of-phase),
-    and values near 0.0 indicate uncorrelated channels.
-
-    Args:
-        audio (Audio): The SenseLab Audio object.
-        frame_length (int): Frame size for analysis.
-        hop_length (int): Hop size for moving window.
-
-    Returns:
-        float: Average phase correlation coefficient between channels.
-
-    Raises:
-        ValueError: If the audio is not stereo (doesn't have exactly 2 channels).
-    """
+    """Computes average inter-channel correlation for stereo or multi-channel audio."""
     waveform = audio.waveform
 
-    # Check if the audio is stereo
-    if waveform.ndim != 2 or waveform.shape[0] != 2:
-        return 1
+    if waveform.ndim != 2:
+        return 1.0  # Treat 1D as mono
 
-    # Convert to numpy if it's a torch tensor
-    if isinstance(waveform, torch.Tensor):
-        waveform = waveform.numpy()
+    num_channels, num_samples = waveform.shape
+    if num_channels < 2:
+        return 1.0  # Mono
 
-    left_channel = waveform[0]
-    right_channel = waveform[1]
+    if num_samples < frame_length:
+        frame_length = num_samples
+        hop_length = max(1, num_samples // 2)
 
-    # Calculate the correlation coefficient for each frame and average
-    num_frames = 1 + (left_channel.shape[0] - frame_length) // hop_length
     correlation_values = []
 
-    for i in range(num_frames):
-        start_idx = i * hop_length
-        end_idx = start_idx + frame_length
+    for i in range(0, num_samples - frame_length + 1, hop_length):
+        frame = waveform[:, i : i + frame_length]
+        if frame.shape[1] < 2:
+            continue
 
-        if end_idx > left_channel.shape[0]:
-            end_idx = left_channel.shape[0]
+        corr_matrix = np.corrcoef(frame.numpy())
+        upper_triangle = corr_matrix[np.triu_indices(num_channels, k=1)]
 
-        left_frame = left_channel[start_idx:end_idx]
-        right_frame = right_channel[start_idx:end_idx]
+        # Exclude NaNs (e.g. from silent channels)
+        valid_corrs = upper_triangle[~np.isnan(upper_triangle)]
+        if valid_corrs.size > 0:
+            correlation_values.append(np.mean(valid_corrs))
 
-        # Calculate Pearson correlation coefficient, handling edge cases
-        if np.std(left_frame) == 0 or np.std(right_frame) == 0:
-            corr = 0
-        else:
-            corr = np.corrcoef(left_frame, right_frame)[0, 1]
-
-            # Handle NaN values (can happen with very low amplitude signals)
-            if np.isnan(corr):
-                corr = 0
-
-        correlation_values.append(corr)
-    mean_correlation = np.mean(correlation_values)
-    return float(mean_correlation)
+    return float(np.mean(correlation_values)) if correlation_values else 0.0
