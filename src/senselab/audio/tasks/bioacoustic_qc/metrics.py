@@ -16,10 +16,11 @@ def proportion_silent_metric(audio: Audio, silence_threshold: float = 0.01) -> f
         silence_threshold (float): Amplitude below which a sample is silent.
 
     Returns:
-        float: Proportion of silent samples.
+        float: Proportion of silent samples, or 0.0 if waveform has zero elements.
     """
     waveform = audio.waveform
-    assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
+    if torch.numel(waveform) == 0:
+        return 1.0
 
     silent_samples = (waveform.abs() < silence_threshold).sum().item()
     return silent_samples / waveform.numel()
@@ -85,6 +86,9 @@ def amplitude_headroom_metric(audio: Audio) -> float:
         ValueError: If amplitude exceeds [-1.0, 1.0].
         TypeError: If the waveform is not of type `torch.float32`.
     """
+    if torch.numel(audio.waveform) == 0:
+        return 1.0
+
     if audio.waveform.dtype != torch.float32:
         raise TypeError(f"Expected waveform dtype torch.float32, but got {audio.waveform.dtype}")
 
@@ -140,49 +144,42 @@ def proportion_clipped_metric(audio: Audio, clip_threshold: float = 1.0) -> floa
     Returns:
         float: Proportion of samples that are clipped.
     """
-    if not clipping_present_metric(audio):
-        return 0.0
-    else:
-        waveform = audio.waveform
-        assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
-        waveform = waveform.abs()
-
-        clipped_proportion_by_channel = []
-        for channel in waveform:
-            max_val = torch.max(channel)
-            clipped_samples = torch.isclose(channel, max_val).sum().item()
-            clipped_proportion_by_channel.append(clipped_samples / channel.numel())
-
-        return float(np.mean(clipped_proportion_by_channel))
-
-
-def clipping_present_metric(audio: Audio, plateau_length: int = 5) -> bool:
-    """Detects clipping by looking for flat plateaus of high-amplitude samples.
-
-    Args:
-        audio (Audio): The SenseLab Audio object.
-        plateau_length (float): Length of maximum-valued samples that determine clipping status.
-
-    Returns:
-        bool: True if clipping is present, False otherwise.
-    """
     waveform = audio.waveform
+
+    if torch.numel(waveform) == 0:
+        return 0.0
+
     assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
     waveform = waveform.abs()
-    if (waveform >= 1.0).any().item():
-        return True
+
+    clipped_proportion_by_channel = []
+
+    def is_likely_clipped(channel: torch.Tensor, min_proportion: float = 0.0001) -> bool:
+        """Returns True if a significant proportion of samples are close to the max value, suggesting clipping.
+
+        Args:
+            channel: 1D audio tensor.
+            min_proportion: Minimum proportion of samples that must be close to max to indicate clipping.
+
+        Returns:
+            bool: True if likely clipped.
+        """
+        if channel.numel() == 0:
+            return False
+
+        max_val = channel.max()
+        close_to_max = torch.isclose(channel, max_val)
+        proportion = close_to_max.sum().item() / channel.numel()
+        return proportion >= min_proportion
 
     for channel in waveform:
-        count = 0
+        clipped_samples = 0
         max_val = torch.max(channel)
-        for val in channel:
-            if torch.isclose(val, max_val):
-                count += 1
-            else:
-                count = 0
-            if count >= plateau_length:
-                return True
-    return False
+        if torch.isclose(max_val, torch.tensor(1.0)) or is_likely_clipped(channel):
+            clipped_samples = torch.isclose(channel, max_val).sum().item()
+        clipped_proportion_by_channel.append(clipped_samples / channel.numel())
+
+    return float(np.mean(clipped_proportion_by_channel))
 
 
 def amplitude_modulation_depth_metric(audio: Audio) -> float:
@@ -195,6 +192,8 @@ def amplitude_modulation_depth_metric(audio: Audio) -> float:
         float: Amplitude modulation depth.
     """
     waveform = audio.waveform
+    if torch.numel(waveform) == 0:
+        return np.nan
     assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
 
     # Convert to numpy array if it's a torch tensor
@@ -282,6 +281,8 @@ def dynamic_range_metric(audio: Audio) -> float:
         float: The dynamic range (max amplitude minus min amplitude).
     """
     waveform = audio.waveform
+    if torch.numel(waveform) == 0:
+        return 0.0
     assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
 
     # Compute the overall dynamic range across all channels
@@ -360,6 +361,8 @@ def crest_factor_metric(audio: Audio) -> float:
         float: Crest factor (unitless).
     """
     waveform = audio.waveform
+    if torch.numel(waveform) == 0:
+        return np.nan
     assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
 
     # Peak absolute amplitude across all channels
@@ -388,6 +391,8 @@ def peak_snr_from_spectral_metric(
         float: Peak‑SNR in decibels.
     """
     waveform = audio.waveform
+    if torch.numel(waveform) == 0:
+        return np.nan
     if isinstance(waveform, torch.Tensor):
         waveform = waveform.numpy()
 
@@ -451,61 +456,33 @@ def amplitude_interquartile_range_metric(audio: Audio) -> float:
 
 
 def phase_correlation_metric(audio: Audio, frame_length: int = 2048, hop_length: int = 512) -> float:
-    """Calculates the phase correlation between stereo channels.
-
-    This metric measures the coherence between left and right channels in stereo audio.
-    Values close to 1.0 indicate strong positive correlation (in-phase),
-    values close to -1.0 indicate strong negative correlation (out-of-phase),
-    and values near 0.0 indicate uncorrelated channels.
-
-    Args:
-        audio (Audio): The SenseLab Audio object.
-        frame_length (int): Frame size for analysis.
-        hop_length (int): Hop size for moving window.
-
-    Returns:
-        float: Average phase correlation coefficient between channels.
-
-    Raises:
-        ValueError: If the audio is not stereo (doesn't have exactly 2 channels).
-    """
+    """Computes average inter-channel correlation for stereo or multi-channel audio."""
     waveform = audio.waveform
 
-    # Check if the audio is stereo
-    if waveform.ndim != 2 or waveform.shape[0] != 2:
-        return 1
+    if waveform.ndim != 2:
+        return 1.0  # Treat 1D as mono
 
-    # Convert to numpy if it's a torch tensor
-    if isinstance(waveform, torch.Tensor):
-        waveform = waveform.numpy()
+    num_channels, num_samples = waveform.shape
+    if num_channels < 2:
+        return 1.0  # Mono
 
-    left_channel = waveform[0]
-    right_channel = waveform[1]
+    if num_samples < frame_length:
+        frame_length = num_samples
+        hop_length = max(1, num_samples // 2)
 
-    # Calculate the correlation coefficient for each frame and average
-    num_frames = 1 + (left_channel.shape[0] - frame_length) // hop_length
     correlation_values = []
 
-    for i in range(num_frames):
-        start_idx = i * hop_length
-        end_idx = start_idx + frame_length
+    for i in range(0, num_samples - frame_length + 1, hop_length):
+        frame = waveform[:, i : i + frame_length]
+        if frame.shape[1] < 2:
+            continue
 
-        if end_idx > left_channel.shape[0]:
-            end_idx = left_channel.shape[0]
+        corr_matrix = np.corrcoef(frame.numpy())
+        upper_triangle = corr_matrix[np.triu_indices(num_channels, k=1)]
 
-        left_frame = left_channel[start_idx:end_idx]
-        right_frame = right_channel[start_idx:end_idx]
+        # Exclude NaNs (e.g. from silent channels)
+        valid_corrs = upper_triangle[~np.isnan(upper_triangle)]
+        if valid_corrs.size > 0:
+            correlation_values.append(np.mean(valid_corrs))
 
-        # Calculate Pearson correlation coefficient, handling edge cases
-        if np.std(left_frame) == 0 or np.std(right_frame) == 0:
-            corr = 0
-        else:
-            corr = np.corrcoef(left_frame, right_frame)[0, 1]
-
-            # Handle NaN values (can happen with very low amplitude signals)
-            if np.isnan(corr):
-                corr = 0
-
-        correlation_values.append(corr)
-    mean_correlation = np.mean(correlation_values)
-    return float(mean_correlation)
+    return float(np.mean(correlation_values)) if correlation_values else 0.0

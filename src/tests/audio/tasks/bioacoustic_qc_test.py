@@ -16,8 +16,30 @@ from senselab.audio.tasks.bioacoustic_qc import (
     evaluate_node,
     run_taxonomy_subtree_checks_recursively,
 )
-from senselab.audio.tasks.bioacoustic_qc.checks import audio_intensity_positive_check, audio_length_positive_check
+from senselab.audio.tasks.bioacoustic_qc.checks import audio_length_positive_check
 from senselab.audio.tasks.bioacoustic_qc.constants import BIOACOUSTIC_ACTIVITY_TAXONOMY
+from senselab.audio.tasks.bioacoustic_qc.metrics import (
+    amplitude_headroom_metric,
+    amplitude_interquartile_range_metric,
+    amplitude_kurtosis_metric,
+    amplitude_modulation_depth_metric,
+    amplitude_skew_metric,
+    crest_factor_metric,
+    dynamic_range_metric,
+    mean_absolute_amplitude_metric,
+    mean_absolute_deviation_metric,
+    peak_snr_from_spectral_metric,
+    phase_correlation_metric,
+    proportion_clipped_metric,
+    proportion_silence_at_beginning_metric,
+    proportion_silence_at_end_metric,
+    proportion_silent_metric,
+    root_mean_square_energy_metric,
+    shannon_entropy_amplitude_metric,
+    signal_variance_metric,
+    spectral_gating_snr_metric,
+    zero_crossing_rate_metric,
+)
 
 
 def test_audios_to_activity_dict(
@@ -118,8 +140,8 @@ def test_activity_dict_to_dataset_taxonomy_subtree(mono_audio_sample: Audio) -> 
     activity_dict = {"sigh": [mono_audio_sample]}
     expected_subtree = {
         "bioacoustic": {
-            "checks": [audio_length_positive_check, audio_intensity_positive_check],
-            "metrics": [],
+            "checks": [audio_length_positive_check],
+            "metrics": BIOACOUSTIC_ACTIVITY_TAXONOMY["bioacoustic"]["metrics"],
             "subclass": {
                 "human": {
                     "checks": [],
@@ -159,8 +181,8 @@ def test_activity_dict_to_dataset_taxonomy_subtree(mono_audio_sample: Audio) -> 
     activity_dict = {}
     expected_empty_tree = {
         "bioacoustic": {
-            "checks": [audio_length_positive_check, audio_intensity_positive_check],
-            "metrics": [],
+            "checks": [audio_length_positive_check],
+            "metrics": BIOACOUSTIC_ACTIVITY_TAXONOMY["bioacoustic"]["metrics"],
             "subclass": None,
         }
     }
@@ -171,8 +193,8 @@ def test_activity_dict_to_dataset_taxonomy_subtree(mono_audio_sample: Audio) -> 
     activity_dict = {"sigh": [mono_audio_sample], "cough": [mono_audio_sample]}
     expected_subtree_multiple = {
         "bioacoustic": {
-            "checks": [audio_length_positive_check, audio_intensity_positive_check],
-            "metrics": [],
+            "checks": [audio_length_positive_check],
+            "metrics": BIOACOUSTIC_ACTIVITY_TAXONOMY["bioacoustic"]["metrics"],
             "subclass": {
                 "human": {
                     "checks": [],
@@ -218,8 +240,8 @@ def test_activity_dict_to_dataset_taxonomy_subtree(mono_audio_sample: Audio) -> 
     activity_dict = {"voluntary": [mono_audio_sample]}
     expected_subtree_deep = {
         "bioacoustic": {
-            "checks": [audio_length_positive_check, audio_intensity_positive_check],
-            "metrics": [],
+            "checks": [audio_length_positive_check],
+            "metrics": BIOACOUSTIC_ACTIVITY_TAXONOMY["bioacoustic"]["metrics"],
             "subclass": {
                 "human": {
                     "checks": [],
@@ -259,36 +281,30 @@ def test_activity_dict_to_dataset_taxonomy_subtree(mono_audio_sample: Audio) -> 
 
 def test_evaluate_node(mono_audio_sample: Audio) -> None:
     """Tests that `evaluate_node` applies checks and updates the node dict with results."""
-    tree = {"checks": [audio_length_positive_check, audio_intensity_positive_check]}
-    empty_audio = Audio(waveform=torch.tensor([]), sampling_rate=16000, metadata={})
-    silent_audio = Audio(waveform=torch.zeros(1, 16000), sampling_rate=16000, metadata={})
+    tree = {"checks": [audio_length_positive_check]}
+    empty_audio = Audio(filepath="empty", waveform=torch.tensor([]), sampling_rate=16000, metadata={})
+    silent_audio = Audio(filepath="silent", waveform=torch.zeros(1, 16000), sampling_rate=16000, metadata={})
 
     audios = [mono_audio_sample, empty_audio, silent_audio]
     activity_audios = [mono_audio_sample, empty_audio, silent_audio]
 
     # For the new code, we need a DataFrame to store results
-    df = pd.DataFrame({"audio_path_or_id": ["valid", "empty", "silent"]})
-    mono_audio_sample.orig_path_or_id = "valid"
-    empty_audio.orig_path_or_id = "empty"
-    silent_audio.orig_path_or_id = "silent"
+    df = pd.DataFrame({"audio_path_or_id": [mono_audio_sample.filepath(), "empty", "silent"]})
 
     updated_df = evaluate_node(audios, activity_audios, tree, df)
 
     # The tree itself doesn't hold "checks_results" now; the DataFrame does
     # but let's confirm we have columns for each check
     assert "audio_length_positive_check" in updated_df.columns
-    assert "audio_intensity_positive_check" in updated_df.columns
 
     # Check values
     length_vals = updated_df["audio_length_positive_check"].values
-    intensity_vals = updated_df["audio_intensity_positive_check"].values
 
     # Expected booleans:
     # - valid (waveform rand): True length, True intensity
     # - empty (waveform=[]): False length, False intensity
     # - silent (waveform=all zeros): True length, False intensity
     assert list(length_vals) == [True, False, True], "Unexpected length check booleans"
-    assert list(intensity_vals) == [True, False, False], "Unexpected intensity check booleans"
 
 
 def test_run_taxonomy_subtree_checks_recursively(mono_audio_sample: Audio) -> None:
@@ -296,8 +312,8 @@ def test_run_taxonomy_subtree_checks_recursively(mono_audio_sample: Audio) -> No
     # Create a minimal taxonomy tree with sample checks
     test_tree = {
         "bioacoustic": {
-            "checks": [audio_length_positive_check, audio_intensity_positive_check],
-            "metrics": [],
+            "checks": [audio_length_positive_check],
+            "metrics": BIOACOUSTIC_ACTIVITY_TAXONOMY["bioacoustic"]["metrics"],
             "subclass": {
                 "human": {
                     "checks": [],
@@ -321,15 +337,14 @@ def test_run_taxonomy_subtree_checks_recursively(mono_audio_sample: Audio) -> No
     }
 
     # Create valid/invalid audio
-    empty_audio = Audio(waveform=torch.tensor([]), sampling_rate=16000, metadata={"activity": "sigh"})
-    silent_audio = Audio(waveform=torch.zeros(1, 16000), sampling_rate=16000, metadata={"activity": "sigh"})
+    empty_audio = Audio(filepath="empty", waveform=torch.tensor([]), sampling_rate=16000, metadata={"activity": "sigh"})
+    silent_audio = Audio(
+        filepath="silent", waveform=torch.zeros(1, 16000), sampling_rate=16000, metadata={"activity": "sigh"}
+    )
     mono_audio_sample.metadata["activity"] = "sigh"
 
     # Assign IDs to each audio and build a DataFrame for storing check results
-    mono_audio_sample.orig_path_or_id = "valid"
-    empty_audio.orig_path_or_id = "empty"
-    silent_audio.orig_path_or_id = "silent"
-    df = pd.DataFrame({"audio_path_or_id": ["valid", "empty", "silent"]})
+    df = pd.DataFrame({"audio_path_or_id": [mono_audio_sample.filepath(), "empty", "silent"]})
 
     # Create the activity_dict
     activity_dict = {"sigh": [mono_audio_sample, empty_audio, silent_audio]}
@@ -343,62 +358,59 @@ def test_run_taxonomy_subtree_checks_recursively(mono_audio_sample: Audio) -> No
     )
 
     # Verify the DataFrame contains columns for each check
-    for col in ["audio_length_positive_check", "audio_intensity_positive_check"]:
+    for col in ["audio_length_positive_check"]:
         assert col in results_df.columns, f"Missing column {col} in results DataFrame."
 
     # Check the boolean values
     length_vals = results_df["audio_length_positive_check"].tolist()
-    intensity_vals = results_df["audio_intensity_positive_check"].tolist()
 
     # For [valid, empty, silent]:
     # - valid => length=True, intensity=True
     # - empty => length=False, intensity=False (no samples)
     # - silent => length=True, intensity=False (samples but all zeros)
     assert length_vals == [True, False, True], "Unexpected length check booleans."
-    assert intensity_vals == [True, False, False], "Unexpected intensity check booleans."
 
 
 def test_check_quality() -> None:
     """Tests that `check_quality` produces a DataFrame with correct boolean columns."""
-    # Create valid/invalid Audio samples
-    valid_audio = Audio(
-        waveform=torch.rand(1, 16000),
-        sampling_rate=16000,
-        metadata={"activity": "breathing"},
-    )
-    empty_audio = Audio(
-        waveform=torch.tensor([]),
-        sampling_rate=16000,
-        metadata={"activity": "breathing"},
-    )
-    silent_audio = Audio(
-        waveform=torch.zeros(1, 16000),
-        sampling_rate=16000,
-        metadata={"activity": "breathing"},
-    )
+    import shutil
+    import tempfile
 
-    # Assign identifiers for the DataFrame
-    valid_audio.orig_path_or_id = "valid"
-    empty_audio.orig_path_or_id = "empty"
-    silent_audio.orig_path_or_id = "silent"
+    import soundfile as sf
 
-    # Create the initial DataFrame
-    df = pd.DataFrame({"audio_path_or_id": ["valid", "empty", "silent"]})
+    tmp_path = tempfile.mkdtemp()
 
-    # Run check_quality, which returns the updated DataFrame
-    results_df = check_quality(audios=[valid_audio, empty_audio, silent_audio], audio_df=df)
+    try:
+        from pathlib import Path
 
-    # Ensure columns for the two checks exist
-    for col in ["audio_length_positive_check", "audio_intensity_positive_check"]:
-        assert col in results_df.columns, f"Expected column {col} not found in results DataFrame."
+        # Create temporary audio files
+        valid_path = Path(tmp_path) / "valid.wav"
+        empty_path = Path(tmp_path) / "empty.wav"
+        silent_path = Path(tmp_path) / "silent.wav"
 
-    # Extract booleans from each column
-    length_vals = results_df["audio_length_positive_check"].tolist()
-    intensity_vals = results_df["audio_intensity_positive_check"].tolist()
+        # Write actual files to match expected input for check_quality
+        sf.write(valid_path, torch.rand(16000).numpy(), 16000)
+        sf.write(empty_path, torch.tensor([]).numpy(), 16000)
+        sf.write(silent_path, torch.zeros(16000).numpy(), 16000)
 
-    # For [valid, empty, silent]:
-    # valid => length=True, intensity=True
-    # empty => length=False, intensity=False (no samples)
-    # silent => length=True, intensity=False (samples, but all zeros)
-    assert length_vals == [True, False, True], f"Unexpected length results: {length_vals}"
-    assert intensity_vals == [True, False, False], f"Unexpected intensity results: {intensity_vals}"
+        # Run check_quality on the temporary directory
+        from joblib import parallel_backend
+
+        with parallel_backend("sequential"):
+            results_df = check_quality(audio_dir=tmp_path, batch_size=3, n_jobs=1)
+
+        # Ensure columns for the checks exist
+        for col in ["audio_length_positive_check"]:
+            assert col in results_df.columns, f"Expected column {col} not found in results DataFrame."
+
+        # Extract booleans from each column
+        length_vals = results_df.sort_values("audio_path_or_id")["audio_length_positive_check"].tolist()
+
+        # For [empty, silent, valid]:
+        # valid => length=True
+        # empty => length=False
+        # silent => length=True
+        assert length_vals == [False, True, True], f"Unexpected length results: {length_vals}"
+
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)

@@ -1,13 +1,12 @@
 """Taxonomy of bioacoustic activities emphasizing human activities."""
 
-from senselab.audio.tasks.bioacoustic_qc.checks import audio_intensity_positive_check, audio_length_positive_check
+from senselab.audio.tasks.bioacoustic_qc.checks import audio_length_positive_check
 from senselab.audio.tasks.bioacoustic_qc.metrics import (
     amplitude_headroom_metric,
     amplitude_interquartile_range_metric,
     amplitude_kurtosis_metric,
     amplitude_modulation_depth_metric,
     amplitude_skew_metric,
-    clipping_present_metric,
     crest_factor_metric,
     dynamic_range_metric,
     mean_absolute_amplitude_metric,
@@ -27,7 +26,7 @@ from senselab.audio.tasks.bioacoustic_qc.metrics import (
 
 BIOACOUSTIC_ACTIVITY_TAXONOMY = {
     "bioacoustic": {
-        "checks": [audio_length_positive_check, audio_intensity_positive_check],
+        "checks": [audio_length_positive_check],
         "metrics": [
             proportion_silent_metric,
             proportion_silence_at_beginning_metric,
@@ -35,7 +34,6 @@ BIOACOUSTIC_ACTIVITY_TAXONOMY = {
             amplitude_headroom_metric,
             spectral_gating_snr_metric,
             proportion_clipped_metric,
-            clipping_present_metric,
             amplitude_modulation_depth_metric,
             root_mean_square_energy_metric,
             zero_crossing_rate_metric,
@@ -135,7 +133,7 @@ BIOACOUSTIC_ACTIVITY_TAXONOMY = {
 
 
 COMPUTATIONAL_COMPLEXITY_TO_CHECK = {
-    "low": [audio_intensity_positive_check, audio_length_positive_check],
+    "low": [audio_length_positive_check],
     "medium": [],
     "high": [],
 }

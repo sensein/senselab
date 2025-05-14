@@ -228,7 +228,7 @@ def test_audio_save_to_file(audio_fixture: str, request: pytest.FixtureRequest) 
         assert temp_file_path.exists(), "The audio file was not saved."
 
         # Load the saved file and verify its content
-        loaded_waveform, loaded_sampling_rate = torchaudio.load(temp_file_path)
+        loaded_waveform, loaded_sampling_rate = torchaudio.load(str(temp_file_path))
         assert torch.allclose(audio_sample.waveform, loaded_waveform, atol=1e-5), "Waveform data does not match."
         assert audio_sample.sampling_rate == loaded_sampling_rate, "Sampling rate does not match."
 
@@ -401,3 +401,15 @@ def test_window_generator_step_greater_than_audio(audio_fixture: str, request: p
     expected_windows = (audio_length - window_size) // step_size + 1  # This is always 1
     assert len(windowed_audios) == expected_windows, f"Should yield {expected_windows} \
         windows when step size is greater than audio length. Yielded {len(windowed_audios)}."
+
+
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
+def test_audio_filepath_is_stored_with_waveform() -> None:
+    """Tests that the filepath is stored even when a waveform is provided."""
+    dummy_path = "/tmp/dummy_audio.wav"
+    dummy_waveform = torch.randn(1, 16000)
+    dummy_sr = 16000
+
+    audio = Audio(waveform=dummy_waveform, sampling_rate=dummy_sr, filepath=dummy_path)
+
+    assert audio.filepath() == dummy_path, "Filepath should be preserved even when waveform is provided."
