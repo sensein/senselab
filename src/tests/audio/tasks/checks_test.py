@@ -171,7 +171,7 @@ def test_high_proportion_clipped_check(stereo_audio_sample: Audio) -> None:
 def test_clipping_present_check(stereo_audio_sample: Audio) -> None:
     """clipping_present_check returns False."""
     m = proportion_clipped_metric(stereo_audio_sample)
-    assert clipping_present_check(stereo_audio_sample), f"clipping_present_check flagged (clip_prop={m:.6f})"
+    assert not clipping_present_check(stereo_audio_sample), f"clipping_present_check flagged (clip_prop={m:.6f})"
 
 
 def test_completely_silent_check(stereo_audio_sample: Audio) -> None:
