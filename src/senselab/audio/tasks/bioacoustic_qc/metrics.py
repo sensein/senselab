@@ -16,10 +16,11 @@ def proportion_silent_metric(audio: Audio, silence_threshold: float = 0.01) -> f
         silence_threshold (float): Amplitude below which a sample is silent.
 
     Returns:
-        float: Proportion of silent samples.
+        float: Proportion of silent samples, or 0.0 if waveform has zero elements.
     """
     waveform = audio.waveform
-    assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
+    if torch.numel(waveform) == 0:
+        return 1.0
 
     silent_samples = (waveform.abs() < silence_threshold).sum().item()
     return silent_samples / waveform.numel()
@@ -85,6 +86,9 @@ def amplitude_headroom_metric(audio: Audio) -> float:
         ValueError: If amplitude exceeds [-1.0, 1.0].
         TypeError: If the waveform is not of type `torch.float32`.
     """
+    if torch.numel(audio.waveform) == 0:
+        return 1.0
+
     if audio.waveform.dtype != torch.float32:
         raise TypeError(f"Expected waveform dtype torch.float32, but got {audio.waveform.dtype}")
 
@@ -141,6 +145,10 @@ def proportion_clipped_metric(audio: Audio, clip_threshold: float = 1.0) -> floa
         float: Proportion of samples that are clipped.
     """
     waveform = audio.waveform
+
+    if torch.numel(waveform) == 0:
+        return 0.0
+
     assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
     waveform = waveform.abs()
 
@@ -163,6 +171,8 @@ def amplitude_modulation_depth_metric(audio: Audio) -> float:
         float: Amplitude modulation depth.
     """
     waveform = audio.waveform
+    if torch.numel(waveform) == 0:
+        return np.nan
     assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
 
     # Convert to numpy array if it's a torch tensor
@@ -250,6 +260,8 @@ def dynamic_range_metric(audio: Audio) -> float:
         float: The dynamic range (max amplitude minus min amplitude).
     """
     waveform = audio.waveform
+    if torch.numel(waveform) == 0:
+        return 0.0
     assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
 
     # Compute the overall dynamic range across all channels
@@ -328,6 +340,8 @@ def crest_factor_metric(audio: Audio) -> float:
         float: Crest factor (unitless).
     """
     waveform = audio.waveform
+    if torch.numel(waveform) == 0:
+        return np.nan
     assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
 
     # Peak absolute amplitude across all channels
@@ -356,6 +370,8 @@ def peak_snr_from_spectral_metric(
         float: Peak‑SNR in decibels.
     """
     waveform = audio.waveform
+    if torch.numel(waveform) == 0:
+        return np.nan
     if isinstance(waveform, torch.Tensor):
         waveform = waveform.numpy()
 
