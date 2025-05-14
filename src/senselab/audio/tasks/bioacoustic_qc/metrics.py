@@ -153,9 +153,29 @@ def proportion_clipped_metric(audio: Audio, clip_threshold: float = 1.0) -> floa
     waveform = waveform.abs()
 
     clipped_proportion_by_channel = []
+
+    def is_likely_clipped(channel: torch.Tensor, min_proportion: float = 0.0001) -> bool:
+        """Returns True if a significant proportion of samples are close to the max value, suggesting clipping.
+
+        Args:
+            channel: 1D audio tensor.
+            min_proportion: Minimum proportion of samples that must be close to max to indicate clipping.
+
+        Returns:
+            bool: True if likely clipped.
+        """
+        if channel.numel() == 0:
+            return False
+
+        max_val = channel.max()
+        close_to_max = torch.isclose(channel, max_val)
+        proportion = close_to_max.sum().item() / channel.numel()
+        return proportion >= min_proportion
+
     for channel in waveform:
         max_val = torch.max(channel)
-        clipped_samples = torch.isclose(channel, max_val).sum().item()
+        if torch.isclose(max_val, torch.tensor(1.0)) or is_likely_clipped(channel):
+            clipped_samples = torch.isclose(channel, max_val).sum().item()
         clipped_proportion_by_channel.append(clipped_samples / channel.numel())
 
     return float(np.mean(clipped_proportion_by_channel))

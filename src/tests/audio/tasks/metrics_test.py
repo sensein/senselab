@@ -127,7 +127,7 @@ def test_amplitude_headroom_metric_errors(
     "waveform, expected_proportion",
     [
         (torch.tensor([[0.0, 0.5, 1.0, -1.0]]), 0.5),  # 2/4 clipped
-        (torch.tensor([[0.0, 0.4, 0.6, -0.9]]), 0.0),  # No clipped samples
+        (torch.tensor([[0.0, 0.4, 0.6, -0.9]]), 0.25),  # a large enough proportion == max value
         (torch.tensor([[1.0, 1.0, -1.0, -1.0]]), 1.0),  # All clipped
     ],
 )
