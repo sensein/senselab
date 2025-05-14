@@ -141,28 +141,7 @@ def test_activity_dict_to_dataset_taxonomy_subtree(mono_audio_sample: Audio) -> 
     expected_subtree = {
         "bioacoustic": {
             "checks": [audio_length_positive_check],
-            "metrics": [
-                proportion_silent_metric,
-                proportion_silence_at_beginning_metric,
-                proportion_silence_at_end_metric,
-                amplitude_headroom_metric,
-                spectral_gating_snr_metric,
-                proportion_clipped_metric,
-                amplitude_modulation_depth_metric,
-                root_mean_square_energy_metric,
-                zero_crossing_rate_metric,
-                signal_variance_metric,
-                dynamic_range_metric,
-                mean_absolute_amplitude_metric,
-                mean_absolute_deviation_metric,
-                shannon_entropy_amplitude_metric,
-                crest_factor_metric,
-                peak_snr_from_spectral_metric,
-                amplitude_skew_metric,
-                amplitude_kurtosis_metric,
-                amplitude_interquartile_range_metric,
-                phase_correlation_metric,
-            ],
+            "metrics": BIOACOUSTIC_ACTIVITY_TAXONOMY["bioacoustic"]["metrics"],
             "subclass": {
                 "human": {
                     "checks": [],
@@ -203,7 +182,7 @@ def test_activity_dict_to_dataset_taxonomy_subtree(mono_audio_sample: Audio) -> 
     expected_empty_tree = {
         "bioacoustic": {
             "checks": [audio_length_positive_check],
-            "metrics": [],
+            "metrics": BIOACOUSTIC_ACTIVITY_TAXONOMY["bioacoustic"]["metrics"],
             "subclass": None,
         }
     }
@@ -215,7 +194,7 @@ def test_activity_dict_to_dataset_taxonomy_subtree(mono_audio_sample: Audio) -> 
     expected_subtree_multiple = {
         "bioacoustic": {
             "checks": [audio_length_positive_check],
-            "metrics": [],
+            "metrics": BIOACOUSTIC_ACTIVITY_TAXONOMY["bioacoustic"]["metrics"],
             "subclass": {
                 "human": {
                     "checks": [],
@@ -262,7 +241,7 @@ def test_activity_dict_to_dataset_taxonomy_subtree(mono_audio_sample: Audio) -> 
     expected_subtree_deep = {
         "bioacoustic": {
             "checks": [audio_length_positive_check],
-            "metrics": [],
+            "metrics": BIOACOUSTIC_ACTIVITY_TAXONOMY["bioacoustic"]["metrics"],
             "subclass": {
                 "human": {
                     "checks": [],
@@ -334,7 +313,7 @@ def test_run_taxonomy_subtree_checks_recursively(mono_audio_sample: Audio) -> No
     test_tree = {
         "bioacoustic": {
             "checks": [audio_length_positive_check],
-            "metrics": [],
+            "metrics": BIOACOUSTIC_ACTIVITY_TAXONOMY["bioacoustic"]["metrics"],
             "subclass": {
                 "human": {
                     "checks": [],
