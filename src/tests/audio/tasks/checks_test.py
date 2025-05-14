@@ -23,7 +23,7 @@ from senselab.audio.tasks.bioacoustic_qc.checks import (
     high_shannon_entropy_amplitude_check,
     high_signal_variance_check,
     high_spectral_gating_snr_check,
-    high_zero_crossing_rate_metric_check,
+    high_zero_crossing_rate_check,
     low_amplitude_modulation_depth_check,
     low_crest_factor_check,
     low_peak_snr_from_spectral_check,
@@ -31,7 +31,7 @@ from senselab.audio.tasks.bioacoustic_qc.checks import (
     low_shannon_entropy_amplitude_check,
     low_signal_variance_check,
     low_spectral_gating_snr_check,
-    low_zero_crossing_rate_metric_check,
+    low_zero_crossing_rate_check,
     mostly_silent_check,
     very_high_amplitude_interquartile_range_check,
     very_high_amplitude_kurtosis_check,
@@ -40,8 +40,7 @@ from senselab.audio.tasks.bioacoustic_qc.checks import (
     very_high_mean_absolute_deviation_check,
     very_high_peak_snr_from_spectral_check,
     very_high_root_mean_square_energy_check,
-    very_high_zero_crossing_rate_metric_check,
-    very_low_amplitude_interquartile_range_check,
+    very_high_zero_crossing_rate_check,
     very_low_amplitude_kurtosis_check,
     very_low_amplitude_modulation_depth_check,
     very_low_dynamic_range_check,
@@ -121,14 +120,6 @@ def test_very_high_headroom_check(stereo_audio_sample: Audio) -> None:
     ), f"very_high_headroom_check flagged sample (headroom={m:.4f})"
 
 
-def test_very_low_amplitude_interquartile_range_check(stereo_audio_sample: Audio) -> None:
-    """very_low_amplitude_interquartile_range_check returns False."""
-    m = amplitude_interquartile_range_metric(stereo_audio_sample)
-    assert not very_low_amplitude_interquartile_range_check(
-        stereo_audio_sample
-    ), f"very_low_amplitude_interquartile_range_check flagged (IQR={m:.4f})"
-
-
 def test_very_high_amplitude_interquartile_range_check(stereo_audio_sample: Audio) -> None:
     """very_high_amplitude_interquartile_range_check returns False."""
     m = amplitude_interquartile_range_metric(stereo_audio_sample)
@@ -198,7 +189,7 @@ def test_mostly_silent_check(stereo_audio_sample: Audio) -> None:
 def test_high_amplitude_skew_magnitude_check(stereo_audio_sample: Audio) -> None:
     """high_amplitude_skew_magnitude_check returns False."""
     m = amplitude_skew_metric(stereo_audio_sample)
-    assert high_amplitude_skew_magnitude_check(
+    assert not high_amplitude_skew_magnitude_check(
         stereo_audio_sample
     ), f"high_amplitude_skew_magnitude_check flagged (skew={m:.4f})"
 
@@ -353,25 +344,23 @@ def test_high_signal_variance_check(stereo_audio_sample: Audio) -> None:
     assert not high_signal_variance_check(stereo_audio_sample), f"high_signal_variance_check flagged (var={m:.6f})"
 
 
-def test_low_zero_crossing_rate_metric_check(stereo_audio_sample: Audio) -> None:
-    """low_zero_crossing_rate_metric_check returns False."""
+def test_low_zero_crossing_rate_check(stereo_audio_sample: Audio) -> None:
+    """low_zero_crossing_rate_check returns False."""
     m = zero_crossing_rate_metric(stereo_audio_sample)
-    assert not low_zero_crossing_rate_metric_check(
-        stereo_audio_sample
-    ), f"low_zero_crossing_rate_metric_check flagged (ZCR={m:.4f})"
+    assert not low_zero_crossing_rate_check(stereo_audio_sample), f"low_zero_crossing_rate_check flagged (ZCR={m:.4f})"
 
 
-def test_high_zero_crossing_rate_metric_check(stereo_audio_sample: Audio) -> None:
-    """high_zero_crossing_rate_metric_check returns False."""
+def test_high_zero_crossing_rate_check(stereo_audio_sample: Audio) -> None:
+    """high_zero_crossing_rate_check returns False."""
     m = zero_crossing_rate_metric(stereo_audio_sample)
-    assert not high_zero_crossing_rate_metric_check(
+    assert not high_zero_crossing_rate_check(
         stereo_audio_sample
-    ), f"high_zero_crossing_rate_metric_check flagged (ZCR={m:.4f})"
+    ), f"high_zero_crossing_rate_check flagged (ZCR={m:.4f})"
 
 
-def test_very_high_zero_crossing_rate_metric_check(stereo_audio_sample: Audio) -> None:
-    """very_high_zero_crossing_rate_metric_check returns False."""
+def test_very_high_zero_crossing_rate_check(stereo_audio_sample: Audio) -> None:
+    """very_high_zero_crossing_rate_check returns False."""
     m = zero_crossing_rate_metric(stereo_audio_sample)
-    assert not very_high_zero_crossing_rate_metric_check(
+    assert not very_high_zero_crossing_rate_check(
         stereo_audio_sample
-    ), f"very_high_zero_crossing_rate_metric_check flagged (ZCR={m:.4f})"
+    ), f"very_high_zero_crossing_rate_check flagged (ZCR={m:.4f})"
