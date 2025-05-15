@@ -16,9 +16,9 @@ from senselab.utils.constants import SENSELAB_NAMESPACE
 try:
     import av  # noqa: F401
 
-    PYAV_AVAILABLE = True
+    AV_AVAILABLE = True
 except ModuleNotFoundError:
-    PYAV_AVAILABLE = False
+    AV_AVAILABLE = False
 
 
 class Video(BaseModel):
@@ -155,13 +155,13 @@ class Video(BaseModel):
         Raises:
             ValueError: If no file path is available for lazy loading.
             FileNotFoundError: If the file does not exist.
-            ModuleNotFoundError: If PyAV is not available.
+            ModuleNotFoundError: If AV is not available.
         """
         if not self._file_path:
             raise ValueError("No file path available for lazy loading.")
         if not os.path.exists(self._file_path):
             raise FileNotFoundError(f"File {self._file_path} does not exist.")
-        if not PYAV_AVAILABLE:
+        if not AV_AVAILABLE:
             raise ModuleNotFoundError(
                 "`pyav` is not installed. "
                 "Please install senselab video dependencies using `pip install 'senselab[video]'`."

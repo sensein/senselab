@@ -66,7 +66,7 @@ pylangacq = {version = "~=0.19", optional = true}
 mediapipe = {version = "~=0.10", optional = true}
 opencv-python = {version = "~=4.10", optional = true}
 ultralytics = {version = "~=8.3", optional = true}
-pyav = {version = "~=14.2", optional = true}
+av = {version = "~=14.2", optional = true}
 
 [tool.poetry.extras]
 audio = [
@@ -88,7 +88,7 @@ text = [
   "pylangacq"
 ]
 video = [
-  "pyav",
+  "av",
   "mediapipe",
   "opencv-python",
   "ultralytics"
