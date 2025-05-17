@@ -13,6 +13,7 @@ try:
     TTS_AVAILABLE = True
 except ModuleNotFoundError:
     TTS_AVAILABLE = False
+    TTS = None  # This is to avoid errors during pdoc documentation generation
 
 import os
 from functools import lru_cache
@@ -123,7 +124,7 @@ class CoquiTTSModel(SenselabModel):
         if not TTS_AVAILABLE:
             raise ModuleNotFoundError(
                 "`coqui-tts` is not installed. "
-                "Please install senselab audio dependencies using `pip install senselab['audio']`."
+                "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
             )
         if not isinstance(value, Path):
             model_ids = TTS().list_models()
@@ -177,7 +178,7 @@ def check_torchaudio_model_exists(model_id: str) -> bool:
     if not TORCHAUDIO_AVAILABLE:
         raise ModuleNotFoundError(
             "`torchaudio` is not installed. "
-            "Please install senselab audio dependencies using `pip install senselab['audio']`."
+            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
         )
 
     try:

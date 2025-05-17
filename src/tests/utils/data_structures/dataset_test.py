@@ -111,7 +111,8 @@ def test_get_sessions() -> None:
 def test_audio_dataset_creation_import_error() -> None:
     """Tests that an ImportError is raised when torchaudio is not installed."""
     with pytest.raises(ModuleNotFoundError):
-        SenselabDataset(audios=[MONO_AUDIO_PATH, STEREO_AUDIO_PATH])
+        dataset = SenselabDataset(audios=[MONO_AUDIO_PATH, STEREO_AUDIO_PATH])
+        dataset.audios[0].waveform
 
 
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed")
@@ -122,12 +123,10 @@ def test_audio_dataset_creation() -> None:
     mono_audio = Audio(
         waveform=mono_audio_data,
         sampling_rate=mono_sr,
-        orig_path_or_id=MONO_AUDIO_PATH,
     )
     stereo_audio = Audio(
         waveform=stereo_audio_data,
         sampling_rate=stereo_sr,
-        orig_path_or_id=STEREO_AUDIO_PATH,
     )
 
     audio_dataset_from_paths = SenselabDataset(audios=[MONO_AUDIO_PATH, STEREO_AUDIO_PATH])
@@ -154,12 +153,10 @@ def test_audio_dataset_splits() -> None:
     mono_audio = Audio(
         waveform=mono_audio_data,
         sampling_rate=mono_sr,
-        orig_path_or_id=MONO_AUDIO_PATH,
     )
     stereo_audio = Audio(
         waveform=stereo_audio_data,
         sampling_rate=stereo_sr,
-        orig_path_or_id=STEREO_AUDIO_PATH,
     )
 
     no_param_cpu_split = audio_dataset.create_audio_split_for_pydra_task()
@@ -192,7 +189,6 @@ def test_convert_senselab_dataset_to_hf_datasets() -> None:
         frames=dataset.videos[0].frames[:5],
         frame_rate=dataset.videos[0].frame_rate,
         audio=dataset.videos[0].audio,
-        orig_path_or_id=dataset.videos[0].orig_path_or_id,
         metadata=dataset.videos[0].metadata,
     )
 
@@ -208,8 +204,8 @@ def test_convert_senselab_dataset_to_hf_datasets() -> None:
 
     audio_data = hf_datasets["audios"]
     video_data = hf_datasets["videos"]
-    test_audio = Audio.from_filepath(STEREO_AUDIO_PATH)
-    test_video = Video.from_filepath(VIDEO_PATH)
+    test_audio = Audio(filepath=STEREO_AUDIO_PATH)
+    test_video = Video(filepath=VIDEO_PATH)
 
     # extracted_audio = extract_audios_from_local_videos('src/tests/data_for_testing/video_48khz_stereo_16bits.mp4')
     # extracted_audio, extract_sr = torchaudio.load(extracted_audio['audio'][0]['path'])
@@ -218,7 +214,6 @@ def test_convert_senselab_dataset_to_hf_datasets() -> None:
         frames=test_video.frames[:5],
         frame_rate=test_video.frame_rate,
         audio=test_video.audio,
-        orig_path_or_id=test_video.orig_path_or_id,
         metadata=test_video.metadata,
     )
     # print(hf_datasets)
