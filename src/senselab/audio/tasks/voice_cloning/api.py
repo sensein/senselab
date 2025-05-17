@@ -54,8 +54,8 @@ def clone_voices(
             Currently, only SPARC and Coqui TTS models are supported.
 
     Examples:
-        >>> source_audios = [Audio.from_filepath("source1.wav"), Audio.from_filepath("source2.wav")]
-        >>> target_audios = [Audio.from_filepath("target1.wav"), Audio.from_filepath("target2.wav")]
+        >>> source_audios = [Audio(filepath="source1.wav"), Audio(filepath="source2.wav")]
+        >>> target_audios = [Audio(filepath="target1.wav"), Audio(filepath="target2.wav")]
         >>> cloned_audios = clone_voices(source_audios, target_audios)
     """
     if len(source_audios) != len(target_audios):

@@ -29,7 +29,7 @@ def extract_speaker_embeddings_from_audios(
         NotImplementedError: If the model is not a Hugging Face model.
 
     Examples:
-        >>> audios = [Audio.from_filepath("sample.wav")]
+        >>> audios = [Audio(filepath="sample.wav")]
         >>> model = SpeechBrainModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb", revision="main")
         >>> embeddings = extract_speaker_embeddings_from_audios(audios, model, device=DeviceType.CUDA)
         >>> print(embeddings[0].shape)

@@ -45,6 +45,7 @@ jobs:
     - name: Build docs
       env:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        PDOC_ALLOW_EXEC: '1'
       run: |
         APP_MODULE_NAME=$(ls -1 src | sort | head -1)
         echo "APP_MODULE_NAME: $APP_MODULE_NAME"
