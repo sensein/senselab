@@ -159,8 +159,33 @@ def activity_to_dataset_taxonomy_subtree(activity_name: str, activity_tree: Dict
 
 #     return results_df
 
-def get_evaluation():
-    pass
+def get_evaluation(
+    audio: Audio,
+    evaluation_function: Callable[[Audio], float | bool],
+    id: str,
+    df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Computes and caches an evaluation (metric or check) in the DataFrame.
+
+    Args:
+        audio: An `Audio` instance.
+        evaluation_function: Function that takes `Audio` and returns a value.
+        id: Identifier corresponding to the row in the DataFrame.
+        df: DataFrame containing an 'id' column.
+
+    Returns:
+        Updated DataFrame with the evaluation result for the given id.
+    """
+    evaluation_name = evaluation_function.__name__
+
+    if evaluation_name in df.columns and not pd.isna(df.loc[df["id"] == id, evaluation_name]).all():
+        return df  # Already computed
+
+    if evaluation_name not in df.columns:
+        df[evaluation_name] = None
+
+    df.loc[df["id"] == id, evaluation_name] = evaluation_function(audio)
+    return df
 
 
 def evaluate_audios(audio_paths, save_path, activity, evaluations):
@@ -178,6 +203,12 @@ def evaluate_audios(audio_paths, save_path, activity, evaluations):
 
         df.to_csv(output_file, index=False)
 
+# goal: reuse computation, simple interface
+# simple metrics 
+# get_metrics function
+# checks call get_metrics
+# checks call get_evaluation(metric)
+# evaluate_audios calls get_evaluation(check)
 
 def create_activity_to_evaluations(audio_path_to_activity: Dict[str, str], activity_tree: Dict) -> Dict[str, List[str]]:
     """Generates a mapping from each activity to the list of evaluation functions (metrics and checks)
