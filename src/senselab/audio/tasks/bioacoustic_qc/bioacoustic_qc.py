@@ -13,25 +13,6 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.bioacoustic_qc.constants import BIOACOUSTIC_ACTIVITY_TAXONOMY
 
 
-def apply_audio_quality_function(
-    df: pd.DataFrame, activity_audios: List[Audio], function: Callable[[Audio], bool]
-) -> pd.DataFrame:
-    """Applies a function to each audio and stores results in a new column with the function name.
-
-    Args:
-        df (pd.DataFrame): DataFrame containing audio metadata with an 'audio_path_or_id' column.
-        activity_audios (List[Audio]): List of Audio objects to check.
-        function (Callable[[Audio], bool]): Function that evaluates an Audio object and returns a bool.
-
-    Returns:
-        pd.DataFrame: Updated DataFrame with a new column for the check results.
-    """
-    column_name = function.__name__
-    audio_dict = {audio.orig_path_or_id: function(audio) for audio in activity_audios}
-    df[column_name] = df["audio_path_or_id"].map(audio_dict)
-    return df
-
-
 def activity_to_taxonomy_tree_path(activity: str) -> List[str]:
     """Gets the taxonomy tree path for a given activity .
 
@@ -131,34 +112,6 @@ def activity_to_dataset_taxonomy_subtree(activity_name: str, activity_tree: Dict
     return pruned_tree
 
 
-# def evaluate_node(
-#     audios: List[Audio], activity_audios: List[Audio], tree: Dict[str, Any], results_df: pd.DataFrame
-# ) -> pd.DataFrame:
-#     """Runs quality checks on a given taxonomy tree node and updates the tree with results.
-
-#     Args:
-#         audios (List[Audio]): The full list of audio files, which may be modified if files are excluded.
-#         activity_audios (List[Audio]): The subset of `audios` relevant to the current taxonomy node.
-#         tree (Dict[str, Any]): The taxonomy tree node containing a "checks" key with check functions.
-#         results_df (pd.DataFrame): DataFrame to store results of the quality checks.
-
-#     Returns:
-#         pd.DataFrame: Updated results DataFrame.
-#     """
-#     # Calculate metrics
-#     metrics = tree.get("metrics")
-#     if isinstance(metrics, list):
-#         for metric in metrics:
-#             results_df = apply_audio_quality_function(results_df, activity_audios, function=metric)
-
-#     # Evaluate checks
-#     checks = tree.get("checks")
-#     if isinstance(checks, list):
-#         for check in checks:
-#             results_df = apply_audio_quality_function(results_df, activity_audios, function=check)
-
-#     return results_df
-
 def get_evaluation(
     audio: Audio,
     evaluation_function: Callable[[Audio], float | bool],
@@ -203,12 +156,6 @@ def evaluate_audios(audio_paths, save_path, activity, evaluations):
 
         df.to_csv(output_file, index=False)
 
-# goal: reuse computation, simple interface
-# simple metrics 
-# get_metrics function
-# checks call get_metrics
-# checks call get_evaluation(metric)
-# evaluate_audios calls get_evaluation(check)
 
 def create_activity_to_evaluations(audio_path_to_activity: Dict[str, str], activity_tree: Dict) -> Dict[str, List[str]]:
     """Generates a mapping from each activity to the list of evaluation functions (metrics and checks)
@@ -249,7 +196,6 @@ def run_evaluations(audio_path_to_activity: Dict, activity_to_evaluations: Dict,
     for audio_path, activity in audio_path_to_activity:
         evaluations = activity_to_evaluations[activity]
         evaluate_audio(audio_path, save_path, activity, evaluations)
-
 
     # use activity2evaluations dict
     # split across audio paths
