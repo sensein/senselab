@@ -9,12 +9,12 @@ import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.bioacoustic_qc import (
-    activity_dict_to_dataset_taxonomy_subtree,
-    activity_to_taxonomy_tree_path,
-    audios_to_activity_dict,
+    activity_to_dataset_taxonomy_subtree,
+    # activity_to_taxonomy_tree_path,
+    # audios_to_activity_dict,
     check_quality,
-    evaluate_node,
-    run_taxonomy_subtree_checks_recursively,
+    # evaluate_node,
+    # run_taxonomy_subtree_checks_recursively,
 )
 from senselab.audio.tasks.bioacoustic_qc.checks import audio_intensity_positive_check, audio_length_positive_check
 from senselab.audio.tasks.bioacoustic_qc.constants import BIOACOUSTIC_ACTIVITY_TAXONOMY
@@ -112,132 +112,29 @@ def test_activity_to_taxonomy_tree_path() -> None:
         activity_to_taxonomy_tree_path("nonexistent_activity")
 
 
-def test_activity_dict_to_dataset_taxonomy_subtree(mono_audio_sample: Audio) -> None:
-    """Tests that the function correctly prunes the taxonomy based on dataset activities."""
-    # Case 1: Valid activity in the taxonomy (should return a pruned tree with 'sigh')
-    activity_dict = {"sigh": [mono_audio_sample]}
-    expected_subtree = {
-        "bioacoustic": {
-            "checks": [audio_length_positive_check, audio_intensity_positive_check],
-            "metrics": [],
-            "subclass": {
-                "human": {
-                    "checks": [],
-                    "metrics": [],
+@pytest.mark.parametrize(
+    "activity_name,expected_subtree",
+    [
+        (
+            "sigh",
+            {
+                "bioacoustic": {
+                    "checks": [audio_length_positive_check, audio_intensity_positive_check],
+                    "metrics": BIOACOUSTIC_ACTIVITY_TAXONOMY["bioacoustic"]["metrics"],
                     "subclass": {
-                        "respiration": {
+                        "human": {
                             "checks": [],
                             "metrics": [],
                             "subclass": {
-                                "breathing": {
+                                "respiration": {
                                     "checks": [],
                                     "metrics": [],
                                     "subclass": {
-                                        "sigh": {
-                                            "checks": [],
-                                            "metrics": [],
-                                            "subclass": None,
-                                        }
-                                    },
-                                }
-                            },
-                        }
-                    },
-                }
-            },
-        }
-    }
-    pruned_tree = activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=BIOACOUSTIC_ACTIVITY_TAXONOMY)
-    assert pruned_tree == expected_subtree, f"Expected {expected_subtree}, but got {pruned_tree}"
-
-    # Case 2: Activity not in the taxonomy (should raise ValueError)
-    activity_dict = {"nonexistent_activity": [mono_audio_sample]}
-    with pytest.raises(ValueError, match="Activity 'nonexistent_activity' not found in taxonomy tree."):
-        activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=BIOACOUSTIC_ACTIVITY_TAXONOMY)
-
-    # Case 3: Empty activity_dict (should return 'bioacoustic' with empty subclass)
-    activity_dict = {}
-    expected_empty_tree = {
-        "bioacoustic": {
-            "checks": [audio_length_positive_check, audio_intensity_positive_check],
-            "metrics": [],
-            "subclass": None,
-        }
-    }
-    pruned_tree = activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=BIOACOUSTIC_ACTIVITY_TAXONOMY)
-    assert pruned_tree == expected_empty_tree, f"Expected {expected_empty_tree}, but got {pruned_tree}"
-
-    # Case 4: Multiple valid activities ('sigh' and 'cough')
-    activity_dict = {"sigh": [mono_audio_sample], "cough": [mono_audio_sample]}
-    expected_subtree_multiple = {
-        "bioacoustic": {
-            "checks": [audio_length_positive_check, audio_intensity_positive_check],
-            "metrics": [],
-            "subclass": {
-                "human": {
-                    "checks": [],
-                    "metrics": [],
-                    "subclass": {
-                        "respiration": {
-                            "checks": [],
-                            "metrics": [],
-                            "subclass": {
-                                "breathing": {
-                                    "checks": [],
-                                    "metrics": [],
-                                    "subclass": {
-                                        "sigh": {
-                                            "checks": [],
-                                            "metrics": [],
-                                            "subclass": None,
-                                        }
-                                    },
-                                },
-                                "exhalation": {
-                                    "checks": [],
-                                    "metrics": [],
-                                    "subclass": {
-                                        "cough": {
-                                            "checks": [],
-                                            "metrics": [],
-                                            "subclass": None,
-                                        }
-                                    },
-                                },
-                            },
-                        }
-                    },
-                }
-            },
-        }
-    }
-    pruned_tree = activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=BIOACOUSTIC_ACTIVITY_TAXONOMY)
-    assert pruned_tree == expected_subtree_multiple, f"Expected {expected_subtree_multiple}, but got {pruned_tree}"
-
-    # Case 5: Deeply nested activity ('voluntary cough')
-    activity_dict = {"voluntary": [mono_audio_sample]}
-    expected_subtree_deep = {
-        "bioacoustic": {
-            "checks": [audio_length_positive_check, audio_intensity_positive_check],
-            "metrics": [],
-            "subclass": {
-                "human": {
-                    "checks": [],
-                    "metrics": [],
-                    "subclass": {
-                        "respiration": {
-                            "checks": [],
-                            "metrics": [],
-                            "subclass": {
-                                "exhalation": {
-                                    "checks": [],
-                                    "metrics": [],
-                                    "subclass": {
-                                        "cough": {
+                                        "breathing": {
                                             "checks": [],
                                             "metrics": [],
                                             "subclass": {
-                                                "voluntary": {
+                                                "sigh": {
                                                     "checks": [],
                                                     "metrics": [],
                                                     "subclass": None,
@@ -251,10 +148,57 @@ def test_activity_dict_to_dataset_taxonomy_subtree(mono_audio_sample: Audio) -> 
                     },
                 }
             },
-        }
-    }
-    pruned_tree = activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=BIOACOUSTIC_ACTIVITY_TAXONOMY)
-    assert pruned_tree == expected_subtree_deep, f"Expected {expected_subtree_deep}, but got {pruned_tree}"
+        ),
+        (
+            "voluntary",
+            {
+                "bioacoustic": {
+                    "checks": [audio_length_positive_check, audio_intensity_positive_check],
+                    "metrics": BIOACOUSTIC_ACTIVITY_TAXONOMY["bioacoustic"]["metrics"],
+                    "subclass": {
+                        "human": {
+                            "checks": [],
+                            "metrics": [],
+                            "subclass": {
+                                "respiration": {
+                                    "checks": [],
+                                    "metrics": [],
+                                    "subclass": {
+                                        "exhalation": {
+                                            "checks": [],
+                                            "metrics": [],
+                                            "subclass": {
+                                                "cough": {
+                                                    "checks": [],
+                                                    "metrics": [],
+                                                    "subclass": {
+                                                        "voluntary": {
+                                                            "checks": [],
+                                                            "metrics": [],
+                                                            "subclass": None,
+                                                        }
+                                                    },
+                                                }
+                                            },
+                                        }
+                                    },
+                                }
+                            },
+                        }
+                    },
+                }
+            },
+        ),
+    ],
+)
+def test_activity_to_dataset_taxonomy_subtree(activity_name: str, expected_subtree: Dict) -> None:
+    result = activity_to_dataset_taxonomy_subtree(activity_name, BIOACOUSTIC_ACTIVITY_TAXONOMY)
+    assert result == expected_subtree, f"Expected {expected_subtree}, but got {result}"
+
+
+def test_activity_to_dataset_taxonomy_subtree_errors() -> None:
+    with pytest.raises(ValueError, match="Activity 'nonexistent_activity' not found in taxonomy tree."):
+        activity_to_dataset_taxonomy_subtree("nonexistent_activity", BIOACOUSTIC_ACTIVITY_TAXONOMY)
 
 
 def test_evaluate_node(mono_audio_sample: Audio) -> None:
