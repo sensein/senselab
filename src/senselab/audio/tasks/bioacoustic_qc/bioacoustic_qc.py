@@ -226,21 +226,20 @@ def create_audio_path_to_activity(
         Dict[str, str]: Dictionary mapping each audio path to its activity.
     """
     return {
-        path: audio_path_to_activity.get(path, "bioacoustic") if audio_path_to_activity else "bioacoustic"
-        for path in audio_paths
+        
     }
 
 
 def check_quality(
     audio_paths: Union[str, os.PathLike],
-    audio_path_to_activity: Dict = None,
+    audio_path_to_activity: Dict = {},
     activity_tree: Dict = BIOACOUSTIC_ACTIVITY_TAXONOMY,
     save_path: Union[str, os.PathLike, None] = None,
     n_batches: int = 1
 ) -> pd.DataFrame:
     """Runs quality checks on audio files in n_batches and updates the taxonomy tree."""
     # get the paths to activity dict
-    audio_path_to_activity = audio_path_to_activity(audio_paths, audio_path_to_activity)
+    audio_path_to_activity = {path: audio_path_to_activity.get(path, "bioacoustic") for path in audio_paths}
 
     # create activity to evaluations dict
     activity_to_evaluations = create_activity_to_evaluations(audio_path_to_activity)
@@ -249,6 +248,7 @@ def check_quality(
     run_evaluations(audio_path_to_activity, activity_to_evaluations, save_path, n_batches)
 
     # construct evaluations csv
+    
     # label include, exclude, review
 
 
