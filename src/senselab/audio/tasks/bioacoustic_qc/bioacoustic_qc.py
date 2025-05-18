@@ -76,16 +76,14 @@ def subtree_to_evaluations(subtree: Dict) -> List[Callable[[Audio], bool]]:
 
     def collect_evaluations(node: Dict):
         if not isinstance(node, dict):
-            return
-        metrics = node.get("metrics", [])
-        checks = node.get("checks", [])
-        for fn in metrics + checks:
-            if fn not in evaluations:
-                evaluations.append(fn)
-        subclass = node.get("subclass")
-        if isinstance(subclass, dict):
-            for child in subclass.values():
-                collect_evaluations(child)
+            return None
+        for key in node:
+            for function in node[key].get("metrics", []) + node[key].get("checks", []):
+                if function not in evaluations:
+                    evaluations.append(function)
+            children = node[key].get("subclass")
+            if isinstance(children, dict):
+                collect_evaluations(children)
 
     collect_evaluations(subtree)
     return evaluations
