@@ -132,49 +132,49 @@ def activity_to_dataset_taxonomy_subtree(activity_name: str, activity_tree: Dict
     return pruned_tree
 
 
-def evaluate_node(
-    audios: List[Audio], activity_audios: List[Audio], tree: Dict[str, Any], results_df: pd.DataFrame
-) -> pd.DataFrame:
-    """Runs quality checks on a given taxonomy tree node and updates the tree with results.
+# def evaluate_node(
+#     audios: List[Audio], activity_audios: List[Audio], tree: Dict[str, Any], results_df: pd.DataFrame
+# ) -> pd.DataFrame:
+#     """Runs quality checks on a given taxonomy tree node and updates the tree with results.
 
-    Args:
-        audios (List[Audio]): The full list of audio files, which may be modified if files are excluded.
-        activity_audios (List[Audio]): The subset of `audios` relevant to the current taxonomy node.
-        tree (Dict[str, Any]): The taxonomy tree node containing a "checks" key with check functions.
-        results_df (pd.DataFrame): DataFrame to store results of the quality checks.
+#     Args:
+#         audios (List[Audio]): The full list of audio files, which may be modified if files are excluded.
+#         activity_audios (List[Audio]): The subset of `audios` relevant to the current taxonomy node.
+#         tree (Dict[str, Any]): The taxonomy tree node containing a "checks" key with check functions.
+#         results_df (pd.DataFrame): DataFrame to store results of the quality checks.
 
-    Returns:
-        pd.DataFrame: Updated results DataFrame.
-    """
-    # Calculate metrics
-    metrics = tree.get("metrics")
-    if isinstance(metrics, list):
-        for metric in metrics:
-            results_df = apply_audio_quality_function(results_df, activity_audios, function=metric)
+#     Returns:
+#         pd.DataFrame: Updated results DataFrame.
+#     """
+#     # Calculate metrics
+#     metrics = tree.get("metrics")
+#     if isinstance(metrics, list):
+#         for metric in metrics:
+#             results_df = apply_audio_quality_function(results_df, activity_audios, function=metric)
 
-    # Evaluate checks
-    checks = tree.get("checks")
-    if isinstance(checks, list):
-        for check in checks:
-            results_df = apply_audio_quality_function(results_df, activity_audios, function=check)
+#     # Evaluate checks
+#     checks = tree.get("checks")
+#     if isinstance(checks, list):
+#         for check in checks:
+#             results_df = apply_audio_quality_function(results_df, activity_audios, function=check)
 
-    return results_df
+#     return results_df
 
 
-def evaluate_audio():
-    """Runs evaluations for one audio. Saves to file. Don't run if the audio files features file already exists.
+# def evaluate_audio():
+#     """Runs evaluations for one audio. Saves to file. Don't run if the audio files features file already exists.
 
-    Run efficiently without duplicating metrics or checks.
+#     Run efficiently without duplicating metrics or checks.
 
-    in:
-        activity2evaluations dict
-        audio_path
-        save_path
-    """
+#     in:
+#         activity2evaluations dict
+#         audio_path
+#         save_path
+#     """
+
 
 def run_evaluations(audio_path_to_activity: Dict, activity_to_evaluations: Dict, save_path, n_batches: int):
-    """Constructs a Pydra workflow for running evaluations. Batches audio files. Splits over n_batches.
-    """
+    """Constructs a Pydra workflow for running evaluations. Batches audio files. Splits over n_batches."""
 
     # use activity2evaluations dict
     # split across audio paths
@@ -193,41 +193,41 @@ def run_evaluations(audio_path_to_activity: Dict, activity_to_evaluations: Dict,
     pass
 
 
-def create_activity_to_evaluations(audio_to_activity: Dict[str, str], activity_tree: Dict) -> Dict[str, List[str]]:
+def create_activity_to_evaluations(audio_path_to_activity: Dict[str, str], activity_tree: Dict) -> Dict[str, List[str]]:
     """Generates a mapping from each activity to the list of evaluation functions (metrics and checks)
     that should be applied, based on the activity's corresponding subtree in the taxonomy.
 
     Args:
-        audio_to_activity (Dict[str, str]): Mapping of audio file paths to activity labels.
+        audio_path_to_activity (Dict[str, str]): Mapping of audio file paths to activity labels.
         activity_tree (Dict): Full taxonomy tree defining activity hierarchies and associated evaluations.
 
     Returns:
         Dict[str, List[str]]: Mapping from activity names to ordered lists of evaluation functions.
     """
-    unique_activities = set(audio_to_activity.values())
+    unique_activities = set(audio_path_to_activity.values())
     activity_to_evaluations = {}
     for activity in unique_activities:
         subtree = activity_to_dataset_taxonomy_subtree(activity, activity_tree)
+        print(subtree)
         evaluations = subtree_to_evaluations(subtree)
+        print(evaluations)
         activity_to_evaluations[activity] = evaluations
     return activity_to_evaluations
 
 
-def create_audio_path_to_activity(
-    audio_paths: List[str], audio_path_to_activity: Optional[Dict[str, str]] = None
-) -> Dict[str, str]:
-    """Maps each audio path to an activity, defaulting to 'bioacoustic' if not provided.
+# def create_audio_path_to_activity(
+#     audio_paths: List[str], audio_path_to_activity: Optional[Dict[str, str]] = None
+# ) -> Dict[str, str]:
+#     """Maps each audio path to an activity, defaulting to 'bioacoustic' if not provided.
 
-    Args:
-        audio_paths (List[str]): List of audio file paths.
-        path_to_activity (Optional[Dict[str, str]]): Optional mapping of paths to activity names.
+#     Args:
+#         audio_paths (List[str]): List of audio file paths.
+#         path_to_activity (Optional[Dict[str, str]]): Optional mapping of paths to activity names.
 
-    Returns:
-        Dict[str, str]: Dictionary mapping each audio path to its activity.
-    """
-    return {
-        
-    }
+#     Returns:
+#         Dict[str, str]: Dictionary mapping each audio path to its activity.
+#     """
+#     return {}
 
 
 def check_quality(
@@ -235,26 +235,24 @@ def check_quality(
     audio_path_to_activity: Dict = {},
     activity_tree: Dict = BIOACOUSTIC_ACTIVITY_TAXONOMY,
     save_path: Union[str, os.PathLike, None] = None,
-    n_batches: int = 1
+    n_batches: int = 1,
 ) -> pd.DataFrame:
     """Runs quality checks on audio files in n_batches and updates the taxonomy tree."""
     # get the paths to activity dict
     audio_path_to_activity = {path: audio_path_to_activity.get(path, "bioacoustic") for path in audio_paths}
 
     # create activity to evaluations dict
-    activity_to_evaluations = create_activity_to_evaluations(audio_path_to_activity)
+    activity_to_evaluations = create_activity_to_evaluations(
+        audio_path_to_activity=audio_path_to_activity, activity_tree=activity_tree
+    )
+    print(activity_to_evaluations)
 
     # run_evaluations
     run_evaluations(audio_path_to_activity, activity_to_evaluations, save_path, n_batches)
 
     # construct evaluations csv
-    
+
     # label include, exclude, review
-
-
-
-
-
 
     # run workflow
     # create final metadata files
