@@ -3,6 +3,7 @@
 import os
 from copy import deepcopy
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
+from pathlib import Path
 
 import pandas as pd
 from joblib import Parallel, delayed
@@ -158,37 +159,24 @@ def activity_to_dataset_taxonomy_subtree(activity_name: str, activity_tree: Dict
 
 #     return results_df
 
-
-# def evaluate_audio():
-#     """Runs evaluations for one audio. Saves to file. Don't run if the audio files features file already exists.
-
-#     Run efficiently without duplicating metrics or checks.
-
-#     in:
-#         activity2evaluations dict
-#         audio_path
-#         save_path
-#     """
-
-
-def run_evaluations(audio_path_to_activity: Dict, activity_to_evaluations: Dict, save_path, n_batches: int):
-    """Constructs a Pydra workflow for running evaluations. Batches audio files. Splits over n_batches."""
-
-    # use activity2evaluations dict
-    # split across audio paths
-    # run evaluate_audio
-    # collect all the outputs
-
-    # in check_quality, batch audio files
-    # run separate workflow for each batch
-    # at the end of each batch, update CSV with all evaluations
-
-    # make crucial checks that automatically exclude audio if not passed
-    # Run these first. Don't run anything else after if these fail.
-    # Make them customizable.
-    # Then run review checks. If any of these don't pass, run all other checks, but label review at the end.
-
+def get_evaluation():
     pass
+
+
+def evaluate_audios(audio_paths, save_path, activity, evaluations):
+    """Runs evaluations iteratively. Skips audio if output file already exists."""
+    for audio_path in audio_paths:
+        id = Path(audio_path).stem
+        output_file = save_path / f"{id}.csv"
+        if output_file.exists():
+            continue
+
+        audio = Audio(filepath=audio_path)
+        df = pd.DataFrame([{"id": id, "path": audio_path, "activity": activity}])
+        for evaluation in evaluations:
+            df = get_evaluation(audio, evaluation, df)
+
+        df.to_csv(output_file, index=False)
 
 
 def create_activity_to_evaluations(audio_path_to_activity: Dict[str, str], activity_tree: Dict) -> Dict[str, List[str]]:
@@ -211,6 +199,42 @@ def create_activity_to_evaluations(audio_path_to_activity: Dict[str, str], activ
         print(evaluations)
         activity_to_evaluations[activity] = evaluations
     return activity_to_evaluations
+
+
+def run_evaluations(audio_path_to_activity: Dict, activity_to_evaluations: Dict, save_path, n_batches: int):
+    """
+    C
+    works on batches
+    audio_path_to_activity paths to activity labels
+    activity_to_evaluations dict of activity labels to evaluations
+    divides the audio files into n_processes
+    each process runs iteratively, one audio file at a time
+
+
+    T
+    A
+    Constructs a Pydra workflow for running evaluations. Batches audio files. Splits over n_batches."""
+    # start iteratively
+    for audio_path, activity in audio_path_to_activity:
+        evaluations = activity_to_evaluations[activity]
+        evaluate_audio(audio_path, save_path, activity, evaluations)
+
+
+    # use activity2evaluations dict
+    # split across audio paths
+    # run evaluate_audio
+    # collect all the outputs
+
+    # in check_quality, batch audio files
+    # run separate workflow for each batch
+    # at the end of each batch, update CSV with all evaluations
+
+    # make crucial checks that automatically exclude audio if not passed
+    # Run these first. Don't run anything else after if these fail.
+    # Make them customizable.
+    # Then run review checks. If any of these don't pass, run all other checks, but label review at the end.
+
+    pass
 
 
 # def create_audio_path_to_activity(
