@@ -172,9 +172,7 @@ def create_activity_to_evaluations(audio_path_to_activity: Dict[str, str], activ
     activity_to_evaluations = {}
     for activity in unique_activities:
         subtree = activity_to_dataset_taxonomy_subtree(activity, activity_tree)
-        print(subtree)
         evaluations = subtree_to_evaluations(subtree)
-        print(evaluations)
         activity_to_evaluations[activity] = evaluations
     return activity_to_evaluations
 
@@ -212,21 +210,6 @@ def run_evaluations(audio_path_to_activity: Dict, activity_to_evaluations: Dict,
     # Then run review checks. If any of these don't pass, run all other checks, but label review at the end.
 
     pass
-
-
-# def create_audio_path_to_activity(
-#     audio_paths: List[str], audio_path_to_activity: Optional[Dict[str, str]] = None
-# ) -> Dict[str, str]:
-#     """Maps each audio path to an activity, defaulting to 'bioacoustic' if not provided.
-
-#     Args:
-#         audio_paths (List[str]): List of audio file paths.
-#         path_to_activity (Optional[Dict[str, str]]): Optional mapping of paths to activity names.
-
-#     Returns:
-#         Dict[str, str]: Dictionary mapping each audio path to its activity.
-#     """
-#     return {}
 
 
 def check_quality(
