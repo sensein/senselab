@@ -11,7 +11,7 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.bioacoustic_qc import (
     subtree_to_evaluations,
     activity_to_dataset_taxonomy_subtree,
-    # activity_to_taxonomy_tree_path,
+    activity_to_taxonomy_tree_path,
     # audios_to_activity_dict,
     check_quality,
     # evaluate_node,
@@ -202,60 +202,29 @@ def test_activity_to_dataset_taxonomy_subtree_errors() -> None:
         activity_to_dataset_taxonomy_subtree("nonexistent_activity", BIOACOUSTIC_ACTIVITY_TAXONOMY)
 
 
-@pytest.mark.parametrize("activity_name,expected_subtree", [
-    ("sigh", {
-        "bioacoustic": {
-            "checks": [audio_length_positive_check, audio_intensity_positive_check],
-            "metrics": BIOACOUSTIC_ACTIVITY_TAXONOMY['bioacoustic']['metrics'],
-            "subclass": {
-                "human": {
-                    "checks": [],
-                    "metrics": [],
+@pytest.mark.parametrize(
+    "activity_name,expected_subtree",
+    [
+        (
+            "sigh",
+            {
+                "bioacoustic": {
+                    "checks": [audio_length_positive_check, audio_intensity_positive_check],
+                    "metrics": BIOACOUSTIC_ACTIVITY_TAXONOMY["bioacoustic"]["metrics"],
                     "subclass": {
-                        "respiration": {
+                        "human": {
                             "checks": [],
                             "metrics": [],
                             "subclass": {
-                                "breathing": {
+                                "respiration": {
                                     "checks": [],
                                     "metrics": [],
                                     "subclass": {
-                                        "sigh": {
-                                            "checks": [],
-                                            "metrics": [],
-                                            "subclass": None,
-                                        }
-                                    },
-                                }
-                            },
-                        }
-                    },
-                }
-            },
-        }
-    }),
-    ("voluntary", {
-        "bioacoustic": {
-            "checks": [audio_length_positive_check, audio_intensity_positive_check],
-            "metrics": BIOACOUSTIC_ACTIVITY_TAXONOMY['bioacoustic']['metrics'],
-            "subclass": {
-                "human": {
-                    "checks": [],
-                    "metrics": [],
-                    "subclass": {
-                        "respiration": {
-                            "checks": [],
-                            "metrics": [],
-                            "subclass": {
-                                "exhalation": {
-                                    "checks": [],
-                                    "metrics": [],
-                                    "subclass": {
-                                        "cough": {
+                                        "breathing": {
                                             "checks": [],
                                             "metrics": [],
                                             "subclass": {
-                                                "voluntary": {
+                                                "sigh": {
                                                     "checks": [],
                                                     "metrics": [],
                                                     "subclass": None,
@@ -269,16 +238,57 @@ def test_activity_to_dataset_taxonomy_subtree_errors() -> None:
                     },
                 }
             },
-        }
-    }),
-])
+        ),
+        (
+            "voluntary",
+            {
+                "bioacoustic": {
+                    "checks": [audio_length_positive_check, audio_intensity_positive_check],
+                    "metrics": BIOACOUSTIC_ACTIVITY_TAXONOMY["bioacoustic"]["metrics"],
+                    "subclass": {
+                        "human": {
+                            "checks": [],
+                            "metrics": [],
+                            "subclass": {
+                                "respiration": {
+                                    "checks": [],
+                                    "metrics": [],
+                                    "subclass": {
+                                        "exhalation": {
+                                            "checks": [],
+                                            "metrics": [],
+                                            "subclass": {
+                                                "cough": {
+                                                    "checks": [],
+                                                    "metrics": [],
+                                                    "subclass": {
+                                                        "voluntary": {
+                                                            "checks": [],
+                                                            "metrics": [],
+                                                            "subclass": None,
+                                                        }
+                                                    },
+                                                }
+                                            },
+                                        }
+                                    },
+                                }
+                            },
+                        }
+                    },
+                }
+            },
+        ),
+    ],
+)
 def test_subtree_to_evaluations(activity_name, expected_subtree):
     subtree = activity_to_dataset_taxonomy_subtree(activity_name, BIOACOUSTIC_ACTIVITY_TAXONOMY)
     evaluations = subtree_to_evaluations(subtree)
-    expected_evals = BIOACOUSTIC_ACTIVITY_TAXONOMY['bioacoustic']['metrics'] + [audio_length_positive_check, audio_intensity_positive_check]
+    expected_evals = BIOACOUSTIC_ACTIVITY_TAXONOMY["bioacoustic"]["metrics"] + [
+        audio_length_positive_check,
+        audio_intensity_positive_check,
+    ]
     assert evaluations == expected_evals
-
-
 
 
 def test_evaluate_node(mono_audio_sample: Audio) -> None:
