@@ -27,7 +27,8 @@ except ModuleNotFoundError:
 def test_read_audios_torchaudio_not_installed() -> None:
     """Tests the read_audios function when torchaudio is not installed."""
     with pytest.raises(ModuleNotFoundError):
-        read_audios(file_paths=[MONO_AUDIO_PATH], plugin="serial")
+        audios = read_audios(file_paths=[MONO_AUDIO_PATH], plugin="serial")
+        audios[0].waveform
 
 
 @pytest.mark.skipif(
@@ -52,7 +53,7 @@ def test_read_audios(audio_paths: List[str | os.PathLike]) -> None:
 
     for idx, processed_audio in enumerate(processed_audios):
         # Load the same file directly using the Audio class for comparison
-        reference_audio = Audio.from_filepath(audio_paths[idx])
+        reference_audio = Audio(filepath=audio_paths[idx])
 
         # Verify the processed Audio matches the reference
         assert torch.equal(
