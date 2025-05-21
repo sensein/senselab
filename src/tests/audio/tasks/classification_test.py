@@ -23,7 +23,7 @@ except ModuleNotFoundError:
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_speech_emotion_recognition() -> None:
     """Tests speech emotion recognition."""
-    audio_dataset = [Audio.from_filepath(MONO_AUDIO_PATH)]
+    audio_dataset = [Audio(filepath=MONO_AUDIO_PATH)]
 
     resampled_audios = resample_audios(audio_dataset, 16000)  # some pipelines resample for us but can't guarantee
 
