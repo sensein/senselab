@@ -170,9 +170,9 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-    - name: Install ffmpeg
+    - name: Install ffmpeg and CUDA 12.1 runtime libraries
       run: |
-        sudo apt-get update && sudo apt-get install -y ffmpeg
+        sudo apt-get update && sudo apt-get install -y ffmpeg && sudo apt-get install -y cuda-libraries-12-1
         ffmpeg -version
       shell: bash
     - name: Install Poetry
@@ -331,9 +331,9 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-    - name: Install ffmpeg
+    - name: Install ffmpeg and CUDA 12.1 runtime libraries
       run: |
-        sudo apt-get update && sudo apt-get install -y ffmpeg
+        sudo apt-get update && sudo apt-get install -y ffmpeg && sudo apt-get install -y cuda-libraries-12-1
         ffmpeg -version
       shell: bash
     - name: Install Poetry
@@ -357,25 +357,6 @@ jobs:
     - name: Copy senselab directory to current directory
       run: |
         cp -r /actions-runner/_work/senselab/senselab .
-    - name: Ensure conda is available (install Miniconda if missing)
-      run: |
-        if ! command -v conda &> /dev/null; then
-          echo "Conda not found. Installing Miniconda..."
-          wget --quiet https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/miniconda.sh
-          bash ~/miniconda.sh -b -p $HOME/miniconda
-          eval "$($HOME/miniconda/bin/conda shell.bash hook)"
-          conda init
-        else
-          echo "Conda found at $(which conda)"
-        fi
-        conda --version
-      shell: bash
-    - name: Install CUDA 12.6.3 libraries (ensure CUDA runtime matches PyTorch)
-      run: |
-        eval "$($HOME/miniconda/bin/conda shell.bash hook)"
-        conda config --add channels nvidia
-        conda install -y nvidia/label/cuda-12.6.3::cuda-libraries-dev
-      shell: bash
     - name: Install dependencies with Poetry
       run: |
         cd senselab
@@ -503,9 +484,9 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-    - name: Install ffmpeg
+    - name: Install ffmpeg and CUDA 12.1 runtime libraries
       run: |
-        sudo apt-get update && sudo apt-get install -y ffmpeg
+        sudo apt-get update && sudo apt-get install -y ffmpeg && sudo apt-get install -y cuda-libraries-12-1
         ffmpeg -version
       shell: bash
     - name: Install Poetry
@@ -523,24 +504,6 @@ jobs:
     - name: Copy senselab directory to current directory
       run: |
         cp -r /actions-runner/_work/senselab/senselab .
-    - name: Ensure conda is available (install Miniconda if missing)
-      run: |
-        if ! command -v conda &> /dev/null; then
-          echo "Conda not found. Installing Miniconda..."
-          wget --quiet https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/miniconda.sh
-          bash ~/miniconda.sh -b -p $HOME/miniconda
-          eval "$($HOME/miniconda/bin/conda shell.bash hook)"
-          conda init
-        else
-          echo "Conda found at $(which conda)"
-        fi
-        conda --version
-      shell: bash
-    - name: Install CUDA 12.6.3 libraries (ensure CUDA runtime matches PyTorch)
-      run: |
-        conda config --add channels nvidia
-        conda install -y nvidia/label/cuda-12.6.3::cuda-libraries-dev
-      shell: bash
     - name: Install dependencies with Poetry
       run: |
         cd senselab
@@ -675,9 +638,9 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-    - name: Install ffmpeg
+    - name: Install ffmpeg and CUDA 12.1 runtime libraries
       run: |
-        sudo apt-get update && sudo apt-get install -y ffmpeg
+        sudo apt-get update && sudo apt-get install -y ffmpeg && sudo apt-get install -y cuda-libraries-12-1
         ffmpeg -version
       shell: bash
     - name: Install Poetry
@@ -695,24 +658,6 @@ jobs:
     - name: Copy senselab directory to current directory
       run: |
         cp -r /actions-runner/_work/senselab/senselab .
-    - name: Ensure conda is available (install Miniconda if missing)
-      run: |
-        if ! command -v conda &> /dev/null; then
-          echo "Conda not found. Installing Miniconda..."
-          wget --quiet https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/miniconda.sh
-          bash ~/miniconda.sh -b -p $HOME/miniconda
-          eval "$($HOME/miniconda/bin/conda shell.bash hook)"
-          conda init
-        else
-          echo "Conda found at $(which conda)"
-        fi
-        conda --version
-      shell: bash
-    - name: Install CUDA 12.6.3 libraries (ensure CUDA runtime matches PyTorch)
-      run: |
-        conda config --add channels nvidia
-        conda install -y nvidia/label/cuda-12.6.3::cuda-libraries-dev
-      shell: bash
     - name: Install dependencies with Poetry
       run: |
         cd senselab
