@@ -39,7 +39,7 @@ jobs:
     - name: Install dependencies with Poetry
       run: |
         poetry env use ${{ matrix.python-version }}
-        poetry install --extras "audio text video" --with dev
+        poetry install --extras "audio articulatory text video" --with dev
         poetry env info
       shell: bash
     - name: check files
@@ -95,7 +95,7 @@ jobs:
     - name: Install dependencies with Poetry
       run: |
         poetry env use ${{ matrix.python-version }}
-        poetry install --extras "audio text video" --with dev
+        poetry install --extras "audio articulatory text video" --with dev
         poetry env info
       shell: bash
     - name: Install pre-commit
@@ -357,11 +357,26 @@ jobs:
     - name: Copy senselab directory to current directory
       run: |
         cp -r /actions-runner/_work/senselab/senselab .
+    - name: Verify conda is available
+      run: |
+        which conda
+        conda --version
+      shell: bash
+    - name: Install CUDA 12.6.3 libraries (ensure CUDA runtime matches PyTorch)
+      run: |
+        conda config --add channels nvidia
+        conda install -y nvidia/label/cuda-12.6.3::cuda-libraries-dev
+      shell: bash
     - name: Install dependencies with Poetry
       run: |
         cd senselab
         poetry env use ${{ matrix.python-version }}
-        poetry install --extras "audio text video" --with dev
+        poetry install --extras "audio articulatory text video" --with dev
+      shell: bash
+    - name: List installed packages after Poetry install
+      run: |
+        cd senselab
+        poetry show
       shell: bash
     - name: Check NVIDIA SMI details
       run: |
@@ -499,11 +514,26 @@ jobs:
     - name: Copy senselab directory to current directory
       run: |
         cp -r /actions-runner/_work/senselab/senselab .
+    - name: Verify conda is available
+      run: |
+        which conda
+        conda --version
+      shell: bash
+    - name: Install CUDA 12.6.3 libraries (ensure CUDA runtime matches PyTorch)
+      run: |
+        conda config --add channels nvidia
+        conda install -y nvidia/label/cuda-12.6.3::cuda-libraries-dev
+      shell: bash
     - name: Install dependencies with Poetry
       run: |
         cd senselab
         poetry env use ${{ matrix.python-version }}
-        poetry install --extras "audio text video" --with dev
+        poetry install --extras "audio articulatory text video" --with dev
+      shell: bash
+    - name: List installed packages after Poetry install
+      run: |
+        cd senselab
+        poetry show
       shell: bash
     - name: Check poetry info
       run: |
@@ -648,11 +678,26 @@ jobs:
     - name: Copy senselab directory to current directory
       run: |
         cp -r /actions-runner/_work/senselab/senselab .
+    - name: Verify conda is available
+      run: |
+        which conda
+        conda --version
+      shell: bash
+    - name: Install CUDA 12.6.3 libraries (ensure CUDA runtime matches PyTorch)
+      run: |
+        conda config --add channels nvidia
+        conda install -y nvidia/label/cuda-12.6.3::cuda-libraries-dev
+      shell: bash
     - name: Install dependencies with Poetry
       run: |
         cd senselab
         poetry env use ${{ matrix.python-version }}
-        poetry install --extras "audio text video" --with dev
+        poetry install --extras "audio articulatory text video" --with dev
+      shell: bash
+    - name: List installed packages after Poetry install
+      run: |
+        cd senselab
+        poetry show
       shell: bash
     - name: Check poetry info
       run: |
