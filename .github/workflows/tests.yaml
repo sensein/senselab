@@ -170,13 +170,10 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-    - name: Install ffmpeg and CUDA 12.1 runtime libraries
+    - name: Install ffmpeg
       run: |
-        sudo apt-get update && sudo apt-get install -y ffmpeg && sudo apt-get install -y cuda-libraries-12-1
+        sudo apt-get update && sudo apt-get install -y ffmpeg
         ffmpeg -version
-      shell: bash
-    - name: Install Python development headers
-      run: sudo apt-get install -y python${{ matrix.python-version }}-dev
       shell: bash
     - name: Install Poetry
       run: |
@@ -334,13 +331,20 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-    - name: Install ffmpeg and CUDA 12.1 runtime libraries
+    - name: Install ffmpeg
       run: |
-        sudo apt-get update && sudo apt-get install -y ffmpeg && sudo apt-get install -y cuda-libraries-12-1
+        sudo apt-get update && sudo apt-get install -y ffmpeg
         ffmpeg -version
       shell: bash
-    - name: Install Python development headers
-      run: sudo apt-get install -y python${{ matrix.python-version }}-dev
+    - name: Install CUDA Toolkit 12.6
+      run: |
+        wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-ubuntu2204.pin
+        sudo mv cuda-ubuntu2204.pin /etc/apt/preferences.d/cuda-repository-pin-600
+        wget https://developer.download.nvidia.com/compute/cuda/12.6.3/local_installers/cuda-repo-ubuntu2204-12-6-local_12.6.3-550.54.14-1_amd64.deb
+        sudo dpkg -i cuda-repo-ubuntu2204-12-6-local_12.6.3-550.54.14-1_amd64.deb
+        sudo cp /var/cuda-repo-ubuntu2204-12-6-local/cuda-*-keyring.gpg /usr/share/keyrings/
+        sudo apt-get update
+        sudo apt-get -y install cuda-toolkit-12-6
       shell: bash
     - name: Install Poetry
       run: |
@@ -368,11 +372,6 @@ jobs:
         cd senselab
         poetry env use ${{ matrix.python-version }}
         poetry install --extras "audio articulatory text video" --with dev
-      shell: bash
-    - name: List installed packages after Poetry install
-      run: |
-        cd senselab
-        poetry show
       shell: bash
     - name: Check NVIDIA SMI details
       run: |
@@ -490,13 +489,20 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-    - name: Install ffmpeg and CUDA 12.1 runtime libraries
+    - name: Install ffmpeg
       run: |
-        sudo apt-get update && sudo apt-get install -y ffmpeg && sudo apt-get install -y cuda-libraries-12-1
+        sudo apt-get update && sudo apt-get install -y ffmpeg
         ffmpeg -version
       shell: bash
-    - name: Install Python development headers
-      run: sudo apt-get install -y python${{ matrix.python-version }}-dev
+    - name: Install CUDA Toolkit 12.6
+      run: |
+        wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-ubuntu2204.pin
+        sudo mv cuda-ubuntu2204.pin /etc/apt/preferences.d/cuda-repository-pin-600
+        wget https://developer.download.nvidia.com/compute/cuda/12.6.3/local_installers/cuda-repo-ubuntu2204-12-6-local_12.6.3-550.54.14-1_amd64.deb
+        sudo dpkg -i cuda-repo-ubuntu2204-12-6-local_12.6.3-550.54.14-1_amd64.deb
+        sudo cp /var/cuda-repo-ubuntu2204-12-6-local/cuda-*-keyring.gpg /usr/share/keyrings/
+        sudo apt-get update
+        sudo apt-get -y install cuda-toolkit-12-6
       shell: bash
     - name: Install Poetry
       run: |
@@ -518,11 +524,6 @@ jobs:
         cd senselab
         poetry env use ${{ matrix.python-version }}
         poetry install --extras "audio articulatory text video" --with dev
-      shell: bash
-    - name: List installed packages after Poetry install
-      run: |
-        cd senselab
-        poetry show
       shell: bash
     - name: Check poetry info
       run: |
@@ -647,13 +648,20 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-    - name: Install ffmpeg and CUDA 12.1 runtime libraries
+    - name: Install ffmpeg
       run: |
-        sudo apt-get update && sudo apt-get install -y ffmpeg && sudo apt-get install -y cuda-libraries-12-1
+        sudo apt-get update && sudo apt-get install -y ffmpeg
         ffmpeg -version
       shell: bash
-    - name: Install Python development headers
-      run: sudo apt-get install -y python${{ matrix.python-version }}-dev
+    - name: Install CUDA Toolkit 12.6
+      run: |
+        wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-ubuntu2204.pin
+        sudo mv cuda-ubuntu2204.pin /etc/apt/preferences.d/cuda-repository-pin-600
+        wget https://developer.download.nvidia.com/compute/cuda/12.6.3/local_installers/cuda-repo-ubuntu2204-12-6-local_12.6.3-550.54.14-1_amd64.deb
+        sudo dpkg -i cuda-repo-ubuntu2204-12-6-local_12.6.3-550.54.14-1_amd64.deb
+        sudo cp /var/cuda-repo-ubuntu2204-12-6-local/cuda-*-keyring.gpg /usr/share/keyrings/
+        sudo apt-get update
+        sudo apt-get -y install cuda-toolkit-12-6
       shell: bash
     - name: Install Poetry
       run: |
@@ -675,11 +683,6 @@ jobs:
         cd senselab
         poetry env use ${{ matrix.python-version }}
         poetry install --extras "audio articulatory text video" --with dev
-      shell: bash
-    - name: List installed packages after Poetry install
-      run: |
-        cd senselab
-        poetry show
       shell: bash
     - name: Check poetry info
       run: |
