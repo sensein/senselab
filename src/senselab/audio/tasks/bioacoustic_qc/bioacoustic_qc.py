@@ -1,13 +1,14 @@
 """Runs bioacoustic activity recording quality control on a set of Audio objects."""
 
+import multiprocessing as mp
 import os
 from copy import deepcopy
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
 import pandas as pd
-from joblib import Parallel, delayed
-from pydra.engine.core import Workflow  # Assuming you're using Pydra workflows
+import pydra
+from pydra import Submitter
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.bioacoustic_qc.constants import BIOACOUSTIC_ACTIVITY_TAXONOMY
@@ -179,30 +180,45 @@ def run_evaluations(
     audio_path_to_activity: Dict[str, str],
     activity_to_evaluations: Dict[str, List[Callable[[Audio], float | bool]]],
     save_path: Union[str, Path],
-    batch_size: int,
+    batch_size: int = 8,
+    plugin: str = "cf",
+    n_cores: int = 8,
 ):
-    """
-    Runs evaluation functions over audio files, optionally in parallel.
+    try:
+        mp.set_start_method("spawn", force=True)
+    except RuntimeError:
+        pass
 
-    Args:
-        audio_path_to_activity (Dict): Maps audio file paths to activity labels.
-        activity_to_evaluations (Dict): Maps activity labels to a list of evaluation functions.
-        save_path (str | Path): Directory where evaluation CSVs should be saved.
-        batch_size (int): Number of audio files to process in each parallel batch.
-    """
+    if n_cores > 1:
+        plugin_args = {"n_procs": n_cores} if plugin == "cf" else {}
+    else:
+        plugin = "serial"
+        plugin_args = {}
+
     save_path = Path(save_path)
     save_path.mkdir(parents=True, exist_ok=True)
 
     audio_paths = sorted(audio_path_to_activity.keys())
-    batches = [audio_paths[i:i + batch_size] for i in range(0, len(audio_paths), batch_size)]
+    batches = [audio_paths[i : i + batch_size] for i in range(0, len(audio_paths), batch_size)]
 
-    def process_batch(batch_audio_paths):
-        for audio_path in batch_audio_paths:
-            activity = audio_path_to_activity[audio_path]
-            evaluations = activity_to_evaluations[activity]
-            evaluate_audio(audio_path, save_path, activity, evaluations)
+    # Capture evaluation logic in a closure
+    def process_batch_task_closure(activity_to_evaluations, audio_path_to_activity, save_path):
+        @pydra.mark.task
+        def process_batch_task(batch_audio_paths: List[str]):
+            for audio_path in batch_audio_paths:
+                activity = audio_path_to_activity[audio_path]
+                evaluations = activity_to_evaluations[activity]
+                evaluate_audio(audio_path, save_path, activity, evaluations)
 
-    Parallel(n_jobs=len(batches))(delayed(process_batch)(batch) for batch in batches)
+        return process_batch_task
+
+    task = process_batch_task_closure(activity_to_evaluations, audio_path_to_activity, save_path)()
+    task.split("batch_audio_paths", batch_audio_paths=batches)
+
+    with Submitter(plugin=plugin, **plugin_args) as sub:
+        sub(task)
+
+    return task
 
 
 def check_quality(
@@ -210,7 +226,7 @@ def check_quality(
     audio_path_to_activity: Dict = {},
     activity_tree: Dict = BIOACOUSTIC_ACTIVITY_TAXONOMY,
     save_dir: Union[str, os.PathLike, None] = None,
-    batch_size: int = 8
+    batch_size: int = 8,
 ) -> pd.DataFrame:
     """Runs quality checks on audio files in n_batches and updates the taxonomy tree."""
     # get the paths to activity dict
@@ -230,8 +246,6 @@ def check_quality(
 
     # label include, exclude, review
     return evaluations_df
-
-
 
     # run workflow
     # create final metadata files
