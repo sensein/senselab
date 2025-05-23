@@ -33,7 +33,7 @@ version = "0.0.0"
 
 [tool.poetry.dependencies]
 datasets = "~=3"
-torch = {version = "~=2.6", markers = "sys_platform != 'darwin' or platform_machine == 'arm64'"}
+torch = {version = "==2.6", markers = "sys_platform != 'darwin' or platform_machine == 'arm64'"}
 torchvision = "~=0.20"
 transformers = "~=4.48"
 pydra = "~=0.25"
