@@ -175,6 +175,9 @@ jobs:
         sudo apt-get update && sudo apt-get install -y ffmpeg && sudo apt-get install -y cuda-libraries-12-1
         ffmpeg -version
       shell: bash
+    - name: Install Python development headers
+      run: sudo apt-get install -y python${{ matrix.python-version }}-dev
+      shell: bash
     - name: Install Poetry
       run: |
         which python
@@ -336,6 +339,9 @@ jobs:
         sudo apt-get update && sudo apt-get install -y ffmpeg && sudo apt-get install -y cuda-libraries-12-1
         ffmpeg -version
       shell: bash
+    - name: Install Python development headers
+      run: sudo apt-get install -y python${{ matrix.python-version }}-dev
+      shell: bash
     - name: Install Poetry
       run: |
         which python
@@ -488,6 +494,9 @@ jobs:
       run: |
         sudo apt-get update && sudo apt-get install -y ffmpeg && sudo apt-get install -y cuda-libraries-12-1
         ffmpeg -version
+      shell: bash
+    - name: Install Python development headers
+      run: sudo apt-get install -y python${{ matrix.python-version }}-dev
       shell: bash
     - name: Install Poetry
       run: |
@@ -642,6 +651,9 @@ jobs:
       run: |
         sudo apt-get update && sudo apt-get install -y ffmpeg && sudo apt-get install -y cuda-libraries-12-1
         ffmpeg -version
+      shell: bash
+    - name: Install Python development headers
+      run: sudo apt-get install -y python${{ matrix.python-version }}-dev
       shell: bash
     - name: Install Poetry
       run: |
