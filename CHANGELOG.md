@@ -1,3 +1,15 @@
+# 0.36.2 (Fri May 23 2025)
+
+#### 🐛 Bug Fix
+
+- solving different blockers [#337](https://github.com/sensein/senselab/pull/337) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.36.1 (Tue Apr 22 2025)
 
 #### 🐛 Bug Fix
