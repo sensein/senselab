@@ -42,6 +42,10 @@ Welcome to ```senselab```! This is a Python package for streamlining the process
 
 2. `FFmpeg` is required by some audio and video dependencies (e.g., `torchaudio`). Please make sure you have `FFmpeg` properly installed on your machine before installing and using `senselab` (see [here](https://www.ffmpeg.org/download.html) for detailed platform-dependent instructions).
 
+3. CUDA libraries matching the CUDA version expected by the PyTorch wheels (e.g., the latest pytorch 2.7 expects cuda-12.6). To install those with conda, please do:
+  - ```conda config --add channels nvidia```
+  - ```conda install -y nvidia/label/cuda-12.6.3::cuda-libraries-dev```
+
 ## Installation
 Install this package via:
 
@@ -59,6 +63,12 @@ If you want to install only audio dependencies, you do:
 ```sh
 pip install 'senselab[audio]'
 ```
+
+To install audio and articulatory dependencies, you do:
+```sh
+pip install 'senselab[audio,articulatory]'
+```
+
 To install video and text extras, please do:
 ```sh
 pip install 'senselab[video,text]'
