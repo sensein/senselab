@@ -29,6 +29,7 @@ def diarize_audios(
             This will be used only if the model supports it (e.g., Pyannote).
         max_speakers (Optional[int]): The maximum number of speakers (default is None).
             This will be used only if the model supports it (e.g., Pyannote).
+            For the NVIDIA Sortformer model, the max number of speakers is 4.
 
     Returns:
         List[List[ScriptLine]]: The list of script lines with speaker labels.
