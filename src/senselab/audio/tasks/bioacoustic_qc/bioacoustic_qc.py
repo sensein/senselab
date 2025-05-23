@@ -171,8 +171,7 @@ def evaluate_audio(audio_path, save_path, activity, evaluations):
     audio = Audio(filepath=audio_path)
     df = pd.DataFrame([{"id": id, "path": audio_path, "activity": activity}])
     for evaluation in evaluations:
-        df = get_evaluation(audio, evaluation, df)
-
+        df = get_evaluation(audio=audio, evaluation_function=evaluation, df=df, id=id)
     df.to_csv(output_file, index=False)
 
 
@@ -221,10 +220,10 @@ def check_quality(
     activity_to_evaluations = create_activity_to_evaluations(
         audio_path_to_activity=audio_path_to_activity, activity_tree=activity_tree
     )
-    print(activity_to_evaluations)
 
     # run_evaluations
     run_evaluations(audio_path_to_activity, activity_to_evaluations, save_path, n_batches)
+
 
     # construct evaluations csv
 
