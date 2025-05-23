@@ -3,13 +3,14 @@
 from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.speaker_diarization.nvidia import diarize_audios_with_nvidia_sortformer
 from senselab.audio.tasks.speaker_diarization.pyannote import diarize_audios_with_pyannote
-from senselab.utils.data_structures import DeviceType, PyannoteAudioModel, ScriptLine
+from senselab.utils.data_structures import DeviceType, HFModel, PyannoteAudioModel, ScriptLine, SenselabModel
 
 
 def diarize_audios(
     audios: List[Audio],
-    model: Optional[PyannoteAudioModel] = None,
+    model: Optional[SenselabModel] = None,
     num_speakers: Optional[int] = None,
     min_speakers: Optional[int] = None,
     max_speakers: Optional[int] = None,
@@ -23,8 +24,11 @@ def diarize_audios(
             If None, the default model "pyannote/speaker-diarization-3.1" is used.
         device (Optional[DeviceType]): The device to run the model on (default is None).
         num_speakers (Optional[int]): The number of speakers (default is None).
+            This will be used only if the model supports it (e.g., Pyannote).
         min_speakers (Optional[int]): The minimum number of speakers (default is None).
+            This will be used only if the model supports it (e.g., Pyannote).
         max_speakers (Optional[int]): The maximum number of speakers (default is None).
+            This will be used only if the model supports it (e.g., Pyannote).
 
     Returns:
         List[List[ScriptLine]]: The list of script lines with speaker labels.
@@ -41,7 +45,13 @@ def diarize_audios(
             min_speakers=min_speakers,
             max_speakers=max_speakers,
         )
+    elif isinstance(model, HFModel):
+        return diarize_audios_with_nvidia_sortformer(
+            audios=audios,
+            model_name=str(model.path_or_uri),
+            device=device,
+        )
     else:
         raise NotImplementedError(
-            "Only Pyannote models are supported for now. We aim to support more models in the future."
+            "Only Pyannote and NVIDIA Sortformer (from HuggingFace) models are supported for now."
         )
