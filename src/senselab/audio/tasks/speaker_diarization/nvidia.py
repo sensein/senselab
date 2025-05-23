@@ -63,6 +63,8 @@ def diarize_audios_with_nvidia_sortformer(
 ) -> List[List[ScriptLine]]:
     """Diarizes a list of audio files using the NVIDIA Sortformer diarization model.
 
+    The max number of detectable speakers is 4.
+
     Args:
         audios (List[Audio]): A list of Audio objects.
         model_name (str): The Hugging Face model card name.
@@ -106,12 +108,13 @@ def diarize_audios_with_nvidia_sortformer(
             tmpfile_path = tmpfile.name
         try:
             audio.save_to_file(tmpfile_path)
-            diarization_segments = model.diarize(audio=tmpfile_path)
+            diarization_segments = model.diarize(audio=tmpfile_path)[0]
+
             # diarization_segments: List[List[str]], e.g. [['0.080 4.950 speaker_0']]
             script_lines: List[ScriptLine] = []
             for seg in diarization_segments:
                 # seg: List[str], e.g. '[0.080 4.950 speaker_0]'
-                parts = seg[0].strip().split()
+                parts = seg.strip().split()
                 if len(parts) == 3:
                     start, end, speaker = parts
                     script_lines.append(
@@ -121,7 +124,7 @@ def diarize_audios_with_nvidia_sortformer(
                             end=float(end),
                         )
                     )
-            results.append(script_lines)
+            results.append(sorted(script_lines, key=lambda x: x.start if x.start is not None else 0.0))
         finally:
             # Clean up the temporary file
             if os.path.exists(tmpfile_path):
