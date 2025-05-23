@@ -179,7 +179,7 @@ def run_evaluations(
     audio_path_to_activity: Dict[str, str],
     activity_to_evaluations: Dict[str, List[Callable[[Audio], float | bool]]],
     save_path: Union[str, Path],
-    n_batches: int = 1,
+    batch_size: int,
 ):
     """
     Runs evaluation functions over audio files, optionally in parallel.
@@ -188,13 +188,13 @@ def run_evaluations(
         audio_path_to_activity (Dict): Maps audio file paths to activity labels.
         activity_to_evaluations (Dict): Maps activity labels to a list of evaluation functions.
         save_path (str | Path): Directory where evaluation CSVs should be saved.
-        n_batches (int): Number of batches to split audio files across for parallel execution.
+        batch_size (int): Number of audio files to process in each parallel batch.
     """
     save_path = Path(save_path)
     save_path.mkdir(parents=True, exist_ok=True)
 
     audio_paths = sorted(audio_path_to_activity.keys())
-    batches = [audio_paths[i::n_batches] for i in range(n_batches)]
+    batches = [audio_paths[i:i + batch_size] for i in range(0, len(audio_paths), batch_size)]
 
     def process_batch(batch_audio_paths):
         for audio_path in batch_audio_paths:
@@ -202,15 +202,15 @@ def run_evaluations(
             evaluations = activity_to_evaluations[activity]
             evaluate_audio(audio_path, save_path, activity, evaluations)
 
-    Parallel(n_jobs=n_batches)(delayed(process_batch)(batch) for batch in batches)
+    Parallel(n_jobs=len(batches))(delayed(process_batch)(batch) for batch in batches)
 
 
 def check_quality(
     audio_paths: Union[str, os.PathLike],
     audio_path_to_activity: Dict = {},
     activity_tree: Dict = BIOACOUSTIC_ACTIVITY_TAXONOMY,
-    save_path: Union[str, os.PathLike, None] = None,
-    n_batches: int = 1,
+    save_dir: Union[str, os.PathLike, None] = None,
+    batch_size: int = 8
 ) -> pd.DataFrame:
     """Runs quality checks on audio files in n_batches and updates the taxonomy tree."""
     # get the paths to activity dict
@@ -222,12 +222,16 @@ def check_quality(
     )
 
     # run_evaluations
-    run_evaluations(audio_path_to_activity, activity_to_evaluations, save_path, n_batches)
-
+    run_evaluations(audio_path_to_activity, activity_to_evaluations, save_dir, batch_size=batch_size)
 
     # construct evaluations csv
+    csv_paths = Path(save_dir).glob("*.csv")
+    evaluations_df = pd.concat((pd.read_csv(p) for p in csv_paths), axis=0, ignore_index=True, sort=False)
 
     # label include, exclude, review
+    return evaluations_df
+
+
 
     # run workflow
     # create final metadata files
