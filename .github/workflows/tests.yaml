@@ -386,6 +386,27 @@ jobs:
         sudo rm -f "$INSTALL_ROOT/$CUDA_DEB"
         sudo rm -f /var/cuda-repo-ubuntu2204-12-6-local
       shell: bash
+    - name: Check CUDA and GCC compatibility
+      run: |
+        echo "Checking CUDA version..."
+        if [ -x "$(command -v nvcc)" ]; then
+          nvcc --version
+        else
+          echo "⚠️ nvcc not found - CUDA might not be installed properly"
+          exit 1
+        fi
+
+        echo "Checking GCC version..."
+        gcc_version=$(gcc -dumpversion)
+        echo "GCC version: $gcc_version"
+
+        # Check if GCC version is compatible with CUDA (e.g., CUDA 12.6 supports up to GCC 11)
+        if [[ "$gcc_version" =~ ^12 ]]; then
+          echo "❌ GCC 12 is not supported by CUDA 12.6. Please use GCC 11."
+          exit 1
+        else
+          echo "✅ GCC version appears compatible with CUDA 12.6"
+        fi
     - name: Check available space
       run: |
         df -h
