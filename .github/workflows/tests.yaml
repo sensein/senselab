@@ -386,6 +386,12 @@ jobs:
         sudo rm -f "$INSTALL_ROOT/$CUDA_DEB"
         sudo rm -f /var/cuda-repo-ubuntu2204-12-6-local
       shell: bash
+    - name: Export CUDA environment variables
+      run: |
+        echo "Exporting CUDA environment variables to GITHUB_ENV"
+        echo "PATH=/usr/local/cuda/bin:$PATH" >> $GITHUB_ENV
+        echo "LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+      shell: bash
     - name: Check CUDA and GCC compatibility
       run: |
         echo "Checking CUDA version..."
@@ -393,17 +399,6 @@ jobs:
         echo "Checking GCC version..."
         gcc_version=$(gcc -dumpversion)
         echo "GCC version: $gcc_version"
-      shell: bash
-    - name: Install GCC 12 and set as default
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y gcc-12 g++-12
-        # Set GCC/G++ 12 as default
-        sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100
-        sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 100
-        echo "🛠 Using GCC version:"
-        gcc --version
-        g++ --version
       shell: bash
     - name: Check available space
       run: |
