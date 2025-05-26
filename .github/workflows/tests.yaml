@@ -151,12 +151,12 @@ jobs:
         python-version: ['3.10']
     env:
       WORKING_DIR: ${{ vars.WORKING_DIR }}
-      TORCH_HOME: ${{ env.WORKING_DIR }}/torch
-      PIP_CACHE_DIR: ${{ env.WORKING_DIR }}/pip
-      POETRY_CACHE_DIR: ${{ env.WORKING_DIR }}/poetry
-      HF_HOME: ${{ env.WORKING_DIR }}/huggingface
-      TRANSFORMERS_CACHE: ${{ env.HF_HOME }}/transformers
-      HF_DATASETS_CACHE: ${{ env.HF_HOME }}/datasets
+      TORCH_HOME: ${{ vars.WORKING_DIR }}/torch
+      PIP_CACHE_DIR: ${{ vars.WORKING_DIR }}/pip
+      POETRY_CACHE_DIR: ${{ vars.WORKING_DIR }}/poetry
+      HF_HOME: ${{ vars.WORKING_DIR }}/huggingface
+      TRANSFORMERS_CACHE: ${{ vars.WORKING_DIR }}/huggingface/transformers
+      HF_DATASETS_CACHE: ${{ vars.WORKING_DIR }}/huggingface/datasets
     outputs:
       job-ran: ${{ steps.set-ran.outputs.ran }}
     steps:
@@ -305,12 +305,12 @@ jobs:
         python-version: ['3.10']
     env:
       WORKING_DIR: ${{ vars.WORKING_DIR }}
-      TORCH_HOME: ${{ env.WORKING_DIR }}/torch
-      PIP_CACHE_DIR: ${{ env.WORKING_DIR }}/pip
-      POETRY_CACHE_DIR: ${{ env.WORKING_DIR }}/poetry
-      HF_HOME: ${{ env.WORKING_DIR }}/huggingface
-      TRANSFORMERS_CACHE: ${{ env.HF_HOME }}/transformers
-      HF_DATASETS_CACHE: ${{ env.HF_HOME }}/datasets
+      TORCH_HOME: ${{ vars.WORKING_DIR }}/torch
+      PIP_CACHE_DIR: ${{ vars.WORKING_DIR }}/pip
+      POETRY_CACHE_DIR: ${{ vars.WORKING_DIR }}/poetry
+      HF_HOME: ${{ vars.WORKING_DIR }}/huggingface
+      TRANSFORMERS_CACHE: ${{ vars.WORKING_DIR }}/huggingface/transformers
+      HF_DATASETS_CACHE: ${{ vars.WORKING_DIR }}/huggingface/datasets
     outputs:
       job-ran: ${{ steps.set-ran.outputs.ran }}
     steps:
@@ -490,12 +490,12 @@ jobs:
         python-version: ['3.11']
     env:
       WORKING_DIR: ${{ vars.WORKING_DIR }}
-      TORCH_HOME: ${{ env.WORKING_DIR }}/torch
-      PIP_CACHE_DIR: ${{ env.WORKING_DIR }}/pip
-      POETRY_CACHE_DIR: ${{ env.WORKING_DIR }}/poetry
-      HF_HOME: ${{ env.WORKING_DIR }}/huggingface
-      TRANSFORMERS_CACHE: ${{ env.HF_HOME }}/transformers
-      HF_DATASETS_CACHE: ${{ env.HF_HOME }}/datasets
+      TORCH_HOME: ${{ vars.WORKING_DIR }}/torch
+      PIP_CACHE_DIR: ${{ vars.WORKING_DIR }}/pip
+      POETRY_CACHE_DIR: ${{ vars.WORKING_DIR }}/poetry
+      HF_HOME: ${{ vars.WORKING_DIR }}/huggingface
+      TRANSFORMERS_CACHE: ${{ vars.WORKING_DIR }}/huggingface/transformers
+      HF_DATASETS_CACHE: ${{ vars.WORKING_DIR }}/huggingface/datasets
     outputs:
       job-ran: ${{ steps.set-ran.outputs.ran }}
     steps:
@@ -665,12 +665,12 @@ jobs:
         python-version: ['3.12']
     env:
       WORKING_DIR: ${{ vars.WORKING_DIR }}
-      TORCH_HOME: ${{ env.WORKING_DIR }}/torch
-      PIP_CACHE_DIR: ${{ env.WORKING_DIR }}/pip
-      POETRY_CACHE_DIR: ${{ env.WORKING_DIR }}/poetry
-      HF_HOME: ${{ env.WORKING_DIR }}/huggingface
-      TRANSFORMERS_CACHE: ${{ env.HF_HOME }}/transformers
-      HF_DATASETS_CACHE: ${{ env.HF_HOME }}/datasets
+      TORCH_HOME: ${{ vars.WORKING_DIR }}/torch
+      PIP_CACHE_DIR: ${{ vars.WORKING_DIR }}/pip
+      POETRY_CACHE_DIR: ${{ vars.WORKING_DIR }}/poetry
+      HF_HOME: ${{ vars.WORKING_DIR }}/huggingface
+      TRANSFORMERS_CACHE: ${{ vars.WORKING_DIR }}/huggingface/transformers
+      HF_DATASETS_CACHE: ${{ vars.WORKING_DIR }}/huggingface/datasets
     outputs:
       job-ran: ${{ steps.set-ran.outputs.ran }}
     steps:
