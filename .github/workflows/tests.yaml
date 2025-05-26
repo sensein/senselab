@@ -3,6 +3,7 @@ name: tests
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
 
 jobs:
   macos-tests:
@@ -108,7 +109,9 @@ jobs:
 
 
   start-runner-310-core:
-    if: github.event.pull_request.draft == false && contains(github.event.pull_request.labels.*.name, 'to-test-gpu') && success()
+    if: >
+      (github.event.pull_request.draft == false && contains(github.event.pull_request.labels.*.name, 'to-test-gpu') && success())
+      || github.event_name == 'workflow_dispatch'
     needs:
     - pre-commit
     - macos-tests
@@ -167,7 +170,7 @@ jobs:
         fetch-depth: 1   # no need for the history
     - name: Create cache directories
       run: |
-        mkdir -p "$POETRY_CACHE_DIR" "$HF_HOME"
+        mkdir -p "$POETRY_CACHE_DIR" "$PIP_CACHE_DIR" "$TORCH_HOME" "$HF_HOME" "$TRANSFORMERS_CACHE" "$HF_DATASETS_CACHE"
         ls -lah ${{ vars.WORKING_DIR }}
       shell: bash
     - name: Set up Python ${{ matrix.python-version }}
@@ -261,7 +264,9 @@ jobs:
 
 
   start-runner-310:
-    if: github.event.pull_request.draft == false && contains(github.event.pull_request.labels.*.name, 'to-test-gpu') && success()
+    if: >
+      (github.event.pull_request.draft == false && contains(github.event.pull_request.labels.*.name, 'to-test-gpu') && success())
+      || github.event_name == 'workflow_dispatch'
     needs:
     - pre-commit
     - macos-tests
@@ -316,9 +321,6 @@ jobs:
     steps:
     - id: set-ran
       run: echo "::set-output name=ran::true"
-    - name: Check available space before execution
-      run: df -h
-      shell: bash
     - uses: actions/checkout@v4
       with:
         fetch-depth: 1   # no need for the history
@@ -330,9 +332,15 @@ jobs:
         rm -rf ~/.poetry
         df -h
       shell: bash
-    - name: Create cache directories
+    - name: Symlink default cache folders
       run: |
-        mkdir -p "$POETRY_CACHE_DIR" "$HF_HOME"
+        mkdir -p "$WORKING_DIR"/{pip,poetry,torch,huggingface,wget,tmp}
+        ln -sf "$WORKING_DIR/pip" ~/.cache/pip
+        ln -sf "$WORKING_DIR/poetry" ~/.cache/pypoetry
+        ln -sf "$WORKING_DIR/torch" ~/.cache/torch
+        ln -sf "$WORKING_DIR/huggingface" ~/.cache/huggingface
+        ln -sf "$WORKING_DIR/huggingface" ~/.huggingface
+        ln -sf "$WORKING_DIR/tmp" /tmp  # override /tmp if large temp files are expected
         ls -lah ${{ vars.WORKING_DIR }}
       shell: bash
     - name: Set up Python ${{ matrix.python-version }}
@@ -344,27 +352,51 @@ jobs:
         sudo apt-get update && sudo apt-get install -y ffmpeg
         ffmpeg -version
       shell: bash
-    - name: Install CUDA Toolkit 12.6
+    - name: Install CUDA Toolkit 12.6 (minimize root disk usage)
       run: |
-        # Download the CUDA pin file as before
+        set -e
+
+        # Reuse the same WORKING_DIR for CUDA installer
+        export INSTALL_ROOT="$WORKING_DIR"
+
+        # Download the pin file and add it to apt preferences
         wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-ubuntu2204.pin
         sudo mv cuda-ubuntu2204.pin /etc/apt/preferences.d/cuda-repository-pin-600
 
-        # Download the .deb installer to /opt/dlami/nvme
-        cd /opt/dlami/nvme
-        wget https://developer.download.nvidia.com/compute/cuda/12.6.3/local_installers/cuda-repo-ubuntu2204-12-6-local_12.6.3-560.35.05-1_amd64.deb
+        # Download CUDA installer into working dir
+        cd "$INSTALL_ROOT"
+        CUDA_DEB=cuda-repo-ubuntu2204-12-6-local_12.6.3-560.35.05-1_amd64.deb
+        wget "https://developer.download.nvidia.com/compute/cuda/12.6.3/local_installers/$CUDA_DEB"
 
-        # Install the .deb from /opt/dlami/nvme
-        sudo dpkg -i ./cuda-repo-ubuntu2204-12-6-local_12.6.3-560.35.05-1_amd64.deb
+        # Install and redirect unpacked contents
+        sudo dpkg -i "./$CUDA_DEB"
 
-        # Move the extracted repo directory to /opt/dlami/nvme and symlink it back to /var
-        sudo mv /var/cuda-repo-ubuntu2204-12-6-local /opt/dlami/nvme/
-        sudo ln -s /opt/dlami/nvme/cuda-repo-ubuntu2204-12-6-local /var/cuda-repo-ubuntu2204-12-6-local
+        if [ -d /var/cuda-repo-ubuntu2204-12-6-local ]; then
+          sudo mv /var/cuda-repo-ubuntu2204-12-6-local "$INSTALL_ROOT/"
+          sudo ln -s "$INSTALL_ROOT/cuda-repo-ubuntu2204-12-6-local" /var/cuda-repo-ubuntu2204-12-6-local
+        fi
 
-        # Continue as normal
+        # Install the CUDA Toolkit
         sudo cp /var/cuda-repo-ubuntu2204-12-6-local/cuda-*-keyring.gpg /usr/share/keyrings/
         sudo apt-get update
         sudo apt-get -y install cuda-toolkit-12-6
+
+        # Clean up installer and symlink
+        sudo rm -f "$INSTALL_ROOT/$CUDA_DEB"
+        sudo rm -f /var/cuda-repo-ubuntu2204-12-6-local
+      shell: bash
+    - name: Check available space
+      run: |
+        df -h
+      shell: bash
+    - name: Clean apt cache
+      run: |
+        sudo apt-get clean
+        sudo rm -rf /var/lib/apt/lists/*
+      shell: bash
+    - name: Check available space
+      run: |
+        df -h
       shell: bash
     - name: Install Poetry
       run: |
@@ -447,7 +479,9 @@ jobs:
         ec2-instance-id: ${{ needs.start-runner-310.outputs.ec2-instance-id }}
 
   start-runner-311:
-    if: github.event.pull_request.draft == false && contains(github.event.pull_request.labels.*.name, 'to-test-gpu') && success()
+    if: >
+      (github.event.pull_request.draft == false && contains(github.event.pull_request.labels.*.name, 'to-test-gpu') && success())
+      || github.event_name == 'workflow_dispatch'
     needs:
     - pre-commit
     - macos-tests
@@ -506,7 +540,7 @@ jobs:
         fetch-depth: 1   # no need for the history
     - name: Create cache directories
       run: |
-        mkdir -p "$POETRY_CACHE_DIR" "$HF_HOME"
+        mkdir -p "$POETRY_CACHE_DIR" "$PIP_CACHE_DIR" "$TORCH_HOME" "$HF_HOME" "$TRANSFORMERS_CACHE" "$HF_DATASETS_CACHE"
         ls -lah ${{ vars.WORKING_DIR }}
       shell: bash
     - name: Set up Python ${{ matrix.python-version }}
@@ -622,7 +656,9 @@ jobs:
 
 
   start-runner-312:
-    if: github.event.pull_request.draft == false && contains(github.event.pull_request.labels.*.name, 'to-test-gpu') && success()
+    if: >
+      (github.event.pull_request.draft == false && contains(github.event.pull_request.labels.*.name, 'to-test-gpu') && success())
+      || github.event_name == 'workflow_dispatch'
     needs:
     - pre-commit
     - macos-tests
@@ -681,7 +717,7 @@ jobs:
         fetch-depth: 1   # no need for the history
     - name: Create cache directories
       run: |
-        mkdir -p "$POETRY_CACHE_DIR" "$HF_HOME"
+        mkdir -p "$POETRY_CACHE_DIR" "$PIP_CACHE_DIR" "$TORCH_HOME" "$HF_HOME" "$TRANSFORMERS_CACHE" "$HF_DATASETS_CACHE"
         ls -lah ${{ vars.WORKING_DIR }}
       shell: bash
     - name: Set up Python ${{ matrix.python-version }}
