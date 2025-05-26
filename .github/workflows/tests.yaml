@@ -352,6 +352,9 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y python3.10-dev
+        echo "CPLUS_INCLUDE_PATH set to $CPLUS_INCLUDE_PATH"
+        export CPLUS_INCLUDE_PATH=/usr/include/python3.10
+        echo "CPLUS_INCLUDE_PATH set to $CPLUS_INCLUDE_PATH"
       shell: bash
     - name: Install ffmpeg
       run: |
