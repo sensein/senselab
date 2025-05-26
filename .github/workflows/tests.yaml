@@ -328,6 +328,7 @@ jobs:
       run: |
         echo "Cleaning up disk space..."
         rm -rf ~/.cache
+        mkdir -p ~/.cache
         rm -rf ~/.npm
         rm -rf ~/.poetry
         df -h
