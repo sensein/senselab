@@ -392,6 +392,13 @@ jobs:
         echo "PATH=/usr/local/cuda/bin:$PATH" >> $GITHUB_ENV
         echo "LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH" >> $GITHUB_ENV
       shell: bash
+    - name: Install GCC 10
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-10 g++-10
+        sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 100
+        sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-10 100
+        gcc --version
     - name: Check CUDA and GCC compatibility
       run: |
         echo "Checking CUDA version..."
