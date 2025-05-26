@@ -389,24 +389,22 @@ jobs:
     - name: Check CUDA and GCC compatibility
       run: |
         echo "Checking CUDA version..."
-        if [ -x "$(command -v nvcc)" ]; then
-          nvcc --version
-        else
-          echo "⚠️ nvcc not found - CUDA might not be installed properly"
-          exit 1
-        fi
-
+        nvcc --version
         echo "Checking GCC version..."
         gcc_version=$(gcc -dumpversion)
         echo "GCC version: $gcc_version"
-
-        # Check if GCC version is compatible with CUDA (e.g., CUDA 12.6 supports up to GCC 11)
-        if [[ "$gcc_version" =~ ^12 ]]; then
-          echo "❌ GCC 12 is not supported by CUDA 12.6. Please use GCC 11."
-          exit 1
-        else
-          echo "✅ GCC version appears compatible with CUDA 12.6"
-        fi
+      shell: bash
+    - name: Install GCC 12 and set as default
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-12 g++-12
+        # Set GCC/G++ 12 as default
+        sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100
+        sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 100
+        echo "🛠 Using GCC version:"
+        gcc --version
+        g++ --version
+      shell: bash
     - name: Check available space
       run: |
         df -h
