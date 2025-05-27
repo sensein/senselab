@@ -65,7 +65,7 @@ def recognize_faces(
     distance_metric: str = "cosine",
     detector_backend: str = "opencv",
     align: bool = True,
-    enforce_detection: bool = True,
+    enforce_detection: bool = False,
     threshold: Optional[float] = None,
     frame_sample_rate: Optional[float] = None,
 ) -> List[List[DetectedFace]]:
@@ -89,7 +89,7 @@ def recognize_faces(
         align (bool): Perform alignment based on the eye positions.
 
         enforce_detection (boolean): If no face is detected in an image, raise an exception.
-            Default is True. Set to False to avoid the exception for low-resolution images.
+            Default is False.
 
         threshold (float): Specify a threshold to determine whether a pair represents the same
             person or different individuals. This threshold is used for comparing distances.
@@ -172,7 +172,7 @@ def verify_faces(
     distance_metric: str = "cosine",
     detector_backend: str = "opencv",
     align: bool = True,
-    enforce_detection: bool = True,
+    enforce_detection: bool = False,
     threshold: Optional[float] = None,
 ) -> DetectedFace:
     """Verify if two images contain the same person's face.
@@ -195,7 +195,7 @@ def verify_faces(
         align (Optional[bool]): Perform alignment based on the eye positions.
 
         enforce_detection (Optional[boolean]): If no face is detected in an image, raise an exception.
-            Default is True. Set to False to avoid the exception for low-resolution images.
+            Default is False.
 
         threshold (float): Specify a threshold to determine whether a pair represents the same
             person or different individuals. This threshold is used for comparing distances.
@@ -245,7 +245,7 @@ def extract_face_embeddings(
     model_name: str = "VGG-Face",
     detector_backend: str = "opencv",
     align: bool = True,
-    enforce_detection: bool = True,
+    enforce_detection: bool = False,
     frame_sample_rate: Optional[float] = None,
 ) -> List[List[DetectedFace]]:
     """Extract face embeddings from an image or video.
@@ -263,7 +263,7 @@ def extract_face_embeddings(
         align (boolean): Perform alignment based on the eye positions.
 
         enforce_detection (boolean): If no face is detected in an image, raise an exception.
-            Default is True. Set to False to avoid the exception for low-resolution images.
+            Default is False.
 
         frame_sample_rate (float): The desired number of frames per second to sample.
             If None or greater than the video's native frame rate, processes all frames. (default is None)
@@ -319,7 +319,7 @@ def analyze_face_attributes(
     actions: List[str] = ["age", "gender", "emotion", "race"],
     detector_backend: str = "opencv",
     align: bool = True,
-    enforce_detection: bool = True,
+    enforce_detection: bool = False,
     frame_sample_rate: Optional[float] = None,
 ) -> List[List[DetectedFace]]:
     """Analyze facial attributes (age, gender, emotion, race).
@@ -336,7 +336,7 @@ def analyze_face_attributes(
         align (boolean): Perform alignment based on the eye positions (default is True).
 
         enforce_detection (boolean): If no face is detected in an image, raise an exception.
-            Set to False to avoid the exception for low-resolution images (default is True).
+            Default is False.
 
         frame_sample_rate (float): The desired number of frames per second to sample.
             If None or greater than the video's native frame rate, processes all frames. (default is None)
