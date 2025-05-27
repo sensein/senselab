@@ -29,7 +29,7 @@ class DeepFaceAnalysis:
         distance_metric: str = "cosine",
         detector_backend: str = "opencv",
         align: bool = True,
-        enforce_detection: bool = True,
+        enforce_detection: bool = False,
         threshold: Optional[float] = None,
     ) -> None:
         """Initialize the DeepFaceAnalysis class with configurations.
@@ -50,7 +50,7 @@ class DeepFaceAnalysis:
             align (bool): Perform alignment based on the eye positions.
 
             enforce_detection (boolean): If no face is detected in an image, raise an exception.
-                Default is True. Set to False to avoid the exception for low-resolution images.
+                Default is False.
 
             threshold (float): Specify a threshold to determine whether a pair represents the same
                 person or different individuals. This threshold is used for comparing distances.
