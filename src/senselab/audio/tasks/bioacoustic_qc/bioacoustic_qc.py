@@ -15,13 +15,13 @@ from senselab.audio.tasks.bioacoustic_qc.constants import BIOACOUSTIC_ACTIVITY_T
 
 
 def activity_to_taxonomy_tree_path(activity: str) -> List[str]:
-    """Gets the taxonomy tree path for a given activity .
+    """Gets the taxonomy tree path for a given activity.
 
     Args:
         activity (str): The activity name to find in the taxonomy tree.
 
     Returns:
-        List[str]: A list representing the path from the root to the given activity .
+        List[str]: A list representing the path from the root to the given activity.
 
     Raises:
         ValueError: If the activity is not found in the taxonomy tree.
@@ -46,18 +46,18 @@ def activity_to_taxonomy_tree_path(activity: str) -> List[str]:
     return path
 
 
-def subtree_to_evaluations(subtree: Dict) -> List[Callable[[Audio], bool]]:
+def subtree_to_evaluations(subtree: Dict) -> List[Callable[[Audio], float | bool]]:
     """Recursively extracts all evaluation functions (metrics and checks) from a taxonomy subtree.
 
     Args:
-        subtree (Dict): A pruned or full subtree of the taxonomy.
+        subtree (Dict): A subtree of the full taxonomy, either pruned or complete.
 
     Returns:
-        List[Callable[[Audio], bool]]: Ordered list of unique evaluation functions to run.
+        List[Callable[[Audio], float | bool]]: An ordered list of evaluation functions to run.
     """
     evaluations = []
 
-    def collect_evaluations(node: Dict):
+    def collect_evaluations(node: Dict) -> None:
         if not isinstance(node, dict):
             return None
         for key in node:
@@ -76,14 +76,14 @@ def activity_to_dataset_taxonomy_subtree(activity_name: str, activity_tree: Dict
     """Constructs a pruned taxonomy tree containing only the specified activity.
 
     Args:
-        activity_name (str): Activity name to retain.
-        activity_tree (Dict): Full taxonomy tree defining the activity hierarchy.
+        activity_name (str): The name of the activity to isolate.
+        activity_tree (Dict): The full taxonomy tree.
 
     Returns:
-        Dict: Pruned taxonomy tree with only relevant branches for the given activity.
+        Dict: A pruned version of the taxonomy containing only the target activity and its path.
 
     Raises:
-        ValueError: If the activity does not exist in the taxonomy.
+        ValueError: If the activity is not found in the taxonomy.
     """
     activity_path = activity_to_taxonomy_tree_path(activity_name)
     valid_nodes: Set[str] = set(activity_path)
@@ -113,16 +113,17 @@ def activity_to_dataset_taxonomy_subtree(activity_name: str, activity_tree: Dict
     return pruned_tree
 
 
-def create_activity_to_evaluations(audio_path_to_activity: Dict[str, str], activity_tree: Dict) -> Dict[str, List[str]]:
-    """Generates a mapping from each activity to the list of evaluation functions (metrics and checks)
-    that should be applied, based on the activity's corresponding subtree in the taxonomy.
+def create_activity_to_evaluations(
+    audio_path_to_activity: Dict[str, str], activity_tree: Dict
+) -> Dict[str, List[Callable[[Audio], float | bool]]]:
+    """Maps each activity label to its associated evaluation functions.
 
     Args:
-        audio_path_to_activity (Dict[str, str]): Mapping of audio file paths to activity labels.
-        activity_tree (Dict): Full taxonomy tree defining activity hierarchies and associated evaluations.
+        audio_path_to_activity (Dict[str, str]): Maps audio file paths to activity labels.
+        activity_tree (Dict): The full taxonomy tree of activities.
 
     Returns:
-        Dict[str, List[str]]: Mapping from activity names to ordered lists of evaluation functions.
+        Dict[str, List[Callable[[Audio], float | bool]]]: Maps each activity label to a list of evaluation functions.
     """
     unique_activities = set(audio_path_to_activity.values())
     activity_to_evaluations = {}
@@ -139,16 +140,16 @@ def get_evaluation(
     id: str,
     df: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Computes and caches an evaluation (metric or check) in the DataFrame.
+    """Applies a single evaluation function to an Audio instance and caches the result in a DataFrame.
 
     Args:
-        audio: An `Audio` instance.
-        evaluation_function: Function that takes `Audio` and returns a value.
-        id: Identifier corresponding to the row in the DataFrame.
-        df: DataFrame containing an 'id' column.
+        audio (Audio): The Audio object to evaluate.
+        evaluation_function (Callable): A function that computes a metric or check from Audio.
+        id (str): The unique ID for the current row in the DataFrame.
+        df (pd.DataFrame): A DataFrame used to accumulate evaluation results.
 
     Returns:
-        Updated DataFrame with the evaluation result for the given id.
+        pd.DataFrame: The updated DataFrame with the new evaluation result.
     """
     evaluation_name = evaluation_function.__name__
 
@@ -162,10 +163,25 @@ def get_evaluation(
     return df
 
 
-def evaluate_audio(audio_path, save_path, activity, evaluations):
-    """Runs evaluations iteratively. Skips audio if output file already exists."""
+def evaluate_audio(
+    audio_path: Union[str, Path],
+    save_path: Union[str, Path],
+    activity: str,
+    evaluations: List[Callable[[Audio], float | bool]],
+) -> None:
+    """Evaluates a single audio file using the given set of functions and saves results as CSV.
+
+    Args:
+        audio_path (Union[str, Path]): Path to the audio file.
+        save_path (Union[str, Path]): Directory to write the output CSV.
+        activity (str): Activity label associated with the audio file.
+        evaluations (List[Callable[[Audio], float | bool]]): List of evaluation functions to apply.
+
+    Returns:
+        None
+    """
     id = Path(audio_path).stem
-    output_file = save_path / f"{id}.csv"
+    output_file = save_path / Path(f"{id}.csv")
     if output_file.exists():
         return
 
@@ -176,7 +192,6 @@ def evaluate_audio(audio_path, save_path, activity, evaluations):
     df.to_csv(output_file, index=False)
 
 
-
 def run_evaluations(
     audio_path_to_activity: Dict[str, str],
     activity_to_evaluations: Dict[str, List[Callable[[Audio], float | bool]]],
@@ -184,6 +199,18 @@ def run_evaluations(
     n_cores: int,
     plugin: str = "cf",
 ) -> pd.DataFrame:
+    """Runs quality evaluations on a set of audio files in parallel batches using Pydra.
+
+    Args:
+        audio_path_to_activity (Dict[str, str]): Maps audio paths to activity labels.
+        activity_to_evaluations (Dict[str, List[Callable]]): Maps activity labels to evaluation functions.
+        batch_size (int): Number of files to process in a batch.
+        n_cores (int): Number of parallel processes to use.
+        plugin (str, optional): Pydra execution plugin ("cf" for concurrent.futures). Defaults to "cf".
+
+    Returns:
+        pd.DataFrame: A DataFrame with evaluation results for all audio files.
+    """
     try:
         mp.set_start_method("spawn", force=True)
     except RuntimeError:
@@ -195,10 +222,13 @@ def run_evaluations(
         plugin = "serial"
         plugin_args = {}
 
-    audio_paths = audio_path_to_activity.keys()
-    batches = [audio_paths[i:i + batch_size] for i in range(0, len(audio_paths), batch_size)]
+    audio_paths = list(audio_path_to_activity.keys())
+    batches = [audio_paths[i : i + batch_size] for i in range(0, len(audio_paths), batch_size)]
 
-    def process_batch_task_closure(activity_to_evaluations, audio_path_to_activity):
+    def process_batch_task_closure(
+        activity_to_evaluations: Dict[str, List[Callable[[Audio], float | bool]]],
+        audio_path_to_activity: Dict[str, str],
+    ) -> Callable[[], Any]:
         @pydra.mark.task
         def process_batch_task(batch_audio_paths: List[str]) -> List[Dict[str, Any]]:
             records = []
@@ -206,11 +236,12 @@ def run_evaluations(
                 activity = audio_path_to_activity[audio_path]
                 evaluations = activity_to_evaluations[activity]
                 audio = Audio(filepath=audio_path)
-                row = {"id": Path(audio_path).stem, "path": audio_path, "activity": activity}
+                row: Dict[str, Any] = {"id": Path(audio_path).stem, "path": audio_path, "activity": activity}
                 for fn in evaluations:
                     row[fn.__name__] = fn(audio)
                 records.append(row)
             return records
+
         return process_batch_task
 
     task = process_batch_task_closure(activity_to_evaluations, audio_path_to_activity)()
@@ -225,14 +256,26 @@ def run_evaluations(
 
 
 def check_quality(
-    audio_paths: Union[str, os.PathLike],
+    audio_paths: List[Union[str, os.PathLike]],
     audio_path_to_activity: Dict = {},
     activity_tree: Dict = BIOACOUSTIC_ACTIVITY_TAXONOMY,
     save_dir: Union[str, os.PathLike, None] = None,
     batch_size: int = 8,
-    n_cores: int = 4
+    n_cores: int = 4,
 ) -> pd.DataFrame:
-    """Runs quality checks on audio files in n_batches and updates the taxonomy tree."""
+    """Runs audio quality control evaluations across multiple audio files.
+
+    Args:
+        audio_paths (List[Union[str, os.PathLike]]): List of paths to audio files.
+        audio_path_to_activity (Dict, optional): Maps audio paths to activity labels. Defaults to {}.
+        activity_tree (Dict, optional): The full taxonomy tree. Defaults to BIOACOUSTIC_ACTIVITY_TAXONOMY.
+        save_dir (Union[str, os.PathLike, None], optional): Directory containing results.
+        batch_size (int, optional): Number of files per batch. Defaults to 8.
+        n_cores (int, optional): Number of CPU cores to use. Defaults to 4.
+
+    Returns:
+        pd.DataFrame: A DataFrame containing all evaluation results from saved CSVs.
+    """
     # get the paths to activity dict
     audio_path_to_activity = {path: audio_path_to_activity.get(path, "bioacoustic") for path in audio_paths}
 
@@ -245,51 +288,14 @@ def check_quality(
     run_evaluations(audio_path_to_activity, activity_to_evaluations, batch_size=batch_size, n_cores=n_cores)
 
     # construct evaluations csv
+    if save_dir is None:
+        raise ValueError("save_dir must be provided to collect evaluation CSVs.")
     csv_paths = Path(save_dir).glob("*.csv")
+
     evaluations_df = pd.concat((pd.read_csv(p) for p in csv_paths), axis=0, ignore_index=True, sort=False)
 
-    # label include, exclude, review
     return evaluations_df
 
-    # run workflow
+    # label include, exclude, review
+
     # create final metadata files
-
-    # audio_extensions = (".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac")
-    # audio_paths = [
-    #     os.path.join(root, fname)
-    #     for root, _, files in os.walk(str(audio_dir))
-    #     for fname in files
-    #     if fname.lower().endswith(audio_extensions)
-    # ]
-
-    # print("Audio paths loaded.")
-
-    # total_n_batches = (len(audio_paths) + batch_size - 1) // batch_size
-    # print(f"{total_n_batches} n_batches of size {batch_size}")
-
-    # def process_batch(batch_paths: List[str], batch_idx: int) -> pd.DataFrame:
-    #     batch_audios = [Audio.from_filepath(p) for p in batch_paths]
-    #     activity_dict = audios_to_activity_dict(batch_audios)
-    #     dataset_tree = activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=activity_tree)
-
-    #     results_df = pd.DataFrame([a.orig_path_or_id for a in batch_audios], columns=["audio_path_or_id"])
-    #     results_df = run_taxonomy_subtree_checks_recursively(
-    #         audios=batch_audios,
-    #         dataset_tree=dataset_tree,
-    #         activity_dict=activity_dict,
-    #         results_df=results_df,
-    #     )
-    #     del batch_audios
-    #     return results_df
-
-    # n_batches = [audio_paths[i : i + batch_size] for i in range(0, len(audio_paths), batch_size)]
-    # batch_aqm_dataframes = Parallel(n_jobs=n_jobs, verbose=verbosity)(
-    #     delayed(process_batch)(batch, idx) for idx, batch in enumerate(n_batches)
-    # )
-
-    # all_aqms = pd.concat(batch_aqm_dataframes, ignore_index=True)
-    # all_aqms["audio_path_or_id"] = all_aqms["audio_path_or_id"].apply(os.path.basename)
-    # if save_path:
-    #     all_aqms.to_csv(save_path)
-    #     print(f"Results saved to: {save_path}")
-    # return all_aqms
