@@ -176,14 +176,14 @@ def evaluate_audio(audio_path, save_path, activity, evaluations):
     df.to_csv(output_file, index=False)
 
 
+
 def run_evaluations(
     audio_path_to_activity: Dict[str, str],
     activity_to_evaluations: Dict[str, List[Callable[[Audio], float | bool]]],
-    save_path: Union[str, Path],
-    batch_size: int = 8,
+    batch_size: int,
+    n_cores: int,
     plugin: str = "cf",
-    n_cores: int = 8,
-):
+) -> pd.DataFrame:
     try:
         mp.set_start_method("spawn", force=True)
     except RuntimeError:
@@ -195,30 +195,33 @@ def run_evaluations(
         plugin = "serial"
         plugin_args = {}
 
-    save_path = Path(save_path)
-    save_path.mkdir(parents=True, exist_ok=True)
-
     audio_paths = sorted(audio_path_to_activity.keys())
-    batches = [audio_paths[i : i + batch_size] for i in range(0, len(audio_paths), batch_size)]
+    batches = [audio_paths[i:i + batch_size] for i in range(0, len(audio_paths), batch_size)]
 
-    # Capture evaluation logic in a closure
-    def process_batch_task_closure(activity_to_evaluations, audio_path_to_activity, save_path):
+    def process_batch_task_closure(activity_to_evaluations, audio_path_to_activity):
         @pydra.mark.task
-        def process_batch_task(batch_audio_paths: List[str]):
+        def process_batch_task(batch_audio_paths: List[str]) -> List[Dict[str, Any]]:
+            records = []
             for audio_path in batch_audio_paths:
                 activity = audio_path_to_activity[audio_path]
                 evaluations = activity_to_evaluations[activity]
-                evaluate_audio(audio_path, save_path, activity, evaluations)
-
+                audio = Audio(filepath=audio_path)
+                row = {"id": Path(audio_path).stem, "path": audio_path, "activity": activity}
+                for fn in evaluations:
+                    row[fn.__name__] = fn(audio)
+                records.append(row)
+            return records
         return process_batch_task
 
-    task = process_batch_task_closure(activity_to_evaluations, audio_path_to_activity, save_path)()
+    task = process_batch_task_closure(activity_to_evaluations, audio_path_to_activity)()
     task.split("batch_audio_paths", batch_audio_paths=batches)
 
     with Submitter(plugin=plugin, **plugin_args) as sub:
         sub(task)
 
-    return task
+    # Concatenate batch DataFrames into one
+    results = [record for r in task.result() for record in r.output.out]
+    return pd.DataFrame(results)
 
 
 def check_quality(
@@ -227,6 +230,7 @@ def check_quality(
     activity_tree: Dict = BIOACOUSTIC_ACTIVITY_TAXONOMY,
     save_dir: Union[str, os.PathLike, None] = None,
     batch_size: int = 8,
+    n_cores: int = 4
 ) -> pd.DataFrame:
     """Runs quality checks on audio files in n_batches and updates the taxonomy tree."""
     # get the paths to activity dict
@@ -238,7 +242,7 @@ def check_quality(
     )
 
     # run_evaluations
-    run_evaluations(audio_path_to_activity, activity_to_evaluations, save_dir, batch_size=batch_size)
+    run_evaluations(audio_path_to_activity, activity_to_evaluations, batch_size=batch_size, n_cores=n_cores)
 
     # construct evaluations csv
     csv_paths = Path(save_dir).glob("*.csv")
