@@ -195,7 +195,7 @@ def run_evaluations(
         plugin = "serial"
         plugin_args = {}
 
-    audio_paths = sorted(audio_path_to_activity.keys())
+    audio_paths = audio_path_to_activity.keys()
     batches = [audio_paths[i:i + batch_size] for i in range(0, len(audio_paths), batch_size)]
 
     def process_batch_task_closure(activity_to_evaluations, audio_path_to_activity):
