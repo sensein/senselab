@@ -1,23 +1,32 @@
 """.. include:: ../../README.md"""  # noqa: D415
 
 import platform
+import asyncio
+import nest_asyncio
 from multiprocessing import set_start_method
 
+# Raise error on incompatible macOS architecture
 if platform.system() == "Darwin" and platform.machine() != "arm64":
     raise RuntimeError(
         "Error: This package requires an ARM64 architecture on macOS "
         "since PyTorch 2.2.2+ does not support x86-64 on macOS."
     )
 
+# Conditionally apply nest_asyncio to avoid uvloop conflict
+def safe_apply_nest_asyncio():
+    try:
+        loop = asyncio.get_event_loop()
+        if "uvloop" not in str(type(loop)):
+            nest_asyncio.apply()
+    except Exception as e:
+        print(f"nest_asyncio not applied: {e}")
 
-import nest_asyncio
-
-nest_asyncio.apply()
+safe_apply_nest_asyncio()
 
 from senselab.utils.data_structures.pydra_helpers import *  # NOQA
 
+# Ensure multiprocessing start method is 'spawn'
 try:
     set_start_method("spawn", force=True)
 except RuntimeError:
-    # Already set
-    pass
+    pass  # Method already set
