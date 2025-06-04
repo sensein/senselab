@@ -190,26 +190,115 @@ def evaluate_audio(
     for evaluation in evaluations:
         df = get_evaluation(audio=audio, evaluation_function=evaluation, df=df, id=id)
     df.to_csv(output_file, index=False)
+    return df
+
+
+def process_batch_task(
+    batch_audio_paths: List[str],
+    audio_path_to_activity: Dict[str, str],
+    activity_to_evaluations: Dict[str, List[Callable[[Audio], Union[float, bool, str]]]],
+    output_dir: Path,
+) -> List[Dict[str, Any]]:
+    """Process a batch of audio files, saving individual results and avoiding recomputation.
+
+    Args:
+        batch_audio_paths: List of audio file paths to process
+        audio_path_to_activity: Mapping of audio paths to their activities
+        activity_to_evaluations: Mapping of activities to their evaluation functions
+        output_dir: Directory to save individual results
+
+    Returns:
+        List[Dict[str, Any]]: List of processed records with evaluation results
+    """
+    results_dir = output_dir / "audio_results"
+    results_dir.mkdir(exist_ok=True, parents=True)
+
+    records = []
+    for audio_path in batch_audio_paths:
+        audio_id = Path(audio_path).stem
+        result_path = results_dir / f"{audio_id}.parquet"
+
+        # Initialize record with basic info
+        record: Dict[str, Any] = {
+            "id": audio_id,
+            "path": str(audio_path),  # Ensure path is string
+            "activity": audio_path_to_activity[str(audio_path)],
+        }
+
+        # Load existing results if available
+        existing_results: Dict[str, Any] = {}
+        if result_path.exists():
+            try:
+                existing_df = pd.read_parquet(result_path)
+                if not existing_df.empty:
+                    existing_results = existing_df.iloc[0].to_dict()
+                    # Remove basic info keys to keep only metrics/checks
+                    for key in ["id", "path", "activity"]:
+                        existing_results.pop(key, None)
+            except Exception as e:
+                print("Warning: Could not read existing results for " f"{audio_id}: {e}")
+
+        # Get evaluations for this activity
+        activity = audio_path_to_activity[str(audio_path)]
+        evaluations = activity_to_evaluations[activity]
+
+        # Only compute missing evaluations
+        missing_evaluations = [fn for fn in evaluations if fn.__name__ not in existing_results]
+
+        if missing_evaluations:
+            try:
+                # Load audio only if we have new evaluations to compute
+                audio = Audio(filepath=audio_path)
+
+                # Compute missing evaluations
+                for fn in missing_evaluations:
+                    try:
+                        result = fn(audio)
+                        record[fn.__name__] = result
+                        # Save after each evaluation for maximum resilience
+                        pd.DataFrame([record]).to_parquet(result_path)
+                    except Exception as e:
+                        print(f"Warning: Failed to compute {fn.__name__} " f"for {audio_id}: {e}")
+                        # Use empty string for failed string metrics
+                        record[fn.__name__] = "" if fn.__annotations__.get("return") == str else None
+                        # Save the failure state
+                        pd.DataFrame([record]).to_parquet(result_path)
+
+                # Merge with existing results
+                record.update(existing_results)
+            except Exception as e:
+                print(f"Error processing {audio_id}: {e}")
+                # Keep existing results if available
+                record.update(existing_results)
+        else:
+            # Use existing results if all evaluations were already computed
+            record.update(existing_results)
+
+        records.append(record)
+
+    return records
 
 
 def run_evaluations(
     audio_path_to_activity: Dict[str, str],
-    activity_to_evaluations: Dict[str, List[Callable[[Audio], float | bool]]],
-    batch_size: int,
-    n_cores: int,
+    activity_to_evaluations: Dict[str, List[Callable]],
+    output_dir: Path,
+    batch_size: int = 8,
+    n_cores: int = 4,
     plugin: str = "cf",
 ) -> pd.DataFrame:
-    """Runs quality evaluations on a set of audio files in parallel batches using Pydra.
+    """Runs quality evaluations on audio files in parallel batches using Pydra.
 
     Args:
-        audio_path_to_activity (Dict[str, str]): Maps audio paths to activity labels.
-        activity_to_evaluations (Dict[str, List[Callable]]): Maps activity labels to evaluation functions.
-        batch_size (int): Number of files to process in a batch.
-        n_cores (int): Number of parallel processes to use.
-        plugin (str, optional): Pydra execution plugin ("cf" for concurrent.futures). Defaults to "cf".
+        audio_path_to_activity: Maps audio paths to activity labels
+        activity_to_evaluations: Maps activity labels to evaluation functions
+        output_dir: Directory to save results
+        batch_size: Number of files to process in a batch
+        n_cores: Number of parallel processes to use
+        plugin: Pydra execution plugin ("cf" for concurrent.futures)
 
     Returns:
-        pd.DataFrame: A DataFrame with evaluation results for all audio files.
+        pd.DataFrame: Combined results from all processed batches
     """
     try:
         mp.set_start_method("spawn", force=True)
@@ -225,32 +314,26 @@ def run_evaluations(
     audio_paths = list(audio_path_to_activity.keys())
     batches = [audio_paths[i : i + batch_size] for i in range(0, len(audio_paths), batch_size)]
 
-    def process_batch_task_closure(
-        activity_to_evaluations: Dict[str, List[Callable[[Audio], float | bool]]],
-        audio_path_to_activity: Dict[str, str],
-    ) -> Callable[[], Any]:
+    def process_batch_task_closure() -> Callable:
+        """Creates a Pydra task for batch processing.
+
+        Returns:
+            Callable: Wrapped task function for batch processing
+        """
+
         @pydra.mark.task
-        def process_batch_task(batch_audio_paths: List[str]) -> List[Dict[str, Any]]:
-            records = []
-            for audio_path in batch_audio_paths:
-                activity = audio_path_to_activity[audio_path]
-                evaluations = activity_to_evaluations[activity]
-                audio = Audio(filepath=audio_path)
-                row: Dict[str, Any] = {"id": Path(audio_path).stem, "path": audio_path, "activity": activity}
-                for fn in evaluations:
-                    row[fn.__name__] = fn(audio)
-                records.append(row)
-            return records
+        def wrapped_process_batch_task(batch_audio_paths: List[str]) -> List[Dict[str, Any]]:
+            return process_batch_task(batch_audio_paths, audio_path_to_activity, activity_to_evaluations, output_dir)
 
-        return process_batch_task
+        return wrapped_process_batch_task
 
-    task = process_batch_task_closure(activity_to_evaluations, audio_path_to_activity)()
+    task = process_batch_task_closure()()
     task.split("batch_audio_paths", batch_audio_paths=batches)
 
     with Submitter(plugin=plugin, **plugin_args) as sub:
         sub(task)
 
-    # Concatenate batch DataFrames into one
+    # Concatenate batch results
     results = [record for r in task.result() for record in r.output.out]
     return pd.DataFrame(results)
 
@@ -259,40 +342,49 @@ def check_quality(
     audio_paths: List[Union[str, os.PathLike]],
     audio_path_to_activity: Dict = {},
     activity_tree: Dict = BIOACOUSTIC_ACTIVITY_TAXONOMY,
-    save_dir: Union[str, os.PathLike, None] = None,
+    save_dir: Optional[Union[str, os.PathLike]] = None,
+    output_dir: Optional[Union[str, os.PathLike]] = None,
     batch_size: int = 8,
     n_cores: int = 4,
 ) -> pd.DataFrame:
     """Runs audio quality control evaluations across multiple audio files.
 
     Args:
-        audio_paths (List[Union[str, os.PathLike]]): List of paths to audio files.
-        audio_path_to_activity (Dict, optional): Maps audio paths to activity labels. Defaults to {}.
-        activity_tree (Dict, optional): The full taxonomy tree. Defaults to BIOACOUSTIC_ACTIVITY_TAXONOMY.
-        save_dir (Union[str, os.PathLike, None], optional): Directory containing results.
-        batch_size (int, optional): Number of files per batch. Defaults to 8.
-        n_cores (int, optional): Number of CPU cores to use. Defaults to 4.
+        audio_paths: List of paths to audio files
+        audio_path_to_activity: Maps audio paths to activity labels
+        activity_tree: The full taxonomy tree
+        save_dir: Directory to save results (preferred parameter name)
+        output_dir: Alias for save_dir (deprecated)
+        batch_size: Number of files to process in parallel batches
+        n_cores: Number of CPU cores to use for parallel processing
 
     Returns:
-        pd.DataFrame: A DataFrame containing all evaluation results from saved CSVs.
+        pd.DataFrame: Combined results from all processed audio files
     """
-    # get the paths to activity dict
-    audio_path_to_activity = {path: audio_path_to_activity.get(path, "bioacoustic") for path in audio_paths}
+    # Handle both save_dir and output_dir for backward compatibility
+    output_directory = Path(save_dir or output_dir or "qc_results")
+    output_directory.mkdir(exist_ok=True, parents=True)
 
-    # create activity to evaluations dict
+    # Setup activity mappings
+    audio_path_to_activity = {str(path): audio_path_to_activity.get(str(path), "bioacoustic") for path in audio_paths}
+
+    # Create activity to evaluations mapping
     activity_to_evaluations = create_activity_to_evaluations(
         audio_path_to_activity=audio_path_to_activity, activity_tree=activity_tree
     )
 
-    # run_evaluations
-    run_evaluations(audio_path_to_activity, activity_to_evaluations, batch_size=batch_size, n_cores=n_cores)
+    # Run evaluations with result caching
+    evaluations_df = run_evaluations(
+        audio_path_to_activity,
+        activity_to_evaluations,
+        output_dir=output_directory,
+        batch_size=batch_size,
+        n_cores=n_cores,
+    )
 
-    # construct evaluations csv
-    if save_dir is None:
-        raise ValueError("save_dir must be provided to collect evaluation CSVs.")
-    csv_paths = Path(save_dir).glob("*.csv")
-
-    evaluations_df = pd.concat((pd.read_csv(p) for p in csv_paths), axis=0, ignore_index=True, sort=False)
+    # Save final combined results
+    final_results_path = output_directory / "combined_results.parquet"
+    evaluations_df.to_parquet(final_results_path)
 
     return evaluations_df
 
