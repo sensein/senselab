@@ -34,12 +34,12 @@ jobs:
         ffmpeg -version
       shell: bash
     - name: Install Poetry
-      run: pip install poetry==2.1.1
+      run: pip install poetry==2.1.3
       shell: bash
     - name: Install dependencies with Poetry
       run: |
         poetry env use ${{ matrix.python-version }}
-        poetry install --extras "audio articulatory text video" --with dev
+        poetry install --extras "audio text video" --with dev
         poetry env info
       shell: bash
     - name: check files
@@ -90,12 +90,12 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
     - name: Install Poetry
-      run: pip install poetry==2.1.1
+      run: pip install poetry==2.1.3
       shell: bash
     - name: Install dependencies with Poetry
       run: |
         poetry env use ${{ matrix.python-version }}
-        poetry install --extras "audio articulatory text video" --with dev
+        poetry install --extras "audio text video" --with dev
         poetry env info
       shell: bash
     - name: Install pre-commit
@@ -145,15 +145,18 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: /opt/dlami/nvme/senselab
+        working-directory: ${{ vars.WORKING_DIR }}
     strategy:
       matrix:
         python-version: ['3.10']
     env:
-      WORKING_DIR: /opt/dlami/nvme/senselab
-      POETRY_CACHE_DIR: /opt/dlami/nvme/poetry
-      PIP_CACHE_DIR: /opt/dlami/nvme/pip
-      HF_HOME: /opt/dlami/nvme/huggingface
+      WORKING_DIR: ${{ vars.WORKING_DIR }}
+      TORCH_HOME: ${{ vars.WORKING_DIR }}/torch
+      PIP_CACHE_DIR: ${{ vars.WORKING_DIR }}/pip
+      POETRY_CACHE_DIR: ${{ vars.WORKING_DIR }}/poetry
+      HF_HOME: ${{ vars.WORKING_DIR }}/huggingface
+      TRANSFORMERS_CACHE: ${{ vars.WORKING_DIR }}/huggingface/transformers
+      HF_DATASETS_CACHE: ${{ vars.WORKING_DIR }}/huggingface/datasets
     outputs:
       job-ran: ${{ steps.set-ran.outputs.ran }}
     steps:
@@ -162,17 +165,18 @@ jobs:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 1   # no need for the history
+    - name: Cleanup disk space
+      run: |
+        echo "Cleaning up disk space..."
+        rm -rf ~/.cache
+        rm -rf ~/.npm
+        rm -rf ~/.poetry
+        df -h
+      shell: bash
     - name: Create cache directories
       run: |
-        mkdir -p "$POETRY_CACHE_DIR" "$PIP_CACHE_DIR" "$HF_HOME"
-        ls -lah /opt/dlami/nvme
-      shell: bash
-    - name: Aggressive cleanup to free disk space
-      run: |
-        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-        sudo apt-get clean
-        sudo rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /tmp/*
-        df -h
+        mkdir -p "$POETRY_CACHE_DIR" "$PIP_CACHE_DIR" "$TORCH_HOME" "$HF_HOME" "$TRANSFORMERS_CACHE" "$HF_DATASETS_CACHE"
+        ls -lah ${{ vars.WORKING_DIR }}
       shell: bash
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
@@ -187,7 +191,7 @@ jobs:
       run: |
         which python
         python --version
-        pip install poetry==2.1.1
+        pip install poetry==2.1.3
         which poetry
         poetry --version
       shell: bash
@@ -201,11 +205,12 @@ jobs:
         which python
         which poetry
       shell: bash
-    - name: Copy senselab directory to /opt/dlami/nvme
+    - name: Copy senselab directory to current directory
       run: |
-        cp -r /actions-runner/_work/senselab/senselab /opt/dlami/nvme/
+        cp -r /actions-runner/_work/senselab/senselab .
     - name: Install dependencies with Poetry (Core only)
       run: |
+        cd senselab
         poetry env use ${{ matrix.python-version }}
         poetry install --with dev
       shell: bash
@@ -225,7 +230,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: >
-        poetry run pytest \
+        cd senselab && poetry run pytest \
           --rootdir=$WORKING_DIR/pytest \
           --basetemp=$WORKING_DIR/pytest/temp \
           --junitxml=pytest.xml \
@@ -308,8 +313,12 @@ jobs:
         python-version: ['3.10']
     env:
       WORKING_DIR: ${{ vars.WORKING_DIR }}
+      TORCH_HOME: ${{ vars.WORKING_DIR }}/torch
+      PIP_CACHE_DIR: ${{ vars.WORKING_DIR }}/pip
       POETRY_CACHE_DIR: ${{ vars.WORKING_DIR }}/poetry
       HF_HOME: ${{ vars.WORKING_DIR }}/huggingface
+      TRANSFORMERS_CACHE: ${{ vars.WORKING_DIR }}/huggingface/transformers
+      HF_DATASETS_CACHE: ${{ vars.WORKING_DIR }}/huggingface/datasets
     outputs:
       job-ran: ${{ steps.set-ran.outputs.ran }}
     steps:
@@ -331,7 +340,7 @@ jobs:
       shell: bash
     - name: Create cache directories
       run: |
-        mkdir -p "$POETRY_CACHE_DIR" "$HF_HOME"
+        mkdir -p "$POETRY_CACHE_DIR" "$PIP_CACHE_DIR" "$TORCH_HOME" "$HF_HOME" "$TRANSFORMERS_CACHE" "$HF_DATASETS_CACHE"
         ls -lah ${{ vars.WORKING_DIR }}
       shell: bash
     - name: Set up Python ${{ matrix.python-version }}
@@ -343,33 +352,11 @@ jobs:
         sudo apt-get update && sudo apt-get install -y ffmpeg
         ffmpeg -version
       shell: bash
-    - name: Install CUDA Toolkit 12.6
-      run: |
-        # Download the CUDA pin file as before
-        wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-ubuntu2204.pin
-        sudo mv cuda-ubuntu2204.pin /etc/apt/preferences.d/cuda-repository-pin-600
-
-        # Download the .deb installer to /opt/dlami/nvme
-        cd /opt/dlami/nvme
-        wget https://developer.download.nvidia.com/compute/cuda/12.6.3/local_installers/cuda-repo-ubuntu2204-12-6-local_12.6.3-560.35.05-1_amd64.deb
-
-        # Install the .deb from /opt/dlami/nvme
-        sudo dpkg -i ./cuda-repo-ubuntu2204-12-6-local_12.6.3-560.35.05-1_amd64.deb
-
-        # Move the extracted repo directory to /opt/dlami/nvme and symlink it back to /var
-        sudo mv /var/cuda-repo-ubuntu2204-12-6-local /opt/dlami/nvme/
-        sudo ln -s /opt/dlami/nvme/cuda-repo-ubuntu2204-12-6-local /var/cuda-repo-ubuntu2204-12-6-local
-
-        # Continue as normal
-        sudo cp /var/cuda-repo-ubuntu2204-12-6-local/cuda-*-keyring.gpg /usr/share/keyrings/
-        sudo apt-get update
-        sudo apt-get -y install cuda-toolkit-12-6
-      shell: bash
     - name: Install Poetry
       run: |
         which python
         python --version
-        pip install poetry==2.1.1
+        pip install poetry==2.1.3
         which poetry
         poetry --version
       shell: bash
@@ -390,7 +377,7 @@ jobs:
       run: |
         cd senselab
         poetry env use ${{ matrix.python-version }}
-        poetry install --extras "audio articulatory text video" --with dev
+        poetry install --extras "audio text video" --with dev
       shell: bash
     - name: Check NVIDIA SMI details
       run: |
@@ -483,15 +470,18 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: /opt/dlami/nvme/senselab
+        working-directory: ${{ vars.WORKING_DIR }}
     strategy:
       matrix:
         python-version: ['3.11']
     env:
-      WORKING_DIR: /opt/dlami/nvme/senselab
-      POETRY_CACHE_DIR: /opt/dlami/nvme/poetry
-      PIP_CACHE_DIR: /opt/dlami/nvme/pip
-      HF_HOME: /opt/dlami/nvme/huggingface
+      WORKING_DIR: ${{ vars.WORKING_DIR }}
+      TORCH_HOME: ${{ vars.WORKING_DIR }}/torch
+      PIP_CACHE_DIR: ${{ vars.WORKING_DIR }}/pip
+      POETRY_CACHE_DIR: ${{ vars.WORKING_DIR }}/poetry
+      HF_HOME: ${{ vars.WORKING_DIR }}/huggingface
+      TRANSFORMERS_CACHE: ${{ vars.WORKING_DIR }}/huggingface/transformers
+      HF_DATASETS_CACHE: ${{ vars.WORKING_DIR }}/huggingface/datasets
     outputs:
       job-ran: ${{ steps.set-ran.outputs.ran }}
     steps:
@@ -500,17 +490,18 @@ jobs:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 1   # no need for the history
+    - name: Cleanup disk space
+      run: |
+        echo "Cleaning up disk space..."
+        rm -rf ~/.cache
+        rm -rf ~/.npm
+        rm -rf ~/.poetry
+        df -h
+      shell: bash
     - name: Create cache directories
       run: |
-        mkdir -p "$POETRY_CACHE_DIR" "$PIP_CACHE_DIR" "$HF_HOME"
-        ls -lah /opt/dlami/nvme
-      shell: bash
-    - name: Aggressive cleanup to free disk space
-      run: |
-        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-        sudo apt-get clean
-        sudo rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /tmp/*
-        df -h
+        mkdir -p "$POETRY_CACHE_DIR" "$PIP_CACHE_DIR" "$TORCH_HOME" "$HF_HOME" "$TRANSFORMERS_CACHE" "$HF_DATASETS_CACHE"
+        ls -lah ${{ vars.WORKING_DIR }}
       shell: bash
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
@@ -521,33 +512,11 @@ jobs:
         sudo apt-get update && sudo apt-get install -y ffmpeg
         ffmpeg -version
       shell: bash
-    - name: Install CUDA Toolkit 12.6
-      run: |
-        # Download the CUDA pin file as before
-        wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-ubuntu2204.pin
-        sudo mv cuda-ubuntu2204.pin /etc/apt/preferences.d/cuda-repository-pin-600
-
-        # Download the .deb installer to /opt/dlami/nvme
-        cd /opt/dlami/nvme
-        wget https://developer.download.nvidia.com/compute/cuda/12.6.3/local_installers/cuda-repo-ubuntu2204-12-6-local_12.6.3-560.35.05-1_amd64.deb
-
-        # Install the .deb from /opt/dlami/nvme
-        sudo dpkg -i ./cuda-repo-ubuntu2204-12-6-local_12.6.3-560.35.05-1_amd64.deb
-
-        # Move the extracted repo directory to /opt/dlami/nvme and symlink it back to /var
-        sudo mv /var/cuda-repo-ubuntu2204-12-6-local /opt/dlami/nvme/
-        sudo ln -s /opt/dlami/nvme/cuda-repo-ubuntu2204-12-6-local /var/cuda-repo-ubuntu2204-12-6-local
-
-        # Continue as normal
-        sudo cp /var/cuda-repo-ubuntu2204-12-6-local/cuda-*-keyring.gpg /usr/share/keyrings/
-        sudo apt-get update
-        sudo apt-get -y install cuda-toolkit-12-6
-      shell: bash
     - name: Install Poetry
       run: |
         which python
         python --version
-        pip install poetry==2.1.1
+        pip install poetry==2.1.3
         which poetry
         poetry --version
       shell: bash
@@ -555,13 +524,14 @@ jobs:
       run: |
         df -h
       shell: bash
-    - name: Copy senselab directory to /opt/dlami/nvme
+    - name: Copy senselab directory to current directory
       run: |
-        cp -r /actions-runner/_work/senselab/senselab /opt/dlami/nvme/
+        cp -r /actions-runner/_work/senselab/senselab .
     - name: Install dependencies with Poetry
       run: |
+        cd senselab
         poetry env use ${{ matrix.python-version }}
-        poetry install --extras "audio articulatory text video" --with dev
+        poetry install --extras "audio text video" --with dev
       shell: bash
     - name: Check poetry info
       run: |
@@ -585,7 +555,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: >
-        poetry run pytest \
+        cd senselab && poetry run pytest \
           --rootdir=$WORKING_DIR/pytest \
           --basetemp=$WORKING_DIR/pytest/temp \
           --junitxml=pytest.xml \
@@ -661,15 +631,18 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: /opt/dlami/nvme/senselab
+        working-directory: ${{ vars.WORKING_DIR }}
     strategy:
       matrix:
         python-version: ['3.12']
     env:
-      WORKING_DIR: /opt/dlami/nvme/senselab
-      POETRY_CACHE_DIR: /opt/dlami/nvme/poetry
-      PIP_CACHE_DIR: /opt/dlami/nvme/pip
-      HF_HOME: /opt/dlami/nvme/huggingface
+      WORKING_DIR: ${{ vars.WORKING_DIR }}
+      TORCH_HOME: ${{ vars.WORKING_DIR }}/torch
+      PIP_CACHE_DIR: ${{ vars.WORKING_DIR }}/pip
+      POETRY_CACHE_DIR: ${{ vars.WORKING_DIR }}/poetry
+      HF_HOME: ${{ vars.WORKING_DIR }}/huggingface
+      TRANSFORMERS_CACHE: ${{ vars.WORKING_DIR }}/huggingface/transformers
+      HF_DATASETS_CACHE: ${{ vars.WORKING_DIR }}/huggingface/datasets
     outputs:
       job-ran: ${{ steps.set-ran.outputs.ran }}
     steps:
@@ -678,17 +651,18 @@ jobs:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 1   # no need for the history
+    - name: Cleanup disk space
+      run: |
+        echo "Cleaning up disk space..."
+        rm -rf ~/.cache
+        rm -rf ~/.npm
+        rm -rf ~/.poetry
+        df -h
+      shell: bash
     - name: Create cache directories
       run: |
-        mkdir -p "$POETRY_CACHE_DIR" "$PIP_CACHE_DIR" "$HF_HOME"
-        ls -lah /opt/dlami/nvme
-      shell: bash
-    - name: Aggressive cleanup to free disk space
-      run: |
-        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-        sudo apt-get clean
-        sudo rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /tmp/*
-        df -h
+        mkdir -p "$POETRY_CACHE_DIR" "$PIP_CACHE_DIR" "$TORCH_HOME" "$HF_HOME" "$TRANSFORMERS_CACHE" "$HF_DATASETS_CACHE"
+        ls -lah ${{ vars.WORKING_DIR }}
       shell: bash
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
@@ -699,33 +673,11 @@ jobs:
         sudo apt-get update && sudo apt-get install -y ffmpeg
         ffmpeg -version
       shell: bash
-    - name: Install CUDA Toolkit 12.6
-      run: |
-        # Download the CUDA pin file as before
-        wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-ubuntu2204.pin
-        sudo mv cuda-ubuntu2204.pin /etc/apt/preferences.d/cuda-repository-pin-600
-
-        # Download the .deb installer to /opt/dlami/nvme
-        cd /opt/dlami/nvme
-        wget https://developer.download.nvidia.com/compute/cuda/12.6.3/local_installers/cuda-repo-ubuntu2204-12-6-local_12.6.3-560.35.05-1_amd64.deb
-
-        # Install the .deb from /opt/dlami/nvme
-        sudo dpkg -i ./cuda-repo-ubuntu2204-12-6-local_12.6.3-560.35.05-1_amd64.deb
-
-        # Move the extracted repo directory to /opt/dlami/nvme and symlink it back to /var
-        sudo mv /var/cuda-repo-ubuntu2204-12-6-local /opt/dlami/nvme/
-        sudo ln -s /opt/dlami/nvme/cuda-repo-ubuntu2204-12-6-local /var/cuda-repo-ubuntu2204-12-6-local
-
-        # Continue as normal
-        sudo cp /var/cuda-repo-ubuntu2204-12-6-local/cuda-*-keyring.gpg /usr/share/keyrings/
-        sudo apt-get update
-        sudo apt-get -y install cuda-toolkit-12-6
-      shell: bash
     - name: Install Poetry
       run: |
         which python
         python --version
-        pip install poetry==2.1.1
+        pip install poetry==2.1.3
         which poetry
         poetry --version
       shell: bash
@@ -733,13 +685,14 @@ jobs:
       run: |
         df -h
       shell: bash
-    - name: Copy senselab directory to /opt/dlami/nvme
+    - name: Copy senselab directory to current directory
       run: |
-        cp -r /actions-runner/_work/senselab/senselab /opt/dlami/nvme/
+        cp -r /actions-runner/_work/senselab/senselab .
     - name: Install dependencies with Poetry
       run: |
+        cd senselab
         poetry env use ${{ matrix.python-version }}
-        poetry install --extras "audio articulatory text video" --with dev
+        poetry install --extras "audio text video" --with dev
       shell: bash
     - name: Check poetry info
       run: |
@@ -763,7 +716,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: >
-        poetry run pytest \
+        cd senselab && poetry run pytest \
           --rootdir=$WORKING_DIR/pytest \
           --basetemp=$WORKING_DIR/pytest/temp \
           --junitxml=pytest.xml \
