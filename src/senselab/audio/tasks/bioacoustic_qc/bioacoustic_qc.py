@@ -342,7 +342,6 @@ def check_quality(
     audio_paths: List[Union[str, os.PathLike]],
     audio_path_to_activity: Dict = {},
     activity_tree: Dict = BIOACOUSTIC_ACTIVITY_TAXONOMY,
-    save_dir: Optional[Union[str, os.PathLike]] = None,
     output_dir: Optional[Union[str, os.PathLike]] = None,
     batch_size: int = 8,
     n_cores: int = 4,
@@ -353,16 +352,15 @@ def check_quality(
         audio_paths: List of paths to audio files
         audio_path_to_activity: Maps audio paths to activity labels
         activity_tree: The full taxonomy tree
-        save_dir: Directory to save results (preferred parameter name)
-        output_dir: Alias for save_dir (deprecated)
+        output_dir: Directory to save results
         batch_size: Number of files to process in parallel batches
         n_cores: Number of CPU cores to use for parallel processing
 
     Returns:
         pd.DataFrame: Combined results from all processed audio files
     """
-    # Handle both save_dir and output_dir for backward compatibility
-    output_directory = Path(save_dir or output_dir or "qc_results")
+    # Convert output_dir to Path with default
+    output_directory = Path(output_dir or "qc_results")
     output_directory.mkdir(exist_ok=True, parents=True)
 
     # Setup activity mappings
