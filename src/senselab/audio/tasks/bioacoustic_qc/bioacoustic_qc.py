@@ -382,9 +382,8 @@ def check_quality(
         n_cores=n_cores,
     )
 
-    # Save final combined results
-    final_results_path = output_directory / "combined_results.parquet"
-    evaluations_df.to_parquet(final_results_path)
+    final_results_path = output_directory / "combined_results.csv"
+    evaluations_df.to_csv(final_results_path, index=False)
 
     return evaluations_df
 
