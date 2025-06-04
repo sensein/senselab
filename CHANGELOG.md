@@ -1,3 +1,15 @@
+# 0.36.3 (Wed Jun 04 2025)
+
+#### 🐛 Bug Fix
+
+- Fix nest_asyncio crash on uvloop: apply only when safe [#342](https://github.com/sensein/senselab/pull/342) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.36.2 (Fri May 23 2025)
 
 #### 🐛 Bug Fix
