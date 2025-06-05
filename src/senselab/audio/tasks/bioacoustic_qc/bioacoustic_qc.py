@@ -1,4 +1,4 @@
-"""Runs bioacoustic activity recording quality control on a set of Audio objects."""
+"""Runs bioacoustic activity recording quality control on a set of audio files."""
 
 import multiprocessing as mp
 import os
@@ -47,7 +47,7 @@ def activity_to_taxonomy_tree_path(activity: str) -> List[str]:
 
 
 def subtree_to_evaluations(subtree: Dict) -> List[Callable[[Audio], float | bool]]:
-    """Recursively extracts all evaluation functions (metrics and checks) from a taxonomy subtree.
+    """Recursively gets all evaluation functions (metrics and checks) from a taxonomy subtree.
 
     Args:
         subtree (Dict): A subtree of the full taxonomy, either pruned or complete.
@@ -73,7 +73,7 @@ def subtree_to_evaluations(subtree: Dict) -> List[Callable[[Audio], float | bool
 
 
 def activity_to_dataset_taxonomy_subtree(activity_name: str, activity_tree: Dict) -> Dict:
-    """Constructs a pruned taxonomy tree containing only the specified activity.
+    """Constructs a pruned taxonomy tree for the specified activity.
 
     Args:
         activity_name (str): The name of the activity to isolate.
