@@ -5,7 +5,6 @@ from .bioacoustic_qc import (
     activity_to_taxonomy_tree_path,
     check_quality,
     create_activity_to_evaluations,
-    get_evaluation,
     subtree_to_evaluations,
 )
 
@@ -15,5 +14,4 @@ __all__ = [
     "check_quality",
     "activity_to_taxonomy_tree_path",
     "create_activity_to_evaluations",
-    "get_evaluation",
 ]
