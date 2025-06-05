@@ -134,63 +134,56 @@ def create_activity_to_evaluations(
     return activity_to_evaluations
 
 
-def get_evaluation(
-    audio: Audio,
-    evaluation_function: Callable[[Audio], float | bool],
-    id: str,
-    df: pd.DataFrame,
-) -> pd.DataFrame:
-    """Applies a single evaluation function to an Audio instance and caches the result in a DataFrame.
-
-    Args:
-        audio (Audio): The Audio object to evaluate.
-        evaluation_function (Callable): A function that computes a metric or check from Audio.
-        id (str): The unique ID for the current row in the DataFrame.
-        df (pd.DataFrame): A DataFrame used to accumulate evaluation results.
-
-    Returns:
-        pd.DataFrame: The updated DataFrame with the new evaluation result.
-    """
-    evaluation_name = evaluation_function.__name__
-
-    if evaluation_name in df.columns and not pd.isna(df.loc[df["id"] == id, evaluation_name]).all():
-        return df  # Already computed
-
-    if evaluation_name not in df.columns:
-        df[evaluation_name] = None
-
-    df.loc[df["id"] == id, evaluation_name] = evaluation_function(audio)
-    return df
-
-
 def evaluate_audio(
-    audio_path: Union[str, Path],
-    save_path: Union[str, Path],
+    audio_path: str,
     activity: str,
-    evaluations: List[Callable[[Audio], float | bool]],
-) -> None:
-    """Evaluates a single audio file using the given set of functions and saves results as CSV.
+    evaluations: List[Callable[[Audio], Union[float, bool, str]]],
+    existing_results: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Evaluates a single audio file using the given set of functions.
 
     Args:
-        audio_path (Union[str, Path]): Path to the audio file.
-        save_path (Union[str, Path]): Directory to write the output CSV.
-        activity (str): Activity label associated with the audio file.
-        evaluations (List[Callable[[Audio], float | bool]]): List of evaluation functions to apply.
+        audio_path: Path to the audio file
+        activity: Activity label associated with the audio file
+        evaluations: List of evaluation functions to apply
+        existing_results: Optional dictionary of existing evaluation results
 
     Returns:
-        None
+        Dict[str, Any]: Dictionary containing evaluation results
     """
-    id = Path(audio_path).stem
-    output_file = save_path / Path(f"{id}.csv")
-    if output_file.exists():
-        return
+    audio_id = Path(audio_path).stem
+    record: Dict[str, Any] = {
+        "id": audio_id,
+        "path": str(audio_path),
+        "activity": activity,
+    }
 
-    audio = Audio(filepath=audio_path)
-    df = pd.DataFrame([{"id": id, "path": audio_path, "activity": activity}])
-    for evaluation in evaluations:
-        df = get_evaluation(audio=audio, evaluation_function=evaluation, df=df, id=id)
-    df.to_csv(output_file, index=False)
-    return df
+    # Start with existing results if available
+    if existing_results:
+        record.update(existing_results)
+
+    # Determine which evaluations need to be computed
+    missing_evaluations = [fn for fn in evaluations if not existing_results or fn.__name__ not in existing_results]
+
+    if missing_evaluations:
+        try:
+            # Load audio only if we have evaluations to compute
+            audio = Audio(filepath=audio_path)
+
+            # Apply each missing evaluation function
+            for fn in missing_evaluations:
+                try:
+                    result = fn(audio)
+                    record[fn.__name__] = result
+                except Exception as e:
+                    print(f"Warning: Failed to compute {fn.__name__} for {audio_id}: {e}")
+                    # Use empty string for failed string metrics, None otherwise
+                    record[fn.__name__] = "" if fn.__annotations__.get("return") == str else None
+
+        except Exception as e:
+            print(f"Error processing {audio_id}: {e}")
+
+    return record
 
 
 def evaluate_batch(
@@ -218,61 +211,26 @@ def evaluate_batch(
         audio_id = Path(audio_path).stem
         result_path = results_dir / f"{audio_id}.parquet"
 
-        # Initialize record with basic info
-        record: Dict[str, Any] = {
-            "id": audio_id,
-            "path": str(audio_path),  # Ensure path is string
-            "activity": audio_path_to_activity[str(audio_path)],
-        }
-
         # Load existing results if available
-        existing_results: Dict[str, Any] = {}
+        existing_results = None
         if result_path.exists():
             try:
                 existing_df = pd.read_parquet(result_path)
                 if not existing_df.empty:
                     existing_results = existing_df.iloc[0].to_dict()
-                    # Remove basic info keys to keep only metrics/checks
-                    for key in ["id", "path", "activity"]:
-                        existing_results.pop(key, None)
             except Exception as e:
-                print("Warning: Could not read existing results for " f"{audio_id}: {e}")
+                print(f"Warning: Could not read existing results for {audio_id}: {e}")
 
         # Get evaluations for this activity
         activity = audio_path_to_activity[str(audio_path)]
         evaluations = activity_to_evaluations[activity]
 
-        # Only compute missing evaluations
-        missing_evaluations = [fn for fn in evaluations if fn.__name__ not in existing_results]
+        # Evaluate audio and save results
+        record = evaluate_audio(str(audio_path), activity, evaluations, existing_results)
 
-        if missing_evaluations:
-            try:
-                # Load audio only if we have new evaluations to compute
-                audio = Audio(filepath=audio_path)
-
-                # Compute missing evaluations
-                for fn in missing_evaluations:
-                    try:
-                        result = fn(audio)
-                        record[fn.__name__] = result
-                        # Save after each evaluation for maximum resilience
-                        pd.DataFrame([record]).to_parquet(result_path)
-                    except Exception as e:
-                        print(f"Warning: Failed to compute {fn.__name__} " f"for {audio_id}: {e}")
-                        # Use empty string for failed string metrics
-                        record[fn.__name__] = "" if fn.__annotations__.get("return") == str else None
-                        # Save the failure state
-                        pd.DataFrame([record]).to_parquet(result_path)
-
-                # Merge with existing results
-                record.update(existing_results)
-            except Exception as e:
-                print(f"Error processing {audio_id}: {e}")
-                # Keep existing results if available
-                record.update(existing_results)
-        else:
-            # Use existing results if all evaluations were already computed
-            record.update(existing_results)
+        # Only save if we computed new results
+        if not existing_results or record != existing_results:
+            pd.DataFrame([record]).to_parquet(result_path)
 
         records.append(record)
 
