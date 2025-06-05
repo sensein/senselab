@@ -70,70 +70,6 @@ def test_activity_to_taxonomy_tree_path() -> None:
         activity_to_taxonomy_tree_path("nonexistent_activity")
 
 
-@pytest.mark.parametrize(
-    "activity_name,expected_subtree",
-    [
-        (
-            "sigh",
-            {
-                "bioacoustic": {
-                    "checks": [
-                        audio_length_positive_check,
-                        audio_intensity_positive_check,
-                    ],
-                    "metrics": TAXONOMY["bioacoustic"]["metrics"],
-                    "subclass": {
-                        "human": {
-                            "checks": [],
-                            "metrics": [],
-                            "subclass": {
-                                "respiration": {
-                                    "checks": [],
-                                    "metrics": [],
-                                    "subclass": {
-                                        "breathing": {
-                                            "checks": [],
-                                            "metrics": [],
-                                            "subclass": {
-                                                "sigh": {
-                                                    "checks": [],
-                                                    "metrics": [],
-                                                    "subclass": None,
-                                                }
-                                            },
-                                        }
-                                    },
-                                }
-                            },
-                        }
-                    },
-                }
-            },
-        ),
-    ],
-)
-def test_activity_to_dataset_taxonomy_subtree(
-    activity_name: str,
-    expected_subtree: Dict,
-) -> None:
-    """Tests pruned taxonomy subtree creation."""
-    result = activity_to_dataset_taxonomy_subtree(
-        activity_name,
-        TAXONOMY,
-    )
-    assert result == expected_subtree, f"Expected {expected_subtree}, but got {result}"
-
-
-def test_activity_to_dataset_taxonomy_subtree_errors() -> None:
-    """Tests error handling in taxonomy subtree creation."""
-    error_msg = "Activity 'nonexistent_activity' not found in taxonomy tree."
-    with pytest.raises(ValueError, match=error_msg):
-        activity_to_dataset_taxonomy_subtree(
-            "nonexistent_activity",
-            TAXONOMY,
-        )
-
-
 def test_subtree_to_evaluations() -> None:
     """Tests evaluation extraction from taxonomy subtree."""
     # Create a test subtree
@@ -171,11 +107,7 @@ def test_subtree_to_evaluations_empty() -> None:
 
 
 def test_subtree_to_evaluations_nested() -> None:
-    """Tests that nested subtrees correctly collect all evaluations.
-
-    Verifies that evaluations are collected from all levels of the tree,
-    including root and child nodes.
-    """
+    """Tests that nested subtrees correctly collect all evaluations."""
 
     # Mock evaluation functions
     def mock_metric1(audio: Audio) -> float:
@@ -203,11 +135,7 @@ def test_subtree_to_evaluations_nested() -> None:
 
 
 def test_subtree_to_evaluations_duplicates() -> None:
-    """Tests that duplicate evaluations are only included once.
-
-    Verifies that when the same evaluation function appears multiple times
-    in the tree, it is only included once in the final list.
-    """
+    """Tests that duplicate evaluations are only included once."""
 
     # Mock evaluation function
     def mock_eval(audio: Audio) -> float:
@@ -235,11 +163,7 @@ def test_subtree_to_evaluations_duplicates() -> None:
 
 
 def test_subtree_to_evaluations_order() -> None:
-    """Tests that evaluation order is preserved from the taxonomy structure.
-
-    Verifies that evaluations are returned in the same order they appear
-    in the tree structure.
-    """
+    """Tests that evaluation order is preserved from the taxonomy structure."""
 
     # Mock evaluation functions
     def mock_eval1(audio: Audio) -> float:
@@ -264,26 +188,59 @@ def test_subtree_to_evaluations_order() -> None:
     assert evaluations == expected, "Expected order to be preserved"
 
 
-def test_check_quality(tmp_path: Path) -> None:
-    """Tests that check_quality correctly processes audio files and returns results."""
-    # Create a test audio file
-    audio = Audio(
-        waveform=torch.rand(1, 16000),
-        sampling_rate=16000,
+def test_activity_to_dataset_taxonomy_subtree(
+    activity_name: str = "sigh",
+    expected_subtree: Dict = {
+        "bioacoustic": {
+            "checks": [
+                audio_length_positive_check,
+                audio_intensity_positive_check,
+            ],
+            "metrics": TAXONOMY["bioacoustic"]["metrics"],
+            "subclass": {
+                "human": {
+                    "checks": [],
+                    "metrics": [],
+                    "subclass": {
+                        "respiration": {
+                            "checks": [],
+                            "metrics": [],
+                            "subclass": {
+                                "breathing": {
+                                    "checks": [],
+                                    "metrics": [],
+                                    "subclass": {
+                                        "sigh": {
+                                            "checks": [],
+                                            "metrics": [],
+                                            "subclass": None,
+                                        }
+                                    },
+                                }
+                            },
+                        }
+                    },
+                }
+            },
+        }
+    },
+) -> None:
+    """Tests pruned taxonomy subtree creation."""
+    result = activity_to_dataset_taxonomy_subtree(
+        activity_name,
+        TAXONOMY,
     )
-    audio_path = str(tmp_path / "test.wav")
-    audio.save_to_file(audio_path)
+    assert result == expected_subtree, f"Expected {expected_subtree}, but got {result}"
 
-    # Run check_quality
-    results_df = check_quality(
-        audio_paths=[audio_path],
-        output_dir=tmp_path,
-    )
 
-    # Verify results
-    assert isinstance(results_df, pd.DataFrame), "Expected DataFrame output"
-    assert not results_df.empty, "Expected non-empty results"
-    assert "path" in results_df.columns, "Expected 'path' column in results"
+def test_activity_to_dataset_taxonomy_subtree_errors() -> None:
+    """Tests error handling in taxonomy subtree creation."""
+    error_msg = "Activity 'nonexistent_activity' not found in taxonomy tree."
+    with pytest.raises(ValueError, match=error_msg):
+        activity_to_dataset_taxonomy_subtree(
+            "nonexistent_activity",
+            TAXONOMY,
+        )
 
 
 def test_create_activity_to_evaluations() -> None:
@@ -491,3 +448,25 @@ def test_run_evaluations(tmp_path: Path) -> None:
     assert results_dir.exists(), "Results directory should be created"
     for i in range(3):
         assert (results_dir / f"test{i}.parquet").exists(), f"Cache file for test{i} should exist"
+
+
+def test_check_quality(tmp_path: Path) -> None:
+    """Tests that check_quality correctly processes audio files and returns results."""
+    # Create a test audio file
+    audio = Audio(
+        waveform=torch.rand(1, 16000),
+        sampling_rate=16000,
+    )
+    audio_path = str(tmp_path / "test.wav")
+    audio.save_to_file(audio_path)
+
+    # Run check_quality
+    results_df = check_quality(
+        audio_paths=[audio_path],
+        output_dir=tmp_path,
+    )
+
+    # Verify results
+    assert isinstance(results_df, pd.DataFrame), "Expected DataFrame output"
+    assert not results_df.empty, "Expected non-empty results"
+    assert "path" in results_df.columns, "Expected 'path' column in results"
