@@ -7,6 +7,7 @@ from .bioacoustic_qc import (
     create_activity_to_evaluations,
     evaluate_audio,
     evaluate_batch,
+    run_evaluations,
     subtree_to_evaluations,
 )
 
@@ -18,4 +19,5 @@ __all__ = [
     "create_activity_to_evaluations",
     "evaluate_audio",
     "evaluate_batch",
+    "run_evaluations",
 ]

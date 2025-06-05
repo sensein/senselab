@@ -16,6 +16,7 @@ from senselab.audio.tasks.bioacoustic_qc import (
     create_activity_to_evaluations,
     evaluate_audio,
     evaluate_batch,
+    run_evaluations,
     subtree_to_evaluations,
 )
 from senselab.audio.tasks.bioacoustic_qc.checks import (
@@ -415,3 +416,78 @@ def test_evaluate_batch(tmp_path: Path) -> None:
 
     # Verify cached results match original results
     assert cached_results == results, "Cached results should match original results"
+
+
+def test_run_evaluations(tmp_path: Path) -> None:
+    """Tests that run_evaluations correctly processes batches in parallel."""
+    # Create test audio files
+    audio = Audio(
+        waveform=torch.rand(1, 16000),
+        sampling_rate=16000,
+    )
+
+    # Create multiple test files to test batching
+    audio_paths = []
+    for i in range(3):  # Create 3 files to test batching
+        path = str(tmp_path / f"test{i}.wav")
+        audio.save_to_file(path)
+        audio_paths.append(path)
+
+    # Setup test evaluation function
+    def test_metric(_: Audio) -> Union[float, bool, str]:
+        return 0.5
+
+    # Setup test data
+    audio_path_to_activity = {path: "test_activity" for path in audio_paths}
+    activity_to_evaluations: Dict[
+        str,
+        List[Callable[[Audio], Union[float, bool, str]]],
+    ] = {"test_activity": [test_metric]}
+
+    # Run evaluations with different configurations
+    # Test serial execution
+    results_serial = run_evaluations(
+        audio_path_to_activity=audio_path_to_activity,
+        activity_to_evaluations=activity_to_evaluations,
+        output_dir=tmp_path,
+        batch_size=2,  # Should create 2 batches
+        n_cores=1,  # Force serial execution
+        plugin="serial",
+    )
+
+    # Test parallel execution
+    results_parallel = run_evaluations(
+        audio_path_to_activity=audio_path_to_activity,
+        activity_to_evaluations=activity_to_evaluations,
+        output_dir=tmp_path,
+        batch_size=2,  # Should create 2 batches
+        n_cores=2,  # Use parallel execution
+        plugin="cf",
+    )
+
+    # Verify results
+    assert isinstance(results_serial, pd.DataFrame), "Expected DataFrame output"
+    assert isinstance(results_parallel, pd.DataFrame), "Expected DataFrame output"
+    assert len(results_serial) == 3, "Expected results for all files"
+    assert len(results_parallel) == 3, "Expected results for all files"
+
+    # Verify both methods give same results
+    pd.testing.assert_frame_equal(
+        results_serial.sort_values("id").reset_index(drop=True),
+        results_parallel.sort_values("id").reset_index(drop=True),
+    )
+
+    # Verify results content
+    for df in [results_serial, results_parallel]:
+        for _, row in df.iterrows():
+            assert "id" in row, "Expected 'id' in result"
+            assert "path" in row, "Expected 'path' in result"
+            assert "activity" in row, "Expected 'activity' in result"
+            assert "test_metric" in row, "Expected metric result"
+            assert row["test_metric"] == 0.5, "Expected metric value of 0.5"
+
+    # Verify cache files exist
+    results_dir = tmp_path / "audio_results"
+    assert results_dir.exists(), "Results directory should be created"
+    for i in range(3):
+        assert (results_dir / f"test{i}.parquet").exists(), f"Cache file for test{i} should exist"

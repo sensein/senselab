@@ -341,8 +341,8 @@ def check_quality(
     final_results_path = output_directory / "combined_results.csv"
     evaluations_df.to_csv(final_results_path, index=False)
 
-    return evaluations_df
-
     # label include, exclude, review
 
     # create final metadata files
+
+    return evaluations_df
