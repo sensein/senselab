@@ -25,7 +25,6 @@ from senselab.audio.tasks.bioacoustic_qc.checks import (
 )
 from senselab.audio.tasks.bioacoustic_qc.constants import BIOACOUSTIC_ACTIVITY_TAXONOMY as TAXONOMY
 
-
 @pytest.mark.parametrize("taxonomy_tree", [TAXONOMY])
 def test_no_duplicate_subclass_keys(taxonomy_tree: Dict) -> None:
     """Tests that all subclass keys in the taxonomy are unique."""
