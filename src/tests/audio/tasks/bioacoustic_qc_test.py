@@ -13,6 +13,7 @@ from senselab.audio.tasks.bioacoustic_qc import (
     activity_to_dataset_taxonomy_subtree,
     activity_to_taxonomy_tree_path,
     check_quality,
+    create_activity_to_evaluations,
     subtree_to_evaluations,
 )
 from senselab.audio.tasks.bioacoustic_qc.checks import (
@@ -280,3 +281,28 @@ def test_check_quality(tmp_path: Path) -> None:
     assert isinstance(results_df, pd.DataFrame), "Expected DataFrame output"
     assert not results_df.empty, "Expected non-empty results"
     assert "path" in results_df.columns, "Expected 'path' column in results"
+
+
+def test_create_activity_to_evaluations() -> None:
+    """Tests mapping of audio paths to their evaluation functions."""
+    # Setup test data
+    audio_paths = {
+        "audio1.wav": "sigh",
+        "audio2.wav": "sigh",  # Same activity to test deduplication
+    }
+
+    # Get evaluations mapping
+    activity_evals = create_activity_to_evaluations(
+        audio_path_to_activity=audio_paths,
+        activity_tree=TAXONOMY,
+    )
+
+    # Verify results
+    assert len(activity_evals) == 1, "Expected one activity"
+    assert "sigh" in activity_evals, "Expected 'sigh' activity"
+
+    # Verify evaluations for sigh
+    sigh_evals = activity_evals["sigh"]
+    assert isinstance(sigh_evals, list), "Expected list of evaluations"
+    assert audio_length_positive_check in sigh_evals, "Missing length check"
+    assert audio_intensity_positive_check in sigh_evals, "Missing intensity check"
