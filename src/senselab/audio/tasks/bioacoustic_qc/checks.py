@@ -740,3 +740,19 @@ def very_high_zero_crossing_rate_check(
         True when ZCR > ``threshold``.
     """
     return get_metric(audio_or_path, zero_crossing_rate_metric, df) > threshold
+
+
+def audio_intensity_positive_check(
+    audio_or_path: Union[Audio, str],
+    df: Optional[pd.DataFrame] = None,
+) -> bool:
+    """Check that the audio has non-zero intensity.
+
+    Args:
+        audio_or_path: An Audio instance or filepath to the audio file.
+        df: Optional DataFrame with ``dynamic_range_metric``.
+
+    Returns:
+        True if the audio has non-zero dynamic range.
+    """
+    return get_metric(audio_or_path, dynamic_range_metric, df) > 0
