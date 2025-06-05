@@ -15,6 +15,7 @@ from senselab.audio.tasks.bioacoustic_qc import (
     check_quality,
     create_activity_to_evaluations,
     evaluate_audio,
+    evaluate_batch,
     subtree_to_evaluations,
 )
 from senselab.audio.tasks.bioacoustic_qc.checks import (
@@ -353,3 +354,64 @@ def test_evaluate_audio(tmp_path: Path) -> None:
     assert results["test_float"] == 1.0, "Existing float result was not preserved"
     assert results["test_str"] == "old", "Existing string result was not preserved"
     assert results["test_bool"] is True, "New evaluation was not computed"
+
+
+def test_evaluate_batch(tmp_path: Path) -> None:
+    """Tests that evaluate_batch correctly processes multiple audio files and handles caching."""
+    # Create test audio files
+    audio = Audio(
+        waveform=torch.rand(1, 16000),
+        sampling_rate=16000,
+    )
+
+    # Create two test files
+    audio_path1 = str(tmp_path / "test1.wav")
+    audio_path2 = str(tmp_path / "test2.wav")
+    audio.save_to_file(audio_path1)
+    audio.save_to_file(audio_path2)
+
+    # Setup test evaluation function
+    def test_metric(_: Audio) -> Union[float, bool, str]:
+        return 0.5
+
+    # Setup test data
+    batch_audio_paths = [audio_path1, audio_path2]
+    audio_path_to_activity = {audio_path1: "test_activity", audio_path2: "test_activity"}
+    activity_to_evaluations: Dict[
+        str,
+        List[Callable[[Audio], Union[float, bool, str]]],
+    ] = {"test_activity": [test_metric]}
+
+    # Run evaluate_batch
+    results = evaluate_batch(
+        batch_audio_paths=batch_audio_paths,
+        audio_path_to_activity=audio_path_to_activity,
+        activity_to_evaluations=activity_to_evaluations,
+        output_dir=tmp_path,
+    )
+
+    # Verify results
+    assert len(results) == 2, "Expected results for both audio files"
+    for result in results:
+        assert "id" in result, "Expected 'id' in result"
+        assert "path" in result, "Expected 'path' in result"
+        assert "activity" in result, "Expected 'activity' in result"
+        assert "test_metric" in result, "Expected metric result"
+        assert result["test_metric"] == 0.5, "Expected metric value of 0.5"
+
+    # Verify caching - files should exist
+    results_dir = tmp_path / "audio_results"
+    assert results_dir.exists(), "Results directory should be created"
+    assert (results_dir / "test1.parquet").exists(), "Cache file for test1 should exist"
+    assert (results_dir / "test2.parquet").exists(), "Cache file for test2 should exist"
+
+    # Test with existing results
+    cached_results = evaluate_batch(
+        batch_audio_paths=batch_audio_paths,
+        audio_path_to_activity=audio_path_to_activity,
+        activity_to_evaluations=activity_to_evaluations,
+        output_dir=tmp_path,
+    )
+
+    # Verify cached results match original results
+    assert cached_results == results, "Cached results should match original results"
