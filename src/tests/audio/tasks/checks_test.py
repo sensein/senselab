@@ -11,6 +11,7 @@ import pandas as pd
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.bioacoustic_qc.checks import (
+    audio_intensity_positive_check,
     audio_length_positive_check,
     clipping_present_check,
     completely_silent_check,
@@ -364,3 +365,11 @@ def test_very_high_zero_crossing_rate_check(stereo_audio_sample: Audio) -> None:
     assert not very_high_zero_crossing_rate_check(
         stereo_audio_sample
     ), f"very_high_zero_crossing_rate_check flagged (ZCR={m:.4f})"
+
+
+def test_audio_intensity_positive_check(stereo_audio_sample: Audio) -> None:
+    """audio_intensity_positive_check returns True for non-zero dynamic range."""
+    m = dynamic_range_metric(stereo_audio_sample)
+    assert audio_intensity_positive_check(
+        stereo_audio_sample
+    ), f"audio_intensity_positive_check returned False (dynamic_range={m:.4f})"
