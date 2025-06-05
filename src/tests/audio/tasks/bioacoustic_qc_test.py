@@ -1,7 +1,8 @@
 """Module for testing bioacoustic quality control."""
 
 from collections import Counter
-from typing import Dict, List
+from pathlib import Path
+from typing import Dict, List, cast
 
 import pandas as pd
 import pytest
@@ -9,10 +10,10 @@ import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.bioacoustic_qc import (
-    subtree_to_evaluations,
     activity_to_dataset_taxonomy_subtree,
     activity_to_taxonomy_tree_path,
     check_quality,
+    subtree_to_evaluations,
 )
 from senselab.audio.tasks.bioacoustic_qc.checks import audio_intensity_positive_check, audio_length_positive_check
 from senselab.audio.tasks.bioacoustic_qc.constants import BIOACOUSTIC_ACTIVITY_TAXONOMY
@@ -180,14 +181,14 @@ def test_subtree_to_evaluations() -> None:
     }
 
     evaluations = subtree_to_evaluations(subtree)
-    expected_evals = BIOACOUSTIC_ACTIVITY_TAXONOMY["bioacoustic"]["metrics"] + [
+    expected_evals = cast(list, BIOACOUSTIC_ACTIVITY_TAXONOMY["bioacoustic"]["metrics"]) + [
         audio_length_positive_check,
         audio_intensity_positive_check,
     ]
     assert evaluations == expected_evals, "Incorrect evaluations extracted from subtree"
 
 
-def test_check_quality(tmp_path) -> None:
+def test_check_quality(tmp_path: Path) -> None:
     """Tests that check_quality correctly processes audio files and returns results."""
     # Create a test audio file
     audio = Audio(
@@ -195,7 +196,7 @@ def test_check_quality(tmp_path) -> None:
         sampling_rate=16000,
     )
     audio_path = str(tmp_path / "test.wav")
-    audio.save(audio_path)
+    audio.save_to_file(audio_path)
 
     # Run check_quality
     results_df = check_quality(
