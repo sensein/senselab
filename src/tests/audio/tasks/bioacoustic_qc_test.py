@@ -14,6 +14,7 @@ from senselab.audio.tasks.bioacoustic_qc import (
     activity_to_taxonomy_tree_path,
     check_quality,
     create_activity_to_evaluations,
+    get_evaluation,
     subtree_to_evaluations,
 )
 from senselab.audio.tasks.bioacoustic_qc.checks import (
@@ -306,3 +307,39 @@ def test_create_activity_to_evaluations() -> None:
     assert isinstance(sigh_evals, list), "Expected list of evaluations"
     assert audio_length_positive_check in sigh_evals, "Missing length check"
     assert audio_intensity_positive_check in sigh_evals, "Missing intensity check"
+
+
+def test_get_evaluation() -> None:
+    """Tests that get_evaluation correctly applies and caches evaluation results."""
+    # Create test audio
+    audio = Audio(
+        waveform=torch.rand(1, 16000),
+        sampling_rate=16000,
+    )
+
+    # Create a simple evaluation function
+    def mock_evaluation(audio: Audio) -> float:
+        return 0.5
+
+    # Initialize DataFrame with test data
+    df = pd.DataFrame([{"id": "test_id", "path": "test.wav"}])
+
+    # Test first evaluation - should add column and compute result
+    df = get_evaluation(
+        audio=audio,
+        evaluation_function=mock_evaluation,
+        id="test_id",
+        df=df,
+    )
+    assert "mock_evaluation" in df.columns, "Evaluation column not created"
+    assert df.loc[df["id"] == "test_id", "mock_evaluation"].iloc[0] == 0.5, "Incorrect evaluation result"
+
+    # Test caching - modify result and verify it's not recomputed
+    df.loc[df["id"] == "test_id", "mock_evaluation"] = 1.0
+    df = get_evaluation(
+        audio=audio,
+        evaluation_function=mock_evaluation,
+        id="test_id",
+        df=df,
+    )
+    assert df.loc[df["id"] == "test_id", "mock_evaluation"].iloc[0] == 1.0, "Cached result was recomputed"
