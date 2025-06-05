@@ -193,7 +193,7 @@ def evaluate_audio(
     return df
 
 
-def process_batch_task(
+def evaluate_batch(
     batch_audio_paths: List[str],
     audio_path_to_activity: Dict[str, str],
     activity_to_evaluations: Dict[str, List[Callable[[Audio], Union[float, bool, str]]]],
@@ -314,7 +314,7 @@ def run_evaluations(
     audio_paths = list(audio_path_to_activity.keys())
     batches = [audio_paths[i : i + batch_size] for i in range(0, len(audio_paths), batch_size)]
 
-    def process_batch_task_closure() -> Callable:
+    def evaluate_batch_closure() -> Callable:
         """Creates a Pydra task for batch processing.
 
         Returns:
@@ -322,12 +322,12 @@ def run_evaluations(
         """
 
         @pydra.mark.task
-        def wrapped_process_batch_task(batch_audio_paths: List[str]) -> List[Dict[str, Any]]:
-            return process_batch_task(batch_audio_paths, audio_path_to_activity, activity_to_evaluations, output_dir)
+        def evaluate_batch_task(batch_audio_paths: List[str]) -> List[Dict[str, Any]]:
+            return evaluate_batch(batch_audio_paths, audio_path_to_activity, activity_to_evaluations, output_dir)
 
-        return wrapped_process_batch_task
+        return evaluate_batch_task
 
-    task = process_batch_task_closure()()
+    task = evaluate_batch_closure()()
     task.split("batch_audio_paths", batch_audio_paths=batches)
 
     with Submitter(plugin=plugin, **plugin_args) as sub:
