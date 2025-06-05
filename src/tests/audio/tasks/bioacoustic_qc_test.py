@@ -268,15 +268,11 @@ def test_create_activity_to_evaluations() -> None:
     assert audio_intensity_positive_check in sigh_evals, "Missing intensity check"
 
 
-def test_evaluate_audio(tmp_path: Path) -> None:
+def test_evaluate_audio(tmp_path: Path, resampled_mono_audio_sample: Audio) -> None:
     """Tests that evaluate_audio correctly processes audio and handles existing results."""
-    # Create test audio file
-    audio = Audio(
-        waveform=torch.rand(1, 16000),
-        sampling_rate=16000,
-    )
+    # Save test audio file
     audio_path = str(tmp_path / "test.wav")
-    audio.save_to_file(audio_path)
+    resampled_mono_audio_sample.save_to_file(audio_path)
 
     # Create test evaluation functions with proper names
     def test_float(x: Audio) -> float:
@@ -314,19 +310,13 @@ def test_evaluate_audio(tmp_path: Path) -> None:
     assert results["test_bool"] is True, "New evaluation was not computed"
 
 
-def test_evaluate_batch(tmp_path: Path) -> None:
+def test_evaluate_batch(tmp_path: Path, resampled_mono_audio_sample: Audio) -> None:
     """Tests that evaluate_batch correctly processes multiple audio files and handles caching."""
-    # Create test audio files
-    audio = Audio(
-        waveform=torch.rand(1, 16000),
-        sampling_rate=16000,
-    )
-
     # Create two test files
     audio_path1 = str(tmp_path / "test1.wav")
     audio_path2 = str(tmp_path / "test2.wav")
-    audio.save_to_file(audio_path1)
-    audio.save_to_file(audio_path2)
+    resampled_mono_audio_sample.save_to_file(audio_path1)
+    resampled_mono_audio_sample.save_to_file(audio_path2)
 
     # Setup test evaluation function
     def test_metric(_: Audio) -> Union[float, bool, str]:
@@ -375,19 +365,13 @@ def test_evaluate_batch(tmp_path: Path) -> None:
     assert cached_results == results, "Cached results should match original results"
 
 
-def test_run_evaluations(tmp_path: Path) -> None:
+def test_run_evaluations(tmp_path: Path, resampled_mono_audio_sample: Audio) -> None:
     """Tests that run_evaluations correctly processes batches in parallel."""
-    # Create test audio files
-    audio = Audio(
-        waveform=torch.rand(1, 16000),
-        sampling_rate=16000,
-    )
-
     # Create multiple test files to test batching
     audio_paths = []
     for i in range(3):  # Create 3 files to test batching
         path = str(tmp_path / f"test{i}.wav")
-        audio.save_to_file(path)
+        resampled_mono_audio_sample.save_to_file(path)
         audio_paths.append(path)
 
     # Setup test evaluation function
@@ -450,15 +434,11 @@ def test_run_evaluations(tmp_path: Path) -> None:
         assert (results_dir / f"test{i}.parquet").exists(), f"Cache file for test{i} should exist"
 
 
-def test_check_quality(tmp_path: Path) -> None:
+def test_check_quality(tmp_path: Path, resampled_mono_audio_sample: Audio) -> None:
     """Tests that check_quality correctly processes audio files and returns results."""
-    # Create a test audio file
-    audio = Audio(
-        waveform=torch.rand(1, 16000),
-        sampling_rate=16000,
-    )
+    # Save test audio file
     audio_path = str(tmp_path / "test.wav")
-    audio.save_to_file(audio_path)
+    resampled_mono_audio_sample.save_to_file(audio_path)
 
     # Run check_quality
     results_df = check_quality(
