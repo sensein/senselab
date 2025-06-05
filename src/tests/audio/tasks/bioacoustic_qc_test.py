@@ -2,7 +2,7 @@
 
 from collections import Counter
 from pathlib import Path
-from typing import Callable, Dict, List, cast
+from typing import Callable, Dict, List, Union, cast
 
 import pandas as pd
 import pytest
@@ -14,7 +14,7 @@ from senselab.audio.tasks.bioacoustic_qc import (
     activity_to_taxonomy_tree_path,
     check_quality,
     create_activity_to_evaluations,
-    get_evaluation,
+    evaluate_audio,
     subtree_to_evaluations,
 )
 from senselab.audio.tasks.bioacoustic_qc.checks import (
@@ -309,37 +309,47 @@ def test_create_activity_to_evaluations() -> None:
     assert audio_intensity_positive_check in sigh_evals, "Missing intensity check"
 
 
-def test_get_evaluation() -> None:
-    """Tests that get_evaluation correctly applies and caches evaluation results."""
-    # Create test audio
+def test_evaluate_audio(tmp_path: Path) -> None:
+    """Tests that evaluate_audio correctly processes audio and handles existing results."""
+    # Create test audio file
     audio = Audio(
         waveform=torch.rand(1, 16000),
         sampling_rate=16000,
     )
+    audio_path = str(tmp_path / "test.wav")
+    audio.save_to_file(audio_path)
 
-    # Create a simple evaluation function
-    def mock_evaluation(audio: Audio) -> float:
+    # Create test evaluation functions with proper names
+    def test_float(x: Audio) -> float:
         return 0.5
 
-    # Initialize DataFrame with test data
-    df = pd.DataFrame([{"id": "test_id", "path": "test.wav"}])
+    def test_bool(x: Audio) -> bool:
+        return True
 
-    # Test first evaluation - should add column and compute result
-    df = get_evaluation(
-        audio=audio,
-        evaluation_function=mock_evaluation,
-        id="test_id",
-        df=df,
-    )
-    assert "mock_evaluation" in df.columns, "Evaluation column not created"
-    assert df.loc[df["id"] == "test_id", "mock_evaluation"].iloc[0] == 0.5, "Incorrect evaluation result"
+    def test_str(x: Audio) -> str:
+        return "test"
 
-    # Test caching - modify result and verify it's not recomputed
-    df.loc[df["id"] == "test_id", "mock_evaluation"] = 1.0
-    df = get_evaluation(
-        audio=audio,
-        evaluation_function=mock_evaluation,
-        id="test_id",
-        df=df,
-    )
-    assert df.loc[df["id"] == "test_id", "mock_evaluation"].iloc[0] == 1.0, "Cached result was recomputed"
+    evaluations: List[Callable[[Audio], Union[float, bool, str]]] = [
+        test_float,
+        test_bool,
+        test_str,
+    ]
+
+    # Test basic evaluation
+    results = evaluate_audio(audio_path, "test_activity", evaluations)
+    assert results["id"] == Path(audio_path).stem
+    assert results["path"] == audio_path
+    assert results["activity"] == "test_activity"
+    assert results["test_float"] == 0.5
+    assert results["test_bool"] is True
+    assert results["test_str"] == "test"
+
+    # Test with existing results
+    existing = {
+        "test_float": 1.0,  # Should be preserved
+        "test_str": "old",  # Should be preserved
+    }
+    results = evaluate_audio(audio_path, "test_activity", evaluations, existing)
+    assert results["test_float"] == 1.0, "Existing float result was not preserved"
+    assert results["test_str"] == "old", "Existing string result was not preserved"
+    assert results["test_bool"] is True, "New evaluation was not computed"
