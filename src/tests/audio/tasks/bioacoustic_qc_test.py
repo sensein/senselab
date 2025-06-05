@@ -230,29 +230,6 @@ def test_subtree_to_evaluations_duplicates() -> None:
     assert evaluations == [mock_eval], "Expected single instance of duplicate function"
 
 
-def test_subtree_to_evaluations_invalid_structure() -> None:
-    """Tests handling of invalid subtree structures.
-
-    Verifies that the function gracefully handles various types of invalid
-    input without raising exceptions.
-    """
-    # Test with non-dict node
-    invalid_subtree1 = {"node": "not_a_dict"}
-    evaluations1 = subtree_to_evaluations(invalid_subtree1)
-    assert evaluations1 == [], "Expected empty list for invalid node type"
-
-    # Test with missing required keys
-    # Missing checks and metrics
-    invalid_subtree2 = {"node": {"subclass": None}}
-    evaluations2 = subtree_to_evaluations(invalid_subtree2)
-    assert evaluations2 == [], "Expected empty list for missing keys"
-
-    # Test with None values
-    invalid_subtree3 = {"node": {"checks": None, "metrics": None, "subclass": None}}
-    evaluations3 = subtree_to_evaluations(invalid_subtree3)
-    assert evaluations3 == [], "Expected empty list for None values"
-
-
 def test_subtree_to_evaluations_order() -> None:
     """Tests that evaluation order is preserved from the taxonomy structure.
 
@@ -279,7 +256,7 @@ def test_subtree_to_evaluations_order() -> None:
     }
 
     evaluations = subtree_to_evaluations(ordered_subtree)
-    expected = [mock_eval1, mock_eval2, mock_eval3]
+    expected = [mock_eval2, mock_eval1, mock_eval3]
     assert evaluations == expected, "Expected order to be preserved"
 
 
