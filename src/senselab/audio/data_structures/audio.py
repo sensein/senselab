@@ -311,7 +311,7 @@ class Audio(BaseModel):
             if not os.path.exists(output_dir):
                 os.makedirs(output_dir)
             torchaudio.save(
-                uri=file_path,
+                uri=str(file_path),
                 src=self.waveform,
                 sample_rate=self.sampling_rate,
                 channels_first=True,
