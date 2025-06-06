@@ -11,11 +11,11 @@ from .evaluate import (
     evaluate_audio,
     evaluate_batch,
     evaluate_dataset,
-    get_metric,
+    evaluate_metric,
 )
 
 __all__ = [
-    "get_metric",
+    "evaluate_metric",
     "subtree_to_evaluations",
     "activity_to_dataset_taxonomy_subtree",
     "check_quality",

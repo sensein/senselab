@@ -15,7 +15,7 @@ from typing import Callable, Optional, Union
 import pandas as pd
 
 from senselab.audio.data_structures import Audio
-from senselab.audio.tasks.bioacoustic_qc.evaluate import get_metric
+from senselab.audio.tasks.bioacoustic_qc.evaluate import evaluate_metric
 from senselab.audio.tasks.bioacoustic_qc.metrics import (
     amplitude_headroom_metric,
     amplitude_interquartile_range_metric,
@@ -67,7 +67,7 @@ def very_low_headroom_check(
     Returns:
         True when headroom < ``headroom_threshold``.
     """
-    return get_metric(audio_or_path, amplitude_headroom_metric, df) < headroom_threshold
+    return evaluate_metric(audio_or_path, amplitude_headroom_metric, df) < headroom_threshold
 
 
 def very_high_headroom_check(
@@ -85,7 +85,7 @@ def very_high_headroom_check(
     Returns:
         True when headroom > ``headroom_threshold``.
     """
-    return get_metric(audio_or_path, amplitude_headroom_metric, df) > headroom_threshold
+    return evaluate_metric(audio_or_path, amplitude_headroom_metric, df) > headroom_threshold
 
 
 def very_high_amplitude_interquartile_range_check(
@@ -103,7 +103,7 @@ def very_high_amplitude_interquartile_range_check(
     Returns:
         True when IQR > ``threshold``.
     """
-    return get_metric(audio_or_path, amplitude_interquartile_range_metric, df) > threshold
+    return evaluate_metric(audio_or_path, amplitude_interquartile_range_metric, df) > threshold
 
 
 def very_low_amplitude_kurtosis_check(
@@ -121,7 +121,7 @@ def very_low_amplitude_kurtosis_check(
     Returns:
         True when kurtosis < ``threshold``.
     """
-    return get_metric(audio_or_path, amplitude_kurtosis_metric, df) < threshold
+    return evaluate_metric(audio_or_path, amplitude_kurtosis_metric, df) < threshold
 
 
 def very_high_amplitude_kurtosis_check(
@@ -139,7 +139,7 @@ def very_high_amplitude_kurtosis_check(
     Returns:
         True when kurtosis > ``threshold``.
     """
-    return get_metric(audio_or_path, amplitude_kurtosis_metric, df) > threshold
+    return evaluate_metric(audio_or_path, amplitude_kurtosis_metric, df) > threshold
 
 
 def very_low_amplitude_modulation_depth_check(
@@ -157,7 +157,7 @@ def very_low_amplitude_modulation_depth_check(
     Returns:
         True when modulation depth < ``threshold``.
     """
-    return get_metric(audio_or_path, amplitude_modulation_depth_metric, df) < threshold
+    return evaluate_metric(audio_or_path, amplitude_modulation_depth_metric, df) < threshold
 
 
 def low_amplitude_modulation_depth_check(
@@ -177,7 +177,7 @@ def low_amplitude_modulation_depth_check(
     Returns:
         True when ``min ≤ depth < max``.
     """
-    depth = get_metric(audio_or_path, amplitude_modulation_depth_metric, df)
+    depth = evaluate_metric(audio_or_path, amplitude_modulation_depth_metric, df)
     return min <= depth < max
 
 
@@ -196,7 +196,7 @@ def high_proportion_clipped_check(
     Returns:
         True when clipped proportion < ``threshold``.
     """
-    return get_metric(audio_or_path, proportion_clipped_metric, df) > threshold
+    return evaluate_metric(audio_or_path, proportion_clipped_metric, df) > threshold
 
 
 def clipping_present_check(
@@ -212,7 +212,7 @@ def clipping_present_check(
     Returns:
         True when clipped proportion > 0.
     """
-    return get_metric(audio_or_path, proportion_clipped_metric, df) > 0
+    return evaluate_metric(audio_or_path, proportion_clipped_metric, df) > 0
 
 
 def completely_silent_check(
@@ -231,7 +231,7 @@ def completely_silent_check(
     Returns:
         True when silent proportion ≥ ``silent_proportion``.
     """
-    return get_metric(audio_or_path, proportion_silent_metric, df) >= silent_proportion
+    return evaluate_metric(audio_or_path, proportion_silent_metric, df) >= silent_proportion
 
 
 def mostly_silent_check(
@@ -250,7 +250,7 @@ def mostly_silent_check(
     Returns:
         True when silent proportion > ``silent_proportion``.
     """
-    return get_metric(audio_or_path, proportion_silent_metric, df) > silent_proportion
+    return evaluate_metric(audio_or_path, proportion_silent_metric, df) > silent_proportion
 
 
 def high_amplitude_skew_magnitude_check(
@@ -268,7 +268,7 @@ def high_amplitude_skew_magnitude_check(
     Returns:
         True when |skew| ≤ ``magnitude``.
     """
-    return abs(get_metric(audio_or_path, amplitude_skew_metric, df)) > magnitude
+    return abs(evaluate_metric(audio_or_path, amplitude_skew_metric, df)) > magnitude
 
 
 def high_crest_factor_check(
@@ -286,7 +286,7 @@ def high_crest_factor_check(
     Returns:
         True when crest factor ≥ ``threshold``.
     """
-    return get_metric(audio_or_path, crest_factor_metric, df) >= threshold
+    return evaluate_metric(audio_or_path, crest_factor_metric, df) >= threshold
 
 
 def low_crest_factor_check(
@@ -304,7 +304,7 @@ def low_crest_factor_check(
     Returns:
         True when crest factor ≤ ``threshold``.
     """
-    return get_metric(audio_or_path, crest_factor_metric, df) <= threshold
+    return evaluate_metric(audio_or_path, crest_factor_metric, df) <= threshold
 
 
 def very_low_dynamic_range_check(
@@ -322,7 +322,7 @@ def very_low_dynamic_range_check(
     Returns:
         True when dynamic range < ``threshold``.
     """
-    return get_metric(audio_or_path, dynamic_range_metric, df) < threshold
+    return evaluate_metric(audio_or_path, dynamic_range_metric, df) < threshold
 
 
 def very_high_dynamic_range_check(
@@ -340,7 +340,7 @@ def very_high_dynamic_range_check(
     Returns:
         True when dynamic range > ``threshold``.
     """
-    return get_metric(audio_or_path, dynamic_range_metric, df) > threshold
+    return evaluate_metric(audio_or_path, dynamic_range_metric, df) > threshold
 
 
 def very_low_mean_absolute_deviation_check(
@@ -358,7 +358,7 @@ def very_low_mean_absolute_deviation_check(
     Returns:
         True when MAD < ``threshold``.
     """
-    return get_metric(audio_or_path, mean_absolute_deviation_metric, df) < threshold
+    return evaluate_metric(audio_or_path, mean_absolute_deviation_metric, df) < threshold
 
 
 def very_high_mean_absolute_deviation_check(
@@ -376,7 +376,7 @@ def very_high_mean_absolute_deviation_check(
     Returns:
         True when MAD > ``threshold``.
     """
-    return get_metric(audio_or_path, mean_absolute_deviation_metric, df) > threshold
+    return evaluate_metric(audio_or_path, mean_absolute_deviation_metric, df) > threshold
 
 
 def very_low_peak_snr_from_spectral_check(
@@ -394,7 +394,7 @@ def very_low_peak_snr_from_spectral_check(
     Returns:
         True when peak-SNR < ``threshold``.
     """
-    return get_metric(audio_or_path, peak_snr_from_spectral_metric, df) < threshold
+    return evaluate_metric(audio_or_path, peak_snr_from_spectral_metric, df) < threshold
 
 
 def low_peak_snr_from_spectral_check(
@@ -414,7 +414,7 @@ def low_peak_snr_from_spectral_check(
     Returns:
         True when ``lower ≤ SNR < upper``.
     """
-    snr = get_metric(audio_or_path, peak_snr_from_spectral_metric, df)
+    snr = evaluate_metric(audio_or_path, peak_snr_from_spectral_metric, df)
     return lower <= snr < upper
 
 
@@ -433,7 +433,7 @@ def very_high_peak_snr_from_spectral_check(
     Returns:
         True when peak-SNR > ``threshold``.
     """
-    return get_metric(audio_or_path, peak_snr_from_spectral_metric, df) > threshold
+    return evaluate_metric(audio_or_path, peak_snr_from_spectral_metric, df) > threshold
 
 
 def low_phase_correlation_check(
@@ -451,7 +451,7 @@ def low_phase_correlation_check(
     Returns:
         True when correlation < ``threshold``.
     """
-    return get_metric(audio_or_path, phase_correlation_metric, df) < threshold
+    return evaluate_metric(audio_or_path, phase_correlation_metric, df) < threshold
 
 
 def high_proportion_silence_at_beginning_check(
@@ -461,7 +461,7 @@ def high_proportion_silence_at_beginning_check(
 ) -> bool:
     """Flag recordings with > ``threshold`` leading silence.
 
-    Note: This metric cannot use ``get_metric`` because the metric
+    Note: This metric cannot use ``evaluate_metric`` because the metric
     requires no DataFrame but **does** use its default internal threshold.
 
     Args:
@@ -472,7 +472,7 @@ def high_proportion_silence_at_beginning_check(
     Returns:
         True when leading silence proportion > ``threshold``.
     """
-    return get_metric(audio_or_path, proportion_silence_at_beginning_metric, df) > threshold
+    return evaluate_metric(audio_or_path, proportion_silence_at_beginning_metric, df) > threshold
 
 
 def high_proportion_silence_at_end_check(
@@ -490,7 +490,7 @@ def high_proportion_silence_at_end_check(
     Returns:
         True when trailing silence proportion > ``threshold``.
     """
-    return get_metric(audio_or_path, proportion_silence_at_end_metric, df) > threshold
+    return evaluate_metric(audio_or_path, proportion_silence_at_end_metric, df) > threshold
 
 
 def very_low_root_mean_square_energy_check(
@@ -508,7 +508,7 @@ def very_low_root_mean_square_energy_check(
     Returns:
         True when RMS < ``threshold``.
     """
-    return get_metric(audio_or_path, root_mean_square_energy_metric, df) < threshold
+    return evaluate_metric(audio_or_path, root_mean_square_energy_metric, df) < threshold
 
 
 def very_high_root_mean_square_energy_check(
@@ -526,7 +526,7 @@ def very_high_root_mean_square_energy_check(
     Returns:
         True when RMS > ``threshold``.
     """
-    return get_metric(audio_or_path, root_mean_square_energy_metric, df) > threshold
+    return evaluate_metric(audio_or_path, root_mean_square_energy_metric, df) > threshold
 
 
 def low_shannon_entropy_amplitude_check(
@@ -544,7 +544,7 @@ def low_shannon_entropy_amplitude_check(
     Returns:
         True when entropy < ``threshold``.
     """
-    return get_metric(audio_or_path, shannon_entropy_amplitude_metric, df) < threshold
+    return evaluate_metric(audio_or_path, shannon_entropy_amplitude_metric, df) < threshold
 
 
 def high_shannon_entropy_amplitude_check(
@@ -562,7 +562,7 @@ def high_shannon_entropy_amplitude_check(
     Returns:
         True when entropy > ``threshold``.
     """
-    return get_metric(audio_or_path, shannon_entropy_amplitude_metric, df) > threshold
+    return evaluate_metric(audio_or_path, shannon_entropy_amplitude_metric, df) > threshold
 
 
 def low_signal_variance_check(
@@ -580,7 +580,7 @@ def low_signal_variance_check(
     Returns:
         True when variance < ``threshold``.
     """
-    return get_metric(audio_or_path, signal_variance_metric, df) < threshold
+    return evaluate_metric(audio_or_path, signal_variance_metric, df) < threshold
 
 
 def high_signal_variance_check(
@@ -598,7 +598,7 @@ def high_signal_variance_check(
     Returns:
         True when variance > ``threshold``.
     """
-    return get_metric(audio_or_path, signal_variance_metric, df) > threshold
+    return evaluate_metric(audio_or_path, signal_variance_metric, df) > threshold
 
 
 def low_spectral_gating_snr_check(
@@ -616,7 +616,7 @@ def low_spectral_gating_snr_check(
     Returns:
         True when SNR < ``threshold``.
     """
-    return get_metric(audio_or_path, spectral_gating_snr_metric, df) < threshold
+    return evaluate_metric(audio_or_path, spectral_gating_snr_metric, df) < threshold
 
 
 def high_spectral_gating_snr_check(
@@ -634,7 +634,7 @@ def high_spectral_gating_snr_check(
     Returns:
         True when SNR > ``threshold``.
     """
-    return get_metric(audio_or_path, spectral_gating_snr_metric, df) > threshold
+    return evaluate_metric(audio_or_path, spectral_gating_snr_metric, df) > threshold
 
 
 def low_zero_crossing_rate_check(
@@ -652,7 +652,7 @@ def low_zero_crossing_rate_check(
     Returns:
         True when ZCR < ``threshold``.
     """
-    return get_metric(audio_or_path, zero_crossing_rate_metric, df) < threshold
+    return evaluate_metric(audio_or_path, zero_crossing_rate_metric, df) < threshold
 
 
 def high_zero_crossing_rate_check(
@@ -672,7 +672,7 @@ def high_zero_crossing_rate_check(
     Returns:
         True when ``lower ≤ ZCR < upper``.
     """
-    zcr = get_metric(audio_or_path, zero_crossing_rate_metric, df)
+    zcr = evaluate_metric(audio_or_path, zero_crossing_rate_metric, df)
     return lower <= zcr < upper
 
 
@@ -691,7 +691,7 @@ def very_high_zero_crossing_rate_check(
     Returns:
         True when ZCR > ``threshold``.
     """
-    return get_metric(audio_or_path, zero_crossing_rate_metric, df) > threshold
+    return evaluate_metric(audio_or_path, zero_crossing_rate_metric, df) > threshold
 
 
 def audio_intensity_positive_check(
@@ -707,4 +707,4 @@ def audio_intensity_positive_check(
     Returns:
         True if the audio has non-zero dynamic range.
     """
-    return get_metric(audio_or_path, dynamic_range_metric, df) > 0
+    return evaluate_metric(audio_or_path, dynamic_range_metric, df) > 0
