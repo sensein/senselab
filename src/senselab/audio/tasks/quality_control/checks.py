@@ -15,8 +15,8 @@ from typing import Callable, Optional, Union
 import pandas as pd
 
 from senselab.audio.data_structures import Audio
-from senselab.audio.tasks.bioacoustic_qc.evaluate import evaluate_metric
-from senselab.audio.tasks.bioacoustic_qc.metrics import (
+from senselab.audio.tasks.quality_control.evaluate import evaluate_metric
+from senselab.audio.tasks.quality_control.metrics import (
     amplitude_headroom_metric,
     amplitude_interquartile_range_metric,
     amplitude_kurtosis_metric,
