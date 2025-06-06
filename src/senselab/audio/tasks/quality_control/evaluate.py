@@ -14,51 +14,46 @@ from senselab.audio.data_structures import Audio
 
 def get_evaluation(
     audio_or_path: Union[Audio, str],
-    metric_function: Callable[[Audio], float],
-    df: Optional[pd.DataFrame] = None,
-) -> float:
-    """Return a metric, using a cached DataFrame when possible.
+    evaluation_function: Callable[[Audio], Union[float, bool, str]],
+    existing_results: Optional[Dict[str, Any]] = None,
+) -> Union[float, bool, str, None]:
+    """Return an evaluation result, using cached results when possible.
 
     Args:
         audio_or_path: An Audio instance or filepath to the audio file.
-        metric_function: The metric function, e.g. ``zero_crossing_rate_metric``.
-        df: Optional DataFrame that already contains pre-computed metrics.
-            The DataFrame must have:
-              * a column ``'audio_path_or_id'`` holding file names, and
-              * a column named exactly ``metric_function.__name__``.
+        evaluation_function: The evaluation function to run. Can be either:
+            * A metric function returning a float (e.g. ``zero_crossing_rate_metric``)
+            * A check function returning a bool (e.g. ``very_low_headroom_check``)
+            * A string-based evaluation (e.g. ``quality_category``)
+        existing_results: Optional dictionary of pre-computed results, mapping
+            function names to their results.
 
     Returns:
-        The metric value for this ``audio`` item. If ``df`` is provided and
-        contains the value, that cached value is returned; otherwise the metric
-        is computed directly and optionally added to ``df``.
+        The evaluation result for this ``audio`` item. If the result exists in
+        existing_results, that cached value is returned; otherwise the result
+        is computed directly.
+
+    Raises:
+        ValueError: If evaluation fails and a proper fallback value cannot be determined.
     """
-    metric_name = metric_function.__name__
+    function_name = evaluation_function.__name__
 
-    filepath = None
+    # Check if result exists in cache
+    if existing_results and function_name in existing_results:
+        return existing_results[function_name]
+
+    # Compute new result
     if isinstance(audio_or_path, str):
-        filepath = audio_or_path
+        audio = Audio(filepath=audio_or_path)
     else:
-        filepath = audio_or_path.filepath()
+        audio = audio_or_path
 
-    metric = None
-    if df is not None and filepath:
-        audio_file_name = os.path.basename(filepath)
-        row = df[df["audio_path_or_id"] == audio_file_name]
-        if not row.empty and metric_name in row.columns:
-            metric = row[metric_name].iloc[0]
-
-    if metric is None and isinstance(audio_or_path, Audio):
-        metric = metric_function(audio_or_path)
-        if df is not None and filepath:
-            audio_file_name = os.path.basename(filepath)
-            if metric_name not in df.columns:
-                df[metric_name] = pd.NA
-            df.loc[df["audio_path_or_id"] == audio_file_name, metric_name] = metric
-
-    if metric is None:
-        raise ValueError("Expected metric to be non-None.")
-
-    return metric
+    result: Union[float, bool, str, None] = None
+    try:
+        result = evaluation_function(audio)
+    except Exception as e:
+        print(f"Warning: Failed to compute {function_name}: {e}")
+    return result
 
 
 def evaluate_audio(
@@ -89,26 +84,17 @@ def evaluate_audio(
     if existing_results:
         record.update(existing_results)
 
-    # Determine which evaluations need to be computed
-    missing_evaluations = [fn for fn in evaluations if not existing_results or fn.__name__ not in existing_results]
+    try:
+        # Load audio only if we have evaluations to compute
+        audio = Audio(filepath=audio_path)
 
-    if missing_evaluations:
-        try:
-            # Load audio only if we have evaluations to compute
-            audio = Audio(filepath=audio_path)
+        # Apply each missing evaluation function
+        for fn in evaluations:
+            result = get_evaluation(audio, fn, existing_results)
+            record[fn.__name__] = result
 
-            # Apply each missing evaluation function
-            for fn in missing_evaluations:
-                try:
-                    result = fn(audio)
-                    record[fn.__name__] = result
-                except Exception as e:
-                    print(f"Warning: Failed to compute {fn.__name__} for {audio_id}: {e}")
-                    # Use empty string for failed string metrics, None otherwise
-                    record[fn.__name__] = "" if fn.__annotations__.get("return") == str else None
-
-        except Exception as e:
-            print(f"Error processing {audio_id}: {e}")
+    except Exception as e:
+        print(f"Error processing {audio_id}: {e}")
 
     return record
 
