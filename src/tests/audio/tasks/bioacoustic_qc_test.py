@@ -11,12 +11,12 @@ import torch
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.bioacoustic_qc import (
     activity_to_dataset_taxonomy_subtree,
+    activity_to_evaluations,
     activity_to_taxonomy_tree_path,
     check_quality,
-    create_activity_to_evaluations,
     evaluate_audio,
     evaluate_batch,
-    run_evaluations,
+    evaluate_dataset,
     subtree_to_evaluations,
 )
 from senselab.audio.tasks.bioacoustic_qc.checks import (
@@ -24,6 +24,7 @@ from senselab.audio.tasks.bioacoustic_qc.checks import (
     audio_length_positive_check,
 )
 from senselab.audio.tasks.bioacoustic_qc.constants import BIOACOUSTIC_ACTIVITY_TAXONOMY as TAXONOMY
+
 
 @pytest.mark.parametrize("taxonomy_tree", [TAXONOMY])
 def test_no_duplicate_subclass_keys(taxonomy_tree: Dict) -> None:
@@ -242,7 +243,7 @@ def test_activity_to_dataset_taxonomy_subtree_errors() -> None:
         )
 
 
-def test_create_activity_to_evaluations() -> None:
+def test_activity_to_evaluations() -> None:
     """Tests mapping of audio paths to their evaluation functions."""
     # Setup test data
     audio_paths = {
@@ -251,7 +252,7 @@ def test_create_activity_to_evaluations() -> None:
     }
 
     # Get evaluations mapping
-    activity_evals = create_activity_to_evaluations(
+    activity_evals = activity_to_evaluations(
         audio_path_to_activity=audio_paths,
         activity_tree=TAXONOMY,
     )
@@ -364,8 +365,8 @@ def test_evaluate_batch(tmp_path: Path, resampled_mono_audio_sample: Audio) -> N
     assert cached_results == results, "Cached results should match original results"
 
 
-def test_run_evaluations(tmp_path: Path, resampled_mono_audio_sample: Audio) -> None:
-    """Tests that run_evaluations correctly processes batches in parallel."""
+def test_evaluate_dataset(tmp_path: Path, resampled_mono_audio_sample: Audio) -> None:
+    """Tests that evaluate_dataset correctly processes batches in parallel."""
     # Create multiple test files to test batching
     audio_paths = []
     for i in range(3):  # Create 3 files to test batching
@@ -386,7 +387,7 @@ def test_run_evaluations(tmp_path: Path, resampled_mono_audio_sample: Audio) -> 
 
     # Run evaluations with different configurations
     # Test serial execution
-    results_serial = run_evaluations(
+    results_serial = evaluate_dataset(
         audio_path_to_activity=audio_path_to_activity,
         activity_to_evaluations=activity_to_evaluations,
         output_dir=tmp_path,
@@ -396,7 +397,7 @@ def test_run_evaluations(tmp_path: Path, resampled_mono_audio_sample: Audio) -> 
     )
 
     # Test parallel execution
-    results_parallel = run_evaluations(
+    results_parallel = evaluate_dataset(
         audio_path_to_activity=audio_path_to_activity,
         activity_to_evaluations=activity_to_evaluations,
         output_dir=tmp_path,
