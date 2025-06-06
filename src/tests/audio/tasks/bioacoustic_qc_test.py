@@ -9,7 +9,7 @@ import pytest
 import torch
 
 from senselab.audio.data_structures import Audio
-from senselab.audio.tasks.bioacoustic_qc import (
+from senselab.audio.tasks.quality_control import (
     activity_to_dataset_taxonomy_subtree,
     activity_to_evaluations,
     activity_to_taxonomy_tree_path,
@@ -19,11 +19,11 @@ from senselab.audio.tasks.bioacoustic_qc import (
     evaluate_dataset,
     subtree_to_evaluations,
 )
-from senselab.audio.tasks.bioacoustic_qc.checks import (
+from senselab.audio.tasks.quality_control.checks import (
     audio_intensity_positive_check,
     audio_length_positive_check,
 )
-from senselab.audio.tasks.bioacoustic_qc.constants import BIOACOUSTIC_ACTIVITY_TAXONOMY as TAXONOMY
+from senselab.audio.tasks.quality_control.constants import BIOACOUSTIC_ACTIVITY_TAXONOMY as TAXONOMY
 
 
 @pytest.mark.parametrize("taxonomy_tree", [TAXONOMY])

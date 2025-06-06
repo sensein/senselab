@@ -4,7 +4,7 @@ from .evaluate import (
     evaluate_audio,
     evaluate_batch,
     evaluate_dataset,
-    evaluate_metric,
+    get_evaluation,
 )
 from .quality_control import (
     activity_to_dataset_taxonomy_subtree,
@@ -15,7 +15,7 @@ from .quality_control import (
 )
 
 __all__ = [
-    "evaluate_metric",
+    "get_evaluation",
     "subtree_to_evaluations",
     "activity_to_dataset_taxonomy_subtree",
     "check_quality",

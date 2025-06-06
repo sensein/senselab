@@ -8,8 +8,8 @@ from typing import Any, Callable, Dict, List, Optional, Set, Union
 import pandas as pd
 
 from senselab.audio.data_structures import Audio
-from senselab.audio.tasks.bioacoustic_qc.constants import BIOACOUSTIC_ACTIVITY_TAXONOMY
-from senselab.audio.tasks.bioacoustic_qc.evaluate import evaluate_dataset
+from senselab.audio.tasks.quality_control.constants import BIOACOUSTIC_ACTIVITY_TAXONOMY
+from senselab.audio.tasks.quality_control.evaluate import evaluate_dataset
 
 
 def activity_to_taxonomy_tree_path(activity: str) -> List[str]:

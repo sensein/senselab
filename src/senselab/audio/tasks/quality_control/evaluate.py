@@ -12,7 +12,7 @@ from pydra import Submitter
 from senselab.audio.data_structures import Audio
 
 
-def evaluate_metric(
+def get_evaluation(
     audio_or_path: Union[Audio, str],
     metric_function: Callable[[Audio], float],
     df: Optional[pd.DataFrame] = None,
