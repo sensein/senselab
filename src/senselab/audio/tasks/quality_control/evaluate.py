@@ -60,7 +60,7 @@ def evaluate_audio(
     audio_path: str,
     activity: str,
     evaluations: List[Callable[[Audio], Union[float, bool, str]]],
-    existing_results: Optional[Dict[str, Any]] = None,
+    output_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Evaluates a single audio file using the given set of functions.
 
@@ -68,7 +68,7 @@ def evaluate_audio(
         audio_path: Path to the audio file
         activity: Activity label associated with the audio file
         evaluations: List of evaluation functions to apply
-        existing_results: Optional dictionary of existing evaluation results
+        output_dir: Optional directory to load/save results from/to
 
     Returns:
         Dict[str, Any]: Dictionary containing evaluation results
@@ -79,6 +79,19 @@ def evaluate_audio(
         "path": str(audio_path),
         "activity": activity,
     }
+
+    # Try to load existing results from file if output_dir is provided
+    existing_results = None
+    if output_dir is not None:
+        results_dir = output_dir / "audio_results"
+        result_path = results_dir / f"{audio_id}.parquet"
+        if result_path.exists():
+            try:
+                existing_df = pd.read_parquet(result_path)
+                if not existing_df.empty:
+                    existing_results = existing_df.iloc[0].to_dict()
+            except Exception as e:
+                print(f"Warning: Could not read existing results for {audio_id}: {e}")
 
     # Start with existing results if available
     if existing_results:
@@ -92,6 +105,16 @@ def evaluate_audio(
         for fn in evaluations:
             result = get_evaluation(audio, fn, existing_results)
             record[fn.__name__] = result
+
+        # Save results if output directory is provided
+        if output_dir is not None:
+            results_dir = output_dir / "audio_results"
+            results_dir.mkdir(exist_ok=True, parents=True)
+            result_path = results_dir / f"{audio_id}.parquet"
+
+            # Only save if we computed new results
+            if not existing_results or record != existing_results:
+                pd.DataFrame([record]).to_parquet(result_path)
 
     except Exception as e:
         print(f"Error processing {audio_id}: {e}")
@@ -116,35 +139,16 @@ def evaluate_batch(
     Returns:
         List[Dict[str, Any]]: List of processed records with evaluation results
     """
-    results_dir = output_dir / "audio_results"
-    results_dir.mkdir(exist_ok=True, parents=True)
-
     records = []
     for audio_path in batch_audio_paths:
-        audio_id = Path(audio_path).stem
-        result_path = results_dir / f"{audio_id}.parquet"
-
-        # Load existing results if available
-        existing_results = None
-        if result_path.exists():
-            try:
-                existing_df = pd.read_parquet(result_path)
-                if not existing_df.empty:
-                    existing_results = existing_df.iloc[0].to_dict()
-            except Exception as e:
-                print(f"Warning: Could not read existing results for {audio_id}: {e}")
-
         # Get evaluations for this activity
         activity = audio_path_to_activity[str(audio_path)]
         evaluations = activity_to_evaluations[activity]
 
-        # Evaluate audio and save results
-        record = evaluate_audio(str(audio_path), activity, evaluations, existing_results)
-
-        # Only save if we computed new results
-        if not existing_results or record != existing_results:
-            pd.DataFrame([record]).to_parquet(result_path)
-
+        # Evaluate audio with result loading/saving handled internally
+        record = evaluate_audio(
+            audio_path=str(audio_path), activity=activity, evaluations=evaluations, output_dir=output_dir
+        )
         records.append(record)
 
     return records
