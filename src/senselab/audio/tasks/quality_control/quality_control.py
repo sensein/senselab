@@ -1,5 +1,6 @@
 """Runs bioacoustic activity recording quality control on a set of audio files."""
 
+import json
 import os
 from copy import deepcopy
 from pathlib import Path
@@ -173,7 +174,6 @@ def check_quality(
         batch_size=batch_size,
         n_cores=n_cores,
     )
-
     final_results_path = output_directory / "combined_results.csv"
     evaluations_df.to_csv(final_results_path, index=False)
 
