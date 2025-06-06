@@ -1,5 +1,6 @@
 """Evaluation utilities for bioacoustic quality control."""
 
+import json
 import multiprocessing as mp
 import os
 from pathlib import Path
@@ -84,12 +85,11 @@ def evaluate_audio(
     existing_results = None
     if output_dir is not None:
         results_dir = output_dir / "audio_results"
-        result_path = results_dir / f"{audio_id}.parquet"
+        result_path = results_dir / f"{audio_id}.json"
         if result_path.exists():
             try:
-                existing_df = pd.read_parquet(result_path)
-                if not existing_df.empty:
-                    existing_results = existing_df.iloc[0].to_dict()
+                with open(result_path) as f:
+                    existing_results = json.load(f)
             except Exception as e:
                 print(f"Warning: Could not read existing results for {audio_id}: {e}")
 
@@ -110,11 +110,12 @@ def evaluate_audio(
         if output_dir is not None:
             results_dir = output_dir / "audio_results"
             results_dir.mkdir(exist_ok=True, parents=True)
-            result_path = results_dir / f"{audio_id}.parquet"
+            result_path = results_dir / f"{audio_id}.json"
 
             # Only save if we computed new results
             if not existing_results or record != existing_results:
-                pd.DataFrame([record]).to_parquet(result_path)
+                with open(result_path, "w") as f:
+                    json.dump(record, f, indent=2)
 
     except Exception as e:
         print(f"Error processing {audio_id}: {e}")
