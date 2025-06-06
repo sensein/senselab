@@ -113,7 +113,7 @@ def activity_to_dataset_taxonomy_subtree(activity_name: str, activity_tree: Dict
     return pruned_tree
 
 
-def create_activity_to_evaluations(
+def activity_to_evaluations(
     audio_path_to_activity: Dict[str, str], activity_tree: Dict
 ) -> Dict[str, List[Callable[[Audio], float | bool]]]:
     """Maps each activity label to its associated evaluation functions.
@@ -237,7 +237,7 @@ def evaluate_batch(
     return records
 
 
-def run_evaluations(
+def evaluate_dataset(
     audio_path_to_activity: Dict[str, str],
     activity_to_evaluations: Dict[str, List[Callable]],
     output_dir: Path,
@@ -325,14 +325,14 @@ def check_quality(
     audio_path_to_activity = {str(path): audio_path_to_activity.get(str(path), "bioacoustic") for path in audio_paths}
 
     # Create activity to evaluations mapping
-    activity_to_evaluations = create_activity_to_evaluations(
+    activity_evaluations_dict = activity_to_evaluations(
         audio_path_to_activity=audio_path_to_activity, activity_tree=activity_tree
     )
 
     # Run evaluations with result caching
-    evaluations_df = run_evaluations(
+    evaluations_df = evaluate_dataset(
         audio_path_to_activity,
-        activity_to_evaluations,
+        activity_evaluations_dict,
         output_dir=output_directory,
         batch_size=batch_size,
         n_cores=n_cores,
