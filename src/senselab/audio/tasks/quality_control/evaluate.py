@@ -12,42 +12,29 @@ from pydra import Submitter
 
 from senselab.audio.data_structures import Audio
 
+# Type aliases for improved readability
+EvalResult = Union[float, bool, str]
+EvalFunc = Callable[[Audio], EvalResult]
+WindowedResult = Dict[str, List[Union[EvalResult, float]]]
+
 
 def get_evaluation(
-    audio_or_path: Union[Audio, str],
-    evaluation_function: Callable[[Audio], Union[float, bool, str]],
+    audio: Audio,
+    evaluation_function: EvalFunc,
     existing_results: Optional[Dict[str, Any]] = None,
-    window_size_sec: Optional[float] = None,
-    step_size_sec: Optional[float] = None,
-) -> Union[float, bool, str, Dict[str, List[Union[float, bool, str]]], None]:
-    """Return an evaluation result, using cached results when possible.
+) -> Optional[EvalResult]:
+    """Return evaluation result for an Audio object.
 
     Args:
-        audio_or_path: An Audio instance or filepath to the audio file.
+        audio: An Audio instance to evaluate
         evaluation_function: The evaluation function to run. Can be either:
-            * A metric function returning a float (e.g. ``zero_crossing_rate``)
-            * A check function returning a bool (e.g. ``very_low_headroom``)
-            * A string-based evaluation (e.g. ``quality_category``)
-        existing_results: Optional dictionary of pre-computed results, mapping
-            function names to their results.
-        window_size_sec: Optional window size in seconds for windowed
-            calculation. If provided along with step_size_sec, the metric will
-            be calculated over sliding windows.
-        step_size_sec: Optional step size in seconds between windows.
-            Must be provided if window_size_sec is provided.
+            * A metric function returning a float (e.g. zero_crossing_rate)
+            * A check function returning a bool (e.g. very_low_headroom)
+            * A string-based evaluation (e.g. quality_category)
+        existing_results: Optional dictionary of pre-computed results
 
     Returns:
-        If window parameters are not provided:
-            The evaluation result for this ``audio`` item. If the result exists
-            in existing_results, that cached value is returned; otherwise the
-            result is computed directly.
-        If window parameters are provided:
-            A dictionary containing:
-                - 'values': List of evaluation results for each window
-                - 'timestamps': List of window start times in seconds
-
-    Raises:
-        ValueError: If evaluation fails or if window parameters are invalid.
+        The evaluation result for the audio, or None if evaluation fails
     """
     function_name = evaluation_function.__name__
 
@@ -55,41 +42,59 @@ def get_evaluation(
     if existing_results and function_name in existing_results:
         return existing_results[function_name]
 
-    # Load audio
-    if isinstance(audio_or_path, str):
-        audio = Audio(filepath=audio_or_path)
-    else:
-        audio = audio_or_path
-
-    # Handle windowed calculation
-    if window_size_sec is not None:
-        if step_size_sec is None:
-            raise ValueError("step_size_sec must be provided if window_size_sec is provided")
-
-        window_size = int(window_size_sec * audio.sampling_rate)
-        step_size = int(step_size_sec * audio.sampling_rate)
-
-        values: List[Union[float, bool, str]] = []
-        timestamps: List[float] = []
-
-        try:
-            for window_idx, window in enumerate(audio.window_generator(window_size, step_size)):
-                result = evaluation_function(window)
-                values.append(result)
-                timestamps.append(window_idx * step_size_sec)
-
-            return {"values": values, "timestamps": timestamps}
-        except Exception as e:
-            print(f"Warning: Failed to compute windowed {function_name}: {e}")
-            return None
-
-    # Regular non-windowed calculation
-    result: Union[float, bool, str, None] = None
+    # Compute result
     try:
         result = evaluation_function(audio)
+        return result
     except Exception as e:
         print(f"Warning: Failed to compute {function_name}: {e}")
-    return result
+        return None
+
+
+def get_windowed_evaluation(
+    audio: Audio,
+    evaluation_function: EvalFunc,
+    window_size_sec: float,
+    step_size_sec: float,
+    existing_results: Optional[Dict[str, Any]] = None,
+) -> Optional[WindowedResult]:
+    """Compute windowed evaluation results.
+
+    Applies get_evaluation to each window of the audio file.
+
+    Args:
+        audio: An Audio instance to evaluate
+        evaluation_function: The evaluation function to run on each window
+        window_size_sec: Window size in seconds
+        step_size_sec: Step size in seconds between windows
+        existing_results: Optional dictionary of pre-computed results
+
+    Returns:
+        Dictionary containing:
+            - 'values': List of evaluation results for each window
+            - 'timestamps': List of window start times in seconds
+        Returns None if evaluation fails
+    """
+    window_size = int(window_size_sec * audio.sampling_rate)
+    step_size = int(step_size_sec * audio.sampling_rate)
+
+    values: List[EvalResult] = []
+    timestamps: List[float] = []
+
+    try:
+        for window_idx, window in enumerate(audio.window_generator(window_size, step_size)):
+            result = get_evaluation(window, evaluation_function, existing_results)
+            if result is None:
+                return None
+            values.append(result)
+            timestamps.append(window_idx * step_size_sec)
+
+        return {"values": values, "timestamps": timestamps}
+    except Exception as e:
+        fn_name = evaluation_function.__name__
+        msg = f"Warning: Failed to compute windowed {fn_name}: {e}"
+        print(msg)
+        return None
 
 
 def evaluate_audio(
@@ -150,9 +155,7 @@ def evaluate_audio(
 
             # Get windowed results if requested
             if window_size_sec is not None and step_size_sec is not None:
-                windowed_result = get_evaluation(
-                    audio, fn, existing_results, window_size_sec=window_size_sec, step_size_sec=step_size_sec
-                )
+                windowed_result = get_windowed_evaluation(audio, fn, window_size_sec, step_size_sec, existing_results)
                 if windowed_result is not None:
                     record["windowed_metrics"][fn.__name__] = windowed_result
 
