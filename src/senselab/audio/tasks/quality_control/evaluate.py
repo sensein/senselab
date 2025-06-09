@@ -3,7 +3,7 @@
 import json
 import multiprocessing as mp
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
 import pandas as pd
 import pydra
@@ -124,7 +124,7 @@ def get_windowed_evaluation(
 def evaluate_audio(
     audio_path: str,
     activity: str,
-    evaluations: List[Callable[[Audio], Union[float, bool, str]]],
+    evaluations: Sequence[Callable[[Audio], Union[float, bool, str]]],
     output_dir: Optional[Path] = None,
     window_size_sec: float = 1.0,
     step_size_sec: float = 0.5,
@@ -200,7 +200,7 @@ def evaluate_audio(
 def evaluate_batch(
     batch_audio_paths: List[str],
     audio_path_to_activity: Dict[str, str],
-    activity_to_evaluations: Dict[str, List[Callable[[Audio], Union[float, bool, str]]]],
+    activity_to_evaluations: Dict[str, Sequence[Callable[[Audio], Union[float, bool, str]]]],
     output_dir: Path,
     window_size_sec: float = 1.0,
     step_size_sec: float = 0.5,
@@ -243,7 +243,7 @@ def evaluate_batch(
 
 def evaluate_dataset(
     audio_path_to_activity: Dict[str, str],
-    activity_to_evaluations: Dict[str, List[Callable]],
+    activity_to_evaluations: Dict[str, Sequence[Callable[[Audio], Union[float, bool, str]]]],
     output_dir: Path,
     batch_size: int = 8,
     n_cores: int = 4,

@@ -3,7 +3,7 @@
 import os
 from copy import deepcopy
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Set, Union
+from typing import Callable, Dict, List, Optional, Sequence, Set, Union
 
 import pandas as pd
 
@@ -44,14 +44,14 @@ def activity_to_taxonomy_tree_path(activity: str) -> List[str]:
     return path
 
 
-def subtree_to_evaluations(subtree: Dict) -> List[Callable[[Audio], float | bool]]:
+def subtree_to_evaluations(subtree: Dict) -> Sequence[Callable[[Audio], Union[float, bool, str]]]:
     """Recursively gets all evaluation functions (metrics and checks) from a taxonomy subtree.
 
     Args:
         subtree (Dict): A subtree of the full taxonomy, either pruned or complete.
 
     Returns:
-        List[Callable[[Audio], float | bool]]: An ordered list of evaluation functions to run.
+        Sequence[Callable[[Audio], Union[float, bool, str]]]: An ordered list of evaluation functions to run.
     """
     evaluations = []
 
@@ -113,7 +113,7 @@ def activity_to_dataset_taxonomy_subtree(activity_name: str, activity_tree: Dict
 
 def activity_to_evaluations(
     audio_path_to_activity: Dict[str, str], activity_tree: Dict
-) -> Dict[str, List[Callable[[Audio], float | bool]]]:
+) -> Dict[str, Sequence[Callable[[Audio], Union[float, bool, str]]]]:
     """Maps each activity label to its associated evaluation functions.
 
     Args:
@@ -121,7 +121,7 @@ def activity_to_evaluations(
         activity_tree (Dict): The full taxonomy tree of activities.
 
     Returns:
-        Dict[str, List[Callable[[Audio], float | bool]]]: Maps each activity label to a list of evaluation functions.
+        Dict[str, Sequence[Callable[[Audio], Union[float, bool, str]]]]: Maps activity label to evaluations.
     """
     unique_activities = set(audio_path_to_activity.values())
     activity_to_evaluations = {}
