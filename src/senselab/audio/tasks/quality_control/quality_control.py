@@ -1,10 +1,9 @@
-"""Runs bioacoustic activity recording quality control on a set of audio files."""
+"""Runs bioacoustic activity recording quality control on audio files."""
 
-import json
 import os
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set, Union
+from typing import Callable, Dict, List, Optional, Set, Union
 
 import pandas as pd
 

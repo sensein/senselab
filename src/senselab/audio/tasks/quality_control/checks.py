@@ -9,8 +9,7 @@ enabling easy filtering of problematic recordings.
 All checks accept an `Audio` object and optionally a DataFrame of cached metric values.
 """
 
-import os
-from typing import Callable, Optional, Union
+from typing import Optional, Union
 
 import pandas as pd
 
