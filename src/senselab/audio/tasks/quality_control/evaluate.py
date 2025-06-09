@@ -2,7 +2,6 @@
 
 import json
 import multiprocessing as mp
-import os
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union
 
@@ -19,7 +18,7 @@ WindowedResult = Dict[str, List[Union[EvalResult, float]]]
 
 
 def get_evaluation(
-    audio: Audio,
+    audio: Union[Audio, str],
     evaluation_function: EvalFunc,
     existing_results: Optional[Dict[str, Any]] = None,
     is_window: bool = False,
@@ -28,7 +27,7 @@ def get_evaluation(
     """Return evaluation result for an Audio object.
 
     Args:
-        audio: An Audio instance to evaluate
+        audio: An Audio instance or filepath to the audio file to evaluate
         evaluation_function: The evaluation function to run. Can be either:
             * A metric function returning a float (e.g. zero_crossing_rate)
             * A check function returning a bool (e.g. very_low_headroom)
@@ -41,6 +40,14 @@ def get_evaluation(
     Returns:
         The evaluation result for the audio, or None if evaluation fails
     """
+    # Convert string path to Audio object if needed
+    if isinstance(audio, str):
+        try:
+            audio = Audio(filepath=audio)
+        except Exception as e:
+            print(f"Warning: Failed to load audio from {audio}: {e}")
+            return None
+
     function_name = evaluation_function.__name__
 
     # Check if result exists in cache
@@ -140,7 +147,8 @@ def evaluate_audio(
         skip_windowing: If True, only compute scalar metrics without windowing
 
     Returns:
-        Dict[str, Any]: Dictionary containing evaluation results
+        Dict[str, Any]: Dictionary containing evaluation results with time_windows as
+        list of (start_time, end_time) tuples in seconds
     """
     audio_id = Path(audio_path).stem
     record: Dict[str, Any] = {
@@ -148,60 +156,56 @@ def evaluate_audio(
         "path": str(audio_path),
         "activity": activity,
         "evaluations": {},
+        "time_windows": None,
         "windowed_evaluations": {} if not skip_windowing else None,
-        "timestamps": None,
     }
 
-    # Try to load existing results from file if output_dir is provided
+    # Load existing results
     existing_results = None
-    if output_dir is not None:
-        results_dir = output_dir / "audio_results"
-        result_path = results_dir / f"{audio_id}.json"
+    if output_dir:
+        result_path = output_dir / "audio_results" / f"{audio_id}.json"
         if result_path.exists():
             try:
                 with open(result_path) as f:
                     existing_results = json.load(f)
-                    if existing_results:
-                        # Handle legacy field names if they exist
-                        if "metrics" in existing_results:
-                            existing_results["evaluations"] = existing_results.pop("metrics")
-                        if "windowed_metrics" in existing_results:
-                            existing_results["windowed_evaluations"] = existing_results.pop("windowed_metrics")
-                        record.update(existing_results)
+                if existing_results:
+                    # Handle legacy fields
+                    if "metrics" in existing_results:
+                        existing_results["evaluations"] = existing_results.pop("metrics")
+                    if "windowed_metrics" in existing_results:
+                        existing_results["windowed_evaluations"] = existing_results.pop("windowed_metrics")
+                    if "time_windows" in existing_results and existing_results["time_windows"]:
+                        windows = existing_results["time_windows"]
+                        if isinstance(windows[0], dict):
+                            existing_results["time_windows"] = [(w["start"], w["end"]) for w in windows]
+                    record.update(existing_results)
             except Exception as e:
-                msg = f"Warning: Could not read existing results for {audio_id}: {e}"
-                print(msg)
+                print(f"Warning: Could not read existing results for {audio_id}: {e}")
 
     try:
-        # Load audio only if we have evaluations to compute
         audio = Audio(filepath=audio_path)
 
-        # Apply each missing evaluation function
         for fn in evaluations:
-            # Get scalar result
-            scalar_result = get_evaluation(audio, fn, existing_results)
-            record["evaluations"][fn.__name__] = scalar_result
+            # Scalar and windowed evaluation
+            record["evaluations"][fn.__name__] = get_evaluation(audio, fn, existing_results)
 
-            # Get windowed results unless explicitly skipped
             if not skip_windowing:
                 windowed_result = get_windowed_evaluation(audio, fn, window_size_sec, step_size_sec, existing_results)
-                if windowed_result is not None:
-                    record["windowed_evaluations"][fn.__name__] = windowed_result
-                    # Calculate timestamps if not already done
-                    if record["timestamps"] is None:
-                        num_windows = len(windowed_result)
-                        record["timestamps"] = [i * step_size_sec for i in range(num_windows)]
+                if windowed_result:
+                    if record["windowed_evaluations"] is not None:
+                        record["windowed_evaluations"][fn.__name__] = windowed_result
+                    # Calculate time windows once
+                    if not record["time_windows"]:
+                        record["time_windows"] = [
+                            (i * step_size_sec, i * step_size_sec + window_size_sec)
+                            for i in range(len(windowed_result))
+                        ]
 
-        # Save results if output directory is provided
-        if output_dir is not None:
-            results_dir = output_dir / "audio_results"
-            results_dir.mkdir(exist_ok=True, parents=True)
-            result_path = results_dir / f"{audio_id}.json"
-
-            # Only save if we computed new results
-            if not existing_results or record != existing_results:
-                with open(result_path, "w") as f:
-                    json.dump(record, f, indent=2)
+        # Save results
+        if output_dir and (not existing_results or record != existing_results):
+            result_path.parent.mkdir(exist_ok=True, parents=True)
+            with open(result_path, "w") as f:
+                json.dump(record, f, indent=2)
 
     except Exception as e:
         print(f"Error processing {audio_id}: {e}")
