@@ -22,6 +22,8 @@ def get_evaluation(
     audio: Audio,
     evaluation_function: EvalFunc,
     existing_results: Optional[Dict[str, Any]] = None,
+    is_window: bool = False,
+    window_idx: Optional[int] = None,
 ) -> Optional[EvalResult]:
     """Return evaluation result for an Audio object.
 
@@ -32,6 +34,9 @@ def get_evaluation(
             * A check function returning a bool (e.g. very_low_headroom)
             * A string-based evaluation (e.g. quality_category)
         existing_results: Optional dictionary of pre-computed results
+        is_window: If True, look for cached results in windowed_metrics
+        window_idx: Index of the window being evaluated, used to find cached
+            results at specific timestamps. Only used if is_window is True.
 
     Returns:
         The evaluation result for the audio, or None if evaluation fails
@@ -39,8 +44,26 @@ def get_evaluation(
     function_name = evaluation_function.__name__
 
     # Check if result exists in cache
-    if existing_results and function_name in existing_results:
-        return existing_results[function_name]
+    if existing_results:
+        if is_window and window_idx is not None:
+            # For windows, look in windowed_metrics at specific index
+            has_windowed = (
+                "windowed_metrics" in existing_results and function_name in existing_results["windowed_metrics"]
+            )
+            if has_windowed:
+                windowed_result = existing_results["windowed_metrics"][function_name]
+                has_valid_window = (
+                    "values" in windowed_result
+                    and "timestamps" in windowed_result
+                    and len(windowed_result["values"]) > window_idx
+                )
+                if has_valid_window:
+                    return windowed_result["values"][window_idx]
+        else:
+            # For non-windows, look in metrics
+            has_metrics = "metrics" in existing_results and function_name in existing_results["metrics"]
+            if has_metrics:
+                return existing_results["metrics"][function_name]
 
     # Compute result
     try:
@@ -82,8 +105,12 @@ def get_windowed_evaluation(
     timestamps: List[float] = []
 
     try:
-        for window_idx, window in enumerate(audio.window_generator(window_size, step_size)):
-            result = get_evaluation(window, evaluation_function, existing_results)
+        # Generate windows and compute evaluations
+        windows = audio.window_generator(window_size, step_size)
+        for window_idx, window in enumerate(windows):
+            result = get_evaluation(
+                window, evaluation_function, existing_results, is_window=True, window_idx=window_idx
+            )
             if result is None:
                 return None
             values.append(result)
@@ -92,7 +119,7 @@ def get_windowed_evaluation(
         return {"values": values, "timestamps": timestamps}
     except Exception as e:
         fn_name = evaluation_function.__name__
-        msg = f"Warning: Failed to compute windowed {fn_name}: {e}"
+        msg = f"Warning: Failed to compute windowed evaluation " f"for '{fn_name}': {e}"
         print(msg)
         return None
 
