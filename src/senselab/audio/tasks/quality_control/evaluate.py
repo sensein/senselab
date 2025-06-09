@@ -10,6 +10,7 @@ import pydra
 from pydra import Submitter
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.quality_control.format import save_formatted_results
 
 # Type aliases for improved readability
 EvalResult = Union[float, bool, str]
@@ -266,7 +267,7 @@ def evaluate_dataset(
         skip_windowing: If True, only compute scalar metrics without windowing
 
     Returns:
-        pd.DataFrame: Combined results from all processed batches
+        pd.DataFrame: Flattened DataFrame with evaluations as columns (human-readable)
     """
     try:
         mp.set_start_method("spawn", force=True)
@@ -311,4 +312,9 @@ def evaluate_dataset(
 
     # Concatenate batch results
     results = [record for r in task.result() for record in r.output.out]
-    return pd.DataFrame(results)
+
+    # Save formatted results (flattened CSV + windowed CSV + full JSON)
+    output_dfs = save_formatted_results(results, output_dir, skip_windowing)
+
+    # Return the flattened DataFrame for backward compatibility
+    return output_dfs["summary"]

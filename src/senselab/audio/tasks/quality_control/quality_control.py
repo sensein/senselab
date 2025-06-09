@@ -145,6 +145,11 @@ def check_quality(
 ) -> pd.DataFrame:
     """Runs audio quality control evaluations across multiple audio files.
 
+    The results are automatically saved in multiple formats:
+    - results_summary.csv: Flattened CSV with evaluations as columns (main output)
+    - results_windowed.csv: Normalized windowed data for temporal analysis
+    - results_full.json: Complete nested data with full fidelity
+
     Args:
         audio_paths: List of paths to audio files
         audio_path_to_activity: Maps audio paths to activity labels
@@ -157,7 +162,7 @@ def check_quality(
         skip_windowing: If True, only compute scalar metrics without windowing
 
     Returns:
-        pd.DataFrame: Combined results from all processed audio files
+        pd.DataFrame: Flattened DataFrame with evaluations as columns (human-readable)
     """
     # Convert output_dir to Path with default
     output_directory = Path(output_dir or "qc_results")
@@ -171,7 +176,7 @@ def check_quality(
         audio_path_to_activity=audio_path_to_activity, activity_tree=activity_tree
     )
 
-    # Run evaluations with result caching
+    # Run evaluations with result caching and formatted output
     evaluations_df = evaluate_dataset(
         audio_path_to_activity,
         activity_evaluations_dict,
@@ -182,7 +187,5 @@ def check_quality(
         step_size_sec=step_size_sec,
         skip_windowing=skip_windowing,
     )
-    final_results_path = output_directory / "combined_results.csv"
-    evaluations_df.to_csv(final_results_path, index=False)
 
     return evaluations_df
