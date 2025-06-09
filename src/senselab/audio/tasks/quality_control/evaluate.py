@@ -80,7 +80,7 @@ def get_windowed_evaluation(
     window_size_sec: float,
     step_size_sec: float,
     existing_results: Optional[Dict[str, Any]] = None,
-) -> Optional[WindowedResult]:
+) -> Optional[List[EvalResult]]:
     """Compute windowed evaluation results.
 
     Applies get_evaluation to each window of the audio file.
@@ -93,16 +93,12 @@ def get_windowed_evaluation(
         existing_results: Optional dictionary of pre-computed results
 
     Returns:
-        Dictionary containing:
-            - 'values': List of evaluation results for each window
-            - 'timestamps': List of window start times in seconds
-        Returns None if evaluation fails
+        List of evaluation results for each window, or None if evaluation fails
     """
     window_size = int(window_size_sec * audio.sampling_rate)
     step_size = int(step_size_sec * audio.sampling_rate)
 
     values: List[EvalResult] = []
-    timestamps: List[float] = []
 
     try:
         # Generate windows and compute evaluations
@@ -114,12 +110,11 @@ def get_windowed_evaluation(
             if result is None:
                 return None
             values.append(result)
-            timestamps.append(window_idx * step_size_sec)
 
-        return {"values": values, "timestamps": timestamps}
+        return values
     except Exception as e:
         function_name = evaluation_function.__name__
-        msg = f"Warning: Failed to compute windowed evaluation " f"for '{function_name}': {e}"
+        msg = f"Warning: Failed to compute windowed evaluation for '{function_name}': {e}"
         print(msg)
         return None
 
@@ -154,6 +149,7 @@ def evaluate_audio(
         "activity": activity,
         "metrics": {},
         "windowed_metrics": {} if not skip_windowing else None,
+        "window_timestamps": None,
     }
 
     # Try to load existing results from file if output_dir is provided
@@ -183,11 +179,14 @@ def evaluate_audio(
 
             # Get windowed results unless explicitly skipped
             if not skip_windowing:
-                windowed_result = get_windowed_evaluation(
-                    audio, fn, window_size_sec, step_size_sec, existing_results
-                )
+                windowed_result = get_windowed_evaluation(audio, fn, window_size_sec, step_size_sec, existing_results)
                 if windowed_result is not None:
                     record["windowed_metrics"][fn.__name__] = windowed_result
+
+                # Calculate timestamps if not already done
+                if record["window_timestamps"] is None:
+                    num_windows = len(windowed_result)
+                    record["window_timestamps"] = [i * step_size_sec for i in range(num_windows)]
 
         # Save results if output directory is provided
         if output_dir is not None:
