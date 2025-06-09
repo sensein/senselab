@@ -53,24 +53,19 @@ def get_evaluation(
     # Check if result exists in cache
     if existing_results:
         if is_window and window_idx is not None:
-            # For windows, look in windowed_metrics at specific index
+            # For windows, look in windowed_evaluations at specific index
             has_windowed = (
-                "windowed_metrics" in existing_results and function_name in existing_results["windowed_metrics"]
+                "windowed_evaluations" in existing_results and function_name in existing_results["windowed_evaluations"]
             )
             if has_windowed:
-                windowed_result = existing_results["windowed_metrics"][function_name]
-                has_valid_window = (
-                    "values" in windowed_result
-                    and "timestamps" in windowed_result
-                    and len(windowed_result["values"]) > window_idx
-                )
-                if has_valid_window:
-                    return windowed_result["values"][window_idx]
+                windowed_result = existing_results["windowed_evaluations"][function_name]
+                if isinstance(windowed_result, list) and len(windowed_result) > window_idx:
+                    return windowed_result[window_idx]
         else:
-            # For non-windows, look in metrics
-            has_metrics = "metrics" in existing_results and function_name in existing_results["metrics"]
-            if has_metrics:
-                return existing_results["metrics"][function_name]
+            # For non-windows, look in evaluations
+            has_evaluations = "evaluations" in existing_results and function_name in existing_results["evaluations"]
+            if has_evaluations:
+                return existing_results["evaluations"][function_name]
 
     # Compute result
     try:
@@ -168,17 +163,6 @@ def evaluate_audio(
             try:
                 with open(result_path) as f:
                     existing_results = json.load(f)
-                if existing_results:
-                    # Handle legacy fields
-                    if "metrics" in existing_results:
-                        existing_results["evaluations"] = existing_results.pop("metrics")
-                    if "windowed_metrics" in existing_results:
-                        existing_results["windowed_evaluations"] = existing_results.pop("windowed_metrics")
-                    if "time_windows" in existing_results and existing_results["time_windows"]:
-                        windows = existing_results["time_windows"]
-                        if isinstance(windows[0], dict):
-                            existing_results["time_windows"] = [(w["start"], w["end"]) for w in windows]
-                    record.update(existing_results)
             except Exception as e:
                 print(f"Warning: Could not read existing results for {audio_id}: {e}")
 
