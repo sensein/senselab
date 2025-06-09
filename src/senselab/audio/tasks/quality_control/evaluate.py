@@ -118,8 +118,8 @@ def get_windowed_evaluation(
 
         return {"values": values, "timestamps": timestamps}
     except Exception as e:
-        fn_name = evaluation_function.__name__
-        msg = f"Warning: Failed to compute windowed evaluation " f"for '{fn_name}': {e}"
+        function_name = evaluation_function.__name__
+        msg = f"Warning: Failed to compute windowed evaluation " f"for '{function_name}': {e}"
         print(msg)
         return None
 
@@ -129,8 +129,9 @@ def evaluate_audio(
     activity: str,
     evaluations: List[Callable[[Audio], Union[float, bool, str]]],
     output_dir: Optional[Path] = None,
-    window_size_sec: Optional[float] = None,
-    step_size_sec: Optional[float] = None,
+    window_size_sec: float = 1.0,
+    step_size_sec: float = 0.5,
+    skip_windowing: bool = False,
 ) -> Dict[str, Any]:
     """Evaluates a single audio file using the given set of functions.
 
@@ -139,9 +140,9 @@ def evaluate_audio(
         activity: Activity label associated with the audio file
         evaluations: List of evaluation functions to apply
         output_dir: Optional directory to load/save results from/to
-        window_size_sec: Optional window size in seconds for windowed
-            calculation
-        step_size_sec: Optional step size in seconds between windows
+        window_size_sec: Window size in seconds for windowed calculation (default: 1.0)
+        step_size_sec: Step size in seconds between windows (default: 0.5)
+        skip_windowing: If True, only compute scalar metrics without windowing
 
     Returns:
         Dict[str, Any]: Dictionary containing evaluation results
@@ -152,7 +153,7 @@ def evaluate_audio(
         "path": str(audio_path),
         "activity": activity,
         "metrics": {},
-        "windowed_metrics": {} if window_size_sec is not None else None,
+        "windowed_metrics": {} if not skip_windowing else None,
     }
 
     # Try to load existing results from file if output_dir is provided
@@ -180,9 +181,11 @@ def evaluate_audio(
             scalar_result = get_evaluation(audio, fn, existing_results)
             record["metrics"][fn.__name__] = scalar_result
 
-            # Get windowed results if requested
-            if window_size_sec is not None and step_size_sec is not None:
-                windowed_result = get_windowed_evaluation(audio, fn, window_size_sec, step_size_sec, existing_results)
+            # Get windowed results unless explicitly skipped
+            if not skip_windowing:
+                windowed_result = get_windowed_evaluation(
+                    audio, fn, window_size_sec, step_size_sec, existing_results
+                )
                 if windowed_result is not None:
                     record["windowed_metrics"][fn.__name__] = windowed_result
 
