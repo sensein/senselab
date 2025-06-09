@@ -139,8 +139,8 @@ def check_quality(
     output_dir: Optional[Union[str, os.PathLike]] = None,
     batch_size: int = 8,
     n_cores: int = 4,
-    window_size_sec: float = 1.0,
-    step_size_sec: float = 0.5,
+    window_size_sec: float = 0.025,
+    step_size_sec: float = 0.0125,
     skip_windowing: bool = False,
 ) -> pd.DataFrame:
     """Runs audio quality control evaluations across multiple audio files.
@@ -157,8 +157,9 @@ def check_quality(
         output_dir: Directory to save results
         batch_size: Number of files to process in parallel batches
         n_cores: Number of CPU cores to use for parallel processing
-        window_size_sec: Window size in seconds for windowed calculation (default: 1.0)
-        step_size_sec: Step size in seconds between windows (default: 0.5)
+        window_size_sec: Window size in seconds for windowed calculation
+                        (default: 0.025)
+        step_size_sec: Step size in seconds between windows (default: 0.0125)
         skip_windowing: If True, only compute scalar metrics without windowing
 
     Returns:
