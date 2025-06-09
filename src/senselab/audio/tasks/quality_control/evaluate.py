@@ -127,8 +127,8 @@ def evaluate_audio(
     activity: str,
     evaluations: Sequence[Callable[[Audio], Union[float, bool, str]]],
     output_dir: Optional[Path] = None,
-    window_size_sec: float = 1.0,
-    step_size_sec: float = 0.5,
+    window_size_sec: float = 0.025,
+    step_size_sec: float = 0.0125,
     skip_windowing: bool = False,
 ) -> Dict[str, Any]:
     """Evaluates a single audio file using the given set of functions.
@@ -138,13 +138,15 @@ def evaluate_audio(
         activity: Activity label associated with the audio file
         evaluations: List of evaluation functions to apply
         output_dir: Optional directory to load/save results from/to
-        window_size_sec: Window size in seconds for windowed calculation (default: 1.0)
-        step_size_sec: Step size in seconds between windows (default: 0.5)
+        window_size_sec: Window size in seconds for windowed calculation
+                        (default: 0.025)
+        step_size_sec: Step size in seconds between windows (default: 0.0125)
         skip_windowing: If True, only compute scalar metrics without windowing
 
     Returns:
-        Dict[str, Any]: Dictionary containing evaluation results with time_windows as
-        list of (start_time, end_time) tuples in seconds
+        Dict[str, Any]: Dictionary containing evaluation results with
+                       time_windows as list of (start_time, end_time) tuples
+                       in seconds
     """
     audio_id = Path(audio_path).stem
     record: Dict[str, Any] = {
@@ -203,8 +205,8 @@ def evaluate_batch(
     audio_path_to_activity: Dict[str, str],
     activity_to_evaluations: Dict[str, Sequence[Callable[[Audio], Union[float, bool, str]]]],
     output_dir: Path,
-    window_size_sec: float = 1.0,
-    step_size_sec: float = 0.5,
+    window_size_sec: float = 0.025,
+    step_size_sec: float = 0.0125,
     skip_windowing: bool = False,
 ) -> List[Dict[str, Any]]:
     """Process a batch of audio files, saving individual results and avoiding recomputation.
@@ -214,8 +216,9 @@ def evaluate_batch(
         audio_path_to_activity: Mapping of audio paths to their activities
         activity_to_evaluations: Mapping of activities to their evaluation functions
         output_dir: Directory to save individual results
-        window_size_sec: Window size in seconds for windowed calculation (default: 1.0)
-        step_size_sec: Step size in seconds between windows (default: 0.5)
+        window_size_sec: Window size in seconds for windowed calculation
+                        (default: 0.025)
+        step_size_sec: Step size in seconds between windows (default: 0.0125)
         skip_windowing: If True, only compute scalar metrics without windowing
 
     Returns:
@@ -249,8 +252,8 @@ def evaluate_dataset(
     batch_size: int = 8,
     n_cores: int = 4,
     plugin: str = "cf",
-    window_size_sec: float = 1.0,
-    step_size_sec: float = 0.5,
+    window_size_sec: float = 0.025,
+    step_size_sec: float = 0.0125,
     skip_windowing: bool = False,
 ) -> pd.DataFrame:
     """Runs quality evaluations on audio files in parallel batches using Pydra.
@@ -262,12 +265,14 @@ def evaluate_dataset(
         batch_size: Number of files to process in a batch
         n_cores: Number of parallel processes to use
         plugin: Pydra execution plugin ("cf" for concurrent.futures)
-        window_size_sec: Window size in seconds for windowed calculation (default: 1.0)
-        step_size_sec: Step size in seconds between windows (default: 0.5)
+        window_size_sec: Window size in seconds for windowed calculation
+                        (default: 0.025)
+        step_size_sec: Step size in seconds between windows (default: 0.0125)
         skip_windowing: If True, only compute scalar metrics without windowing
 
     Returns:
-        pd.DataFrame: Flattened DataFrame with evaluations as columns (human-readable)
+        pd.DataFrame: Flattened DataFrame with evaluations as columns
+                     (human-readable)
     """
     try:
         mp.set_start_method("spawn", force=True)
