@@ -149,6 +149,7 @@ def evaluate_audio(
         "activity": activity,
         "evaluations": {},
         "windowed_evaluations": {} if not skip_windowing else None,
+        "timestamps": None,
     }
 
     # Try to load existing results from file if output_dir is provided
@@ -186,6 +187,10 @@ def evaluate_audio(
                 windowed_result = get_windowed_evaluation(audio, fn, window_size_sec, step_size_sec, existing_results)
                 if windowed_result is not None:
                     record["windowed_evaluations"][fn.__name__] = windowed_result
+                    # Calculate timestamps if not already done
+                    if record["timestamps"] is None:
+                        num_windows = len(windowed_result)
+                        record["timestamps"] = [i * step_size_sec for i in range(num_windows)]
 
         # Save results if output directory is provided
         if output_dir is not None:
@@ -209,6 +214,9 @@ def evaluate_batch(
     audio_path_to_activity: Dict[str, str],
     activity_to_evaluations: Dict[str, List[Callable[[Audio], Union[float, bool, str]]]],
     output_dir: Path,
+    window_size_sec: float = 1.0,
+    step_size_sec: float = 0.5,
+    skip_windowing: bool = False,
 ) -> List[Dict[str, Any]]:
     """Process a batch of audio files, saving individual results and avoiding recomputation.
 
@@ -217,6 +225,9 @@ def evaluate_batch(
         audio_path_to_activity: Mapping of audio paths to their activities
         activity_to_evaluations: Mapping of activities to their evaluation functions
         output_dir: Directory to save individual results
+        window_size_sec: Window size in seconds for windowed calculation (default: 1.0)
+        step_size_sec: Step size in seconds between windows (default: 0.5)
+        skip_windowing: If True, only compute scalar metrics without windowing
 
     Returns:
         List[Dict[str, Any]]: List of processed records with evaluation results
@@ -229,7 +240,13 @@ def evaluate_batch(
 
         # Evaluate audio with result loading/saving handled internally
         record = evaluate_audio(
-            audio_path=str(audio_path), activity=activity, evaluations=evaluations, output_dir=output_dir
+            audio_path=str(audio_path),
+            activity=activity,
+            evaluations=evaluations,
+            output_dir=output_dir,
+            window_size_sec=window_size_sec,
+            step_size_sec=step_size_sec,
+            skip_windowing=skip_windowing,
         )
         records.append(record)
 
@@ -243,6 +260,9 @@ def evaluate_dataset(
     batch_size: int = 8,
     n_cores: int = 4,
     plugin: str = "cf",
+    window_size_sec: float = 1.0,
+    step_size_sec: float = 0.5,
+    skip_windowing: bool = False,
 ) -> pd.DataFrame:
     """Runs quality evaluations on audio files in parallel batches using Pydra.
 
@@ -253,6 +273,9 @@ def evaluate_dataset(
         batch_size: Number of files to process in a batch
         n_cores: Number of parallel processes to use
         plugin: Pydra execution plugin ("cf" for concurrent.futures)
+        window_size_sec: Window size in seconds for windowed calculation (default: 1.0)
+        step_size_sec: Step size in seconds between windows (default: 0.5)
+        skip_windowing: If True, only compute scalar metrics without windowing
 
     Returns:
         pd.DataFrame: Combined results from all processed batches
@@ -280,7 +303,15 @@ def evaluate_dataset(
 
         @pydra.mark.task
         def evaluate_batch_task(batch_audio_paths: List[str]) -> List[Dict[str, Any]]:
-            return evaluate_batch(batch_audio_paths, audio_path_to_activity, activity_to_evaluations, output_dir)
+            return evaluate_batch(
+                batch_audio_paths,
+                audio_path_to_activity,
+                activity_to_evaluations,
+                output_dir,
+                window_size_sec=window_size_sec,
+                step_size_sec=step_size_sec,
+                skip_windowing=skip_windowing,
+            )
 
         return evaluate_batch_task
 
