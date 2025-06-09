@@ -147,9 +147,8 @@ def evaluate_audio(
         "id": audio_id,
         "path": str(audio_path),
         "activity": activity,
-        "metrics": {},
-        "windowed_metrics": {} if not skip_windowing else None,
-        "window_timestamps": None,
+        "evaluations": {},
+        "windowed_evaluations": {} if not skip_windowing else None,
     }
 
     # Try to load existing results from file if output_dir is provided
@@ -162,6 +161,11 @@ def evaluate_audio(
                 with open(result_path) as f:
                     existing_results = json.load(f)
                     if existing_results:
+                        # Handle legacy field names if they exist
+                        if "metrics" in existing_results:
+                            existing_results["evaluations"] = existing_results.pop("metrics")
+                        if "windowed_metrics" in existing_results:
+                            existing_results["windowed_evaluations"] = existing_results.pop("windowed_metrics")
                         record.update(existing_results)
             except Exception as e:
                 msg = f"Warning: Could not read existing results for {audio_id}: {e}"
@@ -175,18 +179,13 @@ def evaluate_audio(
         for fn in evaluations:
             # Get scalar result
             scalar_result = get_evaluation(audio, fn, existing_results)
-            record["metrics"][fn.__name__] = scalar_result
+            record["evaluations"][fn.__name__] = scalar_result
 
             # Get windowed results unless explicitly skipped
             if not skip_windowing:
                 windowed_result = get_windowed_evaluation(audio, fn, window_size_sec, step_size_sec, existing_results)
                 if windowed_result is not None:
-                    record["windowed_metrics"][fn.__name__] = windowed_result
-
-                # Calculate timestamps if not already done
-                if record["window_timestamps"] is None:
-                    num_windows = len(windowed_result)
-                    record["window_timestamps"] = [i * step_size_sec for i in range(num_windows)]
+                    record["windowed_evaluations"][fn.__name__] = windowed_result
 
         # Save results if output directory is provided
         if output_dir is not None:
