@@ -18,13 +18,13 @@ STEREO_AUDIO_PATH = os.path.abspath(r"src/tests/data_for_testing/audio_48khz_ste
 @pytest.fixture
 def mono_audio_sample() -> Audio:
     """Fixture for sample mono audio."""
-    return Audio.from_filepath(MONO_AUDIO_PATH)
+    return Audio(filepath=MONO_AUDIO_PATH)
 
 
 @pytest.fixture
 def stereo_audio_sample() -> Audio:
     """Fixture for sample stereo audio."""
-    return Audio.from_filepath(STEREO_AUDIO_PATH)
+    return Audio(filepath=STEREO_AUDIO_PATH)
 
 
 @pytest.fixture

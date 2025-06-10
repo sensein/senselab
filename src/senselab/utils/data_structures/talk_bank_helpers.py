@@ -31,7 +31,7 @@ def chats_to_script_lines(
     if not PYLANGACQ_AVAILABLE:
         raise ModuleNotFoundError(
             "`pylangacq` is not installed. "
-            "Please install senselab text dependencies using `pip install senselab['text']`."
+            "Please install senselab text dependencies using `pip install 'senselab[text]'`."
         )
 
     chats = pylangacq.read_chat(path, **kwargs)
