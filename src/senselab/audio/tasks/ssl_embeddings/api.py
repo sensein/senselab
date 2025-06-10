@@ -31,7 +31,7 @@ def extract_ssl_embeddings_from_audios(
         NotImplementedError: If the model is not a Hugging Face model.
 
     Examples:
-        >>> audios = [Audio.from_filepath("sample.wav")]
+        >>> audios = [Audio(filepath="sample.wav")]
         >>> model = HFModel(path_or_uri="facebook/wav2vec2-base", revision="main")
         >>> embeddings = extract_ssl_embeddings_from_audios(audios, model, cache_dir="./", device=DeviceType.CUDA)
         >>> print(embeddings[0].shape)
