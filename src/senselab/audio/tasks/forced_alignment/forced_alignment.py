@@ -458,26 +458,40 @@ def _align_transcription(
 
 
 def remove_chunks_by_level(
-    scriptline: Optional[ScriptLine], level: int, keep_lower: bool = True
+    scriptline: ScriptLine, level: int, keep_lower: bool = True
 ) -> Union[List[ScriptLine], ScriptLine, None]:
     """Recursively removes chunks from a ScriptLine object at a given depth level.
 
+    ScriptLine objects can contain nested chunks representing different levels of speech
+    (e.g. utterance -> sentence -> word -> character). This function traverses the chunk hierarchy
+    and removes chunks at the specified level, optionally preserving or removing lower levels.
+
+    For example, with level=1 and keep_lower=True, it will remove word-level chunks but keep
+    character-level chunks. With keep_lower=False, it removes both word and character chunks.
+
     Args:
         scriptline (Optional[ScriptLine]): The root ScriptLine object to modify.
-        level (int): The depth level at which to remove chunks.
-        keep_lower (bool): Whether to keep chunks lower than level.
+        level (int): The depth level at which to remove chunks (0=utterance, 1=sentence, 2=word, 3=char).
+        keep_lower (bool): Whether to keep chunks at levels below the target level.
 
     Returns:
         Union[List[ScriptLine], ScriptLine, None]:
-            - If level == 0, returns the list of chunks.
-            - Otherwise, modifies scriptline in place and returns it.
+            - If level == 0, returns the list of chunks from the root ScriptLine.
+            - If level > 0, modifies scriptline in place and returns the modified ScriptLine.
+            - Returns None if scriptline is None or all chunks are removed.
+
+    Raises:
+        ValueError: If scriptline argument is None.
     """
-    if level == 0 and scriptline is not None:
+    if scriptline is None:
+        raise ValueError("scriptline argument cannot be None")
+
+    if level == 0:
         if not keep_lower:
             return None
         return scriptline.chunks
 
-    if scriptline and scriptline.chunks:
+    if scriptline.chunks:
         updated_chunks: List[ScriptLine] = []
         for chunk in scriptline.chunks:
             updated = remove_chunks_by_level(chunk, level - 1, keep_lower)

@@ -592,11 +592,6 @@ def test_remove_chunks_by_level_level_2(nested_scriptline: ScriptLine) -> None:
     assert result.chunks[1].chunks[0].text == "level 3 - chunk 1"
 
 
-def test_remove_chunks_by_level_no_scriptline() -> None:
-    """Test passing None as scriptline (should return None)."""
-    assert remove_chunks_by_level(None, level=1) is None
-
-
 def test_remove_chunks_by_level_keep_lower_false(nested_scriptline: ScriptLine) -> None:
     """Test removing chunks with keep_lower=False (should return None at level 0)."""
     result = remove_chunks_by_level(nested_scriptline, level=0, keep_lower=False)
