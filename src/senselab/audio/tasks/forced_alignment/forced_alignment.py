@@ -117,7 +117,20 @@ def _can_align_segment(
     Returns:
         bool: True if alignable, False otherwise.
     """
-    return not (segment["clean_char"] is None or len(segment["clean_char"]) == 0 or t1 >= max_duration)
+    # Check if segment has clean characters
+    if segment["clean_char"] is None or len(segment["clean_char"]) == 0:
+        return False
+
+    # Check if segment is within duration bounds
+    if t1 >= max_duration:
+        return False
+
+    # Check if all clean chars are in model dictionary
+    for char in segment["clean_char"]:
+        if char not in model_dictionary:
+            return False
+
+    return True
 
 
 def _get_prediction_matrix(
