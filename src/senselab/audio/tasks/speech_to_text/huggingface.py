@@ -160,7 +160,8 @@ class HuggingFaceASR:
         start_time_transcription = time.time()
         # Run the pipeline
         transcriptions = pipe(
-            formatted_audios, generate_kwargs={"language": f"{language.name.lower()}"} if language else {}
+            formatted_audios,
+            generate_kwargs={"language": f"{language.name.lower()}", "num_beams": 1} if language else {"num_beams": 1},
         )
 
         # Take the end time of the transcription

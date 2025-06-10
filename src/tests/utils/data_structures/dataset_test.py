@@ -28,9 +28,9 @@ except ModuleNotFoundError:
 try:
     import av
 
-    PYAV_AVAILABLE = True
+    AV_AVAILABLE = True
 except ModuleNotFoundError:
-    PYAV_AVAILABLE = False
+    AV_AVAILABLE = False
 
 
 def test_create_participant() -> None:
@@ -176,7 +176,7 @@ def test_audio_dataset_splits() -> None:
     ], "Excess GPU split should generate a list with one list of all of the audios, unpadded"
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE or not PYAV_AVAILABLE, reason="torchaudio or pyav are not installed")
+@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE or not AV_AVAILABLE, reason="torchaudio or av are not installed")
 def test_convert_senselab_dataset_to_hf_datasets() -> None:
     """Tests the conversion of Senselab dataset to HuggingFace."""
     dataset = SenselabDataset(
