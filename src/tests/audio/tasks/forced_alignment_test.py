@@ -1,7 +1,5 @@
 """Tests for forced alignment functions."""
 
-import numpy as np
-import pandas as pd
 import pytest
 import torch
 from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
@@ -30,7 +28,6 @@ try:
         _align_transcription,
         _can_align_segment,
         _get_prediction_matrix,
-        _interpolate_nans,
         _merge_repeats,
         _preprocess_segments,
         align_transcriptions,
@@ -388,14 +385,6 @@ def test_merge_repeats() -> None:
     transcript = "test"
     segments = _merge_repeats(path, transcript)
     assert len(segments) == 2
-
-
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed")
-def test_interpolate_nans() -> None:
-    """Test interpolation of NaN values."""
-    series = pd.Series([0.0, np.nan, 2.0])
-    interpolated_series = _interpolate_nans(series)
-    assert interpolated_series.isnull().sum() == 0
 
 
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed")
