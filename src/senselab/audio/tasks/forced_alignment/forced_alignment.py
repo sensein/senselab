@@ -357,22 +357,6 @@ def _merge_repeats(path: List[Point], transcript: str) -> List[Segment]:
     return segments
 
 
-def _interpolate_nans(x: pd.Series, method: str = "nearest") -> pd.Series:
-    """Interpolate NaN values in a Series.
-
-    Args:
-        x (pd.Series): The series with possible NaNs.
-        method (str): Interpolation method.
-
-    Returns:
-        pd.Series: Series with NaNs interpolated.
-    """
-    if x.notnull().sum() > 1:
-        return x.interpolate(method=method).ffill().bfill()
-    else:
-        return x.ffill().bfill()
-
-
 def _align_segments(
     transcript: List[SingleSegment],
     model: torch.nn.Module,
