@@ -7,14 +7,15 @@ from typing import Callable, Dict, List, Optional, Sequence, Union
 import pandas as pd
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.quality_control.evaluate import evaluate_dataset
+from senselab.audio.tasks.quality_control.taxonomy import TaxonomyNode
 from senselab.audio.tasks.quality_control.trees import (
     BIOACOUSTIC_ACTIVITY_TAXONOMY,
 )
-from senselab.audio.tasks.quality_control.evaluate import evaluate_dataset
 
 
 def activity_to_evaluations(
-    audio_path_to_activity: Dict[str, str], activity_tree
+    audio_path_to_activity: Dict[str, str], activity_tree: TaxonomyNode
 ) -> Dict[str, Sequence[Callable[[Audio], Union[float, bool, str]]]]:
     """Maps each activity label to its associated evaluation functions.
 
@@ -28,7 +29,7 @@ def activity_to_evaluations(
         Maps activity label to evaluations.
     """
     unique_activities = set(audio_path_to_activity.values())
-    activity_to_evaluations = {}
+    activity_to_evaluations: Dict[str, Sequence[Callable[[Audio], Union[float, bool, str]]]] = {}
     for activity in unique_activities:
         # Directly call TaxonomyNode methods instead of wrapper functions
         subtree = activity_tree.prune_to_activity(activity)
@@ -42,7 +43,7 @@ def activity_to_evaluations(
 def check_quality(
     audio_paths: List[Union[str, os.PathLike]],
     audio_path_to_activity: Dict = {},
-    activity_tree=BIOACOUSTIC_ACTIVITY_TAXONOMY,
+    activity_tree: TaxonomyNode = BIOACOUSTIC_ACTIVITY_TAXONOMY,
     output_dir: Optional[Union[str, os.PathLike]] = None,
     batch_size: int = 8,
     n_cores: int = 4,
