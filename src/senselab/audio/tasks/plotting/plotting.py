@@ -5,12 +5,13 @@ from typing import Any
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from matplotlib.pyplot import Figure
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import logger
 
 
-def plot_waveform(audio: Audio, title: str = "Waveform", fast: bool = False) -> None:
+def plot_waveform(audio: Audio, title: str = "Waveform", fast: bool = False) -> Figure:
     """Plots the waveform of an Audio object.
 
     Args:
@@ -43,9 +44,10 @@ def plot_waveform(audio: Audio, title: str = "Waveform", fast: bool = False) -> 
     figure.suptitle(title)
     plt.xlabel("Time [s]")
     plt.show(block=False)
+    return figure
 
 
-def plot_specgram(audio: Audio, mel_scale: bool = False, title: str = "Spectrogram", **spect_kwargs: Any) -> None:  # noqa : ANN401
+def plot_specgram(audio: Audio, mel_scale: bool = False, title: str = "Spectrogram", **spect_kwargs: Any) -> Figure:  # noqa : ANN401
     """Plots the spectrogram of an Audio object.
 
     Args:
@@ -133,7 +135,7 @@ def plot_specgram(audio: Audio, mel_scale: bool = False, title: str = "Spectrogr
     else:
         freq_axis = torch.linspace(0, audio.sampling_rate / 2, num_freq_bins)
 
-    plt.figure(figsize=(10, 4))
+    figure = plt.figure(figsize=(12, 4))
     plt.imshow(
         _power_to_db(spectrogram.numpy()),
         aspect="auto",
@@ -146,6 +148,7 @@ def plot_specgram(audio: Audio, mel_scale: bool = False, title: str = "Spectrogr
     plt.ylabel(y_axis_label)
     plt.xlabel("Time [Sec]")
     plt.show(block=False)
+    return figure
 
 
 def play_audio(audio: Audio) -> None:
