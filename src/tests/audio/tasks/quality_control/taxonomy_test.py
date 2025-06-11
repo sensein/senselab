@@ -27,6 +27,16 @@ def mock_metric_function_2(audio: Audio) -> float:
     return 1.0
 
 
+def mock_check_function_3(audio: Audio) -> bool:
+    """Third mock check function for testing."""
+    return True
+
+
+def mock_metric_function_3(audio: Audio) -> float:
+    """Third mock metric function for testing."""
+    return 2.0
+
+
 def test_add_child_basic() -> None:
     """Test basic functionality of adding a child node."""
     parent = TaxonomyNode(name="parent")
@@ -81,7 +91,7 @@ def test_add_multiple_children() -> None:
 
 
 def test_add_child_overwrites_existing() -> None:
-    """Test that adding a child with existing key overwrites the previous child."""
+    """Test adding a child with existing key overwrites the previous child."""
     parent = TaxonomyNode(name="parent")
     child1 = TaxonomyNode(name="original_child")
     child2 = TaxonomyNode(name="new_child")
@@ -297,3 +307,182 @@ def test_find_path_to_with_evaluations() -> None:
     # Original evaluations should be preserved
     assert parent.checks == [mock_check_function]
     assert child.checks == [mock_check_function_2]
+
+
+def test_get_all_evaluations_single_node() -> None:
+    """Test getting evaluations from a single node with no children."""
+    node = TaxonomyNode(name="test", checks=[mock_check_function], metrics=[mock_metric_function])
+
+    evaluations = node.get_all_evaluations()
+
+    assert len(evaluations) == 2
+    assert mock_metric_function in evaluations
+    assert mock_check_function in evaluations
+
+
+def test_get_all_evaluations_empty_node() -> None:
+    """Test getting evaluations from a node with no evaluation functions."""
+    node = TaxonomyNode(name="empty")
+
+    evaluations = node.get_all_evaluations()
+
+    assert evaluations == []
+
+
+def test_get_all_evaluations_with_children() -> None:
+    """Test getting evaluations from a node with children that have evaluations."""
+    parent = TaxonomyNode(name="parent", checks=[mock_check_function], metrics=[mock_metric_function])
+    child = TaxonomyNode(name="child", checks=[mock_check_function_2], metrics=[mock_metric_function_2])
+    parent.add_child("child", child)
+
+    evaluations = parent.get_all_evaluations()
+
+    assert len(evaluations) == 4
+    assert mock_check_function in evaluations
+    assert mock_metric_function in evaluations
+    assert mock_check_function_2 in evaluations
+    assert mock_metric_function_2 in evaluations
+
+
+def test_get_all_evaluations_deep_hierarchy() -> None:
+    """Test getting evaluations from a deep hierarchy with evaluations at different levels."""
+    root = TaxonomyNode(name="root", checks=[mock_check_function])
+    level1 = TaxonomyNode(name="level1", metrics=[mock_metric_function])
+    level2 = TaxonomyNode(name="level2")  # No evaluations
+    leaf = TaxonomyNode(name="leaf", checks=[mock_check_function_2], metrics=[mock_metric_function_2])
+
+    root.add_child("level1", level1)
+    level1.add_child("level2", level2)
+    level2.add_child("leaf", leaf)
+
+    evaluations = root.get_all_evaluations()
+
+    assert len(evaluations) == 4
+    assert mock_check_function in evaluations
+    assert mock_metric_function in evaluations
+    assert mock_check_function_2 in evaluations
+    assert mock_metric_function_2 in evaluations
+
+
+def test_get_all_evaluations_deduplication() -> None:
+    """Test that duplicate evaluation functions are only included once."""
+    parent = TaxonomyNode(name="parent", checks=[mock_check_function], metrics=[mock_metric_function])
+    child = TaxonomyNode(
+        name="child",
+        checks=[mock_check_function],  # Duplicate
+        metrics=[mock_metric_function_2],
+    )
+    parent.add_child("child", child)
+
+    evaluations = parent.get_all_evaluations()
+
+    assert len(evaluations) == 3
+    # Count occurrences manually since evaluations is a list
+    check_count = sum(1 for func in evaluations if func is mock_check_function)
+    assert check_count == 1, "Duplicate functions should only appear once"
+
+
+def test_get_all_evaluations_multiple_children() -> None:
+    """Test getting evaluations from a node with multiple children."""
+    parent = TaxonomyNode(name="parent", checks=[mock_check_function])
+    child1 = TaxonomyNode(name="child1", metrics=[mock_metric_function])
+    child2 = TaxonomyNode(name="child2", checks=[mock_check_function_2])
+    child3 = TaxonomyNode(name="child3", metrics=[mock_metric_function_2])
+
+    parent.add_child("child1", child1)
+    parent.add_child("child2", child2)
+    parent.add_child("child3", child3)
+
+    evaluations = parent.get_all_evaluations()
+
+    assert len(evaluations) == 4
+    assert mock_check_function in evaluations
+    assert mock_metric_function in evaluations
+    assert mock_check_function_2 in evaluations
+    assert mock_metric_function_2 in evaluations
+
+
+def test_get_all_evaluations_complex_deduplication() -> None:
+    """Test deduplication in a complex hierarchy with multiple duplicates."""
+    root = TaxonomyNode(
+        name="root", checks=[mock_check_function, mock_check_function_2], metrics=[mock_metric_function]
+    )
+
+    # Branch 1 with duplicates
+    branch1 = TaxonomyNode(
+        name="branch1",
+        checks=[mock_check_function],  # Duplicate
+        metrics=[mock_metric_function_2],
+    )
+    leaf1 = TaxonomyNode(
+        name="leaf1",
+        checks=[mock_check_function_2],  # Duplicate
+        metrics=[mock_metric_function],  # Duplicate
+    )
+
+    # Branch 2 with new and duplicate functions
+    branch2 = TaxonomyNode(
+        name="branch2",
+        checks=[mock_check_function_3],  # New
+        metrics=[mock_metric_function_3],  # New
+    )
+
+    root.add_child("branch1", branch1)
+    branch1.add_child("leaf1", leaf1)
+    root.add_child("branch2", branch2)
+
+    evaluations = root.get_all_evaluations()
+
+    # Should have 6 unique functions despite duplicates
+    assert len(evaluations) == 6
+
+    # Check that each function appears exactly once
+    unique_functions = [
+        mock_check_function,
+        mock_check_function_2,
+        mock_check_function_3,
+        mock_metric_function,
+        mock_metric_function_2,
+        mock_metric_function_3,
+    ]
+
+    for func in unique_functions:
+        count = sum(1 for f in evaluations if f is func)
+        assert count == 1, f"Function {func.__name__} should appear exactly once"
+
+
+def test_get_all_evaluations_order_preservation() -> None:
+    """Test that evaluation order follows the traversal pattern."""
+    parent = TaxonomyNode(name="parent", checks=[mock_check_function], metrics=[mock_metric_function])
+    child = TaxonomyNode(name="child", checks=[mock_check_function_2], metrics=[mock_metric_function_2])
+    parent.add_child("child", child)
+
+    evaluations = parent.get_all_evaluations()
+
+    # Parent's evaluations should come before child's evaluations
+    # Within parent: metrics come before checks (based on implementation)
+    parent_metric_index = evaluations.index(mock_metric_function)
+    parent_check_index = evaluations.index(mock_check_function)
+    child_metric_index = evaluations.index(mock_metric_function_2)
+    child_check_index = evaluations.index(mock_check_function_2)
+
+    # Parent evaluations should come before child evaluations
+    assert parent_metric_index < child_metric_index
+    assert parent_check_index < child_check_index
+
+
+def test_get_all_evaluations_empty_children() -> None:
+    """Test getting evaluations when children have no evaluation functions."""
+    parent = TaxonomyNode(name="parent", checks=[mock_check_function], metrics=[mock_metric_function])
+    empty_child1 = TaxonomyNode(name="empty_child1")  # No evaluations
+    empty_child2 = TaxonomyNode(name="empty_child2")  # No evaluations
+
+    parent.add_child("empty_child1", empty_child1)
+    parent.add_child("empty_child2", empty_child2)
+
+    evaluations = parent.get_all_evaluations()
+
+    # Should only have parent's evaluations
+    assert len(evaluations) == 2
+    assert mock_check_function in evaluations
+    assert mock_metric_function in evaluations
