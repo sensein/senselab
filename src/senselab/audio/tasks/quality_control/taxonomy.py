@@ -1,7 +1,7 @@
 """Taxonomy node classes and utilities for bioacoustic activity hierarchies."""
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Sequence, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 
 @dataclass
@@ -15,7 +15,8 @@ class TaxonomyNode:
         name: The name/identifier of this taxonomy node
         checks: List of validation functions that return boolean results
         metrics: List of metric functions that return numeric/string results
-        children: Dictionary mapping child names to child TaxonomyNode instances
+        children: Dictionary mapping child names to child TaxonomyNode
+            instances
         parent: Reference to parent node (None for root)
     """
 
@@ -141,13 +142,17 @@ class TaxonomyNode:
         Returns:
             Dictionary representation compatible with existing code
         """
-        result: Dict[str, Any] = {"checks": self.checks.copy(), "metrics": self.metrics.copy(), "subclass": None}
+        result: Dict[str, Any] = {
+            "checks": self.checks.copy(),
+            "metrics": self.metrics.copy(),
+            "subclass": None,
+        }
 
         if self.children:
             subclass_dict: Dict[str, Any] = {}
             for child_name, child_node in self.children.items():
                 child_dict = child_node.to_dict()
-                # Extract the inner dictionary since to_dict() wraps with node name
+                # Extract the inner dictionary since to_dict() wraps with name
                 subclass_dict[child_name] = child_dict[child_node.name]
             result["subclass"] = subclass_dict
 
@@ -174,7 +179,9 @@ def build_taxonomy_tree_from_dict(taxonomy_dict: Dict[str, Any], name: Optional[
 
     # Create root node
     root = TaxonomyNode(
-        name=root_name, checks=root_data.get("checks", []).copy(), metrics=root_data.get("metrics", []).copy()
+        name=root_name,
+        checks=root_data.get("checks", []).copy(),
+        metrics=root_data.get("metrics", []).copy(),
     )
 
     # Recursively add children
