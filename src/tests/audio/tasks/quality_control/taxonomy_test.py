@@ -486,3 +486,259 @@ def test_get_all_evaluations_empty_children() -> None:
     assert len(evaluations) == 2
     assert mock_check_function in evaluations
     assert mock_metric_function in evaluations
+
+
+def test_prune_to_activity_self() -> None:
+    """Test pruning to the root node itself."""
+    root = TaxonomyNode(name="root", checks=[mock_check_function], metrics=[mock_metric_function])
+    child = TaxonomyNode(name="child")
+    root.add_child("child", child)
+
+    pruned = root.prune_to_activity("root")
+
+    assert pruned is not None
+    assert pruned.name == "root"
+    assert pruned.checks == [mock_check_function]
+    assert pruned.metrics == [mock_metric_function]
+    assert len(pruned.children) == 0  # Should have no children when pruning to self
+    assert pruned.parent is None
+
+
+def test_prune_to_activity_direct_child() -> None:
+    """Test pruning to a direct child node."""
+    root = TaxonomyNode(name="root", checks=[mock_check_function], metrics=[mock_metric_function])
+    child1 = TaxonomyNode(name="child1", checks=[mock_check_function_2], metrics=[mock_metric_function_2])
+    child2 = TaxonomyNode(name="child2")  # This should not appear in pruned tree
+
+    root.add_child("child1", child1)
+    root.add_child("child2", child2)
+
+    pruned = root.prune_to_activity("child1")
+
+    assert pruned is not None
+    assert pruned.name == "root"
+    assert pruned.checks == [mock_check_function]
+    assert pruned.metrics == [mock_metric_function]
+    assert len(pruned.children) == 1
+    assert "child1" in pruned.children
+    assert "child2" not in pruned.children
+
+    pruned_child = pruned.children["child1"]
+    assert pruned_child.name == "child1"
+    assert pruned_child.checks == [mock_check_function_2]
+    assert pruned_child.metrics == [mock_metric_function_2]
+    assert len(pruned_child.children) == 0
+
+
+def test_prune_to_activity_deep_hierarchy() -> None:
+    """Test pruning to a deeply nested node."""
+    root = TaxonomyNode(name="root", checks=[mock_check_function])
+    level1 = TaxonomyNode(name="level1", metrics=[mock_metric_function])
+    level2 = TaxonomyNode(name="level2", checks=[mock_check_function_2])
+    target = TaxonomyNode(name="target", checks=[mock_check_function_3], metrics=[mock_metric_function_3])
+    sibling = TaxonomyNode(name="sibling")  # Should not appear in pruned tree
+
+    root.add_child("level1", level1)
+    level1.add_child("level2", level2)
+    level1.add_child("sibling", sibling)  # Sibling at level1
+    level2.add_child("target", target)
+
+    pruned = root.prune_to_activity("target")
+
+    assert pruned is not None
+    assert pruned.name == "root"
+    assert pruned.checks == [mock_check_function]
+    assert len(pruned.children) == 1
+    assert "level1" in pruned.children
+
+    pruned_level1 = pruned.children["level1"]
+    assert pruned_level1.name == "level1"
+    assert pruned_level1.metrics == [mock_metric_function]
+    assert len(pruned_level1.children) == 1
+    assert "level2" in pruned_level1.children
+    assert "sibling" not in pruned_level1.children  # Sibling should be pruned
+
+    pruned_level2 = pruned_level1.children["level2"]
+    assert pruned_level2.name == "level2"
+    assert pruned_level2.checks == [mock_check_function_2]
+    assert len(pruned_level2.children) == 1
+    assert "target" in pruned_level2.children
+
+    pruned_target = pruned_level2.children["target"]
+    assert pruned_target.name == "target"
+    assert pruned_target.checks == [mock_check_function_3]
+    assert pruned_target.metrics == [mock_metric_function_3]
+    assert len(pruned_target.children) == 0
+
+
+def test_prune_to_activity_nonexistent_node() -> None:
+    """Test pruning to a node that doesn't exist."""
+    root = TaxonomyNode(name="root")
+    child = TaxonomyNode(name="child")
+    root.add_child("child", child)
+
+    pruned = root.prune_to_activity("nonexistent")
+
+    assert pruned is None
+
+
+def test_prune_to_activity_preserves_evaluations() -> None:
+    """Test that pruning preserves all evaluations along the path."""
+    root = TaxonomyNode(name="root", checks=[mock_check_function], metrics=[mock_metric_function])
+    level1 = TaxonomyNode(name="level1", checks=[mock_check_function_2], metrics=[mock_metric_function_2])
+    target = TaxonomyNode(name="target", checks=[mock_check_function_3], metrics=[mock_metric_function_3])
+
+    root.add_child("level1", level1)
+    level1.add_child("target", target)
+
+    pruned = root.prune_to_activity("target")
+
+    assert pruned is not None
+
+    # Check that all evaluations are preserved
+    assert pruned.checks == [mock_check_function]
+    assert pruned.metrics == [mock_metric_function]
+
+    pruned_level1 = pruned.children["level1"]
+    assert pruned_level1.checks == [mock_check_function_2]
+    assert pruned_level1.metrics == [mock_metric_function_2]
+
+    pruned_target = pruned_level1.children["target"]
+    assert pruned_target.checks == [mock_check_function_3]
+    assert pruned_target.metrics == [mock_metric_function_3]
+
+
+def test_prune_to_activity_deep_copy_isolation() -> None:
+    """Test that pruned tree is isolated from original tree."""
+    root = TaxonomyNode(name="root", checks=[mock_check_function], metrics=[mock_metric_function])
+    child = TaxonomyNode(name="child", checks=[mock_check_function_2], metrics=[mock_metric_function_2])
+    root.add_child("child", child)
+
+    pruned = root.prune_to_activity("child")
+
+    # Modify original tree
+    root.checks.append(mock_check_function_3)
+    child.metrics.append(mock_metric_function_3)
+
+    # Pruned tree should be unaffected
+    assert pruned is not None
+    assert len(pruned.checks) == 1
+    assert mock_check_function_3 not in pruned.checks
+
+    pruned_child = pruned.children["child"]
+    assert len(pruned_child.metrics) == 1
+    assert mock_metric_function_3 not in pruned_child.metrics
+
+
+def test_prune_to_activity_complex_multi_branch() -> None:
+    """Test pruning in a complex multi-branch hierarchy."""
+    root = TaxonomyNode(name="root")
+
+    # Branch 1: root -> branch1 -> leaf1
+    branch1 = TaxonomyNode(name="branch1", checks=[mock_check_function])
+    leaf1 = TaxonomyNode(name="leaf1", metrics=[mock_metric_function])
+
+    # Branch 2: root -> branch2 -> subbranch -> target
+    branch2 = TaxonomyNode(name="branch2", checks=[mock_check_function_2])
+    subbranch = TaxonomyNode(name="subbranch", metrics=[mock_metric_function_2])
+    target = TaxonomyNode(name="target", checks=[mock_check_function_3], metrics=[mock_metric_function_3])
+
+    # Build the tree
+    root.add_child("branch1", branch1)
+    branch1.add_child("leaf1", leaf1)
+    root.add_child("branch2", branch2)
+    branch2.add_child("subbranch", subbranch)
+    subbranch.add_child("target", target)
+
+    # Prune to target in branch2
+    pruned = root.prune_to_activity("target")
+
+    assert pruned is not None
+    assert pruned.name == "root"
+    assert len(pruned.children) == 1
+    assert "branch2" in pruned.children
+    assert "branch1" not in pruned.children  # Branch1 should be pruned
+
+    pruned_branch2 = pruned.children["branch2"]
+    assert pruned_branch2.name == "branch2"
+    assert pruned_branch2.checks == [mock_check_function_2]
+    assert len(pruned_branch2.children) == 1
+    assert "subbranch" in pruned_branch2.children
+
+    pruned_subbranch = pruned_branch2.children["subbranch"]
+    assert pruned_subbranch.name == "subbranch"
+    assert pruned_subbranch.metrics == [mock_metric_function_2]
+    assert len(pruned_subbranch.children) == 1
+    assert "target" in pruned_subbranch.children
+
+    pruned_target = pruned_subbranch.children["target"]
+    assert pruned_target.name == "target"
+    assert pruned_target.checks == [mock_check_function_3]
+    assert pruned_target.metrics == [mock_metric_function_3]
+    assert len(pruned_target.children) == 0
+
+
+def test_prune_to_activity_empty_tree() -> None:
+    """Test pruning in an empty tree (no children)."""
+    root = TaxonomyNode(name="root")
+
+    # Prune to self should work
+    pruned = root.prune_to_activity("root")
+    assert pruned is not None
+    assert pruned.name == "root"
+    assert len(pruned.children) == 0
+
+    # Prune to non-existent child should return None
+    pruned = root.prune_to_activity("nonexistent")
+    assert pruned is None
+
+
+def test_prune_to_activity_maintains_parent_child_relationships() -> None:
+    """Test that pruned tree maintains correct parent-child relationships."""
+    root = TaxonomyNode(name="root")
+    level1 = TaxonomyNode(name="level1")
+    level2 = TaxonomyNode(name="level2")
+    target = TaxonomyNode(name="target")
+
+    root.add_child("level1", level1)
+    level1.add_child("level2", level2)
+    level2.add_child("target", target)
+
+    pruned = root.prune_to_activity("target")
+
+    assert pruned is not None
+    assert pruned.parent is None
+
+    pruned_level1 = pruned.children["level1"]
+    assert pruned_level1.parent is pruned
+
+    pruned_level2 = pruned_level1.children["level2"]
+    assert pruned_level2.parent is pruned_level1
+
+    pruned_target = pruned_level2.children["target"]
+    assert pruned_target.parent is pruned_level2
+
+
+def test_prune_to_activity_no_evaluations() -> None:
+    """Test pruning when nodes have no evaluation functions."""
+    root = TaxonomyNode(name="root")  # No evaluations
+    child = TaxonomyNode(name="child")  # No evaluations
+    target = TaxonomyNode(name="target")  # No evaluations
+
+    root.add_child("child", child)
+    child.add_child("target", target)
+
+    pruned = root.prune_to_activity("target")
+
+    assert pruned is not None
+    assert pruned.name == "root"
+    assert len(pruned.checks) == 0
+    assert len(pruned.metrics) == 0
+
+    pruned_child = pruned.children["child"]
+    assert len(pruned_child.checks) == 0
+    assert len(pruned_child.metrics) == 0
+
+    pruned_target = pruned_child.children["target"]
+    assert len(pruned_target.checks) == 0
+    assert len(pruned_target.metrics) == 0
