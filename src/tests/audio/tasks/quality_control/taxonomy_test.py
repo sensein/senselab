@@ -155,3 +155,145 @@ def test_add_child_chaining() -> None:
 
     assert parent.children["child"].children["grandchild"] is grandchild
     assert grandchild.parent is child
+
+
+def test_find_path_to_self() -> None:
+    """Test finding path to the current node itself."""
+    node = TaxonomyNode(name="test_node")
+
+    path = node.find_path_to("test_node")
+
+    assert path == ["test_node"]
+
+
+def test_find_path_to_direct_child() -> None:
+    """Test finding path to a direct child node."""
+    parent = TaxonomyNode(name="parent")
+    child = TaxonomyNode(name="child")
+    parent.add_child("child", child)
+
+    path = parent.find_path_to("child")
+
+    assert path == ["parent", "child"]
+
+
+def test_find_path_to_nested_child() -> None:
+    """Test finding path through multiple levels of hierarchy."""
+    root = TaxonomyNode(name="root")
+    level1 = TaxonomyNode(name="level1")
+    level2 = TaxonomyNode(name="level2")
+    leaf = TaxonomyNode(name="leaf")
+
+    root.add_child("level1", level1)
+    level1.add_child("level2", level2)
+    level2.add_child("leaf", leaf)
+
+    path = root.find_path_to("leaf")
+
+    assert path == ["root", "level1", "level2", "leaf"]
+
+
+def test_find_path_to_nonexistent_node() -> None:
+    """Test finding path to a node that doesn't exist."""
+    parent = TaxonomyNode(name="parent")
+    child = TaxonomyNode(name="child")
+    parent.add_child("child", child)
+
+    path = parent.find_path_to("nonexistent")
+
+    assert path is None
+
+
+def test_find_path_to_empty_tree() -> None:
+    """Test finding path in a tree with no children."""
+    root = TaxonomyNode(name="root")
+
+    # Try to find a non-existent child in empty tree
+    path = root.find_path_to("nonexistent")
+    assert path is None
+
+    # Finding self should still work
+    path = root.find_path_to("root")
+    assert path == ["root"]
+
+
+def test_find_path_to_multiple_children() -> None:
+    """Test finding paths in a tree with multiple children at same level."""
+    parent = TaxonomyNode(name="parent")
+    child1 = TaxonomyNode(name="child1")
+    child2 = TaxonomyNode(name="child2")
+    child3 = TaxonomyNode(name="child3")
+
+    parent.add_child("child1", child1)
+    parent.add_child("child2", child2)
+    parent.add_child("child3", child3)
+
+    # Test finding each child
+    assert parent.find_path_to("child1") == ["parent", "child1"]
+    assert parent.find_path_to("child2") == ["parent", "child2"]
+    assert parent.find_path_to("child3") == ["parent", "child3"]
+
+
+def test_find_path_to_complex_hierarchy() -> None:
+    """Test finding paths in a complex multi-branch hierarchy."""
+    root = TaxonomyNode(name="root")
+
+    # Create branch 1: root -> branch1 -> leaf1
+    branch1 = TaxonomyNode(name="branch1")
+    leaf1 = TaxonomyNode(name="leaf1")
+    root.add_child("branch1", branch1)
+    branch1.add_child("leaf1", leaf1)
+
+    # Create branch 2: root -> branch2 -> subbranch -> leaf2
+    branch2 = TaxonomyNode(name="branch2")
+    subbranch = TaxonomyNode(name="subbranch")
+    leaf2 = TaxonomyNode(name="leaf2")
+    root.add_child("branch2", branch2)
+    branch2.add_child("subbranch", subbranch)
+    subbranch.add_child("leaf2", leaf2)
+
+    # Test finding nodes in different branches
+    assert root.find_path_to("leaf1") == ["root", "branch1", "leaf1"]
+    assert root.find_path_to("leaf2") == ["root", "branch2", "subbranch", "leaf2"]
+    assert root.find_path_to("subbranch") == ["root", "branch2", "subbranch"]
+    assert root.find_path_to("branch1") == ["root", "branch1"]
+    assert root.find_path_to("branch2") == ["root", "branch2"]
+
+
+def test_find_path_to_from_non_root() -> None:
+    """Test finding paths when starting from a non-root node."""
+    root = TaxonomyNode(name="root")
+    level1 = TaxonomyNode(name="level1")
+    level2 = TaxonomyNode(name="level2")
+    leaf = TaxonomyNode(name="leaf")
+
+    root.add_child("level1", level1)
+    level1.add_child("level2", level2)
+    level2.add_child("leaf", leaf)
+
+    # Start search from level1 instead of root
+    path_from_level1 = level1.find_path_to("leaf")
+    assert path_from_level1 == ["level1", "level2", "leaf"]
+
+    # Should not find nodes that are ancestors or siblings
+    assert level1.find_path_to("root") is None
+
+    # Start search from level2
+    path_from_level2 = level2.find_path_to("leaf")
+    assert path_from_level2 == ["level2", "leaf"]
+
+
+def test_find_path_to_with_evaluations() -> None:
+    """Test that find_path_to works correctly with nodes that have evaluations."""
+    parent = TaxonomyNode(name="parent", checks=[mock_check_function], metrics=[mock_metric_function])
+    child = TaxonomyNode(name="child", checks=[mock_check_function_2], metrics=[mock_metric_function_2])
+    parent.add_child("child", child)
+
+    path = parent.find_path_to("child")
+
+    # Path finding should work regardless of evaluations
+    assert path == ["parent", "child"]
+
+    # Original evaluations should be preserved
+    assert parent.checks == [mock_check_function]
+    assert child.checks == [mock_check_function_2]
