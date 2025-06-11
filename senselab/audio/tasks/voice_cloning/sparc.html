@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="generator" content="pdoc 15.0.3"/>
+    <meta name="generator" content="pdoc 15.0.4"/>
     <title>senselab.audio.tasks.voice_cloning.sparc API documentation</title>
             <link rel="icon" href="https://readthedocs.org/favicon.ico"/>
 
@@ -91,7 +91,7 @@
 </span><span id="L-26"><a href="#L-26"><span class="linenos"> 26</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">SPARC_AVAILABLE</span><span class="p">:</span>
 </span><span id="L-27"><a href="#L-27"><span class="linenos"> 27</span></a>            <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
 </span><span id="L-28"><a href="#L-28"><span class="linenos"> 28</span></a>                <span class="s2">&quot;`sparc` is not available. &quot;</span>
-</span><span id="L-29"><a href="#L-29"><span class="linenos"> 29</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`.&quot;</span>
+</span><span id="L-29"><a href="#L-29"><span class="linenos"> 29</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio,articulatory]&#39;`.&quot;</span>
 </span><span id="L-30"><a href="#L-30"><span class="linenos"> 30</span></a>            <span class="p">)</span>
 </span><span id="L-31"><a href="#L-31"><span class="linenos"> 31</span></a>        <span class="n">device</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">_select_device_and_dtype</span><span class="p">(</span>
 </span><span id="L-32"><a href="#L-32"><span class="linenos"> 32</span></a>            <span class="n">user_preference</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">compatible_devices</span><span class="o">=</span><span class="p">[</span><span class="n">DeviceType</span><span class="o">.</span><span class="n">CUDA</span><span class="p">,</span> <span class="n">DeviceType</span><span class="o">.</span><span class="n">CPU</span><span class="p">]</span>
@@ -137,7 +137,7 @@
 </span><span id="L-72"><a href="#L-72"><span class="linenos"> 72</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">SPARC_AVAILABLE</span><span class="p">:</span>
 </span><span id="L-73"><a href="#L-73"><span class="linenos"> 73</span></a>            <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
 </span><span id="L-74"><a href="#L-74"><span class="linenos"> 74</span></a>                <span class="s2">&quot;`sparc` is not available. &quot;</span>
-</span><span id="L-75"><a href="#L-75"><span class="linenos"> 75</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`.&quot;</span>
+</span><span id="L-75"><a href="#L-75"><span class="linenos"> 75</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio,articulatory]&#39;`.&quot;</span>
 </span><span id="L-76"><a href="#L-76"><span class="linenos"> 76</span></a>            <span class="p">)</span>
 </span><span id="L-77"><a href="#L-77"><span class="linenos"> 77</span></a>
 </span><span id="L-78"><a href="#L-78"><span class="linenos"> 78</span></a>        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">source_audios</span><span class="p">)</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="n">target_audios</span><span class="p">):</span>
@@ -209,7 +209,7 @@
 </span><span id="SparcVoiceCloner-27"><a href="#SparcVoiceCloner-27"><span class="linenos"> 27</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">SPARC_AVAILABLE</span><span class="p">:</span>
 </span><span id="SparcVoiceCloner-28"><a href="#SparcVoiceCloner-28"><span class="linenos"> 28</span></a>            <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
 </span><span id="SparcVoiceCloner-29"><a href="#SparcVoiceCloner-29"><span class="linenos"> 29</span></a>                <span class="s2">&quot;`sparc` is not available. &quot;</span>
-</span><span id="SparcVoiceCloner-30"><a href="#SparcVoiceCloner-30"><span class="linenos"> 30</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`.&quot;</span>
+</span><span id="SparcVoiceCloner-30"><a href="#SparcVoiceCloner-30"><span class="linenos"> 30</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio,articulatory]&#39;`.&quot;</span>
 </span><span id="SparcVoiceCloner-31"><a href="#SparcVoiceCloner-31"><span class="linenos"> 31</span></a>            <span class="p">)</span>
 </span><span id="SparcVoiceCloner-32"><a href="#SparcVoiceCloner-32"><span class="linenos"> 32</span></a>        <span class="n">device</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">_select_device_and_dtype</span><span class="p">(</span>
 </span><span id="SparcVoiceCloner-33"><a href="#SparcVoiceCloner-33"><span class="linenos"> 33</span></a>            <span class="n">user_preference</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">compatible_devices</span><span class="o">=</span><span class="p">[</span><span class="n">DeviceType</span><span class="o">.</span><span class="n">CUDA</span><span class="p">,</span> <span class="n">DeviceType</span><span class="o">.</span><span class="n">CPU</span><span class="p">]</span>
@@ -255,7 +255,7 @@
 </span><span id="SparcVoiceCloner-73"><a href="#SparcVoiceCloner-73"><span class="linenos"> 73</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">SPARC_AVAILABLE</span><span class="p">:</span>
 </span><span id="SparcVoiceCloner-74"><a href="#SparcVoiceCloner-74"><span class="linenos"> 74</span></a>            <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
 </span><span id="SparcVoiceCloner-75"><a href="#SparcVoiceCloner-75"><span class="linenos"> 75</span></a>                <span class="s2">&quot;`sparc` is not available. &quot;</span>
-</span><span id="SparcVoiceCloner-76"><a href="#SparcVoiceCloner-76"><span class="linenos"> 76</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`.&quot;</span>
+</span><span id="SparcVoiceCloner-76"><a href="#SparcVoiceCloner-76"><span class="linenos"> 76</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio,articulatory]&#39;`.&quot;</span>
 </span><span id="SparcVoiceCloner-77"><a href="#SparcVoiceCloner-77"><span class="linenos"> 77</span></a>            <span class="p">)</span>
 </span><span id="SparcVoiceCloner-78"><a href="#SparcVoiceCloner-78"><span class="linenos"> 78</span></a>
 </span><span id="SparcVoiceCloner-79"><a href="#SparcVoiceCloner-79"><span class="linenos"> 79</span></a>        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">source_audios</span><span class="p">)</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="n">target_audios</span><span class="p">):</span>
@@ -344,7 +344,7 @@
 </span><span id="SparcVoiceCloner.clone_voices-73"><a href="#SparcVoiceCloner.clone_voices-73"><span class="linenos"> 73</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">SPARC_AVAILABLE</span><span class="p">:</span>
 </span><span id="SparcVoiceCloner.clone_voices-74"><a href="#SparcVoiceCloner.clone_voices-74"><span class="linenos"> 74</span></a>            <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
 </span><span id="SparcVoiceCloner.clone_voices-75"><a href="#SparcVoiceCloner.clone_voices-75"><span class="linenos"> 75</span></a>                <span class="s2">&quot;`sparc` is not available. &quot;</span>
-</span><span id="SparcVoiceCloner.clone_voices-76"><a href="#SparcVoiceCloner.clone_voices-76"><span class="linenos"> 76</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`.&quot;</span>
+</span><span id="SparcVoiceCloner.clone_voices-76"><a href="#SparcVoiceCloner.clone_voices-76"><span class="linenos"> 76</span></a>                <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio,articulatory]&#39;`.&quot;</span>
 </span><span id="SparcVoiceCloner.clone_voices-77"><a href="#SparcVoiceCloner.clone_voices-77"><span class="linenos"> 77</span></a>            <span class="p">)</span>
 </span><span id="SparcVoiceCloner.clone_voices-78"><a href="#SparcVoiceCloner.clone_voices-78"><span class="linenos"> 78</span></a>
 </span><span id="SparcVoiceCloner.clone_voices-79"><a href="#SparcVoiceCloner.clone_voices-79"><span class="linenos"> 79</span></a>        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">source_audios</span><span class="p">)</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="n">target_audios</span><span class="p">):</span>
