@@ -13,16 +13,16 @@ class TaxonomyNode:
 
     Attributes:
         name: The name/identifier of this taxonomy node
-        checks: List of validation functions that return boolean results
         metrics: List of metric functions that return numeric/string results
+        checks: List of validation functions that return boolean results
         children: Dictionary mapping child names to child TaxonomyNode
             instances
         parent: Reference to parent node (None for root)
     """
 
     name: str
-    checks: List[Callable] = field(default_factory=list)
     metrics: List[Callable] = field(default_factory=list)
+    checks: List[Callable] = field(default_factory=list)
     children: Dict[str, "TaxonomyNode"] = field(default_factory=dict)
     parent: Optional["TaxonomyNode"] = field(default=None, repr=False)
 
@@ -41,22 +41,25 @@ class TaxonomyNode:
         return node
 
     def find_path_to(self, target_name: str) -> Optional[List[str]]:
-        """Find the path from this node to a target node by name.
+        """Find the path through the taxonomy tree from this node to a target node by name.
 
         Args:
-            target_name: The name of the node to find
+            target_name: The name of the node to find in the taxonomy tree
 
         Returns:
-            List of node names representing the path from this node to target,
-            or None if target not found
+            List of node names representing the path through the taxonomy tree from this node
+            to the target node, or None if target not found in this subtree
         """
+        # Base case: current node matches target
         if self.name == target_name:
             return [self.name]
 
+        # Recursively search children
         for child_name, child in self.children.items():
-            path = child.find_path_to(target_name)
-            if path:
-                return [self.name] + path
+            child_path = child.find_path_to(target_name)
+            # Only return path if it leads to target_name
+            if child_path is not None and child_path[-1] == target_name:
+                return [self.name] + child_path
         return None
 
     def get_all_evaluations(self) -> Sequence[Callable]:
