@@ -1,3 +1,21 @@
+# 0.36.4 (Wed Jun 11 2025)
+
+#### 🐛 Bug Fix
+
+- Add Word-Level Alignment [#215](https://github.com/sensein/senselab/pull/215) ([@ibevers](https://github.com/ibevers) [@fabiocat93](https://github.com/fabiocat93))
+- Ci space [#343](https://github.com/sensein/senselab/pull/343) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### ⚠️ Pushed to `main`
+
+- Update CONTRIBUTING.md ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@ibevers](https://github.com/ibevers)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.36.3 (Wed Jun 04 2025)
 
 #### 🐛 Bug Fix
