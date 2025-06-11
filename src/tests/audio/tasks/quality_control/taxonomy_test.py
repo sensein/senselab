@@ -742,3 +742,248 @@ def test_prune_to_activity_no_evaluations() -> None:
     pruned_target = pruned_child.children["target"]
     assert len(pruned_target.checks) == 0
     assert len(pruned_target.metrics) == 0
+
+
+def test_get_node_by_path_empty_path() -> None:
+    """Test _get_node_by_path with empty path."""
+    root = TaxonomyNode(name="root")
+
+    result = root._get_node_by_path([])
+
+    assert result is None
+
+
+def test_get_node_by_path_wrong_starting_node() -> None:
+    """Test _get_node_by_path with path that doesn't start with current node."""
+    root = TaxonomyNode(name="root")
+    child = TaxonomyNode(name="child")
+    root.add_child("child", child)
+
+    # Path starts with "wrong" instead of "root"
+    result = root._get_node_by_path(["wrong", "child"])
+
+    assert result is None
+
+
+def test_get_node_by_path_self() -> None:
+    """Test _get_node_by_path with path to self (single element)."""
+    root = TaxonomyNode(name="root")
+    child = TaxonomyNode(name="child")
+    root.add_child("child", child)
+
+    result = root._get_node_by_path(["root"])
+
+    assert result is root
+
+
+def test_get_node_by_path_direct_child() -> None:
+    """Test _get_node_by_path to a direct child."""
+    root = TaxonomyNode(name="root")
+    child1 = TaxonomyNode(name="child1")
+    child2 = TaxonomyNode(name="child2")
+    root.add_child("child1", child1)
+    root.add_child("child2", child2)
+
+    result = root._get_node_by_path(["root", "child1"])
+
+    assert result is child1
+
+    result = root._get_node_by_path(["root", "child2"])
+
+    assert result is child2
+
+
+def test_get_node_by_path_deep_nested() -> None:
+    """Test _get_node_by_path to deeply nested nodes."""
+    root = TaxonomyNode(name="root")
+    level1 = TaxonomyNode(name="level1")
+    level2 = TaxonomyNode(name="level2")
+    level3 = TaxonomyNode(name="level3")
+    leaf = TaxonomyNode(name="leaf")
+
+    root.add_child("level1", level1)
+    level1.add_child("level2", level2)
+    level2.add_child("level3", level3)
+    level3.add_child("leaf", leaf)
+
+    # Test path to intermediate nodes
+    result = root._get_node_by_path(["root", "level1"])
+    assert result is level1
+
+    result = root._get_node_by_path(["root", "level1", "level2"])
+    assert result is level2
+
+    result = root._get_node_by_path(["root", "level1", "level2", "level3"])
+    assert result is level3
+
+    # Test path to leaf
+    result = root._get_node_by_path(["root", "level1", "level2", "level3", "leaf"])
+    assert result is leaf
+
+
+def test_get_node_by_path_nonexistent_child() -> None:
+    """Test _get_node_by_path with non-existent child."""
+    root = TaxonomyNode(name="root")
+    child = TaxonomyNode(name="child")
+    root.add_child("child", child)
+
+    # Non-existent direct child
+    result = root._get_node_by_path(["root", "nonexistent"])
+    assert result is None
+
+    # Non-existent nested child
+    result = root._get_node_by_path(["root", "child", "nonexistent"])
+    assert result is None
+
+
+def test_get_node_by_path_partial_valid_path() -> None:
+    """Test _get_node_by_path with path that's valid partway but breaks."""
+    root = TaxonomyNode(name="root")
+    level1 = TaxonomyNode(name="level1")
+    level2 = TaxonomyNode(name="level2")
+
+    root.add_child("level1", level1)
+    level1.add_child("level2", level2)
+
+    # Path exists up to level2, but "nonexistent" doesn't exist
+    result = root._get_node_by_path(["root", "level1", "level2", "nonexistent"])
+    assert result is None
+
+    # Path exists up to level1, but "wrong" doesn't exist
+    result = root._get_node_by_path(["root", "level1", "wrong"])
+    assert result is None
+
+
+def test_get_node_by_path_complex_multi_branch() -> None:
+    """Test _get_node_by_path in a complex multi-branch hierarchy."""
+    root = TaxonomyNode(name="root")
+
+    # Branch 1: root -> branch1 -> leaf1
+    branch1 = TaxonomyNode(name="branch1")
+    leaf1 = TaxonomyNode(name="leaf1")
+    root.add_child("branch1", branch1)
+    branch1.add_child("leaf1", leaf1)
+
+    # Branch 2: root -> branch2 -> subbranch -> leaf2
+    branch2 = TaxonomyNode(name="branch2")
+    subbranch = TaxonomyNode(name="subbranch")
+    leaf2 = TaxonomyNode(name="leaf2")
+    root.add_child("branch2", branch2)
+    branch2.add_child("subbranch", subbranch)
+    subbranch.add_child("leaf2", leaf2)
+
+    # Test paths in branch 1
+    result = root._get_node_by_path(["root", "branch1"])
+    assert result is branch1
+
+    result = root._get_node_by_path(["root", "branch1", "leaf1"])
+    assert result is leaf1
+
+    # Test paths in branch 2
+    result = root._get_node_by_path(["root", "branch2"])
+    assert result is branch2
+
+    result = root._get_node_by_path(["root", "branch2", "subbranch"])
+    assert result is subbranch
+
+    result = root._get_node_by_path(["root", "branch2", "subbranch", "leaf2"])
+    assert result is leaf2
+
+    # Test invalid cross-branch paths
+    result = root._get_node_by_path(["root", "branch1", "subbranch"])
+    assert result is None
+
+    result = root._get_node_by_path(["root", "branch2", "leaf1"])
+    assert result is None
+
+
+def test_get_node_by_path_from_non_root() -> None:
+    """Test _get_node_by_path when called from a non-root node."""
+    root = TaxonomyNode(name="root")
+    level1 = TaxonomyNode(name="level1")
+    level2 = TaxonomyNode(name="level2")
+    leaf = TaxonomyNode(name="leaf")
+
+    root.add_child("level1", level1)
+    level1.add_child("level2", level2)
+    level2.add_child("leaf", leaf)
+
+    # Call from level1 node
+    result = level1._get_node_by_path(["level1"])
+    assert result is level1
+
+    result = level1._get_node_by_path(["level1", "level2"])
+    assert result is level2
+
+    result = level1._get_node_by_path(["level1", "level2", "leaf"])
+    assert result is leaf
+
+    # Invalid paths from level1
+    result = level1._get_node_by_path(["root", "level1"])  # Wrong starting node
+    assert result is None
+
+    result = level1._get_node_by_path(["level1", "nonexistent"])
+    assert result is None
+
+
+def test_get_node_by_path_with_evaluations() -> None:
+    """Test _get_node_by_path works correctly regardless of evaluations."""
+    root = TaxonomyNode(name="root", checks=[mock_check_function], metrics=[mock_metric_function])
+    child = TaxonomyNode(name="child", checks=[mock_check_function_2], metrics=[mock_metric_function_2])
+    grandchild = TaxonomyNode(name="grandchild", checks=[mock_check_function_3])
+
+    root.add_child("child", child)
+    child.add_child("grandchild", grandchild)
+
+    # Path navigation should work regardless of evaluations
+    result = root._get_node_by_path(["root", "child"])
+    assert result is child
+    assert result.checks == [mock_check_function_2]
+    assert result.metrics == [mock_metric_function_2]
+
+    result = root._get_node_by_path(["root", "child", "grandchild"])
+    assert result is grandchild
+    assert result.checks == [mock_check_function_3]
+    assert len(result.metrics) == 0
+
+
+def test_get_node_by_path_empty_tree() -> None:
+    """Test _get_node_by_path on a tree with no children."""
+    root = TaxonomyNode(name="root")
+
+    # Self path should work
+    result = root._get_node_by_path(["root"])
+    assert result is root
+
+    # Any path beyond self should fail
+    result = root._get_node_by_path(["root", "nonexistent"])
+    assert result is None
+
+
+def test_get_node_by_path_single_child_chain() -> None:
+    """Test _get_node_by_path with a single linear chain of nodes."""
+    root = TaxonomyNode(name="root")
+    child = TaxonomyNode(name="child")
+    grandchild = TaxonomyNode(name="grandchild")
+    great_grandchild = TaxonomyNode(name="great_grandchild")
+
+    root.add_child("child", child)
+    child.add_child("grandchild", grandchild)
+    grandchild.add_child("great_grandchild", great_grandchild)
+
+    # Test each level of the chain
+    result = root._get_node_by_path(["root"])
+    assert result is root
+
+    result = root._get_node_by_path(["root", "child"])
+    assert result is child
+
+    result = root._get_node_by_path(["root", "child", "grandchild"])
+    assert result is grandchild
+
+    result = root._get_node_by_path(["root", "child", "grandchild", "great_grandchild"])
+    assert result is great_grandchild
+
+    # Test that longer invalid paths fail
+    result = root._get_node_by_path(["root", "child", "grandchild", "great_grandchild", "nonexistent"])
+    assert result is None
