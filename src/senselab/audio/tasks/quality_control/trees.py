@@ -70,30 +70,22 @@ def build_bioacoustic_activity_taxonomy() -> TaxonomyNode:
     human = TaxonomyNode(name="human", checks=[], metrics=[])
     root.add_child("human", human)
 
-    # Create respiration branch
-    respiration = TaxonomyNode(name="respiration", checks=[], metrics=[])
-    human.add_child("respiration", respiration)
-
-    # Breathing sub-branch
+    # Create breathing branch
     breathing = TaxonomyNode(name="breathing", checks=[], metrics=[])
-    respiration.add_child("breathing", breathing)
+    human.add_child("breathing", breathing)
 
     # Breathing types
-    quiet = TaxonomyNode(name="quiet", checks=[], metrics=[])
     deep = TaxonomyNode(name="deep", checks=[], metrics=[])
     rapid = TaxonomyNode(name="rapid", checks=[], metrics=[])
-    sigh = TaxonomyNode(name="sigh", checks=[], metrics=[])
 
-    breathing.add_child("quiet", quiet)
     breathing.add_child("deep", deep)
     breathing.add_child("rapid", rapid)
-    breathing.add_child("sigh", sigh)
 
-    # Exhalation sub-branch
+    # Create exhalation branch under breathing
     exhalation = TaxonomyNode(name="exhalation", checks=[], metrics=[])
-    respiration.add_child("exhalation", exhalation)
+    breathing.add_child("exhalation", exhalation)
 
-    # Cough sub-branch
+    # Cough sub-branch under exhalation
     cough = TaxonomyNode(name="cough", checks=[], metrics=[])
     exhalation.add_child("cough", cough)
 
@@ -104,9 +96,13 @@ def build_bioacoustic_activity_taxonomy() -> TaxonomyNode:
     cough.add_child("voluntary", voluntary)
     cough.add_child("reflexive", reflexive)
 
-    # Inhalation sub-branch
+    # Sigh under exhalation
+    sigh = TaxonomyNode(name="sigh", checks=[], metrics=[])
+    exhalation.add_child("sigh", sigh)
+
+    # Create inhalation branch under breathing
     inhalation = TaxonomyNode(name="inhalation", checks=[], metrics=[])
-    respiration.add_child("inhalation", inhalation)
+    breathing.add_child("inhalation", inhalation)
 
     # Inhalation types
     sniff = TaxonomyNode(name="sniff", checks=[], metrics=[])
@@ -123,23 +119,12 @@ def build_bioacoustic_activity_taxonomy() -> TaxonomyNode:
     speech = TaxonomyNode(name="speech", checks=[], metrics=[])
     vocalization.add_child("speech", speech)
 
-    # Speech types
-    spontaneous_speech = TaxonomyNode(name="spontaneous_speech", checks=[], metrics=[])
-    read_speech = TaxonomyNode(name="read_speech", checks=[], metrics=[])
-    repetitive_speech = TaxonomyNode(name="repetitive_speech", checks=[], metrics=[])
-    sustained_phonation = TaxonomyNode(name="sustained_phonation", checks=[], metrics=[])
+    # Speech types (simplified)
+    spontaneous = TaxonomyNode(name="spontaneous", checks=[], metrics=[])
+    reading = TaxonomyNode(name="reading", checks=[], metrics=[])
 
-    speech.add_child("spontaneous_speech", spontaneous_speech)
-    speech.add_child("read_speech", read_speech)
-    speech.add_child("repetitive_speech", repetitive_speech)
-    speech.add_child("sustained_phonation", sustained_phonation)
-
-    # Repetitive speech types
-    diadochokinesis = TaxonomyNode(name="diadochokinesis", checks=[], metrics=[])
-    counting = TaxonomyNode(name="counting", checks=[], metrics=[])
-
-    repetitive_speech.add_child("diadochokinesis", diadochokinesis)
-    repetitive_speech.add_child("counting", counting)
+    speech.add_child("spontaneous", spontaneous)
+    speech.add_child("reading", reading)
 
     # Non-speech sub-branch
     non_speech = TaxonomyNode(name="non_speech", checks=[], metrics=[])
