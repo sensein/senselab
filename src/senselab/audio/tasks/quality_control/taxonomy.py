@@ -141,3 +141,34 @@ class TaxonomyNode:
             return next_node._get_node_by_path(remaining_path)
 
         return None
+
+    def print_tree(self, prefix: str = "", is_last: bool = True) -> None:
+        """Print the taxonomy tree in a nice hierarchical format.
+
+        Args:
+            prefix: The prefix string for indentation (used internally)
+            is_last: Whether this is the last child at its level
+        """
+        # Print current node
+        connector = "└── " if is_last else "├── "
+        print(f"{prefix}{connector}{self.name}")
+
+        # Print evaluations if any exist
+        evaluation_info = []
+        if self.metrics:
+            evaluation_info.append(f"metrics: {len(self.metrics)}")
+        if self.checks:
+            evaluation_info.append(f"checks: {len(self.checks)}")
+
+        if evaluation_info:
+            next_prefix = prefix + ("    " if is_last else "│   ")
+            print(f"{next_prefix}({', '.join(evaluation_info)})")
+
+        # Print children
+        if self.children:
+            next_prefix = prefix + ("    " if is_last else "│   ")
+            child_items = list(self.children.items())
+
+            for i, (child_name, child_node) in enumerate(child_items):
+                is_last_child = i == len(child_items) - 1
+                child_node.print_tree(next_prefix, is_last_child)
