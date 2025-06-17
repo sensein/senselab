@@ -123,6 +123,13 @@ def build_bioacoustic_activity_taxonomy() -> TaxonomyNode:
     non_speech.add_child("humming", humming)
     non_speech.add_child("throat_clearing", throat_clearing)
 
+    # Specific audio check reading files
+    audio_check_1 = TaxonomyNode(name="audio_check_1", checks=[], metrics=[])
+    audio_check_2 = TaxonomyNode(name="audio_check_2", checks=[], metrics=[])
+
+    reading.add_child("audio_check_1", audio_check_1)
+    reading.add_child("audio_check_2", audio_check_2)
+
     return root
 
 
@@ -308,11 +315,6 @@ def build_bridge2ai_voice_taxonomy() -> TaxonomyNode:
 
     story_reading.add_child("cinderella_story", cinderella_story)
 
-    # Specific audio check reading files
-    audio_check_1 = TaxonomyNode(name="audio_check_1", checks=[], metrics=[])
-
-    reading.add_child("audio_check_1", audio_check_1)
-
     # Additional speech tasks for Bridge2AI
     motor_speech = TaxonomyNode(name="motor_speech", checks=[], metrics=[])
     speech.add_child("motor_speech", motor_speech)
@@ -398,15 +400,6 @@ def build_bridge2ai_voice_taxonomy() -> TaxonomyNode:
     # Specific voice assessment files
     loudness = TaxonomyNode(name="loudness", checks=[], metrics=[])
     loudness_tasks.add_child("loudness", loudness)
-
-    # Audio checks
-    audio_checks = TaxonomyNode(name="audio_checks", checks=[], metrics=[])
-    speech.add_child("audio_checks", audio_checks)
-
-    # Specific audio check files
-    audio_check_2 = TaxonomyNode(name="audio_check_2", checks=[], metrics=[])
-
-    audio_checks.add_child("audio_check_2", audio_check_2)
 
     # Non-speech sub-branch
     non_speech = TaxonomyNode(name="non_speech", checks=[], metrics=[])
