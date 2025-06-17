@@ -331,23 +331,16 @@ def build_bridge2ai_voice_taxonomy() -> TaxonomyNode:
     diadochokinesis.add_child("diadochokinesis_buttercup", diadochokinesis_buttercup)
 
     # Cognitive tasks
-    cognitive_tasks = TaxonomyNode(name="cognitive_tasks", checks=[], metrics=[])
-    speech.add_child("cognitive_tasks", cognitive_tasks)
+    cognitive = TaxonomyNode(name="cognitive", checks=[], metrics=[])
+    speech.add_child("cognitive", cognitive)
 
     # Cognitive types
-    fluency_tasks = TaxonomyNode(name="fluency_tasks", checks=[], metrics=[])
-    vocabulary_tasks = TaxonomyNode(name="vocabulary_tasks", checks=[], metrics=[])
-    stroop_task = TaxonomyNode(name="stroop_task", checks=[], metrics=[])
-    random_generation = TaxonomyNode(name="random_generation", checks=[], metrics=[])
-
-    cognitive_tasks.add_child("fluency_tasks", fluency_tasks)
-    cognitive_tasks.add_child("vocabulary_tasks", vocabulary_tasks)
-    cognitive_tasks.add_child("stroop_task", stroop_task)
-    cognitive_tasks.add_child("random_generation", random_generation)
+    productive_vocabulary = TaxonomyNode(name="productive_vocabulary", checks=[], metrics=[])
+    cognitive.add_child("productive_vocabulary", productive_vocabulary)
 
     # Specific cognitive task files
     animal_fluency = TaxonomyNode(name="animal_fluency", checks=[], metrics=[])
-    fluency_tasks.add_child("animal_fluency", animal_fluency)
+    cognitive.add_child("animal_fluency", animal_fluency)
 
     productive_vocabulary_1 = TaxonomyNode(name="productive_vocabulary_1", checks=[], metrics=[])
     productive_vocabulary_2 = TaxonomyNode(name="productive_vocabulary_2", checks=[], metrics=[])
@@ -356,18 +349,18 @@ def build_bridge2ai_voice_taxonomy() -> TaxonomyNode:
     productive_vocabulary_5 = TaxonomyNode(name="productive_vocabulary_5", checks=[], metrics=[])
     productive_vocabulary_6 = TaxonomyNode(name="productive_vocabulary_6", checks=[], metrics=[])
 
-    vocabulary_tasks.add_child("productive_vocabulary_1", productive_vocabulary_1)
-    vocabulary_tasks.add_child("productive_vocabulary_2", productive_vocabulary_2)
-    vocabulary_tasks.add_child("productive_vocabulary_3", productive_vocabulary_3)
-    vocabulary_tasks.add_child("productive_vocabulary_4", productive_vocabulary_4)
-    vocabulary_tasks.add_child("productive_vocabulary_5", productive_vocabulary_5)
-    vocabulary_tasks.add_child("productive_vocabulary_6", productive_vocabulary_6)
+    productive_vocabulary.add_child("productive_vocabulary_1", productive_vocabulary_1)
+    productive_vocabulary.add_child("productive_vocabulary_2", productive_vocabulary_2)
+    productive_vocabulary.add_child("productive_vocabulary_3", productive_vocabulary_3)
+    productive_vocabulary.add_child("productive_vocabulary_4", productive_vocabulary_4)
+    productive_vocabulary.add_child("productive_vocabulary_5", productive_vocabulary_5)
+    productive_vocabulary.add_child("productive_vocabulary_6", productive_vocabulary_6)
 
     word_color_stroop = TaxonomyNode(name="word_color_stroop", checks=[], metrics=[])
-    stroop_task.add_child("word_color_stroop", word_color_stroop)
+    cognitive.add_child("word_color_stroop", word_color_stroop)
 
     random_item_generation = TaxonomyNode(name="random_item_generation", checks=[], metrics=[])
-    random_generation.add_child("random_item_generation", random_item_generation)
+    cognitive.add_child("random_item_generation", random_item_generation)
 
     # Voice assessment
     voice_assessment = TaxonomyNode(name="voice_assessment", checks=[], metrics=[])
