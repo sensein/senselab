@@ -247,10 +247,10 @@ def build_bridge2ai_voice_taxonomy() -> TaxonomyNode:
 
     # Speech types (maintaining base structure)
     unscripted = TaxonomyNode(name="unscripted", checks=[], metrics=[])
-    reading = TaxonomyNode(name="reading", checks=[], metrics=[])
+    scripted = TaxonomyNode(name="scripted", checks=[], metrics=[])
 
     speech.add_child("unscripted", unscripted)
-    speech.add_child("reading", reading)
+    speech.add_child("scripted", scripted)
 
     # Extended unscripted speech types for Bridge2AI
     free_speech = TaxonomyNode(name="free_speech", checks=[], metrics=[])
@@ -276,8 +276,8 @@ def build_bridge2ai_voice_taxonomy() -> TaxonomyNode:
     passage_reading = TaxonomyNode(name="passage_reading", checks=[], metrics=[])
     cape_v_sentences = TaxonomyNode(name="cape_v_sentences", checks=[], metrics=[])
 
-    reading.add_child("passage_reading", passage_reading)
-    reading.add_child("cape_v_sentences", cape_v_sentences)
+    scripted.add_child("passage_reading", passage_reading)
+    scripted.add_child("cape_v_sentences", cape_v_sentences)
 
     # Specific passage reading files
     caterpillar_passage = TaxonomyNode(name="caterpillar_passage", checks=[], metrics=[])
@@ -304,14 +304,16 @@ def build_bridge2ai_voice_taxonomy() -> TaxonomyNode:
     # Specific story reading files
     cinderella_story = TaxonomyNode(name="cinderella_story", checks=[], metrics=[])
 
-    reading.add_child("cinderella_story", cinderella_story)
+    scripted.add_child("cinderella_story", cinderella_story)
 
-    # Audio check files under reading
+    # Audio check files under scripted
     audio_check_1 = TaxonomyNode(name="audio_check_1", checks=[], metrics=[])
     audio_check_2 = TaxonomyNode(name="audio_check_2", checks=[], metrics=[])
+    loudness = TaxonomyNode(name="loudness", checks=[], metrics=[])
 
-    reading.add_child("audio_check_1", audio_check_1)
-    reading.add_child("audio_check_2", audio_check_2)
+    scripted.add_child("audio_check_1", audio_check_1)
+    scripted.add_child("audio_check_2", audio_check_2)
+    scripted.add_child("loudness", loudness)
 
     # Diadochokinesis directly under speech
     diadochokinesis = TaxonomyNode(name="diadochokinesis", checks=[], metrics=[])
@@ -361,21 +363,6 @@ def build_bridge2ai_voice_taxonomy() -> TaxonomyNode:
 
     random_item_generation = TaxonomyNode(name="random_item_generation", checks=[], metrics=[])
     cognitive.add_child("random_item_generation", random_item_generation)
-
-    # Voice assessment
-    voice_assessment = TaxonomyNode(name="voice_assessment", checks=[], metrics=[])
-    speech.add_child("voice_assessment", voice_assessment)
-
-    # Voice types
-    loudness_tasks = TaxonomyNode(name="loudness_tasks", checks=[], metrics=[])
-    cape_v_sentences = TaxonomyNode(name="cape_v_sentences", checks=[], metrics=[])
-
-    voice_assessment.add_child("loudness_tasks", loudness_tasks)
-    voice_assessment.add_child("cape_v_sentences", cape_v_sentences)
-
-    # Specific voice assessment files
-    loudness = TaxonomyNode(name="loudness", checks=[], metrics=[])
-    loudness_tasks.add_child("loudness", loudness)
 
     # Non-speech sub-branch
     non_speech = TaxonomyNode(name="non_speech", checks=[], metrics=[])
