@@ -313,37 +313,22 @@ def build_bridge2ai_voice_taxonomy() -> TaxonomyNode:
     reading.add_child("audio_check_1", audio_check_1)
     reading.add_child("audio_check_2", audio_check_2)
 
-    # Additional speech tasks for Bridge2AI
-    motor_speech = TaxonomyNode(name="motor_speech", checks=[], metrics=[])
-    speech.add_child("motor_speech", motor_speech)
-
-    # Diadochokinesis under motor speech
+    # Diadochokinesis directly under speech
     diadochokinesis = TaxonomyNode(name="diadochokinesis", checks=[], metrics=[])
-    motor_speech.add_child("diadochokinesis", diadochokinesis)
+    speech.add_child("diadochokinesis", diadochokinesis)
 
-    # DDK types
-    single_syllable = TaxonomyNode(name="single_syllable", checks=[], metrics=[])
-    alternating_motion = TaxonomyNode(name="alternating_motion", checks=[], metrics=[])
-    sequential_motion = TaxonomyNode(name="sequential_motion", checks=[], metrics=[])
-    word_repetition = TaxonomyNode(name="word_repetition", checks=[], metrics=[])
-
-    diadochokinesis.add_child("single_syllable", single_syllable)
-    diadochokinesis.add_child("alternating_motion", alternating_motion)
-    diadochokinesis.add_child("sequential_motion", sequential_motion)
-    diadochokinesis.add_child("word_repetition", word_repetition)
-
-    # Specific DDK files
+    # Specific DDK files directly under diadochokinesis
     diadochokinesis_ka = TaxonomyNode(name="diadochokinesis_ka", checks=[], metrics=[])
     diadochokinesis_pa = TaxonomyNode(name="diadochokinesis_pa", checks=[], metrics=[])
     diadochokinesis_ta = TaxonomyNode(name="diadochokinesis_ta", checks=[], metrics=[])
     diadochokinesis_pataka = TaxonomyNode(name="diadochokinesis_pataka", checks=[], metrics=[])
     diadochokinesis_buttercup = TaxonomyNode(name="diadochokinesis_buttercup", checks=[], metrics=[])
 
-    single_syllable.add_child("diadochokinesis_ka", diadochokinesis_ka)
-    single_syllable.add_child("diadochokinesis_pa", diadochokinesis_pa)
-    single_syllable.add_child("diadochokinesis_ta", diadochokinesis_ta)
-    sequential_motion.add_child("diadochokinesis_pataka", diadochokinesis_pataka)
-    word_repetition.add_child("diadochokinesis_buttercup", diadochokinesis_buttercup)
+    diadochokinesis.add_child("diadochokinesis_ka", diadochokinesis_ka)
+    diadochokinesis.add_child("diadochokinesis_pa", diadochokinesis_pa)
+    diadochokinesis.add_child("diadochokinesis_ta", diadochokinesis_ta)
+    diadochokinesis.add_child("diadochokinesis_pataka", diadochokinesis_pataka)
+    diadochokinesis.add_child("diadochokinesis_buttercup", diadochokinesis_buttercup)
 
     # Cognitive tasks
     cognitive_tasks = TaxonomyNode(name="cognitive_tasks", checks=[], metrics=[])
