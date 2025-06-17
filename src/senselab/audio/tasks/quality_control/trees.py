@@ -89,6 +89,17 @@ def build_bioacoustic_activity_taxonomy() -> TaxonomyNode:
     cough = TaxonomyNode(name="cough", checks=[], metrics=[])
     exhalation.add_child("cough", cough)
 
+    # Cough types for Bridge2AI - specific file mappings
+    audio_check_3 = TaxonomyNode(name="audio_check_3", checks=[], metrics=[])
+    respiration_and_cough_cough_1 = TaxonomyNode(name="respiration_and_cough_cough_1", checks=[], metrics=[])
+    respiration_and_cough_cough_2 = TaxonomyNode(name="respiration_and_cough_cough_2", checks=[], metrics=[])
+    voluntary_cough = TaxonomyNode(name="voluntary_cough", checks=[], metrics=[])
+
+    cough.add_child("audio_check_3", audio_check_3)
+    cough.add_child("respiration_and_cough_cough_1", respiration_and_cough_cough_1)
+    cough.add_child("respiration_and_cough_cough_2", respiration_and_cough_cough_2)
+    cough.add_child("voluntary_cough", voluntary_cough)
+
     # Sigh under exhalation
     sigh = TaxonomyNode(name="sigh", checks=[], metrics=[])
     exhalation.add_child("sigh", sigh)
@@ -201,12 +212,16 @@ def build_bridge2ai_voice_taxonomy() -> TaxonomyNode:
     cough = TaxonomyNode(name="cough", checks=[], metrics=[])
     exhalation.add_child("cough", cough)
 
-    # Cough types for Bridge2AI
+    # Cough types for Bridge2AI - specific file mappings
+    audio_check_3 = TaxonomyNode(name="audio_check_3", checks=[], metrics=[])
+    respiration_and_cough_cough_1 = TaxonomyNode(name="respiration_and_cough_cough_1", checks=[], metrics=[])
+    respiration_and_cough_cough_2 = TaxonomyNode(name="respiration_and_cough_cough_2", checks=[], metrics=[])
     voluntary_cough = TaxonomyNode(name="voluntary_cough", checks=[], metrics=[])
-    mixed_cough = TaxonomyNode(name="mixed_cough", checks=[], metrics=[])
 
+    cough.add_child("audio_check_3", audio_check_3)
+    cough.add_child("respiration_and_cough_cough_1", respiration_and_cough_cough_1)
+    cough.add_child("respiration_and_cough_cough_2", respiration_and_cough_cough_2)
     cough.add_child("voluntary_cough", voluntary_cough)
-    cough.add_child("mixed_cough", mixed_cough)
 
     # Sigh under exhalation
     sigh = TaxonomyNode(name="sigh", checks=[], metrics=[])
@@ -227,16 +242,44 @@ def build_bridge2ai_voice_taxonomy() -> TaxonomyNode:
     breath_sequences = TaxonomyNode(name="breath_sequences", checks=[], metrics=[])
     breathing.add_child("breath_sequences", breath_sequences)
 
-    # Breath sequence types
-    single_breath = TaxonomyNode(name="single_breath", checks=[], metrics=[])
-    multiple_breaths = TaxonomyNode(name="multiple_breaths", checks=[], metrics=[])
-    quick_breaths = TaxonomyNode(name="quick_breaths", checks=[], metrics=[])
+    # Breath sequence types - specific file mappings
+    audio_check_4 = TaxonomyNode(name="audio_check_4", checks=[], metrics=[])
     breath_sounds = TaxonomyNode(name="breath_sounds", checks=[], metrics=[])
+    respiration_and_cough_breath_1 = TaxonomyNode(name="respiration_and_cough_breath_1", checks=[], metrics=[])
+    respiration_and_cough_breath_2 = TaxonomyNode(name="respiration_and_cough_breath_2", checks=[], metrics=[])
+    respiration_and_cough_five_breaths_1 = TaxonomyNode(
+        name="respiration_and_cough_five_breaths_1", checks=[], metrics=[]
+    )
+    respiration_and_cough_five_breaths_2 = TaxonomyNode(
+        name="respiration_and_cough_five_breaths_2", checks=[], metrics=[]
+    )
+    respiration_and_cough_five_breaths_3 = TaxonomyNode(
+        name="respiration_and_cough_five_breaths_3", checks=[], metrics=[]
+    )
+    respiration_and_cough_five_breaths_4 = TaxonomyNode(
+        name="respiration_and_cough_five_breaths_4", checks=[], metrics=[]
+    )
+    respiration_and_cough_three_quick_breaths_1 = TaxonomyNode(
+        name="respiration_and_cough_three_quick_breaths_1", checks=[], metrics=[]
+    )
+    respiration_and_cough_three_quick_breaths_2 = TaxonomyNode(
+        name="respiration_and_cough_three_quick_breaths_2", checks=[], metrics=[]
+    )
 
-    breath_sequences.add_child("single_breath", single_breath)
-    breath_sequences.add_child("multiple_breaths", multiple_breaths)
-    breath_sequences.add_child("quick_breaths", quick_breaths)
+    breath_sequences.add_child("audio_check_4", audio_check_4)
     breath_sequences.add_child("breath_sounds", breath_sounds)
+    breath_sequences.add_child("respiration_and_cough_breath_1", respiration_and_cough_breath_1)
+    breath_sequences.add_child("respiration_and_cough_breath_2", respiration_and_cough_breath_2)
+    breath_sequences.add_child("respiration_and_cough_five_breaths_1", respiration_and_cough_five_breaths_1)
+    breath_sequences.add_child("respiration_and_cough_five_breaths_2", respiration_and_cough_five_breaths_2)
+    breath_sequences.add_child("respiration_and_cough_five_breaths_3", respiration_and_cough_five_breaths_3)
+    breath_sequences.add_child("respiration_and_cough_five_breaths_4", respiration_and_cough_five_breaths_4)
+    breath_sequences.add_child(
+        "respiration_and_cough_three_quick_breaths_1", respiration_and_cough_three_quick_breaths_1
+    )
+    breath_sequences.add_child(
+        "respiration_and_cough_three_quick_breaths_2", respiration_and_cough_three_quick_breaths_2
+    )
 
     # Create vocalization branch
     vocalization = TaxonomyNode(name="vocalization", checks=[], metrics=[])
@@ -264,6 +307,15 @@ def build_bridge2ai_voice_taxonomy() -> TaxonomyNode:
     spontaneous.add_child("story_recall", story_recall)
     spontaneous.add_child("open_response", open_response)
 
+    # Specific free speech files
+    free_speech_1 = TaxonomyNode(name="free_speech_1", checks=[], metrics=[])
+    free_speech_2 = TaxonomyNode(name="free_speech_2", checks=[], metrics=[])
+    free_speech_3 = TaxonomyNode(name="free_speech_3", checks=[], metrics=[])
+
+    free_speech.add_child("free_speech_1", free_speech_1)
+    free_speech.add_child("free_speech_2", free_speech_2)
+    free_speech.add_child("free_speech_3", free_speech_3)
+
     # Extended reading types for Bridge2AI
     passage_reading = TaxonomyNode(name="passage_reading", checks=[], metrics=[])
     sentence_reading = TaxonomyNode(name="sentence_reading", checks=[], metrics=[])
@@ -272,6 +324,33 @@ def build_bridge2ai_voice_taxonomy() -> TaxonomyNode:
     reading.add_child("passage_reading", passage_reading)
     reading.add_child("sentence_reading", sentence_reading)
     reading.add_child("story_reading", story_reading)
+
+    # Specific passage reading files
+    caterpillar_passage = TaxonomyNode(name="caterpillar_passage", checks=[], metrics=[])
+    rainbow_passage = TaxonomyNode(name="rainbow_passage", checks=[], metrics=[])
+
+    passage_reading.add_child("caterpillar_passage", caterpillar_passage)
+    passage_reading.add_child("rainbow_passage", rainbow_passage)
+
+    # Specific sentence reading files (Cape-V)
+    cape_v_sentences_1 = TaxonomyNode(name="cape_v_sentences_1", checks=[], metrics=[])
+    cape_v_sentences_2 = TaxonomyNode(name="cape_v_sentences_2", checks=[], metrics=[])
+    cape_v_sentences_3 = TaxonomyNode(name="cape_v_sentences_3", checks=[], metrics=[])
+    cape_v_sentences_4 = TaxonomyNode(name="cape_v_sentences_4", checks=[], metrics=[])
+    cape_v_sentences_5 = TaxonomyNode(name="cape_v_sentences_5", checks=[], metrics=[])
+    cape_v_sentences_6 = TaxonomyNode(name="cape_v_sentences_6", checks=[], metrics=[])
+
+    sentence_reading.add_child("cape_v_sentences_1", cape_v_sentences_1)
+    sentence_reading.add_child("cape_v_sentences_2", cape_v_sentences_2)
+    sentence_reading.add_child("cape_v_sentences_3", cape_v_sentences_3)
+    sentence_reading.add_child("cape_v_sentences_4", cape_v_sentences_4)
+    sentence_reading.add_child("cape_v_sentences_5", cape_v_sentences_5)
+    sentence_reading.add_child("cape_v_sentences_6", cape_v_sentences_6)
+
+    # Specific story reading files
+    cinderella_story = TaxonomyNode(name="cinderella_story", checks=[], metrics=[])
+
+    story_reading.add_child("cinderella_story", cinderella_story)
 
     # Additional speech tasks for Bridge2AI
     motor_speech = TaxonomyNode(name="motor_speech", checks=[], metrics=[])
@@ -292,6 +371,19 @@ def build_bridge2ai_voice_taxonomy() -> TaxonomyNode:
     diadochokinesis.add_child("sequential_motion", sequential_motion)
     diadochokinesis.add_child("word_repetition", word_repetition)
 
+    # Specific DDK files
+    diadochokinesis_ka = TaxonomyNode(name="diadochokinesis_ka", checks=[], metrics=[])
+    diadochokinesis_pa = TaxonomyNode(name="diadochokinesis_pa", checks=[], metrics=[])
+    diadochokinesis_ta = TaxonomyNode(name="diadochokinesis_ta", checks=[], metrics=[])
+    diadochokinesis_pataka = TaxonomyNode(name="diadochokinesis_pataka", checks=[], metrics=[])
+    diadochokinesis_buttercup = TaxonomyNode(name="diadochokinesis_buttercup", checks=[], metrics=[])
+
+    single_syllable.add_child("diadochokinesis_ka", diadochokinesis_ka)
+    single_syllable.add_child("diadochokinesis_pa", diadochokinesis_pa)
+    single_syllable.add_child("diadochokinesis_ta", diadochokinesis_ta)
+    sequential_motion.add_child("diadochokinesis_pataka", diadochokinesis_pataka)
+    word_repetition.add_child("diadochokinesis_buttercup", diadochokinesis_buttercup)
+
     # Cognitive tasks
     cognitive_tasks = TaxonomyNode(name="cognitive_tasks", checks=[], metrics=[])
     speech.add_child("cognitive_tasks", cognitive_tasks)
@@ -307,6 +399,30 @@ def build_bridge2ai_voice_taxonomy() -> TaxonomyNode:
     cognitive_tasks.add_child("stroop_task", stroop_task)
     cognitive_tasks.add_child("random_generation", random_generation)
 
+    # Specific cognitive task files
+    animal_fluency = TaxonomyNode(name="animal_fluency", checks=[], metrics=[])
+    fluency_tasks.add_child("animal_fluency", animal_fluency)
+
+    productive_vocabulary_1 = TaxonomyNode(name="productive_vocabulary_1", checks=[], metrics=[])
+    productive_vocabulary_2 = TaxonomyNode(name="productive_vocabulary_2", checks=[], metrics=[])
+    productive_vocabulary_3 = TaxonomyNode(name="productive_vocabulary_3", checks=[], metrics=[])
+    productive_vocabulary_4 = TaxonomyNode(name="productive_vocabulary_4", checks=[], metrics=[])
+    productive_vocabulary_5 = TaxonomyNode(name="productive_vocabulary_5", checks=[], metrics=[])
+    productive_vocabulary_6 = TaxonomyNode(name="productive_vocabulary_6", checks=[], metrics=[])
+
+    vocabulary_tasks.add_child("productive_vocabulary_1", productive_vocabulary_1)
+    vocabulary_tasks.add_child("productive_vocabulary_2", productive_vocabulary_2)
+    vocabulary_tasks.add_child("productive_vocabulary_3", productive_vocabulary_3)
+    vocabulary_tasks.add_child("productive_vocabulary_4", productive_vocabulary_4)
+    vocabulary_tasks.add_child("productive_vocabulary_5", productive_vocabulary_5)
+    vocabulary_tasks.add_child("productive_vocabulary_6", productive_vocabulary_6)
+
+    word_color_stroop = TaxonomyNode(name="word_color_stroop", checks=[], metrics=[])
+    stroop_task.add_child("word_color_stroop", word_color_stroop)
+
+    random_item_generation = TaxonomyNode(name="random_item_generation", checks=[], metrics=[])
+    random_generation.add_child("random_item_generation", random_item_generation)
+
     # Voice assessment
     voice_assessment = TaxonomyNode(name="voice_assessment", checks=[], metrics=[])
     speech.add_child("voice_assessment", voice_assessment)
@@ -318,9 +434,20 @@ def build_bridge2ai_voice_taxonomy() -> TaxonomyNode:
     voice_assessment.add_child("loudness_tasks", loudness_tasks)
     voice_assessment.add_child("cape_v_sentences", cape_v_sentences)
 
+    # Specific voice assessment files
+    loudness = TaxonomyNode(name="loudness", checks=[], metrics=[])
+    loudness_tasks.add_child("loudness", loudness)
+
     # Audio checks
     audio_checks = TaxonomyNode(name="audio_checks", checks=[], metrics=[])
     speech.add_child("audio_checks", audio_checks)
+
+    # Specific audio check files
+    audio_check_1 = TaxonomyNode(name="audio_check_1", checks=[], metrics=[])
+    audio_check_2 = TaxonomyNode(name="audio_check_2", checks=[], metrics=[])
+
+    audio_checks.add_child("audio_check_1", audio_check_1)
+    audio_checks.add_child("audio_check_2", audio_check_2)
 
     # Non-speech sub-branch
     non_speech = TaxonomyNode(name="non_speech", checks=[], metrics=[])
@@ -348,6 +475,17 @@ def build_bridge2ai_voice_taxonomy() -> TaxonomyNode:
     phonation.add_child("maximum_phonation_time", maximum_phonation_time)
     phonation.add_child("prolonged_vowels", prolonged_vowels)
 
+    # Specific phonation files
+    maximum_phonation_time_1 = TaxonomyNode(name="maximum_phonation_time_1", checks=[], metrics=[])
+    maximum_phonation_time_2 = TaxonomyNode(name="maximum_phonation_time_2", checks=[], metrics=[])
+    maximum_phonation_time_3 = TaxonomyNode(name="maximum_phonation_time_3", checks=[], metrics=[])
+    prolonged_vowel = TaxonomyNode(name="prolonged_vowel", checks=[], metrics=[])
+
+    maximum_phonation_time.add_child("maximum_phonation_time_1", maximum_phonation_time_1)
+    maximum_phonation_time.add_child("maximum_phonation_time_2", maximum_phonation_time_2)
+    maximum_phonation_time.add_child("maximum_phonation_time_3", maximum_phonation_time_3)
+    prolonged_vowels.add_child("prolonged_vowel", prolonged_vowel)
+
     # Glides
     glides = TaxonomyNode(name="glides", checks=[], metrics=[])
     non_speech.add_child("glides", glides)
@@ -358,6 +496,13 @@ def build_bridge2ai_voice_taxonomy() -> TaxonomyNode:
 
     glides.add_child("high_to_low", high_to_low)
     glides.add_child("low_to_high", low_to_high)
+
+    # Specific glide files
+    glides_high_to_low = TaxonomyNode(name="glides_high_to_low", checks=[], metrics=[])
+    glides_low_to_high = TaxonomyNode(name="glides_low_to_high", checks=[], metrics=[])
+
+    high_to_low.add_child("glides_high_to_low", glides_high_to_low)
+    low_to_high.add_child("glides_low_to_high", glides_low_to_high)
 
     return root
 
