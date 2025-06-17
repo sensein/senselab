@@ -76,10 +76,10 @@ def build_bioacoustic_activity_taxonomy() -> TaxonomyNode:
 
     # Breathing types
     deep = TaxonomyNode(name="deep", checks=[], metrics=[])
-    rapid = TaxonomyNode(name="rapid", checks=[], metrics=[])
+    shallow = TaxonomyNode(name="shallow", checks=[], metrics=[])
 
     breathing.add_child("deep", deep)
-    breathing.add_child("rapid", rapid)
+    breathing.add_child("shallow", shallow)
 
     # Create exhalation branch under breathing
     exhalation = TaxonomyNode(name="exhalation", checks=[], metrics=[])
@@ -88,13 +88,6 @@ def build_bioacoustic_activity_taxonomy() -> TaxonomyNode:
     # Cough sub-branch under exhalation
     cough = TaxonomyNode(name="cough", checks=[], metrics=[])
     exhalation.add_child("cough", cough)
-
-    # Cough types
-    voluntary = TaxonomyNode(name="voluntary", checks=[], metrics=[])
-    reflexive = TaxonomyNode(name="reflexive", checks=[], metrics=[])
-
-    cough.add_child("voluntary", voluntary)
-    cough.add_child("reflexive", reflexive)
 
     # Sigh under exhalation
     sigh = TaxonomyNode(name="sigh", checks=[], metrics=[])
