@@ -102,10 +102,10 @@ def build_bioacoustic_activity_taxonomy() -> TaxonomyNode:
     vocalization.add_child("speech", speech)
 
     # Speech types (simplified)
-    spontaneous = TaxonomyNode(name="spontaneous", checks=[], metrics=[])
+    unscripted = TaxonomyNode(name="unscripted", checks=[], metrics=[])
     reading = TaxonomyNode(name="reading", checks=[], metrics=[])
 
-    speech.add_child("spontaneous", spontaneous)
+    speech.add_child("unscripted", unscripted)
     speech.add_child("reading", reading)
 
     # Non-speech sub-branch
@@ -122,13 +122,6 @@ def build_bioacoustic_activity_taxonomy() -> TaxonomyNode:
     non_speech.add_child("crying", crying)
     non_speech.add_child("humming", humming)
     non_speech.add_child("throat_clearing", throat_clearing)
-
-    # Specific audio check reading files
-    audio_check_1 = TaxonomyNode(name="audio_check_1", checks=[], metrics=[])
-    audio_check_2 = TaxonomyNode(name="audio_check_2", checks=[], metrics=[])
-
-    reading.add_child("audio_check_1", audio_check_1)
-    reading.add_child("audio_check_2", audio_check_2)
 
     return root
 
@@ -253,22 +246,22 @@ def build_bridge2ai_voice_taxonomy() -> TaxonomyNode:
     vocalization.add_child("speech", speech)
 
     # Speech types (maintaining base structure)
-    spontaneous = TaxonomyNode(name="spontaneous", checks=[], metrics=[])
+    unscripted = TaxonomyNode(name="unscripted", checks=[], metrics=[])
     reading = TaxonomyNode(name="reading", checks=[], metrics=[])
 
-    speech.add_child("spontaneous", spontaneous)
+    speech.add_child("unscripted", unscripted)
     speech.add_child("reading", reading)
 
-    # Extended spontaneous speech types for Bridge2AI
+    # Extended unscripted speech types for Bridge2AI
     free_speech = TaxonomyNode(name="free_speech", checks=[], metrics=[])
     picture_description = TaxonomyNode(name="picture_description", checks=[], metrics=[])
     story_recall = TaxonomyNode(name="story_recall", checks=[], metrics=[])
     open_response = TaxonomyNode(name="open_response", checks=[], metrics=[])
 
-    spontaneous.add_child("free_speech", free_speech)
-    spontaneous.add_child("picture_description", picture_description)
-    spontaneous.add_child("story_recall", story_recall)
-    spontaneous.add_child("open_response", open_response)
+    unscripted.add_child("free_speech", free_speech)
+    unscripted.add_child("picture_description", picture_description)
+    unscripted.add_child("story_recall", story_recall)
+    unscripted.add_child("open_response", open_response)
 
     # Specific free speech files
     free_speech_1 = TaxonomyNode(name="free_speech_1", checks=[], metrics=[])
@@ -281,12 +274,10 @@ def build_bridge2ai_voice_taxonomy() -> TaxonomyNode:
 
     # Extended reading types for Bridge2AI
     passage_reading = TaxonomyNode(name="passage_reading", checks=[], metrics=[])
-    sentence_reading = TaxonomyNode(name="sentence_reading", checks=[], metrics=[])
-    story_reading = TaxonomyNode(name="story_reading", checks=[], metrics=[])
+    cape_v_sentences = TaxonomyNode(name="cape_v_sentences", checks=[], metrics=[])
 
     reading.add_child("passage_reading", passage_reading)
-    reading.add_child("sentence_reading", sentence_reading)
-    reading.add_child("story_reading", story_reading)
+    reading.add_child("cape_v_sentences", cape_v_sentences)
 
     # Specific passage reading files
     caterpillar_passage = TaxonomyNode(name="caterpillar_passage", checks=[], metrics=[])
@@ -303,17 +294,24 @@ def build_bridge2ai_voice_taxonomy() -> TaxonomyNode:
     cape_v_sentences_5 = TaxonomyNode(name="cape_v_sentences_5", checks=[], metrics=[])
     cape_v_sentences_6 = TaxonomyNode(name="cape_v_sentences_6", checks=[], metrics=[])
 
-    sentence_reading.add_child("cape_v_sentences_1", cape_v_sentences_1)
-    sentence_reading.add_child("cape_v_sentences_2", cape_v_sentences_2)
-    sentence_reading.add_child("cape_v_sentences_3", cape_v_sentences_3)
-    sentence_reading.add_child("cape_v_sentences_4", cape_v_sentences_4)
-    sentence_reading.add_child("cape_v_sentences_5", cape_v_sentences_5)
-    sentence_reading.add_child("cape_v_sentences_6", cape_v_sentences_6)
+    cape_v_sentences.add_child("cape_v_sentences_1", cape_v_sentences_1)
+    cape_v_sentences.add_child("cape_v_sentences_2", cape_v_sentences_2)
+    cape_v_sentences.add_child("cape_v_sentences_3", cape_v_sentences_3)
+    cape_v_sentences.add_child("cape_v_sentences_4", cape_v_sentences_4)
+    cape_v_sentences.add_child("cape_v_sentences_5", cape_v_sentences_5)
+    cape_v_sentences.add_child("cape_v_sentences_6", cape_v_sentences_6)
 
     # Specific story reading files
     cinderella_story = TaxonomyNode(name="cinderella_story", checks=[], metrics=[])
 
-    story_reading.add_child("cinderella_story", cinderella_story)
+    reading.add_child("cinderella_story", cinderella_story)
+
+    # Audio check files under reading
+    audio_check_1 = TaxonomyNode(name="audio_check_1", checks=[], metrics=[])
+    audio_check_2 = TaxonomyNode(name="audio_check_2", checks=[], metrics=[])
+
+    reading.add_child("audio_check_1", audio_check_1)
+    reading.add_child("audio_check_2", audio_check_2)
 
     # Additional speech tasks for Bridge2AI
     motor_speech = TaxonomyNode(name="motor_speech", checks=[], metrics=[])
