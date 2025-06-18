@@ -194,9 +194,9 @@ def build_bridge2ai_voice_taxonomy() -> TaxonomyNode:
     breathing = TaxonomyNode(name="breathing", checks=[], metrics=[])
     human.add_child("breathing", breathing)
 
-    # Cough sub-branch under breathing
+    # Cough sub-branch under human
     cough = TaxonomyNode(name="cough", checks=[], metrics=[])
-    breathing.add_child("cough", cough)
+    human.add_child("cough", cough)
 
     # Cough types for Bridge2AI - specific file mappings
     audio_check_3 = TaxonomyNode(name="audio_check_3", checks=[], metrics=[])
