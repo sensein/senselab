@@ -143,13 +143,11 @@ def proportion_clipped_metric(audio: Audio, clip_threshold: float = 1.0) -> floa
         assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
         waveform = waveform.abs()
 
-        clipped_proportion_by_channel = []
-        for channel in waveform:
-            max_val = torch.max(channel)
-            clipped_samples = torch.isclose(channel, max_val).sum().item()
-            clipped_proportion_by_channel.append(clipped_samples / channel.numel())
+        max_vals = torch.max(waveform, dim=1).values
+        clipped_samples = torch.isclose(waveform, max_vals.unsqueeze(1)).sum(dim=1)
+        clipped_proportions = clipped_samples / waveform.shape[1]
 
-        return float(np.mean(clipped_proportion_by_channel))
+        return float(np.mean(clipped_proportions))
 
 
 def clipping_present_metric(audio: Audio, plateau_length: int = 5) -> bool:
