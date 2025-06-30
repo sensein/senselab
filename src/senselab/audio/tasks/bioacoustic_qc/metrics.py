@@ -150,12 +150,12 @@ def proportion_clipped_metric(audio: Audio, clip_threshold: float = 1.0) -> floa
         return float(np.mean(clipped_proportions))
 
 
-def clipping_present_metric(audio: Audio, plateau_length: int = 5) -> bool:
-    """Detects clipping by looking for flat plateaus of high-amplitude samples.
+def clipping_present_metric(audio: Audio, max_value_count: int = 5) -> bool:
+    """Detects clipping by counting the number of maximum-valued samples.
 
     Args:
         audio (Audio): The SenseLab Audio object.
-        plateau_length (float): Length of maximum-valued samples that determine clipping status.
+        max_value_count (int): Number of maximum-valued samples that determine clipping status.
 
     Returns:
         bool: True if clipping is present, False otherwise.
@@ -174,7 +174,7 @@ def clipping_present_metric(audio: Audio, plateau_length: int = 5) -> bool:
                 count += 1
             else:
                 count = 0
-            if count >= plateau_length:
+            if count >= max_value_count:
                 return True
     return False
 
