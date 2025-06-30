@@ -233,14 +233,27 @@ def build_bridge2ai_voice_taxonomy() -> TaxonomyNode:
         name="respiration_and_cough_three_quick_breaths_2", checks=[], metrics=[]
     )
 
+    # Create five breaths parent node
+    respiration_and_cough_five_breaths = TaxonomyNode(name="respiration_and_cough_five_breaths", checks=[], metrics=[])
+
     breathing.add_child("audio_check_4", audio_check_4)
     breathing.add_child("breath_sounds", breath_sounds)
     breathing.add_child("respiration_and_cough_breath_1", respiration_and_cough_breath_1)
     breathing.add_child("respiration_and_cough_breath_2", respiration_and_cough_breath_2)
-    breathing.add_child("respiration_and_cough_five_breaths_1", respiration_and_cough_five_breaths_1)
-    breathing.add_child("respiration_and_cough_five_breaths_2", respiration_and_cough_five_breaths_2)
-    breathing.add_child("respiration_and_cough_five_breaths_3", respiration_and_cough_five_breaths_3)
-    breathing.add_child("respiration_and_cough_five_breaths_4", respiration_and_cough_five_breaths_4)
+    breathing.add_child("respiration_and_cough_five_breaths", respiration_and_cough_five_breaths)
+
+    respiration_and_cough_five_breaths.add_child(
+        "respiration_and_cough_five_breaths_1", respiration_and_cough_five_breaths_1
+    )
+    respiration_and_cough_five_breaths.add_child(
+        "respiration_and_cough_five_breaths_2", respiration_and_cough_five_breaths_2
+    )
+    respiration_and_cough_five_breaths.add_child(
+        "respiration_and_cough_five_breaths_3", respiration_and_cough_five_breaths_3
+    )
+    respiration_and_cough_five_breaths.add_child(
+        "respiration_and_cough_five_breaths_4", respiration_and_cough_five_breaths_4
+    )
     breathing.add_child("respiration_and_cough_three_quick_breaths_1", respiration_and_cough_three_quick_breaths_1)
     breathing.add_child("respiration_and_cough_three_quick_breaths_2", respiration_and_cough_three_quick_breaths_2)
 
