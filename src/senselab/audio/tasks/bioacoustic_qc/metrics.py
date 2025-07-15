@@ -5,9 +5,6 @@ import scipy
 import torch
 
 from senselab.audio.data_structures import Audio
-from senselab.audio.tasks.features_extraction.torchaudio import (
-    extract_spectrogram_from_audios,
-)
 
 
 def proportion_silent_metric(audio: Audio, silence_threshold: float = 0.01) -> float:
@@ -118,6 +115,10 @@ def spectral_gating_snr_metric(
     Returns:
         float: Estimated segmental SNR in dB.
     """
+    from senselab.audio.tasks.features_extraction.torchaudio import (
+        extract_spectrogram_from_audios,
+    )
+
     # Use senselab's torchaudio utility instead of librosa
     spectrograms = extract_spectrogram_from_audios([audio], n_fft=frame_length, hop_length=hop_length)
 
@@ -153,7 +154,7 @@ def proportion_clipped_metric(audio: Audio, clip_threshold: float = 1.0) -> floa
         clipped_samples = torch.isclose(waveform, max_vals.unsqueeze(1)).sum(dim=1)
         clipped_proportions = clipped_samples / waveform.shape[1]
 
-        return float(np.mean(clipped_proportions))
+        return float(torch.mean(clipped_proportions))
 
 
 def clipping_present_metric(audio: Audio, max_value_count: int = 5) -> bool:
@@ -393,6 +394,10 @@ def peak_snr_from_spectral_metric(
     Returns:
         float: Peak‑SNR in decibels.
     """
+    from senselab.audio.tasks.features_extraction.torchaudio import (
+        extract_spectrogram_from_audios,
+    )
+
     # Use senselab's torchaudio utility instead of librosa
     spectrograms = extract_spectrogram_from_audios([audio], n_fft=frame_length, hop_length=hop_length)
 
