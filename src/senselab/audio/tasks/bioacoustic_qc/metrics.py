@@ -7,21 +7,22 @@ import torch
 from senselab.audio.data_structures import Audio
 
 
-def proportion_silent_metric(audio: Audio, silence_threshold: float = 0.01) -> float:
-    """Calculates the proportion of silent samples.
+def proportion_silent_metric(audio: Audio, silence_threshold: float = 0.01) -> torch.Tensor:
+    """Calculates the proportion of silent samples per channel.
 
     Args:
         audio (Audio): The SenseLab Audio object.
         silence_threshold (float): Amplitude below which a sample is silent.
 
     Returns:
-        float: Proportion of silent samples.
+        torch.Tensor: Proportion of silent samples per channel with shape (n_channels,).
     """
     waveform = audio.waveform
     assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
 
-    silent_samples = (waveform.abs() < silence_threshold).sum().item()
-    return silent_samples / waveform.numel()
+    silent_samples_per_channel = (waveform.abs() < silence_threshold).sum(dim=1).float()
+    total_samples_per_channel = waveform.shape[1]
+    return silent_samples_per_channel / total_samples_per_channel
 
 
 def proportion_silence_at_beginning_metric(audio: Audio, silence_threshold: float = 0.01) -> float:
@@ -70,31 +71,34 @@ def proportion_silence_at_end_metric(audio: Audio, silence_threshold: float = 0.
     return (total_samples - last_non_silent_idx - 1) / total_samples
 
 
-def amplitude_headroom_metric(audio: Audio) -> float:
-    """Returns the smaller of positive or negative amplitude headroom.
+def amplitude_headroom_metric(audio: Audio) -> torch.Tensor:
+    """Returns the smaller of positive or negative amplitude headroom per channel.
 
     Args:
         audio (Audio): The SenseLab Audio object.
 
     Returns:
-        float: Minimum headroom to clipping (positive or negative side).
+        torch.Tensor: Minimum headroom to clipping per channel with shape (n_channels,).
 
     Raises:
         ValueError: If amplitude exceeds [-1.0, 1.0].
         TypeError: If the waveform is not of type `torch.float32`.
     """
-    max_amp = audio.waveform.max().item()
-    min_amp = audio.waveform.min().item()
+    waveform = audio.waveform
+    max_amps = waveform.max(dim=1).values
+    min_amps = waveform.min(dim=1).values
 
-    if max_amp > 1.0:
-        raise ValueError(f"Audio contains samples over 1.0. Max amplitude = {max_amp:.4f}")
-    if min_amp < -1.0:
-        raise ValueError(f"Audio contains samples under -1.0. Min amplitude = {min_amp:.4f}")
+    if (max_amps > 1.0).any():
+        max_val = max_amps.max().item()
+        raise ValueError(f"Audio contains samples over 1.0. Max amplitude = {max_val:.4f}")
+    if (min_amps < -1.0).any():
+        min_val = min_amps.min().item()
+        raise ValueError(f"Audio contains samples under -1.0. Min amplitude = {min_val:.4f}")
 
-    pos_headroom = 1.0 - max_amp
-    neg_headroom = 1.0 + min_amp
+    pos_headroom = 1.0 - max_amps
+    neg_headroom = 1.0 + min_amps
 
-    return min(pos_headroom, neg_headroom)
+    return torch.minimum(pos_headroom, neg_headroom)
 
 
 def spectral_gating_snr_metric(
@@ -219,30 +223,29 @@ def amplitude_modulation_depth_metric(audio: Audio) -> float:
     return float(np.mean(modulation_depth))
 
 
-def root_mean_square_energy_metric(audio: Audio) -> float:
-    """Calculates the root mean square (RMS) energy of the audio signal.
+def root_mean_square_energy_metric(audio: Audio) -> torch.Tensor:
+    """Calculates the root mean square (RMS) energy per channel.
 
     Args:
         audio (Audio): The SenseLab Audio object.
 
     Returns:
-        float: RMS energy averaged across channels.
+        torch.Tensor: RMS energy per channel with shape (n_channels,).
     """
     waveform = audio.waveform
     assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
 
-    rms_per_channel = torch.sqrt(torch.mean(waveform**2, dim=1))
-    return float(torch.mean(rms_per_channel))
+    return torch.sqrt(torch.mean(waveform**2, dim=1))
 
 
-def zero_crossing_rate_metric(audio: Audio) -> float:
-    """Estimates the zero-crossing rate of the audio signal.
+def zero_crossing_rate_metric(audio: Audio) -> torch.Tensor:
+    """Estimates the zero-crossing rate per channel.
 
     Args:
         audio (Audio): The SenseLab Audio object.
 
     Returns:
-        float: Average zero-crossing rate across channels.
+        torch.Tensor: Zero-crossing rate per channel with shape (n_channels,).
     """
     waveform = audio.waveform
     assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
@@ -254,78 +257,75 @@ def zero_crossing_rate_metric(audio: Audio) -> float:
     # shape: (channels, samples - 1)
     crossings = (signs[:, 1:] * signs[:, :-1]) < 0
 
-    # Mean ZCR per channel, then average
-    zcr_per_channel = crossings.float().mean(dim=1)
-    return float(zcr_per_channel.mean())
+    # Return ZCR per channel
+    return crossings.float().mean(dim=1)
 
 
-def signal_variance_metric(audio: Audio) -> float:
-    """Estimates the variance of the audio signal.
+def signal_variance_metric(audio: Audio) -> torch.Tensor:
+    """Estimates the variance per channel.
 
     Args:
         audio (Audio): The SenseLab Audio object.
 
     Returns:
-        float: Variance across all samples and channels.
+        torch.Tensor: Variance per channel with shape (n_channels,).
     """
     waveform = audio.waveform
     assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
-    return float(torch.var(waveform))
+    return torch.var(waveform, dim=1)
 
 
-def dynamic_range_metric(audio: Audio) -> float:
-    """Calculates the dynamic range of the audio signal.
+def dynamic_range_metric(audio: Audio) -> torch.Tensor:
+    """Calculates the dynamic range per channel.
 
     Dynamic range is defined as the difference between the maximum and minimum
-    amplitude values in the signal.
+    amplitude values per channel.
 
     Args:
         audio (Audio): The SenseLab Audio object.
 
     Returns:
-        float: The dynamic range (max amplitude minus min amplitude).
+        torch.Tensor: Dynamic range per channel with shape (n_channels,).
     """
     waveform = audio.waveform
     assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
 
-    # Compute the overall dynamic range across all channels
-    max_amp = waveform.max().item()
-    min_amp = waveform.min().item()
-    return float(max_amp - min_amp)
+    # Compute dynamic range per channel
+    max_amps = waveform.max(dim=1).values
+    min_amps = waveform.min(dim=1).values
+    return max_amps - min_amps
 
 
-def mean_absolute_amplitude_metric(audio: Audio) -> float:
-    """Calculates the mean absolute amplitude of the audio signal.
+def mean_absolute_amplitude_metric(audio: Audio) -> torch.Tensor:
+    """Calculates the mean absolute amplitude per channel.
 
     Args:
         audio (Audio): The SenseLab Audio object.
 
     Returns:
-        float: Mean absolute amplitude averaged across channels.
+        torch.Tensor: Mean absolute amplitude per channel with shape (n_channels,).
     """
     waveform = audio.waveform
     assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
 
-    # Compute the mean absolute amplitude across all samples and channels
-    mean_abs = torch.mean(waveform.abs())
-    return float(mean_abs)
+    # Compute the mean absolute amplitude per channel
+    return torch.mean(waveform.abs(), dim=1)
 
 
-def mean_absolute_deviation_metric(audio: Audio) -> float:
-    """Calculates the mean absolute deviation (MAD) of the audio signal.
+def mean_absolute_deviation_metric(audio: Audio) -> torch.Tensor:
+    """Calculates the mean absolute deviation (MAD) per channel.
 
     Args:
         audio (Audio): The SenseLab Audio object.
 
     Returns:
-        float: MAD averaged across channels.
+        torch.Tensor: MAD per channel with shape (n_channels,).
     """
     waveform = audio.waveform
     assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
 
     mean_val = torch.mean(waveform, dim=1, keepdim=True)
-    mad = torch.mean(torch.abs(waveform - mean_val), dim=1)
-    return float(torch.mean(mad))
+    return torch.mean(torch.abs(waveform - mean_val), dim=1)
 
 
 def shannon_entropy_amplitude_metric(audio: "Audio", num_bins: int = 256) -> float:
