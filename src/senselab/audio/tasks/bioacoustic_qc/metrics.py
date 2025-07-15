@@ -1,11 +1,13 @@
 """Contains audio quality metrics used in various checks."""
 
-import librosa
 import numpy as np
 import scipy
 import torch
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.features_extraction.torchaudio import (
+    extract_spectrogram_from_audios,
+)
 
 
 def proportion_silent_metric(audio: Audio, silence_threshold: float = 0.01) -> float:
@@ -99,7 +101,10 @@ def amplitude_headroom_metric(audio: Audio) -> float:
 
 
 def spectral_gating_snr_metric(
-    audio: Audio, frame_length: int = 2048, hop_length: int = 512, percentile: int = 10
+    audio: Audio,
+    frame_length: int = 2048,
+    hop_length: int = 512,
+    percentile: int = 10,
 ) -> float:
     """Computes segmental SNR using the spectral gating approach.
 
@@ -107,21 +112,21 @@ def spectral_gating_snr_metric(
         audio (Audio): Audio object containing waveform and metadata.
         frame_length (int): Frame size for STFT.
         hop_length (int): Hop size for moving window.
-        percentile (int): Percentage of lowest-energy frequency bins used for noise estimation.
+        percentile (int): Percentage of lowest-energy frequency bins used for
+            noise estimation.
 
     Returns:
         float: Estimated segmental SNR in dB.
     """
-    waveform: np.ndarray | torch.Tensor = audio.waveform
-    if isinstance(waveform, torch.Tensor):
-        waveform = waveform.numpy()
+    # Use senselab's torchaudio utility instead of librosa
+    spectrograms = extract_spectrogram_from_audios([audio], n_fft=frame_length, hop_length=hop_length)
 
-    if waveform.shape[0] > 1:
-        waveform = np.mean(waveform, axis=0)
+    # Extract magnitude spectrogram (take sqrt since torchaudio returns power)
+    stft_mag = torch.sqrt(spectrograms[0]["spectrogram"]).numpy()
 
-    stft: np.ndarray = np.abs(librosa.stft(waveform, n_fft=frame_length, hop_length=hop_length))
-    noise_estimate: np.ndarray = np.percentile(stft, percentile, axis=1)
-    snr_per_freq: np.ndarray = 10 * np.log10((np.mean(stft**2, axis=1) + 1e-10) / (noise_estimate**2 + 1e-10))
+    # Estimate noise floor from quietest bins
+    noise_estimate: np.ndarray = np.percentile(stft_mag, percentile, axis=1)
+    snr_per_freq: np.ndarray = 10 * np.log10((np.mean(stft_mag**2, axis=1) + 1e-10) / (noise_estimate**2 + 1e-10))
 
     return float(np.mean(snr_per_freq))
 
@@ -131,7 +136,8 @@ def proportion_clipped_metric(audio: Audio, clip_threshold: float = 1.0) -> floa
 
     Args:
         audio (Audio): The SenseLab Audio object.
-        clip_threshold (float): Threshold at or above which a sample is considered clipped.
+        clip_threshold (float): Threshold at or above which a sample is
+            considered clipped.
 
     Returns:
         float: Proportion of samples that are clipped.
@@ -155,7 +161,8 @@ def clipping_present_metric(audio: Audio, max_value_count: int = 5) -> bool:
 
     Args:
         audio (Audio): The SenseLab Audio object.
-        max_value_count (int): Number of maximum-valued samples that determine clipping status.
+        max_value_count (int): Number of maximum-valued samples that determine
+            clipping status.
 
     Returns:
         bool: True if clipping is present, False otherwise.
@@ -204,7 +211,8 @@ def amplitude_modulation_depth_metric(audio: Audio) -> float:
     # Calculate modulation depth
     max_env = np.max(amplitude_envelope, axis=-1)
     min_env = np.min(amplitude_envelope, axis=-1)
-    modulation_depth = (max_env - min_env) / (max_env + min_env + 1e-10)  # Adding epsilon to avoid division by zero
+    # Adding epsilon to avoid division by zero
+    modulation_depth = (max_env - min_env) / (max_env + min_env + 1e-10)
 
     # Return the mean modulation depth across channels
     return float(np.mean(modulation_depth))
@@ -242,7 +250,8 @@ def zero_crossing_rate_metric(audio: Audio) -> float:
     signs = torch.sign(waveform)
 
     # Zero-crossings occur where the sign changes
-    crossings = (signs[:, 1:] * signs[:, :-1]) < 0  # shape: (channels, samples - 1)
+    # shape: (channels, samples - 1)
+    crossings = (signs[:, 1:] * signs[:, :-1]) < 0
 
     # Mean ZCR per channel, then average
     zcr_per_channel = crossings.float().mean(dim=1)
@@ -368,7 +377,10 @@ def crest_factor_metric(audio: Audio) -> float:
 
 
 def peak_snr_from_spectral_metric(
-    audio: Audio, frame_length: int = 2048, hop_length: int = 512, percentile: int = 10
+    audio: Audio,
+    frame_length: int = 2048,
+    hop_length: int = 512,
+    percentile: int = 10,
 ) -> float:
     """Estimates Peak‑SNR (dB) using spectral gating to estimate the noise floor.
 
@@ -381,23 +393,18 @@ def peak_snr_from_spectral_metric(
     Returns:
         float: Peak‑SNR in decibels.
     """
-    waveform = audio.waveform
-    if isinstance(waveform, torch.Tensor):
-        waveform = waveform.numpy()
+    # Use senselab's torchaudio utility instead of librosa
+    spectrograms = extract_spectrogram_from_audios([audio], n_fft=frame_length, hop_length=hop_length)
 
-    # Collapse to mono if multi-channel
-    if waveform.ndim == 2 and waveform.shape[0] > 1:
-        waveform = np.mean(waveform, axis=0)
-
-    # Get magnitude spectrogram
-    stft_mag = np.abs(librosa.stft(waveform, n_fft=frame_length, hop_length=hop_length))
+    # Extract magnitude spectrogram (take sqrt since torchaudio returns power)
+    stft_mag = torch.sqrt(spectrograms[0]["spectrogram"]).numpy()
 
     # Estimate noise floor from quietest bins
     noise_floor = np.percentile(stft_mag, percentile, axis=1)
     noise_rms = np.sqrt(np.mean(noise_floor**2) + 1e-10)
 
     # Get peak signal amplitude from time-domain
-    peak = np.max(np.abs(waveform))
+    peak = audio.waveform.abs().max().item()
 
     return 20 * np.log10(peak / noise_rms)
 
@@ -447,10 +454,10 @@ def amplitude_interquartile_range_metric(audio: Audio) -> float:
 def phase_correlation_metric(audio: Audio, frame_length: int = 2048, hop_length: int = 512) -> float:
     """Calculates the phase correlation between stereo channels.
 
-    This metric measures the coherence between left and right channels in stereo audio.
-    Values close to 1.0 indicate strong positive correlation (in-phase),
-    values close to -1.0 indicate strong negative correlation (out-of-phase),
-    and values near 0.0 indicate uncorrelated channels.
+    This metric measures the coherence between left and right channels in
+    stereo audio. Values close to 1.0 indicate strong positive correlation
+    (in-phase), values close to -1.0 indicate strong negative correlation
+    (out-of-phase), and values near 0.0 indicate uncorrelated channels.
 
     Args:
         audio (Audio): The SenseLab Audio object.
@@ -461,13 +468,14 @@ def phase_correlation_metric(audio: Audio, frame_length: int = 2048, hop_length:
         float: Average phase correlation coefficient between channels.
 
     Raises:
-        ValueError: If the audio is not stereo (doesn't have exactly 2 channels).
+        ValueError: If the audio is not stereo (doesn't have exactly 2
+            channels).
     """
     waveform = audio.waveform
 
     # Check if the audio is stereo
     if waveform.ndim != 2 or waveform.shape[0] != 2:
-        raise ValueError(f"Expected stereo audio (2 channels), but got {waveform.shape[0]} channels")
+        raise ValueError(f"Expected stereo audio (2 channels), but got " f"{waveform.shape[0]} channels")
 
     # Convert to numpy if it's a torch tensor
     if isinstance(waveform, torch.Tensor):
