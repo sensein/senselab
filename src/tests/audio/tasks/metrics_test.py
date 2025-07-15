@@ -22,6 +22,7 @@ from senselab.audio.tasks.bioacoustic_qc.metrics import (
     dynamic_range_metric,
     mean_absolute_amplitude_metric,
     mean_absolute_deviation_metric,
+    median_absolute_deviation_metric,
     peak_snr_from_spectral_metric,
     phase_correlation_metric,
     proportion_clipped_metric,
@@ -297,6 +298,30 @@ def test_mean_absolute_deviation_metric(waveform: torch.Tensor, expected_mad: li
     audio = Audio(waveform=waveform, sampling_rate=16000)
     result = mean_absolute_deviation_metric(audio)
     expected_tensor = torch.tensor(expected_mad)
+    assert torch.allclose(result, expected_tensor, rtol=1e-6), f"Expected {expected_tensor}, got {result}"
+
+
+@pytest.mark.parametrize(
+    "waveform, expected_median_mad",
+    [
+        # Constant signal: Median MAD should be 0
+        (torch.tensor([[1.0, 1.0, 1.0, 1.0]]), [0.0]),
+        # Single channel with two distinct values:
+        # [1, -1] -> PyTorch median = -1.0, deviations = [2, 0] -> median MAD = 0.0
+        (torch.tensor([[1.0, -1.0]]), [0.0]),
+        # Single channel: [1, 0, -1, 0] -> median = 0.0, deviations = [1, 0, 1, 0] -> median MAD = 0.0
+        (torch.tensor([[1.0, 0.0, -1.0, 0.0]]), [0.0]),
+        # Multi-channel: per-channel values [1.0, 1.0]
+        # Channel 1: [1, 2, 3, 4] -> median = 2.0, deviations = [1, 0, 1, 2] -> median MAD = 1.0
+        # Channel 2: [-1, -2, -3, -4] -> median = -3.0, deviations = [2, 1, 0, 1] -> median MAD = 1.0
+        (torch.tensor([[1.0, 2.0, 3.0, 4.0], [-1.0, -2.0, -3.0, -4.0]]), [1.0, 1.0]),
+    ],
+)
+def test_median_absolute_deviation_metric(waveform: torch.Tensor, expected_median_mad: list) -> None:
+    """Tests the median_absolute_deviation_metric function with per-channel values."""
+    audio = Audio(waveform=waveform, sampling_rate=16000)
+    result = median_absolute_deviation_metric(audio)
+    expected_tensor = torch.tensor(expected_median_mad)
     assert torch.allclose(result, expected_tensor, rtol=1e-6), f"Expected {expected_tensor}, got {result}"
 
 
