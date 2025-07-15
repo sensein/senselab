@@ -54,9 +54,11 @@ def test_proportion_silent_metric(waveform: torch.Tensor, expected_silence_propo
     """Tests proportion_silent_metric function."""
     audio = Audio(waveform=waveform, sampling_rate=16000)
     silence_proportion = proportion_silent_metric(audio, silence_threshold=0.05)
-    assert (
-        silence_proportion == expected_silence_proportion
-    ), f"Expected {expected_silence_proportion}, got {silence_proportion}"
+    # For single-channel audio, extract the first element
+    result = silence_proportion[0].item() if len(silence_proportion) == 1 else silence_proportion
+    assert result == approx(
+        expected_silence_proportion, rel=1e-6
+    ), f"Expected {expected_silence_proportion}, got {result}"
 
 
 @pytest.mark.parametrize(
@@ -105,7 +107,9 @@ def test_amplitude_headroom_metric(waveform: torch.Tensor, expected_headroom: fl
     """Tests amplitude_headroom_metric with valid inputs."""
     audio = Audio(waveform=waveform, sampling_rate=16000)
     headroom = amplitude_headroom_metric(audio)
-    assert headroom == approx(expected_headroom, rel=1e-6), f"Expected {expected_headroom}, got {headroom}"
+    # For single-channel audio, extract the first element
+    result = headroom[0].item() if len(headroom) == 1 else headroom
+    assert result == approx(expected_headroom, rel=1e-6), f"Expected {expected_headroom}, got {result}"
 
 
 @pytest.mark.parametrize(
@@ -177,119 +181,123 @@ def test_amplitude_modulation_depth_metric(waveform: torch.Tensor, expected_dept
 @pytest.mark.parametrize(
     "waveform, expected",
     [
-        (torch.tensor([[1.0, 1.0, 1.0, 1.0]]), 1.0),
-        (torch.tensor([[0.0, 0.0, 0.0, 0.0]]), 0.0),
-        (torch.tensor([[1.0, -1.0, 1.0, -1.0]]), 1.0),
-        (torch.tensor([[1.0, 0.0, 1.0, 0.0]]), (0.5) ** 0.5),
-        (torch.tensor([[1.0, 1.0], [0.0, 0.0]]), 0.5),
+        (torch.tensor([[1.0, 1.0, 1.0, 1.0]]), [1.0]),
+        (torch.tensor([[0.0, 0.0, 0.0, 0.0]]), [0.0]),
+        (torch.tensor([[1.0, -1.0, 1.0, -1.0]]), [1.0]),
+        (torch.tensor([[1.0, 0.0, 1.0, 0.0]]), [(0.5) ** 0.5]),
+        (torch.tensor([[1.0, 1.0], [0.0, 0.0]]), [1.0, 0.0]),  # Per-channel values
     ],
 )
-def test_root_mean_square_energy_metric(waveform: torch.Tensor, expected: float) -> None:
-    """Test RMS energy metric against expected values."""
+def test_root_mean_square_energy_metric(waveform: torch.Tensor, expected: list) -> None:
+    """Test RMS energy metric against expected per-channel values."""
     audio = Audio(waveform=waveform, sampling_rate=16000)
     result = root_mean_square_energy_metric(audio)
-    assert result == approx(expected, rel=1e-6), f"Expected {expected}, got {result}"
+    expected_tensor = torch.tensor(expected)
+    assert torch.allclose(result, expected_tensor, rtol=1e-6), f"Expected {expected_tensor}, got {result}"
 
 
 @pytest.mark.parametrize(
     "waveform, expected_zcr",
     [
-        (torch.tensor([[1.0, 1.0, 1.0, 1.0]]), 0.0),
-        (torch.tensor([[1.0, 1.0, -1.0, -1.0]]), 1 / 3),
-        (torch.tensor([[1.0, -1.0, 1.0, -1.0]]), 1.0),
-        (torch.tensor([[1.0, 0.0, -1.0, 0.0]]), 0),  # intermediate 0 doesn't count
-        # Multi-channel: one has 1 crossing, other 0 → avg = 0.5
-        (torch.tensor([[1.0, -1.0, -1.0], [0.5, 0.5, 0.5]]), 0.25),
+        (torch.tensor([[1.0, 1.0, 1.0, 1.0]]), [0.0]),
+        (torch.tensor([[1.0, 1.0, -1.0, -1.0]]), [1 / 3]),
+        (torch.tensor([[1.0, -1.0, 1.0, -1.0]]), [1.0]),
+        (torch.tensor([[1.0, 0.0, -1.0, 0.0]]), [0.0]),  # intermediate 0 doesn't count
+        # Multi-channel: per-channel values [0.5, 0.0]
+        (torch.tensor([[1.0, -1.0, -1.0], [0.5, 0.5, 0.5]]), [0.5, 0.0]),
     ],
 )
-def test_zero_crossing_rate_metric(waveform: torch.Tensor, expected_zcr: float) -> None:
-    """Tests zero_crossing_rate_metric function."""
+def test_zero_crossing_rate_metric(waveform: torch.Tensor, expected_zcr: list) -> None:
+    """Tests zero_crossing_rate_metric function with per-channel values."""
     audio = Audio(waveform=waveform, sampling_rate=16000)
     result = zero_crossing_rate_metric(audio)
-    assert result == approx(expected_zcr, rel=1e-6), f"Expected {expected_zcr}, got {result}"
+    expected_tensor = torch.tensor(expected_zcr)
+    assert torch.allclose(result, expected_tensor, rtol=1e-6), f"Expected {expected_tensor}, got {result}"
 
 
 @pytest.mark.parametrize(
     "waveform, expected",
     [
-        (torch.tensor([[0.0, 0.0, 0.0, 0.0]]), 0.0),  # Constant signal → zero variance
-        (torch.tensor([[1.0, -1.0, 1.0, -1.0]]), 4 / 3),  # Mean=0, variance=1
-        (torch.tensor([[0.5, 0.5, -0.5, -0.5]]), 1 / 3),  # Variance of smaller range
-        (torch.tensor([[1.0, 2.0, 3.0, 4.0]]), 5 / 3),  # Increasing sequence
+        (torch.tensor([[0.0, 0.0, 0.0, 0.0]]), [0.0]),  # Constant signal → zero variance
+        (torch.tensor([[1.0, -1.0, 1.0, -1.0]]), [4 / 3]),  # Mean=0, variance=1
+        (torch.tensor([[0.5, 0.5, -0.5, -0.5]]), [1 / 3]),  # Variance of smaller range
+        (torch.tensor([[1.0, 2.0, 3.0, 4.0]]), [5 / 3]),  # Increasing sequence
     ],
 )
-def test_signal_variance_metric(waveform: torch.Tensor, expected: float) -> None:
-    """Tests signal_variance_metric function."""
+def test_signal_variance_metric(waveform: torch.Tensor, expected: list) -> None:
+    """Tests signal_variance_metric function with per-channel values."""
     audio = Audio(waveform=waveform, sampling_rate=16000)
     result = signal_variance_metric(audio)
-    assert result == approx(expected, rel=1e-6), f"Expected {expected}, got {result}"
+    expected_tensor = torch.tensor(expected)
+    assert torch.allclose(result, expected_tensor, rtol=1e-6), f"Expected {expected_tensor}, got {result}"
 
 
 @pytest.mark.parametrize(
     "waveform, expected_range",
     [
         # Constant signal: dynamic range = 1.0 - 1.0 = 0.0
-        (torch.tensor([[1.0, 1.0, 1.0, 1.0]]), 0.0),
+        (torch.tensor([[1.0, 1.0, 1.0, 1.0]]), [0.0]),
         # Increasing signal: dynamic range = 4.0 - 1.0 = 3.0
-        (torch.tensor([[1.0, 2.0, 3.0, 4.0]]), 3.0),
+        (torch.tensor([[1.0, 2.0, 3.0, 4.0]]), [3.0]),
         # Mixed signal: e.g., min = -0.5, max = 1.0 → dynamic range = 1.0 - (-0.5) = 1.5
-        (torch.tensor([[0.0, 0.5, 1.0, -0.5]]), 1.5),
-        # Multi-channel signal: overall min = -1.0, overall max = 0.8 → dynamic range = 0.8 - (-1.0) = 1.8
-        (torch.tensor([[-0.5, 0.3, 0.8], [-1.0, 0.0, 0.5]]), 1.8),
+        (torch.tensor([[0.0, 0.5, 1.0, -0.5]]), [1.5]),
+        # Multi-channel signal: per-channel ranges [1.3, 1.5]
+        (torch.tensor([[-0.5, 0.3, 0.8], [-1.0, 0.0, 0.5]]), [1.3, 1.5]),
     ],
 )
-def test_dynamic_range_metric(waveform: torch.Tensor, expected_range: float) -> None:
-    """Tests dynamic_range_metric function."""
+def test_dynamic_range_metric(waveform: torch.Tensor, expected_range: list) -> None:
+    """Tests dynamic_range_metric function with per-channel values."""
     audio = Audio(waveform=waveform, sampling_rate=16000)
     result = dynamic_range_metric(audio)
-    assert result == approx(expected_range, rel=1e-6), f"Expected {expected_range}, got {result}"
+    expected_tensor = torch.tensor(expected_range)
+    assert torch.allclose(result, expected_tensor, rtol=1e-6), f"Expected {expected_tensor}, got {result}"
 
 
 @pytest.mark.parametrize(
     "waveform, expected_mean_abs",
     [
         # Constant positive signal: mean abs = 1.0
-        (torch.tensor([[1.0, 1.0, 1.0, 1.0]]), 1.0),
+        (torch.tensor([[1.0, 1.0, 1.0, 1.0]]), [1.0]),
         # Alternating positive and negative: mean abs = 1.0
-        (torch.tensor([[1.0, -1.0, 1.0, -1.0]]), 1.0),
+        (torch.tensor([[1.0, -1.0, 1.0, -1.0]]), [1.0]),
         # Zero signal: mean abs = 0.0
-        (torch.tensor([[0.0, 0.0, 0.0, 0.0]]), 0.0),
-        # Multi-channel signal:
+        (torch.tensor([[0.0, 0.0, 0.0, 0.0]]), [0.0]),
+        # Multi-channel signal: per-channel values [0.5, 2.0]
         # Channel 1: [1.0, 0.0, -1.0, 0.0] -> mean abs = (1+0+1+0)/4 = 0.5
         # Channel 2: [2.0, 2.0, 2.0, 2.0] -> mean abs = 2.0
-        # Overall average = (0.5 + 2.0)/2 = 1.25
-        (torch.tensor([[1.0, 0.0, -1.0, 0.0], [2.0, 2.0, 2.0, 2.0]]), 1.25),
+        (torch.tensor([[1.0, 0.0, -1.0, 0.0], [2.0, 2.0, 2.0, 2.0]]), [0.5, 2.0]),
     ],
 )
-def test_mean_absolute_amplitude_metric(waveform: torch.Tensor, expected_mean_abs: float) -> None:
-    """Tests the mean_absolute_amplitude_metric function."""
+def test_mean_absolute_amplitude_metric(waveform: torch.Tensor, expected_mean_abs: list) -> None:
+    """Tests the mean_absolute_amplitude_metric function with per-channel values."""
     audio = Audio(waveform=waveform, sampling_rate=16000)
     result = mean_absolute_amplitude_metric(audio)
-    assert result == approx(expected_mean_abs, rel=1e-6), f"Expected {expected_mean_abs}, got {result}"
+    expected_tensor = torch.tensor(expected_mean_abs)
+    assert torch.allclose(result, expected_tensor, rtol=1e-6), f"Expected {expected_tensor}, got {result}"
 
 
 @pytest.mark.parametrize(
     "waveform, expected_mad",
     [
         # Constant signal: MAD should be 0
-        (torch.tensor([[1.0, 1.0, 1.0, 1.0]]), 0.0),
+        (torch.tensor([[1.0, 1.0, 1.0, 1.0]]), [0.0]),
         # Single channel with two distinct values:
         # [1, -1] -> mean = 0, deviations = [1, 1] -> MAD = 1.0
-        (torch.tensor([[1.0, -1.0]]), 1.0),
+        (torch.tensor([[1.0, -1.0]]), [1.0]),
         # Single channel: [1, 0, -1, 0] -> mean = 0, deviations = [1, 0, 1, 0] -> MAD = 0.5
-        (torch.tensor([[1.0, 0.0, -1.0, 0.0]]), 0.5),
-        # Multi-channel: two channels with symmetric values.
+        (torch.tensor([[1.0, 0.0, -1.0, 0.0]]), [0.5]),
+        # Multi-channel: per-channel values [1.0, 1.0]
         # Channel 1: [1, 2, 3, 4] -> mean = 2.5, deviations = [1.5, 0.5, 0.5, 1.5] -> MAD = 1.0
         # Channel 2: [-1, -2, -3, -4] -> mean = -2.5, deviations = [1.5, 0.5, 0.5, 1.5] -> MAD = 1.0
-        # Overall MAD = (1.0 + 1.0) / 2 = 1.0
-        (torch.tensor([[1.0, 2.0, 3.0, 4.0], [-1.0, -2.0, -3.0, -4.0]]), 1.0),
+        (torch.tensor([[1.0, 2.0, 3.0, 4.0], [-1.0, -2.0, -3.0, -4.0]]), [1.0, 1.0]),
     ],
 )
-def test_mean_absolute_deviation_metric(waveform: torch.Tensor, expected_mad: float) -> None:
-    """Tests the mean_absolute_deviation_metric function."""
+def test_mean_absolute_deviation_metric(waveform: torch.Tensor, expected_mad: list) -> None:
+    """Tests the mean_absolute_deviation_metric function with per-channel values."""
     audio = Audio(waveform=waveform, sampling_rate=16000)
     result = mean_absolute_deviation_metric(audio)
-    assert result == approx(expected_mad, rel=1e-6), f"Expected {expected_mad}, got {result}"
+    expected_tensor = torch.tensor(expected_mad)
+    assert torch.allclose(result, expected_tensor, rtol=1e-6), f"Expected {expected_tensor}, got {result}"
 
 
 @pytest.mark.parametrize(
