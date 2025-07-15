@@ -188,7 +188,7 @@ def clipping_present_metric(audio: Audio, max_value_count: int = 5) -> bool:
 
 
 def amplitude_modulation_depth_metric(audio: Audio) -> float:
-    """Calculates the amplitude modulation depth of an audio signal.
+    """Calculates the amplitude modulation depth of an audio signal using a Hilbert transform.
 
     Args:
         audio (Audio): The SenseLab Audio object.
