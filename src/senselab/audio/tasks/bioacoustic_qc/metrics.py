@@ -11,7 +11,7 @@ def proportion_silent_metric(audio: Audio, silence_threshold: float = 0.01) -> t
     """Calculates the proportion of silent samples per channel.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): A SenseLab Audio object.
         silence_threshold (float): Amplitude below which a sample is silent.
 
     Returns:
@@ -29,7 +29,7 @@ def proportion_silence_at_beginning_metric(audio: Audio, silence_threshold: floa
     """Calculates the proportion of silence at the start.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): A SenseLab Audio object.
         silence_threshold (float): Amplitude below which a sample is silent.
 
     Returns:
@@ -51,7 +51,7 @@ def proportion_silence_at_end_metric(audio: Audio, silence_threshold: float = 0.
     """Calculates the proportion of silence at the end.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): A SenseLab Audio object.
         silence_threshold (float): Amplitude below which a sample is silent.
 
     Returns:
@@ -75,7 +75,7 @@ def amplitude_headroom_metric(audio: Audio) -> torch.Tensor:
     """Returns the smaller of positive or negative amplitude headroom per channel.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): A SenseLab Audio object.
 
     Returns:
         torch.Tensor: Minimum headroom to clipping per channel with shape (n_channels,).
@@ -140,7 +140,7 @@ def proportion_clipped_metric(audio: Audio, clip_threshold: float = 1.0) -> floa
     """Calculates the proportion of clipped samples.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): A SenseLab Audio object.
         clip_threshold (float): Threshold at or above which a sample is
             considered clipped.
 
@@ -165,7 +165,7 @@ def clipping_present_metric(audio: Audio, max_value_count: int = 5) -> bool:
     """Detects clipping by counting the number of maximum-valued samples.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): A SenseLab Audio object.
         max_value_count (int): Number of maximum-valued samples that determine
             clipping status.
 
@@ -195,7 +195,7 @@ def amplitude_modulation_depth_metric(audio: Audio) -> float:
     """Calculates the amplitude modulation depth of an audio signal using a Hilbert transform.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): A SenseLab Audio object.
 
     Returns:
         float: Amplitude modulation depth.
@@ -227,7 +227,7 @@ def root_mean_square_energy_metric(audio: Audio) -> torch.Tensor:
     """Calculates the root mean square (RMS) energy per channel.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): A SenseLab Audio object.
 
     Returns:
         torch.Tensor: RMS energy per channel with shape (n_channels,).
@@ -242,7 +242,7 @@ def zero_crossing_rate_metric(audio: Audio) -> torch.Tensor:
     """Estimates the zero-crossing rate per channel.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): A SenseLab Audio object.
 
     Returns:
         torch.Tensor: Zero-crossing rate per channel with shape (n_channels,).
@@ -265,7 +265,7 @@ def signal_variance_metric(audio: Audio) -> torch.Tensor:
     """Estimates the variance per channel.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): A SenseLab Audio object.
 
     Returns:
         torch.Tensor: Variance per channel with shape (n_channels,).
@@ -282,7 +282,7 @@ def dynamic_range_metric(audio: Audio) -> torch.Tensor:
     amplitude values per channel.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): A SenseLab Audio object.
 
     Returns:
         torch.Tensor: Dynamic range per channel with shape (n_channels,).
@@ -300,7 +300,7 @@ def mean_absolute_amplitude_metric(audio: Audio) -> torch.Tensor:
     """Calculates the mean absolute amplitude per channel.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): A SenseLab Audio object.
 
     Returns:
         torch.Tensor: Mean absolute amplitude per channel with shape (n_channels,).
@@ -316,7 +316,7 @@ def mean_absolute_deviation_metric(audio: Audio) -> torch.Tensor:
     """Calculates the mean absolute deviation (MAD) per channel.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): A SenseLab Audio object.
 
     Returns:
         torch.Tensor: MAD per channel with shape (n_channels,).
@@ -328,11 +328,28 @@ def mean_absolute_deviation_metric(audio: Audio) -> torch.Tensor:
     return torch.mean(torch.abs(waveform - mean_val), dim=1)
 
 
+def median_absolute_deviation_metric(audio: Audio) -> torch.Tensor:
+    """Calculates the median absolute deviation per channel.
+
+    Args:
+        audio (Audio): A SenseLab Audio object.
+
+    Returns:
+        torch.Tensor: Median absolute deviation per channel with shape
+            (n_channels,).
+    """
+    waveform = audio.waveform
+    assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
+
+    median_val = torch.median(waveform, dim=1, keepdim=True).values
+    return torch.median(torch.abs(waveform - median_val), dim=1).values
+
+
 def shannon_entropy_amplitude_metric(audio: "Audio", num_bins: int = 256) -> float:
     """Calculates the Shannon entropy of the audio signal's amplitude distribution.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): A SenseLab Audio object.
         num_bins (int): Number of bins to discretize the amplitude values.
 
     Returns:
@@ -358,7 +375,7 @@ def crest_factor_metric(audio: Audio) -> float:
     """Calculates the crest factor (peak‑to‑RMS ratio) of the audio signal.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): A SenseLab Audio object.
 
     Returns:
         float: Crest factor (unitless).
@@ -386,7 +403,7 @@ def peak_snr_from_spectral_metric(
     """Estimates Peak‑SNR (dB) using spectral gating to estimate the noise floor.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): A SenseLab Audio object.
         frame_length (int): STFT window size.
         hop_length (int): STFT hop size.
         percentile (int): Percentile used for noise floor estimation.
@@ -418,7 +435,7 @@ def amplitude_skew_metric(audio: Audio) -> float:
     """Calculates the skew of the audio signal amplitude.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): A SenseLab Audio object.
 
     Returns:
         float: Skew of the flattened amplitude distribution.
@@ -432,7 +449,7 @@ def amplitude_kurtosis_metric(audio: Audio) -> float:
     """Calculates the kurtosis of the audio signal amplitude.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): A SenseLab Audio object.
 
     Returns:
         float: Kurtosis of the flattened amplitude distribution.
@@ -446,7 +463,7 @@ def amplitude_interquartile_range_metric(audio: Audio) -> float:
     """Calculates the interquartile range (IQR) of the audio signal amplitude.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): A SenseLab Audio object.
 
     Returns:
         float: IQR of the flattened amplitude distribution.
@@ -465,7 +482,7 @@ def phase_correlation_metric(audio: Audio, frame_length: int = 2048, hop_length:
     (out-of-phase), and values near 0.0 indicate uncorrelated channels.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): A SenseLab Audio object.
         frame_length (int): Frame size for analysis.
         hop_length (int): Hop size for moving window.
 
