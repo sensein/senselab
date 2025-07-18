@@ -109,6 +109,25 @@ def spectral_gating_snr_metric(
 ) -> float:
     """Computes segmental SNR using the spectral gating approach.
 
+    This approach is based on the noisereduce package. However, it does not remove
+    the noise from the input audio, only estimates it.
+
+    The algorithm used by noisereduce is as follows:
+        "1.1. Compute a Short-Time Fourier Transform (STFT; Sn) on each channel of the
+        noise recording (Xnoise).
+        1.2. For each frequency channel, compute spectral statistics (µn, σn) over the noise
+        STFT (Sn).
+        1.3. Compute a noise threshold based upon the statistics of the noise and the desired
+        sensitivity."
+
+    Reference:
+        Sainburg, Tim, and Asaf Zorea. Noisereduce: Domain General Noise Reduction for Time Series Signals.
+        arXiv:2412.17851, arXiv, 19 Dec. 2024. arXiv.org, https://doi.org/10.48550/arXiv.2412.17851.
+
+    In this implementation, the noise threshold is specified as a fixed percentile of the
+    energy of the spectral bins. As this function may be used for diverse bioacoustic applications,
+    this approach is robust to the specific characteristics of the noise.
+
     Parameters:
         audio (Audio): Audio object containing waveform and metadata.
         frame_length (int): Frame size for STFT.
