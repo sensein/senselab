@@ -43,7 +43,7 @@ class HuggingFaceASR:
         Returns:
             pipeline: The ASR pipeline.
         """
-        device, torch_dtype = _select_device_and_dtype(
+        device, _ = _select_device_and_dtype(
             user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
         )
         key = (
@@ -60,7 +60,6 @@ class HuggingFaceASR:
                 chunk_length_s=chunk_length_s,
                 batch_size=batch_size,
                 device=device.value,
-                torch_dtype=torch_dtype,
             )
         return cls._pipelines[key]
 
@@ -73,7 +72,7 @@ class HuggingFaceASR:
         return_timestamps: Optional[str] = "word",
         max_new_tokens: int = 128,
         chunk_length_s: int = 30,
-        batch_size: int = 16,
+        batch_size: int = 1,
         device: Optional[DeviceType] = None,
     ) -> List[ScriptLine]:
         """Transcribes all audio samples in the dataset.
@@ -86,7 +85,10 @@ class HuggingFaceASR:
             return_timestamps (Optional[str]): The level of timestamp details (default is "word").
             max_new_tokens (int): The maximum number of new tokens (default is 128).
             chunk_length_s (int): The length of audio chunks in seconds (default is 30).
-            batch_size (int): The batch size for processing (default is 16).
+            batch_size (int): The batch size for processing (default is 1).
+                Note: Issues have been observed with long audio recordings and timestamped transcript
+                if the batch_size is high - not exactly clear what high means
+                (https://github.com/huggingface/transformers/issues/2615#issuecomment-656923205).
             device (Optional[DeviceType]): The device to run the model on (default is None).
 
         Returns:
@@ -158,7 +160,8 @@ class HuggingFaceASR:
         start_time_transcription = time.time()
         # Run the pipeline
         transcriptions = pipe(
-            formatted_audios, generate_kwargs={"language": f"{language.name.lower()}"} if language else {}
+            formatted_audios,
+            generate_kwargs={"language": f"{language.name.lower()}", "num_beams": 1} if language else {"num_beams": 1},
         )
 
         # Take the end time of the transcription

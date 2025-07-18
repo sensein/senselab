@@ -6,9 +6,9 @@ Note that a code of conduct applies to all spaces managed by the `senselab` proj
 ## Workflow
 Please use the following workflow when contributing:
 
-0. **Install poetry and poetry-dynamic-versioning plugin for dynamic versioning**:
-  - ```pipx install poetry```
-  - ```pipx inject poetry "poetry-dynamic-versioning[plugin]"```
+0. **Install poetry**:
+  - Make sure `ffmpeg` is installed in your system. If not, please install it (see [here](https://www.ffmpeg.org/download.html) for detailed platform-dependent instructions).
+  - ```pipx install poetry``` (alternative installation strategies [here](https://python-poetry.org/docs/#installation))
 1. **Create an issue**: Use GitHub to create an issuel, assign it to yourself (and any collaborators) and, if you have access, add it to the [Project board](https://github.com/orgs/sensein/projects/45).
 2. **Create a branch**: Use GitHub's "Create a branch" button from the issue page to generate a branch associated with the issue.
 3. **Clone the repo locally**:
@@ -16,8 +16,14 @@ Please use the following workflow when contributing:
 4. **Checkout locally**:
     - ```git fetch origin```
     - ```git checkout <branch-name>```
-5. **Install all required dependencies**:
-  - ```poetry install --with dev,docs```
+
+5a. **Install CUDA libraries**: Install CUDA libraries, maybe using conda, matching the CUDA version expected by the PyTorch wheels (e.g., the latest pytorch 2.7 expects cuda-12.6):
+  - ```conda config --add channels nvidia```
+  - ```conda install -y nvidia/label/cuda-12.6.3::cuda-libraries-dev```
+
+
+5b. **Install all required dependencies** (we recommend to test your code both with all extras and the minimum required set of extras):
+  - ```poetry install --extras "audio articulatory text video" --with dev,docs```
 6. **Install pre-commit hooks**:
   ```poetry run pre-commit install```
 7. **Work locally on the issue branch.**
@@ -39,7 +45,7 @@ Please use the following workflow when contributing:
           ```poetry run ruff check --fix```
       - Spell checking:
         ```poetry run codespell```
-10. **Add repository secrets**: From your github web interface, add the following repository secrets: ```CODECOV_TOKEN``` (CodeCov), ```HF_TOKEN``` (HuggingFace), ```PYPI_TOKEN``` (Pypi).
+10. **Add repository secrets** (maintainers only): From your github web interface, add the following repository secrets: ```CODECOV_TOKEN``` (CodeCov), ```HF_TOKEN``` (HuggingFace), ```PYPI_TOKEN``` (Pypi).
 11. **Submit a pull request**: Once you are done adding your new amazing functionality, submit a pull request to merge the upstream issue branch into the upstream main.
 12. **Don’t worry much about point 9**: Just joking, there’s nothing there – just making sure you're paying attention!
 
@@ -49,7 +55,7 @@ It also facilitates incremental neatly scoped changes since it tends to keep the
 **If you would like to change this workflow, please use the current process to suggest a change to this document.**
 
 ### The biometrics-book
-If you feel that the functionality you have added to senselab requires some extra explanation, or you want to share some of the knowledge you obtained during the process (e.g., you implemented an API for speaker diarization and want to write a brief explanation about what speaker diarization means and how it's generally evaluated), you can contribute to the [Biometrics-book](https://github.com/sensein/biometrics-book)!
+If you feel that the functionality you have added to senselab requires some extra explanation, or you want to share some of the knowledge you obtained during the process (e.g., you implemented an API for speaker diarization and want to write a brief explanation about what speaker diarization means and how it's generally evaluated), you can contribute to the [Biometrics-book](https://sensein.group/biometrics-book/intro.html) (code [here](https://github.com/sensein/biometrics-book))!
 
 
 ### An example of well documented function following Google-style

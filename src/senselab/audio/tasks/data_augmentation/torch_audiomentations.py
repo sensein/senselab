@@ -3,7 +3,6 @@
 from typing import List, Optional
 
 import torch
-from torch_audiomentations import Compose
 
 from senselab.audio.data_structures import (
     Audio,
@@ -12,9 +11,16 @@ from senselab.audio.data_structures import (
 )
 from senselab.utils.data_structures import DeviceType, _select_device_and_dtype
 
+try:
+    from torch_audiomentations import Compose
+
+    TORCH_AUDIOMENTATIONS_AVAILABLE = True
+except ModuleNotFoundError:
+    TORCH_AUDIOMENTATIONS_AVAILABLE = False
+
 
 def augment_audios_with_torch_audiomentations(
-    audios: List[Audio], augmentation: Compose, device: Optional[DeviceType] = None
+    audios: List[Audio], augmentation: "Compose", device: Optional[DeviceType] = None
 ) -> List[Audio]:
     """Augments all provided audios with a given augmentation, either individually or all batched together.
 
@@ -37,8 +43,14 @@ def augment_audios_with_torch_audiomentations(
             not necessarily mean that the augmentation has been run on every audio. For more information,
             see the torch-audiomentations documentation.
     """
+    if not TORCH_AUDIOMENTATIONS_AVAILABLE:
+        raise ModuleNotFoundError(
+            "`torch-audiomentations` is not installed. "
+            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`"
+        )
+
     augmentation.output_type = "dict"
-    device_type, dtype = _select_device_and_dtype(
+    device_type, _ = _select_device_and_dtype(
         user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
     )
     if device_type == DeviceType.CPU:
@@ -63,7 +75,6 @@ def augment_audios_with_torch_audiomentations(
                 waveform=torch.squeeze(augmented_waveform),
                 sampling_rate=audio.sampling_rate,
                 metadata=audio.metadata.copy(),
-                orig_path_or_id=audio.orig_path_or_id,
             )
 
         _augment_single_audio_pt = pydra.mark.task(_augment_single_audio)
@@ -89,14 +100,13 @@ def augment_audios_with_torch_audiomentations(
                     waveform=torch.squeeze(augmented_audio),
                     sampling_rate=audio.sampling_rate,
                     metadata=audio.metadata.copy(),
-                    orig_path_or_id=audio.orig_path_or_id,
                 )
             )
         return new_audios
     else:
         batched_audios, sampling_rates, metadatas = batch_audios(audios)
 
-        batched_audios = batched_audios.to(device=torch.device(device_type.value), dtype=dtype)
+        batched_audios = batched_audios.to(device=torch.device(device_type.value))
         sampling_rate = sampling_rates[0] if isinstance(sampling_rates, List) else sampling_rates
         augmented_audio = augmentation(batched_audios, sample_rate=sampling_rate).samples
 

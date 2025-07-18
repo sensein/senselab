@@ -1,5 +1,20 @@
 """This module implements some utilities for the model class."""
 
+try:
+    import torchaudio
+
+    TORCHAUDIO_AVAILABLE = True
+except ModuleNotFoundError:
+    TORCHAUDIO_AVAILABLE = False
+
+try:
+    from TTS.api import TTS
+
+    TTS_AVAILABLE = True
+except ModuleNotFoundError:
+    TTS_AVAILABLE = False
+    TTS = None  # This is to avoid errors during pdoc documentation generation
+
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -7,7 +22,6 @@ from typing import Optional, Union
 
 import requests
 import torch
-import torchaudio
 from huggingface_hub import HfApi
 from huggingface_hub.hf_api import ModelInfo
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
@@ -69,6 +83,8 @@ class HFModel(SenselabModel):
 
     def get_model_info(self) -> ModelInfo:
         """Gets the model info using the HuggingFace API and saves it as a property."""
+        if isinstance(self.path_or_uri, Path):
+            raise ValueError("Model info is only available for remote resources and not for files.")
         if not self.info:
             api = HfApi()
             self.info = api.model_info(repo_id=self.path_or_uri, revision=self.revision)
@@ -91,6 +107,32 @@ class SentenceTransformersModel(HFModel):
     """SentenceTransformersModel model."""
 
     pass
+
+
+class CoquiTTSModel(SenselabModel):
+    """CoquiTTSModel model."""
+
+    _scope: Optional[str] = None
+
+    @field_validator("path_or_uri", mode="before")
+    def validate_path_or_uri(cls, value: Union[str, Path]) -> Union[str, Path]:
+        """Validate the path_or_uri.
+
+        This check is only for remote resources and not for files.
+        It checks if the specified torch model ID and revision exist in the remote Hub.
+        """
+        if not TTS_AVAILABLE:
+            raise ModuleNotFoundError(
+                "`coqui-tts` is not installed. "
+                "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+            )
+        if not isinstance(value, Path):
+            model_ids = TTS().list_models()
+            if value not in model_ids:
+                raise ValueError(f"Model {value} not found. Available models: {model_ids}")
+            cls._scope = value.split("/")[0]
+
+        return value
 
 
 class TorchModel(SenselabModel):
@@ -133,6 +175,12 @@ class TorchAudioModel(SenselabModel):
 
 def check_torchaudio_model_exists(model_id: str) -> bool:
     """Private function to check if a torchaudio model exists."""
+    if not TORCHAUDIO_AVAILABLE:
+        raise ModuleNotFoundError(
+            "`torchaudio` is not installed. "
+            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+        )
+
     try:
         _ = getattr(torchaudio.pipelines, model_id)
         return True

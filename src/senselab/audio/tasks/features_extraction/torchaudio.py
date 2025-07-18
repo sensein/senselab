@@ -6,7 +6,13 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pydra
 import torch
-import torchaudio
+
+try:
+    import torchaudio
+
+    TORCHAUDIO_AVAILABLE = True
+except ModuleNotFoundError:
+    TORCHAUDIO_AVAILABLE = False
 
 from senselab.audio.data_structures import Audio
 
@@ -28,6 +34,12 @@ def extract_spectrogram_from_audios(
     Returns:
         List[Dict[str, torch.Tensor]]: List of Dict objects containing spectrograms.
     """
+    if not TORCHAUDIO_AVAILABLE:
+        raise ModuleNotFoundError(
+            "`torchaudio` is not installed. "
+            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+        )
+
     if win_length is None:
         win_length = n_fft
     if hop_length is None:
@@ -65,6 +77,12 @@ def extract_mel_spectrogram_from_audios(
     Returns:
         List[Dict[str, torch.Tensor]]: List of Dict objects containing mel spectrograms.
     """
+    if not TORCHAUDIO_AVAILABLE:
+        raise ModuleNotFoundError(
+            "`torchaudio` is not installed. "
+            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+        )
+
     if win_length is None:
         win_length = n_fft
     if hop_length is None:
@@ -109,6 +127,12 @@ def extract_mfcc_from_audios(
     Returns:
         List[Dict[str, torch.Tensor]]: List of Dict objects containing MFCCs.
     """
+    if not TORCHAUDIO_AVAILABLE:
+        raise ModuleNotFoundError(
+            "`torchaudio` is not installed. "
+            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+        )
+
     if win_length is None:
         win_length = n_ftt
     if hop_length is None:
@@ -149,6 +173,12 @@ def extract_mel_filter_bank_from_audios(
     Returns:
         List[Dict[str, torch.Tensor]]: List of Dict objects containing mel filter banks.
     """
+    if not TORCHAUDIO_AVAILABLE:
+        raise ModuleNotFoundError(
+            "`torchaudio` is not installed. "
+            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+        )
+
     if win_length is None:
         win_length = n_fft
     if hop_length is None:
@@ -184,6 +214,12 @@ def extract_mel_filter_bank_from_spectrograms(
     Returns:
         List[Dict[str, torch.Tensor]]: List of Dict objects containing mel filter banks.
     """
+    if not TORCHAUDIO_AVAILABLE:
+        raise ModuleNotFoundError(
+            "`torchaudio` is not installed. "
+            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+        )
+
     mel_filter_banks = []
     for spectrogram in spectrograms:
         try:
@@ -214,6 +250,12 @@ def extract_pitch_from_audios(
     Returns:
         List[Dict[str, torch.Tensor]]: List of Dict objects containing pitches.
     """
+    if not TORCHAUDIO_AVAILABLE:
+        raise ModuleNotFoundError(
+            "`torchaudio` is not installed. "
+            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+        )
+
     if freq_low <= 0:
         raise ValueError("freq_low should be bigger than 0")
 
@@ -290,7 +332,7 @@ def extract_torchaudio_features_from_audios(
         extract_spectrogram_from_audios_pt(
             name="extract_spectrogram_from_audios_pt",
             audios=wf.lzin.x,
-            n_nfft=n_fft,
+            n_fft=n_fft,
             win_length=win_length,
             hop_length=hop_length,
         )
@@ -300,7 +342,7 @@ def extract_torchaudio_features_from_audios(
             name="extract_mel_spectrogram_from_audios_pt",
             audios=wf.lzin.x,
             n_mels=n_mels,
-            n_nfft=n_fft,
+            n_fft=n_fft,
             win_length=win_length,
             hop_length=hop_length,
         )
@@ -311,7 +353,7 @@ def extract_torchaudio_features_from_audios(
             spectrograms=wf.extract_spectrogram_from_audios_pt.lzout.out,
             sampling_rate=wf._extract_sampling_rate_pt.lzout.out,
             n_mels=n_mels,
-            n_nfft=n_fft,
+            n_fft=n_fft,
         )
     )
     wf.add(

@@ -1,10 +1,17 @@
 """This module implements some utilities for the preprocessing task."""
 
+try:
+    from speechbrain.augment.time_domain import Resample
+
+    SPEECHBRAIN_AVAILABLE = True
+except ModuleNotFoundError:
+    SPEECHBRAIN_AVAILABLE = False
+
+
 from typing import List, Optional, Tuple
 
 import torch
 from scipy import signal
-from speechbrain.augment.time_domain import Resample
 
 from senselab.audio.data_structures import Audio
 
@@ -26,6 +33,12 @@ def resample_audios(
     Returns:
         List[Audio]: Resampled audio objects.
     """
+    if not SPEECHBRAIN_AVAILABLE:
+        raise ModuleNotFoundError(
+            "`speechbrain` is not installed. "
+            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+        )
+
     resampled_audios = []
     for audio in audios:
         if lowcut is None:
@@ -45,7 +58,6 @@ def resample_audios(
                 waveform=resampled_waveform,
                 sampling_rate=resample_rate,
                 metadata=audio.metadata.copy(),
-                orig_path_or_id=audio.orig_path_or_id,
             )
         )
     return resampled_audios
@@ -68,7 +80,6 @@ def downmix_audios_to_mono(audios: List[Audio]) -> List[Audio]:
                 waveform=audio.waveform.mean(dim=0, keepdim=True),
                 sampling_rate=audio.sampling_rate,
                 metadata=audio.metadata.copy(),
-                orig_path_or_id=audio.orig_path_or_id,
             )
         )
 
@@ -96,7 +107,6 @@ def select_channel_from_audios(audios: List[Audio], channel_index: int) -> List[
                 waveform=audio.waveform[channel_index, :],
                 sampling_rate=audio.sampling_rate,
                 metadata=audio.metadata.copy(),
-                orig_path_or_id=audio.orig_path_or_id,
             )
         )
     return mono_channel_audios
@@ -132,7 +142,6 @@ def chunk_audios(data: List[Tuple[Audio, Tuple[float, float]]]) -> List[Audio]:
                 waveform=chunked_waveform,
                 sampling_rate=audio.sampling_rate,
                 metadata=audio.metadata.copy(),
-                orig_path_or_id=audio.orig_path_or_id,
             )
         )
     return chunked_audios
@@ -179,7 +188,6 @@ def pad_audios(audios: List[Audio], desired_samples: int) -> List[Audio]:
             waveform=padded_waveform,
             sampling_rate=audio.sampling_rate,
             metadata=audio.metadata.copy(),
-            orig_path_or_id=audio.orig_path_or_id,
         )
         padded_audios.append(padded_audio)
     return padded_audios
@@ -246,7 +254,7 @@ def concatenate_audios(audios: List[Audio]) -> Audio:
         if audio.waveform.shape[0] != num_channels:
             raise ValueError("All audios must have the same number of channels (mono or stereo) to concatenate.")
 
-    concatenated_waveform = torch.cat([audio.waveform for audio in audios], dim=1)
+    concatenated_waveform = torch.cat([audio.waveform.cpu() for audio in audios], dim=1)
 
     # TODO: do we want to concatenate metadata? TBD
 

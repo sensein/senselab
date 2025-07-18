@@ -1,11 +1,9 @@
 """Align function based on WhisperX implementation."""
 
-import math
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
 import torch
-from nltk.tokenize.punkt import PunktParameters, PunktSentenceTokenizer
 from threadpoolctl import threadpool_limits
 from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
 
@@ -18,15 +16,19 @@ from senselab.audio.tasks.forced_alignment.constants import (
     SAMPLE_RATE,
 )
 from senselab.audio.tasks.forced_alignment.data_structures import (
-    AlignedTranscriptionResult,
     Point,
     Segment,
-    SingleAlignedSegment,
     SingleSegment,
-    SingleWordSegment,
 )
 from senselab.audio.tasks.preprocessing import extract_segments, pad_audios
 from senselab.utils.data_structures import DeviceType, HFModel, Language, ScriptLine, _select_device_and_dtype
+
+try:
+    from nltk.tokenize.punkt import PunktParameters, PunktSentenceTokenizer
+
+    NLTK_AVAILABLE = True
+except ModuleNotFoundError:
+    NLTK_AVAILABLE = False
 
 
 def _preprocess_segments(
@@ -36,18 +38,24 @@ def _preprocess_segments(
     print_progress: bool,
     combined_progress: bool,
 ) -> List[SingleSegment]:
-    """Preprocess transcription segments by filtering characters, handling spaces, and preparing text.
+    """Preprocess segments by cleaning characters and handling spaces.
 
     Args:
-        transcript (List[SingleSegment]): The list of transcription segments.
-        model_dictionary (Dict[str, int]): Dictionary for the alignment model.
-        model_lang (Language): Language of the model.
-        print_progress (bool): Whether to print progress.
-        combined_progress (bool): Whether to combine progress percentage.
+        transcript (List[SingleSegment]): The transcription segments.
+        model_dictionary (Dict[str, int]): The model's character dictionary.
+        model_lang (Language): The language configuration of the model.
+        print_progress (bool): If True, print progress updates.
+        combined_progress (bool): If True, combine progress into a single percentage.
 
     Returns:
         List[SingleSegment]: The preprocessed transcription segments.
     """
+    if not NLTK_AVAILABLE:
+        raise ModuleNotFoundError(
+            "`nltk` is not installed. "
+            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+        )
+
     total_segments = len(transcript)
 
     for sdx, segment in enumerate(transcript):
@@ -60,7 +68,6 @@ def _preprocess_segments(
         num_trailing = len(segment["text"]) - len(segment["text"].rstrip())
         text = segment["text"]
 
-        # Split into words
         if model_lang.alpha_2 not in LANGUAGES_WITHOUT_SPACES:
             per_word = text.split(" ")
         else:
@@ -68,7 +75,7 @@ def _preprocess_segments(
 
         clean_char, clean_cdx = [], []
         for cdx, char in enumerate(text):
-            char_ = char.lower()
+            char_ = char.upper()
             if model_lang.alpha_2 not in LANGUAGES_WITHOUT_SPACES:
                 char_ = char_.replace(" ", "|")
 
@@ -99,21 +106,30 @@ def _preprocess_segments(
 def _can_align_segment(
     segment: SingleSegment, model_dictionary: Dict[str, int], t1: float, max_duration: float
 ) -> bool:
-    """Checks if a segment can be aligned.
+    """Check if a segment can be aligned based on content and timing.
 
     Args:
         segment (SingleSegment): The segment to check.
-        model_dictionary (Dict[str, int]): Dictionary for character indices.
-        t1 (float): Start time of the segment.
-        max_duration (float): Maximum duration of the audio.
+        model_dictionary (Dict[str, int]): Model character dictionary.
+        t1 (float): Segment start time.
+        max_duration (float): Maximum allowed audio duration.
 
     Returns:
-        bool: True if the segment can be aligned, False otherwise.
+        bool: True if alignable, False otherwise.
     """
+    # Check if segment has clean characters
     if segment["clean_char"] is None or len(segment["clean_char"]) == 0:
         return False
+
+    # Check if segment is within duration bounds
     if t1 >= max_duration:
         return False
+
+    # Check if all clean chars are in model dictionary
+    for char in segment["clean_char"]:
+        if char not in model_dictionary:
+            return False
+
     return True
 
 
@@ -124,17 +140,17 @@ def _get_prediction_matrix(
     model_type: str,
     device: DeviceType,
 ) -> torch.Tensor:
-    """Generate prediction matrix from the alignment model.
+    """Obtain the prediction (emission) matrix from the model.
 
     Args:
         model (torch.nn.Module): The alignment model.
-        waveform_segment (torch.Tensor): The audio segment to be processed.
-        lengths (Optional[torch.Tensor]): Lengths of the audio segments.
-        model_type (str): The type of the model ('torchaudio' or 'huggingface').
-        device (DeviceType): The device to run the model on.
+        waveform_segment (torch.Tensor): Audio segment tensor.
+        lengths (Optional[torch.Tensor]): Lengths of audio segments.
+        model_type (str): 'torchaudio' or 'huggingface'.
+        device (DeviceType): Device for computation.
 
     Returns:
-        torch.Tensor: The prediction matrix.
+        torch.Tensor: The log-softmax emissions.
     """
     with torch.inference_mode():
         if model_type == "torchaudio":
@@ -149,111 +165,64 @@ def _get_prediction_matrix(
     return emissions
 
 
-def _assign_timestamps_to_characters(
-    text: str, segment: SingleSegment, char_segments: list, ratio: float, t1: float, model_lang: Language
-) -> pd.DataFrame:
-    """Assigns timestamps to aligned characters and organizes them into a DataFrame.
+def _assign_timestamps(
+    segment: SingleSegment, char_segments: List[Segment], ratio: float, t1: float, model_lang: Language
+) -> Dict[str, Any]:
+    """Assign timestamps to each character, grouping them into words and sentences.
 
     Args:
-        text (str): The text to align with the segment.
-        segment (SingleSegment): The segment containing character indices.
-        char_segments (list): List of character segments with alignment information.
-        ratio (float): The ratio of duration to waveform segment size.
-        t1 (float): Start time of the segment.
-        model_lang (Language): Language of the model.
+        segment (SingleSegment): The segment containing text and timing information.
+        char_segments (List[Segment]): A list of character-level alignment segments.
+        ratio (float): The ratio used to convert frame indices to timestamps.
+        t1 (float): The starting time of the segment in seconds.
+        model_lang (Language): The language configuration, used to determine word boundaries.
 
     Returns:
-        pd.DataFrame: DataFrame containing character alignments with timestamps and word indices.
+        Dict[str, Any]: A nested structure with aligned sentence, word, and character chunks.
     """
-    char_segments_arr = []
-    word_idx = 0
+    text = segment["text"]
+    start = segment["start"]
+    end = segment["end"]
+
+    clean_cdx = segment["clean_cdx"] or []
+
+    aligned_segment_dict: Dict[str, Any] = {"text": text, "timestamps": [start, end], "chunks": []}
+    current_word_dict: Dict[str, Any] = {"text": "", "timestamps": [], "chunks": []}
+    current_subsegment_dict: Dict[str, Any] = {"text": "", "timestamps": [], "chunks": []}
+
     for cdx, char in enumerate(text):
-        start, end, score = None, None, None
-        if segment["clean_cdx"] is not None and cdx in segment["clean_cdx"]:
-            char_seg = char_segments[segment["clean_cdx"].index(cdx)]
-            start = round(char_seg.start * ratio + t1, 3)
-            end = round(char_seg.end * ratio + t1, 3)
-            score = round(char_seg.score, 3)
+        if cdx in clean_cdx:
+            char_seg_index = clean_cdx.index(cdx)
+            char_seg = char_segments[char_seg_index]
+            char_dict = {"text": char, "timestamps": [round(x * ratio + t1, 3) for x in [char_seg.start, char_seg.end]]}
+            current_word_dict["chunks"].append(char_dict)
+            current_word_dict["text"] += char
 
-        char_segments_arr.append(
-            {
-                "char": char,
-                "start": start,
-                "end": end,
-                "score": score,
-                "word-idx": word_idx,
-            }
-        )
+        is_end_of_text = cdx == len(text) - 1
+        next_is_space = (not is_end_of_text) and (text[cdx + 1] == " ")
+        if (model_lang.alpha_2 in LANGUAGES_WITHOUT_SPACES) or is_end_of_text or next_is_space:
+            if current_word_dict["chunks"]:
+                merged_timestamps = [t for c in current_word_dict["chunks"] for t in c["timestamps"]]
+                current_word_dict["timestamps"] = [min(merged_timestamps), max(merged_timestamps)]
+            current_subsegment_dict["text"] += current_word_dict["text"]
+            current_subsegment_dict["chunks"].append(current_word_dict)
+            current_word_dict = {"text": "", "timestamps": [], "chunks": []}
 
-        if model_lang.alpha_2 in LANGUAGES_WITHOUT_SPACES:
-            word_idx += 1
-        elif cdx == len(text) - 1 or text[cdx + 1] == " ":
-            word_idx += 1
+        if char == "." or is_end_of_text:
+            if current_subsegment_dict["chunks"]:
+                merged_timestamps = [t for c in current_subsegment_dict["chunks"] for t in c["timestamps"]]
+                current_subsegment_dict["timestamps"] = [min(merged_timestamps), max(merged_timestamps)]
+            aligned_segment_dict["chunks"].append(current_subsegment_dict)
+            current_subsegment_dict = {"text": "", "timestamps": [], "chunks": []}
 
-    return pd.DataFrame(char_segments_arr)
+    for subsegment in aligned_segment_dict["chunks"]:
+        subsegment["text"] = subsegment["text"].strip() + "."
+        for word in subsegment["chunks"]:
+            word["text"] = word["text"].strip()
 
-
-def _align_subsegments(
-    segment: SingleSegment,
-    char_segments_df: pd.DataFrame,
-    text: str,
-    word_segments: List[SingleWordSegment],
-    aligned_subsegments: List[SingleAlignedSegment],
-    return_char_alignments: bool,
-) -> None:
-    """Aligns sentence spans to create subsegments and update word segments.
-
-    Args:
-        segment (SingleSegment): The segment containing sentence spans.
-        char_segments_df (pd.DataFrame): DataFrame with character alignments.
-        text (str): The text to align with the segment.
-        word_segments (List[SingleWordSegment]): List to store word segments.
-        aligned_subsegments (List[SingleAlignedSegment]): List to store aligned subsegments.
-        return_char_alignments (bool): Flag to return character alignments.
-
-    Returns:
-        None: The function modifies the word_segments and aligned_subsegments lists in place.
-    """
-    for sdx, (sstart, send) in enumerate(segment["sentence_spans"] or []):
-        curr_chars = char_segments_df.loc[(char_segments_df.index >= sstart) & (char_segments_df.index <= send)]
-        char_segments_df.loc[(char_segments_df.index >= sstart) & (char_segments_df.index <= send), "sentence-idx"] = (
-            sdx
-        )
-
-        sentence_text = text[sstart:send]
-        sentence_start = curr_chars["start"].min()
-        end_chars = curr_chars[curr_chars["char"] != " "]
-        sentence_end = end_chars["end"].max()
-        sentence_words = []
-
-        for word_idx in curr_chars["word-idx"].unique():
-            word_chars = curr_chars.loc[curr_chars["word-idx"] == word_idx]
-            word_text = "".join(word_chars["char"].tolist()).strip()
-            if len(word_text) == 0:
-                continue
-
-            word_chars = word_chars[word_chars["char"] != " "]
-
-            word_start = word_chars["start"].min()
-            word_end = word_chars["end"].max()
-            word_score = round(word_chars["score"].mean(), 3)
-
-            word_segment = SingleWordSegment(word=word_text, start=word_start, end=word_end, score=word_score)
-
-            sentence_words.append(word_segment)
-            word_segments.append(word_segment)
-
-        aligned_subsegment = SingleAlignedSegment(
-            text=sentence_text, start=sentence_start, end=sentence_end, words=sentence_words, chars=word_chars
-        )
-        aligned_subsegments.append(aligned_subsegment)
-
-        if return_char_alignments:
-            curr_chars = curr_chars[["char", "start", "end", "score"]]
-            curr_chars.fillna(-1, inplace=True)
-            curr_chars = curr_chars.to_dict("records")
-            curr_chars = [{key: val for key, val in char.items() if val != -1} for char in curr_chars]
-            aligned_subsegments[-1]["chars"] = curr_chars
+    aligned_segment_dict["timestamps"][0] = aligned_segment_dict["chunks"][0]["timestamps"][0]
+    aligned_segment_dict["timestamps"][1] = aligned_segment_dict["chunks"][-1]["timestamps"][1]
+    return aligned_segment_dict
 
 
 def _align_single_segment(
@@ -266,40 +235,28 @@ def _align_single_segment(
     device: DeviceType,
     t1: float,
     t2: float,
-    return_char_alignments: bool,
-    interpolate_method: str,
-    aligned_segment: SingleAlignedSegment,
-    aligned_segments: List[SingleAlignedSegment],
-    word_segments: List[SingleWordSegment],
-) -> None:
-    """Processes and aligns a single segment.
+) -> Optional[dict]:
+    """Align a single transcription segment by extracting audio, running inference, and decoding alignments.
 
     Args:
-        segment (SingleSegment): The segment to align.
-        model (torch.nn.Module): The alignment model.
-        model_dictionary (Dict[str, int]): Dictionary for character indices.
-        model_lang (Language): Language of the model.
-        model_type (str): Either 'huggingface' or 'torchaudio'.
+        segment (SingleSegment): The segment with text and timing.
+        model (torch.nn.Module): The trained alignment model.
+        model_dictionary (Dict[str, int]): Mapping of characters to tokens.
+        model_lang (Language): The language configuration.
+        model_type (str): 'huggingface' or 'torchaudio'.
         audio (Audio): The audio data.
-        device (DeviceType): The device to run the model on.
-        t1 (float): Start time of the segment.
-        t2 (float): End time of the segment.
-        return_char_alignments (bool): Flag to return character alignments.
-        interpolate_method (str): Method for interpolating NaNs.
-        aligned_segment (SingleAlignedSegment ): The aligned segment data.
-        aligned_segments (List[SingleAlignedSegment]): List to store aligned segments.
-        word_segments (List[SingleWordSegment]): List to store word segments.
+        device (DeviceType): The device to run inference on.
+        t1 (float): Segment start time.
+        t2 (float): Segment end time.
 
     Returns:
-        None: The function modifies the aligned_segments and word_segments lists in place.
+        dict or None: A dictionary with aligned segment info, or None if alignment fails.
     """
     text_clean = "".join(segment["clean_char"] or [])
     tokens = [model_dictionary[c] for c in text_clean]
-
     extracted_segment = extract_segments([(audio, [(t1, t2)])])[0][0]
     lengths = torch.tensor([extracted_segment.waveform.shape[-1]])
     waveform_segment = pad_audios([extracted_segment], MINIMUM_SEGMENT_SIZE)[0].waveform
-
     emissions = _get_prediction_matrix(
         model=model, waveform_segment=waveform_segment, lengths=lengths, model_type=model_type, device=device
     )
@@ -307,7 +264,7 @@ def _align_single_segment(
 
     blank_id = 0
     for char, code in model_dictionary.items():
-        if char == "[pad]" or char == "<pad>":
+        if char in ["[pad]", "<pad>"]:
             blank_id = code
 
     trellis = _get_trellis(emission, tokens, blank_id)
@@ -315,60 +272,25 @@ def _align_single_segment(
 
     if path is None:
         print(f'Failed to align segment ("{segment["text"]}"): backtrack failed, resorting to original...')
-        aligned_segments.append(aligned_segment)
-        return
+        return None
 
     char_segments = _merge_repeats(path, text_clean)
-
     duration = t2 - t1
     ratio = duration * waveform_segment.size(0) / (trellis.size(0) - 1)
-
-    char_segments_df = _assign_timestamps_to_characters(segment["text"], segment, char_segments, ratio, t1, model_lang)
-
-    aligned_subsegments: List[SingleAlignedSegment] = []
-    if isinstance(char_segments_df, pd.DataFrame):
-        char_segments_df["sentence-idx"] = None
-    else:
-        raise TypeError("char_segments_df must be a pandas DataFrame.")
-
-    if segment["sentence_spans"] is not None:
-        _align_subsegments(
-            segment=segment,
-            char_segments_df=char_segments_df,
-            text=segment["text"],
-            word_segments=word_segments,
-            aligned_subsegments=aligned_subsegments,
-            return_char_alignments=True,
-        )
-
-        if aligned_subsegments:
-            aligned_subsegments_df = pd.DataFrame(aligned_subsegments)
-
-            aligned_subsegments_df["start"] = _interpolate_nans(
-                aligned_subsegments_df["start"], method=interpolate_method
-            )
-            aligned_subsegments_df["end"] = _interpolate_nans(aligned_subsegments_df["end"], method=interpolate_method)
-            agg_dict = {"text": " ".join, "words": "sum"}
-            if model_lang.alpha_2 in LANGUAGES_WITHOUT_SPACES:
-                agg_dict["text"] = "".join
-            if return_char_alignments:
-                agg_dict["chars"] = "sum"
-            aligned_subsegments_df.groupby(["start", "end"], as_index=False).agg(agg_dict)
-            aligned_subsegments = aligned_subsegments_df.to_dict("records")
-
-    aligned_segments.extend(aligned_subsegments)
+    aligned_segment = _assign_timestamps(segment, char_segments, ratio, t1, model_lang)
+    return aligned_segment
 
 
 def _get_trellis(emission: torch.Tensor, tokens: List[int], blank_id: int = 0) -> torch.Tensor:
-    """Gets the trellis for token alignment.
+    """Compute the trellis matrix for alignment.
 
     Args:
-        emission (torch.Tensor): The emission matrix from the model.
-        tokens (List[int]): The token IDs.
-        blank_id (int): The ID for the blank token.
+        emission (torch.Tensor): Emission log probabilities.
+        tokens (List[int]): Target token sequence.
+        blank_id (int): Blank token ID.
 
     Returns:
-        torch.Tensor: The trellis matrix.
+        torch.Tensor: The computed trellis matrix.
     """
     num_frame = emission.size(0)
     num_tokens = len(tokens)
@@ -390,16 +312,16 @@ def _get_trellis(emission: torch.Tensor, tokens: List[int], blank_id: int = 0) -
 def _backtrack(
     trellis: torch.Tensor, emission: torch.Tensor, tokens: List[int], blank_id: int = 0
 ) -> Optional[List[Point]]:
-    """Backtracks to find the best path through the trellis.
+    """Backtrack through the trellis to find the best path.
 
     Args:
         trellis (torch.Tensor): The trellis matrix.
-        emission (torch.Tensor): The emission matrix from the model.
-        tokens (List[int]): The token IDs.
-        blank_id (int): The ID for the blank token.
+        emission (torch.Tensor): The emission matrix.
+        tokens (List[int]): Target tokens.
+        blank_id (int): Blank token ID.
 
     Returns:
-        Optional[List[Point]]: The best path as a list of Points.
+        Optional[List[Point]]: The best path of Points or None if not found.
     """
     j = trellis.size(1) - 1
     t_start = int(torch.argmax(trellis[:, j]).item())
@@ -421,14 +343,14 @@ def _backtrack(
 
 
 def _merge_repeats(path: List[Point], transcript: str) -> List[Segment]:
-    """Merges repeated tokens in the alignment path.
+    """Merge repeated tokens in the alignment path.
 
     Args:
-        path (List[Point]): The alignment path.
-        transcript (str): The transcript text.
+        path (List[Point]): The alignment path points.
+        transcript (str): Original transcript string.
 
     Returns:
-        List[Segment]: The merged segments.
+        List[Segment]: Segments after merging repeated tokens.
     """
     i1, i2 = 0, 0
     segments = []
@@ -448,22 +370,6 @@ def _merge_repeats(path: List[Point], transcript: str) -> List[Segment]:
     return segments
 
 
-def _interpolate_nans(x: pd.Series, method: str = "nearest") -> pd.Series:
-    """Interpolates NaN values in a pandas Series.
-
-    Args:
-        x (pd.Series): The pandas Series.
-        method (str): The interpolation method (default: "nearest").
-
-    Returns:
-        pd.Series: The Series with interpolated NaNs.
-    """
-    if x.notnull().sum() > 1:
-        return x.interpolate(method=method).ffill().bfill()
-    else:
-        return x.ffill().bfill()
-
-
 def _align_segments(
     transcript: List[SingleSegment],
     model: torch.nn.Module,
@@ -473,89 +379,37 @@ def _align_segments(
     audio: Audio,
     device: DeviceType,
     max_duration: float,
-    return_char_alignments: bool,
-    interpolate_method: str,
-) -> Tuple[List[SingleAlignedSegment], List[SingleWordSegment]]:
-    """Align segments based on the predictions.
+) -> List[ScriptLine | None]:
+    """Align each transcription segment with the audio and return aligned segments.
 
     Args:
-        transcript (List[SingleSegment]): The list of transcription segments.
+        transcript (List[SingleSegment]): The segments to align.
         model (torch.nn.Module): The alignment model.
-        model_dictionary (Dict[str, int]): Dictionary for character indices.
-        model_lang (str): Language of the model.
-        model_type (str): The type of the model ('torchaudio' or 'huggingface').
+        model_dictionary (Dict[str, int]): Model char-to-token dictionary.
+        model_lang (Language): Language configuration.
+        model_type (str): 'huggingface' or 'torchaudio'.
         audio (Audio): The audio data.
-        device (DeviceType): The device to run the model on.
-        max_duration (float): Maximum duration of the audio.
-        return_char_alignments (bool): Flag to return character alignments.
-        interpolate_method (str): Method for interpolating NaNs.
+        device (DeviceType): Device for inference.
+        max_duration (float): Max allowed audio duration.
 
     Returns:
-        Tuple[List[SingleAlignedSegment], List[SingleWordSegment]]: The aligned segments and word segments.
+        List[ScriptLine | None]: A list of aligned segments.
     """
-    aligned_segments: List[SingleAlignedSegment] = []
-    word_segments: List[SingleWordSegment] = []
+    aligned_segments: List[ScriptLine | None] = []
 
     for sdx, segment in enumerate(transcript):
         t1 = segment["start"]
         t2 = segment["end"]
-        text = segment["text"]
-
-        aligned_segment: SingleAlignedSegment = {"start": t1, "end": t2, "text": text, "words": [], "chars": None}
-
-        if return_char_alignments:
-            aligned_segment["chars"] = []
-
         if _can_align_segment(segment, model_dictionary, t1, max_duration):
-            _align_single_segment(
-                segment,
-                model,
-                model_dictionary,
-                model_lang,
-                model_type,
-                audio,
-                device,
-                t1,
-                t2,
-                return_char_alignments,
-                interpolate_method,
-                aligned_segment,
-                aligned_segments,
-                word_segments,
+            aligned_segment = _align_single_segment(
+                segment, model, model_dictionary, model_lang, model_type, audio, device, t1, t2
             )
         else:
             print(f'Failed to align segment ("{segment["text"]}"), skipping...')
-            aligned_segments.append(aligned_segment)
+            aligned_segment = None
 
-    return (aligned_segments, word_segments)
-
-
-def _convert_to_scriptline(data: AlignedTranscriptionResult) -> List[ScriptLine]:
-    """Convert a dictionary of segments and word segments to a list of ScriptLine objects.
-
-    Args:
-        data (AlignedTranscriptionResult): The input dictionary with segments and word segments.
-
-    Returns:
-        List[ScriptLine]: The list of ScriptLine objects.
-    """
-    segments = data["segments"]
-    script_lines = []
-
-    for segment in segments:
-        words = segment["words"]
-        word_chunks = [ScriptLine(text=word["word"]) for word in words]
-
-        # Handle 'nan' end values by setting them to None
-        start = segment["start"]
-        end: Optional[float] = segment["end"]
-        if end is not None and (isinstance(end, float) and math.isnan(end)):
-            end = None
-
-        script_line = ScriptLine(text=segment["text"], start=start, end=end, chunks=word_chunks)
-        script_lines.append(script_line)
-
-    return script_lines
+        aligned_segments.append(ScriptLine.from_dict(aligned_segment) if aligned_segment else None)
+    return aligned_segments
 
 
 def _align_transcription(
@@ -564,42 +418,30 @@ def _align_transcription(
     align_model_metadata: Dict[str, Any],
     audio: Audio,
     device: DeviceType,
-    interpolate_method: str = "nearest",
-    return_char_alignments: bool = False,
     print_progress: bool = False,
     combined_progress: bool = False,
-) -> AlignedTranscriptionResult:
-    """Aligns phoneme recognition predictions to known transcription.
+) -> List[ScriptLine | None]:
+    """Align the given transcription segments against the audio using the model.
 
     Args:
-        transcript (List[SingleSegment]): The list of transcription segments.
+        transcript (List[SingleSegment]): Segments to align.
         model (torch.nn.Module): The alignment model.
-        align_model_metadata (Dict[str, Any]): Metadata for the alignment model.
-        audio (Audio): The audio data.
-        device (DeviceType): The device to run the model on.
-        interpolate_method (str): The method for interpolating NaNs (default: "nearest").
-        return_char_alignments (bool): Whether to return character alignments (default: False).
-        print_progress (bool): Whether to print progress (default: False).
-        combined_progress (bool): Whether to combine progress (default: False).
+        align_model_metadata (Dict[str, Any]): Model dictionary, language, and type info.
+        audio (Audio): Audio data.
+        device (DeviceType): Device for inference.
+        print_progress (bool): If True, print progress updates.
+        combined_progress (bool): If True, combine progress percentages.
 
     Returns:
-        AlignedTranscriptionResult: The aligned transcription result.
+        List[ScriptLine | None]: Aligned transcription segments.
     """
     max_duration = audio.waveform.shape[1] / audio.sampling_rate
-
     model_dictionary = align_model_metadata["dictionary"]
     model_lang = align_model_metadata["language"]
     model_type = align_model_metadata["type"]
 
-    transcript = _preprocess_segments(
-        transcript,
-        align_model_metadata["dictionary"],
-        align_model_metadata["language"],
-        print_progress,
-        combined_progress,
-    )
-
-    aligned_segments, word_segments = _align_segments(
+    transcript = _preprocess_segments(transcript, model_dictionary, model_lang, print_progress, combined_progress)
+    aligned_segments = _align_segments(
         transcript=transcript,
         model=model,
         model_dictionary=model_dictionary,
@@ -608,40 +450,150 @@ def _align_transcription(
         audio=audio,
         device=device,
         max_duration=max_duration,
-        return_char_alignments=return_char_alignments,
-        interpolate_method=interpolate_method,
     )
-    return {"segments": aligned_segments, "word_segments": word_segments}
+    return aligned_segments
+
+
+def remove_chunks_by_level(
+    scriptline: ScriptLine, level: int, keep_lower: bool = True
+) -> Union[List[ScriptLine], ScriptLine, None]:
+    """Recursively removes chunks from a ScriptLine object at a given depth level.
+
+    ScriptLine objects can contain nested chunks representing different levels of speech
+    (e.g. utterance -> sentence -> word -> character). This function traverses the chunk hierarchy
+    and removes chunks at the specified level, optionally preserving or removing lower levels.
+
+    For example, with level=1 and keep_lower=True, it will remove word-level chunks but keep
+    character-level chunks. With keep_lower=False, it removes both word and character chunks.
+
+    Args:
+        scriptline (Optional[ScriptLine]): The root ScriptLine object to modify.
+        level (int): The depth level at which to remove chunks (0=utterance, 1=sentence, 2=word, 3=char).
+        keep_lower (bool): Whether to keep chunks at levels below the target level.
+
+    Returns:
+        Union[List[ScriptLine], ScriptLine, None]:
+            - If level == 0, returns the list of chunks from the root ScriptLine.
+            - If level > 0, modifies scriptline in place and returns the modified ScriptLine.
+            - Returns None if scriptline is None or all chunks are removed.
+
+    Raises:
+        ValueError: If scriptline argument is None.
+    """
+    if scriptline is None:
+        raise ValueError("scriptline argument cannot be None")
+
+    if level == 0:
+        if not keep_lower:
+            return None
+        return scriptline.chunks
+
+    if scriptline.chunks:
+        updated_chunks: List[ScriptLine] = []
+        for chunk in scriptline.chunks:
+            updated = remove_chunks_by_level(chunk, level - 1, keep_lower)
+            if isinstance(updated, list):
+                updated_chunks.extend(updated)
+            elif updated is not None:
+                updated_chunks.append(updated)
+
+        scriptline.chunks = updated_chunks
+
+    return scriptline
+
+
+def flatten_script_lines(nested: list[ScriptLine | None]) -> List[ScriptLine | None]:
+    """Flattens a list by unpacking any inner lists of `ScriptLine` while keeping `None` values.
+
+    Args:
+        nested (list[ScriptLine | None]):
+            A list that may contain `ScriptLine | None` elements, or lists of `ScriptLine`.
+
+    Returns:
+        List[ScriptLine | None]: A flattened list where all `ScriptLine` objects are at the top level,
+        with `None` values preserved.
+    """
+    flattened: List[ScriptLine | None] = []
+
+    for item in nested:
+        if isinstance(item, list):
+            flattened.extend(item)
+        else:
+            flattened.append(item)
+
+    return flattened
+
+
+def filter_aligned_script_lines(
+    aligned_script_lines: List[List[ScriptLine | None]], levels_to_keep: Dict[str, bool]
+) -> list[list[ScriptLine | None]]:
+    """Filters aligned script lines by removing specific chunk levels based on `levels_to_keep`.
+
+    Args:
+        aligned_script_lines (List[List[ScriptLine | None]]):
+            A list of lists containing `ScriptLine | None` elements.
+        levels_to_keep (Dict[str, bool]):
+            A dictionary specifying which levels to retain:
+            - "utterance" (bool): Whether to keep utterance-level chunks.
+            - "word" (bool): Whether to keep word-level chunks.
+            - "char" (bool): Whether to keep character-level chunks.
+
+    Returns:
+        list[list[ScriptLine | None]]: The filtered aligned script lines.
+    """
+    for i, scriptline_list in enumerate(aligned_script_lines):
+        updated_scriptline_list: list[ScriptLine | None] = []
+        for j, scriptline in enumerate(scriptline_list):
+            if scriptline is None or isinstance(scriptline, list):
+                continue
+
+            updated_scriptline: Union[list[ScriptLine], ScriptLine, None] = scriptline
+            if not levels_to_keep["word"] and not levels_to_keep["char"]:
+                updated_scriptline = remove_chunks_by_level(scriptline, level=2, keep_lower=False)
+            elif not levels_to_keep["word"] and levels_to_keep["char"]:
+                updated_scriptline = remove_chunks_by_level(scriptline, level=2)
+            elif levels_to_keep["word"] and not levels_to_keep["char"]:
+                updated_scriptline = remove_chunks_by_level(scriptline, level=3)
+
+            if not levels_to_keep["utterance"]:
+                updated_scriptline = remove_chunks_by_level(scriptline, level=0)
+
+            if isinstance(updated_scriptline, list):
+                updated_scriptline_list.extend(updated_scriptline)
+            elif updated_scriptline is not None:
+                updated_scriptline_list.append(updated_scriptline)
+
+        aligned_script_lines[i] = updated_scriptline_list
+    return [flatten_script_lines(scriptline_list) for scriptline_list in aligned_script_lines]
 
 
 def align_transcriptions(
     audios_and_transcriptions_and_language: List[Tuple[Audio, ScriptLine, Language]],
-) -> List[List[ScriptLine]]:
-    """Aligns transcriptions with the given audio using a wav2vec2.0 model.
+    levels_to_keep: Dict = {"utterance": False, "word": False, "char": False},
+) -> List[List[ScriptLine | None]]:
+    """Align multiple transcriptions with their respective audios using a wav2vec2.0 model.
 
     Args:
-        audios_and_transcriptions_and_language (List[tuple[Audio, ScriptLine, Language]):
-            A list of tuples audios, corresponding transcriptions, and optionally a language.
-            The default language is English.
+        audios_and_transcriptions_and_language (List[Tuple[Audio, ScriptLine, Language]]):
+            Each tuple contains an Audio object, a ScriptLine with transcription,
+            and an optional Language (default is English).
+        levels_to_keep (Dict): Levels of transcription to keep in output.
 
     Returns:
-        List[List[ScriptLine]]: A list of lists, where each inner list contains the aligned script lines for each audio.
+        List[List[ScriptLine | None]]: A list of aligned results for each audio.
     """
-    aligned_script_lines = []
+    aligned_script_lines: list[list[ScriptLine | None]] = []
     loaded_processors_and_models = {}
+    device = _select_device_and_dtype()[0]
 
-    for item in audios_and_transcriptions_and_language:
-        audio, transcription, language = (*item, None)[:3]
-
-        # Set default language to English if not provided
+    for recording in audios_and_transcriptions_and_language:
+        audio, transcription, language = (*recording, None)[:3]
         if language is None:
             language = Language(language_code="en")
 
-        # Define the language code and load model
-        device = _select_device_and_dtype()[0]  # DeviceType object
-        model_variant = DEFAULT_ALIGN_MODELS_HF.get(language.language_code, DEFAULT_ALIGN_MODELS_HF["en"])
-
-        if model_variant.path_or_uri not in loaded_processors_and_models:  # Load model
+        model_dict = DEFAULT_ALIGN_MODELS_HF.get(language.language_code, DEFAULT_ALIGN_MODELS_HF["en"])
+        model_variant = HFModel(path_or_uri=model_dict["path_or_uri"], revision=model_dict["revision"])
+        if model_variant.path_or_uri not in loaded_processors_and_models:
             processor = Wav2Vec2Processor.from_pretrained(model_variant.path_or_uri)
             model = Wav2Vec2ForCTC.from_pretrained(model_variant.path_or_uri).to(device.value)
             loaded_processors_and_models[model_variant.path_or_uri] = (processor, model)
@@ -649,16 +601,12 @@ def align_transcriptions(
         processor, model = loaded_processors_and_models[model_variant.path_or_uri]
 
         if audio.sampling_rate != SAMPLE_RATE:
-            raise ValueError(f"{audio.sampling_rate} rate is not equal to the training rate of {SAMPLE_RATE}.")
+            raise ValueError(f"{audio.sampling_rate} rate is not equal to {SAMPLE_RATE}.")
 
-        # Ensure start and end are not None
         start = transcription.start if transcription.start is not None else 0.0
         end = transcription.end if transcription.end is not None else audio.waveform.shape[1] / audio.sampling_rate
-
-        # Ensure text is not None
         text = transcription.text if transcription.text is not None else ""
 
-        # Align each segment of the transcription
         segments = [
             SingleSegment(
                 start=start, end=end, text=text, clean_char=None, clean_cdx=None, clean_wdx=None, sentence_spans=None
@@ -676,10 +624,10 @@ def align_transcriptions(
                 },
                 audio=audio,
                 device=device,
-                return_char_alignments=True,
             )
-            aligned_script_lines.append(_convert_to_scriptline(alignment))
 
+            aligned_script_lines.append([item if isinstance(item, ScriptLine) else None for item in alignment])
+    aligned_script_lines = filter_aligned_script_lines(aligned_script_lines, levels_to_keep)
     return aligned_script_lines
 
 
