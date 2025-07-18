@@ -2,7 +2,7 @@
 
 # TODO: Please double-check this because tests are failing
 from senselab.audio.data_structures import Audio
-from senselab.audio.workflows.transcribe_timestamped import transcribe_timestamped
+from senselab.audio.workflows import transcribe_timestamped
 
 
 def test_transcribe_timestamped_mono(mono_audio_sample: Audio) -> None:
