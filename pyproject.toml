@@ -67,6 +67,7 @@ mediapipe = {version = "~=0.10", optional = true}
 opencv-python = {version = "~=4.10", optional = true}
 ultralytics = {version = "~=8.3", optional = true}
 av = {version = "~=14.2", optional = true}
+pre-commit = "^4.2.0"
 
 [tool.poetry.extras]
 audio = [

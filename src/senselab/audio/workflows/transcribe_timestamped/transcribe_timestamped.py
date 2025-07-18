@@ -1,7 +1,7 @@
 """Transcribes audio files with timestamps."""
 
 # TODO: Please double-check this because tests are failing
-from typing import List
+from typing import List, Tuple
 
 import pydra
 
@@ -10,11 +10,12 @@ from senselab.audio.tasks.forced_alignment.constants import SAMPLE_RATE
 from senselab.audio.tasks.forced_alignment.forced_alignment import (
     align_transcriptions,
 )
-from senselab.audio.tasks.preprocessing import downmix_audios_to_mono, resample_audios
+from senselab.audio.tasks.preprocessing import (
+    downmix_audios_to_mono,
+    resample_audios,
+)
 from senselab.audio.tasks.speech_to_text import transcribe_audios
-from senselab.utils.data_structures import Language
-from senselab.utils.data_structures import HFModel
-from senselab.utils.data_structures import ScriptLine
+from senselab.utils.data_structures import HFModel, Language, ScriptLine
 from senselab.utils.tasks.batching import batch_list
 
 
@@ -24,7 +25,7 @@ def transcribe_timestamped(
     language: Language = Language(language_code="en"),
     n_batches: int = 1,
 ) -> List[List[ScriptLine]]:
-    """Transcribes a list of audio files and timestamps them using forced alignment.
+    """Transcribes audio files and timestamps them with forced alignment.
 
     This function processes the given list of Audio objects by performing
     necessary preprocessing steps (such as downmixing channels and resampling),
@@ -38,7 +39,8 @@ def transcribe_timestamped(
                                    Defaults to 'whisper'.
         language (Language, optional): Language object for the transcription.
                                        If None, language detection is triggered
-                                       for the 'whisper' model. Defaults to None.
+                                       for the 'whisper' model. Defaults to
+                                       None.
         n_batches (int, optional): The number of batches to split over in the
                                    workflow.
 
@@ -66,8 +68,13 @@ def transcribe_timestamped(
         cache_dir=None,
     )
 
+    # Split the workflow over batched_audios
+    wf.split("batched_audios", batched_audios=batched_audios)
+
     @pydra.mark.task
-    def transcribe_task(audios: List[Audio], model: HFModel, language: Language) -> List[tuple]:
+    def transcribe_task(
+        audios: List[Audio], model: HFModel, language: Language
+    ) -> List[Tuple[Audio, ScriptLine, Language]]:
         transcriptions = transcribe_audios(audios=audios, model=model, language=language)
         return list(zip(audios, transcriptions, [language] * len(audios)))
 
@@ -78,7 +85,7 @@ def transcribe_timestamped(
             model=wf.lzin.model,
             language=wf.lzin.language,
         )
-    ).split("batched_audios", batched_audios=wf.transcribe.lzin.batched_audios)
+    )
 
     align_transcriptions_task = pydra.mark.task(align_transcriptions)
     wf.add(

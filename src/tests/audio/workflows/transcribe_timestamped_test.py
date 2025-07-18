@@ -1,6 +1,5 @@
 """Tests the transcribe_timestamped module."""
 
-# TODO: Please double-check this because tests are failing
 from senselab.audio.data_structures import Audio
 from senselab.audio.workflows import transcribe_timestamped
 
@@ -61,7 +60,7 @@ def test_transcribe_timestamped_noise(audio_with_metadata: Audio) -> None:
 def test_transcribe_timestamped_different_bit_depths(
     audio_with_different_bit_depths: list[Audio],
 ) -> None:
-    """Test transcribe_timestamped with audio samples of different bit depths."""
+    """Test with audio samples of different bit depths."""
     result = transcribe_timestamped(audios=audio_with_different_bit_depths)
     assert isinstance(result, list), "The result should be a list of ScriptLine lists."
     assert len(result) == len(
