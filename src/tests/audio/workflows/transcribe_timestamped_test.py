@@ -1,5 +1,7 @@
 """Tests the transcribe_timestamped module."""
 
+import pytest
+
 from senselab.audio.data_structures import Audio
 from senselab.audio.workflows import transcribe_timestamped
 
