@@ -9,9 +9,9 @@ import torch
 class DeviceType(Enum):
     """Device types for PyTorch operations."""
 
-    CPU: str = "cpu"
-    CUDA: str = "cuda"
-    MPS: str = "mps"
+    CPU = "cpu"
+    CUDA = "cuda"
+    MPS = "mps"
 
 
 DTYPE_MAP = {DeviceType.CPU: torch.float32, DeviceType.CUDA: torch.float16, DeviceType.MPS: torch.float32}
@@ -44,12 +44,22 @@ def _select_device_and_dtype(
     if user_preference:
         if not isinstance(user_preference, DeviceType):
             raise ValueError(f"user_preference should be of type DeviceType, not {type(user_preference)}")
+
     available_devices = [DeviceType.CPU]
+
     if torch.cuda.is_available():
-        available_devices.append(DeviceType.CUDA)
+        try:
+            torch.empty(0, device=DeviceType.CUDA.value)
+            available_devices.append(DeviceType.CUDA)
+        except Exception as e:
+            print(f"CUDA is available but encountered an error: {e}")
 
     if torch.backends.mps.is_available():
-        available_devices.append(DeviceType.MPS)
+        try:
+            torch.empty(0, device=DeviceType.MPS.value)
+            available_devices.append(DeviceType.MPS)
+        except Exception as e:
+            print(f"MPS is available but encountered an error: {e}")
 
     # Check compatible and available
     useable_devices = []

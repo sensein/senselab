@@ -3,7 +3,13 @@
 from typing import Tuple
 
 import torch
-from speechbrain.utils.metric_stats import EER
+
+try:
+    from speechbrain.utils.metric_stats import EER
+
+    SPEECHBRAIN_AVAILABLE = True
+except ModuleNotFoundError:
+    SPEECHBRAIN_AVAILABLE = False
 
 
 def compute_eer(predictions: torch.Tensor, targets: torch.Tensor) -> Tuple[float, float]:
@@ -16,4 +22,10 @@ def compute_eer(predictions: torch.Tensor, targets: torch.Tensor) -> Tuple[float
     Returns:
         Tuple[float, float]: The EER and the threshold for the EER.
     """
+    if not SPEECHBRAIN_AVAILABLE:
+        raise ModuleNotFoundError(
+            "`speechbrain` is not installed. "
+            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+        )
+
     return EER(predictions, targets)

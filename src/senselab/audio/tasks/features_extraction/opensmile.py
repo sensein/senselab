@@ -8,11 +8,33 @@ for parallel processing. This approach supports efficient and scalable feature
 extraction across multiple audio files.
 """
 
+try:
+    import opensmile
+
+    OPENSMILE_AVAILABLE = True
+except ModuleNotFoundError:
+    OPENSMILE_AVAILABLE = False
+
+    class DummyOpenSmile:
+        """Dummy class to represent openSMILE when it's not available."""
+
+        def __init__(self) -> None:
+            """Dummy constructor for when openSMILE is not available."""
+            self.__dict__ = {}
+
+        class Smile:
+            """Dummy class to represent openSMILE when it's not available."""
+
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                """Dummy class for when openSMILE is not available."""
+                pass
+
+    opensmile = DummyOpenSmile()
+
 import os
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-import opensmile
 import pydra
 
 from senselab.audio.data_structures import Audio
@@ -39,6 +61,12 @@ class OpenSmileFeatureExtractorFactory:
         Returns:
             opensmile.Smile: The openSMILE feature extractor.
         """
+        if not OPENSMILE_AVAILABLE:
+            raise ModuleNotFoundError(
+                "`opensmile` is not installed. "
+                "Please install senselab audio dependencies using `pip install 'senselab[audio]'`"
+            )
+
         key = f"{feature_set}-{feature_level}"  # Unique key for each feature extractor
         if key not in cls._extractors:  # Check if extractor exists in cache
             # Create and store a new extractor if not found in cache
@@ -74,6 +102,11 @@ def extract_opensmile_features_from_audios(
     Returns:
         List[Dict[str, Any]]: A list of dictionaries, each containing extracted features.
     """
+    if not OPENSMILE_AVAILABLE:
+        raise ModuleNotFoundError(
+            "`opensmile` is not installed. Please install the necessary dependencies using:\n"
+            "`pip install 'senselab[audio]'`"
+        )
 
     def _extract_feats_from_audio(sample: Audio, smile: opensmile.Smile) -> Dict[str, Any]:
         """Extract features from a single audio sample using openSMILE.
@@ -98,7 +131,9 @@ def extract_opensmile_features_from_audios(
             }
         except Exception as e:
             # Log error and return NaNs if feature extraction fails
-            print(f"Error processing sample {sample.orig_path_or_id}: {e}")
+            filepath = sample.filepath() if hasattr(sample, "filepath") and sample.filepath() else ""
+            desc = f"{sample.generate_id()}{f' ({filepath})' if filepath else ''}"
+            print(f"Error processing sample {desc}: {e}")
             return {feature: np.nan for feature in smile.feature_names}
 
     # Decorate the feature extraction function for Pydra
