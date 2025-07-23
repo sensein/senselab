@@ -109,18 +109,41 @@ def plot_specgram(audio: Audio, mel_scale: bool = False, title: str = "Spectrogr
 
     # Extract the spectrogram
     if mel_scale:
-        from senselab.audio.tasks.features_extraction.torchaudio import extract_mel_spectrogram_from_audios
+        from senselab.audio.tasks.features_extraction.torchaudio import (
+            extract_mel_spectrogram_from_audios,
+        )
 
-        spectrogram = extract_mel_spectrogram_from_audios([audio], **spect_kwargs)[0]["mel_spectrogram"]
+        result = extract_mel_spectrogram_from_audios([audio], **spect_kwargs)[0]
+        spectrogram = result["mel_spectrogram"]
         y_axis_label = "Mel Frequency"
     else:
-        from senselab.audio.tasks.features_extraction.torchaudio import extract_spectrogram_from_audios
+        from senselab.audio.tasks.features_extraction.torchaudio import (
+            extract_spectrogram_from_audios,
+        )
 
-        spectrogram = extract_spectrogram_from_audios([audio], **spect_kwargs)[0]["spectrogram"]
+        result = extract_spectrogram_from_audios([audio], **spect_kwargs)[0]
+        spectrogram = result["spectrogram"]
         y_axis_label = "Frequency [Hz]"
 
-    if spectrogram.dim() != 2:
-        raise ValueError("Spectrogram must be a 2D tensor.")
+    # Handle edge cases for spectrogram tensor
+    if not isinstance(spectrogram, torch.Tensor):
+        raise ValueError("Spectrogram extraction failed - returned non-tensor result.")
+
+    if torch.isnan(spectrogram).all():
+        error_msg = "Spectrogram extraction failed - all values are NaN. " "Audio may be too short."
+        raise ValueError(error_msg)
+
+    # Handle multi-channel spectrograms (3D tensor: channels x frequency x time)
+    if spectrogram.dim() == 3:
+        # Use the first channel for plotting
+        spectrogram = spectrogram[0]
+    elif spectrogram.dim() == 1:
+        # Handle case where spectrogram is 1D (very short audio)
+        error_msg = "Audio is too short to generate a meaningful spectrogram " "for plotting."
+        raise ValueError(error_msg)
+    elif spectrogram.dim() != 2:
+        error_msg = f"Spectrogram must be a 2D tensor, got {spectrogram.dim()}D tensor."
+        raise ValueError(error_msg)
 
     # Determine time and frequency scale
     num_frames = spectrogram.size(1)
