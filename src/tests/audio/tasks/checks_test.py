@@ -97,6 +97,30 @@ def test_get_metric_uses_dataframe_cache(stereo_audio_sample: Audio) -> None:
     assert value == cached_value
 
 
+def test_get_metric_when_filepath_is_none(stereo_audio_sample: Audio) -> None:
+    """Should compute directly when audio has no filepath."""
+    cached_value = 0.1234
+    df = pd.DataFrame(
+        {
+            "audio_path_or_id": ["some_file.wav"],
+            "zero_crossing_rate_metric": [cached_value],
+        }
+    )
+
+    # Create an Audio object with no filepath (waveform + sampling_rate only)
+    audio_no_filepath = Audio(waveform=stereo_audio_sample.waveform, sampling_rate=stereo_audio_sample.sampling_rate)
+
+    # Verify filepath is None
+    assert audio_no_filepath.filepath() is None
+
+    value = get_metric(audio_no_filepath, zero_crossing_rate_metric, df=df)
+    # Should compute directly since filepath is None
+    assert isinstance(value, float)
+    assert 0 <= value <= 1
+    # Should not use cached value since filepath is None
+    assert value != cached_value
+
+
 def test_get_metric_computes_when_not_in_dataframe(
     stereo_audio_sample: Audio,
 ) -> None:
