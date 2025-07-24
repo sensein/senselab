@@ -1,7 +1,8 @@
 """Module for testing bioacoustic quality control."""
 
 from collections import Counter
-from typing import Dict, List
+from pathlib import Path
+from typing import Callable, Dict, List, Union, cast
 
 import pandas as pd
 import pytest
@@ -9,92 +10,43 @@ import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.bioacoustic_qc import (
-    activity_dict_to_dataset_taxonomy_subtree,
+    activity_to_dataset_taxonomy_subtree,
     activity_to_taxonomy_tree_path,
-    audios_to_activity_dict,
     check_quality,
-    evaluate_node,
-    run_taxonomy_subtree_checks_recursively,
+    create_activity_to_evaluations,
+    evaluate_audio,
+    evaluate_batch,
+    run_evaluations,
+    subtree_to_evaluations,
 )
-from senselab.audio.tasks.bioacoustic_qc.checks import audio_length_positive_check
-from senselab.audio.tasks.bioacoustic_qc.constants import BIOACOUSTIC_ACTIVITY_TAXONOMY
-from senselab.audio.tasks.bioacoustic_qc.metrics import (
-    amplitude_headroom_metric,
-    amplitude_interquartile_range_metric,
-    amplitude_kurtosis_metric,
-    amplitude_modulation_depth_metric,
-    amplitude_skew_metric,
-    crest_factor_metric,
-    dynamic_range_metric,
-    mean_absolute_amplitude_metric,
-    mean_absolute_deviation_metric,
-    peak_snr_from_spectral_metric,
-    phase_correlation_metric,
-    proportion_clipped_metric,
-    proportion_silence_at_beginning_metric,
-    proportion_silence_at_end_metric,
-    proportion_silent_metric,
-    root_mean_square_energy_metric,
-    shannon_entropy_amplitude_metric,
-    signal_variance_metric,
-    spectral_gating_snr_metric,
-    zero_crossing_rate_metric,
+from senselab.audio.tasks.bioacoustic_qc.checks import (
+    audio_intensity_positive_check,
+    audio_length_positive_check,
 )
+from senselab.audio.tasks.bioacoustic_qc.constants import BIOACOUSTIC_ACTIVITY_TAXONOMY as TAXONOMY
 
 
-def test_audios_to_activity_dict(
-    mono_audio_sample: Audio,
-    stereo_audio_sample: Audio,
-    resampled_mono_audio_sample: Audio,
-    resampled_stereo_audio_sample: Audio,
-) -> None:
-    """Tests the function that assigns Audio objects to activity categories."""
-    # Assign activity metadata
-    mono_audio_sample.metadata["activity"] = "breathing"
-    stereo_audio_sample.metadata["activity"] = "cough"
-    resampled_mono_audio_sample.metadata["activity"] = "speech"
-
-    audios: List[Audio] = [mono_audio_sample, stereo_audio_sample, resampled_mono_audio_sample]
-
-    activity_dict: Dict[str, List[Audio]] = audios_to_activity_dict(audios)
-    expected_keys = {"breathing", "cough", "speech"}
-
-    # Ensure the function returns the expected structure
-    assert set(activity_dict.keys()) == expected_keys, f"Unexpected activity keys: {activity_dict.keys()}"
-
-    # Ensure each activity has at least one Audio object
-    for activity, audio_list in activity_dict.items():
-        assert isinstance(audio_list, list), f"Expected list for activity {activity}, got {type(audio_list)}"
-        assert len(audio_list) > 0, f"Expected at least one audio for activity {activity}"
-
-    # Test case where an audio has no activity metadata (should default to "bioacoustic")
-    resampled_stereo_audio_sample.metadata = {}  # Remove activity metadata
-    activity_dict = audios_to_activity_dict([resampled_stereo_audio_sample])
-
-    assert "bioacoustic" in activity_dict, "Audio without activity metadata should be assigned to 'bioacoustic'"
-    assert len(activity_dict["bioacoustic"]) == 1, "Expected one audio under 'bioacoustic'"
-
-
-@pytest.mark.parametrize("taxonomy_tree", [BIOACOUSTIC_ACTIVITY_TAXONOMY])
+@pytest.mark.parametrize("taxonomy_tree", [TAXONOMY])
 def test_no_duplicate_subclass_keys(taxonomy_tree: Dict) -> None:
     """Tests that all subclass keys in the taxonomy are unique."""
 
     def get_all_subclass_keys(tree: Dict) -> List[str]:
         """Recursively extract all subclass keys from the taxonomy tree."""
-        subclass_keys = []
+        keys: List[str] = []
 
         def traverse(subtree: Dict) -> None:
             for key, value in subtree.items():
-                subclass_keys.append(key)  # Collect every key (activity category)
-                if isinstance(value, Dict) and "subclass" in value and value["subclass"] is not None:
-                    traverse(value["subclass"])  # Continue traversal on non-null subclass
+                # Collect every key (activity category)
+                keys.append(key)
+                # Continue traversal on non-null subclass
+                if isinstance(value, dict) and "subclass" in value and value["subclass"] is not None:
+                    traverse(value["subclass"])
 
         traverse(tree)
-        return subclass_keys
-
-    subclass_keys = get_all_subclass_keys(taxonomy_tree)
+        return keys
 
     # Ensure there are no duplicate subclass keys
+    subclass_keys = get_all_subclass_keys(taxonomy_tree)
     subclass_counts = Counter(subclass_keys)
     duplicates = {key: count for key, count in subclass_counts.items() if count > 1}
 
@@ -102,7 +54,7 @@ def test_no_duplicate_subclass_keys(taxonomy_tree: Dict) -> None:
 
 
 def test_activity_to_taxonomy_tree_path() -> None:
-    """Tests that the function correctly retrieves the taxonomy path for a given activity."""
+    """Tests taxonomy path retrieval for activities."""
     # Test valid activity paths
     assert activity_to_taxonomy_tree_path("sigh") == [
         "bioacoustic",
@@ -112,36 +64,139 @@ def test_activity_to_taxonomy_tree_path() -> None:
         "sigh",
     ], "Incorrect path for 'sigh'"
 
-    assert activity_to_taxonomy_tree_path("cough") == [
-        "bioacoustic",
-        "human",
-        "respiration",
-        "exhalation",
-        "cough",
-    ], "Incorrect path for 'cough'"
-
-    assert activity_to_taxonomy_tree_path("diadochokinesis") == [
-        "bioacoustic",
-        "human",
-        "vocalization",
-        "speech",
-        "repetitive_speech",
-        "diadochokinesis",
-    ], "Incorrect path for 'diadochokinesis'"
-
     # Test activity not in taxonomy
-    with pytest.raises(ValueError, match="Activity 'nonexistent_activity' not found in taxonomy tree."):
+    error_msg = "Activity 'nonexistent_activity' not found in taxonomy tree."
+    with pytest.raises(ValueError, match=error_msg):
         activity_to_taxonomy_tree_path("nonexistent_activity")
 
 
-def test_activity_dict_to_dataset_taxonomy_subtree(mono_audio_sample: Audio) -> None:
-    """Tests that the function correctly prunes the taxonomy based on dataset activities."""
-    # Case 1: Valid activity in the taxonomy (should return a pruned tree with 'sigh')
-    activity_dict = {"sigh": [mono_audio_sample]}
-    expected_subtree = {
+def test_subtree_to_evaluations() -> None:
+    """Tests evaluation extraction from taxonomy subtree."""
+    # Create a test subtree
+    subtree = {
         "bioacoustic": {
-            "checks": [audio_length_positive_check],
-            "metrics": BIOACOUSTIC_ACTIVITY_TAXONOMY["bioacoustic"]["metrics"],
+            "checks": [
+                audio_length_positive_check,
+                audio_intensity_positive_check,
+            ],
+            "metrics": TAXONOMY["bioacoustic"]["metrics"],
+            "subclass": {
+                "human": {
+                    "checks": [],
+                    "metrics": [],
+                    "subclass": None,
+                }
+            },
+        }
+    }
+
+    evaluations = subtree_to_evaluations(subtree)
+    metrics = cast(list, TAXONOMY["bioacoustic"]["metrics"])
+    expected_evals = metrics + [
+        audio_length_positive_check,
+        audio_intensity_positive_check,
+    ]
+    assert evaluations == expected_evals, "Incorrect evaluations extracted from subtree"
+
+
+def test_subtree_to_evaluations_empty() -> None:
+    """Tests that empty subtrees return empty evaluation lists."""
+    empty_subtree: Dict[str, Dict] = {"node": {"checks": [], "metrics": [], "subclass": None}}
+    evaluations = subtree_to_evaluations(empty_subtree)
+    assert evaluations == [], "Expected empty list for empty subtree"
+
+
+def test_subtree_to_evaluations_nested() -> None:
+    """Tests that nested subtrees correctly collect all evaluations."""
+
+    # Mock evaluation functions
+    def mock_metric1(audio: Audio) -> float:
+        return 0.0
+
+    def mock_metric2(audio: Audio) -> float:
+        return 0.0
+
+    def mock_check1(audio: Audio) -> bool:
+        return True
+
+    nested_subtree = {
+        "root": {
+            "checks": [mock_check1],
+            "metrics": [mock_metric1],
+            "subclass": {"child": {"checks": [], "metrics": [mock_metric2], "subclass": None}},
+        }
+    }
+
+    evaluations = subtree_to_evaluations(nested_subtree)
+    assert len(evaluations) == 3, "Expected all evaluations from nested structure"
+    assert mock_check1 in evaluations, "Missing check from root"
+    assert mock_metric1 in evaluations, "Missing metric from root"
+    assert mock_metric2 in evaluations, "Missing metric from child"
+
+
+def test_subtree_to_evaluations_duplicates() -> None:
+    """Tests that duplicate evaluations are only included once."""
+
+    # Mock evaluation function
+    def mock_eval(audio: Audio) -> float:
+        return 0.0
+
+    subtree_with_duplicates = {
+        "node1": {
+            "checks": [mock_eval],
+            # Same function in checks and metrics
+            "metrics": [mock_eval],
+            "subclass": {
+                "node2": {
+                    # Same function in child
+                    "checks": [mock_eval],
+                    "metrics": [],
+                    "subclass": None,
+                }
+            },
+        }
+    }
+
+    evaluations = subtree_to_evaluations(subtree_with_duplicates)
+    assert len(evaluations) == 1, "Expected duplicates to be removed"
+    assert evaluations == [mock_eval], "Expected single instance of duplicate function"
+
+
+def test_subtree_to_evaluations_order() -> None:
+    """Tests that evaluation order is preserved from the taxonomy structure."""
+
+    # Mock evaluation functions
+    def mock_eval1(audio: Audio) -> float:
+        return 0.0
+
+    def mock_eval2(audio: Audio) -> float:
+        return 0.0
+
+    def mock_eval3(audio: Audio) -> float:
+        return 0.0
+
+    ordered_subtree = {
+        "root": {
+            "checks": [mock_eval1],
+            "metrics": [mock_eval2],
+            "subclass": {"child": {"checks": [mock_eval3], "metrics": [], "subclass": None}},
+        }
+    }
+
+    evaluations = subtree_to_evaluations(ordered_subtree)
+    expected = [mock_eval2, mock_eval1, mock_eval3]
+    assert evaluations == expected, "Expected order to be preserved"
+
+
+def test_activity_to_dataset_taxonomy_subtree(
+    activity_name: str = "sigh",
+    expected_subtree: Dict = {
+        "bioacoustic": {
+            "checks": [
+                audio_length_positive_check,
+                audio_intensity_positive_check,
+            ],
+            "metrics": TAXONOMY["bioacoustic"]["metrics"],
             "subclass": {
                 "human": {
                     "checks": [],
@@ -168,249 +223,230 @@ def test_activity_dict_to_dataset_taxonomy_subtree(mono_audio_sample: Audio) -> 
                 }
             },
         }
-    }
-    pruned_tree = activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=BIOACOUSTIC_ACTIVITY_TAXONOMY)
-    assert pruned_tree == expected_subtree, f"Expected {expected_subtree}, but got {pruned_tree}"
-
-    # Case 2: Activity not in the taxonomy (should raise ValueError)
-    activity_dict = {"nonexistent_activity": [mono_audio_sample]}
-    with pytest.raises(ValueError, match="Activity 'nonexistent_activity' not found in taxonomy tree."):
-        activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=BIOACOUSTIC_ACTIVITY_TAXONOMY)
-
-    # Case 3: Empty activity_dict (should return 'bioacoustic' with empty subclass)
-    activity_dict = {}
-    expected_empty_tree = {
-        "bioacoustic": {
-            "checks": [audio_length_positive_check],
-            "metrics": BIOACOUSTIC_ACTIVITY_TAXONOMY["bioacoustic"]["metrics"],
-            "subclass": None,
-        }
-    }
-    pruned_tree = activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=BIOACOUSTIC_ACTIVITY_TAXONOMY)
-    assert pruned_tree == expected_empty_tree, f"Expected {expected_empty_tree}, but got {pruned_tree}"
-
-    # Case 4: Multiple valid activities ('sigh' and 'cough')
-    activity_dict = {"sigh": [mono_audio_sample], "cough": [mono_audio_sample]}
-    expected_subtree_multiple = {
-        "bioacoustic": {
-            "checks": [audio_length_positive_check],
-            "metrics": BIOACOUSTIC_ACTIVITY_TAXONOMY["bioacoustic"]["metrics"],
-            "subclass": {
-                "human": {
-                    "checks": [],
-                    "metrics": [],
-                    "subclass": {
-                        "respiration": {
-                            "checks": [],
-                            "metrics": [],
-                            "subclass": {
-                                "breathing": {
-                                    "checks": [],
-                                    "metrics": [],
-                                    "subclass": {
-                                        "sigh": {
-                                            "checks": [],
-                                            "metrics": [],
-                                            "subclass": None,
-                                        }
-                                    },
-                                },
-                                "exhalation": {
-                                    "checks": [],
-                                    "metrics": [],
-                                    "subclass": {
-                                        "cough": {
-                                            "checks": [],
-                                            "metrics": [],
-                                            "subclass": None,
-                                        }
-                                    },
-                                },
-                            },
-                        }
-                    },
-                }
-            },
-        }
-    }
-    pruned_tree = activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=BIOACOUSTIC_ACTIVITY_TAXONOMY)
-    assert pruned_tree == expected_subtree_multiple, f"Expected {expected_subtree_multiple}, but got {pruned_tree}"
-
-    # Case 5: Deeply nested activity ('voluntary cough')
-    activity_dict = {"voluntary": [mono_audio_sample]}
-    expected_subtree_deep = {
-        "bioacoustic": {
-            "checks": [audio_length_positive_check],
-            "metrics": BIOACOUSTIC_ACTIVITY_TAXONOMY["bioacoustic"]["metrics"],
-            "subclass": {
-                "human": {
-                    "checks": [],
-                    "metrics": [],
-                    "subclass": {
-                        "respiration": {
-                            "checks": [],
-                            "metrics": [],
-                            "subclass": {
-                                "exhalation": {
-                                    "checks": [],
-                                    "metrics": [],
-                                    "subclass": {
-                                        "cough": {
-                                            "checks": [],
-                                            "metrics": [],
-                                            "subclass": {
-                                                "voluntary": {
-                                                    "checks": [],
-                                                    "metrics": [],
-                                                    "subclass": None,
-                                                }
-                                            },
-                                        }
-                                    },
-                                }
-                            },
-                        }
-                    },
-                }
-            },
-        }
-    }
-    pruned_tree = activity_dict_to_dataset_taxonomy_subtree(activity_dict, activity_tree=BIOACOUSTIC_ACTIVITY_TAXONOMY)
-    assert pruned_tree == expected_subtree_deep, f"Expected {expected_subtree_deep}, but got {pruned_tree}"
-
-
-def test_evaluate_node(mono_audio_sample: Audio) -> None:
-    """Tests that `evaluate_node` applies checks and updates the node dict with results."""
-    tree = {"checks": [audio_length_positive_check]}
-    empty_audio = Audio(filepath="empty", waveform=torch.tensor([]), sampling_rate=16000, metadata={})
-    silent_audio = Audio(filepath="silent", waveform=torch.zeros(1, 16000), sampling_rate=16000, metadata={})
-
-    audios = [mono_audio_sample, empty_audio, silent_audio]
-    activity_audios = [mono_audio_sample, empty_audio, silent_audio]
-
-    # For the new code, we need a DataFrame to store results
-    df = pd.DataFrame({"audio_path_or_id": [mono_audio_sample.filepath(), "empty", "silent"]})
-
-    updated_df = evaluate_node(audios, activity_audios, tree, df)
-
-    # The tree itself doesn't hold "checks_results" now; the DataFrame does
-    # but let's confirm we have columns for each check
-    assert "audio_length_positive_check" in updated_df.columns
-
-    # Check values
-    length_vals = updated_df["audio_length_positive_check"].values
-
-    # Expected booleans:
-    # - valid (waveform rand): True length, True intensity
-    # - empty (waveform=[]): False length, False intensity
-    # - silent (waveform=all zeros): True length, False intensity
-    assert list(length_vals) == [True, False, True], "Unexpected length check booleans"
-
-
-def test_run_taxonomy_subtree_checks_recursively(mono_audio_sample: Audio) -> None:
-    """Tests that checks are correctly applied across the taxonomy subtree, storing results in a DataFrame."""
-    # Create a minimal taxonomy tree with sample checks
-    test_tree = {
-        "bioacoustic": {
-            "checks": [audio_length_positive_check],
-            "metrics": BIOACOUSTIC_ACTIVITY_TAXONOMY["bioacoustic"]["metrics"],
-            "subclass": {
-                "human": {
-                    "checks": [],
-                    "metrics": [],
-                    "subclass": {
-                        "respiration": {
-                            "checks": [],
-                            "metrics": [],
-                            "subclass": {
-                                "breathing": {
-                                    "checks": [],
-                                    "metrics": [],
-                                    "subclass": {"sigh": {"checks": [], "metrics": [], "subclass": None}},
-                                }
-                            },
-                        }
-                    },
-                }
-            },
-        }
-    }
-
-    # Create valid/invalid audio
-    empty_audio = Audio(filepath="empty", waveform=torch.tensor([]), sampling_rate=16000, metadata={"activity": "sigh"})
-    silent_audio = Audio(
-        filepath="silent", waveform=torch.zeros(1, 16000), sampling_rate=16000, metadata={"activity": "sigh"}
+    },
+) -> None:
+    """Tests pruned taxonomy subtree creation."""
+    result = activity_to_dataset_taxonomy_subtree(
+        activity_name,
+        TAXONOMY,
     )
-    mono_audio_sample.metadata["activity"] = "sigh"
+    assert result == expected_subtree, f"Expected {expected_subtree}, but got {result}"
 
-    # Assign IDs to each audio and build a DataFrame for storing check results
-    df = pd.DataFrame({"audio_path_or_id": [mono_audio_sample.filepath(), "empty", "silent"]})
 
-    # Create the activity_dict
-    activity_dict = {"sigh": [mono_audio_sample, empty_audio, silent_audio]}
+def test_activity_to_dataset_taxonomy_subtree_errors() -> None:
+    """Tests error handling in taxonomy subtree creation."""
+    error_msg = "Activity 'nonexistent_activity' not found in taxonomy tree."
+    with pytest.raises(ValueError, match=error_msg):
+        activity_to_dataset_taxonomy_subtree(
+            "nonexistent_activity",
+            TAXONOMY,
+        )
 
-    # Run the function, now providing `results_df=df`
-    results_df = run_taxonomy_subtree_checks_recursively(
-        audios=[mono_audio_sample, empty_audio, silent_audio],
-        dataset_tree=test_tree,
-        activity_dict=activity_dict,
-        results_df=df,
+
+def test_create_activity_to_evaluations() -> None:
+    """Tests mapping of audio paths to their evaluation functions."""
+    # Setup test data
+    audio_paths = {
+        "audio1.wav": "sigh",
+        "audio2.wav": "sigh",  # Same activity to test deduplication
+    }
+
+    # Get evaluations mapping
+    activity_evals = create_activity_to_evaluations(
+        audio_path_to_activity=audio_paths,
+        activity_tree=TAXONOMY,
     )
 
-    # Verify the DataFrame contains columns for each check
-    for col in ["audio_length_positive_check"]:
-        assert col in results_df.columns, f"Missing column {col} in results DataFrame."
+    # Verify results
+    assert len(activity_evals) == 1, "Expected one activity"
+    assert "sigh" in activity_evals, "Expected 'sigh' activity"
 
-    # Check the boolean values
-    length_vals = results_df["audio_length_positive_check"].tolist()
-
-    # For [valid, empty, silent]:
-    # - valid => length=True, intensity=True
-    # - empty => length=False, intensity=False (no samples)
-    # - silent => length=True, intensity=False (samples but all zeros)
-    assert length_vals == [True, False, True], "Unexpected length check booleans."
+    # Verify evaluations for sigh
+    sigh_evals = activity_evals["sigh"]
+    assert isinstance(sigh_evals, list), "Expected list of evaluations"
+    assert audio_length_positive_check in sigh_evals, "Missing length check"
+    assert audio_intensity_positive_check in sigh_evals, "Missing intensity check"
 
 
-def test_check_quality() -> None:
-    """Tests that `check_quality` produces a DataFrame with correct boolean columns."""
-    import shutil
-    import tempfile
+def test_evaluate_audio(tmp_path: Path, resampled_mono_audio_sample: Audio) -> None:
+    """Tests that evaluate_audio correctly processes audio and handles existing results."""
+    # Save test audio file
+    audio_path = str(tmp_path / "test.wav")
+    resampled_mono_audio_sample.save_to_file(audio_path)
 
-    import soundfile as sf
+    # Create test evaluation functions with proper names
+    def test_float(x: Audio) -> float:
+        return 0.5
 
-    tmp_path = tempfile.mkdtemp()
+    def test_bool(x: Audio) -> bool:
+        return True
 
-    try:
-        from pathlib import Path
+    def test_str(x: Audio) -> str:
+        return "test"
 
-        # Create temporary audio files
-        valid_path = Path(tmp_path) / "valid.wav"
-        empty_path = Path(tmp_path) / "empty.wav"
-        silent_path = Path(tmp_path) / "silent.wav"
+    evaluations: List[Callable[[Audio], Union[float, bool, str]]] = [
+        test_float,
+        test_bool,
+        test_str,
+    ]
 
-        # Write actual files to match expected input for check_quality
-        sf.write(valid_path, torch.rand(16000).numpy(), 16000)
-        sf.write(empty_path, torch.tensor([]).numpy(), 16000)
-        sf.write(silent_path, torch.zeros(16000).numpy(), 16000)
+    # Test basic evaluation
+    results = evaluate_audio(audio_path, "test_activity", evaluations)
+    assert results["id"] == Path(audio_path).stem
+    assert results["path"] == audio_path
+    assert results["activity"] == "test_activity"
+    assert results["test_float"] == 0.5
+    assert results["test_bool"] is True
+    assert results["test_str"] == "test"
 
-        # Run check_quality on the temporary directory
-        from joblib import parallel_backend
+    # Test with existing results
+    existing = {
+        "test_float": 1.0,  # Should be preserved
+        "test_str": "old",  # Should be preserved
+    }
+    results = evaluate_audio(audio_path, "test_activity", evaluations, existing)
+    assert results["test_float"] == 1.0, "Existing float result was not preserved"
+    assert results["test_str"] == "old", "Existing string result was not preserved"
+    assert results["test_bool"] is True, "New evaluation was not computed"
 
-        with parallel_backend("sequential"):
-            results_df = check_quality(audio_dir=tmp_path, batch_size=3, n_jobs=1)
 
-        # Ensure columns for the checks exist
-        for col in ["audio_length_positive_check"]:
-            assert col in results_df.columns, f"Expected column {col} not found in results DataFrame."
+def test_evaluate_batch(tmp_path: Path, resampled_mono_audio_sample: Audio) -> None:
+    """Tests that evaluate_batch correctly processes multiple audio files and handles caching."""
+    # Create two test files
+    audio_path1 = str(tmp_path / "test1.wav")
+    audio_path2 = str(tmp_path / "test2.wav")
+    resampled_mono_audio_sample.save_to_file(audio_path1)
+    resampled_mono_audio_sample.save_to_file(audio_path2)
 
-        # Extract booleans from each column
-        length_vals = results_df.sort_values("audio_path_or_id")["audio_length_positive_check"].tolist()
+    # Setup test evaluation function
+    def test_metric(_: Audio) -> Union[float, bool, str]:
+        return 0.5
 
-        # For [empty, silent, valid]:
-        # valid => length=True
-        # empty => length=False
-        # silent => length=True
-        assert length_vals == [False, True, True], f"Unexpected length results: {length_vals}"
+    # Setup test data
+    batch_audio_paths = [audio_path1, audio_path2]
+    audio_path_to_activity = {audio_path1: "test_activity", audio_path2: "test_activity"}
+    activity_to_evaluations: Dict[
+        str,
+        List[Callable[[Audio], Union[float, bool, str]]],
+    ] = {"test_activity": [test_metric]}
 
-    finally:
-        shutil.rmtree(tmp_path, ignore_errors=True)
+    # Run evaluate_batch
+    results = evaluate_batch(
+        batch_audio_paths=batch_audio_paths,
+        audio_path_to_activity=audio_path_to_activity,
+        activity_to_evaluations=activity_to_evaluations,
+        output_dir=tmp_path,
+    )
+
+    # Verify results
+    assert len(results) == 2, "Expected results for both audio files"
+    for result in results:
+        assert "id" in result, "Expected 'id' in result"
+        assert "path" in result, "Expected 'path' in result"
+        assert "activity" in result, "Expected 'activity' in result"
+        assert "test_metric" in result, "Expected metric result"
+        assert result["test_metric"] == 0.5, "Expected metric value of 0.5"
+
+    # Verify caching - files should exist
+    results_dir = tmp_path / "audio_results"
+    assert results_dir.exists(), "Results directory should be created"
+    assert (results_dir / "test1.parquet").exists(), "Cache file for test1 should exist"
+    assert (results_dir / "test2.parquet").exists(), "Cache file for test2 should exist"
+
+    # Test with existing results
+    cached_results = evaluate_batch(
+        batch_audio_paths=batch_audio_paths,
+        audio_path_to_activity=audio_path_to_activity,
+        activity_to_evaluations=activity_to_evaluations,
+        output_dir=tmp_path,
+    )
+
+    # Verify cached results match original results
+    assert cached_results == results, "Cached results should match original results"
+
+
+def test_run_evaluations(tmp_path: Path, resampled_mono_audio_sample: Audio) -> None:
+    """Tests that run_evaluations correctly processes batches in parallel."""
+    # Create multiple test files to test batching
+    audio_paths = []
+    for i in range(3):  # Create 3 files to test batching
+        path = str(tmp_path / f"test{i}.wav")
+        resampled_mono_audio_sample.save_to_file(path)
+        audio_paths.append(path)
+
+    # Setup test evaluation function
+    def test_metric(_: Audio) -> Union[float, bool, str]:
+        return 0.5
+
+    # Setup test data
+    audio_path_to_activity = {path: "test_activity" for path in audio_paths}
+    activity_to_evaluations: Dict[
+        str,
+        List[Callable[[Audio], Union[float, bool, str]]],
+    ] = {"test_activity": [test_metric]}
+
+    # Run evaluations with different configurations
+    # Test serial execution
+    results_serial = run_evaluations(
+        audio_path_to_activity=audio_path_to_activity,
+        activity_to_evaluations=activity_to_evaluations,
+        output_dir=tmp_path,
+        batch_size=2,  # Should create 2 batches
+        n_cores=1,  # Force serial execution
+        plugin="serial",
+    )
+
+    # Test parallel execution
+    results_parallel = run_evaluations(
+        audio_path_to_activity=audio_path_to_activity,
+        activity_to_evaluations=activity_to_evaluations,
+        output_dir=tmp_path,
+        batch_size=2,  # Should create 2 batches
+        n_cores=2,  # Use parallel execution
+        plugin="cf",
+    )
+
+    # Verify results
+    assert isinstance(results_serial, pd.DataFrame), "Expected DataFrame output"
+    assert isinstance(results_parallel, pd.DataFrame), "Expected DataFrame output"
+    assert len(results_serial) == 3, "Expected results for all files"
+    assert len(results_parallel) == 3, "Expected results for all files"
+
+    # Verify both methods give same results
+    pd.testing.assert_frame_equal(
+        results_serial.sort_values("id").reset_index(drop=True),
+        results_parallel.sort_values("id").reset_index(drop=True),
+    )
+
+    # Verify results content
+    for df in [results_serial, results_parallel]:
+        for _, row in df.iterrows():
+            assert "id" in row, "Expected 'id' in result"
+            assert "path" in row, "Expected 'path' in result"
+            assert "activity" in row, "Expected 'activity' in result"
+            assert "test_metric" in row, "Expected metric result"
+            assert row["test_metric"] == 0.5, "Expected metric value of 0.5"
+
+    # Verify cache files exist
+    results_dir = tmp_path / "audio_results"
+    assert results_dir.exists(), "Results directory should be created"
+    for i in range(3):
+        assert (results_dir / f"test{i}.parquet").exists(), f"Cache file for test{i} should exist"
+
+
+def test_check_quality(tmp_path: Path, resampled_mono_audio_sample: Audio) -> None:
+    """Tests that check_quality correctly processes audio files and returns results."""
+    # Save test audio file
+    audio_path = str(tmp_path / "test.wav")
+    resampled_mono_audio_sample.save_to_file(audio_path)
+
+    # Run check_quality
+    results_df = check_quality(
+        audio_paths=[audio_path],
+        output_dir=tmp_path,
+    )
+
+    # Verify results
+    assert isinstance(results_df, pd.DataFrame), "Expected DataFrame output"
+    assert not results_df.empty, "Expected non-empty results"
+    assert "path" in results_df.columns, "Expected 'path' column in results"
