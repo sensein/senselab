@@ -122,7 +122,7 @@ def test_clone_voices_unsupported_model(resampled_mono_audio_sample: Audio) -> N
     target_audios = [resampled_mono_audio_sample]
     # this uri doesn't exist
     with pytest.raises(ValueError, match="Model sensein/senselab not found. Available models:"):
-        unsupported_model = CoquiTTSModel(path_or_uri="sensein/senselab")
+        unsupported_model: CoquiTTSModel = CoquiTTSModel(path_or_uri="sensein/senselab")
         clone_voices(source_audios=source_audios, target_audios=target_audios, model=unsupported_model, device=None)
 
 

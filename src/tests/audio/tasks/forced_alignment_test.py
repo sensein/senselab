@@ -437,7 +437,7 @@ def test_align_transcriptions_multilingual(
     resampled_mono_audio_sample: Audio, aligned_scriptline_fixture_resampled_mono_audio: ScriptLine
 ) -> None:
     """Test alignment of transcriptions."""
-    model = HFModel(path_or_uri="openai/whisper-tiny")
+    model: HFModel = HFModel(path_or_uri="openai/whisper-tiny")
     transcription_en = transcribe_audios(
         [resampled_mono_audio_sample], model=model, language=Language(language_code="en")
     )[0]
