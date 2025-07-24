@@ -6,18 +6,20 @@ These dimensions can be updated or refined in the future as part of ongoing deve
 This module is currently a work in progress.
 """
 
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Union
 
 from senselab.audio.data_structures import Audio
+from senselab.utils.data_structures import ScriptLine
 
 from .opensmile import extract_opensmile_features_from_audios
 from .praat_parselmouth import extract_praat_parselmouth_features_from_audios
 from .torchaudio import extract_torchaudio_features_from_audios
 from .torchaudio_squim import extract_objective_quality_features_from_audios
-
+from .transcript_features import extract_transcript_features
 
 def extract_features_from_audios(
     audios: List[Audio],
+    transcripts: Optional[List[ScriptLine]] = None,
     opensmile: Union[Dict[str, str], bool] = True,
     parselmouth: Union[Dict[str, str], bool] = True,
     torchaudio: Union[Dict[str, str], bool] = True,
@@ -369,6 +371,9 @@ def extract_features_from_audios(
     if torchaudio_squim:
         torchaudio_squim_features = extract_objective_quality_features_from_audios(audios=audios)
 
+    if transcripts:
+        transcripts_features = extract_transcript_features(transcripts=transcripts)
+
     results = []
     for i in range(len(audios)):
         result = {}
@@ -380,6 +385,8 @@ def extract_features_from_audios(
             result["torchaudio"] = torchaudio_features[i]
         if torchaudio_squim:
             result["torchaudio_squim"] = torchaudio_squim_features[i]
+        if transcripts:
+            result["transcripts"] = transcripts[i]
         results.append(result)
 
     return results
