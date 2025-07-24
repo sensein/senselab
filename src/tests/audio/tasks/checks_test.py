@@ -188,7 +188,7 @@ def test_get_metric_filepath_not_in_dataframe(
 
 
 def test_get_metric_raises_error_when_filepath_not_in_df() -> None:
-    """Should raise ValueError when filepath not in DataFrame and no Audio."""
+    """Should raise FileNotFoundError when filepath doesn't exist."""
     import pytest
 
     # Create a DataFrame with different filenames
@@ -199,8 +199,8 @@ def test_get_metric_raises_error_when_filepath_not_in_df() -> None:
         }
     )
 
-    # Pass a filepath string that's not in the DataFrame
-    with pytest.raises(ValueError, match="Expected metric to be non-None"):
+    # Pass a filepath string that doesn't exist
+    with pytest.raises(FileNotFoundError, match="File nonexistent_file.wav does not exist"):
         get_metric("nonexistent_file.wav", zero_crossing_rate_metric, df=df)
 
 

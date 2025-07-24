@@ -58,34 +58,40 @@ def get_metric(
         contains the value, that cached value is returned; otherwise the metric
         is computed directly and optionally added to ``df``.
     """
-    metric_name = metric_function.__name__
-
-    filepath = None
-    audio_id = None
-
+    # Get audio identifier - either filepath basename or generated ID
     if isinstance(audio_or_path, str):
-        filepath = audio_or_path
-        audio_id = os.path.basename(filepath)
+        audio_id = os.path.basename(audio_or_path)
     else:
         filepath = audio_or_path.filepath()
-        # Use filepath if available, otherwise use the audio's unique ID
         audio_id = os.path.basename(filepath) if filepath else audio_or_path.generate_id()
 
-    metric = None
-    if df is not None and audio_id:
+    # Return cached value if available
+    metric_name = metric_function.__name__
+    if df is not None:
         row = df[df["audio_path_or_id"] == audio_id]
         if not row.empty and metric_name in row.columns:
-            metric = row[metric_name].iloc[0]
+            return row[metric_name].iloc[0]
 
-    if metric is None and isinstance(audio_or_path, Audio):
-        metric = metric_function(audio_or_path)
-        if df is not None and audio_id:
-            if metric_name not in df.columns:
-                df[metric_name] = pd.NA
-            df.loc[df["audio_path_or_id"] == audio_id, metric_name] = metric
+    # Compute metric - convert string to Audio if needed
+    if isinstance(audio_or_path, str):
+        audio_or_path = Audio(filepath=audio_or_path)
+    metric = metric_function(audio_or_path)
 
-    if metric is None:
-        raise ValueError("Expected metric to be non-None.")
+    # Cache computed value if DataFrame provided
+    if df is not None:
+        if metric_name not in df.columns:
+            df[metric_name] = pd.NA
+
+        # Find if audio_id already exists
+        mask = df["audio_path_or_id"] == audio_id
+        if mask.any():
+            # Update existing row
+            df.loc[mask, metric_name] = metric
+        else:
+            # Add new row using next available index
+            new_idx = len(df)
+            df.loc[new_idx, "audio_path_or_id"] = audio_id
+            df.loc[new_idx, metric_name] = metric
 
     return metric
 
