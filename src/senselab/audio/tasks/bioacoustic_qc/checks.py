@@ -50,7 +50,7 @@ def get_metric(
         metric_function: The metric function, e.g. ``zero_crossing_rate_metric``.
         df: Optional DataFrame that already contains pre-computed metrics.
             The DataFrame must have:
-              * a column ``'audio_path_or_id'`` holding file names, and
+              * a column ``'audio_path_or_id'`` holding file names or audio IDs, and
               * a column named exactly ``metric_function.__name__``.
 
     Returns:
@@ -61,25 +61,28 @@ def get_metric(
     metric_name = metric_function.__name__
 
     filepath = None
+    audio_id = None
+
     if isinstance(audio_or_path, str):
         filepath = audio_or_path
+        audio_id = os.path.basename(filepath)
     else:
         filepath = audio_or_path.filepath()
+        # Use filepath if available, otherwise use the audio's unique ID
+        audio_id = os.path.basename(filepath) if filepath else audio_or_path.generate_id()
 
     metric = None
-    if df is not None and filepath:
-        audio_file_name = os.path.basename(filepath)
-        row = df[df["audio_path_or_id"] == audio_file_name]
+    if df is not None and audio_id:
+        row = df[df["audio_path_or_id"] == audio_id]
         if not row.empty and metric_name in row.columns:
             metric = row[metric_name].iloc[0]
 
     if metric is None and isinstance(audio_or_path, Audio):
         metric = metric_function(audio_or_path)
-        if df is not None and filepath:
-            audio_file_name = os.path.basename(filepath)
+        if df is not None and audio_id:
             if metric_name not in df.columns:
                 df[metric_name] = pd.NA
-            df.loc[df["audio_path_or_id"] == audio_file_name, metric_name] = metric
+            df.loc[df["audio_path_or_id"] == audio_id, metric_name] = metric
 
     if metric is None:
         raise ValueError("Expected metric to be non-None.")
