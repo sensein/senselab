@@ -592,7 +592,7 @@ def align_transcriptions(
             language = Language(language_code="en")
 
         model_dict = DEFAULT_ALIGN_MODELS_HF.get(language.language_code, DEFAULT_ALIGN_MODELS_HF["en"])
-        model_variant = HFModel(path_or_uri=model_dict["path_or_uri"], revision=model_dict["revision"])
+        model_variant: HFModel = HFModel(path_or_uri=model_dict["path_or_uri"], revision=model_dict["revision"])
         if model_variant.path_or_uri not in loaded_processors_and_models:
             processor = Wav2Vec2Processor.from_pretrained(model_variant.path_or_uri)
             model = Wav2Vec2ForCTC.from_pretrained(model_variant.path_or_uri).to(device.value)
