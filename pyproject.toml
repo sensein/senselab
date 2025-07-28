@@ -37,7 +37,7 @@ torch = {version = "~=2.6", markers = "sys_platform != 'darwin' or platform_mach
 torchvision = "~=0.20"
 transformers = "~=4.48"
 pydra = "~=0.25"
-pydantic = "^2.11.0"
+pydantic = "~=2.11"
 accelerate = "*"
 huggingface-hub = "~=0.23"
 pycountry = "~=24.6"
