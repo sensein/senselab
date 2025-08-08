@@ -1,27 +1,18 @@
 """Uses weak supervision to label files as include, exclude, or unsure."""
 
 import pandas as pd
+import numpy as np
 from snorkel.labeling import LFAnalysis, PandasLFApplier, labeling_function
 from snorkel.labeling.model import LabelModel
-
 
 INCLUDE = 1
 EXCLUDE = 0
 ABSTAIN = -1
 
-
-# load the evaluation results
-# get the check columns
-# define label functions that map True to exclude, False to unsure
-# train the label model
-# apply the label model to the data
-# save the results
-
 def make_check_lf(col: str):
     @labeling_function(name=f"lf_{col}")
     def lf(x, _col=col):
         val = getattr(x, _col, None)
-        # normalize to boolean
         if val is None or (isinstance(val, float) and pd.isna(val)):
             return ABSTAIN
         if isinstance(val, str):
@@ -29,42 +20,85 @@ def make_check_lf(col: str):
         return EXCLUDE if bool(val) else ABSTAIN
     return lf
 
-def label_files(df_path: str):
-    quality_control_df = pd.read_csv(path)
-    quality_control_df = quality_control_df[~quality_control_df["audio_path_or_id"].str.contains("Audio-Check", na=False)]
-    print(len(quality_control_df))
-    df_check_only = quality_control_df[
-        [col for col in quality_control_df.columns if "check" in col]
-    ]
+def _prune_check_columns(df_checks: pd.DataFrame, corr_thresh: float = 0.95):
+    """Return pruned check column names and a dict of what was dropped."""
+    X = df_checks.copy()
+    # normalize to boolean for redundancy tests
+    for c in X.columns:
+        if X[c].dtype == object:
+            X[c] = X[c].astype(str).str.strip().str.lower().isin({"1","true","t","yes","y"})
+    X = X.fillna(False).astype(bool)
 
-    # --- Apply LFs to binary check columns ---
-    check_cols = [col for col in df_check_only.columns if "check" in col]
-    lf_list = [make_check_lf(c) for c in check_cols]
+    dropped = {"constant": [], "high_corr": []}
+
+    # 1) drop constants
+    const_cols = [c for c in X.columns if X[c].nunique(dropna=False) <= 1]
+    if const_cols:
+        dropped["constant"].extend(const_cols)
+        X = X.drop(columns=const_cols)
+
+    # 2) drop highly correlated (keep first in order)
+    if X.shape[1] > 1:
+        corr = X.astype(int).corr()
+        to_drop = set()
+        cols = list(corr.columns)
+        for i in range(len(cols)):
+            if cols[i] in to_drop:
+                continue
+            for j in range(i + 1, len(cols)):
+                if cols[j] in to_drop:
+                    continue
+                if corr.iloc[i, j] >= corr_thresh:
+                    to_drop.add(cols[j])
+        if to_drop:
+            dropped["high_corr"].extend(sorted(to_drop))
+            X = X.drop(columns=list(to_drop))
+
+    keep_cols = list(X.columns)
+    return keep_cols, dropped
+
+def label_files(df_path: str, corr_thresh: float = 0.95):
+    df = pd.read_csv(df_path)
+    df = df[~df["audio_path_or_id"].astype(str).str.contains("Audio-Check", na=False)]
+    print(f"Total files: {len(df)}")
+
+    df_checks = df[[c for c in df.columns if "check" in c]]
+    keep_cols, dropped = _prune_check_columns(df_checks, corr_thresh=corr_thresh)
+
+    print(f"Checks total: {df_checks.shape[1]} | kept: {len(keep_cols)} | "
+          f"dropped: {sum(len(v) for v in dropped.values())}")
+    for reason, cols in dropped.items():
+        if cols:
+            print(f"  - {reason} ({len(cols)}): {cols}")
+
+    # Build LFs on pruned columns
+    lf_list = [make_check_lf(c) for c in keep_cols]
     applier = PandasLFApplier(lfs=lf_list)
-    L_train = applier.apply(df_check_only[check_cols])
+    L_train = applier.apply(df_checks[keep_cols])
 
-    # --- Train Label Model ---
+    # Train label model
     label_model = LabelModel(cardinality=2, verbose=True)
     label_model.fit(L_train=L_train, n_epochs=500, log_freq=100, seed=123)
 
-    # --- Predict labels ---
+    # Predict
     preds = label_model.predict(L=L_train)
-    df_check_only["snorkel_label"] = preds
+    df["snorkel_label"] = preds
 
-    # --- Optional: Analyze ---
-    # --- Count ABSTAIN / INCLUDE / EXCLUDE ---
+    # Counts (abstain = no LF fired)
     abstain_mask = (L_train != ABSTAIN).sum(axis=1) == 0
-    num_abstain = abstain_mask.sum()
-    num_include = (preds == INCLUDE).sum()
-    num_exclude = (preds == EXCLUDE).sum()
+    num_abstain = int(abstain_mask.sum())
+    num_include = int((preds == INCLUDE).sum())
+    num_exclude = int((preds == EXCLUDE).sum())
 
     print(f"ABSTAIN: {num_abstain}")
     print(f"INCLUDE: {num_include}")
     print(f"EXCLUDE: {num_exclude}")
 
-    # --- Optional: Analyze ---
+    # Optional: summary
     LFAnalysis(L=L_train, lfs=lf_list).lf_summary()
-    print(df_check_only[["snorkel_label"] + check_cols].head())
+    print(df[["snorkel_label"]].head())
+
+    return df
 
 path = "/Users/isaacbevers/sensein/b2ai-wrapper/b2ai-data/wasabi/eipm-bridge2ai-internal-data-dissemination/2025-04-04T18.14.48.299Z/bioacoustic_quality_control_results_with_checks.csv"
 label_files(path)
