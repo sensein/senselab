@@ -100,10 +100,33 @@ def label_files(df_path: str, corr_thresh: float = 0.95):
     print(f"INCLUDE: {num_include}")
     print(f"EXCLUDE: {num_exclude}")
 
-    LFAnalysis(L=L_train, lfs=lf_list).lf_summary()
-    print(df[["snorkel_label"]].head())
-    return df
+    # Reliability ranking
+    lf_names = [lf.name for lf in lf_list]
+    reliability_rows = []
+    for j, name in enumerate(lf_names):
+        votes = L_train[:, j]
+        fired = votes != ABSTAIN
+        n_fired = int(fired.sum())
+        cov = n_fired / len(df)
+        if n_fired == 0:
+            agree = np.nan
+        else:
+            agree = float((votes[fired] == preds[fired]).mean())
+        reliability_rows.append({
+            "lf": name,
+            "coverage": round(cov, 4),
+            "n_fired": n_fired,
+            "agreement": round(agree, 4) if agree == agree else None
+        })
 
+    reliability_df = pd.DataFrame(reliability_rows).sort_values(
+        ["agreement", "coverage"], ascending=[False, False]
+    )
+
+    print("\nLF reliability (agreement with LabelModel):")
+    print(reliability_df.to_string(index=False))
+
+    return df
 
 path = "/Users/isaacbevers/sensein/b2ai-wrapper/b2ai-data/wasabi/eipm-bridge2ai-internal-data-dissemination/2025-04-04T18.14.48.299Z/bioacoustic_quality_control_results_with_checks.csv"
 label_files(path)
