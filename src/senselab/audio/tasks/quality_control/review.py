@@ -20,10 +20,20 @@ def make_check_lf(col: str):
         return EXCLUDE if bool(val) else ABSTAIN
     return lf
 
+def make_no_checks_true_include_lf(cols):
+    @labeling_function(name="lf_no_checks_true_include")
+    def lf(x, _cols=tuple(cols)):
+        total_true = 0
+        for c in _cols:
+            v = getattr(x, c, None)
+            if isinstance(v, str):
+                v = v.strip().lower() in {"1","true","t","yes","y"}
+            total_true += int(bool(v))
+        return INCLUDE if total_true == 0 else ABSTAIN
+    return lf
+
 def _prune_check_columns(df_checks: pd.DataFrame, corr_thresh: float = 0.95):
-    """Return pruned check column names and a dict of what was dropped."""
     X = df_checks.copy()
-    # normalize to boolean for redundancy tests
     for c in X.columns:
         if X[c].dtype == object:
             X[c] = X[c].astype(str).str.strip().str.lower().isin({"1","true","t","yes","y"})
@@ -31,13 +41,11 @@ def _prune_check_columns(df_checks: pd.DataFrame, corr_thresh: float = 0.95):
 
     dropped = {"constant": [], "high_corr": []}
 
-    # 1) drop constants
     const_cols = [c for c in X.columns if X[c].nunique(dropna=False) <= 1]
     if const_cols:
         dropped["constant"].extend(const_cols)
         X = X.drop(columns=const_cols)
 
-    # 2) drop highly correlated (keep first in order)
     if X.shape[1] > 1:
         corr = X.astype(int).corr()
         to_drop = set()
@@ -65,26 +73,24 @@ def label_files(df_path: str, corr_thresh: float = 0.95):
     df_checks = df[[c for c in df.columns if "check" in c]]
     keep_cols, dropped = _prune_check_columns(df_checks, corr_thresh=corr_thresh)
 
-    print(f"Checks total: {df_checks.shape[1]} | kept: {len(keep_cols)} | "
-          f"dropped: {sum(len(v) for v in dropped.values())}")
+    print(f"Checks total: {df_checks.shape[1]} | kept: {len(keep_cols)} | dropped: {sum(len(v) for v in dropped.values())}")
     for reason, cols in dropped.items():
         if cols:
             print(f"  - {reason} ({len(cols)}): {cols}")
 
-    # Build LFs on pruned columns
+    # LFs: per-check EXCLUDE + composite INCLUDE when no checks fire
     lf_list = [make_check_lf(c) for c in keep_cols]
+    lf_list.append(make_no_checks_true_include_lf(keep_cols))
+
     applier = PandasLFApplier(lfs=lf_list)
     L_train = applier.apply(df_checks[keep_cols])
 
-    # Train label model
     label_model = LabelModel(cardinality=2, verbose=True)
     label_model.fit(L_train=L_train, n_epochs=500, log_freq=100, seed=123)
 
-    # Predict
     preds = label_model.predict(L=L_train)
     df["snorkel_label"] = preds
 
-    # Counts (abstain = no LF fired)
     abstain_mask = (L_train != ABSTAIN).sum(axis=1) == 0
     num_abstain = int(abstain_mask.sum())
     num_include = int((preds == INCLUDE).sum())
@@ -94,11 +100,10 @@ def label_files(df_path: str, corr_thresh: float = 0.95):
     print(f"INCLUDE: {num_include}")
     print(f"EXCLUDE: {num_exclude}")
 
-    # Optional: summary
     LFAnalysis(L=L_train, lfs=lf_list).lf_summary()
     print(df[["snorkel_label"]].head())
-
     return df
+
 
 path = "/Users/isaacbevers/sensein/b2ai-wrapper/b2ai-data/wasabi/eipm-bridge2ai-internal-data-dissemination/2025-04-04T18.14.48.299Z/bioacoustic_quality_control_results_with_checks.csv"
 label_files(path)
