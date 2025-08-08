@@ -1,45 +1,68 @@
 """Uses weak supervision to label files as include, exclude, or unsure."""
 
-import pandas as pd
+from __future__ import annotations
+
+from typing import Any, Callable, Dict, List, Sequence, Tuple
+
 import numpy as np
-from snorkel.labeling import LFAnalysis, PandasLFApplier, labeling_function
+import pandas as pd
+from snorkel.labeling import PandasLFApplier, labeling_function
 from snorkel.labeling.model import LabelModel
 
-INCLUDE = 1
-EXCLUDE = 0
-ABSTAIN = -1
+INCLUDE: int = 1
+EXCLUDE: int = 0
+ABSTAIN: int = -1
 
-def make_check_lf(col: str):
+
+def make_check_lf(col: str) -> Callable[[pd.Series], int]:
+    """Create a labeling function: True in column -> EXCLUDE, else ABSTAIN."""
+
     @labeling_function(name=f"lf_{col}")
-    def lf(x, _col=col):
-        val = getattr(x, _col, None)
+    def lf(x: pd.Series, _col: str = col) -> int:
+        val: Any = getattr(x, _col, None)
         if val is None or (isinstance(val, float) and pd.isna(val)):
             return ABSTAIN
         if isinstance(val, str):
             val = val.strip().lower() in {"1", "true", "t", "yes", "y"}
         return EXCLUDE if bool(val) else ABSTAIN
+
     return lf
 
-def make_no_checks_true_include_lf(cols):
+
+def make_no_checks_true_include_lf(cols: Sequence[str]) -> Callable[[pd.Series], int]:
+    """Create an LF: if all given checks are False/NA -> INCLUDE."""
+
     @labeling_function(name="lf_no_checks_true_include")
-    def lf(x, _cols=tuple(cols)):
+    def lf(x: pd.Series, _cols: Sequence[str] = tuple(cols)) -> int:
         total_true = 0
         for c in _cols:
-            v = getattr(x, c, None)
+            v: Any = getattr(x, c, None)
             if isinstance(v, str):
-                v = v.strip().lower() in {"1","true","t","yes","y"}
+                v = v.strip().lower() in {"1", "true", "t", "yes", "y"}
             total_true += int(bool(v))
         return INCLUDE if total_true == 0 else ABSTAIN
+
     return lf
 
-def _prune_check_columns(df_checks: pd.DataFrame, corr_thresh: float = 0.95):
+
+def _prune_check_columns(df_checks: pd.DataFrame, corr_thresh: float = 0.95) -> Tuple[List[str], Dict[str, List[str]]]:
+    """Prune constant and highly correlated check columns.
+
+    Args:
+        df_checks: DataFrame containing only *_check columns.
+        corr_thresh: Drop one of any pair with correlation >= this threshold.
+
+    Returns:
+        keep_cols: Names of check columns to keep.
+        dropped: Dict of reasons -> list of dropped column names.
+    """
     X = df_checks.copy()
     for c in X.columns:
         if X[c].dtype == object:
-            X[c] = X[c].astype(str).str.strip().str.lower().isin({"1","true","t","yes","y"})
+            X[c] = X[c].astype(str).str.strip().str.lower().isin({"1", "true", "t", "yes", "y"})
     X = X.fillna(False).astype(bool)
 
-    dropped = {"constant": [], "high_corr": []}
+    dropped: Dict[str, List[str]] = {"constant": [], "high_corr": []}
 
     const_cols = [c for c in X.columns if X[c].nunique(dropna=False) <= 1]
     if const_cols:
@@ -48,7 +71,7 @@ def _prune_check_columns(df_checks: pd.DataFrame, corr_thresh: float = 0.95):
 
     if X.shape[1] > 1:
         corr = X.astype(int).corr()
-        to_drop = set()
+        to_drop: set[str] = set()
         cols = list(corr.columns)
         for i in range(len(cols)):
             if cols[i] in to_drop:
@@ -65,7 +88,17 @@ def _prune_check_columns(df_checks: pd.DataFrame, corr_thresh: float = 0.95):
     keep_cols = list(X.columns)
     return keep_cols, dropped
 
-def label_files(df_path: str, corr_thresh: float = 0.95):
+
+def label_files(df_path: str, corr_thresh: float = 0.95) -> pd.DataFrame:
+    """Label files using per-check LFs + a composite include LF.
+
+    Steps:
+      1) Load CSV and filter out Audio-Check rows.
+      2) Prune *_check columns (constants, highly correlated).
+      3) Build LFs (per-check EXCLUDE + composite INCLUDE).
+      4) Train binary LabelModel, predict labels.
+      5) Print counts and LF reliability; return labeled DataFrame.
+    """
     df = pd.read_csv(df_path)
     df = df[~df["audio_path_or_id"].astype(str).str.contains("Audio-Check", na=False)]
     print(f"Total files: {len(df)}")
@@ -73,60 +106,70 @@ def label_files(df_path: str, corr_thresh: float = 0.95):
     df_checks = df[[c for c in df.columns if "check" in c]]
     keep_cols, dropped = _prune_check_columns(df_checks, corr_thresh=corr_thresh)
 
-    print(f"Checks total: {df_checks.shape[1]} | kept: {len(keep_cols)} | dropped: {sum(len(v) for v in dropped.values())}")
+    dropped_total = sum(len(v) for v in dropped.values())
+    print(f"Checks total: {df_checks.shape[1]} | kept: {len(keep_cols)} | " f"dropped: {dropped_total}")
     for reason, cols in dropped.items():
         if cols:
             print(f"  - {reason} ({len(cols)}): {cols}")
 
-    # LFs: per-check EXCLUDE + composite INCLUDE when no checks fire
-    lf_list = [make_check_lf(c) for c in keep_cols]
+    # Build LFs + explicit names (avoid mypy complaining about .name)
+    lf_list: List[Callable[[pd.Series], int]] = []
+    lf_names: List[str] = []
+    for c in keep_cols:
+        lf_list.append(make_check_lf(c))
+        lf_names.append(f"lf_{c}")
     lf_list.append(make_no_checks_true_include_lf(keep_cols))
+    lf_names.append("lf_no_checks_true_include")
 
+    # Apply LFs
     applier = PandasLFApplier(lfs=lf_list)
     L_train = applier.apply(df_checks[keep_cols])
 
+    # Train LabelModel
     label_model = LabelModel(cardinality=2, verbose=True)
     label_model.fit(L_train=L_train, n_epochs=500, log_freq=100, seed=123)
 
+    # Predict
     preds = label_model.predict(L=L_train)
     df["snorkel_label"] = preds
 
+    # Counts (abstain == no LF fired; with composite LF this should be 0)
     abstain_mask = (L_train != ABSTAIN).sum(axis=1) == 0
-    num_abstain = int(abstain_mask.sum())
-    num_include = int((preds == INCLUDE).sum())
-    num_exclude = int((preds == EXCLUDE).sum())
+    print(f"ABSTAIN: {int(abstain_mask.sum())}")
+    print(f"INCLUDE: {int((preds == INCLUDE).sum())}")
+    print(f"EXCLUDE: {int((preds == EXCLUDE).sum())}")
 
-    print(f"ABSTAIN: {num_abstain}")
-    print(f"INCLUDE: {num_include}")
-    print(f"EXCLUDE: {num_exclude}")
-
-    # Reliability ranking
-    lf_names = [lf.name for lf in lf_list]
-    reliability_rows = []
+    # Reliability ranking (agreement with LabelModel on rows where LF fired)
+    reliability_rows: List[Dict[str, object]] = []
+    n_rows = len(df)
     for j, name in enumerate(lf_names):
         votes = L_train[:, j]
         fired = votes != ABSTAIN
         n_fired = int(fired.sum())
-        cov = n_fired / len(df)
-        if n_fired == 0:
-            agree = np.nan
-        else:
-            agree = float((votes[fired] == preds[fired]).mean())
-        reliability_rows.append({
-            "lf": name,
-            "coverage": round(cov, 4),
-            "n_fired": n_fired,
-            "agreement": round(agree, 4) if agree == agree else None
-        })
+        cov = (n_fired / n_rows) if n_rows else 0.0
+        agree = float((votes[fired] == preds[fired]).mean()) if n_fired else np.nan
+        reliability_rows.append(
+            {
+                "lf": name,
+                "coverage": round(cov, 4),
+                "n_fired": n_fired,
+                "agreement": round(agree, 4) if agree == agree else None,
+            }
+        )
 
-    reliability_df = pd.DataFrame(reliability_rows).sort_values(
-        ["agreement", "coverage"], ascending=[False, False]
-    )
-
+    reliability_df = pd.DataFrame(reliability_rows).sort_values(["agreement", "coverage"], ascending=[False, False])
     print("\nLF reliability (agreement with LabelModel):")
     print(reliability_df.to_string(index=False))
 
     return df
 
-path = "/Users/isaacbevers/sensein/b2ai-wrapper/b2ai-data/wasabi/eipm-bridge2ai-internal-data-dissemination/2025-04-04T18.14.48.299Z/bioacoustic_quality_control_results_with_checks.csv"
-label_files(path)
+
+# Example call (split long path for style checks)
+if __name__ == "__main__":
+    path = (
+        "/Users/isaacbevers/sensein/b2ai-wrapper/b2ai-data/wasabi/"
+        "eipm-bridge2ai-internal-data-dissemination/"
+        "2025-04-04T18.14.48.299Z/"
+        "bioacoustic_quality_control_results_with_checks.csv"
+    )
+    label_files(path)
