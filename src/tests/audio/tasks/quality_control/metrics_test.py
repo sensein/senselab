@@ -9,9 +9,9 @@ import pytest
 import torch
 from pytest import approx
 
-import senselab.audio.tasks.bioacoustic_qc.metrics as metrics
+import senselab.audio.tasks.quality_control.metrics as metrics
 from senselab.audio.data_structures import Audio
-from senselab.audio.tasks.bioacoustic_qc.metrics import (
+from senselab.audio.tasks.quality_control.metrics import (
     amplitude_headroom_metric,
     amplitude_interquartile_range_metric,
     amplitude_kurtosis_metric,

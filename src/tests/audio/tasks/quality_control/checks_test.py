@@ -10,11 +10,11 @@ import os
 import pandas as pd
 
 from senselab.audio.data_structures import Audio
-from senselab.audio.tasks.bioacoustic_qc.checks import (
+from senselab.audio.tasks.quality_control.checks import (
+    audio_intensity_positive_check,
     audio_length_positive_check,
     clipping_present_check,
     completely_silent_check,
-    get_metric,
     high_amplitude_skew_magnitude_check,
     high_crest_factor_check,
     high_proportion_clipped_check,
@@ -49,7 +49,7 @@ from senselab.audio.tasks.bioacoustic_qc.checks import (
     very_low_peak_snr_from_spectral_check,
     very_low_root_mean_square_energy_check,
 )
-from senselab.audio.tasks.bioacoustic_qc.metrics import (
+from senselab.audio.tasks.quality_control.metrics import (
     amplitude_headroom_metric,
     amplitude_interquartile_range_metric,
     amplitude_kurtosis_metric,
@@ -70,30 +70,6 @@ from senselab.audio.tasks.bioacoustic_qc.metrics import (
     spectral_gating_snr_metric,
     zero_crossing_rate_metric,
 )
-
-
-def test_get_metric_computes_directly(stereo_audio_sample: Audio) -> None:
-    """Should compute the metric when no DataFrame is provided."""
-    value = get_metric(stereo_audio_sample, zero_crossing_rate_metric)
-    assert isinstance(value, float)
-    assert 0 <= value <= 1
-
-
-def test_get_metric_uses_dataframe_cache(stereo_audio_sample: Audio) -> None:
-    """Should return cached value when DataFrame is valid."""
-    cached_value = 0.1234
-    filepath = stereo_audio_sample.filepath()
-    filename = None
-    if filepath:
-        filename = os.path.basename(filepath)
-    df = pd.DataFrame(
-        {
-            "audio_path_or_id": [filename],
-            "zero_crossing_rate_metric": [cached_value],
-        }
-    )
-    value = get_metric(stereo_audio_sample, zero_crossing_rate_metric, df=df)
-    assert value == cached_value
 
 
 def test_audio_length_positive_check(stereo_audio_sample: Audio) -> None:
@@ -364,3 +340,11 @@ def test_very_high_zero_crossing_rate_check(stereo_audio_sample: Audio) -> None:
     assert not very_high_zero_crossing_rate_check(
         stereo_audio_sample
     ), f"very_high_zero_crossing_rate_check flagged (ZCR={m:.4f})"
+
+
+def test_audio_intensity_positive_check(stereo_audio_sample: Audio) -> None:
+    """audio_intensity_positive_check returns True for non-zero dynamic range."""
+    m = dynamic_range_metric(stereo_audio_sample)
+    assert audio_intensity_positive_check(
+        stereo_audio_sample
+    ), f"audio_intensity_positive_check returned False (dynamic_range={m:.4f})"
