@@ -80,8 +80,6 @@ class Audio(BaseModel):
                 raise ValueError("When a waveform is provided, a sampling_rate must also be supplied.")
             self._waveform = self.convert_to_tensor(waveform)
             self._sampling_rate = provided_sr
-            if filepath:
-                self._file_path = filepath
         else:
             # otherwise, a valid filepath is required for lazy loading.
             if not filepath:
