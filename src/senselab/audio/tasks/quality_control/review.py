@@ -123,19 +123,21 @@ def calculate_lf_reliability(L_train: np.ndarray, preds: np.ndarray, lf_names: L
     for j, name in enumerate(lf_names):
         votes = L_train[:, j]
         fired = votes != ABSTAIN
-        n_fired = int(fired.sum())
-        cov = (n_fired / n_rows) if n_rows else 0.0
-        agree = float((votes[fired] == preds[fired]).mean()) if n_fired else np.nan
+        n_audio_files = int(fired.sum())
+        cov = (n_audio_files / n_rows) if n_rows else 0.0
+        agree = float((votes[fired] == preds[fired]).mean()) if n_audio_files else np.nan
         reliability_rows.append(
             {
                 "lf": name,
                 "coverage": round(cov, 4),
-                "n_fired": n_fired,
-                "agreement": round(agree, 4) if agree == agree else None,
+                "n_audio_files": n_audio_files,
+                "agreement_with_label_model": round(agree, 4) if agree == agree else None,
             }
         )
 
-    return pd.DataFrame(reliability_rows).sort_values(["agreement", "coverage"], ascending=[False, False])
+    return pd.DataFrame(reliability_rows).sort_values(
+        ["agreement_with_label_model", "coverage"], ascending=[False, False]
+    )
 
 
 def review_files(df_path: str, correlation_threahold: float = 0.99) -> pd.DataFrame:
@@ -178,7 +180,7 @@ def review_files(df_path: str, correlation_threahold: float = 0.99) -> pd.DataFr
 
     # Train LabelModel
     label_model = LabelModel(cardinality=2, verbose=True)
-    label_model.fit(L_train=L_train, n_epochs=500, log_freq=100, seed=123)
+    label_model.fit(L_train=L_train, n_epochs=200, log_freq=100, seed=123)
 
     # Predict
     preds = label_model.predict(L=L_train)
