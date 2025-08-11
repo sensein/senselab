@@ -1,29 +1,26 @@
 """Module for testing bioacoustic quality control."""
 
+import json
 from collections import Counter
 from pathlib import Path
 from typing import Callable, Dict, List, Union, cast
 
 import pandas as pd
 import pytest
-import torch
 
 from senselab.audio.data_structures import Audio
-from senselab.audio.tasks.bioacoustic_qc import (
+from senselab.audio.tasks.quality_control import (
     activity_to_dataset_taxonomy_subtree,
+    activity_to_evaluations,
     activity_to_taxonomy_tree_path,
     check_quality,
-    create_activity_to_evaluations,
-    evaluate_audio,
-    evaluate_batch,
-    run_evaluations,
     subtree_to_evaluations,
 )
-from senselab.audio.tasks.bioacoustic_qc.checks import (
+from senselab.audio.tasks.quality_control.checks import (
     audio_intensity_positive_check,
     audio_length_positive_check,
 )
-from senselab.audio.tasks.bioacoustic_qc.constants import BIOACOUSTIC_ACTIVITY_TAXONOMY as TAXONOMY
+from senselab.audio.tasks.quality_control.constants import BIOACOUSTIC_ACTIVITY_TAXONOMY as TAXONOMY
 
 
 @pytest.mark.parametrize("taxonomy_tree", [TAXONOMY])
@@ -243,7 +240,7 @@ def test_activity_to_dataset_taxonomy_subtree_errors() -> None:
         )
 
 
-def test_create_activity_to_evaluations() -> None:
+def test_activity_to_evaluations() -> None:
     """Tests mapping of audio paths to their evaluation functions."""
     # Setup test data
     audio_paths = {
@@ -252,7 +249,7 @@ def test_create_activity_to_evaluations() -> None:
     }
 
     # Get evaluations mapping
-    activity_evals = create_activity_to_evaluations(
+    activity_evals = activity_to_evaluations(
         audio_path_to_activity=audio_paths,
         activity_tree=TAXONOMY,
     )
@@ -266,172 +263,6 @@ def test_create_activity_to_evaluations() -> None:
     assert isinstance(sigh_evals, list), "Expected list of evaluations"
     assert audio_length_positive_check in sigh_evals, "Missing length check"
     assert audio_intensity_positive_check in sigh_evals, "Missing intensity check"
-
-
-def test_evaluate_audio(tmp_path: Path, resampled_mono_audio_sample: Audio) -> None:
-    """Tests that evaluate_audio correctly processes audio and handles existing results."""
-    # Save test audio file
-    audio_path = str(tmp_path / "test.wav")
-    resampled_mono_audio_sample.save_to_file(audio_path)
-
-    # Create test evaluation functions with proper names
-    def test_float(x: Audio) -> float:
-        return 0.5
-
-    def test_bool(x: Audio) -> bool:
-        return True
-
-    def test_str(x: Audio) -> str:
-        return "test"
-
-    evaluations: List[Callable[[Audio], Union[float, bool, str]]] = [
-        test_float,
-        test_bool,
-        test_str,
-    ]
-
-    # Test basic evaluation
-    results = evaluate_audio(audio_path, "test_activity", evaluations)
-    assert results["id"] == Path(audio_path).stem
-    assert results["path"] == audio_path
-    assert results["activity"] == "test_activity"
-    assert results["test_float"] == 0.5
-    assert results["test_bool"] is True
-    assert results["test_str"] == "test"
-
-    # Test with existing results
-    existing = {
-        "test_float": 1.0,  # Should be preserved
-        "test_str": "old",  # Should be preserved
-    }
-    results = evaluate_audio(audio_path, "test_activity", evaluations, existing)
-    assert results["test_float"] == 1.0, "Existing float result was not preserved"
-    assert results["test_str"] == "old", "Existing string result was not preserved"
-    assert results["test_bool"] is True, "New evaluation was not computed"
-
-
-def test_evaluate_batch(tmp_path: Path, resampled_mono_audio_sample: Audio) -> None:
-    """Tests that evaluate_batch correctly processes multiple audio files and handles caching."""
-    # Create two test files
-    audio_path1 = str(tmp_path / "test1.wav")
-    audio_path2 = str(tmp_path / "test2.wav")
-    resampled_mono_audio_sample.save_to_file(audio_path1)
-    resampled_mono_audio_sample.save_to_file(audio_path2)
-
-    # Setup test evaluation function
-    def test_metric(_: Audio) -> Union[float, bool, str]:
-        return 0.5
-
-    # Setup test data
-    batch_audio_paths = [audio_path1, audio_path2]
-    audio_path_to_activity = {audio_path1: "test_activity", audio_path2: "test_activity"}
-    activity_to_evaluations: Dict[
-        str,
-        List[Callable[[Audio], Union[float, bool, str]]],
-    ] = {"test_activity": [test_metric]}
-
-    # Run evaluate_batch
-    results = evaluate_batch(
-        batch_audio_paths=batch_audio_paths,
-        audio_path_to_activity=audio_path_to_activity,
-        activity_to_evaluations=activity_to_evaluations,
-        output_dir=tmp_path,
-    )
-
-    # Verify results
-    assert len(results) == 2, "Expected results for both audio files"
-    for result in results:
-        assert "id" in result, "Expected 'id' in result"
-        assert "path" in result, "Expected 'path' in result"
-        assert "activity" in result, "Expected 'activity' in result"
-        assert "test_metric" in result, "Expected metric result"
-        assert result["test_metric"] == 0.5, "Expected metric value of 0.5"
-
-    # Verify caching - files should exist
-    results_dir = tmp_path / "audio_results"
-    assert results_dir.exists(), "Results directory should be created"
-    assert (results_dir / "test1.parquet").exists(), "Cache file for test1 should exist"
-    assert (results_dir / "test2.parquet").exists(), "Cache file for test2 should exist"
-
-    # Test with existing results
-    cached_results = evaluate_batch(
-        batch_audio_paths=batch_audio_paths,
-        audio_path_to_activity=audio_path_to_activity,
-        activity_to_evaluations=activity_to_evaluations,
-        output_dir=tmp_path,
-    )
-
-    # Verify cached results match original results
-    assert cached_results == results, "Cached results should match original results"
-
-
-def test_run_evaluations(tmp_path: Path, resampled_mono_audio_sample: Audio) -> None:
-    """Tests that run_evaluations correctly processes batches in parallel."""
-    # Create multiple test files to test batching
-    audio_paths = []
-    for i in range(3):  # Create 3 files to test batching
-        path = str(tmp_path / f"test{i}.wav")
-        resampled_mono_audio_sample.save_to_file(path)
-        audio_paths.append(path)
-
-    # Setup test evaluation function
-    def test_metric(_: Audio) -> Union[float, bool, str]:
-        return 0.5
-
-    # Setup test data
-    audio_path_to_activity = {path: "test_activity" for path in audio_paths}
-    activity_to_evaluations: Dict[
-        str,
-        List[Callable[[Audio], Union[float, bool, str]]],
-    ] = {"test_activity": [test_metric]}
-
-    # Run evaluations with different configurations
-    # Test serial execution
-    results_serial = run_evaluations(
-        audio_path_to_activity=audio_path_to_activity,
-        activity_to_evaluations=activity_to_evaluations,
-        output_dir=tmp_path,
-        batch_size=2,  # Should create 2 batches
-        n_cores=1,  # Force serial execution
-        plugin="serial",
-    )
-
-    # Test parallel execution
-    results_parallel = run_evaluations(
-        audio_path_to_activity=audio_path_to_activity,
-        activity_to_evaluations=activity_to_evaluations,
-        output_dir=tmp_path,
-        batch_size=2,  # Should create 2 batches
-        n_cores=2,  # Use parallel execution
-        plugin="cf",
-    )
-
-    # Verify results
-    assert isinstance(results_serial, pd.DataFrame), "Expected DataFrame output"
-    assert isinstance(results_parallel, pd.DataFrame), "Expected DataFrame output"
-    assert len(results_serial) == 3, "Expected results for all files"
-    assert len(results_parallel) == 3, "Expected results for all files"
-
-    # Verify both methods give same results
-    pd.testing.assert_frame_equal(
-        results_serial.sort_values("id").reset_index(drop=True),
-        results_parallel.sort_values("id").reset_index(drop=True),
-    )
-
-    # Verify results content
-    for df in [results_serial, results_parallel]:
-        for _, row in df.iterrows():
-            assert "id" in row, "Expected 'id' in result"
-            assert "path" in row, "Expected 'path' in result"
-            assert "activity" in row, "Expected 'activity' in result"
-            assert "test_metric" in row, "Expected metric result"
-            assert row["test_metric"] == 0.5, "Expected metric value of 0.5"
-
-    # Verify cache files exist
-    results_dir = tmp_path / "audio_results"
-    assert results_dir.exists(), "Results directory should be created"
-    for i in range(3):
-        assert (results_dir / f"test{i}.parquet").exists(), f"Cache file for test{i} should exist"
 
 
 def test_check_quality(tmp_path: Path, resampled_mono_audio_sample: Audio) -> None:
