@@ -10,12 +10,11 @@ import os
 import pandas as pd
 
 from senselab.audio.data_structures import Audio
-from senselab.audio.tasks.bioacoustic_qc.checks import (
+from senselab.audio.tasks.quality_control.checks import (
     audio_intensity_positive_check,
     audio_length_positive_check,
     clipping_present_check,
     completely_silent_check,
-    get_metric,
     high_amplitude_skew_magnitude_check,
     high_crest_factor_check,
     high_proportion_clipped_check,
@@ -50,7 +49,7 @@ from senselab.audio.tasks.bioacoustic_qc.checks import (
     very_low_peak_snr_from_spectral_check,
     very_low_root_mean_square_energy_check,
 )
-from senselab.audio.tasks.bioacoustic_qc.metrics import (
+from senselab.audio.tasks.quality_control.metrics import (
     amplitude_headroom_metric,
     amplitude_interquartile_range_metric,
     amplitude_kurtosis_metric,
