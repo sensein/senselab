@@ -42,4 +42,4 @@ def compare_alignments(
     if alignment_one.chunks and alignment_two.chunks and len(alignment_one.chunks) == len(alignment_two.chunks):
         for i, (a1, a2) in enumerate(zip(alignment_one.chunks, alignment_two.chunks)):
             print(f"Comparing chunk {i + 1}/{len(alignment_one.chunks)}")
-            compare_alignments(a1, a2)
+            compare_alignments(a1, a2, difference_tolerance=difference_tolerance, check_text=check_text)
