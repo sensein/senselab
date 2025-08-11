@@ -1,3 +1,20 @@
+# 0.36.5 (Fri Jul 25 2025)
+
+#### 🐛 Bug Fix
+
+- Add PROVIDER_T to model classes [#353](https://github.com/sensein/senselab/pull/353) ([@ibevers](https://github.com/ibevers))
+
+#### ⚠️ Pushed to `main`
+
+- Update README.md ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@ibevers](https://github.com/ibevers)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.36.4 (Wed Jun 11 2025)
 
 #### 🐛 Bug Fix
