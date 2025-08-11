@@ -327,13 +327,9 @@ def test_evaluate_dataset(tmp_path: Path, resampled_mono_audio_sample: Audio) ->
             assert "id" in row, "Expected 'id' in result"
             assert "path" in row, "Expected 'path' in result"
             assert "activity" in row, "Expected 'activity' in result"
-            assert "evaluations" in row, "Expected 'evaluations' in result"
-            # Note: DataFrame stores nested dict as string, so need to parse
-            evaluations = row["evaluations"]
-            if isinstance(evaluations, str):
-                evaluations = json.loads(evaluations)
-            assert "test_metric" in evaluations, "Expected metric result"
-            assert evaluations["test_metric"] == 0.5, "Expected metric value"
+            # In flattened structure, evaluations become individual columns
+            assert "test_metric" in row, "Expected 'test_metric' column in result"
+            assert row["test_metric"] == 0.5, "Expected metric value"
 
     # Verify cache files exist
     results_dir = tmp_path / "audio_results"
