@@ -3,10 +3,9 @@
 from senselab.utils.data_structures.script_line import ScriptLine
 
 
-def compare_alignments(alignment_one: ScriptLine, 
-                       alignment_two: ScriptLine, 
-                       difference_tolerance: float = 0.1,
-                       check_text: bool = True) -> None:
+def compare_alignments(
+    alignment_one: ScriptLine, alignment_two: ScriptLine, difference_tolerance: float = 0.1, check_text: bool = True
+) -> None:
     """Check if two alignments are within the specified difference tolerance.
 
     Args:
@@ -19,11 +18,13 @@ def compare_alignments(alignment_one: ScriptLine,
         AssertionError: If the start or end times differ by more than the tolerance.
     """
     # ---- Text check (optional exact match) ----
-    if check_text:
-        if getattr(alignment_one, "text", None) and getattr(alignment_two, "text", None):
-            assert alignment_one.text.lower() == alignment_two.text.lower(), (
-                f"Text mismatch: '{alignment_one.text}' != '{alignment_two.text}'"
-            )
+    text1 = getattr(alignment_one, "text", None)
+    text2 = getattr(alignment_two, "text", None)
+
+    # ---- Text check (optional exact match) ----
+    if check_text and isinstance(text1, str) and isinstance(text2, str):
+        if text1 and text2:  # non-empty
+            assert text1.lower() == text2.lower(), f"Text mismatch: '{text1}' != '{text2}'"
 
     # ---- Timing checks (always enforced) ----
     if alignment_one.start is not None and alignment_two.start is not None:
