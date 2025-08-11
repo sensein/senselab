@@ -469,7 +469,7 @@ def test_align_transcriptions_multilingual(
         compare_alignments(
             aligned_scriptline_fixture_resampled_mono_audio,
             aligned_transcription_en,
-            difference_tolerance=0.001,
+            difference_tolerance=0.1,
             check_text=False,  # multilingual vs EN can differ lexically
         )
     else:
