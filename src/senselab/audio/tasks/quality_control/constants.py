@@ -1,10 +1,10 @@
 """Taxonomy of bioacoustic activities emphasizing human activities."""
 
-from senselab.audio.tasks.bioacoustic_qc.checks import (
+from senselab.audio.tasks.quality_control.checks import (
     audio_intensity_positive_check,
     audio_length_positive_check,
 )
-from senselab.audio.tasks.bioacoustic_qc.metrics import (
+from senselab.audio.tasks.quality_control.metrics import (
     amplitude_headroom_metric,
     amplitude_interquartile_range_metric,
     amplitude_kurtosis_metric,
