@@ -18,7 +18,7 @@ except ModuleNotFoundError:
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional, Union
+from typing import Generic, Optional, TypeVar, Union
 
 import requests
 import torch
@@ -27,8 +27,11 @@ from huggingface_hub.hf_api import ModelInfo
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 from typing_extensions import Annotated
 
+# Define the TypeVar for provider types
+PROVIDER_T = TypeVar("PROVIDER_T")
 
-class SenselabModel(BaseModel):
+
+class SenselabModel(BaseModel, Generic[PROVIDER_T]):
     """Base configuration for SenselabModel class."""
 
     path_or_uri: Union[str, Path]
@@ -39,7 +42,8 @@ class SenselabModel(BaseModel):
         """Validate the path_or_uri.
 
         This check is only for files and not for remote resources.
-        It does check if the path_or_uri is not empty and if it is an existing file.
+        It does check if the path_or_uri is not empty and if it is an
+        existing file.
         """
         if not value:
             raise ValueError("path_or_uri cannot be empty")
@@ -47,7 +51,8 @@ class SenselabModel(BaseModel):
         if isinstance(value, Path) and not os.path.isfile(value):
             raise ValueError("path_or_uri is not an existing file")
 
-        # If the value is a string and looks like an existing file path, convert it to a Path object
+        # If the value is a string and looks like an existing file path,
+        # convert it to a Path object
         if isinstance(value, str) and os.path.isfile(value):
             value = Path(value)
             if not is_torch_model(value):
@@ -56,7 +61,7 @@ class SenselabModel(BaseModel):
         return value
 
 
-class HFModel(SenselabModel):
+class HFModel(SenselabModel[PROVIDER_T]):
     """HuggingFace model."""
 
     revision: Annotated[str, Field(validate_default=True)] = "main"
@@ -67,49 +72,51 @@ class HFModel(SenselabModel):
         """Validate the path_or_uri.
 
         This check is only for remote resources and not for files.
-        It checks if the specified Hugging Face model ID and revision exist in the remote Hub.
+        It checks if the specified Hugging Face model ID and revision exist
+        in the remote Hub.
         """
         path_or_uri = info.data["path_or_uri"]
         if not isinstance(path_or_uri, Path):
             if not check_hf_repo_exists(repo_id=str(path_or_uri), revision=value, repo_type="model"):
                 raise ValueError(
-                    f"The huggingface model: path_or_uri ({path_or_uri}) or specified revision ({value}) "
-                    "cannot be found.\n"
-                    "Please check the model ID and revision. If the model is private or restricted access, "
-                    "make sure you have access to it and have exported your huggingface token "
-                    "in your environment variables."
+                    f"The huggingface model: path_or_uri ({path_or_uri}) or "
+                    f"specified revision ({value}) cannot be found.\n"
+                    "Please check the model ID and revision. If the model is "
+                    "private or restricted access, make sure you have access "
+                    "to it and have exported your huggingface token in your "
+                    "environment variables."
                 )
         return value
 
     def get_model_info(self) -> ModelInfo:
         """Gets the model info using the HuggingFace API and saves it as a property."""
         if isinstance(self.path_or_uri, Path):
-            raise ValueError("Model info is only available for remote resources and not for files.")
+            raise ValueError("Model info is only available for remote resources and not " "for files.")
         if not self.info:
             api = HfApi()
             self.info = api.model_info(repo_id=self.path_or_uri, revision=self.revision)
         return self.info
 
 
-class SpeechBrainModel(HFModel):
+class SpeechBrainModel(HFModel[PROVIDER_T]):
     """SpeechBrain model."""
 
     pass
 
 
-class PyannoteAudioModel(HFModel):
+class PyannoteAudioModel(HFModel[PROVIDER_T]):
     """PyannoteAudioModel model."""
 
     pass
 
 
-class SentenceTransformersModel(HFModel):
+class SentenceTransformersModel(HFModel[PROVIDER_T]):
     """SentenceTransformersModel model."""
 
     pass
 
 
-class CoquiTTSModel(SenselabModel):
+class CoquiTTSModel(SenselabModel[PROVIDER_T]):
     """CoquiTTSModel model."""
 
     _scope: Optional[str] = None
@@ -119,12 +126,14 @@ class CoquiTTSModel(SenselabModel):
         """Validate the path_or_uri.
 
         This check is only for remote resources and not for files.
-        It checks if the specified torch model ID and revision exist in the remote Hub.
+        It checks if the specified torch model ID and revision exist in the
+        remote Hub.
         """
         if not TTS_AVAILABLE:
             raise ModuleNotFoundError(
                 "`coqui-tts` is not installed. "
-                "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+                "Please install senselab audio dependencies using "
+                "`pip install 'senselab[audio]'`."
             )
         if not isinstance(value, Path):
             model_ids = TTS().list_models()
@@ -135,7 +144,7 @@ class CoquiTTSModel(SenselabModel):
         return value
 
 
-class TorchModel(SenselabModel):
+class TorchModel(SenselabModel[PROVIDER_T]):
     """Generic torch model."""
 
     revision: Annotated[str, Field(validate_default=True)] = "main"
@@ -145,16 +154,17 @@ class TorchModel(SenselabModel):
         """Validate the path_or_uri.
 
         This check is only for remote resources and not for files.
-        It checks if the specified torch model ID and revision exist in the remote Hub.
+        It checks if the specified torch model ID and revision exist in the
+        remote Hub.
         """
         path_or_uri = info.data["path_or_uri"]
         if not isinstance(path_or_uri, Path):
             if not check_github_repo_exists(repo_id=str(path_or_uri), branch=value):
-                raise ValueError("path_or_uri or specified revision is not a valid github repo")
+                raise ValueError("path_or_uri or specified revision is not a valid " "github repo")
         return value
 
 
-class TorchAudioModel(SenselabModel):
+class TorchAudioModel(SenselabModel[PROVIDER_T]):
     """TorchAudio model."""
 
     revision: Annotated[str, Field(validate_default=True)] = "main"
@@ -178,7 +188,8 @@ def check_torchaudio_model_exists(model_id: str) -> bool:
     if not TORCHAUDIO_AVAILABLE:
         raise ModuleNotFoundError(
             "`torchaudio` is not installed. "
-            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+            "Please install senselab audio dependencies using "
+            "`pip install 'senselab[audio]'`."
         )
 
     try:
@@ -213,7 +224,7 @@ def check_hf_repo_exists(repo_id: str, revision: str = "main", repo_type: str = 
 
 @lru_cache(maxsize=128)
 def check_github_repo_exists(repo_id: str, branch: str = "main") -> bool:
-    """Private function to check if a GitHub repository exists with caching and authentication."""
+    """Checks if a GitHub repository exists with caching and authentication."""
     url = f"https://api.github.com/repos/{repo_id}/branches/{branch}"
     token = os.getenv("GITHUB_TOKEN") or None
 
@@ -233,3 +244,14 @@ def check_github_repo_exists(repo_id: str, branch: str = "main") -> bool:
     else:
         response.raise_for_status()
         return False
+
+
+# Rebuild the model classes to ensure proper generic type resolution
+SenselabModel.model_rebuild()
+HFModel.model_rebuild()
+SpeechBrainModel.model_rebuild()
+PyannoteAudioModel.model_rebuild()
+SentenceTransformersModel.model_rebuild()
+CoquiTTSModel.model_rebuild()
+TorchModel.model_rebuild()
+TorchAudioModel.model_rebuild()
