@@ -1,3 +1,62 @@
+# 0.36.5 (Fri Jul 25 2025)
+
+#### 🐛 Bug Fix
+
+- Add PROVIDER_T to model classes [#353](https://github.com/sensein/senselab/pull/353) ([@ibevers](https://github.com/ibevers))
+
+#### ⚠️ Pushed to `main`
+
+- Update README.md ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@ibevers](https://github.com/ibevers)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.36.4 (Wed Jun 11 2025)
+
+#### 🐛 Bug Fix
+
+- Add Word-Level Alignment [#215](https://github.com/sensein/senselab/pull/215) ([@ibevers](https://github.com/ibevers) [@fabiocat93](https://github.com/fabiocat93))
+- Ci space [#343](https://github.com/sensein/senselab/pull/343) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### ⚠️ Pushed to `main`
+
+- Update CONTRIBUTING.md ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@ibevers](https://github.com/ibevers)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.36.3 (Wed Jun 04 2025)
+
+#### 🐛 Bug Fix
+
+- Fix nest_asyncio crash on uvloop: apply only when safe [#342](https://github.com/sensein/senselab/pull/342) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.36.2 (Fri May 23 2025)
+
+#### 🐛 Bug Fix
+
+- solving different blockers [#337](https://github.com/sensein/senselab/pull/337) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.36.1 (Tue Apr 22 2025)
 
 #### 🐛 Bug Fix
