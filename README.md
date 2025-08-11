@@ -7,6 +7,7 @@
 [![License](https://img.shields.io/pypi/l/senselab)](https://opensource.org/licenses/Apache-2.0)
 
 [![pages](https://img.shields.io/badge/api-docs-blue)](https://sensein.github.io/senselab)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/sensein/senselab)
 
 Welcome to ```senselab```! This is a Python package for streamlining the processing and analysis of behavioral data, such as voice and speech patterns, with robust and reproducible methodologies.
 
