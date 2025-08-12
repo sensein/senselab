@@ -49,15 +49,16 @@ class HuggingFaceAudioClassifier:
             cls._pipelines[key] = cast(
                 Pipeline,
                 pipeline(  # type: ignore[call-overload]
-                task="audio-classification",
-                model=model.path_or_uri,
-                revision=model.revision,
-                # top_k=top_k, #TODO: this causes a bug in the pipeline that has been reported to transformers
-                # https://github.com/huggingface/transformers/issues/35736
-                function_to_apply=function_to_apply,  # TODO: parameter ignored in transformer code, bug reported
-                # https://github.com/huggingface/transformers/issues/35739
-                device=device.value,
-            ))
+                    task="audio-classification",
+                    model=model.path_or_uri,
+                    revision=model.revision,
+                    # top_k=top_k, #TODO: this causes a bug in the pipeline that has been reported to transformers
+                    # https://github.com/huggingface/transformers/issues/35736
+                    function_to_apply=function_to_apply,  # TODO: parameter ignored in transformer code, bug reported
+                    # https://github.com/huggingface/transformers/issues/35739
+                    device=device.value,
+                ),
+            )
         return cls._pipelines[key]
 
     @classmethod
@@ -124,7 +125,7 @@ class HuggingFaceAudioClassifier:
         feature_extractor = getattr(pipe, "feature_extractor", None)
         if feature_extractor is None:
             raise ValueError("Internal error: The Hugging Face pipeline does not have a feature extractor.")
-        
+
         # Retrieve the expected sampling rate from the Hugging Face model
         expected_sampling_rate = cast(int, getattr(feature_extractor, "sampling_rate", None))  # type: ignore[attr-defined]
         if expected_sampling_rate is None:

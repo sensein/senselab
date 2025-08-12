@@ -108,16 +108,16 @@ class SSLEmbeddingsFactory:
         # Pre-process audio using the SSL mode feature extractor
         preprocessed_audios = [
             feat_extractor(  # type: ignore[operator]
-                audio.waveform, 
-                sampling_rate=sampling_rate, 
-                return_tensors="pt") for audio in audios
+                audio.waveform, sampling_rate=sampling_rate, return_tensors="pt"
+            )
+            for audio in audios
         ]
 
         # Extract embeddings (hidden states from all layers) from pre-trained model
         embeddings = [
             ssl_model(  # type: ignore[operator]
-                audio.input_values.squeeze(0).to(device.value), 
-                output_hidden_states=True)
+                audio.input_values.squeeze(0).to(device.value), output_hidden_states=True
+            )
             for audio in preprocessed_audios
         ]
         embeddings = [torch.cat(embedding.hidden_states) for embedding in embeddings]

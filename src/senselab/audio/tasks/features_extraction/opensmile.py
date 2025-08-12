@@ -33,6 +33,7 @@ except ModuleNotFoundError:
 
         class Smile:
             """Dummy class for when openSMILE is not available."""
+
             def __init__(self, *args: object, **kwargs: object) -> None:
                 """Dummy constructor for when openSMILE is not available."""
                 pass
@@ -83,13 +84,13 @@ def extract_opensmile_features_from_audios(
     cache_dir: Optional[str | os.PathLike] = None,
 ) -> List[Dict[str, Any]]:
     """Extract openSMILE features from a list of audio files using a Pydra compose workflow.
-    
+
     Args:
         audios (List[Audio]): A list of Audio objects.
         feature_set (str, optional): The feature set to use. Defaults to "eGeMAPSv02".
         feature_level (str, optional): The feature level to use. Defaults to "Functionals".
         plugin (str, optional): The Pydra plugin to use for workflow submission. Defaults to "debug".
-        plugin_args (Optional[Dict[str, Any]], optional): Additional arguments for the Pydra plugin. 
+        plugin_args (Optional[Dict[str, Any]], optional): Additional arguments for the Pydra plugin.
             Defaults to None.
         cache_dir (Optional[str | os.PathLike], optional): The directory for caching intermediate results.
             Defaults to None.
@@ -113,10 +114,7 @@ def extract_opensmile_features_from_audios(
         sampling_rate = sample.sampling_rate
         try:
             df = smile.process_signal(audio_array, sampling_rate)
-            return {
-                k: (v[0] if isinstance(v, list) and len(v) == 1 else v)
-                for k, v in df.to_dict("list").items()
-            }
+            return {k: (v[0] if isinstance(v, list) and len(v) == 1 else v) for k, v in df.to_dict("list").items()}
         except Exception as e:
             filepath = sample.filepath() if hasattr(sample, "filepath") and sample.filepath() else ""
             desc = f"{sample.generate_id()}{f' ({filepath})' if filepath else ''}"

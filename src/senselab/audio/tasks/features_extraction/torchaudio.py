@@ -274,7 +274,6 @@ def extract_pitch_from_audios(
     return pitches
 
 
-
 def extract_torchaudio_features_from_audios(
     audios: List[Audio],
     freq_low: int = 80,
@@ -289,29 +288,29 @@ def extract_torchaudio_features_from_audios(
     cache_dir: Optional[str | os.PathLike] = None,
 ) -> List[Dict[str, Any]]:
     """Extract torchaudio features from a list of audio objects using pydra.compose.
-    
+
     Args:
     audios (List[Audio]): List of Audio objects.
-    freq_low (int): Lowest detectable frequency (Hz). Must be > 0. 
+    freq_low (int): Lowest detectable frequency (Hz). Must be > 0.
         Default is 80.
-    freq_high (int): Highest detectable frequency (Hz). 
+    freq_high (int): Highest detectable frequency (Hz).
         Default is 500.
-    n_fft (int): Size of FFT; creates n_fft // 2 + 1 bins. 
+    n_fft (int): Size of FFT; creates n_fft // 2 + 1 bins.
         Default is 1024.
     n_mels (int): Number of mel filter banks. Default is 128.
     n_mfcc (int): Number of MFCC coefficients. Default is 40.
-    win_length (Optional[int]): Window size. If None, uses n_fft. 
+    win_length (Optional[int]): Window size. If None, uses n_fft.
         Default is None.
-    hop_length (Optional[int]): Hop length between STFT windows. If None, uses win_length // 2. 
+    hop_length (Optional[int]): Hop length between STFT windows. If None, uses win_length // 2.
         Default is None.
-    plugin (str): Pydra plugin to use. 
+    plugin (str): Pydra plugin to use.
         Default is "debug".
-    plugin_args (Optional[Dict[str, Any]]): Additional plugin arguments. 
+    plugin_args (Optional[Dict[str, Any]]): Additional plugin arguments.
         Default is None.
-    cache_dir (Optional[str | os.PathLike]): Directory for intermediate/cache files. 
+    cache_dir (Optional[str | os.PathLike]): Directory for intermediate/cache files.
         Default is None.
 
-    
+
     Returns:
     - List[Dict[str, Any]]: List of Dict objects containing features.
 
@@ -386,7 +385,7 @@ def extract_torchaudio_features_from_audios(
                 "mel_filter_bank": np.nan,
                 "mfcc": np.nan,
                 "mel_spectrogram": np.nan,
-                "spectrogram": np.nan, 
+                "spectrogram": np.nan,
             }
 
     # Map-style workflow over the list of audios

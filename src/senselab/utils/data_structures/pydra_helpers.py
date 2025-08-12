@@ -17,6 +17,7 @@ try:
 except ModuleNotFoundError:
     OPENSMILE_AVAILABLE = False
 
+
 @register_serializer(torch.Tensor)
 def bytes_repr_arraylike(obj: torch.Tensor, cache: Cache) -> Iterator[bytes]:
     """Register a serializer for Torch tensors that allows Pydra to properly use them."""
@@ -27,6 +28,7 @@ def bytes_repr_arraylike(obj: torch.Tensor, cache: Cache) -> Iterator[bytes]:
         yield from bytes_repr_sequence_contents(iter(array.ravel()), cache)
     else:
         yield array.tobytes(order="C")
+
 
 @register_serializer(Audio)
 def bytes_repr_audio(obj: Audio, cache: Cache) -> Iterator[bytes]:
@@ -74,7 +76,6 @@ def bytes_repr_audio(obj: Audio, cache: Cache) -> Iterator[bytes]:
         md = "{}"
     yield b"md:"
     yield md.encode()
-
 
 
 if OPENSMILE_AVAILABLE:

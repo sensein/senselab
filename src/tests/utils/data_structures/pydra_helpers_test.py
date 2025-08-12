@@ -14,6 +14,7 @@ import senselab  # noqa: F401  # ignore unused import (kept to ensure package in
 
 def test_pydra() -> None:
     """Test Pydra workflow submission and execution."""
+
     @python.define
     def pydra_task(test_input: torch.Tensor) -> torch.Tensor:
         return test_input + 2

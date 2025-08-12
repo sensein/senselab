@@ -1,4 +1,5 @@
 """This module contains functions for applying data augmentation using audiomentations."""
+
 from __future__ import annotations
 
 from typing import Any, List, Optional, Sequence
@@ -10,6 +11,7 @@ from senselab.audio.data_structures import Audio
 
 try:
     from audiomentations import Compose
+
     AUDIOMENTATIONS_AVAILABLE = True
 except ModuleNotFoundError:
     AUDIOMENTATIONS_AVAILABLE = False
@@ -58,7 +60,5 @@ def augment_audios_with_audiomentations(
         return node.out
 
     worker = "debug" if plugin in ("serial", "debug") else plugin
-    res = _wf(xs=audios, aug_payload=aug_payload)(
-        worker=worker, cache_root=cache_dir, **(plugin_args or {})
-    )
+    res = _wf(xs=audios, aug_payload=aug_payload)(worker=worker, cache_root=cache_dir, **(plugin_args or {}))
     return list(res.out)

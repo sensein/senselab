@@ -1,4 +1,5 @@
 """This module contains functions for applying data augmentation using torch-audiomentations."""
+
 from typing import Any, List, Optional, Sequence
 
 import cloudpickle
@@ -10,6 +11,7 @@ from senselab.utils.data_structures import DeviceType, _select_device_and_dtype
 
 try:
     from torch_audiomentations import Compose as _TACompose  # runtime check
+
     TORCH_AUDIOMENTATIONS_AVAILABLE = True
 except ModuleNotFoundError:
     TORCH_AUDIOMENTATIONS_AVAILABLE = False
