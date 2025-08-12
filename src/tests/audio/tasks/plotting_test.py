@@ -4,7 +4,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
-import torchaudio
 from matplotlib.pyplot import Figure
 
 from senselab.audio.data_structures import Audio
@@ -118,7 +117,13 @@ class TestPlotSpecgram:
     def test_plot_specgram_with_kwargs(self, mono_audio_sample: Audio) -> None:
         """Test plotting spectrogram with additional keyword arguments."""
         # Test with some common spectrogram parameters
-        figure = plot_specgram(mono_audio_sample, mel_scale=False, title="Test with kwargs", n_fft=512, hop_length=256)
+        figure = plot_specgram(
+            mono_audio_sample,
+            mel_scale=False,
+            title="Test with kwargs",
+            n_fft=512,
+            hop_length=256,
+        )
 
         assert isinstance(figure, Figure)
 
@@ -154,7 +159,12 @@ class TestPlayAudio:
 
     @patch("IPython.display.display")
     @patch("IPython.display.Audio")
-    def test_play_audio_mono(self, mock_audio: MagicMock, mock_display: MagicMock, mono_audio_sample: Audio) -> None:
+    def test_play_audio_mono(
+        self,
+        mock_audio: MagicMock,
+        mock_display: MagicMock,
+        mono_audio_sample: Audio,
+    ) -> None:
         """Test playing mono audio."""
         play_audio(mono_audio_sample)
 
@@ -169,7 +179,10 @@ class TestPlayAudio:
     @patch("IPython.display.display")
     @patch("IPython.display.Audio")
     def test_play_audio_stereo(
-        self, mock_audio: MagicMock, mock_display: MagicMock, stereo_audio_sample: Audio
+        self,
+        mock_audio: MagicMock,
+        mock_display: MagicMock,
+        stereo_audio_sample: Audio,
     ) -> None:
         """Test playing stereo audio."""
         play_audio(stereo_audio_sample)
@@ -188,7 +201,11 @@ class TestPlayAudio:
         mock_display.assert_called_once()
 
     def test_play_audio_more_than_two_channels(self) -> None:
-        """Test that playing audio with more than 2 channels raises ValueError."""
+        """Test that playing n-channel audio for n > 2 raises ValueError.
+
+        This test ensures that audio with more than 2 channels cannot be played
+        using the play_audio function, as it only supports mono and stereo audio.
+        """
         # Create 3-channel audio
         waveform = torch.randn(3, 16000)
         audio = Audio(waveform=waveform, sampling_rate=16000)
