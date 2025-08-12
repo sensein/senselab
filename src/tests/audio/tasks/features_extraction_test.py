@@ -67,6 +67,7 @@ def test_missing_opensmile_dependency() -> None:
 
         OpenSmileFeatureExtractorFactory.get_opensmile_extractor("eGeMAPSv02", "Functionals")
 
+
 @pytest.mark.skipif(not OPENSMILE_AVAILABLE, reason="openSMILE is not installed.")
 def test_extract_opensmile_features_from_audios(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of openSMILE features from audio."""
@@ -113,11 +114,8 @@ def test_extract_torchaudio_features_from_audios(resampled_mono_audio_sample: Au
     print(result[0].keys())
     assert isinstance(result, list)
     assert all(isinstance(spec, dict) for spec in result)
-    assert set(['pitch', 
-                'mel_filter_bank', 
-                'mfcc', 
-                'mel_spectrogram', 
-                'spectrogram']).issubset(set(result[0].keys()))
+    assert set(["pitch", "mel_filter_bank", "mfcc", "mel_spectrogram", "spectrogram"]).issubset(set(result[0].keys()))
+
 
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 def test_extract_spectrogram_from_audios_specify_n_fft(resampled_mono_audio_sample: Audio) -> None:
@@ -225,13 +223,12 @@ def test_extract_subjective_quality_features_invalid_audio(mono_audio_sample: Au
             audios=[mono_audio_sample], non_matching_references=[mono_audio_sample]
         )
 
+
 @pytest.mark.skipif(PARSELMOUTH_AVAILABLE, reason="Praat-Parselmouth is installed.")
 def test_missing_parselmouth_dependency() -> None:
     """Test that a ModuleNotFoundError is raised when Praat-Parselmouth is not installed."""
     with pytest.raises(ModuleNotFoundError):
         get_sound(audio=Path("path/to/audio.wav"))
-
-
 
 
 @pytest.mark.skipif(not PARSELMOUTH_AVAILABLE, reason="Praat-Parselmouth is not installed.")

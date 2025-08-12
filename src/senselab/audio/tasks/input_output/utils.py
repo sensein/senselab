@@ -15,7 +15,7 @@ def read_audios(
     plugin_args: Optional[Dict[str, Any]] = None,
 ) -> List[Audio]:
     """Read and wrap a list of audio files as `Audio` objects via a Pydra workflow.
-    
+
     Args:
         file_paths: A list of audio file paths.
         cache_dir: The directory to use for caching the workflow. Default is None.
@@ -52,7 +52,7 @@ def save_audios(
     plugin_args: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Save a sequence of `(Audio, output_path)` pairs via a Pydra workflow.
-    
+
     Args:
         audio_tuples: A sequence of `(Audio, output_path)` pairs.
         save_params: A dictionary of parameters to pass to `Audio.save_to_file`.

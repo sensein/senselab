@@ -36,11 +36,12 @@ class HuggingFaceTTS:
             cls._pipelines[key] = cast(
                 Pipeline,
                 pipeline(  # type: ignore[call-overload]
-                task="text-to-speech",
-                model=model.path_or_uri,
-                revision=model.revision,
-                device=device.value,
-            ))
+                    task="text-to-speech",
+                    model=model.path_or_uri,
+                    revision=model.revision,
+                    device=device.value,
+                ),
+            )
         return cls._pipelines[key]
 
     @classmethod

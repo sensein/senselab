@@ -54,15 +54,16 @@ class HuggingFaceASR:
             cls._pipelines[key] = cast(
                 Pipeline,
                 pipeline(  # type: ignore[call-overload]
-                task="automatic-speech-recognition",
-                model=model.path_or_uri,
-                revision=model.revision,
-                return_timestamps=return_timestamps,
-                max_new_tokens=max_new_tokens,
-                chunk_length_s=chunk_length_s,
-                batch_size=batch_size,
-                device=device.value,
-            ))
+                    task="automatic-speech-recognition",
+                    model=model.path_or_uri,
+                    revision=model.revision,
+                    return_timestamps=return_timestamps,
+                    max_new_tokens=max_new_tokens,
+                    chunk_length_s=chunk_length_s,
+                    batch_size=batch_size,
+                    device=device.value,
+                ),
+            )
         return cls._pipelines[key]
 
     @classmethod
@@ -136,7 +137,7 @@ class HuggingFaceASR:
             batch_size=batch_size,
             device=device,
         )
-        
+
         # Take the end time of the pipeline initialization
         end_time_pipeline = time.time()
         # Print the time taken for initialize the hugging face ASR pipeline
@@ -146,7 +147,7 @@ class HuggingFaceASR:
         feature_extractor = getattr(pipe, "feature_extractor", None)
         if feature_extractor is None:
             raise ValueError("Internal error: The Hugging Face pipeline does not have a feature extractor.")
-        
+
         # Retrieve the expected sampling rate from the Hugging Face model
         expected_sampling_rate = cast(int, getattr(feature_extractor, "sampling_rate", None))
         if expected_sampling_rate is None:
