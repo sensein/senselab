@@ -1,8 +1,8 @@
 """This module implements some utilities for the text-to-speech task."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
-from transformers import pipeline
+from transformers import Pipeline, pipeline
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, HFModel, _select_device_and_dtype
@@ -11,14 +11,14 @@ from senselab.utils.data_structures import DeviceType, HFModel, _select_device_a
 class HuggingFaceTTS:
     """A factory for managing Hugging Face TTS pipelines."""
 
-    _pipelines: Dict[str, pipeline] = {}
+    _pipelines: Dict[str, Pipeline] = {}
 
     @classmethod
     def _get_hf_tts_pipeline(
         cls,
         model: HFModel,
         device: Optional[DeviceType] = None,
-    ) -> pipeline:
+    ) -> Pipeline:
         """Get or create a Hugging Face TTS pipeline.
 
         Args:
@@ -26,19 +26,21 @@ class HuggingFaceTTS:
             device (Optional[DeviceType]): The device to run the model on.
 
         Returns:
-            pipeline: The TTS pipeline.
+            Pipeline: The TTS pipeline.
         """
         device, _ = _select_device_and_dtype(
             user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
         )
         key = f"{model.path_or_uri}-{model.revision}-{device.value}"
         if key not in cls._pipelines:
-            cls._pipelines[key] = pipeline(
-                "text-to-speech",
+            cls._pipelines[key] = cast(
+                Pipeline,
+                pipeline(  # type: ignore[call-overload]
+                task="text-to-speech",
                 model=model.path_or_uri,
                 revision=model.revision,
                 device=device.value,
-            )
+            ))
         return cls._pipelines[key]
 
     @classmethod
