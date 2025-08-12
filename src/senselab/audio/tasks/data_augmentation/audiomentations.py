@@ -41,7 +41,7 @@ def augment_audios_with_audiomentations(
         )
 
     # Serialize augmentation deterministically
-    aug_payload = __import__("cloudpickle").dumps(augmentation)
+    aug_payload = cloudpickle.dumps(augmentation)
 
     @python.define
     def _augment_single_audio(audio: Audio, aug_payload: Any) -> Audio:  # noqa: ANN401
