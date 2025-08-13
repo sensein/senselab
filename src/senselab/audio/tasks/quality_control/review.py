@@ -35,7 +35,7 @@ def check_to_labeling_function(col: str) -> Callable[[pd.Series], int]:
     return lf
 
 
-def include_no_failed_checks_lf(cols: Sequence[str]) -> Callable[[pd.Series], int]:
+def include_no_failed_checks_label_function(cols: Sequence[str]) -> Callable[[pd.Series], int]:
     """Include a file if all given checks are False or None.
 
     Args:
@@ -46,7 +46,7 @@ def include_no_failed_checks_lf(cols: Sequence[str]) -> Callable[[pd.Series], in
         otherwise ABSTAIN.
     """
 
-    @labeling_function(name="include_no_failed_checks_lf")
+    @labeling_function(name="include_no_failed_checks_label_function")
     def lf(x: pd.Series, _cols: Sequence[str] = tuple(cols)) -> int:
         total_true = 0
         for c in _cols:
@@ -106,11 +106,11 @@ def prune_check_columns(
     return keep_cols, dropped
 
 
-def calculate_lf_reliability(L_train: np.ndarray, preds: np.ndarray, lf_names: List[str]) -> pd.DataFrame:
+def calculate_label_function_reliability(L_train: np.ndarray, preds: np.ndarray, lf_names: List[str]) -> pd.DataFrame:
     """Calculate reliability metrics for labeling functions.
 
     Args:
-        L_train: Matrix of labeling function votes (n_examples x n_lfs)
+        L_train: Matrix of labeling function votes (n_examples x n_label_functions)
         preds: Label model predictions
         lf_names: Names of the labeling functions
 
@@ -128,7 +128,7 @@ def calculate_lf_reliability(L_train: np.ndarray, preds: np.ndarray, lf_names: L
         agree = float((votes[fired] == preds[fired]).mean()) if n_audio_files else np.nan
         reliability_rows.append(
             {
-                "lf": name,
+                "label_function": name,
                 "coverage": round(cov, 4),
                 "n_audio_files": n_audio_files,
                 "agreement_with_label_model": round(agree, 4) if agree == agree else None,
@@ -152,7 +152,6 @@ def review_files(df_path: str, correlation_threahold: float = 0.99) -> pd.DataFr
         DataFrame with snorkel_label column added containing predicted labels.
     """
     df = pd.read_csv(df_path)
-    df = df[~df["audio_path_or_id"].astype(str).str.contains("Audio-Check", na=False)]
     print(f"Total files: {len(df)}")
 
     df_checks = df[[c for c in df.columns if "check" in c]]
@@ -170,13 +169,17 @@ def review_files(df_path: str, correlation_threahold: float = 0.99) -> pd.DataFr
     lf_names: List[str] = []
     for c in keep_cols:
         lf_list.append(check_to_labeling_function(c))
-        lf_names.append(f"lf_{c}")
-    lf_list.append(include_no_failed_checks_lf(keep_cols))
-    lf_names.append("lf_no_checks_true_include")
+        lf_names.append(f"{c}")
+    lf_list.append(include_no_failed_checks_label_function(keep_cols))
+    lf_names.append("no_checks_true_include_label_function")
 
     # Apply labeling functions
     applier = PandasLFApplier(lfs=lf_list)
-    L_train = applier.apply(df_checks[keep_cols])
+    df_checks_filtered = df_checks[keep_cols]
+    L_train = applier.apply(df_checks_filtered)
+
+    # Verify alignment
+    assert len(L_train) == len(df), f"Mismatch: L_train has {len(L_train)} rows, df has {len(df)} rows"
 
     # Train LabelModel
     label_model = LabelModel(cardinality=2, verbose=True)
@@ -185,6 +188,7 @@ def review_files(df_path: str, correlation_threahold: float = 0.99) -> pd.DataFr
     # Predict
     preds = label_model.predict(L=L_train)
     df["snorkel_label"] = preds
+    df["review_result_1=include"] = preds == INCLUDE
 
     # Counts (abstain == no labeling function fired; with composite labeling
     # function this should be 0)
@@ -195,7 +199,7 @@ def review_files(df_path: str, correlation_threahold: float = 0.99) -> pd.DataFr
 
     # Reliability ranking (agreement with LabelModel on rows where labeling
     # function fired)
-    reliability_df = calculate_lf_reliability(L_train, preds, lf_names)
+    reliability_df = calculate_label_function_reliability(L_train, preds, lf_names)
     print("\nlabeling function reliability (agreement with LabelModel):")
     print(reliability_df.to_string(index=False))
 
