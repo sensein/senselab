@@ -15,6 +15,7 @@ MP_LANDMARK_COUNT = 33
 def _to_proto(points: List[Dict[str, float]]) -> Any:  # noqa: ANN401
     """Convert a list of {x,y,z,v?} dicts to a MediaPipe NormalizedLandmarkList."""
     from mediapipe.framework.formats import landmark_pb2  # lazy import inside container
+
     proto = landmark_pb2.NormalizedLandmarkList()
     for p in points:
         lm = landmark_pb2.NormalizedLandmark(
@@ -30,10 +31,10 @@ def _to_proto(points: List[Dict[str, float]]) -> Any:  # noqa: ANN401
 
 def _draw_single_pose(img_rgb: np.ndarray, points: list[dict]) -> None:
     """Draw one pose worth of landmarks (and connections if count==33) onto img_rgb.
-    
+
     Args:
         img_rgb: Input image in RGB format.
-        points: List of dicts with keys x, y, z, v representing the pose landmarks.        
+        points: List of dicts with keys x, y, z, v representing the pose landmarks.
     """
     proto = _to_proto(points)
     from mediapipe import solutions
@@ -59,6 +60,7 @@ def main(image: str, poses_json: str, out: str) -> None:
     """Main function to draw pose landmarks onto an image using MediaPipe drawing utils."""
     try:
         import cv2  # local import to keep module import light
+
         # Read input image (BGR) -> RGB
         bgr = cv2.imread(image, cv2.IMREAD_COLOR)
         if bgr is None:
@@ -91,9 +93,7 @@ def main(image: str, poses_json: str, out: str) -> None:
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(
-        description="Draw pose landmarks onto an image using MediaPipe drawing utils."
-    )
+    ap = argparse.ArgumentParser(description="Draw pose landmarks onto an image using MediaPipe drawing utils.")
     ap.add_argument("--image", required=True, help="Input image path (under /app).")
     ap.add_argument(
         "--poses",

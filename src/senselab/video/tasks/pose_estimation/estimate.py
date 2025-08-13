@@ -14,12 +14,14 @@ import numpy as np
 # --- Optional dependencies (cv2, ultralytics) --------------------------------
 try:
     import cv2
+
     CV2_AVAILABLE = True
 except ModuleNotFoundError:
     CV2_AVAILABLE = False
 
 try:
     from ultralytics import YOLO
+
     YOLO_AVAILABLE = True
 except ModuleNotFoundError:
     YOLO_AVAILABLE = False
@@ -42,6 +44,7 @@ from senselab.video.tasks.pose_estimation.utils import (
 # =============================================================================
 # Base class
 # =============================================================================
+
 
 class PoseEstimator(ABC):
     """Abstract base class for pose estimators."""
@@ -68,12 +71,14 @@ class PoseEstimator(ABC):
 # Utilities
 # =============================================================================
 
+
 def _require_cv2() -> None:
     if not CV2_AVAILABLE:
         raise ModuleNotFoundError(
             "`opencv-python` is not installed. "
             "Please install senselab video dependencies using `pip install 'senselab[video]'`."
         )
+
 
 def _read_rgb_image(path: str | os.PathLike[str]) -> np.ndarray:
     """Read image from disk as RGB uint8."""
@@ -89,6 +94,7 @@ def _read_rgb_image(path: str | os.PathLike[str]) -> np.ndarray:
 # =============================================================================
 # MediaPipe via Docker
 # =============================================================================
+
 
 class MediaPipePoseEstimator(PoseEstimator):
     """MediaPipe implementation that delegates inference to Docker.
@@ -110,9 +116,7 @@ class MediaPipePoseEstimator(PoseEstimator):
     ) -> None:
         """Initialize the MediaPipe pose estimator."""
         if not docker_is_running():
-            raise RuntimeError(
-                "Docker is not running and is required for pose estimation with MediaPipe."
-            )
+            raise RuntimeError("Docker is not running and is required for pose estimation with MediaPipe.")
 
         # Download/resolve model path on host
         self.model_path = get_model("mediapipe", model_type)
@@ -127,8 +131,7 @@ class MediaPipePoseEstimator(PoseEstimator):
         self.worker_script = self.workdir / "mp_pose_worker.py"
         if not self.worker_script.exists():
             raise FileNotFoundError(
-                f"Worker script not found at {self.worker_script}. "
-                "Place mp_pose_worker.py in the mounted workdir."
+                f"Worker script not found at {self.worker_script}. " "Place mp_pose_worker.py in the mounted workdir."
             )
 
         # Ensure model is visible under workdir (hard-link or copy if needed)
@@ -187,26 +190,31 @@ class MediaPipePoseEstimator(PoseEstimator):
         Returns parsed JSON dict from the worker's stdout.
         """
         if not docker_is_running():
-            raise RuntimeError(
-                "Docker is not running and is required for pose estimation with MediaPipe."
-            )
+            raise RuntimeError("Docker is not running and is required for pose estimation with MediaPipe.")
 
         cmd = [
-            "docker", "run", "--rm",
-            "-v", f"{str(self.workdir)}:/app",
-            "-w", "/app",
-            "-e", "MPLCONFIGDIR=/tmp",  # avoid matplotlib permission issues
+            "docker",
+            "run",
+            "--rm",
+            "-v",
+            f"{str(self.workdir)}:/app",
+            "-w",
+            "/app",
+            "-e",
+            "MPLCONFIGDIR=/tmp",  # avoid matplotlib permission issues
             self.image_name,
-            "python", str(self.worker_script.name),
-            "--image", image_rel,
-            "--model", model_rel,
-            "--num", str(num),
+            "python",
+            str(self.worker_script.name),
+            "--image",
+            image_rel,
+            "--model",
+            model_rel,
+            "--num",
+            str(num),
         ]
 
         try:
-            proc = subprocess.run(
-                cmd, check=True, capture_output=True, text=True
-            )
+            proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
         except subprocess.CalledProcessError as e:
             # Surface helpful diagnostics including stderr
             raise RuntimeError(
@@ -224,10 +232,7 @@ class MediaPipePoseEstimator(PoseEstimator):
         try:
             return json.loads(stdout)
         except json.JSONDecodeError as e:
-            raise RuntimeError(
-                "Failed to parse JSON from MediaPipe Docker worker.\n"
-                f"Raw stdout: {stdout}"
-            ) from e
+            raise RuntimeError("Failed to parse JSON from MediaPipe Docker worker.\n" f"Raw stdout: {stdout}") from e
 
     def _write_temp_image_in_workdir(self, rgb: np.ndarray) -> Path:
         """Writes a temporary PNG under workdir.
@@ -240,7 +245,7 @@ class MediaPipePoseEstimator(PoseEstimator):
 
         Raises:
             ValueError: If `rgb` is not a valid RGB uint8 numpy array.
-            RuntimeError: If the image cannot be written 
+            RuntimeError: If the image cannot be written
                 (requires OpenCV on host).
         """
         if not (isinstance(rgb, np.ndarray) and rgb.ndim == 3 and rgb.shape[2] == 3 and rgb.dtype == np.uint8):
@@ -263,9 +268,7 @@ class MediaPipePoseEstimator(PoseEstimator):
                 tmp.unlink()
             except Exception:
                 pass
-            raise RuntimeError(
-                "Failed to write temp image (need imageio or PIL or OpenCV on host)."
-            )
+            raise RuntimeError("Failed to write temp image (need imageio or PIL or OpenCV on host).")
         return tmp
 
     def _rel_to_workdir(self, p: Path) -> str:
@@ -273,7 +276,7 @@ class MediaPipePoseEstimator(PoseEstimator):
 
     def _ensure_path_under_workdir(self, path_str: str) -> str:
         """Ensures the model file is under workdir.
-         
+
         If not, creates a hard link or
         copies it into workdir/models/. Returns the *relative* path string.
 
@@ -296,6 +299,7 @@ class MediaPipePoseEstimator(PoseEstimator):
                     os.link(src, dst)  # hard link if same filesystem
                 except Exception:
                     import shutil
+
                     shutil.copy2(src, dst)
             return str(dst.relative_to(self.workdir))
 
@@ -333,12 +337,13 @@ class MediaPipePoseEstimator(PoseEstimator):
 # YOLO
 # =============================================================================
 
+
 class YOLOPoseEstimator(PoseEstimator):
     """YOLO implementation of pose estimation."""
 
     def __init__(self, model_type: str = "8n") -> None:
         """Initialize the YOLO pose estimator.
-        
+
         Args:
             model_type: Model type to use, e.g. '8n', '8x', etc.
 

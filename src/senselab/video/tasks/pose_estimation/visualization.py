@@ -18,6 +18,7 @@ from senselab.video.tasks.pose_estimation.utils import SENSELAB_KEYPOINT_MAPPING
 # ---- cv2 is required on the host (as in the original code) ----
 try:
     import cv2
+
     CV2_AVAILABLE = True
 except ModuleNotFoundError:
     CV2_AVAILABLE = False
@@ -30,6 +31,7 @@ DOCKER_IMAGE = "fabiocat93/mediapipe-deps:latest"
 # Helpers
 # =============================================================================
 
+
 def _default_workdir() -> Path:
     """Folder that should contain mp_visualization_worker.py."""
     return Path(__file__).resolve().parent
@@ -40,8 +42,7 @@ def _ensure_worker_exists(workdir: Path) -> Path:
     worker = workdir / "mp_visualization_worker.py"
     if not worker.exists():
         raise FileNotFoundError(
-            f"Worker script not found at {worker}. "
-            "Place mp_visualization_worker.py in the mounted workdir."
+            f"Worker script not found at {worker}. " "Place mp_visualization_worker.py in the mounted workdir."
         )
     return worker
 
@@ -49,8 +50,7 @@ def _ensure_worker_exists(workdir: Path) -> Path:
 def _require_cv2() -> None:
     if not CV2_AVAILABLE:
         raise ModuleNotFoundError(
-            "`opencv-python` is required for visualization. "
-            "Install via `pip install 'senselab[video]'`."
+            "`opencv-python` is required for visualization. " "Install via `pip install 'senselab[video]'`."
         )
 
 
@@ -78,7 +78,7 @@ def _poses_json_for_worker(pose_image: ImagePose) -> Dict[str, List[List[Dict[st
 
     Returns:
         Dictionary with a single key "poses" mapping to a list of poses,
-        where each pose is a list of dicts with keys x, y, z, v 
+        where each pose is a list of dicts with keys x, y, z, v
         (x, y, z coordinates and visibility).
     """
     names_in_order = list(SENSELAB_KEYPOINT_MAPPING.values())
@@ -139,33 +139,36 @@ def _run_docker_visualizer(
             json.dump(poses_payload, f, separators=(",", ":"), ensure_ascii=False)
 
         cmd = [
-            "docker", "run", "--rm",
-            "-v", f"{str(workdir)}:/app",
-            "-w", "/app",
-            "-e", "MPLCONFIGDIR=/tmp",
+            "docker",
+            "run",
+            "--rm",
+            "-v",
+            f"{str(workdir)}:/app",
+            "-w",
+            "/app",
+            "-e",
+            "MPLCONFIGDIR=/tmp",
             image_name,
-            "python", Path(worker).name,       # worker lives in /app
-            "--image", Path(in_img).name,      # pass filenames (relative to /app)
-            "--poses", Path(in_json).name,
-            "--out",   Path(out_img).name,
+            "python",
+            Path(worker).name,  # worker lives in /app
+            "--image",
+            Path(in_img).name,  # pass filenames (relative to /app)
+            "--poses",
+            Path(in_json).name,
+            "--out",
+            Path(out_img).name,
         ]
 
         try:
-            proc = subprocess.run(
-                cmd, check=True, capture_output=True, text=True, timeout=timeout
-            )
+            proc = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=timeout)
         except subprocess.CalledProcessError as e:
             pretty = " ".join(shlex.quote(c) for c in cmd)
             raise RuntimeError(
-                "Docker visualization failed.\n"
-                f"Command: {pretty}\n"
-                f"STDOUT:\n{e.stdout}\n\nSTDERR:\n{e.stderr}"
+                "Docker visualization failed.\n" f"Command: {pretty}\n" f"STDOUT:\n{e.stdout}\n\nSTDERR:\n{e.stderr}"
             ) from e
         except subprocess.TimeoutExpired as e:
             pretty = " ".join(shlex.quote(c) for c in cmd)
-            raise TimeoutError(
-                f"Docker visualization timed out.\nCommand: {pretty}"
-            ) from e
+            raise TimeoutError(f"Docker visualization timed out.\nCommand: {pretty}") from e
 
         _require_cv2()
         bgr = cv2.imread(str(out_img), cv2.IMREAD_COLOR)
@@ -173,8 +176,7 @@ def _run_docker_visualizer(
             stdout = getattr(proc, "stdout", "")
             stderr = getattr(proc, "stderr", "")
             raise RuntimeError(
-                "Docker worker did not produce a readable output image.\n"
-                f"STDOUT:\n{stdout}\n\nSTDERR:\n{stderr}"
+                "Docker worker did not produce a readable output image.\n" f"STDOUT:\n{stdout}\n\nSTDERR:\n{stderr}"
             )
         return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
@@ -190,6 +192,7 @@ def _run_docker_visualizer(
 # =============================================================================
 # Public API
 # =============================================================================
+
 
 def visualize(
     pose_image: ImagePose,
