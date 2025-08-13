@@ -184,8 +184,10 @@ def _run_docker_visualizer(
         # Best-effort cleanup
         for p in (in_img, in_json, out_img):
             try:
-                Path(p).unlink(missing_ok=True)  # type: ignore[arg-type]
-            except Exception:
+                p.unlink(missing_ok=True)
+            except Exception as e:
+                # Consider logging this for diagnostics, e.g.,
+                # logging.warning(f"Failed to clean up temp file {p}: {e}")
                 pass
 
 
