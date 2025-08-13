@@ -27,7 +27,7 @@ except ModuleNotFoundError:
 def test_read_audios_torchaudio_not_installed() -> None:
     """Tests the read_audios function when torchaudio is not installed."""
     with pytest.raises(ModuleNotFoundError):
-        audios = read_audios(file_paths=[MONO_AUDIO_PATH], plugin="serial")
+        audios = read_audios(file_paths=[MONO_AUDIO_PATH], plugin="debug")
         audios[0].waveform
 
 
@@ -46,7 +46,7 @@ def test_read_audios_torchaudio_not_installed() -> None:
 def test_read_audios(audio_paths: List[str | os.PathLike]) -> None:
     """Tests the read_audios function with actual mono and stereo audio files."""
     # Run the function with real audio file paths
-    processed_audios = read_audios(file_paths=audio_paths, plugin="serial")
+    processed_audios = read_audios(file_paths=audio_paths, plugin="debug")
 
     # Validate results
     assert len(processed_audios) == len(audio_paths), "Incorrect number of processed files."
