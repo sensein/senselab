@@ -101,8 +101,9 @@ def test_yolo_unavailable() -> None:
         YOLOPoseEstimator("8n")
 
 
-@pytest.mark.skipif(not DOCKER_AVAILABLE or not YOLO_AVAILABLE, 
-                    reason="Docker is not running or YOLO is not installed.")
+@pytest.mark.skipif(
+    not DOCKER_AVAILABLE or not YOLO_AVAILABLE, reason="Docker is not running or YOLO is not installed."
+)
 @pytest.mark.parametrize(
     "model, model_type, num_individuals",
     [
@@ -149,17 +150,12 @@ class TestPoseEstimators:
         [-1, "3", 1.5],
     )
     def test_invalid_num_individuals(
-        self, model: str, model_type: str, 
-        invalid_num_individuals: int, 
-        num_individuals: int
+        self, model: str, model_type: str, invalid_num_individuals: int, num_individuals: int
     ) -> None:
         """Test error handling for invalid number of individuals using the API."""
         if model == "mediapipe":
             with pytest.raises(ValueError):
-                self._run_estimation(model, 
-                                     MULTIPLE_PEOPLE_IMAGE, 
-                                     model_type, 
-                                     invalid_num_individuals)
+                self._run_estimation(model, MULTIPLE_PEOPLE_IMAGE, model_type, invalid_num_individuals)
 
     def test_invalid_image_path(self, model: str, model_type: str, num_individuals: int) -> None:
         """Test error handling for invalid image paths using the API."""
@@ -167,8 +163,9 @@ class TestPoseEstimators:
             self._run_estimation(model, INVALID_IMAGE_PATH, model_type, num_individuals)
 
 
-@pytest.mark.skipif(not DOCKER_AVAILABLE or not YOLO_AVAILABLE, 
-                    reason="Docker is not running or YOLO is not installed.")
+@pytest.mark.skipif(
+    not DOCKER_AVAILABLE or not YOLO_AVAILABLE, reason="Docker is not running or YOLO is not installed."
+)
 @pytest.mark.parametrize(
     "estimator_class, valid_model_types, invalid_model_types",
     [
@@ -194,13 +191,11 @@ def test_model_types(
             estimator_class(invalid_model_type)
 
 
-@pytest.mark.skipif(not DOCKER_AVAILABLE or not YOLO_AVAILABLE, 
-                    reason="Docker is not running or YOLO is not installed.")
-@pytest.mark.parametrize("sample_pose", ["sample_pose_mediapipe", 
-                                         "sample_pose_yolo"])
-def test_visualize_pose(sample_pose: str, 
-                        request: pytest.FixtureRequest, 
-                        tmpdir: pytest.TempPathFactory) -> None:
+@pytest.mark.skipif(
+    not DOCKER_AVAILABLE or not YOLO_AVAILABLE, reason="Docker is not running or YOLO is not installed."
+)
+@pytest.mark.parametrize("sample_pose", ["sample_pose_mediapipe", "sample_pose_yolo"])
+def test_visualize_pose(sample_pose: str, request: pytest.FixtureRequest, tmpdir: pytest.TempPathFactory) -> None:
     """Test the visualization of poses for both MediaPipe and YOLO."""
     pose = request.getfixturevalue(sample_pose)
     output_path = os.path.join(str(tmpdir), f"{pose.model.name.lower()}.png")
