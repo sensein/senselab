@@ -1,3 +1,20 @@
+# 0.37.0 (Wed Aug 13 2025)
+
+#### 🚀 Enhancement
+
+- Migrate from Pydra v0 to v1 [#358](https://github.com/sensein/senselab/pull/358) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### 🔩 Dependency Updates
+
+- Bump actions/first-interaction from 1 to 2 [#355](https://github.com/sensein/senselab/pull/355) ([@dependabot[bot]](https://github.com/dependabot[bot]) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@dependabot[bot]](https://github.com/dependabot[bot])
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.36.5 (Fri Jul 25 2025)
 
 #### 🐛 Bug Fix
