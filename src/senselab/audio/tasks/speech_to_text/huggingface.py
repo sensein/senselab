@@ -6,9 +6,9 @@ function at once, rather than calling the function with one audio at a time.
 """
 
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
-from transformers import pipeline
+from transformers import Pipeline, pipeline
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, HFModel, Language, ScriptLine, _select_device_and_dtype
@@ -18,7 +18,7 @@ from senselab.utils.data_structures.logging import logger
 class HuggingFaceASR:
     """A factory for managing Hugging Face ASR pipelines."""
 
-    _pipelines: Dict[str, pipeline] = {}
+    _pipelines: Dict[str, Pipeline] = {}
 
     @classmethod
     def _get_hf_asr_pipeline(
@@ -29,7 +29,7 @@ class HuggingFaceASR:
         chunk_length_s: int,
         batch_size: int,
         device: Optional[DeviceType] = None,
-    ) -> pipeline:
+    ) -> Pipeline:
         """Get or create a Hugging Face ASR pipeline.
 
         Args:
@@ -41,7 +41,7 @@ class HuggingFaceASR:
             device (Optional[DeviceType]): The device to run the model on.
 
         Returns:
-            pipeline: The ASR pipeline.
+            Pipeline: The ASR pipeline.
         """
         device, _ = _select_device_and_dtype(
             user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
@@ -51,15 +51,18 @@ class HuggingFaceASR:
             f"{max_new_tokens}-{chunk_length_s}-{batch_size}-{device.value}"
         )
         if key not in cls._pipelines:
-            cls._pipelines[key] = pipeline(
-                "automatic-speech-recognition",
-                model=model.path_or_uri,
-                revision=model.revision,
-                return_timestamps=return_timestamps,
-                max_new_tokens=max_new_tokens,
-                chunk_length_s=chunk_length_s,
-                batch_size=batch_size,
-                device=device.value,
+            cls._pipelines[key] = cast(
+                Pipeline,
+                pipeline(  # type: ignore[call-overload]
+                    task="automatic-speech-recognition",
+                    model=model.path_or_uri,
+                    revision=model.revision,
+                    return_timestamps=return_timestamps,
+                    max_new_tokens=max_new_tokens,
+                    chunk_length_s=chunk_length_s,
+                    batch_size=batch_size,
+                    device=device.value,
+                ),
             )
         return cls._pipelines[key]
 
@@ -141,8 +144,14 @@ class HuggingFaceASR:
         elapsed_time_pipeline = end_time_pipeline - start_time_pipeline
         logger.info(f"Time taken to initialize the hugging face ASR pipeline: {elapsed_time_pipeline:.2f} seconds")
 
+        feature_extractor = getattr(pipe, "feature_extractor", None)
+        if feature_extractor is None:
+            raise ValueError("Internal error: The Hugging Face pipeline does not have a feature extractor.")
+
         # Retrieve the expected sampling rate from the Hugging Face model
-        expected_sampling_rate = pipe.feature_extractor.sampling_rate
+        expected_sampling_rate = cast(int, getattr(feature_extractor, "sampling_rate", None))
+        if expected_sampling_rate is None:
+            raise ValueError("Internal error: The Hugging Face model does not specify an expected sampling rate.")
 
         # Check that all audio objects are mono
         for audio in audios:
@@ -174,4 +183,4 @@ class HuggingFaceASR:
         transcriptions = _rename_key_recursive(transcriptions, "timestamp", "timestamps")
 
         # Convert the pipeline output to ScriptLine objects
-        return [ScriptLine.from_dict(t) for t in transcriptions]
+        return [ScriptLine.from_dict(cast(Dict[str, Any], t)) for t in transcriptions]
