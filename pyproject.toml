@@ -12,14 +12,13 @@ maintainers = [
 ]
 license = {file = "LICENSE.txt"}
 readme = "README.md"
-requires-python = ">=3.10,<3.13"
+requires-python = ">=3.11,<3.13"
 homepage = "https://github.com/sensein/senselab"
 repository = "https://github.com/sensein/senselab"
 documentation = "https://sensein.github.io/senselab"
 keywords = ["audio", "voice", "speech", "video", "pose", "face", "text", "nlp"]
 classifiers = [
   "Development Status :: 3 - Alpha",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "License :: OSI Approved :: Apache Software License",
@@ -36,8 +35,8 @@ datasets = "~=3"
 torch = {version = "~=2.6", markers = "sys_platform != 'darwin' or platform_machine == 'arm64'"}
 torchvision = "~=0.20"
 transformers = "~=4.48"
-pydra = "~=0.25"
-pydantic = "~=2.11"
+pydra = ">=1.0a0"
+pydantic = "~=2.7"
 accelerate = "*"
 huggingface-hub = "~=0.23"
 pycountry = "~=24.6"

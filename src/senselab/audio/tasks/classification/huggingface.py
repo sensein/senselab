@@ -6,9 +6,9 @@ function at once, rather than calling the function with one audio at a time.
 """
 
 import time
-from typing import Dict, List, Literal, Optional
+from typing import Dict, List, Literal, Optional, cast
 
-from transformers import pipeline
+from transformers import Pipeline, pipeline
 
 from senselab.audio.data_structures import Audio, AudioClassificationResult
 from senselab.utils.data_structures import DeviceType, HFModel, _select_device_and_dtype
@@ -18,7 +18,7 @@ from senselab.utils.data_structures.logging import logger
 class HuggingFaceAudioClassifier:
     """A factory for managing Hugging Face audio classification pipelines."""
 
-    _pipelines: Dict[str, pipeline] = {}
+    _pipelines: Dict[str, Pipeline] = {}
 
     @classmethod
     def _get_hf_audio_classification_pipeline(
@@ -28,7 +28,7 @@ class HuggingFaceAudioClassifier:
         function_to_apply: Literal["softmax", "sigmoid", "none"],
         batch_size: int,
         device: Optional[DeviceType] = None,
-    ) -> pipeline:
+    ) -> Pipeline:
         """Get or create a Hugging Face audio classification pipeline.
 
         Args:
@@ -39,22 +39,25 @@ class HuggingFaceAudioClassifier:
             device (Optional[DeviceType]): The device to run the model on.
 
         Returns:
-            pipeline: The Audio Classification pipeline.
+            Pipeline: The Audio Classification pipeline.
         """
         device, _ = _select_device_and_dtype(
             user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
         )
         key = f"{model.path_or_uri}-{model.revision}-{top_k}-" f"{function_to_apply}-{batch_size}-{device.value}"
         if key not in cls._pipelines:
-            cls._pipelines[key] = pipeline(
-                "audio-classification",
-                model=model.path_or_uri,
-                revision=model.revision,
-                # top_k=top_k, #TODO: this causes a bug in the pipeline that has been reported to transformers
-                # https://github.com/huggingface/transformers/issues/35736
-                function_to_apply=function_to_apply,  # TODO: parameter ignored in transformer code, bug reported
-                # https://github.com/huggingface/transformers/issues/35739
-                device=device.value,
+            cls._pipelines[key] = cast(
+                Pipeline,
+                pipeline(  # type: ignore[call-overload]
+                    task="audio-classification",
+                    model=model.path_or_uri,
+                    revision=model.revision,
+                    # top_k=top_k, #TODO: this causes a bug in the pipeline that has been reported to transformers
+                    # https://github.com/huggingface/transformers/issues/35736
+                    function_to_apply=function_to_apply,  # TODO: parameter ignored in transformer code, bug reported
+                    # https://github.com/huggingface/transformers/issues/35739
+                    device=device.value,
+                ),
             )
         return cls._pipelines[key]
 
@@ -119,8 +122,14 @@ class HuggingFaceAudioClassifier:
             pipeline: {elapsed_time_pipeline:.2f} seconds"
         )
 
+        feature_extractor = getattr(pipe, "feature_extractor", None)
+        if feature_extractor is None:
+            raise ValueError("Internal error: The Hugging Face pipeline does not have a feature extractor.")
+
         # Retrieve the expected sampling rate from the Hugging Face model
-        expected_sampling_rate = pipe.feature_extractor.sampling_rate
+        expected_sampling_rate = cast(int, getattr(feature_extractor, "sampling_rate", None))  # type: ignore[attr-defined]
+        if expected_sampling_rate is None:
+            raise ValueError("Internal error: The Hugging Face model does not specify an expected sampling rate.")
 
         # Check that all audio objects are mono
         for audio in audios:
@@ -137,7 +146,7 @@ class HuggingFaceAudioClassifier:
         # Take the start time of the transcription
         start_time_transcription = time.time()
         # Run the pipeline
-        classifications = pipe(formatted_audios, top_k=top_k, function_to_apply=function_to_apply)
+        classifications = pipe(formatted_audios, top_k=top_k, function_to_apply=function_to_apply)  # type: ignore[call-arg]
 
         # Take the end time of the classification
         end_time_transcription = time.time()
