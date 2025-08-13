@@ -1,6 +1,7 @@
 """Uses weak supervision to label files as include, exclude, or unsure."""
 
-from typing import Any, Callable, Dict, List, Sequence, Tuple
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -35,7 +36,9 @@ def check_to_labeling_function(col: str) -> Callable[[pd.Series], int]:
     return lf
 
 
-def include_no_failed_checks_label_function(cols: Sequence[str]) -> Callable[[pd.Series], int]:
+def include_no_failed_checks_label_function(
+    cols: Sequence[str],
+) -> Callable[[pd.Series], int]:
     """Include a file if all given checks are False or None.
 
     Args:
@@ -110,7 +113,8 @@ def calculate_label_function_reliability(L_train: np.ndarray, preds: np.ndarray,
     """Calculate reliability metrics for labeling functions.
 
     Args:
-        L_train: Matrix of labeling function votes (n_examples x n_label_functions)
+        L_train: Matrix of labeling function votes
+            (n_examples x n_label_functions)
         preds: Label model predictions
         lf_names: Names of the labeling functions
 
@@ -131,7 +135,7 @@ def calculate_label_function_reliability(L_train: np.ndarray, preds: np.ndarray,
                 "label_function": name,
                 "coverage": round(cov, 4),
                 "n_audio_files": n_audio_files,
-                "agreement_with_label_model": round(agree, 4) if agree == agree else None,
+                "agreement_with_label_model": (round(agree, 4) if agree == agree else None),
             }
         )
 
@@ -140,13 +144,21 @@ def calculate_label_function_reliability(L_train: np.ndarray, preds: np.ndarray,
     )
 
 
-def review_files(df_path: str, correlation_threahold: float = 0.99) -> pd.DataFrame:
+def review_files(
+    df_path: str,
+    correlation_threahold: float = 0.99,
+    output_dir: Optional[str] = None,
+    save_results: bool = True,
+) -> pd.DataFrame:
     """Labels audio files as include, exclude, or unsure with weak supervision.
 
     Args:
         df_path: Path to CSV file containing quality control results.
         correlation_threahold: Correlation threshold for pruning highly
             correlated columns.
+        output_dir: Directory to save results. If None, saves to same directory
+            as input CSV.
+        save_results: Whether to save the results to disk.
 
     Returns:
         DataFrame with snorkel_label column added containing predicted labels.
@@ -203,15 +215,41 @@ def review_files(df_path: str, correlation_threahold: float = 0.99) -> pd.DataFr
     print("\nlabeling function reliability (agreement with LabelModel):")
     print(reliability_df.to_string(index=False))
 
+    # Save results if requested
+    if save_results:
+        input_path = Path(df_path)
+        if output_dir is None:
+            output_path = input_path.parent
+        else:
+            output_path = Path(output_dir)
+            output_path.mkdir(parents=True, exist_ok=True)
+
+        # Save labeled dataset
+        base_name = input_path.stem
+        labeled_csv_path = output_path / f"{base_name}_with_snorkel_labels.csv"
+        df.to_csv(labeled_csv_path, index=False)
+        print(f"\nSaved labeled dataset to: {labeled_csv_path}")
+
+        # Save reliability ranking
+        reliability_csv_path = output_path / f"{base_name}_labeling_function_reliability.csv"
+        reliability_df.to_csv(reliability_csv_path, index=False)
+        print(f"Saved reliability ranking to: {reliability_csv_path}")
+
     return df
 
 
-# Example call (split long path for style checks)
+# Example usage
 if __name__ == "__main__":
+    # Example path (split long path for style checks)
     path = (
         "/Users/isaacbevers/sensein/b2ai-wrapper/b2ai-data/wasabi/"
         "eipm-bridge2ai-internal-data-dissemination/"
         "2025-04-04T18.14.48.299Z/"
-        "bioacoustic_quality_control_results_with_checks.csv"
+        "bioacoustic_quality_control_results.csv"
     )
-    review_files(path)
+
+    # Process the CSV and save results to the same directory as input
+    df_with_labels = review_files(path)
+
+    # Alternative: specify a custom output directory
+    # df_with_labels = review_files(path, output_dir="/path/to/output")
