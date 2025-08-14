@@ -78,8 +78,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest]
-        python-version: ['3.11']
+        include:
+        - {os: macos-latest, architecture: arm64, python-version: '3.11'}
     steps:
     - uses: actions/checkout@v4
       with:  # no need for the history
