@@ -8,6 +8,8 @@ Please use the following workflow when contributing:
 
 0. **Install poetry**:
   - Make sure `ffmpeg` is installed in your system. If not, please install it (see [here](https://www.ffmpeg.org/download.html) for detailed platform-dependent instructions).
+  - Install and run Docker (required for some video models, like MediaPipe-based estimators).
+Please follow the official installation instructions for your platform: [Install Docker](https://docs.docker.com/get-started/get-docker/).
   - ```pipx install poetry``` (alternative installation strategies [here](https://python-poetry.org/docs/#installation))
 1. **Create an issue**: Use GitHub to create an issuel, assign it to yourself (and any collaborators) and, if you have access, add it to the [Project board](https://github.com/orgs/sensein/projects/45).
 2. **Create a branch**: Use GitHub's "Create a branch" button from the issue page to generate a branch associated with the issue.
