@@ -121,7 +121,7 @@ def test_huggingface_tts_pipeline_factory(hf_model: HFModel, device: DeviceType,
 def test_invalid_model() -> None:
     """Test synthesize_texts with invalid model."""
     texts = ["Hello world"]
-    model = SenselabModel(path_or_uri="-----", revision="main")
+    model: SenselabModel = SenselabModel(path_or_uri="-----", revision="main")
 
     # TODO Texts like these should be stored in a common utils/constants file such that
     # they only need to be changed in one place
