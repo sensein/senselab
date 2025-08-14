@@ -10,7 +10,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest]
-        python-version: ['3.10']
+        python-version: ['3.11']
     steps:
     - uses: actions/checkout@v4
       with:
@@ -23,7 +23,7 @@ jobs:
       run: |
         which python
         python --version
-        pip install poetry==2.1.1
+        pip install poetry==2.1.3
         which poetry
         poetry --version
       shell: bash
