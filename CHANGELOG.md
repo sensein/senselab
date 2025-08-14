@@ -1,3 +1,15 @@
+# 0.38.0 (Thu Aug 14 2025)
+
+#### 🚀 Enhancement
+
+- run mediapipe on a docker runner [#360](https://github.com/sensein/senselab/pull/360) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.37.0 (Wed Aug 13 2025)
 
 #### 🚀 Enhancement
