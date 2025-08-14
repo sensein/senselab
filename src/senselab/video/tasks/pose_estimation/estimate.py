@@ -256,7 +256,10 @@ class MediaPipePoseEstimator(PoseEstimator):
         wrote = False
         try:
             if not CV2_AVAILABLE:
-                raise
+                raise ModuleNotFoundError(
+                    "`opencv-python` is not installed. "
+                    "Please install senselab video dependencies using `pip install 'senselab[video]'`."
+                )
             bgr = rgb[:, :, ::-1]
             ok = cv2.imwrite(str(tmp), bgr)
             wrote = bool(ok)
