@@ -41,6 +41,7 @@
             <h2>Submodules</h2>
             <ul>
                     <li><a href="speaker_diarization/api.html">api</a></li>
+                    <li><a href="speaker_diarization/nvidia.html">nvidia</a></li>
                     <li><a href="speaker_diarization/pyannote.html">pyannote</a></li>
             </ul>
 
@@ -68,7 +69,22 @@
 
 <h2 id="models">Models</h2>
 
-<p>In <code><a href="../../../senselab.html">senselab</a></code>, we integrate <a href="https://github.com/pyannote/pyannote-audio">pyannote.audio</a> models for speaker diarization. These models can be explored on the <a href="https://huggingface.co/pyannote">Hugging Face Hub</a>. We may integrate additional approaches for speaker diarization into the package in the future.</p>
+<p>All supported models (<a href="https://github.com/pyannote/pyannote-audio">pyannote.audio</a> models from <a href="https://huggingface.co/pyannote">Hugging Face Hub</a> and the <a href="https://huggingface.co/nvidia/diar_sortformer_4spk-v1">NVIDIA nemo softformer</a>) provide state-of-the-art diarization and can be used as follows:</p>
+
+<div class="pdoc-code codehilite">
+<pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn"><a href="../data_structures.html">senselab.audio.data_structures</a></span><span class="w"> </span><span class="kn">import</span> <span class="n">Audio</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn"><a href="../../utils/data_structures/model.html">senselab.utils.data_structures.model</a></span><span class="w"> </span><span class="kn">import</span> <span class="n">HFModel</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn"><a href="speaker_diarization/api.html">senselab.audio.tasks.speaker_diarization.api</a></span><span class="w"> </span><span class="kn">import</span> <span class="n">diarize_audios</span>
+
+<span class="n">audio</span> <span class="o">=</span> <span class="n">Audio</span><span class="p">(</span><span class="n">filepath</span><span class="o">=</span><span class="s2">&quot;path/to/audio_48khz_mono_16bits.wav&quot;</span><span class="p">)</span>
+<span class="n">model</span> <span class="o">=</span> <span class="n">HFModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="s2">&quot;nvidia/diar_sortformer_4spk-v1&quot;</span><span class="p">)</span>
+<span class="n">results</span> <span class="o">=</span> <span class="n">diarize_audios</span><span class="p">([</span><span class="n">audio</span><span class="p">],</span> <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">)</span>
+<span class="c1"># results is a list of lists of ScriptLine objects, e.g.:</span>
+<span class="c1"># [[ScriptLine(speaker=&quot;speaker_0&quot;, start=0.08, end=4.95), ...]]</span>
+</code></pre>
+</div>
+
+<p>We may integrate additional approaches for speaker diarization into the package in the future.</p>
 
 <h2 id="evaluation">Evaluation</h2>
 
