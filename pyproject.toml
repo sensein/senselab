@@ -76,15 +76,14 @@ audio = [
   "speechbrain",
   "pyannote-audio",
   "opensmile",
+  "speech-articulatory-coding",
   "vocos",
   "jiwer",
   "nltk",
   "coqui-tts",
   "nemo-toolkit"
 ]
-articulatory = [
-  "speech-articulatory-coding"
-]
+
 text = [
   "sentence-transformers",
   "pylangacq"
