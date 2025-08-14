@@ -8,16 +8,44 @@ It is intended for running MediaPipe inference without installing it into your h
 ```bash
 # Log in to Docker Hub
 docker login
+```
 
-# Build locally
-docker build -t fabiocat93/mediapipe-deps:latest .
+- One-time setup (if needed, ensure emulators for cross-builds are installed)
+```bash
+docker run --privileged --rm tonistiigi/binfmt --install all
+```
 
-# Push to Docker Hub
-docker push fabiocat93/mediapipe-deps:latest
+- Create & use a Buildx builder that supports multi-arch
+```bash
+docker buildx create --name multi --use
+docker buildx inspect --bootstrap
+```
 
-# Run and print MediaPipe version
+- Build & push a multi-arch image (from the folder with the Dockerfile)
+```bash
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  -t fabiocat93/mediapipe-deps:latest \
+  --push .
+```
+You can find the multi-arch image already built and pushed [here](https://hub.docker.com/r/fabiocat93/mediapipe-deps).
+
+
+- Verify both architectures are present (You should see entries for linux/amd64 and linux/arm64)
+```bash
+docker buildx imagetools inspect fabiocat93/mediapipe-deps:latest
+```
+
+- Run and print MediaPipe version
+```bash
 docker run --rm fabiocat93/mediapipe-deps:latest \
+    --platform=linux/amd64 \
+    python -c "import mediapipe as mp; print(mp.__version__)"
+```
+and
+```bash
+docker run --rm fabiocat93/mediapipe-deps:latest \
+    --platform=linux/arm64 \
     python -c "import mediapipe as mp; print(mp.__version__)"
 ```
 
-You can find it already built [here](https://hub.docker.com/r/fabiocat93/mediapipe-deps).
