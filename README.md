@@ -67,9 +67,9 @@ If you want to install only audio dependencies, you do:
 pip install 'senselab[audio]'
 ```
 
-To install audio and articulatory dependencies, you do:
+To install audio dependencies, you do:
 ```sh
-pip install 'senselab[audio,articulatory]'
+pip install 'senselab[audio]'
 ```
 
 To install video and text extras, please do:
