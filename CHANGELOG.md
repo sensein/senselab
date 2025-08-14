@@ -1,3 +1,17 @@
+# 0.38.1 (Thu Aug 14 2025)
+
+#### 🐛 Bug Fix
+
+- fix: plotting in colab [#317](https://github.com/sensein/senselab/pull/317) ([@satra](https://github.com/satra) [@ibevers](https://github.com/ibevers) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 3
+
+- [@ibevers](https://github.com/ibevers)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Satrajit Ghosh ([@satra](https://github.com/satra))
+
+---
+
 # 0.38.0 (Thu Aug 14 2025)
 
 #### 🚀 Enhancement
