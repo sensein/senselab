@@ -189,6 +189,8 @@ jobs:
     - name: Install Docker
       run: |
         sudo systemctl start docker || true
+        # make the socket world-RW for this job only
+        sudo chmod 666 /var/run/docker.sock
         sudo docker version
         sudo docker info
     - name: Install Poetry
@@ -355,6 +357,8 @@ jobs:
     - name: Install Docker
       run: |
         sudo systemctl start docker || true
+        # make the socket world-RW for this job only
+        sudo chmod 666 /var/run/docker.sock
         sudo docker version
         sudo docker info
     - name: Install Poetry
@@ -521,6 +525,8 @@ jobs:
     - name: Install Docker
       run: |
         sudo systemctl start docker || true
+        # make the socket world-RW for this job only
+        sudo chmod 666 /var/run/docker.sock
         sudo docker version
         sudo docker info
     - name: Install Poetry
