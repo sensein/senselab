@@ -7,7 +7,7 @@
 
 Pose estimation is the process of detecting and tracking key points on a human body or other objects in images or videos. These key points represent joints, limbs, or other significant regions of interest. Pose estimation is widely used in applications such as motion analysis, sports performance tracking, gesture recognition, and augmented reality.
 
-`senselab` supports pose estimation using **MediaPipe** and **YOLO**, offering models with varying accuracy, speed, and computational requirements.
+`senselab` supports pose estimation using **MediaPipe** (Docker required) and **YOLO**, offering models with varying accuracy, speed, and computational requirements.
 
 ---
 
@@ -20,6 +20,7 @@ MediaPipe provides three pose estimation models:
 - **Heavy**: High-accuracy model designed for tasks where precision is critical but latency is less of a concern.
 
 These models detect 33 key points across the body, including joints, eyes, ears, and the nose.
+Mediapipe requires on a Docker runner.
 
 ### YOLO
 YOLO-based pose estimation models are efficient and capable of detecting key points in real-time. Supported variants include:

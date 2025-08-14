@@ -22,12 +22,13 @@ try:
 except ModuleNotFoundError:
     CV2_AVAILABLE = False
 
-try:
-    import mediapipe
+from senselab.utils.data_structures.docker import docker_is_running
 
-    MEDIAPIPE_AVAILABLE = True
-except ModuleNotFoundError:
-    MEDIAPIPE_AVAILABLE = False
+if docker_is_running():
+    DOCKER_AVAILABLE = True
+else:
+    DOCKER_AVAILABLE = False
+
 
 try:
     from ultralytics import YOLO
@@ -86,10 +87,10 @@ def sample_pose_yolo() -> ImagePose:
     return ImagePose(image=image, individuals=individuals, model=PoseModel.YOLO)
 
 
-@pytest.mark.skipif(MEDIAPIPE_AVAILABLE, reason="MediaPipe is installed.")
+@pytest.mark.skipif(DOCKER_AVAILABLE, reason="Docker is installed and running.")
 def test_media_pipe_unavailable() -> None:
     """Test MediaPipePoseEstimator import error."""
-    with pytest.raises(ModuleNotFoundError):
+    with pytest.raises(RuntimeError):
         MediaPipePoseEstimator("full")
 
 
@@ -100,7 +101,9 @@ def test_yolo_unavailable() -> None:
         YOLOPoseEstimator("8n")
 
 
-@pytest.mark.skipif(not MEDIAPIPE_AVAILABLE or not YOLO_AVAILABLE, reason="MediaPipe or YOLO are not installed.")
+@pytest.mark.skipif(
+    not DOCKER_AVAILABLE or not YOLO_AVAILABLE, reason="Docker is not running or YOLO is not installed."
+)
 @pytest.mark.parametrize(
     "model, model_type, num_individuals",
     [
@@ -160,7 +163,9 @@ class TestPoseEstimators:
             self._run_estimation(model, INVALID_IMAGE_PATH, model_type, num_individuals)
 
 
-@pytest.mark.skipif(not MEDIAPIPE_AVAILABLE or not YOLO_AVAILABLE, reason="MediaPipe or YOLO are not installed.")
+@pytest.mark.skipif(
+    not DOCKER_AVAILABLE or not YOLO_AVAILABLE, reason="Docker is not running or YOLO is not installed."
+)
 @pytest.mark.parametrize(
     "estimator_class, valid_model_types, invalid_model_types",
     [
@@ -186,7 +191,9 @@ def test_model_types(
             estimator_class(invalid_model_type)
 
 
-@pytest.mark.skipif(not MEDIAPIPE_AVAILABLE or not YOLO_AVAILABLE, reason="MediaPipe or YOLO are not installed.")
+@pytest.mark.skipif(
+    not DOCKER_AVAILABLE or not YOLO_AVAILABLE, reason="Docker is not running or YOLO is not installed."
+)
 @pytest.mark.parametrize("sample_pose", ["sample_pose_mediapipe", "sample_pose_yolo"])
 def test_visualize_pose(sample_pose: str, request: pytest.FixtureRequest, tmpdir: pytest.TempPathFactory) -> None:
     """Test the visualization of poses for both MediaPipe and YOLO."""

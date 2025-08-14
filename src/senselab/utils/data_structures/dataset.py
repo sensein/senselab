@@ -61,7 +61,7 @@ class Session(BaseModel):
 
 
 class SenselabDataset(BaseModel):
-    """Class for maintaining SenseLab datasets and functionalities.
+    """Class for maintaining senselab datasets and functionalities.
 
     Maintains collections of Audios, Videos, and metadata for use of the Senselab tools
     and pipelines. Includes the ability to manage Sessions and Participants.
