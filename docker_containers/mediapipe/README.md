@@ -48,4 +48,3 @@ docker run --rm fabiocat93/mediapipe-deps:latest \
     --platform=linux/arm64 \
     python -c "import mediapipe as mp; print(mp.__version__)"
 ```
-
