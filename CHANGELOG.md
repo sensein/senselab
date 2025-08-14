@@ -1075,7 +1075,7 @@
 - VAD and speaker diarization [#74](https://github.com/sensein/senselab/pull/74) ([@fabiocat93](https://github.com/fabiocat93))
 - Audio classification functionality [#76](https://github.com/sensein/senselab/pull/76) ([@wilke0818](https://github.com/wilke0818))
 - Add code for speaker embeddings task [#75](https://github.com/sensein/senselab/pull/75) (mbsilva@OPENMIND7.MIT.EDU [@fabiocat93](https://github.com/fabiocat93) [@900miles](https://github.com/900miles))
-- Senselab io [#70](https://github.com/sensein/senselab/pull/70) ([@wilke0818](https://github.com/wilke0818) [@fabiocat93](https://github.com/fabiocat93))
+- senselab io [#70](https://github.com/sensein/senselab/pull/70) ([@wilke0818](https://github.com/wilke0818) [@fabiocat93](https://github.com/fabiocat93))
 
 #### Authors: 5
 
