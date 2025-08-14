@@ -5,12 +5,13 @@ from typing import Any
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from matplotlib.pyplot import Figure
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import logger
 
 
-def plot_waveform(audio: Audio, title: str = "Waveform", fast: bool = False) -> None:
+def plot_waveform(audio: Audio, title: str = "Waveform", fast: bool = False) -> Figure:
     """Plots the waveform of an Audio object.
 
     Args:
@@ -43,9 +44,10 @@ def plot_waveform(audio: Audio, title: str = "Waveform", fast: bool = False) -> 
     figure.suptitle(title)
     plt.xlabel("Time [s]")
     plt.show(block=False)
+    return figure
 
 
-def plot_specgram(audio: Audio, mel_scale: bool = False, title: str = "Spectrogram", **spect_kwargs: Any) -> None:  # noqa : ANN401
+def plot_specgram(audio: Audio, mel_scale: bool = False, title: str = "Spectrogram", **spect_kwargs: Any) -> Figure:  # noqa : ANN401
     """Plots the spectrogram of an Audio object.
 
     Args:
@@ -107,18 +109,41 @@ def plot_specgram(audio: Audio, mel_scale: bool = False, title: str = "Spectrogr
 
     # Extract the spectrogram
     if mel_scale:
-        from senselab.audio.tasks.features_extraction.torchaudio import extract_mel_spectrogram_from_audios
+        from senselab.audio.tasks.features_extraction.torchaudio import (
+            extract_mel_spectrogram_from_audios,
+        )
 
-        spectrogram = extract_mel_spectrogram_from_audios([audio], **spect_kwargs)[0]["mel_spectrogram"]
+        result = extract_mel_spectrogram_from_audios([audio], **spect_kwargs)[0]
+        spectrogram = result["mel_spectrogram"]
         y_axis_label = "Mel Frequency"
     else:
-        from senselab.audio.tasks.features_extraction.torchaudio import extract_spectrogram_from_audios
+        from senselab.audio.tasks.features_extraction.torchaudio import (
+            extract_spectrogram_from_audios,
+        )
 
-        spectrogram = extract_spectrogram_from_audios([audio], **spect_kwargs)[0]["spectrogram"]
+        result = extract_spectrogram_from_audios([audio], **spect_kwargs)[0]
+        spectrogram = result["spectrogram"]
         y_axis_label = "Frequency [Hz]"
 
-    if spectrogram.dim() != 2:
-        raise ValueError("Spectrogram must be a 2D tensor.")
+    # Handle edge cases for spectrogram tensor
+    if not isinstance(spectrogram, torch.Tensor):
+        raise ValueError("Spectrogram extraction failed - returned non-tensor result.")
+
+    if torch.isnan(spectrogram).all():
+        error_msg = "Spectrogram extraction failed - all values are NaN. " "Audio may be too short."
+        raise ValueError(error_msg)
+
+    # Handle multi-channel spectrograms (3D tensor: channels x frequency x time)
+    if spectrogram.dim() == 3:
+        # Use the first channel for plotting
+        spectrogram = spectrogram[0]
+    elif spectrogram.dim() == 1:
+        # Handle case where spectrogram is 1D (very short audio)
+        error_msg = "Audio is too short to generate a meaningful spectrogram " "for plotting."
+        raise ValueError(error_msg)
+    elif spectrogram.dim() != 2:
+        error_msg = f"Spectrogram must be a 2D tensor, got {spectrogram.dim()}D tensor."
+        raise ValueError(error_msg)
 
     # Determine time and frequency scale
     num_frames = spectrogram.size(1)
@@ -133,7 +158,7 @@ def plot_specgram(audio: Audio, mel_scale: bool = False, title: str = "Spectrogr
     else:
         freq_axis = torch.linspace(0, audio.sampling_rate / 2, num_freq_bins)
 
-    plt.figure(figsize=(10, 4))
+    figure = plt.figure(figsize=(12, 4))
     plt.imshow(
         _power_to_db(spectrogram.numpy()),
         aspect="auto",
@@ -146,6 +171,7 @@ def plot_specgram(audio: Audio, mel_scale: bool = False, title: str = "Spectrogr
     plt.ylabel(y_axis_label)
     plt.xlabel("Time [Sec]")
     plt.show(block=False)
+    return figure
 
 
 def play_audio(audio: Audio) -> None:
