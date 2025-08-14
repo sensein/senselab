@@ -1,3 +1,16 @@
+# 0.39.0 (Thu Aug 14 2025)
+
+#### 🚀 Enhancement
+
+- added nvidia nemo diarization model [#338](https://github.com/sensein/senselab/pull/338) ([@fabiocat93](https://github.com/fabiocat93) [@satra](https://github.com/satra))
+
+#### Authors: 2
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Satrajit Ghosh ([@satra](https://github.com/satra))
+
+---
+
 # 0.38.1 (Thu Aug 14 2025)
 
 #### 🐛 Bug Fix
