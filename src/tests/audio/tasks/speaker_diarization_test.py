@@ -64,7 +64,7 @@ def test_diarize_audios(resampled_mono_audio_sample: Audio, pyannote_model: Pyan
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_diarize_audios_with_nvidia_sortformer(resampled_mono_audio_sample: Audio) -> None:
     """Test diarizing audios with NVIDIA Sortformer."""
-    model = HFModel(path_or_uri="nvidia/diar_sortformer_4spk-v1")
+    model: HFModel = HFModel(path_or_uri="nvidia/diar_sortformer_4spk-v1")
     results = diarize_audios(audios=[resampled_mono_audio_sample], model=model)
     assert len(results) == 1
     assert all(isinstance(line, ScriptLine) for line in results[0])
