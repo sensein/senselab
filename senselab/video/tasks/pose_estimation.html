@@ -42,6 +42,8 @@
             <ul>
                     <li><a href="pose_estimation/api.html">api</a></li>
                     <li><a href="pose_estimation/estimate.html">estimate</a></li>
+                    <li><a href="pose_estimation/mp_pose_worker.html">mp_pose_worker</a></li>
+                    <li><a href="pose_estimation/mp_visualization_worker.html">mp_visualization_worker</a></li>
                     <li><a href="pose_estimation/utils.html">utils</a></li>
                     <li><a href="pose_estimation/visualization.html">visualization</a></li>
             </ul>
@@ -68,7 +70,7 @@
 
 <p>Pose estimation is the process of detecting and tracking key points on a human body or other objects in images or videos. These key points represent joints, limbs, or other significant regions of interest. Pose estimation is widely used in applications such as motion analysis, sports performance tracking, gesture recognition, and augmented reality.</p>
 
-<p><code><a href="../../../senselab.html">senselab</a></code> supports pose estimation using <strong>MediaPipe</strong> and <strong>YOLO</strong>, offering models with varying accuracy, speed, and computational requirements.</p>
+<p><code><a href="../../../senselab.html">senselab</a></code> supports pose estimation using <strong>MediaPipe</strong> (Docker required) and <strong>YOLO</strong>, offering models with varying accuracy, speed, and computational requirements.</p>
 
 <hr />
 
@@ -84,7 +86,8 @@
 <li><strong>Heavy</strong>: High-accuracy model designed for tasks where precision is critical but latency is less of a concern.</li>
 </ul>
 
-<p>These models detect 33 key points across the body, including joints, eyes, ears, and the nose.</p>
+<p>These models detect 33 key points across the body, including joints, eyes, ears, and the nose.
+Mediapipe requires on a Docker runner.</p>
 
 <h3 id="yolo">YOLO</h3>
 
