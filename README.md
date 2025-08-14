@@ -46,6 +46,8 @@ Welcome to ```senselab```! This is a Python package for streamlining the process
 3. CUDA libraries matching the CUDA version expected by the PyTorch wheels (e.g., the latest pytorch 2.7 expects cuda-12.6). To install those with conda, please do:
   - ```conda config --add channels nvidia```
   - ```conda install -y nvidia/label/cuda-12.6.3::cuda-libraries-dev```
+4. Docker is required and must be running for some video models (e.g., MediaPipe-based estimators).
+Please follow the official installation instructions for your platform: [Install Docker](https://docs.docker.com/get-started/get-docker/).
 
 ## Installation
 Install this package via:

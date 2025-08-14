@@ -15,6 +15,8 @@ from senselab.video.tasks.pose_estimation.visualization import visualize
 def estimate_pose(image_path: str, model: str, **kwargs: Any) -> ImagePose:  # noqa ANN401
     """Estimate poses in an image using the specified model.
 
+    For MediaPipe, Docker is required to run the worker script.
+
     Args:
         image_path (str): Path to the input image file.
         model (str): The model to use for pose estimation. Options are 'mediapipe' or 'yolo'.

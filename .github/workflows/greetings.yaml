@@ -13,11 +13,11 @@ jobs:
       with:
         repo-token: ${{ secrets.GITHUB_TOKEN }}
         issue-message: |
-          👋 Welcome to **Senselab**!
+          👋 Welcome to **senselab**!
 
-          Thank you for your interest and contribution. Senselab is a comprehensive Python package designed to process behavioral data, including voice and speech patterns, with a focus on reproducibility and robust methodologies. Your issue will be reviewed soon. Stay tuned!
+          Thank you for your interest and contribution. senselab is a comprehensive Python package designed to process behavioral data, including voice and speech patterns, with a focus on reproducibility and robust methodologies. Your issue will be reviewed soon. Stay tuned!
 
         pr-message: |
           🚀 **First Pull Request** 🎉
 
-          Welcome to **Senselab**, and thank you for submitting your first pull request! We’re thrilled to have your contribution. Our team will review it as soon as possible. Stay engaged, and let’s make behavioral data analysis even more powerful together!
+          Welcome to **senselab**, and thank you for submitting your first pull request! We’re thrilled to have your contribution. Our team will review it as soon as possible. Stay engaged, and let’s make behavioral data analysis even more powerful together!

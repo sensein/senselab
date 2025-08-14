@@ -88,7 +88,13 @@ class SSLEmbeddingsFactory:
         )
         # Load feature extractor and model
         feat_extractor = cls._get_feature_extractor(model=model, cache_dir=cache_dir)
-        sampling_rate = feat_extractor.sampling_rate
+        sr = getattr(feat_extractor, "sampling_rate", None)
+        if not isinstance(sr, int):
+            raise AttributeError(
+                "The feature extractor doesn't expose an integer `sampling_rate`. "
+                "Please use a model with a known sampling rate."
+            )
+        sampling_rate: int = sr
         ssl_model = cls._load_model(model=model, cache_dir=cache_dir, device=device)
 
         # Check that all audio objects have the correct sampling rate
@@ -101,12 +107,17 @@ class SSLEmbeddingsFactory:
                 )
         # Pre-process audio using the SSL mode feature extractor
         preprocessed_audios = [
-            feat_extractor(audio.waveform, sampling_rate=sampling_rate, return_tensors="pt") for audio in audios
+            feat_extractor(  # type: ignore[operator]
+                audio.waveform, sampling_rate=sampling_rate, return_tensors="pt"
+            )
+            for audio in audios
         ]
 
         # Extract embeddings (hidden states from all layers) from pre-trained model
         embeddings = [
-            ssl_model(audio.input_values.squeeze(0).to(device.value), output_hidden_states=True)
+            ssl_model(  # type: ignore[operator]
+                audio.input_values.squeeze(0).to(device.value), output_hidden_states=True
+            )
             for audio in preprocessed_audios
         ]
         embeddings = [torch.cat(embedding.hidden_states) for embedding in embeddings]

@@ -8,10 +8,10 @@ Speaker verification is identity authentication based on voice features.
 
 This technology is widely used in various applications, including security systems, authentication processes, and personalized user experiences. The core concept revolves around comparing voice characteristics extracted from speech samples to verify the identity of the speaker.
 
-SenseLab speaker verification extracts audio embeddings, finds their cosine similarity, and uses a similarity threshold to determine if two audio files came from the same speaker.
+senselab speaker verification extracts audio embeddings, finds their cosine similarity, and uses a similarity threshold to determine if two audio files came from the same speaker.
 
 ## Models
-SenseLab speaker verification extracts audio embeddings using ECAPA-TDNN (`speechbrain/spkrec-ecapa-voxceleb`). This model is part of [SpeechBrain](https://huggingface.co/speechbrain), "an open-source and all-in-one conversational AI toolkit based on PyTorch." This model was trained on  [Voxceleb1](https://www.robots.ox.ac.uk/~vgg/data/voxceleb/vox1.html) and [Voxceleb2](https://www.robots.ox.ac.uk/~vgg/data/voxceleb/vox2.html), celebrity voice datasets. It is important to ensure that the audio samples used for verification have a sampling rate of 16kHz, as this is the rate that `speechbrain/spkrec-ecapa-voxceleb` was trained on.
+senselab speaker verification extracts audio embeddings using ECAPA-TDNN (`speechbrain/spkrec-ecapa-voxceleb`). This model is part of [SpeechBrain](https://huggingface.co/speechbrain), "an open-source and all-in-one conversational AI toolkit based on PyTorch." This model was trained on  [Voxceleb1](https://www.robots.ox.ac.uk/~vgg/data/voxceleb/vox1.html) and [Voxceleb2](https://www.robots.ox.ac.uk/~vgg/data/voxceleb/vox2.html), celebrity voice datasets. It is important to ensure that the audio samples used for verification have a sampling rate of 16kHz, as this is the rate that `speechbrain/spkrec-ecapa-voxceleb` was trained on.
 
 - **ECAPA-TDNN**
     - [spkrec-ecapa-voxceleb](https://huggingface.co/speechbrain/spkrec-ecapa-voxceleb)
