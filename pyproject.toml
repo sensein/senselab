@@ -65,6 +65,7 @@ opencv-python-headless = {version = "~=4.11", optional = true}
 ultralytics = {version = "~=8.3", optional = true}
 av = {version = "~=15", optional = true}
 nemo-toolkit = {version = "~=2.3", optional = true, extras = ["asr"]}
+notebook-intelligence = {version = "~=2.3", optional = true}
 
 [tool.poetry.extras]
 audio = [
@@ -92,6 +93,9 @@ video = [
   "av",
   "opencv-python-headless",
   "ultralytics"
+]
+intelligence = [
+  "notebook-intelligence"
 ]
 
 [tool.poetry.group.dev]
