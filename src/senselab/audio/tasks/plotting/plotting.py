@@ -5,12 +5,12 @@ from typing import Any, Dict, Tuple, Union
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from matplotlib.figure import Figure
 from matplotlib import rc_context
+from matplotlib.figure import Figure
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import logger
-from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 # ---------------------------
 # Plot context & scaling
@@ -221,7 +221,7 @@ def plot_specgram(
         )
 
     # Determine time and frequency scale
-    num_frames = spectrogram.size(1)
+    # num_frames = spectrogram.size(1)
     num_freq_bins = spectrogram.size(0)
 
     # Time axis in seconds
@@ -269,7 +269,7 @@ def plot_waveform_and_specgram(
     fast_wave: bool = False,
     context: "_Context" = "auto",
     figsize: Tuple[float, float] | None = None,
-    **spect_kwargs: Any,  # forwarded to spectrogram extraction
+    **spect_kwargs: Any,  # noqa # forwarded to spectrogram extraction
 ) -> Figure:
     """Stacked single-column layout: waveform (top) above spectrogram (bottom).
 
