@@ -1,3 +1,59 @@
+# 0.39.0 (Thu Aug 14 2025)
+
+#### 🚀 Enhancement
+
+- added nvidia nemo diarization model [#338](https://github.com/sensein/senselab/pull/338) ([@fabiocat93](https://github.com/fabiocat93) [@satra](https://github.com/satra))
+
+#### Authors: 2
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Satrajit Ghosh ([@satra](https://github.com/satra))
+
+---
+
+# 0.38.1 (Thu Aug 14 2025)
+
+#### 🐛 Bug Fix
+
+- fix: plotting in colab [#317](https://github.com/sensein/senselab/pull/317) ([@satra](https://github.com/satra) [@ibevers](https://github.com/ibevers) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 3
+
+- [@ibevers](https://github.com/ibevers)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Satrajit Ghosh ([@satra](https://github.com/satra))
+
+---
+
+# 0.38.0 (Thu Aug 14 2025)
+
+#### 🚀 Enhancement
+
+- run mediapipe on a docker runner [#360](https://github.com/sensein/senselab/pull/360) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.37.0 (Wed Aug 13 2025)
+
+#### 🚀 Enhancement
+
+- Migrate from Pydra v0 to v1 [#358](https://github.com/sensein/senselab/pull/358) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### 🔩 Dependency Updates
+
+- Bump actions/first-interaction from 1 to 2 [#355](https://github.com/sensein/senselab/pull/355) ([@dependabot[bot]](https://github.com/dependabot[bot]) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@dependabot[bot]](https://github.com/dependabot[bot])
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.36.5 (Fri Jul 25 2025)
 
 #### 🐛 Bug Fix
@@ -1058,7 +1114,7 @@
 - VAD and speaker diarization [#74](https://github.com/sensein/senselab/pull/74) ([@fabiocat93](https://github.com/fabiocat93))
 - Audio classification functionality [#76](https://github.com/sensein/senselab/pull/76) ([@wilke0818](https://github.com/wilke0818))
 - Add code for speaker embeddings task [#75](https://github.com/sensein/senselab/pull/75) (mbsilva@OPENMIND7.MIT.EDU [@fabiocat93](https://github.com/fabiocat93) [@900miles](https://github.com/900miles))
-- Senselab io [#70](https://github.com/sensein/senselab/pull/70) ([@wilke0818](https://github.com/wilke0818) [@fabiocat93](https://github.com/fabiocat93))
+- senselab io [#70](https://github.com/sensein/senselab/pull/70) ([@wilke0818](https://github.com/wilke0818) [@fabiocat93](https://github.com/fabiocat93))
 
 #### Authors: 5
 
