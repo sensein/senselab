@@ -214,7 +214,6 @@ def plot_specgram(
         spectrogram = extract_spectrogram_from_audios([audio], **spect_kwargs)[0]["spectrogram"]
         y_axis_label = "Frequency [Hz]"
 
-
     # ---- Guard against invalid/short-audio outputs (must be exactly this phrase)
     if not torch.is_tensor(spectrogram):
         raise ValueError("Spectrogram extraction failed")
@@ -281,7 +280,7 @@ def plot_waveform_and_specgram(
     **spect_kwargs: Any,  # noqa: ANN401  # forwarded to spectrogram extraction
 ) -> Figure:
     """Stacked single-column layout: waveform (top) above spectrogram (bottom).
-    
+
     Args:
         audio: The audio data to plot.
         title: The title of the plot.
@@ -316,6 +315,7 @@ def plot_waveform_and_specgram(
         from senselab.audio.tasks.features_extraction.torchaudio import (
             extract_mel_spectrogram_from_audios,
         )
+
         spec = extract_mel_spectrogram_from_audios([audio], **spect_kwargs)[0]["mel_spectrogram"]
         ylab = "Mel bins"
         f0, f1 = 0.0, float(spec.size(0) - 1) if torch.is_tensor(spec) and spec.ndim >= 1 else (0.0, 0.0)
@@ -324,6 +324,7 @@ def plot_waveform_and_specgram(
         from senselab.audio.tasks.features_extraction.torchaudio import (
             extract_spectrogram_from_audios,
         )
+
         spec = extract_spectrogram_from_audios([audio], **spect_kwargs)[0]["spectrogram"]
         ylab = "Frequency [Hz]"
         f0, f1 = 0.0, float(sr / 2)
@@ -352,9 +353,7 @@ def plot_waveform_and_specgram(
     size = (base[0] * scale, base[1] * scale)
 
     with rc_context(rc):
-        fig, (ax_wav, ax_spec) = plt.subplots(
-            2, 1, figsize=size, sharex=True, gridspec_kw={"height_ratios": [1, 2]}
-        )
+        fig, (ax_wav, ax_spec) = plt.subplots(2, 1, figsize=size, sharex=True, gridspec_kw={"height_ratios": [1, 2]})
 
         # ---- Waveform (top)
         if num_channels == 1:
