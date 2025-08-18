@@ -60,7 +60,7 @@ def plot_transcript(transcript: ScriptLine) -> Figure:
     return figure
 
 
-def plot_segment(segments: List[ScriptLine]) -> None:
+def plot_segment(segments: List[ScriptLine]) -> Figure:
     """Plots the segments of the transcript over time.
 
     Args:
