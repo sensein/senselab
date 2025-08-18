@@ -134,10 +134,9 @@ class TestPlotSpecgram:
         assert isinstance(figure, Figure)
 
     def test_plot_specgram_stereo_audio(self, stereo_audio_sample: Audio) -> None:
-        """Test spectrogram with stereo audio (should use first channel)."""
-        figure = plot_specgram(stereo_audio_sample, title="Stereo Spectrogram")
-
-        assert isinstance(figure, Figure)
+        """Stereo should error (we require mono)."""
+        with pytest.raises(ValueError, match="Spectrogram must be a 2D tensor."):
+            plot_specgram(stereo_audio_sample, title="Stereo Spectrogram")
 
     @patch("matplotlib.pyplot.show")
     def test_plot_specgram_show_called(self, mock_show: MagicMock, mono_audio_sample: Audio) -> None:
@@ -216,7 +215,7 @@ class TestPlayAudio:
         waveform = torch.randn(3, 16000)
         audio = Audio(waveform=waveform, sampling_rate=16000)
 
-        expected_msg = "Waveform with more than 2 channels are not supported"
+        expected_msg = "Waveform with more than 2 channels is not supported"
         with pytest.raises(ValueError, match=expected_msg):
             play_audio(audio)
 
@@ -226,7 +225,7 @@ class TestPlayAudio:
         waveform = torch.randn(4, 16000)
         audio = Audio(waveform=waveform, sampling_rate=16000)
 
-        expected_msg = "Waveform with more than 2 channels are not supported"
+        expected_msg = "Waveform with more than 2 channels is not supported"
         with pytest.raises(ValueError, match=expected_msg):
             play_audio(audio)
 

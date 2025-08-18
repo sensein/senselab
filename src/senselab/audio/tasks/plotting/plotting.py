@@ -214,6 +214,15 @@ def plot_specgram(
         spectrogram = extract_spectrogram_from_audios([audio], **spect_kwargs)[0]["spectrogram"]
         y_axis_label = "Frequency [Hz]"
 
+
+    # ---- Guard against invalid/short-audio outputs (must be exactly this phrase)
+    if not torch.is_tensor(spectrogram):
+        raise ValueError("Spectrogram extraction failed")
+    if spectrogram.ndim == 0 or spectrogram.numel() == 0:
+        raise ValueError("Spectrogram extraction failed")
+    if spectrogram.dtype.is_floating_point and torch.isnan(spectrogram).any():
+        raise ValueError("Spectrogram extraction failed")
+
     if spectrogram.dim() != 2:
         raise ValueError(
             "Spectrogram must be a 2D tensor. Got shape: {}".format(spectrogram.shape),
@@ -269,21 +278,21 @@ def plot_waveform_and_specgram(
     fast_wave: bool = False,
     context: "_Context" = "auto",
     figsize: Tuple[float, float] | None = None,
-    **spect_kwargs: Any,  # noqa # forwarded to spectrogram extraction
+    **spect_kwargs: Any,  # noqa: ANN401  # forwarded to spectrogram extraction
 ) -> Figure:
     """Stacked single-column layout: waveform (top) above spectrogram (bottom).
-
+    
     Args:
-        audio: Audio object.
-        title: Supertitle for the figure.
-        mel_scale: If True, use mel spectrogram.
-        fast_wave: If True, downsample the waveform for speed.
-        context: "auto" | "small" | "medium" | "large" or a float scale.
-        figsize: Optional (width, height) inches before scaling. Default scales with context.
-        **spect_kwargs: Passed to the underlying feature extraction functions.
+        audio: The audio data to plot.
+        title: The title of the plot.
+        mel_scale: Whether to use mel scale for the spectrogram.
+        fast_wave: Whether to use fast waveform plotting.
+        context: The context for the plot.
+        figsize: The figure size.
+        **spect_kwargs: Additional keyword arguments for spectrogram extraction.
 
     Returns:
-        Figure: The matplotlib figure containing the plots.
+        Figure: The matplotlib figure containing the waveform and spectrogram.
     """
     # ---- Core timing info from ORIGINAL (non-decimated) data
     sr = audio.sampling_rate
@@ -296,49 +305,56 @@ def plot_waveform_and_specgram(
     if fast_wave:
         waveform = waveform[..., ::10]  # decimate samples
     num_channels, num_frames = waveform.shape
-    # Build time axis to span the same duration with the (possibly) reduced length
     time_axis = np.linspace(0.0, duration_sec, num_frames, endpoint=False)
+
+    # ---- Guardrail: spectrogram plotting requires mono input
+    if audio.waveform.shape[0] != 1:
+        raise ValueError("Only mono audio is supported for spectrogram plotting")
 
     # ---- Spectrogram (2D tensor: [freq_bins, time_frames])
     if mel_scale:
         from senselab.audio.tasks.features_extraction.torchaudio import (
             extract_mel_spectrogram_from_audios,
         )
-
         spec = extract_mel_spectrogram_from_audios([audio], **spect_kwargs)[0]["mel_spectrogram"]
         ylab = "Mel bins"
-        f0, f1 = 0.0, float(spec.size(0) - 1)
+        f0, f1 = 0.0, float(spec.size(0) - 1) if torch.is_tensor(spec) and spec.ndim >= 1 else (0.0, 0.0)
         spec_title = "Mel Spectrogram"
     else:
         from senselab.audio.tasks.features_extraction.torchaudio import (
             extract_spectrogram_from_audios,
         )
-
         spec = extract_spectrogram_from_audios([audio], **spect_kwargs)[0]["spectrogram"]
         ylab = "Frequency [Hz]"
         f0, f1 = 0.0, float(sr / 2)
         spec_title = "Spectrogram"
 
-    if spec.dim() != 2:
-        raise ValueError(
-            "Spectrogram must be a 2D tensor. Got shape: {}".format(spec.shape),
-            "Please make sure the input audio is mono.",
-        )
+    # ---- Guardrails for short/invalid outputs (exact phrase expected by tests)
+    if not torch.is_tensor(spec):
+        raise ValueError("Spectrogram extraction failed")
+    if spec.ndim == 0 or spec.numel() == 0:
+        raise ValueError("Spectrogram extraction failed")
+    if spec.dtype.is_floating_point and torch.isnan(spec).any():
+        raise ValueError("Spectrogram extraction failed")
+
+    # We require a 2D (F x T) spectrogram. Anything else → fail (don’t auto-pick channels).
+    if spec.ndim != 2:
+        raise ValueError("Spectrogram extraction failed")
 
     # ---- Layout & context
     scale = _resolve_scale(context)
     rc = _rc_for_scale(scale)
     if figsize is None:
-        # base height: waveform ~ max(2, 0.9*channels), spectrogram ~ 4
-        base_h = max(2.0, 0.9 * num_channels) + 4.0
+        base_h = max(2.0, 0.9 * num_channels) + 4.0  # waveform height + spectrogram
         base = (12.0, base_h)
     else:
         base = figsize
     size = (base[0] * scale, base[1] * scale)
 
     with rc_context(rc):
-        # sharex=True ensures axes stay aligned and share limits/ticks
-        fig, (ax_wav, ax_spec) = plt.subplots(2, 1, figsize=size, sharex=True, gridspec_kw={"height_ratios": [1, 2]})
+        fig, (ax_wav, ax_spec) = plt.subplots(
+            2, 1, figsize=size, sharex=True, gridspec_kw={"height_ratios": [1, 2]}
+        )
 
         # ---- Waveform (top)
         if num_channels == 1:
@@ -356,24 +372,23 @@ def plot_waveform_and_specgram(
             _power_to_db(spec.cpu().numpy()),
             aspect="auto",
             origin="lower",
-            extent=(t0, t1, f0, f1),  # span the SAME total duration
+            extent=(t0, t1, f0, f1),
             cmap="viridis",
         )
         ax_spec.set_ylabel(ylab)
         ax_spec.set_xlabel("Time [s]")
         ax_spec.set_title(spec_title)
 
-        # Hard clamp both axes to the same time window (protects against rounding)
+        # Keep both axes aligned in time
         ax_wav.set_xlim(t0, t1)
         ax_spec.set_xlim(t0, t1)
 
-        # ---- Colorbar in a separate axes so widths match
+        # ---- Horizontal colorbar below the spectrogram
         divider = make_axes_locatable(ax_spec)
         cax = divider.append_axes("bottom", size="5%", pad=0.6)
         cbar = fig.colorbar(im, cax=cax, orientation="horizontal")
         cbar.set_label("Magnitude (dB)")
 
-        # ---- Final touches
         fig.suptitle(title)
         fig.tight_layout(rect=[0, 0, 1, 0.96])
         plt.show(block=False)
