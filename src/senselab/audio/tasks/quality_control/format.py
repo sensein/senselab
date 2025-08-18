@@ -94,7 +94,7 @@ def save_formatted_results(
     flattened_df = flatten_results_to_dataframe(results)
 
     # Save main results CSV
-    main_results_path = output_dir / "results_summary.csv"
+    main_results_path = output_dir / "quality_control_results_non_windowed.csv"
     flattened_df.to_csv(main_results_path, index=False)
     print(f"Saved flattened results to: {main_results_path}")
 
@@ -104,13 +104,13 @@ def save_formatted_results(
     if not skip_windowing:
         windowed_df = extract_windowed_data(results)
         if not windowed_df.empty:
-            windowed_results_path = output_dir / "results_windowed.csv"
+            windowed_results_path = output_dir / "quality_control_results_windowed.csv"
             windowed_df.to_csv(windowed_results_path, index=False)
             print(f"Saved windowed results to: {windowed_results_path}")
             output_dfs["windowed"] = windowed_df
 
     # Save full results as JSON for complete fidelity
-    full_results_path = output_dir / "results_full.json"
+    full_results_path = output_dir / "quality_control_results_all.json"
     with open(full_results_path, "w") as f:
         json.dump(results, f, indent=2)
     print(f"Saved full results to: {full_results_path}")
