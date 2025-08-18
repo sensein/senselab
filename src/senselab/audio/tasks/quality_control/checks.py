@@ -39,15 +39,34 @@ from senselab.audio.tasks.quality_control.metrics import (
 
 
 def audio_length_positive_check(audio: Audio) -> bool:
-    """Check that the waveform is not empty.
+    """Check if the waveform is empty.
 
     Args:
         audio: Audio object to evaluate.
 
     Returns:
-        True if the waveform contains one or more samples, else False.
+        True if the waveform contains no samples, else False.
     """
-    return audio.waveform.numel() != 0
+    return audio.waveform.numel() == 0
+
+
+def audio_intensity_positive_check(
+    audio_or_path: Union[Audio, str],
+    df: Optional[pd.DataFrame] = None,
+) -> Optional[bool]:
+    """Check that the audio has completely zero intensity.
+
+    Args:
+        audio_or_path: An Audio instance or filepath to the audio file.
+        df: Optional DataFrame with ``dynamic_range_metric``.
+
+    Returns:
+        True if the audio has completely zero dynamic range, None if evaluation fails.
+    """
+    result = get_evaluation(audio_or_path, dynamic_range_metric, df)
+    if result is None:
+        return None
+    return float(result) == 0
 
 
 def very_low_headroom_check(
@@ -796,22 +815,3 @@ def very_high_zero_crossing_rate_check(
     if result is None:
         return None
     return float(result) > threshold
-
-
-def audio_intensity_positive_check(
-    audio_or_path: Union[Audio, str],
-    df: Optional[pd.DataFrame] = None,
-) -> Optional[bool]:
-    """Check that the audio has non-zero intensity.
-
-    Args:
-        audio_or_path: An Audio instance or filepath to the audio file.
-        df: Optional DataFrame with ``dynamic_range_metric``.
-
-    Returns:
-        True if the audio has non-zero dynamic range, None if evaluation fails.
-    """
-    result = get_evaluation(audio_or_path, dynamic_range_metric, df)
-    if result is None:
-        return None
-    return float(result) > 0
