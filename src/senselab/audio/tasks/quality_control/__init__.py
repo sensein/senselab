@@ -10,6 +10,9 @@ from .quality_control import (
     activity_to_evaluations,
     check_quality,
 )
+from .utils import (
+    get_audio_files_from_directory,
+)
 
 __all__ = [
     "get_evaluation",
@@ -18,4 +21,5 @@ __all__ = [
     "evaluate_audio",
     "evaluate_batch",
     "evaluate_dataset",
+    "get_audio_files_from_directory",
 ]
