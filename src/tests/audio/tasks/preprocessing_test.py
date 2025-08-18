@@ -23,6 +23,8 @@ try:
 except ModuleNotFoundError:
     SPEECHBRAIN_AVAILABLE = False
 
+import re
+
 try:
     import torchaudio
 
@@ -160,12 +162,13 @@ def test_chunk_audios(mono_audio_sample: Audio) -> None:
         expected_length = end_sample - start_sample
         assert chunked_audios[i].waveform.shape[1] == expected_length
 
-    with pytest.raises(ValueError, match="Start time must be greater than or equal to 0."):
+    with pytest.raises(ValueError, match="Start time must be >= 0."):
         chunk_audios([(mono_audio_sample, (-1.0, 1.0))])
 
     with pytest.raises(ValueError) as e:
         chunk_audios([(mono_audio_sample, (0.0, audio_duration + 1.0))])
-    assert str(e.value) == f"End time must be less than the duration of the audio file ({audio_duration} seconds)."
+    # Accept any value between parentheses in the error message
+    assert re.match(rf"End time \([^)]+\) must be <= audio duration \({audio_duration:.6f} s\)\.", str(e.value))
 
     chunked_audio = chunk_audios([(mono_audio_sample, (0.0, audio_duration))])[0]
     assert chunked_audio.waveform.shape[1] == mono_audio_sample.waveform.shape[1]
@@ -177,6 +180,7 @@ def test_chunk_audios(mono_audio_sample: Audio) -> None:
 )
 def test_concatenate_audios(resampled_mono_audio_sample: Audio, resampled_mono_audio_sample_x2: Audio) -> None:
     """Tests functionality for concatenating Audio objects."""
+    print("resampled_mono_audio_sample_x2:", resampled_mono_audio_sample_x2)
     assert torch.equal(
         resampled_mono_audio_sample_x2.waveform,
         torch.cat([resampled_mono_audio_sample.waveform, resampled_mono_audio_sample.waveform], dim=1),

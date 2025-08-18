@@ -8,6 +8,7 @@ from typing import Dict, List, Optional, Union
 import torch
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.features_extraction.praat_parselmouth import extract_audio_duration
 from senselab.utils.data_structures import DeviceType, ScriptLine, _select_device_and_dtype
 from senselab.utils.data_structures.logging import logger
 
@@ -108,6 +109,7 @@ def diarize_audios_with_nvidia_sortformer(
             tmpfile_path = tmpfile.name
         try:
             audio.save_to_file(tmpfile_path)
+            audio_duration = extract_audio_duration(audio)["duration"]
             diarization_segments = model.diarize(audio=tmpfile_path)[0]
 
             # diarization_segments: List[List[str]], e.g. [['0.080 4.950 speaker_0']]
@@ -121,14 +123,14 @@ def diarize_audios_with_nvidia_sortformer(
                         ScriptLine(
                             speaker=speaker,
                             start=float(start),
-                            end=float(end),
+                            end=float(end) if float(end) < audio_duration else audio_duration,
                         )
                     )
             results.append(sorted(script_lines, key=lambda x: x.start if x.start is not None else 0.0))
         finally:
             # Clean up the temporary file
             if os.path.exists(tmpfile_path):
-                print("Deleting temporary file:", tmpfile_path)
+                # print("Deleting temporary file:", tmpfile_path)
                 os.remove(tmpfile_path)
     end_time_diarization = time.time()
     elapsed_time_diarization = end_time_diarization - start_time_diarization
