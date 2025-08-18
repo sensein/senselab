@@ -1,6 +1,6 @@
 JUPYTER_TOKEN=$(python -c 'import secrets;print(secrets.token_urlsafe(24))')
 
-echo $JUPYTER_TOKEN   
+echo $JUPYTER_TOKEN
 MbeZwzyiprj29m6aAHUB2xWS3o0DpFWM
 
 
@@ -15,7 +15,7 @@ poetry run jupyter lab --port 8888 --IdentityProvider.token JUPYTER_TOKEN --ip 0
 
 
 JUPYTER_TOKEN=<....>
-echo $JUPYTER_TOKEN                  
+echo $JUPYTER_TOKEN
 QLg8vUr4S5LmPGtP3N8S1sMKxmCoR48O
 
 poetry run jupyter-mcp-server start \
@@ -106,7 +106,7 @@ WITH COLAB:
 
 COLAB + senselab + Jupyter Notebook
 
-# it was critical running the jupyter notebook with 
+# it was critical running the jupyter notebook with
 /Users/fabiocat/miniconda3/envs/colab/bin/jupyter server \
   --ServerApp.allow_origin='https://colab.research.google.com' \
   --port=8888 --ServerApp.port_retries=0
@@ -114,4 +114,3 @@ COLAB + senselab + Jupyter Notebook
 from the same environment as senselab and also make sure the kernel used is the one with senselab installed!!!
 xx
 TEST IT AGAIN UPLOADING THE TUTORIAL NOTEBOOK AS A REFERENCE!!!!!!!!
-
