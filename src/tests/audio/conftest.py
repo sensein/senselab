@@ -88,8 +88,10 @@ def audio_with_extreme_amplitude() -> Audio:
 def resampled_mono_audio_sample_x2(resampled_mono_audio_sample: Audio) -> Audio:
     """Fixture for sample mono audio."""
     print("resampled_mono_audio_sample: ", resampled_mono_audio_sample)
-    print("concatenate_audios([resampled_mono_audio_sample, resampled_mono_audio_sample]): ", 
-          concatenate_audios([resampled_mono_audio_sample, resampled_mono_audio_sample]))
+    print(
+        "concatenate_audios([resampled_mono_audio_sample, resampled_mono_audio_sample]): ",
+        concatenate_audios([resampled_mono_audio_sample, resampled_mono_audio_sample]),
+    )
     return concatenate_audios([resampled_mono_audio_sample, resampled_mono_audio_sample])
 
 

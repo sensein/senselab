@@ -68,10 +68,7 @@ def resample_audios(
         return Audio(waveform=resampled_waveform, sampling_rate=resample_rate, metadata=md)
 
     @workflow.define
-    def _wf(xs: Sequence[Audio], 
-            resample_rate: int, 
-            lowcut: Optional[float], 
-            order: int) -> List[Audio]:
+    def _wf(xs: Sequence[Audio], resample_rate: int, lowcut: Optional[float], order: int) -> List[Audio]:
         node = workflow.add(
             _resample(resample_rate=resample_rate, lowcut=lowcut, order=order).split(audio=xs),
             name="map_resample_audio",
@@ -189,9 +186,7 @@ def chunk_audios(
         wf = audio.waveform  # shape: (C, T)
         duration = wf.shape[1] / sr
         if end > duration:
-            raise ValueError(
-                f"End time ({end}) must be <= audio duration ({duration:.6f} s)."
-            )
+            raise ValueError(f"End time ({end}) must be <= audio duration ({duration:.6f} s).")
 
         i0 = int(start * sr)
         i1 = int(end * sr)
@@ -214,6 +209,8 @@ def chunk_audios(
     worker = "debug" if plugin in ("serial", "debug") else plugin
     res = _wf(pairs=data)(worker=worker, cache_root=cache_dir, **plugin_args)
     return list(res.out)
+
+
 '''
 def chunk_audios(data: List[Tuple[Audio, Tuple[float, float]]]) -> List[Audio]:
     """
@@ -410,6 +407,7 @@ def evenly_segment_audios(
         worker=worker, cache_root=cache_dir, **plugin_args
     )
     return list(res.out)
+
 
 # ---------------------------------------------------------------------
 # Concatenate audio objects

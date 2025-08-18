@@ -95,9 +95,8 @@ def _rc_for_scale(scale: float) -> Dict[str, Any]:
 # Helpers
 # ---------------------------
 
-def _power_to_db(
-    spectrogram: np.ndarray, ref: float = 1.0, amin: float = 1e-10, top_db: float = 80.0
-) -> np.ndarray:
+
+def _power_to_db(spectrogram: np.ndarray, ref: float = 1.0, amin: float = 1e-10, top_db: float = 80.0) -> np.ndarray:
     """Converts a power spectrogram (amplitude squared) to decibel (dB) units."""
     S = np.asarray(spectrogram)
 
@@ -129,6 +128,7 @@ def _power_to_db(
 # ---------------------------
 # Public API
 # ---------------------------
+
 
 def plot_waveform(
     audio: Audio,
@@ -217,8 +217,8 @@ def plot_specgram(
     if spectrogram.dim() != 2:
         raise ValueError(
             "Spectrogram must be a 2D tensor. Got shape: {}".format(spectrogram.shape),
-            "Please make sure the input audio is mono."
-            )
+            "Please make sure the input audio is mono.",
+        )
 
     # Determine time and frequency scale
     num_frames = spectrogram.size(1)
@@ -304,6 +304,7 @@ def plot_waveform_and_specgram(
         from senselab.audio.tasks.features_extraction.torchaudio import (
             extract_mel_spectrogram_from_audios,
         )
+
         spec = extract_mel_spectrogram_from_audios([audio], **spect_kwargs)[0]["mel_spectrogram"]
         ylab = "Mel bins"
         f0, f1 = 0.0, float(spec.size(0) - 1)
@@ -312,6 +313,7 @@ def plot_waveform_and_specgram(
         from senselab.audio.tasks.features_extraction.torchaudio import (
             extract_spectrogram_from_audios,
         )
+
         spec = extract_spectrogram_from_audios([audio], **spect_kwargs)[0]["spectrogram"]
         ylab = "Frequency [Hz]"
         f0, f1 = 0.0, float(sr / 2)
@@ -320,8 +322,8 @@ def plot_waveform_and_specgram(
     if spec.dim() != 2:
         raise ValueError(
             "Spectrogram must be a 2D tensor. Got shape: {}".format(spec.shape),
-            "Please make sure the input audio is mono."
-            )
+            "Please make sure the input audio is mono.",
+        )
 
     # ---- Layout & context
     scale = _resolve_scale(context)
@@ -336,9 +338,7 @@ def plot_waveform_and_specgram(
 
     with rc_context(rc):
         # sharex=True ensures axes stay aligned and share limits/ticks
-        fig, (ax_wav, ax_spec) = plt.subplots(
-            2, 1, figsize=size, sharex=True, gridspec_kw={"height_ratios": [1, 2]}
-        )
+        fig, (ax_wav, ax_spec) = plt.subplots(2, 1, figsize=size, sharex=True, gridspec_kw={"height_ratios": [1, 2]})
 
         # ---- Waveform (top)
         if num_channels == 1:
