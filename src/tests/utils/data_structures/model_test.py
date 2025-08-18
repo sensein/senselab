@@ -39,7 +39,7 @@ def test_check_hf_repo_exists_false() -> None:
 def test_hfmodel_valid_hf_repo_check() -> None:
     """Test valid HFModel repo check."""
     with patch("senselab.utils.data_structures.model.check_hf_repo_exists", return_value=True):
-        model = HFModel(path_or_uri="valid_repo")
+        model: HFModel = HFModel(path_or_uri="valid_repo")
         assert model.revision == "main"
 
 
