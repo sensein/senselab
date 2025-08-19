@@ -236,20 +236,3 @@ def review_files(
         print(f"Saved reliability ranking to: {reliability_csv_path}")
 
     return df
-
-
-# Example usage
-if __name__ == "__main__":
-    # Example path (split long path for style checks)
-    path = (
-        "/Users/isaacbevers/sensein/b2ai-wrapper/b2ai-data/wasabi/"
-        "eipm-bridge2ai-internal-data-dissemination/"
-        "2025-04-04T18.14.48.299Z/"
-        "bioacoustic_quality_control_results.csv"
-    )
-
-    # Process the CSV and save results to the same directory as input
-    df_with_labels = review_files(path)
-
-    # Alternative: specify a custom output directory
-    # df_with_labels = review_files(path, output_dir="/path/to/output")
