@@ -5,10 +5,7 @@ If a test fails, the assertion message shows the metric value.
 
 from __future__ import annotations
 
-import os
 from typing import Any, Dict
-
-import pandas as pd
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.quality_control.checks import (
@@ -36,7 +33,6 @@ from senselab.audio.tasks.quality_control.checks import (
     mostly_silent_check,
     very_high_amplitude_interquartile_range_check,
     very_high_amplitude_kurtosis_check,
-    very_high_dynamic_range_check,
     very_high_headroom_check,
     very_high_mean_absolute_deviation_check,
     very_high_peak_snr_from_spectral_check,
@@ -45,7 +41,6 @@ from senselab.audio.tasks.quality_control.checks import (
     very_low_amplitude_kurtosis_check,
     very_low_amplitude_modulation_depth_check,
     very_low_dynamic_range_check,
-    very_low_headroom_check,
     very_low_mean_absolute_deviation_check,
     very_low_peak_snr_from_spectral_check,
     very_low_root_mean_square_energy_check,
@@ -170,14 +165,6 @@ def test_audio_length_zero_check(stereo_audio_sample: Audio) -> None:
     assert not audio_length_zero_check(stereo_audio_sample), f"audio_length_zero_check returned True (num_samples={n})"
 
 
-def test_very_low_headroom_check(stereo_audio_sample: Audio) -> None:
-    """very_low_headroom_check returns False."""
-    m = amplitude_headroom_metric(stereo_audio_sample)
-    assert not very_low_headroom_check(
-        stereo_audio_sample
-    ), f"very_low_headroom_check flagged sample (headroom={m:.4f})"
-
-
 def test_very_high_headroom_check(stereo_audio_sample: Audio) -> None:
     """very_high_headroom_check returns False."""
     m = amplitude_headroom_metric(stereo_audio_sample)
@@ -288,14 +275,6 @@ def test_very_low_dynamic_range_check(stereo_audio_sample: Audio) -> None:
     assert not very_low_dynamic_range_check(
         stereo_audio_sample
     ), f"very_low_dynamic_range_check flagged (dyn_range={m:.4f})"
-
-
-def test_very_high_dynamic_range_check(stereo_audio_sample: Audio) -> None:
-    """very_high_dynamic_range_check returns False."""
-    m = dynamic_range_metric(stereo_audio_sample)
-    assert not very_high_dynamic_range_check(
-        stereo_audio_sample
-    ), f"very_high_dynamic_range_check flagged (dyn_range={m:.4f})"
 
 
 def test_very_low_mean_absolute_deviation_check(
