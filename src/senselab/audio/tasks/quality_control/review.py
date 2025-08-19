@@ -149,6 +149,7 @@ def review_files(
     correlation_threahold: float = 0.99,
     output_dir: Optional[str] = None,
     save_results: bool = True,
+    prune_checks: bool = True,
 ) -> pd.DataFrame:
     """Labels audio files as include, exclude, or unsure with weak supervision.
 
@@ -159,6 +160,7 @@ def review_files(
         output_dir: Directory to save results. If None, saves to same directory
             as input CSV.
         save_results: Whether to save the results to disk.
+        prune_checks: Whether to prune constant and highly correlated check columns.
 
     Returns:
         DataFrame with snorkel_label column added containing predicted labels.
@@ -167,13 +169,17 @@ def review_files(
     print(f"Total files: {len(df)}")
 
     df_checks = df[[c for c in df.columns if "check" in c]]
-    keep_cols, dropped = prune_check_columns(df_checks, correlation_threahold=correlation_threahold)
 
-    dropped_total = sum(len(v) for v in dropped.values())
-    print(f"Checks total: {df_checks.shape[1]} | kept: {len(keep_cols)} | " f"dropped: {dropped_total}")
-    for reason, cols in dropped.items():
-        if cols:
-            print(f"  - {reason} ({len(cols)}): {cols}")
+    if prune_checks:
+        keep_cols, dropped = prune_check_columns(df_checks, correlation_threahold=correlation_threahold)
+        dropped_total = sum(len(v) for v in dropped.values())
+        print(f"Checks total: {df_checks.shape[1]} | kept: {len(keep_cols)} | " f"dropped: {dropped_total}")
+        for reason, cols in dropped.items():
+            if cols:
+                print(f"  - {reason} ({len(cols)}): {cols}")
+    else:
+        keep_cols = list(df_checks.columns)
+        print(f"Checks total: {df_checks.shape[1]} | kept: {len(keep_cols)} | " f"dropped: 0 (pruning disabled)")
 
     # Build labeling functions + explicit names (avoid mypy complaining
     # about .name)
