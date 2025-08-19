@@ -6,13 +6,14 @@ If a test fails, the assertion message shows the metric value.
 from __future__ import annotations
 
 import os
+from typing import Any, Dict
 
 import pandas as pd
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.quality_control.checks import (
-    audio_intensity_positive_check,
-    audio_length_positive_check,
+    audio_intensity_zero_check,
+    audio_length_zero_check,
     clipping_present_check,
     completely_silent_check,
     high_amplitude_skew_magnitude_check,
@@ -49,6 +50,7 @@ from senselab.audio.tasks.quality_control.checks import (
     very_low_peak_snr_from_spectral_check,
     very_low_root_mean_square_energy_check,
 )
+from senselab.audio.tasks.quality_control.evaluate import get_evaluation
 from senselab.audio.tasks.quality_control.metrics import (
     amplitude_headroom_metric,
     amplitude_interquartile_range_metric,
@@ -72,143 +74,100 @@ from senselab.audio.tasks.quality_control.metrics import (
 )
 
 
-def test_get_metric_computes_directly(stereo_audio_sample: Audio) -> None:
-    """Should compute the metric when no DataFrame is provided."""
-    value = get_metric(stereo_audio_sample, zero_crossing_rate_metric)
+def test_get_evaluation_computes_directly(stereo_audio_sample: Audio) -> None:
+    """Should compute the metric when no existing results are provided."""
+    value = get_evaluation(stereo_audio_sample, zero_crossing_rate_metric)
     assert isinstance(value, float)
     assert 0 <= value <= 1
 
 
-def test_get_metric_uses_dataframe_cache(stereo_audio_sample: Audio) -> None:
-    """Should return cached value when DataFrame is valid."""
+def test_get_evaluation_uses_cache(stereo_audio_sample: Audio) -> None:
+    """Should return cached value when existing results are provided."""
     cached_value = 0.1234
-    filepath = stereo_audio_sample.filepath()
-    filename = None
-    if filepath:
-        filename = os.path.basename(filepath)
-    df = pd.DataFrame(
-        {
-            "audio_path_or_id": [filename],
-            "zero_crossing_rate_metric": [cached_value],
-        }
-    )
-    value = get_metric(stereo_audio_sample, zero_crossing_rate_metric, df=df)
+    existing_results = {"evaluations": {"zero_crossing_rate_metric": cached_value}}
+    value = get_evaluation(stereo_audio_sample, zero_crossing_rate_metric, existing_results)
     assert value == cached_value
 
 
-def test_get_metric_when_filepath_is_none(stereo_audio_sample: Audio) -> None:
-    """Should compute directly when audio has no filepath."""
+def test_get_evaluation_when_no_cache_match(stereo_audio_sample: Audio) -> None:
+    """Should compute directly when no cache match is found."""
     cached_value = 0.1234
-    df = pd.DataFrame(
-        {
-            "audio_path_or_id": ["some_file.wav"],
-            "zero_crossing_rate_metric": [cached_value],
+    existing_results = {
+        "evaluations": {
+            "some_other_metric": cached_value  # Different metric, no match
         }
-    )
+    }
 
-    # Create an Audio object with no filepath (waveform + sampling_rate only)
-    audio_no_filepath = Audio(waveform=stereo_audio_sample.waveform, sampling_rate=stereo_audio_sample.sampling_rate)
-
-    # Verify filepath is None
-    assert audio_no_filepath.filepath() is None
-
-    value = get_metric(audio_no_filepath, zero_crossing_rate_metric, df=df)
-    # Should compute directly since filepath is None
+    value = get_evaluation(stereo_audio_sample, zero_crossing_rate_metric, existing_results)
+    # Should compute directly since no cache match
     assert isinstance(value, float)
     assert 0 <= value <= 1
-    # Should not use cached value since filepath is None
+    # Should NOT be the cached value since metric doesn't match
     assert value != cached_value
 
 
-def test_get_metric_caches_with_audio_id_when_no_filepath(
+def test_get_evaluation_computes_without_cache(
     stereo_audio_sample: Audio,
 ) -> None:
-    """Should cache metric using audio ID when filepath is None."""
+    """Should compute metric directly when no existing results provided."""
     # Create an Audio object with no filepath
     audio_no_filepath = Audio(waveform=stereo_audio_sample.waveform, sampling_rate=stereo_audio_sample.sampling_rate)
 
     # Verify filepath is None
     assert audio_no_filepath.filepath() is None
 
-    # Create DataFrame that will be modified
-    df = pd.DataFrame({"audio_path_or_id": [], "zero_crossing_rate_metric": []})
-
-    # First call should compute and cache the metric
-    value1 = get_metric(audio_no_filepath, zero_crossing_rate_metric, df=df)
+    # First call should compute the metric
+    value1 = get_evaluation(audio_no_filepath, zero_crossing_rate_metric)
     assert isinstance(value1, float)
     assert 0 <= value1 <= 1
 
-    # Verify the metric was cached using audio ID
-    audio_id = audio_no_filepath.generate_id()
-    assert audio_id in df["audio_path_or_id"].values
-    assert "zero_crossing_rate_metric" in df.columns
-
-    # Second call should use cached value
-    value2 = get_metric(audio_no_filepath, zero_crossing_rate_metric, df=df)
-    assert value2 == value1  # Should be same cached value
+    # Second call should compute again (no caching without existing_results)
+    value2 = get_evaluation(audio_no_filepath, zero_crossing_rate_metric)
+    assert value2 == value1  # Should be same since same audio
 
 
-def test_get_metric_computes_when_not_in_dataframe(
+def test_get_evaluation_computes_when_not_in_cache(
     stereo_audio_sample: Audio,
 ) -> None:
-    """Should compute metric when file not in DataFrame."""
+    """Should compute metric when not found in existing results."""
     cached_value = 0.1234
-    df = pd.DataFrame(
-        {
-            "audio_path_or_id": ["not_the_sample.wav"],
-            "zero_crossing_rate_metric": [cached_value],
+    existing_results = {
+        "evaluations": {
+            "some_other_metric": cached_value  # Different metric
         }
-    )
-    value = get_metric(stereo_audio_sample, zero_crossing_rate_metric, df=df)
+    }
+    value = get_evaluation(stereo_audio_sample, zero_crossing_rate_metric, existing_results)
     assert value != cached_value
     assert isinstance(value, float)
     assert 0 <= value <= 1
 
 
-def test_get_metric_filepath_not_in_dataframe(
+def test_get_evaluation_with_empty_cache(
     stereo_audio_sample: Audio,
 ) -> None:
-    """Should compute metric when audio filepath not found in DataFrame."""
-    # Create a DataFrame with different filenames
-    df = pd.DataFrame(
-        {
-            "audio_path_or_id": ["other_file1.wav", "other_file2.wav"],
-            "zero_crossing_rate_metric": [0.1, 0.2],
-        }
-    )
+    """Should compute metric when existing results are empty."""
+    # Create empty existing results
+    existing_results: Dict[str, Any] = {
+        "evaluations": {}  # Empty cache
+    }
 
-    # Should compute directly since filepath not in DataFrame
-    value = get_metric(stereo_audio_sample, zero_crossing_rate_metric, df=df)
+    # Should compute directly since no cached values
+    value = get_evaluation(stereo_audio_sample, zero_crossing_rate_metric, existing_results)
     assert isinstance(value, float)
     assert 0 <= value <= 1
 
-    # Verify it's not one of the cached values
-    assert value not in [0.1, 0.2]
 
-
-def test_get_metric_raises_error_when_filepath_not_in_df() -> None:
-    """Should raise FileNotFoundError when filepath doesn't exist."""
-    import pytest
-
-    # Create a DataFrame with different filenames
-    df = pd.DataFrame(
-        {
-            "audio_path_or_id": ["other_file1.wav", "other_file2.wav"],
-            "zero_crossing_rate_metric": [0.1, 0.2],
-        }
-    )
-
+def test_get_evaluation_returns_none_when_filepath_not_exists() -> None:
+    """Should return None when filepath doesn't exist."""
     # Pass a filepath string that doesn't exist
-    with pytest.raises(FileNotFoundError, match="File nonexistent_file.wav does not exist"):
-        get_metric("nonexistent_file.wav", zero_crossing_rate_metric, df=df)
+    result = get_evaluation("nonexistent_file.wav", zero_crossing_rate_metric)
+    assert result is None
 
 
-def test_audio_length_positive_check(stereo_audio_sample: Audio) -> None:
-    """audio_length_positive_check returns True."""
+def test_audio_length_zero_check(stereo_audio_sample: Audio) -> None:
+    """audio_length_zero_check returns False for non-empty audio."""
     n = stereo_audio_sample.waveform.numel()
-    assert audio_length_positive_check(
-        stereo_audio_sample
-    ), f"audio_length_positive_check returned False (num_samples={n})"
+    assert not audio_length_zero_check(stereo_audio_sample), f"audio_length_zero_check returned True (num_samples={n})"
 
 
 def test_very_low_headroom_check(stereo_audio_sample: Audio) -> None:
@@ -506,9 +465,9 @@ def test_very_high_zero_crossing_rate_check(
     ), f"very_high_zero_crossing_rate_check flagged (ZCR={m:.4f})"
 
 
-def test_audio_intensity_positive_check(stereo_audio_sample: Audio) -> None:
-    """audio_intensity_positive_check returns True for non-zero range."""
+def test_audio_intensity_zero_check(stereo_audio_sample: Audio) -> None:
+    """audio_intensity_zero_check returns False for non-zero range."""
     m = dynamic_range_metric(stereo_audio_sample)
-    assert audio_intensity_positive_check(
+    assert not audio_intensity_zero_check(
         stereo_audio_sample
-    ), f"audio_intensity_positive_check returned False (dynamic_range={m:.4f})"
+    ), f"audio_intensity_zero_check returned True (dynamic_range={m:.4f})"

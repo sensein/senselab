@@ -38,7 +38,7 @@ from senselab.audio.tasks.quality_control.metrics import (
 )
 
 
-def audio_length_positive_check(audio: Audio) -> bool:
+def audio_length_zero_check(audio: Audio) -> bool:
     """Check if the waveform is empty.
 
     Args:
@@ -50,7 +50,7 @@ def audio_length_positive_check(audio: Audio) -> bool:
     return audio.waveform.numel() == 0
 
 
-def audio_intensity_positive_check(
+def audio_intensity_zero_check(
     audio_or_path: Union[Audio, str],
     df: Optional[pd.DataFrame] = None,
 ) -> Optional[bool]:

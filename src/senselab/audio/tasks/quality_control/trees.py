@@ -1,8 +1,8 @@
 """Bioacoustic activity taxonomy tree implementations."""
 
 from senselab.audio.tasks.quality_control.checks import (
-    audio_intensity_positive_check,
-    audio_length_positive_check,
+    audio_intensity_zero_check,
+    audio_length_zero_check,
     clipping_present_check,
     completely_silent_check,
     high_amplitude_skew_magnitude_check,
@@ -74,8 +74,8 @@ def build_bioacoustic_activity_taxonomy() -> TaxonomyNode:
     root = TaxonomyNode(
         name="bioacoustic",
         checks=[
-            audio_length_positive_check,
-            audio_intensity_positive_check,
+            audio_length_zero_check,
+            audio_intensity_zero_check,
             clipping_present_check,
             completely_silent_check,
             high_amplitude_skew_magnitude_check,
