@@ -31,7 +31,7 @@ def check_to_labeling_function(col: str) -> Callable[[pd.Series], int]:
             return ABSTAIN
         if isinstance(val, str):
             val = val.strip().lower() in {"1", "true", "t", "yes", "y"}
-        return EXCLUDE if bool(val) else ABSTAIN
+        return EXCLUDE if bool(val) else INCLUDE
 
     return lf
 
@@ -57,7 +57,7 @@ def include_no_failed_checks_label_function(
             if isinstance(v, str):
                 v = v.strip().lower() in {"1", "true", "t", "yes", "y"}
             total_true += int(bool(v))
-        return INCLUDE if total_true == 0 else ABSTAIN
+        return INCLUDE if total_true == 0 else EXCLUDE
 
     return lf
 
@@ -119,7 +119,7 @@ def calculate_label_function_reliability(L_train: np.ndarray, preds: np.ndarray,
         lf_names: Names of the labeling functions
 
     Returns:
-        DataFrame with reliability metrics sorted by agreement and coverage
+        DataFrame with reliability metrics sorted by agreement and vote counts
     """
     reliability_rows: List[Dict[str, object]] = []
     n_rows = len(preds)
@@ -127,20 +127,24 @@ def calculate_label_function_reliability(L_train: np.ndarray, preds: np.ndarray,
     for j, name in enumerate(lf_names):
         votes = L_train[:, j]
         fired = votes != ABSTAIN
-        n_audio_files = int(fired.sum())
-        cov = (n_audio_files / n_rows) if n_rows else 0.0
-        agree = float((votes[fired] == preds[fired]).mean()) if n_audio_files else np.nan
+        n_voted = int(fired.sum())
+        
+        # Count votes for include/exclude when labeling function fired
+        voted_include = int((votes[fired] == INCLUDE).sum()) if n_voted else 0
+        voted_exclude = int((votes[fired] == EXCLUDE).sum()) if n_voted else 0
+        
+        agree = float((votes[fired] == preds[fired]).mean()) if n_voted else np.nan
         reliability_rows.append(
             {
                 "label_function": name,
-                "coverage": round(cov, 4),
-                "n_audio_files": n_audio_files,
+                "voted_include": voted_include,
+                "voted_exclude": voted_exclude,
                 "agreement_with_label_model": (round(agree, 4) if agree == agree else None),
             }
         )
 
     return pd.DataFrame(reliability_rows).sort_values(
-        ["agreement_with_label_model", "coverage"], ascending=[False, False]
+        ["agreement_with_label_model", "voted_include"], ascending=[False, False]
     )
 
 
