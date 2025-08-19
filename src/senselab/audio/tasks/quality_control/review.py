@@ -122,17 +122,16 @@ def calculate_label_function_reliability(L_train: np.ndarray, preds: np.ndarray,
         DataFrame with reliability metrics sorted by agreement and vote counts
     """
     reliability_rows: List[Dict[str, object]] = []
-    n_rows = len(preds)
 
     for j, name in enumerate(lf_names):
         votes = L_train[:, j]
         fired = votes != ABSTAIN
         n_voted = int(fired.sum())
-        
+
         # Count votes for include/exclude when labeling function fired
         voted_include = int((votes[fired] == INCLUDE).sum()) if n_voted else 0
         voted_exclude = int((votes[fired] == EXCLUDE).sum()) if n_voted else 0
-        
+
         agree = float((votes[fired] == preds[fired]).mean()) if n_voted else np.nan
         reliability_rows.append(
             {

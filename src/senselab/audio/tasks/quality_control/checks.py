@@ -69,28 +69,6 @@ def audio_intensity_zero_check(
     return float(result) == 0
 
 
-def very_low_headroom_check(
-    audio_or_path: Union[Audio, str],
-    headroom_threshold: float = 0.005,
-    df: Optional[pd.DataFrame] = None,
-) -> Optional[bool]:
-    """Detect signals within ``headroom_threshold`` of clipping.
-
-    Args:
-        audio_or_path: An Audio instance or filepath to the audio file.
-        headroom_threshold: Maximum acceptable positive/negative headroom.
-        df: Optional DataFrame containing a pre-computed
-            ``amplitude_headroom_metric`` column.
-
-    Returns:
-        True when headroom < ``headroom_threshold``, None if evaluation fails.
-    """
-    result = get_evaluation(audio_or_path, amplitude_headroom_metric, df)
-    if result is None:
-        return None
-    return float(result) < headroom_threshold
-
-
 def very_high_headroom_check(
     audio_or_path: Union[Audio, str],
     headroom_threshold: float = 0.95,
@@ -386,27 +364,6 @@ def very_low_dynamic_range_check(
     if result is None:
         return None
     return float(result) < threshold
-
-
-def very_high_dynamic_range_check(
-    audio_or_path: Union[Audio, str],
-    threshold: float = 1.9,
-    df: Optional[pd.DataFrame] = None,
-) -> Optional[bool]:
-    """Detect signals with suspiciously high dynamic range.
-
-    Args:
-        audio_or_path: An Audio instance or filepath to the audio file.
-        threshold: Minimum dynamic range considered too high.
-        df: Optional DataFrame with ``dynamic_range_metric``.
-
-    Returns:
-        True when dynamic range > ``threshold``, None if evaluation fails.
-    """
-    result = get_evaluation(audio_or_path, dynamic_range_metric, df)
-    if result is None:
-        return None
-    return float(result) > threshold
 
 
 def very_low_mean_absolute_deviation_check(
