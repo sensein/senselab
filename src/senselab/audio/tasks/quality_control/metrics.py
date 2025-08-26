@@ -486,3 +486,30 @@ def phase_correlation_metric(audio: Audio, frame_length: int = 2048, hop_length:
             correlation_values.append(np.mean(valid_corrs))
 
     return float(np.mean(correlation_values)) if correlation_values else 0.0
+
+
+def percent_clipping_check(audio: Audio) -> float:
+    
+    waveform = audio.waveform
+
+    # Determine the maximum possible amplitude based on the data type
+    if waveform.dtype == torch.int16:
+        max_amplitude = np.iinfo(np.int16).max
+    elif waveform.dtype == torch.float32:
+        max_amplitude = np.finfo(np.float32).max
+    else:
+        raise ValueError("Unsupported audio data type. Only int16 and float32 are supported.")
+
+    # alternate AI generated, this doesn't make sense to met tho
+    # audio = audio / np.max(np.abs(audio))
+    # clipped_samples = np.sum(np.abs(audio) >= max_amplitude)
+
+    # Count clipped samples
+    clipped_samples = torch.sum(torch.abs(waveform) >= max_amplitude)
+
+    # Calculate clipping percentage
+    total_samples = waveform.shape[1]
+    clipping_percentage = float((clipped_samples / total_samples) * 100 if total_samples > 0 else 0.0)
+
+    # return y_axis_new, y_axis_old
+    return clipping_percentage
