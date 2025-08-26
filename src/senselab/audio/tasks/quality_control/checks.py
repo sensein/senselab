@@ -821,41 +821,28 @@ def audio_intensity_positive_check(
 
 
 # calculate clipping
-def measure_clipping(audio_path):
+def measure_clipping(
+    audio_or_path: Union[Audio, str],
+    df: Optional[pd.DataFrame] = None,
+) -> Optional[bool]:
     """
     Measures clipping in an audio file.
 
     Args:
-        audio_path (str): Path to the audio file.
+        audio_or_path: An Audio instance or filepath to the audio file.
 
     Returns:
+        TO DO
         float: Percentage of clipped samples in the audio.
     """
-    # audio, sr = librosa.load(audio_path, sr=None)
-    # audio = Audio.from_filepath(audio_path).waveform
-    audio = torchaudio.load(audio_path, normalize=False)[0]
-
-    # Determine the maximum possible amplitude based on the data type
-    if audio.dtype == torch.int16:
-        max_amplitude = np.iinfo(np.int16).max
-    elif audio.dtype == torch.float32:
-        max_amplitude = np.finfo(np.float32).max
-    else:
-        raise ValueError("Unsupported audio data type. Only int16 and float32 are supported.")
-
-    # alternate AI generated, this doesn't make sense to met tho
-    # audio = audio / np.max(np.abs(audio))
-    # clipped_samples = np.sum(np.abs(audio) >= max_amplitude)
-
-    # Count clipped samples
-    clipped_samples = torch.sum(torch.abs(audio) >= max_amplitude)
-
-    # Calculate clipping percentage
-    total_samples = audio.shape[1]
-    clipping_percentage = float((clipped_samples / total_samples) * 100 if total_samples > 0 else 0.0)
-
-    # return y_axis_new, y_axis_old
-    return clipping_percentage
+    
+    
+    result = get_evaluation(audio_or_path, percent_clipping_check, df)
+    if result is None:
+        return None
+    return float(result) > 0
+    
+    
 
 
 # calculate SNR
