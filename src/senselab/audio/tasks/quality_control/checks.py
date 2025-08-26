@@ -817,8 +817,97 @@ def audio_intensity_positive_check(
     return float(result) > 0
 
 
-def placeholder_rahul():
+##### Rahul's Code Below
 
-    #super exiting big chagnges coming here
+#calculate clipping
+def measure_clipping(audio_path):
+    """
+    Measures clipping in an audio file.
 
-    return "rahul"
+    Args:
+        audio_path (str): Path to the audio file.
+
+    Returns:
+        float: Percentage of clipped samples in the audio.
+    """
+    #audio, sr = librosa.load(audio_path, sr=None)
+    #audio = Audio.from_filepath(audio_path).waveform
+    audio = torchaudio.load(audio_path, normalize=False)[0]
+    
+    # Determine the maximum possible amplitude based on the data type
+    if audio.dtype == torch.int16:
+        max_amplitude = np.iinfo(np.int16).max
+    elif audio.dtype == torch.float32:
+        max_amplitude = np.finfo(np.float32).max
+    else:
+        raise ValueError("Unsupported audio data type. Only int16 and float32 are supported.")
+
+    #alternate AI generated, this doesn't make sense to met tho
+    #audio = audio / np.max(np.abs(audio))
+    #clipped_samples = np.sum(np.abs(audio) >= max_amplitude)
+    
+    # Count clipped samples
+    clipped_samples = torch.sum(torch.abs(audio) >= max_amplitude)
+
+    # Calculate clipping percentage
+    total_samples = audio.shape[1]
+    clipping_percentage = float((clipped_samples / total_samples) * 100 if total_samples > 0 else 0.0)
+
+    #return y_axis_new, y_axis_old 
+    return clipping_percentage
+
+
+
+#calculate SNR
+## idn is the name of the file
+## pyn is the pyannote object
+##features i think is existing df to use to index out the record and session and task)
+
+def signal_to_noise_ratio(idn, pyn, features):
+    test_row = features[(features.record_id == idn[0]) 
+                                  & (features.session_id == idn[1]) 
+                                  & (features.task == idn[2])]
+    test_audio = Audio.from_filepath(str(list(test_row.file)[0]))
+    time = np.divide(np.arange(test_audio.waveform.shape[1]), test_audio.sampling_rate)
+    
+    signal = []
+    noise = []
+
+    previous_end = 0
+
+    for seg in pyn.get_timeline().segments_list_:
+        #signal.append(time[np.where((time>=seg.start) & (time<=seg.end))])
+        #noise.append(time[np.where((time<seg.start) & (time>=previous_end))])
+
+        signal.append(np.where((time>=seg.start) & (time<=seg.end))[0])
+        noise.append(np.where((time<seg.start) & (time>=previous_end))[0])
+        previous_end = seg.end
+
+    try:
+        signal_wav = test_audio.waveform.squeeze().numpy()[np.concatenate(signal)]
+        noise_wav =  test_audio.waveform.squeeze().numpy()[np.concatenate(noise)]
+
+        signal_power = np.mean(signal_wav**2)
+        noise_power = np.mean(noise_wav**2)
+        snr = 10 * np.log10(signal_power / noise_power)  if noise_power > 0 else -30
+        
+        
+        percent_noise_of_total = np.divide(noise_wav.shape[0], noise_wav.shape[0] + signal_wav.shape[0])
+    except:
+        snr = -25
+        percent_noise_of_total = np.nan
+    
+    return snr, percent_noise_of_total
+
+
+
+#need to load diarization outputs
+
+def primary_speaker_ratio(diar_obj):
+    
+    try:
+        ratio = (diar_obj.label_duration(diar_obj.argmax())/np.sum([c[1] for c in diar_obj.chart()]))
+    except:
+        ratio = np.nan
+        
+    return ratio
