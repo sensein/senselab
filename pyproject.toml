@@ -65,6 +65,9 @@ opencv-python-headless = {version = "~=4.11", optional = true}
 ultralytics = {version = "~=8.3", optional = true}
 av = {version = "~=15", optional = true}
 nemo-toolkit = {version = "~=2.3", optional = true, extras = ["asr"]}
+notebook-intelligence = {version = "~=2.3", optional = true}
+ipywidgets = {version = "~=8.1", optional = true}
+ipykernel = {version = "*", optional = true}
 
 [tool.poetry.extras]
 audio = [
@@ -91,6 +94,11 @@ video = [
   "opencv-python-headless",
   "ultralytics"
 ]
+notebook = [
+  "notebook-intelligence",
+  "ipywidgets",
+  "ipykernel"
+]
 
 [tool.poetry.group.dev]
 optional = true
@@ -103,10 +111,8 @@ mypy = "~=1.9"
 pre-commit = "~=4.0"
 ruff = "~=0.3"
 codespell = "~=2.3"
-jupyter = "~=1.0"
-ipywidgets = "~=8.1"
-ipykernel = "*"
 uvloop = "~=0.21"
+jupyter = "~=1.1"
 
 [tool.poetry.group.docs]
 optional = true
