@@ -837,17 +837,15 @@ def measure_clipping_check(
     Returns:
         True when clipping percent > ``threshold``, None if evaluation fails.
     """
-    
-    
+
     result = get_evaluation(audio_or_path, percent_clipping_metric, df)
     if result is None:
         return None
     return float(result) > threshold
-    
 
 
-
-def primary_speaker_ratio_check(audio_or_path: Union[Audio, str],
+def primary_speaker_ratio_check(
+    audio_or_path: Union[Audio, str],
     threshold: float = 0.8,
     df: Optional[pd.DataFrame] = None,
 ) -> Optional[bool]:
@@ -860,17 +858,15 @@ def primary_speaker_ratio_check(audio_or_path: Union[Audio, str],
     Returns:
         True when primary speaker > ``threshold``, None if evaluation fails.
     """
-    
 
-    #x.speaker_count > 1 and x.primary_speaker_ratio < 0.8
-    
+    # x.speaker_count > 1 and x.primary_speaker_ratio < 0.8
+
     result = get_evaluation(audio_or_path, primary_speaker_ratio_metric, df)
     if result is None:
         return None
     return float(result) > threshold
-        
-        
-    #diar_obj):
+
+    # diar_obj):
     try:
         ratio = diar_obj.label_duration(diar_obj.argmax()) / np.sum([c[1] for c in diar_obj.chart()])
     except:
@@ -920,6 +916,3 @@ def signal_to_noise_ratio(idn, pyn, features):
 
 
 # need to load diarization outputs
-
-
-
