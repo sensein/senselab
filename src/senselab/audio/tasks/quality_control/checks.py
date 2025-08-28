@@ -861,7 +861,7 @@ def primary_speaker_ratio_check(
 
     # x.speaker_count > 1 and x.primary_speaker_ratio < 0.8
 
-    result = get_evaluation(audio_or_path, primary_speaker_ratio_metric, df)
+    result = get_evaluation(audio_or_path, "../../modeling/diarize/diar_r2.pkl", primary_speaker_ratio_metric, df)
     if result is None:
         return None
     return float(result) > threshold
