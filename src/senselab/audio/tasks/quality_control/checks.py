@@ -35,6 +35,8 @@ from senselab.audio.tasks.quality_control.metrics import (
     signal_variance_metric,
     spectral_gating_snr_metric,
     zero_crossing_rate_metric,
+    percent_clipping_metric,
+    primary_speaker_ratio_metric,
 )
 
 
@@ -815,3 +817,102 @@ def audio_intensity_positive_check(
     if result is None:
         return None
     return float(result) > 0
+
+
+##### Rahul's Code Below
+
+
+# calculate clipping
+def measure_clipping_check(
+    audio_or_path: Union[Audio, str],
+    threshold: float = 0.001,
+    df: Optional[pd.DataFrame] = None,
+) -> Optional[bool]:
+    """
+    Measures clipping in an audio file.
+
+    Args:
+        audio_or_path: An Audio instance or filepath to the audio file.
+
+    Returns:
+        True when clipping percent > ``threshold``, None if evaluation fails.
+    """
+
+    result = get_evaluation(audio_or_path, percent_clipping_metric, df)
+    if result is None:
+        return None
+    return float(result) > threshold
+
+
+def primary_speaker_ratio_check(
+    audio_or_path: Union[Audio, str],
+    threshold: float = 0.8,
+    df: Optional[pd.DataFrame] = None,
+) -> Optional[bool]:
+    """
+    Measures primary speaker ratio in an audio file. Takes the outputs from diarization and calculates the ratio of the most common speaker to the total duration.
+
+    Args:
+        audio_or_path: An Audio instance or filepath to the audio file.
+
+    Returns:
+        True when primary speaker > ``threshold``, None if evaluation fails.
+    """
+
+    # x.speaker_count > 1 and x.primary_speaker_ratio < 0.8
+
+    result = get_evaluation(audio_or_path, "../../modeling/diarize/diar_r2.pkl", primary_speaker_ratio_metric, df)
+    if result is None:
+        return None
+    return float(result) > threshold
+
+    # diar_obj):
+    try:
+        ratio = diar_obj.label_duration(diar_obj.argmax()) / np.sum([c[1] for c in diar_obj.chart()])
+    except:
+        ratio = np.nan
+
+    return ratio
+
+
+# calculate SNR
+## idn is the name of the file
+## pyn is the pyannote object
+##features i think is existing df to use to index out the record and session and task)
+
+
+def signal_to_noise_ratio(idn, pyn, features):
+    test_row = features[(features.record_id == idn[0]) & (features.session_id == idn[1]) & (features.task == idn[2])]
+    test_audio = Audio.from_filepath(str(list(test_row.file)[0]))
+    time = np.divide(np.arange(test_audio.waveform.shape[1]), test_audio.sampling_rate)
+
+    signal = []
+    noise = []
+
+    previous_end = 0
+
+    for seg in pyn.get_timeline().segments_list_:
+        # signal.append(time[np.where((time>=seg.start) & (time<=seg.end))])
+        # noise.append(time[np.where((time<seg.start) & (time>=previous_end))])
+
+        signal.append(np.where((time >= seg.start) & (time <= seg.end))[0])
+        noise.append(np.where((time < seg.start) & (time >= previous_end))[0])
+        previous_end = seg.end
+
+    try:
+        signal_wav = test_audio.waveform.squeeze().numpy()[np.concatenate(signal)]
+        noise_wav = test_audio.waveform.squeeze().numpy()[np.concatenate(noise)]
+
+        signal_power = np.mean(signal_wav**2)
+        noise_power = np.mean(noise_wav**2)
+        snr = 10 * np.log10(signal_power / noise_power) if noise_power > 0 else -30
+
+        percent_noise_of_total = np.divide(noise_wav.shape[0], noise_wav.shape[0] + signal_wav.shape[0])
+    except:
+        snr = -25
+        percent_noise_of_total = np.nan
+
+    return snr, percent_noise_of_total
+
+
+# need to load diarization outputs

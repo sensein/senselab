@@ -486,3 +486,97 @@ def phase_correlation_metric(audio: Audio, frame_length: int = 2048, hop_length:
             correlation_values.append(np.mean(valid_corrs))
 
     return float(np.mean(correlation_values)) if correlation_values else 0.0
+
+
+#### Rahul's additions below
+
+
+def percent_clipping_metric(audio: Audio) -> float:
+    waveform = audio.waveform
+
+    # Determine the maximum possible amplitude based on the data type
+    if waveform.dtype == torch.int16:
+        max_amplitude = np.iinfo(np.int16).max
+    elif waveform.dtype == torch.float32:
+        max_amplitude = np.finfo(np.float32).max
+    else:
+        raise ValueError("Unsupported audio data type. Only int16 and float32 are supported.")
+
+    # alternate AI generated, this doesn't make sense to met tho
+    # audio = audio / np.max(np.abs(audio))
+    # clipped_samples = np.sum(np.abs(audio) >= max_amplitude)
+
+    # Count clipped samples
+    clipped_samples = torch.sum(torch.abs(waveform) >= max_amplitude)
+
+    # Calculate clipping percentage
+    total_samples = waveform.shape[1]
+    clipping_percentage = float((clipped_samples / total_samples) * 100 if total_samples > 0 else 0.0)
+
+    # return y_axis_new, y_axis_old
+    return clipping_percentage
+
+
+def primary_speaker_ratio_metric(audio: Audio, **input_source) -> float:
+    """Calculates the ratio of the primary speaker's duration to the total duration.
+
+    Args:
+        audio (Audio): The SenseLab Audio object.
+
+    Returns:
+        float: Ratio of primary speaker's duration to total duration.
+    """
+
+    if input_source['precompute'] is None:
+        diar #= #diarize the uadio
+    else:
+        diar = input_source['precompute']
+    
+    
+    
+    def primary_speaker_ratio(diar_obj):
+        try:
+            ratio = diar_obj.label_duration(diar_obj.argmax()) / np.sum([c[1] for c in diar_obj.chart()])
+        except:
+            ratio = np.nan
+
+        return ratio
+
+    ##should work; how to make this part fit into existing architecuture
+    #diar = pd.read_pickle("../../modeling/diarize/diar_r2.pkl")
+
+    sub = []
+    ses = []
+    task = []
+    speaker_count = []
+    diar_obj = {}
+    main_speaker_ratio = []
+
+    for k, r in diar.items():
+        
+        #probably not needed 
+        sb = Path(k).stem.split("sub-")[1].split("_ses")[0]
+        ss = Path(k).stem.split("ses-")[1].split("_task")[0]
+        tk = Path(k).stem.split("task-")[1].split(".wav")[0]
+
+        sub.append(sb)
+        ses.append(ss)
+        task.append(tk)
+        # silent.append(r.get_timeline().duration()< 0.5)
+        # diar_result.append(r.get_timeline().duration())
+        speaker_count.append(len(r.labels()))
+        diar_obj[(sb, ss, tk)] = r
+        main_speaker_ratio.append(primary_speaker_ratio(r))
+
+    diar_speaker_check = pd.DataFrame(
+        {
+            "record_id": sub,
+            "session_id": ses,
+            "task": task,
+            "speaker_count": speaker_count,
+            "primary_speaker_ratio": main_speaker_ratio,
+        }
+    )
+    diar_obj_filtered = {tuple(f): diar_obj[tuple(f)] for f in features[["record_id", "session_id", "task"]].values}
+
+    return 0.75  # Example fixed value; replace with actual computation
