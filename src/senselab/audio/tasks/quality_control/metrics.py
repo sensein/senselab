@@ -517,7 +517,7 @@ def percent_clipping_metric(audio: Audio) -> float:
     return clipping_percentage
 
 
-def primary_speaker_ratio_metric(audio: Audio) -> float:
+def primary_speaker_ratio_metric(audio: Audio, **input_source) -> float:
     """Calculates the ratio of the primary speaker's duration to the total duration.
 
     Args:
@@ -527,6 +527,13 @@ def primary_speaker_ratio_metric(audio: Audio) -> float:
         float: Ratio of primary speaker's duration to total duration.
     """
 
+    if input_source['precompute'] is None:
+        diar #= #diarize the uadio
+    else:
+        diar = input_source['precompute']
+    
+    
+    
     def primary_speaker_ratio(diar_obj):
         try:
             ratio = diar_obj.label_duration(diar_obj.argmax()) / np.sum([c[1] for c in diar_obj.chart()])
@@ -536,7 +543,7 @@ def primary_speaker_ratio_metric(audio: Audio) -> float:
         return ratio
 
     ##should work; how to make this part fit into existing architecuture
-    iar = pd.read_pickle("../../modeling/diarize/diar_r2.pkl")
+    #diar = pd.read_pickle("../../modeling/diarize/diar_r2.pkl")
 
     sub = []
     ses = []
@@ -546,6 +553,8 @@ def primary_speaker_ratio_metric(audio: Audio) -> float:
     main_speaker_ratio = []
 
     for k, r in diar.items():
+        
+        #probably not needed 
         sb = Path(k).stem.split("sub-")[1].split("_ses")[0]
         ss = Path(k).stem.split("ses-")[1].split("_task")[0]
         tk = Path(k).stem.split("task-")[1].split(".wav")[0]
