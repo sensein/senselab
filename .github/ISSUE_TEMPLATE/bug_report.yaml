@@ -7,41 +7,50 @@ description: This is a template for reporting a bug.
 title: 'Bug: '
 labels: [bug]
 body:
-- type: textarea
-  id: description
-  attributes:
-    label: Description
-    description: Please provide a clear and concise description of the bug.
-    placeholder: Describe the bug here
-  validations:
-    required: true
-- type: textarea
-  id: steps-to-reproduce
-  attributes:
-    label: Steps to Reproduce
-    description: Please provide detailed steps to reproduce the bug.
-    placeholder: Describe the steps to reproduce the bug here.
-  validations:
-    required: true
-- type: textarea
-  id: expected-results
-  attributes:
-    label: Expected Results
-    description: Please describe what you expected to happen.
-    placeholder: Describe the expected results here.
-  validations:
-    required: true
-- type: textarea
-  id: actual-results
-  attributes:
-    label: Actual Results
-    description: Please describe what actually happened.
-    placeholder: Describe the actual results here.
-  validations:
-    required: true
-- type: textarea
-  id: additional-notes
-  attributes:
-    label: Additional Notes
-    description: Add any additional notes or context here.
-    placeholder: Add additional notes here.
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Please provide a clear and concise description of the bug.
+      placeholder: Describe the bug here
+    validations:
+      required: true
+  - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: Please provide detailed steps to reproduce the bug.
+      placeholder: Describe the steps to reproduce the bug here.
+    validations:
+      required: true
+  - type: textarea
+    id: expected-results
+    attributes:
+      label: Expected Results
+      description: Please describe what you expected to happen.
+      placeholder: Describe the expected results here.
+    validations:
+      required: true
+  - type: textarea
+    id: actual-results
+    attributes:
+      label: Actual Results
+      description: Please describe what actually happened.
+      placeholder: Describe the actual results here.
+    validations:
+      required: true
+  - type: textarea
+    id: additional-notes
+    attributes:
+      label: Additional Notes
+      description: Add any additional notes or context here.
+      placeholder: Add additional notes here.
+  - type: dropdown
+    id: contribution
+    attributes:
+      label: Would you be willing to help fix this bug?
+      options:
+        - Yes, I'd like to contribute
+        - No, I'm just reporting
+    validations:
+      required: true
