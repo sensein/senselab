@@ -115,26 +115,43 @@ class ScriptLine(BaseModel):
             chunks=[cls.from_dict(c) for c in d["chunks"]] if "chunks" in d else None,
         )
 
+    def __str__(self) -> str:
+        """Return a nicely formatted string representation of the ScriptLine.
+        
+        Returns:
+            str: The nicely formatted string representation of the ScriptLine.
+        """
+        def format_timestamp(start: Optional[float], end: Optional[float]) -> str:
+            if start is not None and end is not None:
+                return f" [{start:.2f} - {end:.2f}]"
+            return ""
 
-def print_scriptline(scriptline: ScriptLine, indent: int = 2) -> None:
-    """Nicely prints a ScriptLine object with its nested chunks.
+        speaker_part = f"{self.speaker}: " if self.speaker else ""
+        timestamp_part = format_timestamp(self.start, self.end)
+        text_part = self.text or "<No Text>"
 
-    Args:
-        scriptline (ScriptLine): The ScriptLine instance to print.
-        indent (int): Current indentation level for nested chunks.
-    """
-    def format_timestamp(start: Optional[float], end: Optional[float]) -> str:
-        if start is not None and end is not None:
-            return f" [{start:.2f} - {end:.2f}]"
-        return ""
+        return f"{speaker_part}{text_part}{timestamp_part}"
 
-    indent_space = "    " * indent  # Four spaces per indentation level
-    speaker_part = f"{scriptline.speaker}: " if scriptline.speaker else ""
-    timestamp_part = format_timestamp(scriptline.start, scriptline.end)
-    text_part = scriptline.text or "<No Text>"
+    def _str_with_indent(self, indent: int = 0) -> str:
+        """Helper for recursive pretty-printing with indentation.
+        
+        Args:
+            indent (int): The current indentation level.
 
-    print(f"{indent_space}{speaker_part}{text_part}{timestamp_part}")
+        Returns:
+            str: The indented string representation of the script line.
+        """
+        indent_space = "    " * indent
+        lines = [f"{indent_space}{self.__str__()}"]
+        if self.chunks:
+            for chunk in self.chunks:
+                lines.append(chunk._str_with_indent(indent + 1))
+        return "\n".join(lines)
 
-    if scriptline.chunks:
-        for chunk in scriptline.chunks:
-            print_scriptline(chunk, indent=indent + 1)
+    def __repr__(self) -> str:
+        """By default, repr will show the same as str with indentation.
+
+        Returns:
+            str: The indented string representation of the script line.
+        """
+        return self._str_with_indent(0)
