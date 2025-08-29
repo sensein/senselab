@@ -389,9 +389,8 @@ class RenameNotebookTool(Tool):
 
     async def handle_tool_call(self, request: ChatRequest, response: ChatResponse, tool_context: dict, tool_args: dict) -> str:
         new_name = tool_args["new_name"]
-        ui_cmd_response = await response.run_ui_command('notebook-intelligence:rename-notebook', {"newName": new_name})
-        return str(ui_cmd_response)
-
+        await response.run_ui_command('notebook-intelligence:rename-notebook', {"newName": new_name})
+        return f"Successfully renamed notebook to '{new_name}'."
 
 class GetNumberOfCellsTool(Tool):
     def __init__(self, auto_approve: bool = True):

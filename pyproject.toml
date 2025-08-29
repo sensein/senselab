@@ -67,10 +67,9 @@ av = {version = "~=15", optional = true}
 nemo-toolkit = {version = "~=2.3", optional = true, extras = ["asr"]}
 notebook-intelligence = {version = "~=2.3", optional = true}
 ipywidgets = {version = "~=8.1", optional = true}
-ipykernel = {version = "*", optional = true}
-geopy = {version = "*", optional = true}
-nbformat = {version = "*", optional = true}
-nbss-upload = {version = "*", optional = true}
+ipykernel = {version = "~=6.3", optional = true}
+nbformat = {version = "~=5.10", optional = true}
+nbss-upload = {version = "~=0.1", optional = true}
 
 [tool.poetry.extras]
 audio = [
@@ -101,7 +100,6 @@ notebook = [
   "notebook-intelligence",
   "ipywidgets",
   "ipykernel",
-  "geopy",
   "nbformat",
   "nbss-upload"
 ]
