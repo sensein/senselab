@@ -114,3 +114,44 @@ class ScriptLine(BaseModel):
             end=end,
             chunks=[cls.from_dict(c) for c in d["chunks"]] if "chunks" in d else None,
         )
+
+    def __str__(self) -> str:
+        """Return a nicely formatted string representation of the ScriptLine.
+        
+        Returns:
+            str: The nicely formatted string representation of the ScriptLine.
+        """
+        def format_timestamp(start: Optional[float], end: Optional[float]) -> str:
+            if start is not None and end is not None:
+                return f" [{start:.2f} - {end:.2f}]"
+            return ""
+
+        speaker_part = f"{self.speaker}: " if self.speaker else ""
+        timestamp_part = format_timestamp(self.start, self.end)
+        text_part = self.text if self.text is not None else ""
+
+        return f"{speaker_part}{text_part}{timestamp_part}"
+
+    def _str_with_indent(self, indent: int = 0) -> str:
+        """Helper for recursive pretty-printing with indentation.
+        
+        Args:
+            indent (int): The current indentation level.
+
+        Returns:
+            str: The indented string representation of the script line.
+        """
+        indent_space = "    " * indent
+        lines = [f"{indent_space}{self.__str__()}"]
+        if self.chunks:
+            for chunk in self.chunks:
+                lines.append(chunk._str_with_indent(indent + 1))
+        return "\n".join(lines)
+
+    def __repr__(self) -> str:
+        """By default, repr will show the same as str with indentation.
+
+        Returns:
+            str: The indented string representation of the script line.
+        """
+        return self._str_with_indent(0)
