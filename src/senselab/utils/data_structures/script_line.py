@@ -128,7 +128,7 @@ class ScriptLine(BaseModel):
 
         speaker_part = f"{self.speaker}: " if self.speaker else ""
         timestamp_part = format_timestamp(self.start, self.end)
-        text_part = self.text or "<No Text>"
+        text_part = self.text if self.text is not None else ""
 
         return f"{speaker_part}{text_part}{timestamp_part}"
 
