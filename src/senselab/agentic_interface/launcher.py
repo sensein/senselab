@@ -2,7 +2,7 @@
 import subprocess
 import sys
 
-from .senselab_agent.install import install
+from .senselab_agent.install import ensure_installed
 
 
 def senselab_ai():
