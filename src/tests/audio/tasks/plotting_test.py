@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import torch
 from matplotlib.pyplot import Figure
+from matplotlib.text import Text
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.plotting.plotting import (
@@ -33,7 +34,9 @@ class TestPlotWaveform:
         figure = plot_waveform(mono_audio_sample, title="Test Mono Waveform")
 
         assert isinstance(figure, Figure)
-        assert figure._suptitle.get_text() == "Test Mono Waveform"
+        # Access the stored suptitle (private attribute but safe for testing)
+        suptitle: Text = getattr(figure, "_suptitle")
+        assert suptitle.get_text() == "Test Mono Waveform"
 
         # Check that we have the expected number of subplots (1 for mono)
         assert len(figure.axes) == 1
@@ -43,7 +46,8 @@ class TestPlotWaveform:
         figure = plot_waveform(stereo_audio_sample, title="Test Stereo Waveform")
 
         assert isinstance(figure, Figure)
-        assert figure._suptitle.get_text() == "Test Stereo Waveform"
+        suptitle: Text = getattr(figure, "_suptitle")
+        assert suptitle.get_text() == "Test Stereo Waveform"
 
         # Check that we have the expected number of subplots (2 for stereo)
         assert len(figure.axes) == 2
@@ -53,14 +57,16 @@ class TestPlotWaveform:
         figure = plot_waveform(mono_audio_sample, title="Fast Plot", fast=True)
 
         assert isinstance(figure, Figure)
-        assert figure._suptitle.get_text() == "Fast Plot"
+        suptitle: Text = getattr(figure, "_suptitle")
+        assert suptitle.get_text() == "Fast Plot"
 
     def test_plot_waveform_default_title(self, mono_audio_sample: Audio) -> None:
         """Test plotting waveform with default title."""
         figure = plot_waveform(mono_audio_sample)
 
         assert isinstance(figure, Figure)
-        assert figure._suptitle.get_text() == "Waveform"
+        suptitle: Text = getattr(figure, "_suptitle")
+        assert suptitle.get_text() == "Waveform"
 
     def test_plot_waveform_multi_channel_audio(self) -> None:
         """Test waveform with multi-channel audio (more than 2 channels)."""
@@ -128,10 +134,9 @@ class TestPlotSpecgram:
         assert isinstance(figure, Figure)
 
     def test_plot_specgram_stereo_audio(self, stereo_audio_sample: Audio) -> None:
-        """Test spectrogram with stereo audio (should use first channel)."""
-        figure = plot_specgram(stereo_audio_sample, title="Stereo Spectrogram")
-
-        assert isinstance(figure, Figure)
+        """Stereo should error (we require mono)."""
+        with pytest.raises(ValueError, match="Spectrogram must be a 2D tensor."):
+            plot_specgram(stereo_audio_sample, title="Stereo Spectrogram")
 
     @patch("matplotlib.pyplot.show")
     def test_plot_specgram_show_called(self, mock_show: MagicMock, mono_audio_sample: Audio) -> None:
@@ -210,7 +215,7 @@ class TestPlayAudio:
         waveform = torch.randn(3, 16000)
         audio = Audio(waveform=waveform, sampling_rate=16000)
 
-        expected_msg = "Waveform with more than 2 channels are not supported"
+        expected_msg = "Waveform with more than 2 channels is not supported"
         with pytest.raises(ValueError, match=expected_msg):
             play_audio(audio)
 
@@ -220,7 +225,7 @@ class TestPlayAudio:
         waveform = torch.randn(4, 16000)
         audio = Audio(waveform=waveform, sampling_rate=16000)
 
-        expected_msg = "Waveform with more than 2 channels are not supported"
+        expected_msg = "Waveform with more than 2 channels is not supported"
         with pytest.raises(ValueError, match=expected_msg):
             play_audio(audio)
 

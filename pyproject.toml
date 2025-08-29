@@ -68,6 +68,9 @@ nemo-toolkit = {version = "~=2.3", optional = true, extras = ["asr"]}
 notebook-intelligence = {version = "~=2.3", optional = true}
 ipywidgets = {version = "~=8.1", optional = true}
 ipykernel = {version = "*", optional = true}
+geopy = {version = "*", optional = true}
+nbformat = {version = "*", optional = true}
+nbss-upload = {version = "*", optional = true}
 
 [tool.poetry.extras]
 audio = [
@@ -97,7 +100,10 @@ video = [
 notebook = [
   "notebook-intelligence",
   "ipywidgets",
-  "ipykernel"
+  "ipykernel",
+  "geopy",
+  "nbformat",
+  "nbss-upload"
 ]
 
 [tool.poetry.group.dev]
@@ -202,8 +208,8 @@ skip = [
 ]
 ignore-words-list = ["senselab", "nd", "astroid", "wil", "SER", "te", "EXPRESSO", "VAI"]
 
-[poetry.scripts]
-senselab-cli = "senselab.cli:main"
+[tool.poetry.scripts]
+senselab-ai = "senselab.agentic_interface.launcher:senselab_ai"
 
 [build-system]
 requires = ["poetry-core>=2.0", "poetry-dynamic-versioning>=1.0.0,<2.0.0"]

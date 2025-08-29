@@ -1,3 +1,28 @@
+# 0.40.0 (Mon Aug 18 2025)
+
+#### 🚀 Enhancement
+
+- new tutorial for basic conversational audio analysis + Improved plotting utilities + Optimized preprocessing utilities using Pydra + Minors [#363](https://github.com/sensein/senselab/pull/363) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.39.0 (Thu Aug 14 2025)
+
+#### 🚀 Enhancement
+
+- added nvidia nemo diarization model [#338](https://github.com/sensein/senselab/pull/338) ([@fabiocat93](https://github.com/fabiocat93) [@satra](https://github.com/satra))
+
+#### Authors: 2
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Satrajit Ghosh ([@satra](https://github.com/satra))
+
+---
+
 # 0.38.1 (Thu Aug 14 2025)
 
 #### 🐛 Bug Fix
