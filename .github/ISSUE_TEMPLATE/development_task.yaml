@@ -30,10 +30,12 @@ body:
       label: Freeform Notes
       description: Add any additional notes here.
       placeholder: Add notes here.
-  - type: checkboxes
+  - type: dropdown
     id: contribution
     attributes:
-      label: Would you be willing to help implement this feature?
+      label: Would you be willing to help fix this bug?
       options:
-        - label: Yes, I'd like to contribute
-        - label: No, I'm just suggesting
+        - Yes, I'd like to contribute
+        - No, I'm just reporting
+    validations:
+      required: true
