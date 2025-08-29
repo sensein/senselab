@@ -25,7 +25,7 @@ Please follow the official installation instructions for your platform: [Install
 
 
 5b. **Install all required dependencies** (we recommend to test your code both with all extras and the minimum required set of extras):
-  - ```poetry install --extras "audio articulatory text video" --with dev,docs```
+  - ```poetry install --extras "audio text video" --with dev,docs```
 6. **Install pre-commit hooks**:
   ```poetry run pre-commit install```
 7. **Work locally on the issue branch.**
