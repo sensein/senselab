@@ -7,7 +7,7 @@
                 "id": "api_key",
                 "name": "API key",
                 "description": "API key",
-                "value": "sk-",
+                "value": "",
                 "optional": false
             },
             {
