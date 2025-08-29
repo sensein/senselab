@@ -1,5 +1,7 @@
 """Tests for speaker diarization."""
 
+import os
+
 import pytest
 import torch
 
@@ -7,6 +9,7 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speaker_diarization import diarize_audios
 from senselab.audio.tasks.speaker_diarization.pyannote import PyannoteDiarization, diarize_audios_with_pyannote
 from senselab.utils.data_structures import DeviceType, PyannoteAudioModel, ScriptLine
+from senselab.utils.data_structures.model import HFModel
 
 try:
     import pyannote.audio
@@ -21,6 +24,13 @@ try:
     TORCHAUDIO_AVAILABLE = True
 except ModuleNotFoundError:
     TORCHAUDIO_AVAILABLE = False
+
+try:
+    from nemo.collections.asr.models import SortformerEncLabelModel
+
+    NEMO_SORTFORMER_AVAILABLE = True
+except ModuleNotFoundError:
+    NEMO_SORTFORMER_AVAILABLE = False
 
 
 @pytest.fixture
@@ -45,6 +55,21 @@ def test_diarize_audios(resampled_mono_audio_sample: Audio, pyannote_model: Pyan
     results = diarize_audios(audios=[resampled_mono_audio_sample], model=pyannote_model)
     assert len(results) == 1
     assert isinstance(results[0][0], ScriptLine)
+
+
+@pytest.mark.skipif(
+    not NEMO_SORTFORMER_AVAILABLE or not TORCHAUDIO_AVAILABLE,
+    reason="NVIDIA Sortformer or torchaudio are not installed",
+)
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
+def test_diarize_audios_with_nvidia_sortformer(resampled_mono_audio_sample: Audio) -> None:
+    """Test diarizing audios with NVIDIA Sortformer."""
+    model: HFModel = HFModel(path_or_uri="nvidia/diar_sortformer_4spk-v1")
+    results = diarize_audios(audios=[resampled_mono_audio_sample], model=model)
+    assert len(results) == 1
+    assert all(isinstance(line, ScriptLine) for line in results[0])
+    # Optionally, check that at least one segment is returned
+    assert len(results[0]) > 0
 
 
 @pytest.mark.skipif(

@@ -12,14 +12,13 @@ maintainers = [
 ]
 license = {file = "LICENSE.txt"}
 readme = "README.md"
-requires-python = ">=3.10,<3.13"
+requires-python = ">=3.11,<3.13"
 homepage = "https://github.com/sensein/senselab"
 repository = "https://github.com/sensein/senselab"
 documentation = "https://sensein.github.io/senselab"
 keywords = ["audio", "voice", "speech", "video", "pose", "face", "text", "nlp"]
 classifiers = [
   "Development Status :: 3 - Alpha",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "License :: OSI Approved :: Apache Software License",
@@ -32,39 +31,40 @@ requires-poetry = ">=2.0"
 version = "0.0.0"
 
 [tool.poetry.dependencies]
-datasets = "~=3"
+datasets = "~=3.6"
 torch = {version = "~=2.6", markers = "sys_platform != 'darwin' or platform_machine == 'arm64'"}
 torchvision = "~=0.20"
-transformers = "~=4.48"
-pydra = "~=0.25"
-pydantic = "~=2.7"
+transformers = "~=4.55"
+pydra = ">=1.0a0"
+pydantic = "~=2.11"
 accelerate = "*"
-huggingface-hub = "~=0.23"
+huggingface-hub = "~=0.34"
 pycountry = "~=24.6"
 iso639 = "~=0.1"
 types-requests = "~=2.32"
-numpy = "~=1.26"
-scikit-learn = "~=1.5"
+scikit-learn = "~=1.7"
 umap-learn = "~=0.5"
 python-ffmpeg = "~=2.0"
-nest-asyncio = "~=1.5"
+nest-asyncio = "~=1.6"
 matplotlib = "~=3.10"
 torchaudio = {version = "~=2.6", optional = true}
 praat-parselmouth = {version = "~=0.4", optional = true}
-audiomentations = {version = "~=0.39", optional = true}
+audiomentations = {version = "~=0.42", optional = true}
 torch-audiomentations = {version = "~=0.12", optional = true}
 speechbrain = {version = "~=1", optional = true}
 pyannote-audio = {version = "~=3.3", optional = true}
-opensmile = {version = "~=2.5", optional = true}
+opensmile = {version = "~=2.6", optional = true}
 vocos = {version = "~=0.1", optional = true}
-jiwer = {version = "~=3.0", optional = true}
+coqui-tts = {version = "~=0.27", optional = true}
+speech-articulatory-coding = {version = "~=0.1", optional = true}
+jiwer = {version = "~=4.0", optional = true}
 nltk = {version = "~=3.9", optional = true}
-sentence-transformers = {version = "~=3.1", optional = true}
+sentence-transformers = {version = "~=5.1", optional = true}
 pylangacq = {version = "~=0.19", optional = true}
-mediapipe = {version = "~=0.10", optional = true}
-opencv-python = {version = "~=4.10", optional = true}
+opencv-python-headless = {version = "~=4.11", optional = true}
 ultralytics = {version = "~=8.3", optional = true}
-pyav = {version = "~=14.2", optional = true}
+av = {version = "~=15", optional = true}
+nemo-toolkit = {version = "~=2.3", optional = true, extras = ["asr"]}
 
 [tool.poetry.extras]
 audio = [
@@ -77,16 +77,20 @@ audio = [
   "opensmile",
   "vocos",
   "jiwer",
-  "nltk"
+  "nltk",
+  "coqui-tts",
+  "nemo-toolkit"
+]
+articulatory = [
+  "speech-articulatory-coding"
 ]
 text = [
   "sentence-transformers",
   "pylangacq"
 ]
 video = [
-  "pyav",
-  "mediapipe",
-  "opencv-python",
+  "av",
+  "opencv-python-headless",
   "ultralytics"
 ]
 
@@ -104,6 +108,7 @@ codespell = "~=2.3"
 jupyter = "~=1.0"
 ipywidgets = "~=8.1"
 ipykernel = "*"
+uvloop = "~=0.21"
 
 [tool.poetry.group.docs]
 optional = true
@@ -127,6 +132,7 @@ ignore_missing_imports = true
 plugins = [
   "pydantic.mypy"
 ]
+extra_checks = true
 
 [tool.ruff]
 exclude = [
@@ -190,7 +196,7 @@ skip = [
   "*.cha",
   "*.ipynb"
 ]
-ignore-words-list = ["senselab", "nd", "astroid", "wil", "SER", "te"]
+ignore-words-list = ["senselab", "nd", "astroid", "wil", "SER", "te", "EXPRESSO", "VAI"]
 
 [poetry.scripts]
 senselab-cli = "senselab.cli:main"

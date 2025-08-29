@@ -7,7 +7,22 @@ Speaker diarization is the process of segmenting audio recordings by speaker lab
 
 ## Models
 
-In `senselab`, we integrate [pyannote.audio](https://github.com/pyannote/pyannote-audio) models for speaker diarization. These models can be explored on the [Hugging Face Hub](https://huggingface.co/pyannote). We may integrate additional approaches for speaker diarization into the package in the future.
+All supported models ([pyannote.audio](https://github.com/pyannote/pyannote-audio) models from [Hugging Face Hub](https://huggingface.co/pyannote) and the [NVIDIA nemo softformer](https://huggingface.co/nvidia/diar_sortformer_4spk-v1)) provide state-of-the-art diarization and can be used as follows:
+
+```python
+from senselab.audio.data_structures import Audio
+from senselab.utils.data_structures.model import HFModel
+from senselab.audio.tasks.speaker_diarization.api import diarize_audios
+
+audio = Audio(filepath="path/to/audio_48khz_mono_16bits.wav")
+model = HFModel(path_or_uri="nvidia/diar_sortformer_4spk-v1")
+results = diarize_audios([audio], model=model)
+# results is a list of lists of ScriptLine objects, e.g.:
+# [[ScriptLine(speaker="speaker_0", start=0.08, end=4.95), ...]]
+```
+
+We may integrate additional approaches for speaker diarization into the package in the future.
+
 
 ## Evaluation
 
