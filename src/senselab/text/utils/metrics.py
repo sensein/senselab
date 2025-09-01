@@ -1,4 +1,4 @@
-"""Metrics to assess performance on tutor response.
+"""Comprehensive text metrics for objective text analysis.
 
 Functions named as ``*_score`` return a scalar value to maximize: the higher
 the better.
@@ -9,25 +9,19 @@ the lower the better.
 All other functions are value-independent.
 """
 
+import re
 from abc import ABC, abstractmethod
-from typing import Any, Dict
+from typing import Any, Dict, Union
 
 import textstat
+import tiktoken
 from deepeval.metrics import BiasMetric, PromptAlignmentMetric, ToxicityMetric
 from deepeval.test_case import LLMTestCaseParams
 from rouge_score import rouge_scorer
 
 
-class BaseMetric(ABC):
-    """Base class for evaluation metrics."""
 
-    @abstractmethod
-    def compute_reference_pair(self: "BaseMetric", pair: tuple) -> Dict[str, Any]:
-        """Compute the reference pair metrics."""
-        raise NotImplementedError
-
-
-class SingleTextMetric(BaseMetric):
+class SingleTextMetric():
     """Base class for metrics that only need one text."""
 
     @abstractmethod
@@ -43,37 +37,9 @@ class SingleTextMetric(BaseMetric):
         """
         raise NotImplementedError
 
-    def compute_reference_pair(self: "SingleTextMetric", pair: tuple) -> Dict[str, Any]:
-        """Compute the reference pair.
 
-        This method takes a tuple containing two elements and computes the reference
-        for the first element in the tuple. It asserts that the tuple has exactly two elements.
-
-        Args:
-            pair (tuple): A tuple containing two elements.
-
-        Returns:
-            Dict[str, Any]: The computed reference for the first element in the tuple.
-        """
-        assert len(pair) == 2
-        return self.compute(pair[0])
-
-
-class ComparativeMetric(BaseMetric):
+class ComparativeMetric():
     """Base class for metrics that compare two texts."""
-
-    @abstractmethod
-    def compute(self: "ComparativeMetric", text: str, reference_text: str) -> Dict[str, Any]:
-        """Computes the evaluation metrics for a given text against a reference text.
-
-        Args:
-            text (str): The text to be evaluated.
-            reference_text (str): The reference text to compare against.
-
-        Returns:
-            Dict[str, Any]: A dictionary containing the computed metrics.
-        """
-        raise NotImplementedError
 
     def compute_reference_pair(self: "ComparativeMetric", pair: tuple) -> Dict[str, Any]:
         """Compute the reference pair metrics.
@@ -157,25 +123,61 @@ class RougeScore(ComparativeMetric):
         }
 
 
-class TextStatistics(SingleTextMetric):
-    """Class to compute basic text statistics such as word count and sentence count."""
+class ComprehensiveTextStatistics(SingleTextMetric):
+    """Class to compute comprehensive text statistics including counts, averages, and token counts."""
 
-    def compute(self: "TextStatistics", text: str) -> Dict[str, int]:
-        """Compute basic text statistics such as word count and sentence count.
+    def __init__(self: "ComprehensiveTextStatistics", model: str = "gpt-4") -> None:
+        """Initialize with tokenizer model.
+        
+        Args:
+            model: The model name to use for tokenization (default: gpt-4)
+        """
+        self.encoding = tiktoken.encoding_for_model(model)
+
+    def compute(self: "ComprehensiveTextStatistics", text: str) -> Dict[str, Union[int, float]]:
+        """Compute comprehensive text statistics.
 
         Args:
-            text: The model response text
+            text: The input text
 
         Returns:
-            Dictionary containing the computed text statistics:
+            Dictionary containing comprehensive text statistics:
             - "word_count": Number of words in the text
             - "sentence_count": Number of sentences in the text
             - "char_count": Number of characters in the text
+            - "avg_word_length": Average number of characters per word
+            - "avg_sentence_length": Average number of words per sentence
+            - "token_count": Number of tokens according to OpenAI tokenizer
         """
+        word_count = textstat.lexicon_count(text)
+        sentence_count = textstat.sentence_count(text)
+        char_count = textstat.char_count(text)
+        
+        # Calculate average word length
+        words = re.findall(r'\b\w+\b', text)
+        if words:
+            total_chars_in_words = sum(len(word) for word in words)
+            avg_word_length = total_chars_in_words / len(words)
+        else:
+            avg_word_length = 0.0
+        
+        # Calculate average sentence length
+        if sentence_count > 0:
+            avg_sentence_length = word_count / sentence_count
+        else:
+            avg_sentence_length = 0.0
+        
+        # Calculate token count
+        tokens = self.encoding.encode(text)
+        token_count = len(tokens)
+        
         return {
-            "word_count": textstat.lexicon_count(text),
-            "sentence_count": textstat.sentence_count(text),
-            "char_count": textstat.char_count(text),
+            "word_count": word_count,
+            "sentence_count": sentence_count,
+            "char_count": char_count,
+            "avg_word_length": avg_word_length,
+            "avg_sentence_length": avg_sentence_length,
+            "token_count": token_count,
         }
 
 
@@ -247,7 +249,6 @@ class PromptAlignmentEvaluation(ComparativeMetric):
     """Evaluates how well the response aligns with the original prompt using deepeval's PromptAlignmentMetric."""
 
     # TODO
-
     # This should compare the LLM response to the system instruction, not the tutor response
 
     def __init__(self: "PromptAlignmentEvaluation") -> None:
@@ -273,3 +274,73 @@ class PromptAlignmentEvaluation(ComparativeMetric):
 
         evaluation = self.evaluator.measure(test_case)
         return {"alignment_score": evaluation.score, "is_aligned": evaluation.passed}
+
+
+
+
+
+
+def single_text_pipeline(text: str, metrics: list[SingleTextMetric]) -> Dict[str, Any]:
+    """Pipeline for metrics that only need one text.
+    
+    Args:
+        text: The input text to evaluate
+        metrics: List of SingleTextMetric instances to apply
+        
+    Returns:
+        Dict: A dictionary containing the results of the computed metrics
+    """
+    results = {}
+    
+    for metric in metrics:
+        result = metric.compute(text)
+        results.update(result)
+    
+    return results
+
+
+def comparative_pipeline(text: str, reference: str, metrics: list[ComparativeMetric]) -> Dict[str, Any]:
+    """Pipeline for metrics that compare two texts.
+    
+    Args:
+        text: The text to evaluate
+        reference: The reference text to compare against
+        metrics: List of ComparativeMetric instances to apply
+        
+    Returns:
+        Dict: A dictionary containing the results of the computed metrics
+    """
+    results = {}
+    
+    for metric in metrics:
+        result = metric.compute(text, reference)
+        results.update(result)
+    
+    return results
+
+
+def evaluate_text(text: str, reference: str = None, 
+                 single_metrics: list[SingleTextMetric] = None, 
+                 comparative_metrics: list[ComparativeMetric] = None) -> Dict[str, Any]:
+    """Unified evaluation function that routes to appropriate pipeline.
+    
+    Args:
+        text: The text to evaluate
+        reference: Optional reference text for comparative metrics
+        single_metrics: List of SingleTextMetric instances
+        comparative_metrics: List of ComparativeMetric instances
+        
+    Returns:
+        Dict: Combined results from all metrics
+    """
+    results = {}
+    
+    if single_metrics:
+        single_results = single_text_pipeline(text, single_metrics)
+        results.update(single_results)
+    
+    if comparative_metrics and reference is not None:
+        comparative_results = comparative_pipeline(text, reference, comparative_metrics)
+        results.update(comparative_results)
+    
+    return results
