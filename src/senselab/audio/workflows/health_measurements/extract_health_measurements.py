@@ -12,13 +12,13 @@ from senselab.audio.tasks.features_extraction.praat_parselmouth import extract_p
 
 
 def extract_health_measurements(
-    audios: List[Audio], plugin: str = "serial", plugin_args: Dict[str, Any] = {}, cache_dir: Optional[str] = None
+    audios: List[Audio], plugin: str = "debug", plugin_args: Dict[str, Any] = {}, cache_dir: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """Extract health measurements from audio files.
 
     Args:
         audios (List[Audio]): List of Audio objects.
-        plugin (str): Plugin to use for feature extraction. Defaults to "serial".
+        plugin (str): Plugin to use for feature extraction. Defaults to "debug".
         plugin_args (Dict[str, Any]): Dictionary of arguments for the feature extraction plugin.
         cache_dir (Optional[str]): Directory to use for caching by pydra. Defaults to None.
 
@@ -57,7 +57,7 @@ def extract_health_measurements(
             - spectral_kurtosis
 
     Examples:
-        >>> audios = [Audio.from_filepath("sample.wav")]
+        >>> audios = [Audio(filepath="sample.wav")]
         >>> extract_health_measurements(audios)
         [{'speaking_rate': 3.874983349680919,
         'articulation_rate': 3.874983349680919,

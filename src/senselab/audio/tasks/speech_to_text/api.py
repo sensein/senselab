@@ -44,4 +44,4 @@ def transcribe_audios(
                 "Only Hugging Face models are supported for now. We aim to support more models in the future."
             )
     except TypeError as e:
-        raise TypeError(e)  # noqa: W0707
+        raise TypeError(e)

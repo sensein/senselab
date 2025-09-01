@@ -8,127 +8,133 @@ for parallel processing. This approach supports efficient and scalable feature
 extraction across multiple audio files.
 """
 
-import os
-from typing import Any, Dict, List, Optional
+from __future__ import annotations
 
-import numpy as np
-import opensmile
-import pydra
+import os
+from typing import Any, Dict, List, Optional, Sequence
+
+from pydra.compose import python, workflow
 
 from senselab.audio.data_structures import Audio
 
+try:
+    import opensmile
+
+    OPENSMILE_AVAILABLE = True
+except ModuleNotFoundError:
+    OPENSMILE_AVAILABLE = False
+
+    class DummyOpenSmile:
+        """Dummy class to represent openSMILE when it's not available."""
+
+        def __init__(self) -> None:
+            """Dummy constructor for when openSMILE is not available."""
+            self.__dict__ = {}
+
+        class Smile:
+            """Dummy class for when openSMILE is not available."""
+
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                """Dummy constructor for when openSMILE is not available."""
+                pass
+
+    opensmile = DummyOpenSmile()  # type: ignore[assignment]
+
 
 class OpenSmileFeatureExtractorFactory:
-    """A factory for managing openSMILE feature extractors.
+    """A factory for managing openSMILE feature extractors."""
 
-    This class creates and caches openSMILE feature extractors, allowing for
-    efficient reuse. It ensures only one instance of each feature extractor
-    exists per unique combination of `feature_set` and `feature_level`.
-    """
-
-    _extractors: Dict[str, opensmile.Smile] = {}  # Cache for feature extractors
+    _extractors: Dict[str, opensmile.Smile] = {}
 
     @classmethod
     def get_opensmile_extractor(cls, feature_set: str, feature_level: str) -> opensmile.Smile:
-        """Get or create an openSMILE feature extractor.
+        """Get an openSMILE feature extractor for a given feature set and feature level.
 
         Args:
-            feature_set (str): The openSMILE feature set.
-            feature_level (str): The openSMILE feature level.
+            feature_set (str): The feature set to use.
+            feature_level (str): The feature level to use.
 
         Returns:
             opensmile.Smile: The openSMILE feature extractor.
+
+        Raises:
+            ModuleNotFoundError: If `opensmile` is not installed.
         """
-        key = f"{feature_set}-{feature_level}"  # Unique key for each feature extractor
-        if key not in cls._extractors:  # Check if extractor exists in cache
-            # Create and store a new extractor if not found in cache
+        if not OPENSMILE_AVAILABLE:
+            raise ModuleNotFoundError(
+                "`opensmile` is not installed. "
+                "Please install senselab audio dependencies using `pip install 'senselab[audio]'`"
+            )
+
+        key = f"{feature_set}-{feature_level}"
+        if key not in cls._extractors:
             cls._extractors[key] = opensmile.Smile(
                 feature_set=opensmile.FeatureSet[feature_set],
                 feature_level=opensmile.FeatureLevel[feature_level],
             )
-        return cls._extractors[key]  # Return cached or newly created extractor
+        return cls._extractors[key]
 
 
 def extract_opensmile_features_from_audios(
     audios: List[Audio],
     feature_set: str = "eGeMAPSv02",
     feature_level: str = "Functionals",
-    plugin: str = "serial",
-    plugin_args: Optional[Dict[str, Any]] = {},
+    plugin: str = "debug",
+    plugin_args: Optional[Dict[str, Any]] = None,
     cache_dir: Optional[str | os.PathLike] = None,
 ) -> List[Dict[str, Any]]:
-    """Extract openSMILE features from a list of audio files using Pydra workflow.
-
-    This function sets up a Pydra workflow for parallel processing of openSMILE
-    feature extraction on a list of audio samples. Each sample's features are
-    extracted and formatted as dictionaries.
+    """Extract openSMILE features from a list of audio files using a Pydra compose workflow.
 
     Args:
-        audios (List[Audio]): The list of audio objects to extract features from.
-        feature_set (str): The openSMILE feature set (default is "eGeMAPSv02").
-        feature_level (str): The openSMILE feature level (default is "Functionals").
-        plugin (str): The Pydra plugin to use (default is "serial").
-        plugin_args (Optional[Dict[str, Any]]): Additional arguments for the Pydra plugin.
-        cache_dir (Optional[str | os.PathLike]): The path to the Pydra cache directory.
+        audios (List[Audio]): A list of Audio objects.
+        feature_set (str, optional): The feature set to use. Defaults to "eGeMAPSv02".
+        feature_level (str, optional): The feature level to use. Defaults to "Functionals".
+        plugin (str, optional): The Pydra plugin to use for workflow submission. Defaults to "debug".
+        plugin_args (Optional[Dict[str, Any]], optional): Additional arguments for the Pydra plugin.
+            Defaults to None.
+        cache_dir (Optional[str | os.PathLike], optional): The directory for caching intermediate results.
+            Defaults to None.
 
     Returns:
-        List[Dict[str, Any]]: A list of dictionaries, each containing extracted features.
+        List[Dict[str, Any]]: A list of dictionaries containing the extracted features.
+
+    Raises:
+        ModuleNotFoundError: If `opensmile` is not installed.
     """
+    if not OPENSMILE_AVAILABLE:
+        raise ModuleNotFoundError(
+            "`opensmile` is not installed. Please install the necessary dependencies using:\n"
+            "`pip install 'senselab[audio]'`"
+        )
 
-    def _extract_feats_from_audio(sample: Audio, smile: opensmile.Smile) -> Dict[str, Any]:
-        """Extract features from a single audio sample using openSMILE.
-
-        Args:
-            sample (Audio): The audio object.
-            smile (opensmile.Smile): The openSMILE feature extractor.
-
-        Returns:
-            Dict[str, Any]: The extracted features as a dictionary.
-        """
-        # Convert audio tensor to a NumPy array for processing
+    @python.define
+    def _extract_feats_from_audio(sample: Audio, feature_set: str, feature_level: str) -> Dict[str, Any]:
+        smile = OpenSmileFeatureExtractorFactory.get_opensmile_extractor(feature_set, feature_level)
         audio_array = sample.waveform.squeeze().numpy()
-        sampling_rate = sample.sampling_rate  # Get sampling rate from Audio object
+        sampling_rate = sample.sampling_rate
         try:
-            # Process the audio and extract features
-            sample_features = smile.process_signal(audio_array, sampling_rate)
-            # Convert features to a dictionary and handle single-item lists
-            return {
-                k: v[0] if isinstance(v, list) and len(v) == 1 else v
-                for k, v in sample_features.to_dict("list").items()
-            }
+            df = smile.process_signal(audio_array, sampling_rate)
+            return {k: (v[0] if isinstance(v, list) and len(v) == 1 else v) for k, v in df.to_dict("list").items()}
         except Exception as e:
-            # Log error and return NaNs if feature extraction fails
-            print(f"Error processing sample {sample.orig_path_or_id}: {e}")
-            return {feature: np.nan for feature in smile.feature_names}
+            filepath = sample.filepath() if hasattr(sample, "filepath") and sample.filepath() else ""
+            desc = f"{sample.generate_id()}{f' ({filepath})' if filepath else ''}"
+            print(f"Error processing sample {desc}: {e}")
+            names = getattr(smile, "feature_names", [])
+            return {name: float("nan") for name in names} if names else {}
 
-    # Decorate the feature extraction function for Pydra
-    _extract_feats_from_audio_pt = pydra.mark.task(_extract_feats_from_audio)
+    @workflow.define
+    def _wf(xs: Sequence[Audio], feature_set: str, feature_level: str) -> List[Dict[str, Any]]:
+        t = _extract_feats_from_audio(
+            feature_set=feature_set,
+            feature_level=feature_level,
+        ).split(sample=xs)
 
-    # Obtain the feature extractor using the factory
-    smile = OpenSmileFeatureExtractorFactory.get_opensmile_extractor(feature_set, feature_level)
+        node = workflow.add(t, name="map_extract_feats")
+        return node.out
 
-    # Create a Pydra workflow, split it over the list of audio samples
-    wf = pydra.Workflow(name="wf", input_spec=["x"], cache_dir=cache_dir)
-    wf.split("x", x=audios)  # Each audio is treated as a separate task
-    # Add feature extraction task to the workflow
-    wf.add(_extract_feats_from_audio_pt(name="_extract_feats_from_audio_pt", sample=wf.lzin.x, smile=smile))
+    worker = "debug" if plugin in ("serial", "debug") else plugin
+    worker_kwargs = plugin_args or {}
 
-    # Set workflow output to the results of each audio feature extraction
-    wf.set_output([("opensmile", wf._extract_feats_from_audio_pt.lzout.out)])
-
-    # Run the workflow using the specified Pydra plugin and arguments
-    with pydra.Submitter(plugin=plugin, **plugin_args) as sub:
-        sub(wf)
-
-    # Retrieve results from the completed workflow
-    outputs = wf.result()
-
-    # Format the outputs into a list of dictionaries
-    formatted_output: List[Dict[str, Any]] = []
-    for output in outputs:
-        # Extract features and organize into a dictionary
-        formatted_output_item = {
-            f"{feature}": output.output.opensmile[f"{feature}"] for feature in output.output.opensmile
-        }
-        formatted_output.append(formatted_output_item)  # Append to final output list
-    return formatted_output  # Return the list of formatted feature dictionaries
+    wf = _wf(xs=audios, feature_set=feature_set, feature_level=feature_level)
+    res: Any = wf(worker=worker, cache_root=cache_dir, **worker_kwargs)
+    return list(res.out)

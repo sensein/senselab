@@ -4,11 +4,12 @@ from typing import List
 
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
+from matplotlib.pyplot import Figure
 
 from senselab.utils.data_structures import ScriptLine
 
 
-def plot_transcript(transcript: ScriptLine) -> None:
+def plot_transcript(transcript: ScriptLine) -> Figure:
     """Plots the transcript visualization over time.
 
     Args:
@@ -39,7 +40,7 @@ def plot_transcript(transcript: ScriptLine) -> None:
             end_times.append(chunk.end)
 
     # Create a figure and axis
-    _, ax = plt.subplots(figsize=(12, 6))
+    figure, ax = plt.subplots(figsize=(12, 6))
 
     # Plot each text segment and add text label
     for i, text in enumerate(texts):
@@ -55,10 +56,11 @@ def plot_transcript(transcript: ScriptLine) -> None:
     ax.set_title("Transcript Visualization Over Time")
 
     # Show the plot
-    plt.show()
+    plt.show(block=False)
+    return figure
 
 
-def plot_segment(segments: List[ScriptLine]) -> None:
+def plot_segment(segments: List[ScriptLine]) -> Figure:
     """Plots the segments of the transcript over time.
 
     Args:
@@ -86,7 +88,7 @@ def plot_segment(segments: List[ScriptLine]) -> None:
             labels.append(segment.speaker)
 
     # Create a figure and axis
-    _, ax = plt.subplots(figsize=(12, 6))
+    figure, ax = plt.subplots(figsize=(12, 6))
 
     # Create a color map based on unique labels
     unique_labels = list(set(labels))
@@ -108,4 +110,5 @@ def plot_segment(segments: List[ScriptLine]) -> None:
     ax.set_title("Segment Visualization Over Time")
 
     # Show the plot
-    plt.show()
+    plt.show(block=False)
+    return figure

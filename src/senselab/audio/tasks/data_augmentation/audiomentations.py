@@ -1,66 +1,64 @@
-"""This module implements some utilities for audio data augmentation with audiomentations."""
+"""This module contains functions for applying data augmentation using audiomentations."""
 
-from typing import List
+from __future__ import annotations
 
-from audiomentations import Compose
+from typing import Any, List, Optional, Sequence
+
+import cloudpickle
+from pydra.compose import python, workflow
 
 from senselab.audio.data_structures import Audio
 
+try:
+    from audiomentations import Compose
 
-def augment_audios_with_audiomentations(audios: List[Audio], augmentation: Compose) -> List[Audio]:
-    """Augments all provided audios with audiomentations library.
+    AUDIOMENTATIONS_AVAILABLE = True
+except ModuleNotFoundError:
+    AUDIOMENTATIONS_AVAILABLE = False
+
+
+def augment_audios_with_audiomentations(
+    audios: List[Audio],
+    augmentation: "Compose",
+    plugin: str = "debug",
+    plugin_args: Optional[dict[str, Any]] = None,
+    cache_dir: Optional[str] = None,
+) -> List[Audio]:
+    """Apply data augmentation using audiomentations.
 
     Args:
         audios: List of Audios whose data will be augmented with the given augmentations.
-        augmentation: A Composition of augmentations to run on each audio (uses audiomentations).
+        augmentation: A composition of augmentations (audiomentations).
+        plugin: The plugin to use for running the workflow. Default is "debug".
+        plugin_args: Additional arguments to pass to the plugin. Default is None.
+        cache_dir: The directory to use for caching the workflow. Default is None.
 
     Returns:
-        List of audios that have passed through the provided augmentation.
+        List of augmented audios.
     """
-
-    def _augment_single_audio(audio: Audio, augmentation: Compose):  # noqa: ANN202
-        """Augments a single audio with audiomentations.
-
-        Args:
-            audio: The audio to be augmented.
-            augmentation: The audiomentations augmentation to be applied.
-
-        Returns:
-            The augmented audio. The returned data type is not explicitly specified
-                in the function signature because it would brake pydra.
-        """
-        augmented_waveform = augmentation(samples=audio.waveform.numpy(), sample_rate=audio.sampling_rate)
-        return Audio(
-            waveform=augmented_waveform,
-            sampling_rate=audio.sampling_rate,
-            metadata=audio.metadata.copy(),
-            orig_path_or_id=audio.orig_path_or_id,
+    if not AUDIOMENTATIONS_AVAILABLE:
+        raise ModuleNotFoundError(
+            "`audiomentations` is not installed. "
+            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
         )
 
-    """
-    # The commented code is for parallelizing the augmentation using pydra
-    # Due to some issues with pydra, this is disabled for now
+    # Serialize augmentation deterministically
+    aug_payload = cloudpickle.dumps(augmentation)
 
-    import pydra
+    @python.define
+    def _augment_single_audio(audio: Audio, aug_payload: Any) -> Audio:  # noqa: ANN401
+        aug = cloudpickle.loads(aug_payload)
+        augmented = aug(samples=audio.waveform, sample_rate=audio.sampling_rate)
+        return Audio(waveform=augmented, sampling_rate=audio.sampling_rate, metadata=audio.metadata.copy())
 
-    _augment_single_audio_pt = pydra.mark.task(_augment_single_audio)
+    @workflow.define
+    def _wf(xs: Sequence[Audio], aug_payload: Any) -> List[Audio]:  # noqa: ANN401
+        node = workflow.add(
+            _augment_single_audio(aug_payload=aug_payload).split(audio=xs),
+            name="map_audiomentations",
+        )
+        return node.out
 
-    # Create the workflow
-    wf = pydra.Workflow(name="audio_augmentation_wf", input_spec=["y"])
-    wf.split("y", y=audios)
-    wf.add(_augment_single_audio_pt(name="augment_audio", audio=wf.lzin.y, augmentation=augmentation))
-    wf.set_output([("augmented_audio", wf.augment_audio.lzout.out)])
-
-    # Execute the workflow
-    with pydra.Submitter(plugin="cf") as submitter:
-        submitter(wf)
-
-    outputs = wf.result()
-    return [out.output.augmented_audio for out in outputs]
-    """
-
-    augmented_audios = []
-    for audio in audios:
-        augmented_audios.append(_augment_single_audio(audio, augmentation))
-
-    return augmented_audios
+    worker = "debug" if plugin in ("serial", "debug") else plugin
+    res = _wf(xs=audios, aug_payload=aug_payload)(worker=worker, cache_root=cache_dir, **(plugin_args or {}))
+    return list(res.out)

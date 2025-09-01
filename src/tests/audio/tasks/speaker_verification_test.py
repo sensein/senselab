@@ -17,7 +17,24 @@ from senselab.audio.tasks.speaker_verification.speaker_verification import (
     verify_speaker,
 )
 
+try:
+    import speechbrain  # noqa: F401
 
+    SPEECHBRAIN_AVAILABLE = True
+except ModuleNotFoundError:
+    SPEECHBRAIN_AVAILABLE = False
+
+try:
+    import torchaudio  # noqa: F401
+
+    TORCHAUDIO_AVAILABLE = True
+except ModuleNotFoundError:
+    TORCHAUDIO_AVAILABLE = False
+
+
+@pytest.mark.skipif(
+    not TORCHAUDIO_AVAILABLE or not SPEECHBRAIN_AVAILABLE, reason="torchaudio or speechbrain are not available"
+)
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 @pytest.mark.large_model
 def test_verify_speaker(mono_audio_sample: Audio) -> None:
