@@ -4,19 +4,43 @@ from typing import List
 
 import pytest
 import torch
-from speechbrain.inference.separation import SepformerSeparation as separator
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speech_enhancement import enhance_audios
 from senselab.audio.tasks.speech_enhancement.speechbrain import SpeechBrainEnhancer
 from senselab.utils.data_structures import DeviceType, SpeechBrainModel
 
+try:
+    from speechbrain.inference.separation import SepformerSeparation as separator
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
+    SPEECHBRAIN_AVAILABLE = True
+except ModuleNotFoundError:
+    SPEECHBRAIN_AVAILABLE = False
+
+try:
+    import torchaudio  # noqa: F401
+
+    TORCHAUDIO_AVAILABLE = True
+except ModuleNotFoundError:
+    TORCHAUDIO_AVAILABLE = False
+
+
 @pytest.fixture
-def speechbrain_model() -> SpeechBrainModel:
+def speechbrain_model1() -> SpeechBrainModel:
     """Fixture for Hugging Face model."""
-    return SpeechBrainModel(path_or_uri="speechbrain/sepformer-wham16k-enhancement")
+    return SpeechBrainModel(path_or_uri="speechbrain/sepformer-wham16k-enhancement", revision="main")
+
+
+@pytest.fixture
+def speechbrain_model2() -> SpeechBrainModel:
+    """Fixture for SpeechBrain model."""
+    return SpeechBrainModel(path_or_uri="speechbrain/metricgan-plus-voicebank", revision="main")
+
+
+@pytest.fixture
+def speechbrain_model(request: pytest.FixtureRequest) -> SpeechBrainModel:
+    """Fixture that dynamically returns test a SpeechBrain model."""
+    return request.getfixturevalue(request.param)
 
 
 @pytest.fixture(autouse=True)
@@ -25,7 +49,11 @@ def clear_cache() -> None:
     SpeechBrainEnhancer._models = {}
 
 
+@pytest.mark.skipif(
+    not TORCHAUDIO_AVAILABLE or not SPEECHBRAIN_AVAILABLE, reason="SpeechBrain or torchaudio are not installed"
+)
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
+@pytest.mark.parametrize("speechbrain_model", ["speechbrain_model1"], indirect=True)
 def test_enhance_audios_stereo_audio(resampled_stereo_audio_sample: Audio, speechbrain_model: SpeechBrainModel) -> None:
     """Test that enhancing stereo audios raises a ValueError."""
     with pytest.raises(ValueError, match="Audio waveform must be mono"):
@@ -34,7 +62,11 @@ def test_enhance_audios_stereo_audio(resampled_stereo_audio_sample: Audio, speec
         )
 
 
+@pytest.mark.skipif(
+    not TORCHAUDIO_AVAILABLE or not SPEECHBRAIN_AVAILABLE, reason="SpeechBrain or torchaudio are not installed"
+)
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
+@pytest.mark.parametrize("speechbrain_model", ["speechbrain_model1", "speechbrain_model2"], indirect=True)
 def test_enhance_audios(
     resampled_mono_audio_sample: Audio, resampled_mono_audio_sample_x2: Audio, speechbrain_model: SpeechBrainModel
 ) -> None:
@@ -47,7 +79,11 @@ def test_enhance_audios(
     assert enhanced_audios[0].waveform.shape == resampled_mono_audio_sample.waveform.shape
 
 
+@pytest.mark.skipif(
+    not TORCHAUDIO_AVAILABLE or not SPEECHBRAIN_AVAILABLE, reason="SpeechBrain or torchaudio are not installed"
+)
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
+@pytest.mark.parametrize("speechbrain_model", ["speechbrain_model1"], indirect=True)
 def test_speechbrain_enhancer_get_model(speechbrain_model: SpeechBrainModel) -> None:
     """Test getting SpeechBrain model."""
     # TODO: add tests like these but with multithreading
@@ -62,7 +98,11 @@ def test_speechbrain_enhancer_get_model(speechbrain_model: SpeechBrainModel) -> 
     )
 
 
+@pytest.mark.skipif(
+    not TORCHAUDIO_AVAILABLE or not SPEECHBRAIN_AVAILABLE, reason="SpeechBrain or torchaudio are not installed"
+)
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
+@pytest.mark.parametrize("speechbrain_model", ["speechbrain_model1", "speechbrain_model2"], indirect=True)
 def test_enhance_audios_with_speechbrain(
     resampled_mono_audio_sample: Audio, resampled_mono_audio_sample_x2: Audio, speechbrain_model: SpeechBrainModel
 ) -> None:
@@ -76,14 +116,25 @@ def test_enhance_audios_with_speechbrain(
     assert enhanced_audios[1].waveform.shape == resampled_mono_audio_sample_x2.waveform.shape
 
 
+@pytest.mark.skipif(
+    not TORCHAUDIO_AVAILABLE or not SPEECHBRAIN_AVAILABLE, reason="SpeechBrain or torchaudio are not installed"
+)
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
+@pytest.mark.parametrize(
+    "speechbrain_model",
+    ["speechbrain_model1"],
+    indirect=True,
+)
 def test_enhance_audios_incorrect_sampling_rate(mono_audio_sample: Audio, speechbrain_model: SpeechBrainModel) -> None:
     """Test enhancing audios with incorrect sampling rate."""
-    mono_audio_sample.sampling_rate = 8000  # Incorrect sample rate for this model
+    new_audio = Audio(waveform=mono_audio_sample.waveform, sampling_rate=8000)  # Incorrect sample rate for this model
     with pytest.raises(ValueError, match="Audio sampling rate 8000 does not match expected 16000"):
-        SpeechBrainEnhancer.enhance_audios_with_speechbrain(audios=[mono_audio_sample], model=speechbrain_model)
+        SpeechBrainEnhancer.enhance_audios_with_speechbrain(audios=[new_audio], model=speechbrain_model)
 
 
+@pytest.mark.skipif(
+    not TORCHAUDIO_AVAILABLE or not SPEECHBRAIN_AVAILABLE, reason="SpeechBrain or torchaudio are not installed"
+)
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_enhance_audios_with_different_bit_depths(audio_with_different_bit_depths: List[Audio]) -> None:
     """Test enhancing audios with different bit depths."""
@@ -94,6 +145,9 @@ def test_enhance_audios_with_different_bit_depths(audio_with_different_bit_depth
         assert audio.waveform.shape == audio_with_different_bit_depths[0].waveform.shape
 
 
+@pytest.mark.skipif(
+    not TORCHAUDIO_AVAILABLE or not SPEECHBRAIN_AVAILABLE, reason="SpeechBrain or torchaudio are not installed"
+)
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_enhance_audios_with_metadata(audio_with_metadata: Audio) -> None:
     """Test enhancing audios with metadata."""
@@ -103,6 +157,9 @@ def test_enhance_audios_with_metadata(audio_with_metadata: Audio) -> None:
     assert enhanced_audios[0].metadata == audio_with_metadata.metadata
 
 
+@pytest.mark.skipif(
+    not TORCHAUDIO_AVAILABLE or not SPEECHBRAIN_AVAILABLE, reason="SpeechBrain or torchaudio are not installed"
+)
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_enhance_audios_with_extreme_amplitude(audio_with_extreme_amplitude: Audio) -> None:
     """Test enhancing audios with extreme amplitude values."""
@@ -112,6 +169,7 @@ def test_enhance_audios_with_extreme_amplitude(audio_with_extreme_amplitude: Aud
     assert enhanced_audios[0].waveform.shape == audio_with_extreme_amplitude.waveform.shape
 
 
+@pytest.mark.skipif(not SPEECHBRAIN_AVAILABLE, reason="SpeechBrain is not installed")
 def test_model_caching(resampled_mono_audio_sample: Audio) -> None:
     """Test model caching by enhancing audios with the same model multiple times."""
     SpeechBrainEnhancer.enhance_audios_with_speechbrain(audios=[resampled_mono_audio_sample], device=DeviceType.CPU)

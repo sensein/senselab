@@ -11,9 +11,21 @@ from .model import (  # noqa: F401
     SenselabModel,
     SentenceTransformersModel,
     SpeechBrainModel,
-    TorchAudioModel,
     TorchModel,
     check_hf_repo_exists,
 )
+
+# Conditionally import TorchAudioModel only if torchaudio is available
+try:
+    from .model import TorchAudioModel
+except ImportError:
+    pass
+
+# Conditionally import CoquiTTSModel only if coqui-tts is available
+try:
+    from .model import CoquiTTSModel
+except ImportError:
+    pass
+
 from .pydra_helpers import *  # noqa: F403
 from .script_line import ScriptLine  # noqa: F401

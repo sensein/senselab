@@ -3,7 +3,7 @@
 import os
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
-import pydra
+from pydra.compose import python, workflow
 
 from senselab.audio.data_structures import Audio
 
@@ -11,109 +11,75 @@ from senselab.audio.data_structures import Audio
 def read_audios(
     file_paths: List[str | os.PathLike],
     cache_dir: Optional[Union[str, os.PathLike]] = None,
-    plugin: str = "serial",
-    plugin_args: Dict[str, Any] = {},
+    plugin: str = "debug",
+    plugin_args: Optional[Dict[str, Any]] = None,
 ) -> List[Audio]:
-    """Read and process a list of audio files using Pydra workflow.
+    """Read and wrap a list of audio files as `Audio` objects via a Pydra workflow.
 
     Args:
-        file_paths (List[str]): List of paths to audio files.
-        cache_dir (str, optional): Directory for caching intermediate results. Defaults to None.
-        plugin (str, optional): Pydra plugin to use for workflow submission. Defaults to "serial".
-        plugin_args (dict, optional): Additional arguments for the Pydra plugin. Defaults to {}.
+        file_paths: A list of audio file paths.
+        cache_dir: The directory to use for caching the workflow. Default is None.
+        plugin: The Pydra plugin to use for workflow submission. Default is "debug".
+        plugin_args: Additional arguments to pass to the plugin. Default is None.
 
     Returns:
-        List[Audio]: A list of Audio objects containing the waveform and sample rate for each processed file.
+        A list of `Audio` objects.
     """
+    plugin_args = plugin_args or {}
 
-    @pydra.mark.task
-    def load_audio_file(file_path: str | os.PathLike) -> Any:  # noqa: ANN401
-        """Load an audio file and return an Audio object.
+    @python.define
+    def _load_audio_file(path: str | os.PathLike) -> Audio:
+        return Audio(filepath=path)
 
-        Args:
-            file_path (str): Path to the audio file.
+    @workflow.define
+    def _wf(xs: Sequence[str | os.PathLike]) -> List[Audio]:
+        node = workflow.add(
+            _load_audio_file().split(path=xs),
+            name="map_read_audio",
+        )
+        return node.out
 
-        Returns:
-            Audio: An instance of the Audio class containing the waveform and sample rate.
-        """
-        return Audio.from_filepath(file_path)
-
-    # Create the workflow
-    wf = pydra.Workflow(name="read_audio_files_workflow", input_spec=["x"], cache_dir=cache_dir)
-    wf.split("x", x=file_paths)
-    wf.add(load_audio_file(name="load_audio_file", file_path=wf.lzin.x))
-    wf.set_output([("processed_files", wf.load_audio_file.lzout.out)])
-
-    # Run the workflow
-    with pydra.Submitter(plugin=plugin, **plugin_args) as sub:
-        sub(wf)
-
-    # Collect and return the results
-    outputs = wf.result()
-    return [output.output.processed_files for output in outputs]
+    worker = "debug" if plugin in ("serial", "debug") else plugin
+    res = _wf(xs=file_paths)(worker=worker, cache_root=cache_dir, **plugin_args)
+    return list(res.out)
 
 
 def save_audios(
     audio_tuples: Sequence[Tuple[Audio, Union[str, os.PathLike]]],
-    save_params: Dict[str, Any] = {},
+    save_params: Optional[Dict[str, Any]] = None,
     cache_dir: Optional[Union[str, os.PathLike]] = None,
-    plugin: str = "serial",
-    plugin_args: Dict[str, Any] = {},
+    plugin: str = "debug",
+    plugin_args: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """Save a list of Audio objects to specified files using Pydra workflow.
+    """Save a sequence of `(Audio, output_path)` pairs via a Pydra workflow.
 
     Args:
-        audio_tuples (Sequence[Tuple[Audio, Union[str, os.PathLike]]): Sequence of tuples where each tuple contains
-            an Audio object, its output path (str or os.PathLike).
-        save_params (dict, optional): Additional parameters for saving audio files.
-            Defaults to {}
-        cache_dir (str, optional): Directory for caching intermediate results.
-            Defaults to None.
-        plugin (str, optional): Pydra plugin to use for workflow submission.
-            Defaults to "serial".
-        plugin_args (dict, optional): Additional arguments for the Pydra plugin.
-            Defaults to {}.
+        audio_tuples: A sequence of `(Audio, output_path)` pairs.
+        save_params: A dictionary of parameters to pass to `Audio.save_to_file`.
+        cache_dir: The directory to use for caching the workflow. Default is None.
+        plugin: The Pydra plugin to use for workflow submission. Default is "serial".
+        plugin_args: Additional arguments to pass to the plugin. Default is None.
 
-    Raises:
-        RuntimeError: If any output directory in the provided paths does not exist or is not writable.
+    Returns:
+        None
     """
+    save_params = save_params or {}
+    plugin_args = plugin_args or {}
 
-    @pydra.mark.task
-    def _extract_audio(audio_tuple: Tuple[Audio, Union[str, os.PathLike]]) -> Any:  # noqa: ANN401
-        """Extract the Audio object from the tuple."""
-        return audio_tuple[0]
+    @python.define
+    def _save_pair(pair: Tuple[Audio, Union[str, os.PathLike]], params: Dict[str, Any]) -> str:
+        audio, out_path = pair
+        audio.save_to_file(os.fspath(out_path), **params)
+        return os.fspath(out_path)
 
-    @pydra.mark.task
-    def _extract_output_path(audio_tuple: Tuple[Audio, Union[str, os.PathLike]]) -> Union[str, os.PathLike]:
-        """Extract the output path from the tuple."""
-        return audio_tuple[1]
-
-    @pydra.mark.task
-    def _save_audio(audio: Audio, file_path: str, save_params: Dict[str, Any]) -> None:
-        """Save an Audio object to a file.
-
-        Args:
-            audio (Audio): The Audio object to save.
-            file_path (str): Path to save the audio file.
-            save_params (dict): Additional parameters for saving audio files.
-        """
-        audio.save_to_file(file_path, **save_params)
-
-    # Create the workflow
-    wf = pydra.Workflow(name="save_audio_files_workflow", input_spec=["audio_tuples"], cache_dir=cache_dir)
-    wf.split("audio_tuples", audio_tuples=audio_tuples)
-    wf.add(_extract_audio(name="_extract_audio", audio_tuple=wf.lzin.audio_tuples))
-    wf.add(_extract_output_path(name="_extract_output_path", audio_tuple=wf.lzin.audio_tuples))
-    wf.add(
-        _save_audio(
-            name="_save_audio",
-            audio=wf._extract_audio.lzout.out,
-            file_path=wf._extract_output_path.lzout.out,
-            save_params=save_params,
+    @workflow.define
+    def _wf(pairs: Sequence[Tuple[Audio, Union[str, os.PathLike]]], params: Dict[str, Any]) -> List[str]:
+        node = workflow.add(
+            _save_pair(params=params).split(pair=pairs),
+            name="map_save_audio",
         )
-    )
-    wf.set_output([])
+        return node.out  # list of saved file paths
 
-    # Run the workflow
-    with pydra.Submitter(plugin=plugin, **plugin_args) as sub:
-        sub(wf)
+    worker = "debug" if plugin in ("serial", "debug") else plugin
+    # Execute and ignore returned paths to keep the original None-returning API
+    _ = _wf(pairs=audio_tuples, params=save_params)(worker=worker, cache_root=cache_dir, **plugin_args)

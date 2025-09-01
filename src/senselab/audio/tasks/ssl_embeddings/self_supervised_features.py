@@ -1,6 +1,7 @@
 """This module contains functions for extracting features from pre-trained self-supervised models."""
 
-from typing import Dict, List, Optional
+import os
+from typing import Dict, List, Optional, Union
 
 import torch
 from transformers import AutoFeatureExtractor, AutoModel
@@ -19,13 +20,13 @@ class SSLEmbeddingsFactory:
     def _get_feature_extractor(
         cls,
         model: HFModel,
-        cache_dir: str = "~/",
+        cache_dir: Optional[Union[str, os.PathLike]] = None,
     ) -> AutoFeatureExtractor:
         """Get or create a feature extractor for SSL model.
 
         Args:
             model (HFModel): The HuggingFace model.
-            cache_dir (str): The path to where the model's weights will be saved.
+            cache_dir (Optional[str, os.PathLike]): The path to where the model's weights will be saved.
 
         Returns:
             AutoFeatureExtractor: The feature extractor for the model.
@@ -42,13 +43,13 @@ class SSLEmbeddingsFactory:
         cls,
         model: HFModel,
         device: DeviceType,
-        cache_dir: str = "~/",
+        cache_dir: Optional[Union[str, os.PathLike]] = None,
     ) -> AutoModel:
         """Load weights of SSL model.
 
         Args:
             model (HFModel): The Hugging Face model.
-            cache_dir (str): The path to where the model's weights will be saved.
+            cache_dir (Optional[os.PathLike, str]): The path to where the model's weights will be saved.
             device (DeviceType): The device to run the model on.
 
         Returns:
@@ -66,7 +67,7 @@ class SSLEmbeddingsFactory:
         cls,
         audios: List[Audio],
         model: HFModel,
-        cache_dir: str = "~/",
+        cache_dir: Optional[Union[str, os.PathLike]] = None,
         device: Optional[DeviceType] = None,
     ) -> List[torch.Tensor]:
         """Compute the ssl embeddings of audio signals.
@@ -75,7 +76,7 @@ class SSLEmbeddingsFactory:
             audios (List[Audio]): A list of Audio objects containing the audio signals and their properties.
             model (HFModel): The model used to compute the embeddings
                 (default is "facebook/wav2vec2-base").
-            cache_dir (str): The path to where the model's weights will be saved.
+            cache_dir (Optional[str, os.PathLike]): The path to where the model's weights will be saved.
             device (Optional[DeviceType]): The device to run the model on (default is None).
                 Only CPU and CUDA are supported.
 
@@ -87,7 +88,13 @@ class SSLEmbeddingsFactory:
         )
         # Load feature extractor and model
         feat_extractor = cls._get_feature_extractor(model=model, cache_dir=cache_dir)
-        sampling_rate = feat_extractor.sampling_rate
+        sr = getattr(feat_extractor, "sampling_rate", None)
+        if not isinstance(sr, int):
+            raise AttributeError(
+                "The feature extractor doesn't expose an integer `sampling_rate`. "
+                "Please use a model with a known sampling rate."
+            )
+        sampling_rate: int = sr
         ssl_model = cls._load_model(model=model, cache_dir=cache_dir, device=device)
 
         # Check that all audio objects have the correct sampling rate
@@ -100,12 +107,17 @@ class SSLEmbeddingsFactory:
                 )
         # Pre-process audio using the SSL mode feature extractor
         preprocessed_audios = [
-            feat_extractor(audio.waveform, sampling_rate=sampling_rate, return_tensors="pt") for audio in audios
+            feat_extractor(  # type: ignore[operator]
+                audio.waveform, sampling_rate=sampling_rate, return_tensors="pt"
+            )
+            for audio in audios
         ]
 
         # Extract embeddings (hidden states from all layers) from pre-trained model
         embeddings = [
-            ssl_model(audio.input_values.squeeze(0).to(device.value), output_hidden_states=True)
+            ssl_model(  # type: ignore[operator]
+                audio.input_values.squeeze(0).to(device.value), output_hidden_states=True
+            )
             for audio in preprocessed_audios
         ]
         embeddings = [torch.cat(embedding.hidden_states) for embedding in embeddings]

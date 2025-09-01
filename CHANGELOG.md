@@ -1,3 +1,431 @@
+# 0.41.0 (Fri Aug 29 2025)
+
+#### 🚀 Enhancement
+
+- Add print_scriptline function [#368](https://github.com/sensein/senselab/pull/368) ([@ibevers](https://github.com/ibevers) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@ibevers](https://github.com/ibevers)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.40.0 (Mon Aug 18 2025)
+
+#### 🚀 Enhancement
+
+- new tutorial for basic conversational audio analysis + Improved plotting utilities + Optimized preprocessing utilities using Pydra + Minors [#363](https://github.com/sensein/senselab/pull/363) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.39.0 (Thu Aug 14 2025)
+
+#### 🚀 Enhancement
+
+- added nvidia nemo diarization model [#338](https://github.com/sensein/senselab/pull/338) ([@fabiocat93](https://github.com/fabiocat93) [@satra](https://github.com/satra))
+
+#### Authors: 2
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Satrajit Ghosh ([@satra](https://github.com/satra))
+
+---
+
+# 0.38.1 (Thu Aug 14 2025)
+
+#### 🐛 Bug Fix
+
+- fix: plotting in colab [#317](https://github.com/sensein/senselab/pull/317) ([@satra](https://github.com/satra) [@ibevers](https://github.com/ibevers) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 3
+
+- [@ibevers](https://github.com/ibevers)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Satrajit Ghosh ([@satra](https://github.com/satra))
+
+---
+
+# 0.38.0 (Thu Aug 14 2025)
+
+#### 🚀 Enhancement
+
+- run mediapipe on a docker runner [#360](https://github.com/sensein/senselab/pull/360) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.37.0 (Wed Aug 13 2025)
+
+#### 🚀 Enhancement
+
+- Migrate from Pydra v0 to v1 [#358](https://github.com/sensein/senselab/pull/358) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### 🔩 Dependency Updates
+
+- Bump actions/first-interaction from 1 to 2 [#355](https://github.com/sensein/senselab/pull/355) ([@dependabot[bot]](https://github.com/dependabot[bot]) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@dependabot[bot]](https://github.com/dependabot[bot])
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.36.5 (Fri Jul 25 2025)
+
+#### 🐛 Bug Fix
+
+- Add PROVIDER_T to model classes [#353](https://github.com/sensein/senselab/pull/353) ([@ibevers](https://github.com/ibevers))
+
+#### ⚠️ Pushed to `main`
+
+- Update README.md ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@ibevers](https://github.com/ibevers)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.36.4 (Wed Jun 11 2025)
+
+#### 🐛 Bug Fix
+
+- Add Word-Level Alignment [#215](https://github.com/sensein/senselab/pull/215) ([@ibevers](https://github.com/ibevers) [@fabiocat93](https://github.com/fabiocat93))
+- Ci space [#343](https://github.com/sensein/senselab/pull/343) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### ⚠️ Pushed to `main`
+
+- Update CONTRIBUTING.md ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@ibevers](https://github.com/ibevers)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.36.3 (Wed Jun 04 2025)
+
+#### 🐛 Bug Fix
+
+- Fix nest_asyncio crash on uvloop: apply only when safe [#342](https://github.com/sensein/senselab/pull/342) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.36.2 (Fri May 23 2025)
+
+#### 🐛 Bug Fix
+
+- solving different blockers [#337](https://github.com/sensein/senselab/pull/337) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.36.1 (Tue Apr 22 2025)
+
+#### 🐛 Bug Fix
+
+- prevent model loading while importing plot_waveform. [#318](https://github.com/sensein/senselab/pull/318) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### 📝 Documentation
+
+- Update README.md getting started link [#314](https://github.com/sensein/senselab/pull/314) ([@satra](https://github.com/satra))
+
+#### Authors: 2
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Satrajit Ghosh ([@satra](https://github.com/satra))
+
+---
+
+# 0.36.0 (Fri Apr 18 2025)
+
+#### 🚀 Enhancement
+
+- added coqui-tts for text to speech [#313](https://github.com/sensein/senselab/pull/313) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### 📝 Documentation
+
+- fixing install command to make it compatible with zsh, bash, and fish [#312](https://github.com/sensein/senselab/pull/312) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.35.2 (Wed Apr 16 2025)
+
+#### 🐛 Bug Fix
+
+- Feats documentation refactor [#310](https://github.com/sensein/senselab/pull/310) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.35.1 (Wed Apr 16 2025)
+
+#### 🐛 Bug Fix
+
+- fixing extract_praat_parselmouth_features_from_audios [#309](https://github.com/sensein/senselab/pull/309) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.35.0 (Mon Apr 14 2025)
+
+#### 🚀 Enhancement
+
+- Lazy load audios [#288](https://github.com/sensein/senselab/pull/288) ([@fabiocat93](https://github.com/fabiocat93) jordanwilke@Jordans-MacBook-Air.local [@wilke0818](https://github.com/wilke0818))
+
+#### 🐛 Bug Fix
+
+- removing timestamped_transcript workflow [#308](https://github.com/sensein/senselab/pull/308) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 3
+
+- [@wilke0818](https://github.com/wilke0818)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Jordan Wilke (jordanwilke@Jordans-MacBook-Air.local)
+
+---
+
+# 0.34.1 (Sun Apr 13 2025)
+
+#### 🐛 Bug Fix
+
+- Enhanced stability for cca and cka [#294](https://github.com/sensein/senselab/pull/294) ([@fabiocat93](https://github.com/fabiocat93) [@satra](https://github.com/satra))
+
+#### Authors: 2
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Satrajit Ghosh ([@satra](https://github.com/satra))
+
+---
+
+# 0.34.0 (Fri Apr 11 2025)
+
+#### 🚀 Enhancement
+
+- Added Audio.from_stream + enhanced Audio.from_filepath [#284](https://github.com/sensein/senselab/pull/284) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.33.1 (Tue Mar 25 2025)
+
+#### 🐛 Bug Fix
+
+- Fixed but where n_fft defaults to 1024 [#291](https://github.com/sensein/senselab/pull/291) ([@Evan8456](https://github.com/Evan8456) [@fabiocat93](https://github.com/fabiocat93))
+
+#### ⚠️ Pushed to `main`
+
+- Update README.md ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- Evan Ng ([@Evan8456](https://github.com/Evan8456))
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.33.0 (Fri Mar 14 2025)
+
+#### 🚀 Enhancement
+
+- Added sparc for voice cloning [#273](https://github.com/sensein/senselab/pull/273) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.32.0 (Wed Mar 12 2025)
+
+#### 🚀 Enhancement
+
+- adding freevc, openvoice and knnvc (new implementation) for voice cloning [#265](https://github.com/sensein/senselab/pull/265) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.31.2 (Mon Mar 10 2025)
+
+#### 🐛 Bug Fix
+
+- Fix docs [#266](https://github.com/sensein/senselab/pull/266) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.31.1 (Mon Mar 10 2025)
+
+#### 🐛 Bug Fix
+
+- Initialize HF models using their preferred data type [#264](https://github.com/sensein/senselab/pull/264) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### ⚠️ Pushed to `main`
+
+- fixing docs ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.31.0 (Mon Mar 10 2025)
+
+#### 🚀 Enhancement
+
+- Restructuring senselab in submodules (audio, text, video) [#258](https://github.com/sensein/senselab/pull/258) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.30.1 (Tue Mar 04 2025)
+
+#### 🐛 Bug Fix
+
+- Fixing cache pointer [#260](https://github.com/sensein/senselab/pull/260) (jordanwilke@dhcp-10-29-168-254.dyn.MIT.EDU [@wilke0818](https://github.com/wilke0818))
+- experimenting with fixing seg fault during doc build [#257](https://github.com/sensein/senselab/pull/257) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 3
+
+- [@wilke0818](https://github.com/wilke0818)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Jordan Wilke (jordanwilke@dhcp-10-29-168-254.dyn.MIT.EDU)
+
+---
+
+# 0.30.0 (Thu Feb 27 2025)
+
+#### 🚀 Enhancement
+
+- migrating to poetry 2 and ensuring arm arch on mac [#255](https://github.com/sensein/senselab/pull/255) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.29.1 (Mon Feb 24 2025)
+
+#### 🐛 Bug Fix
+
+- adding python-ffmpeg to the dependencies and updating audiomentations version [#254](https://github.com/sensein/senselab/pull/254) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.29.0 (Tue Feb 04 2025)
+
+#### 🚀 Enhancement
+
+- Created SER tutorial [#201](https://github.com/sensein/senselab/pull/201) (jordanwilke@dhcp-10-31-174-110.dyn.MIT.EDU [@wilke0818](https://github.com/wilke0818) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 7
+
+- [@wilke0818](https://github.com/wilke0818)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Jordan Wilke (jordanwilke@dhcp-10-29-150-110.dyn.mit.edu)
+- Jordan Wilke (jordanwilke@dhcp-10-29-183-7.dyn.mit.edu)
+- Jordan Wilke (jordanwilke@dhcp-10-29-183-7.dyn.MIT.EDU)
+- Jordan Wilke (jordanwilke@dhcp-10-31-174-110.dyn.MIT.EDU)
+- Jordan Wilke (jordanwilke@Jordans-MacBook-Air.local)
+
+---
+
+# 0.28.3 (Tue Feb 04 2025)
+
+#### 🐛 Bug Fix
+
+- Fix/workaround to Pydra serialization issue while keeping torch up to date [#248](https://github.com/sensein/senselab/pull/248) (jordanwilke@Jordans-MacBook-Air.local [@fabiocat93](https://github.com/fabiocat93) [@wilke0818](https://github.com/wilke0818))
+
+#### Authors: 3
+
+- [@wilke0818](https://github.com/wilke0818)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Jordan Wilke (jordanwilke@Jordans-MacBook-Air.local)
+
+---
+
+# 0.28.2 (Mon Feb 03 2025)
+
+#### 🐛 Bug Fix
+
+- Fixing enhancement with segment duration < kernel size [#250](https://github.com/sensein/senselab/pull/250) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.28.1 (Sat Feb 01 2025)
+
+#### 🐛 Bug Fix
+
+- Fixing  timestamped-ASR with long audio recordings [#246](https://github.com/sensein/senselab/pull/246) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.28.0 (Fri Jan 31 2025)
+
+#### 🚀 Enhancement
+
+- enhancing speech enhancement [#244](https://github.com/sensein/senselab/pull/244) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.27.1 (Wed Jan 22 2025)
 
 #### 🐛 Bug Fix
@@ -711,7 +1139,7 @@
 - VAD and speaker diarization [#74](https://github.com/sensein/senselab/pull/74) ([@fabiocat93](https://github.com/fabiocat93))
 - Audio classification functionality [#76](https://github.com/sensein/senselab/pull/76) ([@wilke0818](https://github.com/wilke0818))
 - Add code for speaker embeddings task [#75](https://github.com/sensein/senselab/pull/75) (mbsilva@OPENMIND7.MIT.EDU [@fabiocat93](https://github.com/fabiocat93) [@900miles](https://github.com/900miles))
-- Senselab io [#70](https://github.com/sensein/senselab/pull/70) ([@wilke0818](https://github.com/wilke0818) [@fabiocat93](https://github.com/fabiocat93))
+- senselab io [#70](https://github.com/sensein/senselab/pull/70) ([@wilke0818](https://github.com/wilke0818) [@fabiocat93](https://github.com/fabiocat93))
 
 #### Authors: 5
 

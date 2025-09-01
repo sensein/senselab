@@ -6,6 +6,22 @@ import pytest
 
 from senselab.utils.data_structures import HFModel, check_hf_repo_exists
 
+try:
+    import torchaudio
+
+    TORCHAUDIO_AVAILABLE = True
+except ModuleNotFoundError:
+    TORCHAUDIO_AVAILABLE = False
+
+
+@pytest.mark.skipif(TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
+def test_check_torchaudio_model_init() -> None:
+    """Test torchaudio model initialization."""
+    with pytest.raises(ModuleNotFoundError):
+        from senselab.utils.data_structures.model import TorchAudioModel
+
+        TorchAudioModel(path_or_uri="torchaudio_model", revision="main")
+
 
 def test_check_hf_repo_exists_true() -> None:
     """Test HF repo exists."""
@@ -23,7 +39,7 @@ def test_check_hf_repo_exists_false() -> None:
 def test_hfmodel_valid_hf_repo_check() -> None:
     """Test valid HFModel repo check."""
     with patch("senselab.utils.data_structures.model.check_hf_repo_exists", return_value=True):
-        model = HFModel(path_or_uri="valid_repo")
+        model: HFModel = HFModel(path_or_uri="valid_repo")
         assert model.revision == "main"
 
 
