@@ -11,17 +11,20 @@
 
 Welcome to ```senselab```! This is a Python package for streamlining the processing and analysis of behavioral data, such as voice and speech patterns, with robust and reproducible methodologies.
 
-### Why should I use senselab?
-- **Modular Design**: Easily integrate or use standalone transformations for flexible data manipulation.
-- **Pre-built Pipelines**: Access pre-configured pipelines to reduce setup time and effort.
+### Why should I use ```senselab```?
+- **Modular design**: Easily integrate or use standalone transformations for flexible data manipulation.
+- **Pre-built pipelines**: Access pre-configured pipelines to reduce setup time and effort.
 - **Reproducibility**: Ensure consistent and verifiable results with fixed seeds and version-controlled steps.
-- **Easy Integration**: Seamlessly fit into existing workflows with minimal configuration.
+- **Easy integration**: Seamlessly fit into existing workflows with minimal configuration.
 - **Extensible**: Modify and contribute custom transformations and pipelines to meet specific research needs.
-- **Comprehensive Documentation**: Detailed guides, examples, and documentation for all features and modules.
-- **Performance Optimized**: Efficiently process large datasets with optimized code and algorithms.
-- **Interactive Examples**: Jupyter notebooks provide practical examples for deriving insights from real-world datasets.
+- **Comprehensive documentation**: Detailed guides, examples, and documentation for all features and modules.
+- **Performance optimized**: Efficiently process large datasets with optimized code and algorithms.
+- **Interactive examples**: Jupyter notebooks provide practical examples for deriving insights from real-world datasets.
+- **senselab AI**: Interact with your data through a chatbox using natural language. The AI agent generates and runs senselab-based code for you, making exploration easier and giving you both the results and the code used to produce them (perfect for quick experiments or for users who prefer not to code).
 
 **Caution:**: this package is still under development and may change rapidly over the next few weeks.
+
+---
 
 ## ⚠️ System Requirements
 1. **If on macOS, this package requires an ARM64 architecture** due to PyTorch 2.2.2+ dropping support for x86-64 on macOS.
@@ -55,7 +58,7 @@ Please follow the official installation instructions for your platform: [Install
     ```
   - or by adding it to your `.env` file (see `.env.example` for reference).
 
-
+---
 
 ## Installation
 Install this package via:
@@ -75,15 +78,12 @@ If you want to install only audio dependencies, you do:
 pip install 'senselab[audio]'
 ```
 
-To install audio dependencies, you do:
+To install articulatory, video, text, and senselab-ai extras, please do:
 ```sh
-pip install 'senselab[audio]'
+pip install 'senselab[articulatory,video,text,senselab-ai]'
 ```
 
-To install articulatory, video and text extras, please do:
-```sh
-pip install 'senselab[articulatory,video,text]'
-```
+---
 
 ## Quick start
 ```Python
@@ -100,8 +100,31 @@ print("The resampled audio has a sampling rate of {} Hz.".format(audio.sampling_
 For more detailed information, check out our [**Getting Started Tutorial**](https://github.com/sensein/senselab/blob/main/tutorials/audio/00_getting_started.ipynb).
 
 
+### senselab AI (our natural language agent)
+
+#### Development (with poetry)
+
+```bash
+poetry install --extras "senselab-ai"
+poetry run senselab-ai
+```
+
+#### Production (with pip)
+
+```bash
+pip install 'senselab[senselab-ai]'
+senselab-ai
+```
+
+Once started, you can open the provided JupyterLab interface, setup the agent and chat with it, and let it create and execute code for you.
+For a walkthrough, see: [`tutorials/senselab-ai/senselab_ai_intro.ipynb`](tutorials/senselab-ai/senselab_ai_intro.ipynb).
+
+---
+
 ## Contributing
 We welcome contributions from the community! Before getting started, please review our [**CONTRIBUTING.md**](https://github.com/sensein/senselab/blob/main/CONTRIBUTING.md).
+
+---
 
 ## Acknowledgments
 `senselab` is mostly supported by the following organizations and initiatives:
