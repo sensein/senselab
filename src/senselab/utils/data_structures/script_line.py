@@ -117,10 +117,11 @@ class ScriptLine(BaseModel):
 
     def __str__(self) -> str:
         """Return a nicely formatted string representation of the ScriptLine.
-        
+
         Returns:
             str: The nicely formatted string representation of the ScriptLine.
         """
+
         def format_timestamp(start: Optional[float], end: Optional[float]) -> str:
             if start is not None and end is not None:
                 return f" [{start:.2f} - {end:.2f}]"
@@ -134,6 +135,7 @@ class ScriptLine(BaseModel):
 
     def _str_with_indent(self, indent: int = 0) -> str:
         """Helper for recursive pretty-printing with indentation.
+
         Args:
             indent (int): The current indentation level.
 

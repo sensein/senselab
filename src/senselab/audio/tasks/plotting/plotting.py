@@ -174,7 +174,7 @@ def plot_waveform(
             ax.grid(True, alpha=0.3)
         fig.suptitle(title)
         axes[-1].set_xlabel("Time [s]")
-        fig.tight_layout(rect=[0, 0, 1, 0.96])
+        fig.tight_layout(rect=(0, 0, 1, 0.96))
         plt.show(block=False)
         return fig
 
@@ -389,7 +389,7 @@ def plot_waveform_and_specgram(
         cbar.set_label("Magnitude (dB)")
 
         fig.suptitle(title)
-        fig.tight_layout(rect=[0, 0, 1, 0.96])
+        fig.tight_layout(rect=(0, 0, 1, 0.96))
         plt.show(block=False)
         return fig
 

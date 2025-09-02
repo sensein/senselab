@@ -57,17 +57,17 @@ For clarity:
 
 * The **core** of this project is licensed under **Apache-2.0**.
 * **Optional** functionality depending on:
-  - **`notebook-intelligence`** (GPL-3.0) and **`praat-parselmouth`** (GPL-3.0)  
+  - **`notebook-intelligence`** (GPL-3.0) and **`praat-parselmouth`** (GPL-3.0)
     → Using or distributing the project together with these components subjects the combined distribution to GPL-3.0 obligations.
-  - **`ultralytics`** (AGPL-3.0)  
+  - **`ultralytics`** (AGPL-3.0)
     → Using or distributing the project together with this component subjects the combined distribution to AGPL-3.0 obligations.
-  - **`pycountry`** (LGPL-2.1)  
+  - **`pycountry`** (LGPL-2.1)
     → The project may depend dynamically on this component while remaining Apache-2.0; however, modifications or static incorporation are subject to LGPL-2.1 obligations.
-  - **`coqui-tts`** (MPL-2.0)  
+  - **`coqui-tts`** (MPL-2.0)
     → Modifications to MPL-licensed files must be released under MPL-2.0, though the rest of the project remains Apache-2.0.
-  - **`opensmile`** (audEERING Research License)  
-    → Licensed for non-commercial use only (academic research, teaching, evaluation).  
-      Any use in products or other commercial applications requires a separate commercial license from audEERING GmbH.  
+  - **`opensmile`** (audEERING Research License)
+    → Licensed for non-commercial use only (academic research, teaching, evaluation).
+      Any use in products or other commercial applications requires a separate commercial license from audEERING GmbH.
 * If you do **not** install or distribute the GPL, AGPL, LGPL, MPL, or custom-licensed optional components, your use of this project remains under the **Apache-2.0 License** only.
 
 **Note:** If you are uncertain about your rights or obligations under these licenses, you should seek advice from a qualified legal professional.
