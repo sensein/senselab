@@ -48,6 +48,14 @@ Welcome to ```senselab```! This is a Python package for streamlining the process
   - ```conda install -y nvidia/label/cuda-12.6.3::cuda-libraries-dev```
 4. Docker is required and must be running for some video models (e.g., MediaPipe-based estimators).
 Please follow the official installation instructions for your platform: [Install Docker](https://docs.docker.com/get-started/get-docker/).
+5. Some functionalities rely on HuggingFace models, and increasingly, models require authentication and signed license agreements. Instructions on how to generate a Hugging Face access token can be found here: https://huggingface.co/docs/hub/security-tokens
+  - You can provide your HuggingFace token either by exporting it in your shell:
+    ```bash
+    export HF_TOKEN=your_token_here
+    ```
+  - or by adding it to your `.env` file (see `.env.example` for reference).
+
+
 
 ## Installation
 Install this package via:
@@ -59,7 +67,7 @@ pip install 'senselab[all]'
 Or get the newest development version via:
 
 ```sh
-pip install git+https://github.com/sensein/senselab.git
+pip install 'git+https://github.com/sensein/senselab.git#egg=senselab[all]'
 ```
 
 If you want to install only audio dependencies, you do:
@@ -72,9 +80,9 @@ To install audio dependencies, you do:
 pip install 'senselab[audio]'
 ```
 
-To install video and text extras, please do:
+To install articulatory, video and text extras, please do:
 ```sh
-pip install 'senselab[video,text]'
+pip install 'senselab[articulatory,video,text]'
 ```
 
 ## Quick start
