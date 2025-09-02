@@ -97,7 +97,7 @@ video = [
   "opencv-python-headless",
   "ultralytics"
 ]
-notebook = [
+senselab-ai = [
   "notebook-intelligence",
   "ipywidgets",
   "ipykernel",
