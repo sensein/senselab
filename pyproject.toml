@@ -128,6 +128,9 @@ pdoc = "~=15.0"
 [tool.poetry.requires-plugins]
 poetry-dynamic-versioning = {version = ">=1.0.0,<2.0.0", extras = ["plugin"]}
 
+[tool.poetry.scripts]
+senselab-ai = "senselab.agentic_interface.launcher:senselab_ai"
+
 [tool.pytest.ini_options]
 pythonpath = [
   "src"
@@ -206,9 +209,6 @@ skip = [
   "*.ipynb"
 ]
 ignore-words-list = ["senselab", "nd", "astroid", "wil", "SER", "te", "EXPRESSO", "VAI"]
-
-[tool.poetry.scripts]
-senselab-ai = "senselab.agentic_interface.launcher:senselab_ai"
 
 [build-system]
 requires = ["poetry-core>=2.0", "poetry-dynamic-versioning>=1.0.0,<2.0.0"]

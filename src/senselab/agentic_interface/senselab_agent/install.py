@@ -9,6 +9,7 @@ from typing import Tuple
 
 # ---- Paths -----------------------------------------------------------------
 
+
 def _share_jupyter_dir() -> Path:
     # <venv or env>/share/jupyter
     return Path(sys.prefix) / "share" / "jupyter"
@@ -30,6 +31,7 @@ def _nbi_config_dst_path() -> Path:
 
 # ---- Installers ------------------------------------------------------------
 
+
 def _copy_json(src: Path, dst: Path, *, force: bool) -> Path:
     dst.parent.mkdir(parents=True, exist_ok=True)
     if dst.exists() and not force:
@@ -42,29 +44,47 @@ def _copy_json(src: Path, dst: Path, *, force: bool) -> Path:
 
 
 def install_extension_json(*, force: bool = False) -> Path:
-    """Copy vendored extension.json into the ENV's share/jupyter path so
-    Notebook-Intelligence can discover it.
+    """Copy vendored extension.json into the ENV's share/jupyter path.
+     
+    This is so that Notebook-Intelligence can discover it.
+
+    Args:
+        force (bool): Whether to force the installation, overwriting existing files.
+
+    Return:
+        Path: The destination path for the nbi-config.json file.
     """
     src = files("senselab.agentic_interface.senselab_agent") / "extension.json"
     if not src.is_file():
         raise FileNotFoundError("Bundled extension.json not found inside package")
+    assert isinstance(src, Path)
     return _copy_json(src, _extension_dst_path(), force=force)
 
 
 def install_nbi_config_json(*, force: bool = False) -> Path:
-    """Copy vendored nbi-config.json into <env-prefix>/share/jupyter/nbi-config.json
-    so global Notebook-Intelligence settings are available by default.
+    """Copy vendored nbi-config.json into <env-prefix>/share/jupyter/nbi-config.json.
+
+    This is so global Notebook-Intelligence settings are available by default.
+
+    Args:
+        force (bool): Whether to force the installation, overwriting existing files.
+
+    Return:
+        Path: The destination path for the nbi-config.json file.
     """
     # Adjust the resource package/path below if your nbi-config.json lives elsewhere.
     src = files("senselab.agentic_interface") / "nbi-config.json"
     if not src.is_file():
         raise FileNotFoundError("Bundled nbi-config.json not found inside package")
+    assert isinstance(src, Path)
     return _copy_json(src, _nbi_config_dst_path(), force=force)
 
 
 def install(*, force: bool = False) -> Tuple[Path, Path]:
     """Install both extension.json and nbi-config.json.
-    Returns the destination paths (extension_dst, nbi_config_dst).
+
+    Return:
+        Tuple[Path, Path]: The destination paths (extension_dst, nbi_config_dst).
     """
     ext_path = install_extension_json(force=force)
     cfg_path = install_nbi_config_json(force=force)
@@ -73,7 +93,9 @@ def install(*, force: bool = False) -> Tuple[Path, Path]:
 
 def ensure_installed() -> Tuple[Path, Path]:
     """Idempotent helper; copies only if missing.
-    Returns the destination paths (extension_dst, nbi_config_dst).
+
+    Return:
+        Tuple[Path, Path]: The destination paths (extension_dst, nbi_config_dst).
     """
     ext_dst = _extension_dst_path()
     cfg_dst = _nbi_config_dst_path()

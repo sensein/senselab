@@ -28,8 +28,8 @@ Please follow the official installation instructions for your platform: [Install
   - ```poetry install --extras "audio text video" --with dev,docs```
 
 5c. **Set up your HuggingFace token** (required for some models).
-Many models used in senselab are hosted on HuggingFace and require authentication or acceptance of a model license. 
-  - Generate a token by following the instructions here: https://huggingface.co/docs/hub/security-tokens. 
+Many models used in senselab are hosted on HuggingFace and require authentication or acceptance of a model license.
+  - Generate a token by following the instructions here: https://huggingface.co/docs/hub/security-tokens.
   - Export it in your shell: ```export HF_TOKEN=your_token_here``` or add it to your ```.env``` file (see ```.env.example``` for reference).
 6. **Install pre-commit hooks**:
   ```poetry run pre-commit install```
