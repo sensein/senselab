@@ -23,6 +23,7 @@ See the **Third-party licenses** section below for details and references.
 | iso639                     | [MIT](https://github.com/janpipek/iso639-python/blob/master/LICENSE)                        |
 | jiwer                      | [Apache-2.0](https://github.com/jitsi/jiwer/blob/master/LICENSE)                            |
 | matplotlib                 | [CUSTOM](https://github.com/matplotlib/matplotlib/blob/main/LICENSE)                        |
+| mediapipe                  | [Apache-2.0](https://github.com/google-ai-edge/mediapipe/blob/master/LICENSE)                        |
 | nbformat                   | [BSD-3-Clause](https://github.com/jupyter/nbformat/blob/main/LICENSE)                       |
 | nbss-upload                | [BSD-3-Clause](https://github.com/notebook-sharing-space/nbss-upload/blob/main/LICENSE)     |
 | nemo-toolkit               | [Apache-2.0](https://github.com/NVIDIA/NeMo/blob/main/LICENSE)                              |

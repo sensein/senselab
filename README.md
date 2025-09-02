@@ -110,3 +110,29 @@ We welcome contributions from the community! Before getting started, please revi
 - Child Mind Institute
 - ReadNet Project
 - Chris and Lann Woehrle Psychiatric Fund
+
+
+### Open-source acknowledgments
+
+`senselab` builds on the work of many open-source projects. We gratefully acknowledge the developers and maintainers of the following key dependencies:
+
+* [PyTorch](https://github.com/pytorch/pytorch), [Torchvision](https://github.com/pytorch/vision), [Torchaudio](https://github.com/pytorch/audio)
+_deep learning framework and audio/vision extensions_
+* [Transformers](https://github.com/huggingface/transformers), [Datasets](https://github.com/huggingface/datasets), [Accelerate](https://github.com/huggingface/accelerate), [Huggingface Hub](https://github.com/huggingface/huggingface_hub)
+_training and inference utilities plus (pre-)trained models and datasets_
+* [Scikit-learn](https://github.com/scikit-learn/scikit-learn), [UMAP-learn](https://github.com/lmcinnes/umap)
+_machine learning utilities_
+* [Matplotlib](https://github.com/matplotlib/matplotlib)
+_visualization toolkit_
+* [Praat-Parselmouth](https://github.com/YannickJadoul/Parselmouth), [OpenSMILE](https://github.com/audeering/opensmile), [SpeechBrain](https://github.com/speechbrain/speechbrain), [SPARC](speech-articulatory-coding), [Pyannote-audio](https://github.com/pyannote/pyannote-audio), [Coqui-TTS](https://github.com/idiap/coqui-ai-TTS), [NVIDIA NeMo](https://github.com/NVIDIA/NeMo), [Vocos](https://github.com/gemelo-ai/vocos), [Audiomentations](https://github.com/iver56/audiomentations), [Torch-audiomentations](https://github.com/asteroid-team/torch-audiomentations)
+_speech and audio processing tools_
+* [NLTK](https://github.com/nltk/nltk), [Sentence-Transformers](https://github.com/UKPLab/sentence-transformers), [Pylangacq](https://github.com/jacksonllee/pylangacq), [Jiwer](https://github.com/jitsi/jiwer)
+_text and language processing tools_
+* [OpenCV](https://github.com/opencv/opencv-python), [Ultralytics](https://github.com/ultralytics/ultralytics), [mediapipe](https://github.com/google-ai-edge/mediapipe), [Python-ffmpeg](https://github.com/jonghwanhyeon/python-ffmpeg), [AV](https://github.com/PyAV-Org/PyAV)
+_computer vision and pose estimation_
+* [Pydra](https://github.com/nipype/pydra), [Pydantic](https://github.com/pydantic/pydantic), [Iso639](https://github.com/janpipek/iso639-python), [PyCountry](https://github.com/pycountry/pycountry), [Nest-asyncio](https://github.com/erdewit/nest_asyncio) 
+_workflow, validation, and utilities_
+* [Ipywidgets](https://github.com/jupyter-widgets/ipywidgets), [IpKernel](https://github.com/ipython/ipykernel), [Nbformat](https://github.com/jupyter/nbformat), [Nbss-upload](https://github.com/notebook-sharing-space/nbss-upload), [Notebook-intelligence](https://github.com/notebook-intelligence/notebook-intelligence)
+_Jupyter and notebook-related tools_
+
+We are thankful to the open-source community for enabling this project
