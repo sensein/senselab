@@ -134,7 +134,6 @@ class ScriptLine(BaseModel):
 
     def _str_with_indent(self, indent: int = 0) -> str:
         """Helper for recursive pretty-printing with indentation.
-        
         Args:
             indent (int): The current indentation level.
 

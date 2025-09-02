@@ -1,3 +1,16 @@
+# 0.41.0 (Fri Aug 29 2025)
+
+#### 🚀 Enhancement
+
+- Add print_scriptline function [#368](https://github.com/sensein/senselab/pull/368) ([@ibevers](https://github.com/ibevers) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@ibevers](https://github.com/ibevers)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.40.0 (Mon Aug 18 2025)
 
 #### 🚀 Enhancement
