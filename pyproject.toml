@@ -41,7 +41,6 @@ accelerate = "*"
 huggingface-hub = "~=0.34"
 pycountry = "~=24.6"
 iso639 = "~=0.1"
-types-requests = "~=2.32"
 scikit-learn = "~=1.7"
 umap-learn = "~=0.5"
 python-ffmpeg = "~=2.0"
@@ -118,6 +117,7 @@ pre-commit = "~=4.0"
 ruff = "~=0.3"
 codespell = "~=2.3"
 uvloop = "~=0.21"
+types-requests = "~=2.32"
 
 [tool.poetry.group.docs]
 optional = true
