@@ -1,3 +1,81 @@
+# LICENSE
+
+This project is licensed under the **Apache License, Version 2.0**.
+
+Some **optional** components depend on third-party packages that are licensed under terms other than Apache-2.0. If you install, enable, or distribute the project together with those optional components, your use and distribution of the combined work must also comply with the license obligations of those third-party components.
+
+See the **Third-party licenses** section below for details and references.
+
+
+## Third-party licenses
+
+
+| Dependency                 | License                                                                                     |
+| -------------------------- | ------------------------------------------------------------------------------------------- |
+| accelerate                 | [Apache-2.0](https://github.com/huggingface/accelerate/blob/main/LICENSE)                   |
+| audiomentations            | [MIT](https://github.com/iver56/audiomentations/blob/master/LICENSE)                        |
+| av                         | [BSD-3-Clause](https://github.com/PyAV-Org/PyAV/blob/main/LICENSE.txt)                      |
+| coqui-tts                  | [MPL-2.0](https://github.com/idiap/coqui-ai-TTS/blob/dev/LICENSE.txt)                       |
+| datasets                   | [Apache-2.0](https://github.com/huggingface/datasets/blob/main/LICENSE)                     |
+| huggingface-hub            | [Apache-2.0](https://github.com/huggingface/huggingface_hub/blob/main/LICENSE)              |
+| ipykernel                  | [BSD-3-Clause](https://github.com/ipython/ipykernel/blob/main/LICENSE)                      |
+| ipywidgets                 | [BSD-3-Clause](https://github.com/jupyter-widgets/ipywidgets/blob/main/LICENSE)             |
+| iso639                     | [MIT](https://github.com/janpipek/iso639-python/blob/master/LICENSE)                        |
+| jiwer                      | [Apache-2.0](https://github.com/jitsi/jiwer/blob/master/LICENSE)                            |
+| matplotlib                 | [CUSTOM](https://github.com/matplotlib/matplotlib/blob/main/LICENSE)                        |
+| nbformat                   | [BSD-3-Clause](https://github.com/jupyter/nbformat/blob/main/LICENSE)                       |
+| nbss-upload                | [BSD-3-Clause](https://github.com/notebook-sharing-space/nbss-upload/blob/main/LICENSE)     |
+| nemo-toolkit               | [Apache-2.0](https://github.com/NVIDIA/NeMo/blob/main/LICENSE)                              |
+| nest-asyncio               | [BSD-2-Clause](https://github.com/erdewit/nest_asyncio/blob/master/LICENSE)                 |
+| nltk                       | [Apache-2.0](https://github.com/nltk/nltk/blob/develop/LICENSE.txt)                         |
+| notebook-intelligence      | [GPL-3.0](https://github.com/notebook-intelligence/notebook-intelligence/blob/main/LICENSE) |
+| opencv-python-headless     | [MIT](https://github.com/opencv/opencv-python/blob/4.x/LICENSE.txt)                         |
+| opensmile                  | [CUSTOM](https://github.com/audeering/opensmile/blob/master/LICENSE)                        |
+| praat-parselmouth          | [GPL-3.0](https://github.com/YannickJadoul/Parselmouth/blob/master/LICENSE)                 |
+| pyannote-audio             | [MIT](https://github.com/pyannote/pyannote-audio/blob/develop/LICENSE)                      |
+| pycountry                  | [LGPL-2.1](https://github.com/pycountry/pycountry/blob/main/LICENSE.txt)                    |
+| pydantic                   | [MIT](https://github.com/pydantic/pydantic/blob/main/LICENSE)                               |
+| pydra                      | [Apache-2.0](https://github.com/nipype/pydra/blob/master/LICENSE)                           |
+| pylangacq                  | [MIT](https://github.com/jacksonllee/pylangacq/blob/main/LICENSE.txt)                       |
+| python-ffmpeg              | [CUSTOM](https://github.com/jonghwanhyeon/python-ffmpeg/blob/main/LICENSE)                  |
+| scikit-learn               | [BSD-3-Clause](https://github.com/scikit-learn/scikit-learn/blob/main/COPYING)              |
+| sentence-transformers      | [Apache-2.0](https://github.com/UKPLab/sentence-transformers/blob/master/LICENSE)           |
+| speech-articulatory-coding | Not defined                                                                                 |
+| speechbrain                | [Apache-2.0](https://github.com/speechbrain/speechbrain/blob/develop/LICENSE)               |
+| torch                      | [CUSTOM](https://github.com/pytorch/pytorch/blob/main/LICENSE)                              |
+| torch-audiomentations      | [MIT](https://github.com/asteroid-team/torch-audiomentations/blob/master/LICENSE)           |
+| torchaudio                 | [BSD-2-Clause](https://github.com/pytorch/audio/blob/main/LICENSE)                          |
+| torchvision                | [BSD-3-Clause](https://github.com/pytorch/vision/blob/main/LICENSE)                         |
+| transformers               | [Apache-2.0](https://github.com/huggingface/transformers/blob/main/LICENSE)                 |
+| types-requests             | [Apache-2.0](https://github.com/python/typeshed/blob/main/LICENSE)                          |
+| ultralytics                | [AGPL-3.0](https://github.com/ultralytics/ultralytics/blob/main/LICENSE)                    |
+| umap-learn                 | [BSD-3-Clause](https://github.com/lmcinnes/umap/blob/master/LICENSE.txt)                    |
+| vocos                      | [MIT](https://github.com/gemelo-ai/vocos/blob/main/LICENSE)                                 |
+
+
+For clarity:
+
+* The **core** of this project is licensed under **Apache-2.0**.
+* **Optional** functionality depending on:
+  - **`notebook-intelligence`** (GPL-3.0) and **`praat-parselmouth`** (GPL-3.0)  
+    → Using or distributing the project together with these components subjects the combined distribution to GPL-3.0 obligations.
+  - **`ultralytics`** (AGPL-3.0)  
+    → Using or distributing the project together with this component subjects the combined distribution to AGPL-3.0 obligations.
+  - **`pycountry`** (LGPL-2.1)  
+    → The project may depend dynamically on this component while remaining Apache-2.0; however, modifications or static incorporation are subject to LGPL-2.1 obligations.
+  - **`coqui-tts`** (MPL-2.0)  
+    → Modifications to MPL-licensed files must be released under MPL-2.0, though the rest of the project remains Apache-2.0.
+  - **`opensmile`** (audEERING Research License)  
+    → Licensed for non-commercial use only (academic research, teaching, evaluation).  
+      Any use in products or other commercial applications requires a separate commercial license from audEERING GmbH.  
+* If you do **not** install or distribute the GPL, AGPL, LGPL, MPL, or custom-licensed optional components, your use of this project remains under the **Apache-2.0 License** only.
+
+**Note:** If you are uncertain about your rights or obligations under these licenses, you should seek advice from a qualified legal professional.
+
+---
+
+## Apache License, Version 2.0
+
 Apache License
 Version 2.0, January 2004
 http://www.apache.org/licenses/
