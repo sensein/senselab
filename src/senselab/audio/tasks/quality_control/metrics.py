@@ -542,39 +542,4 @@ def primary_speaker_ratio_metric(audio: Audio, **input_source) -> float:
     except:
         ratio = np.nan
 
-
-    # sub = []
-    # ses = []
-    # task = []
-    # speaker_count = []
-    # diar_obj = {}
-    # main_speaker_ratio = []
-
-    #for k, r in diar.items():
-        
-        # #probably not needed 
-        # sb = Path(k).stem.split("sub-")[1].split("_ses")[0]
-        # ss = Path(k).stem.split("ses-")[1].split("_task")[0]
-        # tk = Path(k).stem.split("task-")[1].split(".wav")[0]
-
-        # sub.append(sb)
-        # ses.append(ss)
-        # task.append(tk)
-        # silent.append(r.get_timeline().duration()< 0.5)
-        # diar_result.append(r.get_timeline().duration())
-        # speaker_count.append(len(r.labels()))
-        # diar_obj[(sb, ss, tk)] = r
-        #main_speaker_ratio.append(primary_speaker_ratio(r))
-
-    #diar_speaker_check = pd.DataFrame(
-    #     {
-    #         "record_id": sub,
-    #         "session_id": ses,
-    #         "task": task,
-    #         "speaker_count": speaker_count,
-    #         "primary_speaker_ratio": main_speaker_ratio,
-    #     }
-    # )
-    #diar_obj_filtered = {tuple(f): diar_obj[tuple(f)] for f in features[["record_id", "session_id", "task"]].values}
-
     return ratio
