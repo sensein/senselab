@@ -859,20 +859,11 @@ def primary_speaker_ratio_check(
         True when primary speaker > ``threshold``, None if evaluation fails.
     """
 
-    # x.speaker_count > 1 and x.primary_speaker_ratio < 0.8
-
     result = get_evaluation(audio_or_path, "../../modeling/diarize/diar_r2.pkl", primary_speaker_ratio_metric, df)
     if result is None:
         return None
+    # x.speaker_count > 1 and x.primary_speaker_ratio < 0.8 TODO do I need the first threshold; I don't think so since it should be 1 for 1 speaker
     return float(result) > threshold
-
-    # diar_obj):
-    try:
-        ratio = diar_obj.label_duration(diar_obj.argmax()) / np.sum([c[1] for c in diar_obj.chart()])
-    except:
-        ratio = np.nan
-
-    return ratio
 
 
 # calculate SNR
