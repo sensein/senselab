@@ -11,7 +11,7 @@ Please use the following workflow when contributing:
   - Install and run Docker (required for some video models, like MediaPipe-based estimators).
 Please follow the official installation instructions for your platform: [Install Docker](https://docs.docker.com/get-started/get-docker/).
   - ```pipx install poetry``` (alternative installation strategies [here](https://python-poetry.org/docs/#installation))
-1. **Create an issue**: Use GitHub to create an issuel, assign it to yourself (and any collaborators) and, if you have access, add it to the [Project board](https://github.com/orgs/sensein/projects/45).
+1. **Create an issue**: Use GitHub to create an issue, assign it to yourself (and any collaborators) and, if you have access, add it to the [Project board](https://github.com/orgs/sensein/projects/45).
 2. **Create a branch**: Use GitHub's "Create a branch" button from the issue page to generate a branch associated with the issue.
 3. **Clone the repo locally**:
    ```git clone https://github.com/sensein/senselab.git```
@@ -25,7 +25,12 @@ Please follow the official installation instructions for your platform: [Install
 
 
 5b. **Install all required dependencies** (we recommend to test your code both with all extras and the minimum required set of extras):
-  - ```poetry install --extras "audio articulatory text video" --with dev,docs```
+  - ```poetry install --extras "audio text video" --with dev,docs```
+
+5c. **Set up your HuggingFace token** (required for some models).
+Many models used in senselab are hosted on HuggingFace and require authentication or acceptance of a model license.
+  - Generate a token by following the instructions here: https://huggingface.co/docs/hub/security-tokens.
+  - Export it in your shell: ```export HF_TOKEN=your_token_here``` or add it to your ```.env``` file (see ```.env.example``` for reference).
 6. **Install pre-commit hooks**:
   ```poetry run pre-commit install```
 7. **Work locally on the issue branch.**

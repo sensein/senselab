@@ -1,0 +1,71 @@
+{
+    "chat_model": {
+        "provider": "openai-compatible",
+        "model": "openai-compatible-chat-model",
+        "properties": [
+            {
+                "id": "api_key",
+                "name": "API key",
+                "description": "API key",
+                "value": "",
+                "optional": false
+            },
+            {
+                "id": "model_id",
+                "name": "Model",
+                "description": "Model (must support streaming)",
+                "value": "gpt-4o",
+                "optional": false
+            },
+            {
+                "id": "base_url",
+                "name": "Base URL",
+                "description": "Base URL",
+                "value": "",
+                "optional": true
+            },
+            {
+                "id": "context_window",
+                "name": "Context window",
+                "description": "Context window length",
+                "value": "",
+                "optional": true
+            }
+        ]
+    },
+    "inline_completion_model": {
+        "provider": "openai-compatible",
+        "model": "openai-compatible-inline-completion-model",
+        "properties": [
+            {
+                "id": "api_key",
+                "name": "API key",
+                "description": "API key",
+                "value": "sk-",
+                "optional": false
+            },
+            {
+                "id": "model_id",
+                "name": "Model",
+                "description": "Model",
+                "value": "gpt-4o",
+                "optional": false
+            },
+            {
+                "id": "base_url",
+                "name": "Base URL",
+                "description": "Base URL",
+                "value": "",
+                "optional": true
+            },
+            {
+                "id": "context_window",
+                "name": "Context window",
+                "description": "Context window length",
+                "value": "",
+                "optional": true
+            }
+        ]
+    },
+    "store_github_access_token": false
+}

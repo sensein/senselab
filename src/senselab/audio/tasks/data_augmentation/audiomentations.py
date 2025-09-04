@@ -24,17 +24,60 @@ def augment_audios_with_audiomentations(
     plugin_args: Optional[dict[str, Any]] = None,
     cache_dir: Optional[str] = None,
 ) -> List[Audio]:
-    """Apply data augmentation using audiomentations.
+    """Apply data augmentation using **audiomentations** via a Pydra workflow.
+
+    The provided `audiomentations.Compose` is serialized once and sent to each
+    map task so that multiple `Audio` objects can be augmented in parallel.
+
+    Notes:
+        - This function expects a CPU-only pipeline (audiomentations is NumPy-based).
+        - For reproducibility, construct your `Compose` with your own random seed
+          strategy (e.g., seeding your RNG before creating the pipeline).
+        - The returned `Audio` objects preserve sampling rate and copy metadata.
 
     Args:
-        audios: List of Audios whose data will be augmented with the given augmentations.
-        augmentation: A composition of augmentations (audiomentations).
-        plugin: The plugin to use for running the workflow. Default is "debug".
-        plugin_args: Additional arguments to pass to the plugin. Default is None.
-        cache_dir: The directory to use for caching the workflow. Default is None.
+        audios (list[Audio]):
+            List of `Audio` objects to augment.
+        augmentation (Compose):
+            An `audiomentations.Compose` pipeline (CPU).
+        plugin (str, optional):
+            Pydra execution plugin. Common options:
+              * ``"serial"`` or ``"debug"``: Run sequentially (default).
+              * ``"cf"``: Use concurrent futures for parallel execution.
+              * ``"slurm"``: Submit tasks to a SLURM cluster.
+        plugin_args (dict, optional):
+            Extra keyword arguments passed to the chosen plugin.
+            Example (for ``"cf"``): ``{"n_procs": 8}``
+            See: https://nipype.github.io/pydra/
+        cache_dir (str, optional):
+            Directory for Pydra's cache. If ``None``, Pydra uses its default.
 
     Returns:
-        List of augmented audios.
+        list[Audio]: Augmented `Audio` objects in the same order as input.
+
+    Raises:
+        ModuleNotFoundError: If `audiomentations` is not installed.
+        Exception: Any error raised during augmentation or workflow execution.
+
+    Example:
+        >>> from audiomentations import Compose, AddGaussianNoise, Gain
+        >>> from senselab.audio.data_structures import Audio
+        >>> from senselab.audio.tasks.data_augmentation.audiomentations import (
+        ...     augment_audios_with_audiomentations
+        ... )
+        >>> aug = Compose([
+        ...     AddGaussianNoise(min_amplitude=0.001, max_amplitude=0.01, p=1.0),
+        ...     Gain(min_gain_in_db=-6, max_gain_in_db=6, p=1.0),
+        ... ])
+        >>> a1 = Audio(filepath="/abs/path/sample1.wav")
+        >>> a2 = Audio(filepath="/abs/path/sample2.wav")
+        >>> out = augment_audios_with_audiomentations(
+        ...     [a1, a2],
+        ...     aug,
+        ...     plugin="cf"
+        ... )
+        >>> len(out)
+        2
     """
     if not AUDIOMENTATIONS_AVAILABLE:
         raise ModuleNotFoundError(

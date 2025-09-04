@@ -1,4 +1,10 @@
-"""This module implements plotting methods for utilities."""
+"""Plotting utilities for transcripts and diarization segments.
+
+These helpers produce simple timeline visualizations using Matplotlib and
+return the created `matplotlib.figure.Figure`. Plots are shown in a
+non-blocking way (`plt.show(block=False)`), so you can continue execution and
+optionally call `fig.savefig(...)` afterwards.
+"""
 
 from typing import List
 
@@ -10,18 +16,32 @@ from senselab.utils.data_structures import ScriptLine
 
 
 def plot_transcript(transcript: ScriptLine) -> Figure:
-    """Plots the transcript visualization over time.
+    """Visualize a transcript's word/segment chunks over time.
+
+    Expects a `ScriptLine` where `chunks` is a list of child `ScriptLine`
+    objects, each with `start`, `end`, and `text`. Each chunk is rendered as
+    a horizontal segment positioned along the time axis, with its text label.
 
     Args:
-        transcript (ScriptLine): The transcript object containing chunks of text with start and end times.
+        transcript (ScriptLine):
+            Transcript whose `chunks` will be plotted. Every chunk must have
+            both `start` and `end` timestamps (in seconds). `text` may be empty.
 
     Returns:
-        None
+        matplotlib.figure.Figure: The created figure (also displayed).
 
-    Todo:
-        - Add option to save the plot
-        - Add option to choose the size of the Figure
-        - Add check if transcript contains chunks with time information
+    Raises:
+        ValueError:
+            If `transcript.chunks` is `None`, or any chunk lacks `start` or `end`.
+
+    Example:
+        >>> from senselab.utils.data_structures import ScriptLine
+        >>> chunks = [
+        ...     ScriptLine(text="hello", start=0.0, end=0.6),
+        ...     ScriptLine(text="world", start=0.7, end=1.4),
+        ... ]
+        >>> transcript = ScriptLine(text="hello world", chunks=chunks)
+        >>> fig = plot_transcript(transcript)
     """
     if transcript.chunks is None:
         raise ValueError("The transcript does not contain any chunks.")
@@ -61,18 +81,32 @@ def plot_transcript(transcript: ScriptLine) -> Figure:
 
 
 def plot_segment(segments: List[ScriptLine]) -> Figure:
-    """Plots the segments of the transcript over time.
+    """Visualize diarization (or generic labeled) segments over time.
+
+    Each `ScriptLine` in `segments` must provide `start`, `end`, and `speaker`
+    (used here as a categorical label). Segments are drawn as colored horizontal
+    bars, stacked by label on the y-axis.
 
     Args:
-        segments (List[ScriptLine]): The segments object containing segments with start and end times and a label.
+        segments (list[ScriptLine]):
+            List of labeled time segments. Each item must have
+            `start` (sec), `end` (sec), and `speaker` (label) set.
 
     Returns:
-        None
+        matplotlib.figure.Figure: The created figure (also displayed).
 
-    Todo:
-        - Add option to save the plot
-        - Add option to choose the size of the Figure
-        - Add check if transcript contains segments with time information
+    Raises:
+        ValueError:
+            If any segment is missing `start`, `end`, or `speaker`.
+
+    Example:
+        >>> from senselab.utils.data_structures import ScriptLine
+        >>> segs = [
+        ...     ScriptLine(speaker="spk1", start=0.0, end=1.2),
+        ...     ScriptLine(speaker="spk2", start=1.0, end=2.0),
+        ...     ScriptLine(speaker="spk1", start=2.1, end=3.0),
+        ... ]
+        >>> fig = plot_segment(segs)
     """
     start_times = []
     end_times = []
