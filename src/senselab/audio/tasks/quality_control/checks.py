@@ -37,6 +37,7 @@ from senselab.audio.tasks.quality_control.metrics import (
     zero_crossing_rate_metric,
     percent_clipping_metric,
     primary_speaker_ratio_metric,
+    presence_of_voice_metric
 )
 
 
@@ -829,7 +830,7 @@ def measure_clipping_check(
     df: Optional[pd.DataFrame] = None,
 ) -> Optional[bool]:
     """
-    Measures clipping in an audio file.
+    Checks for clipping in an audio file.
 
     Args:
         audio_or_path: An Audio instance or filepath to the audio file.
@@ -850,7 +851,7 @@ def primary_speaker_ratio_check(
     df: Optional[pd.DataFrame] = None,
 ) -> Optional[bool]:
     """
-    Measures primary speaker ratio in an audio file. Takes the outputs from diarization and calculates the ratio of the most common speaker to the total duration.
+    Checks that primary speaker ratio in an audio file (the outputs from diarization and then the the ratio of the most common speaker to the total duration) is above threshold
 
     Args:
         audio_or_path: An Audio instance or filepath to the audio file.
@@ -866,10 +867,41 @@ def primary_speaker_ratio_check(
     return float(result) > threshold
 
 
+
+def presence_of_voice_check(
+    audio_or_path: Union[Audio, str],
+    threshold: float = 0,
+    df: Optional[pd.DataFrame] = None,
+) -> Optional[bool]:
+    """
+    Check that Voice Activity Detection duration is more than 0.
+
+    Args:
+        audio_or_path: An Audio instance or filepath to the audio file.
+
+    Returns:
+        True when primary speaker > ``threshold``, None if evaluation fails.
+    """
+
+    result = get_evaluation(audio_or_path, "../../modeling/diarize/vad_r2.pkl", presence_of_voice_metric, df)
+    if result is None:
+        return None
+    return float(result) > threshold
+
+
+
+
+
+
+
+
 # calculate SNR
 ## idn is the name of the file
 ## pyn is the pyannote object
 ##features i think is existing df to use to index out the record and session and task)
+
+
+
 
 
 def signal_to_noise_ratio(idn, pyn, features):
