@@ -1,3 +1,15 @@
+# 0.42.1 (Thu Sep 04 2025)
+
+#### 🐛 Bug Fix
+
+- handle when senselab-ai extras are not installed [#375](https://github.com/sensein/senselab/pull/375) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.42.0 (Thu Sep 04 2025)
 
 #### 🚀 Enhancement
