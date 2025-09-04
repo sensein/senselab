@@ -62,7 +62,10 @@ class SenselabModel(BaseModel, Generic[PROVIDER_T]):
 
 
 class HFModel(SenselabModel[PROVIDER_T]):
-    """HuggingFace model."""
+    """HuggingFace model.
+
+    Note: For some HuggingFace models, HF_TOKEN may be required for access.
+    """
 
     revision: Annotated[str, Field(validate_default=True)] = "main"
     info: Optional[ModelInfo] = None

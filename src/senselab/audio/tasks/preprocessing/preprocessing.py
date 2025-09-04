@@ -1,4 +1,23 @@
-"""This module implements audio preprocessing utilities with Pydra workflows."""
+"""Audio preprocessing utilities implemented with Pydra workflows.
+
+This module provides parallelizable preprocessing primitives operating on in-memory
+`senselab.audio.data_structures.Audio` objects. Each function exposes a simple API
+and runs as a small Pydra workflow so that batches can be processed concurrently
+(using the selected plugin).
+
+Notes:
+    - These functions operate on `Audio` objects (already loaded in memory); they
+      do not read or write files.
+    - For execution backends, see Pydra v1 plugins:
+      https://nipype.github.io/pydra/
+
+Common plugins:
+    * "serial" / "debug" — sequential execution (default).
+    * "cf" — concurrent futures for parallel execution.
+    * "slurm" — submit tasks to a SLURM cluster.
+
+Use `plugin_args` to tune the backend, e.g. `{"n_procs": 8}` for "cf".
+"""
 
 import os
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
@@ -36,7 +55,48 @@ def resample_audios(
     plugin: str = "debug",
     plugin_args: Optional[Dict[str, Any]] = None,
 ) -> List[Audio]:
-    """Resamples a list of audio signals to a given sampling rate (parallelized with Pydra)."""
+    """Resample a batch of `Audio` objects to a target sampling rate via Pydra.
+
+    For each channel, a zero-phase IIR low-pass filter (Butterworth, SOS) is applied,
+    then resampling is performed with `speechbrain.augment.time_domain.Resample`.
+
+    Args:
+        audios (list[Audio]):
+            Input audio objects to be resampled.
+        resample_rate (int):
+            Target sampling rate in Hz.
+        lowcut (float, optional):
+            Low-pass cutoff frequency in Hz (applied before resampling). If ``None``,
+            defaults to ``resample_rate / 2 - 100`` to avoid Nyquist artifacts.
+        order (int, optional):
+            Butterworth filter order (default: 4).
+        cache_dir (str | os.PathLike, optional):
+            Pydra cache directory. If ``None``, Pydra uses its default.
+        plugin (str, optional):
+            Pydra execution plugin. Common options:
+              * ``"serial"`` / ``"debug"``: sequential (default).
+              * ``"cf"``: concurrent futures (parallel).
+              * ``"slurm"``: SLURM scheduler.
+        plugin_args (dict, optional):
+            Extra options for the chosen plugin (e.g., ``{"n_procs": 8}`` for "cf").
+
+    Returns:
+        list[Audio]: Resampled `Audio` objects (sampling rate set to `resample_rate`).
+
+    Raises:
+        ModuleNotFoundError:
+            If `speechbrain` is not installed.
+        ValueError:
+            If provided parameters are invalid.
+
+    Example:
+        >>> from senselab.audio.tasks.preprocessing import resample_audios
+        >>> from senselab.audio.data_structures import Audio
+        >>> a1 = Audio(filepath=Path("sample1.wav").resolve())
+        >>> out = resample_audios([a1], resample_rate=16000, plugin="cf")
+        >>> out[0].sampling_rate
+        16000
+    """
     if not SPEECHBRAIN_AVAILABLE:
         raise ModuleNotFoundError(
             "`speechbrain` is not installed. "
@@ -91,7 +151,34 @@ def downmix_audios_to_mono(
     plugin: str = "debug",
     plugin_args: Optional[Dict[str, Any]] = None,
 ) -> List[Audio]:
-    """Downmix Audio objects to mono by averaging channels (parallelized with Pydra)."""
+    """Downmix each `Audio` to mono by averaging channels (parallel via Pydra).
+
+    Channel averaging preserves the original sampling rate and copies metadata.
+
+    Args:
+        audios (list[Audio]):
+            Input `Audio` objects. Works for mono and multi-channel inputs.
+        cache_dir (str | os.PathLike, optional):
+            Pydra cache directory. If ``None``, Pydra uses its default.
+        plugin (str, optional):
+            Pydra execution plugin. Common options:
+              * ``"serial"`` / ``"debug"``: sequential (default).
+              * ``"cf"``: concurrent futures (parallel).
+              * ``"slurm"``: SLURM scheduler.
+        plugin_args (dict, optional):
+            Extra options for the chosen plugin (e.g., ``{"n_procs": 8}``).
+
+    Returns:
+        list[Audio]: Mono `Audio` objects (shape [1, T]).
+
+    Example:
+        >>> from senselab.audio.tasks.preprocessing import downmix_audios_to_mono
+        >>> from senselab.audio.data_structures import Audio
+        >>> a1 = Audio(filepath=Path("sample1.wav").resolve())
+        >>> out = downmix_audios_to_mono([a1], plugin="cf")
+        >>> out[0].waveform.shape[0]
+        1
+    """
     plugin_args = plugin_args or {}
 
     @python.define
@@ -122,7 +209,38 @@ def select_channel_from_audios(
     plugin: str = "debug",
     plugin_args: Optional[Dict[str, Any]] = None,
 ) -> List[Audio]:
-    """Select a specific channel from each Audio (parallelized with Pydra)."""
+    """Select a specific channel from each `Audio` (parallel via Pydra).
+
+    Args:
+        audios (list[Audio]):
+            Input `Audio` objects (mono or multi-channel).
+        channel_index (int):
+            Zero-based channel index to extract.
+        cache_dir (str | os.PathLike, optional):
+            Pydra cache directory.
+        plugin (str, optional):
+            Pydra execution plugin. Common options:
+              * ``"serial"`` / ``"debug"``: sequential (default).
+              * ``"cf"``: concurrent futures (parallel).
+              * ``"slurm"``: SLURM scheduler.
+        plugin_args (dict, optional):
+            Extra options for the chosen plugin.
+
+    Returns:
+        list[Audio]: `Audio` objects containing only the selected channel (shape [1, T]).
+
+    Raises:
+        ValueError:
+            If `channel_index` is out of range for any input.
+
+    Example:
+        >>> from senselab.audio.tasks.preprocessing import select_channel_from_audios
+        >>> from senselab.audio.data_structures import Audio
+        >>> a1 = Audio(filepath=Path("sample1.wav").resolve())
+        >>> ch0 = select_channel_from_audios([a1], channel_index=0, plugin="cf")
+        >>> ch0[0].waveform.shape[0]
+        1
+    """
     plugin_args = plugin_args or {}
 
     @python.define
@@ -143,9 +261,6 @@ def select_channel_from_audios(
 
 
 # ---------------------------------------------------------------------
-# Chunk Audios (by single [start, end])
-# ---------------------------------------------------------------------
-# ---------------------------------------------------------------------
 # Chunk Audios (by single [start, end]) via Pydra
 # ---------------------------------------------------------------------
 def chunk_audios(
@@ -154,21 +269,38 @@ def chunk_audios(
     plugin: str = "debug",
     plugin_args: Optional[Dict[str, Any]] = None,
 ) -> List[Audio]:
-    """Chunk input audios based on provided start/end timestamps using a Pydra workflow.
+    """Extract a single time chunk from each `Audio` via a Pydra workflow.
+
+    Each pair provides the `(start, end)` times (in seconds) of the desired chunk.
 
     Args:
-        data: A sequence of tuples in the form:
-              [(audio: Audio, (start: float, end: float)), ...]
-              where `start` and `end` are in seconds.
-        cache_dir: Directory to use for caching the workflow (optional).
-        plugin: Pydra plugin to use for submission. Defaults to "debug".
-        plugin_args: Additional arguments to pass to the plugin (optional).
+        data (Sequence[tuple[Audio, tuple[float, float]]]):
+            Sequence like ``[(audio, (start, end)), ...]``.
+        cache_dir (str | os.PathLike, optional):
+            Pydra cache directory.
+        plugin (str, optional):
+            Pydra execution plugin. Common options:
+              * ``"serial"`` / ``"debug"``: sequential (default).
+              * ``"cf"``: concurrent futures (parallel).
+              * ``"slurm"``: SLURM scheduler.
+        plugin_args (dict, optional):
+            Extra options for the chosen plugin.
 
     Returns:
-        List[Audio]: New Audio objects corresponding to the requested chunks.
+        list[Audio]: One chunked `Audio` per input pair.
 
     Raises:
-        ValueError: If start < 0, end exceeds duration, or start >= end.
+        ValueError:
+            If `start < 0`, `start >= end`, or `end` exceeds audio duration.
+
+    Example:
+        >>> from senselab.audio.tasks.preprocessing import chunk_audios
+        >>> from senselab.audio.data_structures import Audio
+        >>> a1 = Audio(filepath=Path("sample1.wav").resolve())
+        >>> pairs = [(a1, (0.5, 2.0)), (a1, (1.0, 3.0))]
+        >>> chunks = chunk_audios(pairs, plugin="cf", plugin_args={"n_procs": 8})
+        >>> len(chunks)
+        2
     """
     plugin_args = plugin_args or {}
 
@@ -211,53 +343,6 @@ def chunk_audios(
     return list(res.out)
 
 
-'''
-def chunk_audios(data: List[Tuple[Audio, Tuple[float, float]]]) -> List[Audio]:
-    """
-    Chunk input audios based on provided start/end timestamps.
-
-    Args:
-        data: A list of tuples in the form:
-              [(audio: Audio, (start: float, end: float)), ...]
-              where `start` and `end` are in seconds.
-
-    Returns:
-        List[Audio]: New `Audio` objects corresponding to the requested chunks.
-
-    Raises:
-        ValueError: If start < 0, end exceeds duration, or start >= end.
-    """
-    chunked_audios: List[Audio] = []
-
-    for audio, (start, end) in data:
-        if start < 0:
-            raise ValueError("Start time must be >= 0.")
-        if start >= end:
-            raise ValueError(f"Start time ({start}) must be < end time ({end}).")
-
-        duration = audio.waveform.shape[1] / audio.sampling_rate
-        if end > duration:
-            raise ValueError(
-                f"End time must be <= audio duration ({duration:.6f} s)."
-            )
-
-        start_sample = int(start * audio.sampling_rate)
-        end_sample = int(end * audio.sampling_rate)
-
-        chunked_waveform = audio.waveform[:, start_sample:end_sample]
-
-        chunked_audios.append(
-            Audio(
-                waveform=chunked_waveform,
-                sampling_rate=audio.sampling_rate,
-                metadata=audio.metadata.copy(),
-            )
-        )
-
-    return chunked_audios
-'''
-
-
 # ---------------------------------------------------------------------
 # Extract multiple segments per audio
 # ---------------------------------------------------------------------
@@ -267,9 +352,39 @@ def extract_segments(
     plugin: str = "debug",
     plugin_args: Optional[Dict[str, Any]] = None,
 ) -> List[List[Audio]]:
-    """Extract multiple segments for each input Audio (maps over audios with Pydra).
+    """Extract multiple time segments per `Audio` (maps over inputs via Pydra).
 
-    Returns a list aligned with `data`, where each element is a list[Audio] (the extracted segments).
+    For each input `Audio`, a list of `(start, end)` segments (in seconds) is provided,
+    and the function returns a list of chunked `Audio` objects.
+
+    Args:
+        data (list[tuple[Audio, list[tuple[float, float]]]]):
+            Items like ``(audio, [(s1, e1), (s2, e2), ...])``.
+        cache_dir (str | os.PathLike, optional):
+            Pydra cache directory.
+        plugin (str, optional):
+            Pydra execution plugin. Common options:
+              * ``"serial"`` / ``"debug"``: sequential (default).
+              * ``"cf"``: concurrent futures (parallel).
+              * ``"slurm"``: SLURM scheduler.
+        plugin_args (dict, optional):
+            Extra options for the chosen plugin.
+
+    Returns:
+        list[list[Audio]]: For each input audio, a list of extracted segments.
+
+    Raises:
+        ValueError:
+            If any segment is invalid or exceeds audio duration.
+
+    Example:
+        >>> from senselab.audio.data_structures import Audio
+        >>> from senselab.audio.tasks.preprocessing import extract_segments
+        >>> a1 = Audio(filepath=Path("sample1.wav").resolve())
+        >>> specs = [(a1, [(0.0, 1.0), (1.5, 2.0)])]
+        >>> segmented = extract_segments(specs, plugin="cf")
+        >>> len(segmented[0])
+        2
     """
     plugin_args = plugin_args or {}
 
@@ -312,7 +427,37 @@ def pad_audios(
     plugin: str = "debug",
     plugin_args: Optional[Dict[str, Any]] = None,
 ) -> List[Audio]:
-    """Right-pad each audio to `desired_samples` (parallelized with Pydra)."""
+    """Right-pad each audio to a desired number of samples (parallel via Pydra).
+
+    Pads with zeros to reach `desired_samples`. If an audio is already longer or equal,
+    it is returned unchanged.
+
+    Args:
+        audios (list[Audio]):
+            Input `Audio` objects.
+        desired_samples (int):
+            Target length in samples (per channel).
+        cache_dir (str | os.PathLike, optional):
+            Pydra cache directory.
+        plugin (str, optional):
+            Pydra execution plugin. Common options:
+              * ``"serial"`` / ``"debug"``: sequential (default).
+              * ``"cf"``: concurrent futures (parallel).
+              * ``"slurm"``: SLURM scheduler.
+        plugin_args (dict, optional):
+            Extra options for the chosen plugin.
+
+    Returns:
+        list[Audio]: Padded `Audio` objects.
+
+    Example:
+        >>> from senselab.audio.data_structures import Audio
+        >>> from senselab.audio.tasks.preprocessing import pad_audios
+        >>> a1 = Audio(filepath=Path("sample1.wav").resolve())
+        >>> padded = pad_audios([a1], desired_samples=16000, plugin="cf")
+        >>> padded[0].waveform.shape[1] >= 16000
+        True
+    """
     plugin_args = plugin_args or {}
 
     @python.define
@@ -349,10 +494,38 @@ def evenly_segment_audios(
     plugin: str = "debug",
     plugin_args: Optional[Dict[str, Any]] = None,
 ) -> List[List[Audio]]:
-    """Split each audio into fixed-length segments (seconds). Optionally pad the last segment.
+    """Split each audio into fixed-length segments (seconds), optionally padding the last.
+
+    If `pad_last_segment` is True and the final segment is shorter than `segment_length`,
+    it is right-padded with zeros to match the target duration.
+
+    Args:
+        audios (list[Audio]):
+            Input `Audio` objects.
+        segment_length (float):
+            Segment duration in seconds.
+        pad_last_segment (bool, optional):
+            Whether to pad the last segment to full length (default: True).
+        cache_dir (str | os.PathLike, optional):
+            Pydra cache directory.
+        plugin (str, optional):
+            Pydra execution plugin. Common options:
+              * ``"serial"`` / ``"debug"``: sequential (default).
+              * ``"cf"``: concurrent futures (parallel).
+              * ``"slurm"``: SLURM scheduler.
+        plugin_args (dict, optional):
+            Extra options for the chosen plugin.
 
     Returns:
-        List[List[Audio]]: For each input Audio, a list of segments as Audio objects.
+        list[list[Audio]]: For each input, a list of fixed-length segments.
+
+    Example:
+        >>> from senselab.audio.data_structures import Audio
+        >>> from senselab.audio.tasks.preprocessing import evenly_segment_audios
+        >>> a1 = Audio(filepath=Path("sample1.wav").resolve())
+        >>> segs = evenly_segment_audios([a1], segment_length=1.0, pad_last_segment=True, plugin="cf")
+        >>> len(segs[0]) >= 1
+        True
     """
     plugin_args = plugin_args or {}
 
@@ -413,16 +586,32 @@ def evenly_segment_audios(
 # Concatenate audio objects
 # ---------------------------------------------------------------------
 def concatenate_audios(audios: List[Audio]) -> Audio:
-    """Concatenates all audios in the list, ensuring they have the same sampling rate and shape.
+    """Concatenate multiple `Audio` objects along the time axis.
+
+    All inputs must have the same sampling rate and number of channels. Metadata
+    is not merged; the output `Audio` contains the concatenated waveform and
+    the common sampling rate.
 
     Args:
-        audios: List of Audio objects to concatenate.
+        audios (list[Audio]):
+            Non-empty list of `Audio` objects to concatenate.
 
     Returns:
-        A single Audio object that is the concatenation of all input audios.
+        Audio: A single `Audio` with waveform concatenated along time.
 
     Raises:
-        ValueError: If the audios do not all have the same sampling rate or shape.
+        ValueError:
+            If the list is empty, or inputs differ in sampling rate or channel count.
+
+    Example:
+        >>> from senselab.audio.data_structures import Audio
+        >>> from senselab.audio.tasks.preprocessing import concatenate_audios
+        >>> a1 = Audio(filepath=Path("sample1.wav").resolve())
+        >>> a2 = Audio(filepath=Path("sample2.wav").resolve())
+        >>> a3 = Audio(filepath=Path("sample3.wav").resolve())
+        >>> out = concatenate_audios([a1, a2, a3])
+        >>> out.waveform.shape[1] == a1.waveform.shape[1] + a2.waveform.shape[1] + a3.waveform.shape[1]
+        True
     """
     if not audios:
         raise ValueError("The input list is empty. Please provide a list with at least one Audio object.")

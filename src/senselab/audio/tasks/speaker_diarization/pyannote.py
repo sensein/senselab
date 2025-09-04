@@ -19,7 +19,17 @@ except ModuleNotFoundError:
 
 
 class PyannoteDiarization:
-    """A factory for managing Pyannote Diarization pipelines."""
+    """Factory for creating and caching **Pyannote** diarization pipelines.
+
+    Pipelines are cached per *(model.path_or_uri, revision, device)*, so repeated calls
+    with the same configuration reuse the initialized pipeline.
+
+    Guidance:
+        - Pyannote models typically expect **mono, 16 kHz** audio.
+        - If you know the number of speakers, set `num_speakers`; otherwise use
+          `min_speakers`/`max_speakers` bounds to help estimation.
+        - Supported devices: ``DeviceType.CPU`` and ``DeviceType.CUDA``.
+    """
 
     _pipelines: Dict[str, "Pipeline"] = {}
 
@@ -64,19 +74,58 @@ def diarize_audios_with_pyannote(
     min_speakers: Optional[int] = None,
     max_speakers: Optional[int] = None,
 ) -> List[List[ScriptLine]]:
-    """Diarizes a list of audio files using the Pyannote speaker diarization model.
+    """Diarize audios with **Pyannote**; returns per-speaker segments per audio.
+
+    Requirements:
+        - Input must be **mono** (`[1, T]`); stereo/multi-channel is rejected.
+        - Sampling rate must be **16 kHz** (per model card for `3.1`).
 
     Args:
-        audios (List[Audio]): A list of audio files.
-        model (PyannoteAudioModel): The model to use for diarization.
-            If None, the default model "pyannote/speaker-diarization-3.1" is used.
-        device (Optional[DeviceType]): The device to use for diarization.
-        num_speakers (Optional[int]): Number of speakers, when known.
-        min_speakers (Optional[int]): Minimum number of speakers. Has no effect when `num_speakers` is provided.
-        max_speakers (Optional[int]): Maximum number of speakers. Has no effect when `num_speakers` is provided.
+        audios (list[Audio]):
+            Audio clips to diarize (mono, 16 kHz).
+        model (PyannoteAudioModel | None):
+            Pyannote model. Defaults to ``pyannote/speaker-diarization-3.1@main``.
+        device (DeviceType | None):
+            Inference device (``CPU`` or ``CUDA``).
+        num_speakers (int | None):
+            If known, fix the number of speakers.
+        min_speakers (int | None):
+            Minimum speakers when estimating (ignored if `num_speakers` is set).
+        max_speakers (int | None):
+            Maximum speakers when estimating (ignored if `num_speakers` is set).
 
     Returns:
-        List[ScriptLine]: A list of ScriptLine objects containing the diarization results.
+        list[list[ScriptLine]]: One list per input audio with `(speaker, start, end)`.
+
+    Raises:
+        ModuleNotFoundError:
+            If `pyannote-audio` is not installed.
+        ValueError:
+            If audio is not mono or sampling rate ≠ 16 kHz.
+
+    Example (estimate speakers within bounds):
+        >>> from pathlib import Path
+        >>> from senselab.audio.data_structures import Audio
+        >>> from senselab.utils.data_structures import DeviceType, PyannoteAudioModel
+        >>> a1 = Audio(filepath=Path("sample1.wav").resolve())
+        >>> mdl = PyannoteAudioModel(path_or_uri="pyannote/speaker-diarization-3.1", revision="main")
+        >>> diar = diarize_audios_with_pyannote(
+        ...     [a1],
+        ...     model=mdl,
+        ...     device=DeviceType.CPU,
+        ...     min_speakers=1,
+        ...     max_speakers=3,
+        ... )
+        >>> len(diar[0]) >= 0
+        True
+
+    Example (known number of speakers):
+        >>> from pathlib import Path
+        >>> from senselab.audio.data_structures import Audio
+        >>> a1 = Audio(filepath=Path("sample1.wav").resolve())
+        >>> diar = diarize_audios_with_pyannote([a1], num_speakers=2)
+        >>> len(diar[0]) >= 0
+        True
     """
 
     def _annotation_to_script_lines(annotation: "Annotation") -> List[ScriptLine]:

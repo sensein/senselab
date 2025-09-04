@@ -1,4 +1,15 @@
-"""This module computes CCA and CKA."""
+"""CCA and CKA similarity utilities.
+
+This module provides two representation-similarity metrics:
+
+- **CCA (Canonical Correlation Analysis)** — returns the mean of squared canonical
+  correlations (often denoted `R^2_{CCA}`) between two sets of features.
+- **CKA (Centered Kernel Alignment)** — a kernel-based similarity with strong
+  invariance properties; we provide linear and RBF variants with numerically
+  stable centering and regularization.
+
+All inputs are expected as PyTorch tensors shaped **[n_samples, n_features]**.
+"""
 
 from enum import Enum
 
@@ -6,16 +17,39 @@ import torch
 
 
 def compute_cca(features_x: torch.Tensor, features_y: torch.Tensor, standardize: bool = True) -> float:
-    """Compute the mean squared CCA correlation (R^2_{CCA}).
+    r"""Compute mean squared CCA correlation (`R^2_{CCA}`) between two feature sets.
+
+    This implementation:
+      * Optionally **z-score standardizes** features per dimension (recommended),
+      * Uses **reduced QR** to obtain orthonormal bases for numerical stability,
+      * Computes the average of squared canonical correlations in a compact form:
+        `\\|Q_x^\\top Q_y\\|_F^2 / \\min(d_x, d_y)`.
 
     Args:
-        features_x (torch.Tensor): A num_examples x num_features matrix of features.
-        features_y (torch.Tensor): A num_examples x num_features matrix of features.
-        standardize (bool): Whether to perform z-score standardization on input features.
-                            Defaults to True.
+        features_x (torch.Tensor):
+            Feature matrix with shape ``[n_samples, d_x]``.
+        features_y (torch.Tensor):
+            Feature matrix with shape ``[n_samples, d_y]``.
+        standardize (bool, optional):
+            If ``True``, z-score each feature dimension across samples.
+            Improves conditioning and makes scales comparable. Defaults to ``True``.
 
     Returns:
-        float: The mean squared CCA correlations between X and Y.
+        float: Mean of squared canonical correlations in ``[0, 1]`` (1 means identical
+        subspaces modulo linear transforms).
+
+    Notes:
+        - Both inputs must have the **same number of samples** (rows).
+        - For very high-dimensional features, standardization typically improves stability.
+
+    Example:
+        >>> import torch
+        >>> torch.manual_seed(0)
+        >>> X = torch.randn(100, 64)
+        >>> Y = X @ torch.randn(64, 64)  # linear transform
+        >>> r2 = compute_cca(X, Y, standardize=True)
+        >>> 0.8 <= r2 <= 1.0
+        True
     """
     if standardize:
         # Standardize inputs to unit variance (improves numerical stability)
@@ -30,7 +64,12 @@ def compute_cca(features_x: torch.Tensor, features_y: torch.Tensor, standardize:
 
 
 class CKAKernelType(Enum):
-    """CKA kernel types."""
+    """Kernel choices for CKA.
+
+    Attributes:
+        LINEAR: Linear kernel (dot-product).
+        RBF: Radial Basis Function (Gaussian) kernel.
+    """
 
     LINEAR = "linear"
     RBF = "rbf"
@@ -44,29 +83,65 @@ def compute_cka(
     reg: float = 1e-6,
     standardize: bool = True,  # Use 'standardize' to clarify the operation
 ) -> float:
-    """Compute Centered Kernel Alignment (CKA) with enhanced numerical stability.
+    """Compute Centered Kernel Alignment (CKA) with stability guards.
 
-    Guarantees output ∈ [0,1] through:
-      1. Input standardization (prevents scale dominance)
-      2. Gram matrix regularization (avoids ill-conditioning)
-      3. Epsilon-protected division (prevents NaN/∞)
-      4. Value clipping (enforces theoretical bounds)
+    The implementation follows the standard CKA definition with additional
+    numerical-stability steps:
+      1) **Optional z-score** standardization per feature,
+      2) **Gram-matrix regularization** (Tikhonov) added to the diagonal,
+      3) **Epsilon-guarded** division to avoid NaN/Inf,
+      4) **Value clipping** to ensure the result lies in ``[0, 1]``.
+
+    For the **RBF** kernel, the bandwidth is set via a robust median heuristic:
+    ``sigma^2 = (threshold^2) * median(||x_i - x_j||^2)``. Set ``threshold`` to
+    tune kernel width around the median distance (``1.0`` is a common default).
 
     Args:
-        features_x (torch.Tensor): A num_examples x num_features matrix.
-        features_y (torch.Tensor): A num_examples x num_features matrix.
-        kernel (CKAKernelType): Kernel type (LINEAR or RBF).
-        threshold (float): Fraction of median Euclidean distance to use as RBF kernel bandwidth.
-                           Ignored for LINEAR kernel.
-        reg (float): Regularization term added to the Gram matrix diagonal for stability.
-        standardize (bool): Whether to perform z-score standardization on input features.
-                            Defaults to True.
+        features_x (torch.Tensor):
+            Feature matrix with shape ``[n_samples, d_x]``.
+        features_y (torch.Tensor):
+            Feature matrix with shape ``[n_samples, d_y]``.
+        kernel (CKAKernelType, optional):
+            Kernel type; ``CKAKernelType.LINEAR`` or ``CKAKernelType.RBF``.
+            Defaults to ``LINEAR``.
+        threshold (float, optional):
+            Scale for the RBF bandwidth relative to the median pairwise squared
+            distance. Ignored for the linear kernel. Defaults to ``1.0``.
+        reg (float, optional):
+            Tikhonov regularization added to Gram diagonals during centering.
+            Defaults to ``1e-6``.
+        standardize (bool, optional):
+            If ``True``, z-score features across samples before kernelization.
+            Defaults to ``True``.
 
     Returns:
-        float: CKA similarity ∈ [0,1] where 1 = identical representations.
+        float: CKA similarity in ``[0, 1]`` (1 indicates identical representations).
 
     Raises:
-        ValueError: If an unsupported kernel type is provided.
+        ValueError: If an unsupported kernel type is requested.
+
+    Notes:
+        - Inputs must share the same **n_samples**.
+        - Complexity is dominated by Gram computations and centering
+          (``O(n^2)`` memory and time), where ``n = n_samples``.
+
+    Example (linear CKA, identical up to linear transform):
+        >>> import torch
+        >>> torch.manual_seed(0)
+        >>> X = torch.randn(128, 256)
+        >>> A = torch.randn(256, 256)
+        >>> Y = X @ A
+        >>> sim = compute_cka(X, Y, kernel=CKAKernelType.LINEAR, standardize=True)
+        >>> 0.8 <= sim <= 1.0
+        True
+
+    Example (RBF CKA with median heuristic):
+        >>> import torch
+        >>> X = torch.randn(200, 64)
+        >>> Y = X + 0.1 * torch.randn_like(X)
+        >>> sim = compute_cka(X, Y, kernel=CKAKernelType.RBF, threshold=1.0, standardize=True)
+        >>> 0.7 <= sim <= 1.0
+        True
     """
     if standardize:
         # Standardize inputs to unit variance (improves numerical stability)

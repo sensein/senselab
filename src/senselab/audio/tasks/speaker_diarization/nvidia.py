@@ -21,7 +21,16 @@ except ModuleNotFoundError:
 
 
 class NvidiaSortformerDiarization:
-    """A factory for managing NVIDIA Sortformer Diarization models."""
+    """Factory for creating and caching **NVIDIA Sortformer** diarization models.
+
+    Models are cached per *(model_name, device)* pair, so reusing the same configuration
+    avoids repeated downloads/initialization.
+
+    Notes:
+        - Sortformer supports up to **4 speakers** (model dependent).
+        - The model’s **expected sampling rate** is taken from `model.cfg.sample_rate`.
+        - Supported devices here: ``DeviceType.CPU`` and ``DeviceType.CUDA``.
+    """
 
     _models: Dict[str, "SortformerEncLabelModel"] = {}
 
@@ -62,17 +71,50 @@ def diarize_audios_with_nvidia_sortformer(
     model_name: str = "nvidia/diar_sortformer_4spk-v1",
     device: Optional[DeviceType] = None,
 ) -> List[List[ScriptLine]]:
-    """Diarizes a list of audio files using the NVIDIA Sortformer diarization model.
+    """Diarize audios with **NVIDIA Sortformer** (NeMo), returning per-speaker segments.
 
-    The max number of detectable speakers is 4.
+    The current model supports a maximum of **4 speakers**. Inputs must be **mono** and
+    match the model’s expected sampling rate (`model.cfg.sample_rate`). Internally,
+    each clip is serialized to a temporary WAV file for NeMo inference and then cleaned up.
 
     Args:
-        audios (List[Audio]): A list of Audio objects.
-        model_name (str): The Hugging Face model card name.
-        device (Optional[DeviceType]): The device to use for diarization.
+        audios (list[Audio]):
+            Audio clips to diarize (mono, correct sampling rate).
+        model_name (str, optional):
+            HF model card name (e.g., ``"nvidia/diar_sortformer_4spk-v1"``).
+        device (DeviceType | None):
+            Inference device (``CPU`` or ``CUDA``).
 
     Returns:
-        List[List[ScriptLine]]: A list of lists of ScriptLine objects containing the diarization results.
+        list[list[ScriptLine]]: One list per input audio with `(speaker, start, end)`, sorted by start time.
+
+    Raises:
+        ModuleNotFoundError:
+            If `nemo_toolkit` is not installed.
+        ValueError:
+            If input is not mono or sampling rate mismatches the model.
+
+    Example (CPU):
+        >>> from pathlib import Path
+        >>> from senselab.audio.data_structures import Audio
+        >>> from senselab.utils.data_structures import DeviceType
+        >>> a1 = Audio(filepath=Path("sample1.wav").resolve())
+        >>> diar = diarize_audios_with_nvidia_sortformer([a1], device=DeviceType.CPU)
+        >>> len(diar[0]) >= 0
+        True
+
+    Example (CUDA, explicit model):
+        >>> from pathlib import Path
+        >>> from senselab.audio.data_structures import Audio
+        >>> from senselab.utils.data_structures import DeviceType
+        >>> a1 = Audio(filepath=Path("sample1.wav").resolve())
+        >>> diar = diarize_audios_with_nvidia_sortformer(
+        ...     [a1],
+        ...     model_name="nvidia/diar_sortformer_4spk-v1",
+        ...     device=DeviceType.CUDA,
+        ... )
+        >>> isinstance(diar[0], list)
+        True
     """
     if not NEMO_SORTFORMER_AVAILABLE:
         raise ModuleNotFoundError(
