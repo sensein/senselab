@@ -57,67 +57,109 @@
 
                         <label class="view-source-button" for="mod-api-view-source"><span>View Source</span></label>
 
-                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos"> 1</span></a><span class="sd">&quot;&quot;&quot;This module provides the API for data augmentation tasks.&quot;&quot;&quot;</span>
-</span><span id="L-2"><a href="#L-2"><span class="linenos"> 2</span></a>
-</span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">List</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Union</span>
-</span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a>
-</span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">senselab.audio.data_structures</span><span class="w"> </span><span class="kn">import</span> <span class="n">Audio</span>
-</span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">senselab.audio.tasks.data_augmentation.audiomentations</span><span class="w"> </span><span class="kn">import</span> <span class="n">augment_audios_with_audiomentations</span>
-</span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">senselab.audio.tasks.data_augmentation.torch_audiomentations</span><span class="w"> </span><span class="kn">import</span> <span class="n">augment_audios_with_torch_audiomentations</span>
-</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">senselab.utils.data_structures</span><span class="w"> </span><span class="kn">import</span> <span class="n">DeviceType</span>
-</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a>
-</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a><span class="k">try</span><span class="p">:</span>
-</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">audiomentations</span><span class="w"> </span><span class="kn">import</span> <span class="n">Compose</span> <span class="k">as</span> <span class="n">AudiomentationsCompose</span>
-</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a>
-</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a>    <span class="n">AUDIOMENTATIONS_AVAILABLE</span> <span class="o">=</span> <span class="kc">True</span>
-</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a><span class="k">except</span> <span class="ne">ModuleNotFoundError</span><span class="p">:</span>
-</span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a>    <span class="n">AUDIOMENTATIONS_AVAILABLE</span> <span class="o">=</span> <span class="kc">False</span>
-</span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a>
-</span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a><span class="k">try</span><span class="p">:</span>
-</span><span id="L-18"><a href="#L-18"><span class="linenos">18</span></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">torch_audiomentations</span><span class="w"> </span><span class="kn">import</span> <span class="n">Compose</span> <span class="k">as</span> <span class="n">TorchAudiomentationsCompose</span>
-</span><span id="L-19"><a href="#L-19"><span class="linenos">19</span></a>
-</span><span id="L-20"><a href="#L-20"><span class="linenos">20</span></a>    <span class="n">TORCH_AUDIOMENTATIONS_AVAILABLE</span> <span class="o">=</span> <span class="kc">True</span>
-</span><span id="L-21"><a href="#L-21"><span class="linenos">21</span></a><span class="k">except</span> <span class="ne">ModuleNotFoundError</span><span class="p">:</span>
-</span><span id="L-22"><a href="#L-22"><span class="linenos">22</span></a>    <span class="n">TORCH_AUDIOMENTATIONS_AVAILABLE</span> <span class="o">=</span> <span class="kc">False</span>
-</span><span id="L-23"><a href="#L-23"><span class="linenos">23</span></a>
-</span><span id="L-24"><a href="#L-24"><span class="linenos">24</span></a>
-</span><span id="L-25"><a href="#L-25"><span class="linenos">25</span></a><span class="k">def</span><span class="w"> </span><span class="nf">augment_audios</span><span class="p">(</span>
-</span><span id="L-26"><a href="#L-26"><span class="linenos">26</span></a>    <span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">],</span>
-</span><span id="L-27"><a href="#L-27"><span class="linenos">27</span></a>    <span class="n">augmentation</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="s2">&quot;TorchAudiomentationsCompose&quot;</span><span class="p">,</span> <span class="s2">&quot;AudiomentationsCompose&quot;</span><span class="p">],</span>
-</span><span id="L-28"><a href="#L-28"><span class="linenos">28</span></a>    <span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">DeviceType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="L-29"><a href="#L-29"><span class="linenos">29</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">]:</span>
-</span><span id="L-30"><a href="#L-30"><span class="linenos">30</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Augments all provided audios.</span>
-</span><span id="L-31"><a href="#L-31"><span class="linenos">31</span></a>
-</span><span id="L-32"><a href="#L-32"><span class="linenos">32</span></a><span class="sd">    Uses either torch-audiomentations or audiomentations, calling the appropriate method based on</span>
-</span><span id="L-33"><a href="#L-33"><span class="linenos">33</span></a><span class="sd">    the type of Compose. If runs on CPU, pydra is used for optimization using concurrent futures.</span>
-</span><span id="L-34"><a href="#L-34"><span class="linenos">34</span></a>
-</span><span id="L-35"><a href="#L-35"><span class="linenos">35</span></a><span class="sd">    Args:</span>
-</span><span id="L-36"><a href="#L-36"><span class="linenos">36</span></a><span class="sd">        audios: List of Audios whose data will be augmented with the given augmentations.</span>
-</span><span id="L-37"><a href="#L-37"><span class="linenos">37</span></a><span class="sd">        augmentation: A composition of augmentations (torch-audiomentations or audiomentations).</span>
-</span><span id="L-38"><a href="#L-38"><span class="linenos">38</span></a><span class="sd">        device: The device to use for augmenting (relevant for torch-audiomentations).</span>
-</span><span id="L-39"><a href="#L-39"><span class="linenos">39</span></a><span class="sd">            Defaults is None.</span>
-</span><span id="L-40"><a href="#L-40"><span class="linenos">40</span></a>
-</span><span id="L-41"><a href="#L-41"><span class="linenos">41</span></a><span class="sd">    Returns:</span>
-</span><span id="L-42"><a href="#L-42"><span class="linenos">42</span></a><span class="sd">        List of augmented audios.</span>
-</span><span id="L-43"><a href="#L-43"><span class="linenos">43</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="L-44"><a href="#L-44"><span class="linenos">44</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">AUDIOMENTATIONS_AVAILABLE</span><span class="p">:</span>
-</span><span id="L-45"><a href="#L-45"><span class="linenos">45</span></a>        <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
-</span><span id="L-46"><a href="#L-46"><span class="linenos">46</span></a>            <span class="s2">&quot;`audiomentations` is not installed. &quot;</span>
-</span><span id="L-47"><a href="#L-47"><span class="linenos">47</span></a>            <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`&quot;</span>
-</span><span id="L-48"><a href="#L-48"><span class="linenos">48</span></a>        <span class="p">)</span>
-</span><span id="L-49"><a href="#L-49"><span class="linenos">49</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">TORCH_AUDIOMENTATIONS_AVAILABLE</span><span class="p">:</span>
-</span><span id="L-50"><a href="#L-50"><span class="linenos">50</span></a>        <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
-</span><span id="L-51"><a href="#L-51"><span class="linenos">51</span></a>            <span class="s2">&quot;`torch-audiomentations` is not installed. &quot;</span>
-</span><span id="L-52"><a href="#L-52"><span class="linenos">52</span></a>            <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`&quot;</span>
-</span><span id="L-53"><a href="#L-53"><span class="linenos">53</span></a>        <span class="p">)</span>
-</span><span id="L-54"><a href="#L-54"><span class="linenos">54</span></a>    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">augmentation</span><span class="p">,</span> <span class="n">TorchAudiomentationsCompose</span><span class="p">):</span>
-</span><span id="L-55"><a href="#L-55"><span class="linenos">55</span></a>        <span class="k">return</span> <span class="n">augment_audios_with_torch_audiomentations</span><span class="p">(</span><span class="n">audios</span><span class="p">,</span> <span class="n">augmentation</span><span class="p">,</span> <span class="n">device</span><span class="p">)</span>
-</span><span id="L-56"><a href="#L-56"><span class="linenos">56</span></a>    <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">augmentation</span><span class="p">,</span> <span class="n">AudiomentationsCompose</span><span class="p">):</span>
-</span><span id="L-57"><a href="#L-57"><span class="linenos">57</span></a>        <span class="k">return</span> <span class="n">augment_audios_with_audiomentations</span><span class="p">(</span><span class="n">audios</span><span class="p">,</span> <span class="n">augmentation</span><span class="p">)</span>
-</span><span id="L-58"><a href="#L-58"><span class="linenos">58</span></a>    <span class="k">else</span><span class="p">:</span>
-</span><span id="L-59"><a href="#L-59"><span class="linenos">59</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-</span><span id="L-60"><a href="#L-60"><span class="linenos">60</span></a>            <span class="s2">&quot;Unsupported augmentation type.&quot;</span> <span class="s2">&quot;Use either torch_audiomentations.Compose or audiomentations.Compose.&quot;</span>
-</span><span id="L-61"><a href="#L-61"><span class="linenos">61</span></a>        <span class="p">)</span>
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">  1</span></a><span class="sd">&quot;&quot;&quot;This module provides the API for data augmentation tasks.&quot;&quot;&quot;</span>
+</span><span id="L-2"><a href="#L-2"><span class="linenos">  2</span></a>
+</span><span id="L-3"><a href="#L-3"><span class="linenos">  3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">List</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Union</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos">  4</span></a>
+</span><span id="L-5"><a href="#L-5"><span class="linenos">  5</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">senselab.audio.data_structures</span><span class="w"> </span><span class="kn">import</span> <span class="n">Audio</span>
+</span><span id="L-6"><a href="#L-6"><span class="linenos">  6</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">senselab.audio.tasks.data_augmentation.audiomentations</span><span class="w"> </span><span class="kn">import</span> <span class="n">augment_audios_with_audiomentations</span>
+</span><span id="L-7"><a href="#L-7"><span class="linenos">  7</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">senselab.audio.tasks.data_augmentation.torch_audiomentations</span><span class="w"> </span><span class="kn">import</span> <span class="n">augment_audios_with_torch_audiomentations</span>
+</span><span id="L-8"><a href="#L-8"><span class="linenos">  8</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">senselab.utils.data_structures</span><span class="w"> </span><span class="kn">import</span> <span class="n">DeviceType</span>
+</span><span id="L-9"><a href="#L-9"><span class="linenos">  9</span></a>
+</span><span id="L-10"><a href="#L-10"><span class="linenos"> 10</span></a><span class="k">try</span><span class="p">:</span>
+</span><span id="L-11"><a href="#L-11"><span class="linenos"> 11</span></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">audiomentations</span><span class="w"> </span><span class="kn">import</span> <span class="n">Compose</span> <span class="k">as</span> <span class="n">AudiomentationsCompose</span>
+</span><span id="L-12"><a href="#L-12"><span class="linenos"> 12</span></a>
+</span><span id="L-13"><a href="#L-13"><span class="linenos"> 13</span></a>    <span class="n">AUDIOMENTATIONS_AVAILABLE</span> <span class="o">=</span> <span class="kc">True</span>
+</span><span id="L-14"><a href="#L-14"><span class="linenos"> 14</span></a><span class="k">except</span> <span class="ne">ModuleNotFoundError</span><span class="p">:</span>
+</span><span id="L-15"><a href="#L-15"><span class="linenos"> 15</span></a>    <span class="n">AUDIOMENTATIONS_AVAILABLE</span> <span class="o">=</span> <span class="kc">False</span>
+</span><span id="L-16"><a href="#L-16"><span class="linenos"> 16</span></a>
+</span><span id="L-17"><a href="#L-17"><span class="linenos"> 17</span></a><span class="k">try</span><span class="p">:</span>
+</span><span id="L-18"><a href="#L-18"><span class="linenos"> 18</span></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">torch_audiomentations</span><span class="w"> </span><span class="kn">import</span> <span class="n">Compose</span> <span class="k">as</span> <span class="n">TorchAudiomentationsCompose</span>
+</span><span id="L-19"><a href="#L-19"><span class="linenos"> 19</span></a>
+</span><span id="L-20"><a href="#L-20"><span class="linenos"> 20</span></a>    <span class="n">TORCH_AUDIOMENTATIONS_AVAILABLE</span> <span class="o">=</span> <span class="kc">True</span>
+</span><span id="L-21"><a href="#L-21"><span class="linenos"> 21</span></a><span class="k">except</span> <span class="ne">ModuleNotFoundError</span><span class="p">:</span>
+</span><span id="L-22"><a href="#L-22"><span class="linenos"> 22</span></a>    <span class="n">TORCH_AUDIOMENTATIONS_AVAILABLE</span> <span class="o">=</span> <span class="kc">False</span>
+</span><span id="L-23"><a href="#L-23"><span class="linenos"> 23</span></a>
+</span><span id="L-24"><a href="#L-24"><span class="linenos"> 24</span></a>
+</span><span id="L-25"><a href="#L-25"><span class="linenos"> 25</span></a><span class="k">def</span><span class="w"> </span><span class="nf">augment_audios</span><span class="p">(</span>
+</span><span id="L-26"><a href="#L-26"><span class="linenos"> 26</span></a>    <span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">],</span>
+</span><span id="L-27"><a href="#L-27"><span class="linenos"> 27</span></a>    <span class="n">augmentation</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="s2">&quot;TorchAudiomentationsCompose&quot;</span><span class="p">,</span> <span class="s2">&quot;AudiomentationsCompose&quot;</span><span class="p">],</span>
+</span><span id="L-28"><a href="#L-28"><span class="linenos"> 28</span></a>    <span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">DeviceType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="L-29"><a href="#L-29"><span class="linenos"> 29</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">]:</span>
+</span><span id="L-30"><a href="#L-30"><span class="linenos"> 30</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Apply audio data augmentation to a list of `Audio` objects.</span>
+</span><span id="L-31"><a href="#L-31"><span class="linenos"> 31</span></a>
+</span><span id="L-32"><a href="#L-32"><span class="linenos"> 32</span></a><span class="sd">    This function provides a unified interface for applying augmentations</span>
+</span><span id="L-33"><a href="#L-33"><span class="linenos"> 33</span></a><span class="sd">    using either [torch-audiomentations](https://github.com/asteroid-team/torch-audiomentations)</span>
+</span><span id="L-34"><a href="#L-34"><span class="linenos"> 34</span></a><span class="sd">    or [audiomentations](https://github.com/iver56/audiomentations).</span>
+</span><span id="L-35"><a href="#L-35"><span class="linenos"> 35</span></a>
+</span><span id="L-36"><a href="#L-36"><span class="linenos"> 36</span></a><span class="sd">    - If the augmentation is a ``TorchAudiomentationsCompose``, the operation</span>
+</span><span id="L-37"><a href="#L-37"><span class="linenos"> 37</span></a><span class="sd">      can run on CPU or CUDA (GPU), as specified by ``device``.</span>
+</span><span id="L-38"><a href="#L-38"><span class="linenos"> 38</span></a><span class="sd">    - If the augmentation is an ``AudiomentationsCompose``, augmentation runs</span>
+</span><span id="L-39"><a href="#L-39"><span class="linenos"> 39</span></a><span class="sd">      only on CPU. For efficiency, multiple files are processed in parallel</span>
+</span><span id="L-40"><a href="#L-40"><span class="linenos"> 40</span></a><span class="sd">      using Pydra with the concurrent futures plugin.</span>
+</span><span id="L-41"><a href="#L-41"><span class="linenos"> 41</span></a>
+</span><span id="L-42"><a href="#L-42"><span class="linenos"> 42</span></a><span class="sd">    Args:</span>
+</span><span id="L-43"><a href="#L-43"><span class="linenos"> 43</span></a><span class="sd">        audios (list[Audio]):</span>
+</span><span id="L-44"><a href="#L-44"><span class="linenos"> 44</span></a><span class="sd">            List of `Audio` objects to augment.</span>
+</span><span id="L-45"><a href="#L-45"><span class="linenos"> 45</span></a><span class="sd">        augmentation (TorchAudiomentationsCompose | AudiomentationsCompose):</span>
+</span><span id="L-46"><a href="#L-46"><span class="linenos"> 46</span></a><span class="sd">            A composition of augmentations. Must be created from either</span>
+</span><span id="L-47"><a href="#L-47"><span class="linenos"> 47</span></a><span class="sd">            ``torch_audiomentations.Compose`` or ``audiomentations.Compose``.</span>
+</span><span id="L-48"><a href="#L-48"><span class="linenos"> 48</span></a><span class="sd">        device (DeviceType, optional):</span>
+</span><span id="L-49"><a href="#L-49"><span class="linenos"> 49</span></a><span class="sd">            Target device for augmentation (relevant only for torch-audiomentations).</span>
+</span><span id="L-50"><a href="#L-50"><span class="linenos"> 50</span></a><span class="sd">            Accepted values:</span>
+</span><span id="L-51"><a href="#L-51"><span class="linenos"> 51</span></a><span class="sd">              * ``DeviceType.CPU`` → Run on CPU.</span>
+</span><span id="L-52"><a href="#L-52"><span class="linenos"> 52</span></a><span class="sd">              * ``DeviceType.CUDA`` → Run on GPU (if CUDA is available).</span>
+</span><span id="L-53"><a href="#L-53"><span class="linenos"> 53</span></a><span class="sd">            Defaults to ``None`` (equivalent to ``DeviceType.CUDA``, if available</span>
+</span><span id="L-54"><a href="#L-54"><span class="linenos"> 54</span></a><span class="sd">            ``DeviceType.CPU`` otherwise).</span>
+</span><span id="L-55"><a href="#L-55"><span class="linenos"> 55</span></a>
+</span><span id="L-56"><a href="#L-56"><span class="linenos"> 56</span></a><span class="sd">    Returns:</span>
+</span><span id="L-57"><a href="#L-57"><span class="linenos"> 57</span></a><span class="sd">        list[Audio]: A list of augmented `Audio` objects, matching the order of input.</span>
+</span><span id="L-58"><a href="#L-58"><span class="linenos"> 58</span></a>
+</span><span id="L-59"><a href="#L-59"><span class="linenos"> 59</span></a><span class="sd">    Raises:</span>
+</span><span id="L-60"><a href="#L-60"><span class="linenos"> 60</span></a><span class="sd">        ModuleNotFoundError:</span>
+</span><span id="L-61"><a href="#L-61"><span class="linenos"> 61</span></a><span class="sd">            If the selected augmentation backend is not installed.</span>
+</span><span id="L-62"><a href="#L-62"><span class="linenos"> 62</span></a><span class="sd">        ValueError:</span>
+</span><span id="L-63"><a href="#L-63"><span class="linenos"> 63</span></a><span class="sd">            If an unsupported augmentation type is provided.</span>
+</span><span id="L-64"><a href="#L-64"><span class="linenos"> 64</span></a>
+</span><span id="L-65"><a href="#L-65"><span class="linenos"> 65</span></a><span class="sd">    Example (torch-audiomentations):</span>
+</span><span id="L-66"><a href="#L-66"><span class="linenos"> 66</span></a><span class="sd">        &gt;&gt;&gt; from torch_audiomentations import Compose, AddColoredNoise</span>
+</span><span id="L-67"><a href="#L-67"><span class="linenos"> 67</span></a><span class="sd">        &gt;&gt;&gt; from senselab.audio.tasks.data_augmentation.api import augment_audios</span>
+</span><span id="L-68"><a href="#L-68"><span class="linenos"> 68</span></a><span class="sd">        &gt;&gt;&gt; from senselab.audio.data_structures import Audio</span>
+</span><span id="L-69"><a href="#L-69"><span class="linenos"> 69</span></a><span class="sd">        &gt;&gt;&gt; from senselab.utils.data_structures import DeviceType</span>
+</span><span id="L-70"><a href="#L-70"><span class="linenos"> 70</span></a><span class="sd">        &gt;&gt;&gt; aug = Compose([AddColoredNoise(p=1.0)])</span>
+</span><span id="L-71"><a href="#L-71"><span class="linenos"> 71</span></a><span class="sd">        &gt;&gt;&gt; audio = Audio(filepath=&quot;/absolute/path/to/sample.wav&quot;)</span>
+</span><span id="L-72"><a href="#L-72"><span class="linenos"> 72</span></a><span class="sd">        &gt;&gt;&gt; augmented = augment_audios([audio], aug, device=DeviceType.CPU)</span>
+</span><span id="L-73"><a href="#L-73"><span class="linenos"> 73</span></a><span class="sd">        &gt;&gt;&gt; len(augmented)</span>
+</span><span id="L-74"><a href="#L-74"><span class="linenos"> 74</span></a><span class="sd">        1</span>
+</span><span id="L-75"><a href="#L-75"><span class="linenos"> 75</span></a>
+</span><span id="L-76"><a href="#L-76"><span class="linenos"> 76</span></a><span class="sd">    Example (audiomentations):</span>
+</span><span id="L-77"><a href="#L-77"><span class="linenos"> 77</span></a><span class="sd">        &gt;&gt;&gt; from audiomentations import Compose, PitchShift</span>
+</span><span id="L-78"><a href="#L-78"><span class="linenos"> 78</span></a><span class="sd">        &gt;&gt;&gt; from senselab.audio.tasks.data_augmentation.api import augment_audios</span>
+</span><span id="L-79"><a href="#L-79"><span class="linenos"> 79</span></a><span class="sd">        &gt;&gt;&gt; from senselab.audio.data_structures import Audio</span>
+</span><span id="L-80"><a href="#L-80"><span class="linenos"> 80</span></a><span class="sd">        &gt;&gt;&gt; aug = Compose([PitchShift(min_semitones=-2, max_semitones=2, p=1.0)])</span>
+</span><span id="L-81"><a href="#L-81"><span class="linenos"> 81</span></a><span class="sd">        &gt;&gt;&gt; audio = Audio(filepath=&quot;/absolute/path/to/sample.wav&quot;)</span>
+</span><span id="L-82"><a href="#L-82"><span class="linenos"> 82</span></a><span class="sd">        &gt;&gt;&gt; augmented = augment_audios([audio], aug)</span>
+</span><span id="L-83"><a href="#L-83"><span class="linenos"> 83</span></a><span class="sd">        &gt;&gt;&gt; len(augmented)</span>
+</span><span id="L-84"><a href="#L-84"><span class="linenos"> 84</span></a><span class="sd">        1</span>
+</span><span id="L-85"><a href="#L-85"><span class="linenos"> 85</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="L-86"><a href="#L-86"><span class="linenos"> 86</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">AUDIOMENTATIONS_AVAILABLE</span><span class="p">:</span>
+</span><span id="L-87"><a href="#L-87"><span class="linenos"> 87</span></a>        <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
+</span><span id="L-88"><a href="#L-88"><span class="linenos"> 88</span></a>            <span class="s2">&quot;`audiomentations` is not installed. &quot;</span>
+</span><span id="L-89"><a href="#L-89"><span class="linenos"> 89</span></a>            <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`&quot;</span>
+</span><span id="L-90"><a href="#L-90"><span class="linenos"> 90</span></a>        <span class="p">)</span>
+</span><span id="L-91"><a href="#L-91"><span class="linenos"> 91</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">TORCH_AUDIOMENTATIONS_AVAILABLE</span><span class="p">:</span>
+</span><span id="L-92"><a href="#L-92"><span class="linenos"> 92</span></a>        <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
+</span><span id="L-93"><a href="#L-93"><span class="linenos"> 93</span></a>            <span class="s2">&quot;`torch-audiomentations` is not installed. &quot;</span>
+</span><span id="L-94"><a href="#L-94"><span class="linenos"> 94</span></a>            <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`&quot;</span>
+</span><span id="L-95"><a href="#L-95"><span class="linenos"> 95</span></a>        <span class="p">)</span>
+</span><span id="L-96"><a href="#L-96"><span class="linenos"> 96</span></a>    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">augmentation</span><span class="p">,</span> <span class="n">TorchAudiomentationsCompose</span><span class="p">):</span>
+</span><span id="L-97"><a href="#L-97"><span class="linenos"> 97</span></a>        <span class="k">return</span> <span class="n">augment_audios_with_torch_audiomentations</span><span class="p">(</span><span class="n">audios</span><span class="p">,</span> <span class="n">augmentation</span><span class="p">,</span> <span class="n">device</span><span class="p">)</span>
+</span><span id="L-98"><a href="#L-98"><span class="linenos"> 98</span></a>    <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">augmentation</span><span class="p">,</span> <span class="n">AudiomentationsCompose</span><span class="p">):</span>
+</span><span id="L-99"><a href="#L-99"><span class="linenos"> 99</span></a>        <span class="k">return</span> <span class="n">augment_audios_with_audiomentations</span><span class="p">(</span><span class="n">audios</span><span class="p">,</span> <span class="n">augmentation</span><span class="p">,</span> <span class="n">plugin</span><span class="o">=</span><span class="s2">&quot;cf&quot;</span><span class="p">)</span>
+</span><span id="L-100"><a href="#L-100"><span class="linenos">100</span></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="L-101"><a href="#L-101"><span class="linenos">101</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+</span><span id="L-102"><a href="#L-102"><span class="linenos">102</span></a>            <span class="s2">&quot;Unsupported augmentation type.&quot;</span> <span class="s2">&quot;Use either torch_audiomentations.Compose or audiomentations.Compose.&quot;</span>
+</span><span id="L-103"><a href="#L-103"><span class="linenos">103</span></a>        <span class="p">)</span>
 </span></pre></div>
 
 
@@ -133,64 +175,164 @@
 
     </div>
     <a class="headerlink" href="#augment_audios"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="augment_audios-26"><a href="#augment_audios-26"><span class="linenos">26</span></a><span class="k">def</span><span class="w"> </span><span class="nf">augment_audios</span><span class="p">(</span>
-</span><span id="augment_audios-27"><a href="#augment_audios-27"><span class="linenos">27</span></a>    <span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">],</span>
-</span><span id="augment_audios-28"><a href="#augment_audios-28"><span class="linenos">28</span></a>    <span class="n">augmentation</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="s2">&quot;TorchAudiomentationsCompose&quot;</span><span class="p">,</span> <span class="s2">&quot;AudiomentationsCompose&quot;</span><span class="p">],</span>
-</span><span id="augment_audios-29"><a href="#augment_audios-29"><span class="linenos">29</span></a>    <span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">DeviceType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="augment_audios-30"><a href="#augment_audios-30"><span class="linenos">30</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">]:</span>
-</span><span id="augment_audios-31"><a href="#augment_audios-31"><span class="linenos">31</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Augments all provided audios.</span>
-</span><span id="augment_audios-32"><a href="#augment_audios-32"><span class="linenos">32</span></a>
-</span><span id="augment_audios-33"><a href="#augment_audios-33"><span class="linenos">33</span></a><span class="sd">    Uses either torch-audiomentations or audiomentations, calling the appropriate method based on</span>
-</span><span id="augment_audios-34"><a href="#augment_audios-34"><span class="linenos">34</span></a><span class="sd">    the type of Compose. If runs on CPU, pydra is used for optimization using concurrent futures.</span>
-</span><span id="augment_audios-35"><a href="#augment_audios-35"><span class="linenos">35</span></a>
-</span><span id="augment_audios-36"><a href="#augment_audios-36"><span class="linenos">36</span></a><span class="sd">    Args:</span>
-</span><span id="augment_audios-37"><a href="#augment_audios-37"><span class="linenos">37</span></a><span class="sd">        audios: List of Audios whose data will be augmented with the given augmentations.</span>
-</span><span id="augment_audios-38"><a href="#augment_audios-38"><span class="linenos">38</span></a><span class="sd">        augmentation: A composition of augmentations (torch-audiomentations or audiomentations).</span>
-</span><span id="augment_audios-39"><a href="#augment_audios-39"><span class="linenos">39</span></a><span class="sd">        device: The device to use for augmenting (relevant for torch-audiomentations).</span>
-</span><span id="augment_audios-40"><a href="#augment_audios-40"><span class="linenos">40</span></a><span class="sd">            Defaults is None.</span>
-</span><span id="augment_audios-41"><a href="#augment_audios-41"><span class="linenos">41</span></a>
-</span><span id="augment_audios-42"><a href="#augment_audios-42"><span class="linenos">42</span></a><span class="sd">    Returns:</span>
-</span><span id="augment_audios-43"><a href="#augment_audios-43"><span class="linenos">43</span></a><span class="sd">        List of augmented audios.</span>
-</span><span id="augment_audios-44"><a href="#augment_audios-44"><span class="linenos">44</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="augment_audios-45"><a href="#augment_audios-45"><span class="linenos">45</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">AUDIOMENTATIONS_AVAILABLE</span><span class="p">:</span>
-</span><span id="augment_audios-46"><a href="#augment_audios-46"><span class="linenos">46</span></a>        <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
-</span><span id="augment_audios-47"><a href="#augment_audios-47"><span class="linenos">47</span></a>            <span class="s2">&quot;`audiomentations` is not installed. &quot;</span>
-</span><span id="augment_audios-48"><a href="#augment_audios-48"><span class="linenos">48</span></a>            <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`&quot;</span>
-</span><span id="augment_audios-49"><a href="#augment_audios-49"><span class="linenos">49</span></a>        <span class="p">)</span>
-</span><span id="augment_audios-50"><a href="#augment_audios-50"><span class="linenos">50</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">TORCH_AUDIOMENTATIONS_AVAILABLE</span><span class="p">:</span>
-</span><span id="augment_audios-51"><a href="#augment_audios-51"><span class="linenos">51</span></a>        <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
-</span><span id="augment_audios-52"><a href="#augment_audios-52"><span class="linenos">52</span></a>            <span class="s2">&quot;`torch-audiomentations` is not installed. &quot;</span>
-</span><span id="augment_audios-53"><a href="#augment_audios-53"><span class="linenos">53</span></a>            <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`&quot;</span>
-</span><span id="augment_audios-54"><a href="#augment_audios-54"><span class="linenos">54</span></a>        <span class="p">)</span>
-</span><span id="augment_audios-55"><a href="#augment_audios-55"><span class="linenos">55</span></a>    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">augmentation</span><span class="p">,</span> <span class="n">TorchAudiomentationsCompose</span><span class="p">):</span>
-</span><span id="augment_audios-56"><a href="#augment_audios-56"><span class="linenos">56</span></a>        <span class="k">return</span> <span class="n">augment_audios_with_torch_audiomentations</span><span class="p">(</span><span class="n">audios</span><span class="p">,</span> <span class="n">augmentation</span><span class="p">,</span> <span class="n">device</span><span class="p">)</span>
-</span><span id="augment_audios-57"><a href="#augment_audios-57"><span class="linenos">57</span></a>    <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">augmentation</span><span class="p">,</span> <span class="n">AudiomentationsCompose</span><span class="p">):</span>
-</span><span id="augment_audios-58"><a href="#augment_audios-58"><span class="linenos">58</span></a>        <span class="k">return</span> <span class="n">augment_audios_with_audiomentations</span><span class="p">(</span><span class="n">audios</span><span class="p">,</span> <span class="n">augmentation</span><span class="p">)</span>
-</span><span id="augment_audios-59"><a href="#augment_audios-59"><span class="linenos">59</span></a>    <span class="k">else</span><span class="p">:</span>
-</span><span id="augment_audios-60"><a href="#augment_audios-60"><span class="linenos">60</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-</span><span id="augment_audios-61"><a href="#augment_audios-61"><span class="linenos">61</span></a>            <span class="s2">&quot;Unsupported augmentation type.&quot;</span> <span class="s2">&quot;Use either torch_audiomentations.Compose or audiomentations.Compose.&quot;</span>
-</span><span id="augment_audios-62"><a href="#augment_audios-62"><span class="linenos">62</span></a>        <span class="p">)</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="augment_audios-26"><a href="#augment_audios-26"><span class="linenos"> 26</span></a><span class="k">def</span><span class="w"> </span><span class="nf">augment_audios</span><span class="p">(</span>
+</span><span id="augment_audios-27"><a href="#augment_audios-27"><span class="linenos"> 27</span></a>    <span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">],</span>
+</span><span id="augment_audios-28"><a href="#augment_audios-28"><span class="linenos"> 28</span></a>    <span class="n">augmentation</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="s2">&quot;TorchAudiomentationsCompose&quot;</span><span class="p">,</span> <span class="s2">&quot;AudiomentationsCompose&quot;</span><span class="p">],</span>
+</span><span id="augment_audios-29"><a href="#augment_audios-29"><span class="linenos"> 29</span></a>    <span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">DeviceType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="augment_audios-30"><a href="#augment_audios-30"><span class="linenos"> 30</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">]:</span>
+</span><span id="augment_audios-31"><a href="#augment_audios-31"><span class="linenos"> 31</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Apply audio data augmentation to a list of `Audio` objects.</span>
+</span><span id="augment_audios-32"><a href="#augment_audios-32"><span class="linenos"> 32</span></a>
+</span><span id="augment_audios-33"><a href="#augment_audios-33"><span class="linenos"> 33</span></a><span class="sd">    This function provides a unified interface for applying augmentations</span>
+</span><span id="augment_audios-34"><a href="#augment_audios-34"><span class="linenos"> 34</span></a><span class="sd">    using either [torch-audiomentations](https://github.com/asteroid-team/torch-audiomentations)</span>
+</span><span id="augment_audios-35"><a href="#augment_audios-35"><span class="linenos"> 35</span></a><span class="sd">    or [audiomentations](https://github.com/iver56/audiomentations).</span>
+</span><span id="augment_audios-36"><a href="#augment_audios-36"><span class="linenos"> 36</span></a>
+</span><span id="augment_audios-37"><a href="#augment_audios-37"><span class="linenos"> 37</span></a><span class="sd">    - If the augmentation is a ``TorchAudiomentationsCompose``, the operation</span>
+</span><span id="augment_audios-38"><a href="#augment_audios-38"><span class="linenos"> 38</span></a><span class="sd">      can run on CPU or CUDA (GPU), as specified by ``device``.</span>
+</span><span id="augment_audios-39"><a href="#augment_audios-39"><span class="linenos"> 39</span></a><span class="sd">    - If the augmentation is an ``AudiomentationsCompose``, augmentation runs</span>
+</span><span id="augment_audios-40"><a href="#augment_audios-40"><span class="linenos"> 40</span></a><span class="sd">      only on CPU. For efficiency, multiple files are processed in parallel</span>
+</span><span id="augment_audios-41"><a href="#augment_audios-41"><span class="linenos"> 41</span></a><span class="sd">      using Pydra with the concurrent futures plugin.</span>
+</span><span id="augment_audios-42"><a href="#augment_audios-42"><span class="linenos"> 42</span></a>
+</span><span id="augment_audios-43"><a href="#augment_audios-43"><span class="linenos"> 43</span></a><span class="sd">    Args:</span>
+</span><span id="augment_audios-44"><a href="#augment_audios-44"><span class="linenos"> 44</span></a><span class="sd">        audios (list[Audio]):</span>
+</span><span id="augment_audios-45"><a href="#augment_audios-45"><span class="linenos"> 45</span></a><span class="sd">            List of `Audio` objects to augment.</span>
+</span><span id="augment_audios-46"><a href="#augment_audios-46"><span class="linenos"> 46</span></a><span class="sd">        augmentation (TorchAudiomentationsCompose | AudiomentationsCompose):</span>
+</span><span id="augment_audios-47"><a href="#augment_audios-47"><span class="linenos"> 47</span></a><span class="sd">            A composition of augmentations. Must be created from either</span>
+</span><span id="augment_audios-48"><a href="#augment_audios-48"><span class="linenos"> 48</span></a><span class="sd">            ``torch_audiomentations.Compose`` or ``audiomentations.Compose``.</span>
+</span><span id="augment_audios-49"><a href="#augment_audios-49"><span class="linenos"> 49</span></a><span class="sd">        device (DeviceType, optional):</span>
+</span><span id="augment_audios-50"><a href="#augment_audios-50"><span class="linenos"> 50</span></a><span class="sd">            Target device for augmentation (relevant only for torch-audiomentations).</span>
+</span><span id="augment_audios-51"><a href="#augment_audios-51"><span class="linenos"> 51</span></a><span class="sd">            Accepted values:</span>
+</span><span id="augment_audios-52"><a href="#augment_audios-52"><span class="linenos"> 52</span></a><span class="sd">              * ``DeviceType.CPU`` → Run on CPU.</span>
+</span><span id="augment_audios-53"><a href="#augment_audios-53"><span class="linenos"> 53</span></a><span class="sd">              * ``DeviceType.CUDA`` → Run on GPU (if CUDA is available).</span>
+</span><span id="augment_audios-54"><a href="#augment_audios-54"><span class="linenos"> 54</span></a><span class="sd">            Defaults to ``None`` (equivalent to ``DeviceType.CUDA``, if available</span>
+</span><span id="augment_audios-55"><a href="#augment_audios-55"><span class="linenos"> 55</span></a><span class="sd">            ``DeviceType.CPU`` otherwise).</span>
+</span><span id="augment_audios-56"><a href="#augment_audios-56"><span class="linenos"> 56</span></a>
+</span><span id="augment_audios-57"><a href="#augment_audios-57"><span class="linenos"> 57</span></a><span class="sd">    Returns:</span>
+</span><span id="augment_audios-58"><a href="#augment_audios-58"><span class="linenos"> 58</span></a><span class="sd">        list[Audio]: A list of augmented `Audio` objects, matching the order of input.</span>
+</span><span id="augment_audios-59"><a href="#augment_audios-59"><span class="linenos"> 59</span></a>
+</span><span id="augment_audios-60"><a href="#augment_audios-60"><span class="linenos"> 60</span></a><span class="sd">    Raises:</span>
+</span><span id="augment_audios-61"><a href="#augment_audios-61"><span class="linenos"> 61</span></a><span class="sd">        ModuleNotFoundError:</span>
+</span><span id="augment_audios-62"><a href="#augment_audios-62"><span class="linenos"> 62</span></a><span class="sd">            If the selected augmentation backend is not installed.</span>
+</span><span id="augment_audios-63"><a href="#augment_audios-63"><span class="linenos"> 63</span></a><span class="sd">        ValueError:</span>
+</span><span id="augment_audios-64"><a href="#augment_audios-64"><span class="linenos"> 64</span></a><span class="sd">            If an unsupported augmentation type is provided.</span>
+</span><span id="augment_audios-65"><a href="#augment_audios-65"><span class="linenos"> 65</span></a>
+</span><span id="augment_audios-66"><a href="#augment_audios-66"><span class="linenos"> 66</span></a><span class="sd">    Example (torch-audiomentations):</span>
+</span><span id="augment_audios-67"><a href="#augment_audios-67"><span class="linenos"> 67</span></a><span class="sd">        &gt;&gt;&gt; from torch_audiomentations import Compose, AddColoredNoise</span>
+</span><span id="augment_audios-68"><a href="#augment_audios-68"><span class="linenos"> 68</span></a><span class="sd">        &gt;&gt;&gt; from senselab.audio.tasks.data_augmentation.api import augment_audios</span>
+</span><span id="augment_audios-69"><a href="#augment_audios-69"><span class="linenos"> 69</span></a><span class="sd">        &gt;&gt;&gt; from senselab.audio.data_structures import Audio</span>
+</span><span id="augment_audios-70"><a href="#augment_audios-70"><span class="linenos"> 70</span></a><span class="sd">        &gt;&gt;&gt; from senselab.utils.data_structures import DeviceType</span>
+</span><span id="augment_audios-71"><a href="#augment_audios-71"><span class="linenos"> 71</span></a><span class="sd">        &gt;&gt;&gt; aug = Compose([AddColoredNoise(p=1.0)])</span>
+</span><span id="augment_audios-72"><a href="#augment_audios-72"><span class="linenos"> 72</span></a><span class="sd">        &gt;&gt;&gt; audio = Audio(filepath=&quot;/absolute/path/to/sample.wav&quot;)</span>
+</span><span id="augment_audios-73"><a href="#augment_audios-73"><span class="linenos"> 73</span></a><span class="sd">        &gt;&gt;&gt; augmented = augment_audios([audio], aug, device=DeviceType.CPU)</span>
+</span><span id="augment_audios-74"><a href="#augment_audios-74"><span class="linenos"> 74</span></a><span class="sd">        &gt;&gt;&gt; len(augmented)</span>
+</span><span id="augment_audios-75"><a href="#augment_audios-75"><span class="linenos"> 75</span></a><span class="sd">        1</span>
+</span><span id="augment_audios-76"><a href="#augment_audios-76"><span class="linenos"> 76</span></a>
+</span><span id="augment_audios-77"><a href="#augment_audios-77"><span class="linenos"> 77</span></a><span class="sd">    Example (audiomentations):</span>
+</span><span id="augment_audios-78"><a href="#augment_audios-78"><span class="linenos"> 78</span></a><span class="sd">        &gt;&gt;&gt; from audiomentations import Compose, PitchShift</span>
+</span><span id="augment_audios-79"><a href="#augment_audios-79"><span class="linenos"> 79</span></a><span class="sd">        &gt;&gt;&gt; from senselab.audio.tasks.data_augmentation.api import augment_audios</span>
+</span><span id="augment_audios-80"><a href="#augment_audios-80"><span class="linenos"> 80</span></a><span class="sd">        &gt;&gt;&gt; from senselab.audio.data_structures import Audio</span>
+</span><span id="augment_audios-81"><a href="#augment_audios-81"><span class="linenos"> 81</span></a><span class="sd">        &gt;&gt;&gt; aug = Compose([PitchShift(min_semitones=-2, max_semitones=2, p=1.0)])</span>
+</span><span id="augment_audios-82"><a href="#augment_audios-82"><span class="linenos"> 82</span></a><span class="sd">        &gt;&gt;&gt; audio = Audio(filepath=&quot;/absolute/path/to/sample.wav&quot;)</span>
+</span><span id="augment_audios-83"><a href="#augment_audios-83"><span class="linenos"> 83</span></a><span class="sd">        &gt;&gt;&gt; augmented = augment_audios([audio], aug)</span>
+</span><span id="augment_audios-84"><a href="#augment_audios-84"><span class="linenos"> 84</span></a><span class="sd">        &gt;&gt;&gt; len(augmented)</span>
+</span><span id="augment_audios-85"><a href="#augment_audios-85"><span class="linenos"> 85</span></a><span class="sd">        1</span>
+</span><span id="augment_audios-86"><a href="#augment_audios-86"><span class="linenos"> 86</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="augment_audios-87"><a href="#augment_audios-87"><span class="linenos"> 87</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">AUDIOMENTATIONS_AVAILABLE</span><span class="p">:</span>
+</span><span id="augment_audios-88"><a href="#augment_audios-88"><span class="linenos"> 88</span></a>        <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
+</span><span id="augment_audios-89"><a href="#augment_audios-89"><span class="linenos"> 89</span></a>            <span class="s2">&quot;`audiomentations` is not installed. &quot;</span>
+</span><span id="augment_audios-90"><a href="#augment_audios-90"><span class="linenos"> 90</span></a>            <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`&quot;</span>
+</span><span id="augment_audios-91"><a href="#augment_audios-91"><span class="linenos"> 91</span></a>        <span class="p">)</span>
+</span><span id="augment_audios-92"><a href="#augment_audios-92"><span class="linenos"> 92</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">TORCH_AUDIOMENTATIONS_AVAILABLE</span><span class="p">:</span>
+</span><span id="augment_audios-93"><a href="#augment_audios-93"><span class="linenos"> 93</span></a>        <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
+</span><span id="augment_audios-94"><a href="#augment_audios-94"><span class="linenos"> 94</span></a>            <span class="s2">&quot;`torch-audiomentations` is not installed. &quot;</span>
+</span><span id="augment_audios-95"><a href="#augment_audios-95"><span class="linenos"> 95</span></a>            <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`&quot;</span>
+</span><span id="augment_audios-96"><a href="#augment_audios-96"><span class="linenos"> 96</span></a>        <span class="p">)</span>
+</span><span id="augment_audios-97"><a href="#augment_audios-97"><span class="linenos"> 97</span></a>    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">augmentation</span><span class="p">,</span> <span class="n">TorchAudiomentationsCompose</span><span class="p">):</span>
+</span><span id="augment_audios-98"><a href="#augment_audios-98"><span class="linenos"> 98</span></a>        <span class="k">return</span> <span class="n">augment_audios_with_torch_audiomentations</span><span class="p">(</span><span class="n">audios</span><span class="p">,</span> <span class="n">augmentation</span><span class="p">,</span> <span class="n">device</span><span class="p">)</span>
+</span><span id="augment_audios-99"><a href="#augment_audios-99"><span class="linenos"> 99</span></a>    <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">augmentation</span><span class="p">,</span> <span class="n">AudiomentationsCompose</span><span class="p">):</span>
+</span><span id="augment_audios-100"><a href="#augment_audios-100"><span class="linenos">100</span></a>        <span class="k">return</span> <span class="n">augment_audios_with_audiomentations</span><span class="p">(</span><span class="n">audios</span><span class="p">,</span> <span class="n">augmentation</span><span class="p">,</span> <span class="n">plugin</span><span class="o">=</span><span class="s2">&quot;cf&quot;</span><span class="p">)</span>
+</span><span id="augment_audios-101"><a href="#augment_audios-101"><span class="linenos">101</span></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="augment_audios-102"><a href="#augment_audios-102"><span class="linenos">102</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+</span><span id="augment_audios-103"><a href="#augment_audios-103"><span class="linenos">103</span></a>            <span class="s2">&quot;Unsupported augmentation type.&quot;</span> <span class="s2">&quot;Use either torch_audiomentations.Compose or audiomentations.Compose.&quot;</span>
+</span><span id="augment_audios-104"><a href="#augment_audios-104"><span class="linenos">104</span></a>        <span class="p">)</span>
 </span></pre></div>
 
 
-            <div class="docstring"><p>Augments all provided audios.</p>
+            <div class="docstring"><p>Apply audio data augmentation to a list of <code>Audio</code> objects.</p>
 
-<p>Uses either torch-audiomentations or audiomentations, calling the appropriate method based on
-the type of Compose. If runs on CPU, pydra is used for optimization using concurrent futures.</p>
+<p>This function provides a unified interface for applying augmentations
+using either <a href="https://github.com/asteroid-team/torch-audiomentations">torch-audiomentations</a>
+or <a href="https://github.com/iver56/audiomentations">audiomentations</a>.</p>
+
+<ul>
+<li>If the augmentation is a <code>TorchAudiomentationsCompose</code>, the operation
+can run on CPU or CUDA (GPU), as specified by <code>device</code>.</li>
+<li>If the augmentation is an <code>AudiomentationsCompose</code>, augmentation runs
+only on CPU. For efficiency, multiple files are processed in parallel
+using Pydra with the concurrent futures plugin.</li>
+</ul>
 
 <h6 id="arguments">Arguments:</h6>
 
 <ul>
-<li><strong>audios:</strong>  List of Audios whose data will be augmented with the given augmentations.</li>
-<li><strong>augmentation:</strong>  A composition of augmentations (torch-audiomentations or audiomentations).</li>
-<li><strong>device:</strong>  The device to use for augmenting (relevant for torch-audiomentations).
-Defaults is None.</li>
+<li><strong>audios (list[Audio]):</strong>  List of <code>Audio</code> objects to augment.</li>
+<li><strong>augmentation (TorchAudiomentationsCompose | AudiomentationsCompose):</strong>  A composition of augmentations. Must be created from either
+<code>torch_audiomentations.Compose</code> or <code>audiomentations.Compose</code>.</li>
+<li><strong>device (DeviceType, optional):</strong>  Target device for augmentation (relevant only for torch-audiomentations).
+Accepted values:
+<ul>
+<li><code>DeviceType.CPU</code> → Run on CPU.</li>
+<li><code>DeviceType.CUDA</code> → Run on GPU (if CUDA is available).
+Defaults to <code>None</code> (equivalent to <code>DeviceType.CUDA</code>, if available
+<code>DeviceType.CPU</code> otherwise).</li>
+</ul></li>
 </ul>
 
 <h6 id="returns">Returns:</h6>
 
 <blockquote>
-  <p>List of augmented audios.</p>
+  <p>list[Audio]: A list of augmented <code>Audio</code> objects, matching the order of input.</p>
+</blockquote>
+
+<h6 id="raises">Raises:</h6>
+
+<ul>
+<li><strong>ModuleNotFoundError:</strong>  If the selected augmentation backend is not installed.</li>
+<li><strong>ValueError:</strong>  If an unsupported augmentation type is provided.</li>
+</ul>
+
+<p>Example (torch-audiomentations):</p>
+
+<blockquote>
+  <blockquote>
+    <blockquote>
+      <p>from torch_audiomentations import Compose, AddColoredNoise
+      from <a href="">senselab.audio.tasks.data_augmentation.api</a> import augment_audios
+      from <a href="../../data_structures.html">senselab.audio.data_structures</a> import Audio
+      from <a href="../../../utils/data_structures.html">senselab.utils.data_structures</a> import DeviceType
+      aug = Compose([AddColoredNoise(p=1.0)])
+      audio = Audio(filepath="/absolute/path/to/sample.wav")
+      augmented = augment_audios([audio], aug, device=DeviceType.CPU)
+      len(augmented)
+          1</p>
+    </blockquote>
+  </blockquote>
+</blockquote>
+
+<p>Example (audiomentations):</p>
+
+<blockquote>
+  <blockquote>
+    <blockquote>
+      <p>from audiomentations import Compose, PitchShift
+      from <a href="">senselab.audio.tasks.data_augmentation.api</a> import augment_audios
+      from <a href="../../data_structures.html">senselab.audio.data_structures</a> import Audio
+      aug = Compose([PitchShift(min_semitones=-2, max_semitones=2, p=1.0)])
+      audio = Audio(filepath="/absolute/path/to/sample.wav")
+      augmented = augment_audios([audio], aug)
+      len(augmented)
+          1</p>
+    </blockquote>
+  </blockquote>
 </blockquote>
 </div>
 

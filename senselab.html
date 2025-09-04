@@ -34,6 +34,7 @@
 
             <h2>Submodules</h2>
             <ul>
+                    <li><a href="senselab/agentic_interface.html">agentic_interface</a></li>
                     <li><a href="senselab/audio.html">audio</a></li>
                     <li><a href="senselab/text.html">text</a></li>
                     <li><a href="senselab/utils.html">utils</a></li>
@@ -74,20 +75,23 @@ senselab    </h1>
 
 <p>Welcome to <code><a href="">senselab</a></code>! This is a Python package for streamlining the processing and analysis of behavioral data, such as voice and speech patterns, with robust and reproducible methodologies.</p>
 
-<h3 id="why-should-i-use-senselab">Why should I use senselab?</h3>
+<h3 id="why-should-i-use-senselab">Why should I use <code><a href="">senselab</a></code>?</h3>
 
 <ul>
-<li><strong>Modular Design</strong>: Easily integrate or use standalone transformations for flexible data manipulation.</li>
-<li><strong>Pre-built Pipelines</strong>: Access pre-configured pipelines to reduce setup time and effort.</li>
+<li><strong>Modular design</strong>: Easily integrate or use standalone transformations for flexible data manipulation.</li>
+<li><strong>Pre-built pipelines</strong>: Access pre-configured pipelines to reduce setup time and effort.</li>
 <li><strong>Reproducibility</strong>: Ensure consistent and verifiable results with fixed seeds and version-controlled steps.</li>
-<li><strong>Easy Integration</strong>: Seamlessly fit into existing workflows with minimal configuration.</li>
+<li><strong>Easy integration</strong>: Seamlessly fit into existing workflows with minimal configuration.</li>
 <li><strong>Extensible</strong>: Modify and contribute custom transformations and pipelines to meet specific research needs.</li>
-<li><strong>Comprehensive Documentation</strong>: Detailed guides, examples, and documentation for all features and modules.</li>
-<li><strong>Performance Optimized</strong>: Efficiently process large datasets with optimized code and algorithms.</li>
-<li><strong>Interactive Examples</strong>: Jupyter notebooks provide practical examples for deriving insights from real-world datasets.</li>
+<li><strong>Comprehensive documentation</strong>: Detailed guides, examples, and documentation for all features and modules.</li>
+<li><strong>Performance optimized</strong>: Efficiently process large datasets with optimized code and algorithms.</li>
+<li><strong>Interactive examples</strong>: Jupyter notebooks provide practical examples for deriving insights from real-world datasets.</li>
+<li><strong>senselab AI</strong>: Interact with your data through a chatbox using natural language. The AI agent generates and runs senselab-based code for you, making exploration easier and giving you both the results and the code used to produce them (perfect for quick experiments or for users who prefer not to code).</li>
 </ul>
 
 <p><strong>Caution:</strong>: this package is still under development and may change rapidly over the next few weeks.</p>
+
+<hr />
 
 <h2 id="system-requirements">⚠️ System Requirements</h2>
 
@@ -125,7 +129,20 @@ senselab    </h1>
 </ul></li>
 <li>Docker is required and must be running for some video models (e.g., MediaPipe-based estimators).
 Please follow the official installation instructions for your platform: <a href="https://docs.docker.com/get-started/get-docker/">Install Docker</a>.</li>
+<li><p>Some functionalities rely on HuggingFace models, and increasingly, models require authentication and signed license agreements. Instructions on how to generate a Hugging Face access token can be found here: <a href="https://huggingface.co/docs/hub/security-tokens">https://huggingface.co/docs/hub/security-tokens</a></p>
+
+<ul>
+<li><p>You can provide your HuggingFace token either by exporting it in your shell:</p>
+
+<div class="pdoc-code codehilite">
+<pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">HF_TOKEN</span><span class="o">=</span>your_token_here
+</code></pre>
+</div></li>
+<li><p>or by adding it to your <code>.env</code> file (see <code>.env.example</code> for reference).</p></li>
+</ul></li>
 </ol>
+
+<hr />
 
 <h2 id="installation">Installation</h2>
 
@@ -139,7 +156,7 @@ Please follow the official installation instructions for your platform: <a href=
 <p>Or get the newest development version via:</p>
 
 <div class="pdoc-code codehilite">
-<pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>git+https://github.com/sensein/senselab.git
+<pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s1">&#39;git+https://github.com/sensein/senselab.git#egg=senselab[all]&#39;</span>
 </code></pre>
 </div>
 
@@ -150,19 +167,14 @@ Please follow the official installation instructions for your platform: <a href=
 </code></pre>
 </div>
 
-<p>To install audio and articulatory dependencies, you do:</p>
+<p>To install articulatory, video, text, and senselab-ai extras, please do:</p>
 
 <div class="pdoc-code codehilite">
-<pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s1">&#39;senselab[audio,articulatory]&#39;</span>
+<pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s1">&#39;senselab[articulatory,video,text,senselab-ai]&#39;</span>
 </code></pre>
 </div>
 
-<p>To install video and text extras, please do:</p>
-
-<div class="pdoc-code codehilite">
-<pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s1">&#39;senselab[video,text]&#39;</span>
-</code></pre>
-</div>
+<hr />
 
 <h2 id="quick-start">Quick start</h2>
 
@@ -180,9 +192,34 @@ Please follow the official installation instructions for your platform: <a href=
 
 <p>For more detailed information, check out our <a href="https://github.com/sensein/senselab/blob/main/tutorials/audio/00_getting_started.ipynb"><strong>Getting Started Tutorial</strong></a>.</p>
 
+<h3 id="senselab-ai-our-natural-language-agent">senselab AI (our natural language agent)</h3>
+
+<h4 id="development-with-poetry">Development (with poetry)</h4>
+
+<div class="pdoc-code codehilite">
+<pre><span></span><code>poetry<span class="w"> </span>install<span class="w"> </span>--extras<span class="w"> </span><span class="s2">&quot;senselab-ai&quot;</span>
+poetry<span class="w"> </span>run<span class="w"> </span>senselab-ai
+</code></pre>
+</div>
+
+<h4 id="production-with-pip">Production (with pip)</h4>
+
+<div class="pdoc-code codehilite">
+<pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s1">&#39;senselab[senselab-ai]&#39;</span>
+senselab-ai
+</code></pre>
+</div>
+
+<p>Once started, you can open the provided JupyterLab interface, setup the agent and chat with it, and let it create and execute code for you.
+For a walkthrough, see: <a href="tutorials/senselab-ai/senselab_ai_intro.ipynb"><code>tutorials/senselab-ai/senselab_ai_intro.ipynb</code></a>.</p>
+
+<hr />
+
 <h2 id="contributing">Contributing</h2>
 
 <p>We welcome contributions from the community! Before getting started, please review our <a href="https://github.com/sensein/senselab/blob/main/CONTRIBUTING.md"><strong>CONTRIBUTING.md</strong></a>.</p>
+
+<hr />
 
 <h2 id="acknowledgments">Acknowledgments</h2>
 
@@ -195,6 +232,33 @@ Please follow the official installation instructions for your platform: <a href=
 <li>ReadNet Project</li>
 <li>Chris and Lann Woehrle Psychiatric Fund</li>
 </ul>
+
+<h3 id="open-source-acknowledgments">Open-source acknowledgments</h3>
+
+<p><code><a href="">senselab</a></code> builds on the work of many open-source projects. We gratefully acknowledge the developers and maintainers of the following key dependencies:</p>
+
+<ul>
+<li><a href="https://github.com/pytorch/pytorch">PyTorch</a>, <a href="https://github.com/pytorch/vision">Torchvision</a>, <a href="https://github.com/pytorch/audio">Torchaudio</a>
+_deep learning framework and audio/vision extensions_</li>
+<li><a href="https://github.com/huggingface/transformers">Transformers</a>, <a href="https://github.com/huggingface/datasets">Datasets</a>, <a href="https://github.com/huggingface/accelerate">Accelerate</a>, <a href="https://github.com/huggingface/huggingface_hub">Huggingface Hub</a>
+_training and inference utilities plus (pre-)trained models and datasets_</li>
+<li><a href="https://github.com/scikit-learn/scikit-learn">Scikit-learn</a>, <a href="https://github.com/lmcinnes/umap">UMAP-learn</a>
+_machine learning utilities_</li>
+<li><a href="https://github.com/matplotlib/matplotlib">Matplotlib</a>
+_visualization toolkit_</li>
+<li><a href="https://github.com/YannickJadoul/Parselmouth">Praat-Parselmouth</a>, <a href="https://github.com/audeering/opensmile">OpenSMILE</a>, <a href="https://github.com/speechbrain/speechbrain">SpeechBrain</a>, <a href="speech-articulatory-coding">SPARC</a>, <a href="https://github.com/pyannote/pyannote-audio">Pyannote-audio</a>, <a href="https://github.com/idiap/coqui-ai-TTS">Coqui-TTS</a>, <a href="https://github.com/NVIDIA/NeMo">NVIDIA NeMo</a>, <a href="https://github.com/gemelo-ai/vocos">Vocos</a>, <a href="https://github.com/iver56/audiomentations">Audiomentations</a>, <a href="https://github.com/asteroid-team/torch-audiomentations">Torch-audiomentations</a>
+_speech and audio processing tools_</li>
+<li><a href="https://github.com/nltk/nltk">NLTK</a>, <a href="https://github.com/UKPLab/sentence-transformers">Sentence-Transformers</a>, <a href="https://github.com/jacksonllee/pylangacq">Pylangacq</a>, <a href="https://github.com/jitsi/jiwer">Jiwer</a>
+_text and language processing tools_</li>
+<li><a href="https://github.com/opencv/opencv-python">OpenCV</a>, <a href="https://github.com/ultralytics/ultralytics">Ultralytics</a>, <a href="https://github.com/google-ai-edge/mediapipe">mediapipe</a>, <a href="https://github.com/jonghwanhyeon/python-ffmpeg">Python-ffmpeg</a>, <a href="https://github.com/PyAV-Org/PyAV">AV</a>
+_computer vision and pose estimation_</li>
+<li><a href="https://github.com/nipype/pydra">Pydra</a>, <a href="https://github.com/pydantic/pydantic">Pydantic</a>, <a href="https://github.com/janpipek/iso639-python">Iso639</a>, <a href="https://github.com/pycountry/pycountry">PyCountry</a>, <a href="https://github.com/erdewit/nest_asyncio">Nest-asyncio</a>
+_workflow, validation, and utilities_</li>
+<li><a href="https://github.com/jupyter-widgets/ipywidgets">Ipywidgets</a>, <a href="https://github.com/ipython/ipykernel">IpKernel</a>, <a href="https://github.com/jupyter/nbformat">Nbformat</a>, <a href="https://github.com/notebook-sharing-space/nbss-upload">Nbss-upload</a>, <a href="https://github.com/notebook-intelligence/notebook-intelligence">Notebook-intelligence</a>
+_Jupyter and notebook-related tools_</li>
+</ul>
+
+<p>We are thankful to the open-source community for enabling this project</p>
 </div>
 
                         <input id="mod-senselab-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">

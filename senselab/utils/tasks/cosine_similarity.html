@@ -75,31 +75,34 @@
 </span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a><span class="sd">    Raises:</span>
 </span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a><span class="sd">        ValueError: If the input tensors are not of the same shape.</span>
 </span><span id="L-18"><a href="#L-18"><span class="linenos">18</span></a>
-</span><span id="L-19"><a href="#L-19"><span class="linenos">19</span></a><span class="sd">    Examples:</span>
-</span><span id="L-20"><a href="#L-20"><span class="linenos">20</span></a><span class="sd">        &gt;&gt;&gt; tensor1 = torch.tensor([1.0, 2.0, 3.0])</span>
-</span><span id="L-21"><a href="#L-21"><span class="linenos">21</span></a><span class="sd">        &gt;&gt;&gt; tensor2 = torch.tensor([4.0, 5.0, 6.0])</span>
-</span><span id="L-22"><a href="#L-22"><span class="linenos">22</span></a><span class="sd">        &gt;&gt;&gt; cosine_similarity(tensor1, tensor2)</span>
-</span><span id="L-23"><a href="#L-23"><span class="linenos">23</span></a><span class="sd">        0.9746318461970762</span>
-</span><span id="L-24"><a href="#L-24"><span class="linenos">24</span></a>
-</span><span id="L-25"><a href="#L-25"><span class="linenos">25</span></a><span class="sd">        &gt;&gt;&gt; tensor1 = torch.tensor([1.0, 0.0, -1.0])</span>
-</span><span id="L-26"><a href="#L-26"><span class="linenos">26</span></a><span class="sd">        &gt;&gt;&gt; tensor2 = torch.tensor([-1.0, 0.0, 1.0])</span>
-</span><span id="L-27"><a href="#L-27"><span class="linenos">27</span></a><span class="sd">        &gt;&gt;&gt; cosine_similarity(tensor1, tensor2)</span>
-</span><span id="L-28"><a href="#L-28"><span class="linenos">28</span></a><span class="sd">        -1.0</span>
-</span><span id="L-29"><a href="#L-29"><span class="linenos">29</span></a>
-</span><span id="L-30"><a href="#L-30"><span class="linenos">30</span></a><span class="sd">    Note:</span>
-</span><span id="L-31"><a href="#L-31"><span class="linenos">31</span></a><span class="sd">        This function assumes the input tensors are 1-dimensional and have the same shape.</span>
-</span><span id="L-32"><a href="#L-32"><span class="linenos">32</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="L-33"><a href="#L-33"><span class="linenos">33</span></a>    <span class="k">if</span> <span class="n">tensor1</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">!=</span> <span class="mi">1</span> <span class="ow">or</span> <span class="n">tensor2</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
-</span><span id="L-34"><a href="#L-34"><span class="linenos">34</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Input tensors must be 1-dimensional&quot;</span><span class="p">)</span>
-</span><span id="L-35"><a href="#L-35"><span class="linenos">35</span></a>    <span class="k">if</span> <span class="n">tensor1</span><span class="o">.</span><span class="n">shape</span> <span class="o">!=</span> <span class="n">tensor2</span><span class="o">.</span><span class="n">shape</span><span class="p">:</span>
-</span><span id="L-36"><a href="#L-36"><span class="linenos">36</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Input tensors must have the same shape&quot;</span><span class="p">)</span>
-</span><span id="L-37"><a href="#L-37"><span class="linenos">37</span></a>
-</span><span id="L-38"><a href="#L-38"><span class="linenos">38</span></a>    <span class="n">dot_product</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">tensor1</span><span class="p">,</span> <span class="n">tensor2</span><span class="p">)</span>
-</span><span id="L-39"><a href="#L-39"><span class="linenos">39</span></a>    <span class="n">norm_tensor1</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">norm</span><span class="p">(</span><span class="n">tensor1</span><span class="p">)</span>
-</span><span id="L-40"><a href="#L-40"><span class="linenos">40</span></a>    <span class="n">norm_tensor2</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">norm</span><span class="p">(</span><span class="n">tensor2</span><span class="p">)</span>
-</span><span id="L-41"><a href="#L-41"><span class="linenos">41</span></a>
-</span><span id="L-42"><a href="#L-42"><span class="linenos">42</span></a>    <span class="n">cosine_sim</span> <span class="o">=</span> <span class="n">dot_product</span> <span class="o">/</span> <span class="p">(</span><span class="n">norm_tensor1</span> <span class="o">*</span> <span class="n">norm_tensor2</span><span class="p">)</span>
-</span><span id="L-43"><a href="#L-43"><span class="linenos">43</span></a>    <span class="k">return</span> <span class="n">cosine_sim</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
+</span><span id="L-19"><a href="#L-19"><span class="linenos">19</span></a><span class="sd">    Notes:</span>
+</span><span id="L-20"><a href="#L-20"><span class="linenos">20</span></a><span class="sd">        - If either input has **zero norm**, the division will produce ``nan``/``inf``.</span>
+</span><span id="L-21"><a href="#L-21"><span class="linenos">21</span></a><span class="sd">          Ensure non-zero vectors or add an epsilon guard upstream if needed.</span>
+</span><span id="L-22"><a href="#L-22"><span class="linenos">22</span></a><span class="sd">        - For batched computation, consider ``torch.nn.functional.cosine_similarity``.</span>
+</span><span id="L-23"><a href="#L-23"><span class="linenos">23</span></a>
+</span><span id="L-24"><a href="#L-24"><span class="linenos">24</span></a><span class="sd">    Examples:</span>
+</span><span id="L-25"><a href="#L-25"><span class="linenos">25</span></a><span class="sd">        &gt;&gt;&gt; import torch</span>
+</span><span id="L-26"><a href="#L-26"><span class="linenos">26</span></a><span class="sd">        &gt;&gt;&gt; a = torch.tensor([1.0, 2.0, 3.0])</span>
+</span><span id="L-27"><a href="#L-27"><span class="linenos">27</span></a><span class="sd">        &gt;&gt;&gt; b = torch.tensor([4.0, 5.0, 6.0])</span>
+</span><span id="L-28"><a href="#L-28"><span class="linenos">28</span></a><span class="sd">        &gt;&gt;&gt; compute_cosine_similarity(a, b)</span>
+</span><span id="L-29"><a href="#L-29"><span class="linenos">29</span></a><span class="sd">        0.9746318461970762</span>
+</span><span id="L-30"><a href="#L-30"><span class="linenos">30</span></a>
+</span><span id="L-31"><a href="#L-31"><span class="linenos">31</span></a><span class="sd">        &gt;&gt;&gt; a = torch.tensor([1.0, 0.0, -1.0])</span>
+</span><span id="L-32"><a href="#L-32"><span class="linenos">32</span></a><span class="sd">        &gt;&gt;&gt; b = torch.tensor([-1.0, 0.0, 1.0])</span>
+</span><span id="L-33"><a href="#L-33"><span class="linenos">33</span></a><span class="sd">        &gt;&gt;&gt; compute_cosine_similarity(a, b)</span>
+</span><span id="L-34"><a href="#L-34"><span class="linenos">34</span></a><span class="sd">        -1.0</span>
+</span><span id="L-35"><a href="#L-35"><span class="linenos">35</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="L-36"><a href="#L-36"><span class="linenos">36</span></a>    <span class="k">if</span> <span class="n">tensor1</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">!=</span> <span class="mi">1</span> <span class="ow">or</span> <span class="n">tensor2</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
+</span><span id="L-37"><a href="#L-37"><span class="linenos">37</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Input tensors must be 1-dimensional&quot;</span><span class="p">)</span>
+</span><span id="L-38"><a href="#L-38"><span class="linenos">38</span></a>    <span class="k">if</span> <span class="n">tensor1</span><span class="o">.</span><span class="n">shape</span> <span class="o">!=</span> <span class="n">tensor2</span><span class="o">.</span><span class="n">shape</span><span class="p">:</span>
+</span><span id="L-39"><a href="#L-39"><span class="linenos">39</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Input tensors must have the same shape&quot;</span><span class="p">)</span>
+</span><span id="L-40"><a href="#L-40"><span class="linenos">40</span></a>
+</span><span id="L-41"><a href="#L-41"><span class="linenos">41</span></a>    <span class="n">dot_product</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">tensor1</span><span class="p">,</span> <span class="n">tensor2</span><span class="p">)</span>
+</span><span id="L-42"><a href="#L-42"><span class="linenos">42</span></a>    <span class="n">norm_tensor1</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">norm</span><span class="p">(</span><span class="n">tensor1</span><span class="p">)</span>
+</span><span id="L-43"><a href="#L-43"><span class="linenos">43</span></a>    <span class="n">norm_tensor2</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">norm</span><span class="p">(</span><span class="n">tensor2</span><span class="p">)</span>
+</span><span id="L-44"><a href="#L-44"><span class="linenos">44</span></a>
+</span><span id="L-45"><a href="#L-45"><span class="linenos">45</span></a>    <span class="n">cosine_sim</span> <span class="o">=</span> <span class="n">dot_product</span> <span class="o">/</span> <span class="p">(</span><span class="n">norm_tensor1</span> <span class="o">*</span> <span class="n">norm_tensor2</span><span class="p">)</span>
+</span><span id="L-46"><a href="#L-46"><span class="linenos">46</span></a>    <span class="k">return</span> <span class="n">cosine_sim</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
 </span></pre></div>
 
 
@@ -128,31 +131,34 @@
 </span><span id="compute_cosine_similarity-17"><a href="#compute_cosine_similarity-17"><span class="linenos">17</span></a><span class="sd">    Raises:</span>
 </span><span id="compute_cosine_similarity-18"><a href="#compute_cosine_similarity-18"><span class="linenos">18</span></a><span class="sd">        ValueError: If the input tensors are not of the same shape.</span>
 </span><span id="compute_cosine_similarity-19"><a href="#compute_cosine_similarity-19"><span class="linenos">19</span></a>
-</span><span id="compute_cosine_similarity-20"><a href="#compute_cosine_similarity-20"><span class="linenos">20</span></a><span class="sd">    Examples:</span>
-</span><span id="compute_cosine_similarity-21"><a href="#compute_cosine_similarity-21"><span class="linenos">21</span></a><span class="sd">        &gt;&gt;&gt; tensor1 = torch.tensor([1.0, 2.0, 3.0])</span>
-</span><span id="compute_cosine_similarity-22"><a href="#compute_cosine_similarity-22"><span class="linenos">22</span></a><span class="sd">        &gt;&gt;&gt; tensor2 = torch.tensor([4.0, 5.0, 6.0])</span>
-</span><span id="compute_cosine_similarity-23"><a href="#compute_cosine_similarity-23"><span class="linenos">23</span></a><span class="sd">        &gt;&gt;&gt; cosine_similarity(tensor1, tensor2)</span>
-</span><span id="compute_cosine_similarity-24"><a href="#compute_cosine_similarity-24"><span class="linenos">24</span></a><span class="sd">        0.9746318461970762</span>
-</span><span id="compute_cosine_similarity-25"><a href="#compute_cosine_similarity-25"><span class="linenos">25</span></a>
-</span><span id="compute_cosine_similarity-26"><a href="#compute_cosine_similarity-26"><span class="linenos">26</span></a><span class="sd">        &gt;&gt;&gt; tensor1 = torch.tensor([1.0, 0.0, -1.0])</span>
-</span><span id="compute_cosine_similarity-27"><a href="#compute_cosine_similarity-27"><span class="linenos">27</span></a><span class="sd">        &gt;&gt;&gt; tensor2 = torch.tensor([-1.0, 0.0, 1.0])</span>
-</span><span id="compute_cosine_similarity-28"><a href="#compute_cosine_similarity-28"><span class="linenos">28</span></a><span class="sd">        &gt;&gt;&gt; cosine_similarity(tensor1, tensor2)</span>
-</span><span id="compute_cosine_similarity-29"><a href="#compute_cosine_similarity-29"><span class="linenos">29</span></a><span class="sd">        -1.0</span>
-</span><span id="compute_cosine_similarity-30"><a href="#compute_cosine_similarity-30"><span class="linenos">30</span></a>
-</span><span id="compute_cosine_similarity-31"><a href="#compute_cosine_similarity-31"><span class="linenos">31</span></a><span class="sd">    Note:</span>
-</span><span id="compute_cosine_similarity-32"><a href="#compute_cosine_similarity-32"><span class="linenos">32</span></a><span class="sd">        This function assumes the input tensors are 1-dimensional and have the same shape.</span>
-</span><span id="compute_cosine_similarity-33"><a href="#compute_cosine_similarity-33"><span class="linenos">33</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="compute_cosine_similarity-34"><a href="#compute_cosine_similarity-34"><span class="linenos">34</span></a>    <span class="k">if</span> <span class="n">tensor1</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">!=</span> <span class="mi">1</span> <span class="ow">or</span> <span class="n">tensor2</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
-</span><span id="compute_cosine_similarity-35"><a href="#compute_cosine_similarity-35"><span class="linenos">35</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Input tensors must be 1-dimensional&quot;</span><span class="p">)</span>
-</span><span id="compute_cosine_similarity-36"><a href="#compute_cosine_similarity-36"><span class="linenos">36</span></a>    <span class="k">if</span> <span class="n">tensor1</span><span class="o">.</span><span class="n">shape</span> <span class="o">!=</span> <span class="n">tensor2</span><span class="o">.</span><span class="n">shape</span><span class="p">:</span>
-</span><span id="compute_cosine_similarity-37"><a href="#compute_cosine_similarity-37"><span class="linenos">37</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Input tensors must have the same shape&quot;</span><span class="p">)</span>
-</span><span id="compute_cosine_similarity-38"><a href="#compute_cosine_similarity-38"><span class="linenos">38</span></a>
-</span><span id="compute_cosine_similarity-39"><a href="#compute_cosine_similarity-39"><span class="linenos">39</span></a>    <span class="n">dot_product</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">tensor1</span><span class="p">,</span> <span class="n">tensor2</span><span class="p">)</span>
-</span><span id="compute_cosine_similarity-40"><a href="#compute_cosine_similarity-40"><span class="linenos">40</span></a>    <span class="n">norm_tensor1</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">norm</span><span class="p">(</span><span class="n">tensor1</span><span class="p">)</span>
-</span><span id="compute_cosine_similarity-41"><a href="#compute_cosine_similarity-41"><span class="linenos">41</span></a>    <span class="n">norm_tensor2</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">norm</span><span class="p">(</span><span class="n">tensor2</span><span class="p">)</span>
-</span><span id="compute_cosine_similarity-42"><a href="#compute_cosine_similarity-42"><span class="linenos">42</span></a>
-</span><span id="compute_cosine_similarity-43"><a href="#compute_cosine_similarity-43"><span class="linenos">43</span></a>    <span class="n">cosine_sim</span> <span class="o">=</span> <span class="n">dot_product</span> <span class="o">/</span> <span class="p">(</span><span class="n">norm_tensor1</span> <span class="o">*</span> <span class="n">norm_tensor2</span><span class="p">)</span>
-</span><span id="compute_cosine_similarity-44"><a href="#compute_cosine_similarity-44"><span class="linenos">44</span></a>    <span class="k">return</span> <span class="n">cosine_sim</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
+</span><span id="compute_cosine_similarity-20"><a href="#compute_cosine_similarity-20"><span class="linenos">20</span></a><span class="sd">    Notes:</span>
+</span><span id="compute_cosine_similarity-21"><a href="#compute_cosine_similarity-21"><span class="linenos">21</span></a><span class="sd">        - If either input has **zero norm**, the division will produce ``nan``/``inf``.</span>
+</span><span id="compute_cosine_similarity-22"><a href="#compute_cosine_similarity-22"><span class="linenos">22</span></a><span class="sd">          Ensure non-zero vectors or add an epsilon guard upstream if needed.</span>
+</span><span id="compute_cosine_similarity-23"><a href="#compute_cosine_similarity-23"><span class="linenos">23</span></a><span class="sd">        - For batched computation, consider ``torch.nn.functional.cosine_similarity``.</span>
+</span><span id="compute_cosine_similarity-24"><a href="#compute_cosine_similarity-24"><span class="linenos">24</span></a>
+</span><span id="compute_cosine_similarity-25"><a href="#compute_cosine_similarity-25"><span class="linenos">25</span></a><span class="sd">    Examples:</span>
+</span><span id="compute_cosine_similarity-26"><a href="#compute_cosine_similarity-26"><span class="linenos">26</span></a><span class="sd">        &gt;&gt;&gt; import torch</span>
+</span><span id="compute_cosine_similarity-27"><a href="#compute_cosine_similarity-27"><span class="linenos">27</span></a><span class="sd">        &gt;&gt;&gt; a = torch.tensor([1.0, 2.0, 3.0])</span>
+</span><span id="compute_cosine_similarity-28"><a href="#compute_cosine_similarity-28"><span class="linenos">28</span></a><span class="sd">        &gt;&gt;&gt; b = torch.tensor([4.0, 5.0, 6.0])</span>
+</span><span id="compute_cosine_similarity-29"><a href="#compute_cosine_similarity-29"><span class="linenos">29</span></a><span class="sd">        &gt;&gt;&gt; compute_cosine_similarity(a, b)</span>
+</span><span id="compute_cosine_similarity-30"><a href="#compute_cosine_similarity-30"><span class="linenos">30</span></a><span class="sd">        0.9746318461970762</span>
+</span><span id="compute_cosine_similarity-31"><a href="#compute_cosine_similarity-31"><span class="linenos">31</span></a>
+</span><span id="compute_cosine_similarity-32"><a href="#compute_cosine_similarity-32"><span class="linenos">32</span></a><span class="sd">        &gt;&gt;&gt; a = torch.tensor([1.0, 0.0, -1.0])</span>
+</span><span id="compute_cosine_similarity-33"><a href="#compute_cosine_similarity-33"><span class="linenos">33</span></a><span class="sd">        &gt;&gt;&gt; b = torch.tensor([-1.0, 0.0, 1.0])</span>
+</span><span id="compute_cosine_similarity-34"><a href="#compute_cosine_similarity-34"><span class="linenos">34</span></a><span class="sd">        &gt;&gt;&gt; compute_cosine_similarity(a, b)</span>
+</span><span id="compute_cosine_similarity-35"><a href="#compute_cosine_similarity-35"><span class="linenos">35</span></a><span class="sd">        -1.0</span>
+</span><span id="compute_cosine_similarity-36"><a href="#compute_cosine_similarity-36"><span class="linenos">36</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="compute_cosine_similarity-37"><a href="#compute_cosine_similarity-37"><span class="linenos">37</span></a>    <span class="k">if</span> <span class="n">tensor1</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">!=</span> <span class="mi">1</span> <span class="ow">or</span> <span class="n">tensor2</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
+</span><span id="compute_cosine_similarity-38"><a href="#compute_cosine_similarity-38"><span class="linenos">38</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Input tensors must be 1-dimensional&quot;</span><span class="p">)</span>
+</span><span id="compute_cosine_similarity-39"><a href="#compute_cosine_similarity-39"><span class="linenos">39</span></a>    <span class="k">if</span> <span class="n">tensor1</span><span class="o">.</span><span class="n">shape</span> <span class="o">!=</span> <span class="n">tensor2</span><span class="o">.</span><span class="n">shape</span><span class="p">:</span>
+</span><span id="compute_cosine_similarity-40"><a href="#compute_cosine_similarity-40"><span class="linenos">40</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Input tensors must have the same shape&quot;</span><span class="p">)</span>
+</span><span id="compute_cosine_similarity-41"><a href="#compute_cosine_similarity-41"><span class="linenos">41</span></a>
+</span><span id="compute_cosine_similarity-42"><a href="#compute_cosine_similarity-42"><span class="linenos">42</span></a>    <span class="n">dot_product</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">tensor1</span><span class="p">,</span> <span class="n">tensor2</span><span class="p">)</span>
+</span><span id="compute_cosine_similarity-43"><a href="#compute_cosine_similarity-43"><span class="linenos">43</span></a>    <span class="n">norm_tensor1</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">norm</span><span class="p">(</span><span class="n">tensor1</span><span class="p">)</span>
+</span><span id="compute_cosine_similarity-44"><a href="#compute_cosine_similarity-44"><span class="linenos">44</span></a>    <span class="n">norm_tensor2</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">norm</span><span class="p">(</span><span class="n">tensor2</span><span class="p">)</span>
+</span><span id="compute_cosine_similarity-45"><a href="#compute_cosine_similarity-45"><span class="linenos">45</span></a>
+</span><span id="compute_cosine_similarity-46"><a href="#compute_cosine_similarity-46"><span class="linenos">46</span></a>    <span class="n">cosine_sim</span> <span class="o">=</span> <span class="n">dot_product</span> <span class="o">/</span> <span class="p">(</span><span class="n">norm_tensor1</span> <span class="o">*</span> <span class="n">norm_tensor2</span><span class="p">)</span>
+</span><span id="compute_cosine_similarity-47"><a href="#compute_cosine_similarity-47"><span class="linenos">47</span></a>    <span class="k">return</span> <span class="n">cosine_sim</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
 </span></pre></div>
 
 
@@ -177,30 +183,35 @@
 <li><strong>ValueError:</strong>  If the input tensors are not of the same shape.</li>
 </ul>
 
+<h6 id="notes">Notes:</h6>
+
+<blockquote>
+  <ul>
+  <li>If either input has <strong>zero norm</strong>, the division will produce <code>nan</code>/<code>inf</code>.
+  Ensure non-zero vectors or add an epsilon guard upstream if needed.</li>
+  <li>For batched computation, consider <code>torch.nn.functional.cosine_similarity</code>.</li>
+  </ul>
+</blockquote>
+
 <h6 id="examples">Examples:</h6>
 
 <blockquote>
   <div class="pdoc-code codehilite">
-<pre><span></span><code><span class="gp">&gt;&gt;&gt; </span><span class="n">tensor1</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">2.0</span><span class="p">,</span> <span class="mf">3.0</span><span class="p">])</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">tensor2</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([</span><span class="mf">4.0</span><span class="p">,</span> <span class="mf">5.0</span><span class="p">,</span> <span class="mf">6.0</span><span class="p">])</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">cosine_similarity</span><span class="p">(</span><span class="n">tensor1</span><span class="p">,</span> <span class="n">tensor2</span><span class="p">)</span>
+<pre><span></span><code><span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">a</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">2.0</span><span class="p">,</span> <span class="mf">3.0</span><span class="p">])</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">b</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([</span><span class="mf">4.0</span><span class="p">,</span> <span class="mf">5.0</span><span class="p">,</span> <span class="mf">6.0</span><span class="p">])</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">compute_cosine_similarity</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
 <span class="go">0.9746318461970762</span>
 </code></pre>
   </div>
   
   <div class="pdoc-code codehilite">
-<pre><span></span><code><span class="gp">&gt;&gt;&gt; </span><span class="n">tensor1</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="o">-</span><span class="mf">1.0</span><span class="p">])</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">tensor2</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([</span><span class="o">-</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">])</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">cosine_similarity</span><span class="p">(</span><span class="n">tensor1</span><span class="p">,</span> <span class="n">tensor2</span><span class="p">)</span>
+<pre><span></span><code><span class="gp">&gt;&gt;&gt; </span><span class="n">a</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="o">-</span><span class="mf">1.0</span><span class="p">])</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">b</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([</span><span class="o">-</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">])</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">compute_cosine_similarity</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
 <span class="go">-1.0</span>
 </code></pre>
   </div>
-</blockquote>
-
-<h6 id="note">Note:</h6>
-
-<blockquote>
-  <p>This function assumes the input tensors are 1-dimensional and have the same shape.</p>
 </blockquote>
 </div>
 

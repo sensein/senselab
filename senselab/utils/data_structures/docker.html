@@ -50,28 +50,85 @@
                     <h1 class="modulename">
 <a href="./../../../senselab.html">senselab</a><wbr>.<a href="./../../utils.html">utils</a><wbr>.<a href="./../data_structures.html">data_structures</a><wbr>.docker    </h1>
 
-                        <div class="docstring"><p>Utility functions for checking Docker status.</p>
+                        <div class="docstring"><p>Docker status utilities.</p>
+
+<p>This module provides a lightweight check to determine whether the Docker CLI
+is available <strong>and</strong> the Docker daemon is reachable on the current system.</p>
+
+<h6 id="how-it-works">How it works:</h6>
+
+<blockquote>
+  <p>1) Verifies that the <code>docker</code> executable exists on the PATH via
+     <code>shutil.which("docker")</code>.
+  2) Executes <code>docker info</code> and returns <code>True</code> <strong>only</strong> if it exits
+     successfully (exit code 0). All command output is suppressed.</p>
+</blockquote>
+
+<h6 id="notes">Notes:</h6>
+
+<blockquote>
+  <ul>
+  <li>This does <strong>not</strong> validate Docker version, Compose availability, or any
+  specific container runtime configuration.</li>
+  <li>The check may block briefly while the Docker client contacts the daemon.</li>
+  <li>Permission/configuration issues (e.g., missing group membership) will
+  cause the function to return <code>False</code>.</li>
+  </ul>
+</blockquote>
 </div>
 
                         <input id="mod-docker-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 
                         <label class="view-source-button" for="mod-docker-view-source"><span>View Source</span></label>
 
-                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos"> 1</span></a><span class="sd">&quot;&quot;&quot;Utility functions for checking Docker status.&quot;&quot;&quot;</span>
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos"> 1</span></a><span class="sd">&quot;&quot;&quot;Docker status utilities.</span>
 </span><span id="L-2"><a href="#L-2"><span class="linenos"> 2</span></a>
-</span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">shutil</span>
-</span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">subprocess</span>
+</span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a><span class="sd">This module provides a lightweight check to determine whether the Docker CLI</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a><span class="sd">is available **and** the Docker daemon is reachable on the current system.</span>
 </span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a>
-</span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a>
-</span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a><span class="k">def</span><span class="w"> </span><span class="nf">docker_is_running</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
-</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Return True if Docker CLI exists and daemon is running, else False.&quot;&quot;&quot;</span>
-</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">shutil</span><span class="o">.</span><span class="n">which</span><span class="p">(</span><span class="s2">&quot;docker&quot;</span><span class="p">):</span>
-</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a>        <span class="k">return</span> <span class="kc">False</span>
-</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a>    <span class="k">try</span><span class="p">:</span>
-</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a>        <span class="n">subprocess</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="s2">&quot;docker&quot;</span><span class="p">,</span> <span class="s2">&quot;info&quot;</span><span class="p">],</span> <span class="n">stdout</span><span class="o">=</span><span class="n">subprocess</span><span class="o">.</span><span class="n">DEVNULL</span><span class="p">,</span> <span class="n">stderr</span><span class="o">=</span><span class="n">subprocess</span><span class="o">.</span><span class="n">DEVNULL</span><span class="p">,</span> <span class="n">check</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a>        <span class="k">return</span> <span class="kc">True</span>
-</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a>    <span class="k">except</span> <span class="n">subprocess</span><span class="o">.</span><span class="n">CalledProcessError</span><span class="p">:</span>
-</span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a>        <span class="k">return</span> <span class="kc">False</span>
+</span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a><span class="sd">How it works:</span>
+</span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a><span class="sd">    1) Verifies that the ``docker`` executable exists on the PATH via</span>
+</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a><span class="sd">       ``shutil.which(&quot;docker&quot;)``.</span>
+</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a><span class="sd">    2) Executes ``docker info`` and returns ``True`` **only** if it exits</span>
+</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a><span class="sd">       successfully (exit code 0). All command output is suppressed.</span>
+</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a>
+</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a><span class="sd">Notes:</span>
+</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a><span class="sd">    - This does **not** validate Docker version, Compose availability, or any</span>
+</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a><span class="sd">      specific container runtime configuration.</span>
+</span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a><span class="sd">    - The check may block briefly while the Docker client contacts the daemon.</span>
+</span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a><span class="sd">    - Permission/configuration issues (e.g., missing group membership) will</span>
+</span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a><span class="sd">      cause the function to return ``False``.</span>
+</span><span id="L-18"><a href="#L-18"><span class="linenos">18</span></a><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="L-19"><a href="#L-19"><span class="linenos">19</span></a>
+</span><span id="L-20"><a href="#L-20"><span class="linenos">20</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">shutil</span>
+</span><span id="L-21"><a href="#L-21"><span class="linenos">21</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">subprocess</span>
+</span><span id="L-22"><a href="#L-22"><span class="linenos">22</span></a>
+</span><span id="L-23"><a href="#L-23"><span class="linenos">23</span></a>
+</span><span id="L-24"><a href="#L-24"><span class="linenos">24</span></a><span class="k">def</span><span class="w"> </span><span class="nf">docker_is_running</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+</span><span id="L-25"><a href="#L-25"><span class="linenos">25</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Return whether the Docker CLI is present and the daemon is reachable.</span>
+</span><span id="L-26"><a href="#L-26"><span class="linenos">26</span></a>
+</span><span id="L-27"><a href="#L-27"><span class="linenos">27</span></a><span class="sd">    The function returns:</span>
+</span><span id="L-28"><a href="#L-28"><span class="linenos">28</span></a><span class="sd">      * ``True``  → ``docker`` is on PATH **and** ``docker info`` succeeds.</span>
+</span><span id="L-29"><a href="#L-29"><span class="linenos">29</span></a><span class="sd">      * ``False`` → CLI missing, the daemon is not running/unreachable, or the</span>
+</span><span id="L-30"><a href="#L-30"><span class="linenos">30</span></a><span class="sd">        command exits with a non-zero status.</span>
+</span><span id="L-31"><a href="#L-31"><span class="linenos">31</span></a>
+</span><span id="L-32"><a href="#L-32"><span class="linenos">32</span></a><span class="sd">    Returns:</span>
+</span><span id="L-33"><a href="#L-33"><span class="linenos">33</span></a><span class="sd">        bool: ``True`` if Docker appears operational; otherwise ``False``.</span>
+</span><span id="L-34"><a href="#L-34"><span class="linenos">34</span></a>
+</span><span id="L-35"><a href="#L-35"><span class="linenos">35</span></a><span class="sd">    Example:</span>
+</span><span id="L-36"><a href="#L-36"><span class="linenos">36</span></a><span class="sd">        &gt;&gt;&gt; from senselab.utils.data_structures.docker import docker_is_running</span>
+</span><span id="L-37"><a href="#L-37"><span class="linenos">37</span></a><span class="sd">        &gt;&gt;&gt; if docker_is_running():</span>
+</span><span id="L-38"><a href="#L-38"><span class="linenos">38</span></a><span class="sd">        ...     print(&quot;Docker is up!&quot;)</span>
+</span><span id="L-39"><a href="#L-39"><span class="linenos">39</span></a><span class="sd">        ... else:</span>
+</span><span id="L-40"><a href="#L-40"><span class="linenos">40</span></a><span class="sd">        ...     print(&quot;Docker is not available or the daemon is down.&quot;)</span>
+</span><span id="L-41"><a href="#L-41"><span class="linenos">41</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="L-42"><a href="#L-42"><span class="linenos">42</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">shutil</span><span class="o">.</span><span class="n">which</span><span class="p">(</span><span class="s2">&quot;docker&quot;</span><span class="p">):</span>
+</span><span id="L-43"><a href="#L-43"><span class="linenos">43</span></a>        <span class="k">return</span> <span class="kc">False</span>
+</span><span id="L-44"><a href="#L-44"><span class="linenos">44</span></a>    <span class="k">try</span><span class="p">:</span>
+</span><span id="L-45"><a href="#L-45"><span class="linenos">45</span></a>        <span class="n">subprocess</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="s2">&quot;docker&quot;</span><span class="p">,</span> <span class="s2">&quot;info&quot;</span><span class="p">],</span> <span class="n">stdout</span><span class="o">=</span><span class="n">subprocess</span><span class="o">.</span><span class="n">DEVNULL</span><span class="p">,</span> <span class="n">stderr</span><span class="o">=</span><span class="n">subprocess</span><span class="o">.</span><span class="n">DEVNULL</span><span class="p">,</span> <span class="n">check</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="L-46"><a href="#L-46"><span class="linenos">46</span></a>        <span class="k">return</span> <span class="kc">True</span>
+</span><span id="L-47"><a href="#L-47"><span class="linenos">47</span></a>    <span class="k">except</span> <span class="n">subprocess</span><span class="o">.</span><span class="n">CalledProcessError</span><span class="p">:</span>
+</span><span id="L-48"><a href="#L-48"><span class="linenos">48</span></a>        <span class="k">return</span> <span class="kc">False</span>
 </span></pre></div>
 
 
@@ -87,19 +144,64 @@
 
     </div>
     <a class="headerlink" href="#docker_is_running"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="docker_is_running-8"><a href="#docker_is_running-8"><span class="linenos"> 8</span></a><span class="k">def</span><span class="w"> </span><span class="nf">docker_is_running</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
-</span><span id="docker_is_running-9"><a href="#docker_is_running-9"><span class="linenos"> 9</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Return True if Docker CLI exists and daemon is running, else False.&quot;&quot;&quot;</span>
-</span><span id="docker_is_running-10"><a href="#docker_is_running-10"><span class="linenos">10</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">shutil</span><span class="o">.</span><span class="n">which</span><span class="p">(</span><span class="s2">&quot;docker&quot;</span><span class="p">):</span>
-</span><span id="docker_is_running-11"><a href="#docker_is_running-11"><span class="linenos">11</span></a>        <span class="k">return</span> <span class="kc">False</span>
-</span><span id="docker_is_running-12"><a href="#docker_is_running-12"><span class="linenos">12</span></a>    <span class="k">try</span><span class="p">:</span>
-</span><span id="docker_is_running-13"><a href="#docker_is_running-13"><span class="linenos">13</span></a>        <span class="n">subprocess</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="s2">&quot;docker&quot;</span><span class="p">,</span> <span class="s2">&quot;info&quot;</span><span class="p">],</span> <span class="n">stdout</span><span class="o">=</span><span class="n">subprocess</span><span class="o">.</span><span class="n">DEVNULL</span><span class="p">,</span> <span class="n">stderr</span><span class="o">=</span><span class="n">subprocess</span><span class="o">.</span><span class="n">DEVNULL</span><span class="p">,</span> <span class="n">check</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</span><span id="docker_is_running-14"><a href="#docker_is_running-14"><span class="linenos">14</span></a>        <span class="k">return</span> <span class="kc">True</span>
-</span><span id="docker_is_running-15"><a href="#docker_is_running-15"><span class="linenos">15</span></a>    <span class="k">except</span> <span class="n">subprocess</span><span class="o">.</span><span class="n">CalledProcessError</span><span class="p">:</span>
-</span><span id="docker_is_running-16"><a href="#docker_is_running-16"><span class="linenos">16</span></a>        <span class="k">return</span> <span class="kc">False</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="docker_is_running-25"><a href="#docker_is_running-25"><span class="linenos">25</span></a><span class="k">def</span><span class="w"> </span><span class="nf">docker_is_running</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+</span><span id="docker_is_running-26"><a href="#docker_is_running-26"><span class="linenos">26</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Return whether the Docker CLI is present and the daemon is reachable.</span>
+</span><span id="docker_is_running-27"><a href="#docker_is_running-27"><span class="linenos">27</span></a>
+</span><span id="docker_is_running-28"><a href="#docker_is_running-28"><span class="linenos">28</span></a><span class="sd">    The function returns:</span>
+</span><span id="docker_is_running-29"><a href="#docker_is_running-29"><span class="linenos">29</span></a><span class="sd">      * ``True``  → ``docker`` is on PATH **and** ``docker info`` succeeds.</span>
+</span><span id="docker_is_running-30"><a href="#docker_is_running-30"><span class="linenos">30</span></a><span class="sd">      * ``False`` → CLI missing, the daemon is not running/unreachable, or the</span>
+</span><span id="docker_is_running-31"><a href="#docker_is_running-31"><span class="linenos">31</span></a><span class="sd">        command exits with a non-zero status.</span>
+</span><span id="docker_is_running-32"><a href="#docker_is_running-32"><span class="linenos">32</span></a>
+</span><span id="docker_is_running-33"><a href="#docker_is_running-33"><span class="linenos">33</span></a><span class="sd">    Returns:</span>
+</span><span id="docker_is_running-34"><a href="#docker_is_running-34"><span class="linenos">34</span></a><span class="sd">        bool: ``True`` if Docker appears operational; otherwise ``False``.</span>
+</span><span id="docker_is_running-35"><a href="#docker_is_running-35"><span class="linenos">35</span></a>
+</span><span id="docker_is_running-36"><a href="#docker_is_running-36"><span class="linenos">36</span></a><span class="sd">    Example:</span>
+</span><span id="docker_is_running-37"><a href="#docker_is_running-37"><span class="linenos">37</span></a><span class="sd">        &gt;&gt;&gt; from senselab.utils.data_structures.docker import docker_is_running</span>
+</span><span id="docker_is_running-38"><a href="#docker_is_running-38"><span class="linenos">38</span></a><span class="sd">        &gt;&gt;&gt; if docker_is_running():</span>
+</span><span id="docker_is_running-39"><a href="#docker_is_running-39"><span class="linenos">39</span></a><span class="sd">        ...     print(&quot;Docker is up!&quot;)</span>
+</span><span id="docker_is_running-40"><a href="#docker_is_running-40"><span class="linenos">40</span></a><span class="sd">        ... else:</span>
+</span><span id="docker_is_running-41"><a href="#docker_is_running-41"><span class="linenos">41</span></a><span class="sd">        ...     print(&quot;Docker is not available or the daemon is down.&quot;)</span>
+</span><span id="docker_is_running-42"><a href="#docker_is_running-42"><span class="linenos">42</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="docker_is_running-43"><a href="#docker_is_running-43"><span class="linenos">43</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">shutil</span><span class="o">.</span><span class="n">which</span><span class="p">(</span><span class="s2">&quot;docker&quot;</span><span class="p">):</span>
+</span><span id="docker_is_running-44"><a href="#docker_is_running-44"><span class="linenos">44</span></a>        <span class="k">return</span> <span class="kc">False</span>
+</span><span id="docker_is_running-45"><a href="#docker_is_running-45"><span class="linenos">45</span></a>    <span class="k">try</span><span class="p">:</span>
+</span><span id="docker_is_running-46"><a href="#docker_is_running-46"><span class="linenos">46</span></a>        <span class="n">subprocess</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="s2">&quot;docker&quot;</span><span class="p">,</span> <span class="s2">&quot;info&quot;</span><span class="p">],</span> <span class="n">stdout</span><span class="o">=</span><span class="n">subprocess</span><span class="o">.</span><span class="n">DEVNULL</span><span class="p">,</span> <span class="n">stderr</span><span class="o">=</span><span class="n">subprocess</span><span class="o">.</span><span class="n">DEVNULL</span><span class="p">,</span> <span class="n">check</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="docker_is_running-47"><a href="#docker_is_running-47"><span class="linenos">47</span></a>        <span class="k">return</span> <span class="kc">True</span>
+</span><span id="docker_is_running-48"><a href="#docker_is_running-48"><span class="linenos">48</span></a>    <span class="k">except</span> <span class="n">subprocess</span><span class="o">.</span><span class="n">CalledProcessError</span><span class="p">:</span>
+</span><span id="docker_is_running-49"><a href="#docker_is_running-49"><span class="linenos">49</span></a>        <span class="k">return</span> <span class="kc">False</span>
 </span></pre></div>
 
 
-            <div class="docstring"><p>Return True if Docker CLI exists and daemon is running, else False.</p>
+            <div class="docstring"><p>Return whether the Docker CLI is present and the daemon is reachable.</p>
+
+<h6 id="the-function-returns">The function returns:</h6>
+
+<blockquote>
+  <ul>
+  <li><code>True</code>  → <code>docker</code> is on PATH <strong>and</strong> <code>docker info</code> succeeds.</li>
+  <li><code>False</code> → CLI missing, the daemon is not running/unreachable, or the
+  command exits with a non-zero status.</li>
+  </ul>
+</blockquote>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p>bool: <code>True</code> if Docker appears operational; otherwise <code>False</code>.</p>
+</blockquote>
+
+<h6 id="example">Example:</h6>
+
+<blockquote>
+  <div class="pdoc-code codehilite">
+<pre><span></span><code><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span><span class="w"> </span><span class="nn"><a href="">senselab.utils.data_structures.docker</a></span><span class="w"> </span><span class="kn">import</span> <span class="n">docker_is_running</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="k">if</span> <span class="n">docker_is_running</span><span class="p">():</span>
+<span class="gp">... </span>    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Docker is up!&quot;</span><span class="p">)</span>
+<span class="gp">... </span><span class="k">else</span><span class="p">:</span>
+<span class="gp">... </span>    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Docker is not available or the daemon is down.&quot;</span><span class="p">)</span>
+</code></pre>
+  </div>
+</blockquote>
 </div>
 
 

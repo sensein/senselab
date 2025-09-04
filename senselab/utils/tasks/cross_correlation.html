@@ -74,40 +74,41 @@
 </span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a><span class="sd">    Returns:</span>
 </span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a><span class="sd">        torch.Tensor: The normalized cross-correlation value between the two input signals.</span>
 </span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a>
-</span><span id="L-18"><a href="#L-18"><span class="linenos">18</span></a><span class="sd">    Examples:</span>
-</span><span id="L-19"><a href="#L-19"><span class="linenos">19</span></a><span class="sd">        &gt;&gt;&gt; signal1 = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0])</span>
-</span><span id="L-20"><a href="#L-20"><span class="linenos">20</span></a><span class="sd">        &gt;&gt;&gt; signal2 = torch.tensor([2.0, 3.0, 4.0])</span>
-</span><span id="L-21"><a href="#L-21"><span class="linenos">21</span></a><span class="sd">        &gt;&gt;&gt; normalized_cross_correlation(signal1, signal2)</span>
-</span><span id="L-22"><a href="#L-22"><span class="linenos">22</span></a><span class="sd">        Tensor([0.30151134, 0.51298918, 0.77459667, 0.9486833 , 0.90453403, 0.70710678, 0.43643578])</span>
-</span><span id="L-23"><a href="#L-23"><span class="linenos">23</span></a>
-</span><span id="L-24"><a href="#L-24"><span class="linenos">24</span></a><span class="sd">    Note:</span>
-</span><span id="L-25"><a href="#L-25"><span class="linenos">25</span></a><span class="sd">        This function assumes the input signals are one-dimensional</span>
-</span><span id="L-26"><a href="#L-26"><span class="linenos">26</span></a><span class="sd">        and contain sufficient elements for meaningful cross-correlation.</span>
-</span><span id="L-27"><a href="#L-27"><span class="linenos">27</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="L-28"><a href="#L-28"><span class="linenos">28</span></a>    <span class="c1"># Ensure the inputs are 1D tensors</span>
-</span><span id="L-29"><a href="#L-29"><span class="linenos">29</span></a>    <span class="k">if</span> <span class="n">signal1</span><span class="o">.</span><span class="n">ndim</span> <span class="o">!=</span> <span class="mi">1</span> <span class="ow">or</span> <span class="n">signal2</span><span class="o">.</span><span class="n">ndim</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
-</span><span id="L-30"><a href="#L-30"><span class="linenos">30</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Input signals must be one-dimensional&quot;</span><span class="p">)</span>
-</span><span id="L-31"><a href="#L-31"><span class="linenos">31</span></a>
-</span><span id="L-32"><a href="#L-32"><span class="linenos">32</span></a>    <span class="c1"># Convert PyTorch tensors to NumPy arrays</span>
-</span><span id="L-33"><a href="#L-33"><span class="linenos">33</span></a>    <span class="n">signal1_np</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">=</span> <span class="n">signal1</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
-</span><span id="L-34"><a href="#L-34"><span class="linenos">34</span></a>    <span class="n">signal2_np</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">=</span> <span class="n">signal2</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
-</span><span id="L-35"><a href="#L-35"><span class="linenos">35</span></a>
-</span><span id="L-36"><a href="#L-36"><span class="linenos">36</span></a>    <span class="c1"># Calculate the energy of each signal</span>
-</span><span id="L-37"><a href="#L-37"><span class="linenos">37</span></a>    <span class="n">energy_signal1</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">signal1_np</span><span class="o">**</span><span class="mi">2</span><span class="p">)</span>
-</span><span id="L-38"><a href="#L-38"><span class="linenos">38</span></a>    <span class="n">energy_signal2</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">signal2_np</span><span class="o">**</span><span class="mi">2</span><span class="p">)</span>
-</span><span id="L-39"><a href="#L-39"><span class="linenos">39</span></a>
-</span><span id="L-40"><a href="#L-40"><span class="linenos">40</span></a>    <span class="c1"># Check for zero energy to avoid division by zero</span>
-</span><span id="L-41"><a href="#L-41"><span class="linenos">41</span></a>    <span class="k">if</span> <span class="n">energy_signal1</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">energy_signal2</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-</span><span id="L-42"><a href="#L-42"><span class="linenos">42</span></a>        <span class="k">raise</span> <span class="ne">ZeroDivisionError</span><span class="p">(</span><span class="s2">&quot;One of the input signals has zero energy, causing division by zero in normalization&quot;</span><span class="p">)</span>
-</span><span id="L-43"><a href="#L-43"><span class="linenos">43</span></a>
-</span><span id="L-44"><a href="#L-44"><span class="linenos">44</span></a>    <span class="c1"># Compute the cross-correlation</span>
-</span><span id="L-45"><a href="#L-45"><span class="linenos">45</span></a>    <span class="n">cross_correlation</span> <span class="o">=</span> <span class="n">correlate</span><span class="p">(</span><span class="n">signal1_np</span><span class="p">,</span> <span class="n">signal2_np</span><span class="p">)</span>
-</span><span id="L-46"><a href="#L-46"><span class="linenos">46</span></a>
-</span><span id="L-47"><a href="#L-47"><span class="linenos">47</span></a>    <span class="c1"># Calculate the normalized cross-correlation</span>
-</span><span id="L-48"><a href="#L-48"><span class="linenos">48</span></a>    <span class="n">normalized_cross_correlation</span> <span class="o">=</span> <span class="n">cross_correlation</span> <span class="o">/</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">energy_signal1</span> <span class="o">*</span> <span class="n">energy_signal2</span><span class="p">)</span>
-</span><span id="L-49"><a href="#L-49"><span class="linenos">49</span></a>
-</span><span id="L-50"><a href="#L-50"><span class="linenos">50</span></a>    <span class="nb">print</span><span class="p">(</span><span class="n">normalized_cross_correlation</span><span class="p">)</span>
-</span><span id="L-51"><a href="#L-51"><span class="linenos">51</span></a>    <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">(</span><span class="n">normalized_cross_correlation</span><span class="p">)</span>
+</span><span id="L-18"><a href="#L-18"><span class="linenos">18</span></a><span class="sd">    Note:</span>
+</span><span id="L-19"><a href="#L-19"><span class="linenos">19</span></a><span class="sd">        This function assumes the input signals are one-dimensional</span>
+</span><span id="L-20"><a href="#L-20"><span class="linenos">20</span></a><span class="sd">        and contain sufficient elements for meaningful cross-correlation.</span>
+</span><span id="L-21"><a href="#L-21"><span class="linenos">21</span></a>
+</span><span id="L-22"><a href="#L-22"><span class="linenos">22</span></a><span class="sd">    Examples:</span>
+</span><span id="L-23"><a href="#L-23"><span class="linenos">23</span></a><span class="sd">        &gt;&gt;&gt; import torch</span>
+</span><span id="L-24"><a href="#L-24"><span class="linenos">24</span></a><span class="sd">        &gt;&gt;&gt; signal1 = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0])</span>
+</span><span id="L-25"><a href="#L-25"><span class="linenos">25</span></a><span class="sd">        &gt;&gt;&gt; signal2 = torch.tensor([2.0, 3.0, 4.0])</span>
+</span><span id="L-26"><a href="#L-26"><span class="linenos">26</span></a><span class="sd">        &gt;&gt;&gt; normalized_cross_correlation(signal1, signal2)</span>
+</span><span id="L-27"><a href="#L-27"><span class="linenos">27</span></a><span class="sd">        Tensor([0.30151134, 0.51298918, 0.77459667, 0.9486833 , 0.90453403, 0.70710678, 0.43643578])</span>
+</span><span id="L-28"><a href="#L-28"><span class="linenos">28</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="L-29"><a href="#L-29"><span class="linenos">29</span></a>    <span class="c1"># Ensure the inputs are 1D tensors</span>
+</span><span id="L-30"><a href="#L-30"><span class="linenos">30</span></a>    <span class="k">if</span> <span class="n">signal1</span><span class="o">.</span><span class="n">ndim</span> <span class="o">!=</span> <span class="mi">1</span> <span class="ow">or</span> <span class="n">signal2</span><span class="o">.</span><span class="n">ndim</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
+</span><span id="L-31"><a href="#L-31"><span class="linenos">31</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Input signals must be one-dimensional&quot;</span><span class="p">)</span>
+</span><span id="L-32"><a href="#L-32"><span class="linenos">32</span></a>
+</span><span id="L-33"><a href="#L-33"><span class="linenos">33</span></a>    <span class="c1"># Convert PyTorch tensors to NumPy arrays</span>
+</span><span id="L-34"><a href="#L-34"><span class="linenos">34</span></a>    <span class="n">signal1_np</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">=</span> <span class="n">signal1</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
+</span><span id="L-35"><a href="#L-35"><span class="linenos">35</span></a>    <span class="n">signal2_np</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">=</span> <span class="n">signal2</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
+</span><span id="L-36"><a href="#L-36"><span class="linenos">36</span></a>
+</span><span id="L-37"><a href="#L-37"><span class="linenos">37</span></a>    <span class="c1"># Calculate the energy of each signal</span>
+</span><span id="L-38"><a href="#L-38"><span class="linenos">38</span></a>    <span class="n">energy_signal1</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">signal1_np</span><span class="o">**</span><span class="mi">2</span><span class="p">)</span>
+</span><span id="L-39"><a href="#L-39"><span class="linenos">39</span></a>    <span class="n">energy_signal2</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">signal2_np</span><span class="o">**</span><span class="mi">2</span><span class="p">)</span>
+</span><span id="L-40"><a href="#L-40"><span class="linenos">40</span></a>
+</span><span id="L-41"><a href="#L-41"><span class="linenos">41</span></a>    <span class="c1"># Check for zero energy to avoid division by zero</span>
+</span><span id="L-42"><a href="#L-42"><span class="linenos">42</span></a>    <span class="k">if</span> <span class="n">energy_signal1</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">energy_signal2</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+</span><span id="L-43"><a href="#L-43"><span class="linenos">43</span></a>        <span class="k">raise</span> <span class="ne">ZeroDivisionError</span><span class="p">(</span><span class="s2">&quot;One of the input signals has zero energy, causing division by zero in normalization&quot;</span><span class="p">)</span>
+</span><span id="L-44"><a href="#L-44"><span class="linenos">44</span></a>
+</span><span id="L-45"><a href="#L-45"><span class="linenos">45</span></a>    <span class="c1"># Compute the cross-correlation</span>
+</span><span id="L-46"><a href="#L-46"><span class="linenos">46</span></a>    <span class="n">cross_correlation</span> <span class="o">=</span> <span class="n">correlate</span><span class="p">(</span><span class="n">signal1_np</span><span class="p">,</span> <span class="n">signal2_np</span><span class="p">)</span>
+</span><span id="L-47"><a href="#L-47"><span class="linenos">47</span></a>
+</span><span id="L-48"><a href="#L-48"><span class="linenos">48</span></a>    <span class="c1"># Calculate the normalized cross-correlation</span>
+</span><span id="L-49"><a href="#L-49"><span class="linenos">49</span></a>    <span class="n">normalized_cross_correlation</span> <span class="o">=</span> <span class="n">cross_correlation</span> <span class="o">/</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">energy_signal1</span> <span class="o">*</span> <span class="n">energy_signal2</span><span class="p">)</span>
+</span><span id="L-50"><a href="#L-50"><span class="linenos">50</span></a>
+</span><span id="L-51"><a href="#L-51"><span class="linenos">51</span></a>    <span class="nb">print</span><span class="p">(</span><span class="n">normalized_cross_correlation</span><span class="p">)</span>
+</span><span id="L-52"><a href="#L-52"><span class="linenos">52</span></a>    <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">(</span><span class="n">normalized_cross_correlation</span><span class="p">)</span>
 </span></pre></div>
 
 
@@ -133,40 +134,41 @@
 </span><span id="compute_normalized_cross_correlation-16"><a href="#compute_normalized_cross_correlation-16"><span class="linenos">16</span></a><span class="sd">    Returns:</span>
 </span><span id="compute_normalized_cross_correlation-17"><a href="#compute_normalized_cross_correlation-17"><span class="linenos">17</span></a><span class="sd">        torch.Tensor: The normalized cross-correlation value between the two input signals.</span>
 </span><span id="compute_normalized_cross_correlation-18"><a href="#compute_normalized_cross_correlation-18"><span class="linenos">18</span></a>
-</span><span id="compute_normalized_cross_correlation-19"><a href="#compute_normalized_cross_correlation-19"><span class="linenos">19</span></a><span class="sd">    Examples:</span>
-</span><span id="compute_normalized_cross_correlation-20"><a href="#compute_normalized_cross_correlation-20"><span class="linenos">20</span></a><span class="sd">        &gt;&gt;&gt; signal1 = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0])</span>
-</span><span id="compute_normalized_cross_correlation-21"><a href="#compute_normalized_cross_correlation-21"><span class="linenos">21</span></a><span class="sd">        &gt;&gt;&gt; signal2 = torch.tensor([2.0, 3.0, 4.0])</span>
-</span><span id="compute_normalized_cross_correlation-22"><a href="#compute_normalized_cross_correlation-22"><span class="linenos">22</span></a><span class="sd">        &gt;&gt;&gt; normalized_cross_correlation(signal1, signal2)</span>
-</span><span id="compute_normalized_cross_correlation-23"><a href="#compute_normalized_cross_correlation-23"><span class="linenos">23</span></a><span class="sd">        Tensor([0.30151134, 0.51298918, 0.77459667, 0.9486833 , 0.90453403, 0.70710678, 0.43643578])</span>
-</span><span id="compute_normalized_cross_correlation-24"><a href="#compute_normalized_cross_correlation-24"><span class="linenos">24</span></a>
-</span><span id="compute_normalized_cross_correlation-25"><a href="#compute_normalized_cross_correlation-25"><span class="linenos">25</span></a><span class="sd">    Note:</span>
-</span><span id="compute_normalized_cross_correlation-26"><a href="#compute_normalized_cross_correlation-26"><span class="linenos">26</span></a><span class="sd">        This function assumes the input signals are one-dimensional</span>
-</span><span id="compute_normalized_cross_correlation-27"><a href="#compute_normalized_cross_correlation-27"><span class="linenos">27</span></a><span class="sd">        and contain sufficient elements for meaningful cross-correlation.</span>
-</span><span id="compute_normalized_cross_correlation-28"><a href="#compute_normalized_cross_correlation-28"><span class="linenos">28</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="compute_normalized_cross_correlation-29"><a href="#compute_normalized_cross_correlation-29"><span class="linenos">29</span></a>    <span class="c1"># Ensure the inputs are 1D tensors</span>
-</span><span id="compute_normalized_cross_correlation-30"><a href="#compute_normalized_cross_correlation-30"><span class="linenos">30</span></a>    <span class="k">if</span> <span class="n">signal1</span><span class="o">.</span><span class="n">ndim</span> <span class="o">!=</span> <span class="mi">1</span> <span class="ow">or</span> <span class="n">signal2</span><span class="o">.</span><span class="n">ndim</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
-</span><span id="compute_normalized_cross_correlation-31"><a href="#compute_normalized_cross_correlation-31"><span class="linenos">31</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Input signals must be one-dimensional&quot;</span><span class="p">)</span>
-</span><span id="compute_normalized_cross_correlation-32"><a href="#compute_normalized_cross_correlation-32"><span class="linenos">32</span></a>
-</span><span id="compute_normalized_cross_correlation-33"><a href="#compute_normalized_cross_correlation-33"><span class="linenos">33</span></a>    <span class="c1"># Convert PyTorch tensors to NumPy arrays</span>
-</span><span id="compute_normalized_cross_correlation-34"><a href="#compute_normalized_cross_correlation-34"><span class="linenos">34</span></a>    <span class="n">signal1_np</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">=</span> <span class="n">signal1</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
-</span><span id="compute_normalized_cross_correlation-35"><a href="#compute_normalized_cross_correlation-35"><span class="linenos">35</span></a>    <span class="n">signal2_np</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">=</span> <span class="n">signal2</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
-</span><span id="compute_normalized_cross_correlation-36"><a href="#compute_normalized_cross_correlation-36"><span class="linenos">36</span></a>
-</span><span id="compute_normalized_cross_correlation-37"><a href="#compute_normalized_cross_correlation-37"><span class="linenos">37</span></a>    <span class="c1"># Calculate the energy of each signal</span>
-</span><span id="compute_normalized_cross_correlation-38"><a href="#compute_normalized_cross_correlation-38"><span class="linenos">38</span></a>    <span class="n">energy_signal1</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">signal1_np</span><span class="o">**</span><span class="mi">2</span><span class="p">)</span>
-</span><span id="compute_normalized_cross_correlation-39"><a href="#compute_normalized_cross_correlation-39"><span class="linenos">39</span></a>    <span class="n">energy_signal2</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">signal2_np</span><span class="o">**</span><span class="mi">2</span><span class="p">)</span>
-</span><span id="compute_normalized_cross_correlation-40"><a href="#compute_normalized_cross_correlation-40"><span class="linenos">40</span></a>
-</span><span id="compute_normalized_cross_correlation-41"><a href="#compute_normalized_cross_correlation-41"><span class="linenos">41</span></a>    <span class="c1"># Check for zero energy to avoid division by zero</span>
-</span><span id="compute_normalized_cross_correlation-42"><a href="#compute_normalized_cross_correlation-42"><span class="linenos">42</span></a>    <span class="k">if</span> <span class="n">energy_signal1</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">energy_signal2</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-</span><span id="compute_normalized_cross_correlation-43"><a href="#compute_normalized_cross_correlation-43"><span class="linenos">43</span></a>        <span class="k">raise</span> <span class="ne">ZeroDivisionError</span><span class="p">(</span><span class="s2">&quot;One of the input signals has zero energy, causing division by zero in normalization&quot;</span><span class="p">)</span>
-</span><span id="compute_normalized_cross_correlation-44"><a href="#compute_normalized_cross_correlation-44"><span class="linenos">44</span></a>
-</span><span id="compute_normalized_cross_correlation-45"><a href="#compute_normalized_cross_correlation-45"><span class="linenos">45</span></a>    <span class="c1"># Compute the cross-correlation</span>
-</span><span id="compute_normalized_cross_correlation-46"><a href="#compute_normalized_cross_correlation-46"><span class="linenos">46</span></a>    <span class="n">cross_correlation</span> <span class="o">=</span> <span class="n">correlate</span><span class="p">(</span><span class="n">signal1_np</span><span class="p">,</span> <span class="n">signal2_np</span><span class="p">)</span>
-</span><span id="compute_normalized_cross_correlation-47"><a href="#compute_normalized_cross_correlation-47"><span class="linenos">47</span></a>
-</span><span id="compute_normalized_cross_correlation-48"><a href="#compute_normalized_cross_correlation-48"><span class="linenos">48</span></a>    <span class="c1"># Calculate the normalized cross-correlation</span>
-</span><span id="compute_normalized_cross_correlation-49"><a href="#compute_normalized_cross_correlation-49"><span class="linenos">49</span></a>    <span class="n">normalized_cross_correlation</span> <span class="o">=</span> <span class="n">cross_correlation</span> <span class="o">/</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">energy_signal1</span> <span class="o">*</span> <span class="n">energy_signal2</span><span class="p">)</span>
-</span><span id="compute_normalized_cross_correlation-50"><a href="#compute_normalized_cross_correlation-50"><span class="linenos">50</span></a>
-</span><span id="compute_normalized_cross_correlation-51"><a href="#compute_normalized_cross_correlation-51"><span class="linenos">51</span></a>    <span class="nb">print</span><span class="p">(</span><span class="n">normalized_cross_correlation</span><span class="p">)</span>
-</span><span id="compute_normalized_cross_correlation-52"><a href="#compute_normalized_cross_correlation-52"><span class="linenos">52</span></a>    <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">(</span><span class="n">normalized_cross_correlation</span><span class="p">)</span>
+</span><span id="compute_normalized_cross_correlation-19"><a href="#compute_normalized_cross_correlation-19"><span class="linenos">19</span></a><span class="sd">    Note:</span>
+</span><span id="compute_normalized_cross_correlation-20"><a href="#compute_normalized_cross_correlation-20"><span class="linenos">20</span></a><span class="sd">        This function assumes the input signals are one-dimensional</span>
+</span><span id="compute_normalized_cross_correlation-21"><a href="#compute_normalized_cross_correlation-21"><span class="linenos">21</span></a><span class="sd">        and contain sufficient elements for meaningful cross-correlation.</span>
+</span><span id="compute_normalized_cross_correlation-22"><a href="#compute_normalized_cross_correlation-22"><span class="linenos">22</span></a>
+</span><span id="compute_normalized_cross_correlation-23"><a href="#compute_normalized_cross_correlation-23"><span class="linenos">23</span></a><span class="sd">    Examples:</span>
+</span><span id="compute_normalized_cross_correlation-24"><a href="#compute_normalized_cross_correlation-24"><span class="linenos">24</span></a><span class="sd">        &gt;&gt;&gt; import torch</span>
+</span><span id="compute_normalized_cross_correlation-25"><a href="#compute_normalized_cross_correlation-25"><span class="linenos">25</span></a><span class="sd">        &gt;&gt;&gt; signal1 = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0])</span>
+</span><span id="compute_normalized_cross_correlation-26"><a href="#compute_normalized_cross_correlation-26"><span class="linenos">26</span></a><span class="sd">        &gt;&gt;&gt; signal2 = torch.tensor([2.0, 3.0, 4.0])</span>
+</span><span id="compute_normalized_cross_correlation-27"><a href="#compute_normalized_cross_correlation-27"><span class="linenos">27</span></a><span class="sd">        &gt;&gt;&gt; normalized_cross_correlation(signal1, signal2)</span>
+</span><span id="compute_normalized_cross_correlation-28"><a href="#compute_normalized_cross_correlation-28"><span class="linenos">28</span></a><span class="sd">        Tensor([0.30151134, 0.51298918, 0.77459667, 0.9486833 , 0.90453403, 0.70710678, 0.43643578])</span>
+</span><span id="compute_normalized_cross_correlation-29"><a href="#compute_normalized_cross_correlation-29"><span class="linenos">29</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="compute_normalized_cross_correlation-30"><a href="#compute_normalized_cross_correlation-30"><span class="linenos">30</span></a>    <span class="c1"># Ensure the inputs are 1D tensors</span>
+</span><span id="compute_normalized_cross_correlation-31"><a href="#compute_normalized_cross_correlation-31"><span class="linenos">31</span></a>    <span class="k">if</span> <span class="n">signal1</span><span class="o">.</span><span class="n">ndim</span> <span class="o">!=</span> <span class="mi">1</span> <span class="ow">or</span> <span class="n">signal2</span><span class="o">.</span><span class="n">ndim</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
+</span><span id="compute_normalized_cross_correlation-32"><a href="#compute_normalized_cross_correlation-32"><span class="linenos">32</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Input signals must be one-dimensional&quot;</span><span class="p">)</span>
+</span><span id="compute_normalized_cross_correlation-33"><a href="#compute_normalized_cross_correlation-33"><span class="linenos">33</span></a>
+</span><span id="compute_normalized_cross_correlation-34"><a href="#compute_normalized_cross_correlation-34"><span class="linenos">34</span></a>    <span class="c1"># Convert PyTorch tensors to NumPy arrays</span>
+</span><span id="compute_normalized_cross_correlation-35"><a href="#compute_normalized_cross_correlation-35"><span class="linenos">35</span></a>    <span class="n">signal1_np</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">=</span> <span class="n">signal1</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
+</span><span id="compute_normalized_cross_correlation-36"><a href="#compute_normalized_cross_correlation-36"><span class="linenos">36</span></a>    <span class="n">signal2_np</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">=</span> <span class="n">signal2</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
+</span><span id="compute_normalized_cross_correlation-37"><a href="#compute_normalized_cross_correlation-37"><span class="linenos">37</span></a>
+</span><span id="compute_normalized_cross_correlation-38"><a href="#compute_normalized_cross_correlation-38"><span class="linenos">38</span></a>    <span class="c1"># Calculate the energy of each signal</span>
+</span><span id="compute_normalized_cross_correlation-39"><a href="#compute_normalized_cross_correlation-39"><span class="linenos">39</span></a>    <span class="n">energy_signal1</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">signal1_np</span><span class="o">**</span><span class="mi">2</span><span class="p">)</span>
+</span><span id="compute_normalized_cross_correlation-40"><a href="#compute_normalized_cross_correlation-40"><span class="linenos">40</span></a>    <span class="n">energy_signal2</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">signal2_np</span><span class="o">**</span><span class="mi">2</span><span class="p">)</span>
+</span><span id="compute_normalized_cross_correlation-41"><a href="#compute_normalized_cross_correlation-41"><span class="linenos">41</span></a>
+</span><span id="compute_normalized_cross_correlation-42"><a href="#compute_normalized_cross_correlation-42"><span class="linenos">42</span></a>    <span class="c1"># Check for zero energy to avoid division by zero</span>
+</span><span id="compute_normalized_cross_correlation-43"><a href="#compute_normalized_cross_correlation-43"><span class="linenos">43</span></a>    <span class="k">if</span> <span class="n">energy_signal1</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">energy_signal2</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+</span><span id="compute_normalized_cross_correlation-44"><a href="#compute_normalized_cross_correlation-44"><span class="linenos">44</span></a>        <span class="k">raise</span> <span class="ne">ZeroDivisionError</span><span class="p">(</span><span class="s2">&quot;One of the input signals has zero energy, causing division by zero in normalization&quot;</span><span class="p">)</span>
+</span><span id="compute_normalized_cross_correlation-45"><a href="#compute_normalized_cross_correlation-45"><span class="linenos">45</span></a>
+</span><span id="compute_normalized_cross_correlation-46"><a href="#compute_normalized_cross_correlation-46"><span class="linenos">46</span></a>    <span class="c1"># Compute the cross-correlation</span>
+</span><span id="compute_normalized_cross_correlation-47"><a href="#compute_normalized_cross_correlation-47"><span class="linenos">47</span></a>    <span class="n">cross_correlation</span> <span class="o">=</span> <span class="n">correlate</span><span class="p">(</span><span class="n">signal1_np</span><span class="p">,</span> <span class="n">signal2_np</span><span class="p">)</span>
+</span><span id="compute_normalized_cross_correlation-48"><a href="#compute_normalized_cross_correlation-48"><span class="linenos">48</span></a>
+</span><span id="compute_normalized_cross_correlation-49"><a href="#compute_normalized_cross_correlation-49"><span class="linenos">49</span></a>    <span class="c1"># Calculate the normalized cross-correlation</span>
+</span><span id="compute_normalized_cross_correlation-50"><a href="#compute_normalized_cross_correlation-50"><span class="linenos">50</span></a>    <span class="n">normalized_cross_correlation</span> <span class="o">=</span> <span class="n">cross_correlation</span> <span class="o">/</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">energy_signal1</span> <span class="o">*</span> <span class="n">energy_signal2</span><span class="p">)</span>
+</span><span id="compute_normalized_cross_correlation-51"><a href="#compute_normalized_cross_correlation-51"><span class="linenos">51</span></a>
+</span><span id="compute_normalized_cross_correlation-52"><a href="#compute_normalized_cross_correlation-52"><span class="linenos">52</span></a>    <span class="nb">print</span><span class="p">(</span><span class="n">normalized_cross_correlation</span><span class="p">)</span>
+</span><span id="compute_normalized_cross_correlation-53"><a href="#compute_normalized_cross_correlation-53"><span class="linenos">53</span></a>    <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">(</span><span class="n">normalized_cross_correlation</span><span class="p">)</span>
 </span></pre></div>
 
 
@@ -185,23 +187,24 @@
   <p>torch.Tensor: The normalized cross-correlation value between the two input signals.</p>
 </blockquote>
 
-<h6 id="examples">Examples:</h6>
-
-<blockquote>
-  <div class="pdoc-code codehilite">
-<pre><span></span><code><span class="gp">&gt;&gt;&gt; </span><span class="n">signal1</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">2.0</span><span class="p">,</span> <span class="mf">3.0</span><span class="p">,</span> <span class="mf">4.0</span><span class="p">,</span> <span class="mf">5.0</span><span class="p">])</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">signal2</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([</span><span class="mf">2.0</span><span class="p">,</span> <span class="mf">3.0</span><span class="p">,</span> <span class="mf">4.0</span><span class="p">])</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">normalized_cross_correlation</span><span class="p">(</span><span class="n">signal1</span><span class="p">,</span> <span class="n">signal2</span><span class="p">)</span>
-<span class="go">Tensor([0.30151134, 0.51298918, 0.77459667, 0.9486833 , 0.90453403, 0.70710678, 0.43643578])</span>
-</code></pre>
-  </div>
-</blockquote>
-
 <h6 id="note">Note:</h6>
 
 <blockquote>
   <p>This function assumes the input signals are one-dimensional
   and contain sufficient elements for meaningful cross-correlation.</p>
+</blockquote>
+
+<h6 id="examples">Examples:</h6>
+
+<blockquote>
+  <div class="pdoc-code codehilite">
+<pre><span></span><code><span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">signal1</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">2.0</span><span class="p">,</span> <span class="mf">3.0</span><span class="p">,</span> <span class="mf">4.0</span><span class="p">,</span> <span class="mf">5.0</span><span class="p">])</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">signal2</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([</span><span class="mf">2.0</span><span class="p">,</span> <span class="mf">3.0</span><span class="p">,</span> <span class="mf">4.0</span><span class="p">])</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">normalized_cross_correlation</span><span class="p">(</span><span class="n">signal1</span><span class="p">,</span> <span class="n">signal2</span><span class="p">)</span>
+<span class="go">Tensor([0.30151134, 0.51298918, 0.77459667, 0.9486833 , 0.90453403, 0.70710678, 0.43643578])</span>
+</code></pre>
+  </div>
 </blockquote>
 </div>
 

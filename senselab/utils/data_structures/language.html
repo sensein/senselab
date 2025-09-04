@@ -71,51 +71,151 @@
                     <h1 class="modulename">
 <a href="./../../../senselab.html">senselab</a><wbr>.<a href="./../../utils.html">utils</a><wbr>.<a href="./../data_structures.html">data_structures</a><wbr>.language    </h1>
 
-                        <div class="docstring"><p>This module provides the implementation of language data structures.</p>
+                        <div class="docstring"><p>Language data structures and normalization.</p>
+
+<p>This module defines a <code><a href="#Language">Language</a></code> pydantic model that <strong>normalizes</strong> an input
+language identifier (ISO 639-1, ISO 639-3, or English name) to a canonical
+<strong>ISO 639-3</strong> code at initialization.</p>
+
+<p>Supported inputs for <code>language_code</code>:</p>
+
+<ul>
+<li>ISO 639-1 two-letter codes (e.g., <code>"en"</code>, <code>"it"</code>),</li>
+<li>ISO 639-3 three-letter codes (e.g., <code>"eng"</code>, <code>"ita"</code>),</li>
+<li>English language names (e.g., <code>"English"</code>, <code>"Italian"</code>).</li>
+</ul>
+
+<p>Internally it uses <code>pycountry.languages</code> to validate and resolve the code.</p>
+
+<h6 id="notes">Notes:</h6>
+
+<blockquote>
+  <ul>
+  <li>Not every language has an ISO 639-1 (two-letter) code; in those cases,
+  accessing <code>.alpha_2</code> will raise an <code>AttributeError</code> from <code>pycountry</code>.</li>
+  <li>The model stores the <strong>alpha-3</strong> code as its canonical representation.</li>
+  </ul>
+</blockquote>
 </div>
 
                         <input id="mod-language-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 
                         <label class="view-source-button" for="mod-language-view-source"><span>View Source</span></label>
 
-                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos"> 1</span></a><span class="sd">&quot;&quot;&quot;This module provides the implementation of language data structures.&quot;&quot;&quot;</span>
-</span><span id="L-2"><a href="#L-2"><span class="linenos"> 2</span></a>
-</span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">pycountry</span>
-</span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">pycountry.db</span>
-</span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">pydantic</span><span class="w"> </span><span class="kn">import</span> <span class="n">BaseModel</span><span class="p">,</span> <span class="n">field_validator</span>
-</span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a>
-</span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a>
-</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a><span class="k">class</span><span class="w"> </span><span class="nc">Language</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
-</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Data structure for a language.&quot;&quot;&quot;</span>
-</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a>
-</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a>    <span class="n">language_code</span><span class="p">:</span> <span class="nb">str</span>
-</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a>
-</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a>    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;language_code&quot;</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;before&quot;</span><span class="p">)</span>
-</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">validate_language</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-</span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Validate that the language code is valid.&quot;&quot;&quot;</span>
-</span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a>        <span class="n">lang</span> <span class="o">=</span> <span class="p">(</span>
-</span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a>            <span class="n">pycountry</span><span class="o">.</span><span class="n">languages</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">alpha_2</span><span class="o">=</span><span class="n">v</span><span class="p">)</span> <span class="ow">or</span> <span class="n">pycountry</span><span class="o">.</span><span class="n">languages</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">alpha_3</span><span class="o">=</span><span class="n">v</span><span class="p">)</span> <span class="ow">or</span> <span class="n">pycountry</span><span class="o">.</span><span class="n">languages</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="n">v</span><span class="p">)</span>
-</span><span id="L-18"><a href="#L-18"><span class="linenos">18</span></a>        <span class="p">)</span>
-</span><span id="L-19"><a href="#L-19"><span class="linenos">19</span></a>
-</span><span id="L-20"><a href="#L-20"><span class="linenos">20</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">lang</span><span class="p">:</span>
-</span><span id="L-21"><a href="#L-21"><span class="linenos">21</span></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2"> is not a valid ISO language code or name&quot;</span><span class="p">)</span>
-</span><span id="L-22"><a href="#L-22"><span class="linenos">22</span></a>
-</span><span id="L-23"><a href="#L-23"><span class="linenos">23</span></a>        <span class="k">return</span> <span class="n">lang</span><span class="o">.</span><span class="n">alpha_3</span>  <span class="c1"># ISO 639-3</span>
-</span><span id="L-24"><a href="#L-24"><span class="linenos">24</span></a>
-</span><span id="L-25"><a href="#L-25"><span class="linenos">25</span></a>    <span class="nd">@property</span>
-</span><span id="L-26"><a href="#L-26"><span class="linenos">26</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">alpha_2</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-</span><span id="L-27"><a href="#L-27"><span class="linenos">27</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Get the ISO 639-2 code for the language.&quot;&quot;&quot;</span>
-</span><span id="L-28"><a href="#L-28"><span class="linenos">28</span></a>        <span class="k">return</span> <span class="n">pycountry</span><span class="o">.</span><span class="n">languages</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">alpha_3</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">language_code</span><span class="p">)</span><span class="o">.</span><span class="n">alpha_2</span>
-</span><span id="L-29"><a href="#L-29"><span class="linenos">29</span></a>
-</span><span id="L-30"><a href="#L-30"><span class="linenos">30</span></a>    <span class="nd">@property</span>
-</span><span id="L-31"><a href="#L-31"><span class="linenos">31</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">alpha_3</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-</span><span id="L-32"><a href="#L-32"><span class="linenos">32</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Get the ISO 639-3 code for the language.&quot;&quot;&quot;</span>
-</span><span id="L-33"><a href="#L-33"><span class="linenos">33</span></a>        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">language_code</span>
-</span><span id="L-34"><a href="#L-34"><span class="linenos">34</span></a>
-</span><span id="L-35"><a href="#L-35"><span class="linenos">35</span></a>    <span class="nd">@property</span>
-</span><span id="L-36"><a href="#L-36"><span class="linenos">36</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">name</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-</span><span id="L-37"><a href="#L-37"><span class="linenos">37</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Get the name of the language.&quot;&quot;&quot;</span>
-</span><span id="L-38"><a href="#L-38"><span class="linenos">38</span></a>        <span class="k">return</span> <span class="n">pycountry</span><span class="o">.</span><span class="n">languages</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">alpha_3</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">language_code</span><span class="p">)</span><span class="o">.</span><span class="n">name</span>
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">  1</span></a><span class="sd">&quot;&quot;&quot;Language data structures and normalization.</span>
+</span><span id="L-2"><a href="#L-2"><span class="linenos">  2</span></a>
+</span><span id="L-3"><a href="#L-3"><span class="linenos">  3</span></a><span class="sd">This module defines a `Language` pydantic model that **normalizes** an input</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos">  4</span></a><span class="sd">language identifier (ISO 639-1, ISO 639-3, or English name) to a canonical</span>
+</span><span id="L-5"><a href="#L-5"><span class="linenos">  5</span></a><span class="sd">**ISO 639-3** code at initialization.</span>
+</span><span id="L-6"><a href="#L-6"><span class="linenos">  6</span></a>
+</span><span id="L-7"><a href="#L-7"><span class="linenos">  7</span></a><span class="sd">Supported inputs for `language_code`:</span>
+</span><span id="L-8"><a href="#L-8"><span class="linenos">  8</span></a><span class="sd">  - ISO 639-1 two-letter codes (e.g., `&quot;en&quot;`, `&quot;it&quot;`),</span>
+</span><span id="L-9"><a href="#L-9"><span class="linenos">  9</span></a><span class="sd">  - ISO 639-3 three-letter codes (e.g., `&quot;eng&quot;`, `&quot;ita&quot;`),</span>
+</span><span id="L-10"><a href="#L-10"><span class="linenos"> 10</span></a><span class="sd">  - English language names (e.g., `&quot;English&quot;`, `&quot;Italian&quot;`).</span>
+</span><span id="L-11"><a href="#L-11"><span class="linenos"> 11</span></a>
+</span><span id="L-12"><a href="#L-12"><span class="linenos"> 12</span></a><span class="sd">Internally it uses `pycountry.languages` to validate and resolve the code.</span>
+</span><span id="L-13"><a href="#L-13"><span class="linenos"> 13</span></a>
+</span><span id="L-14"><a href="#L-14"><span class="linenos"> 14</span></a><span class="sd">Notes:</span>
+</span><span id="L-15"><a href="#L-15"><span class="linenos"> 15</span></a><span class="sd">  - Not every language has an ISO 639-1 (two-letter) code; in those cases,</span>
+</span><span id="L-16"><a href="#L-16"><span class="linenos"> 16</span></a><span class="sd">    accessing `.alpha_2` will raise an `AttributeError` from `pycountry`.</span>
+</span><span id="L-17"><a href="#L-17"><span class="linenos"> 17</span></a><span class="sd">  - The model stores the **alpha-3** code as its canonical representation.</span>
+</span><span id="L-18"><a href="#L-18"><span class="linenos"> 18</span></a><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="L-19"><a href="#L-19"><span class="linenos"> 19</span></a>
+</span><span id="L-20"><a href="#L-20"><span class="linenos"> 20</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">pycountry</span>
+</span><span id="L-21"><a href="#L-21"><span class="linenos"> 21</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">pycountry.db</span>
+</span><span id="L-22"><a href="#L-22"><span class="linenos"> 22</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">pydantic</span><span class="w"> </span><span class="kn">import</span> <span class="n">BaseModel</span><span class="p">,</span> <span class="n">field_validator</span>
+</span><span id="L-23"><a href="#L-23"><span class="linenos"> 23</span></a>
+</span><span id="L-24"><a href="#L-24"><span class="linenos"> 24</span></a>
+</span><span id="L-25"><a href="#L-25"><span class="linenos"> 25</span></a><span class="k">class</span><span class="w"> </span><span class="nc">Language</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+</span><span id="L-26"><a href="#L-26"><span class="linenos"> 26</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Normalized language identifier (canonical ISO 639-3).</span>
+</span><span id="L-27"><a href="#L-27"><span class="linenos"> 27</span></a>
+</span><span id="L-28"><a href="#L-28"><span class="linenos"> 28</span></a><span class="sd">    Initializing `Language(language_code=...)` accepts multiple forms (ISO 639-1,</span>
+</span><span id="L-29"><a href="#L-29"><span class="linenos"> 29</span></a><span class="sd">    ISO 639-3, or English name) and **normalizes** the stored value to the</span>
+</span><span id="L-30"><a href="#L-30"><span class="linenos"> 30</span></a><span class="sd">    ISO 639-3 `alpha_3` code.</span>
+</span><span id="L-31"><a href="#L-31"><span class="linenos"> 31</span></a>
+</span><span id="L-32"><a href="#L-32"><span class="linenos"> 32</span></a><span class="sd">    Attributes:</span>
+</span><span id="L-33"><a href="#L-33"><span class="linenos"> 33</span></a><span class="sd">        language_code (str): Canonical ISO 639-3 code after validation.</span>
+</span><span id="L-34"><a href="#L-34"><span class="linenos"> 34</span></a>
+</span><span id="L-35"><a href="#L-35"><span class="linenos"> 35</span></a><span class="sd">    Example:</span>
+</span><span id="L-36"><a href="#L-36"><span class="linenos"> 36</span></a><span class="sd">        &gt;&gt;&gt; from senselab.utils.data_structures.language import Language</span>
+</span><span id="L-37"><a href="#L-37"><span class="linenos"> 37</span></a><span class="sd">        &gt;&gt;&gt; Language(language_code=&quot;en&quot;).alpha_3</span>
+</span><span id="L-38"><a href="#L-38"><span class="linenos"> 38</span></a><span class="sd">        &#39;eng&#39;</span>
+</span><span id="L-39"><a href="#L-39"><span class="linenos"> 39</span></a><span class="sd">        &gt;&gt;&gt; Language(language_code=&quot;English&quot;).alpha_2</span>
+</span><span id="L-40"><a href="#L-40"><span class="linenos"> 40</span></a><span class="sd">        &#39;en&#39;</span>
+</span><span id="L-41"><a href="#L-41"><span class="linenos"> 41</span></a><span class="sd">        &gt;&gt;&gt; Language(language_code=&quot;ita&quot;).name</span>
+</span><span id="L-42"><a href="#L-42"><span class="linenos"> 42</span></a><span class="sd">        &#39;Italian&#39;</span>
+</span><span id="L-43"><a href="#L-43"><span class="linenos"> 43</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="L-44"><a href="#L-44"><span class="linenos"> 44</span></a>
+</span><span id="L-45"><a href="#L-45"><span class="linenos"> 45</span></a>    <span class="n">language_code</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="L-46"><a href="#L-46"><span class="linenos"> 46</span></a>
+</span><span id="L-47"><a href="#L-47"><span class="linenos"> 47</span></a>    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;language_code&quot;</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;before&quot;</span><span class="p">)</span>
+</span><span id="L-48"><a href="#L-48"><span class="linenos"> 48</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">validate_language</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="L-49"><a href="#L-49"><span class="linenos"> 49</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Validate and normalize input to ISO 639-3.</span>
+</span><span id="L-50"><a href="#L-50"><span class="linenos"> 50</span></a>
+</span><span id="L-51"><a href="#L-51"><span class="linenos"> 51</span></a><span class="sd">        Accepts ISO 639-1 (`alpha_2`), ISO 639-3 (`alpha_3`), or English name,</span>
+</span><span id="L-52"><a href="#L-52"><span class="linenos"> 52</span></a><span class="sd">        and returns the canonical `alpha_3` code.</span>
+</span><span id="L-53"><a href="#L-53"><span class="linenos"> 53</span></a>
+</span><span id="L-54"><a href="#L-54"><span class="linenos"> 54</span></a><span class="sd">        Args:</span>
+</span><span id="L-55"><a href="#L-55"><span class="linenos"> 55</span></a><span class="sd">            v (str): Language identifier (e.g., `&quot;en&quot;`, `&quot;eng&quot;`, `&quot;English&quot;`).</span>
+</span><span id="L-56"><a href="#L-56"><span class="linenos"> 56</span></a>
+</span><span id="L-57"><a href="#L-57"><span class="linenos"> 57</span></a><span class="sd">        Returns:</span>
+</span><span id="L-58"><a href="#L-58"><span class="linenos"> 58</span></a><span class="sd">            str: ISO 639-3 code.</span>
+</span><span id="L-59"><a href="#L-59"><span class="linenos"> 59</span></a>
+</span><span id="L-60"><a href="#L-60"><span class="linenos"> 60</span></a><span class="sd">        Raises:</span>
+</span><span id="L-61"><a href="#L-61"><span class="linenos"> 61</span></a><span class="sd">            ValueError: If the value does not correspond to a known language in</span>
+</span><span id="L-62"><a href="#L-62"><span class="linenos"> 62</span></a><span class="sd">                `pycountry.languages`.</span>
+</span><span id="L-63"><a href="#L-63"><span class="linenos"> 63</span></a><span class="sd">        &quot;&quot;&quot;</span>
+</span><span id="L-64"><a href="#L-64"><span class="linenos"> 64</span></a>        <span class="n">lang</span> <span class="o">=</span> <span class="p">(</span>
+</span><span id="L-65"><a href="#L-65"><span class="linenos"> 65</span></a>            <span class="n">pycountry</span><span class="o">.</span><span class="n">languages</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">alpha_2</span><span class="o">=</span><span class="n">v</span><span class="p">)</span> <span class="ow">or</span> <span class="n">pycountry</span><span class="o">.</span><span class="n">languages</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">alpha_3</span><span class="o">=</span><span class="n">v</span><span class="p">)</span> <span class="ow">or</span> <span class="n">pycountry</span><span class="o">.</span><span class="n">languages</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="n">v</span><span class="p">)</span>
+</span><span id="L-66"><a href="#L-66"><span class="linenos"> 66</span></a>        <span class="p">)</span>
+</span><span id="L-67"><a href="#L-67"><span class="linenos"> 67</span></a>
+</span><span id="L-68"><a href="#L-68"><span class="linenos"> 68</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">lang</span><span class="p">:</span>
+</span><span id="L-69"><a href="#L-69"><span class="linenos"> 69</span></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2"> is not a valid ISO language code or name&quot;</span><span class="p">)</span>
+</span><span id="L-70"><a href="#L-70"><span class="linenos"> 70</span></a>
+</span><span id="L-71"><a href="#L-71"><span class="linenos"> 71</span></a>        <span class="k">return</span> <span class="n">lang</span><span class="o">.</span><span class="n">alpha_3</span>  <span class="c1"># ISO 639-3</span>
+</span><span id="L-72"><a href="#L-72"><span class="linenos"> 72</span></a>
+</span><span id="L-73"><a href="#L-73"><span class="linenos"> 73</span></a>    <span class="nd">@property</span>
+</span><span id="L-74"><a href="#L-74"><span class="linenos"> 74</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">alpha_2</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="L-75"><a href="#L-75"><span class="linenos"> 75</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the ISO 639-1 two-letter code.</span>
+</span><span id="L-76"><a href="#L-76"><span class="linenos"> 76</span></a>
+</span><span id="L-77"><a href="#L-77"><span class="linenos"> 77</span></a><span class="sd">        Returns:</span>
+</span><span id="L-78"><a href="#L-78"><span class="linenos"> 78</span></a><span class="sd">            str: ISO 639-1 (`alpha_2`) code.</span>
+</span><span id="L-79"><a href="#L-79"><span class="linenos"> 79</span></a>
+</span><span id="L-80"><a href="#L-80"><span class="linenos"> 80</span></a><span class="sd">        Raises:</span>
+</span><span id="L-81"><a href="#L-81"><span class="linenos"> 81</span></a><span class="sd">            AttributeError: If the language has no ISO 639-1 code in the</span>
+</span><span id="L-82"><a href="#L-82"><span class="linenos"> 82</span></a><span class="sd">                `pycountry` database.</span>
+</span><span id="L-83"><a href="#L-83"><span class="linenos"> 83</span></a>
+</span><span id="L-84"><a href="#L-84"><span class="linenos"> 84</span></a><span class="sd">        Example:</span>
+</span><span id="L-85"><a href="#L-85"><span class="linenos"> 85</span></a><span class="sd">            &gt;&gt;&gt; Language(language_code=&quot;eng&quot;).alpha_2</span>
+</span><span id="L-86"><a href="#L-86"><span class="linenos"> 86</span></a><span class="sd">            &#39;en&#39;</span>
+</span><span id="L-87"><a href="#L-87"><span class="linenos"> 87</span></a><span class="sd">        &quot;&quot;&quot;</span>
+</span><span id="L-88"><a href="#L-88"><span class="linenos"> 88</span></a>        <span class="k">return</span> <span class="n">pycountry</span><span class="o">.</span><span class="n">languages</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">alpha_3</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">language_code</span><span class="p">)</span><span class="o">.</span><span class="n">alpha_2</span>
+</span><span id="L-89"><a href="#L-89"><span class="linenos"> 89</span></a>
+</span><span id="L-90"><a href="#L-90"><span class="linenos"> 90</span></a>    <span class="nd">@property</span>
+</span><span id="L-91"><a href="#L-91"><span class="linenos"> 91</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">alpha_3</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="L-92"><a href="#L-92"><span class="linenos"> 92</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the ISO 639-3 three-letter code.</span>
+</span><span id="L-93"><a href="#L-93"><span class="linenos"> 93</span></a>
+</span><span id="L-94"><a href="#L-94"><span class="linenos"> 94</span></a><span class="sd">        Returns:</span>
+</span><span id="L-95"><a href="#L-95"><span class="linenos"> 95</span></a><span class="sd">            str: ISO 639-3 (`alpha_3`) code (the model’s canonical form).</span>
+</span><span id="L-96"><a href="#L-96"><span class="linenos"> 96</span></a>
+</span><span id="L-97"><a href="#L-97"><span class="linenos"> 97</span></a><span class="sd">        Example:</span>
+</span><span id="L-98"><a href="#L-98"><span class="linenos"> 98</span></a><span class="sd">            &gt;&gt;&gt; Language(language_code=&quot;en&quot;).alpha_3</span>
+</span><span id="L-99"><a href="#L-99"><span class="linenos"> 99</span></a><span class="sd">            &#39;eng&#39;</span>
+</span><span id="L-100"><a href="#L-100"><span class="linenos">100</span></a><span class="sd">        &quot;&quot;&quot;</span>
+</span><span id="L-101"><a href="#L-101"><span class="linenos">101</span></a>        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">language_code</span>
+</span><span id="L-102"><a href="#L-102"><span class="linenos">102</span></a>
+</span><span id="L-103"><a href="#L-103"><span class="linenos">103</span></a>    <span class="nd">@property</span>
+</span><span id="L-104"><a href="#L-104"><span class="linenos">104</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">name</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="L-105"><a href="#L-105"><span class="linenos">105</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the English name of the language.</span>
+</span><span id="L-106"><a href="#L-106"><span class="linenos">106</span></a>
+</span><span id="L-107"><a href="#L-107"><span class="linenos">107</span></a><span class="sd">        Returns:</span>
+</span><span id="L-108"><a href="#L-108"><span class="linenos">108</span></a><span class="sd">            str: English language name from `pycountry`.</span>
+</span><span id="L-109"><a href="#L-109"><span class="linenos">109</span></a>
+</span><span id="L-110"><a href="#L-110"><span class="linenos">110</span></a><span class="sd">        Example:</span>
+</span><span id="L-111"><a href="#L-111"><span class="linenos">111</span></a><span class="sd">            &gt;&gt;&gt; Language(language_code=&quot;eng&quot;).name</span>
+</span><span id="L-112"><a href="#L-112"><span class="linenos">112</span></a><span class="sd">            &#39;English&#39;</span>
+</span><span id="L-113"><a href="#L-113"><span class="linenos">113</span></a><span class="sd">        &quot;&quot;&quot;</span>
+</span><span id="L-114"><a href="#L-114"><span class="linenos">114</span></a>        <span class="k">return</span> <span class="n">pycountry</span><span class="o">.</span><span class="n">languages</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">alpha_3</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">language_code</span><span class="p">)</span><span class="o">.</span><span class="n">name</span>
 </span></pre></div>
 
 
@@ -131,41 +231,125 @@
 
     </div>
     <a class="headerlink" href="#Language"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="Language-9"><a href="#Language-9"><span class="linenos"> 9</span></a><span class="k">class</span><span class="w"> </span><span class="nc">Language</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
-</span><span id="Language-10"><a href="#Language-10"><span class="linenos">10</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Data structure for a language.&quot;&quot;&quot;</span>
-</span><span id="Language-11"><a href="#Language-11"><span class="linenos">11</span></a>
-</span><span id="Language-12"><a href="#Language-12"><span class="linenos">12</span></a>    <span class="n">language_code</span><span class="p">:</span> <span class="nb">str</span>
-</span><span id="Language-13"><a href="#Language-13"><span class="linenos">13</span></a>
-</span><span id="Language-14"><a href="#Language-14"><span class="linenos">14</span></a>    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;language_code&quot;</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;before&quot;</span><span class="p">)</span>
-</span><span id="Language-15"><a href="#Language-15"><span class="linenos">15</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">validate_language</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-</span><span id="Language-16"><a href="#Language-16"><span class="linenos">16</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Validate that the language code is valid.&quot;&quot;&quot;</span>
-</span><span id="Language-17"><a href="#Language-17"><span class="linenos">17</span></a>        <span class="n">lang</span> <span class="o">=</span> <span class="p">(</span>
-</span><span id="Language-18"><a href="#Language-18"><span class="linenos">18</span></a>            <span class="n">pycountry</span><span class="o">.</span><span class="n">languages</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">alpha_2</span><span class="o">=</span><span class="n">v</span><span class="p">)</span> <span class="ow">or</span> <span class="n">pycountry</span><span class="o">.</span><span class="n">languages</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">alpha_3</span><span class="o">=</span><span class="n">v</span><span class="p">)</span> <span class="ow">or</span> <span class="n">pycountry</span><span class="o">.</span><span class="n">languages</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="n">v</span><span class="p">)</span>
-</span><span id="Language-19"><a href="#Language-19"><span class="linenos">19</span></a>        <span class="p">)</span>
-</span><span id="Language-20"><a href="#Language-20"><span class="linenos">20</span></a>
-</span><span id="Language-21"><a href="#Language-21"><span class="linenos">21</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">lang</span><span class="p">:</span>
-</span><span id="Language-22"><a href="#Language-22"><span class="linenos">22</span></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2"> is not a valid ISO language code or name&quot;</span><span class="p">)</span>
-</span><span id="Language-23"><a href="#Language-23"><span class="linenos">23</span></a>
-</span><span id="Language-24"><a href="#Language-24"><span class="linenos">24</span></a>        <span class="k">return</span> <span class="n">lang</span><span class="o">.</span><span class="n">alpha_3</span>  <span class="c1"># ISO 639-3</span>
-</span><span id="Language-25"><a href="#Language-25"><span class="linenos">25</span></a>
-</span><span id="Language-26"><a href="#Language-26"><span class="linenos">26</span></a>    <span class="nd">@property</span>
-</span><span id="Language-27"><a href="#Language-27"><span class="linenos">27</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">alpha_2</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-</span><span id="Language-28"><a href="#Language-28"><span class="linenos">28</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Get the ISO 639-2 code for the language.&quot;&quot;&quot;</span>
-</span><span id="Language-29"><a href="#Language-29"><span class="linenos">29</span></a>        <span class="k">return</span> <span class="n">pycountry</span><span class="o">.</span><span class="n">languages</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">alpha_3</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">language_code</span><span class="p">)</span><span class="o">.</span><span class="n">alpha_2</span>
-</span><span id="Language-30"><a href="#Language-30"><span class="linenos">30</span></a>
-</span><span id="Language-31"><a href="#Language-31"><span class="linenos">31</span></a>    <span class="nd">@property</span>
-</span><span id="Language-32"><a href="#Language-32"><span class="linenos">32</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">alpha_3</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-</span><span id="Language-33"><a href="#Language-33"><span class="linenos">33</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Get the ISO 639-3 code for the language.&quot;&quot;&quot;</span>
-</span><span id="Language-34"><a href="#Language-34"><span class="linenos">34</span></a>        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">language_code</span>
-</span><span id="Language-35"><a href="#Language-35"><span class="linenos">35</span></a>
-</span><span id="Language-36"><a href="#Language-36"><span class="linenos">36</span></a>    <span class="nd">@property</span>
-</span><span id="Language-37"><a href="#Language-37"><span class="linenos">37</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">name</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-</span><span id="Language-38"><a href="#Language-38"><span class="linenos">38</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Get the name of the language.&quot;&quot;&quot;</span>
-</span><span id="Language-39"><a href="#Language-39"><span class="linenos">39</span></a>        <span class="k">return</span> <span class="n">pycountry</span><span class="o">.</span><span class="n">languages</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">alpha_3</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">language_code</span><span class="p">)</span><span class="o">.</span><span class="n">name</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="Language-26"><a href="#Language-26"><span class="linenos"> 26</span></a><span class="k">class</span><span class="w"> </span><span class="nc">Language</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+</span><span id="Language-27"><a href="#Language-27"><span class="linenos"> 27</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Normalized language identifier (canonical ISO 639-3).</span>
+</span><span id="Language-28"><a href="#Language-28"><span class="linenos"> 28</span></a>
+</span><span id="Language-29"><a href="#Language-29"><span class="linenos"> 29</span></a><span class="sd">    Initializing `Language(language_code=...)` accepts multiple forms (ISO 639-1,</span>
+</span><span id="Language-30"><a href="#Language-30"><span class="linenos"> 30</span></a><span class="sd">    ISO 639-3, or English name) and **normalizes** the stored value to the</span>
+</span><span id="Language-31"><a href="#Language-31"><span class="linenos"> 31</span></a><span class="sd">    ISO 639-3 `alpha_3` code.</span>
+</span><span id="Language-32"><a href="#Language-32"><span class="linenos"> 32</span></a>
+</span><span id="Language-33"><a href="#Language-33"><span class="linenos"> 33</span></a><span class="sd">    Attributes:</span>
+</span><span id="Language-34"><a href="#Language-34"><span class="linenos"> 34</span></a><span class="sd">        language_code (str): Canonical ISO 639-3 code after validation.</span>
+</span><span id="Language-35"><a href="#Language-35"><span class="linenos"> 35</span></a>
+</span><span id="Language-36"><a href="#Language-36"><span class="linenos"> 36</span></a><span class="sd">    Example:</span>
+</span><span id="Language-37"><a href="#Language-37"><span class="linenos"> 37</span></a><span class="sd">        &gt;&gt;&gt; from senselab.utils.data_structures.language import Language</span>
+</span><span id="Language-38"><a href="#Language-38"><span class="linenos"> 38</span></a><span class="sd">        &gt;&gt;&gt; Language(language_code=&quot;en&quot;).alpha_3</span>
+</span><span id="Language-39"><a href="#Language-39"><span class="linenos"> 39</span></a><span class="sd">        &#39;eng&#39;</span>
+</span><span id="Language-40"><a href="#Language-40"><span class="linenos"> 40</span></a><span class="sd">        &gt;&gt;&gt; Language(language_code=&quot;English&quot;).alpha_2</span>
+</span><span id="Language-41"><a href="#Language-41"><span class="linenos"> 41</span></a><span class="sd">        &#39;en&#39;</span>
+</span><span id="Language-42"><a href="#Language-42"><span class="linenos"> 42</span></a><span class="sd">        &gt;&gt;&gt; Language(language_code=&quot;ita&quot;).name</span>
+</span><span id="Language-43"><a href="#Language-43"><span class="linenos"> 43</span></a><span class="sd">        &#39;Italian&#39;</span>
+</span><span id="Language-44"><a href="#Language-44"><span class="linenos"> 44</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="Language-45"><a href="#Language-45"><span class="linenos"> 45</span></a>
+</span><span id="Language-46"><a href="#Language-46"><span class="linenos"> 46</span></a>    <span class="n">language_code</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="Language-47"><a href="#Language-47"><span class="linenos"> 47</span></a>
+</span><span id="Language-48"><a href="#Language-48"><span class="linenos"> 48</span></a>    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;language_code&quot;</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;before&quot;</span><span class="p">)</span>
+</span><span id="Language-49"><a href="#Language-49"><span class="linenos"> 49</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">validate_language</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="Language-50"><a href="#Language-50"><span class="linenos"> 50</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Validate and normalize input to ISO 639-3.</span>
+</span><span id="Language-51"><a href="#Language-51"><span class="linenos"> 51</span></a>
+</span><span id="Language-52"><a href="#Language-52"><span class="linenos"> 52</span></a><span class="sd">        Accepts ISO 639-1 (`alpha_2`), ISO 639-3 (`alpha_3`), or English name,</span>
+</span><span id="Language-53"><a href="#Language-53"><span class="linenos"> 53</span></a><span class="sd">        and returns the canonical `alpha_3` code.</span>
+</span><span id="Language-54"><a href="#Language-54"><span class="linenos"> 54</span></a>
+</span><span id="Language-55"><a href="#Language-55"><span class="linenos"> 55</span></a><span class="sd">        Args:</span>
+</span><span id="Language-56"><a href="#Language-56"><span class="linenos"> 56</span></a><span class="sd">            v (str): Language identifier (e.g., `&quot;en&quot;`, `&quot;eng&quot;`, `&quot;English&quot;`).</span>
+</span><span id="Language-57"><a href="#Language-57"><span class="linenos"> 57</span></a>
+</span><span id="Language-58"><a href="#Language-58"><span class="linenos"> 58</span></a><span class="sd">        Returns:</span>
+</span><span id="Language-59"><a href="#Language-59"><span class="linenos"> 59</span></a><span class="sd">            str: ISO 639-3 code.</span>
+</span><span id="Language-60"><a href="#Language-60"><span class="linenos"> 60</span></a>
+</span><span id="Language-61"><a href="#Language-61"><span class="linenos"> 61</span></a><span class="sd">        Raises:</span>
+</span><span id="Language-62"><a href="#Language-62"><span class="linenos"> 62</span></a><span class="sd">            ValueError: If the value does not correspond to a known language in</span>
+</span><span id="Language-63"><a href="#Language-63"><span class="linenos"> 63</span></a><span class="sd">                `pycountry.languages`.</span>
+</span><span id="Language-64"><a href="#Language-64"><span class="linenos"> 64</span></a><span class="sd">        &quot;&quot;&quot;</span>
+</span><span id="Language-65"><a href="#Language-65"><span class="linenos"> 65</span></a>        <span class="n">lang</span> <span class="o">=</span> <span class="p">(</span>
+</span><span id="Language-66"><a href="#Language-66"><span class="linenos"> 66</span></a>            <span class="n">pycountry</span><span class="o">.</span><span class="n">languages</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">alpha_2</span><span class="o">=</span><span class="n">v</span><span class="p">)</span> <span class="ow">or</span> <span class="n">pycountry</span><span class="o">.</span><span class="n">languages</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">alpha_3</span><span class="o">=</span><span class="n">v</span><span class="p">)</span> <span class="ow">or</span> <span class="n">pycountry</span><span class="o">.</span><span class="n">languages</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="n">v</span><span class="p">)</span>
+</span><span id="Language-67"><a href="#Language-67"><span class="linenos"> 67</span></a>        <span class="p">)</span>
+</span><span id="Language-68"><a href="#Language-68"><span class="linenos"> 68</span></a>
+</span><span id="Language-69"><a href="#Language-69"><span class="linenos"> 69</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">lang</span><span class="p">:</span>
+</span><span id="Language-70"><a href="#Language-70"><span class="linenos"> 70</span></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2"> is not a valid ISO language code or name&quot;</span><span class="p">)</span>
+</span><span id="Language-71"><a href="#Language-71"><span class="linenos"> 71</span></a>
+</span><span id="Language-72"><a href="#Language-72"><span class="linenos"> 72</span></a>        <span class="k">return</span> <span class="n">lang</span><span class="o">.</span><span class="n">alpha_3</span>  <span class="c1"># ISO 639-3</span>
+</span><span id="Language-73"><a href="#Language-73"><span class="linenos"> 73</span></a>
+</span><span id="Language-74"><a href="#Language-74"><span class="linenos"> 74</span></a>    <span class="nd">@property</span>
+</span><span id="Language-75"><a href="#Language-75"><span class="linenos"> 75</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">alpha_2</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="Language-76"><a href="#Language-76"><span class="linenos"> 76</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the ISO 639-1 two-letter code.</span>
+</span><span id="Language-77"><a href="#Language-77"><span class="linenos"> 77</span></a>
+</span><span id="Language-78"><a href="#Language-78"><span class="linenos"> 78</span></a><span class="sd">        Returns:</span>
+</span><span id="Language-79"><a href="#Language-79"><span class="linenos"> 79</span></a><span class="sd">            str: ISO 639-1 (`alpha_2`) code.</span>
+</span><span id="Language-80"><a href="#Language-80"><span class="linenos"> 80</span></a>
+</span><span id="Language-81"><a href="#Language-81"><span class="linenos"> 81</span></a><span class="sd">        Raises:</span>
+</span><span id="Language-82"><a href="#Language-82"><span class="linenos"> 82</span></a><span class="sd">            AttributeError: If the language has no ISO 639-1 code in the</span>
+</span><span id="Language-83"><a href="#Language-83"><span class="linenos"> 83</span></a><span class="sd">                `pycountry` database.</span>
+</span><span id="Language-84"><a href="#Language-84"><span class="linenos"> 84</span></a>
+</span><span id="Language-85"><a href="#Language-85"><span class="linenos"> 85</span></a><span class="sd">        Example:</span>
+</span><span id="Language-86"><a href="#Language-86"><span class="linenos"> 86</span></a><span class="sd">            &gt;&gt;&gt; Language(language_code=&quot;eng&quot;).alpha_2</span>
+</span><span id="Language-87"><a href="#Language-87"><span class="linenos"> 87</span></a><span class="sd">            &#39;en&#39;</span>
+</span><span id="Language-88"><a href="#Language-88"><span class="linenos"> 88</span></a><span class="sd">        &quot;&quot;&quot;</span>
+</span><span id="Language-89"><a href="#Language-89"><span class="linenos"> 89</span></a>        <span class="k">return</span> <span class="n">pycountry</span><span class="o">.</span><span class="n">languages</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">alpha_3</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">language_code</span><span class="p">)</span><span class="o">.</span><span class="n">alpha_2</span>
+</span><span id="Language-90"><a href="#Language-90"><span class="linenos"> 90</span></a>
+</span><span id="Language-91"><a href="#Language-91"><span class="linenos"> 91</span></a>    <span class="nd">@property</span>
+</span><span id="Language-92"><a href="#Language-92"><span class="linenos"> 92</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">alpha_3</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="Language-93"><a href="#Language-93"><span class="linenos"> 93</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the ISO 639-3 three-letter code.</span>
+</span><span id="Language-94"><a href="#Language-94"><span class="linenos"> 94</span></a>
+</span><span id="Language-95"><a href="#Language-95"><span class="linenos"> 95</span></a><span class="sd">        Returns:</span>
+</span><span id="Language-96"><a href="#Language-96"><span class="linenos"> 96</span></a><span class="sd">            str: ISO 639-3 (`alpha_3`) code (the model’s canonical form).</span>
+</span><span id="Language-97"><a href="#Language-97"><span class="linenos"> 97</span></a>
+</span><span id="Language-98"><a href="#Language-98"><span class="linenos"> 98</span></a><span class="sd">        Example:</span>
+</span><span id="Language-99"><a href="#Language-99"><span class="linenos"> 99</span></a><span class="sd">            &gt;&gt;&gt; Language(language_code=&quot;en&quot;).alpha_3</span>
+</span><span id="Language-100"><a href="#Language-100"><span class="linenos">100</span></a><span class="sd">            &#39;eng&#39;</span>
+</span><span id="Language-101"><a href="#Language-101"><span class="linenos">101</span></a><span class="sd">        &quot;&quot;&quot;</span>
+</span><span id="Language-102"><a href="#Language-102"><span class="linenos">102</span></a>        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">language_code</span>
+</span><span id="Language-103"><a href="#Language-103"><span class="linenos">103</span></a>
+</span><span id="Language-104"><a href="#Language-104"><span class="linenos">104</span></a>    <span class="nd">@property</span>
+</span><span id="Language-105"><a href="#Language-105"><span class="linenos">105</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">name</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="Language-106"><a href="#Language-106"><span class="linenos">106</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the English name of the language.</span>
+</span><span id="Language-107"><a href="#Language-107"><span class="linenos">107</span></a>
+</span><span id="Language-108"><a href="#Language-108"><span class="linenos">108</span></a><span class="sd">        Returns:</span>
+</span><span id="Language-109"><a href="#Language-109"><span class="linenos">109</span></a><span class="sd">            str: English language name from `pycountry`.</span>
+</span><span id="Language-110"><a href="#Language-110"><span class="linenos">110</span></a>
+</span><span id="Language-111"><a href="#Language-111"><span class="linenos">111</span></a><span class="sd">        Example:</span>
+</span><span id="Language-112"><a href="#Language-112"><span class="linenos">112</span></a><span class="sd">            &gt;&gt;&gt; Language(language_code=&quot;eng&quot;).name</span>
+</span><span id="Language-113"><a href="#Language-113"><span class="linenos">113</span></a><span class="sd">            &#39;English&#39;</span>
+</span><span id="Language-114"><a href="#Language-114"><span class="linenos">114</span></a><span class="sd">        &quot;&quot;&quot;</span>
+</span><span id="Language-115"><a href="#Language-115"><span class="linenos">115</span></a>        <span class="k">return</span> <span class="n">pycountry</span><span class="o">.</span><span class="n">languages</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">alpha_3</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">language_code</span><span class="p">)</span><span class="o">.</span><span class="n">name</span>
 </span></pre></div>
 
 
-            <div class="docstring"><p>Data structure for a language.</p>
+            <div class="docstring"><p>Normalized language identifier (canonical ISO 639-3).</p>
+
+<p>Initializing <code>Language(language_code=...)</code> accepts multiple forms (ISO 639-1,
+ISO 639-3, or English name) and <strong>normalizes</strong> the stored value to the
+ISO 639-3 <code><a href="#Language.alpha_3">alpha_3</a></code> code.</p>
+
+<h6 id="attributes">Attributes:</h6>
+
+<ul>
+<li><strong>language_code (str):</strong>  Canonical ISO 639-3 code after validation.</li>
+</ul>
+
+<h6 id="example">Example:</h6>
+
+<blockquote>
+  <div class="pdoc-code codehilite">
+<pre><span></span><code><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span><span class="w"> </span><span class="nn"><a href="">senselab.utils.data_structures.language</a></span><span class="w"> </span><span class="kn">import</span> <span class="n">Language</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">Language</span><span class="p">(</span><span class="n">language_code</span><span class="o">=</span><span class="s2">&quot;en&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">alpha_3</span>
+<span class="go">&#39;eng&#39;</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">Language</span><span class="p">(</span><span class="n">language_code</span><span class="o">=</span><span class="s2">&quot;English&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">alpha_2</span>
+<span class="go">&#39;en&#39;</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">Language</span><span class="p">(</span><span class="n">language_code</span><span class="o">=</span><span class="s2">&quot;ita&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">name</span>
+<span class="go">&#39;Italian&#39;</span>
+</code></pre>
+  </div>
+</blockquote>
 </div>
 
 
@@ -192,21 +376,57 @@
 
     </div>
     <a class="headerlink" href="#Language.validate_language"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="Language.validate_language-14"><a href="#Language.validate_language-14"><span class="linenos">14</span></a>    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;language_code&quot;</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;before&quot;</span><span class="p">)</span>
-</span><span id="Language.validate_language-15"><a href="#Language.validate_language-15"><span class="linenos">15</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">validate_language</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-</span><span id="Language.validate_language-16"><a href="#Language.validate_language-16"><span class="linenos">16</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Validate that the language code is valid.&quot;&quot;&quot;</span>
-</span><span id="Language.validate_language-17"><a href="#Language.validate_language-17"><span class="linenos">17</span></a>        <span class="n">lang</span> <span class="o">=</span> <span class="p">(</span>
-</span><span id="Language.validate_language-18"><a href="#Language.validate_language-18"><span class="linenos">18</span></a>            <span class="n">pycountry</span><span class="o">.</span><span class="n">languages</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">alpha_2</span><span class="o">=</span><span class="n">v</span><span class="p">)</span> <span class="ow">or</span> <span class="n">pycountry</span><span class="o">.</span><span class="n">languages</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">alpha_3</span><span class="o">=</span><span class="n">v</span><span class="p">)</span> <span class="ow">or</span> <span class="n">pycountry</span><span class="o">.</span><span class="n">languages</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="n">v</span><span class="p">)</span>
-</span><span id="Language.validate_language-19"><a href="#Language.validate_language-19"><span class="linenos">19</span></a>        <span class="p">)</span>
-</span><span id="Language.validate_language-20"><a href="#Language.validate_language-20"><span class="linenos">20</span></a>
-</span><span id="Language.validate_language-21"><a href="#Language.validate_language-21"><span class="linenos">21</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">lang</span><span class="p">:</span>
-</span><span id="Language.validate_language-22"><a href="#Language.validate_language-22"><span class="linenos">22</span></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2"> is not a valid ISO language code or name&quot;</span><span class="p">)</span>
-</span><span id="Language.validate_language-23"><a href="#Language.validate_language-23"><span class="linenos">23</span></a>
-</span><span id="Language.validate_language-24"><a href="#Language.validate_language-24"><span class="linenos">24</span></a>        <span class="k">return</span> <span class="n">lang</span><span class="o">.</span><span class="n">alpha_3</span>  <span class="c1"># ISO 639-3</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="Language.validate_language-48"><a href="#Language.validate_language-48"><span class="linenos">48</span></a>    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;language_code&quot;</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;before&quot;</span><span class="p">)</span>
+</span><span id="Language.validate_language-49"><a href="#Language.validate_language-49"><span class="linenos">49</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">validate_language</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="Language.validate_language-50"><a href="#Language.validate_language-50"><span class="linenos">50</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Validate and normalize input to ISO 639-3.</span>
+</span><span id="Language.validate_language-51"><a href="#Language.validate_language-51"><span class="linenos">51</span></a>
+</span><span id="Language.validate_language-52"><a href="#Language.validate_language-52"><span class="linenos">52</span></a><span class="sd">        Accepts ISO 639-1 (`alpha_2`), ISO 639-3 (`alpha_3`), or English name,</span>
+</span><span id="Language.validate_language-53"><a href="#Language.validate_language-53"><span class="linenos">53</span></a><span class="sd">        and returns the canonical `alpha_3` code.</span>
+</span><span id="Language.validate_language-54"><a href="#Language.validate_language-54"><span class="linenos">54</span></a>
+</span><span id="Language.validate_language-55"><a href="#Language.validate_language-55"><span class="linenos">55</span></a><span class="sd">        Args:</span>
+</span><span id="Language.validate_language-56"><a href="#Language.validate_language-56"><span class="linenos">56</span></a><span class="sd">            v (str): Language identifier (e.g., `&quot;en&quot;`, `&quot;eng&quot;`, `&quot;English&quot;`).</span>
+</span><span id="Language.validate_language-57"><a href="#Language.validate_language-57"><span class="linenos">57</span></a>
+</span><span id="Language.validate_language-58"><a href="#Language.validate_language-58"><span class="linenos">58</span></a><span class="sd">        Returns:</span>
+</span><span id="Language.validate_language-59"><a href="#Language.validate_language-59"><span class="linenos">59</span></a><span class="sd">            str: ISO 639-3 code.</span>
+</span><span id="Language.validate_language-60"><a href="#Language.validate_language-60"><span class="linenos">60</span></a>
+</span><span id="Language.validate_language-61"><a href="#Language.validate_language-61"><span class="linenos">61</span></a><span class="sd">        Raises:</span>
+</span><span id="Language.validate_language-62"><a href="#Language.validate_language-62"><span class="linenos">62</span></a><span class="sd">            ValueError: If the value does not correspond to a known language in</span>
+</span><span id="Language.validate_language-63"><a href="#Language.validate_language-63"><span class="linenos">63</span></a><span class="sd">                `pycountry.languages`.</span>
+</span><span id="Language.validate_language-64"><a href="#Language.validate_language-64"><span class="linenos">64</span></a><span class="sd">        &quot;&quot;&quot;</span>
+</span><span id="Language.validate_language-65"><a href="#Language.validate_language-65"><span class="linenos">65</span></a>        <span class="n">lang</span> <span class="o">=</span> <span class="p">(</span>
+</span><span id="Language.validate_language-66"><a href="#Language.validate_language-66"><span class="linenos">66</span></a>            <span class="n">pycountry</span><span class="o">.</span><span class="n">languages</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">alpha_2</span><span class="o">=</span><span class="n">v</span><span class="p">)</span> <span class="ow">or</span> <span class="n">pycountry</span><span class="o">.</span><span class="n">languages</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">alpha_3</span><span class="o">=</span><span class="n">v</span><span class="p">)</span> <span class="ow">or</span> <span class="n">pycountry</span><span class="o">.</span><span class="n">languages</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="n">v</span><span class="p">)</span>
+</span><span id="Language.validate_language-67"><a href="#Language.validate_language-67"><span class="linenos">67</span></a>        <span class="p">)</span>
+</span><span id="Language.validate_language-68"><a href="#Language.validate_language-68"><span class="linenos">68</span></a>
+</span><span id="Language.validate_language-69"><a href="#Language.validate_language-69"><span class="linenos">69</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">lang</span><span class="p">:</span>
+</span><span id="Language.validate_language-70"><a href="#Language.validate_language-70"><span class="linenos">70</span></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2"> is not a valid ISO language code or name&quot;</span><span class="p">)</span>
+</span><span id="Language.validate_language-71"><a href="#Language.validate_language-71"><span class="linenos">71</span></a>
+</span><span id="Language.validate_language-72"><a href="#Language.validate_language-72"><span class="linenos">72</span></a>        <span class="k">return</span> <span class="n">lang</span><span class="o">.</span><span class="n">alpha_3</span>  <span class="c1"># ISO 639-3</span>
 </span></pre></div>
 
 
-            <div class="docstring"><p>Validate that the language code is valid.</p>
+            <div class="docstring"><p>Validate and normalize input to ISO 639-3.</p>
+
+<p>Accepts ISO 639-1 (<code><a href="#Language.alpha_2">alpha_2</a></code>), ISO 639-3 (<code><a href="#Language.alpha_3">alpha_3</a></code>), or English name,
+and returns the canonical <code><a href="#Language.alpha_3">alpha_3</a></code> code.</p>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>v (str):</strong>  Language identifier (e.g., <code>"en"</code>, <code>"eng"</code>, <code>"English"</code>).</li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p>str: ISO 639-3 code.</p>
+</blockquote>
+
+<h6 id="raises">Raises:</h6>
+
+<ul>
+<li><strong>ValueError:</strong>  If the value does not correspond to a known language in
+<code>pycountry.languages</code>.</li>
+</ul>
 </div>
 
 
@@ -220,14 +440,49 @@
 
     </div>
     <a class="headerlink" href="#Language.alpha_2"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="Language.alpha_2-26"><a href="#Language.alpha_2-26"><span class="linenos">26</span></a>    <span class="nd">@property</span>
-</span><span id="Language.alpha_2-27"><a href="#Language.alpha_2-27"><span class="linenos">27</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">alpha_2</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-</span><span id="Language.alpha_2-28"><a href="#Language.alpha_2-28"><span class="linenos">28</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Get the ISO 639-2 code for the language.&quot;&quot;&quot;</span>
-</span><span id="Language.alpha_2-29"><a href="#Language.alpha_2-29"><span class="linenos">29</span></a>        <span class="k">return</span> <span class="n">pycountry</span><span class="o">.</span><span class="n">languages</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">alpha_3</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">language_code</span><span class="p">)</span><span class="o">.</span><span class="n">alpha_2</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="Language.alpha_2-74"><a href="#Language.alpha_2-74"><span class="linenos">74</span></a>    <span class="nd">@property</span>
+</span><span id="Language.alpha_2-75"><a href="#Language.alpha_2-75"><span class="linenos">75</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">alpha_2</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="Language.alpha_2-76"><a href="#Language.alpha_2-76"><span class="linenos">76</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the ISO 639-1 two-letter code.</span>
+</span><span id="Language.alpha_2-77"><a href="#Language.alpha_2-77"><span class="linenos">77</span></a>
+</span><span id="Language.alpha_2-78"><a href="#Language.alpha_2-78"><span class="linenos">78</span></a><span class="sd">        Returns:</span>
+</span><span id="Language.alpha_2-79"><a href="#Language.alpha_2-79"><span class="linenos">79</span></a><span class="sd">            str: ISO 639-1 (`alpha_2`) code.</span>
+</span><span id="Language.alpha_2-80"><a href="#Language.alpha_2-80"><span class="linenos">80</span></a>
+</span><span id="Language.alpha_2-81"><a href="#Language.alpha_2-81"><span class="linenos">81</span></a><span class="sd">        Raises:</span>
+</span><span id="Language.alpha_2-82"><a href="#Language.alpha_2-82"><span class="linenos">82</span></a><span class="sd">            AttributeError: If the language has no ISO 639-1 code in the</span>
+</span><span id="Language.alpha_2-83"><a href="#Language.alpha_2-83"><span class="linenos">83</span></a><span class="sd">                `pycountry` database.</span>
+</span><span id="Language.alpha_2-84"><a href="#Language.alpha_2-84"><span class="linenos">84</span></a>
+</span><span id="Language.alpha_2-85"><a href="#Language.alpha_2-85"><span class="linenos">85</span></a><span class="sd">        Example:</span>
+</span><span id="Language.alpha_2-86"><a href="#Language.alpha_2-86"><span class="linenos">86</span></a><span class="sd">            &gt;&gt;&gt; Language(language_code=&quot;eng&quot;).alpha_2</span>
+</span><span id="Language.alpha_2-87"><a href="#Language.alpha_2-87"><span class="linenos">87</span></a><span class="sd">            &#39;en&#39;</span>
+</span><span id="Language.alpha_2-88"><a href="#Language.alpha_2-88"><span class="linenos">88</span></a><span class="sd">        &quot;&quot;&quot;</span>
+</span><span id="Language.alpha_2-89"><a href="#Language.alpha_2-89"><span class="linenos">89</span></a>        <span class="k">return</span> <span class="n">pycountry</span><span class="o">.</span><span class="n">languages</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">alpha_3</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">language_code</span><span class="p">)</span><span class="o">.</span><span class="n">alpha_2</span>
 </span></pre></div>
 
 
-            <div class="docstring"><p>Get the ISO 639-2 code for the language.</p>
+            <div class="docstring"><p>Return the ISO 639-1 two-letter code.</p>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p>str: ISO 639-1 (<code><a href="#Language.alpha_2">alpha_2</a></code>) code.</p>
+</blockquote>
+
+<h6 id="raises">Raises:</h6>
+
+<ul>
+<li><strong>AttributeError:</strong>  If the language has no ISO 639-1 code in the
+<code>pycountry</code> database.</li>
+</ul>
+
+<h6 id="example">Example:</h6>
+
+<blockquote>
+  <div class="pdoc-code codehilite">
+<pre><span></span><code><span class="gp">&gt;&gt;&gt; </span><span class="n">Language</span><span class="p">(</span><span class="n">language_code</span><span class="o">=</span><span class="s2">&quot;eng&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">alpha_2</span>
+<span class="go">&#39;en&#39;</span>
+</code></pre>
+  </div>
+</blockquote>
 </div>
 
 
@@ -241,14 +496,38 @@
 
     </div>
     <a class="headerlink" href="#Language.alpha_3"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="Language.alpha_3-31"><a href="#Language.alpha_3-31"><span class="linenos">31</span></a>    <span class="nd">@property</span>
-</span><span id="Language.alpha_3-32"><a href="#Language.alpha_3-32"><span class="linenos">32</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">alpha_3</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-</span><span id="Language.alpha_3-33"><a href="#Language.alpha_3-33"><span class="linenos">33</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Get the ISO 639-3 code for the language.&quot;&quot;&quot;</span>
-</span><span id="Language.alpha_3-34"><a href="#Language.alpha_3-34"><span class="linenos">34</span></a>        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">language_code</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="Language.alpha_3-91"><a href="#Language.alpha_3-91"><span class="linenos"> 91</span></a>    <span class="nd">@property</span>
+</span><span id="Language.alpha_3-92"><a href="#Language.alpha_3-92"><span class="linenos"> 92</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">alpha_3</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="Language.alpha_3-93"><a href="#Language.alpha_3-93"><span class="linenos"> 93</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the ISO 639-3 three-letter code.</span>
+</span><span id="Language.alpha_3-94"><a href="#Language.alpha_3-94"><span class="linenos"> 94</span></a>
+</span><span id="Language.alpha_3-95"><a href="#Language.alpha_3-95"><span class="linenos"> 95</span></a><span class="sd">        Returns:</span>
+</span><span id="Language.alpha_3-96"><a href="#Language.alpha_3-96"><span class="linenos"> 96</span></a><span class="sd">            str: ISO 639-3 (`alpha_3`) code (the model’s canonical form).</span>
+</span><span id="Language.alpha_3-97"><a href="#Language.alpha_3-97"><span class="linenos"> 97</span></a>
+</span><span id="Language.alpha_3-98"><a href="#Language.alpha_3-98"><span class="linenos"> 98</span></a><span class="sd">        Example:</span>
+</span><span id="Language.alpha_3-99"><a href="#Language.alpha_3-99"><span class="linenos"> 99</span></a><span class="sd">            &gt;&gt;&gt; Language(language_code=&quot;en&quot;).alpha_3</span>
+</span><span id="Language.alpha_3-100"><a href="#Language.alpha_3-100"><span class="linenos">100</span></a><span class="sd">            &#39;eng&#39;</span>
+</span><span id="Language.alpha_3-101"><a href="#Language.alpha_3-101"><span class="linenos">101</span></a><span class="sd">        &quot;&quot;&quot;</span>
+</span><span id="Language.alpha_3-102"><a href="#Language.alpha_3-102"><span class="linenos">102</span></a>        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">language_code</span>
 </span></pre></div>
 
 
-            <div class="docstring"><p>Get the ISO 639-3 code for the language.</p>
+            <div class="docstring"><p>Return the ISO 639-3 three-letter code.</p>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p>str: ISO 639-3 (<code><a href="#Language.alpha_3">alpha_3</a></code>) code (the model’s canonical form).</p>
+</blockquote>
+
+<h6 id="example">Example:</h6>
+
+<blockquote>
+  <div class="pdoc-code codehilite">
+<pre><span></span><code><span class="gp">&gt;&gt;&gt; </span><span class="n">Language</span><span class="p">(</span><span class="n">language_code</span><span class="o">=</span><span class="s2">&quot;en&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">alpha_3</span>
+<span class="go">&#39;eng&#39;</span>
+</code></pre>
+  </div>
+</blockquote>
 </div>
 
 
@@ -262,14 +541,38 @@
 
     </div>
     <a class="headerlink" href="#Language.name"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="Language.name-36"><a href="#Language.name-36"><span class="linenos">36</span></a>    <span class="nd">@property</span>
-</span><span id="Language.name-37"><a href="#Language.name-37"><span class="linenos">37</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">name</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-</span><span id="Language.name-38"><a href="#Language.name-38"><span class="linenos">38</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Get the name of the language.&quot;&quot;&quot;</span>
-</span><span id="Language.name-39"><a href="#Language.name-39"><span class="linenos">39</span></a>        <span class="k">return</span> <span class="n">pycountry</span><span class="o">.</span><span class="n">languages</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">alpha_3</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">language_code</span><span class="p">)</span><span class="o">.</span><span class="n">name</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="Language.name-104"><a href="#Language.name-104"><span class="linenos">104</span></a>    <span class="nd">@property</span>
+</span><span id="Language.name-105"><a href="#Language.name-105"><span class="linenos">105</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">name</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="Language.name-106"><a href="#Language.name-106"><span class="linenos">106</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the English name of the language.</span>
+</span><span id="Language.name-107"><a href="#Language.name-107"><span class="linenos">107</span></a>
+</span><span id="Language.name-108"><a href="#Language.name-108"><span class="linenos">108</span></a><span class="sd">        Returns:</span>
+</span><span id="Language.name-109"><a href="#Language.name-109"><span class="linenos">109</span></a><span class="sd">            str: English language name from `pycountry`.</span>
+</span><span id="Language.name-110"><a href="#Language.name-110"><span class="linenos">110</span></a>
+</span><span id="Language.name-111"><a href="#Language.name-111"><span class="linenos">111</span></a><span class="sd">        Example:</span>
+</span><span id="Language.name-112"><a href="#Language.name-112"><span class="linenos">112</span></a><span class="sd">            &gt;&gt;&gt; Language(language_code=&quot;eng&quot;).name</span>
+</span><span id="Language.name-113"><a href="#Language.name-113"><span class="linenos">113</span></a><span class="sd">            &#39;English&#39;</span>
+</span><span id="Language.name-114"><a href="#Language.name-114"><span class="linenos">114</span></a><span class="sd">        &quot;&quot;&quot;</span>
+</span><span id="Language.name-115"><a href="#Language.name-115"><span class="linenos">115</span></a>        <span class="k">return</span> <span class="n">pycountry</span><span class="o">.</span><span class="n">languages</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">alpha_3</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">language_code</span><span class="p">)</span><span class="o">.</span><span class="n">name</span>
 </span></pre></div>
 
 
-            <div class="docstring"><p>Get the name of the language.</p>
+            <div class="docstring"><p>Return the English name of the language.</p>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p>str: English language name from <code>pycountry</code>.</p>
+</blockquote>
+
+<h6 id="example">Example:</h6>
+
+<blockquote>
+  <div class="pdoc-code codehilite">
+<pre><span></span><code><span class="gp">&gt;&gt;&gt; </span><span class="n">Language</span><span class="p">(</span><span class="n">language_code</span><span class="o">=</span><span class="s2">&quot;eng&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">name</span>
+<span class="go">&#39;English&#39;</span>
+</code></pre>
+  </div>
+</blockquote>
 </div>
 
 

@@ -93,37 +93,39 @@
 </span><span id="L-34"><a href="#L-34"><span class="linenos">34</span></a><span class="sd">        ValueError: If an invalid pooling method choice is provided.</span>
 </span><span id="L-35"><a href="#L-35"><span class="linenos">35</span></a>
 </span><span id="L-36"><a href="#L-36"><span class="linenos">36</span></a><span class="sd">    Examples:</span>
-</span><span id="L-37"><a href="#L-37"><span class="linenos">37</span></a><span class="sd">        &gt;&gt;&gt; data = torch.randn(10, 20, 30)  # 10 samples, 20 features, 30 channels</span>
-</span><span id="L-38"><a href="#L-38"><span class="linenos">38</span></a><span class="sd">        &gt;&gt;&gt; data.shape</span>
-</span><span id="L-39"><a href="#L-39"><span class="linenos">39</span></a><span class="sd">        torch.Size([10, 20, 30])</span>
-</span><span id="L-40"><a href="#L-40"><span class="linenos">40</span></a>
-</span><span id="L-41"><a href="#L-41"><span class="linenos">41</span></a><span class="sd">        &gt;&gt;&gt; pooled_data = pooling(data, pool_type=&quot;mean&quot;, dimension=0, keep_dimension=True)</span>
-</span><span id="L-42"><a href="#L-42"><span class="linenos">42</span></a><span class="sd">        &gt;&gt;&gt; print(pooled_data.shape)</span>
-</span><span id="L-43"><a href="#L-43"><span class="linenos">43</span></a><span class="sd">        torch.Size([1, 20, 30])</span>
-</span><span id="L-44"><a href="#L-44"><span class="linenos">44</span></a>
-</span><span id="L-45"><a href="#L-45"><span class="linenos">45</span></a><span class="sd">        &gt;&gt;&gt; pooled_data = pooling(data, pool_type=&quot;max&quot;, dimension=1, keep_dimension=False)</span>
-</span><span id="L-46"><a href="#L-46"><span class="linenos">46</span></a><span class="sd">        &gt;&gt;&gt; print(pooled_data.shape)</span>
-</span><span id="L-47"><a href="#L-47"><span class="linenos">47</span></a><span class="sd">        torch.Size([10, 30])</span>
-</span><span id="L-48"><a href="#L-48"><span class="linenos">48</span></a>
-</span><span id="L-49"><a href="#L-49"><span class="linenos">49</span></a><span class="sd">        &gt;&gt;&gt; pooled_data = pooling(data, pool_type=&quot;min&quot;, dimension=2)</span>
-</span><span id="L-50"><a href="#L-50"><span class="linenos">50</span></a><span class="sd">        &gt;&gt;&gt; print(pooled_data.shape)</span>
-</span><span id="L-51"><a href="#L-51"><span class="linenos">51</span></a><span class="sd">        torch.Size([10, 20])</span>
-</span><span id="L-52"><a href="#L-52"><span class="linenos">52</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="L-53"><a href="#L-53"><span class="linenos">53</span></a>    <span class="c1"># Ensure the dimension is valid</span>
-</span><span id="L-54"><a href="#L-54"><span class="linenos">54</span></a>    <span class="k">assert</span> <span class="n">dimension</span> <span class="o">&lt;</span> <span class="nb">len</span><span class="p">(</span><span class="n">data</span><span class="o">.</span><span class="n">shape</span><span class="p">),</span> <span class="s2">&quot;Invalid dimension provided.&quot;</span>
-</span><span id="L-55"><a href="#L-55"><span class="linenos">55</span></a>
-</span><span id="L-56"><a href="#L-56"><span class="linenos">56</span></a>    <span class="k">if</span> <span class="n">data</span><span class="o">.</span><span class="n">numel</span><span class="p">()</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-</span><span id="L-57"><a href="#L-57"><span class="linenos">57</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Input data must not be empty&quot;</span><span class="p">)</span>
-</span><span id="L-58"><a href="#L-58"><span class="linenos">58</span></a>
-</span><span id="L-59"><a href="#L-59"><span class="linenos">59</span></a>    <span class="c1"># Applying the appropriate pooling based on the pool type</span>
-</span><span id="L-60"><a href="#L-60"><span class="linenos">60</span></a>    <span class="k">if</span> <span class="n">pool_type</span> <span class="o">==</span> <span class="s2">&quot;max&quot;</span><span class="p">:</span>
-</span><span id="L-61"><a href="#L-61"><span class="linenos">61</span></a>        <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="n">dimension</span><span class="p">,</span> <span class="n">keepdim</span><span class="o">=</span><span class="n">keep_dimension</span><span class="p">)</span><span class="o">.</span><span class="n">values</span>
-</span><span id="L-62"><a href="#L-62"><span class="linenos">62</span></a>    <span class="k">elif</span> <span class="n">pool_type</span> <span class="o">==</span> <span class="s2">&quot;mean&quot;</span><span class="p">:</span>
-</span><span id="L-63"><a href="#L-63"><span class="linenos">63</span></a>        <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="n">dimension</span><span class="p">,</span> <span class="n">keepdim</span><span class="o">=</span><span class="n">keep_dimension</span><span class="p">)</span>
-</span><span id="L-64"><a href="#L-64"><span class="linenos">64</span></a>    <span class="k">elif</span> <span class="n">pool_type</span> <span class="o">==</span> <span class="s2">&quot;min&quot;</span><span class="p">:</span>
-</span><span id="L-65"><a href="#L-65"><span class="linenos">65</span></a>        <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">min</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="n">dimension</span><span class="p">,</span> <span class="n">keepdim</span><span class="o">=</span><span class="n">keep_dimension</span><span class="p">)</span><span class="o">.</span><span class="n">values</span>
-</span><span id="L-66"><a href="#L-66"><span class="linenos">66</span></a>    <span class="k">else</span><span class="p">:</span>
-</span><span id="L-67"><a href="#L-67"><span class="linenos">67</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Unsupported pooling type. Choose &#39;max&#39;, &#39;avg&#39;, or &#39;min&#39;.&quot;</span><span class="p">)</span>
+</span><span id="L-37"><a href="#L-37"><span class="linenos">37</span></a><span class="sd">        &gt;&gt;&gt; import torch</span>
+</span><span id="L-38"><a href="#L-38"><span class="linenos">38</span></a><span class="sd">        &gt;&gt;&gt; data = torch.randn(10, 20, 30)  # 10 samples, 20 features, 30 channels</span>
+</span><span id="L-39"><a href="#L-39"><span class="linenos">39</span></a><span class="sd">        &gt;&gt;&gt; data.shape</span>
+</span><span id="L-40"><a href="#L-40"><span class="linenos">40</span></a><span class="sd">        torch.Size([10, 20, 30])</span>
+</span><span id="L-41"><a href="#L-41"><span class="linenos">41</span></a>
+</span><span id="L-42"><a href="#L-42"><span class="linenos">42</span></a><span class="sd">        &gt;&gt;&gt; from senselab.utils.tasks.pooling import pooling</span>
+</span><span id="L-43"><a href="#L-43"><span class="linenos">43</span></a><span class="sd">        &gt;&gt;&gt; pooled_data = pooling(data, pool_type=&quot;mean&quot;, dimension=0, keep_dimension=True)</span>
+</span><span id="L-44"><a href="#L-44"><span class="linenos">44</span></a><span class="sd">        &gt;&gt;&gt; print(pooled_data.shape)</span>
+</span><span id="L-45"><a href="#L-45"><span class="linenos">45</span></a><span class="sd">        torch.Size([1, 20, 30])</span>
+</span><span id="L-46"><a href="#L-46"><span class="linenos">46</span></a>
+</span><span id="L-47"><a href="#L-47"><span class="linenos">47</span></a><span class="sd">        &gt;&gt;&gt; pooled_data = pooling(data, pool_type=&quot;max&quot;, dimension=1, keep_dimension=False)</span>
+</span><span id="L-48"><a href="#L-48"><span class="linenos">48</span></a><span class="sd">        &gt;&gt;&gt; print(pooled_data.shape)</span>
+</span><span id="L-49"><a href="#L-49"><span class="linenos">49</span></a><span class="sd">        torch.Size([10, 30])</span>
+</span><span id="L-50"><a href="#L-50"><span class="linenos">50</span></a>
+</span><span id="L-51"><a href="#L-51"><span class="linenos">51</span></a><span class="sd">        &gt;&gt;&gt; pooled_data = pooling(data, pool_type=&quot;min&quot;, dimension=2)</span>
+</span><span id="L-52"><a href="#L-52"><span class="linenos">52</span></a><span class="sd">        &gt;&gt;&gt; print(pooled_data.shape)</span>
+</span><span id="L-53"><a href="#L-53"><span class="linenos">53</span></a><span class="sd">        torch.Size([10, 20])</span>
+</span><span id="L-54"><a href="#L-54"><span class="linenos">54</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="L-55"><a href="#L-55"><span class="linenos">55</span></a>    <span class="c1"># Ensure the dimension is valid</span>
+</span><span id="L-56"><a href="#L-56"><span class="linenos">56</span></a>    <span class="k">assert</span> <span class="n">dimension</span> <span class="o">&lt;</span> <span class="nb">len</span><span class="p">(</span><span class="n">data</span><span class="o">.</span><span class="n">shape</span><span class="p">),</span> <span class="s2">&quot;Invalid dimension provided.&quot;</span>
+</span><span id="L-57"><a href="#L-57"><span class="linenos">57</span></a>
+</span><span id="L-58"><a href="#L-58"><span class="linenos">58</span></a>    <span class="k">if</span> <span class="n">data</span><span class="o">.</span><span class="n">numel</span><span class="p">()</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+</span><span id="L-59"><a href="#L-59"><span class="linenos">59</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Input data must not be empty&quot;</span><span class="p">)</span>
+</span><span id="L-60"><a href="#L-60"><span class="linenos">60</span></a>
+</span><span id="L-61"><a href="#L-61"><span class="linenos">61</span></a>    <span class="c1"># Applying the appropriate pooling based on the pool type</span>
+</span><span id="L-62"><a href="#L-62"><span class="linenos">62</span></a>    <span class="k">if</span> <span class="n">pool_type</span> <span class="o">==</span> <span class="s2">&quot;max&quot;</span><span class="p">:</span>
+</span><span id="L-63"><a href="#L-63"><span class="linenos">63</span></a>        <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="n">dimension</span><span class="p">,</span> <span class="n">keepdim</span><span class="o">=</span><span class="n">keep_dimension</span><span class="p">)</span><span class="o">.</span><span class="n">values</span>
+</span><span id="L-64"><a href="#L-64"><span class="linenos">64</span></a>    <span class="k">elif</span> <span class="n">pool_type</span> <span class="o">==</span> <span class="s2">&quot;mean&quot;</span><span class="p">:</span>
+</span><span id="L-65"><a href="#L-65"><span class="linenos">65</span></a>        <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="n">dimension</span><span class="p">,</span> <span class="n">keepdim</span><span class="o">=</span><span class="n">keep_dimension</span><span class="p">)</span>
+</span><span id="L-66"><a href="#L-66"><span class="linenos">66</span></a>    <span class="k">elif</span> <span class="n">pool_type</span> <span class="o">==</span> <span class="s2">&quot;min&quot;</span><span class="p">:</span>
+</span><span id="L-67"><a href="#L-67"><span class="linenos">67</span></a>        <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">min</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="n">dimension</span><span class="p">,</span> <span class="n">keepdim</span><span class="o">=</span><span class="n">keep_dimension</span><span class="p">)</span><span class="o">.</span><span class="n">values</span>
+</span><span id="L-68"><a href="#L-68"><span class="linenos">68</span></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="L-69"><a href="#L-69"><span class="linenos">69</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Unsupported pooling type. Choose &#39;max&#39;, &#39;avg&#39;, or &#39;min&#39;.&quot;</span><span class="p">)</span>
 </span></pre></div>
 
 
@@ -168,37 +170,39 @@
 </span><span id="pooling-35"><a href="#pooling-35"><span class="linenos">35</span></a><span class="sd">        ValueError: If an invalid pooling method choice is provided.</span>
 </span><span id="pooling-36"><a href="#pooling-36"><span class="linenos">36</span></a>
 </span><span id="pooling-37"><a href="#pooling-37"><span class="linenos">37</span></a><span class="sd">    Examples:</span>
-</span><span id="pooling-38"><a href="#pooling-38"><span class="linenos">38</span></a><span class="sd">        &gt;&gt;&gt; data = torch.randn(10, 20, 30)  # 10 samples, 20 features, 30 channels</span>
-</span><span id="pooling-39"><a href="#pooling-39"><span class="linenos">39</span></a><span class="sd">        &gt;&gt;&gt; data.shape</span>
-</span><span id="pooling-40"><a href="#pooling-40"><span class="linenos">40</span></a><span class="sd">        torch.Size([10, 20, 30])</span>
-</span><span id="pooling-41"><a href="#pooling-41"><span class="linenos">41</span></a>
-</span><span id="pooling-42"><a href="#pooling-42"><span class="linenos">42</span></a><span class="sd">        &gt;&gt;&gt; pooled_data = pooling(data, pool_type=&quot;mean&quot;, dimension=0, keep_dimension=True)</span>
-</span><span id="pooling-43"><a href="#pooling-43"><span class="linenos">43</span></a><span class="sd">        &gt;&gt;&gt; print(pooled_data.shape)</span>
-</span><span id="pooling-44"><a href="#pooling-44"><span class="linenos">44</span></a><span class="sd">        torch.Size([1, 20, 30])</span>
-</span><span id="pooling-45"><a href="#pooling-45"><span class="linenos">45</span></a>
-</span><span id="pooling-46"><a href="#pooling-46"><span class="linenos">46</span></a><span class="sd">        &gt;&gt;&gt; pooled_data = pooling(data, pool_type=&quot;max&quot;, dimension=1, keep_dimension=False)</span>
-</span><span id="pooling-47"><a href="#pooling-47"><span class="linenos">47</span></a><span class="sd">        &gt;&gt;&gt; print(pooled_data.shape)</span>
-</span><span id="pooling-48"><a href="#pooling-48"><span class="linenos">48</span></a><span class="sd">        torch.Size([10, 30])</span>
-</span><span id="pooling-49"><a href="#pooling-49"><span class="linenos">49</span></a>
-</span><span id="pooling-50"><a href="#pooling-50"><span class="linenos">50</span></a><span class="sd">        &gt;&gt;&gt; pooled_data = pooling(data, pool_type=&quot;min&quot;, dimension=2)</span>
-</span><span id="pooling-51"><a href="#pooling-51"><span class="linenos">51</span></a><span class="sd">        &gt;&gt;&gt; print(pooled_data.shape)</span>
-</span><span id="pooling-52"><a href="#pooling-52"><span class="linenos">52</span></a><span class="sd">        torch.Size([10, 20])</span>
-</span><span id="pooling-53"><a href="#pooling-53"><span class="linenos">53</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="pooling-54"><a href="#pooling-54"><span class="linenos">54</span></a>    <span class="c1"># Ensure the dimension is valid</span>
-</span><span id="pooling-55"><a href="#pooling-55"><span class="linenos">55</span></a>    <span class="k">assert</span> <span class="n">dimension</span> <span class="o">&lt;</span> <span class="nb">len</span><span class="p">(</span><span class="n">data</span><span class="o">.</span><span class="n">shape</span><span class="p">),</span> <span class="s2">&quot;Invalid dimension provided.&quot;</span>
-</span><span id="pooling-56"><a href="#pooling-56"><span class="linenos">56</span></a>
-</span><span id="pooling-57"><a href="#pooling-57"><span class="linenos">57</span></a>    <span class="k">if</span> <span class="n">data</span><span class="o">.</span><span class="n">numel</span><span class="p">()</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-</span><span id="pooling-58"><a href="#pooling-58"><span class="linenos">58</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Input data must not be empty&quot;</span><span class="p">)</span>
-</span><span id="pooling-59"><a href="#pooling-59"><span class="linenos">59</span></a>
-</span><span id="pooling-60"><a href="#pooling-60"><span class="linenos">60</span></a>    <span class="c1"># Applying the appropriate pooling based on the pool type</span>
-</span><span id="pooling-61"><a href="#pooling-61"><span class="linenos">61</span></a>    <span class="k">if</span> <span class="n">pool_type</span> <span class="o">==</span> <span class="s2">&quot;max&quot;</span><span class="p">:</span>
-</span><span id="pooling-62"><a href="#pooling-62"><span class="linenos">62</span></a>        <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="n">dimension</span><span class="p">,</span> <span class="n">keepdim</span><span class="o">=</span><span class="n">keep_dimension</span><span class="p">)</span><span class="o">.</span><span class="n">values</span>
-</span><span id="pooling-63"><a href="#pooling-63"><span class="linenos">63</span></a>    <span class="k">elif</span> <span class="n">pool_type</span> <span class="o">==</span> <span class="s2">&quot;mean&quot;</span><span class="p">:</span>
-</span><span id="pooling-64"><a href="#pooling-64"><span class="linenos">64</span></a>        <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="n">dimension</span><span class="p">,</span> <span class="n">keepdim</span><span class="o">=</span><span class="n">keep_dimension</span><span class="p">)</span>
-</span><span id="pooling-65"><a href="#pooling-65"><span class="linenos">65</span></a>    <span class="k">elif</span> <span class="n">pool_type</span> <span class="o">==</span> <span class="s2">&quot;min&quot;</span><span class="p">:</span>
-</span><span id="pooling-66"><a href="#pooling-66"><span class="linenos">66</span></a>        <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">min</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="n">dimension</span><span class="p">,</span> <span class="n">keepdim</span><span class="o">=</span><span class="n">keep_dimension</span><span class="p">)</span><span class="o">.</span><span class="n">values</span>
-</span><span id="pooling-67"><a href="#pooling-67"><span class="linenos">67</span></a>    <span class="k">else</span><span class="p">:</span>
-</span><span id="pooling-68"><a href="#pooling-68"><span class="linenos">68</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Unsupported pooling type. Choose &#39;max&#39;, &#39;avg&#39;, or &#39;min&#39;.&quot;</span><span class="p">)</span>
+</span><span id="pooling-38"><a href="#pooling-38"><span class="linenos">38</span></a><span class="sd">        &gt;&gt;&gt; import torch</span>
+</span><span id="pooling-39"><a href="#pooling-39"><span class="linenos">39</span></a><span class="sd">        &gt;&gt;&gt; data = torch.randn(10, 20, 30)  # 10 samples, 20 features, 30 channels</span>
+</span><span id="pooling-40"><a href="#pooling-40"><span class="linenos">40</span></a><span class="sd">        &gt;&gt;&gt; data.shape</span>
+</span><span id="pooling-41"><a href="#pooling-41"><span class="linenos">41</span></a><span class="sd">        torch.Size([10, 20, 30])</span>
+</span><span id="pooling-42"><a href="#pooling-42"><span class="linenos">42</span></a>
+</span><span id="pooling-43"><a href="#pooling-43"><span class="linenos">43</span></a><span class="sd">        &gt;&gt;&gt; from senselab.utils.tasks.pooling import pooling</span>
+</span><span id="pooling-44"><a href="#pooling-44"><span class="linenos">44</span></a><span class="sd">        &gt;&gt;&gt; pooled_data = pooling(data, pool_type=&quot;mean&quot;, dimension=0, keep_dimension=True)</span>
+</span><span id="pooling-45"><a href="#pooling-45"><span class="linenos">45</span></a><span class="sd">        &gt;&gt;&gt; print(pooled_data.shape)</span>
+</span><span id="pooling-46"><a href="#pooling-46"><span class="linenos">46</span></a><span class="sd">        torch.Size([1, 20, 30])</span>
+</span><span id="pooling-47"><a href="#pooling-47"><span class="linenos">47</span></a>
+</span><span id="pooling-48"><a href="#pooling-48"><span class="linenos">48</span></a><span class="sd">        &gt;&gt;&gt; pooled_data = pooling(data, pool_type=&quot;max&quot;, dimension=1, keep_dimension=False)</span>
+</span><span id="pooling-49"><a href="#pooling-49"><span class="linenos">49</span></a><span class="sd">        &gt;&gt;&gt; print(pooled_data.shape)</span>
+</span><span id="pooling-50"><a href="#pooling-50"><span class="linenos">50</span></a><span class="sd">        torch.Size([10, 30])</span>
+</span><span id="pooling-51"><a href="#pooling-51"><span class="linenos">51</span></a>
+</span><span id="pooling-52"><a href="#pooling-52"><span class="linenos">52</span></a><span class="sd">        &gt;&gt;&gt; pooled_data = pooling(data, pool_type=&quot;min&quot;, dimension=2)</span>
+</span><span id="pooling-53"><a href="#pooling-53"><span class="linenos">53</span></a><span class="sd">        &gt;&gt;&gt; print(pooled_data.shape)</span>
+</span><span id="pooling-54"><a href="#pooling-54"><span class="linenos">54</span></a><span class="sd">        torch.Size([10, 20])</span>
+</span><span id="pooling-55"><a href="#pooling-55"><span class="linenos">55</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="pooling-56"><a href="#pooling-56"><span class="linenos">56</span></a>    <span class="c1"># Ensure the dimension is valid</span>
+</span><span id="pooling-57"><a href="#pooling-57"><span class="linenos">57</span></a>    <span class="k">assert</span> <span class="n">dimension</span> <span class="o">&lt;</span> <span class="nb">len</span><span class="p">(</span><span class="n">data</span><span class="o">.</span><span class="n">shape</span><span class="p">),</span> <span class="s2">&quot;Invalid dimension provided.&quot;</span>
+</span><span id="pooling-58"><a href="#pooling-58"><span class="linenos">58</span></a>
+</span><span id="pooling-59"><a href="#pooling-59"><span class="linenos">59</span></a>    <span class="k">if</span> <span class="n">data</span><span class="o">.</span><span class="n">numel</span><span class="p">()</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+</span><span id="pooling-60"><a href="#pooling-60"><span class="linenos">60</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Input data must not be empty&quot;</span><span class="p">)</span>
+</span><span id="pooling-61"><a href="#pooling-61"><span class="linenos">61</span></a>
+</span><span id="pooling-62"><a href="#pooling-62"><span class="linenos">62</span></a>    <span class="c1"># Applying the appropriate pooling based on the pool type</span>
+</span><span id="pooling-63"><a href="#pooling-63"><span class="linenos">63</span></a>    <span class="k">if</span> <span class="n">pool_type</span> <span class="o">==</span> <span class="s2">&quot;max&quot;</span><span class="p">:</span>
+</span><span id="pooling-64"><a href="#pooling-64"><span class="linenos">64</span></a>        <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="n">dimension</span><span class="p">,</span> <span class="n">keepdim</span><span class="o">=</span><span class="n">keep_dimension</span><span class="p">)</span><span class="o">.</span><span class="n">values</span>
+</span><span id="pooling-65"><a href="#pooling-65"><span class="linenos">65</span></a>    <span class="k">elif</span> <span class="n">pool_type</span> <span class="o">==</span> <span class="s2">&quot;mean&quot;</span><span class="p">:</span>
+</span><span id="pooling-66"><a href="#pooling-66"><span class="linenos">66</span></a>        <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="n">dimension</span><span class="p">,</span> <span class="n">keepdim</span><span class="o">=</span><span class="n">keep_dimension</span><span class="p">)</span>
+</span><span id="pooling-67"><a href="#pooling-67"><span class="linenos">67</span></a>    <span class="k">elif</span> <span class="n">pool_type</span> <span class="o">==</span> <span class="s2">&quot;min&quot;</span><span class="p">:</span>
+</span><span id="pooling-68"><a href="#pooling-68"><span class="linenos">68</span></a>        <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">min</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="n">dimension</span><span class="p">,</span> <span class="n">keepdim</span><span class="o">=</span><span class="n">keep_dimension</span><span class="p">)</span><span class="o">.</span><span class="n">values</span>
+</span><span id="pooling-69"><a href="#pooling-69"><span class="linenos">69</span></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="pooling-70"><a href="#pooling-70"><span class="linenos">70</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Unsupported pooling type. Choose &#39;max&#39;, &#39;avg&#39;, or &#39;min&#39;.&quot;</span><span class="p">)</span>
 </span></pre></div>
 
 
@@ -237,14 +241,16 @@ Defaults to 0.</li>
 
 <blockquote>
   <div class="pdoc-code codehilite">
-<pre><span></span><code><span class="gp">&gt;&gt;&gt; </span><span class="n">data</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">20</span><span class="p">,</span> <span class="mi">30</span><span class="p">)</span>  <span class="c1"># 10 samples, 20 features, 30 channels</span>
+<pre><span></span><code><span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">data</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">20</span><span class="p">,</span> <span class="mi">30</span><span class="p">)</span>  <span class="c1"># 10 samples, 20 features, 30 channels</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">data</span><span class="o">.</span><span class="n">shape</span>
 <span class="go">torch.Size([10, 20, 30])</span>
 </code></pre>
   </div>
   
   <div class="pdoc-code codehilite">
-<pre><span></span><code><span class="gp">&gt;&gt;&gt; </span><span class="n">pooled_data</span> <span class="o">=</span> <span class="n">pooling</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">pool_type</span><span class="o">=</span><span class="s2">&quot;mean&quot;</span><span class="p">,</span> <span class="n">dimension</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">keep_dimension</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<pre><span></span><code><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span><span class="w"> </span><span class="nn"><a href="">senselab.utils.tasks.pooling</a></span><span class="w"> </span><span class="kn">import</span> <span class="n">pooling</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">pooled_data</span> <span class="o">=</span> <span class="n">pooling</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">pool_type</span><span class="o">=</span><span class="s2">&quot;mean&quot;</span><span class="p">,</span> <span class="n">dimension</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">keep_dimension</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">pooled_data</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
 <span class="go">torch.Size([1, 20, 30])</span>
 </code></pre>

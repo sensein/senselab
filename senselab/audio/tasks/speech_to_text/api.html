@@ -82,32 +82,79 @@ the preferred device, and the model-specific parameters, and senselab handles th
 </span><span id="L-19"><a href="#L-19"><span class="linenos">19</span></a>    <span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">DeviceType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 </span><span id="L-20"><a href="#L-20"><span class="linenos">20</span></a>    <span class="o">**</span><span class="n">kwargs</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>  <span class="c1"># noqa: ANN401</span>
 </span><span id="L-21"><a href="#L-21"><span class="linenos">21</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">ScriptLine</span><span class="p">]:</span>
-</span><span id="L-22"><a href="#L-22"><span class="linenos">22</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Transcribes all audios using the given model.</span>
+</span><span id="L-22"><a href="#L-22"><span class="linenos">22</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Transcribe a batch of `Audio` objects using an ASR model.</span>
 </span><span id="L-23"><a href="#L-23"><span class="linenos">23</span></a>
-</span><span id="L-24"><a href="#L-24"><span class="linenos">24</span></a><span class="sd">    Args:</span>
-</span><span id="L-25"><a href="#L-25"><span class="linenos">25</span></a><span class="sd">        audios (List[Audio]): The list of audio objects to be transcribed.</span>
-</span><span id="L-26"><a href="#L-26"><span class="linenos">26</span></a><span class="sd">        model (SenselabModel): The model used for transcription.</span>
-</span><span id="L-27"><a href="#L-27"><span class="linenos">27</span></a><span class="sd">        language (Optional[Language]): The language of the audio (default is None).</span>
-</span><span id="L-28"><a href="#L-28"><span class="linenos">28</span></a><span class="sd">        device (Optional[DeviceType]): The device to run the model on (default is None).</span>
-</span><span id="L-29"><a href="#L-29"><span class="linenos">29</span></a><span class="sd">        **kwargs: Additional keyword arguments to pass to the transcription function.</span>
-</span><span id="L-30"><a href="#L-30"><span class="linenos">30</span></a>
-</span><span id="L-31"><a href="#L-31"><span class="linenos">31</span></a><span class="sd">    Returns:</span>
-</span><span id="L-32"><a href="#L-32"><span class="linenos">32</span></a><span class="sd">        List[ScriptLine]: The list of script lines.</span>
-</span><span id="L-33"><a href="#L-33"><span class="linenos">33</span></a>
-</span><span id="L-34"><a href="#L-34"><span class="linenos">34</span></a><span class="sd">    Todo:</span>
-</span><span id="L-35"><a href="#L-35"><span class="linenos">35</span></a><span class="sd">        - Include more models (e.g., speechbrain, nvidia)</span>
-</span><span id="L-36"><a href="#L-36"><span class="linenos">36</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="L-37"><a href="#L-37"><span class="linenos">37</span></a>    <span class="k">try</span><span class="p">:</span>
-</span><span id="L-38"><a href="#L-38"><span class="linenos">38</span></a>        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">HFModel</span><span class="p">):</span>
-</span><span id="L-39"><a href="#L-39"><span class="linenos">39</span></a>            <span class="k">return</span> <span class="n">HuggingFaceASR</span><span class="o">.</span><span class="n">transcribe_audios_with_transformers</span><span class="p">(</span>
-</span><span id="L-40"><a href="#L-40"><span class="linenos">40</span></a>                <span class="n">audios</span><span class="o">=</span><span class="n">audios</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span> <span class="n">language</span><span class="o">=</span><span class="n">language</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span>
-</span><span id="L-41"><a href="#L-41"><span class="linenos">41</span></a>            <span class="p">)</span>
-</span><span id="L-42"><a href="#L-42"><span class="linenos">42</span></a>        <span class="k">else</span><span class="p">:</span>
-</span><span id="L-43"><a href="#L-43"><span class="linenos">43</span></a>            <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span>
-</span><span id="L-44"><a href="#L-44"><span class="linenos">44</span></a>                <span class="s2">&quot;Only Hugging Face models are supported for now. We aim to support more models in the future.&quot;</span>
-</span><span id="L-45"><a href="#L-45"><span class="linenos">45</span></a>            <span class="p">)</span>
-</span><span id="L-46"><a href="#L-46"><span class="linenos">46</span></a>    <span class="k">except</span> <span class="ne">TypeError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
-</span><span id="L-47"><a href="#L-47"><span class="linenos">47</span></a>        <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="n">e</span><span class="p">)</span>
+</span><span id="L-24"><a href="#L-24"><span class="linenos">24</span></a><span class="sd">    Currently supports **Hugging Face** models (via Transformers). For best throughput,</span>
+</span><span id="L-25"><a href="#L-25"><span class="linenos">25</span></a><span class="sd">    pass the **entire list** of audios in one call so that a single ASR pipeline is</span>
+</span><span id="L-26"><a href="#L-26"><span class="linenos">26</span></a><span class="sd">    initialized and reused internally.</span>
+</span><span id="L-27"><a href="#L-27"><span class="linenos">27</span></a>
+</span><span id="L-28"><a href="#L-28"><span class="linenos">28</span></a><span class="sd">    Args:</span>
+</span><span id="L-29"><a href="#L-29"><span class="linenos">29</span></a><span class="sd">        audios (list[Audio]):</span>
+</span><span id="L-30"><a href="#L-30"><span class="linenos">30</span></a><span class="sd">            Audio objects to transcribe. Typical ASR models expect **mono, fixed</span>
+</span><span id="L-31"><a href="#L-31"><span class="linenos">31</span></a><span class="sd">            sampling rate** (e.g., Whisper expects mono 16 kHz). Validate upstream.</span>
+</span><span id="L-32"><a href="#L-32"><span class="linenos">32</span></a><span class="sd">        model (SenselabModel):</span>
+</span><span id="L-33"><a href="#L-33"><span class="linenos">33</span></a><span class="sd">            The ASR model to use. **Only `HFModel` is supported** at present.</span>
+</span><span id="L-34"><a href="#L-34"><span class="linenos">34</span></a><span class="sd">        language (Language, optional):</span>
+</span><span id="L-35"><a href="#L-35"><span class="linenos">35</span></a><span class="sd">            Spoken language hint for decoding (passed to the HF pipeline when supported).</span>
+</span><span id="L-36"><a href="#L-36"><span class="linenos">36</span></a><span class="sd">        device (DeviceType, optional):</span>
+</span><span id="L-37"><a href="#L-37"><span class="linenos">37</span></a><span class="sd">            Preferred device for inference. For HF ASR we currently support</span>
+</span><span id="L-38"><a href="#L-38"><span class="linenos">38</span></a><span class="sd">            ``DeviceType.CPU`` and ``DeviceType.CUDA``. If None, the backend will choose</span>
+</span><span id="L-39"><a href="#L-39"><span class="linenos">39</span></a><span class="sd">            ``CUDA`` if available, otherwise ``CPU``.</span>
+</span><span id="L-40"><a href="#L-40"><span class="linenos">40</span></a><span class="sd">        **kwargs:</span>
+</span><span id="L-41"><a href="#L-41"><span class="linenos">41</span></a><span class="sd">            Model-specific options forwarded to the HF ASR helper, e.g.:</span>
+</span><span id="L-42"><a href="#L-42"><span class="linenos">42</span></a><span class="sd">              * ``return_timestamps``: ``&quot;word&quot;`` | ``&quot;segment&quot;`` | ``None``</span>
+</span><span id="L-43"><a href="#L-43"><span class="linenos">43</span></a><span class="sd">              * ``max_new_tokens``: ``int`` (default 128)</span>
+</span><span id="L-44"><a href="#L-44"><span class="linenos">44</span></a><span class="sd">              * ``chunk_length_s``: ``int`` seconds (default 30)</span>
+</span><span id="L-45"><a href="#L-45"><span class="linenos">45</span></a><span class="sd">              * ``batch_size``: ``int`` (default 1)</span>
+</span><span id="L-46"><a href="#L-46"><span class="linenos">46</span></a>
+</span><span id="L-47"><a href="#L-47"><span class="linenos">47</span></a><span class="sd">    Returns:</span>
+</span><span id="L-48"><a href="#L-48"><span class="linenos">48</span></a><span class="sd">        list[ScriptLine]: One transcript object per input audio, preserving order.</span>
+</span><span id="L-49"><a href="#L-49"><span class="linenos">49</span></a>
+</span><span id="L-50"><a href="#L-50"><span class="linenos">50</span></a><span class="sd">    Raises:</span>
+</span><span id="L-51"><a href="#L-51"><span class="linenos">51</span></a><span class="sd">        NotImplementedError: If `model` is not an instance of `HFModel`.</span>
+</span><span id="L-52"><a href="#L-52"><span class="linenos">52</span></a><span class="sd">        TypeError: If invalid keyword arguments are provided downstream.</span>
+</span><span id="L-53"><a href="#L-53"><span class="linenos">53</span></a>
+</span><span id="L-54"><a href="#L-54"><span class="linenos">54</span></a><span class="sd">    Todo:</span>
+</span><span id="L-55"><a href="#L-55"><span class="linenos">55</span></a><span class="sd">        - Include more models (e.g., speechbrain, nvidia)</span>
+</span><span id="L-56"><a href="#L-56"><span class="linenos">56</span></a>
+</span><span id="L-57"><a href="#L-57"><span class="linenos">57</span></a><span class="sd">    Example (default settings on CPU):</span>
+</span><span id="L-58"><a href="#L-58"><span class="linenos">58</span></a><span class="sd">        &gt;&gt;&gt; from pathlib import Path</span>
+</span><span id="L-59"><a href="#L-59"><span class="linenos">59</span></a><span class="sd">        &gt;&gt;&gt; from senselab.audio.data_structures import Audio</span>
+</span><span id="L-60"><a href="#L-60"><span class="linenos">60</span></a><span class="sd">        &gt;&gt;&gt; from senselab.utils.data_structures import HFModel, DeviceType, Language</span>
+</span><span id="L-61"><a href="#L-61"><span class="linenos">61</span></a><span class="sd">        &gt;&gt;&gt; a1 = Audio(filepath=Path(&quot;sample1.wav&quot;).resolve())</span>
+</span><span id="L-62"><a href="#L-62"><span class="linenos">62</span></a><span class="sd">        &gt;&gt;&gt; a2 = Audio(filepath=Path(&quot;sample2.wav&quot;).resolve())</span>
+</span><span id="L-63"><a href="#L-63"><span class="linenos">63</span></a><span class="sd">        &gt;&gt;&gt; model = HFModel(path_or_uri=&quot;openai/whisper-tiny&quot;)</span>
+</span><span id="L-64"><a href="#L-64"><span class="linenos">64</span></a><span class="sd">        &gt;&gt;&gt; lines = transcribe_audios([a1, a2], model, language=Language.EN, device=DeviceType.CPU)</span>
+</span><span id="L-65"><a href="#L-65"><span class="linenos">65</span></a><span class="sd">        &gt;&gt;&gt; lines[0].text</span>
+</span><span id="L-66"><a href="#L-66"><span class="linenos">66</span></a>
+</span><span id="L-67"><a href="#L-67"><span class="linenos">67</span></a><span class="sd">    Example (timestamps, longer chunks, CUDA):</span>
+</span><span id="L-68"><a href="#L-68"><span class="linenos">68</span></a><span class="sd">        &gt;&gt;&gt; from pathlib import Path</span>
+</span><span id="L-69"><a href="#L-69"><span class="linenos">69</span></a><span class="sd">        &gt;&gt;&gt; from senselab.audio.data_structures import Audio</span>
+</span><span id="L-70"><a href="#L-70"><span class="linenos">70</span></a><span class="sd">        &gt;&gt;&gt; from senselab.utils.data_structures import HFModel, DeviceType, Language</span>
+</span><span id="L-71"><a href="#L-71"><span class="linenos">71</span></a><span class="sd">        &gt;&gt;&gt; a1 = Audio(filepath=Path(&quot;sample1.wav&quot;).resolve())</span>
+</span><span id="L-72"><a href="#L-72"><span class="linenos">72</span></a><span class="sd">        &gt;&gt;&gt; model = HFModel(path_or_uri=&quot;openai/whisper-small&quot;, revision=&quot;main&quot;)</span>
+</span><span id="L-73"><a href="#L-73"><span class="linenos">73</span></a><span class="sd">        &gt;&gt;&gt; lines = transcribe_audios(</span>
+</span><span id="L-74"><a href="#L-74"><span class="linenos">74</span></a><span class="sd">        ...     [a1],</span>
+</span><span id="L-75"><a href="#L-75"><span class="linenos">75</span></a><span class="sd">        ...     model,</span>
+</span><span id="L-76"><a href="#L-76"><span class="linenos">76</span></a><span class="sd">        ...     language=Language.EN,</span>
+</span><span id="L-77"><a href="#L-77"><span class="linenos">77</span></a><span class="sd">        ...     device=DeviceType.CUDA,</span>
+</span><span id="L-78"><a href="#L-78"><span class="linenos">78</span></a><span class="sd">        ...     return_timestamps=&quot;word&quot;,</span>
+</span><span id="L-79"><a href="#L-79"><span class="linenos">79</span></a><span class="sd">        ...     chunk_length_s=30,</span>
+</span><span id="L-80"><a href="#L-80"><span class="linenos">80</span></a><span class="sd">        ...     batch_size=1,</span>
+</span><span id="L-81"><a href="#L-81"><span class="linenos">81</span></a><span class="sd">        ... )</span>
+</span><span id="L-82"><a href="#L-82"><span class="linenos">82</span></a><span class="sd">        &gt;&gt;&gt; lines[0].timestamps</span>
+</span><span id="L-83"><a href="#L-83"><span class="linenos">83</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="L-84"><a href="#L-84"><span class="linenos">84</span></a>    <span class="k">try</span><span class="p">:</span>
+</span><span id="L-85"><a href="#L-85"><span class="linenos">85</span></a>        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">HFModel</span><span class="p">):</span>
+</span><span id="L-86"><a href="#L-86"><span class="linenos">86</span></a>            <span class="k">return</span> <span class="n">HuggingFaceASR</span><span class="o">.</span><span class="n">transcribe_audios_with_transformers</span><span class="p">(</span>
+</span><span id="L-87"><a href="#L-87"><span class="linenos">87</span></a>                <span class="n">audios</span><span class="o">=</span><span class="n">audios</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span> <span class="n">language</span><span class="o">=</span><span class="n">language</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span>
+</span><span id="L-88"><a href="#L-88"><span class="linenos">88</span></a>            <span class="p">)</span>
+</span><span id="L-89"><a href="#L-89"><span class="linenos">89</span></a>        <span class="k">else</span><span class="p">:</span>
+</span><span id="L-90"><a href="#L-90"><span class="linenos">90</span></a>            <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span>
+</span><span id="L-91"><a href="#L-91"><span class="linenos">91</span></a>                <span class="s2">&quot;Only Hugging Face models are supported for now. We aim to support more models in the future.&quot;</span>
+</span><span id="L-92"><a href="#L-92"><span class="linenos">92</span></a>            <span class="p">)</span>
+</span><span id="L-93"><a href="#L-93"><span class="linenos">93</span></a>    <span class="k">except</span> <span class="ne">TypeError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+</span><span id="L-94"><a href="#L-94"><span class="linenos">94</span></a>        <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="n">e</span><span class="p">)</span>
 </span></pre></div>
 
 
@@ -130,52 +177,119 @@ the preferred device, and the model-specific parameters, and senselab handles th
 </span><span id="transcribe_audios-20"><a href="#transcribe_audios-20"><span class="linenos">20</span></a>    <span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">DeviceType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 </span><span id="transcribe_audios-21"><a href="#transcribe_audios-21"><span class="linenos">21</span></a>    <span class="o">**</span><span class="n">kwargs</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>  <span class="c1"># noqa: ANN401</span>
 </span><span id="transcribe_audios-22"><a href="#transcribe_audios-22"><span class="linenos">22</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">ScriptLine</span><span class="p">]:</span>
-</span><span id="transcribe_audios-23"><a href="#transcribe_audios-23"><span class="linenos">23</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Transcribes all audios using the given model.</span>
+</span><span id="transcribe_audios-23"><a href="#transcribe_audios-23"><span class="linenos">23</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Transcribe a batch of `Audio` objects using an ASR model.</span>
 </span><span id="transcribe_audios-24"><a href="#transcribe_audios-24"><span class="linenos">24</span></a>
-</span><span id="transcribe_audios-25"><a href="#transcribe_audios-25"><span class="linenos">25</span></a><span class="sd">    Args:</span>
-</span><span id="transcribe_audios-26"><a href="#transcribe_audios-26"><span class="linenos">26</span></a><span class="sd">        audios (List[Audio]): The list of audio objects to be transcribed.</span>
-</span><span id="transcribe_audios-27"><a href="#transcribe_audios-27"><span class="linenos">27</span></a><span class="sd">        model (SenselabModel): The model used for transcription.</span>
-</span><span id="transcribe_audios-28"><a href="#transcribe_audios-28"><span class="linenos">28</span></a><span class="sd">        language (Optional[Language]): The language of the audio (default is None).</span>
-</span><span id="transcribe_audios-29"><a href="#transcribe_audios-29"><span class="linenos">29</span></a><span class="sd">        device (Optional[DeviceType]): The device to run the model on (default is None).</span>
-</span><span id="transcribe_audios-30"><a href="#transcribe_audios-30"><span class="linenos">30</span></a><span class="sd">        **kwargs: Additional keyword arguments to pass to the transcription function.</span>
-</span><span id="transcribe_audios-31"><a href="#transcribe_audios-31"><span class="linenos">31</span></a>
-</span><span id="transcribe_audios-32"><a href="#transcribe_audios-32"><span class="linenos">32</span></a><span class="sd">    Returns:</span>
-</span><span id="transcribe_audios-33"><a href="#transcribe_audios-33"><span class="linenos">33</span></a><span class="sd">        List[ScriptLine]: The list of script lines.</span>
-</span><span id="transcribe_audios-34"><a href="#transcribe_audios-34"><span class="linenos">34</span></a>
-</span><span id="transcribe_audios-35"><a href="#transcribe_audios-35"><span class="linenos">35</span></a><span class="sd">    Todo:</span>
-</span><span id="transcribe_audios-36"><a href="#transcribe_audios-36"><span class="linenos">36</span></a><span class="sd">        - Include more models (e.g., speechbrain, nvidia)</span>
-</span><span id="transcribe_audios-37"><a href="#transcribe_audios-37"><span class="linenos">37</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="transcribe_audios-38"><a href="#transcribe_audios-38"><span class="linenos">38</span></a>    <span class="k">try</span><span class="p">:</span>
-</span><span id="transcribe_audios-39"><a href="#transcribe_audios-39"><span class="linenos">39</span></a>        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">HFModel</span><span class="p">):</span>
-</span><span id="transcribe_audios-40"><a href="#transcribe_audios-40"><span class="linenos">40</span></a>            <span class="k">return</span> <span class="n">HuggingFaceASR</span><span class="o">.</span><span class="n">transcribe_audios_with_transformers</span><span class="p">(</span>
-</span><span id="transcribe_audios-41"><a href="#transcribe_audios-41"><span class="linenos">41</span></a>                <span class="n">audios</span><span class="o">=</span><span class="n">audios</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span> <span class="n">language</span><span class="o">=</span><span class="n">language</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span>
-</span><span id="transcribe_audios-42"><a href="#transcribe_audios-42"><span class="linenos">42</span></a>            <span class="p">)</span>
-</span><span id="transcribe_audios-43"><a href="#transcribe_audios-43"><span class="linenos">43</span></a>        <span class="k">else</span><span class="p">:</span>
-</span><span id="transcribe_audios-44"><a href="#transcribe_audios-44"><span class="linenos">44</span></a>            <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span>
-</span><span id="transcribe_audios-45"><a href="#transcribe_audios-45"><span class="linenos">45</span></a>                <span class="s2">&quot;Only Hugging Face models are supported for now. We aim to support more models in the future.&quot;</span>
-</span><span id="transcribe_audios-46"><a href="#transcribe_audios-46"><span class="linenos">46</span></a>            <span class="p">)</span>
-</span><span id="transcribe_audios-47"><a href="#transcribe_audios-47"><span class="linenos">47</span></a>    <span class="k">except</span> <span class="ne">TypeError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
-</span><span id="transcribe_audios-48"><a href="#transcribe_audios-48"><span class="linenos">48</span></a>        <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="n">e</span><span class="p">)</span>
+</span><span id="transcribe_audios-25"><a href="#transcribe_audios-25"><span class="linenos">25</span></a><span class="sd">    Currently supports **Hugging Face** models (via Transformers). For best throughput,</span>
+</span><span id="transcribe_audios-26"><a href="#transcribe_audios-26"><span class="linenos">26</span></a><span class="sd">    pass the **entire list** of audios in one call so that a single ASR pipeline is</span>
+</span><span id="transcribe_audios-27"><a href="#transcribe_audios-27"><span class="linenos">27</span></a><span class="sd">    initialized and reused internally.</span>
+</span><span id="transcribe_audios-28"><a href="#transcribe_audios-28"><span class="linenos">28</span></a>
+</span><span id="transcribe_audios-29"><a href="#transcribe_audios-29"><span class="linenos">29</span></a><span class="sd">    Args:</span>
+</span><span id="transcribe_audios-30"><a href="#transcribe_audios-30"><span class="linenos">30</span></a><span class="sd">        audios (list[Audio]):</span>
+</span><span id="transcribe_audios-31"><a href="#transcribe_audios-31"><span class="linenos">31</span></a><span class="sd">            Audio objects to transcribe. Typical ASR models expect **mono, fixed</span>
+</span><span id="transcribe_audios-32"><a href="#transcribe_audios-32"><span class="linenos">32</span></a><span class="sd">            sampling rate** (e.g., Whisper expects mono 16 kHz). Validate upstream.</span>
+</span><span id="transcribe_audios-33"><a href="#transcribe_audios-33"><span class="linenos">33</span></a><span class="sd">        model (SenselabModel):</span>
+</span><span id="transcribe_audios-34"><a href="#transcribe_audios-34"><span class="linenos">34</span></a><span class="sd">            The ASR model to use. **Only `HFModel` is supported** at present.</span>
+</span><span id="transcribe_audios-35"><a href="#transcribe_audios-35"><span class="linenos">35</span></a><span class="sd">        language (Language, optional):</span>
+</span><span id="transcribe_audios-36"><a href="#transcribe_audios-36"><span class="linenos">36</span></a><span class="sd">            Spoken language hint for decoding (passed to the HF pipeline when supported).</span>
+</span><span id="transcribe_audios-37"><a href="#transcribe_audios-37"><span class="linenos">37</span></a><span class="sd">        device (DeviceType, optional):</span>
+</span><span id="transcribe_audios-38"><a href="#transcribe_audios-38"><span class="linenos">38</span></a><span class="sd">            Preferred device for inference. For HF ASR we currently support</span>
+</span><span id="transcribe_audios-39"><a href="#transcribe_audios-39"><span class="linenos">39</span></a><span class="sd">            ``DeviceType.CPU`` and ``DeviceType.CUDA``. If None, the backend will choose</span>
+</span><span id="transcribe_audios-40"><a href="#transcribe_audios-40"><span class="linenos">40</span></a><span class="sd">            ``CUDA`` if available, otherwise ``CPU``.</span>
+</span><span id="transcribe_audios-41"><a href="#transcribe_audios-41"><span class="linenos">41</span></a><span class="sd">        **kwargs:</span>
+</span><span id="transcribe_audios-42"><a href="#transcribe_audios-42"><span class="linenos">42</span></a><span class="sd">            Model-specific options forwarded to the HF ASR helper, e.g.:</span>
+</span><span id="transcribe_audios-43"><a href="#transcribe_audios-43"><span class="linenos">43</span></a><span class="sd">              * ``return_timestamps``: ``&quot;word&quot;`` | ``&quot;segment&quot;`` | ``None``</span>
+</span><span id="transcribe_audios-44"><a href="#transcribe_audios-44"><span class="linenos">44</span></a><span class="sd">              * ``max_new_tokens``: ``int`` (default 128)</span>
+</span><span id="transcribe_audios-45"><a href="#transcribe_audios-45"><span class="linenos">45</span></a><span class="sd">              * ``chunk_length_s``: ``int`` seconds (default 30)</span>
+</span><span id="transcribe_audios-46"><a href="#transcribe_audios-46"><span class="linenos">46</span></a><span class="sd">              * ``batch_size``: ``int`` (default 1)</span>
+</span><span id="transcribe_audios-47"><a href="#transcribe_audios-47"><span class="linenos">47</span></a>
+</span><span id="transcribe_audios-48"><a href="#transcribe_audios-48"><span class="linenos">48</span></a><span class="sd">    Returns:</span>
+</span><span id="transcribe_audios-49"><a href="#transcribe_audios-49"><span class="linenos">49</span></a><span class="sd">        list[ScriptLine]: One transcript object per input audio, preserving order.</span>
+</span><span id="transcribe_audios-50"><a href="#transcribe_audios-50"><span class="linenos">50</span></a>
+</span><span id="transcribe_audios-51"><a href="#transcribe_audios-51"><span class="linenos">51</span></a><span class="sd">    Raises:</span>
+</span><span id="transcribe_audios-52"><a href="#transcribe_audios-52"><span class="linenos">52</span></a><span class="sd">        NotImplementedError: If `model` is not an instance of `HFModel`.</span>
+</span><span id="transcribe_audios-53"><a href="#transcribe_audios-53"><span class="linenos">53</span></a><span class="sd">        TypeError: If invalid keyword arguments are provided downstream.</span>
+</span><span id="transcribe_audios-54"><a href="#transcribe_audios-54"><span class="linenos">54</span></a>
+</span><span id="transcribe_audios-55"><a href="#transcribe_audios-55"><span class="linenos">55</span></a><span class="sd">    Todo:</span>
+</span><span id="transcribe_audios-56"><a href="#transcribe_audios-56"><span class="linenos">56</span></a><span class="sd">        - Include more models (e.g., speechbrain, nvidia)</span>
+</span><span id="transcribe_audios-57"><a href="#transcribe_audios-57"><span class="linenos">57</span></a>
+</span><span id="transcribe_audios-58"><a href="#transcribe_audios-58"><span class="linenos">58</span></a><span class="sd">    Example (default settings on CPU):</span>
+</span><span id="transcribe_audios-59"><a href="#transcribe_audios-59"><span class="linenos">59</span></a><span class="sd">        &gt;&gt;&gt; from pathlib import Path</span>
+</span><span id="transcribe_audios-60"><a href="#transcribe_audios-60"><span class="linenos">60</span></a><span class="sd">        &gt;&gt;&gt; from senselab.audio.data_structures import Audio</span>
+</span><span id="transcribe_audios-61"><a href="#transcribe_audios-61"><span class="linenos">61</span></a><span class="sd">        &gt;&gt;&gt; from senselab.utils.data_structures import HFModel, DeviceType, Language</span>
+</span><span id="transcribe_audios-62"><a href="#transcribe_audios-62"><span class="linenos">62</span></a><span class="sd">        &gt;&gt;&gt; a1 = Audio(filepath=Path(&quot;sample1.wav&quot;).resolve())</span>
+</span><span id="transcribe_audios-63"><a href="#transcribe_audios-63"><span class="linenos">63</span></a><span class="sd">        &gt;&gt;&gt; a2 = Audio(filepath=Path(&quot;sample2.wav&quot;).resolve())</span>
+</span><span id="transcribe_audios-64"><a href="#transcribe_audios-64"><span class="linenos">64</span></a><span class="sd">        &gt;&gt;&gt; model = HFModel(path_or_uri=&quot;openai/whisper-tiny&quot;)</span>
+</span><span id="transcribe_audios-65"><a href="#transcribe_audios-65"><span class="linenos">65</span></a><span class="sd">        &gt;&gt;&gt; lines = transcribe_audios([a1, a2], model, language=Language.EN, device=DeviceType.CPU)</span>
+</span><span id="transcribe_audios-66"><a href="#transcribe_audios-66"><span class="linenos">66</span></a><span class="sd">        &gt;&gt;&gt; lines[0].text</span>
+</span><span id="transcribe_audios-67"><a href="#transcribe_audios-67"><span class="linenos">67</span></a>
+</span><span id="transcribe_audios-68"><a href="#transcribe_audios-68"><span class="linenos">68</span></a><span class="sd">    Example (timestamps, longer chunks, CUDA):</span>
+</span><span id="transcribe_audios-69"><a href="#transcribe_audios-69"><span class="linenos">69</span></a><span class="sd">        &gt;&gt;&gt; from pathlib import Path</span>
+</span><span id="transcribe_audios-70"><a href="#transcribe_audios-70"><span class="linenos">70</span></a><span class="sd">        &gt;&gt;&gt; from senselab.audio.data_structures import Audio</span>
+</span><span id="transcribe_audios-71"><a href="#transcribe_audios-71"><span class="linenos">71</span></a><span class="sd">        &gt;&gt;&gt; from senselab.utils.data_structures import HFModel, DeviceType, Language</span>
+</span><span id="transcribe_audios-72"><a href="#transcribe_audios-72"><span class="linenos">72</span></a><span class="sd">        &gt;&gt;&gt; a1 = Audio(filepath=Path(&quot;sample1.wav&quot;).resolve())</span>
+</span><span id="transcribe_audios-73"><a href="#transcribe_audios-73"><span class="linenos">73</span></a><span class="sd">        &gt;&gt;&gt; model = HFModel(path_or_uri=&quot;openai/whisper-small&quot;, revision=&quot;main&quot;)</span>
+</span><span id="transcribe_audios-74"><a href="#transcribe_audios-74"><span class="linenos">74</span></a><span class="sd">        &gt;&gt;&gt; lines = transcribe_audios(</span>
+</span><span id="transcribe_audios-75"><a href="#transcribe_audios-75"><span class="linenos">75</span></a><span class="sd">        ...     [a1],</span>
+</span><span id="transcribe_audios-76"><a href="#transcribe_audios-76"><span class="linenos">76</span></a><span class="sd">        ...     model,</span>
+</span><span id="transcribe_audios-77"><a href="#transcribe_audios-77"><span class="linenos">77</span></a><span class="sd">        ...     language=Language.EN,</span>
+</span><span id="transcribe_audios-78"><a href="#transcribe_audios-78"><span class="linenos">78</span></a><span class="sd">        ...     device=DeviceType.CUDA,</span>
+</span><span id="transcribe_audios-79"><a href="#transcribe_audios-79"><span class="linenos">79</span></a><span class="sd">        ...     return_timestamps=&quot;word&quot;,</span>
+</span><span id="transcribe_audios-80"><a href="#transcribe_audios-80"><span class="linenos">80</span></a><span class="sd">        ...     chunk_length_s=30,</span>
+</span><span id="transcribe_audios-81"><a href="#transcribe_audios-81"><span class="linenos">81</span></a><span class="sd">        ...     batch_size=1,</span>
+</span><span id="transcribe_audios-82"><a href="#transcribe_audios-82"><span class="linenos">82</span></a><span class="sd">        ... )</span>
+</span><span id="transcribe_audios-83"><a href="#transcribe_audios-83"><span class="linenos">83</span></a><span class="sd">        &gt;&gt;&gt; lines[0].timestamps</span>
+</span><span id="transcribe_audios-84"><a href="#transcribe_audios-84"><span class="linenos">84</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="transcribe_audios-85"><a href="#transcribe_audios-85"><span class="linenos">85</span></a>    <span class="k">try</span><span class="p">:</span>
+</span><span id="transcribe_audios-86"><a href="#transcribe_audios-86"><span class="linenos">86</span></a>        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">HFModel</span><span class="p">):</span>
+</span><span id="transcribe_audios-87"><a href="#transcribe_audios-87"><span class="linenos">87</span></a>            <span class="k">return</span> <span class="n">HuggingFaceASR</span><span class="o">.</span><span class="n">transcribe_audios_with_transformers</span><span class="p">(</span>
+</span><span id="transcribe_audios-88"><a href="#transcribe_audios-88"><span class="linenos">88</span></a>                <span class="n">audios</span><span class="o">=</span><span class="n">audios</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span> <span class="n">language</span><span class="o">=</span><span class="n">language</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span>
+</span><span id="transcribe_audios-89"><a href="#transcribe_audios-89"><span class="linenos">89</span></a>            <span class="p">)</span>
+</span><span id="transcribe_audios-90"><a href="#transcribe_audios-90"><span class="linenos">90</span></a>        <span class="k">else</span><span class="p">:</span>
+</span><span id="transcribe_audios-91"><a href="#transcribe_audios-91"><span class="linenos">91</span></a>            <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span>
+</span><span id="transcribe_audios-92"><a href="#transcribe_audios-92"><span class="linenos">92</span></a>                <span class="s2">&quot;Only Hugging Face models are supported for now. We aim to support more models in the future.&quot;</span>
+</span><span id="transcribe_audios-93"><a href="#transcribe_audios-93"><span class="linenos">93</span></a>            <span class="p">)</span>
+</span><span id="transcribe_audios-94"><a href="#transcribe_audios-94"><span class="linenos">94</span></a>    <span class="k">except</span> <span class="ne">TypeError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+</span><span id="transcribe_audios-95"><a href="#transcribe_audios-95"><span class="linenos">95</span></a>        <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="n">e</span><span class="p">)</span>
 </span></pre></div>
 
 
-            <div class="docstring"><p>Transcribes all audios using the given model.</p>
+            <div class="docstring"><p>Transcribe a batch of <code>Audio</code> objects using an ASR model.</p>
+
+<p>Currently supports <strong>Hugging Face</strong> models (via Transformers). For best throughput,
+pass the <strong>entire list</strong> of audios in one call so that a single ASR pipeline is
+initialized and reused internally.</p>
 
 <h6 id="arguments">Arguments:</h6>
 
 <ul>
-<li><strong>audios (List[Audio]):</strong>  The list of audio objects to be transcribed.</li>
-<li><strong>model (SenselabModel):</strong>  The model used for transcription.</li>
-<li><strong>language (Optional[Language]):</strong>  The language of the audio (default is None).</li>
-<li><strong>device (Optional[DeviceType]):</strong>  The device to run the model on (default is None).</li>
-<li><strong>**kwargs:</strong>  Additional keyword arguments to pass to the transcription function.</li>
+<li><strong>audios (list[Audio]):</strong>  Audio objects to transcribe. Typical ASR models expect <strong>mono, fixed
+sampling rate</strong> (e.g., Whisper expects mono 16 kHz). Validate upstream.</li>
+<li><strong>model (SenselabModel):</strong>  The ASR model to use. <strong>Only <code>HFModel</code> is supported</strong> at present.</li>
+<li><strong>language (Language, optional):</strong>  Spoken language hint for decoding (passed to the HF pipeline when supported).</li>
+<li><strong>device (DeviceType, optional):</strong>  Preferred device for inference. For HF ASR we currently support
+<code>DeviceType.CPU</code> and <code>DeviceType.CUDA</code>. If None, the backend will choose
+<code>CUDA</code> if available, otherwise <code>CPU</code>.</li>
+<li><strong>**kwargs:</strong>  Model-specific options forwarded to the HF ASR helper, e.g.:
+<ul>
+<li><code>return_timestamps</code>: <code>"word"</code> | <code>"segment"</code> | <code>None</code></li>
+<li><code>max_new_tokens</code>: <code>int</code> (default 128)</li>
+<li><code>chunk_length_s</code>: <code>int</code> seconds (default 30)</li>
+<li><code>batch_size</code>: <code>int</code> (default 1)</li>
+</ul></li>
 </ul>
 
 <h6 id="returns">Returns:</h6>
 
 <blockquote>
-  <p>List[ScriptLine]: The list of script lines.</p>
+  <p>list[ScriptLine]: One transcript object per input audio, preserving order.</p>
 </blockquote>
+
+<h6 id="raises">Raises:</h6>
+
+<ul>
+<li><strong>NotImplementedError:</strong>  If <code>model</code> is not an instance of <code>HFModel</code>.</li>
+<li><strong>TypeError:</strong>  If invalid keyword arguments are provided downstream.</li>
+</ul>
 
 <h6 id="todo">Todo:</h6>
 
@@ -183,6 +297,47 @@ the preferred device, and the model-specific parameters, and senselab handles th
   <ul>
   <li>Include more models (e.g., speechbrain, nvidia)</li>
   </ul>
+</blockquote>
+
+<p>Example (default settings on CPU):</p>
+
+<blockquote>
+  <blockquote>
+    <blockquote>
+      <p>from pathlib import Path
+      from <a href="../../data_structures.html">senselab.audio.data_structures</a> import Audio
+      from <a href="../../../utils/data_structures.html">senselab.utils.data_structures</a> import HFModel, DeviceType, Language
+      a1 = Audio(filepath=Path("sample1.wav").resolve())
+      a2 = Audio(filepath=Path("sample2.wav").resolve())
+      model = HFModel(path_or_uri="openai/whisper-tiny")
+      lines = transcribe_audios([a1, a2], model, language=Language.EN, device=DeviceType.CPU)
+      lines[0].text</p>
+    </blockquote>
+  </blockquote>
+</blockquote>
+
+<p>Example (timestamps, longer chunks, CUDA):</p>
+
+<blockquote>
+  <blockquote>
+    <blockquote>
+      <p>from pathlib import Path
+      from <a href="../../data_structures.html">senselab.audio.data_structures</a> import Audio
+      from <a href="../../../utils/data_structures.html">senselab.utils.data_structures</a> import HFModel, DeviceType, Language
+      a1 = Audio(filepath=Path("sample1.wav").resolve())
+      model = HFModel(path_or_uri="openai/whisper-small", revision="main")
+      lines = transcribe_audios(
+          ...     [a1],
+          ...     model,
+          ...     language=Language.EN,
+          ...     device=DeviceType.CUDA,
+          ...     return_timestamps="word",
+          ...     chunk_length_s=30,
+          ...     batch_size=1,
+          ... )
+      lines[0].timestamps</p>
+    </blockquote>
+  </blockquote>
 </blockquote>
 </div>
 
