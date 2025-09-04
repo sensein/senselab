@@ -5,19 +5,26 @@ import logging
 import os
 import threading
 
-from notebook_intelligence import (
-    ChatCommand,
-    ChatRequest,
-    ChatResponse,
-    Host,
-    MarkdownData,
-    NotebookIntelligenceExtension,
-    Tool,
-    ToolPreInvokeResponse,
-)
-from notebook_intelligence.mcp_manager import MCPChatParticipant, MCPServer, MCPServerImpl, SSEServerParameters
+try:
+    from notebook_intelligence import (
+        ChatCommand,
+        ChatRequest,
+        ChatResponse,
+        Host,
+        MarkdownData,
+        NotebookIntelligenceExtension,
+        Tool,
+        ToolPreInvokeResponse,
+    )
+    from notebook_intelligence.mcp_manager import MCPChatParticipant, MCPServer, MCPServerImpl, SSEServerParameters
 
-from .notebook_share_tool import NotebookShareTool
+    from .notebook_share_tool import NotebookShareTool
+
+except ImportError:
+    raise ModuleNotFoundError(
+        "The 'notebook_intelligence' package is not installed. "
+        "Install with: pip install 'senselab[senselab-ai]'"
+    )
 
 PARTICIPANT_ICON_URL = "https://avatars.githubusercontent.com/u/47326880?s=200&v=4"
 
