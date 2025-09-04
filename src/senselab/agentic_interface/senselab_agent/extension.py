@@ -22,8 +22,7 @@ try:
 
 except ImportError:
     raise ModuleNotFoundError(
-        "The 'notebook_intelligence' package is not installed. "
-        "Install with: pip install 'senselab[senselab-ai]'"
+        "The 'notebook_intelligence' package is not installed. " "Install with: pip install 'senselab[senselab-ai]'"
     )
 
 PARTICIPANT_ICON_URL = "https://avatars.githubusercontent.com/u/47326880?s=200&v=4"
