@@ -35,6 +35,11 @@ from senselab.audio.tasks.quality_control.metrics import (
     signal_variance_metric,
     spectral_gating_snr_metric,
     zero_crossing_rate_metric,
+    percent_clipping_metric,
+    primary_speaker_ratio_metric,
+    presence_of_voice_metric,
+    signal_to_noise_power_ratio_metric
+
 )
 
 
@@ -815,3 +820,118 @@ def audio_intensity_positive_check(
     if result is None:
         return None
     return float(result) > 0
+
+
+##### Rahul's Code Below
+
+
+# calculate clipping
+def measure_clipping_check(
+    audio_or_path: Union[Audio, str],
+    threshold: float = 0.001,
+    df: Optional[pd.DataFrame] = None,
+) -> Optional[bool]:
+    """
+    Checks for clipping in an audio file.
+
+    Args:
+        audio_or_path: An Audio instance or filepath to the audio file.
+
+    Returns:
+        True when clipping percent > ``threshold``, None if evaluation fails.
+    """
+
+    result = get_evaluation(audio_or_path, percent_clipping_metric, df)
+    if result is None:
+        return None
+    return float(result) > threshold
+
+
+
+def primary_speaker_ratio_check(
+    audio_or_path: Union[Audio, str],
+    threshold: float = 0.8,
+    df: Optional[pd.DataFrame] = None,
+) -> Optional[bool]:
+    """
+    Checks that primary speaker ratio in an audio file (the outputs from diarization and then the the ratio of the most common speaker to the total duration) is above threshold
+
+    Args:
+        audio_or_path: An Audio instance or filepath to the audio file.
+
+    Returns:
+        True when primary speaker > ``threshold``, None if evaluation fails.
+    """
+
+    result = get_evaluation(audio_or_path, "../../modeling/diarize/diar_r2.pkl", primary_speaker_ratio_metric, df)
+    if result is None:
+        return None
+    # x.speaker_count > 1 and x.primary_speaker_ratio < 0.8 TODO do I need the first threshold; I don't think so since it should be 1 for 1 speaker
+    return float(result) > threshold
+
+
+
+def presence_of_voice_check(
+    audio_or_path: Union[Audio, str],
+    threshold: float = 0,
+    df: Optional[pd.DataFrame] = None,
+) -> Optional[bool]:
+    """
+    Check that Voice Activity Detection duration is more than 0.
+
+    Args:
+        audio_or_path: An Audio instance or filepath to the audio file.
+
+    Returns:
+        True when primary speaker > ``threshold``, None if evaluation fails.
+    """
+
+    result = get_evaluation(audio_or_path, "../../modeling/diarize/vad_r2.pkl", presence_of_voice_metric, df)
+    if result is None:
+        return None
+    return float(result) > threshold
+
+
+
+def signal_to_noise_power_ratio_check(audio_or_path: Union[Audio, str],
+    threshold: float = -1,
+    df: Optional[pd.DataFrame] = None,
+) -> Optional[bool]:
+    """
+    Check that SNR is below a threshold. Currently not a lot of samples with major background noise, or this algorithm isn't doing a great job
+
+    Args:
+        audio_or_path: An Audio instance or filepath to the audio file.
+
+    Returns:
+        True when SNR > ``threshold``, None if evaluation fails.
+    """
+    
+    result = get_evaluation(audio_or_path, "../../modeling/diarize/vad_r2.pkl", signal_to_noise_power_ratio_metric, df)
+    if result is None:
+        return None
+    return float(result) > threshold
+
+
+
+def find_buzzing_check(audio_or_path: Union[Audio, str],
+    threshold: float = #TODO,
+    df: Optional[pd.DataFrame] = None,
+) -> Optional[bool]:
+    """
+    Check that SNR is below a threshold. Currently not a lot of samples with major background noise, or this algorithm isn't doing a great job
+
+    Args:
+        audio_or_path: An Audio instance or filepath to the audio file.
+
+    Returns:
+        True when SNR > ``threshold``, None if evaluation fails.
+    """
+    
+    result = get_evaluation(audio_or_path, #"../../modeling/diarize/vad_r2.pkl", 
+                            find_buzzing_metric, df)
+    if result is None:
+        return None
+    return float(result) > threshold
+        
+

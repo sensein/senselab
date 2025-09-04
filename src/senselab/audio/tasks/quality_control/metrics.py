@@ -486,3 +486,194 @@ def phase_correlation_metric(audio: Audio, frame_length: int = 2048, hop_length:
             correlation_values.append(np.mean(valid_corrs))
 
     return float(np.mean(correlation_values)) if correlation_values else 0.0
+
+
+#### Rahul's additions below
+
+
+def percent_clipping_metric(audio: Audio) -> float:
+    waveform = audio.waveform
+
+    # Determine the maximum possible amplitude based on the data type
+    if waveform.dtype == torch.int16:
+        max_amplitude = np.iinfo(np.int16).max
+    elif waveform.dtype == torch.float32:
+        max_amplitude = np.finfo(np.float32).max
+    else:
+        raise ValueError("Unsupported audio data type. Only int16 and float32 are supported.")
+
+    # alternate AI generated, this doesn't make sense to met tho
+    # audio = audio / np.max(np.abs(audio))
+    # clipped_samples = np.sum(np.abs(audio) >= max_amplitude)
+
+    # Count clipped samples
+    clipped_samples = torch.sum(torch.abs(waveform) >= max_amplitude)
+
+    # Calculate clipping percentage
+    total_samples = waveform.shape[1]
+    clipping_percentage = float((clipped_samples / total_samples) * 100 if total_samples > 0 else 0.0)
+
+    # return y_axis_new, y_axis_old
+    return clipping_percentage
+
+
+def primary_speaker_ratio_metric(audio: Audio, **input_source) -> float:
+    """Calculates the ratio of the primary speaker's duration to the total duration.
+
+    Args:
+        audio (Audio): The SenseLab Audio object.
+
+    Returns:
+        float: Ratio of primary speaker's duration to total duration.
+                If there are no speakers, return nan
+                If only one speaker, return 1.0
+                Else return a number between 0.0 and 1.0
+    """
+
+    if input_source['precompute'] is None:
+        diar #= #TODO diarize the audio
+    else:
+        diar = input_source['precompute']
+        #TODO diar = pd.read_pickle("../../modeling/diarize/diar_r2.pkl")
+    
+    # Calculate primary speaker ratio;
+    try:
+        ratio = diar_obj.label_duration(diar_obj.argmax()) / np.sum([c[1] for c in diar_obj.chart()])
+    except:
+        ratio = np.nan
+
+    return ratio
+
+
+def presence_of_voice_metric(audio: Audio, **input_source) -> float:
+    """Calculates the number of samples where Voice Activity Detection detects voice.
+
+    Args:
+        audio (Audio): The SenseLab Audio object.
+
+    Returns:
+        float: the duration of voice activity in seconds.
+    """
+
+    if input_source['precompute'] is None:
+        vad #= #TODO VAD the audio
+    else:
+        vad = input_source['precompute']
+        #TODO diar = pd.read_pickle("../../modeling/diarize/diar_r2.pkl")
+
+    return vad
+
+
+
+
+def signal_to_noise_power_ratio_metric(audio: Audio, **input_source) -> float:
+
+    """Calculates the SNR by looking at power during voice versus power when none.
+
+    Args:
+        audio (Audio): The SenseLab Audio object.
+
+    Returns:
+        float: Ratio of signal to noise power
+                Commented-out return is percent of audio that is noise as a test
+    """
+    
+    
+    waveform = audio.waveform
+    
+    time = np.divide(np.arange(waveform.shape[1]), audio.sampling_rate)
+
+    if input_source['precompute'] is None:
+        vad #= #TODO VAD the audio
+    else:
+        vad = input_source['precompute']
+        #TODO diar = pd.read_pickle("../../modeling/diarize/diar_r2.pkl")
+
+    signal = []
+    noise = []
+    previous_end = 0
+
+    for seg in vad.get_timeline().segments_list_:
+        #get the signal segments with VAD time stamps
+        #get the noise segments with the time stamps between VAD segments
+
+        signal.append(np.where((time >= seg.start) & (time <= seg.end))[0])
+        noise.append(np.where((time < seg.start) & (time >= previous_end))[0])
+        previous_end = seg.end
+
+    try:
+        signal_wav = waveform.squeeze().numpy()[np.concatenate(signal)]
+        noise_wav = waveform.squeeze().numpy()[np.concatenate(noise)]
+
+        signal_power = np.mean(signal_wav**2)
+        noise_power = np.mean(noise_wav**2)
+        snr = 10 * np.log10(signal_power / noise_power) if noise_power > 0 else -30
+
+        percent_noise_of_total = np.divide(noise_wav.shape[0], noise_wav.shape[0] + signal_wav.shape[0])
+    except:
+        snr = -25
+        percent_noise_of_total = np.nan
+
+    return snr #percent_noise_of_total
+
+
+def find_buzzing_metric(audio: Audio, **input_source) -> float:
+
+    """Calculates buzzing from audio_aes Production Quality metric.
+
+    Args:
+        audio (Audio): The SenseLab Audio object.
+
+    Returns:
+        float: Ratio of signal to noise power
+                Commented-out return is percent of audio that is noise as a test
+    """
+
+    def load_json_lines(file_path):
+        data = []
+        with open(file_path, 'r') as file:
+            for line in file:
+                try:
+                    json_object = json.loads(line)
+                    data.append(json_object)
+                except json.JSONDecodeError:
+                    print(f"Skipping invalid JSON line: {line.strip()}")
+        return data
+
+
+    ###Data loading
+
+    ##load participant record id and session id
+    #subset = 'all'
+
+    #if subset == 'mdd':
+    #    diagnosis_df = pd.read_csv('diagnosis_df.csv', index_col=0) #gives us participants/sessions we are analyzing and metadata. this csv points to messy data/recordings that should be removed
+    #elif subset == 'all':
+    #    diagnosis_df = pd.read_csv(os.path.join(dataset_path, 'phenotype/phq9.tsv'), delimiter='\t')
+    #    diagnosis_df.rename(columns={'phq_9_session_id': 'session_id'}, inplace=True)
+
+
+
+    #load audio aesthetics metrics
+    # CE | Content Enjoyment CU | Content Usefulness PC | Production Complexity PQ | Production Quality
+
+    if input_source['precompute'] is None:
+        aes_json #= #TODO aees output the audio
+        audio_json #= #TODO aes inout the audio
+    else:
+        aes_json = input_source['precompute']
+        audio_json = input_source['precompute']
+        #TODO aes_json = load_json_lines('../audio_aes/output_audio_aes_r2.jsonl')
+        #audio_json= load_json_lines('../audio_aes/input_audio_aes_r2.jsonl')
+    
+    
+
+    aes = pd.DataFrame(aes_json)
+    aes[['record_id', 'session_id', 'task']] = [(a['path'].split('sub-')[1].split('/')[0], 
+                                                a['path'].split('ses-')[1].split('/')[0], 
+                                                a['path'].split('task-')[1].split('.wav')[0]) for a in audio_json]
+    aes = aes[['record_id', 'session_id', 'task', 'CE', 'CU', 'PC', 'PQ']]
+
+    return aes.PQ
+
+
