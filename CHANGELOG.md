@@ -1,3 +1,20 @@
+# 0.42.0 (Thu Sep 04 2025)
+
+#### 🚀 Enhancement
+
+- senselab AI MVP + env.example + license & docs improvements [#369](https://github.com/sensein/senselab/pull/369) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### ⚠️ Pushed to `main`
+
+- Update development_task.yaml ([@fabiocat93](https://github.com/fabiocat93))
+- Update bug_report.yaml ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.41.0 (Fri Aug 29 2025)
 
 #### 🚀 Enhancement
