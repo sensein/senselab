@@ -25,13 +25,12 @@ PARTICIPANT_ICON_URL = "https://avatars.githubusercontent.com/u/47326880?s=200&v
 log = logging.getLogger(__name__)
 
 
-
-
 class CreateNewNotebookTool(Tool):
     """Tool for creating a new notebook."""
+
     def __init__(self, auto_approve: bool = False) -> None:
         """Initialize the tool.
-        
+
         Args:
             auto_approve (bool): Whether to automatically approve tool calls.
         """
@@ -41,7 +40,7 @@ class CreateNewNotebookTool(Tool):
     @property
     def name(self) -> str:
         """Name of the tool.
-        
+
         Return:
             str: The name of the tool.
         """
@@ -50,7 +49,7 @@ class CreateNewNotebookTool(Tool):
     @property
     def title(self) -> str:
         """Title of the tool.
-        
+
         Return:
             str: The title of the tool.
         """
@@ -59,7 +58,7 @@ class CreateNewNotebookTool(Tool):
     @property
     def tags(self) -> list[str]:
         """Tags associated with the tool.
-        
+
         Return:
             list[str]: The list of tags associated with the tool.
         """
@@ -68,7 +67,7 @@ class CreateNewNotebookTool(Tool):
     @property
     def description(self) -> str:
         """Description of the tool's functionality.
-        
+
         Return:
             str: The description of the tool's functionality.
         """
@@ -137,7 +136,7 @@ class CreateNewNotebookTool(Tool):
         self, request: ChatRequest, response: ChatResponse, tool_context: dict, tool_args: dict
     ) -> str:
         """Handle the tool call.
-        
+
         Args:
             request (ChatRequest): The chat request object.
             response (ChatResponse): The chat response object.
@@ -174,9 +173,10 @@ class CreateNewNotebookTool(Tool):
 
 class AddMarkdownCellToNotebookTool(Tool):
     """Tool for adding a markdown cell to a notebook."""
+
     def __init__(self, auto_approve: bool = False) -> None:
         """Initialize the tool.
-        
+
         Args:
             auto_approve (bool): Whether to automatically approve tool calls.
         """
@@ -186,7 +186,7 @@ class AddMarkdownCellToNotebookTool(Tool):
     @property
     def name(self) -> str:
         """Name of the tool.
-        
+
         Return:
             str: The name of the tool.
         """
@@ -195,7 +195,7 @@ class AddMarkdownCellToNotebookTool(Tool):
     @property
     def title(self) -> str:
         """Title of the tool.
-        
+
         Return:
             str: The title of the tool.
         """
@@ -204,7 +204,7 @@ class AddMarkdownCellToNotebookTool(Tool):
     @property
     def tags(self) -> list[str]:
         """Tags associated with the tool.
-        
+
         Return:
             list[str]: The list of tags associated with the tool.
         """
@@ -213,7 +213,7 @@ class AddMarkdownCellToNotebookTool(Tool):
     @property
     def description(self) -> str:
         """Description of the tool's functionality.
-        
+
         Return:
             str: The description of the tool's functionality.
         """
@@ -222,7 +222,7 @@ class AddMarkdownCellToNotebookTool(Tool):
     @property
     def schema(self) -> dict:
         """Get the schema for the tool's function.
-        
+
         Return:
             dict: The schema for the tool's function.
         """
@@ -267,7 +267,7 @@ class AddMarkdownCellToNotebookTool(Tool):
         self, request: ChatRequest, response: ChatResponse, tool_context: dict, tool_args: dict
     ) -> str:
         """Handle the tool call.
-        
+
         Args:
             request (ChatRequest): The chat request object.
             response (ChatResponse): The chat response object.
@@ -293,9 +293,10 @@ class AddMarkdownCellToNotebookTool(Tool):
 
 class AddCodeCellTool(Tool):
     """Tool for adding a code cell to a notebook."""
+
     def __init__(self, auto_approve: bool = False) -> None:
         """Initialize the tool.
-        
+
         Args:
             auto_approve (bool): Whether to automatically approve the tool call.
         """
@@ -305,7 +306,7 @@ class AddCodeCellTool(Tool):
     @property
     def name(self) -> str:
         """Name of the tool.
-        
+
         Return:
             str: The name of the tool.
         """
@@ -314,7 +315,7 @@ class AddCodeCellTool(Tool):
     @property
     def title(self) -> str:
         """Title of the tool.
-        
+
         Return:
             str: The title of the tool.
         """
@@ -323,7 +324,7 @@ class AddCodeCellTool(Tool):
     @property
     def tags(self) -> list[str]:
         """Tags associated with the tool.
-        
+
         Return:
             list[str]: The list of tags associated with the tool.
         """
@@ -332,7 +333,7 @@ class AddCodeCellTool(Tool):
     @property
     def description(self) -> str:
         """Description of the tool's functionality.
-        
+
         Return:
             str: The description of the tool's functionality.
         """
@@ -341,7 +342,7 @@ class AddCodeCellTool(Tool):
     @property
     def schema(self) -> dict:
         """Get the schema for the tool's function.
-        
+
         Return:
             dict: The schema for the tool's function.
         """
@@ -386,7 +387,7 @@ class AddCodeCellTool(Tool):
         self, request: ChatRequest, response: ChatResponse, tool_context: dict, tool_args: dict
     ) -> str:
         """Handle the tool call.
-        
+
         Args:
             request (ChatRequest): The chat request object.
             response (ChatResponse): The chat response object.
@@ -411,6 +412,7 @@ class AddCodeCellTool(Tool):
 
 class RunCellAtIndexTool(Tool):
     """Run cell at index tool."""
+
     def __init__(self, auto_approve: bool = False) -> None:
         """Initialize the tool.
 
@@ -423,7 +425,7 @@ class RunCellAtIndexTool(Tool):
     @property
     def name(self) -> str:
         """Name of the tool.
-        
+
         Return:
             str: The name of the tool.
         """
@@ -432,7 +434,7 @@ class RunCellAtIndexTool(Tool):
     @property
     def title(self) -> str:
         """Title of the tool.
-        
+
         Return:
             str: The title of the tool.
         """
@@ -441,7 +443,7 @@ class RunCellAtIndexTool(Tool):
     @property
     def tags(self) -> list[str]:
         """Tags associated with the tool.
-        
+
         Return:
             list[str]: The list of tags associated with the tool.
         """
@@ -450,7 +452,7 @@ class RunCellAtIndexTool(Tool):
     @property
     def description(self) -> str:
         """Description of the tool's functionality.
-        
+
         Return:
             str: The description of the tool's functionality.
         """
@@ -459,7 +461,7 @@ class RunCellAtIndexTool(Tool):
     @property
     def schema(self) -> dict:
         """Get the schema for the tool's function.
-        
+
         Return:
             dict: The schema for the tool's function.
         """
@@ -508,7 +510,7 @@ class RunCellAtIndexTool(Tool):
         self, request: ChatRequest, response: ChatResponse, tool_context: dict, tool_args: dict
     ) -> str:
         """Handle the tool call.
-        
+
         Args:
             request (ChatRequest): The chat request object.
             response (ChatResponse): The chat response object.
@@ -529,9 +531,10 @@ class RunCellAtIndexTool(Tool):
 
 class RenameNotebookTool(Tool):
     """Rename the active notebook tool."""
+
     def __init__(self, auto_approve: bool = False) -> None:
         """Initialize the tool.
-        
+
         Args:
             auto_approve (bool): Whether to automatically approve tool calls.
         """
@@ -541,7 +544,7 @@ class RenameNotebookTool(Tool):
     @property
     def name(self) -> str:
         """Name of the tool.
-        
+
         Return:
             str: The name of the tool.
         """
@@ -550,7 +553,7 @@ class RenameNotebookTool(Tool):
     @property
     def title(self) -> str:
         """Title of the tool.
-        
+
         Return:
             str: The title of the tool.
         """
@@ -559,7 +562,7 @@ class RenameNotebookTool(Tool):
     @property
     def tags(self) -> list[str]:
         """Tags associated with the tool.
-        
+
         Return:
             list[str]: The list of tags associated with the tool.
         """
@@ -568,7 +571,7 @@ class RenameNotebookTool(Tool):
     @property
     def description(self) -> str:
         """Description of the tool's functionality.
-        
+
         Return:
             str: The description of the tool's functionality.
         """
@@ -577,7 +580,7 @@ class RenameNotebookTool(Tool):
     @property
     def schema(self) -> dict:
         """Schema for the tool.
-        
+
         Return:
             dict: The schema for the tool.
         """
@@ -626,7 +629,7 @@ class RenameNotebookTool(Tool):
         self, request: ChatRequest, response: ChatResponse, tool_context: dict, tool_args: dict
     ) -> str:
         """Handle the tool call.
-        
+
         Args:
             request (ChatRequest): The chat request object.
             response (ChatResponse): The chat response object.
@@ -643,9 +646,10 @@ class RenameNotebookTool(Tool):
 
 class GetNumberOfCellsTool(Tool):
     """Get number of cells tool."""
+
     def __init__(self, auto_approve: bool = True) -> None:
         """Initialize the tool.
-        
+
         Args:
             auto_approve (bool): Whether to automatically approve tool calls.
         """
@@ -655,7 +659,7 @@ class GetNumberOfCellsTool(Tool):
     @property
     def name(self) -> str:
         """Name of the tool.
-        
+
         Return:
             str: The name of the tool.
         """
@@ -664,7 +668,7 @@ class GetNumberOfCellsTool(Tool):
     @property
     def title(self) -> str:
         """Title of the tool.
-        
+
         Return:
             str: The title of the tool.
         """
@@ -673,7 +677,7 @@ class GetNumberOfCellsTool(Tool):
     @property
     def tags(self) -> list[str]:
         """Tags associated with the tool.
-        
+
         Return:
             list[str]: The list of tags associated with the tool.
         """
@@ -682,7 +686,7 @@ class GetNumberOfCellsTool(Tool):
     @property
     def description(self) -> str:
         """Description of the tool's functionality.
-        
+
         Return:
             str: The description of the tool's functionality.
         """
@@ -691,7 +695,7 @@ class GetNumberOfCellsTool(Tool):
     @property
     def schema(self) -> dict:
         """Schema for the tool.
-        
+
         Return:
             dict: The schema for the tool.
         """
@@ -729,7 +733,7 @@ class GetNumberOfCellsTool(Tool):
         self, request: ChatRequest, response: ChatResponse, tool_context: dict, tool_args: dict
     ) -> str:
         """Handle the tool call.
-        
+
         Args:
             request (ChatRequest): The chat request object.
             response (ChatResponse): The chat response object.
@@ -745,9 +749,10 @@ class GetNumberOfCellsTool(Tool):
 
 class GetCellTypeAndSourceTool(Tool):
     """Get cell type and source tool."""
+
     def __init__(self, auto_approve: bool = True) -> None:
         """Initialize the tool.
-        
+
         Args:
             auto_approve (bool): Whether to automatically approve tool calls.
         """
@@ -757,7 +762,7 @@ class GetCellTypeAndSourceTool(Tool):
     @property
     def name(self) -> str:
         """Name of the tool.
-        
+
         Return:
             str: The name of the tool.
         """
@@ -766,7 +771,7 @@ class GetCellTypeAndSourceTool(Tool):
     @property
     def title(self) -> str:
         """Title of the tool.
-        
+
         Return:
             str: The title of the tool.
         """
@@ -775,7 +780,7 @@ class GetCellTypeAndSourceTool(Tool):
     @property
     def tags(self) -> list[str]:
         """Tags associated with the tool.
-        
+
         Return:
             list[str]: The list of tags associated with the tool.
         """
@@ -784,7 +789,7 @@ class GetCellTypeAndSourceTool(Tool):
     @property
     def description(self) -> str:
         """Description of the tool's functionality.
-        
+
         Return:
             str: The description of the tool's functionality.
         """
@@ -793,7 +798,7 @@ class GetCellTypeAndSourceTool(Tool):
     @property
     def schema(self) -> dict:
         """Schema for the tool.
-        
+
         Return:
             dict: The schema for the tool.
         """
@@ -840,7 +845,7 @@ class GetCellTypeAndSourceTool(Tool):
         self, request: ChatRequest, response: ChatResponse, tool_context: dict, tool_args: dict
     ) -> str:
         """Handle the tool call.
-        
+
         Args:
             request (ChatRequest): The chat request object.
             response (ChatResponse): The chat response object.
@@ -859,9 +864,10 @@ class GetCellTypeAndSourceTool(Tool):
 
 class GetCellOutputTool(Tool):
     """Tool for getting the output of a cell at a specific index."""
+
     def __init__(self, auto_approve: bool = True) -> None:
         """Initialize the tool.
-        
+
         Args:
             auto_approve (bool): Whether to automatically approve tool calls.
         """
@@ -871,7 +877,7 @@ class GetCellOutputTool(Tool):
     @property
     def name(self) -> str:
         """Name of the tool.
-        
+
         Return:
             str: The name of the tool.
         """
@@ -880,7 +886,7 @@ class GetCellOutputTool(Tool):
     @property
     def title(self) -> str:
         """Title of the tool.
-        
+
         Return:
             str: The title of the tool.
         """
@@ -889,7 +895,7 @@ class GetCellOutputTool(Tool):
     @property
     def tags(self) -> list[str]:
         """Tags associated with the tool.
-        
+
         Return:
             list[str]: The list of tags associated with the tool.
         """
@@ -898,7 +904,7 @@ class GetCellOutputTool(Tool):
     @property
     def description(self) -> str:
         """Description of the tool's functionality.
-        
+
         Return:
             str: The description of the tool's functionality.
         """
@@ -907,7 +913,7 @@ class GetCellOutputTool(Tool):
     @property
     def schema(self) -> dict:
         """Schema for the tool.
-        
+
         Return:
             dict: The schema for the tool.
         """
@@ -952,7 +958,7 @@ class GetCellOutputTool(Tool):
         self, request: ChatRequest, response: ChatResponse, tool_context: dict, tool_args: dict
     ) -> str:
         """Handle the tool call.
-        
+
         Args:
             request (ChatRequest): The chat request object.
             response (ChatResponse): The chat response object.
@@ -974,7 +980,7 @@ class SetCellTypeAndSourceTool(Tool):
 
     def __init__(self, auto_approve: bool = True) -> None:
         """Initialize the tool.
-        
+
         Args:
             auto_approve (bool): Whether to automatically approve tool calls.
         """
@@ -984,7 +990,7 @@ class SetCellTypeAndSourceTool(Tool):
     @property
     def name(self) -> str:
         """Name of the tool.
-        
+
         Return:
             str: The name of the tool.
         """
@@ -993,7 +999,7 @@ class SetCellTypeAndSourceTool(Tool):
     @property
     def title(self) -> str:
         """Title of the tool.
-        
+
         Return:
             str: The title of the tool.
         """
@@ -1002,7 +1008,7 @@ class SetCellTypeAndSourceTool(Tool):
     @property
     def tags(self) -> list[str]:
         """Tags associated with the tool.
-        
+
         Return:
             list[str]: The list of tags associated with the tool.
         """
@@ -1011,7 +1017,7 @@ class SetCellTypeAndSourceTool(Tool):
     @property
     def description(self) -> str:
         """Description of the tool's functionality.
-        
+
         Return:
             str: The description of the tool's functionality.
         """
@@ -1020,7 +1026,7 @@ class SetCellTypeAndSourceTool(Tool):
     @property
     def schema(self) -> dict:
         """Schema for the tool.
-        
+
         Return:
             dict: The schema for the tool.
         """
@@ -1071,7 +1077,7 @@ class SetCellTypeAndSourceTool(Tool):
         self, request: ChatRequest, response: ChatResponse, tool_context: dict, tool_args: dict
     ) -> str:
         """Handle the tool call.
-        
+
         Args:
             request (ChatRequest): The chat request object.
             response (ChatResponse): The chat response object.
@@ -1093,7 +1099,7 @@ class DeleteCellAtIndexTool(Tool):
 
     def __init__(self, auto_approve: bool = True) -> None:
         """Initialize the tool.
-        
+
         Args:
             auto_approve (bool): Whether to automatically approve tool calls.
         """
@@ -1103,7 +1109,7 @@ class DeleteCellAtIndexTool(Tool):
     @property
     def name(self) -> str:
         """Name of the tool.
-        
+
         Return:
             str: The name of the tool.
         """
@@ -1112,7 +1118,7 @@ class DeleteCellAtIndexTool(Tool):
     @property
     def title(self) -> str:
         """Title of the tool.
-        
+
         Return:
             str: The title of the tool.
         """
@@ -1121,7 +1127,7 @@ class DeleteCellAtIndexTool(Tool):
     @property
     def tags(self) -> list[str]:
         """Tags associated with the tool.
-        
+
         Return:
             list[str]: The list of tags associated with the tool.
         """
@@ -1130,7 +1136,7 @@ class DeleteCellAtIndexTool(Tool):
     @property
     def description(self) -> str:
         """Description of the tool's functionality.
-        
+
         Return:
             str: The description of the tool's functionality.
         """
@@ -1139,7 +1145,7 @@ class DeleteCellAtIndexTool(Tool):
     @property
     def schema(self) -> dict:
         """Schema for the tool.
-        
+
         Return:
             dict: The schema for the tool.
         """
@@ -1186,7 +1192,7 @@ class DeleteCellAtIndexTool(Tool):
         self, request: ChatRequest, response: ChatResponse, tool_context: dict, tool_args: dict
     ) -> str:
         """Handle the tool call.
-        
+
         Args:
             request (ChatRequest): The chat request object.
             response (ChatResponse): The chat response object.
@@ -1203,9 +1209,10 @@ class DeleteCellAtIndexTool(Tool):
 
 class InsertCellAtIndexTool(Tool):
     """Tool for inserting a new cell at a specific index."""
+
     def __init__(self, auto_approve: bool = True) -> None:
         """Initialize the tool.
-        
+
         Args:
             auto_approve (bool): Whether to automatically approve tool calls.
         """
@@ -1215,7 +1222,7 @@ class InsertCellAtIndexTool(Tool):
     @property
     def name(self) -> str:
         """Name of the tool.
-        
+
         Return:
             str: The name of the tool.
         """
@@ -1224,7 +1231,7 @@ class InsertCellAtIndexTool(Tool):
     @property
     def title(self) -> str:
         """Title of the tool.
-        
+
         Return:
             str: The title of the tool.
         """
@@ -1233,7 +1240,7 @@ class InsertCellAtIndexTool(Tool):
     @property
     def tags(self) -> list[str]:
         """Tags associated with the tool.
-        
+
         Return:
             list[str]: The list of tags associated with the tool.
         """
@@ -1242,7 +1249,7 @@ class InsertCellAtIndexTool(Tool):
     @property
     def description(self) -> str:
         """Description of the tool's functionality.
-        
+
         Return:
             str: The description of the tool's functionality.
         """
@@ -1251,7 +1258,7 @@ class InsertCellAtIndexTool(Tool):
     @property
     def schema(self) -> dict:
         """Schema for the tool.
-        
+
         Return:
             dict: The schema for the tool.
         """
@@ -1306,7 +1313,7 @@ class InsertCellAtIndexTool(Tool):
         self, request: ChatRequest, response: ChatResponse, tool_context: dict, tool_args: dict
     ) -> str:
         """Handle the tool call.
-        
+
         Args:
             request (ChatRequest): The chat request object.
             response (ChatResponse): The chat response object.
@@ -1325,9 +1332,10 @@ class InsertCellAtIndexTool(Tool):
 
 class SaveNotebookTool(Tool):
     """Tool for saving the active notebook."""
+
     def __init__(self, auto_approve: bool = True) -> None:
         """Initialize the tool.
-        
+
         Args:
             auto_approve (bool): Whether to automatically approve tool calls.
         """
@@ -1337,7 +1345,7 @@ class SaveNotebookTool(Tool):
     @property
     def name(self) -> str:
         """Name of the tool.
-        
+
         Return:
             str: The name of the tool.
         """
@@ -1346,7 +1354,7 @@ class SaveNotebookTool(Tool):
     @property
     def title(self) -> str:
         """Title of the tool.
-        
+
         Return:
             str: The title of the tool.
         """
@@ -1355,7 +1363,7 @@ class SaveNotebookTool(Tool):
     @property
     def tags(self) -> list[str]:
         """Tags associated with the tool.
-        
+
         Return:
             list[str]: The list of tags associated with the tool.
         """
@@ -1364,7 +1372,7 @@ class SaveNotebookTool(Tool):
     @property
     def description(self) -> str:
         """Description of the tool's functionality.
-        
+
         Return:
             str: The description of the tool's functionality.
         """
@@ -1373,7 +1381,7 @@ class SaveNotebookTool(Tool):
     @property
     def schema(self) -> dict:
         """Schema for the tool.
-        
+
         Return:
             dict: The schema for the tool.
         """
@@ -1409,7 +1417,7 @@ class SaveNotebookTool(Tool):
         self, request: ChatRequest, response: ChatResponse, tool_context: dict, tool_args: dict
     ) -> str:
         """Handle the tool call.
-        
+
         Args:
             request (ChatRequest): The chat request object.
             response (ChatResponse): The chat response object.
@@ -1425,9 +1433,10 @@ class SaveNotebookTool(Tool):
 
 class CreateNewPythonFileTool(Tool):
     """Tool for creating a new Python file."""
+
     def __init__(self, auto_approve: bool = True) -> None:
         """Initialize the tool.
-        
+
         Args:
             auto_approve (bool): Whether to automatically approve tool calls.
         """
@@ -1437,7 +1446,7 @@ class CreateNewPythonFileTool(Tool):
     @property
     def name(self) -> str:
         """Name of the tool.
-        
+
         Return:
             str: The name of the tool.
         """
@@ -1446,7 +1455,7 @@ class CreateNewPythonFileTool(Tool):
     @property
     def title(self) -> str:
         """Title of the tool.
-        
+
         Return:
             str: The title of the tool.
         """
@@ -1455,7 +1464,7 @@ class CreateNewPythonFileTool(Tool):
     @property
     def tags(self) -> list[str]:
         """Tags associated with the tool.
-        
+
         Return:
             list[str]: The list of tags associated with the tool.
         """
@@ -1464,7 +1473,7 @@ class CreateNewPythonFileTool(Tool):
     @property
     def description(self) -> str:
         """Description of the tool's functionality.
-        
+
         Return:
             str: The description of the tool's functionality.
         """
@@ -1473,7 +1482,7 @@ class CreateNewPythonFileTool(Tool):
     @property
     def schema(self) -> dict:
         """Schema for the tool.
-        
+
         Return:
             dict: The schema for the tool.
         """
@@ -1514,7 +1523,7 @@ class CreateNewPythonFileTool(Tool):
         self, request: ChatRequest, response: ChatResponse, tool_context: dict, tool_args: dict
     ) -> str:
         """Handle the tool call.
-        
+
         Args:
             request (ChatRequest): The chat request object.
             response (ChatResponse): The chat response object.
@@ -1533,9 +1542,10 @@ class CreateNewPythonFileTool(Tool):
 
 class GetCurrentFileContentTool(Tool):
     """Tool for getting the content of the current file."""
+
     def __init__(self, auto_approve: bool = True) -> None:
         """Initialize the tool.
-        
+
         Args:
             auto_approve (bool): Whether to automatically approve tool calls.
         """
@@ -1545,7 +1555,7 @@ class GetCurrentFileContentTool(Tool):
     @property
     def name(self) -> str:
         """Name of the tool.
-        
+
         Return:
             str: The name of the tool.
         """
@@ -1554,7 +1564,7 @@ class GetCurrentFileContentTool(Tool):
     @property
     def title(self) -> str:
         """Title of the tool.
-        
+
         Return:
             str: The title of the tool.
         """
@@ -1563,7 +1573,7 @@ class GetCurrentFileContentTool(Tool):
     @property
     def tags(self) -> list[str]:
         """Tags associated with the tool.
-        
+
         Return:
             list[str]: The list of tags associated with the tool.
         """
@@ -1572,7 +1582,7 @@ class GetCurrentFileContentTool(Tool):
     @property
     def description(self) -> str:
         """Description of the tool's functionality.
-        
+
         Return:
             str: The description of the tool's functionality.
         """
@@ -1581,7 +1591,7 @@ class GetCurrentFileContentTool(Tool):
     @property
     def schema(self) -> dict:
         """Schema for the tool.
-        
+
         Return:
             dict: The schema for the tool.
         """
@@ -1610,16 +1620,14 @@ class GetCurrentFileContentTool(Tool):
         return (
             ToolPreInvokeResponse(f"Calling tool '{self.name}'")
             if self._auto_approve
-            else ToolPreInvokeResponse(f"Calling tool '{self.name}'", 
-                                       "Approve", 
-                                       "Get content of the current file?")
+            else ToolPreInvokeResponse(f"Calling tool '{self.name}'", "Approve", "Get content of the current file?")
         )
 
     async def handle_tool_call(
         self, request: ChatRequest, response: ChatResponse, tool_context: dict, tool_args: dict
     ) -> str:
         """Handle the tool call.
-        
+
         Args:
             request (ChatRequest): The chat request object.
             response (ChatResponse): The chat response object.
@@ -1635,9 +1643,10 @@ class GetCurrentFileContentTool(Tool):
 
 class SetCurrentFileContentTool(Tool):
     """Tool to set the content of the current file."""
+
     def __init__(self, auto_approve: bool = False) -> None:
         """Tool to set the content of the current file.
-        
+
         Args:
             auto_approve (bool): Whether to automatically approve the tool invocation.
         """
@@ -1647,7 +1656,7 @@ class SetCurrentFileContentTool(Tool):
     @property
     def name(self) -> str:
         """Name of the tool.
-        
+
         Return:
             str: The name of the tool.
         """
@@ -1656,7 +1665,7 @@ class SetCurrentFileContentTool(Tool):
     @property
     def title(self) -> str:
         """Title of the tool.
-        
+
         Return:
             str: The title of the tool.
         """
@@ -1665,7 +1674,7 @@ class SetCurrentFileContentTool(Tool):
     @property
     def tags(self) -> list[str]:
         """Tags associated with the tool.
-        
+
         Return:
             list[str]: The list of tags associated with the tool.
         """
@@ -1674,7 +1683,7 @@ class SetCurrentFileContentTool(Tool):
     @property
     def description(self) -> str:
         """Description of the tool's functionality.
-        
+
         Return:
             str: The description of the tool's functionality.
         """
@@ -1683,7 +1692,7 @@ class SetCurrentFileContentTool(Tool):
     @property
     def schema(self) -> dict:
         """Schema for the tool's parameters.
-        
+
         Returns:
             dict: The schema dictionary.
         """
@@ -1724,7 +1733,7 @@ class SetCurrentFileContentTool(Tool):
         self, request: ChatRequest, response: ChatResponse, tool_context: dict, tool_args: dict
     ) -> str:
         """Handle the tool call to set the current file content.
-        
+
         Args:
             request (ChatRequest): The chat request object.
             response (ChatResponse): The chat response object.
@@ -1743,55 +1752,57 @@ class SetCurrentFileContentTool(Tool):
 class AIAgentChatParticipant(MCPChatParticipant):
     """A chat participant representing the senselab AI."""
 
-    PREPROMPT = """You are senselab AI. Solve every user request using the senselab Python package 
+    PREPROMPT = """You are senselab AI. Solve every user request using the senselab Python package
     (assume it is installed and importable).
-    Before writing ANY import, function call, or data structure, 
-    first consult the Deepwiki MCP server (sensein/senselab, server name: `deepwiki`) 
-    to confirm the correct senselab utilities/classes/modules to use. 
-    Do not invent functions or APIs. 
+    Before writing ANY import, function call, or data structure,
+    first consult the Deepwiki MCP server (sensein/senselab, server name: `deepwiki`)
+    to confirm the correct senselab utilities/classes/modules to use.
+    Do not invent functions or APIs.
     If anything is unclear or ambiguous, STOP and query Deepwiki before coding.
 
     Follow an iterative loop: Think → Act → Observe, repeating as needed.
     1) Plan: briefly state your step-by-step plan for solving the task with senselab.
-    2) Act (discovery): call Deepwiki tools to confirm the exact senselab symbols 
+    2) Act (discovery): call Deepwiki tools to confirm the exact senselab symbols
     (module paths, class/function names, expected arguments, return types) and relevant usage notes.
     3) Observe: summarize what you learned from Deepwiki and update your plan if needed.
     4) Plan II: refine your plan based on the new knowledge.
-    5) Coding: write code one Jupyter cell at a time. 
+    5) Coding: write code one Jupyter cell at a time.
     Each cell must be self-contained and minimal (anatomic), with only what is necessary for that step.
     6) Execute: Run immediately after writing each cell.
-    7) If it fails, debug IN PLACE until it runs successfully. 
-    Only then proceed to the next step. If user input is needed (e.g., paths, parameters, assumptions), 
+    7) If it fails, debug IN PLACE until it runs successfully.
+    Only then proceed to the next step. If user input is needed (e.g., paths, parameters, assumptions),
     explicitly ask the user before continuing.
 
-    While acting, always name which Deepwiki tool you used (e.g., ask_question, read_wiki_structure, 
+    While acting, always name which Deepwiki tool you used (e.g., ask_question, read_wiki_structure,
     read_wiki_contents) and what you asked. Keep responses concise and action-oriented."""
 
     POSTPROMPT = """Output format and discipline:
     - Start with **Plan** (numbered steps).
     - For each discovery step, show **Deepwiki query** (tool + question) and **Observation** (what you learned).
-    - For each coding step, output exactly one Jupyter cell, then immediately run it; 
+    - For each coding step, output exactly one Jupyter cell, then immediately run it;
     if an error occurs, show the error briefly and fix the SAME cell until it succeeds before moving on.
     - Prefer runnable, minimal snippets over long narratives.
     - Never fabricate senselab APIs; if uncertain, consult Deepwiki again.
 
     Finalization:
-    - Conclude with a **Methods** and **Results** section in the Notebook, 
+    - Conclude with a **Methods** and **Results** section in the Notebook,
     as in a scientific report (concise, reproducible).
     - In **Methods**, list senselab components used, key parameters, data handling, and the sequence of steps.
     - In **Results**, report outputs/metrics/artifacts produced and any validations performed.
     - If there are limitations or open questions, include a brief **Discussion/Next steps**.
 
-    Remember: 
-    - senselab-first; 
-    - Deepwiki for confirmation before coding; 
-    - iterate with think→act→observe; 
-    - one self-contained cell at a time; 
-    - run and fix before proceeding."""
+    Remember:
+    - senselab-first;
+    - Deepwiki for confirmation before coding;
+    - iterate with think→act→observe;
+    - one self-contained cell at a time;
+    - run and fix before proceeding;
+    - convert any relative paths to absolute paths before using them with senselab utilities.
+    """
 
     def __init__(self, host: Host, servers: list[MCPServer]) -> None:
         """Initialize the senselab AI chat participant.
-        
+
         Args:
             host (Host): The host of the chat participant.
             servers (list[MCPServer]): The list of MCP servers the participant can access.
@@ -1802,7 +1813,7 @@ class AIAgentChatParticipant(MCPChatParticipant):
     @property
     def id(self) -> str:
         """The ID of the senselab AI Extension.
-        
+
         Return:
             str: The ID of the senselab AI Extension.
         """
@@ -1874,10 +1885,7 @@ class AIAgentChatParticipant(MCPChatParticipant):
             NotebookShareTool(),
         ]
 
-    async def handle_chat_request(self, 
-                                  request: ChatRequest, 
-                                  response: ChatResponse, 
-                                  options: dict = {}) -> None:
+    async def handle_chat_request(self, request: ChatRequest, response: ChatResponse, options: dict = {}) -> None:
         """This method is responsible for processing incoming chat requests and generating appropriate responses.
 
         Args:
@@ -1890,9 +1898,9 @@ class AIAgentChatParticipant(MCPChatParticipant):
                 MarkdownData(
                     """I am the senselab AI. I can help you with audio, text, and video analysis.
                     Here are some example prompts you can try:\n
-                    \n```text\n@senselab-ai Read the audio files in '<directory_path>', make them mono, 
+                    \n```text\n@senselab-ai Read the audio files in '<directory_path>', make them mono,
                     resample them to 16KHz, and extract audio features.\n```\n
-                    \n```text\n@senselab-ai Read the audio files in '<directory_path>', make them mono, 
+                    \n```text\n@senselab-ai Read the audio files in '<directory_path>', make them mono,
                     resample them to 16KHz, and transcribe them with word-level timestamps.\n```\n
                     \n```text\n@senselab-ai Share this notebook publicly.\n```\n
 
@@ -1905,7 +1913,7 @@ class AIAgentChatParticipant(MCPChatParticipant):
 
         system_prompt = """
         Try to answer the questions with `senselab` Python package (you can assume it's installed).
-        You **MUST** query the Deepwiki server (`deepwiki`) to verify every class, function, 
+        You **MUST** query the Deepwiki server (`deepwiki`) to verify every class, function,
         or module **BEFORE** writing any code that uses it (repo: sensein/senselab).
         """
 
@@ -1930,7 +1938,7 @@ class AIAgentExtension(NotebookIntelligenceExtension):
     @property
     def name(self) -> str:
         """The name of the senselab AI Extension.
-        
+
         Return:
             str: The name of the senselab AI Extension.
         """
@@ -1939,7 +1947,7 @@ class AIAgentExtension(NotebookIntelligenceExtension):
     @property
     def provider(self) -> str:
         """The provider of the senselab AI Extension.
-        
+
         Return:
             str: The provider of the senselab AI Extension.
         """
@@ -1948,7 +1956,7 @@ class AIAgentExtension(NotebookIntelligenceExtension):
     @property
     def url(self) -> str:
         """The URL for the senselab AI Extension repository.
-        
+
         Return:
             str: The URL for the senselab AI Extension repository.
         """
@@ -1980,7 +1988,7 @@ class AIAgentExtension(NotebookIntelligenceExtension):
 
     def activate(self, host: Host) -> None:
         """Activate the senselab AI extension.
-        
+
         The senselab AI extension includes a custom AI agent chat participant
         that interacts with the user through natural language following
         a predefined prompt and a set of tools, like Deepwiki.

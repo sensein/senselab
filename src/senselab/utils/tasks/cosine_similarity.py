@@ -16,19 +16,22 @@ def compute_cosine_similarity(tensor1: torch.Tensor, tensor2: torch.Tensor) -> f
     Raises:
         ValueError: If the input tensors are not of the same shape.
 
+    Notes:
+        - If either input has **zero norm**, the division will produce ``nan``/``inf``.
+          Ensure non-zero vectors or add an epsilon guard upstream if needed.
+        - For batched computation, consider ``torch.nn.functional.cosine_similarity``.
+
     Examples:
-        >>> tensor1 = torch.tensor([1.0, 2.0, 3.0])
-        >>> tensor2 = torch.tensor([4.0, 5.0, 6.0])
-        >>> cosine_similarity(tensor1, tensor2)
+        >>> import torch
+        >>> a = torch.tensor([1.0, 2.0, 3.0])
+        >>> b = torch.tensor([4.0, 5.0, 6.0])
+        >>> compute_cosine_similarity(a, b)
         0.9746318461970762
 
-        >>> tensor1 = torch.tensor([1.0, 0.0, -1.0])
-        >>> tensor2 = torch.tensor([-1.0, 0.0, 1.0])
-        >>> cosine_similarity(tensor1, tensor2)
+        >>> a = torch.tensor([1.0, 0.0, -1.0])
+        >>> b = torch.tensor([-1.0, 0.0, 1.0])
+        >>> compute_cosine_similarity(a, b)
         -1.0
-
-    Note:
-        This function assumes the input tensors are 1-dimensional and have the same shape.
     """
     if tensor1.dim() != 1 or tensor2.dim() != 1:
         raise ValueError("Input tensors must be 1-dimensional")

@@ -45,7 +45,7 @@ def _copy_json(src: Path, dst: Path, *, force: bool) -> Path:
 
 def install_extension_json(*, force: bool = False) -> Path:
     """Copy vendored extension.json into the ENV's share/jupyter path.
-     
+
     This is so that Notebook-Intelligence can discover it.
 
     Args:

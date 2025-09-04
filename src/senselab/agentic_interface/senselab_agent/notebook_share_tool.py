@@ -13,6 +13,7 @@ from notebook_intelligence import AnchorData, ChatRequest, ChatResponse, Tool, T
 
 class NotebookShareTool(Tool):
     """A tool for sharing Jupyter notebooks."""
+
     @property
     def name(self) -> str:
         """Name of the tool.
@@ -25,7 +26,7 @@ class NotebookShareTool(Tool):
     @property
     def title(self) -> str:
         """Title of the tool.
-        
+
         Return:
             str: The title of the tool.
         """
@@ -34,7 +35,7 @@ class NotebookShareTool(Tool):
     @property
     def tags(self) -> list[str]:
         """Return a list of tags associated with the tool.
-        
+
         Return:
             list[str]: A list of tags associated with the tool.
         """
@@ -43,7 +44,7 @@ class NotebookShareTool(Tool):
     @property
     def description(self) -> str:
         """Return a description of the tool's purpose.
-        
+
         Return:
             str: A description of the tool's purpose.
         """
@@ -77,7 +78,7 @@ class NotebookShareTool(Tool):
 
     def pre_invoke(self, request: ChatRequest, tool_args: dict) -> Union[ToolPreInvokeResponse, None]:
         """Prepare to share a notebook by confirming the action.
-        
+
         Args:
             request (ChatRequest): The chat request object.
             tool_args (dict): The arguments for the tool invocation.
@@ -102,7 +103,7 @@ class NotebookShareTool(Tool):
         self, request: ChatRequest, response: ChatResponse, tool_context: dict, tool_args: dict
     ) -> dict:
         """Handle the tool call to share a notebook.
-        
+
         Args:
             request (ChatRequest): The chat request object.
             response (ChatResponse): The chat response object.

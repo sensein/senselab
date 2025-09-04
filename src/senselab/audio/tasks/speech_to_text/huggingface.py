@@ -16,7 +16,12 @@ from senselab.utils.data_structures.logging import logger
 
 
 class HuggingFaceASR:
-    """A factory for managing Hugging Face ASR pipelines."""
+    """Factory for creating and caching Hugging Face ASR pipelines.
+
+    Pipelines are cached per *(model, revision, timestamps level, generation limits,
+    chunk length, batch size, device)* so repeated calls with the same settings reuse
+    the initialized pipeline.
+    """
 
     _pipelines: Dict[str, Pipeline] = {}
 
@@ -78,24 +83,70 @@ class HuggingFaceASR:
         batch_size: int = 1,
         device: Optional[DeviceType] = None,
     ) -> List[ScriptLine]:
-        """Transcribes all audio samples in the dataset.
+        """Transcribe a list of `Audio` objects with a cached HF ASR pipeline.
+
+        Initializes (or reuses) a Transformers ASR pipeline and decodes all inputs
+        in one call. Output keys are normalized (``"timestamp"`` → ``"timestamps"``)
+        before converting to `ScriptLine`.
+
+        Requirements:
+            - **Mono** input (shape `[1, T]`). Stereo is rejected.
+            - Sampling rate must match the model’s **expected sampling rate**
+              (read from the pipeline’s `feature_extractor.sampling_rate`).
 
         Args:
-            audios (List[Audio]): The list of audio objects to be transcribed.
-            model (HFModel): The Hugging Face model used for transcription.
-                If None, the default model "openai/whisper-tiny" is used.
-            language (Optional[Language]): The language of the audio (default is None).
-            return_timestamps (Optional[str]): The level of timestamp details (default is "word").
-            max_new_tokens (int): The maximum number of new tokens (default is 128).
-            chunk_length_s (int): The length of audio chunks in seconds (default is 30).
-            batch_size (int): The batch size for processing (default is 1).
-                Note: Issues have been observed with long audio recordings and timestamped transcript
-                if the batch_size is high - not exactly clear what high means
-                (https://github.com/huggingface/transformers/issues/2615#issuecomment-656923205).
-            device (Optional[DeviceType]): The device to run the model on (default is None).
+            audios (list[Audio]):
+                Audio objects to transcribe (mono, correct sampling rate).
+            model (HFModel, optional):
+                HF model to use. Defaults to ``HFModel("openai/whisper-tiny")``.
+            language (Language, optional):
+                Language hint (lowercased and passed via `generate_kwargs` when supported).
+            return_timestamps (str | None, optional):
+                Timestamp granularity. Defaults to ``"word"``.
+            max_new_tokens (int, optional):
+                Decoder limit per chunk. Defaults to ``128``.
+            chunk_length_s (int, optional):
+                Chunk length (seconds). Defaults to ``30``.
+            batch_size (int, optional):
+                Pipeline batch size. Defaults to ``1``.
+                Note: large values can degrade timestamp quality for long audios
+                (see HF issue discussions).
+            device (DeviceType, optional):
+                Inference device; supports ``CPU`` and ``CUDA`` here. If ``None``,
+                the backend will choose ``CUDA`` if available, otherwise ``CPU``.
 
         Returns:
-            List[ScritpLine]: The list of script lines.
+            list[ScriptLine]: One transcript per input audio (order-preserving).
+
+        Raises:
+            ValueError:
+                If inputs are not mono or their sampling rate mismatches the model.
+            RuntimeError | OSError:
+                Any underlying HF/Transformers loading or runtime error.
+
+        Example (default model, CPU):
+            >>> from pathlib import Path
+            >>> from senselab.audio.data_structures import Audio
+            >>> a1 = Audio(filepath=Path("sample1.wav").resolve())
+            >>> lines = HuggingFaceASR.transcribe_audios_with_transformers([a1])
+            >>> lines[0].text
+
+        Example (small Whisper, CUDA, word timestamps):
+            >>> from pathlib import Path
+            >>> from senselab.audio.data_structures import Audio
+            >>> from senselab.utils.data_structures import HFModel, DeviceType, Language
+            >>> a1 = Audio(filepath=Path("sample1.wav").resolve())
+            >>> mdl = HFModel(path_or_uri="openai/whisper-small", revision="main")
+            >>> lines = HuggingFaceASR.transcribe_audios_with_transformers(
+            ...     [a1],
+            ...     model=mdl,
+            ...     language=Language.EN,
+            ...     return_timestamps="word",
+            ...     chunk_length_s=30,
+            ...     batch_size=1,
+            ...     device=DeviceType.CUDA,
+            ... )
+            >>> lines[0].timestamps
         """
         if model is None:
             model = HFModel(path_or_uri="openai/whisper-tiny")

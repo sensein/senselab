@@ -153,7 +153,7 @@ _speech and audio processing tools_
 _text and language processing tools_
 * [OpenCV](https://github.com/opencv/opencv-python), [Ultralytics](https://github.com/ultralytics/ultralytics), [mediapipe](https://github.com/google-ai-edge/mediapipe), [Python-ffmpeg](https://github.com/jonghwanhyeon/python-ffmpeg), [AV](https://github.com/PyAV-Org/PyAV)
 _computer vision and pose estimation_
-* [Pydra](https://github.com/nipype/pydra), [Pydantic](https://github.com/pydantic/pydantic), [Iso639](https://github.com/janpipek/iso639-python), [PyCountry](https://github.com/pycountry/pycountry), [Nest-asyncio](https://github.com/erdewit/nest_asyncio) 
+* [Pydra](https://github.com/nipype/pydra), [Pydantic](https://github.com/pydantic/pydantic), [Iso639](https://github.com/janpipek/iso639-python), [PyCountry](https://github.com/pycountry/pycountry), [Nest-asyncio](https://github.com/erdewit/nest_asyncio)
 _workflow, validation, and utilities_
 * [Ipywidgets](https://github.com/jupyter-widgets/ipywidgets), [IpKernel](https://github.com/ipython/ipykernel), [Nbformat](https://github.com/jupyter/nbformat), [Nbss-upload](https://github.com/notebook-sharing-space/nbss-upload), [Notebook-intelligence](https://github.com/notebook-intelligence/notebook-intelligence)
 _Jupyter and notebook-related tools_
