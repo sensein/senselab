@@ -37,7 +37,9 @@ from senselab.audio.tasks.quality_control.metrics import (
     zero_crossing_rate_metric,
     percent_clipping_metric,
     primary_speaker_ratio_metric,
-    presence_of_voice_metric
+    presence_of_voice_metric,
+    signal_to_noise_power_ratio_metric
+
 )
 
 
@@ -845,6 +847,7 @@ def measure_clipping_check(
     return float(result) > threshold
 
 
+
 def primary_speaker_ratio_check(
     audio_or_path: Union[Audio, str],
     threshold: float = 0.8,
@@ -890,52 +893,45 @@ def presence_of_voice_check(
 
 
 
+def signal_to_noise_power_ratio_check(audio_or_path: Union[Audio, str],
+    threshold: float = -1,
+    df: Optional[pd.DataFrame] = None,
+) -> Optional[bool]:
+    """
+    Check that SNR is below a threshold. Currently not a lot of samples with major background noise, or this algorithm isn't doing a great job
+
+    Args:
+        audio_or_path: An Audio instance or filepath to the audio file.
+
+    Returns:
+        True when SNR > ``threshold``, None if evaluation fails.
+    """
+    
+    result = get_evaluation(audio_or_path, "../../modeling/diarize/vad_r2.pkl", signal_to_noise_power_ratio_metric, df)
+    if result is None:
+        return None
+    return float(result) > threshold
 
 
 
+def find_buzzing_check(audio_or_path: Union[Audio, str],
+    threshold: float = #TODO,
+    df: Optional[pd.DataFrame] = None,
+) -> Optional[bool]:
+    """
+    Check that SNR is below a threshold. Currently not a lot of samples with major background noise, or this algorithm isn't doing a great job
 
+    Args:
+        audio_or_path: An Audio instance or filepath to the audio file.
 
-# calculate SNR
-## idn is the name of the file
-## pyn is the pyannote object
-##features i think is existing df to use to index out the record and session and task)
+    Returns:
+        True when SNR > ``threshold``, None if evaluation fails.
+    """
+    
+    result = get_evaluation(audio_or_path, #"../../modeling/diarize/vad_r2.pkl", 
+                            find_buzzing_metric, df)
+    if result is None:
+        return None
+    return float(result) > threshold
+        
 
-
-
-
-
-def signal_to_noise_ratio(idn, pyn, features):
-    test_row = features[(features.record_id == idn[0]) & (features.session_id == idn[1]) & (features.task == idn[2])]
-    test_audio = Audio.from_filepath(str(list(test_row.file)[0]))
-    time = np.divide(np.arange(test_audio.waveform.shape[1]), test_audio.sampling_rate)
-
-    signal = []
-    noise = []
-
-    previous_end = 0
-
-    for seg in pyn.get_timeline().segments_list_:
-        # signal.append(time[np.where((time>=seg.start) & (time<=seg.end))])
-        # noise.append(time[np.where((time<seg.start) & (time>=previous_end))])
-
-        signal.append(np.where((time >= seg.start) & (time <= seg.end))[0])
-        noise.append(np.where((time < seg.start) & (time >= previous_end))[0])
-        previous_end = seg.end
-
-    try:
-        signal_wav = test_audio.waveform.squeeze().numpy()[np.concatenate(signal)]
-        noise_wav = test_audio.waveform.squeeze().numpy()[np.concatenate(noise)]
-
-        signal_power = np.mean(signal_wav**2)
-        noise_power = np.mean(noise_wav**2)
-        snr = 10 * np.log10(signal_power / noise_power) if noise_power > 0 else -30
-
-        percent_noise_of_total = np.divide(noise_wav.shape[0], noise_wav.shape[0] + signal_wav.shape[0])
-    except:
-        snr = -25
-        percent_noise_of_total = np.nan
-
-    return snr, percent_noise_of_total
-
-
-# need to load diarization outputs
