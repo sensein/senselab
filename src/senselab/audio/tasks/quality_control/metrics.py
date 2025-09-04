@@ -543,3 +543,24 @@ def primary_speaker_ratio_metric(audio: Audio, **input_source) -> float:
         ratio = np.nan
 
     return ratio
+
+
+def presence_of_voice_metric(audio: Audio, **input_source) -> float:
+    """Calculates the number of samples where Voice Activity Detection detects voice.
+
+    Args:
+        audio (Audio): The SenseLab Audio object.
+
+    Returns:
+        float: the duration of voice activity in seconds.
+    """
+
+    if input_source['precompute'] is None:
+        vad #= #TODO VAD the audio
+    else:
+        vad = input_source['precompute']
+        #TODO diar = pd.read_pickle("../../modeling/diarize/diar_r2.pkl")
+
+    return vad
+
+
