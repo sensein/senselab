@@ -262,7 +262,7 @@ def completely_silent_check(
 
 def mostly_silent_check(
     audio_or_path: Union[Audio, str],
-    silent_proportion: float = 0.95,
+    silent_proportion: float = 0.99,
     df: Optional[pd.DataFrame] = None,
 ) -> Optional[bool]:
     """Detect recordings that are mostly silent.
