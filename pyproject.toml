@@ -118,6 +118,7 @@ ruff = "~=0.3"
 codespell = "~=2.3"
 uvloop = "~=0.21"
 types-requests = "~=2.32"
+python-dotenv = "~=1.1"
 
 [tool.poetry.group.docs]
 optional = true
