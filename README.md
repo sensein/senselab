@@ -20,19 +20,19 @@ from senselab.audio.tasks.features_extraction import extract_features_from_audio
 from senselab.audio.tasks.speech_to_text import transcribe_audios
 
 audio = Audio(filepath='path_to_audio_file.wav')
-print(audio.sampling_rate)  
+print(audio.sampling_rate)
 # ➡️ 44100
 
 [resampled_audio] = resample_audios([audio], resample_rate=16000)
-print(resampled_audio.sampling_rate)  
+print(resampled_audio.sampling_rate)
 # ➡️ 16000
 
 audio_features = extract_features_from_audios([audio])
-print(audio_features[0].keys())  
+print(audio_features[0].keys())
 # ➡️ dict_keys(['opensmile', 'praat_parselmouth', 'torchaudio', 'torchaudio_squim', ...])
 
 transcript = transcribe_audios([audio])
-print(transcript)  
+print(transcript)
 # ➡️ "The quick brown fox jumps over the lazy dog."
 ```
 
