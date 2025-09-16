@@ -32,8 +32,8 @@ version = "0.0.0"
 
 [tool.poetry.dependencies]
 datasets = "~=3.6"
-torch = {version = "~=2.6", markers = "sys_platform != 'darwin' or platform_machine == 'arm64'"}
-torchvision = "~=0.20"
+torch = {version = "~=2.8", markers = "sys_platform != 'darwin' or platform_machine == 'arm64'"}
+torchvision = "~=0.23"
 transformers = "~=4.55"
 pydra = ">=1.0a0"
 pydantic = "~=2.11"
@@ -46,7 +46,7 @@ umap-learn = "~=0.5"
 python-ffmpeg = "~=2.0"
 nest-asyncio = "~=1.6"
 matplotlib = "~=3.10"
-torchaudio = {version = "~=2.6", optional = true}
+torchaudio = {version = "~=2.8", optional = true}
 praat-parselmouth = {version = "~=0.4", optional = true}
 audiomentations = {version = "~=0.42", optional = true}
 torch-audiomentations = {version = "~=0.12", optional = true}
@@ -118,6 +118,7 @@ ruff = "~=0.3"
 codespell = "~=2.3"
 uvloop = "~=0.21"
 types-requests = "~=2.32"
+python-dotenv = "~=1.1"
 
 [tool.poetry.group.docs]
 optional = true

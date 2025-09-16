@@ -19,9 +19,9 @@ Please follow the official installation instructions for your platform: [Install
     - ```git fetch origin```
     - ```git checkout <branch-name>```
 
-5a. **Install CUDA libraries**: Install CUDA libraries, maybe using conda, matching the CUDA version expected by the PyTorch wheels (e.g., the latest pytorch 2.7 expects cuda-12.6):
+5a. **Install CUDA libraries**: Install CUDA libraries, maybe using conda, matching the CUDA version expected by the PyTorch wheels (e.g., the latest pytorch 2.8 expects cuda-12.8):
   - ```conda config --add channels nvidia```
-  - ```conda install -y nvidia/label/cuda-12.6.3::cuda-libraries-dev```
+  - ```conda install -y nvidia/label/cuda-12.8.1::cuda-libraries-dev```
 
 
 5b. **Install all required dependencies** (we recommend to test your code both with all extras and the minimum required set of extras):
