@@ -31,11 +31,11 @@ requires-poetry = ">=2.0"
 version = "0.0.0"
 
 [tool.poetry.dependencies]
-datasets = "~=3.6"
 torch = {version = "~=2.8", markers = "sys_platform != 'darwin' or platform_machine == 'arm64'"}
 torchvision = "~=0.23"
-transformers = "~=4.55"
-pydra = ">=1.0a0"
+transformers = "^4.51"
+datasets = "~=3.6"
+pydra = ">=1.0a3"
 pydantic = "~=2.11"
 accelerate = "*"
 huggingface-hub = "~=0.34"
@@ -56,7 +56,7 @@ opensmile = {version = "~=2.6", optional = true}
 vocos = {version = "~=0.1", optional = true}
 coqui-tts = {version = "~=0.27", optional = true}
 speech-articulatory-coding = {version = "~=0.1", optional = true}
-jiwer = {version = "~=4.0", optional = true}
+jiwer = {version = "^3.0", optional = true}
 nltk = {version = "~=3.9", optional = true}
 sentence-transformers = {version = "~=5.1", optional = true}
 pylangacq = {version = "~=0.19", optional = true}
