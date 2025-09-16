@@ -1,3 +1,15 @@
+# 0.43.0 (Tue Sep 16 2025)
+
+#### 🚀 Enhancement
+
+- Torch upgrade + first documentation improvements [#380](https://github.com/sensein/senselab/pull/380) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.42.1 (Thu Sep 04 2025)
 
 #### 🐛 Bug Fix
