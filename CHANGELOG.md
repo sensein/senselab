@@ -1,3 +1,15 @@
+# 0.43.1 (Tue Sep 16 2025)
+
+#### 🐛 Bug Fix
+
+- Quick patch [#382](https://github.com/sensein/senselab/pull/382) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.43.0 (Tue Sep 16 2025)
 
 #### 🚀 Enhancement
