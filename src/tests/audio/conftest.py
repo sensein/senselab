@@ -5,7 +5,7 @@ from typing import Callable, List
 
 import pytest
 import torch
-from dotenv import load_dotenv, find_dotenv
+from dotenv import find_dotenv, load_dotenv
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.preprocessing import concatenate_audios, resample_audios
