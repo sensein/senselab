@@ -29,8 +29,7 @@ def test_senselab_init_with_uvloop() -> None:
             """Dummy async function."""
             return 42
 
-        loop = asyncio.get_event_loop()
-        result = loop.run_until_complete(dummy())
+        result = asyncio.run(dummy())
         assert result == 42
 
     except Exception as e:
