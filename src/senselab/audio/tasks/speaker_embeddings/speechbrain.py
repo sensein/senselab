@@ -85,6 +85,9 @@ class SpeechBrainEmbeddings:
                 "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
             )
 
+        if len(audios) == 0:
+            return []
+
         if model is None:
             model = SpeechBrainModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb", revision="main")
 
