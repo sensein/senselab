@@ -34,8 +34,7 @@ def extract_objective_quality_features_from_audios(audios: List["Audio"]) -> Lis
     """
     if not TORCHAUDIO_AVAILABLE:
         raise ModuleNotFoundError(
-            "`torchaudio` is not installed. "
-            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+            "`torchaudio` is not installed. " "Please install senselab audio dependencies using `pip install senselab`."
         )
 
     if any(audio.waveform.shape[0] != 1 for audio in audios):
@@ -79,8 +78,7 @@ def extract_subjective_quality_features_from_audios(
     """
     if not TORCHAUDIO_AVAILABLE:
         raise ModuleNotFoundError(
-            "`torchaudio` is not installed. "
-            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+            "`torchaudio` is not installed. " "Please install senselab audio dependencies using `pip install senselab`."
         )
 
     # Check if any audio is not mono

@@ -100,7 +100,7 @@ def resample_audios(
     if not SPEECHBRAIN_AVAILABLE:
         raise ModuleNotFoundError(
             "`speechbrain` is not installed. "
-            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+            "Please install senselab audio dependencies using `pip install senselab`."
         )
     plugin_args = plugin_args or {}
 

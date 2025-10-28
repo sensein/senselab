@@ -38,7 +38,7 @@ jobs:
     - name: Install dependencies with Poetry
       run: |
         poetry env use ${{ matrix.python-version }}
-        poetry install --extras "audio text video" --with dev
+        poetry install --extras "text video" --with dev
         poetry env info
       shell: bash
     - name: check files
@@ -94,7 +94,7 @@ jobs:
     - name: Install dependencies with Poetry
       run: |
         poetry env use ${{ matrix.python-version }}
-        poetry install --extras "audio text video" --with dev
+        poetry install --extras "text video" --with dev
         poetry env info
       shell: bash
     - name: Install pre-commit
@@ -380,7 +380,7 @@ jobs:
       run: |
         cd senselab
         poetry env use ${{ matrix.python-version }}
-        poetry install --extras "audio text video" --with dev
+        poetry install --extras "text video" --with dev
       shell: bash
     - name: Check poetry info
       run: |
@@ -548,7 +548,7 @@ jobs:
       run: |
         cd senselab
         poetry env use ${{ matrix.python-version }}
-        poetry install --extras "audio text video" --with dev
+        poetry install --extras "text video" --with dev
       shell: bash
     - name: Check poetry info
       run: |
