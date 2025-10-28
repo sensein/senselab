@@ -1,4 +1,4 @@
-# 1.0.0 (Tue Oct 28 2025)
+# 0.43.2b (Tue Oct 28 2025)
 
 #### 💥 Breaking Change
 
