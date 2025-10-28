@@ -1,3 +1,19 @@
+# 0.43.2 (Mon Oct 20 2025)
+
+#### 🐛 Bug Fix
+
+- fix torch version to 2.8 [#390](https://github.com/sensein/senselab/pull/390) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### ⚠️ Pushed to `main`
+
+- fix jupyter lab dependency ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.43.1 (Tue Sep 16 2025)
 
 #### 🐛 Bug Fix
