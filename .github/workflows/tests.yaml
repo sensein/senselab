@@ -17,7 +17,7 @@ jobs:
         # - {os: macos-latest, architecture: arm64, python-version: '3.12'}
         # the reason why we commented out 3.12 is that it hits github rate limit for some modules (e.g., knn-vc, Camb-ai/mars5-tts)
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
       with:
         fetch-depth: 1   # no need for the history
     - name: Set up Python ${{ matrix.python-version }}
@@ -81,7 +81,7 @@ jobs:
         include:
         - {os: macos-latest, architecture: arm64, python-version: '3.11'}
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
       with:  # no need for the history
         fetch-depth: 1
     - name: Set up Python
@@ -161,7 +161,7 @@ jobs:
     steps:
     - id: set-ran
       run: echo "::set-output name=ran::true"
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
       with:
         fetch-depth: 1   # no need for the history
     - name: Cleanup disk space
@@ -329,7 +329,7 @@ jobs:
     steps:
     - id: set-ran
       run: echo "::set-output name=ran::true"
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
       with:
         fetch-depth: 1   # no need for the history
     - name: Cleanup disk space
@@ -497,7 +497,7 @@ jobs:
     steps:
     - id: set-ran
       run: echo "::set-output name=ran::true"
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
       with:
         fetch-depth: 1   # no need for the history
     - name: Cleanup disk space
