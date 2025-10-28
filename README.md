@@ -105,7 +105,7 @@ pip install 'git+https://github.com/sensein/senselab.git#egg=senselab[all]'
 
 If you want to install only audio dependencies, you do:
 ```sh
-pip install 'senselab[audio]'
+pip install 'senselab'
 ```
 
 To install articulatory, video, text, and senselab-ai extras, please do:

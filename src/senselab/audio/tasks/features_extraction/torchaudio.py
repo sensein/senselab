@@ -36,8 +36,7 @@ def extract_spectrogram_from_audios(
     """
     if not TORCHAUDIO_AVAILABLE:
         raise ModuleNotFoundError(
-            "`torchaudio` is not installed. "
-            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+            "`torchaudio` is not installed. " "Please install senselab audio dependencies using `pip install senselab`."
         )
 
     if win_length is None:
@@ -79,8 +78,7 @@ def extract_mel_spectrogram_from_audios(
     """
     if not TORCHAUDIO_AVAILABLE:
         raise ModuleNotFoundError(
-            "`torchaudio` is not installed. "
-            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+            "`torchaudio` is not installed. " "Please install senselab audio dependencies using `pip install senselab`."
         )
 
     if win_length is None:
@@ -129,8 +127,7 @@ def extract_mfcc_from_audios(
     """
     if not TORCHAUDIO_AVAILABLE:
         raise ModuleNotFoundError(
-            "`torchaudio` is not installed. "
-            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+            "`torchaudio` is not installed. " "Please install senselab audio dependencies using `pip install senselab`."
         )
 
     if win_length is None:
@@ -175,8 +172,7 @@ def extract_mel_filter_bank_from_audios(
     """
     if not TORCHAUDIO_AVAILABLE:
         raise ModuleNotFoundError(
-            "`torchaudio` is not installed. "
-            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+            "`torchaudio` is not installed. " "Please install senselab audio dependencies using `pip install senselab`."
         )
 
     if win_length is None:
@@ -216,8 +212,7 @@ def extract_mel_filter_bank_from_spectrograms(
     """
     if not TORCHAUDIO_AVAILABLE:
         raise ModuleNotFoundError(
-            "`torchaudio` is not installed. "
-            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+            "`torchaudio` is not installed. " "Please install senselab audio dependencies using `pip install senselab`."
         )
 
     mel_filter_banks = []
@@ -252,8 +247,7 @@ def extract_pitch_from_audios(
     """
     if not TORCHAUDIO_AVAILABLE:
         raise ModuleNotFoundError(
-            "`torchaudio` is not installed. "
-            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+            "`torchaudio` is not installed. " "Please install senselab audio dependencies using `pip install senselab`."
         )
 
     if freq_low <= 0:
@@ -319,8 +313,7 @@ def extract_torchaudio_features_from_audios(
     """
     if not TORCHAUDIO_AVAILABLE:
         raise ModuleNotFoundError(
-            "`torchaudio` is not installed. "
-            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+            "`torchaudio` is not installed. " "Please install senselab audio dependencies using `pip install senselab`."
         )
 
     # Per-sample task: compute all features for a single Audio

@@ -25,7 +25,7 @@ Please follow the official installation instructions for your platform: [Install
 
 
 5b. **Install all required dependencies** (we recommend to test your code both with all extras and the minimum required set of extras):
-  - ```poetry install --extras "audio text video" --with dev,docs```
+  - ```poetry install --extras "articulatory text video senselab-ai" --with dev,docs```
 
 5c. **Set up your HuggingFace token** (required for some models).
 Many models used in senselab are hosted on HuggingFace and require authentication or acceptance of a model license.
