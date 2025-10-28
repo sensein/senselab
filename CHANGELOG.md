@@ -1,3 +1,24 @@
+# 1.0.0 (Tue Oct 28 2025)
+
+#### 💥 Breaking Change
+
+- Bump aws-actions/configure-aws-credentials from 4 to 5 [#386](https://github.com/sensein/senselab/pull/386) ([@dependabot[bot]](https://github.com/dependabot[bot]))
+- Bump actions/download-artifact from 4 to 5 [#385](https://github.com/sensein/senselab/pull/385) ([@dependabot[bot]](https://github.com/dependabot[bot]) [@fabiocat93](https://github.com/fabiocat93))
+- Bump actions/setup-python from 5 to 6 [#384](https://github.com/sensein/senselab/pull/384) ([@dependabot[bot]](https://github.com/dependabot[bot]))
+- Bump actions/checkout from 4 to 5 [#383](https://github.com/sensein/senselab/pull/383) ([@dependabot[bot]](https://github.com/dependabot[bot]) [@fabiocat93](https://github.com/fabiocat93))
+- Bump actions/first-interaction from 2 to 3 [#387](https://github.com/sensein/senselab/pull/387) ([@dependabot[bot]](https://github.com/dependabot[bot]))
+
+#### 🚀 Enhancement
+
+- CI dependencies update [#391](https://github.com/sensein/senselab/pull/391) ([@dependabot[bot]](https://github.com/dependabot[bot]) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@dependabot[bot]](https://github.com/dependabot[bot])
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.43.2 (Mon Oct 20 2025)
 
 #### 🐛 Bug Fix
