@@ -57,8 +57,8 @@ class HFFactory:
             m = AutoModel.from_pretrained(
                 model.path_or_uri,
                 revision=model.revision,
-                low_cpu_mem_usage=True,   
-            ).eval()                  
+                low_cpu_mem_usage=True,
+            ).eval()
             if device == DeviceType.CUDA:
                 try:
                     torch.cuda.empty_cache()
@@ -67,8 +67,7 @@ class HFFactory:
                     m = m.to("cpu")
             cls._models[key] = m
         return cls._models[key]
-    
-    
+
     @classmethod
     def extract_text_embeddings(
         cls,
