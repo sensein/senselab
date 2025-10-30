@@ -73,7 +73,7 @@ def explore_conversation(
 
     # 3. Downmix to mono and resample to 16kHz
     audios = downmix_audios_to_mono(audios, plugin=plugin)
-    target_sr = 16000
+    target_sr = 16000  # Target sampling rate for most of our supported models
     audios = resample_audios(audios, resample_rate=target_sr, plugin=plugin)
 
     # 4. Speaker diarization
@@ -114,7 +114,6 @@ def explore_conversation(
 
     # 9. Transcribe segments with all provided models
     transcripts_by_model = {}
-    print("transcription_models:", transcription_models)
     for model in transcription_models:
         trans_out = transcribe_audios(audios=flattened_segments, model=model)
         transcripts_by_model[model.path_or_uri] = [t.text for t in trans_out]
