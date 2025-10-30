@@ -129,8 +129,8 @@ def explore_conversation(
         audios=flattened_segments,
         opensmile=features_config.get("opensmile", True),
         parselmouth=features_config.get("parselmouth", True),
-        torchaudio=features_config.get("torchaudio", True),
-        torchaudio_squim=bool(features_config.get("torchaudio_squim", True)),
+        torchaudio=features_config.get("torchaudio", False),
+        torchaudio_squim=bool(features_config.get("torchaudio_squim", False)),
     )
     for seg, feats in zip(flattened_segments, feat_out):
         seg.metadata["features"] = feats
