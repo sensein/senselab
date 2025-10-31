@@ -1,16 +1,6 @@
 # 1.0.1 (Fri Oct 31 2025)
 
-#### 🐛 Bug Fix
-
-- release 1.0.1 [#396](https://github.com/sensein/senselab/pull/396) ([@fabiocat93](https://github.com/fabiocat93))
-
-#### Authors: 1
-
-- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
-
----
-
-# 1.0.0 (Fri Oct 31 2025)
+- Apparently, 1.0.0 was already taken and pypi refused to publish it and for this reason I forced it to 1.0.1
 
 #### 💥 Breaking Change
 
