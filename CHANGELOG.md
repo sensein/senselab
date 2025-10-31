@@ -1,3 +1,15 @@
+# 1.0.1 (Fri Oct 31 2025)
+
+#### 🐛 Bug Fix
+
+- release 1.0.1 [#396](https://github.com/sensein/senselab/pull/396) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 1.0.0 (Fri Oct 31 2025)
 
 #### 💥 Breaking Change
