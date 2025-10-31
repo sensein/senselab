@@ -4,8 +4,6 @@ from typing import Dict, List, Optional
 
 import torch
 from transformers import AutoModel, AutoTokenizer
-from transformers.modeling_utils import PreTrainedModel
-from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 
 from senselab.utils.data_structures import DeviceType, HFModel, _select_device_and_dtype
 
@@ -13,27 +11,28 @@ from senselab.utils.data_structures import DeviceType, HFModel, _select_device_a
 class HFFactory:
     """A factory for managing self-supervised models from Hugging Face."""
 
-    _tokenizers: Dict[str, PreTrainedTokenizerBase] = {}
-    _models: Dict[str, PreTrainedModel] = {}
+    _tokenizers: Dict[str, AutoTokenizer] = {}
+    _models: Dict[str, AutoModel] = {}
 
     @classmethod
     def _get_tokenizer(
         cls,
         model: HFModel,
-    ) -> PreTrainedTokenizerBase:
+    ) -> AutoTokenizer:
         """Get or create a tokenizer for SSL model.
 
         Args:
             model (HFModel): The HuggingFace model.
 
         Returns:
-            PreTrainedTokenizerBase: The tokenizer for the model.
+            AutoTokenizer: The tokenizer for the model.
         """
         key = f"{model.path_or_uri}-{model.revision}"
         if key not in cls._tokenizers:
             cls._tokenizers[key] = AutoTokenizer.from_pretrained(
                 pretrained_model_name_or_path=model.path_or_uri,
                 revision=model.revision,
+                use_fast=True,
             )
         return cls._tokenizers[key]
 
@@ -42,7 +41,7 @@ class HFFactory:
         cls,
         model: HFModel,
         device: DeviceType,
-    ) -> PreTrainedModel:
+    ) -> AutoModel:
         """Load weights of SSL model.
 
         Args:
@@ -50,11 +49,23 @@ class HFFactory:
             device (DeviceType): The device to run the model on.
 
         Returns:
-            PreTrainedModel: The SSL model.
+            AutoModel: The SSL model.
         """
         key = f"{model.path_or_uri}-{model.revision}-{device.value}"
+
         if key not in cls._models:
-            cls._models[key] = AutoModel.from_pretrained(model.path_or_uri, revision=model.revision).to(device.value)
+            m = AutoModel.from_pretrained(
+                model.path_or_uri,
+                revision=model.revision,
+                low_cpu_mem_usage=True,
+            ).eval()
+            if device == DeviceType.CUDA:
+                try:
+                    torch.cuda.empty_cache()
+                    m = m.to("cuda", non_blocking=True)
+                except torch.cuda.OutOfMemoryError:
+                    m = m.to("cpu")
+            cls._models[key] = m
         return cls._models[key]
 
     @classmethod
@@ -81,8 +92,6 @@ class HFFactory:
         device, _ = _select_device_and_dtype(
             user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
         )
-
-        print(f"Using device: {device}")
 
         # Load tokenizer and model
         tokenizer = cls._get_tokenizer(model=model)

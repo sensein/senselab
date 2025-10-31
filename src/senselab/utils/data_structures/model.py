@@ -136,7 +136,7 @@ class CoquiTTSModel(SenselabModel[PROVIDER_T]):
             raise ModuleNotFoundError(
                 "`coqui-tts` is not installed. "
                 "Please install senselab audio dependencies using "
-                "`pip install 'senselab[audio]'`."
+                "`pip install senselab`."
             )
         if not isinstance(value, Path):
             model_ids = TTS().list_models()
@@ -192,7 +192,7 @@ def check_torchaudio_model_exists(model_id: str) -> bool:
         raise ModuleNotFoundError(
             "`torchaudio` is not installed. "
             "Please install senselab audio dependencies using "
-            "`pip install 'senselab[audio]'`."
+            "`pip install senselab`."
         )
 
     try:

@@ -86,12 +86,12 @@ def augment_audios(
     if not AUDIOMENTATIONS_AVAILABLE:
         raise ModuleNotFoundError(
             "`audiomentations` is not installed. "
-            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`"
+            "Please install senselab audio dependencies using `pip install senselab`"
         )
     if not TORCH_AUDIOMENTATIONS_AVAILABLE:
         raise ModuleNotFoundError(
             "`torch-audiomentations` is not installed. "
-            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`"
+            "Please install senselab audio dependencies using `pip install senselab`"
         )
     if isinstance(augmentation, TorchAudiomentationsCompose):
         return augment_audios_with_torch_audiomentations(audios, augmentation, device)
