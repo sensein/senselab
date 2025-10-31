@@ -144,7 +144,7 @@ to compute the Equal Error Rate and the operating threshold at which
 </span><span id="L-78"><a href="#L-78"><span class="linenos">78</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">SPEECHBRAIN_AVAILABLE</span><span class="p">:</span>
 </span><span id="L-79"><a href="#L-79"><span class="linenos">79</span></a>        <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
 </span><span id="L-80"><a href="#L-80"><span class="linenos">80</span></a>            <span class="s2">&quot;`speechbrain` is not installed. &quot;</span>
-</span><span id="L-81"><a href="#L-81"><span class="linenos">81</span></a>            <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`.&quot;</span>
+</span><span id="L-81"><a href="#L-81"><span class="linenos">81</span></a>            <span class="s2">&quot;Please install senselab audio dependencies using `pip install senselab`.&quot;</span>
 </span><span id="L-82"><a href="#L-82"><span class="linenos">82</span></a>        <span class="p">)</span>
 </span><span id="L-83"><a href="#L-83"><span class="linenos">83</span></a>
 </span><span id="L-84"><a href="#L-84"><span class="linenos">84</span></a>    <span class="k">return</span> <span class="n">EER</span><span class="p">(</span><span class="n">predictions</span><span class="p">,</span> <span class="n">targets</span><span class="p">)</span>
@@ -221,7 +221,7 @@ to compute the Equal Error Rate and the operating threshold at which
 </span><span id="compute_eer-79"><a href="#compute_eer-79"><span class="linenos">79</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">SPEECHBRAIN_AVAILABLE</span><span class="p">:</span>
 </span><span id="compute_eer-80"><a href="#compute_eer-80"><span class="linenos">80</span></a>        <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
 </span><span id="compute_eer-81"><a href="#compute_eer-81"><span class="linenos">81</span></a>            <span class="s2">&quot;`speechbrain` is not installed. &quot;</span>
-</span><span id="compute_eer-82"><a href="#compute_eer-82"><span class="linenos">82</span></a>            <span class="s2">&quot;Please install senselab audio dependencies using `pip install &#39;senselab[audio]&#39;`.&quot;</span>
+</span><span id="compute_eer-82"><a href="#compute_eer-82"><span class="linenos">82</span></a>            <span class="s2">&quot;Please install senselab audio dependencies using `pip install senselab`.&quot;</span>
 </span><span id="compute_eer-83"><a href="#compute_eer-83"><span class="linenos">83</span></a>        <span class="p">)</span>
 </span><span id="compute_eer-84"><a href="#compute_eer-84"><span class="linenos">84</span></a>
 </span><span id="compute_eer-85"><a href="#compute_eer-85"><span class="linenos">85</span></a>    <span class="k">return</span> <span class="n">EER</span><span class="p">(</span><span class="n">predictions</span><span class="p">,</span> <span class="n">targets</span><span class="p">)</span>
