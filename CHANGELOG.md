@@ -15,14 +15,6 @@
 - Alignment to what's described in the paper's draft [#392](https://github.com/sensein/senselab/pull/392) ([@fabiocat93](https://github.com/fabiocat93))
 - CI dependencies update [#391](https://github.com/sensein/senselab/pull/391) ([@dependabot[bot]](https://github.com/dependabot[bot]) [@fabiocat93](https://github.com/fabiocat93))
 
-#### 🐛 Bug Fix
-
-- Clean up CHANGELOG and update version to 0.43.2c [#395](https://github.com/sensein/senselab/pull/395) ([@fabiocat93](https://github.com/fabiocat93))
-
-#### ⚠️ Pushed to `main`
-
-- Update version to 0.43.2b in CHANGELOG ([@fabiocat93](https://github.com/fabiocat93))
-
 #### Authors: 2
 
 - [@dependabot[bot]](https://github.com/dependabot[bot])
