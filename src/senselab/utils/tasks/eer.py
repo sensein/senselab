@@ -78,7 +78,7 @@ def compute_eer(predictions: torch.Tensor, targets: torch.Tensor) -> Tuple[float
     if not SPEECHBRAIN_AVAILABLE:
         raise ModuleNotFoundError(
             "`speechbrain` is not installed. "
-            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+            "Please install senselab audio dependencies using `pip install senselab`."
         )
 
     return EER(predictions, targets)

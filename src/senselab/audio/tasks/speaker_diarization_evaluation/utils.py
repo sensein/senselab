@@ -41,7 +41,7 @@ def calculate_diarization_error_rate(
     if not PYANNOTEAUDIO_AVAILABLE:
         raise ModuleNotFoundError(
             "`pyannote-audio` is not installed. "
-            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+            "Please install senselab audio dependencies using `pip install senselab`."
         )
 
     hypothesis_annotation = Annotation()

@@ -52,7 +52,7 @@ class NvidiaSortformerDiarization:
         if not NEMO_SORTFORMER_AVAILABLE:
             raise ModuleNotFoundError(
                 "`nemo_toolkit` is not installed. "
-                "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+                "Please install senselab audio dependencies using `pip install senselab`."
             )
 
         device, _ = _select_device_and_dtype(
@@ -119,7 +119,7 @@ def diarize_audios_with_nvidia_sortformer(
     if not NEMO_SORTFORMER_AVAILABLE:
         raise ModuleNotFoundError(
             "`nemo_toolkit` is not installed. "
-            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+            "Please install senselab audio dependencies using `pip install senselab`."
         )
 
     # Initialize model
