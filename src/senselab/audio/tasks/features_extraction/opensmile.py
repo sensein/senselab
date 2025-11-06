@@ -3,17 +3,12 @@
 It includes a factory class for managing openSMILE feature extractors, ensuring
 each extractor is created only once per feature set and feature level. The main
 function, `extract_opensmile_features_from_audios`, applies feature extraction
-across a list of audio samples using openSMILE, managed as a Pydra workflow
-for parallel processing. This approach supports efficient and scalable feature
-extraction across multiple audio files.
+across a list of audio samples using openSMILE in a simple for-loop.
 """
 
 from __future__ import annotations
 
-import os
-from typing import Any, Dict, List, Optional, Sequence
-
-from pydra.compose import python, workflow
+from typing import Any, Dict, List
 
 from senselab.audio.data_structures import Audio
 
@@ -76,24 +71,14 @@ class OpenSmileFeatureExtractorFactory:
 
 
 def extract_opensmile_features_from_audios(
-    audios: List[Audio],
-    feature_set: str = "eGeMAPSv02",
-    feature_level: str = "Functionals",
-    plugin: str = "debug",
-    plugin_args: Optional[Dict[str, Any]] = None,
-    cache_dir: Optional[str | os.PathLike] = None,
+    audios: List[Audio], feature_set: str = "eGeMAPSv02", feature_level: str = "Functionals"
 ) -> List[Dict[str, Any]]:
-    """Extract openSMILE features from a list of audio files using a Pydra compose workflow.
+    """Extract openSMILE features from a list of audio files.
 
     Args:
         audios (List[Audio]): A list of Audio objects.
         feature_set (str, optional): The feature set to use. Defaults to "eGeMAPSv02".
         feature_level (str, optional): The feature level to use. Defaults to "Functionals".
-        plugin (str, optional): The Pydra plugin to use for workflow submission. Defaults to "debug".
-        plugin_args (Optional[Dict[str, Any]], optional): Additional arguments for the Pydra plugin.
-            Defaults to None.
-        cache_dir (Optional[str | os.PathLike], optional): The directory for caching intermediate results.
-            Defaults to None.
 
     Returns:
         List[Dict[str, Any]]: A list of dictionaries containing the extracted features.
@@ -106,34 +91,23 @@ def extract_opensmile_features_from_audios(
             "`opensmile` is not installed. Please install the necessary dependencies using:\n" "`pip install senselab`"
         )
 
-    @python.define
-    def _extract_feats_from_audio(sample: Audio, feature_set: str, feature_level: str) -> Dict[str, Any]:
-        smile = OpenSmileFeatureExtractorFactory.get_opensmile_extractor(feature_set, feature_level)
+    # Initialize extractor once
+    smile = OpenSmileFeatureExtractorFactory.get_opensmile_extractor(feature_set, feature_level)
+
+    results: List[Dict[str, Any]] = []
+    for sample in audios:
         audio_array = sample.waveform.squeeze().numpy()
         sampling_rate = sample.sampling_rate
         try:
             df = smile.process_signal(audio_array, sampling_rate)
-            return {k: (v[0] if isinstance(v, list) and len(v) == 1 else v) for k, v in df.to_dict("list").items()}
+            # Convert DataFrame (1 row) to a flat dict of {feature_name: value}
+            row_dict = {k: (v[0] if isinstance(v, list) and len(v) == 1 else v) for k, v in df.to_dict("list").items()}
+            results.append(row_dict)
         except Exception as e:
             filepath = sample.filepath() if hasattr(sample, "filepath") and sample.filepath() else ""
             desc = f"{sample.generate_id()}{f' ({filepath})' if filepath else ''}"
             print(f"Error processing sample {desc}: {e}")
             names = getattr(smile, "feature_names", [])
-            return {name: float("nan") for name in names} if names else {}
+            results.append({name: float("nan") for name in names} if names else {})
 
-    @workflow.define
-    def _wf(xs: Sequence[Audio], feature_set: str, feature_level: str) -> List[Dict[str, Any]]:
-        t = _extract_feats_from_audio(
-            feature_set=feature_set,
-            feature_level=feature_level,
-        ).split(sample=xs)
-
-        node = workflow.add(t, name="map_extract_feats")
-        return node.out
-
-    worker = "debug" if plugin in ("serial", "debug") else plugin
-    worker_kwargs = plugin_args or {}
-
-    wf = _wf(xs=audios, feature_set=feature_set, feature_level=feature_level)
-    res: Any = wf(worker=worker, cache_root=cache_dir, **worker_kwargs)
-    return list(res.out)
+    return results

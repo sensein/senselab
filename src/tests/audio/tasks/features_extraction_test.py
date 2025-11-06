@@ -72,7 +72,7 @@ def test_missing_opensmile_dependency() -> None:
 def test_extract_opensmile_features_from_audios(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of openSMILE features from audio."""
     # Perform eGeMAPSv02 and Functionals features extraction
-    result = extract_opensmile_features_from_audios([resampled_mono_audio_sample], plugin="cf")
+    result = extract_opensmile_features_from_audios([resampled_mono_audio_sample])
     # Assert the result is a list of dictionaries, and check each dictionary
     assert isinstance(result, list)
     assert all(isinstance(features, dict) for features in result)
@@ -364,9 +364,8 @@ def test_extract_shimmer(resampled_mono_audio_sample: Audio) -> None:
 def test_extract_praat_parselmouth_features_from_audios(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of openSMILE features from audio."""
     # Extract Praat-Parselmouth features
-    result = extract_praat_parselmouth_features_from_audios([resampled_mono_audio_sample], plugin="cf")
+    result = extract_praat_parselmouth_features_from_audios([resampled_mono_audio_sample])
     # Assert the result is a list of dictionaries, and check each dictionary
-    print(result)
     assert isinstance(result, list)
     assert all(isinstance(features, dict) for features in result)
 

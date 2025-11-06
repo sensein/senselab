@@ -5,22 +5,17 @@ from King's College London and has since been further developed and maintained
 by the senselab community.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.features_extraction.praat_parselmouth import extract_praat_parselmouth_features_from_audios
 
 
-def extract_health_measurements(
-    audios: List[Audio], plugin: str = "debug", plugin_args: Dict[str, Any] = {}, cache_dir: Optional[str] = None
-) -> List[Dict[str, Any]]:
+def extract_health_measurements(audios: List[Audio]) -> List[Dict[str, Any]]:
     """Extract health measurements from audio files.
 
     Args:
         audios (List[Audio]): List of Audio objects.
-        plugin (str): Plugin to use for feature extraction. Defaults to "debug".
-        plugin_args (Dict[str, Any]): Dictionary of arguments for the feature extraction plugin.
-        cache_dir (Optional[str]): Directory to use for caching by pydra. Defaults to None.
 
     Returns:
         List[Dict[str, Any]]: List of dictionaries containing speech and voice metrics
@@ -90,9 +85,6 @@ def extract_health_measurements(
     """
     return extract_praat_parselmouth_features_from_audios(
         audios=audios,
-        cache_dir=cache_dir,
-        plugin=plugin,
-        plugin_args=plugin_args,
         duration=False,
         jitter=False,
         shimmer=False,
