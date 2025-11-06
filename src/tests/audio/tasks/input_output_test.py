@@ -3,12 +3,11 @@
 import os
 import tempfile
 from typing import List
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 import torch
-
-from unittest.mock import MagicMock, patch
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.input_output import read_audios, save_audios
@@ -33,16 +32,24 @@ def test_read_audios_torchaudio_not_installed() -> None:
         audios[0].waveform
 
 
+@pytest.mark.parametrize(
+    "audio_paths",
+    [
+        ([MONO_AUDIO_PATH]),
+        ([STEREO_AUDIO_PATH]),
+        ([MONO_AUDIO_PATH, STEREO_AUDIO_PATH]),  # Test multiple files
+    ],
+)
 @patch("torchaudio.load")  # Mock torchaudio.load
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
-def test_read_audio_lazy_loading(mock_torchaudio_load: MagicMock) -> None:
+def test_read_audio_lazy_loading(mock_torchaudio_load: MagicMock, audio_paths: List[str | os.PathLike]) -> None:
     """Test lazy audio loading by mocking torchaudio.load."""
     # Mock `torchaudio.load` to return a fake waveform tensor and sample rate
     fake_waveform = torch.tensor([[1.0, 2.0, 3.0, 4.0]])
     fake_sample_rate = 48000
     mock_torchaudio_load.return_value = (fake_waveform, fake_sample_rate)
 
-    audio_paths = [MONO_AUDIO_PATH, STEREO_AUDIO_PATH]
+    # audio_paths = [MONO_AUDIO_PATH, STEREO_AUDIO_PATH]
 
     processed_audios = read_audios(audio_paths)
     mock_torchaudio_load.assert_not_called()
@@ -52,7 +59,7 @@ def test_read_audio_lazy_loading(mock_torchaudio_load: MagicMock) -> None:
         mock_torchaudio_load.assert_called_with(audio_paths[idx], frame_offset=0, num_frames=-1, backend=None)
 
         _ = processed_audio.waveform
-        mock_torchaudio_load.call_count == (idx+1)
+        mock_torchaudio_load.call_count == (idx + 1)
 
 
 @pytest.mark.skipif(
