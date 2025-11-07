@@ -25,7 +25,6 @@ def explore_conversation(
     features_config: Optional[Dict[str, Union[bool, Dict[str, Any]]]] = None,
     speaker_embeddings_models: Optional[List[SpeechBrainModel]] = None,
     ssl_embeddings_models: Optional[List[SenselabModel]] = None,
-    plugin: str = "debug",
 ) -> List[List[Dict[str, Any]]]:
     """Perform conversational data exploration on audio files.
 
@@ -48,8 +47,6 @@ def explore_conversation(
             If None, defaults to [SpeechBrainModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb")].
         ssl_embeddings_models (List[SenselabModel]): List of models for SSL embeddings.
             If None, defaults to [HFModel(path_or_uri="microsoft/wavlm-base")].
-        plugin (str): The pydra plugin to use for task execution.
-            Defaults to "debug". "cf" is for concurrent futures.
 
     Returns:
         List[Dict[str, Any]]: List of JSON-serializable dicts, one per speaker segment.
@@ -69,12 +66,12 @@ def explore_conversation(
     abs_paths = [os.path.abspath(p) for p in audio_file_paths]
 
     # 2. Load audio files into Audio objects
-    audios = read_audios(abs_paths, plugin=plugin)
+    audios = read_audios(abs_paths)
 
     # 3. Downmix to mono and resample to 16kHz
-    audios = downmix_audios_to_mono(audios, plugin=plugin)
+    audios = downmix_audios_to_mono(audios)
     target_sr = 16000  # Target sampling rate for most of our supported models
-    audios = resample_audios(audios, resample_rate=target_sr, plugin=plugin)
+    audios = resample_audios(audios, resample_rate=target_sr)
 
     # 4. Speaker diarization
     diarization_results = diarize_audios(

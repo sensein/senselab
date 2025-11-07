@@ -36,7 +36,6 @@ See the **Third-party licenses** section below for details and references.
 | pyannote-audio             | [MIT](https://github.com/pyannote/pyannote-audio/blob/develop/LICENSE)                      |
 | pycountry                  | [LGPL-2.1](https://github.com/pycountry/pycountry/blob/main/LICENSE.txt)                    |
 | pydantic                   | [MIT](https://github.com/pydantic/pydantic/blob/main/LICENSE)                               |
-| pydra                      | [Apache-2.0](https://github.com/nipype/pydra/blob/master/LICENSE)                           |
 | pylangacq                  | [MIT](https://github.com/jacksonllee/pylangacq/blob/main/LICENSE.txt)                       |
 | python-ffmpeg              | [CUSTOM](https://github.com/jonghwanhyeon/python-ffmpeg/blob/main/LICENSE)                  |
 | scikit-learn               | [BSD-3-Clause](https://github.com/scikit-learn/scikit-learn/blob/main/COPYING)              |

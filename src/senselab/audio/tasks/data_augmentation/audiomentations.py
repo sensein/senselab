@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, List, Optional, Sequence
-
-import cloudpickle
-from pydra.compose import python, workflow
+from typing import List
 
 from senselab.audio.data_structures import Audio
 
@@ -17,17 +14,11 @@ except ModuleNotFoundError:
     AUDIOMENTATIONS_AVAILABLE = False
 
 
-def augment_audios_with_audiomentations(
-    audios: List[Audio],
-    augmentation: "Compose",
-    plugin: str = "debug",
-    plugin_args: Optional[dict[str, Any]] = None,
-    cache_dir: Optional[str] = None,
-) -> List[Audio]:
-    """Apply data augmentation using **audiomentations** via a Pydra workflow.
+def augment_audios_with_audiomentations(audios: List[Audio], augmentation: "Compose") -> List[Audio]:
+    """Apply data augmentation using **audiomentations** by looping over the inputs.
 
-    The provided `audiomentations.Compose` is serialized once and sent to each
-    map task so that multiple `Audio` objects can be augmented in parallel.
+    The provided `audiomentations.Compose` pipeline is applied sequentially to each
+    `Audio` object.
 
     Notes:
         - This function expects a CPU-only pipeline (audiomentations is NumPy-based).
@@ -40,24 +31,13 @@ def augment_audios_with_audiomentations(
             List of `Audio` objects to augment.
         augmentation (Compose):
             An `audiomentations.Compose` pipeline (CPU).
-        plugin (str, optional):
-            Pydra execution plugin. Common options:
-              * ``"serial"`` or ``"debug"``: Run sequentially (default).
-              * ``"cf"``: Use concurrent futures for parallel execution.
-              * ``"slurm"``: Submit tasks to a SLURM cluster.
-        plugin_args (dict, optional):
-            Extra keyword arguments passed to the chosen plugin.
-            Example (for ``"cf"``): ``{"n_procs": 8}``
-            See: https://nipype.github.io/pydra/
-        cache_dir (str, optional):
-            Directory for Pydra's cache. If ``None``, Pydra uses its default.
 
     Returns:
         list[Audio]: Augmented `Audio` objects in the same order as input.
 
     Raises:
         ModuleNotFoundError: If `audiomentations` is not installed.
-        Exception: Any error raised during augmentation or workflow execution.
+        Exception: Any error raised during augmentation.
 
     Example:
         >>> from audiomentations import Compose, AddGaussianNoise, Gain
@@ -71,11 +51,7 @@ def augment_audios_with_audiomentations(
         ... ])
         >>> a1 = Audio(filepath="/abs/path/sample1.wav")
         >>> a2 = Audio(filepath="/abs/path/sample2.wav")
-        >>> out = augment_audios_with_audiomentations(
-        ...     [a1, a2],
-        ...     aug,
-        ...     plugin="cf"
-        ... )
+        >>> out = augment_audios_with_audiomentations([a1, a2], aug)
         >>> len(out)
         2
     """
@@ -85,23 +61,14 @@ def augment_audios_with_audiomentations(
             "Please install senselab audio dependencies using `pip install senselab`."
         )
 
-    # Serialize augmentation deterministically
-    aug_payload = cloudpickle.dumps(augmentation)
-
-    @python.define
-    def _augment_single_audio(audio: Audio, aug_payload: Any) -> Audio:  # noqa: ANN401
-        aug = cloudpickle.loads(aug_payload)
-        augmented = aug(samples=audio.waveform, sample_rate=audio.sampling_rate)
-        return Audio(waveform=augmented, sampling_rate=audio.sampling_rate, metadata=audio.metadata.copy())
-
-    @workflow.define
-    def _wf(xs: Sequence[Audio], aug_payload: Any) -> List[Audio]:  # noqa: ANN401
-        node = workflow.add(
-            _augment_single_audio(aug_payload=aug_payload).split(audio=xs),
-            name="map_audiomentations",
+    augmented_audios: List[Audio] = []
+    for audio in audios:
+        augmented = augmentation(samples=audio.waveform, sample_rate=audio.sampling_rate)
+        augmented_audios.append(
+            Audio(
+                waveform=augmented,
+                sampling_rate=audio.sampling_rate,
+                metadata=audio.metadata.copy(),
+            )
         )
-        return node.out
-
-    worker = "debug" if plugin in ("serial", "debug") else plugin
-    res = _wf(xs=audios, aug_payload=aug_payload)(worker=worker, cache_root=cache_dir, **(plugin_args or {}))
-    return list(res.out)
+    return augmented_audios

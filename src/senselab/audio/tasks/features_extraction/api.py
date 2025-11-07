@@ -10,19 +10,6 @@ Backends:
         (pitch, jitter, shimmer, formants, etc.).
     - **torchaudio**: Spectral features (spectrogram, mel, MFCC, pitch).
     - **torchaudio-squim**: Objective quality metrics (e.g., STOI, PESQ, SI-SDR).
-
-Execution:
-    - Backends that use Pydra accept execution settings via their config dicts:
-      ``plugin``, ``plugin_args``, and ``cache_dir``.
-      * ``plugin``: ``"serial"``/``"debug"`` (sequential; default), ``"cf"`` (concurrent futures),
-        or a cluster plugin (e.g., SLURM) supported by Pydra v1.
-      * ``plugin_args``: extra keyword args for the selected plugin (e.g., ``{"n_procs": 8}`` for ``"cf"``).
-      * ``cache_dir``: directory for Pydra task caching.
-
-Notes:
-    - If you construct `Audio` from file paths and plan to use Pydra-backed tasks,
-      use **absolute paths** (e.g., `Path(...).resolve()`) for predictable caching
-      and correct task identity.
 """
 
 from typing import Any, Dict, List, Union
@@ -50,32 +37,27 @@ def extract_features_from_audios(
 
     Args:
         audios (list[Audio]):
-            Input audio objects. If they originate from files and you rely on Pydra
-            under the hood, ensure **absolute paths** when creating them:
-            ``Audio(filepath=Path('x.wav').resolve())``.
+            Input audio objects.
         opensmile (dict | bool, optional):
             - ``False`` → skip OpenSMILE.
             - ``True``  → use defaults:
-                ``{"feature_set": "eGeMAPSv02", "feature_level": "Functionals",
-                  "plugin": "debug", "plugin_args": {}, "cache_dir": None}``
+                ``{"feature_set": "eGeMAPSv02", "feature_level": "Functionals"}``
             - ``dict`` → override any of the above keys. `feature_set` and `feature_level`
               should match OpenSMILE presets.
         parselmouth (dict | bool, optional):
             - ``False`` → skip Praat/Parselmouth.
-            - ``True``  → use defaults (pitch, intensity, jitter, shimmer, formants, etc. enabled)
-            plus Pydra controls:
+            - ``True``  → use defaults (pitch, intensity, jitter, shimmer, formants, etc. enabled):
                 ``{"time_step": 0.005, "window_length": 0.025, "pitch_unit": "Hertz",
-                  "cache_dir": None, "speech_rate": True, "intensity_descriptors": True,
+                  "speech_rate": True, "intensity_descriptors": True,
                   "harmonicity_descriptors": True, "formants": True, "spectral_moments": True,
                   "pitch": True, "slope_tilt": True, "cpp_descriptors": True, "duration": True,
-                  "jitter": True, "shimmer": True, "plugin": "debug", "plugin_args": {}}``
+                  "jitter": True, "shimmer": True}``
             - ``dict`` → override any of the above keys.
         torchaudio (dict | bool, optional):
             - ``False`` → skip torchaudio.
             - ``True``  → use defaults:
                 ``{"freq_low": 80, "freq_high": 500, "n_fft": 1024, "n_mels": 128,
-                  "n_mfcc": 40, "win_length": None, "hop_length": None,
-                  "plugin": "debug", "plugin_args": {}, "cache_dir": None}``
+                  "n_mfcc": 40, "win_length": None, "hop_length": None}``
             - ``dict`` → override any of the above keys (e.g., ``n_fft``, ``hop_length``).
         torchaudio_squim (bool, optional):
             - ``False`` → skip objective quality metrics.
@@ -100,12 +82,8 @@ def extract_features_from_audios(
             If invalid parameter combinations are provided to a backend.
 
     Tips:
-        - **Performance**: If you’re processing many files, consider Pydra parallelism
-          by setting a backend’s ``plugin="cf"`` and (optionally) ``plugin_args={"n_procs": N}``.
         - **Memory**: Torchaudio tensors (spectrograms, mels) can be large. Convert or
           downsample if you only need summary stats.
-        - **Reproducibility**: Prefer absolute file paths when constructing `Audio`
-          to ensure stable Pydra task hashing and caching.
 
     Example (all defaults):
         >>> from pathlib import Path
@@ -379,7 +357,7 @@ def extract_features_from_audios(
         'pesq': 1.3702949285507202,
         'si_sdr': 11.71167278289795}}]
 
-    Example (disable OpenSMILE; customize torchaudio; parallelize with Pydra cf):
+    Example (disable OpenSMILE; customize torchaudio):
         >>> from pathlib import Path
         >>> from senselab.audio.data_structures import Audio
         >>> a1 = Audio(filepath=Path("sample1.wav").resolve())
@@ -388,9 +366,7 @@ def extract_features_from_audios(
         ...     opensmile=False,
         ...     torchaudio={
         ...         "n_fft": 2048,
-        ...         "hop_length": 256,
-        ...         "plugin": "cf",
-        ...         "plugin_args": {"n_procs": 4},
+        ...         "hop_length": 256
         ...     },
         ... )
         >>> "opensmile" in feats[0]
@@ -411,13 +387,7 @@ def extract_features_from_audios(
         True
     """
     if opensmile:
-        default_opensmile: Dict[str, Any] = {
-            "feature_set": "eGeMAPSv02",
-            "feature_level": "Functionals",
-            "plugin": "debug",
-            "plugin_args": {},
-            "cache_dir": None,
-        }
+        default_opensmile: Dict[str, Any] = {"feature_set": "eGeMAPSv02", "feature_level": "Functionals"}
         if isinstance(opensmile, dict):
             my_opensmile = {**default_opensmile, **opensmile}
         else:
@@ -428,7 +398,6 @@ def extract_features_from_audios(
             "time_step": 0.005,
             "window_length": 0.025,
             "pitch_unit": "Hertz",
-            "cache_dir": None,
             "speech_rate": True,
             "intensity_descriptors": True,
             "harmonicity_descriptors": True,
@@ -440,8 +409,6 @@ def extract_features_from_audios(
             "duration": True,
             "jitter": True,
             "shimmer": True,
-            "plugin": "debug",
-            "plugin_args": {},
         }
         # Update default_parselmouth with provided parselmouth dictionary
         if isinstance(parselmouth, dict):
@@ -460,9 +427,6 @@ def extract_features_from_audios(
             "n_mfcc": 40,
             "win_length": None,
             "hop_length": None,
-            "plugin": "debug",
-            "plugin_args": {},
-            "cache_dir": None,
         }
         if isinstance(torchaudio, dict):
             my_torchaudio = {**default_torchaudio, **torchaudio}
