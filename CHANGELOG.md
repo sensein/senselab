@@ -1,3 +1,20 @@
+# 1.1.0 (Fri Nov 07 2025)
+
+#### 🚀 Enhancement
+
+- remove pydra dependency [#405](https://github.com/sensein/senselab/pull/405) ([@fabiocat93](https://github.com/fabiocat93) [@wilke0818](https://github.com/wilke0818))
+
+#### ⚠️ Pushed to `main`
+
+- Update CHANGELOG.md ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@wilke0818](https://github.com/wilke0818)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 1.0.1 (Fri Oct 31 2025)
 
 - Apparently, 1.0.0 was already taken and pypi refused to publish it and for this reason I forced it to 1.0.1
