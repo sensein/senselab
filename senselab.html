@@ -24,7 +24,7 @@
 
             <h2>Contents</h2>
             <ul>
-  <li><a href="#senselab"><code>md5-bea2dd18760254fe8e4a145326832f1e</code"></a></li>
+  <li><a href="#senselab"><code>md5-3b4fd98d07847730ca00239a7c1a6689</code"></a></li>
   <li><a href="#senselab"><code>senselab</code></a>
   <ul>
     <li><a href="#quick-start">Quick start</a></li>
@@ -277,8 +277,8 @@ _speech and audio processing tools_</li>
 _text and language processing tools_</li>
 <li><a href="https://github.com/opencv/opencv-python">OpenCV</a>, <a href="https://github.com/ultralytics/ultralytics">Ultralytics</a>, <a href="https://github.com/google-ai-edge/mediapipe">mediapipe</a>, <a href="https://github.com/jonghwanhyeon/python-ffmpeg">Python-ffmpeg</a>, <a href="https://github.com/PyAV-Org/PyAV">AV</a>
 _computer vision and pose estimation_</li>
-<li><a href="https://github.com/nipype/pydra">Pydra</a>, <a href="https://github.com/pydantic/pydantic">Pydantic</a>, <a href="https://github.com/janpipek/iso639-python">Iso639</a>, <a href="https://github.com/pycountry/pycountry">PyCountry</a>, <a href="https://github.com/erdewit/nest_asyncio">Nest-asyncio</a>
-_workflow, validation, and utilities_</li>
+<li><a href="https://github.com/pydantic/pydantic">Pydantic</a>, <a href="https://github.com/janpipek/iso639-python">Iso639</a>, <a href="https://github.com/pycountry/pycountry">PyCountry</a>, <a href="https://github.com/erdewit/nest_asyncio">Nest-asyncio</a>
+_validation, and utilities_</li>
 <li><a href="https://github.com/jupyter-widgets/ipywidgets">Ipywidgets</a>, <a href="https://github.com/ipython/ipykernel">IpKernel</a>, <a href="https://github.com/jupyter/nbformat">Nbformat</a>, <a href="https://github.com/notebook-sharing-space/nbss-upload">Nbss-upload</a>, <a href="https://github.com/notebook-intelligence/notebook-intelligence">Notebook-intelligence</a>
 _Jupyter and notebook-related tools_</li>
 </ul>
@@ -319,13 +319,11 @@ _Jupyter and notebook-related tools_</li>
 </span><span id="L-27"><a href="#L-27"><span class="linenos">27</span></a>
 </span><span id="L-28"><a href="#L-28"><span class="linenos">28</span></a><span class="n">safe_apply_nest_asyncio</span><span class="p">()</span>
 </span><span id="L-29"><a href="#L-29"><span class="linenos">29</span></a>
-</span><span id="L-30"><a href="#L-30"><span class="linenos">30</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">senselab.utils.data_structures.pydra_helpers</span><span class="w"> </span><span class="kn">import</span> <span class="o">*</span>  <span class="c1"># NOQA</span>
-</span><span id="L-31"><a href="#L-31"><span class="linenos">31</span></a>
-</span><span id="L-32"><a href="#L-32"><span class="linenos">32</span></a><span class="c1"># Ensure multiprocessing start method is &#39;spawn&#39;</span>
-</span><span id="L-33"><a href="#L-33"><span class="linenos">33</span></a><span class="k">try</span><span class="p">:</span>
-</span><span id="L-34"><a href="#L-34"><span class="linenos">34</span></a>    <span class="n">set_start_method</span><span class="p">(</span><span class="s2">&quot;spawn&quot;</span><span class="p">,</span> <span class="n">force</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</span><span id="L-35"><a href="#L-35"><span class="linenos">35</span></a><span class="k">except</span> <span class="ne">RuntimeError</span><span class="p">:</span>
-</span><span id="L-36"><a href="#L-36"><span class="linenos">36</span></a>    <span class="k">pass</span>  <span class="c1"># Method already set</span>
+</span><span id="L-30"><a href="#L-30"><span class="linenos">30</span></a><span class="c1"># Ensure multiprocessing start method is &#39;spawn&#39;</span>
+</span><span id="L-31"><a href="#L-31"><span class="linenos">31</span></a><span class="k">try</span><span class="p">:</span>
+</span><span id="L-32"><a href="#L-32"><span class="linenos">32</span></a>    <span class="n">set_start_method</span><span class="p">(</span><span class="s2">&quot;spawn&quot;</span><span class="p">,</span> <span class="n">force</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="L-33"><a href="#L-33"><span class="linenos">33</span></a><span class="k">except</span> <span class="ne">RuntimeError</span><span class="p">:</span>
+</span><span id="L-34"><a href="#L-34"><span class="linenos">34</span></a>    <span class="k">pass</span>  <span class="c1"># Method already set</span>
 </span></pre></div>
 
 
