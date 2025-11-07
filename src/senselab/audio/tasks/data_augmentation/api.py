@@ -23,9 +23,7 @@ except ModuleNotFoundError:
 
 
 def augment_audios(
-    audios: List[Audio],
-    augmentation: Union["TorchAudiomentationsCompose", "AudiomentationsCompose"],
-    device: Optional[DeviceType] = None,
+    audios: List[Audio], augmentation: Union["TorchAudiomentationsCompose", "AudiomentationsCompose"]
 ) -> List[Audio]:
     """Apply audio data augmentation to a list of `Audio` objects.
 
@@ -34,10 +32,9 @@ def augment_audios(
     or [audiomentations](https://github.com/iver56/audiomentations).
 
     - If the augmentation is a ``TorchAudiomentationsCompose``, the operation
-      can run on CPU or CUDA (GPU), as specified by ``device``.
+      can run on CPU or CUDA (GPU).
     - If the augmentation is an ``AudiomentationsCompose``, augmentation runs
-      only on CPU. For efficiency, multiple files are processed in parallel
-      using Pydra with the concurrent futures plugin.
+      only on CPU.
 
     Args:
         audios (list[Audio]):
@@ -45,13 +42,6 @@ def augment_audios(
         augmentation (TorchAudiomentationsCompose | AudiomentationsCompose):
             A composition of augmentations. Must be created from either
             ``torch_audiomentations.Compose`` or ``audiomentations.Compose``.
-        device (DeviceType, optional):
-            Target device for augmentation (relevant only for torch-audiomentations).
-            Accepted values:
-              * ``DeviceType.CPU`` → Run on CPU.
-              * ``DeviceType.CUDA`` → Run on GPU (if CUDA is available).
-            Defaults to ``None`` (equivalent to ``DeviceType.CUDA``, if available
-            ``DeviceType.CPU`` otherwise).
 
     Returns:
         list[Audio]: A list of augmented `Audio` objects, matching the order of input.
@@ -66,10 +56,9 @@ def augment_audios(
         >>> from torch_audiomentations import Compose, AddColoredNoise
         >>> from senselab.audio.tasks.data_augmentation.api import augment_audios
         >>> from senselab.audio.data_structures import Audio
-        >>> from senselab.utils.data_structures import DeviceType
         >>> aug = Compose([AddColoredNoise(p=1.0)])
         >>> audio = Audio(filepath="/absolute/path/to/sample.wav")
-        >>> augmented = augment_audios([audio], aug, device=DeviceType.CPU)
+        >>> augmented = augment_audios([audio], aug)
         >>> len(augmented)
         1
 
@@ -94,9 +83,9 @@ def augment_audios(
             "Please install senselab audio dependencies using `pip install senselab`"
         )
     if isinstance(augmentation, TorchAudiomentationsCompose):
-        return augment_audios_with_torch_audiomentations(audios, augmentation, device)
+        return augment_audios_with_torch_audiomentations(audios, augmentation)
     elif isinstance(augmentation, AudiomentationsCompose):
-        return augment_audios_with_audiomentations(audios, augmentation, plugin="cf")
+        return augment_audios_with_audiomentations(audios, augmentation)
     else:
         raise ValueError(
             "Unsupported augmentation type." "Use either torch_audiomentations.Compose or audiomentations.Compose."

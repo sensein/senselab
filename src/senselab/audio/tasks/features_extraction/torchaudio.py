@@ -5,7 +5,6 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 import torch
-from pydra.compose import python, workflow
 
 try:
     import torchaudio
@@ -277,11 +276,8 @@ def extract_torchaudio_features_from_audios(
     n_mfcc: int = 40,
     win_length: Optional[int] = None,
     hop_length: Optional[int] = None,
-    plugin: str = "debug",
-    plugin_args: Optional[Dict[str, Any]] = None,
-    cache_dir: Optional[str | os.PathLike] = None,
 ) -> List[Dict[str, Any]]:
-    """Extract torchaudio features from a list of audio objects using pydra.compose.
+    """Extract torchaudio features from a list of audio objects.
 
     Args:
     audios (List[Audio]): List of Audio objects.
@@ -297,13 +293,6 @@ def extract_torchaudio_features_from_audios(
         Default is None.
     hop_length (Optional[int]): Hop length between STFT windows. If None, uses win_length // 2.
         Default is None.
-    plugin (str): Pydra plugin to use.
-        Default is "debug".
-    plugin_args (Optional[Dict[str, Any]]): Additional plugin arguments.
-        Default is None.
-    cache_dir (Optional[str | os.PathLike]): Directory for intermediate/cache files.
-        Default is None.
-
 
     Returns:
     - List[Dict[str, Any]]: List of Dict objects containing features.
@@ -313,36 +302,28 @@ def extract_torchaudio_features_from_audios(
     """
     if not TORCHAUDIO_AVAILABLE:
         raise ModuleNotFoundError(
-            "`torchaudio` is not installed. " "Please install senselab audio dependencies using `pip install senselab`."
+            "`torchaudio` is not installed. Please install senselab audio dependencies using `pip install senselab`."
         )
 
-    # Per-sample task: compute all features for a single Audio
-    @python.define
-    def _extract_all(
-        sample: Audio,
-        freq_low: int,
-        freq_high: int,
-        n_fft: int,
-        n_mels: int,
-        n_mfcc: int,
-        win_length: Optional[int],
-        hop_length: Optional[int],
-    ) -> Dict[str, Any]:
-        # Defaults (match your helper behavior)
-        wl = n_fft if win_length is None else win_length
-        hl = wl // 2 if hop_length is None else hop_length
-        sr = sample.sampling_rate
+    wl = n_fft if win_length is None else win_length
+    hl = wl // 2 if hop_length is None else hop_length
 
+    if freq_low <= 0:
+        raise ValueError("freq_low should be bigger than 0")
+
+    results: List[Dict[str, Any]] = []
+    for sample in audios:
+        sr = sample.sampling_rate
         try:
             # Spectrogram
             spec = torchaudio.transforms.Spectrogram(n_fft=n_fft, win_length=wl, hop_length=hl)(sample.waveform)
-            spec = spec.squeeze(0)
+            spec = spec.squeeze(0)  # (freq, time)
 
             # Mel-spectrogram
             melspec = torchaudio.transforms.MelSpectrogram(
                 sample_rate=sr, n_fft=n_fft, win_length=wl, hop_length=hl, n_mels=n_mels
             )(sample.waveform)
-            melspec = melspec.squeeze(0)
+            melspec = melspec.squeeze(0)  # (mel, time)
 
             # MFCC
             mfcc = torchaudio.transforms.MFCC(
@@ -350,74 +331,37 @@ def extract_torchaudio_features_from_audios(
                 n_mfcc=n_mfcc,
                 melkwargs={"n_fft": n_fft, "win_length": wl, "hop_length": hl, "n_mels": n_mels},
             )(sample.waveform)
-            mfcc = mfcc.squeeze(0)
+            mfcc = mfcc.squeeze(0)  # (n_mfcc, time)
 
-            # Mel filter bank from the spectrogram
+            # Mel filter bank from spectrogram
             n_stft = n_fft // 2 + 1
             melfb = torchaudio.transforms.MelScale(sample_rate=sr, n_mels=n_mels, n_stft=n_stft)(spec)
-            melfb = melfb.squeeze(0)
+            melfb = melfb.squeeze(0)  # (mel, time)
 
             # Pitch
-            if freq_low <= 0:
-                raise ValueError("freq_low should be bigger than 0")
             pitch = torchaudio.functional.detect_pitch_frequency(
                 sample.waveform, sample_rate=sr, freq_low=freq_low, freq_high=freq_high
             ).squeeze(0)
 
-            return {
-                "pitch": pitch,
-                "mel_filter_bank": melfb,
-                "mfcc": mfcc,
-                "mel_spectrogram": melspec,
-                "spectrogram": spec,
-            }
+            results.append(
+                {
+                    "pitch": pitch,
+                    "mel_filter_bank": melfb,
+                    "mfcc": mfcc,
+                    "mel_spectrogram": melspec,
+                    "spectrogram": spec,
+                }
+            )
         except RuntimeError:
-            # Return NaNs with the right keys if torchaudio blows up
-            return {
-                "pitch": torch.tensor(torch.nan),
-                "mel_filter_bank": np.nan,
-                "mfcc": np.nan,
-                "mel_spectrogram": np.nan,
-                "spectrogram": np.nan,
-            }
+            # Return NaNs with the expected keys if torchaudio raises
+            results.append(
+                {
+                    "pitch": torch.tensor(torch.nan),
+                    "mel_filter_bank": np.nan,
+                    "mfcc": np.nan,
+                    "mel_spectrogram": np.nan,
+                    "spectrogram": np.nan,
+                }
+            )
 
-    # Map-style workflow over the list of audios
-    @workflow.define
-    def _wf(
-        xs: Sequence[Audio],
-        freq_low: int,
-        freq_high: int,
-        n_fft: int,
-        n_mels: int,
-        n_mfcc: int,
-        win_length: Optional[int],
-        hop_length: Optional[int],
-    ) -> List[Dict[str, Any]]:
-        task = _extract_all(
-            freq_low=freq_low,
-            freq_high=freq_high,
-            n_fft=n_fft,
-            n_mels=n_mels,
-            n_mfcc=n_mfcc,
-            win_length=win_length,
-            hop_length=hop_length,
-        ).split(sample=xs)
-        node = workflow.add(task, name="map_torchaudio_feats")
-        return node.out
-
-    # Map legacy plugin to compose worker
-    worker = "debug" if plugin in ("serial", "debug") else plugin
-    worker_kwargs = plugin_args or {}
-
-    wf = _wf(
-        xs=audios,
-        freq_low=freq_low,
-        freq_high=freq_high,
-        n_fft=n_fft,
-        n_mels=n_mels,
-        n_mfcc=n_mfcc,
-        win_length=win_length,
-        hop_length=hop_length,
-    )
-    res: Any = wf(worker=worker, cache_root=cache_dir, **worker_kwargs)
-    return list(res.out)
+    return results

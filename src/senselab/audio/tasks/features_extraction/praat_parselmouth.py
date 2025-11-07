@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Union
 
 import numpy as np
-from pydra.compose import python, workflow
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import logger
@@ -1204,13 +1203,12 @@ def extract_shimmer(snd: Union[parselmouth.Sound, Path, Audio], floor: float, ce
         }
 
 
-### Wrapper ###
+# Wrapper
 def extract_praat_parselmouth_features_from_audios(
     audios: List[Audio],
     time_step: float = 0.005,
     window_length: float = 0.025,
     pitch_unit: str = "Hertz",
-    cache_dir: Optional[str | os.PathLike] = None,
     speech_rate: bool = True,
     intensity_descriptors: bool = True,
     harmonicity_descriptors: bool = True,
@@ -1222,220 +1220,194 @@ def extract_praat_parselmouth_features_from_audios(
     duration: bool = True,
     jitter: bool = True,
     shimmer: bool = True,
-    plugin: str = "debug",
-    plugin_args: Dict[str, Any] | None = None,
 ) -> List[Dict[str, Any]]:
-    """Extract Parselmouth features for each Audio using Pydra v1 compose, in parallel over inputs."""
+    """Extract features from a list of Audio objects and return a JSON-like dictionary.
 
-    @python.define
-    def _extract_all_for_sample(
-        sample: Audio,
-        time_step: float,
-        window_length: float,
-        pitch_unit: str,
-        speech_rate: bool,
-        intensity_descriptors: bool,
-        harmonicity_descriptors: bool,
-        formants: bool,
-        spectral_moments: bool,
-        pitch: bool,
-        slope_tilt: bool,
-        cpp_descriptors: bool,
-        duration: bool,
-        jitter: bool,
-        shimmer: bool,
-    ) -> Dict[str, Any]:
-        """Compute all requested features for a single Audio and return one flat dict."""
-        # 1) Always compute pitch floor/ceiling once (many features depend on them)
-        pv = extract_pitch_values(snd=sample)
-        pitch_floor = pv["pitch_floor"]
-        pitch_ceiling = pv["pitch_ceiling"]
+    Args:
+        audios (list): List of Audio objects to extract features from.
+        pitch_unit (str): Unit for pitch measurements. Defaults to "Hertz".
+        time_step (float): Time rate at which to extract features. Defaults to 0.005.
+        window_length (float): Window length in seconds for spectral features. Defaults to 0.025.
+        speech_rate (bool): Whether to extract speech rate. Defaults to True.
+        intensity_descriptors (bool): Whether to extract intensity descriptors. Defaults to True.
+        harmonicity_descriptors (bool): Whether to extract harmonic descriptors. Defaults to True.
+        formants (bool): Whether to extract formants. Defaults to True.
+        spectral_moments (bool): Whether to extract spectral moments. Defaults to True.
+        pitch (bool): Whether to extract pitch. Defaults to True.
+        slope_tilt (bool): Whether to extract slope and tilt. Defaults to True.
+        cpp_descriptors (bool): Whether to extract CPP descriptors. Defaults to True.
+        duration (bool): Whether to extract duration. Defaults to True.
+        jitter (bool): Whether to extract jitter. Defaults to True.
+        shimmer (bool): Whether to extract shimmer. Defaults to True.
 
-        out: Dict[str, Any] = {}
+    Returns:
+        dict: A JSON-like dictionary with extracted features structured under "praat_parselmouth".
+    """
+    extracted_data: List[Dict[str, Any]] = []
 
-        # 2) Duration
-        if duration:
-            dur = extract_audio_duration(snd=sample)
-            out["duration"] = dur["duration"]
+    for snd in audios:
+        # --- shared precomputations ---
+        pitch_values_out = extract_pitch_values(snd=snd)
+        pitch_floor = pitch_values_out["pitch_floor"]
+        pitch_ceiling = pitch_values_out["pitch_ceiling"]
 
-        # 3) Speech rate / pausing
-        if speech_rate:
-            sr = extract_speech_rate(snd=sample)
-            out["speaking_rate"] = sr["speaking_rate"]
-            out["articulation_rate"] = sr["articulation_rate"]
-            out["phonation_ratio"] = sr["phonation_ratio"]
-            out["pause_rate"] = sr["pause_rate"]
-            out["mean_pause_duration"] = sr["mean_pause_dur"]
-
-        # 4) Pitch + Intensity
-        if pitch:
-            pd = extract_pitch_descriptors(
-                snd=sample,
+        # Precompute blocks conditionally
+        speech_rate_out = extract_speech_rate(snd=snd) if speech_rate else None
+        pitch_out = (
+            extract_pitch_descriptors(
+                snd=snd,
                 floor=pitch_floor,
                 ceiling=pitch_ceiling,
                 frame_shift=time_step,
                 unit=pitch_unit,
             )
-            out[f"mean_f0_{pitch_unit.lower()}"] = pd[f"mean_f0_{pitch_unit.lower()}"]
-            out[f"std_f0_{pitch_unit.lower()}"] = pd[f"stdev_f0_{pitch_unit.lower()}"]
-
-        if intensity_descriptors:
-            idesc = extract_intensity_descriptors(
-                snd=sample,
+            if pitch
+            else None
+        )
+        intensity_out = (
+            extract_intensity_descriptors(
+                snd=snd,
                 floor=pitch_floor,
                 frame_shift=time_step,
             )
-            out["mean_intensity_db"] = idesc["mean_db"]
-            out["std_intensity_db"] = idesc["std_db"]
-            out["range_ratio_intensity_db"] = idesc["range_db_ratio"]
-
-        # 5) Harmonicity, spectral slope/tilt, CPP
-        if harmonicity_descriptors:
-            hdesc = extract_harmonicity_descriptors(
-                snd=sample,
+            if intensity_descriptors
+            else None
+        )
+        harmonicity_out = (
+            extract_harmonicity_descriptors(
+                snd=snd,
                 floor=pitch_floor,
                 frame_shift=time_step,
             )
-            out["mean_hnr_db"] = hdesc["hnr_db_mean"]
-            out["std_hnr_db"] = hdesc["hnr_db_std_dev"]
-
-        if slope_tilt:
-            st = extract_slope_tilt(
-                snd=sample,
-                floor=pitch_floor,
-                ceiling=pitch_ceiling,
-            )
-            out["spectral_slope"] = st["spectral_slope"]
-            out["spectral_tilt"] = st["spectral_tilt"]
-
-        if cpp_descriptors:
-            cpp = extract_cpp_descriptors(
-                snd=sample,
+            if harmonicity_descriptors
+            else None
+        )
+        formants_out = (
+            measure_f1f2_formants_bandwidths(
+                snd=snd,
                 floor=pitch_floor,
                 ceiling=pitch_ceiling,
                 frame_shift=time_step,
             )
-            out["cepstral_peak_prominence_mean"] = cpp["mean_cpp"]
-            out["cepstral_peak_prominence_std"] = cpp["std_dev_cpp"]
-
-        # 6) Formants
-        if formants:
-            fm = measure_f1f2_formants_bandwidths(
-                snd=sample,
-                floor=pitch_floor,
-                ceiling=pitch_ceiling,
-                frame_shift=time_step,
-            )
-            out["mean_f1_loc"] = fm["f1_mean"]
-            out["std_f1_loc"] = fm["f1_std"]
-            out["mean_b1_loc"] = fm["b1_mean"]
-            out["std_b1_loc"] = fm["b1_std"]
-            out["mean_f2_loc"] = fm["f2_mean"]
-            out["std_f2_loc"] = fm["f2_std"]
-            out["mean_b2_loc"] = fm["b2_mean"]
-            out["std_b2_loc"] = fm["b2_std"]
-
-        # 7) Spectral moments
-        if spectral_moments:
-            sm = extract_spectral_moments(
-                snd=sample,
+            if formants
+            else None
+        )
+        spectral_moments_out = (
+            extract_spectral_moments(
+                snd=snd,
                 floor=pitch_floor,
                 ceiling=pitch_ceiling,
                 window_size=window_length,
                 frame_shift=time_step,
             )
-            out["spectral_gravity"] = sm["spectral_gravity"]
-            out["spectral_std_dev"] = sm["spectral_std_dev"]
-            out["spectral_skewness"] = sm["spectral_skewness"]
-            out["spectral_kurtosis"] = sm["spectral_kurtosis"]
-
-        # 8) Jitter / shimmer
-        if jitter:
-            jit = extract_jitter(
-                snd=sample,
+            if spectral_moments
+            else None
+        )
+        slope_tilt_out = (
+            extract_slope_tilt(
+                snd=snd,
                 floor=pitch_floor,
                 ceiling=pitch_ceiling,
             )
-            out["local_jitter"] = jit["local_jitter"]
-            out["localabsolute_jitter"] = jit["localabsolute_jitter"]
-            out["rap_jitter"] = jit["rap_jitter"]
-            out["ppq5_jitter"] = jit["ppq5_jitter"]
-            out["ddp_jitter"] = jit["ddp_jitter"]
-
-        if shimmer:
-            shm = extract_shimmer(
-                snd=sample,
+            if slope_tilt
+            else None
+        )
+        cpp_out = (
+            extract_cpp_descriptors(
+                snd=snd,
+                floor=pitch_floor,
+                ceiling=pitch_ceiling,
+                frame_shift=time_step,
+            )
+            if cpp_descriptors
+            else None
+        )
+        audio_duration_out = extract_audio_duration(snd=snd) if duration else None
+        jitter_out = (
+            extract_jitter(
+                snd=snd,
                 floor=pitch_floor,
                 ceiling=pitch_ceiling,
             )
-            out["local_shimmer"] = shm["local_shimmer"]
-            out["localDB_shimmer"] = shm["localDB_shimmer"]
-            out["apq3_shimmer"] = shm["apq3_shimmer"]
-            out["apq5_shimmer"] = shm["apq5_shimmer"]
-            out["apq11_shimmer"] = shm["apq11_shimmer"]
-            out["dda_shimmer"] = shm["dda_shimmer"]
+            if jitter
+            else None
+        )
+        shimmer_out = (
+            extract_shimmer(
+                snd=snd,
+                floor=pitch_floor,
+                ceiling=pitch_ceiling,
+            )
+            if shimmer
+            else None
+        )
 
-        return out
+        # --- collect outputs ---
+        feature_data: Dict[str, Any] = {}
 
-    @workflow.define
-    def _wf(
-        xs: Sequence[Audio],
-        time_step: float,
-        window_length: float,
-        pitch_unit: str,
-        speech_rate: bool,
-        intensity_descriptors: bool,
-        harmonicity_descriptors: bool,
-        formants: bool,
-        spectral_moments: bool,
-        pitch: bool,
-        slope_tilt: bool,
-        cpp_descriptors: bool,
-        duration: bool,
-        jitter: bool,
-        shimmer: bool,
-    ) -> List[Dict[str, Any]]:
-        # Bind constants; split only over the audios
-        t = _extract_all_for_sample(
-            time_step=time_step,
-            window_length=window_length,
-            pitch_unit=pitch_unit,
-            speech_rate=speech_rate,
-            intensity_descriptors=intensity_descriptors,
-            harmonicity_descriptors=harmonicity_descriptors,
-            formants=formants,
-            spectral_moments=spectral_moments,
-            pitch=pitch,
-            slope_tilt=slope_tilt,
-            cpp_descriptors=cpp_descriptors,
-            duration=duration,
-            jitter=jitter,
-            shimmer=shimmer,
-        ).split(sample=xs)
+        if duration and audio_duration_out is not None:
+            feature_data["duration"] = audio_duration_out["duration"]
 
-        node = workflow.add(t, name="map_praat_parselmouth_features")
-        return node.out
+        if speech_rate and speech_rate_out is not None:
+            feature_data["speaking_rate"] = speech_rate_out["speaking_rate"]
+            feature_data["articulation_rate"] = speech_rate_out["articulation_rate"]
+            feature_data["phonation_ratio"] = speech_rate_out["phonation_ratio"]
+            feature_data["pause_rate"] = speech_rate_out["pause_rate"]
+            feature_data["mean_pause_duration"] = speech_rate_out["mean_pause_dur"]
 
-    # Map legacy plugin names to compose workers
-    worker = "debug" if plugin in ("serial", "debug") else plugin
-    worker_kwargs = plugin_args or {}
+        if pitch and pitch_out is not None:
+            unit_l = pitch_unit.lower()
+            feature_data[f"mean_f0_{unit_l}"] = pitch_out[f"mean_f0_{unit_l}"]
+            feature_data[f"std_f0_{unit_l}"] = pitch_out[f"stdev_f0_{unit_l}"]
 
-    wf = _wf(
-        xs=audios,
-        time_step=time_step,
-        window_length=window_length,
-        pitch_unit=pitch_unit,
-        speech_rate=speech_rate,
-        intensity_descriptors=intensity_descriptors,
-        harmonicity_descriptors=harmonicity_descriptors,
-        formants=formants,
-        spectral_moments=spectral_moments,
-        pitch=pitch,
-        slope_tilt=slope_tilt,
-        cpp_descriptors=cpp_descriptors,
-        duration=duration,
-        jitter=jitter,
-        shimmer=shimmer,
-    )
-    res: Any = wf(worker=worker, cache_root=cache_dir, **worker_kwargs)
-    return list(res.out)
+        if intensity_descriptors and intensity_out is not None:
+            feature_data["mean_intensity_db"] = intensity_out["mean_db"]
+            feature_data["std_intensity_db"] = intensity_out["std_db"]
+            feature_data["range_ratio_intensity_db"] = intensity_out["range_db_ratio"]
+
+        if harmonicity_descriptors and harmonicity_out is not None:
+            feature_data["mean_hnr_db"] = harmonicity_out["hnr_db_mean"]
+            feature_data["std_hnr_db"] = harmonicity_out["hnr_db_std_dev"]
+
+        if slope_tilt and slope_tilt_out is not None:
+            feature_data["spectral_slope"] = slope_tilt_out["spectral_slope"]
+            feature_data["spectral_tilt"] = slope_tilt_out["spectral_tilt"]
+
+        if cpp_descriptors and cpp_out is not None:
+            feature_data["cepstral_peak_prominence_mean"] = cpp_out["mean_cpp"]
+            feature_data["cepstral_peak_prominence_std"] = cpp_out["std_dev_cpp"]
+
+        if formants and formants_out is not None:
+            feature_data["mean_f1_loc"] = formants_out["f1_mean"]
+            feature_data["std_f1_loc"] = formants_out["f1_std"]
+            feature_data["mean_b1_loc"] = formants_out["b1_mean"]
+            feature_data["std_b1_loc"] = formants_out["b1_std"]
+            feature_data["mean_f2_loc"] = formants_out["f2_mean"]
+            feature_data["std_f2_loc"] = formants_out["f2_std"]
+            feature_data["mean_b2_loc"] = formants_out["b2_mean"]
+            feature_data["std_b2_loc"] = formants_out["b2_std"]
+
+        if spectral_moments and spectral_moments_out is not None:
+            feature_data["spectral_gravity"] = spectral_moments_out["spectral_gravity"]
+            feature_data["spectral_std_dev"] = spectral_moments_out["spectral_std_dev"]
+            feature_data["spectral_skewness"] = spectral_moments_out["spectral_skewness"]
+            feature_data["spectral_kurtosis"] = spectral_moments_out["spectral_kurtosis"]
+
+        if jitter and jitter_out is not None:
+            feature_data["local_jitter"] = jitter_out["local_jitter"]
+            feature_data["localabsolute_jitter"] = jitter_out["localabsolute_jitter"]
+            feature_data["rap_jitter"] = jitter_out["rap_jitter"]
+            feature_data["ppq5_jitter"] = jitter_out["ppq5_jitter"]
+            feature_data["ddp_jitter"] = jitter_out["ddp_jitter"]
+
+        if shimmer and shimmer_out is not None:
+            feature_data["local_shimmer"] = shimmer_out["local_shimmer"]
+            feature_data["localDB_shimmer"] = shimmer_out["localDB_shimmer"]
+            feature_data["apq3_shimmer"] = shimmer_out["apq3_shimmer"]
+            feature_data["apq5_shimmer"] = shimmer_out["apq5_shimmer"]
+            feature_data["apq11_shimmer"] = shimmer_out["apq11_shimmer"]
+            feature_data["dda_shimmer"] = shimmer_out["dda_shimmer"]
+
+        extracted_data.append(feature_data)
+
+    return extracted_data
