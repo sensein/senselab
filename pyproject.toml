@@ -96,9 +96,9 @@ senselab-ai = [
 optional = true
 
 [tool.poetry.group.dev.dependencies]
-pytest-xdist = {version = "~=3.6.1", extras = ["psutil"]}
+pytest-xdist = {version = "~=3.8.0", extras = ["psutil"]}
 pytest-mock = "~=3.14"
-pytest-cov = "~=6.0"
+pytest-cov = "~=7.0"
 mypy = "~=1.9"
 pre-commit = "~=4.0"
 ruff = "~=0.3"
@@ -111,7 +111,7 @@ python-dotenv = "~=1.1"
 optional = true
 
 [tool.poetry.group.docs.dependencies]
-pdoc = "~=15.0"
+pdoc = "~=16.0"
 
 [tool.poetry.requires-plugins]
 poetry-dynamic-versioning = {version = ">=1.0.0,<2.0.0", extras = ["plugin"]}
