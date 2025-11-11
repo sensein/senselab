@@ -22,6 +22,7 @@ See the **Third-party licenses** section below for details and references.
 | ipywidgets                 | [BSD-3-Clause](https://github.com/jupyter-widgets/ipywidgets/blob/main/LICENSE)             |
 | iso639                     | [MIT](https://github.com/janpipek/iso639-python/blob/master/LICENSE)                        |
 | jiwer                      | [Apache-2.0](https://github.com/jitsi/jiwer/blob/master/LICENSE)                            |
+| joblib                      | [BSD-3-Clause](https://github.com/joblib/joblib/blob/main/)                            |
 | matplotlib                 | [CUSTOM](https://github.com/matplotlib/matplotlib/blob/main/LICENSE)                        |
 | mediapipe                  | [Apache-2.0](https://github.com/google-ai-edge/mediapipe/blob/master/LICENSE)                        |
 | nbformat                   | [BSD-3-Clause](https://github.com/jupyter/nbformat/blob/main/LICENSE)                       |

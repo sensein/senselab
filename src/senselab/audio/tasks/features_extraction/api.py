@@ -12,7 +12,10 @@ Backends:
     - **torchaudio-squim**: Objective quality metrics (e.g., STOI, PESQ, SI-SDR).
 """
 
-from typing import Any, Dict, List, Union
+import os
+from typing import Any, Dict, List, Literal, Optional, Union
+
+from joblib import Memory, Parallel, delayed
 
 from senselab.audio.data_structures import Audio
 
@@ -28,11 +31,15 @@ def extract_features_from_audios(
     parselmouth: Union[Dict[str, str], bool] = True,
     torchaudio: Union[Dict[str, str], bool] = True,
     torchaudio_squim: bool = True,
+    n_jobs: int = 1,
+    backend: Literal["threading", "loky", "multiprocessing", "sequential"] = "sequential",
+    verbose: int = 0,
+    cache_dir: Optional[str | os.PathLike] = None,
 ) -> List[Dict[str, Any]]:
     """Extract multi-backend features for each `Audio` and return a list of dicts.
 
-    Enabled backends run in parallelizable sub-workflows (where applicable) and
-    their outputs are merged per audio. Disable any backend by passing ``False``;
+    Enabled joblibs backends run in parallelizable sub-workflows (where applicable)
+    and their outputs are merged per audio. Disable any backend by passing ``False``;
     customize a backend by passing a dict (see below for keys and defaults).
 
     Args:
@@ -51,7 +58,8 @@ def extract_features_from_audios(
                   "speech_rate": True, "intensity_descriptors": True,
                   "harmonicity_descriptors": True, "formants": True, "spectral_moments": True,
                   "pitch": True, "slope_tilt": True, "cpp_descriptors": True, "duration": True,
-                  "jitter": True, "shimmer": True}``
+                  "jitter": True, "shimmer": True, "n_jobs": 1, "backend": "loky", "verbose": 0,
+                  "cache_dir": None}``
             - ``dict`` → override any of the above keys.
         torchaudio (dict | bool, optional):
             - ``False`` → skip torchaudio.
@@ -62,6 +70,29 @@ def extract_features_from_audios(
         torchaudio_squim (bool, optional):
             - ``False`` → skip objective quality metrics.
             - ``True``  → compute metrics such as STOI, PESQ, SI-SDR (backend-dependent defaults).
+        n_jobs (int, optional):
+            Number of parallel jobs to run (default: 1).
+        backend (str, optional):
+            Backend to use for parallelization.
+            - “sequential” (used by default) is a serial backend.
+            - “loky” can induce some communication and memory overhead
+            when exchanging input and output data with the worker Python processes.
+            On some rare systems (such as Pyiodide), the loky backend may not be available.
+            - “multiprocessing” previous process-based backend based on multiprocessing.Pool.
+            Less robust than loky.
+            - “threading” is a very low-overhead backend but it suffers from
+            the Python Global Interpreter Lock if the called function relies
+            a lot on Python objects. “threading” is mostly useful when the execution
+            bottleneck is a compiled extension that explicitly releases the GIL
+            (for instance a Cython loop wrapped in a “with nogil” block or an expensive
+            call to a library such as NumPy).
+        verbose (int, optional):
+            Verbosity (default: 0).
+            If non zero, progress messages are printed. Above 50, the output is sent to stdout.
+            The frequency of the messages increases with the verbosity level.
+            If it more than 10, all iterations are reported.
+        cache_dir (str | os.PathLike, optional):
+            Path to cache directory. If None is given, no caching is done.
 
     Returns:
         list[dict[str, Any]]: One dict per input audio. Keys present depend on
@@ -386,68 +417,86 @@ def extract_features_from_audios(
         >>> "praat_parselmouth" in feats[0]
         True
     """
-    if opensmile:
-        default_opensmile: Dict[str, Any] = {"feature_set": "eGeMAPSv02", "feature_level": "Functionals"}
-        if isinstance(opensmile, dict):
-            my_opensmile = {**default_opensmile, **opensmile}
-        else:
-            my_opensmile = default_opensmile
-        opensmile_features = extract_opensmile_features_from_audios(audios, **my_opensmile)  # type: ignore
-    if parselmouth:
-        default_parselmouth: Dict[str, Any] = {
-            "time_step": 0.005,
-            "window_length": 0.025,
-            "pitch_unit": "Hertz",
-            "speech_rate": True,
-            "intensity_descriptors": True,
-            "harmonicity_descriptors": True,
-            "formants": True,
-            "spectral_moments": True,
-            "pitch": True,
-            "slope_tilt": True,
-            "cpp_descriptors": True,
-            "duration": True,
-            "jitter": True,
-            "shimmer": True,
-        }
-        # Update default_parselmouth with provided parselmouth dictionary
-        if isinstance(parselmouth, dict):
-            my_parselmouth = {**default_parselmouth, **parselmouth}
-        else:
-            my_parselmouth = default_parselmouth
+    # defaults
+    default_opensmile: Dict[str, Any] = {"feature_set": "eGeMAPSv02", "feature_level": "Functionals"}
+    default_parselmouth: Dict[str, Any] = {
+        "time_step": 0.005,
+        "window_length": 0.025,
+        "pitch_unit": "Hertz",
+        "speech_rate": True,
+        "intensity_descriptors": True,
+        "harmonicity_descriptors": True,
+        "formants": True,
+        "spectral_moments": True,
+        "pitch": True,
+        "slope_tilt": True,
+        "cpp_descriptors": True,
+        "duration": True,
+        "jitter": True,
+        "shimmer": True,
+        "n_jobs": 1,
+        "backend": "loky",
+        "verbose": 0,
+        "cache_dir": None,
+    }
+    default_torchaudio: Dict[str, Any] = {
+        "freq_low": 80,
+        "freq_high": 500,
+        "n_fft": 1024,
+        "n_mels": 128,
+        "n_mfcc": 40,
+        "win_length": None,
+        "hop_length": None,
+    }
 
-        parselmouth_features = extract_praat_parselmouth_features_from_audios(audios=audios, **my_parselmouth)  # type: ignore
+    # Resolve configs
+    use_opensmile = bool(opensmile)
+    use_parselmouth = bool(parselmouth)
+    use_torchaudio = bool(torchaudio)
+    use_squim = bool(torchaudio_squim)
 
-    if torchaudio:
-        default_torchaudio: Dict[str, Any] = {
-            "freq_low": 80,
-            "freq_high": 500,
-            "n_fft": 1024,
-            "n_mels": 128,
-            "n_mfcc": 40,
-            "win_length": None,
-            "hop_length": None,
-        }
-        if isinstance(torchaudio, dict):
-            my_torchaudio = {**default_torchaudio, **torchaudio}
-        else:
-            my_torchaudio = default_torchaudio
+    if not any([use_opensmile, use_parselmouth, use_torchaudio, use_squim]):
+        return [{} for _ in audios]
 
-        torchaudio_features = extract_torchaudio_features_from_audios(audios=audios, **my_torchaudio)  # type: ignore
-    if torchaudio_squim:
-        torchaudio_squim_features = extract_objective_quality_features_from_audios(audios=audios)
+    def _extract_one(a: Audio) -> Dict[str, Any]:
+        out: Dict[str, Any] = {}
+        if use_opensmile:
+            my_opensmile = {**default_opensmile, **(opensmile if isinstance(opensmile, dict) else {})}
 
-    results = []
-    for i in range(len(audios)):
-        result = {}
-        if opensmile:
-            result["opensmile"] = opensmile_features[i]
-        if parselmouth:
-            result["praat_parselmouth"] = parselmouth_features[i]
-        if torchaudio:
-            result["torchaudio"] = torchaudio_features[i]
-        if torchaudio_squim:
-            result["torchaudio_squim"] = torchaudio_squim_features[i]
-        results.append(result)
+            def _run_opensmile(a: Audio) -> Dict[str, Any]:
+                return extract_opensmile_features_from_audios([a], **my_opensmile)[0]
 
-    return results
+            out["opensmile"] = _run_opensmile(a)
+        if use_parselmouth:
+            my_parselmouth = {**default_parselmouth, **(parselmouth if isinstance(parselmouth, dict) else {})}
+
+            def _run_parselmouth(a: Audio) -> Dict[str, Any]:
+                return extract_praat_parselmouth_features_from_audios([a], **my_parselmouth)[0]
+
+            out["praat_parselmouth"] = _run_parselmouth(a)
+        if use_torchaudio:
+            my_ta = {**default_torchaudio, **(torchaudio if isinstance(torchaudio, dict) else {})}
+
+            def _run_torchaudio(a: Audio) -> Dict[str, Any]:
+                return extract_torchaudio_features_from_audios([a], **my_ta)[0]
+
+            out["torchaudio"] = _run_torchaudio(a)
+        if use_squim:
+
+            def _run_squim(a: Audio) -> Dict[str, Any]:
+                return extract_objective_quality_features_from_audios([a])[0]
+
+            out["torchaudio_squim"] = _run_squim(a)
+        return out
+
+    # Cache
+    memory: Optional[Memory] = Memory(str(cache_dir), verbose=verbose) if cache_dir else None
+    if memory:
+        _extract_one = memory.cache(_extract_one)
+
+    # Parallel across audios
+    return Parallel(
+        n_jobs=n_jobs,
+        backend=backend,
+        verbose=verbose,
+    )(delayed(_extract_one)(a) for a in audios)
