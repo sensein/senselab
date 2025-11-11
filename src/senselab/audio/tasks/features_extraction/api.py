@@ -463,24 +463,14 @@ def extract_features_from_audios(
         if use_opensmile:
             my_opensmile = {**default_opensmile, **(opensmile if isinstance(opensmile, dict) else {})}
 
-            def _run_opensmile(a: Audio) -> Dict[str, Any]:
-                return extract_opensmile_features_from_audios([a], **my_opensmile)[0]
-
-            out["opensmile"] = _run_opensmile(a)
+            out["opensmile"] = extract_opensmile_features_from_audios([a], **my_opensmile)[0]
         if use_parselmouth:
             my_parselmouth = {**default_parselmouth, **(parselmouth if isinstance(parselmouth, dict) else {})}
-
-            def _run_parselmouth(a: Audio) -> Dict[str, Any]:
-                return extract_praat_parselmouth_features_from_audios([a], **my_parselmouth)[0]
-
-            out["praat_parselmouth"] = _run_parselmouth(a)
+            out["praat_parselmouth"] = extract_praat_parselmouth_features_from_audios([a], **my_parselmouth)[0]
         if use_torchaudio:
             my_ta = {**default_torchaudio, **(torchaudio if isinstance(torchaudio, dict) else {})}
 
-            def _run_torchaudio(a: Audio) -> Dict[str, Any]:
-                return extract_torchaudio_features_from_audios([a], **my_ta)[0]
-
-            out["torchaudio"] = _run_torchaudio(a)
+            out["torchaudio"] = extract_torchaudio_features_from_audios([a], **my_ta)[0]
         if use_squim:
 
             def _run_squim(a: Audio) -> Dict[str, Any]:
