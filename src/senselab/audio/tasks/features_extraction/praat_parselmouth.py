@@ -1291,7 +1291,7 @@ def extract_praat_parselmouth_features_from_audios(
         pitch_ceiling = pitch_values_out["pitch_ceiling"]
 
         # --- conditionally compute blocks ---
-        speech_rate_out = extract_speech_rate(snd=snd) if (speech_rate) else None
+        speech_rate_out = extract_speech_rate(snd=snd) if speech_rate else None
 
         pitch_out = (
             extract_pitch_descriptors(
