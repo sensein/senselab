@@ -8,7 +8,8 @@ authors = [
 ]
 maintainers = [
   {name = "Fabio Catania", email = "fabiocat@mit.edu"},
-  {name = "Satra Ghosh", email = "satra@mit.edu"}
+  {name = "Satra Ghosh", email = "satra@mit.edu"},
+  {name = "Jordan Wilke", email = "wilke18@mit.edu"}
 ]
 license = {file = "LICENSE.md"}
 readme = "README.md"
@@ -66,7 +67,7 @@ ultralytics = {version = "~=8.3", optional = true}
 av = {version = "~=15", optional = true}
 notebook-intelligence = {version = "~=2.3.2", optional = true}
 ipywidgets = {version = "~=8.1", optional = true}
-ipykernel = {version = "~=6.3", optional = true}
+ipykernel = {version = "~=7.1", optional = true}
 nbformat = {version = "~=5.10", optional = true}
 nbss-upload = {version = "~=0.1", optional = true}
 jupyterlab = {version = "^4.4", optional = true}
@@ -97,9 +98,9 @@ senselab-ai = [
 optional = true
 
 [tool.poetry.group.dev.dependencies]
-pytest-xdist = {version = "~=3.6.1", extras = ["psutil"]}
+pytest-xdist = {version = "~=3.8.0", extras = ["psutil"]}
 pytest-mock = "~=3.14"
-pytest-cov = "~=6.0"
+pytest-cov = "~=7.0"
 mypy = "~=1.9"
 pre-commit = "~=4.0"
 ruff = "~=0.3"
@@ -112,7 +113,7 @@ python-dotenv = "~=1.1"
 optional = true
 
 [tool.poetry.group.docs.dependencies]
-pdoc = "~=15.0"
+pdoc = "~=16.0"
 
 [tool.poetry.requires-plugins]
 poetry-dynamic-versioning = {version = ">=1.0.0,<2.0.0", extras = ["plugin"]}
