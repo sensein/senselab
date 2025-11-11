@@ -111,7 +111,7 @@ jobs:
 
 
   start-runner-311-core:
-    if: github.event.pull_request.draft == false && contains(github.event.pull_request.labels.*.name, 'to-test-gpu') && success()
+    if: github.event.pull_request.draft == false && contains(github.event.pull_request.labels.*.name, 'to-test') && success()
     needs:
     - pre-commit
     - macos-tests
@@ -279,7 +279,7 @@ jobs:
 
 
   start-runner-311:
-    if: github.event.pull_request.draft == false && contains(github.event.pull_request.labels.*.name, 'to-test-gpu') && success()
+    if: github.event.pull_request.draft == false && contains(github.event.pull_request.labels.*.name, 'to-test') && success()
     needs:
     - pre-commit
     - macos-tests
@@ -447,7 +447,7 @@ jobs:
 
 
   start-runner-312:
-    if: github.event.pull_request.draft == false && contains(github.event.pull_request.labels.*.name, 'to-test-gpu') && success()
+    if: github.event.pull_request.draft == false && contains(github.event.pull_request.labels.*.name, 'to-test') && success()
     needs:
     - pre-commit
     - macos-tests
