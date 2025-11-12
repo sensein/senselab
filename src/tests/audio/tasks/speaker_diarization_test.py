@@ -36,7 +36,7 @@ except ModuleNotFoundError:
 @pytest.fixture
 def pyannote_model() -> PyannoteAudioModel:
     """Fixture for Pyannote model."""
-    return PyannoteAudioModel(path_or_uri="pyannote/speaker-diarization-3.1")
+    return PyannoteAudioModel(path_or_uri="pyannote/speaker-diarization-community-1")
 
 
 @pytest.mark.skipif(PYANNOTE_INSTALLED, reason="Pyannote is installed")
