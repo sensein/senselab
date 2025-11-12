@@ -1285,12 +1285,12 @@ def extract_praat_parselmouth_features_from_audios(
 
     # Utility function to extract features per-audio worker
     def _extract_one(snd: Audio) -> Dict[str, Any]:
-        # --- shared precomputations ---
+        # Shared precomputations
         pitch_values_out = extract_pitch_values(snd=snd)
         pitch_floor = pitch_values_out["pitch_floor"]
         pitch_ceiling = pitch_values_out["pitch_ceiling"]
 
-        # --- conditionally compute blocks ---
+        # Conditionally compute blocks
         speech_rate_out = extract_speech_rate(snd=snd) if speech_rate else None
 
         pitch_out = (

@@ -38,7 +38,7 @@ def extract_features_from_audios(
 ) -> List[Dict[str, Any]]:
     """Extract multi-backend features for each `Audio` and return a list of dicts.
 
-    Enabled joblibs backends run in parallelizable sub-workflows (where applicable)
+    Enabled joblib backends run in parallelizable sub-workflows (where applicable)
     and their outputs are merged per audio. Disable any backend by passing ``False``;
     customize a backend by passing a dict (see below for keys and defaults).
 
@@ -462,21 +462,15 @@ def extract_features_from_audios(
         out: Dict[str, Any] = {}
         if use_opensmile:
             my_opensmile = {**default_opensmile, **(opensmile if isinstance(opensmile, dict) else {})}
-
             out["opensmile"] = extract_opensmile_features_from_audios([a], **my_opensmile)[0]
         if use_parselmouth:
             my_parselmouth = {**default_parselmouth, **(parselmouth if isinstance(parselmouth, dict) else {})}
             out["praat_parselmouth"] = extract_praat_parselmouth_features_from_audios([a], **my_parselmouth)[0]
         if use_torchaudio:
             my_ta = {**default_torchaudio, **(torchaudio if isinstance(torchaudio, dict) else {})}
-
             out["torchaudio"] = extract_torchaudio_features_from_audios([a], **my_ta)[0]
         if use_squim:
-
-            def _run_squim(a: Audio) -> Dict[str, Any]:
-                return extract_objective_quality_features_from_audios([a])[0]
-
-            out["torchaudio_squim"] = _run_squim(a)
+            out["torchaudio_squim"] = extract_objective_quality_features_from_audios([a])[0]
         return out
 
     # Cache
