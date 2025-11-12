@@ -25,12 +25,13 @@ try:
 except ModuleNotFoundError:
     TORCHAUDIO_AVAILABLE = False
 
-try:
-    from nemo.collections.asr.models import SortformerEncLabelModel
 
-    NEMO_SORTFORMER_AVAILABLE = True
-except ModuleNotFoundError:
-    NEMO_SORTFORMER_AVAILABLE = False
+from senselab.utils.data_structures.docker import docker_is_running
+
+if docker_is_running():
+    DOCKER_AVAILABLE = True
+else:
+    DOCKER_AVAILABLE = False
 
 
 @pytest.fixture
@@ -58,10 +59,9 @@ def test_diarize_audios(resampled_mono_audio_sample: Audio, pyannote_model: Pyan
 
 
 @pytest.mark.skipif(
-    not NEMO_SORTFORMER_AVAILABLE or not TORCHAUDIO_AVAILABLE,
-    reason="NVIDIA Sortformer or torchaudio are not installed",
+    not DOCKER_AVAILABLE or not TORCHAUDIO_AVAILABLE,
+    reason="torchaudio is not installed or Docker is not available",
 )
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_diarize_audios_with_nvidia_sortformer(resampled_mono_audio_sample: Audio) -> None:
     """Test diarizing audios with NVIDIA Sortformer."""
     model: HFModel = HFModel(path_or_uri="nvidia/diar_sortformer_4spk-v1")
