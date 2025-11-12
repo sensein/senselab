@@ -5,7 +5,6 @@ from typing import Any, List, Optional, Tuple, TypeGuard
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.text_to_speech.coqui import CoquiTTS
 from senselab.audio.tasks.text_to_speech.huggingface import HuggingFaceTTS
-from senselab.audio.tasks.text_to_speech.marstts import Mars5TTS
 from senselab.utils.data_structures import CoquiTTSModel, DeviceType, HFModel, Language, SenselabModel, TorchModel
 
 
@@ -20,7 +19,7 @@ def synthesize_texts(
     """Synthesizes speech from all texts using the given model.
 
     This function synthesizes speech from a list of text strings using the specified text-to-speech (TTS) model.
-    It supports models from HuggingFace, coqui-tts, and `Mars5TTS`.
+    It supports models from HuggingFace and coqui-tts.
 
     Args:
         texts (List[str]): The list of text strings to be synthesized.
@@ -34,7 +33,6 @@ def synthesize_texts(
             A list where each element is a target audio or a tuple of target audio and transcript.
             Depending on the model being used, the `target` input may need to be provided in a specific format:
             - Hugging Face models do not require a `target` input at all.
-            - `Mars5TTS` requires both `Audio` and a transcript for all inputs.
         **kwargs: Additional keyword arguments to pass to the synthesis function.
             Depending on the model used (e.g., HFModel), additional arguments
             may be required. Refer to the model-specific documentation for details.
@@ -54,22 +52,6 @@ def synthesize_texts(
 
     if isinstance(model, HFModel):
         return HuggingFaceTTS.synthesize_texts_with_transformers(texts=texts, model=model, device=device, **kwargs)
-    elif isinstance(model, TorchModel):
-        if model.path_or_uri == "Camb-ai/mars5-tts":
-            # Converting target to the required format for Mars5TTS
-            assert targets is not None, ValueError(
-                "Mars5-TTS requires target audios and their corresponding transcripts."
-            )
-
-            if _check_all_have_transcripts(targets):
-                return Mars5TTS.synthesize_texts_with_mars5tts(
-                    texts=texts, targets=targets, language=language, device=device, **kwargs
-                )
-            else:
-                raise ValueError("Mars5-TTS requires target audios and their corresponding transcripts.")
-        else:
-            raise NotImplementedError(f"{model.path_or_uri} is currently not a supported Torch model. \
-                                      Feel free to reach out to us about integrating this model into senselab.")
     elif isinstance(model, CoquiTTSModel):
         coqui_targets: Optional[List[Audio]] = None
         if targets is not None:

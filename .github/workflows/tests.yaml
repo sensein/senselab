@@ -19,7 +19,7 @@ jobs:
         include:
         - {os: macos-latest, architecture: arm64, python-version: '3.11'}
         # - {os: macos-latest, architecture: arm64, python-version: '3.12'}
-        # the reason why we commented out 3.12 is that it hits github rate limit for some modules (e.g., knn-vc, Camb-ai/mars5-tts)
+        # the reason why we commented out 3.12 is that it hits github rate limit for some modules (e.g., knn-vc)
     steps:
     - uses: actions/checkout@v5
       with:
