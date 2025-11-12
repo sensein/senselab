@@ -8,9 +8,10 @@ by the senselab community.
 import inspect
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 import numpy as np
+from joblib import Memory, Parallel, delayed
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import logger
@@ -76,9 +77,9 @@ def get_sound(audio: Union[Path, Audio], sampling_rate: int = 16000) -> parselmo
             snd_full = parselmouth.Sound(audio.waveform, audio.sampling_rate)
 
         # Preprocessing
-        if parselmouth.praat.call(snd_full, "Get number of channels") > 1:
+        if snd_full.n_channels > 1:
             snd_full = snd_full.convert_to_mono()
-        if parselmouth.praat.call(snd_full, "Get sampling frequency") != sampling_rate:
+        if snd_full.sampling_frequency != sampling_rate:
             snd_full = parselmouth.praat.call(snd_full, "Resample", sampling_rate, 50)
             # Details of queery: https://www.fon.hum.uva.nl/praat/manual/Get_sampling_frequency.html
             # Details of conversion: https://www.fon.hum.uva.nl/praat/manual/Sound__Resample___.html
@@ -610,7 +611,6 @@ def extract_harmonicity_descriptors(
             time_step=frame_shift, minimum_pitch=floor, silence_threshold=0.1, periods_per_window=4.5
         )
         # Praat recommends using the CC method here: https://www.fon.hum.uva.nl/praat/manual/Sound__To_Harmonicity__cc____.html
-
         hnr_db_mean = parselmouth.praat.call(harmonicity, "Get mean", 0, 0)
         hnr_db_std_dev = parselmouth.praat.call(harmonicity, "Get standard deviation", 0, 0)
 
@@ -810,7 +810,14 @@ def extract_cpp_descriptors(
 
 
 def measure_f1f2_formants_bandwidths(
-    snd: Union[parselmouth.Sound, Path, Audio], floor: float, ceiling: float, frame_shift: float
+    snd: Union[parselmouth.Sound, Path, Audio],
+    floor: float,
+    ceiling: float,
+    frame_shift: float,
+    max_formants: int = 5,
+    maximum_formant_hz: float = 5000.0,
+    window_length: float = 0.025,
+    pre_emphasis_from_hz: float = 50.0,
 ) -> Dict[str, float]:
     """Extract Formant Frequency Features.
 
@@ -822,6 +829,10 @@ def measure_f1f2_formants_bandwidths(
         floor (float): Minimum expected pitch value, set using value found in `pitch_values` function.
         ceiling (float): Maximum expected pitch value, set using value found in `pitch_values` function.
         frame_shift (float): Time rate at which to extract a new pitch value, typically set to 5 ms.
+        max_formants (int, optional): Maximum number of formants to measure. Defaults to 5.
+        maximum_formant_hz (float, optional): Maximum formant frequency to measure. Defaults to 5000.0.
+        window_length (float, optional): Window length for formant analysis. Defaults to 0.025.
+        pre_emphasis_from_hz (float, optional): Pre-emphasis frequency for formant analysis. Defaults to 50.0.
 
     Returns:
         dict: A dictionary containing the following keys:
@@ -853,59 +864,58 @@ def measure_f1f2_formants_bandwidths(
         - Adapted from code at this [link](https://osf.io/6dwr3/).
     """
     if not PARSELMOUTH_AVAILABLE:
-        raise ModuleNotFoundError(
-            "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install senselab`."
-        )
-
+        raise ModuleNotFoundError("`parselmouth` is not installed. Install with `pip install senselab`.")
     try:
         if not isinstance(snd, parselmouth.Sound):
             snd = get_sound(snd)
 
-        # Extract formants
-        formants = parselmouth.praat.call(snd, "To Formant (burg)", frame_shift, 5, 5000, 0.025, 50)
+        formants = snd.to_formant_burg(
+            time_step=frame_shift,
+            max_number_of_formants=max_formants,
+            maximum_formant=maximum_formant_hz,
+            window_length=window_length,
+            pre_emphasis_from=pre_emphasis_from_hz,
+        )
         # Key Hyperparameters: https://www.fon.hum.uva.nl/praat/manual/Sound__To_Formant__burg____.html
 
-        # Extract pitch using CC method
         pitch = snd.to_pitch_cc(time_step=frame_shift, pitch_floor=floor, pitch_ceiling=ceiling)
         pulses = parselmouth.praat.call([snd, pitch], "To PointProcess (cc)")
 
-        F1_list, F2_list, B1_list, B2_list = [], [], [], []
-        numPoints = parselmouth.praat.call(pulses, "Get number of points")
+        n = parselmouth.praat.call(pulses, "Get number of points")
+        if n == 0:
+            return {
+                k: float("nan")
+                for k in ("f1_mean", "f1_std", "b1_mean", "b1_std", "f2_mean", "f2_std", "b2_mean", "b2_std")
+            }
 
-        for point in range(1, numPoints + 1):
-            t = parselmouth.praat.call(pulses, "Get time from index", point)
+        times = np.array(
+            [parselmouth.praat.call(pulses, "Get time from index", i + 1) for i in range(n)],
+            dtype=float,
+        )
 
-            F1_value = parselmouth.praat.call(formants, "Get value at time", 1, t, "Hertz", "Linear")
-            if not np.isnan(F1_value):
-                F1_list.append(F1_value)
-
-            B1_value = parselmouth.praat.call(formants, "Get bandwidth at time", 1, t, "Hertz", "Linear")
-            if not np.isnan(B1_value):
-                B1_list.append(B1_value)
-
-            F2_value = parselmouth.praat.call(formants, "Get value at time", 2, t, "Hertz", "Linear")
-            if not np.isnan(F2_value):
-                F2_list.append(F2_value)
-
-            B2_value = parselmouth.praat.call(formants, "Get bandwidth at time", 2, t, "Hertz", "Linear")
-            if not np.isnan(B2_value):
-                B2_list.append(B2_value)
-
-        f1_mean, f1_std = (np.mean(F1_list), np.std(F1_list)) if F1_list else (np.nan, np.nan)
-        b1_mean, b1_std = (np.mean(B1_list), np.std(B1_list)) if B1_list else (np.nan, np.nan)
-        f2_mean, f2_std = (np.mean(F2_list), np.std(F2_list)) if F2_list else (np.nan, np.nan)
-        b2_mean, b2_std = (np.mean(B2_list), np.std(B2_list)) if B2_list else (np.nan, np.nan)
+        # Sample at those times (native calls)
+        f1 = np.array(
+            [formants.get_value_at_time(1, t, unit=parselmouth.FormantUnit.HERTZ) for t in times], dtype=float
+        )
+        b1 = np.array(
+            [formants.get_bandwidth_at_time(1, t, unit=parselmouth.FormantUnit.HERTZ) for t in times], dtype=float
+        )
+        f2 = np.array(
+            [formants.get_value_at_time(2, t, unit=parselmouth.FormantUnit.HERTZ) for t in times], dtype=float
+        )
+        b2 = np.array(
+            [formants.get_bandwidth_at_time(2, t, unit=parselmouth.FormantUnit.HERTZ) for t in times], dtype=float
+        )
 
         return {
-            "f1_mean": f1_mean,
-            "f1_std": f1_std,
-            "b1_mean": b1_mean,
-            "b1_std": b1_std,
-            "f2_mean": f2_mean,
-            "f2_std": f2_std,
-            "b2_mean": b2_mean,
-            "b2_std": b2_std,
+            "f1_mean": float(np.nanmean(f1)),
+            "f1_std": float(np.nanstd(f1)),
+            "b1_mean": float(np.nanmean(b1)),
+            "b1_std": float(np.nanstd(b1)),
+            "f2_mean": float(np.nanmean(f2)),
+            "f2_std": float(np.nanstd(f2)),
+            "b2_mean": float(np.nanmean(b2)),
+            "b2_std": float(np.nanstd(b2)),
         }
 
     except Exception as e:
@@ -914,14 +924,8 @@ def measure_f1f2_formants_bandwidths(
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
         return {
-            "f1_mean": np.nan,
-            "f1_std": np.nan,
-            "b1_mean": np.nan,
-            "b1_std": np.nan,
-            "f2_mean": np.nan,
-            "f2_std": np.nan,
-            "b2_mean": np.nan,
-            "b2_std": np.nan,
+            k: float("nan")
+            for k in ("f1_mean", "f1_std", "b1_mean", "b1_std", "f2_mean", "f2_std", "b2_mean", "b2_std")
         }
 
 
@@ -986,9 +990,15 @@ def extract_spectral_moments(
 
         Gravity_list, STD_list, Skew_list, Kurt_list = [], [], [], []
 
-        num_steps = parselmouth.praat.call(spectrogram, "Get number of frames")
+        num_steps = spectrogram.nx  # Number of frames exposed in the spectrogram
+
         for i in range(1, num_steps + 1):
-            t = parselmouth.praat.call(spectrogram, "Get time from frame number", i)
+            t = spectrogram.x1 + (i - 1) * spectrogram.dx
+            # where x1 is the time of the center of the first frame
+            # and dx is the time step (seconds between frames)
+            # This is equivalent as doing
+            # t = parselmouth.praat.call(spectrogram, "Get time from frame number", i)
+
             pitch_value = pitch.get_value_at_time(t)
 
             if not np.isnan(pitch_value):
@@ -1076,11 +1086,8 @@ def extract_audio_duration(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[s
         snd = get_sound(snd)
 
     try:
-        # Get the total duration of the sound
-        duration = parselmouth.praat.call(snd, "Get total duration")
-
         # Return the duration in a dictionary
-        return {"duration": duration}
+        return {"duration": snd.duration}
     except Exception as e:
         current_frame = inspect.currentframe()
         if current_frame is not None:
@@ -1220,14 +1227,21 @@ def extract_praat_parselmouth_features_from_audios(
     duration: bool = True,
     jitter: bool = True,
     shimmer: bool = True,
+    n_jobs: int = 1,
+    backend: Literal["threading", "loky", "multiprocessing", "sequential"] = "sequential",
+    verbose: int = 0,
+    cache_dir: Optional[str | os.PathLike] = None,
 ) -> List[Dict[str, Any]]:
-    """Extract features from a list of Audio objects and return a JSON-like dictionary.
+    """Extract Praat/Parselmouth features per `Audio`.
+
+    Parallelizes **across audios** and optionally caches per-audio computations.
+    Toggle individual feature blocks with the boolean flags.
 
     Args:
         audios (list): List of Audio objects to extract features from.
-        pitch_unit (str): Unit for pitch measurements. Defaults to "Hertz".
         time_step (float): Time rate at which to extract features. Defaults to 0.005.
         window_length (float): Window length in seconds for spectral features. Defaults to 0.025.
+        pitch_unit (str): Unit for pitch measurements. Defaults to "Hertz".
         speech_rate (bool): Whether to extract speech rate. Defaults to True.
         intensity_descriptors (bool): Whether to extract intensity descriptors. Defaults to True.
         harmonicity_descriptors (bool): Whether to extract harmonic descriptors. Defaults to True.
@@ -1239,20 +1253,46 @@ def extract_praat_parselmouth_features_from_audios(
         duration (bool): Whether to extract duration. Defaults to True.
         jitter (bool): Whether to extract jitter. Defaults to True.
         shimmer (bool): Whether to extract shimmer. Defaults to True.
+        n_jobs (int, optional):
+            Number of parallel jobs to run (default: 1).
+        backend (str, optional):
+            Backend to use for parallelization.
+            - “sequential” (used by default) is a serial backend.
+            - “loky” can induce some communication and memory overhead
+            when exchanging input and output data with the worker Python processes.
+            On some rare systems (such as Pyiodide), the loky backend may not be available.
+            - “multiprocessing” previous process-based backend based on multiprocessing.Pool.
+            Less robust than loky.
+            - “threading” is a very low-overhead backend but it suffers from
+            the Python Global Interpreter Lock if the called function relies
+            a lot on Python objects. “threading” is mostly useful when the execution
+            bottleneck is a compiled extension that explicitly releases the GIL
+            (for instance a Cython loop wrapped in a “with nogil” block or an expensive
+            call to a library such as NumPy).
+        verbose (int, optional):
+            Verbosity (default: 0).
+            If non zero, progress messages are printed. Above 50, the output is sent to stdout.
+            The frequency of the messages increases with the verbosity level.
+            If it more than 10, all iterations are reported.
+        cache_dir (str | os.PathLike, optional):
+            Path to cache directory. If None is given, no caching is done.
 
     Returns:
-        dict: A JSON-like dictionary with extracted features structured under "praat_parselmouth".
-    """
-    extracted_data: List[Dict[str, Any]] = []
+        list[dict[str, Any]]: A list of JSON-like dictionaries with extracted features
+            structured under "praat_parselmouth".
 
-    for snd in audios:
-        # --- shared precomputations ---
+    """
+
+    # Utility function to extract features per-audio worker
+    def _extract_one(snd: Audio) -> Dict[str, Any]:
+        # Shared precomputations
         pitch_values_out = extract_pitch_values(snd=snd)
         pitch_floor = pitch_values_out["pitch_floor"]
         pitch_ceiling = pitch_values_out["pitch_ceiling"]
 
-        # Precompute blocks conditionally
+        # Conditionally compute blocks
         speech_rate_out = extract_speech_rate(snd=snd) if speech_rate else None
+
         pitch_out = (
             extract_pitch_descriptors(
                 snd=snd,
@@ -1264,6 +1304,7 @@ def extract_praat_parselmouth_features_from_audios(
             if pitch
             else None
         )
+
         intensity_out = (
             extract_intensity_descriptors(
                 snd=snd,
@@ -1273,6 +1314,7 @@ def extract_praat_parselmouth_features_from_audios(
             if intensity_descriptors
             else None
         )
+
         harmonicity_out = (
             extract_harmonicity_descriptors(
                 snd=snd,
@@ -1282,6 +1324,7 @@ def extract_praat_parselmouth_features_from_audios(
             if harmonicity_descriptors
             else None
         )
+
         formants_out = (
             measure_f1f2_formants_bandwidths(
                 snd=snd,
@@ -1292,6 +1335,7 @@ def extract_praat_parselmouth_features_from_audios(
             if formants
             else None
         )
+
         spectral_moments_out = (
             extract_spectral_moments(
                 snd=snd,
@@ -1303,6 +1347,7 @@ def extract_praat_parselmouth_features_from_audios(
             if spectral_moments
             else None
         )
+
         slope_tilt_out = (
             extract_slope_tilt(
                 snd=snd,
@@ -1312,6 +1357,7 @@ def extract_praat_parselmouth_features_from_audios(
             if slope_tilt
             else None
         )
+
         cpp_out = (
             extract_cpp_descriptors(
                 snd=snd,
@@ -1322,7 +1368,9 @@ def extract_praat_parselmouth_features_from_audios(
             if cpp_descriptors
             else None
         )
+
         audio_duration_out = extract_audio_duration(snd=snd) if duration else None
+
         jitter_out = (
             extract_jitter(
                 snd=snd,
@@ -1332,6 +1380,7 @@ def extract_praat_parselmouth_features_from_audios(
             if jitter
             else None
         )
+
         shimmer_out = (
             extract_shimmer(
                 snd=snd,
@@ -1342,7 +1391,8 @@ def extract_praat_parselmouth_features_from_audios(
             else None
         )
 
-        # --- collect outputs ---
+        # collect outputs
+        unit_l = pitch_unit.lower()
         feature_data: Dict[str, Any] = {}
 
         if duration and audio_duration_out is not None:
@@ -1356,7 +1406,6 @@ def extract_praat_parselmouth_features_from_audios(
             feature_data["mean_pause_duration"] = speech_rate_out["mean_pause_dur"]
 
         if pitch and pitch_out is not None:
-            unit_l = pitch_unit.lower()
             feature_data[f"mean_f0_{unit_l}"] = pitch_out[f"mean_f0_{unit_l}"]
             feature_data[f"std_f0_{unit_l}"] = pitch_out[f"stdev_f0_{unit_l}"]
 
@@ -1408,6 +1457,16 @@ def extract_praat_parselmouth_features_from_audios(
             feature_data["apq11_shimmer"] = shimmer_out["apq11_shimmer"]
             feature_data["dda_shimmer"] = shimmer_out["dda_shimmer"]
 
-        extracted_data.append(feature_data)
+        return feature_data
 
-    return extracted_data
+    # optional cache
+    memory: Optional[Memory] = Memory(str(cache_dir), verbose=verbose) if cache_dir else None
+    if memory:
+        _extract_one = memory.cache(_extract_one)
+
+    # parallel across audios
+    return Parallel(
+        n_jobs=n_jobs,
+        backend=backend,
+        verbose=verbose,
+    )(delayed(_extract_one)(a) for a in audios)

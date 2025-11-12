@@ -44,7 +44,7 @@ def detect_human_voice_activity_in_audios(
             (e.g., mono and correct sampling rate).
         model (SenselabModel | None):
             Backend selector. If ``None``, defaults to
-            ``PyannoteAudioModel("pyannote/speaker-diarization-3.1", "main")``.
+            ``PyannoteAudioModel("pyannote/speaker-diarization-community-1", "main")``.
         device (DeviceType | None):
             Preferred device for inference (e.g., ``DeviceType.CPU``, ``DeviceType.CUDA``).
 
@@ -77,7 +77,7 @@ def detect_human_voice_activity_in_audios(
             >>> vad = detect_human_voice_activity_in_audios([a1], model=hf, device=DeviceType.CUDA)
     """
     if model is None:
-        model = PyannoteAudioModel(path_or_uri="pyannote/speaker-diarization-3.1", revision="main")
+        model = PyannoteAudioModel(path_or_uri="pyannote/speaker-diarization-community-1", revision="main")
 
     if isinstance(model, PyannoteAudioModel):
         results = diarize_audios_with_pyannote(audios=audios, model=model, device=device)
@@ -88,7 +88,7 @@ def detect_human_voice_activity_in_audios(
     elif isinstance(model, HFModel) and str(model.path_or_uri).startswith("nvidia/diar_sortformer"):
         result = diarize_audios_with_nvidia_sortformer(
             audios=audios,
-            model_name=str(model.path_or_uri),
+            model=model,
             device=device,
         )
         for sample in result:
