@@ -59,7 +59,12 @@ def calculate_diarization_error_rate(
     der = metric(reference_annotation, hypothesis_annotation, detailed=detailed)
     output = {"diarization error rate": der} if not detailed else der
     if return_speaker_mapping:
-        mapping_fn = metric.greedy_mapping if greedy else metric.optimal_mapping
+        if isinstance(metric, GreedyDiarizationErrorRate):
+            mapping_fn = metric.greedy_mapping
+        elif isinstance(metric, DiarizationErrorRate):
+            mapping_fn = metric.optimal_mapping
+        else:
+            raise TypeError("Unknown metric type for speaker mapping")
         speaker_mapping = mapping_fn(reference_annotation, hypothesis_annotation)
         output["speaker_mapping"] = speaker_mapping
 

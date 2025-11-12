@@ -15,7 +15,7 @@ from senselab.audio.tasks.speaker_diarization import diarize_audios
 from senselab.audio.tasks.speaker_embeddings import extract_speaker_embeddings_from_audios
 from senselab.audio.tasks.speech_to_text import transcribe_audios
 from senselab.audio.tasks.ssl_embeddings import extract_ssl_embeddings_from_audios
-from senselab.utils.data_structures.model import HFModel, SenselabModel, SpeechBrainModel
+from senselab.utils.data_structures.model import HFModel, PyannoteAudioModel, SenselabModel, SpeechBrainModel
 
 
 def explore_conversation(
@@ -35,7 +35,8 @@ def explore_conversation(
     Args:
         audio_file_paths (List[str]): List of paths to audio files.
         speaker_diarization_model (SenselabModel): Model for speaker diarization.
-            If None, defaults to HFModel(path_or_uri="nvidia/diar_sortformer_4spk-v1").
+            If None, defaults to PyannoteAudioModel(path_or_uri="pyannote/speaker-diarization-community-1",
+                                         revision="main").
         transcription_models (List[SenselabModel]): List of models for transcription.
             If None, defaults to [HFModel(path_or_uri="openai/whisper-tiny")].
         features_config (Dict[str, Union[bool, Dict[str, Any]]]): Configuration for feature extraction backends.
@@ -52,7 +53,9 @@ def explore_conversation(
         List[Dict[str, Any]]: List of JSON-serializable dicts, one per speaker segment.
     """
     if speaker_diarization_model is None:
-        speaker_diarization_model = HFModel(path_or_uri="nvidia/diar_sortformer_4spk-v1")
+        speaker_diarization_model = PyannoteAudioModel(
+            path_or_uri="pyannote/speaker-diarization-community-1", revision="main"
+        )
     if transcription_models is None:
         transcription_models = [HFModel(path_or_uri="openai/whisper-tiny")]
     if speaker_embeddings_models is None:

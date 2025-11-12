@@ -59,9 +59,10 @@ class PyannoteDiarization:
         )
         key = f"{model.path_or_uri}-{model.revision}-{device}"
         if key not in cls._pipelines:
-            pipeline = Pipeline.from_pretrained(checkpoint_path=f"{model.path_or_uri}@{model.revision}").to(
-                torch.device(device.value)
-            )
+            pipeline = Pipeline.from_pretrained(checkpoint=f"{model.path_or_uri}", revision=f"{model.revision}")
+            if not pipeline:
+                raise ValueError(f"Pyannote model {model.path_or_uri} not found.")
+            pipeline = pipeline.to(torch.device(device.value))
             cls._pipelines[key] = pipeline
         return cls._pipelines[key]
 
@@ -84,7 +85,7 @@ def diarize_audios_with_pyannote(
         audios (list[Audio]):
             Audio clips to diarize (mono, 16 kHz).
         model (PyannoteAudioModel | None):
-            Pyannote model. Defaults to ``pyannote/speaker-diarization-3.1@main``.
+            Pyannote model. Defaults to ``pyannote/speaker-diarization-community-1@main``.
         device (DeviceType | None):
             Inference device (``CPU`` or ``CUDA``).
         num_speakers (int | None):
@@ -108,7 +109,7 @@ def diarize_audios_with_pyannote(
         >>> from senselab.audio.data_structures import Audio
         >>> from senselab.utils.data_structures import DeviceType, PyannoteAudioModel
         >>> a1 = Audio(filepath=Path("sample1.wav").resolve())
-        >>> mdl = PyannoteAudioModel(path_or_uri="pyannote/speaker-diarization-3.1", revision="main")
+        >>> mdl = PyannoteAudioModel(path_or_uri="pyannote/speaker-diarization-community-1", revision="main")
         >>> diar = diarize_audios_with_pyannote(
         ...     [a1],
         ...     model=mdl,
@@ -138,7 +139,7 @@ def diarize_audios_with_pyannote(
             List[ScriptLine]: A list of script lines.
         """
         diarization_list: List[ScriptLine] = []
-        for segment, _, label in annotation.itertracks(yield_label=True):
+        for segment, label in annotation:
             diarization_list.append(ScriptLine(speaker=label, start=segment.start, end=segment.end))
         return diarization_list
 
@@ -149,9 +150,9 @@ def diarize_audios_with_pyannote(
         )
 
     if model is None:
-        model = PyannoteAudioModel(path_or_uri="pyannote/speaker-diarization-3.1", revision="main")
+        model = PyannoteAudioModel(path_or_uri="pyannote/speaker-diarization-community-1", revision="main")
 
-    # 16khz comes from the model cards of pyannote/speaker-diarization-3.1
+    # 16khz comes from the model cards of pyannote/speaker-diarization-community-1
     expected_sample_rate = 16000
 
     # Check that all audio objects have the correct sampling rate
@@ -183,7 +184,7 @@ def diarize_audios_with_pyannote(
             min_speakers=min_speakers,
             max_speakers=max_speakers,
         )
-        results.append(_annotation_to_script_lines(diarization))
+        results.append(_annotation_to_script_lines(diarization.exclusive_speaker_diarization))
     end_time_diarization = time.time()
     elapsed_time_diarization = end_time_diarization - start_time_diarization
     logger.info(f"Time taken to perform diarization: {elapsed_time_diarization:.2f} seconds")
