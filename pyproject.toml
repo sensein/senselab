@@ -1,6 +1,6 @@
 [project]
 name = "senselab"
-dynamic = []
+dynamic = ["version"]
 description = "senselab is a Python package that simplifies building pipelines for speech and voice analysis."
 authors = [
   {name = "Fabio Catania", email = "fabiocat@mit.edu"},
@@ -189,7 +189,7 @@ skip-magic-trailing-comma = false
 line-ending = "auto"
 
 [tool.poetry-dynamic-versioning]
-enable = false
+enable = true
 vcs = "git"
 bump = true
 style = "pep440"
