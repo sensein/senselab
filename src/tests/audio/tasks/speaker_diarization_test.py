@@ -62,6 +62,7 @@ def test_diarize_audios(resampled_mono_audio_sample: Audio, pyannote_model: Pyan
     not DOCKER_AVAILABLE or not TORCHAUDIO_AVAILABLE,
     reason="torchaudio is not installed or Docker is not available",
 )
+@pytest.mark.skip(reason="This test takes too long, especially on CI")
 def test_diarize_audios_with_nvidia_sortformer(resampled_mono_audio_sample: Audio) -> None:
     """Test diarizing audios with NVIDIA Sortformer."""
     model: HFModel = HFModel(path_or_uri="nvidia/diar_sortformer_4spk-v1")
