@@ -12,10 +12,10 @@ from senselab.audio.tasks.quality_control import (
     activity_to_evaluations,
     check_quality,
 )
-from senselab.audio.tasks.quality_control.taxonomy import TaxonomyNode
-from senselab.audio.tasks.quality_control.trees import (
+from senselab.audio.tasks.quality_control.taxonomies import (
     BIOACOUSTIC_ACTIVITY_TAXONOMY as TAXONOMY,
 )
+from senselab.audio.tasks.quality_control.taxonomy import TaxonomyNode
 
 
 @pytest.mark.parametrize("taxonomy_tree", [TAXONOMY])
