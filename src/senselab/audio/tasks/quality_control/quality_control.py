@@ -8,10 +8,10 @@ import pandas as pd
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.quality_control.evaluate import evaluate_dataset
-from senselab.audio.tasks.quality_control.taxonomy import TaxonomyNode
-from senselab.audio.tasks.quality_control.trees import (
+from senselab.audio.tasks.quality_control.taxonomies import (
     BIOACOUSTIC_ACTIVITY_TAXONOMY,
 )
+from senselab.audio.tasks.quality_control.taxonomy import TaxonomyNode
 
 
 def activity_to_evaluations(

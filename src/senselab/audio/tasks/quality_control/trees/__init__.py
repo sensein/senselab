@@ -1,0 +1,13 @@
+"""Taxonomy trees for bioacoustic quality control."""
+
+from senselab.audio.tasks.quality_control.trees.bioacoustic_activity import (
+    BIOACOUSTIC_ACTIVITY_TAXONOMY,
+)
+from senselab.audio.tasks.quality_control.trees.bridge2ai_voice import (
+    BRIDGE2AI_VOICE_TAXONOMY,
+)
+
+__all__ = [
+    "BIOACOUSTIC_ACTIVITY_TAXONOMY",
+    "BRIDGE2AI_VOICE_TAXONOMY",
+]
