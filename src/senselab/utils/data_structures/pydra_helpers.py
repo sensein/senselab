@@ -1,10 +1,14 @@
 """Functionality for Pydra."""
 
+import json
+import os
 from typing import Iterator
 
 import numpy as np
 import torch
 from pydra.utils.hash import Cache, bytes_repr_sequence_contents, register_serializer
+
+from senselab.audio.data_structures.audio import Audio
 
 try:
     import opensmile
@@ -24,6 +28,54 @@ def bytes_repr_arraylike(obj: torch.Tensor, cache: Cache) -> Iterator[bytes]:
         yield from bytes_repr_sequence_contents(iter(array.ravel()), cache)
     else:
         yield array.tobytes(order="C")
+
+
+@register_serializer(Audio)
+def bytes_repr_audio(obj: Audio, cache: Cache) -> Iterator[bytes]:
+    """Stable hashing for senselab.Audio.
+
+    This is needed since Audio is a lazy-loaded object.
+
+    - File-backed: DO NOT depend on any fields that may be filled during lazy load
+      (e.g., sampling_rate). Only use filepath, file stat, loader params, metadata.
+    - Waveform-backed: hash waveform tensor bytes + sampling_rate + metadata.
+    """
+    yield b"Audio:"
+
+    fp = obj.filepath()
+    if fp:
+        # File-backed: avoid touching lazy-loaded fields entirely.
+        p = os.fspath(fp)
+        yield f"fp:{p}:".encode()
+
+        try:
+            st = os.stat(p)
+            # include mtime_ns + size for strong identity without content read
+            yield f"st:{int(st.st_mtime_ns)}:{st.st_size}:".encode()
+        except Exception:
+            yield b"st:unknown:"
+
+        # Loader params (stable)
+        yield f"off:{obj._offset_in_sec}:".encode()
+        yield f"dur:{obj._duration_in_sec}:".encode()
+        yield f"be:{obj._backend}:".encode()
+
+        # IMPORTANT: do NOT include sampling_rate here to avoid hash drift after lazy load
+        yield b"sr:NA:"
+    else:
+        # Waveform-backed: these are set at construction and won’t change
+        # Use the tensor serializer via cache for stability
+        yield f"sr:{obj._sampling_rate}:".encode()  # _sampling_rate is set in __init__ for waveform-backed
+        yield b"wf:"
+        yield from bytes_repr_sequence_contents([obj.waveform], cache)
+
+    # Metadata as sorted JSON
+    try:
+        md = json.dumps(obj.metadata or {}, sort_keys=True, separators=(",", ":"))
+    except Exception:
+        md = "{}"
+    yield b"md:"
+    yield md.encode()
 
 
 if OPENSMILE_AVAILABLE:
@@ -86,33 +138,3 @@ if OPENSMILE_AVAILABLE:
         yield f"params:{obj.params}".encode()
         yield f"process_func_applies_sliding_window:{obj.process_func_applies_sliding_window}".encode()
         yield f"win_dur:{obj.win_dur}".encode()
-
-
-# TODO: Ignore this for now but need to decide how to incorporate Pydra into the package
-# Pydra runner
-# need function that allows for marking a task (could be obfuscated internally)
-# need function that runs the actual code/does the parallelization
-# getting results is a bit clunky right now so could clean that up
-# internal Pydra wouldn't need obfuscations for add/split but external API might be useful
-# perhaps dictionary structure could be intuitive? linked list?
-
-# what if we had a simple split/run structure:
-# user: run X task with Y audios (Satra example); perhaps extraneous information of DeviceType, Model to use
-#   - kinda easy example of just create the pydra setup ourselves, no user worries
-# Senselab "pipelines"/Tasks:
-
-# example:
-# RAVDESS audios:
-# - need to resample
-# - perhaps run loudness normalization
-# - run SER
-# - run evaluation
-
-# get RAVDESS audios
-# split into batches
-#   - run batches through resmapling
-#   - pass to normalization
-#   - run SER
-#   - get partial evaluation
-# - combine evaluation
-# - give average

@@ -9,8 +9,8 @@ import pandas as pd
 import pytest
 
 from senselab.audio.tasks.quality_control.format import (
-    extract_windowed_data,
-    flatten_results_to_dataframe,
+    flatten_non_windowed_results_to_dataframe,
+    flatten_windowed_results_to_dataframe,
     save_formatted_results,
 )
 
@@ -72,9 +72,9 @@ def sample_results_no_windowing() -> List[Dict[str, Any]]:
     ]
 
 
-def test_flatten_results_to_dataframe(sample_results: List[Dict[str, Any]]) -> None:
-    """Test flattening of evaluation results to DataFrame."""
-    df = flatten_results_to_dataframe(sample_results)
+def test_flatten_non_windowed_results_to_dataframe(sample_results: List[Dict[str, Any]]) -> None:
+    """Test flattening of non-windowed evaluation results to DataFrame."""
+    df = flatten_non_windowed_results_to_dataframe(sample_results)
 
     # Check DataFrame structure
     assert isinstance(df, pd.DataFrame)
@@ -108,7 +108,7 @@ def test_flatten_results_empty_evaluations() -> None:
         }
     ]
 
-    df = flatten_results_to_dataframe(results)
+    df = flatten_non_windowed_results_to_dataframe(results)
     assert len(df) == 1
     assert list(df.columns) == ["id", "path", "activity"]
 
@@ -123,14 +123,14 @@ def test_flatten_results_missing_evaluations() -> None:
         }
     ]
 
-    df = flatten_results_to_dataframe(results)
+    df = flatten_non_windowed_results_to_dataframe(results)
     assert len(df) == 1
     assert list(df.columns) == ["id", "path", "activity"]
 
 
-def test_extract_windowed_data(sample_results: List[Dict[str, Any]]) -> None:
-    """Test extraction of windowed evaluation data."""
-    df = extract_windowed_data(sample_results)
+def test_flatten_windowed_results_to_dataframe(sample_results: List[Dict[str, Any]]) -> None:
+    """Test flattening of windowed evaluation data to DataFrame."""
+    df = flatten_windowed_results_to_dataframe(sample_results)
 
     # Check DataFrame structure
     assert isinstance(df, pd.DataFrame)
@@ -152,17 +152,17 @@ def test_extract_windowed_data(sample_results: List[Dict[str, Any]]) -> None:
     assert audio1_clipped.iloc[2]["value"]
 
 
-def test_extract_windowed_data_no_windowing(sample_results_no_windowing: List[Dict[str, Any]]) -> None:
-    """Test extraction with no windowed data."""
-    df = extract_windowed_data(sample_results_no_windowing)
+def test_flatten_windowed_results_to_dataframe_no_windowing(sample_results_no_windowing: List[Dict[str, Any]]) -> None:
+    """Test flattening with no windowed data."""
+    df = flatten_windowed_results_to_dataframe(sample_results_no_windowing)
 
     # Should return empty DataFrame
     assert isinstance(df, pd.DataFrame)
     assert len(df) == 0
 
 
-def test_extract_windowed_data_missing_time_windows() -> None:
-    """Test extraction with missing time_windows."""
+def test_flatten_windowed_results_to_dataframe_missing_time_windows() -> None:
+    """Test flattening with missing time_windows."""
     results = [
         {
             "id": "audio1",
@@ -173,7 +173,7 @@ def test_extract_windowed_data_missing_time_windows() -> None:
         }
     ]
 
-    df = extract_windowed_data(results)
+    df = flatten_windowed_results_to_dataframe(results)
     assert len(df) == 0
 
 
@@ -192,22 +192,22 @@ def test_save_formatted_results(sample_results: List[Dict[str, Any]]) -> None:
         assert isinstance(result_dfs["windowed"], pd.DataFrame)
 
         # Check files were created
-        assert (output_dir / "results_summary.csv").exists()
-        assert (output_dir / "results_windowed.csv").exists()
-        assert (output_dir / "results_full.json").exists()
+        assert (output_dir / "quality_control_results_non_windowed.csv").exists()
+        assert (output_dir / "quality_control_results_windowed.csv").exists()
+        assert (output_dir / "quality_control_results_all.json").exists()
 
         # Check summary CSV content
-        summary_df = pd.read_csv(output_dir / "results_summary.csv")
+        summary_df = pd.read_csv(output_dir / "quality_control_results_non_windowed.csv")
         assert len(summary_df) == 2
         assert "zero_crossing_rate" in summary_df.columns
 
         # Check windowed CSV content
-        windowed_df = pd.read_csv(output_dir / "results_windowed.csv")
+        windowed_df = pd.read_csv(output_dir / "quality_control_results_windowed.csv")
         assert len(windowed_df) == 15  # (3+2) windows * 3 evaluations
         assert "evaluation_name" in windowed_df.columns
 
         # Check JSON content
-        with open(output_dir / "results_full.json") as f:
+        with open(output_dir / "quality_control_results_all.json") as f:
             json_data = json.load(f)
         assert len(json_data) == 2
         assert json_data[0]["id"] == "audio1"
@@ -225,9 +225,9 @@ def test_save_formatted_results_skip_windowing(sample_results: List[Dict[str, An
         assert "windowed" not in result_dfs
 
         # Check files
-        assert (output_dir / "results_summary.csv").exists()
-        assert not (output_dir / "results_windowed.csv").exists()
-        assert (output_dir / "results_full.json").exists()
+        assert (output_dir / "quality_control_results_non_windowed.csv").exists()
+        assert not (output_dir / "quality_control_results_windowed.csv").exists()
+        assert (output_dir / "quality_control_results_all.json").exists()
 
 
 def test_save_formatted_results_no_windowed_data(sample_results_no_windowing: List[Dict[str, Any]]) -> None:
@@ -240,8 +240,8 @@ def test_save_formatted_results_no_windowed_data(sample_results_no_windowing: Li
         # Should not create windowed file if no windowed data
         assert "summary" in result_dfs
         assert "windowed" not in result_dfs
-        assert (output_dir / "results_summary.csv").exists()
-        assert not (output_dir / "results_windowed.csv").exists()
+        assert (output_dir / "quality_control_results_non_windowed.csv").exists()
+        assert not (output_dir / "quality_control_results_windowed.csv").exists()
 
 
 def test_save_formatted_results_creates_directory() -> None:
