@@ -1,13 +1,11 @@
 """Evaluation utilities for bioacoustic quality control."""
 
 import json
-import multiprocessing as mp
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
 import pandas as pd
-import pydra
-from pydra import Submitter
+from joblib import Parallel, delayed
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.quality_control.format import save_formatted_results
@@ -226,6 +224,7 @@ def evaluate_batch(
     """
     records = []
     for audio_path in batch_audio_paths:
+        print(f"{audio_path}")
         # Get evaluations for this activity
         activity = audio_path_to_activity[str(audio_path)]
         evaluations = activity_to_evaluations[activity]
@@ -251,54 +250,90 @@ def evaluate_dataset(
     output_dir: Path,
     batch_size: int = 8,
     n_cores: int = 4,
-    plugin: str = "cf",
+    backend: str = "loky",
     window_size_sec: float = 0.025,
     step_size_sec: float = 0.0125,
     skip_windowing: bool = False,
+    verbose: int = 0,
 ) -> pd.DataFrame:
-    """Runs quality evaluations on audio files in parallel batches using Pydra.
+    """Runs quality evaluations on audio files in parallel batches using joblib.
 
     Args:
         audio_path_to_activity: Maps audio paths to activity labels
         activity_to_evaluations: Maps activity labels to evaluation functions
         output_dir: Directory to save results
         batch_size: Number of files to process in a batch
-        n_cores: Number of parallel processes to use
-        plugin: Pydra execution plugin ("cf" for concurrent.futures)
+        n_cores: Number of parallel processes to use (-1 for all cores)
+        backend: Joblib backend ("loky", "multiprocessing", "threading")
         window_size_sec: Window size in seconds for windowed calculation
                         (default: 0.025)
         step_size_sec: Step size in seconds between windows (default: 0.0125)
         skip_windowing: If True, only compute scalar metrics without windowing
+        verbose: Verbosity level for joblib (0=silent, higher=more verbose)
 
     Returns:
         pd.DataFrame: Flattened DataFrame with evaluations as columns
                      (human-readable)
     """
-    try:
-        mp.set_start_method("spawn", force=True)
-    except RuntimeError:
-        pass
-
-    if n_cores > 1:
-        plugin_args = {"n_procs": n_cores} if plugin == "cf" else {}
-    else:
-        plugin = "serial"
-        plugin_args = {}
-
     audio_paths = list(audio_path_to_activity.keys())
+
+    # Create batches for parallel processing
     batches = [audio_paths[i : i + batch_size] for i in range(0, len(audio_paths), batch_size)]
 
-    def evaluate_batch_closure() -> Callable:
-        """Creates a Pydra task for batch processing.
+    print(f"Processing {len(audio_paths)} files in {len(batches)} batches using {n_cores} cores...")
 
-        Returns:
-            Callable: Wrapped task function for batch processing
-        """
+    # Use joblib for parallel processing
+    try:
+        if n_cores == 1:
+            # Serial processing
+            results = []
+            for batch in batches:
+                batch_results = evaluate_batch(
+                    batch,
+                    audio_path_to_activity,
+                    activity_to_evaluations,
+                    output_dir,
+                    window_size_sec=window_size_sec,
+                    step_size_sec=step_size_sec,
+                    skip_windowing=skip_windowing,
+                )
+                results.extend(batch_results)
+        else:
+            # Parallel processing with joblib
+            batch_results_list = Parallel(
+                n_jobs=n_cores,
+                backend=backend,
+                verbose=verbose,
+                batch_size=1,  # Process one batch at a time
+            )(
+                delayed(evaluate_batch)(
+                    batch,
+                    audio_path_to_activity,
+                    activity_to_evaluations,
+                    output_dir,
+                    window_size_sec=window_size_sec,
+                    step_size_sec=step_size_sec,
+                    skip_windowing=skip_windowing,
+                )
+                for batch in batches
+            )
 
-        @pydra.mark.task
-        def evaluate_batch_task(batch_audio_paths: List[str]) -> List[Dict[str, Any]]:
-            return evaluate_batch(
-                batch_audio_paths,
+            # Flatten results from all batches
+            results = [rec for batch_results in batch_results_list for rec in batch_results]
+
+        # Save formatted results
+        output_dfs = save_formatted_results(results, output_dir, skip_windowing)
+        return output_dfs["summary"]
+
+    except Exception as e:
+        print(f"Error in joblib parallel execution: {e}")
+        print("Falling back to serial processing...")
+
+        # Fallback to serial processing
+        results = []
+        for batch in batches:
+            batch_results = evaluate_batch(
+                batch,
                 audio_path_to_activity,
                 activity_to_evaluations,
                 output_dir,
@@ -306,20 +341,7 @@ def evaluate_dataset(
                 step_size_sec=step_size_sec,
                 skip_windowing=skip_windowing,
             )
+            results.extend(batch_results)
 
-        return evaluate_batch_task
-
-    task = evaluate_batch_closure()()
-    task.split("batch_audio_paths", batch_audio_paths=batches)
-
-    with Submitter(plugin=plugin, **plugin_args) as sub:
-        sub(task)
-
-    # Concatenate batch results
-    results = [record for r in task.result() for record in r.output.out]
-
-    # Save formatted results (flattened CSV + windowed CSV + full JSON)
-    output_dfs = save_formatted_results(results, output_dir, skip_windowing)
-
-    # Return the flattened DataFrame for backward compatibility
-    return output_dfs["summary"]
+        output_dfs = save_formatted_results(results, output_dir, skip_windowing)
+        return output_dfs["summary"]
