@@ -502,9 +502,6 @@ def high_proportion_silence_at_beginning_check(
 ) -> Optional[bool]:
     """Flag recordings with > ``threshold`` leading silence.
 
-    Note: This metric cannot use get_evaluation because the metric
-    requires no DataFrame but **does** use its default internal threshold.
-
     Args:
         audio_or_path: An Audio instance or filepath to the audio file.
         threshold: Maximum acceptable leading silence proportion.
