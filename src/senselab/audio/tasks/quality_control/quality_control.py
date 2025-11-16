@@ -42,7 +42,7 @@ def activity_to_evaluations(
 
 def check_quality(
     audio_paths: List[Union[str, os.PathLike]],
-    audio_path_to_activity: Dict = {},
+    audio_path_to_activity: Optional[Dict[str, str]] = None,
     activity_tree: TaxonomyNode = BIOACOUSTIC_ACTIVITY_TAXONOMY,
     output_dir: Optional[Union[str, os.PathLike]] = None,
     batch_size: int = 8,
@@ -80,6 +80,10 @@ def check_quality(
     # Convert output_dir to Path with default
     output_directory = Path(output_dir or "qc_results")
     output_directory.mkdir(exist_ok=True, parents=True)
+
+    # Initialize activity mappings if None
+    if audio_path_to_activity is None:
+        audio_path_to_activity = {}
 
     # Setup activity mappings
     audio_path_to_activity = {str(path): audio_path_to_activity.get(str(path), "bioacoustic") for path in audio_paths}
