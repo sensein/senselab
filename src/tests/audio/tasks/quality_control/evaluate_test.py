@@ -296,7 +296,6 @@ def test_evaluate_dataset(tmp_path: Path, resampled_mono_audio_sample: Audio) ->
         output_dir=tmp_path,
         batch_size=2,  # Should create 2 batches
         n_cores=1,  # Force serial execution
-        plugin="serial",
     )
 
     # Test parallel execution
@@ -306,7 +305,6 @@ def test_evaluate_dataset(tmp_path: Path, resampled_mono_audio_sample: Audio) ->
         output_dir=tmp_path,
         batch_size=2,  # Should create 2 batches
         n_cores=2,  # Use parallel execution
-        plugin="cf",
     )
 
     # Verify results
