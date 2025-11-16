@@ -1,8 +1,11 @@
 """Bioacoustic activity taxonomy tree implementations."""
 
 from senselab.audio.tasks.quality_control.checks import (
-    audio_intensity_positive_check,
-    audio_length_positive_check,
+    completely_silent_check,
+    high_proportion_clipped_check,
+    low_spectral_gating_snr_check,
+    very_low_amplitude_modulation_depth_check,
+    very_low_peak_snr_from_spectral_check,
 )
 from senselab.audio.tasks.quality_control.metrics import (
     amplitude_headroom_metric,
@@ -39,8 +42,11 @@ def build_bioacoustic_activity_taxonomy() -> TaxonomyNode:
     root = TaxonomyNode(
         name="bioacoustic",
         checks=[
-            audio_length_positive_check,
-            audio_intensity_positive_check,
+            very_low_amplitude_modulation_depth_check,
+            very_low_peak_snr_from_spectral_check,
+            low_spectral_gating_snr_check,
+            completely_silent_check,
+            high_proportion_clipped_check,
         ],
         metrics=[
             proportion_silent_metric,
