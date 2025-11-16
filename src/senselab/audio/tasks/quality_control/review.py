@@ -8,9 +8,41 @@ import pandas as pd
 from snorkel.labeling import PandasLFApplier, labeling_function
 from snorkel.labeling.model import LabelModel
 
+from senselab.audio.tasks.quality_control.taxonomy import TaxonomyNode
+from senselab.audio.tasks.quality_control.trees import (
+    BIOACOUSTIC_ACTIVITY_TAXONOMY,
+)
+
 INCLUDE: int = 1
 EXCLUDE: int = 0
 ABSTAIN: int = -1
+
+
+def get_taxonomy_check_names(taxonomy: TaxonomyNode, activity: str = "bioacoustic") -> List[str]:
+    """Extract check function names from taxonomy for a given activity.
+
+    Args:
+        taxonomy: The taxonomy tree to extract checks from
+        activity: The activity to get checks for (default: "bioacoustic")
+
+    Returns:
+        List of check function names from the taxonomy
+    """
+    subtree = taxonomy.prune_to_activity(activity)
+    if subtree is None:
+        raise ValueError(f"Activity '{activity}' not found in taxonomy.")
+
+    evaluations = subtree.get_all_evaluations()
+
+    # Filter to only check functions (those that return bool)
+    check_names = []
+    for evaluation in evaluations:
+        func_name = evaluation.__name__
+        # Check functions typically end with "_check"
+        if func_name.endswith("_check"):
+            check_names.append(func_name)
+
+    return check_names
 
 
 def check_to_labeling_function(col: str) -> Callable[[pd.Series], int]:
@@ -153,6 +185,8 @@ def review_files(
     output_dir: Optional[str] = None,
     save_results: bool = True,
     prune_checks: bool = True,
+    taxonomy: TaxonomyNode = BIOACOUSTIC_ACTIVITY_TAXONOMY,
+    activity: str = "bioacoustic",
 ) -> pd.DataFrame:
     """Labels audio files as include, exclude, or unsure with weak supervision.
 
@@ -164,6 +198,8 @@ def review_files(
             as input CSV.
         save_results: Whether to save the results to disk.
         prune_checks: Whether to prune constant and highly correlated check columns.
+        taxonomy: The taxonomy tree to extract checks from.
+        activity: The activity to get checks for (default: "bioacoustic").
 
     Returns:
         DataFrame with snorkel_label column added containing predicted labels.
@@ -171,7 +207,21 @@ def review_files(
     df = pd.read_csv(df_path)
     print(f"Total files: {len(df)}")
 
-    df_checks = df[[c for c in df.columns if "check" in c]]
+    # Get check names from taxonomy
+    taxonomy_check_names = get_taxonomy_check_names(taxonomy, activity)
+    print(f"Taxonomy checks for '{activity}': {taxonomy_check_names}")
+
+    # Filter to only columns that exist in both the DataFrame and taxonomy
+    available_check_cols = [c for c in df.columns if "check" in c]
+    taxonomy_check_cols = [c for c in available_check_cols if c in taxonomy_check_names]
+
+    print(f"Available check columns: {len(available_check_cols)}")
+    print(f"Taxonomy-filtered check columns: {len(taxonomy_check_cols)}")
+
+    if not taxonomy_check_cols:
+        raise ValueError(f"No check columns found that match taxonomy checks for " f"activity '{activity}'")
+
+    df_checks = df[taxonomy_check_cols]
 
     if prune_checks:
         keep_cols, dropped = prune_check_columns(df_checks, correlation_threahold=correlation_threahold)
