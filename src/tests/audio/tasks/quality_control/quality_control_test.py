@@ -140,15 +140,12 @@ def test_activity_to_evaluations_with_missing_activity() -> None:
         "audio1.wav": "nonexistent_activity",
     }
 
-    # Get evaluations mapping - should handle missing activities gracefully
-    activity_evals = activity_to_evaluations(
-        audio_path_to_activity=audio_paths,
-        activity_tree=BIOACOUSTIC_ACTIVITY_TAXONOMY,
-    )
-
-    # Should return empty dict or handle gracefully
-    # The exact behavior depends on implementation
-    assert isinstance(activity_evals, dict), "Should return dictionary"
+    # Should raise ValueError for missing activities (consistent with review.py behavior)
+    with pytest.raises(ValueError, match="Activity 'nonexistent_activity' not found in taxonomy"):
+        activity_to_evaluations(
+            audio_path_to_activity=audio_paths,
+            activity_tree=BIOACOUSTIC_ACTIVITY_TAXONOMY,
+        )
 
 
 def test_activity_to_evaluations_with_multiple_activities() -> None:
