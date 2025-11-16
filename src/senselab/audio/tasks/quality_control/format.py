@@ -7,14 +7,14 @@ from typing import Any, Dict, List
 import pandas as pd
 
 
-def flatten_results_to_dataframe(results: List[Dict[str, Any]]) -> pd.DataFrame:
-    """Converts nested evaluation results to a flattened DataFrame.
+def flatten_non_windowed_results_to_dataframe(results: List[Dict[str, Any]]) -> pd.DataFrame:
+    """Converts nested non-windowed evaluation results to a flattened DataFrame.
 
     Args:
         results: List of result dictionaries from evaluate_audio
 
     Returns:
-        pd.DataFrame: Flattened DataFrame with evaluations as columns
+        pd.DataFrame: Flattened DataFrame with non-windowed evaluations as columns
     """
     flattened_records = []
 
@@ -31,8 +31,8 @@ def flatten_results_to_dataframe(results: List[Dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(flattened_records)
 
 
-def extract_windowed_data(results: List[Dict[str, Any]]) -> pd.DataFrame:
-    """Extracts windowed evaluation data into normalized format.
+def flatten_windowed_results_to_dataframe(results: List[Dict[str, Any]]) -> pd.DataFrame:
+    """Flattens windowed evaluation data into normalized DataFrame format.
 
     Args:
         results: List of result dictionaries from evaluate_audio
@@ -91,10 +91,10 @@ def save_formatted_results(
     output_dir.mkdir(exist_ok=True, parents=True)
 
     # Create flattened results DataFrame
-    flattened_df = flatten_results_to_dataframe(results)
+    flattened_df = flatten_non_windowed_results_to_dataframe(results)
 
     # Save main results CSV
-    main_results_path = output_dir / "results_summary.csv"
+    main_results_path = output_dir / "quality_control_results_non_windowed.csv"
     flattened_df.to_csv(main_results_path, index=False)
     print(f"Saved flattened results to: {main_results_path}")
 
@@ -102,15 +102,15 @@ def save_formatted_results(
 
     # Save windowed data if available
     if not skip_windowing:
-        windowed_df = extract_windowed_data(results)
+        windowed_df = flatten_windowed_results_to_dataframe(results)
         if not windowed_df.empty:
-            windowed_results_path = output_dir / "results_windowed.csv"
+            windowed_results_path = output_dir / "quality_control_results_windowed.csv"
             windowed_df.to_csv(windowed_results_path, index=False)
             print(f"Saved windowed results to: {windowed_results_path}")
             output_dfs["windowed"] = windowed_df
 
     # Save full results as JSON for complete fidelity
-    full_results_path = output_dir / "results_full.json"
+    full_results_path = output_dir / "quality_control_results_all.json"
     with open(full_results_path, "w") as f:
         json.dump(results, f, indent=2)
     print(f"Saved full results to: {full_results_path}")
