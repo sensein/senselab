@@ -94,7 +94,7 @@ def save_formatted_results(
     flattened_df = flatten_non_windowed_results_to_dataframe(results)
 
     # Save main results CSV
-    main_results_path = output_dir / "quality_control_results_entire_audio.csv"
+    main_results_path = output_dir / "quality_control_results_non_windowed.csv"
     flattened_df.to_csv(main_results_path, index=False)
     print(f"Saved flattened results to: {main_results_path}")
 
