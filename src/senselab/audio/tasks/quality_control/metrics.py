@@ -410,7 +410,7 @@ def peak_snr_from_spectral_metric(
     # Get peak signal amplitude from time-domain
     peak = np.max(np.abs(waveform))
 
-    return 20 * np.log10(peak / noise_rms)
+    return float(20 * np.log10(peak / noise_rms))
 
 
 def amplitude_skew_metric(audio: Audio) -> float:
