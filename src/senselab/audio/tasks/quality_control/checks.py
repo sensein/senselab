@@ -24,7 +24,6 @@ from senselab.audio.tasks.quality_control.metrics import (
     amplitude_skew_metric,
     crest_factor_metric,
     dynamic_range_metric,
-    find_buzzing_metric,
     mean_absolute_deviation_metric,
     peak_snr_from_spectral_metric,
     phase_correlation_metric,
@@ -857,29 +856,5 @@ def voice_signal_to_noise_power_ratio_check(
     """
     result = get_evaluation(audio_or_path, voice_signal_to_noise_power_ratio_metric, df)
     if result is None or (isinstance(result, float) and np.isnan(result)):
-        return None
-    return float(result) > threshold
-
-
-def find_buzzing_check(
-    audio_or_path: Union[Audio, str],
-    threshold: float = 0.0,
-    df: Optional[pd.DataFrame] = None,
-) -> Optional[bool]:
-    """Check that buzzing metric is above a threshold.
-
-    Currently not a lot of samples with major background noise, or this
-    algorithm isn't doing a great job.
-
-    Args:
-        audio_or_path: An Audio instance or filepath to the audio file.
-        threshold: Minimum acceptable buzzing metric value.
-        df: Optional DataFrame with ``find_buzzing_metric``.
-
-    Returns:
-        True when buzzing metric > ``threshold``, None if evaluation fails.
-    """
-    result = get_evaluation(audio_or_path, find_buzzing_metric, df)
-    if result is None:
         return None
     return float(result) > threshold
