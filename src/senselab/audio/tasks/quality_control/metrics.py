@@ -1,7 +1,6 @@
 """Contains audio quality metrics used in various checks."""
 
-import json
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 import librosa
 import numpy as np
@@ -715,66 +714,3 @@ def voice_signal_to_noise_power_ratio_metric(audio: Audio) -> float:
         return np.nan
 
     return float(snr)
-
-
-def find_buzzing_metric(audio: Audio, **input_source: Any) -> float:  # noqa: ANN401
-    """Calculates buzzing from audio_aes Production Quality metric.
-
-    Args:
-        audio: The SenseLab Audio object.
-        **input_source: Optional precomputed audio aesthetics results.
-
-    Returns:
-        float: Ratio of signal to noise power
-                Commented-out return is percent of audio that is noise as a test
-    """
-
-    def load_json_lines(file_path: str) -> List[Dict[str, Any]]:
-        data: List[Dict[str, Any]] = []
-        with open(file_path, "r") as file:
-            for line in file:
-                try:
-                    json_object = json.loads(line)
-                    data.append(json_object)
-                except json.JSONDecodeError:
-                    print(f"Skipping invalid JSON line: {line.strip()}")
-        return data
-
-    # Data loading
-
-    # load participant record id and session id
-    # subset = 'all'
-
-    # if subset == 'mdd':
-    #    diagnosis_df = pd.read_csv('diagnosis_df.csv', index_col=0)
-    #    # gives us participants/sessions we are analyzing and metadata.
-    #    # this csv points to messy data/recordings that should be removed
-    # elif subset == 'all':
-    #    diagnosis_df = pd.read_csv(os.path.join(dataset_path, 'phenotype/phq9.tsv'), delimiter='\t')
-    #    diagnosis_df.rename(columns={'phq_9_session_id': 'session_id'}, inplace=True)
-
-    # load audio aesthetics metrics
-    # CE | Content Enjoyment CU | Content Usefulness PC | Production Complexity PQ | Production Quality
-
-    if input_source.get("precompute") is None:
-        raise NotImplementedError("Audio aesthetics computation not yet implemented")
-    else:
-        aes_json = input_source["precompute"]
-        audio_json = input_source["precompute"]
-        # TODO aes_json = load_json_lines('../audio_aes/output_audio_aes_r2.jsonl')
-        # audio_json= load_json_lines('../audio_aes/input_audio_aes_r2.jsonl')
-
-    import pandas as pd  # noqa: TID252
-
-    aes = pd.DataFrame(aes_json)
-    aes[["record_id", "session_id", "task"]] = [
-        (
-            a["path"].split("sub-")[1].split("/")[0],
-            a["path"].split("ses-")[1].split("/")[0],
-            a["path"].split("task-")[1].split(".wav")[0],
-        )
-        for a in audio_json
-    ]
-    aes = aes[["record_id", "session_id", "task", "CE", "CU", "PC", "PQ"]]
-
-    return aes.PQ
