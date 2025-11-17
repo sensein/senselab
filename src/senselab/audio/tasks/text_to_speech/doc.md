@@ -14,7 +14,7 @@ Each model varies in performance, size, license, language support, and more. Per
 Several text-to-speech models are currently available through `🤗 Transformers`. These models can be explored on the [Hugging Face Hub](https://huggingface.co/models?library=transformers&pipeline_tag=text-to-speech&sort=downloads).
 **Note**: Some `Hugging Face` models, despite having the `text-to-speech` label on their model cards, may not work with the text-to-speech pipeline. These models are not supported in `senselab`, and identifying them often requires trial and error.
 
-In addition to the models from 🤗 Transformers, senselab also supports `Mars5-TTS` and `coqui-tts`, which enable text-to-speech generation (sometimes using a specific target voice accompanied by its corresponding transcript). Voice cloning using a target voice refers to the process of creating a synthetic voice that mimics the characteristics of a specific person's voice, known as the target voice. This involves generating speech that sounds like it was spoken by that person, even though it was produced by a machine.
+In addition to the models from 🤗 Transformers, senselab also supports `coqui-tts`, which enable text-to-speech generation (sometimes using a specific target voice accompanied by its corresponding transcript). Voice cloning using a target voice refers to the process of creating a synthetic voice that mimics the characteristics of a specific person's voice, known as the target voice. This involves generating speech that sounds like it was spoken by that person, even though it was produced by a machine.
 
 Popular/recommended models include:
 - **[Bark](https://huggingface.co/docs/transformers/model_doc/bark)**
@@ -25,8 +25,6 @@ Popular/recommended models include:
   - [large](https://huggingface.co/facebook/mms-1b-all)
 - **[SpeechT5](https://huggingface.co/docs/transformers/model_doc/speecht5)**
   - [standard](https://huggingface.co/microsoft/speecht5_tts)
-- **[Mars5-TTS](https://github.com/Camb-ai/MARS5-TTS)**
-  - [mars5_english](https://huggingface.co/CAMB-AI/MARS5-TTS)
 - **[Coqui-tts](https://github.com/idiap/coqui-ai-TTS)**
   - [models](https://github.com/idiap/coqui-ai-TTS/blob/dev/TTS/.models.json)
 

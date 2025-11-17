@@ -22,6 +22,4 @@ Here are some commonly used audio data augmentation techniques:
 - [torch-audiomentations](https://github.com/asteroid-team/torch-audiomentations): A GPU-accelerated augmentation library for PyTorch, allowing for efficient real-time augmentation. This is ideal for speeding up model training and reducing data loading times. It supports a subset of the techniques from audiomentations but is optimized for high-speed processing.
 Compared to `audiomentations`, `torch-audiomentations` offers a more limited set of augmentation types.
 
-In `senselab`, when these libraries run on a CPU, they utilize concurrent futures through `Pydra` for optimization.
-
 For more information on CPU vs GPU audio data augmentation, including the pros and cons, see [this guide](https://iver56.github.io/audiomentations/guides/cpu_vs_gpu/).

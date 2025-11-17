@@ -62,7 +62,10 @@ class SenselabModel(BaseModel, Generic[PROVIDER_T]):
 
 
 class HFModel(SenselabModel[PROVIDER_T]):
-    """HuggingFace model."""
+    """HuggingFace model.
+
+    Note: For some HuggingFace models, HF_TOKEN may be required for access.
+    """
 
     revision: Annotated[str, Field(validate_default=True)] = "main"
     info: Optional[ModelInfo] = None
@@ -133,7 +136,7 @@ class CoquiTTSModel(SenselabModel[PROVIDER_T]):
             raise ModuleNotFoundError(
                 "`coqui-tts` is not installed. "
                 "Please install senselab audio dependencies using "
-                "`pip install 'senselab[audio]'`."
+                "`pip install senselab`."
             )
         if not isinstance(value, Path):
             model_ids = TTS().list_models()
@@ -189,7 +192,7 @@ def check_torchaudio_model_exists(model_id: str) -> bool:
         raise ModuleNotFoundError(
             "`torchaudio` is not installed. "
             "Please install senselab audio dependencies using "
-            "`pip install 'senselab[audio]'`."
+            "`pip install senselab`."
         )
 
     try:

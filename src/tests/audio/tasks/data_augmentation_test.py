@@ -69,13 +69,10 @@ def test_audio_data_augmentation_with_torch_audiomentations() -> None:
         batched_audio[0][1].waveform, -1 * batch_inverted[1].waveform, atol=1e-3
     )
 
-    # Augmenting mono and stereo audio clips together
+    # Test error when augmenting mixed channel audios in a batch
     if torch.cuda.is_available():
         with pytest.raises(RuntimeError, match="All audios must have the same number of channels."):
             augment_audios([mono_audio[0], stereo_audio[0]], apply_augmentation)
-    else:
-        augmented_audios = augment_audios([mono_audio[0], stereo_audio[0]], apply_augmentation)
-        assert len(augmented_audios) == 2
 
 
 @pytest.mark.skipif(not AUDIOMENTATIONS_AVAILABLE, reason="audiomentations is not installed.")
