@@ -8,10 +8,10 @@ import pandas as pd
 from snorkel.labeling import PandasLFApplier, labeling_function
 from snorkel.labeling.model import LabelModel
 
-from senselab.audio.tasks.quality_control.taxonomy import TaxonomyNode
-from senselab.audio.tasks.quality_control.trees import (
+from senselab.audio.tasks.quality_control.taxonomies import (
     BIOACOUSTIC_ACTIVITY_TAXONOMY,
 )
+from senselab.audio.tasks.quality_control.taxonomy import TaxonomyNode
 
 INCLUDE: int = 1
 EXCLUDE: int = 0
