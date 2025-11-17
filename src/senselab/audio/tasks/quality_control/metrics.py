@@ -564,7 +564,7 @@ def primary_speaker_ratio_metric(audio: Audio) -> float:
     return float(primary_speaker_ratio)
 
 
-def presence_of_voice_metric(audio: Audio) -> float:
+def voice_activity_detection_metric(audio: Audio) -> float:
     """Calculates the duration of voice activity detected by VAD.
 
     The voice activity duration is computed from VAD results.
@@ -602,10 +602,7 @@ def presence_of_voice_metric(audio: Audio) -> float:
                 return np.nan
             vad_result = vad_results[0]
         except Exception as e:
-            print(
-                f"Warning: Failed to compute VAD for "
-                f"presence_of_voice_metric: {e}"
-            )
+            print(f"Warning: Failed to compute VAD for " f"voice_activity_detection_metric: {e}")
             return np.nan
 
     # Calculate total voice duration from ScriptLine objects
@@ -616,11 +613,7 @@ def presence_of_voice_metric(audio: Audio) -> float:
 
     for script_line in vad_result:
         # VAD results have speaker="VOICE" for voice segments
-        if (
-            script_line.speaker == "VOICE"
-            and script_line.start is not None
-            and script_line.end is not None
-        ):
+        if script_line.speaker == "VOICE" and script_line.start is not None and script_line.end is not None:
             duration = script_line.end - script_line.start
             total_voice_duration += duration
 
