@@ -11,6 +11,7 @@ All checks accept an `Audio` object and optionally a DataFrame of cached metric 
 
 from typing import Optional, Union
 
+import numpy as np
 import pandas as pd
 
 from senselab.audio.data_structures import Audio
@@ -794,26 +795,27 @@ def audio_intensity_positive_check(
     return float(result) > 0
 
 
-##### Rahul's Code Below
 def primary_speaker_ratio_check(
     audio_or_path: Union[Audio, str],
     threshold: float = 0.8,
     df: Optional[pd.DataFrame] = None,
 ) -> Optional[bool]:
-    """
-    Checks that primary speaker ratio in an audio file (the outputs from diarization and then the the ratio of the most common speaker to the total duration) is above threshold
+    """Check that primary speaker ratio is above threshold.
+
+    The primary speaker ratio is the ratio of the most common speaker duration
+    to the total duration, computed from speaker diarization.
 
     Args:
         audio_or_path: An Audio instance or filepath to the audio file.
+        threshold: Minimum acceptable primary speaker ratio.
+        df: Optional DataFrame with ``primary_speaker_ratio_metric``.
 
     Returns:
-        True when primary speaker > ``threshold``, None if evaluation fails.
+        True when primary speaker ratio > ``threshold``, None if evaluation fails.
     """
-
-    result = get_evaluation(audio_or_path, "../../modeling/diarize/diar_r2.pkl", primary_speaker_ratio_metric, df)
+    result = get_evaluation(audio_or_path, primary_speaker_ratio_metric, df)
     if result is None:
         return None
-    # x.speaker_count > 1 and x.primary_speaker_ratio < 0.8 TODO do I need the first threshold; I don't think so since it should be 1 for 1 speaker
     return float(result) > threshold
 
 
@@ -853,7 +855,7 @@ def signal_to_noise_power_ratio_check(audio_or_path: Union[Audio, str],
     Returns:
         True when SNR > ``threshold``, None if evaluation fails.
     """
-    
+
     result = get_evaluation(audio_or_path, "../../modeling/diarize/vad_r2.pkl", signal_to_noise_power_ratio_metric, df)
     if result is None:
         return None
@@ -874,11 +876,10 @@ def find_buzzing_check(audio_or_path: Union[Audio, str],
     Returns:
         True when SNR > ``threshold``, None if evaluation fails.
     """
-    
-    result = get_evaluation(audio_or_path, #"../../modeling/diarize/vad_r2.pkl", 
+
+    result = get_evaluation(audio_or_path, #"../../modeling/diarize/vad_r2.pkl",
                             find_buzzing_metric, df)
     if result is None:
         return None
     return float(result) > threshold
-        
 
