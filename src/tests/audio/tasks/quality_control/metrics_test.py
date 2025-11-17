@@ -2,7 +2,7 @@
 
 import inspect
 import math
-from typing import Pattern, Type, Union
+from typing import Any, Dict, Pattern, Type, Union
 
 import numpy as np
 import pytest
@@ -455,7 +455,7 @@ def test_voice_activity_detection_metric_no_voice() -> None:
     """Tests voice_activity_detection_metric when no voice is detected."""
     # Create audio with empty VAD result
     waveform = torch.randn(1, 16000)
-    metadata = {"vad": []}
+    metadata: Dict[str, Any] = {"vad": []}
     audio = Audio(waveform=waveform, sampling_rate=16000, metadata=metadata)
 
     duration = voice_activity_detection_metric(audio)
@@ -519,7 +519,7 @@ def test_primary_speaker_ratio_metric_with_nested_metadata() -> None:
 def test_primary_speaker_ratio_metric_no_speakers() -> None:
     """Tests primary_speaker_ratio_metric when no speakers are detected."""
     waveform = torch.randn(1, 16000)
-    metadata = {"diarization": []}
+    metadata: Dict[str, Any] = {"diarization": []}
     audio = Audio(waveform=waveform, sampling_rate=16000, metadata=metadata)
 
     ratio = primary_speaker_ratio_metric(audio)
