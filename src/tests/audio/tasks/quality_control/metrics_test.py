@@ -32,6 +32,7 @@ from senselab.audio.tasks.quality_control.metrics import (
     shannon_entropy_amplitude_metric,
     signal_variance_metric,
     voice_activity_detection_metric,
+    voice_signal_to_noise_power_ratio_metric,
     zero_crossing_rate_metric,
 )
 
@@ -524,3 +525,48 @@ def test_primary_speaker_ratio_metric_no_speakers() -> None:
 
     ratio = primary_speaker_ratio_metric(audio)
     assert math.isnan(ratio), f"Expected NaN for no speakers, got {ratio}"
+
+
+def test_voice_signal_to_noise_power_ratio_metric_with_metadata() -> None:
+    """Tests voice_signal_to_noise_power_ratio_metric with precomputed VAD in metadata."""
+    from senselab.utils.data_structures import ScriptLine
+
+    # Create audio with VAD metadata (voice and noise segments)
+    waveform = torch.randn(1, 16000)  # 1 second of audio
+    vad_result = [
+        ScriptLine(speaker="VOICE", start=0.0, end=0.3),  # Voice segment
+        ScriptLine(speaker="VOICE", start=0.5, end=0.8),  # Voice segment
+    ]
+    metadata: Dict[str, Any] = {"vad": vad_result}
+    audio = Audio(waveform=waveform, sampling_rate=16000, metadata=metadata)
+
+    snr = voice_signal_to_noise_power_ratio_metric(audio)
+    assert isinstance(snr, float), "SNR must be a float"
+    assert not math.isnan(snr), "SNR should not be NaN when voice and noise exist"
+    assert not math.isinf(snr), "SNR should be finite"
+
+
+def test_voice_signal_to_noise_power_ratio_metric_no_voice() -> None:
+    """Tests voice_signal_to_noise_power_ratio_metric when no voice is detected."""
+    waveform = torch.randn(1, 16000)
+    metadata: Dict[str, Any] = {"vad": []}
+    audio = Audio(waveform=waveform, sampling_rate=16000, metadata=metadata)
+
+    snr = voice_signal_to_noise_power_ratio_metric(audio)
+    assert math.isnan(snr), f"Expected NaN for no voice, got {snr}"
+
+
+def test_voice_signal_to_noise_power_ratio_metric_only_voice() -> None:
+    """Tests voice_signal_to_noise_power_ratio_metric when only voice is present."""
+    from senselab.utils.data_structures import ScriptLine
+
+    waveform = torch.randn(1, 16000)
+    vad_result = [
+        ScriptLine(speaker="VOICE", start=0.0, end=1.0),  # Entire audio is voice
+    ]
+    metadata: Dict[str, Any] = {"vad": vad_result}
+    audio = Audio(waveform=waveform, sampling_rate=16000, metadata=metadata)
+
+    snr = voice_signal_to_noise_power_ratio_metric(audio)
+    # When there's no noise, SNR should be NaN or very high
+    assert math.isnan(snr) or snr > 0, f"Expected NaN or positive SNR, got {snr}"

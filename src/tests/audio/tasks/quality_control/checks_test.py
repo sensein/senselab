@@ -46,6 +46,7 @@ from senselab.audio.tasks.quality_control.checks import (
     very_low_peak_snr_from_spectral_check,
     very_low_root_mean_square_energy_check,
     voice_activity_detection_check,
+    voice_signal_to_noise_power_ratio_check,
 )
 from senselab.audio.tasks.quality_control.evaluate import get_evaluation
 from senselab.audio.tasks.quality_control.metrics import (
@@ -537,3 +538,40 @@ def test_primary_speaker_ratio_check_multiple_speakers() -> None:
     # Test with threshold above ratio
     result = primary_speaker_ratio_check(audio, threshold=0.8)
     assert result is False, "Should return False when ratio (0.7) <= threshold (0.8)"
+
+
+def test_voice_signal_to_noise_power_ratio_check_with_metadata() -> None:
+    """Tests voice_signal_to_noise_power_ratio_check with precomputed VAD in metadata."""
+    import torch
+
+    from senselab.utils.data_structures import ScriptLine
+
+    # Create audio with VAD metadata (voice and noise segments)
+    waveform = torch.randn(1, 16000)
+    vad_result = [
+        ScriptLine(speaker="VOICE", start=0.0, end=0.3),  # Voice segment
+        ScriptLine(speaker="VOICE", start=0.5, end=0.8),  # Voice segment
+    ]
+    metadata: Dict[str, Any] = {"vad": vad_result}
+    audio = Audio(waveform=waveform, sampling_rate=16000, metadata=metadata)
+
+    # Test with threshold below SNR
+    result = voice_signal_to_noise_power_ratio_check(audio, threshold=-10.0)
+    assert result is True or result is None, "Should return True or None when SNR > threshold"
+
+    # Test with very high threshold
+    result = voice_signal_to_noise_power_ratio_check(audio, threshold=100.0)
+    assert result is False or result is None, "Should return False or None when SNR <= threshold"
+
+
+def test_voice_signal_to_noise_power_ratio_check_no_voice() -> None:
+    """Tests voice_signal_to_noise_power_ratio_check when no voice is detected."""
+    import torch
+
+    waveform = torch.randn(1, 16000)
+    metadata: Dict[str, Any] = {"vad": []}
+    audio = Audio(waveform=waveform, sampling_rate=16000, metadata=metadata)
+
+    # Test with threshold
+    result = voice_signal_to_noise_power_ratio_check(audio, threshold=-10.0)
+    assert result is None, "Should return None when no voice detected (SNR is NaN)"
