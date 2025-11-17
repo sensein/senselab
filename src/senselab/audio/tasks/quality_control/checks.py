@@ -864,8 +864,9 @@ def signal_to_noise_power_ratio_check(audio_or_path: Union[Audio, str],
 
 
 
-def find_buzzing_check(audio_or_path: Union[Audio, str],
-    threshold: float = #TODO,
+def find_buzzing_check(
+    audio_or_path: Union[Audio, str],
+    threshold: float = 0.0,
     df: Optional[pd.DataFrame] = None,
 ) -> Optional[bool]:
     """
