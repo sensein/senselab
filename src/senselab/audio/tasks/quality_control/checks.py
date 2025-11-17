@@ -11,6 +11,7 @@ All checks accept an `Audio` object and optionally a DataFrame of cached metric 
 
 from typing import Optional, Union
 
+import numpy as np
 import pandas as pd
 
 from senselab.audio.data_structures import Audio
@@ -26,6 +27,7 @@ from senselab.audio.tasks.quality_control.metrics import (
     mean_absolute_deviation_metric,
     peak_snr_from_spectral_metric,
     phase_correlation_metric,
+    primary_speaker_ratio_metric,
     proportion_clipped_metric,
     proportion_silence_at_beginning_metric,
     proportion_silence_at_end_metric,
@@ -34,6 +36,8 @@ from senselab.audio.tasks.quality_control.metrics import (
     shannon_entropy_amplitude_metric,
     signal_variance_metric,
     spectral_gating_snr_metric,
+    voice_activity_detection_metric,
+    voice_signal_to_noise_power_ratio_metric,
     zero_crossing_rate_metric,
 )
 
@@ -176,26 +180,26 @@ def very_low_amplitude_modulation_depth_check(
 
 def low_amplitude_modulation_depth_check(
     audio_or_path: Union[Audio, str],
-    min: float = 0.1,
-    max: float = 0.3,
+    min_threshold: float = 0.1,
+    max_threshold: float = 0.3,
     df: Optional[pd.DataFrame] = None,
 ) -> Optional[bool]:
     """Detect audio with modestly low loudness variation.
 
     Args:
         audio_or_path: An Audio instance or filepath to the audio file.
-        min: Inclusive lower bound for *low* modulation depth.
-        max: Exclusive upper bound for *low* modulation depth.
+        min_threshold: Inclusive lower bound for *low* modulation depth.
+        max_threshold: Exclusive upper bound for *low* modulation depth.
         df: Optional DataFrame with ``amplitude_modulation_depth_metric``.
 
     Returns:
-        True when ``min ≤ depth < max``, None if evaluation fails.
+        True when ``min_threshold ≤ depth < max_threshold``, None if evaluation fails.
     """
     result = get_evaluation(audio_or_path, amplitude_modulation_depth_metric, df)
     if result is None:
         return None
     depth = float(result)
-    return min <= depth < max
+    return min_threshold <= depth < max_threshold
 
 
 def high_proportion_clipped_check(
@@ -767,5 +771,90 @@ def very_high_zero_crossing_rate_check(
     """
     result = get_evaluation(audio_or_path, zero_crossing_rate_metric, df)
     if result is None:
+        return None
+    return float(result) > threshold
+
+
+def audio_intensity_positive_check(
+    audio_or_path: Union[Audio, str],
+    df: Optional[pd.DataFrame] = None,
+) -> Optional[bool]:
+    """Check that the audio has non-zero intensity.
+
+    Args:
+        audio_or_path: An Audio instance or filepath to the audio file.
+        df: Optional DataFrame with ``dynamic_range_metric``.
+
+    Returns:
+        True if the audio has non-zero dynamic range, None if evaluation fails.
+    """
+    result = get_evaluation(audio_or_path, dynamic_range_metric, df)
+    if result is None:
+        return None
+    return float(result) > 0
+
+
+def primary_speaker_ratio_check(
+    audio_or_path: Union[Audio, str],
+    threshold: float = 0.8,
+    df: Optional[pd.DataFrame] = None,
+) -> Optional[bool]:
+    """Check that primary speaker ratio is above threshold.
+
+    The primary speaker ratio is the ratio of the most common speaker duration
+    to the total duration, computed from speaker diarization.
+
+    Args:
+        audio_or_path: An Audio instance or filepath to the audio file.
+        threshold: Minimum acceptable primary speaker ratio.
+        df: Optional DataFrame with ``primary_speaker_ratio_metric``.
+
+    Returns:
+        True when primary speaker ratio > ``threshold``, None if evaluation fails.
+    """
+    result = get_evaluation(audio_or_path, primary_speaker_ratio_metric, df)
+    if result is None:
+        return None
+    return float(result) > threshold
+
+
+def voice_activity_detection_check(
+    audio_or_path: Union[Audio, str],
+    threshold: float = 0,
+    df: Optional[pd.DataFrame] = None,
+) -> Optional[bool]:
+    """Check that Voice Activity Detection duration is above threshold.
+
+    Args:
+        audio_or_path: An Audio instance or filepath to the audio file.
+        threshold: Minimum acceptable voice activity duration in seconds.
+        df: Optional DataFrame with ``voice_activity_detection_metric``.
+
+    Returns:
+        True when voice duration > ``threshold``, None if evaluation fails.
+    """
+    result = get_evaluation(audio_or_path, voice_activity_detection_metric, df)
+    if result is None:
+        return None
+    return float(result) > threshold
+
+
+def voice_signal_to_noise_power_ratio_check(
+    audio_or_path: Union[Audio, str],
+    threshold: float = -1,
+    df: Optional[pd.DataFrame] = None,
+) -> Optional[bool]:
+    """Check that voice signal-to-noise ratio is above a threshold.
+
+    Args:
+        audio_or_path: An Audio instance or filepath to the audio file.
+        threshold: Minimum acceptable SNR value in dB.
+        df: Optional DataFrame with ``voice_signal_to_noise_power_ratio_metric``.
+
+    Returns:
+        True when SNR > ``threshold``, None if evaluation fails.
+    """
+    result = get_evaluation(audio_or_path, voice_signal_to_noise_power_ratio_metric, df)
+    if result is None or (isinstance(result, float) and np.isnan(result)):
         return None
     return float(result) > threshold

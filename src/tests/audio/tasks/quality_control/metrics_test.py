@@ -2,7 +2,7 @@
 
 import inspect
 import math
-from typing import Pattern, Type, Union
+from typing import Any, Dict, Pattern, Type, Union
 
 import numpy as np
 import pytest
@@ -23,6 +23,7 @@ from senselab.audio.tasks.quality_control.metrics import (
     mean_absolute_deviation_metric,
     peak_snr_from_spectral_metric,
     phase_correlation_metric,
+    primary_speaker_ratio_metric,
     proportion_clipped_metric,
     proportion_silence_at_beginning_metric,
     proportion_silence_at_end_metric,
@@ -30,6 +31,8 @@ from senselab.audio.tasks.quality_control.metrics import (
     root_mean_square_energy_metric,
     shannon_entropy_amplitude_metric,
     signal_variance_metric,
+    voice_activity_detection_metric,
+    voice_signal_to_noise_power_ratio_metric,
     zero_crossing_rate_metric,
 )
 
@@ -37,8 +40,11 @@ from senselab.audio.tasks.quality_control.metrics import (
 def test_metric_function_names_end_with_metric() -> None:
     """Ensure all public functions in metrics module end with 'metric'."""
     funcs = inspect.getmembers(metrics, inspect.isfunction)
-    for name, _ in funcs:
-        assert name.endswith("metric"), f"Function '{name}' does not end with 'metric'"
+    module_name = metrics.__name__
+    for name, func in funcs:
+        # Only check functions defined in this module, not imported ones
+        if func.__module__ == module_name:
+            assert name.endswith("metric"), f"Function '{name}' does not end with 'metric'"
 
 
 @pytest.mark.parametrize(
@@ -410,3 +416,160 @@ def test_phase_correlation_metric_real_audio(audio_fixture: str, request: pytest
     assert not math.isnan(correlation), "Correlation should not be NaN"
     assert not math.isinf(correlation), "Correlation should be finite"
     assert -1.0 <= correlation <= 1.0, f"Expected correlation between -1.0 and 1.0, got {correlation}"
+
+
+def test_voice_activity_detection_metric_with_metadata() -> None:
+    """Tests voice_activity_detection_metric with precomputed VAD in metadata."""
+    from senselab.utils.data_structures import ScriptLine
+
+    # Create audio with VAD metadata
+    waveform = torch.randn(1, 16000)  # 1 second of audio
+    vad_result = [
+        ScriptLine(speaker="VOICE", start=0.0, end=0.5),
+        ScriptLine(speaker="VOICE", start=0.6, end=1.0),
+    ]
+    metadata = {"vad": vad_result}
+    audio = Audio(waveform=waveform, sampling_rate=16000, metadata=metadata)
+
+    # Test with List[ScriptLine] format
+    duration = voice_activity_detection_metric(audio)
+    assert isinstance(duration, float), "Duration must be a float"
+    assert duration == 0.9, f"Expected 0.9 seconds, got {duration}"
+
+
+def test_voice_activity_detection_metric_with_nested_metadata() -> None:
+    """Tests voice_activity_detection_metric with nested List[List[ScriptLine]] format."""
+    from senselab.utils.data_structures import ScriptLine
+
+    # Create audio with nested VAD metadata
+    waveform = torch.randn(1, 16000)
+    vad_result = [
+        ScriptLine(speaker="VOICE", start=0.0, end=0.3),
+        ScriptLine(speaker="VOICE", start=0.4, end=0.8),
+    ]
+    metadata = {"vad": [vad_result]}  # Nested format
+    audio = Audio(waveform=waveform, sampling_rate=16000, metadata=metadata)
+
+    duration = voice_activity_detection_metric(audio)
+    assert isinstance(duration, float), "Duration must be a float"
+    assert duration == 0.7, f"Expected 0.7 seconds, got {duration}"
+
+
+def test_voice_activity_detection_metric_no_voice() -> None:
+    """Tests voice_activity_detection_metric when no voice is detected."""
+    # Create audio with empty VAD result
+    waveform = torch.randn(1, 16000)
+    metadata: Dict[str, Any] = {"vad": []}
+    audio = Audio(waveform=waveform, sampling_rate=16000, metadata=metadata)
+
+    duration = voice_activity_detection_metric(audio)
+    assert duration == 0.0, f"Expected 0.0 for no voice, got {duration}"
+
+
+def test_primary_speaker_ratio_metric_with_metadata() -> None:
+    """Tests primary_speaker_ratio_metric with precomputed diarization in metadata."""
+    from senselab.utils.data_structures import ScriptLine
+
+    # Create audio with diarization metadata (single speaker)
+    waveform = torch.randn(1, 16000)
+    diarization_result = [
+        ScriptLine(speaker="SPEAKER_00", start=0.0, end=1.0),
+    ]
+    metadata = {"diarization": diarization_result}
+    audio = Audio(waveform=waveform, sampling_rate=16000, metadata=metadata)
+
+    ratio = primary_speaker_ratio_metric(audio)
+    assert isinstance(ratio, float), "Ratio must be a float"
+    assert ratio == 1.0, f"Expected 1.0 for single speaker, got {ratio}"
+
+
+def test_primary_speaker_ratio_metric_multiple_speakers() -> None:
+    """Tests primary_speaker_ratio_metric with multiple speakers."""
+    from senselab.utils.data_structures import ScriptLine
+
+    # Create audio with diarization metadata (two speakers, one dominant)
+    waveform = torch.randn(1, 16000)
+    diarization_result = [
+        ScriptLine(speaker="SPEAKER_00", start=0.0, end=0.7),  # 70% of time
+        ScriptLine(speaker="SPEAKER_01", start=0.7, end=1.0),  # 30% of time
+    ]
+    metadata = {"diarization": diarization_result}
+    audio = Audio(waveform=waveform, sampling_rate=16000, metadata=metadata)
+
+    ratio = primary_speaker_ratio_metric(audio)
+    assert isinstance(ratio, float), "Ratio must be a float"
+    assert ratio == 0.7, f"Expected 0.7 for dominant speaker, got {ratio}"
+    assert 0.0 <= ratio <= 1.0, "Ratio should be between 0.0 and 1.0"
+
+
+def test_primary_speaker_ratio_metric_with_nested_metadata() -> None:
+    """Tests primary_speaker_ratio_metric with nested List[List[ScriptLine]] format."""
+    from senselab.utils.data_structures import ScriptLine
+
+    # Create audio with nested diarization metadata
+    waveform = torch.randn(1, 16000)
+    diarization_result = [
+        ScriptLine(speaker="SPEAKER_00", start=0.0, end=0.8),
+        ScriptLine(speaker="SPEAKER_01", start=0.8, end=1.0),
+    ]
+    metadata = {"diarization": [diarization_result]}  # Nested format
+    audio = Audio(waveform=waveform, sampling_rate=16000, metadata=metadata)
+
+    ratio = primary_speaker_ratio_metric(audio)
+    assert isinstance(ratio, float), "Ratio must be a float"
+    assert ratio == 0.8, f"Expected 0.8 for dominant speaker, got {ratio}"
+
+
+def test_primary_speaker_ratio_metric_no_speakers() -> None:
+    """Tests primary_speaker_ratio_metric when no speakers are detected."""
+    waveform = torch.randn(1, 16000)
+    metadata: Dict[str, Any] = {"diarization": []}
+    audio = Audio(waveform=waveform, sampling_rate=16000, metadata=metadata)
+
+    ratio = primary_speaker_ratio_metric(audio)
+    assert math.isnan(ratio), f"Expected NaN for no speakers, got {ratio}"
+
+
+def test_voice_signal_to_noise_power_ratio_metric_with_metadata() -> None:
+    """Tests voice_signal_to_noise_power_ratio_metric with precomputed VAD in metadata."""
+    from senselab.utils.data_structures import ScriptLine
+
+    # Create audio with VAD metadata (voice and noise segments)
+    waveform = torch.randn(1, 16000)  # 1 second of audio
+    vad_result = [
+        ScriptLine(speaker="VOICE", start=0.0, end=0.3),  # Voice segment
+        ScriptLine(speaker="VOICE", start=0.5, end=0.8),  # Voice segment
+    ]
+    metadata: Dict[str, Any] = {"vad": vad_result}
+    audio = Audio(waveform=waveform, sampling_rate=16000, metadata=metadata)
+
+    snr = voice_signal_to_noise_power_ratio_metric(audio)
+    assert isinstance(snr, float), "SNR must be a float"
+    assert not math.isnan(snr), "SNR should not be NaN when voice and noise exist"
+    assert not math.isinf(snr), "SNR should be finite"
+
+
+def test_voice_signal_to_noise_power_ratio_metric_no_voice() -> None:
+    """Tests voice_signal_to_noise_power_ratio_metric when no voice is detected."""
+    waveform = torch.randn(1, 16000)
+    metadata: Dict[str, Any] = {"vad": []}
+    audio = Audio(waveform=waveform, sampling_rate=16000, metadata=metadata)
+
+    snr = voice_signal_to_noise_power_ratio_metric(audio)
+    assert math.isnan(snr), f"Expected NaN for no voice, got {snr}"
+
+
+def test_voice_signal_to_noise_power_ratio_metric_only_voice() -> None:
+    """Tests voice_signal_to_noise_power_ratio_metric when only voice is present."""
+    from senselab.utils.data_structures import ScriptLine
+
+    waveform = torch.randn(1, 16000)
+    vad_result = [
+        ScriptLine(speaker="VOICE", start=0.0, end=1.0),  # Entire audio is voice
+    ]
+    metadata: Dict[str, Any] = {"vad": vad_result}
+    audio = Audio(waveform=waveform, sampling_rate=16000, metadata=metadata)
+
+    snr = voice_signal_to_noise_power_ratio_metric(audio)
+    # When there's no noise, SNR should be NaN or very high
+    assert math.isnan(snr) or snr > 0, f"Expected NaN or positive SNR, got {snr}"

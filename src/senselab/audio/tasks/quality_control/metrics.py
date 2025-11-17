@@ -1,11 +1,18 @@
 """Contains audio quality metrics used in various checks."""
 
+from typing import Dict, List, Optional
+
 import librosa
 import numpy as np
 import scipy
 import torch
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.speaker_diarization.api import diarize_audios
+from senselab.audio.tasks.voice_activity_detection.api import (
+    detect_human_voice_activity_in_audios,
+)
+from senselab.utils.data_structures import ScriptLine
 
 
 def proportion_silent_metric(audio: Audio, silence_threshold: float = 0.01) -> float:
@@ -486,3 +493,221 @@ def phase_correlation_metric(audio: Audio, frame_length: int = 2048, hop_length:
             correlation_values.append(np.mean(valid_corrs))
 
     return float(np.mean(correlation_values)) if correlation_values else 0.0
+
+
+def primary_speaker_ratio_metric(audio: Audio) -> float:
+    """Calculates the ratio of the primary speaker's duration to the total duration.
+
+    The primary speaker ratio is computed from speaker diarization results.
+    If diarization is not available in audio.metadata, it will be computed automatically.
+
+    Args:
+        audio: The SenseLab Audio object.
+
+    Returns:
+        float: Ratio of primary speaker's duration to total duration.
+                If there are no speakers, return nan.
+                If only one speaker, return 1.0.
+                Else return a number between 0.0 and 1.0.
+    """
+    # Check Audio metadata for precomputed diarization
+    diarization_result: Optional[List[ScriptLine]] = None
+    if audio.metadata:
+        metadata_diarization = audio.metadata.get("diarization")
+        if metadata_diarization is not None:
+            # Handle different storage formats: List[List[ScriptLine]] or List[ScriptLine]
+            if isinstance(metadata_diarization, list) and len(metadata_diarization) > 0:
+                if isinstance(metadata_diarization[0], list):
+                    # Format: List[List[ScriptLine]] - take first audio's diarization
+                    diarization_result = metadata_diarization[0]
+                elif isinstance(metadata_diarization[0], ScriptLine):
+                    # Format: List[ScriptLine]
+                    diarization_result = metadata_diarization
+
+    # Compute diarization if not in metadata
+    if diarization_result is None:
+        try:
+            diarization_results = diarize_audios([audio])
+            if not diarization_results or len(diarization_results) == 0:
+                return np.nan
+            diarization_result = diarization_results[0]
+        except Exception as e:
+            print(f"Warning: Failed to compute diarization for primary_speaker_ratio_metric: {e}")
+            return np.nan
+
+    # Calculate primary speaker ratio from ScriptLine objects
+    if not diarization_result or len(diarization_result) == 0:
+        return np.nan
+
+    # Calculate duration per speaker
+    speaker_durations: Dict[str, float] = {}
+    total_duration = 0.0
+
+    for script_line in diarization_result:
+        if script_line.speaker is None or script_line.start is None or script_line.end is None:
+            continue
+        duration = script_line.end - script_line.start
+        speaker = script_line.speaker
+        speaker_durations[speaker] = speaker_durations.get(speaker, 0.0) + duration
+        total_duration += duration
+
+    if total_duration == 0.0 or len(speaker_durations) == 0:
+        return np.nan
+
+    # Find primary speaker (speaker with maximum duration)
+    primary_speaker_duration = max(speaker_durations.values())
+    primary_speaker_ratio = primary_speaker_duration / total_duration
+
+    return float(primary_speaker_ratio)
+
+
+def voice_activity_detection_metric(audio: Audio) -> float:
+    """Calculates the duration of voice activity detected by VAD.
+
+    The voice activity duration is computed from VAD results.
+    If VAD is not available in audio.metadata, it will be computed
+    automatically.
+
+    Args:
+        audio: The SenseLab Audio object.
+
+    Returns:
+        float: Duration of voice activity in seconds.
+               Returns 0.0 if no voice is detected.
+               Returns np.nan if VAD computation fails.
+    """
+    # Check Audio metadata for precomputed VAD
+    vad_result: Optional[List[ScriptLine]] = None
+    if audio.metadata:
+        metadata_vad = audio.metadata.get("vad")
+        if metadata_vad is not None:
+            # Handle different storage formats:
+            # List[List[ScriptLine]] or List[ScriptLine]
+            if isinstance(metadata_vad, list) and len(metadata_vad) > 0:
+                if isinstance(metadata_vad[0], list):
+                    # Format: List[List[ScriptLine]] - take first audio's VAD
+                    vad_result = metadata_vad[0]
+                elif isinstance(metadata_vad[0], ScriptLine):
+                    # Format: List[ScriptLine]
+                    vad_result = metadata_vad
+
+    # Compute VAD if not in metadata
+    if vad_result is None:
+        try:
+            vad_results = detect_human_voice_activity_in_audios([audio])
+            if not vad_results or len(vad_results) == 0:
+                return np.nan
+            vad_result = vad_results[0]
+        except Exception as e:
+            print(f"Warning: Failed to compute VAD for " f"voice_activity_detection_metric: {e}")
+            return np.nan
+
+    # Calculate total voice duration from ScriptLine objects
+    if not vad_result or len(vad_result) == 0:
+        return 0.0
+
+    total_voice_duration = 0.0
+
+    for script_line in vad_result:
+        # VAD results have speaker="VOICE" for voice segments
+        if script_line.speaker == "VOICE" and script_line.start is not None and script_line.end is not None:
+            duration = script_line.end - script_line.start
+            total_voice_duration += duration
+
+    return float(total_voice_duration)
+
+
+def voice_signal_to_noise_power_ratio_metric(audio: Audio) -> float:
+    """Calculates the SNR by looking at power during voice versus power when none.
+
+    The signal-to-noise ratio is computed from VAD results, where voice segments
+    are considered signal and non-voice segments are considered noise.
+    If VAD is not available in audio.metadata, it will be computed automatically.
+
+    Args:
+        audio: The SenseLab Audio object.
+
+    Returns:
+        float: Signal-to-noise power ratio in dB.
+               Returns np.nan if VAD computation fails or if there's no voice/noise.
+    """
+    # Check Audio metadata for precomputed VAD
+    vad_result: Optional[List[ScriptLine]] = None
+    if audio.metadata:
+        metadata_vad = audio.metadata.get("vad")
+        if metadata_vad is not None:
+            # Handle different storage formats:
+            # List[List[ScriptLine]] or List[ScriptLine]
+            if isinstance(metadata_vad, list) and len(metadata_vad) > 0:
+                if isinstance(metadata_vad[0], list):
+                    # Format: List[List[ScriptLine]] - take first audio's VAD
+                    vad_result = metadata_vad[0]
+                elif isinstance(metadata_vad[0], ScriptLine):
+                    # Format: List[ScriptLine]
+                    vad_result = metadata_vad
+
+    # Compute VAD if not in metadata
+    if vad_result is None:
+        try:
+            vad_results = detect_human_voice_activity_in_audios([audio])
+            if not vad_results or len(vad_results) == 0:
+                return np.nan
+            vad_result = vad_results[0]
+        except Exception as e:
+            print(f"Warning: Failed to compute VAD for " f"voice_signal_to_noise_power_ratio_metric: {e}")
+            return np.nan
+
+    # Calculate SNR from ScriptLine objects
+    if not vad_result or len(vad_result) == 0:
+        return np.nan
+
+    waveform = audio.waveform
+    time = np.divide(np.arange(waveform.shape[1]), audio.sampling_rate)
+
+    # Collect voice (signal) and non-voice (noise) sample indices
+    voice_indices: List[int] = []
+    noise_indices: List[int] = []
+    previous_end = 0.0
+
+    for script_line in vad_result:
+        if script_line.start is None or script_line.end is None:
+            continue
+
+        # Voice segments (signal)
+        if script_line.speaker == "VOICE":
+            voice_mask = (time >= script_line.start) & (time <= script_line.end)
+            voice_indices.extend(np.where(voice_mask)[0].tolist())
+
+        # Noise segments (between voice segments)
+        if script_line.start > previous_end:
+            noise_mask = (time >= previous_end) & (time < script_line.start)
+            noise_indices.extend(np.where(noise_mask)[0].tolist())
+
+        previous_end = max(previous_end, script_line.end)
+
+    # Handle remaining noise after last voice segment
+    if previous_end < time[-1]:
+        noise_mask = time > previous_end
+        noise_indices.extend(np.where(noise_mask)[0].tolist())
+
+    # Calculate power for voice and noise segments
+    try:
+        if len(voice_indices) == 0 or len(noise_indices) == 0:
+            return np.nan
+
+        waveform_np = waveform.squeeze().numpy()
+        voice_samples = waveform_np[voice_indices]
+        noise_samples = waveform_np[noise_indices]
+
+        signal_power = np.mean(voice_samples**2)
+        noise_power = np.mean(noise_samples**2)
+
+        if noise_power > 0:
+            snr = 10 * np.log10(signal_power / noise_power)
+        else:
+            snr = np.nan
+    except (ValueError, IndexError, ZeroDivisionError) as e:
+        print(f"Warning: Error calculating SNR: {e}")
+        return np.nan
+
+    return float(snr)
