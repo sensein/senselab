@@ -35,7 +35,6 @@ from senselab.audio.tasks.quality_control.metrics import (
     signal_variance_metric,
     spectral_gating_snr_metric,
     zero_crossing_rate_metric,
-    percent_clipping_metric,
     primary_speaker_ratio_metric,
     presence_of_voice_metric,
     signal_to_noise_power_ratio_metric
@@ -796,31 +795,6 @@ def audio_intensity_positive_check(
 
 
 ##### Rahul's Code Below
-
-
-# calculate clipping
-def measure_clipping_check(
-    audio_or_path: Union[Audio, str],
-    threshold: float = 0.001,
-    df: Optional[pd.DataFrame] = None,
-) -> Optional[bool]:
-    """
-    Checks for clipping in an audio file.
-
-    Args:
-        audio_or_path: An Audio instance or filepath to the audio file.
-
-    Returns:
-        True when clipping percent > ``threshold``, None if evaluation fails.
-    """
-
-    result = get_evaluation(audio_or_path, percent_clipping_metric, df)
-    if result is None:
-        return None
-    return float(result) > threshold
-
-
-
 def primary_speaker_ratio_check(
     audio_or_path: Union[Audio, str],
     threshold: float = 0.8,
