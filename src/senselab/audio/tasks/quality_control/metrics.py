@@ -1,11 +1,15 @@
 """Contains audio quality metrics used in various checks."""
 
+from typing import Dict, List, Optional
+
 import librosa
 import numpy as np
 import scipy
 import torch
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.speaker_diarization.api import diarize_audios
+from senselab.utils.data_structures import ScriptLine
 
 
 def proportion_silent_metric(audio: Audio, silence_threshold: float = 0.01) -> float:
@@ -490,32 +494,71 @@ def phase_correlation_metric(audio: Audio, frame_length: int = 2048, hop_length:
 
 #### Rahul's additions below
 
-def primary_speaker_ratio_metric(audio: Audio, **input_source) -> float:
+
+def primary_speaker_ratio_metric(audio: Audio) -> float:
     """Calculates the ratio of the primary speaker's duration to the total duration.
 
+    The primary speaker ratio is computed from speaker diarization results.
+    If diarization is not available in audio.metadata, it will be computed automatically.
+
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio: The SenseLab Audio object.
 
     Returns:
         float: Ratio of primary speaker's duration to total duration.
-                If there are no speakers, return nan
-                If only one speaker, return 1.0
-                Else return a number between 0.0 and 1.0
+                If there are no speakers, return nan.
+                If only one speaker, return 1.0.
+                Else return a number between 0.0 and 1.0.
     """
+    # Check Audio metadata for precomputed diarization
+    diarization_result: Optional[List[ScriptLine]] = None
+    if audio.metadata:
+        metadata_diarization = audio.metadata.get("diarization")
+        if metadata_diarization is not None:
+            # Handle different storage formats: List[List[ScriptLine]] or List[ScriptLine]
+            if isinstance(metadata_diarization, list) and len(metadata_diarization) > 0:
+                if isinstance(metadata_diarization[0], list):
+                    # Format: List[List[ScriptLine]] - take first audio's diarization
+                    diarization_result = metadata_diarization[0]
+                elif isinstance(metadata_diarization[0], ScriptLine):
+                    # Format: List[ScriptLine]
+                    diarization_result = metadata_diarization
 
-    if input_source['precompute'] is None:
-        diar #= #TODO diarize the audio
-    else:
-        diar = input_source['precompute']
-        #TODO diar = pd.read_pickle("../../modeling/diarize/diar_r2.pkl")
-    
-    # Calculate primary speaker ratio;
-    try:
-        ratio = diar_obj.label_duration(diar_obj.argmax()) / np.sum([c[1] for c in diar_obj.chart()])
-    except:
-        ratio = np.nan
+    # Compute diarization if not in metadata
+    if diarization_result is None:
+        try:
+            diarization_results = diarize_audios([audio])
+            if not diarization_results or len(diarization_results) == 0:
+                return np.nan
+            diarization_result = diarization_results[0]
+        except Exception as e:
+            print(f"Warning: Failed to compute diarization for primary_speaker_ratio_metric: {e}")
+            return np.nan
 
-    return ratio
+    # Calculate primary speaker ratio from ScriptLine objects
+    if not diarization_result or len(diarization_result) == 0:
+        return np.nan
+
+    # Calculate duration per speaker
+    speaker_durations: Dict[str, float] = {}
+    total_duration = 0.0
+
+    for script_line in diarization_result:
+        if script_line.speaker is None or script_line.start is None or script_line.end is None:
+            continue
+        duration = script_line.end - script_line.start
+        speaker = script_line.speaker
+        speaker_durations[speaker] = speaker_durations.get(speaker, 0.0) + duration
+        total_duration += duration
+
+    if total_duration == 0.0 or len(speaker_durations) == 0:
+        return np.nan
+
+    # Find primary speaker (speaker with maximum duration)
+    primary_speaker_duration = max(speaker_durations.values())
+    primary_speaker_ratio = primary_speaker_duration / total_duration
+
+    return float(primary_speaker_ratio)
 
 
 def presence_of_voice_metric(audio: Audio, **input_source) -> float:
@@ -528,19 +571,16 @@ def presence_of_voice_metric(audio: Audio, **input_source) -> float:
         float: the duration of voice activity in seconds.
     """
 
-    if input_source['precompute'] is None:
-        vad #= #TODO VAD the audio
+    if input_source["precompute"] is None:
+        vad  # = #TODO VAD the audio
     else:
-        vad = input_source['precompute']
-        #TODO diar = pd.read_pickle("../../modeling/diarize/diar_r2.pkl")
+        vad = input_source["precompute"]
+        # TODO diar = pd.read_pickle("../../modeling/diarize/diar_r2.pkl")
 
     return vad
 
 
-
-
 def signal_to_noise_power_ratio_metric(audio: Audio, **input_source) -> float:
-
     """Calculates the SNR by looking at power during voice versus power when none.
 
     Args:
@@ -550,25 +590,24 @@ def signal_to_noise_power_ratio_metric(audio: Audio, **input_source) -> float:
         float: Ratio of signal to noise power
                 Commented-out return is percent of audio that is noise as a test
     """
-    
-    
+
     waveform = audio.waveform
-    
+
     time = np.divide(np.arange(waveform.shape[1]), audio.sampling_rate)
 
-    if input_source['precompute'] is None:
-        vad #= #TODO VAD the audio
+    if input_source["precompute"] is None:
+        vad  # = #TODO VAD the audio
     else:
-        vad = input_source['precompute']
-        #TODO diar = pd.read_pickle("../../modeling/diarize/diar_r2.pkl")
+        vad = input_source["precompute"]
+        # TODO diar = pd.read_pickle("../../modeling/diarize/diar_r2.pkl")
 
     signal = []
     noise = []
     previous_end = 0
 
     for seg in vad.get_timeline().segments_list_:
-        #get the signal segments with VAD time stamps
-        #get the noise segments with the time stamps between VAD segments
+        # get the signal segments with VAD time stamps
+        # get the noise segments with the time stamps between VAD segments
 
         signal.append(np.where((time >= seg.start) & (time <= seg.end))[0])
         noise.append(np.where((time < seg.start) & (time >= previous_end))[0])
@@ -587,11 +626,10 @@ def signal_to_noise_power_ratio_metric(audio: Audio, **input_source) -> float:
         snr = -25
         percent_noise_of_total = np.nan
 
-    return snr #percent_noise_of_total
+    return snr  # percent_noise_of_total
 
 
 def find_buzzing_metric(audio: Audio, **input_source) -> float:
-
     """Calculates buzzing from audio_aes Production Quality metric.
 
     Args:
@@ -604,7 +642,7 @@ def find_buzzing_metric(audio: Audio, **input_source) -> float:
 
     def load_json_lines(file_path):
         data = []
-        with open(file_path, 'r') as file:
+        with open(file_path, "r") as file:
             for line in file:
                 try:
                     json_object = json.loads(line)
@@ -613,40 +651,38 @@ def find_buzzing_metric(audio: Audio, **input_source) -> float:
                     print(f"Skipping invalid JSON line: {line.strip()}")
         return data
 
-
     ###Data loading
 
     ##load participant record id and session id
-    #subset = 'all'
+    # subset = 'all'
 
-    #if subset == 'mdd':
+    # if subset == 'mdd':
     #    diagnosis_df = pd.read_csv('diagnosis_df.csv', index_col=0) #gives us participants/sessions we are analyzing and metadata. this csv points to messy data/recordings that should be removed
-    #elif subset == 'all':
+    # elif subset == 'all':
     #    diagnosis_df = pd.read_csv(os.path.join(dataset_path, 'phenotype/phq9.tsv'), delimiter='\t')
     #    diagnosis_df.rename(columns={'phq_9_session_id': 'session_id'}, inplace=True)
 
-
-
-    #load audio aesthetics metrics
+    # load audio aesthetics metrics
     # CE | Content Enjoyment CU | Content Usefulness PC | Production Complexity PQ | Production Quality
 
-    if input_source['precompute'] is None:
-        aes_json #= #TODO aees output the audio
-        audio_json #= #TODO aes inout the audio
+    if input_source["precompute"] is None:
+        aes_json  # = #TODO aees output the audio
+        audio_json  # = #TODO aes inout the audio
     else:
-        aes_json = input_source['precompute']
-        audio_json = input_source['precompute']
-        #TODO aes_json = load_json_lines('../audio_aes/output_audio_aes_r2.jsonl')
-        #audio_json= load_json_lines('../audio_aes/input_audio_aes_r2.jsonl')
-    
-    
+        aes_json = input_source["precompute"]
+        audio_json = input_source["precompute"]
+        # TODO aes_json = load_json_lines('../audio_aes/output_audio_aes_r2.jsonl')
+        # audio_json= load_json_lines('../audio_aes/input_audio_aes_r2.jsonl')
 
     aes = pd.DataFrame(aes_json)
-    aes[['record_id', 'session_id', 'task']] = [(a['path'].split('sub-')[1].split('/')[0], 
-                                                a['path'].split('ses-')[1].split('/')[0], 
-                                                a['path'].split('task-')[1].split('.wav')[0]) for a in audio_json]
-    aes = aes[['record_id', 'session_id', 'task', 'CE', 'CU', 'PC', 'PQ']]
+    aes[["record_id", "session_id", "task"]] = [
+        (
+            a["path"].split("sub-")[1].split("/")[0],
+            a["path"].split("ses-")[1].split("/")[0],
+            a["path"].split("task-")[1].split(".wav")[0],
+        )
+        for a in audio_json
+    ]
+    aes = aes[["record_id", "session_id", "task", "CE", "CU", "PC", "PQ"]]
 
     return aes.PQ
-
-
