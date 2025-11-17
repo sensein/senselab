@@ -825,17 +825,18 @@ def presence_of_voice_check(
     threshold: float = 0,
     df: Optional[pd.DataFrame] = None,
 ) -> Optional[bool]:
-    """
-    Check that Voice Activity Detection duration is more than 0.
+    """Check that Voice Activity Detection duration is above threshold.
 
     Args:
         audio_or_path: An Audio instance or filepath to the audio file.
+        threshold: Minimum acceptable voice activity duration in seconds.
+        df: Optional DataFrame with ``presence_of_voice_metric``.
 
     Returns:
-        True when primary speaker > ``threshold``, None if evaluation fails.
+        True when voice duration > ``threshold``, None if evaluation fails.
     """
 
-    result = get_evaluation(audio_or_path, "../../modeling/diarize/vad_r2.pkl", presence_of_voice_metric, df)
+    result = get_evaluation(audio_or_path, presence_of_voice_metric, df)
     if result is None:
         return None
     return float(result) > threshold
@@ -877,8 +878,7 @@ def find_buzzing_check(audio_or_path: Union[Audio, str],
         True when SNR > ``threshold``, None if evaluation fails.
     """
 
-    result = get_evaluation(audio_or_path, #"../../modeling/diarize/vad_r2.pkl",
-                            find_buzzing_metric, df)
+    result = get_evaluation(audio_or_path, find_buzzing_metric, df)
     if result is None:
         return None
     return float(result) > threshold
