@@ -9,6 +9,9 @@ import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speaker_diarization.api import diarize_audios
+from senselab.audio.tasks.voice_activity_detection.api import (
+    detect_human_voice_activity_in_audios,
+)
 from senselab.utils.data_structures import ScriptLine
 
 
@@ -561,23 +564,67 @@ def primary_speaker_ratio_metric(audio: Audio) -> float:
     return float(primary_speaker_ratio)
 
 
-def presence_of_voice_metric(audio: Audio, **input_source) -> float:
-    """Calculates the number of samples where Voice Activity Detection detects voice.
+def presence_of_voice_metric(audio: Audio) -> float:
+    """Calculates the duration of voice activity detected by VAD.
+
+    The voice activity duration is computed from VAD results.
+    If VAD is not available in audio.metadata, it will be computed
+    automatically.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio: The SenseLab Audio object.
 
     Returns:
-        float: the duration of voice activity in seconds.
+        float: Duration of voice activity in seconds.
+               Returns 0.0 if no voice is detected.
+               Returns np.nan if VAD computation fails.
     """
+    # Check Audio metadata for precomputed VAD
+    vad_result: Optional[List[ScriptLine]] = None
+    if audio.metadata:
+        metadata_vad = audio.metadata.get("vad")
+        if metadata_vad is not None:
+            # Handle different storage formats:
+            # List[List[ScriptLine]] or List[ScriptLine]
+            if isinstance(metadata_vad, list) and len(metadata_vad) > 0:
+                if isinstance(metadata_vad[0], list):
+                    # Format: List[List[ScriptLine]] - take first audio's VAD
+                    vad_result = metadata_vad[0]
+                elif isinstance(metadata_vad[0], ScriptLine):
+                    # Format: List[ScriptLine]
+                    vad_result = metadata_vad
 
-    if input_source["precompute"] is None:
-        vad  # = #TODO VAD the audio
-    else:
-        vad = input_source["precompute"]
-        # TODO diar = pd.read_pickle("../../modeling/diarize/diar_r2.pkl")
+    # Compute VAD if not in metadata
+    if vad_result is None:
+        try:
+            vad_results = detect_human_voice_activity_in_audios([audio])
+            if not vad_results or len(vad_results) == 0:
+                return np.nan
+            vad_result = vad_results[0]
+        except Exception as e:
+            print(
+                f"Warning: Failed to compute VAD for "
+                f"presence_of_voice_metric: {e}"
+            )
+            return np.nan
 
-    return vad
+    # Calculate total voice duration from ScriptLine objects
+    if not vad_result or len(vad_result) == 0:
+        return 0.0
+
+    total_voice_duration = 0.0
+
+    for script_line in vad_result:
+        # VAD results have speaker="VOICE" for voice segments
+        if (
+            script_line.speaker == "VOICE"
+            and script_line.start is not None
+            and script_line.end is not None
+        ):
+            duration = script_line.end - script_line.start
+            total_voice_duration += duration
+
+    return float(total_voice_duration)
 
 
 def signal_to_noise_power_ratio_metric(audio: Audio, **input_source) -> float:
