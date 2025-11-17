@@ -161,28 +161,53 @@ def proportion_clipped_metric(audio: Audio, clip_threshold: float = 1.0) -> floa
 
     clipped_proportion_by_channel = []
 
-    def is_likely_clipped(channel: torch.Tensor, min_proportion: float = 0.0001) -> bool:
-        """Returns True if a significant proportion of samples are close to the max value, suggesting clipping.
+    def is_likely_clipped(channel: torch.Tensor, min_consecutive: int = 3) -> bool:
+        """Returns True if there are consecutive samples at the max value, suggesting clipping.
+
+        A plateau pattern (consecutive samples at max) is a strong indicator of clipping,
+        even if the max value is below the threshold.
 
         Args:
             channel: 1D audio tensor.
-            min_proportion: Minimum proportion of samples that must be close to max to indicate clipping.
+            min_consecutive: Minimum number of consecutive samples at max to indicate clipping.
+                           Default 2 means at least two consecutive samples must be at max.
 
         Returns:
-            bool: True if likely clipped.
+            bool: True if likely clipped (plateau pattern detected).
         """
         if channel.numel() == 0:
             return False
 
         max_val = channel.max()
         close_to_max = torch.isclose(channel, max_val)
-        proportion = close_to_max.sum().item() / channel.numel()
-        return proportion >= min_proportion
+
+        # Check for consecutive samples at max value
+        # Convert boolean tensor to list for easier consecutive checking
+        close_to_max_list = close_to_max.tolist()
+
+        # Find the longest consecutive sequence of True values
+        max_consecutive = 0
+        current_consecutive = 0
+
+        for is_close in close_to_max_list:
+            if is_close:
+                current_consecutive += 1
+                max_consecutive = max(max_consecutive, current_consecutive)
+            else:
+                current_consecutive = 0
+
+        return max_consecutive > min_consecutive
 
     for channel in waveform:
         clipped_samples = 0
         max_val = torch.max(channel)
-        if torch.isclose(max_val, torch.tensor(1.0)) or is_likely_clipped(channel):
+        # Check for clipping: either at/above threshold, or plateau pattern near threshold
+        if max_val >= clip_threshold:
+            # Samples at or above threshold are definitely clipped
+            clipped_samples = (channel >= clip_threshold).sum().item()
+        elif is_likely_clipped(channel):
+            # Plateau pattern suggests clipping even if below threshold
+            # Count samples close to max as potentially clipped
             clipped_samples = torch.isclose(channel, max_val).sum().item()
         clipped_proportion_by_channel.append(clipped_samples / channel.numel())
 
@@ -581,9 +606,12 @@ def voice_activity_detection_metric(audio: Audio) -> float:
     if audio.metadata:
         metadata_vad = audio.metadata.get("vad")
         if metadata_vad is not None:
+            # Handle empty list case explicitly
+            if isinstance(metadata_vad, list) and len(metadata_vad) == 0:
+                vad_result = []
             # Handle different storage formats:
             # List[List[ScriptLine]] or List[ScriptLine]
-            if isinstance(metadata_vad, list) and len(metadata_vad) > 0:
+            elif isinstance(metadata_vad, list) and len(metadata_vad) > 0:
                 if isinstance(metadata_vad[0], list):
                     # Format: List[List[ScriptLine]] - take first audio's VAD
                     vad_result = metadata_vad[0]
@@ -636,9 +664,12 @@ def voice_signal_to_noise_power_ratio_metric(audio: Audio) -> float:
     if audio.metadata:
         metadata_vad = audio.metadata.get("vad")
         if metadata_vad is not None:
+            # Handle empty list case explicitly
+            if isinstance(metadata_vad, list) and len(metadata_vad) == 0:
+                vad_result = []
             # Handle different storage formats:
             # List[List[ScriptLine]] or List[ScriptLine]
-            if isinstance(metadata_vad, list) and len(metadata_vad) > 0:
+            elif isinstance(metadata_vad, list) and len(metadata_vad) > 0:
                 if isinstance(metadata_vad[0], list):
                     # Format: List[List[ScriptLine]] - take first audio's VAD
                     vad_result = metadata_vad[0]
