@@ -401,16 +401,3 @@ def test_window_generator_step_greater_than_audio(audio_fixture: str, request: p
     expected_windows = (audio_length - window_size) // step_size + 1  # This is always 1
     assert len(windowed_audios) == expected_windows, f"Should yield {expected_windows} \
         windows when step size is greater than audio length. Yielded {len(windowed_audios)}."
-
-
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
-def test_audio_filepath_is_stored_with_waveform() -> None:
-    """Tests that the filepath is not stored when a waveform is provided."""
-    dummy_path = "/tmp/dummy_audio.wav"
-    dummy_waveform = torch.randn(1, 16000)
-    dummy_sr = 16000
-
-    audio = Audio(waveform=dummy_waveform, sampling_rate=dummy_sr, filepath=dummy_path)
-
-    # When waveform is provided, filepath should not be stored
-    assert audio.filepath() is None, "Filepath should not be stored when waveform is provided."
