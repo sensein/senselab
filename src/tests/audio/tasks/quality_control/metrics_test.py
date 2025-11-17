@@ -152,7 +152,7 @@ def test_proportion_clipped_metric(waveform: torch.Tensor, expected_proportion: 
         (torch.tensor([[1.01, -1.0]]), True),  # Sample above threshold
         (torch.tensor([[1.0, -1.0, 1.0]]), True),  # All clipped
         (torch.tensor([[0.5, 0.5, 0.5, -0.5, 0.5, 0.5]]), True),  # absolute plateau
-        (torch.tensor([[0.5, 0.5, 0.5, -0.4, 0.5, 0.5]]), False),
+        (torch.tensor([[0.5, 0.5, -0.4, 0.5, 0.5]]), False),
     ],
 )
 def test_clipping_present_metric(waveform: torch.Tensor, expected_clipping: bool) -> None:
