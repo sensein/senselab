@@ -40,8 +40,11 @@ from senselab.audio.tasks.quality_control.metrics import (
 def test_metric_function_names_end_with_metric() -> None:
     """Ensure all public functions in metrics module end with 'metric'."""
     funcs = inspect.getmembers(metrics, inspect.isfunction)
-    for name, _ in funcs:
-        assert name.endswith("metric"), f"Function '{name}' does not end with 'metric'"
+    module_name = metrics.__name__
+    for name, func in funcs:
+        # Only check functions defined in this module, not imported ones
+        if func.__module__ == module_name:
+            assert name.endswith("metric"), f"Function '{name}' does not end with 'metric'"
 
 
 @pytest.mark.parametrize(

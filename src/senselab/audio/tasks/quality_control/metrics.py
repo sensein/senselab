@@ -495,9 +495,6 @@ def phase_correlation_metric(audio: Audio, frame_length: int = 2048, hop_length:
     return float(np.mean(correlation_values)) if correlation_values else 0.0
 
 
-#### Rahul's additions below
-
-
 def primary_speaker_ratio_metric(audio: Audio) -> float:
     """Calculates the ratio of the primary speaker's duration to the total duration.
 
