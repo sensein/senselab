@@ -180,26 +180,26 @@ def very_low_amplitude_modulation_depth_check(
 
 def low_amplitude_modulation_depth_check(
     audio_or_path: Union[Audio, str],
-    min: float = 0.1,
-    max: float = 0.3,
+    min_threshold: float = 0.1,
+    max_threshold: float = 0.3,
     df: Optional[pd.DataFrame] = None,
 ) -> Optional[bool]:
     """Detect audio with modestly low loudness variation.
 
     Args:
         audio_or_path: An Audio instance or filepath to the audio file.
-        min: Inclusive lower bound for *low* modulation depth.
-        max: Exclusive upper bound for *low* modulation depth.
+        min_threshold: Inclusive lower bound for *low* modulation depth.
+        max_threshold: Exclusive upper bound for *low* modulation depth.
         df: Optional DataFrame with ``amplitude_modulation_depth_metric``.
 
     Returns:
-        True when ``min ≤ depth < max``, None if evaluation fails.
+        True when ``min_threshold ≤ depth < max_threshold``, None if evaluation fails.
     """
     result = get_evaluation(audio_or_path, amplitude_modulation_depth_metric, df)
     if result is None:
         return None
     depth = float(result)
-    return min <= depth < max
+    return min_threshold <= depth < max_threshold
 
 
 def high_proportion_clipped_check(
