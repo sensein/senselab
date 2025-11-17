@@ -11,7 +11,6 @@ All checks accept an `Audio` object and optionally a DataFrame of cached metric 
 
 from typing import Optional, Union
 
-import numpy as np
 import pandas as pd
 
 from senselab.audio.data_structures import Audio
@@ -24,22 +23,22 @@ from senselab.audio.tasks.quality_control.metrics import (
     amplitude_skew_metric,
     crest_factor_metric,
     dynamic_range_metric,
+    find_buzzing_metric,
     mean_absolute_deviation_metric,
     peak_snr_from_spectral_metric,
     phase_correlation_metric,
+    primary_speaker_ratio_metric,
     proportion_clipped_metric,
     proportion_silence_at_beginning_metric,
     proportion_silence_at_end_metric,
     proportion_silent_metric,
     root_mean_square_energy_metric,
     shannon_entropy_amplitude_metric,
+    signal_to_noise_power_ratio_metric,
     signal_variance_metric,
     spectral_gating_snr_metric,
-    zero_crossing_rate_metric,
-    primary_speaker_ratio_metric,
     voice_activity_detection_metric,
-    signal_to_noise_power_ratio_metric
-
+    zero_crossing_rate_metric,
 )
 
 
@@ -819,7 +818,6 @@ def primary_speaker_ratio_check(
     return float(result) > threshold
 
 
-
 def voice_activity_detection_check(
     audio_or_path: Union[Audio, str],
     threshold: float = 0,
@@ -835,33 +833,34 @@ def voice_activity_detection_check(
     Returns:
         True when voice duration > ``threshold``, None if evaluation fails.
     """
-
     result = get_evaluation(audio_or_path, voice_activity_detection_metric, df)
     if result is None:
         return None
     return float(result) > threshold
 
 
-
-def signal_to_noise_power_ratio_check(audio_or_path: Union[Audio, str],
+def signal_to_noise_power_ratio_check(
+    audio_or_path: Union[Audio, str],
     threshold: float = -1,
     df: Optional[pd.DataFrame] = None,
 ) -> Optional[bool]:
-    """
-    Check that SNR is below a threshold. Currently not a lot of samples with major background noise, or this algorithm isn't doing a great job
+    """Check that SNR is above a threshold.
+
+    Currently not a lot of samples with major background noise, or this
+    algorithm isn't doing a great job.
 
     Args:
         audio_or_path: An Audio instance or filepath to the audio file.
+        threshold: Minimum acceptable SNR value.
+        df: Optional DataFrame with ``signal_to_noise_power_ratio_metric``.
 
     Returns:
         True when SNR > ``threshold``, None if evaluation fails.
     """
-
-    result = get_evaluation(audio_or_path, "../../modeling/diarize/vad_r2.pkl", signal_to_noise_power_ratio_metric, df)
+    result = get_evaluation(audio_or_path, signal_to_noise_power_ratio_metric, df)
     if result is None:
         return None
     return float(result) > threshold
-
 
 
 def find_buzzing_check(
@@ -869,16 +868,19 @@ def find_buzzing_check(
     threshold: float = 0.0,
     df: Optional[pd.DataFrame] = None,
 ) -> Optional[bool]:
-    """
-    Check that SNR is below a threshold. Currently not a lot of samples with major background noise, or this algorithm isn't doing a great job
+    """Check that buzzing metric is above a threshold.
+
+    Currently not a lot of samples with major background noise, or this
+    algorithm isn't doing a great job.
 
     Args:
         audio_or_path: An Audio instance or filepath to the audio file.
+        threshold: Minimum acceptable buzzing metric value.
+        df: Optional DataFrame with ``find_buzzing_metric``.
 
     Returns:
-        True when SNR > ``threshold``, None if evaluation fails.
+        True when buzzing metric > ``threshold``, None if evaluation fails.
     """
-
     result = get_evaluation(audio_or_path, find_buzzing_metric, df)
     if result is None:
         return None

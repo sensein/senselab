@@ -59,7 +59,6 @@ from senselab.audio.tasks.quality_control.metrics import (
     mean_absolute_deviation_metric,
     peak_snr_from_spectral_metric,
     phase_correlation_metric,
-    primary_speaker_ratio_metric,
     proportion_clipped_metric,
     proportion_silence_at_beginning_metric,
     proportion_silence_at_end_metric,
@@ -68,7 +67,6 @@ from senselab.audio.tasks.quality_control.metrics import (
     shannon_entropy_amplitude_metric,
     signal_variance_metric,
     spectral_gating_snr_metric,
-    voice_activity_detection_metric,
     zero_crossing_rate_metric,
 )
 
@@ -458,8 +456,9 @@ def test_audio_intensity_zero_check(stereo_audio_sample: Audio) -> None:
 
 def test_voice_activity_detection_check_with_metadata() -> None:
     """Tests voice_activity_detection_check with precomputed VAD in metadata."""
-    from senselab.utils.data_structures import ScriptLine
     import torch
+
+    from senselab.utils.data_structures import ScriptLine
 
     # Create audio with VAD metadata
     waveform = torch.randn(1, 16000)
@@ -485,7 +484,7 @@ def test_voice_activity_detection_check_no_voice() -> None:
 
     # Create audio with empty VAD result
     waveform = torch.randn(1, 16000)
-    metadata = {"vad": []}
+    metadata: Dict[str, Any] = {"vad": []}
     audio = Audio(waveform=waveform, sampling_rate=16000, metadata=metadata)
 
     # Test with threshold
@@ -495,8 +494,9 @@ def test_voice_activity_detection_check_no_voice() -> None:
 
 def test_primary_speaker_ratio_check_with_metadata() -> None:
     """Tests primary_speaker_ratio_check with precomputed diarization in metadata."""
-    from senselab.utils.data_structures import ScriptLine
     import torch
+
+    from senselab.utils.data_structures import ScriptLine
 
     # Create audio with diarization metadata (single speaker)
     waveform = torch.randn(1, 16000)
@@ -517,8 +517,9 @@ def test_primary_speaker_ratio_check_with_metadata() -> None:
 
 def test_primary_speaker_ratio_check_multiple_speakers() -> None:
     """Tests primary_speaker_ratio_check with multiple speakers."""
-    from senselab.utils.data_structures import ScriptLine
     import torch
+
+    from senselab.utils.data_structures import ScriptLine
 
     # Create audio with diarization metadata (two speakers)
     waveform = torch.randn(1, 16000)

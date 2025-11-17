@@ -1,6 +1,7 @@
 """Contains audio quality metrics used in various checks."""
 
-from typing import Dict, List, Optional
+import json
+from typing import Any, Dict, List, Optional
 
 import librosa
 import numpy as np
@@ -620,23 +621,23 @@ def voice_activity_detection_metric(audio: Audio) -> float:
     return float(total_voice_duration)
 
 
-def signal_to_noise_power_ratio_metric(audio: Audio, **input_source) -> float:
+def signal_to_noise_power_ratio_metric(audio: Audio, **input_source: Any) -> float:  # noqa: ANN401
     """Calculates the SNR by looking at power during voice versus power when none.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio: The SenseLab Audio object.
+        **input_source: Optional precomputed VAD results.
 
     Returns:
         float: Ratio of signal to noise power
                 Commented-out return is percent of audio that is noise as a test
     """
-
     waveform = audio.waveform
 
     time = np.divide(np.arange(waveform.shape[1]), audio.sampling_rate)
 
-    if input_source["precompute"] is None:
-        vad  # = #TODO VAD the audio
+    if input_source.get("precompute") is None:
+        raise NotImplementedError("VAD computation not yet implemented")
     else:
         vad = input_source["precompute"]
         # TODO diar = pd.read_pickle("../../modeling/diarize/diar_r2.pkl")
@@ -660,28 +661,26 @@ def signal_to_noise_power_ratio_metric(audio: Audio, **input_source) -> float:
         signal_power = np.mean(signal_wav**2)
         noise_power = np.mean(noise_wav**2)
         snr = 10 * np.log10(signal_power / noise_power) if noise_power > 0 else -30
-
-        percent_noise_of_total = np.divide(noise_wav.shape[0], noise_wav.shape[0] + signal_wav.shape[0])
-    except:
+    except (ValueError, IndexError, ZeroDivisionError):
         snr = -25
-        percent_noise_of_total = np.nan
 
-    return snr  # percent_noise_of_total
+    return snr
 
 
-def find_buzzing_metric(audio: Audio, **input_source) -> float:
+def find_buzzing_metric(audio: Audio, **input_source: Any) -> float:  # noqa: ANN401
     """Calculates buzzing from audio_aes Production Quality metric.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio: The SenseLab Audio object.
+        **input_source: Optional precomputed audio aesthetics results.
 
     Returns:
         float: Ratio of signal to noise power
                 Commented-out return is percent of audio that is noise as a test
     """
 
-    def load_json_lines(file_path):
-        data = []
+    def load_json_lines(file_path: str) -> List[Dict[str, Any]]:
+        data: List[Dict[str, Any]] = []
         with open(file_path, "r") as file:
             for line in file:
                 try:
@@ -691,13 +690,15 @@ def find_buzzing_metric(audio: Audio, **input_source) -> float:
                     print(f"Skipping invalid JSON line: {line.strip()}")
         return data
 
-    ###Data loading
+    # Data loading
 
-    ##load participant record id and session id
+    # load participant record id and session id
     # subset = 'all'
 
     # if subset == 'mdd':
-    #    diagnosis_df = pd.read_csv('diagnosis_df.csv', index_col=0) #gives us participants/sessions we are analyzing and metadata. this csv points to messy data/recordings that should be removed
+    #    diagnosis_df = pd.read_csv('diagnosis_df.csv', index_col=0)
+    #    # gives us participants/sessions we are analyzing and metadata.
+    #    # this csv points to messy data/recordings that should be removed
     # elif subset == 'all':
     #    diagnosis_df = pd.read_csv(os.path.join(dataset_path, 'phenotype/phq9.tsv'), delimiter='\t')
     #    diagnosis_df.rename(columns={'phq_9_session_id': 'session_id'}, inplace=True)
@@ -705,14 +706,15 @@ def find_buzzing_metric(audio: Audio, **input_source) -> float:
     # load audio aesthetics metrics
     # CE | Content Enjoyment CU | Content Usefulness PC | Production Complexity PQ | Production Quality
 
-    if input_source["precompute"] is None:
-        aes_json  # = #TODO aees output the audio
-        audio_json  # = #TODO aes inout the audio
+    if input_source.get("precompute") is None:
+        raise NotImplementedError("Audio aesthetics computation not yet implemented")
     else:
         aes_json = input_source["precompute"]
         audio_json = input_source["precompute"]
         # TODO aes_json = load_json_lines('../audio_aes/output_audio_aes_r2.jsonl')
         # audio_json= load_json_lines('../audio_aes/input_audio_aes_r2.jsonl')
+
+    import pandas as pd  # noqa: TID252
 
     aes = pd.DataFrame(aes_json)
     aes[["record_id", "session_id", "task"]] = [
