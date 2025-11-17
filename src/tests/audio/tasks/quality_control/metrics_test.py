@@ -145,6 +145,26 @@ def test_proportion_clipped_metric(waveform: torch.Tensor, expected_proportion: 
 
 
 @pytest.mark.parametrize(
+    "waveform, expected_clipping",
+    [
+        (torch.tensor([[0.0, 0.5, 0.9]]), False),  # No clipping
+        (torch.tensor([[0.0, 1.0, -0.5]]), True),  # One sample clipped
+        (torch.tensor([[1.01, -1.0]]), True),  # Sample above threshold
+        (torch.tensor([[1.0, -1.0, 1.0]]), True),  # All clipped
+        (torch.tensor([[0.5, 0.5, 0.5, -0.5, 0.5, 0.5]]), True),  # absolute plateau
+        (torch.tensor([[0.5, 0.5, 0.5, -0.4, 0.5, 0.5]]), False),
+    ],
+)
+def test_clipping_present_metric(waveform: torch.Tensor, expected_clipping: bool) -> None:
+    """Tests clipping detection using proportion_clipped_metric."""
+    audio = Audio(waveform=waveform, sampling_rate=16000)
+    # Use proportion_clipped_metric and check if proportion > 0
+    result = proportion_clipped_metric(audio)
+    has_clipping = result > 0.0
+    assert has_clipping == expected_clipping, f"Expected {expected_clipping}, got {has_clipping} (proportion: {result})"
+
+
+@pytest.mark.parametrize(
     "waveform, expected_depth",
     [
         (torch.tensor([[0.5, 0.5, 0.5, 0.5]]), 0.0),
