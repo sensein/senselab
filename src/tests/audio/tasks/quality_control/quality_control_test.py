@@ -2,7 +2,7 @@
 
 from collections import Counter
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import pandas as pd
 import pytest
@@ -45,13 +45,16 @@ def test_no_duplicate_subclass_keys(taxonomy_tree: TaxonomyNode) -> None:
     assert not duplicates, f"Duplicate subclass keys found: {duplicates}"
 
 
-@pytest.mark.parametrize("taxonomy_tree", [BIOACOUSTIC_ACTIVITY_TAXONOMY, BRIDGE2AI_VOICE_TAXONOMY])
-def test_activity_to_evaluations(taxonomy_tree: TaxonomyNode) -> None:
+@pytest.mark.parametrize(
+    "taxonomy_tree,activity_name",
+    [(BIOACOUSTIC_ACTIVITY_TAXONOMY, "bioacoustic"), (BRIDGE2AI_VOICE_TAXONOMY, "human")],
+)
+def test_activity_to_evaluations(taxonomy_tree: TaxonomyNode, activity_name: str) -> None:
     """Tests mapping of audio paths to their evaluation functions."""
-    # Setup test data - use activities that exist in both taxonomies
+    # Setup test data - use activities that exist in the taxonomy
     audio_paths = {
-        "audio1.wav": "human",
-        "audio2.wav": "human",  # Same activity to test deduplication
+        "audio1.wav": activity_name,
+        "audio2.wav": activity_name,  # Same activity to test deduplication
     }
 
     # Get evaluations mapping
@@ -62,14 +65,14 @@ def test_activity_to_evaluations(taxonomy_tree: TaxonomyNode) -> None:
 
     # Verify results
     assert len(activity_evals) == 1, "Expected one activity"
-    assert "human" in activity_evals, "Expected 'human' activity"
+    assert activity_name in activity_evals, f"Expected '{activity_name}' activity"
 
-    # Verify evaluations for human
-    human_evals = activity_evals["human"]
-    assert isinstance(human_evals, list), "Expected list of evaluations"
+    # Verify evaluations
+    evals = activity_evals[activity_name]
+    assert isinstance(evals, list), "Expected list of evaluations"
     # Since we removed dependency on specific check functions,
     # just verify we get a non-empty list of evaluations
-    assert len(human_evals) > 0, "Expected non-empty evaluation list"
+    assert len(evals) > 0, "Expected non-empty evaluation list"
 
 
 def test_check_quality(tmp_path: Path, resampled_mono_audio_sample: Audio) -> None:
@@ -90,8 +93,16 @@ def test_check_quality(tmp_path: Path, resampled_mono_audio_sample: Audio) -> No
     assert "path" in results_df.columns, "Expected 'path' column in results"
 
 
-@pytest.mark.parametrize("taxonomy_tree", [BIOACOUSTIC_ACTIVITY_TAXONOMY, BRIDGE2AI_VOICE_TAXONOMY])
-def test_taxonomy_tree_structure(taxonomy_tree: TaxonomyNode) -> None:
+@pytest.mark.parametrize(
+    "taxonomy_tree,has_children,expected_child",
+    [
+        (BIOACOUSTIC_ACTIVITY_TAXONOMY, False, None),
+        (BRIDGE2AI_VOICE_TAXONOMY, True, "human"),
+    ],
+)
+def test_taxonomy_tree_structure(
+    taxonomy_tree: TaxonomyNode, has_children: bool, expected_child: Optional[str]
+) -> None:
     """Tests that taxonomy trees have the expected structure."""
     # Verify root node exists and has expected properties
     assert taxonomy_tree.name in ["bioacoustic", "bridge2ai_voice"], f"Unexpected root name: {taxonomy_tree.name}"
@@ -99,18 +110,22 @@ def test_taxonomy_tree_structure(taxonomy_tree: TaxonomyNode) -> None:
     assert hasattr(taxonomy_tree, "metrics"), "Root node should have metrics attribute"
     assert hasattr(taxonomy_tree, "children"), "Root node should have children attribute"
 
-    # Verify root node has children
-    assert len(taxonomy_tree.children) > 0, "Root node should have children"
+    # Verify root node children based on taxonomy type
+    if has_children:
+        assert len(taxonomy_tree.children) > 0, "Root node should have children"
+        if expected_child:
+            assert expected_child in taxonomy_tree.children, f"Taxonomy should have '{expected_child}' child"
+            child_node = taxonomy_tree.children[expected_child]
+            assert isinstance(child_node, TaxonomyNode), f"'{expected_child}' node should be TaxonomyNode instance"
+    else:
+        assert len(taxonomy_tree.children) == 0, "Bioacoustic taxonomy should have no children"
 
-    # Verify human node exists in both taxonomies
-    assert "human" in taxonomy_tree.children, "Both taxonomies should have 'human' child"
 
-    human_node = taxonomy_tree.children["human"]
-    assert isinstance(human_node, TaxonomyNode), "Human node should be TaxonomyNode instance"
-
-
-@pytest.mark.parametrize("taxonomy_tree", [BIOACOUSTIC_ACTIVITY_TAXONOMY, BRIDGE2AI_VOICE_TAXONOMY])
-def test_taxonomy_node_traversal(taxonomy_tree: TaxonomyNode) -> None:
+@pytest.mark.parametrize(
+    "taxonomy_tree,expected_min_nodes",
+    [(BIOACOUSTIC_ACTIVITY_TAXONOMY, 1), (BRIDGE2AI_VOICE_TAXONOMY, 2)],
+)
+def test_taxonomy_node_traversal(taxonomy_tree: TaxonomyNode, expected_min_nodes: int) -> None:
     """Tests that we can traverse the entire taxonomy tree."""
     visited_nodes = []
 
@@ -122,15 +137,16 @@ def test_taxonomy_node_traversal(taxonomy_tree: TaxonomyNode) -> None:
 
     traverse(taxonomy_tree)
 
-    # Verify we visited multiple nodes
-    assert len(visited_nodes) > 1, "Should visit multiple nodes in taxonomy"
-
-    # Verify we have nodes at different depths
-    depths = [depth for _, depth in visited_nodes]
-    assert max(depths) > 0, "Should have nodes at depth > 0"
+    # Verify we visited at least the expected minimum nodes
+    assert len(visited_nodes) >= expected_min_nodes, f"Should visit at least {expected_min_nodes} node(s) in taxonomy"
 
     # Verify root is at depth 0
     assert visited_nodes[0][1] == 0, "Root should be at depth 0"
+
+    # For taxonomies with children, verify we have nodes at different depths
+    if expected_min_nodes > 1:
+        depths = [depth for _, depth in visited_nodes]
+        assert max(depths) > 0, "Should have nodes at depth > 0"
 
 
 def test_activity_to_evaluations_with_missing_activity() -> None:
@@ -150,7 +166,8 @@ def test_activity_to_evaluations_with_missing_activity() -> None:
 
 def test_activity_to_evaluations_with_multiple_activities() -> None:
     """Tests mapping with multiple different activities."""
-    # Setup test data with activities that exist in bioacoustic taxonomy
+    # Setup test data with activities that exist in bridge2ai_voice taxonomy
+    # (bioacoustic only has the root "bioacoustic" node)
     audio_paths = {
         "audio1.wav": "human",
         "audio2.wav": "breathing",
@@ -160,7 +177,7 @@ def test_activity_to_evaluations_with_multiple_activities() -> None:
     # Get evaluations mapping
     activity_evals = activity_to_evaluations(
         audio_path_to_activity=audio_paths,
-        activity_tree=BIOACOUSTIC_ACTIVITY_TAXONOMY,
+        activity_tree=BRIDGE2AI_VOICE_TAXONOMY,
     )
 
     # Verify we get evaluations for activities that exist
