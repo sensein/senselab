@@ -11,6 +11,7 @@ All checks accept an `Audio` object and optionally a DataFrame of cached metric 
 
 from typing import Optional, Union
 
+import numpy as np
 import pandas as pd
 
 from senselab.audio.data_structures import Audio
@@ -34,10 +35,10 @@ from senselab.audio.tasks.quality_control.metrics import (
     proportion_silent_metric,
     root_mean_square_energy_metric,
     shannon_entropy_amplitude_metric,
-    signal_to_noise_power_ratio_metric,
     signal_variance_metric,
     spectral_gating_snr_metric,
     voice_activity_detection_metric,
+    voice_signal_to_noise_power_ratio_metric,
     zero_crossing_rate_metric,
 )
 
@@ -839,26 +840,23 @@ def voice_activity_detection_check(
     return float(result) > threshold
 
 
-def signal_to_noise_power_ratio_check(
+def voice_signal_to_noise_power_ratio_check(
     audio_or_path: Union[Audio, str],
     threshold: float = -1,
     df: Optional[pd.DataFrame] = None,
 ) -> Optional[bool]:
-    """Check that SNR is above a threshold.
-
-    Currently not a lot of samples with major background noise, or this
-    algorithm isn't doing a great job.
+    """Check that voice signal-to-noise ratio is above a threshold.
 
     Args:
         audio_or_path: An Audio instance or filepath to the audio file.
-        threshold: Minimum acceptable SNR value.
-        df: Optional DataFrame with ``signal_to_noise_power_ratio_metric``.
+        threshold: Minimum acceptable SNR value in dB.
+        df: Optional DataFrame with ``voice_signal_to_noise_power_ratio_metric``.
 
     Returns:
         True when SNR > ``threshold``, None if evaluation fails.
     """
-    result = get_evaluation(audio_or_path, signal_to_noise_power_ratio_metric, df)
-    if result is None:
+    result = get_evaluation(audio_or_path, voice_signal_to_noise_power_ratio_metric, df)
+    if result is None or (isinstance(result, float) and np.isnan(result)):
         return None
     return float(result) > threshold
 

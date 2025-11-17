@@ -621,50 +621,100 @@ def voice_activity_detection_metric(audio: Audio) -> float:
     return float(total_voice_duration)
 
 
-def signal_to_noise_power_ratio_metric(audio: Audio, **input_source: Any) -> float:  # noqa: ANN401
+def voice_signal_to_noise_power_ratio_metric(audio: Audio) -> float:
     """Calculates the SNR by looking at power during voice versus power when none.
+
+    The signal-to-noise ratio is computed from VAD results, where voice segments
+    are considered signal and non-voice segments are considered noise.
+    If VAD is not available in audio.metadata, it will be computed automatically.
 
     Args:
         audio: The SenseLab Audio object.
-        **input_source: Optional precomputed VAD results.
 
     Returns:
-        float: Ratio of signal to noise power
-                Commented-out return is percent of audio that is noise as a test
+        float: Signal-to-noise power ratio in dB.
+               Returns np.nan if VAD computation fails or if there's no voice/noise.
     """
-    waveform = audio.waveform
+    # Check Audio metadata for precomputed VAD
+    vad_result: Optional[List[ScriptLine]] = None
+    if audio.metadata:
+        metadata_vad = audio.metadata.get("vad")
+        if metadata_vad is not None:
+            # Handle different storage formats:
+            # List[List[ScriptLine]] or List[ScriptLine]
+            if isinstance(metadata_vad, list) and len(metadata_vad) > 0:
+                if isinstance(metadata_vad[0], list):
+                    # Format: List[List[ScriptLine]] - take first audio's VAD
+                    vad_result = metadata_vad[0]
+                elif isinstance(metadata_vad[0], ScriptLine):
+                    # Format: List[ScriptLine]
+                    vad_result = metadata_vad
 
+    # Compute VAD if not in metadata
+    if vad_result is None:
+        try:
+            vad_results = detect_human_voice_activity_in_audios([audio])
+            if not vad_results or len(vad_results) == 0:
+                return np.nan
+            vad_result = vad_results[0]
+        except Exception as e:
+            print(f"Warning: Failed to compute VAD for " f"voice_signal_to_noise_power_ratio_metric: {e}")
+            return np.nan
+
+    # Calculate SNR from ScriptLine objects
+    if not vad_result or len(vad_result) == 0:
+        return np.nan
+
+    waveform = audio.waveform
     time = np.divide(np.arange(waveform.shape[1]), audio.sampling_rate)
 
-    if input_source.get("precompute") is None:
-        raise NotImplementedError("VAD computation not yet implemented")
-    else:
-        vad = input_source["precompute"]
-        # TODO diar = pd.read_pickle("../../modeling/diarize/diar_r2.pkl")
+    # Collect voice (signal) and non-voice (noise) sample indices
+    voice_indices: List[int] = []
+    noise_indices: List[int] = []
+    previous_end = 0.0
 
-    signal = []
-    noise = []
-    previous_end = 0
+    for script_line in vad_result:
+        if script_line.start is None or script_line.end is None:
+            continue
 
-    for seg in vad.get_timeline().segments_list_:
-        # get the signal segments with VAD time stamps
-        # get the noise segments with the time stamps between VAD segments
+        # Voice segments (signal)
+        if script_line.speaker == "VOICE":
+            voice_mask = (time >= script_line.start) & (time <= script_line.end)
+            voice_indices.extend(np.where(voice_mask)[0].tolist())
 
-        signal.append(np.where((time >= seg.start) & (time <= seg.end))[0])
-        noise.append(np.where((time < seg.start) & (time >= previous_end))[0])
-        previous_end = seg.end
+        # Noise segments (between voice segments)
+        if script_line.start > previous_end:
+            noise_mask = (time >= previous_end) & (time < script_line.start)
+            noise_indices.extend(np.where(noise_mask)[0].tolist())
 
+        previous_end = max(previous_end, script_line.end)
+
+    # Handle remaining noise after last voice segment
+    if previous_end < time[-1]:
+        noise_mask = time > previous_end
+        noise_indices.extend(np.where(noise_mask)[0].tolist())
+
+    # Calculate power for voice and noise segments
     try:
-        signal_wav = waveform.squeeze().numpy()[np.concatenate(signal)]
-        noise_wav = waveform.squeeze().numpy()[np.concatenate(noise)]
+        if len(voice_indices) == 0 or len(noise_indices) == 0:
+            return np.nan
 
-        signal_power = np.mean(signal_wav**2)
-        noise_power = np.mean(noise_wav**2)
-        snr = 10 * np.log10(signal_power / noise_power) if noise_power > 0 else -30
-    except (ValueError, IndexError, ZeroDivisionError):
-        snr = -25
+        waveform_np = waveform.squeeze().numpy()
+        voice_samples = waveform_np[voice_indices]
+        noise_samples = waveform_np[noise_indices]
 
-    return snr
+        signal_power = np.mean(voice_samples**2)
+        noise_power = np.mean(noise_samples**2)
+
+        if noise_power > 0:
+            snr = 10 * np.log10(signal_power / noise_power)
+        else:
+            snr = np.nan
+    except (ValueError, IndexError, ZeroDivisionError) as e:
+        print(f"Warning: Error calculating SNR: {e}")
+        return np.nan
+
+    return float(snr)
 
 
 def find_buzzing_metric(audio: Audio, **input_source: Any) -> float:  # noqa: ANN401
