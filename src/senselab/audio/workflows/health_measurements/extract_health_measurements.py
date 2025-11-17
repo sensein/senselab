@@ -5,22 +5,48 @@ from King's College London and has since been further developed and maintained
 by the senselab community.
 """
 
-from typing import Any, Dict, List, Optional
+import os
+from typing import Any, Dict, List, Literal, Optional
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.features_extraction.praat_parselmouth import extract_praat_parselmouth_features_from_audios
 
 
 def extract_health_measurements(
-    audios: List[Audio], plugin: str = "debug", plugin_args: Dict[str, Any] = {}, cache_dir: Optional[str] = None
+    audios: List[Audio],
+    n_jobs: int = 1,
+    backend: Literal["threading", "loky", "multiprocessing", "sequential"] = "sequential",
+    verbose: int = 0,
+    cache_dir: Optional[str | os.PathLike] = None,
 ) -> List[Dict[str, Any]]:
     """Extract health measurements from audio files.
 
     Args:
         audios (List[Audio]): List of Audio objects.
-        plugin (str): Plugin to use for feature extraction. Defaults to "debug".
-        plugin_args (Dict[str, Any]): Dictionary of arguments for the feature extraction plugin.
-        cache_dir (Optional[str]): Directory to use for caching by pydra. Defaults to None.
+        n_jobs (int, optional):
+            Number of parallel jobs to run (default: 1).
+        backend (str, optional):
+            Backend to use for parallelization.
+            - “sequential” (used by default) is a serial backend.
+            - “loky” can induce some communication and memory overhead
+            when exchanging input and output data with the worker Python processes.
+            On some rare systems (such as Pyiodide), the loky backend may not be available.
+            - “multiprocessing” previous process-based backend based on multiprocessing.Pool.
+            Less robust than loky.
+            - “threading” is a very low-overhead backend but it suffers from
+            the Python Global Interpreter Lock if the called function relies
+            a lot on Python objects. “threading” is mostly useful when the execution
+            bottleneck is a compiled extension that explicitly releases the GIL
+            (for instance a Cython loop wrapped in a “with nogil” block or an expensive
+            call to a library such as NumPy).
+        verbose (int, optional):
+            Verbosity (default: 0).
+            If non zero, progress messages are printed. Above 50, the output is sent to stdout.
+            The frequency of the messages increases with the verbosity level.
+            If it more than 10, all iterations are reported.
+        cache_dir (str | os.PathLike, optional):
+            Path to cache directory. If None is given, no caching is done.
+
 
     Returns:
         List[Dict[str, Any]]: List of dictionaries containing speech and voice metrics
@@ -90,10 +116,11 @@ def extract_health_measurements(
     """
     return extract_praat_parselmouth_features_from_audios(
         audios=audios,
-        cache_dir=cache_dir,
-        plugin=plugin,
-        plugin_args=plugin_args,
         duration=False,
         jitter=False,
         shimmer=False,
+        n_jobs=n_jobs,
+        backend=backend,
+        verbose=verbose,
+        cache_dir=cache_dir,
     )

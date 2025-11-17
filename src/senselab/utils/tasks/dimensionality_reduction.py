@@ -97,6 +97,7 @@ def compute_dimensionality_reduction(
             greater than the number of features in the input data or less than 0.
 
     Examples:
+        >>> import torch
         >>> data = torch.randn(100, 10)  # 100 samples, 10 features
         >>> data.shape
         torch.Size([100, 10])

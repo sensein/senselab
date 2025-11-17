@@ -61,11 +61,6 @@ repos:
     args: [--skip=*.ipynb]
     additional_dependencies:
     - tomli
-- repo: https://github.com/hija/clean-dotenv
-  rev: v0.0.7
-  hooks:
-  - id: clean-dotenv
-
 - repo: local
   hooks:
   - id: yaml-file-extension

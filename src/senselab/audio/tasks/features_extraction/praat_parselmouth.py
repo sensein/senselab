@@ -8,10 +8,10 @@ by the senselab community.
 import inspect
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 import numpy as np
-from pydra.compose import python, workflow
+from joblib import Memory, Parallel, delayed
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import logger
@@ -62,7 +62,7 @@ def get_sound(audio: Union[Path, Audio], sampling_rate: int = 16000) -> parselmo
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
             "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+            "Please install senselab audio dependencies using `pip install senselab`."
         )
 
     try:
@@ -77,9 +77,9 @@ def get_sound(audio: Union[Path, Audio], sampling_rate: int = 16000) -> parselmo
             snd_full = parselmouth.Sound(audio.waveform, audio.sampling_rate)
 
         # Preprocessing
-        if parselmouth.praat.call(snd_full, "Get number of channels") > 1:
+        if snd_full.n_channels > 1:
             snd_full = snd_full.convert_to_mono()
-        if parselmouth.praat.call(snd_full, "Get sampling frequency") != sampling_rate:
+        if snd_full.sampling_frequency != sampling_rate:
             snd_full = parselmouth.praat.call(snd_full, "Resample", sampling_rate, 50)
             # Details of queery: https://www.fon.hum.uva.nl/praat/manual/Get_sampling_frequency.html
             # Details of conversion: https://www.fon.hum.uva.nl/praat/manual/Sound__Resample___.html
@@ -126,7 +126,7 @@ def extract_speech_rate(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str,
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
             "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+            "Please install senselab audio dependencies using `pip install senselab`."
         )
 
     try:
@@ -396,7 +396,7 @@ def extract_pitch_values(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
             "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+            "Please install senselab audio dependencies using `pip install senselab`."
         )
 
     try:
@@ -475,7 +475,7 @@ def extract_pitch_descriptors(
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
             "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+            "Please install senselab audio dependencies using `pip install senselab`."
         )
 
     try:
@@ -535,7 +535,7 @@ def extract_intensity_descriptors(
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
             "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+            "Please install senselab audio dependencies using `pip install senselab`."
         )
 
     try:
@@ -599,7 +599,7 @@ def extract_harmonicity_descriptors(
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
             "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+            "Please install senselab audio dependencies using `pip install senselab`."
         )
 
     try:
@@ -611,7 +611,6 @@ def extract_harmonicity_descriptors(
             time_step=frame_shift, minimum_pitch=floor, silence_threshold=0.1, periods_per_window=4.5
         )
         # Praat recommends using the CC method here: https://www.fon.hum.uva.nl/praat/manual/Sound__To_Harmonicity__cc____.html
-
         hnr_db_mean = parselmouth.praat.call(harmonicity, "Get mean", 0, 0)
         hnr_db_std_dev = parselmouth.praat.call(harmonicity, "Get standard deviation", 0, 0)
 
@@ -658,7 +657,7 @@ def extract_slope_tilt(snd: Union[parselmouth.Sound, Path, Audio], floor: float,
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
             "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+            "Please install senselab audio dependencies using `pip install senselab`."
         )
 
     try:
@@ -728,7 +727,7 @@ def extract_cpp_descriptors(
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
             "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+            "Please install senselab audio dependencies using `pip install senselab`."
         )
 
     try:
@@ -811,7 +810,14 @@ def extract_cpp_descriptors(
 
 
 def measure_f1f2_formants_bandwidths(
-    snd: Union[parselmouth.Sound, Path, Audio], floor: float, ceiling: float, frame_shift: float
+    snd: Union[parselmouth.Sound, Path, Audio],
+    floor: float,
+    ceiling: float,
+    frame_shift: float,
+    max_formants: int = 5,
+    maximum_formant_hz: float = 5000.0,
+    window_length: float = 0.025,
+    pre_emphasis_from_hz: float = 50.0,
 ) -> Dict[str, float]:
     """Extract Formant Frequency Features.
 
@@ -823,6 +829,10 @@ def measure_f1f2_formants_bandwidths(
         floor (float): Minimum expected pitch value, set using value found in `pitch_values` function.
         ceiling (float): Maximum expected pitch value, set using value found in `pitch_values` function.
         frame_shift (float): Time rate at which to extract a new pitch value, typically set to 5 ms.
+        max_formants (int, optional): Maximum number of formants to measure. Defaults to 5.
+        maximum_formant_hz (float, optional): Maximum formant frequency to measure. Defaults to 5000.0.
+        window_length (float, optional): Window length for formant analysis. Defaults to 0.025.
+        pre_emphasis_from_hz (float, optional): Pre-emphasis frequency for formant analysis. Defaults to 50.0.
 
     Returns:
         dict: A dictionary containing the following keys:
@@ -854,59 +864,58 @@ def measure_f1f2_formants_bandwidths(
         - Adapted from code at this [link](https://osf.io/6dwr3/).
     """
     if not PARSELMOUTH_AVAILABLE:
-        raise ModuleNotFoundError(
-            "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
-        )
-
+        raise ModuleNotFoundError("`parselmouth` is not installed. Install with `pip install senselab`.")
     try:
         if not isinstance(snd, parselmouth.Sound):
             snd = get_sound(snd)
 
-        # Extract formants
-        formants = parselmouth.praat.call(snd, "To Formant (burg)", frame_shift, 5, 5000, 0.025, 50)
+        formants = snd.to_formant_burg(
+            time_step=frame_shift,
+            max_number_of_formants=max_formants,
+            maximum_formant=maximum_formant_hz,
+            window_length=window_length,
+            pre_emphasis_from=pre_emphasis_from_hz,
+        )
         # Key Hyperparameters: https://www.fon.hum.uva.nl/praat/manual/Sound__To_Formant__burg____.html
 
-        # Extract pitch using CC method
         pitch = snd.to_pitch_cc(time_step=frame_shift, pitch_floor=floor, pitch_ceiling=ceiling)
         pulses = parselmouth.praat.call([snd, pitch], "To PointProcess (cc)")
 
-        F1_list, F2_list, B1_list, B2_list = [], [], [], []
-        numPoints = parselmouth.praat.call(pulses, "Get number of points")
+        n = parselmouth.praat.call(pulses, "Get number of points")
+        if n == 0:
+            return {
+                k: float("nan")
+                for k in ("f1_mean", "f1_std", "b1_mean", "b1_std", "f2_mean", "f2_std", "b2_mean", "b2_std")
+            }
 
-        for point in range(1, numPoints + 1):
-            t = parselmouth.praat.call(pulses, "Get time from index", point)
+        times = np.array(
+            [parselmouth.praat.call(pulses, "Get time from index", i + 1) for i in range(n)],
+            dtype=float,
+        )
 
-            F1_value = parselmouth.praat.call(formants, "Get value at time", 1, t, "Hertz", "Linear")
-            if not np.isnan(F1_value):
-                F1_list.append(F1_value)
-
-            B1_value = parselmouth.praat.call(formants, "Get bandwidth at time", 1, t, "Hertz", "Linear")
-            if not np.isnan(B1_value):
-                B1_list.append(B1_value)
-
-            F2_value = parselmouth.praat.call(formants, "Get value at time", 2, t, "Hertz", "Linear")
-            if not np.isnan(F2_value):
-                F2_list.append(F2_value)
-
-            B2_value = parselmouth.praat.call(formants, "Get bandwidth at time", 2, t, "Hertz", "Linear")
-            if not np.isnan(B2_value):
-                B2_list.append(B2_value)
-
-        f1_mean, f1_std = (np.mean(F1_list), np.std(F1_list)) if F1_list else (np.nan, np.nan)
-        b1_mean, b1_std = (np.mean(B1_list), np.std(B1_list)) if B1_list else (np.nan, np.nan)
-        f2_mean, f2_std = (np.mean(F2_list), np.std(F2_list)) if F2_list else (np.nan, np.nan)
-        b2_mean, b2_std = (np.mean(B2_list), np.std(B2_list)) if B2_list else (np.nan, np.nan)
+        # Sample at those times (native calls)
+        f1 = np.array(
+            [formants.get_value_at_time(1, t, unit=parselmouth.FormantUnit.HERTZ) for t in times], dtype=float
+        )
+        b1 = np.array(
+            [formants.get_bandwidth_at_time(1, t, unit=parselmouth.FormantUnit.HERTZ) for t in times], dtype=float
+        )
+        f2 = np.array(
+            [formants.get_value_at_time(2, t, unit=parselmouth.FormantUnit.HERTZ) for t in times], dtype=float
+        )
+        b2 = np.array(
+            [formants.get_bandwidth_at_time(2, t, unit=parselmouth.FormantUnit.HERTZ) for t in times], dtype=float
+        )
 
         return {
-            "f1_mean": f1_mean,
-            "f1_std": f1_std,
-            "b1_mean": b1_mean,
-            "b1_std": b1_std,
-            "f2_mean": f2_mean,
-            "f2_std": f2_std,
-            "b2_mean": b2_mean,
-            "b2_std": b2_std,
+            "f1_mean": float(np.nanmean(f1)),
+            "f1_std": float(np.nanstd(f1)),
+            "b1_mean": float(np.nanmean(b1)),
+            "b1_std": float(np.nanstd(b1)),
+            "f2_mean": float(np.nanmean(f2)),
+            "f2_std": float(np.nanstd(f2)),
+            "b2_mean": float(np.nanmean(b2)),
+            "b2_std": float(np.nanstd(b2)),
         }
 
     except Exception as e:
@@ -915,14 +924,8 @@ def measure_f1f2_formants_bandwidths(
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
         return {
-            "f1_mean": np.nan,
-            "f1_std": np.nan,
-            "b1_mean": np.nan,
-            "b1_std": np.nan,
-            "f2_mean": np.nan,
-            "f2_std": np.nan,
-            "b2_mean": np.nan,
-            "b2_std": np.nan,
+            k: float("nan")
+            for k in ("f1_mean", "f1_std", "b1_mean", "b1_std", "f2_mean", "f2_std", "b2_mean", "b2_std")
         }
 
 
@@ -970,7 +973,7 @@ def extract_spectral_moments(
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
             "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+            "Please install senselab audio dependencies using `pip install senselab`."
         )
 
     try:
@@ -987,9 +990,15 @@ def extract_spectral_moments(
 
         Gravity_list, STD_list, Skew_list, Kurt_list = [], [], [], []
 
-        num_steps = parselmouth.praat.call(spectrogram, "Get number of frames")
+        num_steps = spectrogram.nx  # Number of frames exposed in the spectrogram
+
         for i in range(1, num_steps + 1):
-            t = parselmouth.praat.call(spectrogram, "Get time from frame number", i)
+            t = spectrogram.x1 + (i - 1) * spectrogram.dx
+            # where x1 is the time of the center of the first frame
+            # and dx is the time step (seconds between frames)
+            # This is equivalent as doing
+            # t = parselmouth.praat.call(spectrogram, "Get time from frame number", i)
+
             pitch_value = pitch.get_value_at_time(t)
 
             if not np.isnan(pitch_value):
@@ -1069,7 +1078,7 @@ def extract_audio_duration(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[s
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
             "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+            "Please install senselab audio dependencies using `pip install senselab`."
         )
 
     # Check if the input is a Path, in which case we load the audio from the file
@@ -1077,11 +1086,8 @@ def extract_audio_duration(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[s
         snd = get_sound(snd)
 
     try:
-        # Get the total duration of the sound
-        duration = parselmouth.praat.call(snd, "Get total duration")
-
         # Return the duration in a dictionary
-        return {"duration": duration}
+        return {"duration": snd.duration}
     except Exception as e:
         current_frame = inspect.currentframe()
         if current_frame is not None:
@@ -1112,7 +1118,7 @@ def extract_jitter(snd: Union[parselmouth.Sound, Path, Audio], floor: float, cei
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
             "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+            "Please install senselab audio dependencies using `pip install senselab`."
         )
 
     # Check if the input is a Path or Audio, and convert to Parselmouth Sound if necessary
@@ -1168,7 +1174,7 @@ def extract_shimmer(snd: Union[parselmouth.Sound, Path, Audio], floor: float, ce
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
             "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+            "Please install senselab audio dependencies using `pip install senselab`."
         )
 
     # Check if the input is a Path or Audio, and convert to Parselmouth Sound if necessary
@@ -1204,13 +1210,12 @@ def extract_shimmer(snd: Union[parselmouth.Sound, Path, Audio], floor: float, ce
         }
 
 
-### Wrapper ###
+# Wrapper
 def extract_praat_parselmouth_features_from_audios(
     audios: List[Audio],
     time_step: float = 0.005,
     window_length: float = 0.025,
     pitch_unit: str = "Hertz",
-    cache_dir: Optional[str | os.PathLike] = None,
     speech_rate: bool = True,
     intensity_descriptors: bool = True,
     harmonicity_descriptors: bool = True,
@@ -1222,220 +1227,246 @@ def extract_praat_parselmouth_features_from_audios(
     duration: bool = True,
     jitter: bool = True,
     shimmer: bool = True,
-    plugin: str = "debug",
-    plugin_args: Dict[str, Any] | None = None,
+    n_jobs: int = 1,
+    backend: Literal["threading", "loky", "multiprocessing", "sequential"] = "sequential",
+    verbose: int = 0,
+    cache_dir: Optional[str | os.PathLike] = None,
 ) -> List[Dict[str, Any]]:
-    """Extract Parselmouth features for each Audio using Pydra v1 compose, in parallel over inputs."""
+    """Extract Praat/Parselmouth features per `Audio`.
 
-    @python.define
-    def _extract_all_for_sample(
-        sample: Audio,
-        time_step: float,
-        window_length: float,
-        pitch_unit: str,
-        speech_rate: bool,
-        intensity_descriptors: bool,
-        harmonicity_descriptors: bool,
-        formants: bool,
-        spectral_moments: bool,
-        pitch: bool,
-        slope_tilt: bool,
-        cpp_descriptors: bool,
-        duration: bool,
-        jitter: bool,
-        shimmer: bool,
-    ) -> Dict[str, Any]:
-        """Compute all requested features for a single Audio and return one flat dict."""
-        # 1) Always compute pitch floor/ceiling once (many features depend on them)
-        pv = extract_pitch_values(snd=sample)
-        pitch_floor = pv["pitch_floor"]
-        pitch_ceiling = pv["pitch_ceiling"]
+    Parallelizes **across audios** and optionally caches per-audio computations.
+    Toggle individual feature blocks with the boolean flags.
 
-        out: Dict[str, Any] = {}
+    Args:
+        audios (list): List of Audio objects to extract features from.
+        time_step (float): Time rate at which to extract features. Defaults to 0.005.
+        window_length (float): Window length in seconds for spectral features. Defaults to 0.025.
+        pitch_unit (str): Unit for pitch measurements. Defaults to "Hertz".
+        speech_rate (bool): Whether to extract speech rate. Defaults to True.
+        intensity_descriptors (bool): Whether to extract intensity descriptors. Defaults to True.
+        harmonicity_descriptors (bool): Whether to extract harmonic descriptors. Defaults to True.
+        formants (bool): Whether to extract formants. Defaults to True.
+        spectral_moments (bool): Whether to extract spectral moments. Defaults to True.
+        pitch (bool): Whether to extract pitch. Defaults to True.
+        slope_tilt (bool): Whether to extract slope and tilt. Defaults to True.
+        cpp_descriptors (bool): Whether to extract CPP descriptors. Defaults to True.
+        duration (bool): Whether to extract duration. Defaults to True.
+        jitter (bool): Whether to extract jitter. Defaults to True.
+        shimmer (bool): Whether to extract shimmer. Defaults to True.
+        n_jobs (int, optional):
+            Number of parallel jobs to run (default: 1).
+        backend (str, optional):
+            Backend to use for parallelization.
+            - “sequential” (used by default) is a serial backend.
+            - “loky” can induce some communication and memory overhead
+            when exchanging input and output data with the worker Python processes.
+            On some rare systems (such as Pyiodide), the loky backend may not be available.
+            - “multiprocessing” previous process-based backend based on multiprocessing.Pool.
+            Less robust than loky.
+            - “threading” is a very low-overhead backend but it suffers from
+            the Python Global Interpreter Lock if the called function relies
+            a lot on Python objects. “threading” is mostly useful when the execution
+            bottleneck is a compiled extension that explicitly releases the GIL
+            (for instance a Cython loop wrapped in a “with nogil” block or an expensive
+            call to a library such as NumPy).
+        verbose (int, optional):
+            Verbosity (default: 0).
+            If non zero, progress messages are printed. Above 50, the output is sent to stdout.
+            The frequency of the messages increases with the verbosity level.
+            If it more than 10, all iterations are reported.
+        cache_dir (str | os.PathLike, optional):
+            Path to cache directory. If None is given, no caching is done.
 
-        # 2) Duration
-        if duration:
-            dur = extract_audio_duration(snd=sample)
-            out["duration"] = dur["duration"]
+    Returns:
+        list[dict[str, Any]]: A list of JSON-like dictionaries with extracted features
+            structured under "praat_parselmouth".
 
-        # 3) Speech rate / pausing
-        if speech_rate:
-            sr = extract_speech_rate(snd=sample)
-            out["speaking_rate"] = sr["speaking_rate"]
-            out["articulation_rate"] = sr["articulation_rate"]
-            out["phonation_ratio"] = sr["phonation_ratio"]
-            out["pause_rate"] = sr["pause_rate"]
-            out["mean_pause_duration"] = sr["mean_pause_dur"]
+    """
 
-        # 4) Pitch + Intensity
-        if pitch:
-            pd = extract_pitch_descriptors(
-                snd=sample,
+    # Utility function to extract features per-audio worker
+    def _extract_one(snd: Audio) -> Dict[str, Any]:
+        # Shared precomputations
+        pitch_values_out = extract_pitch_values(snd=snd)
+        pitch_floor = pitch_values_out["pitch_floor"]
+        pitch_ceiling = pitch_values_out["pitch_ceiling"]
+
+        # Conditionally compute blocks
+        speech_rate_out = extract_speech_rate(snd=snd) if speech_rate else None
+
+        pitch_out = (
+            extract_pitch_descriptors(
+                snd=snd,
                 floor=pitch_floor,
                 ceiling=pitch_ceiling,
                 frame_shift=time_step,
                 unit=pitch_unit,
             )
-            out[f"mean_f0_{pitch_unit.lower()}"] = pd[f"mean_f0_{pitch_unit.lower()}"]
-            out[f"std_f0_{pitch_unit.lower()}"] = pd[f"stdev_f0_{pitch_unit.lower()}"]
+            if pitch
+            else None
+        )
 
-        if intensity_descriptors:
-            idesc = extract_intensity_descriptors(
-                snd=sample,
+        intensity_out = (
+            extract_intensity_descriptors(
+                snd=snd,
                 floor=pitch_floor,
                 frame_shift=time_step,
             )
-            out["mean_intensity_db"] = idesc["mean_db"]
-            out["std_intensity_db"] = idesc["std_db"]
-            out["range_ratio_intensity_db"] = idesc["range_db_ratio"]
+            if intensity_descriptors
+            else None
+        )
 
-        # 5) Harmonicity, spectral slope/tilt, CPP
-        if harmonicity_descriptors:
-            hdesc = extract_harmonicity_descriptors(
-                snd=sample,
+        harmonicity_out = (
+            extract_harmonicity_descriptors(
+                snd=snd,
                 floor=pitch_floor,
                 frame_shift=time_step,
             )
-            out["mean_hnr_db"] = hdesc["hnr_db_mean"]
-            out["std_hnr_db"] = hdesc["hnr_db_std_dev"]
+            if harmonicity_descriptors
+            else None
+        )
 
-        if slope_tilt:
-            st = extract_slope_tilt(
-                snd=sample,
-                floor=pitch_floor,
-                ceiling=pitch_ceiling,
-            )
-            out["spectral_slope"] = st["spectral_slope"]
-            out["spectral_tilt"] = st["spectral_tilt"]
-
-        if cpp_descriptors:
-            cpp = extract_cpp_descriptors(
-                snd=sample,
+        formants_out = (
+            measure_f1f2_formants_bandwidths(
+                snd=snd,
                 floor=pitch_floor,
                 ceiling=pitch_ceiling,
                 frame_shift=time_step,
             )
-            out["cepstral_peak_prominence_mean"] = cpp["mean_cpp"]
-            out["cepstral_peak_prominence_std"] = cpp["std_dev_cpp"]
+            if formants
+            else None
+        )
 
-        # 6) Formants
-        if formants:
-            fm = measure_f1f2_formants_bandwidths(
-                snd=sample,
-                floor=pitch_floor,
-                ceiling=pitch_ceiling,
-                frame_shift=time_step,
-            )
-            out["mean_f1_loc"] = fm["f1_mean"]
-            out["std_f1_loc"] = fm["f1_std"]
-            out["mean_b1_loc"] = fm["b1_mean"]
-            out["std_b1_loc"] = fm["b1_std"]
-            out["mean_f2_loc"] = fm["f2_mean"]
-            out["std_f2_loc"] = fm["f2_std"]
-            out["mean_b2_loc"] = fm["b2_mean"]
-            out["std_b2_loc"] = fm["b2_std"]
-
-        # 7) Spectral moments
-        if spectral_moments:
-            sm = extract_spectral_moments(
-                snd=sample,
+        spectral_moments_out = (
+            extract_spectral_moments(
+                snd=snd,
                 floor=pitch_floor,
                 ceiling=pitch_ceiling,
                 window_size=window_length,
                 frame_shift=time_step,
             )
-            out["spectral_gravity"] = sm["spectral_gravity"]
-            out["spectral_std_dev"] = sm["spectral_std_dev"]
-            out["spectral_skewness"] = sm["spectral_skewness"]
-            out["spectral_kurtosis"] = sm["spectral_kurtosis"]
+            if spectral_moments
+            else None
+        )
 
-        # 8) Jitter / shimmer
-        if jitter:
-            jit = extract_jitter(
-                snd=sample,
+        slope_tilt_out = (
+            extract_slope_tilt(
+                snd=snd,
                 floor=pitch_floor,
                 ceiling=pitch_ceiling,
             )
-            out["local_jitter"] = jit["local_jitter"]
-            out["localabsolute_jitter"] = jit["localabsolute_jitter"]
-            out["rap_jitter"] = jit["rap_jitter"]
-            out["ppq5_jitter"] = jit["ppq5_jitter"]
-            out["ddp_jitter"] = jit["ddp_jitter"]
+            if slope_tilt
+            else None
+        )
 
-        if shimmer:
-            shm = extract_shimmer(
-                snd=sample,
+        cpp_out = (
+            extract_cpp_descriptors(
+                snd=snd,
+                floor=pitch_floor,
+                ceiling=pitch_ceiling,
+                frame_shift=time_step,
+            )
+            if cpp_descriptors
+            else None
+        )
+
+        audio_duration_out = extract_audio_duration(snd=snd) if duration else None
+
+        jitter_out = (
+            extract_jitter(
+                snd=snd,
                 floor=pitch_floor,
                 ceiling=pitch_ceiling,
             )
-            out["local_shimmer"] = shm["local_shimmer"]
-            out["localDB_shimmer"] = shm["localDB_shimmer"]
-            out["apq3_shimmer"] = shm["apq3_shimmer"]
-            out["apq5_shimmer"] = shm["apq5_shimmer"]
-            out["apq11_shimmer"] = shm["apq11_shimmer"]
-            out["dda_shimmer"] = shm["dda_shimmer"]
+            if jitter
+            else None
+        )
 
-        return out
+        shimmer_out = (
+            extract_shimmer(
+                snd=snd,
+                floor=pitch_floor,
+                ceiling=pitch_ceiling,
+            )
+            if shimmer
+            else None
+        )
 
-    @workflow.define
-    def _wf(
-        xs: Sequence[Audio],
-        time_step: float,
-        window_length: float,
-        pitch_unit: str,
-        speech_rate: bool,
-        intensity_descriptors: bool,
-        harmonicity_descriptors: bool,
-        formants: bool,
-        spectral_moments: bool,
-        pitch: bool,
-        slope_tilt: bool,
-        cpp_descriptors: bool,
-        duration: bool,
-        jitter: bool,
-        shimmer: bool,
-    ) -> List[Dict[str, Any]]:
-        # Bind constants; split only over the audios
-        t = _extract_all_for_sample(
-            time_step=time_step,
-            window_length=window_length,
-            pitch_unit=pitch_unit,
-            speech_rate=speech_rate,
-            intensity_descriptors=intensity_descriptors,
-            harmonicity_descriptors=harmonicity_descriptors,
-            formants=formants,
-            spectral_moments=spectral_moments,
-            pitch=pitch,
-            slope_tilt=slope_tilt,
-            cpp_descriptors=cpp_descriptors,
-            duration=duration,
-            jitter=jitter,
-            shimmer=shimmer,
-        ).split(sample=xs)
+        # collect outputs
+        unit_l = pitch_unit.lower()
+        feature_data: Dict[str, Any] = {}
 
-        node = workflow.add(t, name="map_praat_parselmouth_features")
-        return node.out
+        if duration and audio_duration_out is not None:
+            feature_data["duration"] = audio_duration_out["duration"]
 
-    # Map legacy plugin names to compose workers
-    worker = "debug" if plugin in ("serial", "debug") else plugin
-    worker_kwargs = plugin_args or {}
+        if speech_rate and speech_rate_out is not None:
+            feature_data["speaking_rate"] = speech_rate_out["speaking_rate"]
+            feature_data["articulation_rate"] = speech_rate_out["articulation_rate"]
+            feature_data["phonation_ratio"] = speech_rate_out["phonation_ratio"]
+            feature_data["pause_rate"] = speech_rate_out["pause_rate"]
+            feature_data["mean_pause_duration"] = speech_rate_out["mean_pause_dur"]
 
-    wf = _wf(
-        xs=audios,
-        time_step=time_step,
-        window_length=window_length,
-        pitch_unit=pitch_unit,
-        speech_rate=speech_rate,
-        intensity_descriptors=intensity_descriptors,
-        harmonicity_descriptors=harmonicity_descriptors,
-        formants=formants,
-        spectral_moments=spectral_moments,
-        pitch=pitch,
-        slope_tilt=slope_tilt,
-        cpp_descriptors=cpp_descriptors,
-        duration=duration,
-        jitter=jitter,
-        shimmer=shimmer,
-    )
-    res: Any = wf(worker=worker, cache_root=cache_dir, **worker_kwargs)
-    return list(res.out)
+        if pitch and pitch_out is not None:
+            feature_data[f"mean_f0_{unit_l}"] = pitch_out[f"mean_f0_{unit_l}"]
+            feature_data[f"std_f0_{unit_l}"] = pitch_out[f"stdev_f0_{unit_l}"]
+
+        if intensity_descriptors and intensity_out is not None:
+            feature_data["mean_intensity_db"] = intensity_out["mean_db"]
+            feature_data["std_intensity_db"] = intensity_out["std_db"]
+            feature_data["range_ratio_intensity_db"] = intensity_out["range_db_ratio"]
+
+        if harmonicity_descriptors and harmonicity_out is not None:
+            feature_data["mean_hnr_db"] = harmonicity_out["hnr_db_mean"]
+            feature_data["std_hnr_db"] = harmonicity_out["hnr_db_std_dev"]
+
+        if slope_tilt and slope_tilt_out is not None:
+            feature_data["spectral_slope"] = slope_tilt_out["spectral_slope"]
+            feature_data["spectral_tilt"] = slope_tilt_out["spectral_tilt"]
+
+        if cpp_descriptors and cpp_out is not None:
+            feature_data["cepstral_peak_prominence_mean"] = cpp_out["mean_cpp"]
+            feature_data["cepstral_peak_prominence_std"] = cpp_out["std_dev_cpp"]
+
+        if formants and formants_out is not None:
+            feature_data["mean_f1_loc"] = formants_out["f1_mean"]
+            feature_data["std_f1_loc"] = formants_out["f1_std"]
+            feature_data["mean_b1_loc"] = formants_out["b1_mean"]
+            feature_data["std_b1_loc"] = formants_out["b1_std"]
+            feature_data["mean_f2_loc"] = formants_out["f2_mean"]
+            feature_data["std_f2_loc"] = formants_out["f2_std"]
+            feature_data["mean_b2_loc"] = formants_out["b2_mean"]
+            feature_data["std_b2_loc"] = formants_out["b2_std"]
+
+        if spectral_moments and spectral_moments_out is not None:
+            feature_data["spectral_gravity"] = spectral_moments_out["spectral_gravity"]
+            feature_data["spectral_std_dev"] = spectral_moments_out["spectral_std_dev"]
+            feature_data["spectral_skewness"] = spectral_moments_out["spectral_skewness"]
+            feature_data["spectral_kurtosis"] = spectral_moments_out["spectral_kurtosis"]
+
+        if jitter and jitter_out is not None:
+            feature_data["local_jitter"] = jitter_out["local_jitter"]
+            feature_data["localabsolute_jitter"] = jitter_out["localabsolute_jitter"]
+            feature_data["rap_jitter"] = jitter_out["rap_jitter"]
+            feature_data["ppq5_jitter"] = jitter_out["ppq5_jitter"]
+            feature_data["ddp_jitter"] = jitter_out["ddp_jitter"]
+
+        if shimmer and shimmer_out is not None:
+            feature_data["local_shimmer"] = shimmer_out["local_shimmer"]
+            feature_data["localDB_shimmer"] = shimmer_out["localDB_shimmer"]
+            feature_data["apq3_shimmer"] = shimmer_out["apq3_shimmer"]
+            feature_data["apq5_shimmer"] = shimmer_out["apq5_shimmer"]
+            feature_data["apq11_shimmer"] = shimmer_out["apq11_shimmer"]
+            feature_data["dda_shimmer"] = shimmer_out["dda_shimmer"]
+
+        return feature_data
+
+    # optional cache
+    memory: Optional[Memory] = Memory(str(cache_dir), verbose=verbose) if cache_dir else None
+    if memory:
+        _extract_one = memory.cache(_extract_one)
+
+    # parallel across audios
+    return Parallel(
+        n_jobs=n_jobs,
+        backend=backend,
+        verbose=verbose,
+    )(delayed(_extract_one)(a) for a in audios)

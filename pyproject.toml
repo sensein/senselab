@@ -8,9 +8,10 @@ authors = [
 ]
 maintainers = [
   {name = "Fabio Catania", email = "fabiocat@mit.edu"},
-  {name = "Satra Ghosh", email = "satra@mit.edu"}
+  {name = "Satra Ghosh", email = "satra@mit.edu"},
+  {name = "Jordan Wilke", email = "wilke18@mit.edu"}
 ]
-license = {file = "LICENSE.txt"}
+license = {file = "LICENSE.md"}
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 homepage = "https://github.com/sensein/senselab"
@@ -24,63 +25,54 @@ classifiers = [
   "License :: OSI Approved :: Apache Software License",
   "Operating System :: OS Independent"
 ]
+version = "0.0.0"
 
 [tool.poetry]
 packages = [{include = "senselab", from = "src"}]
 requires-poetry = ">=2.0"
-version = "0.0.0"
 
 [tool.poetry.dependencies]
+torch = {version = "~=2.8.0", markers = "sys_platform != 'darwin' or platform_machine == 'arm64'"}
+torchvision = "~=0.23.0"
+torchcodec = "~=0.7.0"
+transformers = "~=4.53.3"
 datasets = "~=3.6"
-torch = {version = "~=2.6", markers = "sys_platform != 'darwin' or platform_machine == 'arm64'"}
-torchvision = "~=0.20"
-transformers = "~=4.55"
-pydra = ">=1.0a0"
 pydantic = "~=2.11"
 accelerate = "*"
 huggingface-hub = "~=0.34"
 pycountry = "~=24.6"
 iso639 = "~=0.1"
-types-requests = "~=2.32"
 scikit-learn = "~=1.7"
 umap-learn = "~=0.5"
 python-ffmpeg = "~=2.0"
 nest-asyncio = "~=1.6"
 matplotlib = "~=3.10"
-torchaudio = {version = "~=2.6", optional = true}
-praat-parselmouth = {version = "~=0.4", optional = true}
-audiomentations = {version = "~=0.42", optional = true}
-torch-audiomentations = {version = "~=0.12", optional = true}
-speechbrain = {version = "~=1", optional = true}
-pyannote-audio = {version = "~=3.3", optional = true}
-opensmile = {version = "~=2.6", optional = true}
-vocos = {version = "~=0.1", optional = true}
-coqui-tts = {version = "~=0.27", optional = true}
+joblib = "~=1.5"
+torchaudio = {version = "~=2.8.0"}
+praat-parselmouth = {version = "~=0.4"}
+audiomentations = {version = "~=0.42"}
+torch-audiomentations = {version = "~=0.12"}
+speechbrain = {version = "~=1"}
+pyannote-audio = {version = "~=4"}
+opensmile = {version = "~=2.6"}
+vocos = {version = "~=0.1"}
+coqui-tts = {version = "~=0.27"}
 speech-articulatory-coding = {version = "~=0.1", optional = true}
-jiwer = {version = "~=4.0", optional = true}
+jiwer = {version = "^3.0", optional = true}
 nltk = {version = "~=3.9", optional = true}
 sentence-transformers = {version = "~=5.1", optional = true}
 pylangacq = {version = "~=0.19", optional = true}
 opencv-python-headless = {version = "~=4.11", optional = true}
 ultralytics = {version = "~=8.3", optional = true}
 av = {version = "~=15", optional = true}
-nemo-toolkit = {version = "~=2.3", optional = true, extras = ["asr"]}
+notebook-intelligence = {version = "~=2.3.2", optional = true}
+ipywidgets = {version = "~=8.1", optional = true}
+ipykernel = {version = "~=7.1", optional = true}
+nbformat = {version = "~=5.10", optional = true}
+nbss-upload = {version = "~=0.1", optional = true}
+jupyterlab = {version = "~=4.4", optional = true}
 
 [tool.poetry.extras]
-audio = [
-  "torchaudio",
-  "praat-parselmouth",
-  "audiomentations",
-  "torch-audiomentations",
-  "speechbrain",
-  "pyannote-audio",
-  "opensmile",
-  "vocos",
-  "jiwer",
-  "nltk",
-  "coqui-tts",
-  "nemo-toolkit"
-]
 articulatory = [
   "speech-articulatory-coding"
 ]
@@ -93,31 +85,45 @@ video = [
   "opencv-python-headless",
   "ultralytics"
 ]
+senselab-ai = [
+  "jupyterlab",
+  "notebook-intelligence",
+  "ipywidgets",
+  "ipykernel",
+  "nbformat",
+  "nbss-upload"
+]
 
 [tool.poetry.group.dev]
 optional = true
 
 [tool.poetry.group.dev.dependencies]
-pytest-xdist = {version = "~=3.6.1", extras = ["psutil"]}
+pytest-xdist = {version = "~=3.8.0", extras = ["psutil"]}
 pytest-mock = "~=3.14"
-pytest-cov = "~=6.0"
+pytest-cov = "~=7.0"
 mypy = "~=1.9"
 pre-commit = "~=4.0"
 ruff = "~=0.3"
 codespell = "~=2.3"
-jupyter = "~=1.0"
-ipywidgets = "~=8.1"
-ipykernel = "*"
-uvloop = "~=0.21"
+uvloop = "~=0.22"
+types-requests = "~=2.32"
+python-dotenv = "~=1.1"
+ipython = "~=9.7"
+ipykernel = "~=7.1"
+ipywidgets = {version = "~=8.1"}
+jupyterlab = {version = "~=4.4"}
 
 [tool.poetry.group.docs]
 optional = true
 
 [tool.poetry.group.docs.dependencies]
-pdoc = "~=15.0"
+pdoc = "~=16.0"
 
 [tool.poetry.requires-plugins]
 poetry-dynamic-versioning = {version = ">=1.0.0,<2.0.0", extras = ["plugin"]}
+
+[tool.poetry.scripts]
+senselab-ai = "senselab.agentic_interface.launcher:senselab_ai"
 
 [tool.pytest.ini_options]
 pythonpath = [
@@ -197,9 +203,6 @@ skip = [
   "*.ipynb"
 ]
 ignore-words-list = ["senselab", "nd", "astroid", "wil", "SER", "te", "EXPRESSO", "VAI"]
-
-[poetry.scripts]
-senselab-cli = "senselab.cli:main"
 
 [build-system]
 requires = ["poetry-core>=2.0", "poetry-dynamic-versioning>=1.0.0,<2.0.0"]
