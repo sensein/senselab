@@ -37,7 +37,7 @@ from senselab.audio.tasks.quality_control.metrics import (
     spectral_gating_snr_metric,
     zero_crossing_rate_metric,
     primary_speaker_ratio_metric,
-    presence_of_voice_metric,
+    voice_activity_detection_metric,
     signal_to_noise_power_ratio_metric
 
 )
@@ -820,7 +820,7 @@ def primary_speaker_ratio_check(
 
 
 
-def presence_of_voice_check(
+def voice_activity_detection_check(
     audio_or_path: Union[Audio, str],
     threshold: float = 0,
     df: Optional[pd.DataFrame] = None,
@@ -830,13 +830,13 @@ def presence_of_voice_check(
     Args:
         audio_or_path: An Audio instance or filepath to the audio file.
         threshold: Minimum acceptable voice activity duration in seconds.
-        df: Optional DataFrame with ``presence_of_voice_metric``.
+        df: Optional DataFrame with ``voice_activity_detection_metric``.
 
     Returns:
         True when voice duration > ``threshold``, None if evaluation fails.
     """
 
-    result = get_evaluation(audio_or_path, presence_of_voice_metric, df)
+    result = get_evaluation(audio_or_path, voice_activity_detection_metric, df)
     if result is None:
         return None
     return float(result) > threshold
@@ -882,4 +882,3 @@ def find_buzzing_check(audio_or_path: Union[Audio, str],
     if result is None:
         return None
     return float(result) > threshold
-
