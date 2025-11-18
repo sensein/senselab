@@ -22,7 +22,7 @@ def diarize_audios(
     - If `model` is a `PyannoteAudioModel`, uses Pyannote (typically expects **mono, 16 kHz**).
       Optional `num_speakers` or (`min_speakers`, `max_speakers`) are honored.
     - If `model` is an `HFModel` and `model.path_or_uri` starts with `"nvidia/diar_sortformer"`,
-    uses NVIDIA Sortformer (nvidia/diar_sortformer_4spk-v1 detects max **4 speakers**).
+    uses NVIDIA Sortformer via Docker (nvidia/diar_sortformer_4spk-v1 detects max **4 speakers**).
 
     Args:
         audios (list[Audio]):
@@ -69,7 +69,7 @@ def diarize_audios(
         True
     """
     if model is None:
-        model = PyannoteAudioModel(path_or_uri="pyannote/speaker-diarization-3.1", revision="main")
+        model = PyannoteAudioModel(path_or_uri="pyannote/speaker-diarization-community-1", revision="main")
 
     if isinstance(model, PyannoteAudioModel):
         return diarize_audios_with_pyannote(
@@ -83,7 +83,7 @@ def diarize_audios(
     elif isinstance(model, HFModel) and str(model.path_or_uri).startswith("nvidia/diar"):
         return diarize_audios_with_nvidia_sortformer(
             audios=audios,
-            model_name=str(model.path_or_uri),
+            model=model,
             device=device,
         )
     else:
