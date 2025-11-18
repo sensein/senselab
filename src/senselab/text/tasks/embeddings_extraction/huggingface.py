@@ -3,7 +3,7 @@
 from typing import Dict, List, Optional
 
 import torch
-from transformers import AutoModel, AutoTokenizer
+from transformers import AutoModel, AutoTokenizer, PreTrainedModel, PreTrainedTokenizer
 
 from senselab.utils.data_structures import DeviceType, HFModel, _select_device_and_dtype
 
@@ -11,21 +11,21 @@ from senselab.utils.data_structures import DeviceType, HFModel, _select_device_a
 class HFFactory:
     """A factory for managing self-supervised models from Hugging Face."""
 
-    _tokenizers: Dict[str, AutoTokenizer] = {}
-    _models: Dict[str, AutoModel] = {}
+    _tokenizers: Dict[str, PreTrainedTokenizer] = {}
+    _models: Dict[str, PreTrainedModel] = {}
 
     @classmethod
     def _get_tokenizer(
         cls,
         model: HFModel,
-    ) -> AutoTokenizer:
+    ) -> PreTrainedTokenizer:
         """Get or create a tokenizer for SSL model.
 
         Args:
             model (HFModel): The HuggingFace model.
 
         Returns:
-            AutoTokenizer: The tokenizer for the model.
+            PreTrainedTokenizer: The tokenizer for the model.
         """
         key = f"{model.path_or_uri}-{model.revision}"
         if key not in cls._tokenizers:
@@ -41,7 +41,7 @@ class HFFactory:
         cls,
         model: HFModel,
         device: DeviceType,
-    ) -> AutoModel:
+    ) -> PreTrainedModel:
         """Load weights of SSL model.
 
         Args:
@@ -49,7 +49,7 @@ class HFFactory:
             device (DeviceType): The device to run the model on.
 
         Returns:
-            AutoModel: The SSL model.
+            PreTrainedModel: The SSL model.
         """
         key = f"{model.path_or_uri}-{model.revision}-{device.value}"
 
