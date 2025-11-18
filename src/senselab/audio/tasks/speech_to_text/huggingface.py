@@ -48,14 +48,17 @@ class HuggingFaceASR:
         Returns:
             Pipeline: The ASR pipeline.
         """
+        logger.info(f"device should be None and found to be {device}")
         device, _ = _select_device_and_dtype(
             user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
         )
+        logger.info(f"Setting device as {device}")
         key = (
             f"{model.path_or_uri}-{model.revision}-{return_timestamps}-"
             f"{max_new_tokens}-{chunk_length_s}-{batch_size}-{device.value}"
         )
         if key not in cls._pipelines:
+            logger.info("key was not in pipeline cache")
             cls._pipelines[key] = cast(
                 Pipeline,
                 pipeline(  # type: ignore[call-overload]

@@ -12,12 +12,17 @@ Backends:
     - **torchaudio-squim**: Objective quality metrics (e.g., STOI, PESQ, SI-SDR).
 """
 
-from typing import Any, Dict, List, Union
+import time
+from typing import Any, Dict, List, Optional, Union
 
 from senselab.audio.data_structures import Audio
+from senselab.utils.data_structures import DeviceType
+from senselab.utils.data_structures.logging import logger
 
 from .opensmile import extract_opensmile_features_from_audios
+from .ppg import extract_ppgs_from_audios
 from .praat_parselmouth import extract_praat_parselmouth_features_from_audios
+from .sparc import SparcFeatureExtractor
 from .torchaudio import extract_torchaudio_features_from_audios
 from .torchaudio_squim import extract_objective_quality_features_from_audios
 
@@ -28,6 +33,9 @@ def extract_features_from_audios(
     parselmouth: Union[Dict[str, str], bool] = True,
     torchaudio: Union[Dict[str, str], bool] = True,
     torchaudio_squim: bool = True,
+    sparc: bool = True,
+    ppgs: bool = True,
+    device: Optional[DeviceType] = None,
 ) -> List[Dict[str, Any]]:
     """Extract multi-backend features for each `Audio` and return a list of dicts.
 
@@ -62,6 +70,14 @@ def extract_features_from_audios(
         torchaudio_squim (bool, optional):
             - ``False`` → skip objective quality metrics.
             - ``True``  → compute metrics such as STOI, PESQ, SI-SDR (backend-dependent defaults).
+        sparc (bool, optional):
+            - ``False`` → skip Speech Articulatory Coding features.
+            - ``True`` → use the SPARC encoding model to generate features (currently generate and return all)
+        ppgs (bool, optional):
+            - ``False`` → skip Phonetic Posteriorgrams extrtaction.
+            - ``True`` → use the ppgs model to generate phonetic posteriorgrams
+        device (DeviceType, optional):
+            Device to run feature extractions on for features where GPU might enhance performance (`torchaudio_squim`)
 
     Returns:
         list[dict[str, Any]]: One dict per input audio. Keys present depend on
@@ -73,6 +89,8 @@ def extract_features_from_audios(
           ``mel_spectrogram``, ``mfcc``, ``pitch``). Tensors have shapes defined
           by your STFT/mel/MFCC settings.
         - ``"torchaudio_squim"`` → ``dict[str, float]`` with objective quality scores.
+        - ``"sparc"`` → ``dict[str, Tensor]``
+        - ``ppgs`` → Tensor
 
     Raises:
         ModuleNotFoundError:
@@ -392,7 +410,11 @@ def extract_features_from_audios(
             my_opensmile = {**default_opensmile, **opensmile}
         else:
             my_opensmile = default_opensmile
+        start_time = time.time()
         opensmile_features = extract_opensmile_features_from_audios(audios, **my_opensmile)  # type: ignore
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        logger.info(f"Time taken to get opensmile: {elapsed_time:.2f} seconds")
     if parselmouth:
         default_parselmouth: Dict[str, Any] = {
             "time_step": 0.005,
@@ -416,7 +438,11 @@ def extract_features_from_audios(
         else:
             my_parselmouth = default_parselmouth
 
+        start_time = time.time()
         parselmouth_features = extract_praat_parselmouth_features_from_audios(audios=audios, **my_parselmouth)  # type: ignore
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        logger.info(f"Time taken to get parselmouth: {elapsed_time:.2f} seconds")
 
     if torchaudio:
         default_torchaudio: Dict[str, Any] = {
@@ -433,9 +459,29 @@ def extract_features_from_audios(
         else:
             my_torchaudio = default_torchaudio
 
-        torchaudio_features = extract_torchaudio_features_from_audios(audios=audios, **my_torchaudio)  # type: ignore
+        start_time = time.time()
+        torchaudio_features = extract_torchaudio_features_from_audios(audios=audios, **my_torchaudio, device=device)  # type: ignore
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        logger.info(f"Time taken to get torchaudio: {elapsed_time:.2f} seconds")
     if torchaudio_squim:
-        torchaudio_squim_features = extract_objective_quality_features_from_audios(audios=audios)
+        start_time = time.time()
+        torchaudio_squim_features = extract_objective_quality_features_from_audios(audios=audios, device=device)
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        logger.info(f"Time taken to get squim: {elapsed_time:.2f} seconds")
+    if sparc:
+        start_time = time.time()
+        sparc_features = SparcFeatureExtractor.extract_sparc_features(audios=audios, device=device, resample=True)
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        logger.info(f"Time taken to get sparc: {elapsed_time:.2f} seconds")
+    if ppgs:
+        start_time = time.time()
+        periodgrams = extract_ppgs_from_audios(audios=audios, device=device)
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        logger.info(f"Time taken to get ppg: {elapsed_time:.2f} seconds")
 
     results = []
     for i in range(len(audios)):
@@ -448,6 +494,10 @@ def extract_features_from_audios(
             result["torchaudio"] = torchaudio_features[i]
         if torchaudio_squim:
             result["torchaudio_squim"] = torchaudio_squim_features[i]
+        if sparc:
+            result["sparc"] = sparc_features[i]
+        if ppgs:
+            result["ppgs"] = periodgrams[i]
         results.append(result)
 
     return results
