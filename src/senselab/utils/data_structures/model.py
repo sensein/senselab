@@ -23,6 +23,7 @@ from typing import Generic, Optional, TypeVar, Union
 import requests
 import torch
 from huggingface_hub import HfApi
+from huggingface_hub.errors import RepositoryNotFoundError, RevisionNotFoundError
 from huggingface_hub.hf_api import ModelInfo
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 from typing_extensions import Annotated
@@ -220,9 +221,11 @@ def check_hf_repo_exists(repo_id: str, revision: str = "main", repo_type: str = 
         else:
             api.list_repo_commits(repo_id=repo_id, revision=revision, repo_type=repo_type)
         return True
-    except Exception:
-        # raise RuntimeError(f"An error occurred: {e}")
+    except (RepositoryNotFoundError, RevisionNotFoundError):
         return False
+    except Exception as e:
+        raise RuntimeError(f"An error occurred checking HF repos not related to Repository and revisions existing: {e}")
+        # return False
 
 
 @lru_cache(maxsize=128)

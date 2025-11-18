@@ -8,9 +8,11 @@ across a list of audio samples using openSMILE in a simple for-loop.
 
 from __future__ import annotations
 
+import traceback
 from typing import Any, Dict, List
 
 from senselab.audio.data_structures import Audio
+from senselab.utils.data_structures import logger
 
 try:
     import opensmile
@@ -106,7 +108,8 @@ def extract_opensmile_features_from_audios(
         except Exception as e:
             filepath = sample.filepath() if hasattr(sample, "filepath") and sample.filepath() else ""
             desc = f"{sample.generate_id()}{f' ({filepath})' if filepath else ''}"
-            print(f"Error processing sample {desc}: {e}")
+            logger.error(f"Error processing sample {desc}: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             names = getattr(smile, "feature_names", [])
             results.append({name: float("nan") for name in names} if names else {})
 

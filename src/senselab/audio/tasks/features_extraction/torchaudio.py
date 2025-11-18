@@ -1,6 +1,7 @@
 """This module provides the implementation of torchaudio utilities for audio features extraction."""
 
 import os
+import traceback
 from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
@@ -14,6 +15,8 @@ except ModuleNotFoundError:
     TORCHAUDIO_AVAILABLE = False
 
 from senselab.audio.data_structures import Audio
+from senselab.utils.data_structures import DeviceType, _select_device_and_dtype
+from senselab.utils.data_structures.logging import logger
 
 
 def extract_spectrogram_from_audios(
@@ -276,6 +279,7 @@ def extract_torchaudio_features_from_audios(
     n_mfcc: int = 40,
     win_length: Optional[int] = None,
     hop_length: Optional[int] = None,
+    device: Optional[DeviceType] = None,
 ) -> List[Dict[str, Any]]:
     """Extract torchaudio features from a list of audio objects.
 
@@ -293,6 +297,7 @@ def extract_torchaudio_features_from_audios(
         Default is None.
     hop_length (Optional[int]): Hop length between STFT windows. If None, uses win_length // 2.
         Default is None.
+    device (Optional[DeviceType]): device to run feature extraction on
 
     Returns:
     - List[Dict[str, Any]]: List of Dict objects containing features.
@@ -305,6 +310,8 @@ def extract_torchaudio_features_from_audios(
             "`torchaudio` is not installed. Please install senselab audio dependencies using `pip install senselab`."
         )
 
+    device, _ = _select_device_and_dtype(user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU])
+
     wl = n_fft if win_length is None else win_length
     hl = wl // 2 if hop_length is None else hop_length
 
@@ -315,14 +322,15 @@ def extract_torchaudio_features_from_audios(
     for sample in audios:
         sr = sample.sampling_rate
         try:
+            s = sample.waveform.to(device.value)
             # Spectrogram
-            spec = torchaudio.transforms.Spectrogram(n_fft=n_fft, win_length=wl, hop_length=hl)(sample.waveform)
+            spec = torchaudio.transforms.Spectrogram(n_fft=n_fft, win_length=wl, hop_length=hl).to(device.value)(s)
             spec = spec.squeeze(0)  # (freq, time)
 
             # Mel-spectrogram
             melspec = torchaudio.transforms.MelSpectrogram(
                 sample_rate=sr, n_fft=n_fft, win_length=wl, hop_length=hl, n_mels=n_mels
-            )(sample.waveform)
+            ).to(device.value)(s)
             melspec = melspec.squeeze(0)  # (mel, time)
 
             # MFCC
@@ -330,12 +338,12 @@ def extract_torchaudio_features_from_audios(
                 sample_rate=sr,
                 n_mfcc=n_mfcc,
                 melkwargs={"n_fft": n_fft, "win_length": wl, "hop_length": hl, "n_mels": n_mels},
-            )(sample.waveform)
+            ).to(device.value)(s)
             mfcc = mfcc.squeeze(0)  # (n_mfcc, time)
 
             # Mel filter bank from spectrogram
             n_stft = n_fft // 2 + 1
-            melfb = torchaudio.transforms.MelScale(sample_rate=sr, n_mels=n_mels, n_stft=n_stft)(spec)
+            melfb = torchaudio.transforms.MelScale(sample_rate=sr, n_mels=n_mels, n_stft=n_stft).to(device.value)(spec)
             melfb = melfb.squeeze(0)  # (mel, time)
 
             # Pitch
@@ -346,13 +354,15 @@ def extract_torchaudio_features_from_audios(
             results.append(
                 {
                     "pitch": pitch,
-                    "mel_filter_bank": melfb,
-                    "mfcc": mfcc,
-                    "mel_spectrogram": melspec,
-                    "spectrogram": spec,
+                    "mel_filter_bank": melfb.cpu(),
+                    "mfcc": mfcc.cpu(),
+                    "mel_spectrogram": melspec.cpu(),
+                    "spectrogram": spec.cpu(),
                 }
             )
-        except RuntimeError:
+        except RuntimeError as e:
+            logger.warning(f"Runtime error encountered on audio {sample.filepath()}: {e}")
+            logger.warning(f"Traceback: {traceback.format_exc()}")
             # Return NaNs with the expected keys if torchaudio raises
             results.append(
                 {
@@ -363,5 +373,4 @@ def extract_torchaudio_features_from_audios(
                     "spectrogram": np.nan,
                 }
             )
-
     return results
