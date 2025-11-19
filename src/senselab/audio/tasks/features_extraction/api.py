@@ -18,9 +18,13 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from joblib import Memory, Parallel, delayed
 
 from senselab.audio.data_structures import Audio
+from senselab.utils.data_structures import DeviceType
+from senselab.utils.data_structures.logging import logger
 
 from .opensmile import extract_opensmile_features_from_audios
+from .ppg import extract_ppgs_from_audios
 from .praat_parselmouth import extract_praat_parselmouth_features_from_audios
+from .sparc import SparcFeatureExtractor
 from .torchaudio import extract_torchaudio_features_from_audios
 from .torchaudio_squim import extract_objective_quality_features_from_audios
 
@@ -31,6 +35,9 @@ def extract_features_from_audios(
     parselmouth: Union[Dict[str, str], bool] = True,
     torchaudio: Union[Dict[str, str], bool] = True,
     torchaudio_squim: bool = True,
+    sparc: bool = True,
+    ppgs: bool = True,
+    device: Optional[DeviceType] = None,
     n_jobs: int = 1,
     backend: Literal["threading", "loky", "multiprocessing", "sequential"] = "sequential",
     verbose: int = 0,
@@ -70,6 +77,14 @@ def extract_features_from_audios(
         torchaudio_squim (bool, optional):
             - ``False`` → skip objective quality metrics.
             - ``True``  → compute metrics such as STOI, PESQ, SI-SDR (backend-dependent defaults).
+        sparc (bool, optional):
+            - ``False`` → skip Speech Articulatory Coding features.
+            - ``True`` → use the SPARC encoding model to generate features (currently generate and return all)
+        ppgs (bool, optional):
+            - ``False`` → skip Phonetic Posteriorgrams extrtaction.
+            - ``True`` → use the ppgs model to generate phonetic posteriorgrams
+        device (DeviceType, optional):
+            Device to run feature extractions on for features where GPU might enhance performance (`torchaudio_squim`)
         n_jobs (int, optional):
             Number of parallel jobs to run (default: 1).
         backend (str, optional):
@@ -104,6 +119,8 @@ def extract_features_from_audios(
           ``mel_spectrogram``, ``mfcc``, ``pitch``). Tensors have shapes defined
           by your STFT/mel/MFCC settings.
         - ``"torchaudio_squim"`` → ``dict[str, float]`` with objective quality scores.
+        - ``"sparc"`` → ``dict[str, Tensor]``
+        - ``ppgs`` → Tensor
 
     Raises:
         ModuleNotFoundError:
@@ -454,8 +471,10 @@ def extract_features_from_audios(
     use_parselmouth = bool(parselmouth)
     use_torchaudio = bool(torchaudio)
     use_squim = bool(torchaudio_squim)
+    use_sparc = bool(sparc)
+    use_ppgs = bool(ppgs)
 
-    if not any([use_opensmile, use_parselmouth, use_torchaudio, use_squim]):
+    if not any([use_opensmile, use_parselmouth, use_torchaudio, use_squim, use_sparc, use_ppgs]):
         return [{} for _ in audios]
 
     def _extract_one(a: Audio) -> Dict[str, Any]:
@@ -471,6 +490,10 @@ def extract_features_from_audios(
             out["torchaudio"] = extract_torchaudio_features_from_audios([a], **my_ta)[0]
         if use_squim:
             out["torchaudio_squim"] = extract_objective_quality_features_from_audios([a])[0]
+        if use_sparc:
+            out["sparc"] = SparcFeatureExtractor.extract_sparc_features([a], device=device, resample=True)[0]
+        if use_ppgs:
+            out["ppgs"] = extract_ppgs_from_audios([a], device=device)[0]
         return out
 
     # Cache
