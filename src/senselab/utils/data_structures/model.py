@@ -18,14 +18,14 @@ except ModuleNotFoundError:
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Generic, Optional, TypeVar, Union
+from typing import ClassVar, Dict, Generic, Optional, Tuple, TypeVar, Union
 
 import requests
 import torch
 from huggingface_hub import HfApi
 from huggingface_hub.errors import RepositoryNotFoundError, RevisionNotFoundError
 from huggingface_hub.hf_api import ModelInfo
-from pydantic import BaseModel, Field, ValidationInfo, field_validator
+from pydantic import BaseModel, Field, PrivateAttr, ValidationInfo, field_validator
 from typing_extensions import Annotated
 
 # Define the TypeVar for provider types
@@ -70,8 +70,9 @@ class HFModel(SenselabModel[PROVIDER_T]):
 
     revision: Annotated[str, Field(validate_default=True)] = "main"
     info: Optional[ModelInfo] = None
+    _hf_cache: ClassVar[Dict[Tuple[str, str], bool]] = {}
 
-    @field_validator("revision", mode="before")
+    @field_validator("revision")
     def validate_hf_model_id(cls, value: str, info: ValidationInfo) -> Union[str, Path]:
         """Validate the path_or_uri.
 
@@ -81,7 +82,15 @@ class HFModel(SenselabModel[PROVIDER_T]):
         """
         path_or_uri = info.data["path_or_uri"]
         if not isinstance(path_or_uri, Path):
-            if not check_hf_repo_exists(repo_id=str(path_or_uri), revision=value, repo_type="model"):
+            # hf_result = cls._hf_cache.setdefault((str(path_or_uri),value),
+            #        check_hf_repo_exists(repo_id=str(path_or_uri), revision=value, repo_type="model"))
+            if (str(path_or_uri), value) not in cls._hf_cache:
+                hf_result = check_hf_repo_exists(repo_id=str(path_or_uri), revision=value, repo_type="model")
+                print("called hf repo:", path_or_uri, value)
+                cls._hf_cache[(str(path_or_uri), value)] = hf_result
+
+            # if not hf_result:
+            if not cls._hf_cache[(str(path_or_uri), value)]:
                 raise ValueError(
                     f"The huggingface model: path_or_uri ({path_or_uri}) or "
                     f"specified revision ({value}) cannot be found.\n"
@@ -95,7 +104,7 @@ class HFModel(SenselabModel[PROVIDER_T]):
     def get_model_info(self) -> ModelInfo:
         """Gets the model info using the HuggingFace API and saves it as a property."""
         if isinstance(self.path_or_uri, Path):
-            raise ValueError("Model info is only available for remote resources and not " "for files.")
+            raise ValueError("Model info is only available for remote resources and not for files.")
         if not self.info:
             api = HfApi()
             self.info = api.model_info(repo_id=self.path_or_uri, revision=self.revision)
@@ -135,9 +144,7 @@ class CoquiTTSModel(SenselabModel[PROVIDER_T]):
         """
         if not TTS_AVAILABLE:
             raise ModuleNotFoundError(
-                "`coqui-tts` is not installed. "
-                "Please install senselab audio dependencies using "
-                "`pip install senselab`."
+                "`coqui-tts` is not installed. Please install senselab audio dependencies using `pip install senselab`."
             )
         if not isinstance(value, Path):
             model_ids = TTS().list_models()
@@ -164,7 +171,7 @@ class TorchModel(SenselabModel[PROVIDER_T]):
         path_or_uri = info.data["path_or_uri"]
         if not isinstance(path_or_uri, Path):
             if not check_github_repo_exists(repo_id=str(path_or_uri), branch=value):
-                raise ValueError("path_or_uri or specified revision is not a valid " "github repo")
+                raise ValueError("path_or_uri or specified revision is not a valid github repo")
         return value
 
 
@@ -191,9 +198,7 @@ def check_torchaudio_model_exists(model_id: str) -> bool:
     """Private function to check if a torchaudio model exists."""
     if not TORCHAUDIO_AVAILABLE:
         raise ModuleNotFoundError(
-            "`torchaudio` is not installed. "
-            "Please install senselab audio dependencies using "
-            "`pip install senselab`."
+            "`torchaudio` is not installed. Please install senselab audio dependencies using `pip install senselab`."
         )
 
     try:
