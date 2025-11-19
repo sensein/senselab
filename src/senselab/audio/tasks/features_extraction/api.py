@@ -491,9 +491,9 @@ def extract_features_from_audios(
         if use_squim:
             out["torchaudio_squim"] = extract_objective_quality_features_from_audios([a])[0]
         if use_sparc:
-            out["sparc"] = SparcFeatureExtractor.extract_sparc_features([a], device=device, resample=True)
+            out["sparc"] = SparcFeatureExtractor.extract_sparc_features([a], device=device, resample=True)[0]
         if use_ppgs:
-            out["ppgs"] = extract_ppgs_from_audios([a], device=device)
+            out["ppgs"] = extract_ppgs_from_audios([a], device=device)[0]
         return out
 
     # Cache

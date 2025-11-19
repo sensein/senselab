@@ -8,6 +8,7 @@ import torch
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.features_extraction import extract_features_from_audios
 from senselab.audio.tasks.features_extraction.opensmile import extract_opensmile_features_from_audios
+from senselab.audio.tasks.features_extraction.ppg import extract_ppgs_from_audios
 from senselab.audio.tasks.features_extraction.praat_parselmouth import (
     extract_audio_duration,
     extract_cpp_descriptors,
@@ -24,6 +25,7 @@ from senselab.audio.tasks.features_extraction.praat_parselmouth import (
     get_sound,
     measure_f1f2_formants_bandwidths,
 )
+from senselab.audio.tasks.features_extraction.sparc import SparcFeatureExtractor
 from senselab.audio.tasks.features_extraction.torchaudio import (
     extract_mel_filter_bank_from_audios,
     extract_mel_spectrogram_from_audios,

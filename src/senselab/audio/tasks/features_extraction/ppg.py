@@ -29,7 +29,7 @@ def extract_ppgs_from_audios(audios: List["Audio"], device: Optional[DeviceType]
     """
     if not PPGS_AVAILABLE:
         raise ModuleNotFoundError(
-            "`ppgs` is not installed. " "Please install senselab audio dependencies using `pip install senselab`."
+            "`ppgs` is not installed. Please install senselab audio dependencies using `pip install senselab`."
         )
 
     device, _ = _select_device_and_dtype(user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU])
@@ -44,7 +44,7 @@ def extract_ppgs_from_audios(audios: List["Audio"], device: Optional[DeviceType]
                     torch.unsqueeze(audio.waveform, dim=0),
                     ppgs.SAMPLE_RATE,
                     gpu=0 if device == DeviceType.CUDA else None,
-                )
+                ).cpu()
             )
 
         except RuntimeError as e:

@@ -59,7 +59,7 @@ def test_read_audio_lazy_loading(mock_torchaudio_load: MagicMock, audio_paths: L
         mock_torchaudio_load.assert_called_with(audio_paths[idx], frame_offset=0, num_frames=-1, backend=None)
 
         _ = processed_audio.waveform
-        mock_torchaudio_load.call_count == (idx + 1)
+        assert mock_torchaudio_load.call_count == (idx + 1)
 
 
 @pytest.mark.skipif(
@@ -87,12 +87,12 @@ def test_read_audios(audio_paths: List[str | os.PathLike]) -> None:
         reference_audio = Audio(filepath=audio_paths[idx])
 
         # Verify the processed Audio matches the reference
-        assert torch.equal(
-            processed_audio.waveform, reference_audio.waveform
-        ), f"Waveform for file {audio_paths[idx]} does not match the expected."
-        assert (
-            processed_audio.sampling_rate == reference_audio.sampling_rate
-        ), f"Sampling rate for file {audio_paths[idx]} does not match the expected."
+        assert torch.equal(processed_audio.waveform, reference_audio.waveform), (
+            f"Waveform for file {audio_paths[idx]} does not match the expected."
+        )
+        assert processed_audio.sampling_rate == reference_audio.sampling_rate, (
+            f"Sampling rate for file {audio_paths[idx]} does not match the expected."
+        )
 
 
 @pytest.mark.skipif(
