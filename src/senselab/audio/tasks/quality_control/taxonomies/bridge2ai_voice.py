@@ -1,5 +1,7 @@
 """Bridge2AI voice assessment taxonomy tree implementation."""
 
+import copy
+
 from senselab.audio.tasks.quality_control.taxonomies.bioacoustic import (
     build_bioacoustic_activity_taxonomy,
 )
@@ -14,8 +16,8 @@ def build_bridge2ai_voice_taxonomy() -> TaxonomyNode:
     Returns:
         The root node of the Bridge2AI voice taxonomy tree
     """
-    # Reuse the bioacoustic taxonomy
-    root = build_bioacoustic_activity_taxonomy()
+    # Reuse the bioacoustic taxonomy (deep copy to avoid mutating the original)
+    root = copy.deepcopy(build_bioacoustic_activity_taxonomy())
 
     # Change the root name to bridge2ai_voice
     root.name = "bridge2ai_voice"
@@ -267,4 +269,3 @@ def build_bridge2ai_voice_taxonomy() -> TaxonomyNode:
 
 # Create the global Bridge2AI voice taxonomy tree instance
 BRIDGE2AI_VOICE_TAXONOMY = build_bridge2ai_voice_taxonomy()
-BRIDGE2AI_VOICE_TAXONOMY.print_tree()
