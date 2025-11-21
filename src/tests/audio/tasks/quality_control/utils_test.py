@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Generator
 
 import pytest
-from pytest import CaptureFixture
+from pytest import LogCaptureFixture
 
 from senselab.audio.tasks.quality_control.utils import (
     get_audio_files_from_directory,
@@ -36,7 +36,9 @@ def sample_audio_directory() -> Generator[Path, None, None]:
         yield temp_path
 
 
-def test_get_audio_files_from_directory_default(sample_audio_directory: Path) -> None:
+def test_get_audio_files_from_directory_default(
+    sample_audio_directory: Path,
+) -> None:
     """Test default behavior of get_audio_files_from_directory."""
     audio_files = get_audio_files_from_directory(str(sample_audio_directory))
 
@@ -58,7 +60,9 @@ def test_get_audio_files_from_directory_default(sample_audio_directory: Path) ->
     assert not any("not_audio.txt" in f for f in audio_files)
 
 
-def test_get_audio_files_from_directory_non_recursive(sample_audio_directory: Path) -> None:
+def test_get_audio_files_from_directory_non_recursive(
+    sample_audio_directory: Path,
+) -> None:
     """Test non-recursive search."""
     audio_files = get_audio_files_from_directory(str(sample_audio_directory), recursive=False)
 
@@ -69,7 +73,9 @@ def test_get_audio_files_from_directory_non_recursive(sample_audio_directory: Pa
     assert not any("subdir" in f for f in audio_files)
 
 
-def test_get_audio_files_from_directory_custom_extensions(sample_audio_directory: Path) -> None:
+def test_get_audio_files_from_directory_custom_extensions(
+    sample_audio_directory: Path,
+) -> None:
     """Test with custom audio extensions."""
     audio_files = get_audio_files_from_directory(str(sample_audio_directory), audio_extensions={".wav", ".mp3"})
 
@@ -80,7 +86,9 @@ def test_get_audio_files_from_directory_custom_extensions(sample_audio_directory
     assert extensions == {".wav", ".mp3"}
 
 
-def test_get_audio_files_from_directory_case_insensitive(sample_audio_directory: Path) -> None:
+def test_get_audio_files_from_directory_case_insensitive(
+    sample_audio_directory: Path,
+) -> None:
     """Test that extension matching is case-insensitive."""
     audio_files = get_audio_files_from_directory(str(sample_audio_directory), audio_extensions={".wav"})
 
@@ -89,27 +97,27 @@ def test_get_audio_files_from_directory_case_insensitive(sample_audio_directory:
     assert len(wav_files) == 3  # test1.wav + test2.WAV + nested1.wav
 
 
-def test_get_audio_files_from_directory_nonexistent(capsys: CaptureFixture[str]) -> None:
+def test_get_audio_files_from_directory_nonexistent(
+    caplog: LogCaptureFixture,
+) -> None:
     """Test behavior with nonexistent directory."""
     audio_files = get_audio_files_from_directory("/nonexistent/path")
 
     assert audio_files == []
 
-    # Check warning message
-    captured = capsys.readouterr()
-    assert "Warning: Directory /nonexistent/path does not exist" in captured.out
+    # Check warning message (logger output captured by caplog)
+    assert "Directory /nonexistent/path does not exist" in caplog.text
 
 
-def test_get_audio_files_from_directory_file_not_dir(sample_audio_directory: Path, capsys: CaptureFixture[str]) -> None:
+def test_get_audio_files_from_directory_file_not_dir(sample_audio_directory: Path, caplog: LogCaptureFixture) -> None:
     """Test behavior when path points to a file, not directory."""
     file_path = sample_audio_directory / "test1.wav"
     audio_files = get_audio_files_from_directory(str(file_path))
 
     assert audio_files == []
 
-    # Check warning message
-    captured = capsys.readouterr()
-    assert f"Warning: {file_path} is not a directory" in captured.out
+    # Check warning message (logger output captured by caplog)
+    assert f"{file_path} is not a directory" in caplog.text
 
 
 def test_get_audio_files_from_directory_empty_directory() -> None:
@@ -119,15 +127,14 @@ def test_get_audio_files_from_directory_empty_directory() -> None:
         assert audio_files == []
 
 
-def test_get_audio_files_output_format(sample_audio_directory: Path, capsys: CaptureFixture[str]) -> None:
+def test_get_audio_files_output_format(sample_audio_directory: Path, caplog: LogCaptureFixture) -> None:
     """Test the output format and logging."""
     audio_files = get_audio_files_from_directory(str(sample_audio_directory))
 
-    # Check console output
-    captured = capsys.readouterr()
-    assert f"Found {len(audio_files)} audio files" in captured.out
-    assert "File types found:" in captured.out
+    # Check console output (logger output captured by caplog)
+    assert f"Found {len(audio_files)} audio files" in caplog.text
+    assert "File types found:" in caplog.text
 
     # Should list the extensions found
-    assert ".wav" in captured.out
-    assert ".mp3" in captured.out
+    assert ".wav" in caplog.text
+    assert ".mp3" in caplog.text
