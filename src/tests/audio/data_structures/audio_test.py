@@ -228,7 +228,7 @@ def test_audio_save_to_file(audio_fixture: str, request: pytest.FixtureRequest) 
         assert temp_file_path.exists(), "The audio file was not saved."
 
         # Load the saved file and verify its content
-        loaded_waveform, loaded_sampling_rate = torchaudio.load(temp_file_path)
+        loaded_waveform, loaded_sampling_rate = torchaudio.load(str(temp_file_path))
         assert torch.allclose(audio_sample.waveform, loaded_waveform, atol=1e-5), "Waveform data does not match."
         assert audio_sample.sampling_rate == loaded_sampling_rate, "Sampling rate does not match."
 
