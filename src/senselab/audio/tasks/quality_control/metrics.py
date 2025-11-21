@@ -13,6 +13,7 @@ from senselab.audio.tasks.voice_activity_detection.api import (
     detect_human_voice_activity_in_audios,
 )
 from senselab.utils.data_structures import ScriptLine
+from senselab.utils.data_structures.logging import logger
 
 
 def proportion_silent_metric(audio: Audio, silence_threshold: float = 0.01) -> float:
@@ -557,7 +558,7 @@ def primary_speaker_ratio_metric(audio: Audio) -> float:
                 return np.nan
             diarization_result = diarization_results[0]
         except Exception as e:
-            print(f"Warning: Failed to compute diarization for primary_speaker_ratio_metric: {e}")
+            logger.warning(f"Failed to compute diarization for primary_speaker_ratio_metric: {e}")
             return np.nan
 
     # Calculate primary speaker ratio from ScriptLine objects
@@ -627,7 +628,7 @@ def voice_activity_detection_metric(audio: Audio) -> float:
                 return np.nan
             vad_result = vad_results[0]
         except Exception as e:
-            print(f"Warning: Failed to compute VAD for " f"voice_activity_detection_metric: {e}")
+            logger.warning(f"Failed to compute VAD for voice_activity_detection_metric: {e}")
             return np.nan
 
     # Calculate total voice duration from ScriptLine objects
@@ -685,7 +686,7 @@ def voice_signal_to_noise_power_ratio_metric(audio: Audio) -> float:
                 return np.nan
             vad_result = vad_results[0]
         except Exception as e:
-            print(f"Warning: Failed to compute VAD for " f"voice_signal_to_noise_power_ratio_metric: {e}")
+            logger.warning(f"Failed to compute VAD for voice_signal_to_noise_power_ratio_metric: {e}")
             return np.nan
 
     # Calculate SNR from ScriptLine objects
@@ -738,7 +739,7 @@ def voice_signal_to_noise_power_ratio_metric(audio: Audio) -> float:
         else:
             snr = np.nan
     except (ValueError, IndexError, ZeroDivisionError) as e:
-        print(f"Warning: Error calculating SNR: {e}")
+        logger.warning(f"Error calculating SNR: {e}")
         return np.nan
 
     return float(snr)

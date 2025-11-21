@@ -9,6 +9,7 @@ from joblib import Parallel, delayed
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.quality_control.format import save_formatted_results
+from senselab.utils.data_structures.logging import logger
 
 # Type aliases for improved readability
 EvalResult = Union[float, bool, str]
@@ -44,7 +45,7 @@ def get_evaluation(
         try:
             audio = Audio(filepath=audio)
         except Exception as e:
-            print(f"Warning: Failed to load audio from {audio}: {e}")
+            logger.warning(f"Failed to load audio from {audio}: {e}")
             return None
 
     function_name = evaluation_function.__name__
@@ -71,7 +72,7 @@ def get_evaluation(
         result = evaluation_function(audio)
         return result
     except Exception as e:
-        print(f"Warning: Failed to compute {function_name}: {e}")
+        logger.warning(f"Failed to compute {function_name}: {e}")
         return None
 
 
@@ -115,8 +116,7 @@ def get_windowed_evaluation(
         return values
     except Exception as e:
         function_name = evaluation_function.__name__
-        msg = f"Warning: Failed to compute windowed evaluation for '{function_name}': {e}"
-        print(msg)
+        logger.warning(f"Failed to compute windowed evaluation for '{function_name}': {e}")
         return None
 
 
@@ -165,7 +165,7 @@ def evaluate_audio(
                 with open(result_path) as f:
                     existing_results = json.load(f)
             except Exception as e:
-                print(f"Warning: Could not read existing results for {audio_id}: {e}")
+                logger.warning(f"Could not read existing results for {audio_id}: {e}")
 
     try:
         audio = Audio(filepath=audio_path)
@@ -193,7 +193,7 @@ def evaluate_audio(
                 json.dump(record, f, indent=2)
 
     except Exception as e:
-        print(f"Error processing {audio_id}: {e}")
+        logger.error(f"Error processing {audio_id}: {e}")
 
     return record
 
@@ -224,7 +224,7 @@ def evaluate_batch(
     """
     records = []
     for audio_path in batch_audio_paths:
-        print(f"{audio_path}")
+        logger.debug(f"Processing {audio_path}")
         # Get evaluations for this activity
         activity = audio_path_to_activity[str(audio_path)]
         evaluations = activity_to_evaluations[activity]
@@ -280,7 +280,7 @@ def evaluate_dataset(
     # Create batches for parallel processing
     batches = [audio_paths[i : i + batch_size] for i in range(0, len(audio_paths), batch_size)]
 
-    print(f"Processing {len(audio_paths)} files in {len(batches)} batches using {n_cores} cores...")
+    logger.info(f"Processing {len(audio_paths)} files in {len(batches)} batches using {n_cores} cores...")
 
     # Use joblib for parallel processing
     try:
@@ -326,8 +326,8 @@ def evaluate_dataset(
         return output_dfs["summary"]
 
     except Exception as e:
-        print(f"Error in joblib parallel execution: {e}")
-        print("Falling back to serial processing...")
+        logger.error(f"Error in joblib parallel execution: {e}")
+        logger.info("Falling back to serial processing...")
 
         # Fallback to serial processing
         results = []

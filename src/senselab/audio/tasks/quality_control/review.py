@@ -12,6 +12,7 @@ from senselab.audio.tasks.quality_control.taxonomies import (
     BIOACOUSTIC_ACTIVITY_TAXONOMY,
 )
 from senselab.audio.tasks.quality_control.taxonomy import TaxonomyNode
+from senselab.utils.data_structures.logging import logger
 
 INCLUDE: int = 1
 EXCLUDE: int = 0
@@ -95,13 +96,13 @@ def include_no_failed_checks_label_function(
 
 
 def prune_check_columns(
-    df_checks: pd.DataFrame, correlation_threahold: float = 0.99
+    df_checks: pd.DataFrame, correlation_threshold: float = 0.99
 ) -> Tuple[List[str], Dict[str, List[str]]]:
     """Prune constant and highly correlated check columns.
 
     Args:
         df_checks: DataFrame containing only *_check columns.
-        correlation_threahold: Drop one of any pair with correlation >=
+        correlation_threshold: Drop one of any pair with correlation >=
             this threshold.
 
     Returns:
@@ -131,7 +132,7 @@ def prune_check_columns(
             for j in range(i + 1, len(cols)):
                 if cols[j] in to_drop:
                     continue
-                if corr.iloc[i, j] >= correlation_threahold:
+                if corr.iloc[i, j] >= correlation_threshold:
                     to_drop.add(cols[j])
         if to_drop:
             dropped["high_corr"].extend(sorted(to_drop))
@@ -181,7 +182,7 @@ def calculate_label_function_reliability(L_train: np.ndarray, preds: np.ndarray,
 
 def review_files(
     df_path: str,
-    correlation_threahold: float = 0.99,
+    correlation_threshold: float = 0.99,
     output_dir: Optional[str] = None,
     save_results: bool = True,
     prune_checks: bool = True,
@@ -192,7 +193,7 @@ def review_files(
 
     Args:
         df_path: Path to CSV file containing quality control results.
-        correlation_threahold: Correlation threshold for pruning highly
+        correlation_threshold: Correlation threshold for pruning highly
             correlated columns.
         output_dir: Directory to save results. If None, saves to same directory
             as input CSV.
@@ -205,18 +206,18 @@ def review_files(
         DataFrame with snorkel_label column added containing predicted labels.
     """
     df = pd.read_csv(df_path)
-    print(f"Total files: {len(df)}")
+    logger.info(f"Total files: {len(df)}")
 
     # Get check names from taxonomy
     taxonomy_check_names = get_taxonomy_check_names(taxonomy, activity)
-    print(f"Taxonomy checks for '{activity}': {taxonomy_check_names}")
+    logger.info(f"Taxonomy checks for '{activity}': {taxonomy_check_names}")
 
     # Filter to only columns that exist in both the DataFrame and taxonomy
     available_check_cols = [c for c in df.columns if "check" in c]
     taxonomy_check_cols = [c for c in available_check_cols if c in taxonomy_check_names]
 
-    print(f"Available check columns: {len(available_check_cols)}")
-    print(f"Taxonomy-filtered check columns: {len(taxonomy_check_cols)}")
+    logger.info(f"Available check columns: {len(available_check_cols)}")
+    logger.info(f"Taxonomy-filtered check columns: {len(taxonomy_check_cols)}")
 
     if not taxonomy_check_cols:
         raise ValueError(f"No check columns found that match taxonomy checks for " f"activity '{activity}'")
@@ -224,15 +225,15 @@ def review_files(
     df_checks = df[taxonomy_check_cols]
 
     if prune_checks:
-        keep_cols, dropped = prune_check_columns(df_checks, correlation_threahold=correlation_threahold)
+        keep_cols, dropped = prune_check_columns(df_checks, correlation_threshold=correlation_threshold)
         dropped_total = sum(len(v) for v in dropped.values())
-        print(f"Checks total: {df_checks.shape[1]} | kept: {len(keep_cols)} | " f"dropped: {dropped_total}")
+        logger.info(f"Checks total: {df_checks.shape[1]} | kept: {len(keep_cols)} | " f"dropped: {dropped_total}")
         for reason, cols in dropped.items():
             if cols:
-                print(f"  - {reason} ({len(cols)}): {cols}")
+                logger.info(f"  - {reason} ({len(cols)}): {cols}")
     else:
         keep_cols = list(df_checks.columns)
-        print(f"Checks total: {df_checks.shape[1]} | kept: {len(keep_cols)} | " f"dropped: 0 (pruning disabled)")
+        logger.info(f"Checks total: {df_checks.shape[1]} | kept: {len(keep_cols)} | " f"dropped: 0 (pruning disabled)")
 
     # Build labeling functions + explicit names (avoid mypy complaining
     # about .name)
@@ -264,15 +265,15 @@ def review_files(
     # Counts (abstain == no labeling function fired; with composite labeling
     # function this should be 0)
     abstain_mask = (L_train != ABSTAIN).sum(axis=1) == 0
-    print(f"ABSTAIN: {int(abstain_mask.sum())}")
-    print(f"INCLUDE: {int((preds == INCLUDE).sum())}")
-    print(f"EXCLUDE: {int((preds == EXCLUDE).sum())}")
+    logger.info(f"ABSTAIN: {int(abstain_mask.sum())}")
+    logger.info(f"INCLUDE: {int((preds == INCLUDE).sum())}")
+    logger.info(f"EXCLUDE: {int((preds == EXCLUDE).sum())}")
 
     # Reliability ranking (agreement with LabelModel on rows where labeling
     # function fired)
     reliability_df = calculate_label_function_reliability(L_train, preds, lf_names)
-    print("\nlabeling function reliability (agreement with LabelModel):")
-    print(reliability_df.to_string(index=False))
+    logger.info("\nlabeling function reliability (agreement with LabelModel):")
+    logger.info(reliability_df.to_string(index=False))
 
     # Save results if requested
     if save_results:
@@ -287,11 +288,11 @@ def review_files(
         base_name = input_path.stem
         labeled_csv_path = output_path / f"{base_name}_with_snorkel_labels.csv"
         df.to_csv(labeled_csv_path, index=False)
-        print(f"\nSaved labeled dataset to: {labeled_csv_path}")
+        logger.info(f"\nSaved labeled dataset to: {labeled_csv_path}")
 
         # Save reliability ranking
         reliability_csv_path = output_path / f"{base_name}_labeling_function_reliability.csv"
         reliability_df.to_csv(reliability_csv_path, index=False)
-        print(f"Saved reliability ranking to: {reliability_csv_path}")
+        logger.info(f"Saved reliability ranking to: {reliability_csv_path}")
 
     return df

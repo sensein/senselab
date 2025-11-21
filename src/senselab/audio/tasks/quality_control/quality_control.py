@@ -12,6 +12,7 @@ from senselab.audio.tasks.quality_control.taxonomies import (
     BIOACOUSTIC_ACTIVITY_TAXONOMY,
 )
 from senselab.audio.tasks.quality_control.taxonomy import TaxonomyNode
+from senselab.audio.tasks.quality_control.utils import validate_audio_paths
 
 
 def activity_to_evaluations(
@@ -81,13 +82,16 @@ def check_quality(
     output_directory = Path(output_dir or "qc_results")
     output_directory.mkdir(exist_ok=True, parents=True)
 
+    # Validate that all audio paths exist
+    valid_audio_paths = validate_audio_paths(audio_paths, raise_on_empty=True)
+
     # Initialize activity mappings if None
     if audio_path_to_activity is None:
         audio_path_to_activity = {}
 
-    # Setup activity mappings
+    # Setup activity mappings using only valid paths
     audio_path_to_activity = {
-        str(path): audio_path_to_activity.get(str(path), activity_tree.name) for path in audio_paths
+        str(path): audio_path_to_activity.get(str(path), activity_tree.name) for path in valid_audio_paths
     }
 
     # Create activity to evaluations mapping

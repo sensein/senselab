@@ -6,6 +6,8 @@ from typing import Any, Dict, List
 
 import pandas as pd
 
+from senselab.utils.data_structures.logging import logger
+
 
 def flatten_non_windowed_results_to_dataframe(results: List[Dict[str, Any]]) -> pd.DataFrame:
     """Converts nested non-windowed evaluation results to a flattened DataFrame.
@@ -96,7 +98,7 @@ def save_formatted_results(
     # Save main results CSV
     main_results_path = output_dir / "quality_control_results_non_windowed.csv"
     flattened_df.to_csv(main_results_path, index=False)
-    print(f"Saved flattened results to: {main_results_path}")
+    logger.info(f"Saved flattened results to: {main_results_path}")
 
     output_dfs = {"summary": flattened_df}
 
@@ -106,13 +108,13 @@ def save_formatted_results(
         if not windowed_df.empty:
             windowed_results_path = output_dir / "quality_control_results_windowed.csv"
             windowed_df.to_csv(windowed_results_path, index=False)
-            print(f"Saved windowed results to: {windowed_results_path}")
+            logger.info(f"Saved windowed results to: {windowed_results_path}")
             output_dfs["windowed"] = windowed_df
 
     # Save full results as JSON for complete fidelity
     full_results_path = output_dir / "quality_control_results_all.json"
     with open(full_results_path, "w") as f:
         json.dump(results, f, indent=2)
-    print(f"Saved full results to: {full_results_path}")
+    logger.info(f"Saved full results to: {full_results_path}")
 
     return output_dfs
