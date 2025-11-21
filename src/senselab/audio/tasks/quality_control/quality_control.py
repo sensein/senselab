@@ -86,7 +86,9 @@ def check_quality(
         audio_path_to_activity = {}
 
     # Setup activity mappings
-    audio_path_to_activity = {str(path): audio_path_to_activity.get(str(path), "bioacoustic") for path in audio_paths}
+    audio_path_to_activity = {
+        str(path): audio_path_to_activity.get(str(path), activity_tree.name) for path in audio_paths
+    }
 
     # Create activity to evaluations mapping
     activity_evaluations_dict = activity_to_evaluations(
