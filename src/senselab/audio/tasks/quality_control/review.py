@@ -235,6 +235,17 @@ def review_files(
         keep_cols = list(df_checks.columns)
         logger.info(f"Checks total: {df_checks.shape[1]} | kept: {len(keep_cols)} | " f"dropped: 0 (pruning disabled)")
 
+    # Check if we have any columns left after pruning
+    if not keep_cols:
+        logger.warning(
+            "All check columns were pruned (likely all constant values). "
+            "Cannot perform weak supervision labeling. Assigning all files as INCLUDE."
+        )
+        df["snorkel_label"] = INCLUDE
+        df["review_result_1=include"] = True
+        logger.info(f"Assigned all {len(df)} files as INCLUDE (no quality issues detected)")
+        return df
+
     # Build labeling functions + explicit names (avoid mypy complaining
     # about .name)
     lf_list: List[Callable[[pd.Series], int]] = []
