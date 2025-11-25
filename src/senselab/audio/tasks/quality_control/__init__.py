@@ -1,5 +1,7 @@
 """Provides the API for quality control."""
 
+from senselab.audio.tasks.input_output import get_audio_files_from_directory
+
 from .evaluate import (
     evaluate_audio,
     evaluate_batch,
@@ -11,9 +13,6 @@ from .quality_control import (
     check_quality,
 )
 from .review import review_files
-from .utils import (
-    get_audio_files_from_directory,
-)
 
 __all__ = [
     "get_evaluation",
