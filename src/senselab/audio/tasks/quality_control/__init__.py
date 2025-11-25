@@ -1,4 +1,4 @@
-"""Provides the API for bioacoustic quality control."""
+"""Provides the API for quality control."""
 
 from .evaluate import (
     evaluate_audio,

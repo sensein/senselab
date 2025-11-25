@@ -1,4 +1,4 @@
-"""Runs bioacoustic activity recording quality control on audio files."""
+"""Runs quality control on audio files."""
 
 import os
 from pathlib import Path

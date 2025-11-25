@@ -24,7 +24,7 @@ def get_taxonomy_check_names(taxonomy: TaxonomyNode, activity: str = "bioacousti
 
     Args:
         taxonomy: The taxonomy tree to extract checks from
-        activity: The activity to get checks for (default: "bioacoustic")
+        activity: The activity to get checks for
 
     Returns:
         List of check function names from the taxonomy
@@ -200,7 +200,7 @@ def review_files(
         save_results: Whether to save the results to disk.
         prune_checks: Whether to prune constant and highly correlated check columns.
         taxonomy: The taxonomy tree to extract checks from.
-        activity: The activity to get checks for (default: "bioacoustic").
+        activity: The activity to get checks for.
 
     Returns:
         DataFrame with snorkel_label column added containing predicted labels.

@@ -1,4 +1,4 @@
-"""Utility functions for bioacoustic quality control."""
+"""Utility functions for quality control."""
 
 import os
 from pathlib import Path

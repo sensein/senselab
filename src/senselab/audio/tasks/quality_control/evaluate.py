@@ -1,4 +1,4 @@
-"""Evaluation utilities for bioacoustic quality control."""
+"""Evaluation utilities for quality control."""
 
 import json
 from pathlib import Path
