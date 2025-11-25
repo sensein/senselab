@@ -17,11 +17,18 @@ from senselab.utils.data_structures.logging import logger
 
 
 class Label(IntEnum):
-    """Label values for weak supervision review results."""
+    """Label values for weak supervision review results.
+
+    Note: ABSTAIN is used internally by labeling functions when they cannot
+    make a decision (e.g., missing data). However, the final predictions
+    from the LabelModel will only be INCLUDE or EXCLUDE, never ABSTAIN.
+    This is because: (1) the composite labeling function always fires, and
+    (2) the LabelModel is configured with cardinality=2 (binary classification).
+    """
 
     INCLUDE = 1
     EXCLUDE = 0
-    ABSTAIN = -1
+    ABSTAIN = -1  # Used internally only; never appears in final predictions
 
 
 def get_taxonomy_check_names(taxonomy: TaxonomyNode, activity: str = "bioacoustic") -> List[str]:
@@ -58,8 +65,14 @@ def check_to_labeling_function(col: str) -> Callable[[pd.Series], int]:
         col: Column name to check for failed quality checks.
 
     Returns:
-        A labeling function that returns Label.EXCLUDE if the column value is True,
-        otherwise Label.ABSTAIN.
+        A labeling function that returns:
+        - Label.EXCLUDE if the column value is True (check failed)
+        - Label.INCLUDE if the column value is False (check passed)
+        - Label.ABSTAIN if the column value is None/NaN (missing data)
+
+    Note: ABSTAIN is used internally when data is missing, but the final
+    predictions will only be INCLUDE or EXCLUDE due to the composite
+    labeling function and binary LabelModel.
     """
 
     @labeling_function(name=f"{col}")
@@ -79,12 +92,19 @@ def include_no_failed_checks_label_function(
 ) -> Callable[[pd.Series], int]:
     """Include a file if all given checks are False or None.
 
+    This composite labeling function ensures at least one labeling function
+    always fires for every row, preventing ABSTAIN in the final predictions.
+
     Args:
         cols: Sequence of column names to check for failed quality checks.
 
     Returns:
-        A labeling function that returns Label.INCLUDE if all checks are False/None,
-        otherwise Label.ABSTAIN.
+        A labeling function that returns:
+        - Label.INCLUDE if all checks are False/None (no failures)
+        - Label.EXCLUDE if any check is True (at least one failure)
+
+    Note: This function always returns INCLUDE or EXCLUDE, never ABSTAIN.
+    This guarantees that every file gets a final label.
     """
 
     @labeling_function(name="include_no_failed_checks_label_function")
@@ -194,7 +214,10 @@ def review_files(
     taxonomy: TaxonomyNode = BIOACOUSTIC_ACTIVITY_TAXONOMY,
     activity: str = "bioacoustic",
 ) -> pd.DataFrame:
-    """Labels audio files as include, exclude, or unsure with weak supervision.
+    """Labels audio files as include or exclude using weak supervision.
+
+    Uses Snorkel's weak supervision framework to combine multiple quality
+    check labeling functions into a single prediction per file.
 
     Args:
         df_path: Path to CSV file containing quality control results.
@@ -209,6 +232,13 @@ def review_files(
 
     Returns:
         DataFrame with snorkel_label column added containing predicted labels.
+        Values will be 1 (INCLUDE) or 0 (EXCLUDE), never -1 (ABSTAIN).
+
+    Note:
+        The ABSTAIN label is used internally by individual labeling functions
+        when data is missing, but the final predictions are always INCLUDE or
+        EXCLUDE. This is guaranteed by: (1) a composite labeling function that
+        always fires, and (2) a binary LabelModel (cardinality=2).
     """
     df = pd.read_csv(df_path)
     logger.info(f"Total files: {len(df)}")
@@ -270,6 +300,8 @@ def review_files(
     assert len(L_train) == len(df), f"Mismatch: L_train has {len(L_train)} rows, df has {len(df)} rows"
 
     # Train LabelModel
+    # cardinality=2 means binary classification: only INCLUDE (1) or EXCLUDE (0)
+    # ABSTAIN (-1) will never appear in predictions
     label_model = LabelModel(cardinality=2, verbose=True)
     label_model.fit(L_train=L_train, n_epochs=200, log_freq=100, seed=123)
 
@@ -278,10 +310,12 @@ def review_files(
     df["snorkel_label"] = preds
     df["review_result_1=include"] = preds == Label.INCLUDE
 
-    # Counts (abstain == no labeling function fired; with composite labeling
-    # function this should be 0)
+    # Counts
+    # Note: abstain_mask checks if NO labeling function fired for a row.
+    # With the composite labeling function, this should always be 0.
+    # Final predictions (preds) will only be INCLUDE or EXCLUDE, never ABSTAIN.
     abstain_mask = (L_train != Label.ABSTAIN).sum(axis=1) == 0
-    logger.info(f"ABSTAIN: {int(abstain_mask.sum())}")
+    logger.info(f"Rows with no labeling function votes (should be 0): {int(abstain_mask.sum())}")
     logger.info(f"INCLUDE: {int((preds == Label.INCLUDE).sum())}")
     logger.info(f"EXCLUDE: {int((preds == Label.EXCLUDE).sum())}")
 
