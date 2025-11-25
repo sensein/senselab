@@ -33,8 +33,8 @@ def get_evaluation(
             * A check function returning a bool (e.g. very_low_headroom)
             * A string-based evaluation (e.g. quality_category)
         existing_results: Optional dictionary of pre-computed results
-        is_window: If True, look for cached results in windowed_metrics
-        window_idx: Index of the window being evaluated, used to find cached
+        is_window: If True, look for existing results in windowed_evaluations
+        window_idx: Index of the window being evaluated, used to find existing
             results at specific timestamps. Only used if is_window is True.
 
     Returns:
@@ -52,7 +52,7 @@ def get_evaluation(
 
     function_name = evaluation_function.__name__
 
-    # Check if result exists in cache
+    # Check if result is in existing_results
     if existing_results:
         if is_window and window_idx is not None:
             # For windows, look in windowed_evaluations at specific index
