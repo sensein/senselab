@@ -20,7 +20,7 @@ def proportion_silent_metric(audio: Audio, silence_threshold: float = 0.01) -> f
     """Calculates the proportion of silent samples.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
         silence_threshold (float): Amplitude below which a sample is silent.
 
     Returns:
@@ -38,7 +38,7 @@ def proportion_silence_at_beginning_metric(audio: Audio, silence_threshold: floa
     """Calculates the proportion of silence at the start.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
         silence_threshold (float): Amplitude below which a sample is silent.
 
     Returns:
@@ -61,7 +61,7 @@ def proportion_silence_at_end_metric(audio: Audio, silence_threshold: float = 0.
     """Calculates the proportion of silence at the end.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
         silence_threshold (float): Amplitude below which a sample is silent.
 
     Returns:
@@ -85,7 +85,7 @@ def amplitude_headroom_metric(audio: Audio) -> float:
     """Returns the smaller of positive or negative amplitude headroom.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
 
     Returns:
         float: Minimum headroom to clipping (positive or negative side).
@@ -146,7 +146,7 @@ def proportion_clipped_metric(audio: Audio, clip_threshold: float = 1.0) -> floa
     """Calculates the proportion of clipped samples.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
         clip_threshold (float): Threshold at or above which a sample is considered clipped.
 
     Returns:
@@ -219,7 +219,7 @@ def amplitude_modulation_depth_metric(audio: Audio) -> float:
     """Calculates the amplitude modulation depth of an audio signal.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
 
     Returns:
         float: Amplitude modulation depth.
@@ -252,7 +252,7 @@ def root_mean_square_energy_metric(audio: Audio) -> float:
     """Calculates the root mean square (RMS) energy of the audio signal.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
 
     Returns:
         float: RMS energy averaged across channels.
@@ -268,7 +268,7 @@ def zero_crossing_rate_metric(audio: Audio) -> float:
     """Estimates the zero-crossing rate of the audio signal.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
 
     Returns:
         float: Average zero-crossing rate across channels.
@@ -291,7 +291,7 @@ def signal_variance_metric(audio: Audio) -> float:
     """Estimates the variance of the audio signal.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
 
     Returns:
         float: Variance across all samples and channels.
@@ -308,7 +308,7 @@ def dynamic_range_metric(audio: Audio) -> float:
     amplitude values in the signal.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
 
     Returns:
         float: The dynamic range (max amplitude minus min amplitude).
@@ -328,7 +328,7 @@ def mean_absolute_amplitude_metric(audio: Audio) -> float:
     """Calculates the mean absolute amplitude of the audio signal.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
 
     Returns:
         float: Mean absolute amplitude averaged across channels.
@@ -345,7 +345,7 @@ def mean_absolute_deviation_metric(audio: Audio) -> float:
     """Calculates the mean absolute deviation (MAD) of the audio signal.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
 
     Returns:
         float: MAD averaged across channels.
@@ -362,7 +362,7 @@ def shannon_entropy_amplitude_metric(audio: "Audio", num_bins: int = 256) -> flo
     """Calculates the Shannon entropy of the audio signal's amplitude distribution.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
         num_bins (int): Number of bins to discretize the amplitude values.
 
     Returns:
@@ -388,7 +388,7 @@ def crest_factor_metric(audio: Audio) -> float:
     """Calculates the crest factor (peak‑to‑RMS ratio) of the audio signal.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
 
     Returns:
         float: Crest factor (unitless).
@@ -415,7 +415,7 @@ def peak_snr_from_spectral_metric(
     """Estimates Peak‑SNR (dB) using spectral gating to estimate the noise floor.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
         frame_length (int): STFT window size.
         hop_length (int): STFT hop size.
         percentile (int): Percentile used for noise floor estimation.
@@ -450,7 +450,7 @@ def amplitude_skew_metric(audio: Audio) -> float:
     """Calculates the skew of the audio signal amplitude.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
 
     Returns:
         float: Skew of the flattened amplitude distribution.
@@ -464,7 +464,7 @@ def amplitude_kurtosis_metric(audio: Audio) -> float:
     """Calculates the kurtosis of the audio signal amplitude.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
 
     Returns:
         float: Kurtosis of the flattened amplitude distribution.
@@ -478,7 +478,7 @@ def amplitude_interquartile_range_metric(audio: Audio) -> float:
     """Calculates the interquartile range (IQR) of the audio signal amplitude.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
 
     Returns:
         float: IQR of the flattened amplitude distribution.
@@ -528,7 +528,7 @@ def primary_speaker_ratio_metric(audio: Audio) -> float:
     If diarization is not available in audio.metadata, it will be computed automatically.
 
     Args:
-        audio: The SenseLab Audio object.
+        audio: The senselab Audio object.
 
     Returns:
         float: Ratio of primary speaker's duration to total duration.
@@ -595,7 +595,7 @@ def voice_activity_detection_metric(audio: Audio) -> float:
     automatically.
 
     Args:
-        audio: The SenseLab Audio object.
+        audio: The senselab Audio object.
 
     Returns:
         float: Duration of voice activity in seconds.
@@ -654,7 +654,7 @@ def voice_signal_to_noise_power_ratio_metric(audio: Audio) -> float:
     If VAD is not available in audio.metadata, it will be computed automatically.
 
     Args:
-        audio: The SenseLab Audio object.
+        audio: The senselab Audio object.
 
     Returns:
         float: Signal-to-noise power ratio in dB.
