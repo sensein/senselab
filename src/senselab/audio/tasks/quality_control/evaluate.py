@@ -38,7 +38,9 @@ def get_evaluation(
             results at specific timestamps. Only used if is_window is True.
 
     Returns:
-        The evaluation result for the audio, or None if evaluation fails
+        The evaluation result for the audio, or None if:
+            * Loading the audio file fails (when audio is a string filepath)
+            * The evaluation function fails to compute a result
     """
     # Convert string path to Audio object if needed
     if isinstance(audio, str):
