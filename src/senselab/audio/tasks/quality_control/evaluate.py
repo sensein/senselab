@@ -14,7 +14,9 @@ from senselab.utils.data_structures.logging import logger
 # Type aliases for improved readability
 EvalResult = Union[float, bool, str]
 EvalFunc = Callable[[Audio], EvalResult]
+EvalFuncSequence = Sequence[EvalFunc]
 WindowedResult = Dict[str, List[Union[EvalResult, float]]]
+ActivityEvalMap = Dict[str, EvalFuncSequence]
 
 
 def get_evaluation(
@@ -125,7 +127,7 @@ def get_windowed_evaluation(
 def evaluate_audio(
     audio_path: str,
     activity: str,
-    evaluations: Sequence[Callable[[Audio], Union[float, bool, str]]],
+    evaluations: EvalFuncSequence,
     output_dir: Optional[Path] = None,
     window_size_sec: float = 0.025,
     step_size_sec: float = 0.0125,
@@ -203,7 +205,7 @@ def evaluate_audio(
 def evaluate_batch(
     batch_audio_paths: List[str],
     audio_path_to_activity: Dict[str, str],
-    activity_to_evaluations: Dict[str, Sequence[Callable[[Audio], Union[float, bool, str]]]],
+    activity_to_evaluations: ActivityEvalMap,
     output_dir: Path,
     window_size_sec: float = 0.025,
     step_size_sec: float = 0.0125,
@@ -248,7 +250,7 @@ def evaluate_batch(
 
 def evaluate_dataset(
     audio_path_to_activity: Dict[str, str],
-    activity_to_evaluations: Dict[str, Sequence[Callable[[Audio], Union[float, bool, str]]]],
+    activity_to_evaluations: ActivityEvalMap,
     output_dir: Path,
     batch_size: int = 8,
     n_cores: int = 4,
