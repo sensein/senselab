@@ -7,12 +7,12 @@ from typing import Callable, Dict, List, Optional, Sequence, Union
 import pandas as pd
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.input_output import validate_audio_paths
 from senselab.audio.tasks.quality_control.evaluate import evaluate_dataset
 from senselab.audio.tasks.quality_control.taxonomies import (
     BIOACOUSTIC_ACTIVITY_TAXONOMY,
 )
 from senselab.audio.tasks.quality_control.taxonomy import TaxonomyNode
-from senselab.audio.tasks.quality_control.utils import validate_audio_paths
 
 
 def activity_to_evaluations(
