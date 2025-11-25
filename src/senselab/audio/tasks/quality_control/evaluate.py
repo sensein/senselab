@@ -129,8 +129,8 @@ def evaluate_audio(
     activity: str,
     evaluations: EvalFuncSequence,
     output_dir: Optional[Path] = None,
-    window_size_sec: float = 0.025,
-    step_size_sec: float = 0.0125,
+    window_size_sec: float = 0.02,
+    step_size_sec: float = 0.01,
     skip_windowing: bool = False,
 ) -> Dict[str, Any]:
     """Evaluates a single audio file using the given set of functions.
