@@ -2,7 +2,7 @@
 
 from enum import IntEnum
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -206,7 +206,7 @@ def calculate_label_function_reliability(L_train: np.ndarray, preds: np.ndarray,
 
 
 def review_files(
-    df_path: str,
+    df_path: Union[str, pd.DataFrame],
     correlation_threshold: float = 0.99,
     output_dir: Optional[str] = None,
     save_results: bool = True,
@@ -220,11 +220,14 @@ def review_files(
     check labeling functions into a single prediction per file.
 
     Args:
-        df_path: Path to CSV file containing quality control results.
+        df_path: Path to CSV file containing quality control results, or a
+            DataFrame directly. If a DataFrame is provided, output_dir must be
+            specified when save_results=True.
         correlation_threshold: Correlation threshold for pruning highly
             correlated columns.
-        output_dir: Directory to save results. If None, saves to same directory
-            as input CSV.
+        output_dir: Directory to save results. If None and df_path is a string,
+            saves to same directory as input CSV. If None and df_path is a DataFrame,
+            defaults to "qc_results" when save_results=True.
         save_results: Whether to save the results to disk.
         prune_checks: Whether to prune constant and highly correlated check columns.
         taxonomy: The taxonomy tree to extract checks from.
@@ -240,7 +243,14 @@ def review_files(
         EXCLUDE. This is guaranteed by: (1) a composite labeling function that
         always fires, and (2) a binary LabelModel (cardinality=2).
     """
-    df = pd.read_csv(df_path)
+    # Handle both DataFrame and file path inputs
+    if isinstance(df_path, pd.DataFrame):
+        df = df_path.copy()
+        input_path = None
+    else:
+        df = pd.read_csv(df_path)
+        input_path = Path(df_path)
+
     logger.info(f"Total files: {len(df)}")
 
     # Get check names from taxonomy
@@ -324,15 +334,21 @@ def review_files(
 
     # Save results if requested
     if save_results:
-        input_path = Path(df_path)
         if output_dir is None:
-            output_path = input_path.parent
+            if input_path is not None:
+                output_path = input_path.parent
+            else:
+                output_path = Path("qc_results")
+                output_path.mkdir(parents=True, exist_ok=True)
         else:
             output_path = Path(output_dir)
             output_path.mkdir(parents=True, exist_ok=True)
 
         # Save labeled dataset
-        base_name = input_path.stem
+        if input_path is not None:
+            base_name = input_path.stem
+        else:
+            base_name = "quality_control_results"
         labeled_csv_path = output_path / f"{base_name}_with_snorkel_labels.csv"
         df.to_csv(labeled_csv_path, index=False)
         logger.info(f"\nSaved labeled dataset to: {labeled_csv_path}")
