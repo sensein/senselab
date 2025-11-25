@@ -138,3 +138,73 @@ def test_get_audio_files_output_format(sample_audio_directory: Path, caplog: Log
     # Should list the extensions found
     assert ".wav" in caplog.text
     assert ".mp3" in caplog.text
+
+
+def test_get_audio_files_from_directory_all_default_extensions() -> None:
+    """Test that all default audio extensions can be detected."""
+    # All default extensions from the function signature
+    default_extensions = {".wav", ".mp3", ".flac", ".m4a", ".ogg", ".aac", ".wma"}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+
+        # Create one file for each default extension
+        for ext in default_extensions:
+            (temp_path / f"test{ext}").touch()
+
+        # Also create a non-audio file to ensure it's excluded
+        (temp_path / "not_audio.txt").touch()
+
+        # Get audio files using default extensions
+        audio_files = get_audio_files_from_directory(str(temp_path))
+
+        # Should find all 7 audio files
+        assert len(audio_files) == len(default_extensions)
+
+        # Verify all extensions are found
+        extensions_found = {Path(f).suffix.lower() for f in audio_files}
+        assert extensions_found == default_extensions
+
+        # Verify non-audio file is excluded
+        assert not any("not_audio.txt" in f for f in audio_files)
+
+
+@pytest.mark.parametrize(
+    "extension",
+    [".wav", ".mp3", ".flac", ".m4a", ".ogg", ".aac", ".wma"],
+)
+def test_get_audio_files_from_directory_each_default_extension(extension: str) -> None:
+    """Test that each default audio extension can be individually detected."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+
+        # Create a file with the specific extension
+        test_file = temp_path / f"test{extension}"
+        test_file.touch()
+
+        # Create a file with uppercase extension to test case-insensitivity
+        test_file_upper = temp_path / f"test_upper{extension.upper()}"
+        test_file_upper.touch()
+
+        # Create a non-matching audio file to verify exclusion works
+        # Use .wav as the "other" extension unless we're testing .wav, then use .mp3
+        other_ext = ".wav" if extension != ".wav" else ".mp3"
+        (temp_path / f"other{other_ext}").touch()
+
+        # Get audio files with only this extension
+        audio_files = get_audio_files_from_directory(str(temp_path), audio_extensions={extension})
+
+        # Should find both lowercase and uppercase versions
+        assert len(audio_files) == 2
+
+        # Verify both files are found
+        file_names = {Path(f).name for f in audio_files}
+        assert f"test{extension}" in file_names
+        assert f"test_upper{extension.upper()}" in file_names
+
+        # Verify other extension is excluded
+        assert not any(f"other{other_ext}" in f for f in audio_files)
+
+        # Verify all found files have the correct extension (case-insensitive)
+        for f in audio_files:
+            assert Path(f).suffix.lower() == extension.lower()
