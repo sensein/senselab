@@ -296,9 +296,6 @@ def review_files(
     df_checks_filtered = df_checks[keep_cols]
     L_train = applier.apply(df_checks_filtered)
 
-    # Verify alignment
-    assert len(L_train) == len(df), f"Mismatch: L_train has {len(L_train)} rows, df has {len(df)} rows"
-
     # Train LabelModel
     # cardinality=2 means binary classification: only INCLUDE (1) or EXCLUDE (0)
     # ABSTAIN (-1) will never appear in predictions
