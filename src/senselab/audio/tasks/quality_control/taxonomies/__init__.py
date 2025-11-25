@@ -1,4 +1,4 @@
-"""Taxonomy trees for bioacoustic quality control."""
+"""Taxonomy trees for quality control."""
 
 from senselab.audio.tasks.quality_control.taxonomies.bioacoustic import (
     BIOACOUSTIC_ACTIVITY_TAXONOMY,
