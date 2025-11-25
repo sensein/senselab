@@ -591,8 +591,9 @@ def voice_activity_detection_metric(audio: Audio) -> float:
     """Calculates the duration of voice activity detected by VAD.
 
     The voice activity duration is computed from VAD results.
-    If VAD is not available in audio.metadata, it will be computed
-    automatically.
+    If VAD is not available in audio.metadata, it will fall back to
+    diarization results (treating all speaker segments as voice activity).
+    If neither is available, VAD will be computed automatically.
 
     Args:
         audio: The senselab Audio object.
@@ -602,7 +603,7 @@ def voice_activity_detection_metric(audio: Audio) -> float:
                Returns 0.0 if no voice is detected.
                Returns np.nan if VAD computation fails.
     """
-    # Check Audio metadata for precomputed VAD
+    # Step 1: Check Audio metadata for precomputed VAD
     vad_result: Optional[List[ScriptLine]] = None
     if audio.metadata:
         metadata_vad = audio.metadata.get("vad")
@@ -620,13 +621,40 @@ def voice_activity_detection_metric(audio: Audio) -> float:
                     # Format: List[ScriptLine]
                     vad_result = metadata_vad
 
-    # Compute VAD if not in metadata
+    # Step 2: Check for diarization in metadata if VAD not available (do not compute diarization)
+    if vad_result is None:
+        if audio.metadata:
+            metadata_diarization = audio.metadata.get("diarization")
+            if metadata_diarization is not None:
+                # Handle different storage formats: List[List[ScriptLine]] or List[ScriptLine]
+                diarization_result: Optional[List[ScriptLine]] = None
+                if isinstance(metadata_diarization, list) and len(metadata_diarization) > 0:
+                    if isinstance(metadata_diarization[0], list):
+                        # Format: List[List[ScriptLine]] - take first audio's diarization
+                        diarization_result = metadata_diarization[0]
+                    elif isinstance(metadata_diarization[0], ScriptLine):
+                        # Format: List[ScriptLine]
+                        diarization_result = metadata_diarization
+
+                # Convert diarization to VAD-like format (all segments with speakers are voice)
+                if diarization_result:
+                    vad_result = [
+                        ScriptLine(speaker="VOICE", start=sl.start, end=sl.end)
+                        for sl in diarization_result
+                        if sl.speaker is not None and sl.start is not None and sl.end is not None
+                    ]
+
+    # Step 3: Compute VAD if neither VAD nor diarization found in metadata
     if vad_result is None:
         try:
             vad_results = detect_human_voice_activity_in_audios([audio])
             if not vad_results or len(vad_results) == 0:
                 return np.nan
             vad_result = vad_results[0]
+            # Store computed VAD in metadata for reuse
+            if audio.metadata is None:
+                audio.metadata = {}
+            audio.metadata["vad"] = vad_result
         except Exception as e:
             logger.warning(f"Failed to compute VAD for voice_activity_detection_metric: {e}")
             return np.nan
@@ -651,7 +679,8 @@ def voice_signal_to_noise_power_ratio_metric(audio: Audio) -> float:
 
     The signal-to-noise ratio is computed from VAD results, where voice segments
     are considered signal and non-voice segments are considered noise.
-    If VAD is not available in audio.metadata, it will be computed automatically.
+    This function calls voice_activity_detection_metric to ensure VAD is available
+    in metadata, then uses that VAD result for SNR calculation.
 
     Args:
         audio: The senselab Audio object.
@@ -660,16 +689,19 @@ def voice_signal_to_noise_power_ratio_metric(audio: Audio) -> float:
         float: Signal-to-noise power ratio in dB.
                Returns np.nan if VAD computation fails or if there's no voice/noise.
     """
-    # Check Audio metadata for precomputed VAD
+    # Call voice_activity_detection_metric to ensure VAD is computed and stored in metadata
+    voice_duration = voice_activity_detection_metric(audio)
+    if np.isnan(voice_duration):
+        return np.nan
+
+    # Get VAD result from metadata (now guaranteed to be available)
     vad_result: Optional[List[ScriptLine]] = None
     if audio.metadata:
         metadata_vad = audio.metadata.get("vad")
         if metadata_vad is not None:
-            # Handle empty list case explicitly
+            # Handle different storage formats: List[List[ScriptLine]] or List[ScriptLine]
             if isinstance(metadata_vad, list) and len(metadata_vad) == 0:
                 vad_result = []
-            # Handle different storage formats:
-            # List[List[ScriptLine]] or List[ScriptLine]
             elif isinstance(metadata_vad, list) and len(metadata_vad) > 0:
                 if isinstance(metadata_vad[0], list):
                     # Format: List[List[ScriptLine]] - take first audio's VAD
@@ -678,19 +710,12 @@ def voice_signal_to_noise_power_ratio_metric(audio: Audio) -> float:
                     # Format: List[ScriptLine]
                     vad_result = metadata_vad
 
-    # Compute VAD if not in metadata
+    # Safety check: VAD should be available after calling voice_activity_detection_metric
     if vad_result is None:
-        try:
-            vad_results = detect_human_voice_activity_in_audios([audio])
-            if not vad_results or len(vad_results) == 0:
-                return np.nan
-            vad_result = vad_results[0]
-        except Exception as e:
-            logger.warning(f"Failed to compute VAD for voice_signal_to_noise_power_ratio_metric: {e}")
-            return np.nan
+        return np.nan
 
     # Calculate SNR from ScriptLine objects
-    if not vad_result or len(vad_result) == 0:
+    if len(vad_result) == 0:
         return np.nan
 
     waveform = audio.waveform
