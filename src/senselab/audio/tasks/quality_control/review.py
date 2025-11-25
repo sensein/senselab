@@ -1,5 +1,6 @@
 """Uses weak supervision to label files as include, exclude, or unsure."""
 
+from enum import IntEnum
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -14,9 +15,13 @@ from senselab.audio.tasks.quality_control.taxonomies import (
 from senselab.audio.tasks.quality_control.taxonomy import TaxonomyNode
 from senselab.utils.data_structures.logging import logger
 
-INCLUDE: int = 1
-EXCLUDE: int = 0
-ABSTAIN: int = -1
+
+class Label(IntEnum):
+    """Label values for weak supervision review results."""
+
+    INCLUDE = 1
+    EXCLUDE = 0
+    ABSTAIN = -1
 
 
 def get_taxonomy_check_names(taxonomy: TaxonomyNode, activity: str = "bioacoustic") -> List[str]:
@@ -53,18 +58,18 @@ def check_to_labeling_function(col: str) -> Callable[[pd.Series], int]:
         col: Column name to check for failed quality checks.
 
     Returns:
-        A labeling function that returns EXCLUDE if the column value is True,
-        otherwise ABSTAIN.
+        A labeling function that returns Label.EXCLUDE if the column value is True,
+        otherwise Label.ABSTAIN.
     """
 
     @labeling_function(name=f"{col}")
     def lf(x: pd.Series, _col: str = col) -> int:
         val: Any = getattr(x, _col, None)
         if val is None or (isinstance(val, float) and pd.isna(val)):
-            return ABSTAIN
+            return Label.ABSTAIN
         if isinstance(val, str):
             val = val.strip().lower() in {"1", "true", "t", "yes", "y"}
-        return EXCLUDE if bool(val) else INCLUDE
+        return Label.EXCLUDE if bool(val) else Label.INCLUDE
 
     return lf
 
@@ -78,8 +83,8 @@ def include_no_failed_checks_label_function(
         cols: Sequence of column names to check for failed quality checks.
 
     Returns:
-        A labeling function that returns INCLUDE if all checks are False/None,
-        otherwise ABSTAIN.
+        A labeling function that returns Label.INCLUDE if all checks are False/None,
+        otherwise Label.ABSTAIN.
     """
 
     @labeling_function(name="include_no_failed_checks_label_function")
@@ -90,7 +95,7 @@ def include_no_failed_checks_label_function(
             if isinstance(v, str):
                 v = v.strip().lower() in {"1", "true", "t", "yes", "y"}
             total_true += int(bool(v))
-        return INCLUDE if total_true == 0 else EXCLUDE
+        return Label.INCLUDE if total_true == 0 else Label.EXCLUDE
 
     return lf
 
@@ -158,12 +163,12 @@ def calculate_label_function_reliability(L_train: np.ndarray, preds: np.ndarray,
 
     for j, name in enumerate(lf_names):
         votes = L_train[:, j]
-        fired = votes != ABSTAIN
+        fired = votes != Label.ABSTAIN
         n_voted = int(fired.sum())
 
         # Count votes for include/exclude when labeling function fired
-        voted_include = int((votes[fired] == INCLUDE).sum()) if n_voted else 0
-        voted_exclude = int((votes[fired] == EXCLUDE).sum()) if n_voted else 0
+        voted_include = int((votes[fired] == Label.INCLUDE).sum()) if n_voted else 0
+        voted_exclude = int((votes[fired] == Label.EXCLUDE).sum()) if n_voted else 0
 
         agree = float((votes[fired] == preds[fired]).mean()) if n_voted else np.nan
         reliability_rows.append(
@@ -241,7 +246,7 @@ def review_files(
             "All check columns were pruned (likely all constant values). "
             "Cannot perform weak supervision labeling. Assigning all files as INCLUDE."
         )
-        df["snorkel_label"] = INCLUDE
+        df["snorkel_label"] = Label.INCLUDE
         df["review_result_1=include"] = True
         logger.info(f"Assigned all {len(df)} files as INCLUDE (no quality issues detected)")
         return df
@@ -271,14 +276,14 @@ def review_files(
     # Predict
     preds = label_model.predict(L=L_train)
     df["snorkel_label"] = preds
-    df["review_result_1=include"] = preds == INCLUDE
+    df["review_result_1=include"] = preds == Label.INCLUDE
 
     # Counts (abstain == no labeling function fired; with composite labeling
     # function this should be 0)
-    abstain_mask = (L_train != ABSTAIN).sum(axis=1) == 0
+    abstain_mask = (L_train != Label.ABSTAIN).sum(axis=1) == 0
     logger.info(f"ABSTAIN: {int(abstain_mask.sum())}")
-    logger.info(f"INCLUDE: {int((preds == INCLUDE).sum())}")
-    logger.info(f"EXCLUDE: {int((preds == EXCLUDE).sum())}")
+    logger.info(f"INCLUDE: {int((preds == Label.INCLUDE).sum())}")
+    logger.info(f"EXCLUDE: {int((preds == Label.EXCLUDE).sum())}")
 
     # Reliability ranking (agreement with LabelModel on rows where labeling
     # function fired)
