@@ -549,6 +549,8 @@ def primary_speaker_ratio_metric(audio: Audio) -> float:
                 elif isinstance(metadata_diarization[0], ScriptLine):
                     # Format: List[ScriptLine]
                     diarization_result = metadata_diarization
+            elif isinstance(metadata_diarization, list) and len(metadata_diarization) == 0:
+                diarization_result = metadata_diarization
 
     # Compute diarization if not in metadata
     if diarization_result is None:
