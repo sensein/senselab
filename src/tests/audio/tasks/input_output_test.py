@@ -14,9 +14,9 @@ from pytest import LogCaptureFixture
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.input_output import (
     get_audio_files_from_directory,
+    get_valid_audio_paths,
     read_audios,
     save_audios,
-    validate_audio_paths,
 )
 from tests.audio.conftest import MONO_AUDIO_PATH, STEREO_AUDIO_PATH
 
@@ -331,57 +331,57 @@ def test_get_audio_files_from_directory_each_default_extension(extension: str) -
             assert Path(f).suffix.lower() == extension.lower()
 
 
-# Tests for validate_audio_paths
-def test_validate_audio_paths_valid_files(tmp_path: Path) -> None:
-    """Test validate_audio_paths with valid files."""
+# Tests for get_valid_audio_paths
+def test_get_valid_audio_paths_valid_files(tmp_path: Path) -> None:
+    """Test get_valid_audio_paths with valid files."""
     # Create some test files
     file1 = tmp_path / "test1.wav"
     file2 = tmp_path / "test2.mp3"
     file1.touch()
     file2.touch()
 
-    valid_paths = validate_audio_paths([str(file1), str(file2)])
+    valid_paths = get_valid_audio_paths([str(file1), str(file2)])
     assert len(valid_paths) == 2
     assert str(file1) in valid_paths
     assert str(file2) in valid_paths
 
 
-def test_validate_audio_paths_nonexistent(caplog: LogCaptureFixture, tmp_path: Path) -> None:
-    """Test validate_audio_paths with nonexistent files."""
+def test_get_valid_audio_paths_nonexistent(caplog: LogCaptureFixture, tmp_path: Path) -> None:
+    """Test get_valid_audio_paths with nonexistent files."""
     file1 = tmp_path / "test1.wav"
     file1.touch()
     nonexistent = tmp_path / "nonexistent.wav"
 
-    valid_paths = validate_audio_paths([str(file1), str(nonexistent)], raise_on_empty=False)
+    valid_paths = get_valid_audio_paths([str(file1), str(nonexistent)], raise_on_empty=False)
     assert len(valid_paths) == 1
     assert str(file1) in valid_paths
     assert "Audio file does not exist" in caplog.text
 
 
-def test_validate_audio_paths_directory(caplog: LogCaptureFixture, tmp_path: Path) -> None:
-    """Test validate_audio_paths with a directory path."""
+def test_get_valid_audio_paths_directory(caplog: LogCaptureFixture, tmp_path: Path) -> None:
+    """Test get_valid_audio_paths with a directory path."""
     file1 = tmp_path / "test1.wav"
     file1.touch()
     subdir = tmp_path / "subdir"
     subdir.mkdir()
 
-    valid_paths = validate_audio_paths([str(file1), str(subdir)], raise_on_empty=False)
+    valid_paths = get_valid_audio_paths([str(file1), str(subdir)], raise_on_empty=False)
     assert len(valid_paths) == 1
     assert str(file1) in valid_paths
     assert "Path is not a file" in caplog.text
 
 
-def test_validate_audio_paths_empty_raises(tmp_path: Path) -> None:
-    """Test validate_audio_paths raises when no valid paths and raise_on_empty=True."""
+def test_get_valid_audio_paths_empty_raises(tmp_path: Path) -> None:
+    """Test get_valid_audio_paths raises when no valid paths and raise_on_empty=True."""
     nonexistent = tmp_path / "nonexistent.wav"
 
     with pytest.raises(ValueError, match="No valid audio files found"):
-        validate_audio_paths([str(nonexistent)], raise_on_empty=True)
+        get_valid_audio_paths([str(nonexistent)], raise_on_empty=True)
 
 
-def test_validate_audio_paths_empty_no_raise(tmp_path: Path) -> None:
-    """Test validate_audio_paths returns empty list when raise_on_empty=False."""
+def test_get_valid_audio_paths_empty_no_raise(tmp_path: Path) -> None:
+    """Test get_valid_audio_paths returns empty list when raise_on_empty=False."""
     nonexistent = tmp_path / "nonexistent.wav"
 
-    valid_paths = validate_audio_paths([str(nonexistent)], raise_on_empty=False)
+    valid_paths = get_valid_audio_paths([str(nonexistent)], raise_on_empty=False)
     assert valid_paths == []
