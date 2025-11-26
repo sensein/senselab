@@ -77,10 +77,10 @@ def save_audios(
     return None
 
 
-def validate_audio_paths(
+def get_valid_audio_paths(
     audio_paths: List[Union[str, os.PathLike]], raise_on_empty: bool = True
 ) -> List[Union[str, os.PathLike]]:
-    """Validate that audio paths exist and are files.
+    """Gets paths from the input that exist and are files.
 
     Args:
         audio_paths: List of paths to audio files to validate

@@ -7,7 +7,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Union
 import pandas as pd
 
 from senselab.audio.data_structures import Audio
-from senselab.audio.tasks.input_output import validate_audio_paths
+from senselab.audio.tasks.input_output import get_valid_audio_paths
 from senselab.audio.tasks.quality_control.evaluate import evaluate_dataset
 from senselab.audio.tasks.quality_control.taxonomies import (
     BIOACOUSTIC_ACTIVITY_TAXONOMY,
@@ -83,7 +83,7 @@ def check_quality(
     output_directory.mkdir(exist_ok=True, parents=True)
 
     # Validate that all audio paths exist
-    valid_audio_paths = validate_audio_paths(audio_paths, raise_on_empty=True)
+    valid_audio_paths = get_valid_audio_paths(audio_paths, raise_on_empty=True)
 
     # Initialize activity mappings if None
     if audio_path_to_activity is None:
