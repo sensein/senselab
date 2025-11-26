@@ -1,8 +1,8 @@
-# Agentic Interface for SenseLab
+# Agentic Interface for senselab
 
 <button class="tutorial-button" onclick="window.location.href='https://github.com/sensein/senselab/blob/main/tutorials/senselab-ai/senselab_ai_intro.ipynb'">Getting started</button>
 
-The `agentic_interface` submodule provides a flexible, user-friendly bridge between natural language and code, enabling users to interact with SenseLab's AI agent for scientific coding, data analysis, and reproducible research—even without strong technical skills.
+The `agentic_interface` submodule provides a flexible, user-friendly bridge between natural language and code, enabling users to interact with senselab's AI agent for scientific coding, data analysis, and reproducible research—even without strong technical skills.
 
 ![alt text](<https://github.com/sensein/senselab/blob/main/tutorials/senselab-ai/resources/Screenshot 2025-09-02 at 8.52.07 PM.png>)
 
@@ -16,7 +16,7 @@ The goal is to **lower the entry barrier for non-programmers** while keeping wor
 
 * Enable **interactive exploration and analysis** of audio datasets through natural-language interaction.
 * **Generate reproducible code** alongside the analysis, so that results can be shared, rerun, and extended.
-* Integrate seamlessly with existing SenseLab functionality without adding setup complexity.
+* Integrate seamlessly with existing senselab functionality without adding setup complexity.
 
 In short: make audio analysis in senseLab **as simple as asking questions**, while still producing transparent, reproducible workflows.
 
@@ -45,7 +45,7 @@ We reviewed several existing tools that inspired this direction but also highlig
 * Limitations:
 
   * Requires installing & launching multiple tools (high setup overhead for non-technical users).
-  * Without a dedicated MCP server exposing SenseLab tools/docs, the LLM often gets confused about available functions.
+  * Without a dedicated MCP server exposing senselab tools/docs, the LLM often gets confused about available functions.
   * Relies on external LLM usage credits, which can be restrictive.
 
 #### 4. **Notebook Intelligence**
