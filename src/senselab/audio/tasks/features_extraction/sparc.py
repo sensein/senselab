@@ -77,7 +77,7 @@ class SparcFeatureExtractor:
                 "ema": (L, 12) array, #'TDX','TDY','TBX','TBY','TTX','TTY','LIX','LIY','ULX','ULY','LLX','LLY'
                 "loudness": (L, 1) array,
                 "pitch": (L, 1) array,
-                "pperiodicity": (L, 1) array, # auxiliary output of pitch tracker
+                "periodicity": (L, 1) array, # auxiliary output of pitch tracker
                 "pitch_stats": (pitch mean, pitch std),
                 "spk_emb": (spk_emb_dim,) array, # all shared models use spk_emb_dim=64
                 "ft_len": Length of features, # useful when batched processing with padding
@@ -99,7 +99,7 @@ class SparcFeatureExtractor:
 
         for audio in audios:
             if audio.waveform.squeeze().dim() != 1:
-                raise ValueError(f"Only mono audio files are supported. " f"Source: {audio.generate_id()}")
+                raise ValueError(f"Only mono audio files are supported. Source: {audio.generate_id()}")
 
             if audio.sampling_rate != expected_sample_rate:
                 raise ValueError(
@@ -126,14 +126,5 @@ class SparcFeatureExtractor:
                         "ft_len": torch.nan,
                     }
                 )
-
-        # for audio in audios:
-        #    # Extract and flatten waveforms
-        #    src_wav = audio.waveform.numpy().squeeze().astype(np.float32)
-
-        # Perform voice conversion
-        #    converted_waveform = coder.convert(src_wav=src_wav, trg_wav=trg_wav)
-
-        #   cloned_audios.append(Audio(waveform=converted_waveform, sampling_rate=expected_sample_rate))
 
         return codes
