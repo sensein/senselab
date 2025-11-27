@@ -437,7 +437,7 @@ def test_extract_sparc_features_resample() -> None:
         )
 
 
-@pytest.mark.skipif(SPARC_AVAILABLE, reason="sparc is installed.")
+@pytest.mark.skipif(not SPARC_AVAILABLE, reason="sparc is not installed.")
 def test_extract_sparc_features_wrong_sample_rate() -> None:
     """Test that a ValueError is raised when sparc has wrong sampling rate."""
     with pytest.raises(ValueError):
