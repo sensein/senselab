@@ -42,9 +42,9 @@ def augment_audios_with_torch_audiomentations(audios: List[Audio], augmentation:
 
     # Ensure a single sampling rate across the batch
     if isinstance(sampling_rates, list):
-        assert all(
-            sr == sampling_rates[0] for sr in sampling_rates
-        ), "All Audio objects must share the same sampling rate for batched augmentation."
+        assert all(sr == sampling_rates[0] for sr in sampling_rates), (
+            "All Audio objects must share the same sampling rate for batched augmentation."
+        )
         sampling_rate = sampling_rates[0]
     else:
         sampling_rate = sampling_rates

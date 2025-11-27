@@ -51,12 +51,12 @@ def test_audio_data_augmentation_with_torch_audiomentations() -> None:
     mono_audio, stereo_audio = audio_dataset_from_paths.create_audio_split_for_pydra_task()
     mono_inverted = augment_audios(mono_audio, apply_augmentation)
     stereo_inverted = augment_audios(stereo_audio, apply_augmentation)
-    assert torch.allclose(
-        mono_audio[0].waveform, -1 * mono_inverted[0].waveform, atol=1e-3
-    ), "Audio should have been inverted by the augmentation"
-    assert torch.allclose(
-        stereo_audio[0].waveform, -1 * stereo_inverted[0].waveform, atol=1e-3
-    ), "Audio should have been inverted by the augmentation and not affected by stereo audio"
+    assert torch.allclose(mono_audio[0].waveform, -1 * mono_inverted[0].waveform, atol=1e-3), (
+        "Audio should have been inverted by the augmentation"
+    )
+    assert torch.allclose(stereo_audio[0].waveform, -1 * stereo_inverted[0].waveform, atol=1e-3), (
+        "Audio should have been inverted by the augmentation and not affected by stereo audio"
+    )
 
     batched_audio = SenselabDataset(
         audios=[
