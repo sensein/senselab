@@ -80,9 +80,9 @@ def test_audio_creation_with_offset() -> None:
 
     audio_no_offset = Audio(filepath=MONO_AUDIO_PATH)
     manual_audio_offset = int(audio.sampling_rate * test_offset)
-    assert torch.equal(
-        audio.waveform, audio_no_offset.waveform[:, manual_audio_offset:]
-    ), "Audio offset not equivalent to manually offsetting"
+    assert torch.equal(audio.waveform, audio_no_offset.waveform[:, manual_audio_offset:]), (
+        "Audio offset not equivalent to manually offsetting"
+    )
 
 
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
@@ -96,9 +96,9 @@ def test_audio_creation_with_duration() -> None:
     audio_no_trunc = Audio(filepath=MONO_AUDIO_PATH)
     manual_audio_duration = int(audio.sampling_rate * test_duration)
 
-    assert torch.equal(
-        audio.waveform, audio_no_trunc.waveform[:, :manual_audio_duration]
-    ), "Audio with duration not equivalent to manually truncating"
+    assert torch.equal(audio.waveform, audio_no_trunc.waveform[:, :manual_audio_duration]), (
+        "Audio with duration not equivalent to manually truncating"
+    )
 
 
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
@@ -114,9 +114,9 @@ def test_audio_creation_with_offset_and_duration() -> None:
     audio_start = int(test_offset * audio.sampling_rate)
     audio_end = int((test_duration + test_offset) * audio.sampling_rate)
 
-    assert torch.equal(
-        audio.waveform, default_audio.waveform[:, audio_start:audio_end]
-    ), "Audio with offset and duration not equivalent to manual version"
+    assert torch.equal(audio.waveform, default_audio.waveform[:, audio_start:audio_end]), (
+        "Audio with offset and duration not equivalent to manual version"
+    )
 
 
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
@@ -202,9 +202,9 @@ def test_audio_stream(audio_path: str) -> None:
 
         current_chunk_end = min((i + 1) * 48000, non_streamed_audio.waveform.shape[1])
 
-        assert torch.equal(
-            audio_chunk.waveform, non_streamed_audio.waveform[:, i * 48000 : current_chunk_end]
-        ), "Audio stream does not match sliding window of equivalent size and step"
+        assert torch.equal(audio_chunk.waveform, non_streamed_audio.waveform[:, i * 48000 : current_chunk_end]), (
+            "Audio stream does not match sliding window of equivalent size and step"
+        )
 
 
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
@@ -254,9 +254,9 @@ def test_audio_single_tensor(mono_audio_sample: Audio) -> None:
     """Tests mono audio creation with single tensor."""
     mono_audio_data, mono_sr = load_audio(MONO_AUDIO_PATH)
     audio_single_tensor = Audio(waveform=mono_audio_data[0], sampling_rate=mono_sr)
-    assert torch.equal(
-        mono_audio_sample.waveform, audio_single_tensor.waveform
-    ), "Mono audios of tensor shape (num_samples,) should be reshaped to (1, num_samples)"
+    assert torch.equal(mono_audio_sample.waveform, audio_single_tensor.waveform), (
+        "Mono audios of tensor shape (num_samples,) should be reshaped to (1, num_samples)"
+    )
 
 
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
@@ -306,8 +306,10 @@ def test_window_generator_overlap(
     if remaining_audio > 0:
         expected_windows += 1
 
-    assert len(windowed_audios) == expected_windows, f"Should yield {expected_windows} \
+    assert len(windowed_audios) == expected_windows, (
+        f"Should yield {expected_windows} \
         windows when step size is less than window size. Yielded {len(windowed_audios)}."
+    )
 
 
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
@@ -333,8 +335,10 @@ def test_window_generator_exact_fit(
     if remaining_audio > 0:
         expected_windows += 1
 
-    assert len(windowed_audios) == expected_windows, f"Should yield {expected_windows} \
+    assert len(windowed_audios) == expected_windows, (
+        f"Should yield {expected_windows} \
         windows when step size equals window size. Yielded {len(windowed_audios)}."
+    )
 
 
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
@@ -356,8 +360,10 @@ def test_window_generator_step_greater_than_window(
 
     # Refine expected windows calculation
     expected_windows = (audio_length + step_size - 1) // step_size
-    assert len(windowed_audios) == expected_windows, f"Should yield {expected_windows} \
+    assert len(windowed_audios) == expected_windows, (
+        f"Should yield {expected_windows} \
         windows when step size is greater than window size. Yielded {len(windowed_audios)}."
+    )
 
 
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
@@ -377,8 +383,10 @@ def test_window_generator_window_greater_than_audio(audio_fixture: str, request:
 
     windowed_audios: List[Audio] = list(audio_sample.window_generator(window_size, step_size))
     # Expect only 1 window in this case
-    assert len(windowed_audios) == 1, f"Should yield 1 window when window size is greater \
+    assert len(windowed_audios) == 1, (
+        f"Should yield 1 window when window size is greater \
                                 than audio length. Yielded {len(windowed_audios)}."
+    )
 
 
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
@@ -399,5 +407,7 @@ def test_window_generator_step_greater_than_audio(audio_fixture: str, request: p
     windowed_audios: List[Audio] = list(audio_sample.window_generator(window_size, step_size))
 
     expected_windows = (audio_length - window_size) // step_size + 1  # This is always 1
-    assert len(windowed_audios) == expected_windows, f"Should yield {expected_windows} \
+    assert len(windowed_audios) == expected_windows, (
+        f"Should yield {expected_windows} \
         windows when step size is greater than audio length. Yielded {len(windowed_audios)}."
+    )

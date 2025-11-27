@@ -39,7 +39,7 @@ def extract_objective_quality_features_from_audios(
     """
     if not TORCHAUDIO_AVAILABLE:
         raise ModuleNotFoundError(
-            "`torchaudio` is not installed. " "Please install senselab audio dependencies using `pip install senselab`."
+            "`torchaudio` is not installed. Please install senselab audio dependencies using `pip install senselab`."
         )
 
     device, _ = _select_device_and_dtype(user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU])
@@ -85,7 +85,7 @@ def extract_subjective_quality_features_from_audios(
     """
     if not TORCHAUDIO_AVAILABLE:
         raise ModuleNotFoundError(
-            "`torchaudio` is not installed. " "Please install senselab audio dependencies using `pip install senselab`."
+            "`torchaudio` is not installed. Please install senselab audio dependencies using `pip install senselab`."
         )
 
     # Check if any audio is not mono

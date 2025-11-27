@@ -265,20 +265,20 @@ def review_files(
     logger.info(f"Taxonomy-filtered check columns: {len(taxonomy_check_cols)}")
 
     if not taxonomy_check_cols:
-        raise ValueError(f"No check columns found that match taxonomy checks for " f"activity '{activity}'")
+        raise ValueError(f"No check columns found that match taxonomy checks for activity '{activity}'")
 
     df_checks = df[taxonomy_check_cols]
 
     if prune_checks:
         keep_cols, dropped = prune_check_columns(df_checks, correlation_threshold=correlation_threshold)
         dropped_total = sum(len(v) for v in dropped.values())
-        logger.info(f"Checks total: {df_checks.shape[1]} | kept: {len(keep_cols)} | " f"dropped: {dropped_total}")
+        logger.info(f"Checks total: {df_checks.shape[1]} | kept: {len(keep_cols)} | dropped: {dropped_total}")
         for reason, cols in dropped.items():
             if cols:
                 logger.info(f"  - {reason} ({len(cols)}): {cols}")
     else:
         keep_cols = list(df_checks.columns)
-        logger.info(f"Checks total: {df_checks.shape[1]} | kept: {len(keep_cols)} | " f"dropped: 0 (pruning disabled)")
+        logger.info(f"Checks total: {df_checks.shape[1]} | kept: {len(keep_cols)} | dropped: 0 (pruning disabled)")
 
     # Check if we have any columns left after pruning
     if not keep_cols:
