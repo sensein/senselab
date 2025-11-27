@@ -143,12 +143,12 @@ def test_error_wrong_model(resampled_mono_audio_sample: Audio) -> None:
     """Test raising error when using a non-existent model."""
     with pytest.raises(ValueError):
         extract_speaker_embeddings_from_audios(
-            audios=[resampled_mono_audio_sample], model=SpeechBrainModel(path_or_uri="nonexistent---repo")
+            audios=[resampled_mono_audio_sample], model=SpeechBrainModel(path_or_uri="nonexistent-repo")
         )
     with pytest.raises(NotImplementedError):
         extract_speaker_embeddings_from_audios(
             audios=[resampled_mono_audio_sample],
-            model=SenselabModel(path_or_uri="nonexistent---repo"),  # type: ignore
+            model=SenselabModel(path_or_uri="nonexistent-repo"),  # type: ignore
         )
 
 
