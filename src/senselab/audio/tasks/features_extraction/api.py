@@ -35,8 +35,8 @@ def extract_features_from_audios(
     parselmouth: Union[Dict[str, str], bool] = True,
     torchaudio: Union[Dict[str, str], bool] = True,
     torchaudio_squim: bool = True,
-    sparc: bool = True,
-    ppgs: bool = True,
+    sparc: Optional[bool] = None,
+    ppgs: Optional[bool] = None,
     device: Optional[DeviceType] = None,
     n_jobs: int = 1,
     backend: Literal["threading", "loky", "multiprocessing", "sequential"] = "sequential",
@@ -538,6 +538,13 @@ def extract_features_from_audios(
     use_parselmouth = bool(parselmouth)
     use_torchaudio = bool(torchaudio)
     use_squim = bool(torchaudio_squim)
+
+    if sparc is None or ppgs is None:
+        logger.warning(
+            "Future major versions of senselab will default `sparc` and `ppgs` to True. \
+            None values will not be allowed. To maintain current functionality, please set these to False."
+        )
+
     use_sparc = bool(sparc)
     use_ppgs = bool(ppgs)
 
