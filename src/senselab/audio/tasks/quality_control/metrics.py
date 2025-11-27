@@ -20,7 +20,7 @@ def proportion_silent_metric(audio: Audio, silence_threshold: float = 0.01) -> f
     """Calculates the proportion of silent samples.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
         silence_threshold (float): Amplitude below which a sample is silent.
 
     Returns:
@@ -38,7 +38,7 @@ def proportion_silence_at_beginning_metric(audio: Audio, silence_threshold: floa
     """Calculates the proportion of silence at the start.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
         silence_threshold (float): Amplitude below which a sample is silent.
 
     Returns:
@@ -61,7 +61,7 @@ def proportion_silence_at_end_metric(audio: Audio, silence_threshold: float = 0.
     """Calculates the proportion of silence at the end.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
         silence_threshold (float): Amplitude below which a sample is silent.
 
     Returns:
@@ -85,7 +85,7 @@ def amplitude_headroom_metric(audio: Audio) -> float:
     """Returns the smaller of positive or negative amplitude headroom.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
 
     Returns:
         float: Minimum headroom to clipping (positive or negative side).
@@ -146,7 +146,7 @@ def proportion_clipped_metric(audio: Audio, clip_threshold: float = 1.0) -> floa
     """Calculates the proportion of clipped samples.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
         clip_threshold (float): Threshold at or above which a sample is considered clipped.
 
     Returns:
@@ -219,7 +219,7 @@ def amplitude_modulation_depth_metric(audio: Audio) -> float:
     """Calculates the amplitude modulation depth of an audio signal.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
 
     Returns:
         float: Amplitude modulation depth.
@@ -252,7 +252,7 @@ def root_mean_square_energy_metric(audio: Audio) -> float:
     """Calculates the root mean square (RMS) energy of the audio signal.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
 
     Returns:
         float: RMS energy averaged across channels.
@@ -268,7 +268,7 @@ def zero_crossing_rate_metric(audio: Audio) -> float:
     """Estimates the zero-crossing rate of the audio signal.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
 
     Returns:
         float: Average zero-crossing rate across channels.
@@ -291,7 +291,7 @@ def signal_variance_metric(audio: Audio) -> float:
     """Estimates the variance of the audio signal.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
 
     Returns:
         float: Variance across all samples and channels.
@@ -308,7 +308,7 @@ def dynamic_range_metric(audio: Audio) -> float:
     amplitude values in the signal.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
 
     Returns:
         float: The dynamic range (max amplitude minus min amplitude).
@@ -328,7 +328,7 @@ def mean_absolute_amplitude_metric(audio: Audio) -> float:
     """Calculates the mean absolute amplitude of the audio signal.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
 
     Returns:
         float: Mean absolute amplitude averaged across channels.
@@ -345,7 +345,7 @@ def mean_absolute_deviation_metric(audio: Audio) -> float:
     """Calculates the mean absolute deviation (MAD) of the audio signal.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
 
     Returns:
         float: MAD averaged across channels.
@@ -362,7 +362,7 @@ def shannon_entropy_amplitude_metric(audio: "Audio", num_bins: int = 256) -> flo
     """Calculates the Shannon entropy of the audio signal's amplitude distribution.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
         num_bins (int): Number of bins to discretize the amplitude values.
 
     Returns:
@@ -388,7 +388,7 @@ def crest_factor_metric(audio: Audio) -> float:
     """Calculates the crest factor (peak‑to‑RMS ratio) of the audio signal.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
 
     Returns:
         float: Crest factor (unitless).
@@ -415,7 +415,7 @@ def peak_snr_from_spectral_metric(
     """Estimates Peak‑SNR (dB) using spectral gating to estimate the noise floor.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
         frame_length (int): STFT window size.
         hop_length (int): STFT hop size.
         percentile (int): Percentile used for noise floor estimation.
@@ -450,7 +450,7 @@ def amplitude_skew_metric(audio: Audio) -> float:
     """Calculates the skew of the audio signal amplitude.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
 
     Returns:
         float: Skew of the flattened amplitude distribution.
@@ -464,7 +464,7 @@ def amplitude_kurtosis_metric(audio: Audio) -> float:
     """Calculates the kurtosis of the audio signal amplitude.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
 
     Returns:
         float: Kurtosis of the flattened amplitude distribution.
@@ -478,7 +478,7 @@ def amplitude_interquartile_range_metric(audio: Audio) -> float:
     """Calculates the interquartile range (IQR) of the audio signal amplitude.
 
     Args:
-        audio (Audio): The SenseLab Audio object.
+        audio (Audio): The senselab Audio object.
 
     Returns:
         float: IQR of the flattened amplitude distribution.
@@ -528,7 +528,7 @@ def primary_speaker_ratio_metric(audio: Audio) -> float:
     If diarization is not available in audio.metadata, it will be computed automatically.
 
     Args:
-        audio: The SenseLab Audio object.
+        audio: The senselab Audio object.
 
     Returns:
         float: Ratio of primary speaker's duration to total duration.
@@ -542,8 +542,11 @@ def primary_speaker_ratio_metric(audio: Audio) -> float:
         metadata_diarization = audio.metadata.get("diarization")
         if metadata_diarization is not None:
             # Handle different storage formats: List[List[ScriptLine]] or List[ScriptLine]
-            if isinstance(metadata_diarization, list) and len(metadata_diarization) > 0:
-                if isinstance(metadata_diarization[0], list):
+            if isinstance(metadata_diarization, list):
+                if len(metadata_diarization) == 0:
+                    # Empty list means diarization was computed but found no speakers
+                    diarization_result = []
+                elif isinstance(metadata_diarization[0], list):
                     # Format: List[List[ScriptLine]] - take first audio's diarization
                     diarization_result = metadata_diarization[0]
                 elif isinstance(metadata_diarization[0], ScriptLine):
@@ -593,18 +596,19 @@ def voice_activity_detection_metric(audio: Audio) -> float:
     """Calculates the duration of voice activity detected by VAD.
 
     The voice activity duration is computed from VAD results.
-    If VAD is not available in audio.metadata, it will be computed
-    automatically.
+    If VAD is not available in audio.metadata, it will fall back to
+    diarization results (treating all speaker segments as voice activity).
+    If neither is available, VAD will be computed automatically.
 
     Args:
-        audio: The SenseLab Audio object.
+        audio: The senselab Audio object.
 
     Returns:
         float: Duration of voice activity in seconds.
                Returns 0.0 if no voice is detected.
                Returns np.nan if VAD computation fails.
     """
-    # Check Audio metadata for precomputed VAD
+    # Step 1: Check Audio metadata for precomputed VAD
     vad_result: Optional[List[ScriptLine]] = None
     if audio.metadata:
         metadata_vad = audio.metadata.get("vad")
@@ -622,13 +626,40 @@ def voice_activity_detection_metric(audio: Audio) -> float:
                     # Format: List[ScriptLine]
                     vad_result = metadata_vad
 
-    # Compute VAD if not in metadata
+    # Step 2: Check for diarization in metadata if VAD not available (do not compute diarization)
+    if vad_result is None:
+        if audio.metadata:
+            metadata_diarization = audio.metadata.get("diarization")
+            if metadata_diarization is not None:
+                # Handle different storage formats: List[List[ScriptLine]] or List[ScriptLine]
+                diarization_result: Optional[List[ScriptLine]] = None
+                if isinstance(metadata_diarization, list) and len(metadata_diarization) > 0:
+                    if isinstance(metadata_diarization[0], list):
+                        # Format: List[List[ScriptLine]] - take first audio's diarization
+                        diarization_result = metadata_diarization[0]
+                    elif isinstance(metadata_diarization[0], ScriptLine):
+                        # Format: List[ScriptLine]
+                        diarization_result = metadata_diarization
+
+                # Convert diarization to VAD-like format (all segments with speakers are voice)
+                if diarization_result:
+                    vad_result = [
+                        ScriptLine(speaker="VOICE", start=sl.start, end=sl.end)
+                        for sl in diarization_result
+                        if sl.speaker is not None and sl.start is not None and sl.end is not None
+                    ]
+
+    # Step 3: Compute VAD if neither VAD nor diarization found in metadata
     if vad_result is None:
         try:
             vad_results = detect_human_voice_activity_in_audios([audio])
             if not vad_results or len(vad_results) == 0:
                 return np.nan
             vad_result = vad_results[0]
+            # Store computed VAD in metadata for reuse
+            if audio.metadata is None:
+                audio.metadata = {}
+            audio.metadata["vad"] = vad_result
         except Exception as e:
             logger.warning(f"Failed to compute VAD for voice_activity_detection_metric: {e}")
             return np.nan
@@ -653,25 +684,29 @@ def voice_signal_to_noise_power_ratio_metric(audio: Audio) -> float:
 
     The signal-to-noise ratio is computed from VAD results, where voice segments
     are considered signal and non-voice segments are considered noise.
-    If VAD is not available in audio.metadata, it will be computed automatically.
+    This function calls voice_activity_detection_metric to ensure VAD is available
+    in metadata, then uses that VAD result for SNR calculation.
 
     Args:
-        audio: The SenseLab Audio object.
+        audio: The senselab Audio object.
 
     Returns:
         float: Signal-to-noise power ratio in dB.
                Returns np.nan if VAD computation fails or if there's no voice/noise.
     """
-    # Check Audio metadata for precomputed VAD
+    # Call voice_activity_detection_metric to ensure VAD is computed and stored in metadata
+    voice_duration = voice_activity_detection_metric(audio)
+    if np.isnan(voice_duration):
+        return np.nan
+
+    # Get VAD result from metadata (now guaranteed to be available)
     vad_result: Optional[List[ScriptLine]] = None
     if audio.metadata:
         metadata_vad = audio.metadata.get("vad")
         if metadata_vad is not None:
-            # Handle empty list case explicitly
+            # Handle different storage formats: List[List[ScriptLine]] or List[ScriptLine]
             if isinstance(metadata_vad, list) and len(metadata_vad) == 0:
                 vad_result = []
-            # Handle different storage formats:
-            # List[List[ScriptLine]] or List[ScriptLine]
             elif isinstance(metadata_vad, list) and len(metadata_vad) > 0:
                 if isinstance(metadata_vad[0], list):
                     # Format: List[List[ScriptLine]] - take first audio's VAD
@@ -680,19 +715,12 @@ def voice_signal_to_noise_power_ratio_metric(audio: Audio) -> float:
                     # Format: List[ScriptLine]
                     vad_result = metadata_vad
 
-    # Compute VAD if not in metadata
+    # Safety check: VAD should be available after calling voice_activity_detection_metric
     if vad_result is None:
-        try:
-            vad_results = detect_human_voice_activity_in_audios([audio])
-            if not vad_results or len(vad_results) == 0:
-                return np.nan
-            vad_result = vad_results[0]
-        except Exception as e:
-            logger.warning(f"Failed to compute VAD for voice_signal_to_noise_power_ratio_metric: {e}")
-            return np.nan
+        return np.nan
 
     # Calculate SNR from ScriptLine objects
-    if not vad_result or len(vad_result) == 0:
+    if len(vad_result) == 0:
         return np.nan
 
     waveform = audio.waveform
