@@ -58,7 +58,7 @@ repos:
   rev: v2.4.1
   hooks:
   - id: codespell
-    args: [--skip=*.ipynb]
+    args: [--skip=*.ipynb, --ignore-words-list, AER]
     additional_dependencies:
     - tomli
 - repo: local
