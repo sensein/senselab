@@ -1,4 +1,4 @@
-"""Evaluation utilities for bioacoustic quality control."""
+"""Evaluation utilities for quality control."""
 
 import json
 from pathlib import Path
@@ -14,7 +14,9 @@ from senselab.utils.data_structures.logging import logger
 # Type aliases for improved readability
 EvalResult = Union[float, bool, str]
 EvalFunc = Callable[[Audio], EvalResult]
+EvalFuncSequence = Sequence[EvalFunc]
 WindowedResult = Dict[str, List[Union[EvalResult, float]]]
+ActivityEvalMap = Dict[str, EvalFuncSequence]
 
 
 def get_evaluation(
@@ -33,12 +35,14 @@ def get_evaluation(
             * A check function returning a bool (e.g. very_low_headroom)
             * A string-based evaluation (e.g. quality_category)
         existing_results: Optional dictionary of pre-computed results
-        is_window: If True, look for cached results in windowed_metrics
-        window_idx: Index of the window being evaluated, used to find cached
+        is_window: If True, look for existing results in windowed_evaluations
+        window_idx: Index of the window being evaluated, used to find existing
             results at specific timestamps. Only used if is_window is True.
 
     Returns:
-        The evaluation result for the audio, or None if evaluation fails
+        The evaluation result for the audio, or None if:
+            * Loading the audio file fails (when audio is a string filepath)
+            * The evaluation function fails to compute a result
     """
     # Convert string path to Audio object if needed
     if isinstance(audio, str):
@@ -50,7 +54,7 @@ def get_evaluation(
 
     function_name = evaluation_function.__name__
 
-    # Check if result exists in cache
+    # Check if result is in existing_results
     if existing_results:
         if is_window and window_idx is not None:
             # For windows, look in windowed_evaluations at specific index
@@ -123,10 +127,10 @@ def get_windowed_evaluation(
 def evaluate_audio(
     audio_path: str,
     activity: str,
-    evaluations: Sequence[Callable[[Audio], Union[float, bool, str]]],
+    evaluations: EvalFuncSequence,
     output_dir: Optional[Path] = None,
-    window_size_sec: float = 0.025,
-    step_size_sec: float = 0.0125,
+    window_size_sec: float = 0.02,
+    step_size_sec: float = 0.01,
     skip_windowing: bool = False,
 ) -> Dict[str, Any]:
     """Evaluates a single audio file using the given set of functions.
@@ -201,7 +205,7 @@ def evaluate_audio(
 def evaluate_batch(
     batch_audio_paths: List[str],
     audio_path_to_activity: Dict[str, str],
-    activity_to_evaluations: Dict[str, Sequence[Callable[[Audio], Union[float, bool, str]]]],
+    activity_to_evaluations: ActivityEvalMap,
     output_dir: Path,
     window_size_sec: float = 0.025,
     step_size_sec: float = 0.0125,
@@ -246,7 +250,7 @@ def evaluate_batch(
 
 def evaluate_dataset(
     audio_path_to_activity: Dict[str, str],
-    activity_to_evaluations: Dict[str, Sequence[Callable[[Audio], Union[float, bool, str]]]],
+    activity_to_evaluations: ActivityEvalMap,
     output_dir: Path,
     batch_size: int = 8,
     n_cores: int = 4,

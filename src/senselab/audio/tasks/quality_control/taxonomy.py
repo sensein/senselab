@@ -1,4 +1,4 @@
-"""Taxonomy node classes and utilities for bioacoustic activity hierarchies."""
+"""Taxonomy node classes and utilities for activity hierarchies."""
 
 import copy
 from dataclasses import dataclass, field
@@ -7,7 +7,7 @@ from typing import Callable, Dict, List, Optional
 
 @dataclass
 class TaxonomyNode:
-    """A node in the bioacoustic activity taxonomy tree.
+    """A node in the activity taxonomy tree.
 
     This class provides a type-safe, object-oriented interface for navigating
     and manipulating the hierarchical taxonomy structure.

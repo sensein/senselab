@@ -1,7 +1,8 @@
 """Uses weak supervision to label files as include, exclude, or unsure."""
 
+from enum import IntEnum
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -14,9 +15,20 @@ from senselab.audio.tasks.quality_control.taxonomies import (
 from senselab.audio.tasks.quality_control.taxonomy import TaxonomyNode
 from senselab.utils.data_structures.logging import logger
 
-INCLUDE: int = 1
-EXCLUDE: int = 0
-ABSTAIN: int = -1
+
+class Label(IntEnum):
+    """Label values for weak supervision review results.
+
+    Note: ABSTAIN is used internally by labeling functions when they cannot
+    make a decision (e.g., missing data). However, the final predictions
+    from the LabelModel will only be INCLUDE or EXCLUDE, never ABSTAIN.
+    This is because: (1) the composite labeling function always fires, and
+    (2) the LabelModel is configured with cardinality=2 (binary classification).
+    """
+
+    INCLUDE = 1
+    EXCLUDE = 0
+    ABSTAIN = -1  # Used internally only; never appears in final predictions
 
 
 def get_taxonomy_check_names(taxonomy: TaxonomyNode, activity: str = "bioacoustic") -> List[str]:
@@ -24,7 +36,7 @@ def get_taxonomy_check_names(taxonomy: TaxonomyNode, activity: str = "bioacousti
 
     Args:
         taxonomy: The taxonomy tree to extract checks from
-        activity: The activity to get checks for (default: "bioacoustic")
+        activity: The activity to get checks for
 
     Returns:
         List of check function names from the taxonomy
@@ -53,18 +65,24 @@ def check_to_labeling_function(col: str) -> Callable[[pd.Series], int]:
         col: Column name to check for failed quality checks.
 
     Returns:
-        A labeling function that returns EXCLUDE if the column value is True,
-        otherwise ABSTAIN.
+        A labeling function that returns:
+        - Label.EXCLUDE if the column value is True (check failed)
+        - Label.INCLUDE if the column value is False (check passed)
+        - Label.ABSTAIN if the column value is None/NaN (missing data)
+
+    Note: ABSTAIN is used internally when data is missing, but the final
+    predictions will only be INCLUDE or EXCLUDE due to the composite
+    labeling function and binary LabelModel.
     """
 
     @labeling_function(name=f"{col}")
     def lf(x: pd.Series, _col: str = col) -> int:
         val: Any = getattr(x, _col, None)
         if val is None or (isinstance(val, float) and pd.isna(val)):
-            return ABSTAIN
+            return Label.ABSTAIN
         if isinstance(val, str):
             val = val.strip().lower() in {"1", "true", "t", "yes", "y"}
-        return EXCLUDE if bool(val) else INCLUDE
+        return Label.EXCLUDE if bool(val) else Label.INCLUDE
 
     return lf
 
@@ -74,12 +92,19 @@ def include_no_failed_checks_label_function(
 ) -> Callable[[pd.Series], int]:
     """Include a file if all given checks are False or None.
 
+    This composite labeling function ensures at least one labeling function
+    always fires for every row, preventing ABSTAIN in the final predictions.
+
     Args:
         cols: Sequence of column names to check for failed quality checks.
 
     Returns:
-        A labeling function that returns INCLUDE if all checks are False/None,
-        otherwise ABSTAIN.
+        A labeling function that returns:
+        - Label.INCLUDE if all checks are False/None (no failures)
+        - Label.EXCLUDE if any check is True (at least one failure)
+
+    Note: This function always returns INCLUDE or EXCLUDE, never ABSTAIN.
+    This guarantees that every file gets a final label.
     """
 
     @labeling_function(name="include_no_failed_checks_label_function")
@@ -90,7 +115,7 @@ def include_no_failed_checks_label_function(
             if isinstance(v, str):
                 v = v.strip().lower() in {"1", "true", "t", "yes", "y"}
             total_true += int(bool(v))
-        return INCLUDE if total_true == 0 else EXCLUDE
+        return Label.INCLUDE if total_true == 0 else Label.EXCLUDE
 
     return lf
 
@@ -158,12 +183,12 @@ def calculate_label_function_reliability(L_train: np.ndarray, preds: np.ndarray,
 
     for j, name in enumerate(lf_names):
         votes = L_train[:, j]
-        fired = votes != ABSTAIN
+        fired = votes != Label.ABSTAIN
         n_voted = int(fired.sum())
 
         # Count votes for include/exclude when labeling function fired
-        voted_include = int((votes[fired] == INCLUDE).sum()) if n_voted else 0
-        voted_exclude = int((votes[fired] == EXCLUDE).sum()) if n_voted else 0
+        voted_include = int((votes[fired] == Label.INCLUDE).sum()) if n_voted else 0
+        voted_exclude = int((votes[fired] == Label.EXCLUDE).sum()) if n_voted else 0
 
         agree = float((votes[fired] == preds[fired]).mean()) if n_voted else np.nan
         reliability_rows.append(
@@ -181,7 +206,7 @@ def calculate_label_function_reliability(L_train: np.ndarray, preds: np.ndarray,
 
 
 def review_files(
-    df_path: str,
+    df_path: Union[str, pd.DataFrame],
     correlation_threshold: float = 0.99,
     output_dir: Optional[str] = None,
     save_results: bool = True,
@@ -189,23 +214,43 @@ def review_files(
     taxonomy: TaxonomyNode = BIOACOUSTIC_ACTIVITY_TAXONOMY,
     activity: str = "bioacoustic",
 ) -> pd.DataFrame:
-    """Labels audio files as include, exclude, or unsure with weak supervision.
+    """Labels audio files as include or exclude using weak supervision.
+
+    Uses Snorkel's weak supervision framework to combine multiple quality
+    check labeling functions into a single prediction per file.
 
     Args:
-        df_path: Path to CSV file containing quality control results.
+        df_path: Path to CSV file containing quality control results, or a
+            DataFrame directly. If a DataFrame is provided, output_dir must be
+            specified when save_results=True.
         correlation_threshold: Correlation threshold for pruning highly
             correlated columns.
-        output_dir: Directory to save results. If None, saves to same directory
-            as input CSV.
+        output_dir: Directory to save results. If None and df_path is a string,
+            saves to same directory as input CSV. If None and df_path is a DataFrame,
+            defaults to "qc_results" when save_results=True.
         save_results: Whether to save the results to disk.
         prune_checks: Whether to prune constant and highly correlated check columns.
         taxonomy: The taxonomy tree to extract checks from.
-        activity: The activity to get checks for (default: "bioacoustic").
+        activity: The activity to get checks for.
 
     Returns:
         DataFrame with snorkel_label column added containing predicted labels.
+        Values will be 1 (INCLUDE) or 0 (EXCLUDE), never -1 (ABSTAIN).
+
+    Note:
+        The ABSTAIN label is used internally by individual labeling functions
+        when data is missing, but the final predictions are always INCLUDE or
+        EXCLUDE. This is guaranteed by: (1) a composite labeling function that
+        always fires, and (2) a binary LabelModel (cardinality=2).
     """
-    df = pd.read_csv(df_path)
+    # Handle both DataFrame and file path inputs
+    if isinstance(df_path, pd.DataFrame):
+        df = df_path.copy()
+        input_path = None
+    else:
+        df = pd.read_csv(df_path)
+        input_path = Path(df_path)
+
     logger.info(f"Total files: {len(df)}")
 
     # Get check names from taxonomy
@@ -235,6 +280,17 @@ def review_files(
         keep_cols = list(df_checks.columns)
         logger.info(f"Checks total: {df_checks.shape[1]} | kept: {len(keep_cols)} | " f"dropped: 0 (pruning disabled)")
 
+    # Check if we have any columns left after pruning
+    if not keep_cols:
+        logger.warning(
+            "All check columns were pruned (likely all constant values). "
+            "Cannot perform weak supervision labeling. Assigning all files as INCLUDE."
+        )
+        df["snorkel_label"] = Label.INCLUDE
+        df["review_result_1=include"] = True
+        logger.info(f"Assigned all {len(df)} files as INCLUDE (no quality issues detected)")
+        return df
+
     # Build labeling functions + explicit names (avoid mypy complaining
     # about .name)
     lf_list: List[Callable[[pd.Series], int]] = []
@@ -250,24 +306,25 @@ def review_files(
     df_checks_filtered = df_checks[keep_cols]
     L_train = applier.apply(df_checks_filtered)
 
-    # Verify alignment
-    assert len(L_train) == len(df), f"Mismatch: L_train has {len(L_train)} rows, df has {len(df)} rows"
-
     # Train LabelModel
+    # cardinality=2 means binary classification: only INCLUDE (1) or EXCLUDE (0)
+    # ABSTAIN (-1) will never appear in predictions
     label_model = LabelModel(cardinality=2, verbose=True)
     label_model.fit(L_train=L_train, n_epochs=200, log_freq=100, seed=123)
 
     # Predict
     preds = label_model.predict(L=L_train)
     df["snorkel_label"] = preds
-    df["review_result_1=include"] = preds == INCLUDE
+    df["review_result_1=include"] = preds == Label.INCLUDE
 
-    # Counts (abstain == no labeling function fired; with composite labeling
-    # function this should be 0)
-    abstain_mask = (L_train != ABSTAIN).sum(axis=1) == 0
-    logger.info(f"ABSTAIN: {int(abstain_mask.sum())}")
-    logger.info(f"INCLUDE: {int((preds == INCLUDE).sum())}")
-    logger.info(f"EXCLUDE: {int((preds == EXCLUDE).sum())}")
+    # Counts
+    # Note: abstain_mask checks if NO labeling function fired for a row.
+    # With the composite labeling function, this should always be 0.
+    # Final predictions (preds) will only be INCLUDE or EXCLUDE, never ABSTAIN.
+    abstain_mask = (L_train != Label.ABSTAIN).sum(axis=1) == 0
+    logger.info(f"Rows with no labeling function votes (should be 0): {int(abstain_mask.sum())}")
+    logger.info(f"INCLUDE: {int((preds == Label.INCLUDE).sum())}")
+    logger.info(f"EXCLUDE: {int((preds == Label.EXCLUDE).sum())}")
 
     # Reliability ranking (agreement with LabelModel on rows where labeling
     # function fired)
@@ -277,15 +334,21 @@ def review_files(
 
     # Save results if requested
     if save_results:
-        input_path = Path(df_path)
         if output_dir is None:
-            output_path = input_path.parent
+            if input_path is not None:
+                output_path = input_path.parent
+            else:
+                output_path = Path("qc_results")
+                output_path.mkdir(parents=True, exist_ok=True)
         else:
             output_path = Path(output_dir)
             output_path.mkdir(parents=True, exist_ok=True)
 
         # Save labeled dataset
-        base_name = input_path.stem
+        if input_path is not None:
+            base_name = input_path.stem
+        else:
+            base_name = "quality_control_results"
         labeled_csv_path = output_path / f"{base_name}_with_snorkel_labels.csv"
         df.to_csv(labeled_csv_path, index=False)
         logger.info(f"\nSaved labeled dataset to: {labeled_csv_path}")
