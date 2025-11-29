@@ -59,9 +59,9 @@ def test_proportion_silent_metric(waveform: torch.Tensor, expected_silence_propo
     """Tests proportion_silent_metric function."""
     audio = Audio(waveform=waveform, sampling_rate=16000)
     silence_proportion = proportion_silent_metric(audio, silence_threshold=0.05)
-    assert (
-        silence_proportion == expected_silence_proportion
-    ), f"Expected {expected_silence_proportion}, got {silence_proportion}"
+    assert silence_proportion == expected_silence_proportion, (
+        f"Expected {expected_silence_proportion}, got {silence_proportion}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -76,9 +76,9 @@ def test_proportion_silence_at_beginning(waveform: torch.Tensor, expected_silenc
     """Tests proportion_silence_at_beginning function."""
     audio = Audio(waveform=waveform, sampling_rate=16000)
     silence_start_proportion = proportion_silence_at_beginning_metric(audio, silence_threshold=0.05)
-    assert (
-        silence_start_proportion == expected_silence_start_proportion
-    ), f"Expected {expected_silence_start_proportion}, got {silence_start_proportion}"
+    assert silence_start_proportion == expected_silence_start_proportion, (
+        f"Expected {expected_silence_start_proportion}, got {silence_start_proportion}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -93,9 +93,9 @@ def test_proportion_silence_at_end(waveform: torch.Tensor, expected_silence_end_
     """Tests proportion_silence_at_end_metric function."""
     audio = Audio(waveform=waveform, sampling_rate=16000)
     silence_end_proportion = proportion_silence_at_end_metric(audio, silence_threshold=0.05)
-    assert (
-        silence_end_proportion == expected_silence_end_proportion
-    ), f"Expected {expected_silence_end_proportion}, got {silence_end_proportion}"
+    assert silence_end_proportion == expected_silence_end_proportion, (
+        f"Expected {expected_silence_end_proportion}, got {silence_end_proportion}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -418,9 +418,9 @@ def test_phase_correlation_metric(waveform: torch.Tensor, expected_correlation: 
     frame_length = waveform.shape[1]
     hop_length = frame_length
     correlation = phase_correlation_metric(audio, frame_length=frame_length, hop_length=hop_length)
-    assert correlation == pytest.approx(
-        expected_correlation, rel=1e-6
-    ), f"Expected {expected_correlation}, got {correlation}"
+    assert correlation == pytest.approx(expected_correlation, rel=1e-6), (
+        f"Expected {expected_correlation}, got {correlation}"
+    )
 
 
 @pytest.mark.parametrize(

@@ -91,17 +91,14 @@ def diarize_audios_with_nvidia_sortformer(
                 proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
             except subprocess.CalledProcessError as e:
                 raise RuntimeError(
-                    "NeMo Docker worker failed.\n"
-                    f"Exit code: {e.returncode}\n"
-                    f"Stdout: {e.stdout}\n"
-                    f"Stderr: {e.stderr}"
+                    f"NeMo Docker worker failed.\nExit code: {e.returncode}\nStdout: {e.stdout}\nStderr: {e.stderr}"
                 ) from e
 
             # 5) Read JSON from file produced by the worker
             out_path = os.path.join(workdir, out_rel)
             if not os.path.exists(out_path):
                 raise RuntimeError(
-                    "NeMo Docker worker did not produce output file.\n" f"Stdout: {proc.stdout}\nStderr: {proc.stderr}"
+                    f"NeMo Docker worker did not produce output file.\nStdout: {proc.stdout}\nStderr: {proc.stderr}"
                 )
 
             with open(out_path, "r", encoding="utf-8") as f:

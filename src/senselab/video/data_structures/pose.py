@@ -157,6 +157,6 @@ class ImagePose(BaseModel):
         if individual_index >= len(self.individuals) or individual_index < 0:
             raise ValueError(
                 f"Individual index {individual_index} is invalid. {len(self.individuals)} poses were estimated. "
-                f"Valid indices are {f'0 to {len(self.individuals)-1}' if len(self.individuals) > 0 else 'none'}"
+                f"Valid indices are {f'0 to {len(self.individuals) - 1}' if len(self.individuals) > 0 else 'none'}"
             )
         return self.individuals[individual_index]

@@ -44,5 +44,7 @@ def test_speech_emotion_recognition() -> None:
     labels = result[0].get_labels()
 
     for label in labels:
-        assert label in ["arousal", "valence", "dominance"], "No emotion here but rather is one of \
+        assert label in ["arousal", "valence", "dominance"], (
+            "No emotion here but rather is one of \
             arousal, valence, or dominance"
+        )

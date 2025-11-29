@@ -44,7 +44,7 @@ class HuggingFaceAudioClassifier:
         device, _ = _select_device_and_dtype(
             user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
         )
-        key = f"{model.path_or_uri}-{model.revision}-{top_k}-" f"{function_to_apply}-{batch_size}-{device.value}"
+        key = f"{model.path_or_uri}-{model.revision}-{top_k}-{function_to_apply}-{batch_size}-{device.value}"
         if key not in cls._pipelines:
             cls._pipelines[key] = cast(
                 Pipeline,
@@ -137,7 +137,7 @@ class HuggingFaceAudioClassifier:
                 raise ValueError(f"Stereo audio is not supported. Got {audio.waveform.shape[0]} channels")
             if audio.sampling_rate != expected_sampling_rate:
                 raise ValueError(
-                    f"Incorrect sampling rate. Expected {expected_sampling_rate}" f", got {audio.sampling_rate}"
+                    f"Incorrect sampling rate. Expected {expected_sampling_rate}, got {audio.sampling_rate}"
                 )
 
         # Convert the audio objects to dictionaries that can be used by the pipeline

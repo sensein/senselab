@@ -344,8 +344,7 @@ class Audio(BaseModel):
         """
         if not SOUNDFILE_AVAILABLE:
             raise ModuleNotFoundError(
-                "`soundfile` is not installed. "
-                "Please install senselab audio dependencies using `pip install senselab`."
+                "`soundfile` is not installed. Please install senselab audio dependencies using `pip install senselab`."
             )
 
         if isinstance(stream_source, (os.PathLike, str)) and not os.path.exists(stream_source):

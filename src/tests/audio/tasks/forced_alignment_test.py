@@ -452,7 +452,7 @@ def test_align_transcriptions_multilingual(
         audios_and_transcriptions_and_language, levels_to_keep={"utterance": True, "word": True, "char": True}
     )
     assert len(aligned_transcriptions) == 2, (
-        f"Expected 2 transcriptions, but got {len(aligned_transcriptions)}: " f"{aligned_transcriptions}"
+        f"Expected 2 transcriptions, but got {len(aligned_transcriptions)}: {aligned_transcriptions}"
     )
     if aligned_transcriptions[0][0] is not None and aligned_transcriptions[0][0].chunks is not None:
         assert len(aligned_transcriptions[0][0].chunks) == 5, (

@@ -1,8 +1,9 @@
 """Tests for HF models and functions."""
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
+from huggingface_hub import HfApi
 
 from senselab.utils.data_structures import HFModel, check_hf_repo_exists
 
@@ -48,3 +49,19 @@ def test_hfmodel_invalid_hf_repo_check() -> None:
     with patch("senselab.utils.data_structures.model.check_hf_repo_exists", return_value=False):
         with pytest.raises(ValueError):
             HFModel(path_or_uri="invalid/repo")
+
+
+@patch("huggingface_hub.HfApi.model_info")
+def test_hfmodel_caches_hf_repo_check(mock_hf_api_model_info: MagicMock) -> None:
+    """Test that we successfully cache HF repo checks and only make the check once."""
+    mock_hf_api_model_info.return_value = True
+    _ = HFModel(path_or_uri="unique_repo_name_1")
+
+    mock_hf_api_model_info.assert_called_with(repo_id="unique_repo_name_1", revision="main")
+    assert mock_hf_api_model_info.call_count == 1
+
+    _ = HFModel(path_or_uri="unique_repo_name_1")
+    assert mock_hf_api_model_info.call_count == 1
+
+    _ = HFModel(path_or_uri="unique_repo_name_2")
+    assert mock_hf_api_model_info.call_count == 2

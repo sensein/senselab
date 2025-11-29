@@ -7,10 +7,12 @@ These tests focus on verifying:
 """
 
 import pytest
+import torch
 
 from senselab.audio.workflows.explore_conversation import explore_conversation
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_explore_conversation_empty_input() -> None:
     """Test explore_conversation with an empty list of audio files.
 
@@ -21,12 +23,14 @@ def test_explore_conversation_empty_input() -> None:
     assert len(result) == 0
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_explore_conversation_invalid_file() -> None:
     """Test explore_conversation with invalid file paths."""
     with pytest.raises(FileNotFoundError):
         explore_conversation(audio_file_paths=["nonexistent.wav"])
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_explore_conversation_default_args() -> None:
     """Test that default arguments are handled correctly."""
     result = explore_conversation(

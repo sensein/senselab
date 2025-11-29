@@ -26,7 +26,7 @@ def calculate_wer(reference: str, hypothesis: str) -> float:
     """
     if not JIWER_AVAILABLE:
         raise ModuleNotFoundError(
-            "`jiwer` is not installed. " "Please install senselab audio dependencies using `pip install senselab`."
+            "`jiwer` is not installed. Please install senselab audio dependencies using `pip install senselab`."
         )
 
     return jiwer.wer(reference, hypothesis)
@@ -48,7 +48,7 @@ def calculate_mer(reference: str, hypothesis: str) -> float:
     """
     if not JIWER_AVAILABLE:
         raise ModuleNotFoundError(
-            "`jiwer` is not installed. " "Please install senselab audio dependencies using `pip install senselab`."
+            "`jiwer` is not installed. Please install senselab audio dependencies using `pip install senselab`."
         )
     return jiwer.mer(reference, hypothesis)
 
@@ -69,7 +69,7 @@ def calculate_wil(reference: str, hypothesis: str) -> float:
     """
     if not JIWER_AVAILABLE:
         raise ModuleNotFoundError(
-            "`jiwer` is not installed. " "Please install senselab audio dependencies using `pip install senselab`."
+            "`jiwer` is not installed. Please install senselab audio dependencies using `pip install senselab`."
         )
     return jiwer.wil(reference, hypothesis)
 
@@ -90,7 +90,7 @@ def calculate_wip(reference: str, hypothesis: str) -> float:
     """
     if not JIWER_AVAILABLE:
         raise ModuleNotFoundError(
-            "`jiwer` is not installed. " "Please install senselab audio dependencies using `pip install senselab`."
+            "`jiwer` is not installed. Please install senselab audio dependencies using `pip install senselab`."
         )
     return jiwer.wip(reference, hypothesis)
 
@@ -111,7 +111,7 @@ def calculate_cer(reference: str, hypothesis: str) -> float:
     """
     if not JIWER_AVAILABLE:
         raise ModuleNotFoundError(
-            "`jiwer` is not installed. " "Please install senselab audio dependencies using `pip install senselab`."
+            "`jiwer` is not installed. Please install senselab audio dependencies using `pip install senselab`."
         )
     cer_value = jiwer.cer(reference, hypothesis)
     if isinstance(cer_value, dict):

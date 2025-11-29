@@ -25,8 +25,7 @@ class CoquiVoiceCloner:
         """Get or create a TTS voice conversion pipeline."""
         if not TTS_AVAILABLE:
             raise ModuleNotFoundError(
-                "`coqui-tts` is not available. "
-                "Please install senselab audio dependencies using `pip install senselab`."
+                "`coqui-tts` is not available. Please install senselab audio dependencies using `pip install senselab`."
             )
         device, _ = _select_device_and_dtype(
             user_preference=user_preference, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
