@@ -80,7 +80,7 @@ def diarize_audios(
             min_speakers=min_speakers,
             max_speakers=max_speakers,
         )
-    elif isinstance(model, HFModel) and str(model.path_or_uri).startswith("nvidia/diar_sortformer"):
+    elif isinstance(model, HFModel) and str(model.path_or_uri).startswith("nvidia/diar"):
         return diarize_audios_with_nvidia_sortformer(
             audios=audios,
             model=model,

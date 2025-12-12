@@ -8,6 +8,7 @@ import torch
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.features_extraction import extract_features_from_audios
 from senselab.audio.tasks.features_extraction.opensmile import extract_opensmile_features_from_audios
+from senselab.audio.tasks.features_extraction.ppg import extract_ppgs_from_audios
 from senselab.audio.tasks.features_extraction.praat_parselmouth import (
     extract_audio_duration,
     extract_cpp_descriptors,
@@ -24,6 +25,7 @@ from senselab.audio.tasks.features_extraction.praat_parselmouth import (
     get_sound,
     measure_f1f2_formants_bandwidths,
 )
+from senselab.audio.tasks.features_extraction.sparc import SparcFeatureExtractor
 from senselab.audio.tasks.features_extraction.torchaudio import (
     extract_mel_filter_bank_from_audios,
     extract_mel_spectrogram_from_audios,
@@ -57,6 +59,20 @@ try:
     TORCHAUDIO_AVAILABLE = True
 except ModuleNotFoundError:
     TORCHAUDIO_AVAILABLE = False
+
+try:
+    import ppgs
+
+    PPGS_AVAILABLE = True
+except ModuleNotFoundError:
+    PPGS_AVAILABLE = False
+
+try:
+    import sparc
+
+    SPARC_AVAILABLE = True
+except ModuleNotFoundError:
+    SPARC_AVAILABLE = False
 
 
 @pytest.mark.skipif(OPENSMILE_AVAILABLE, reason="openSMILE is installed.")
@@ -370,8 +386,66 @@ def test_extract_praat_parselmouth_features_from_audios(resampled_mono_audio_sam
     assert all(isinstance(features, dict) for features in result)
 
 
+@pytest.mark.skipif(PPGS_AVAILABLE, reason="ppgs is installed.")
+def test_missing_ppg_dependency() -> None:
+    """Test that a ModuleNotFoundError is raised when ppgs is not installed."""
+    with pytest.raises(ModuleNotFoundError):
+        extract_ppgs_from_audios([Audio(waveform=torch.rand(1, 16000), sampling_rate=16000)])
+
+
+@pytest.mark.skipif(not PPGS_AVAILABLE, reason="ppgs is not installed.")
+def test_extract_ppgs_from_audios(resampled_mono_audio_sample: Audio) -> None:
+    """Test extraction of ppgs from audio."""
+    result = extract_ppgs_from_audios([resampled_mono_audio_sample])
+    # Assert the result is a list of tensors
+    assert isinstance(result, list)
+    assert all(isinstance(features, torch.Tensor) for features in result)
+
+
+@pytest.mark.skipif(SPARC_AVAILABLE, reason="sparc is installed.")
+def test_missing_sparc_dependency() -> None:
+    """Test that a ModuleNotFoundError is raised when sparc is not installed."""
+    with pytest.raises(ModuleNotFoundError):
+        SparcFeatureExtractor.extract_sparc_features([Audio(waveform=torch.rand(1, 16000), sampling_rate=16000)])
+
+
+@pytest.mark.skipif(not SPARC_AVAILABLE, reason="sparc is not installed.")
+def test_extract_sparc_features(resampled_mono_audio_sample: Audio) -> None:
+    """Test extraction of sparc from audio."""
+    result = SparcFeatureExtractor.extract_sparc_features([resampled_mono_audio_sample])
+    # Assert the result is a list of dicts
+    assert isinstance(result, list)
+    for features in result:
+        assert isinstance(features, dict)
+        assert all(
+            key in features for key in ["ema", "loudness", "pitch", "periodicity", "pitch_stats", "spk_emb", "ft_len"]
+        )
+
+
+@pytest.mark.skipif(not SPARC_AVAILABLE, reason="sparc is not installed.")
+def test_extract_sparc_features_resample() -> None:
+    """Test extraction of sparc from audio."""
+    result = SparcFeatureExtractor.extract_sparc_features(
+        [Audio(waveform=torch.rand(1, 44100), sampling_rate=44100)], resample=True
+    )
+    # Assert the result is a list of dicts
+    assert isinstance(result, list)
+    for features in result:
+        assert isinstance(features, dict)
+        assert all(
+            key in features for key in ["ema", "loudness", "pitch", "periodicity", "pitch_stats", "spk_emb", "ft_len"]
+        )
+
+
+@pytest.mark.skipif(not SPARC_AVAILABLE, reason="sparc is not installed.")
+def test_extract_sparc_features_wrong_sample_rate() -> None:
+    """Test that a ValueError is raised when sparc has wrong sampling rate."""
+    with pytest.raises(ValueError):
+        SparcFeatureExtractor.extract_sparc_features([Audio(waveform=torch.rand(1, 44100), sampling_rate=44100)])
+
+
 @pytest.mark.skipif(
-    not (OPENSMILE_AVAILABLE and PARSELMOUTH_AVAILABLE and TORCHAUDIO_AVAILABLE),
+    not (OPENSMILE_AVAILABLE and PARSELMOUTH_AVAILABLE and TORCHAUDIO_AVAILABLE and SPARC_AVAILABLE and PPGS_AVAILABLE),
     reason="One or more required dependencies (openSMILE, Praat-Parselmouth, or torchaudio) are not installed.",
 )
 def test_extract_features_from_audios(resampled_mono_audio_sample: Audio) -> None:
@@ -383,7 +457,7 @@ def test_extract_features_from_audios(resampled_mono_audio_sample: Audio) -> Non
     """
     audios = [resampled_mono_audio_sample]
     features = extract_features_from_audios(
-        audios=audios, opensmile=True, parselmouth=True, torchaudio=True, torchaudio_squim=True
+        audios=audios, opensmile=True, parselmouth=True, torchaudio=True, torchaudio_squim=True, ppgs=True, sparc=True
     )
 
     # Check that the output is a list and that it has one feature dict per audio.

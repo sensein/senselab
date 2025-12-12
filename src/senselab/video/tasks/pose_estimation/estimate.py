@@ -131,7 +131,7 @@ class MediaPipePoseEstimator(PoseEstimator):
         self.worker_script = self.workdir / "mp_pose_worker.py"
         if not self.worker_script.exists():
             raise FileNotFoundError(
-                f"Worker script not found at {self.worker_script}. " "Place mp_pose_worker.py in the mounted workdir."
+                f"Worker script not found at {self.worker_script}. Place mp_pose_worker.py in the mounted workdir."
             )
 
         # Ensure model is visible under workdir (hard-link or copy if needed)
@@ -232,7 +232,7 @@ class MediaPipePoseEstimator(PoseEstimator):
         try:
             return json.loads(stdout)
         except json.JSONDecodeError as e:
-            raise RuntimeError("Failed to parse JSON from MediaPipe Docker worker.\n" f"Raw stdout: {stdout}") from e
+            raise RuntimeError(f"Failed to parse JSON from MediaPipe Docker worker.\nRaw stdout: {stdout}") from e
 
     def _write_temp_image_in_workdir(self, rgb: np.ndarray) -> Path:
         """Writes a temporary PNG under workdir.

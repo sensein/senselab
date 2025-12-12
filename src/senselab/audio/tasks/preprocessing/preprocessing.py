@@ -65,8 +65,7 @@ def resample_audios(
     """
     if not SPEECHBRAIN_AVAILABLE:
         raise ModuleNotFoundError(
-            "`speechbrain` is not installed. "
-            "Please install senselab audio dependencies using `pip install senselab`."
+            "`speechbrain` is not installed. Please install senselab audio dependencies using `pip install senselab`."
         )
 
     outs: List[Audio] = []
