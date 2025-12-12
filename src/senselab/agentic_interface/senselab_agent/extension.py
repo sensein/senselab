@@ -22,7 +22,7 @@ try:
 
 except ImportError:
     raise ModuleNotFoundError(
-        "The 'notebook_intelligence' package is not installed. " "Install with: pip install 'senselab[senselab-ai]'"
+        "The 'notebook_intelligence' package is not installed. Install with: pip install 'senselab[senselab-ai]'"
     )
 
 PARTICIPANT_ICON_URL = "https://avatars.githubusercontent.com/u/47326880?s=200&v=4"
@@ -1076,7 +1076,7 @@ class SetCellTypeAndSourceTool(Tool):
         return ToolPreInvokeResponse(
             f"Calling tool '{self.name}'",
             "Approve",
-            f"Set cell {tool_args.get('cell_index','?')} to type {tool_args.get('cell_type','?')}?",
+            f"Set cell {tool_args.get('cell_index', '?')} to type {tool_args.get('cell_type', '?')}?",
         )
 
     async def handle_tool_call(
@@ -1312,7 +1312,7 @@ class InsertCellAtIndexTool(Tool):
         return ToolPreInvokeResponse(
             f"Calling tool '{self.name}'",
             "Approve",
-            f"Insert a {tool_args.get('cell_type','?')} cell at index {tool_args.get('cell_index','?')}?",
+            f"Insert a {tool_args.get('cell_type', '?')} cell at index {tool_args.get('cell_index', '?')}?",
         )
 
     async def handle_tool_call(

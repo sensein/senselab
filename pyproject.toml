@@ -71,7 +71,9 @@ ipykernel = {version = "~=7.1", optional = true}
 nbformat = {version = "~=5.10", optional = true}
 nbss-upload = {version = "~=0.1", optional = true}
 jupyterlab = {version = "~=4.4", optional = true}
+ppgs = "^0.0.9"
 snorkel = "^0.10.0"
+lightning = {version = "~=2.4.0"}
 
 [tool.poetry.extras]
 articulatory = [

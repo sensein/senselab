@@ -89,7 +89,7 @@ class CoquiTTS:
         if model._scope != "tts_models":
             all_models = TTS.list_models()
             tts_models = [m for m in all_models if m.startswith("tts_models")]
-            raise ValueError(f"Model {model.path_or_uri} is not a TTS model. " f"Available TTS models: {tts_models}")
+            raise ValueError(f"Model {model.path_or_uri} is not a TTS model. Available TTS models: {tts_models}")
 
         # load & cache
         tts = cls._get_tts_model(model, device)

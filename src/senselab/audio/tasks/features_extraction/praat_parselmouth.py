@@ -7,6 +7,7 @@ by the senselab community.
 
 import inspect
 import os
+import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
 
@@ -61,8 +62,7 @@ def get_sound(audio: Union[Path, Audio], sampling_rate: int = 16000) -> parselmo
     """
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
-            "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install senselab`."
+            "`parselmouth` is not installed. Please install senselab audio dependencies using `pip install senselab`."
         )
 
     try:
@@ -125,8 +125,7 @@ def extract_speech_rate(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str,
     """
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
-            "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install senselab`."
+            "`parselmouth` is not installed. Please install senselab audio dependencies using `pip install senselab`."
         )
 
     try:
@@ -346,6 +345,7 @@ def extract_speech_rate(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str,
         if current_frame is not None:
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
+            logger.error(f"Traceback: {traceback.format_exc()}")
         return {
             "speaking_rate": np.nan,
             "articulation_rate": np.nan,
@@ -395,8 +395,7 @@ def extract_pitch_values(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str
     """
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
-            "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install senselab`."
+            "`parselmouth` is not installed. Please install senselab audio dependencies using `pip install senselab`."
         )
 
     try:
@@ -431,6 +430,7 @@ def extract_pitch_values(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[str
         if current_frame is not None:
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
+            logger.error(f"Traceback: {traceback.format_exc()}")
         return {"pitch_floor": np.nan, "pitch_ceiling": np.nan}
 
 
@@ -474,8 +474,7 @@ def extract_pitch_descriptors(
     """
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
-            "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install senselab`."
+            "`parselmouth` is not installed. Please install senselab audio dependencies using `pip install senselab`."
         )
 
     try:
@@ -498,6 +497,7 @@ def extract_pitch_descriptors(
         if current_frame is not None:
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
+            logger.error(f"Traceback: {traceback.format_exc()}")
         return {f"mean_f0_{unit.lower()}": np.nan, f"stdev_f0_{unit.lower()}": np.nan}
 
 
@@ -534,8 +534,7 @@ def extract_intensity_descriptors(
     """
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
-            "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install senselab`."
+            "`parselmouth` is not installed. Please install senselab audio dependencies using `pip install senselab`."
         )
 
     try:
@@ -563,6 +562,7 @@ def extract_intensity_descriptors(
         if current_frame is not None:
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
+            logger.error(f"Traceback: {traceback.format_exc()}")
         return {"mean_db": np.nan, "std_db": np.nan, "range_db_ratio": np.nan}
 
 
@@ -598,8 +598,7 @@ def extract_harmonicity_descriptors(
     """
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
-            "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install senselab`."
+            "`parselmouth` is not installed. Please install senselab audio dependencies using `pip install senselab`."
         )
 
     try:
@@ -620,6 +619,7 @@ def extract_harmonicity_descriptors(
         if current_frame is not None:
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
+            logger.error(f"Traceback: {traceback.format_exc()}")
 
         return {"hnr_db_mean": np.nan, "hnr_db_std_dev": np.nan}
 
@@ -656,8 +656,7 @@ def extract_slope_tilt(snd: Union[parselmouth.Sound, Path, Audio], floor: float,
     """
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
-            "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install senselab`."
+            "`parselmouth` is not installed. Please install senselab audio dependencies using `pip install senselab`."
         )
 
     try:
@@ -689,6 +688,7 @@ def extract_slope_tilt(snd: Union[parselmouth.Sound, Path, Audio], floor: float,
         if current_frame is not None:
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
+            logger.error(f"Traceback: {traceback.format_exc()}")
         return {"spectral_slope": np.nan, "spectral_tilt": np.nan}
 
 
@@ -726,8 +726,7 @@ def extract_cpp_descriptors(
     """
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
-            "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install senselab`."
+            "`parselmouth` is not installed. Please install senselab audio dependencies using `pip install senselab`."
         )
 
     try:
@@ -784,6 +783,7 @@ def extract_cpp_descriptors(
                     if current_frame is not None:
                         current_function_name = current_frame.f_code.co_name
                         logger.error(f'Error in "{current_function_name}": \n' + str(e))
+                        logger.error(f"Traceback: {traceback.format_exc()}")
                     CPP_Value = np.nan
 
                 if not np.isnan(CPP_Value) and CPP_Value > 4:
@@ -806,6 +806,7 @@ def extract_cpp_descriptors(
         if current_frame is not None:
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
+            logger.error(f"Traceback: {traceback.format_exc()}")
         return {"mean_cpp": np.nan, "std_dev_cpp": np.nan}
 
 
@@ -923,6 +924,7 @@ def measure_f1f2_formants_bandwidths(
         if current_frame is not None:
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
+            logger.error(f"Traceback: {traceback.format_exc()}")
         return {
             k: float("nan")
             for k in ("f1_mean", "f1_std", "b1_mean", "b1_std", "f2_mean", "f2_std", "b2_mean", "b2_std")
@@ -972,8 +974,7 @@ def extract_spectral_moments(
     """
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
-            "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install senselab`."
+            "`parselmouth` is not installed. Please install senselab audio dependencies using `pip install senselab`."
         )
 
     try:
@@ -1038,6 +1039,7 @@ def extract_spectral_moments(
         if current_frame is not None:
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
+            logger.error(f"Traceback: {traceback.format_exc()}")
         return {
             "spectral_gravity": np.nan,
             "spectral_std_dev": np.nan,
@@ -1077,8 +1079,7 @@ def extract_audio_duration(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[s
     """
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
-            "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install senselab`."
+            "`parselmouth` is not installed. Please install senselab audio dependencies using `pip install senselab`."
         )
 
     # Check if the input is a Path, in which case we load the audio from the file
@@ -1093,6 +1094,7 @@ def extract_audio_duration(snd: Union[parselmouth.Sound, Path, Audio]) -> Dict[s
         if current_frame is not None:
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
+            logger.error(f"Traceback: {traceback.format_exc()}")
         return {"duration": np.nan}
 
 
@@ -1117,8 +1119,7 @@ def extract_jitter(snd: Union[parselmouth.Sound, Path, Audio], floor: float, cei
 
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
-            "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install senselab`."
+            "`parselmouth` is not installed. Please install senselab audio dependencies using `pip install senselab`."
         )
 
     # Check if the input is a Path or Audio, and convert to Parselmouth Sound if necessary
@@ -1143,6 +1144,7 @@ def extract_jitter(snd: Union[parselmouth.Sound, Path, Audio], floor: float, cei
         if current_frame is not None:
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
+            logger.error(f"Traceback: {traceback.format_exc()}")
         return {
             "local_jitter": np.nan,
             "localabsolute_jitter": np.nan,
@@ -1173,8 +1175,7 @@ def extract_shimmer(snd: Union[parselmouth.Sound, Path, Audio], floor: float, ce
 
     if not PARSELMOUTH_AVAILABLE:
         raise ModuleNotFoundError(
-            "`parselmouth` is not installed. "
-            "Please install senselab audio dependencies using `pip install senselab`."
+            "`parselmouth` is not installed. Please install senselab audio dependencies using `pip install senselab`."
         )
 
     # Check if the input is a Path or Audio, and convert to Parselmouth Sound if necessary
@@ -1200,6 +1201,7 @@ def extract_shimmer(snd: Union[parselmouth.Sound, Path, Audio], floor: float, ce
         if current_frame is not None:
             current_function_name = current_frame.f_code.co_name
             logger.error(f'Error in "{current_function_name}": \n' + str(e))
+            logger.error(f"Traceback: {traceback.format_exc()}")
         return {
             "local_shimmer": np.nan,
             "localDB_shimmer": np.nan,

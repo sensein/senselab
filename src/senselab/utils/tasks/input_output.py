@@ -72,7 +72,7 @@ def read_dataset_from_hub(
     """
     if not check_hf_repo_exists(remote_repository, "main", "dataset"):
         raise RuntimeError(
-            f"The repository {remote_repository} - {revision} - {split}" " does not exist or could not be accessed."
+            f"The repository {remote_repository} - {revision} - {split} does not exist or could not be accessed."
         )
 
     # Load the dataset

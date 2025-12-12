@@ -52,7 +52,7 @@ def _preprocess_segments(
     """
     if not NLTK_AVAILABLE:
         raise ModuleNotFoundError(
-            "`nltk` is not installed. " "Please install senselab audio dependencies using `pip install senselab`."
+            "`nltk` is not installed. Please install senselab audio dependencies using `pip install senselab`."
         )
 
     total_segments = len(transcript)

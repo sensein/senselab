@@ -130,9 +130,9 @@ def test_audio_dataset_creation() -> None:
     )
 
     audio_dataset_from_paths = SenselabDataset(audios=[MONO_AUDIO_PATH, STEREO_AUDIO_PATH])
-    assert (
-        audio_dataset_from_paths.audios[0] == mono_audio and audio_dataset_from_paths.audios[1] == stereo_audio
-    ), "Audio data generated from paths does not equal creating the individually"
+    assert audio_dataset_from_paths.audios[0] == mono_audio and audio_dataset_from_paths.audios[1] == stereo_audio, (
+        "Audio data generated from paths does not equal creating the individually"
+    )
 
     audio_dataset_from_data = SenselabDataset(
         audios=[
@@ -166,14 +166,14 @@ def test_audio_dataset_splits() -> None:
     ], "Default split should have been a list of each audio in its own list"
 
     gpu_split_exact = audio_dataset.create_audio_split_for_pydra_task(2)
-    assert gpu_split_exact == [
-        [mono_audio, stereo_audio]
-    ], "Exact GPU split should generate a list with one list of all of the audios"
+    assert gpu_split_exact == [[mono_audio, stereo_audio]], (
+        "Exact GPU split should generate a list with one list of all of the audios"
+    )
 
     gpu_excess_split = audio_dataset.create_audio_split_for_pydra_task(4)
-    assert gpu_excess_split == [
-        [mono_audio, stereo_audio]
-    ], "Excess GPU split should generate a list with one list of all of the audios, unpadded"
+    assert gpu_excess_split == [[mono_audio, stereo_audio]], (
+        "Excess GPU split should generate a list with one list of all of the audios, unpadded"
+    )
 
 
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE or not AV_AVAILABLE, reason="torchaudio or av are not installed")

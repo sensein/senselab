@@ -28,16 +28,16 @@ def compare_alignments(
 
     # ---- Timing checks (always enforced) ----
     if alignment_one.start is not None and alignment_two.start is not None:
-        assert (
-            abs(alignment_one.start - alignment_two.start) < difference_tolerance
-        ), f"(difference: {abs(alignment_one.start - alignment_two.start):.3f}s, \
+        assert abs(alignment_one.start - alignment_two.start) < difference_tolerance, (
+            f"(difference: {abs(alignment_one.start - alignment_two.start):.3f}s, \
             tolerance: {difference_tolerance:.3f}s)"
+        )
 
     if alignment_one.end is not None and alignment_two.end is not None:
-        assert (
-            abs(alignment_one.end - alignment_two.end) < difference_tolerance
-        ), f"(difference: {abs(alignment_one.end - alignment_two.end):.3f}s, \
+        assert abs(alignment_one.end - alignment_two.end) < difference_tolerance, (
+            f"(difference: {abs(alignment_one.end - alignment_two.end):.3f}s, \
             tolerance: {difference_tolerance:.3f}s)"
+        )
 
     if alignment_one.chunks and alignment_two.chunks and len(alignment_one.chunks) == len(alignment_two.chunks):
         for i, (a1, a2) in enumerate(zip(alignment_one.chunks, alignment_two.chunks)):

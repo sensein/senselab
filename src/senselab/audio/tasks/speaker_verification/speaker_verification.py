@@ -46,11 +46,15 @@ def verify_speaker(
     scores_and_predictions = []
     for audio1, audio2 in audios:
         if audio1.sampling_rate != TRAINING_SAMPLE_RATE:
-            raise ValueError(f"{model.path_or_uri} trained on {TRAINING_SAMPLE_RATE} \
-                                sample audio, but audio1 has sample rate {audio1.sampling_rate}.")
+            raise ValueError(
+                f"{model.path_or_uri} trained on {TRAINING_SAMPLE_RATE} \
+                                sample audio, but audio1 has sample rate {audio1.sampling_rate}."
+            )
         if audio2.sampling_rate != TRAINING_SAMPLE_RATE:
-            raise ValueError(f"{model.path_or_uri} trained on {TRAINING_SAMPLE_RATE} \
-                            sample audio, but audio2 has sample rate {audio2.sampling_rate}.")
+            raise ValueError(
+                f"{model.path_or_uri} trained on {TRAINING_SAMPLE_RATE} \
+                            sample audio, but audio2 has sample rate {audio2.sampling_rate}."
+            )
 
         embeddings = SpeechBrainEmbeddings.extract_speechbrain_speaker_embeddings_from_audios(
             audios=[audio1, audio2], model=model, device=device
