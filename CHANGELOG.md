@@ -1,3 +1,15 @@
+# 1.3.0 (Fri Dec 12 2025)
+
+#### 🚀 Enhancement
+
+- B2ai feature extraction enhancements [#412](https://github.com/sensein/senselab/pull/412) ([@wilke0818](https://github.com/wilke0818))
+
+#### Authors: 1
+
+- [@wilke0818](https://github.com/wilke0818)
+
+---
+
 # 1.2.0 (Wed Nov 26 2025)
 
 #### 🚀 Enhancement
