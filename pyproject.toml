@@ -25,11 +25,12 @@ classifiers = [
   "License :: OSI Approved :: Apache Software License",
   "Operating System :: OS Independent"
 ]
-version = "0.0.0"
+
 
 [tool.poetry]
 packages = [{include = "senselab", from = "src"}]
 requires-poetry = ">=2.0"
+version = "0.0.0"
 
 [tool.poetry.dependencies]
 torch = {version = "~=2.8.0", markers = "sys_platform != 'darwin' or platform_machine == 'arm64'"}
