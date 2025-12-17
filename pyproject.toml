@@ -26,7 +26,6 @@ classifiers = [
   "Operating System :: OS Independent"
 ]
 
-
 [tool.poetry]
 packages = [{include = "senselab", from = "src"}]
 requires-poetry = ">=2.0"
