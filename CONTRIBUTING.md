@@ -6,11 +6,11 @@ Note that a code of conduct applies to all spaces managed by the `senselab` proj
 ## Workflow
 Please use the following workflow when contributing:
 
-0. **Install poetry**:
+0. **Install uv**:
   - Make sure `ffmpeg` is installed in your system. If not, please install it (see [here](https://www.ffmpeg.org/download.html) for detailed platform-dependent instructions).
   - Install and run Docker (required for some video models, like MediaPipe-based estimators).
 Please follow the official installation instructions for your platform: [Install Docker](https://docs.docker.com/get-started/get-docker/).
-  - ```pipx install poetry``` (alternative installation strategies [here](https://python-poetry.org/docs/#installation))
+  - ```curl -LsSf https://astral.sh/uv/install.sh | sh``` (alternative installation strategies [here](https://docs.astral.sh/uv/getting-started/installation/))
 1. **Create an issue**: Use GitHub to create an issue, assign it to yourself (and any collaborators) and, if you have access, add it to the [Project board](https://github.com/orgs/sensein/projects/45).
 2. **Create a branch**: Use GitHub's "Create a branch" button from the issue page to generate a branch associated with the issue.
 3. **Clone the repo locally**:
@@ -25,36 +25,36 @@ Please follow the official installation instructions for your platform: [Install
 
 
 5b. **Install all required dependencies** (we recommend to test your code both with all extras and the minimum required set of extras):
-  - ```poetry install --extras "articulatory text video senselab-ai" --with dev,docs```
+  - ```uv sync --extra articulatory --extra text --extra video --extra senselab-ai --group dev --group docs```
 
 5c. **Set up your HuggingFace token** (required for some models).
 Many models used in senselab are hosted on HuggingFace and require authentication or acceptance of a model license.
   - Generate a token by following the instructions here: https://huggingface.co/docs/hub/security-tokens.
   - Export it in your shell: ```export HF_TOKEN=your_token_here``` or add it to your ```.env``` file (see ```.env.example``` for reference).
 6. **Install pre-commit hooks**:
-  ```poetry run pre-commit install```
+  ```uv run pre-commit install```
 7. **Work locally on the issue branch.**
   Note: The contributed code will be licensed under the same [license](LICENSE) as the rest of the repository. **If you did not write the code yourself, you must ensure the existing license is compatible and include the license information in the contributed files, or obtain permission from the original author to relicense the contributed code.**
 8. **Commit and push regularly on your dev branch.**
     - It is also OK to submit work in progress.
     - Please, write unit tests for your code and test it locally:
-        ```poetry run pytest```
+        ```uv run pytest```
     - Please, document your code following [Google style guidelines](https://google.github.io/styleguide/) and the example at the end of this document.
       You can manually check the documentation automatically generated from the docstrings:
-      ```poetry run pdoc src/senselab -t docs_style/pdoc-theme --docformat google```.
+      ```uv run pdoc src/senselab -t docs_style/pdoc-theme --docformat google```.
       This command uses ```pdoc``` to generate the documentation for you and make it accessible through a web interface.
     - If you installed the pre-commit hooks properly, some tests and checks will run, and the commit will succeed if all tests pass. If you prefer to run your tests manually, use the following commands:
       - Static type checks:
-        ```poetry run mypy .```
+        ```uv run mypy .```
       - Code style checks:
-        ```poetry run ruff check```
+        ```uv run ruff check```
         - To automatically fix issues:
-          ```poetry run ruff check --fix```
+          ```uv run ruff check --fix```
       - Spell checking:
-        ```poetry run codespell```
+        ```uv run codespell```
 10. **Add repository secrets** (maintainers only): From your github web interface, add the following repository secrets: ```CODECOV_TOKEN``` (CodeCov), ```HF_TOKEN``` (HuggingFace), ```PYPI_TOKEN``` (Pypi).
 11. **Submit a pull request**: Once you are done adding your new amazing functionality, submit a pull request to merge the upstream issue branch into the upstream main.
-12. **Don’t worry much about point 9**: Just joking, there’s nothing there – just making sure you're paying attention!
+12. **Don't worry much about point 9**: Just joking, there's nothing there – just making sure you're paying attention!
 
 This approach ensures that tasks, issues, and branches all have names that correspond.
 It also facilitates incremental neatly scoped changes since it tends to keep the scope of individual changes narrow.
