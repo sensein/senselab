@@ -4,8 +4,8 @@
 # Dependabot configuration for updating dependencies and GitHub Actions
 version: 2
 updates:
-  # Configuration for Python package updates using pip
-- package-ecosystem: pip
+  # Configuration for Python package updates using uv
+- package-ecosystem: uv
   directory: /
   schedule:
     interval: monthly
