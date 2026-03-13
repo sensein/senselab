@@ -1,14 +1,23 @@
 """This script contains unit tests for the features extraction tasks."""
 
+import math
 from pathlib import Path
+from typing import Any
+from unittest.mock import patch
 
 import pytest
 import torch
+from matplotlib.figure import Figure
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.features_extraction import extract_features_from_audios
 from senselab.audio.tasks.features_extraction.opensmile import extract_opensmile_features_from_audios
-from senselab.audio.tasks.features_extraction.ppg import extract_ppgs_from_audios
+from senselab.audio.tasks.features_extraction.ppg import (
+    extract_mean_phoneme_durations,
+    extract_mean_phoneme_durations_from_audios,
+    extract_ppgs_from_audios,
+    plot_ppg_phoneme_timeline,
+)
 from senselab.audio.tasks.features_extraction.praat_parselmouth import (
     extract_audio_duration,
     extract_cpp_descriptors,
@@ -38,6 +47,9 @@ from senselab.audio.tasks.features_extraction.torchaudio_squim import (
     extract_objective_quality_features_from_audios,
     extract_subjective_quality_features_from_audios,
 )
+from senselab.audio.tasks.text_to_speech import synthesize_texts
+from senselab.audio.tasks.text_to_speech.huggingface import HuggingFaceTTS
+from senselab.utils.data_structures import DeviceType, HFModel
 
 try:
     import opensmile
@@ -73,6 +85,14 @@ try:
     SPARC_AVAILABLE = True
 except ModuleNotFoundError:
     SPARC_AVAILABLE = False
+
+
+def _build_ppg_posteriorgram(labels: list[str]) -> torch.Tensor:
+    """Build a deterministic frame-major argmax pattern in raw PPG output layout."""
+    posteriorgram = torch.full((len(ppgs.PHONEMES), len(labels)), -1000.0)
+    for frame_index, phoneme in enumerate(labels):
+        posteriorgram[ppgs.PHONEME_TO_INDEX_MAPPING[phoneme], frame_index] = 10.0
+    return posteriorgram
 
 
 @pytest.mark.skipif(OPENSMILE_AVAILABLE, reason="openSMILE is installed.")
@@ -394,12 +414,121 @@ def test_missing_ppg_dependency() -> None:
 
 
 @pytest.mark.skipif(not PPGS_AVAILABLE, reason="ppgs is not installed.")
-def test_extract_ppgs_from_audios(resampled_mono_audio_sample: Audio) -> None:
+def test_extract_ppgs_from_audios(
+    monkeypatch: pytest.MonkeyPatch, resampled_mono_audio_sample: Audio
+) -> None:
     """Test extraction of ppgs from audio."""
-    result = extract_ppgs_from_audios([resampled_mono_audio_sample])
-    # Assert the result is a list of tensors
+    observed: dict[str, tuple[int, ...]] = {}
+
+    def fake_from_audio(audio: torch.Tensor, sample_rate: int, gpu: int | None = None) -> torch.Tensor:
+        observed["audio_shape"] = tuple(audio.shape)
+        observed["sample_rate"] = sample_rate
+        observed["gpu"] = gpu
+        return torch.ones((1, len(ppgs.PHONEMES), 8), dtype=torch.float32)
+
+    monkeypatch.setattr(ppgs, "from_audio", fake_from_audio)
+
+    result = extract_ppgs_from_audios(
+        [resampled_mono_audio_sample],
+        device=DeviceType.CPU,
+        start_times=[0.25],
+        end_times=[0.5],
+    )
+
     assert isinstance(result, list)
     assert all(isinstance(features, torch.Tensor) for features in result)
+    assert observed["audio_shape"] == (1, 1, 4000)
+    assert observed["sample_rate"] == ppgs.SAMPLE_RATE
+    assert observed["gpu"] is None
+    assert result[0].shape == (1, len(ppgs.PHONEMES), 8)
+
+
+@pytest.mark.skipif(not PPGS_AVAILABLE, reason="ppgs is not installed.")
+def test_extract_mean_phoneme_durations() -> None:
+    """Test summarizing mean phoneme durations from raw PPG model output."""
+    audio = Audio(waveform=torch.zeros(1, 16000), sampling_rate=16000)
+    posteriorgram = _build_ppg_posteriorgram(
+        ["aa", "aa", "aa", "b", "b", "aa", "aa", "<silent>", "<silent>", "<silent>"]
+    )
+
+    summary = extract_mean_phoneme_durations(audio=audio, posteriorgram=posteriorgram)
+    phonemes = {item["phoneme"]: item for item in summary["phoneme_durations"]}
+
+    assert summary["frame_count"] == 10
+    assert summary["phoneme_count"] == 3
+    assert summary["analysis_duration_seconds"] == pytest.approx(1.0)
+    assert summary["seconds_per_frame"] == pytest.approx(0.1)
+    assert summary["mean_segment_duration_seconds"] == pytest.approx(0.25)
+    assert phonemes["aa"]["count"] == 2
+    assert phonemes["aa"]["mean_duration_seconds"] == pytest.approx(0.25)
+    assert phonemes["aa"]["total_duration_seconds"] == pytest.approx(0.5)
+    assert phonemes["b"]["count"] == 1
+    assert phonemes["b"]["mean_duration_seconds"] == pytest.approx(0.2)
+    assert phonemes["<silent>"]["count"] == 1
+    assert phonemes["<silent>"]["mean_duration_seconds"] == pytest.approx(0.3)
+
+
+@pytest.mark.skipif(not PPGS_AVAILABLE, reason="ppgs is not installed.")
+def test_plot_ppg_phoneme_timeline() -> None:
+    """Test plotting phoneme segments with onset and offset markers."""
+    audio = Audio(waveform=torch.zeros(1, 16000), sampling_rate=16000)
+    posteriorgram = _build_ppg_posteriorgram(["aa", "aa", "b", "b", "<silent>", "<silent>"])
+
+    figure = plot_ppg_phoneme_timeline(audio=audio, posteriorgram=posteriorgram, title="PPG Timeline", show=False)
+
+    assert isinstance(figure, Figure)
+    assert figure.axes[0].get_title() == "PPG Timeline"
+    assert figure.axes[0].get_xlabel() == "Time [s]"
+    assert figure.axes[0].get_ylabel() == "Phoneme"
+    assert [tick.get_text() for tick in figure.axes[0].get_yticklabels()] == ["aa", "b", "<silent>"]
+    assert len(figure.axes[0].collections) == 3
+    assert len(figure.axes[0].lines) == 3
+
+
+@pytest.mark.skipif(not PPGS_AVAILABLE, reason="ppgs is not installed.")
+def test_extract_mean_phoneme_durations_from_synthesized_phrase(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test mean phoneme duration extraction on synthesized audio."""
+
+    class FakePipeline:
+        def __call__(self, texts: list[str], forward_params: dict[str, str] | None = None) -> list[dict[str, Any]]:
+            synthesized = []
+            for text in texts:
+                sample_count = 16000
+                timeline = torch.linspace(0, 1, sample_count)
+                base_frequency = 180 + 10 * len(text.split())
+                waveform = 0.1 * torch.sin(2 * math.pi * base_frequency * timeline)
+                synthesized.append({"audio": waveform.unsqueeze(0), "sampling_rate": 16000})
+            return synthesized
+
+    def fake_get_hf_tts_pipeline(
+        cls: type[HuggingFaceTTS], model: HFModel, device: DeviceType | None = None
+    ) -> FakePipeline:
+        return FakePipeline()
+
+    def fake_from_audio(audio: torch.Tensor, sample_rate: int, gpu: int | None = None) -> torch.Tensor:
+        return _build_ppg_posteriorgram(["w", "w", "iy", "iy", "t", "t", "<silent>", "<silent>"]).unsqueeze(0)
+
+    monkeypatch.setattr(HuggingFaceTTS, "_get_hf_tts_pipeline", classmethod(fake_get_hf_tts_pipeline))
+    monkeypatch.setattr(ppgs, "from_audio", fake_from_audio)
+
+    with patch("senselab.utils.data_structures.model.check_hf_repo_exists", return_value=True):
+        model = HFModel(path_or_uri="test/fake-tts-model", revision="main")
+
+    synthesized_audio = synthesize_texts(
+        texts=["We test mean phoneme durations."],
+        model=model,
+        device=DeviceType.CPU,
+    )
+    summary = extract_mean_phoneme_durations_from_audios(synthesized_audio, device=DeviceType.CPU)[0]
+    phonemes = {item["phoneme"]: item for item in summary["phoneme_durations"]}
+
+    assert summary["frame_count"] == 8
+    assert summary["phoneme_count"] == 4
+    assert summary["analysis_duration_seconds"] == pytest.approx(1.0)
+    assert phonemes["w"]["mean_duration_seconds"] == pytest.approx(0.25)
+    assert phonemes["iy"]["mean_duration_seconds"] == pytest.approx(0.25)
+    assert phonemes["t"]["mean_duration_seconds"] == pytest.approx(0.25)
+    assert phonemes["<silent>"]["mean_duration_seconds"] == pytest.approx(0.25)
 
 
 @pytest.mark.skipif(SPARC_AVAILABLE, reason="sparc is installed.")
