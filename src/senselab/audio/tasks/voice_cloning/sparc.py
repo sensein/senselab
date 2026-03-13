@@ -26,7 +26,7 @@ class SparcVoiceCloner:
         if not SPARC_AVAILABLE:
             raise ModuleNotFoundError(
                 "`sparc` is not available. "
-                "Please install senselab audio dependencies using `pip install 'senselab[audio,articulatory]'`."
+                "Please install senselab audio dependencies using `pip install 'senselab[articulatory]'`."
             )
         device, _ = _select_device_and_dtype(
             user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
@@ -72,7 +72,7 @@ class SparcVoiceCloner:
         if not SPARC_AVAILABLE:
             raise ModuleNotFoundError(
                 "`sparc` is not available. "
-                "Please install senselab audio dependencies using `pip install 'senselab[audio,articulatory]'`."
+                "Please install senselab audio dependencies using `pip install 'senselab[articulatory]'`."
             )
 
         if len(source_audios) != len(target_audios):

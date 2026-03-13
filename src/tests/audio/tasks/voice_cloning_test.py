@@ -82,8 +82,7 @@ def test_clone_voices_valid_input_sparc(resampled_mono_audio_sample: Audio) -> N
 
     # Check if the absolute difference is within the tolerance
     assert abs(source_duration - cloned_duration) <= tolerance, (
-        f"Cloned audio duration is not within acceptable range. Source: {source_duration}, "
-        f"Cloned: {cloned_duration}"
+        f"Cloned audio duration is not within acceptable range. Source: {source_duration}, Cloned: {cloned_duration}"
     )
 
 

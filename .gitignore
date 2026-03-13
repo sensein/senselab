@@ -183,3 +183,8 @@ src/tests/audio/tasks/pretrained_models/
 
 # pose_estimation models
 src/senselab/video/tasks/pose_estimation/models/
+
+# tutorial files
+tutorials/audio/tutorial_audio_files/
+tutorials/video/tutorial_images/
+tutorials/video/visualize/

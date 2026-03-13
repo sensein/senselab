@@ -45,3 +45,12 @@ body:
     label: Additional Notes
     description: Add any additional notes or context here.
     placeholder: Add additional notes here.
+- type: dropdown
+  id: contribution
+  attributes:
+    label: Would you be willing to help fix this bug?
+    options:
+    - Yes, I'd like to contribute
+    - No, I'm just reporting
+  validations:
+    required: true

@@ -42,7 +42,7 @@ def _ensure_worker_exists(workdir: Path) -> Path:
     worker = workdir / "mp_visualization_worker.py"
     if not worker.exists():
         raise FileNotFoundError(
-            f"Worker script not found at {worker}. " "Place mp_visualization_worker.py in the mounted workdir."
+            f"Worker script not found at {worker}. Place mp_visualization_worker.py in the mounted workdir."
         )
     return worker
 
@@ -50,7 +50,7 @@ def _ensure_worker_exists(workdir: Path) -> Path:
 def _require_cv2() -> None:
     if not CV2_AVAILABLE:
         raise ModuleNotFoundError(
-            "`opencv-python` is required for visualization. " "Install via `pip install 'senselab[video]'`."
+            "`opencv-python` is required for visualization. Install via `pip install 'senselab[video]'`."
         )
 
 
@@ -164,7 +164,7 @@ def _run_docker_visualizer(
         except subprocess.CalledProcessError as e:
             pretty = " ".join(shlex.quote(c) for c in cmd)
             raise RuntimeError(
-                "Docker visualization failed.\n" f"Command: {pretty}\n" f"STDOUT:\n{e.stdout}\n\nSTDERR:\n{e.stderr}"
+                f"Docker visualization failed.\nCommand: {pretty}\nSTDOUT:\n{e.stdout}\n\nSTDERR:\n{e.stderr}"
             ) from e
         except subprocess.TimeoutExpired as e:
             pretty = " ".join(shlex.quote(c) for c in cmd)
@@ -176,7 +176,7 @@ def _run_docker_visualizer(
             stdout = getattr(proc, "stdout", "")
             stderr = getattr(proc, "stderr", "")
             raise RuntimeError(
-                "Docker worker did not produce a readable output image.\n" f"STDOUT:\n{stdout}\n\nSTDERR:\n{stderr}"
+                f"Docker worker did not produce a readable output image.\nSTDOUT:\n{stdout}\n\nSTDERR:\n{stderr}"
             )
         return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 

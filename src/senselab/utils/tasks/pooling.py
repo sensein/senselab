@@ -34,10 +34,12 @@ def pooling(
         ValueError: If an invalid pooling method choice is provided.
 
     Examples:
+        >>> import torch
         >>> data = torch.randn(10, 20, 30)  # 10 samples, 20 features, 30 channels
         >>> data.shape
         torch.Size([10, 20, 30])
 
+        >>> from senselab.utils.tasks.pooling import pooling
         >>> pooled_data = pooling(data, pool_type="mean", dimension=0, keep_dimension=True)
         >>> print(pooled_data.shape)
         torch.Size([1, 20, 30])

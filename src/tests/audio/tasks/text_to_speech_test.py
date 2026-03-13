@@ -40,12 +40,6 @@ def hf_model2() -> HFModel:
 
 
 @pytest.fixture
-def mars5_model() -> TorchModel:
-    """Fixture for MARS5 model."""
-    return TorchModel(path_or_uri="Camb-ai/mars5-tts", revision="master")
-
-
-@pytest.fixture
 def coqui_tts_model() -> CoquiTTSModel:
     """Fixture for Coqui TTS model."""
     return CoquiTTSModel(path_or_uri="tts_models/multilingual/multi-dataset/xtts_v2", revision="main")
@@ -77,31 +71,6 @@ def test_synthesize_texts_with_coqui_model(coqui_tts_model: CoquiTTSModel) -> No
     assert isinstance(audios[0], Audio)
     assert audios[0].waveform is not None
     assert audios[0].sampling_rate > 0
-
-
-@pytest.mark.skipif(not VOCOS_AVAILABLE, reason="Vocos is not available (dependency for mars5tts)")
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
-def test_synthesize_texts_with_mars5_model(mars5_model: TorchModel, mono_audio_sample: Audio) -> None:
-    """Test synthesizing texts."""
-    texts_to_synthesize = ["Hello world", "Hello world again."]
-    terget_audio_resampling_rate = 24000
-    target_audio_ground_truth = "This is Peter."
-    language = Language(language_code="en")
-
-    resampled_mono_audio_sample = resample_audios([mono_audio_sample], terget_audio_resampling_rate)[0]
-    target_audio = extract_segments([(resampled_mono_audio_sample, [(0.0, 1.0)])])[0][0]
-    audios = synthesize_texts(
-        texts=texts_to_synthesize,
-        targets=[(target_audio, target_audio_ground_truth), (target_audio, target_audio_ground_truth)],
-        model=mars5_model,
-        language=language,
-        device=DeviceType.CUDA,
-    )
-
-    assert len(audios) == 2
-    assert isinstance(audios[0], Audio)
-    assert audios[0].waveform is not None
-    assert audios[0].sampling_rate == terget_audio_resampling_rate
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")

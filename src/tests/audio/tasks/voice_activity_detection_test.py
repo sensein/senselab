@@ -42,7 +42,7 @@ def test_detect_human_voice_activity_in_audios_with_invalid_model(mono_audio_sam
 @pytest.fixture
 def pyannote_model() -> PyannoteAudioModel:
     """Fixture for Pyannote model."""
-    return PyannoteAudioModel(path_or_uri="pyannote/speaker-diarization-3.1")
+    return PyannoteAudioModel(path_or_uri="pyannote/speaker-diarization-community-1")
 
 
 @pytest.mark.skipif(

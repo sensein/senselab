@@ -138,14 +138,36 @@ def plot_waveform(
     context: _Context = "auto",
     figsize: Tuple[float, float] | None = None,
 ) -> Figure:
-    """Plot the waveform of an Audio object (returns the Figure).
+    """Plot the time-domain waveform of an `Audio` object and return the Figure.
+
+    The plot is automatically scaled for readability using a *context* scale
+    (similar to seaborn). Use `fast=True` to lightly decimate the signal for
+    quicker rendering on very long waveforms.
 
     Args:
-        audio: Audio object with waveform and sampling_rate.
-        title: Figure title.
-        fast: If True, plot a lightly downsampled view for speed.
-        context: "auto" | "small" | "medium" | "large" or a float scale factor.
-        figsize: Optional (width, height) in inches before scaling. Defaults to (12, 2*channels).
+        audio (Audio):
+            Input audio containing `.waveform` (shape `[C, T]`) and `.sampling_rate`.
+        title (str, optional):
+            Figure title. Defaults to `"Waveform"`.
+        fast (bool, optional):
+            If `True`, plots a 10× downsampled view for speed. Defaults to `False`.
+        context (_Context, optional):
+            Size preset or numeric scale. Accepted values:
+              * `"auto"` (detect from screen), `"small"`, `"medium"`, `"large"`,
+              * or a float scale factor (e.g., `1.25`). Defaults to `"auto"`.
+        figsize (tuple[float, float] | None, optional):
+            Base `(width, height)` in inches **before** context scaling.
+            Defaults to `(12, 2×channels)`.
+
+    Returns:
+        matplotlib.figure.Figure: The created figure (also displayed).
+
+    Example:
+        >>> from pathlib import Path
+        >>> from senselab.audio.data_structures import Audio
+        >>> a1 = Audio(filepath=Path("sample1.wav").resolve())
+        >>> fig = plot_waveform(a1, title="Sample 1", fast=True, context="medium")
+        >>> # fig.savefig("waveform.png")  # optional
     """
     waveform = audio.waveform
     sample_rate = audio.sampling_rate
@@ -174,7 +196,7 @@ def plot_waveform(
             ax.grid(True, alpha=0.3)
         fig.suptitle(title)
         axes[-1].set_xlabel("Time [s]")
-        fig.tight_layout(rect=[0, 0, 1, 0.96])
+        fig.tight_layout(rect=(0, 0, 1, 0.96))
         plt.show(block=False)
         return fig
 
@@ -188,15 +210,47 @@ def plot_specgram(
     figsize: Tuple[float, float] | None = None,
     **spect_kwargs: Any,  # noqa: ANN401
 ) -> Figure:
-    """Plot spectrogram (or mel-spectrogram) of an Audio object (returns the Figure).
+    """Plot a (mel-)spectrogram for a **mono** `Audio` object and return the Figure.
+
+    Internally calls senselab's torchaudio-based extractors:
+    `extract_spectrogram_from_audios` or `extract_mel_spectrogram_from_audios`.
+    The function expects a 2D spectrogram `[freq_bins, time_frames]`; multi-channel
+    inputs should be downmixed beforehand.
 
     Args:
-        audio: Audio object.
-        mel_scale: If True, plot mel spectrogram; else linear frequency spectrogram.
-        title: Figure title.
-        context: "auto" | "small" | "medium" | "large" or a float scale factor.
-        figsize: Optional (width, height) inches before scaling (default ~ (10, 4)).
-        **spect_kwargs: Passed to the underlying feature extraction functions.
+        audio (Audio):
+            Input **mono** audio. If multi-channel, downmix first.
+        mel_scale (bool, optional):
+            If `True`, plots a mel spectrogram; otherwise linear frequency. Defaults to `False`.
+        title (str, optional):
+            Figure title. Defaults to `"Spectrogram"`.
+        context (_Context, optional):
+            Size preset or numeric scale (`"auto"`, `"small"`, `"medium"`, `"large"`, or float).
+            Defaults to `"auto"`.
+        figsize (tuple[float, float] | None, optional):
+            Base `(width, height)` in inches **before** context scaling. Defaults to `(10, 4)`.
+        **spect_kwargs:
+            Passed to the underlying extractor (e.g., `n_fft=1024`, `hop_length=256`,
+            `n_mels=80`, `win_length=1024`, `f_min=0`, `f_max=None`).
+
+    Returns:
+        matplotlib.figure.Figure: The created figure (also displayed).
+
+    Raises:
+        ValueError: If spectrogram extraction fails, contains NaNs, or the result is not 2D.
+
+    Example (linear spectrogram):
+        >>> from pathlib import Path
+        >>> from senselab.audio.data_structures import Audio
+        >>> a1 = Audio(filepath=Path("sample1.wav").resolve())
+        >>> fig = plot_specgram(a1, mel_scale=False, n_fft=1024, hop_length=256)
+        >>> # fig.savefig("spec.png")
+
+    Example (mel spectrogram):
+        >>> from pathlib import Path
+        >>> from senselab.audio.data_structures import Audio
+        >>> a1 = Audio(filepath=Path("sample1.wav").resolve())
+        >>> fig = plot_specgram(a1, mel_scale=True, n_mels=80, n_fft=1024, hop_length=256)
     """
     # Extract the spectrogram
     if mel_scale:
@@ -279,19 +333,49 @@ def plot_waveform_and_specgram(
     figsize: Tuple[float, float] | None = None,
     **spect_kwargs: Any,  # noqa: ANN401  # forwarded to spectrogram extraction
 ) -> Figure:
-    """Stacked single-column layout: waveform (top) above spectrogram (bottom).
+    """Stacked layout: waveform (top) and **mono** spectrogram (bottom). Returns the Figure.
+
+    The waveform can be drawn in a faster, lightly decimated mode for long signals.
+    Spectrogram extraction is delegated to senselab's torchaudio-based utilities
+    and requires mono input.
 
     Args:
-        audio: The audio data to plot.
-        title: The title of the plot.
-        mel_scale: Whether to use mel scale for the spectrogram.
-        fast_wave: Whether to use fast waveform plotting.
-        context: The context for the plot.
-        figsize: The figure size.
-        **spect_kwargs: Additional keyword arguments for spectrogram extraction.
+        audio (Audio):
+            Input audio. **Spectrogram requires mono**; downmix multi-channel first.
+        title (str, optional):
+            Overall figure title. Defaults to `"Waveform + Spectrogram"`.
+        mel_scale (bool, optional):
+            If `True`, bottom panel is a mel spectrogram; otherwise linear frequency. Defaults to `False`.
+        fast_wave (bool, optional):
+            If `True`, waveform panel is downsampled for speed. Defaults to `False`.
+        context (_Context, optional):
+            Size preset or numeric scale (`"auto"`, `"small"`, `"medium"`, `"large"`, or float).
+            Defaults to `"auto"`.
+        figsize (tuple[float, float] | None, optional):
+            Base `(width, height)` in inches **before** context scaling. Defaults to a balanced height.
+        **spect_kwargs:
+            Forwarded to the underlying spectrogram extractor (e.g., `n_fft`, `hop_length`, `n_mels`).
 
     Returns:
-        Figure: The matplotlib figure containing the waveform and spectrogram.
+        matplotlib.figure.Figure: The created figure (also displayed).
+
+    Raises:
+        ValueError: If audio is not mono, or spectrogram extraction fails.
+
+    Example:
+        >>> from pathlib import Path
+        >>> from senselab.audio.data_structures import Audio
+        >>> a1 = Audio(filepath=Path("sample1.wav").resolve())
+        >>> fig = plot_waveform_and_specgram(
+        ...     a1,
+        ...     mel_scale=True,
+        ...     fast_wave=True,
+        ...     context="large",
+        ...     n_fft=1024,
+        ...     hop_length=256,
+        ...     n_mels=80,
+        ... )
+        >>> # fig.savefig("wave_plus_mel.png")
     """
     # ---- Core timing info from ORIGINAL (non-decimated) data
     sr = audio.sampling_rate
@@ -389,13 +473,30 @@ def plot_waveform_and_specgram(
         cbar.set_label("Magnitude (dB)")
 
         fig.suptitle(title)
-        fig.tight_layout(rect=[0, 0, 1, 0.96])
+        fig.tight_layout(rect=(0, 0, 1, 0.96))
         plt.show(block=False)
         return fig
 
 
 def play_audio(audio: Audio) -> None:
-    """Plays an audio file (1–2 channels supported)."""
+    """Play an `Audio` object inline (Jupyter/IPython), supporting 1–2 channels.
+
+    Uses `IPython.display.Audio` to render audio widgets in notebooks. For more
+    than two channels, downmix first.
+
+    Args:
+        audio (Audio):
+            Input audio to play (mono or stereo). Sampling rate is preserved.
+
+    Raises:
+        ValueError: If the waveform has more than 2 channels.
+
+    Example:
+        >>> from pathlib import Path
+        >>> from senselab.audio.data_structures import Audio
+        >>> a1 = Audio(filepath=Path("sample1.wav").resolve())
+        >>> play_audio(a1)
+    """
     from IPython.display import Audio as DisplayAudio
     from IPython.display import display
 

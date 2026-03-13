@@ -45,6 +45,17 @@ def resnet_model() -> SpeechBrainModel:
     not TORCHAUDIO_AVAILABLE or not SPEECHBRAIN_AVAILABLE, reason="SpeechBrain or torchaudio are not installed"
 )
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
+def test_extract_speaker_embeddings_from_empty_audio_list(ecapa_model: SpeechBrainModel) -> None:
+    """Test extracting speaker embeddings from an empty audio list returns an empty list."""
+    embeddings = extract_speaker_embeddings_from_audios(audios=[], model=ecapa_model)
+    assert isinstance(embeddings, list)
+    assert len(embeddings) == 0
+
+
+@pytest.mark.skipif(
+    not TORCHAUDIO_AVAILABLE or not SPEECHBRAIN_AVAILABLE, reason="SpeechBrain or torchaudio are not installed"
+)
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_extract_speaker_embeddings_from_audio(
     resampled_mono_audio_sample: Audio,
     ecapa_model: SpeechBrainModel,
@@ -132,12 +143,12 @@ def test_error_wrong_model(resampled_mono_audio_sample: Audio) -> None:
     """Test raising error when using a non-existent model."""
     with pytest.raises(ValueError):
         extract_speaker_embeddings_from_audios(
-            audios=[resampled_mono_audio_sample], model=SpeechBrainModel(path_or_uri="nonexistent---")
+            audios=[resampled_mono_audio_sample], model=SpeechBrainModel(path_or_uri="nonexistent-repo")
         )
     with pytest.raises(NotImplementedError):
         extract_speaker_embeddings_from_audios(
             audios=[resampled_mono_audio_sample],
-            model=SenselabModel(path_or_uri="nonexistent---"),  # type: ignore
+            model=SenselabModel(path_or_uri="nonexistent-repo"),  # type: ignore
         )
 
 

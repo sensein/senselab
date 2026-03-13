@@ -15,15 +15,16 @@ def compute_normalized_cross_correlation(signal1: torch.Tensor, signal2: torch.T
     Returns:
         torch.Tensor: The normalized cross-correlation value between the two input signals.
 
+    Note:
+        This function assumes the input signals are one-dimensional
+        and contain sufficient elements for meaningful cross-correlation.
+
     Examples:
+        >>> import torch
         >>> signal1 = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
         >>> signal2 = torch.tensor([2.0, 3.0, 4.0])
         >>> normalized_cross_correlation(signal1, signal2)
         Tensor([0.30151134, 0.51298918, 0.77459667, 0.9486833 , 0.90453403, 0.70710678, 0.43643578])
-
-    Note:
-        This function assumes the input signals are one-dimensional
-        and contain sufficient elements for meaningful cross-correlation.
     """
     # Ensure the inputs are 1D tensors
     if signal1.ndim != 1 or signal2.ndim != 1:
