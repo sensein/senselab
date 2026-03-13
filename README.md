@@ -117,11 +117,11 @@ pip install 'senselab[articulatory,video,text,senselab-ai]'
 
 ## senselab AI (our AI-based chatbot)
 
-#### Development (with poetry)
+#### Development (with uv)
 
 ```bash
-poetry install --extras "senselab-ai"
-poetry run senselab-ai
+uv sync --extra senselab-ai
+uv run senselab-ai
 ```
 
 #### Production (with pip)
