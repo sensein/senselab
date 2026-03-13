@@ -1,3 +1,199 @@
+# 1.3.0 (Fri Dec 12 2025)
+
+#### 🚀 Enhancement
+
+- B2ai feature extraction enhancements [#412](https://github.com/sensein/senselab/pull/412) ([@wilke0818](https://github.com/wilke0818))
+
+#### Authors: 1
+
+- [@wilke0818](https://github.com/wilke0818)
+
+---
+
+# 1.2.0 (Wed Nov 26 2025)
+
+#### 🚀 Enhancement
+
+- 276 Feature Implement Quality Control Framework [#277](https://github.com/sensein/senselab/pull/277) ([@ibevers](https://github.com/ibevers) rfbrito@node1703.inband)
+- CI and Feature Extraction Optimization, nemo_toolkit containerization, pyannote-audio bump, and more minor edits [#407](https://github.com/sensein/senselab/pull/407) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### 🐛 Bug Fix
+
+- Merge Rahul's QC changes [#365](https://github.com/sensein/senselab/pull/365) (rfbrito@node1703.inband [@ibevers](https://github.com/ibevers) [@Rahul-Brito](https://github.com/Rahul-Brito))
+- 298 Task Update Bioacoustic QC Taxonomy Tree with B2AI Activities [#348](https://github.com/sensein/senselab/pull/348) ([@ibevers](https://github.com/ibevers))
+- 347 Task Add Snorkel Automated Review [#356](https://github.com/sensein/senselab/pull/356) ([@ibevers](https://github.com/ibevers))
+- Update Quality Control Metrics based on Satra's Feedback [#357](https://github.com/sensein/senselab/pull/357) ([@satra](https://github.com/satra) [@ibevers](https://github.com/ibevers) [@fabiocat93](https://github.com/fabiocat93))
+- 296 Task Recursive Bioacoustic QC Class Structure [#345](https://github.com/sensein/senselab/pull/345) ([@ibevers](https://github.com/ibevers))
+- 326 Task Calculate Evaluations over Windows [#344](https://github.com/sensein/senselab/pull/344) ([@ibevers](https://github.com/ibevers))
+- 297 Task Parallelize Bioacoustic QC [#322](https://github.com/sensein/senselab/pull/322) ([@ibevers](https://github.com/ibevers))
+- 300 task add bioacoustic qc checks based on b2ai [#320](https://github.com/sensein/senselab/pull/320) ([@ibevers](https://github.com/ibevers))
+- bioacoustic qc store filepath if provided with waveform [#336](https://github.com/sensein/senselab/pull/336) ([@ibevers](https://github.com/ibevers))
+- 305 task update bioacoustic qc to run on b2ai dataset [#306](https://github.com/sensein/senselab/pull/306) ([@ibevers](https://github.com/ibevers))
+- Add 20 AQMs to bioacoustic qc [#304](https://github.com/sensein/senselab/pull/304) ([@ibevers](https://github.com/ibevers))
+- 269 task add storage of qc aqms and check results in a dataframe [#278](https://github.com/sensein/senselab/pull/278) ([@ibevers](https://github.com/ibevers))
+- 253 task implement initial version of bioacoustic quality control [#256](https://github.com/sensein/senselab/pull/256) ([@ibevers](https://github.com/ibevers))
+
+#### ⚠️ Pushed to `main`
+
+- Merge branch 'main' into 276-feature-implement-bioacoustic-quality-control-framework ([@ibevers](https://github.com/ibevers))
+
+#### Authors: 6
+
+- [@ibevers](https://github.com/ibevers)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+- Rahul Brito ([@Rahul-Brito](https://github.com/Rahul-Brito))
+- rfbrito (rfbrito@node1702.inband)
+- rfbrito (rfbrito@node1703.inband)
+- Satrajit Ghosh ([@satra](https://github.com/satra))
+
+---
+
+# 1.1.0 (Fri Nov 07 2025)
+
+#### 🚀 Enhancement
+
+- remove pydra dependency [#405](https://github.com/sensein/senselab/pull/405) ([@fabiocat93](https://github.com/fabiocat93) [@wilke0818](https://github.com/wilke0818))
+
+#### ⚠️ Pushed to `main`
+
+- Update CHANGELOG.md ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@wilke0818](https://github.com/wilke0818)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 1.0.1 (Fri Oct 31 2025)
+
+- Apparently, 1.0.0 was already taken and pypi refused to publish it and for this reason I forced it to 1.0.1
+
+#### 💥 Breaking Change
+
+- Bump aws-actions/configure-aws-credentials from 4 to 5 [#386](https://github.com/sensein/senselab/pull/386) ([@dependabot[bot]](https://github.com/dependabot[bot]))
+- Bump actions/download-artifact from 4 to 5 [#385](https://github.com/sensein/senselab/pull/385) ([@dependabot[bot]](https://github.com/dependabot[bot]) [@fabiocat93](https://github.com/fabiocat93))
+- Bump actions/setup-python from 5 to 6 [#384](https://github.com/sensein/senselab/pull/384) ([@dependabot[bot]](https://github.com/dependabot[bot]))
+- Bump actions/checkout from 4 to 5 [#383](https://github.com/sensein/senselab/pull/383) ([@dependabot[bot]](https://github.com/dependabot[bot]) [@fabiocat93](https://github.com/fabiocat93))
+- Bump actions/first-interaction from 2 to 3 [#387](https://github.com/sensein/senselab/pull/387) ([@dependabot[bot]](https://github.com/dependabot[bot]))
+
+#### 🚀 Enhancement
+
+- Remove old changelog entries [#394](https://github.com/sensein/senselab/pull/394) ([@fabiocat93](https://github.com/fabiocat93))
+- Update version to 0.43.2c in CHANGELOG [#393](https://github.com/sensein/senselab/pull/393) ([@fabiocat93](https://github.com/fabiocat93))
+- Alignment to what's described in the paper's draft [#392](https://github.com/sensein/senselab/pull/392) ([@fabiocat93](https://github.com/fabiocat93))
+- CI dependencies update [#391](https://github.com/sensein/senselab/pull/391) ([@dependabot[bot]](https://github.com/dependabot[bot]) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@dependabot[bot]](https://github.com/dependabot[bot])
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.43.2b (Tue Oct 28 2025)
+
+#### 💥 Breaking Change
+
+- Bump aws-actions/configure-aws-credentials from 4 to 5 [#386](https://github.com/sensein/senselab/pull/386) ([@dependabot[bot]](https://github.com/dependabot[bot]))
+- Bump actions/download-artifact from 4 to 5 [#385](https://github.com/sensein/senselab/pull/385) ([@dependabot[bot]](https://github.com/dependabot[bot]) [@fabiocat93](https://github.com/fabiocat93))
+- Bump actions/setup-python from 5 to 6 [#384](https://github.com/sensein/senselab/pull/384) ([@dependabot[bot]](https://github.com/dependabot[bot]))
+- Bump actions/checkout from 4 to 5 [#383](https://github.com/sensein/senselab/pull/383) ([@dependabot[bot]](https://github.com/dependabot[bot]) [@fabiocat93](https://github.com/fabiocat93))
+- Bump actions/first-interaction from 2 to 3 [#387](https://github.com/sensein/senselab/pull/387) ([@dependabot[bot]](https://github.com/dependabot[bot]))
+
+#### 🚀 Enhancement
+
+- CI dependencies update [#391](https://github.com/sensein/senselab/pull/391) ([@dependabot[bot]](https://github.com/dependabot[bot]) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@dependabot[bot]](https://github.com/dependabot[bot])
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.43.2 (Mon Oct 20 2025)
+
+#### 🐛 Bug Fix
+
+- fix torch version to 2.8 [#390](https://github.com/sensein/senselab/pull/390) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### ⚠️ Pushed to `main`
+
+- fix jupyter lab dependency ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.43.1 (Tue Sep 16 2025)
+
+#### 🐛 Bug Fix
+
+- Quick patch [#382](https://github.com/sensein/senselab/pull/382) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.43.0 (Tue Sep 16 2025)
+
+#### 🚀 Enhancement
+
+- Torch upgrade + first documentation improvements [#380](https://github.com/sensein/senselab/pull/380) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.42.1 (Thu Sep 04 2025)
+
+#### 🐛 Bug Fix
+
+- handle when senselab-ai extras are not installed [#375](https://github.com/sensein/senselab/pull/375) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.42.0 (Thu Sep 04 2025)
+
+#### 🚀 Enhancement
+
+- senselab AI MVP + env.example + license & docs improvements [#369](https://github.com/sensein/senselab/pull/369) ([@fabiocat93](https://github.com/fabiocat93))
+
+#### ⚠️ Pushed to `main`
+
+- Update development_task.yaml ([@fabiocat93](https://github.com/fabiocat93))
+- Update bug_report.yaml ([@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 1
+
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
+# 0.41.0 (Fri Aug 29 2025)
+
+#### 🚀 Enhancement
+
+- Add print_scriptline function [#368](https://github.com/sensein/senselab/pull/368) ([@ibevers](https://github.com/ibevers) [@fabiocat93](https://github.com/fabiocat93))
+
+#### Authors: 2
+
+- [@ibevers](https://github.com/ibevers)
+- Fabio Catania ([@fabiocat93](https://github.com/fabiocat93))
+
+---
+
 # 0.40.0 (Mon Aug 18 2025)
 
 #### 🚀 Enhancement

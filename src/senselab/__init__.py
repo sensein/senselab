@@ -27,8 +27,6 @@ def safe_apply_nest_asyncio() -> None:
 
 safe_apply_nest_asyncio()
 
-from senselab.utils.data_structures.pydra_helpers import *  # NOQA
-
 # Ensure multiprocessing start method is 'spawn'
 try:
     set_start_method("spawn", force=True)

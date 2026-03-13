@@ -43,7 +43,7 @@ class SpeechBrainEmbeddings:
         if not SPEECHBRAIN_AVAILABLE:
             raise ModuleNotFoundError(
                 "`speechbrain` is not installed. "
-                "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+                "Please install senselab audio dependencies using `pip install senselab`."
             )
 
         device, _ = _select_device_and_dtype(
@@ -82,8 +82,11 @@ class SpeechBrainEmbeddings:
         if not SPEECHBRAIN_AVAILABLE:
             raise ModuleNotFoundError(
                 "`speechbrain` is not installed. "
-                "Please install senselab audio dependencies using `pip install 'senselab[audio]'`."
+                "Please install senselab audio dependencies using `pip install senselab`."
             )
+
+        if len(audios) == 0:
+            return []
 
         if model is None:
             model = SpeechBrainModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb", revision="main")
