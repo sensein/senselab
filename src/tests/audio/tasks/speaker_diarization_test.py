@@ -1,12 +1,14 @@
 """Tests for speaker diarization."""
 
 import os
+from unittest.mock import Mock
 
 import pytest
 import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speaker_diarization import diarize_audios
+from senselab.audio.tasks.speaker_diarization import pyannote as pyannote_module
 from senselab.audio.tasks.speaker_diarization.pyannote import PyannoteDiarization, diarize_audios_with_pyannote
 from senselab.utils.data_structures import DeviceType, PyannoteAudioModel, ScriptLine
 from senselab.utils.data_structures.docker import docker_is_running
@@ -95,6 +97,30 @@ def test_pyannote_pipeline_factory(pyannote_model: PyannoteAudioModel) -> None:
         device=DeviceType.CPU,
     )
     assert pipeline1 is pipeline2  # Check if the same instance is returned
+
+
+@pytest.mark.skipif(not PYANNOTE_INSTALLED, reason="Pyannote is not installed")
+def test_pyannote_pipeline_factory_forwards_hf_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The pyannote factory should forward the Hugging Face token to from_pretrained."""
+    monkeypatch.setattr(PyannoteDiarization, "_pipelines", {})
+    from_pretrained_mock = Mock()
+    pipeline_mock = Mock()
+    pipeline_mock.to.return_value = pipeline_mock
+    from_pretrained_mock.return_value = pipeline_mock
+
+    monkeypatch.setenv("HF_TOKEN", "hf_test_token")
+    monkeypatch.setattr(pyannote_module.Pipeline, "from_pretrained", from_pretrained_mock)
+
+    PyannoteDiarization._get_pyannote_diarization_pipeline(
+        model=PyannoteAudioModel.model_construct(
+            path_or_uri="pyannote/speaker-diarization-community-1",
+            revision="main",
+            info=None,
+        ),
+        device=DeviceType.CPU,
+    )
+
+    assert from_pretrained_mock.call_args.kwargs["token"] == "hf_test_token"
 
 
 @pytest.mark.skipif(

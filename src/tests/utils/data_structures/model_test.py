@@ -1,11 +1,13 @@
 """Tests for HF models and functions."""
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 from huggingface_hub import HfApi
 
 from senselab.utils.data_structures import HFModel, check_hf_repo_exists
+from senselab.utils.data_structures.model import get_huggingface_token
 from senselab.utils.dependencies import torchaudio_available
 
 TORCHAUDIO_AVAILABLE = torchaudio_available()
@@ -45,6 +47,39 @@ def test_hfmodel_invalid_hf_repo_check() -> None:
     with patch("senselab.utils.data_structures.model.check_hf_repo_exists", return_value=False):
         with pytest.raises(ValueError):
             HFModel(path_or_uri="invalid/repo")
+
+
+def test_get_huggingface_token_from_env_file_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test loading a Hugging Face token from an explicit `.env` file path."""
+    for env_var in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_HUB_TOKEN"):
+        monkeypatch.delenv(env_var, raising=False)
+
+    env_file = tmp_path / "hf.env"
+    env_file.write_text("HF_TOKEN=hf_from_file\n")
+
+    assert get_huggingface_token(env_file) == "hf_from_file"
+
+
+def test_get_huggingface_token_from_local_dotenv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test loading a Hugging Face token from a local `.env` file in the cwd."""
+    for env_var in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_HUB_TOKEN"):
+        monkeypatch.delenv(env_var, raising=False)
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text("HUGGING_FACE_HUB_TOKEN=hf_from_local_dotenv\n")
+
+    assert get_huggingface_token() == "hf_from_local_dotenv"
+
+
+def test_get_huggingface_token_prefers_environment_over_dotenv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test environment variables take precedence over `.env` values."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text("HF_TOKEN=hf_from_file\n")
+    monkeypatch.setenv("HF_TOKEN", "hf_from_env")
+
+    assert get_huggingface_token() == "hf_from_env"
 
 
 @patch("huggingface_hub.HfApi.model_info")
