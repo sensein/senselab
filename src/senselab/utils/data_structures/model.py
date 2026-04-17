@@ -1,20 +1,5 @@
 """This module implements some utilities for the model class."""
 
-try:
-    import torchaudio
-
-    TORCHAUDIO_AVAILABLE = True
-except ModuleNotFoundError:
-    TORCHAUDIO_AVAILABLE = False
-
-try:
-    from TTS.api import TTS
-
-    TTS_AVAILABLE = True
-except ModuleNotFoundError:
-    TTS_AVAILABLE = False
-    TTS = None  # This is to avoid errors during pdoc documentation generation
-
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -27,6 +12,20 @@ from huggingface_hub.errors import RepositoryNotFoundError, RevisionNotFoundErro
 from huggingface_hub.hf_api import ModelInfo
 from pydantic import BaseModel, Field, PrivateAttr, ValidationInfo, field_validator
 from typing_extensions import Annotated
+
+from senselab.utils.dependencies import torchaudio_available
+
+TORCHAUDIO_AVAILABLE = torchaudio_available()
+if TORCHAUDIO_AVAILABLE:
+    import torchaudio
+
+try:
+    from TTS.api import TTS
+
+    TTS_AVAILABLE = True
+except ModuleNotFoundError:
+    TTS_AVAILABLE = False
+    TTS = None  # This is to avoid errors during pdoc documentation generation
 
 # Define the TypeVar for provider types
 PROVIDER_T = TypeVar("PROVIDER_T")

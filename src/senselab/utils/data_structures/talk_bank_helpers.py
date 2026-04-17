@@ -34,20 +34,12 @@ def chats_to_script_lines(
             "Please install senselab text dependencies using `pip install 'senselab[text]'`."
         )
 
-    chats = pylangacq.read_chat(path, **kwargs)
+    reader = pylangacq.read_chat(path, **kwargs)
     script_lines_by_file: Dict[str, List[ScriptLine]] = {}
-    paths = chats.file_paths()
-    utterances = chats.utterances(by_files=True)
-    words = chats.words(by_files=True, by_utterances=True)
-    assert len(paths) == len(utterances) and len(utterances) == len(words)
-    for i in range(len(paths)):
-        path = paths[i]
-        script_lines_by_file[path] = []
-        utterances_in_file = utterances[i]
-        words_in_file = words[i]
-        assert len(words_in_file) == len(utterances_in_file)
-        for utt_idx, utterance in enumerate(utterances_in_file):
-            words_in_utterance = words_in_file[utt_idx]
+    for chat in reader:
+        file_path = chat.file_paths[0]
+        script_lines_by_file[file_path] = []
+        for utterance in chat.utterances():
             if utterance.time_marks:
                 start = utterance.time_marks[0] / 1000
                 end = utterance.time_marks[1] / 1000
@@ -55,11 +47,12 @@ def chats_to_script_lines(
                 start = None
                 end = None
 
+            words_in_utterance = [token.word for token in utterance.tokens if token.word]
             if len(words_in_utterance) > 0:
                 utterance_transcript = " ".join(words_in_utterance[:-1]) + words_in_utterance[-1]
             else:
                 utterance_transcript = ""
-            script_lines_by_file[path].append(
+            script_lines_by_file[file_path].append(
                 ScriptLine(text=utterance_transcript, speaker=utterance.participant, start=start, end=end)
             )
     return script_lines_by_file

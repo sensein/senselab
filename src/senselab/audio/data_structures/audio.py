@@ -1,19 +1,5 @@
 """Audio data structure module."""
 
-try:
-    import torchaudio
-
-    TORCHAUDIO_AVAILABLE = True
-except ModuleNotFoundError:
-    TORCHAUDIO_AVAILABLE = False
-
-try:
-    import soundfile as sf
-
-    SOUNDFILE_AVAILABLE = True
-except ModuleNotFoundError:
-    SOUNDFILE_AVAILABLE = False
-
 import os
 import uuid
 import warnings
@@ -24,6 +10,18 @@ import torch
 from pydantic import BaseModel, Field, PrivateAttr
 
 from senselab.utils.constants import SENSELAB_NAMESPACE
+from senselab.utils.dependencies import torchaudio_available
+
+TORCHAUDIO_AVAILABLE = torchaudio_available()
+if TORCHAUDIO_AVAILABLE:
+    import torchaudio
+
+try:
+    import soundfile as sf
+
+    SOUNDFILE_AVAILABLE = True
+except ModuleNotFoundError:
+    SOUNDFILE_AVAILABLE = False
 
 
 class Audio(BaseModel):

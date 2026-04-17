@@ -7,15 +7,14 @@ import numpy as np
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, _select_device_and_dtype, logger
+from senselab.utils.dependencies import torchaudio_available
 
-try:
+TORCHAUDIO_AVAILABLE = torchaudio_available()
+if TORCHAUDIO_AVAILABLE:
     from torchaudio.pipelines import SQUIM_OBJECTIVE, SQUIM_SUBJECTIVE
 
     objective_model = SQUIM_OBJECTIVE.get_model()
     subjective_model = SQUIM_SUBJECTIVE.get_model()
-    TORCHAUDIO_AVAILABLE = True
-except ModuleNotFoundError:
-    TORCHAUDIO_AVAILABLE = False
 
 
 def extract_objective_quality_features_from_audios(

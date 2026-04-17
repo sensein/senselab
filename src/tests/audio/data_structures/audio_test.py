@@ -9,14 +9,12 @@ import pytest
 import torch
 
 from senselab.audio.data_structures import Audio
+from senselab.utils.dependencies import torchaudio_available
 from tests.audio.conftest import MONO_AUDIO_PATH, STEREO_AUDIO_PATH
 
-try:
+TORCHAUDIO_AVAILABLE = torchaudio_available()
+if TORCHAUDIO_AVAILABLE:
     import torchaudio
-
-    TORCHAUDIO_AVAILABLE = True
-except ModuleNotFoundError:
-    TORCHAUDIO_AVAILABLE = False
 
 try:
     import soundfile
