@@ -54,25 +54,25 @@ dependencies = [
   "coqui-tts~=0.27",
   "ppgs>=0.0.9,<0.0.10",
   "snorkel>=0.10.0,<0.11.0",
-  "lightning~=2.4.0",
+  "lightning~=2.4.0"
 ]
 
 [project.optional-dependencies]
 articulatory = [
-  "speech-articulatory-coding~=0.1",
+  "speech-articulatory-coding~=0.1"
 ]
 nlp = [
   "jiwer>=3.0,<4.0",
-  "nltk~=3.9",
+  "nltk~=3.9"
 ]
 text = [
-  "sentence-transformers~=5.1",
-  "pylangacq~=0.19",
+  "sentence-transformers>=5.1,<5.4",
+  "pylangacq~=0.19"
 ]
 video = [
   "av~=15.0",
   "opencv-python-headless~=4.11",
-  "ultralytics~=8.3",
+  "ultralytics~=8.3"
 ]
 senselab-ai = [
   "jupyterlab~=4.4",
@@ -80,7 +80,7 @@ senselab-ai = [
   "ipywidgets~=8.1",
   "ipykernel~=7.1",
   "nbformat~=5.10",
-  "nbss-upload~=0.1",
+  "nbss-upload~=0.1"
 ]
 
 [project.urls]
@@ -106,10 +106,10 @@ dev = [
   "ipython~=9.7",
   "ipykernel~=7.1",
   "ipywidgets~=8.1",
-  "jupyterlab~=4.4",
+  "jupyterlab~=4.4"
 ]
 docs = [
-  "pdoc~=16.0",
+  "pdoc~=16.0"
 ]
 
 [tool.hatch.build.targets.wheel]

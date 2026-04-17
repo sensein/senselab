@@ -17,12 +17,9 @@ try:
 except ModuleNotFoundError:
     SPEECHBRAIN_AVAILABLE = False
 
-try:
-    import torchaudio  # noqa: F401
+from senselab.utils.dependencies import torchaudio_available
 
-    TORCHAUDIO_AVAILABLE = True
-except ModuleNotFoundError:
-    TORCHAUDIO_AVAILABLE = False
+TORCHAUDIO_AVAILABLE = torchaudio_available()
 
 
 @pytest.fixture

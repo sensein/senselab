@@ -15,9 +15,10 @@ try:
 except ModuleNotFoundError:
     NLTK_AVAILABLE = False
 
-try:
-    import torchaudio  # noqa: F401
+from senselab.utils.dependencies import torchaudio_available
 
+TORCHAUDIO_AVAILABLE = torchaudio_available()
+if TORCHAUDIO_AVAILABLE:
     from senselab.audio.tasks.forced_alignment.data_structures import (
         Point,
         SingleSegment,
@@ -34,10 +35,6 @@ try:
     )
     from senselab.audio.tasks.speech_to_text import transcribe_audios
     from senselab.utils.data_structures.model import HFModel
-
-    TORCHAUDIO_AVAILABLE = True
-except ModuleNotFoundError:
-    TORCHAUDIO_AVAILABLE = False
 
 
 @pytest.fixture

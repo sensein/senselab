@@ -9,14 +9,10 @@ from senselab.audio.tasks.classification.speech_emotion_recognition import (
 )
 from senselab.audio.tasks.preprocessing import resample_audios
 from senselab.utils.data_structures import HFModel
+from senselab.utils.dependencies import torchaudio_available
 from tests.audio.conftest import MONO_AUDIO_PATH
 
-try:
-    import torchaudio  # noqa: F401
-
-    TORCHAUDIO_AVAILABLE = True
-except ModuleNotFoundError:
-    TORCHAUDIO_AVAILABLE = False
+TORCHAUDIO_AVAILABLE = torchaudio_available()
 
 
 @pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not available")

@@ -7,16 +7,14 @@ from datasets import load_dataset
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import Participant, SenselabDataset, Session
+from senselab.utils.dependencies import torchaudio_available
 from senselab.video.data_structures import Video
 from tests.audio.conftest import MONO_AUDIO_PATH, STEREO_AUDIO_PATH
 from tests.video.conftest import VIDEO_PATH
 
-try:
+TORCHAUDIO_AVAILABLE = torchaudio_available()
+if TORCHAUDIO_AVAILABLE:
     import torchaudio
-
-    TORCHAUDIO_AVAILABLE = True
-except ModuleNotFoundError:
-    TORCHAUDIO_AVAILABLE = False
 
 try:
     import librosa

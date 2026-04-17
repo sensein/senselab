@@ -13,13 +13,9 @@ from senselab.audio.tasks.plotting.plotting import (
     plot_specgram,
     plot_waveform,
 )
+from senselab.utils.dependencies import torchaudio_available
 
-try:
-    import torchaudio  # noqa: F401
-
-    TORCHAUDIO_AVAILABLE = True
-except ModuleNotFoundError:
-    TORCHAUDIO_AVAILABLE = False
+TORCHAUDIO_AVAILABLE = torchaudio_available()
 
 
 @pytest.mark.skipif(

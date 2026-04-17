@@ -7,16 +7,14 @@ from typing import Any, Dict, List, Optional, Sequence
 import numpy as np
 import torch
 
-try:
-    import torchaudio
-
-    TORCHAUDIO_AVAILABLE = True
-except ModuleNotFoundError:
-    TORCHAUDIO_AVAILABLE = False
-
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, _select_device_and_dtype
 from senselab.utils.data_structures.logging import logger
+from senselab.utils.dependencies import torchaudio_available
+
+TORCHAUDIO_AVAILABLE = torchaudio_available()
+if TORCHAUDIO_AVAILABLE:
+    import torchaudio
 
 
 def extract_spectrogram_from_audios(

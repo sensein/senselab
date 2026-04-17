@@ -9,7 +9,9 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speaker_diarization import diarize_audios
 from senselab.audio.tasks.speaker_diarization.pyannote import PyannoteDiarization, diarize_audios_with_pyannote
 from senselab.utils.data_structures import DeviceType, PyannoteAudioModel, ScriptLine
+from senselab.utils.data_structures.docker import docker_is_running
 from senselab.utils.data_structures.model import HFModel
+from senselab.utils.dependencies import torchaudio_available
 
 try:
     import pyannote.audio
@@ -18,15 +20,7 @@ try:
 except ModuleNotFoundError:
     PYANNOTE_INSTALLED = False
 
-try:
-    import torchaudio
-
-    TORCHAUDIO_AVAILABLE = True
-except ModuleNotFoundError:
-    TORCHAUDIO_AVAILABLE = False
-
-
-from senselab.utils.data_structures.docker import docker_is_running
+TORCHAUDIO_AVAILABLE = torchaudio_available()
 
 if docker_is_running():
     DOCKER_AVAILABLE = True

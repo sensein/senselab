@@ -18,14 +18,10 @@ from senselab.audio.tasks.input_output import (
     read_audios,
     save_audios,
 )
+from senselab.utils.dependencies import torchaudio_available
 from tests.audio.conftest import MONO_AUDIO_PATH, STEREO_AUDIO_PATH
 
-try:
-    import torchaudio  # noqa: F401
-
-    TORCHAUDIO_AVAILABLE = True
-except ModuleNotFoundError:
-    TORCHAUDIO_AVAILABLE = False
+TORCHAUDIO_AVAILABLE = torchaudio_available()
 
 
 @pytest.mark.skipif(

@@ -6,13 +6,9 @@ import pytest
 from huggingface_hub import HfApi
 
 from senselab.utils.data_structures import HFModel, check_hf_repo_exists
+from senselab.utils.dependencies import torchaudio_available
 
-try:
-    import torchaudio
-
-    TORCHAUDIO_AVAILABLE = True
-except ModuleNotFoundError:
-    TORCHAUDIO_AVAILABLE = False
+TORCHAUDIO_AVAILABLE = torchaudio_available()
 
 
 @pytest.mark.skipif(TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")

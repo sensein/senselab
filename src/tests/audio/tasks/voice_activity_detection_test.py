@@ -14,12 +14,9 @@ try:
 except ModuleNotFoundError:
     PYANNOTE_INSTALLED = False
 
-try:
-    import torchaudio
+from senselab.utils.dependencies import torchaudio_available
 
-    TORCHAUDIO_AVAILABLE = True
-except ModuleNotFoundError:
-    TORCHAUDIO_AVAILABLE = False
+TORCHAUDIO_AVAILABLE = torchaudio_available()
 
 
 @pytest.mark.skipif(PYANNOTE_INSTALLED, reason="Pyannote is installed")
