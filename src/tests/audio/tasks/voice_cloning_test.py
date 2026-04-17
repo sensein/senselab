@@ -6,13 +6,9 @@ import torch
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.voice_cloning import clone_voices
 from senselab.utils.data_structures import CoquiTTSModel, DeviceType
+from senselab.utils.dependencies import torchaudio_available
 
-try:
-    import torchaudio  # noqa: F401
-
-    TORCHAUDIO_AVAILABLE = True
-except ModuleNotFoundError:
-    TORCHAUDIO_AVAILABLE = False
+TORCHAUDIO_AVAILABLE = torchaudio_available()
 
 try:
     from TTS.api import TTS

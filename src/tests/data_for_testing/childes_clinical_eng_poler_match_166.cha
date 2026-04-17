@@ -5,7 +5,7 @@
 @Participants:	CHI Target_Child
 @Options:	multi
 @ID:	eng|POLER|CHI|||Chronic_Match||Target_Child|||
-@Media:	166, audio
+@Media:	childes_clinical_eng_poler_match_166, audio
 @Types:	cross, narrative, TD
 *CHI:	a boy named jack was watching his frog last night . 1_34881
 %mor:	det|a-Ind-Art noun|boy verb|name-Part-Past-S noun|jack aux|be-Fin-Ind-Past-S3 verb|watch-Part-Pres-S pron|his-Prs-Gen-S3 noun|frog adj|last-Pos-S1 noun|night .

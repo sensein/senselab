@@ -9,13 +9,9 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speech_to_text import transcribe_audios
 from senselab.audio.tasks.speech_to_text.huggingface import HuggingFaceASR
 from senselab.utils.data_structures import DeviceType, HFModel, Language, ScriptLine
+from senselab.utils.dependencies import torchaudio_available
 
-try:
-    import torchaudio  # noqa: F401
-
-    TORCHAUDIO_AVAILABLE = True
-except ModuleNotFoundError:
-    TORCHAUDIO_AVAILABLE = False
+TORCHAUDIO_AVAILABLE = torchaudio_available()
 
 
 def test_scriptline_from_dict() -> None:
