@@ -1,11 +1,13 @@
 """Tests for the speech to text task."""
 
 from typing import Callable
+from unittest.mock import Mock
 
 import pytest
 import torch
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.speech_to_text import huggingface as huggingface_asr_module
 from senselab.audio.tasks.speech_to_text import transcribe_audios
 from senselab.audio.tasks.speech_to_text.huggingface import HuggingFaceASR
 from senselab.utils.data_structures import DeviceType, HFModel, Language, ScriptLine
@@ -32,6 +34,56 @@ def test_scriptline_from_dict() -> None:
     assert scriptline.chunks[1].text == "world"
     assert scriptline.chunks[1].get_timestamps()[0] == 1.0
     assert scriptline.chunks[1].get_timestamps()[1] == 2.0
+
+
+def test_transcribe_audios_clamps_negative_timestamp_artifacts(
+    monkeypatch: pytest.MonkeyPatch, resampled_mono_audio_sample: Audio
+) -> None:
+    """Tiny negative Whisper timestamps should be clamped before ScriptLine validation."""
+    fake_pipeline = Mock()
+    fake_pipeline.feature_extractor = Mock(sampling_rate=resampled_mono_audio_sample.sampling_rate)
+    fake_pipeline.return_value = [
+        {
+            "text": "hello world",
+            "chunks": [
+                {"text": "hello", "timestamp": [-0.02, 0.31]},
+                {"text": "world", "timestamp": [0.31, 0.72]},
+            ],
+        }
+    ]
+
+    monkeypatch.setattr(HuggingFaceASR, "_get_hf_asr_pipeline", Mock(return_value=fake_pipeline))
+
+    transcripts = transcribe_audios(
+        audios=[resampled_mono_audio_sample],
+        model=HFModel.model_construct(path_or_uri="openai/whisper-tiny", revision="main", info=None),
+        device=DeviceType.CPU,
+    )
+
+    assert transcripts[0].start == 0.0
+    assert transcripts[0].end == 0.72
+    assert transcripts[0].chunks is not None
+    assert transcripts[0].chunks[0].start == 0.0
+    assert transcripts[0].chunks[0].end == 0.31
+
+
+def test_hf_asr_pipeline_forwards_hf_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The ASR pipeline should forward the Hugging Face token to transformers."""
+    monkeypatch.setattr(HuggingFaceASR, "_pipelines", {})
+    pipeline_mock = Mock()
+    monkeypatch.setenv("HF_TOKEN", "hf_test_token")
+    monkeypatch.setattr(huggingface_asr_module, "pipeline", pipeline_mock)
+
+    HuggingFaceASR._get_hf_asr_pipeline(
+        model=HFModel.model_construct(path_or_uri="openai/whisper-tiny", revision="main", info=None),
+        return_timestamps="word",
+        max_new_tokens=128,
+        chunk_length_s=30,
+        batch_size=1,
+        device=DeviceType.CPU,
+    )
+
+    assert pipeline_mock.call_args.kwargs["token"] == "hf_test_token"
 
 
 @pytest.fixture

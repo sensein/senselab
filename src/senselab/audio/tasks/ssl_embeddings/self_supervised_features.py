@@ -8,6 +8,7 @@ from transformers import AutoFeatureExtractor, AutoModel
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, HFModel, _select_device_and_dtype
+from senselab.utils.dependencies import hf_local_files_only
 
 
 class SSLEmbeddingsFactory:
@@ -33,8 +34,9 @@ class SSLEmbeddingsFactory:
         """
         key = f"{model.path_or_uri}-{model.revision}"
         if key not in cls._feat_extractor:
+            local_only = hf_local_files_only(str(model.path_or_uri), model.revision)
             cls._feat_extractor[key] = AutoFeatureExtractor.from_pretrained(
-                model.path_or_uri, revision=model.revision, cache_dir=cache_dir
+                model.path_or_uri, revision=model.revision, cache_dir=cache_dir, local_files_only=local_only
             )
         return cls._feat_extractor[key]
 
@@ -57,8 +59,9 @@ class SSLEmbeddingsFactory:
         """
         key = f"{model.path_or_uri}-{model.revision}-{device.value}"
         if key not in cls._model:
+            local_only = hf_local_files_only(str(model.path_or_uri), model.revision)
             cls._model[key] = AutoModel.from_pretrained(
-                model.path_or_uri, revision=model.revision, cache_dir=cache_dir
+                model.path_or_uri, revision=model.revision, cache_dir=cache_dir, local_files_only=local_only
             ).to(device.value)
         return cls._model[key]
 

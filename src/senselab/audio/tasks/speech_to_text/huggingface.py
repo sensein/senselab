@@ -6,13 +6,21 @@ function at once, rather than calling the function with one audio at a time.
 """
 
 import time
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional, Union, cast
 
 from transformers import Pipeline, pipeline
 
 from senselab.audio.data_structures import Audio
-from senselab.utils.data_structures import DeviceType, HFModel, Language, ScriptLine, _select_device_and_dtype
+from senselab.utils.data_structures import (
+    DeviceType,
+    HFModel,
+    Language,
+    ScriptLine,
+    _select_device_and_dtype,
+)
 from senselab.utils.data_structures.logging import logger
+from senselab.utils.data_structures.model import get_huggingface_token
+from senselab.utils.dependencies import hf_local_files_only
 
 
 class HuggingFaceASR:
@@ -67,6 +75,8 @@ class HuggingFaceASR:
                     chunk_length_s=chunk_length_s,
                     batch_size=batch_size,
                     device=device.value,
+                    token=get_huggingface_token(),
+                    model_kwargs={"local_files_only": hf_local_files_only(str(model.path_or_uri), model.revision)},
                 ),
             )
         return cls._pipelines[key]
@@ -165,7 +175,9 @@ class HuggingFaceASR:
                 "sampling_rate": audio.sampling_rate,
             }
 
-        def _rename_key_recursive(obj: Dict[str, Any], old_key: str, new_key: str) -> Dict[str, Any]:
+        def _rename_key_recursive(
+            obj: Union[Dict, List, object], old_key: str, new_key: str
+        ) -> Union[Dict, List, object]:
             """Recursively rename keys in a dictionary."""
             if isinstance(obj, dict):
                 for key in list(obj.keys()):
@@ -175,6 +187,25 @@ class HuggingFaceASR:
                         obj[key] = _rename_key_recursive(obj[key], old_key, new_key)
             elif isinstance(obj, list):
                 obj = [_rename_key_recursive(item, old_key, new_key) for item in obj]
+            return obj
+
+        def _sanitize_timestamps_recursive(obj: Union[Dict, List, object]) -> Union[Dict, List, object]:
+            """Clamp backend timestamp artifacts to a valid non-negative range."""
+            if isinstance(obj, dict):
+                if "timestamps" in obj and isinstance(obj["timestamps"], (list, tuple)) and len(obj["timestamps"]) == 2:
+                    start, end = obj["timestamps"]
+                    if start is not None:
+                        start = max(0.0, float(start))
+                    if end is not None:
+                        end = max(0.0, float(end))
+                    if start is not None and end is not None and end < start:
+                        end = start
+                    obj["timestamps"] = [start, end]
+                for key, value in list(obj.items()):
+                    if isinstance(value, (dict, list)):
+                        obj[key] = _sanitize_timestamps_recursive(value)
+            elif isinstance(obj, list):
+                obj = [_sanitize_timestamps_recursive(item) for item in obj]
             return obj
 
         # Take the start time of the pipeline initialization
@@ -232,6 +263,9 @@ class HuggingFaceASR:
 
         # Rename the "timestamp" key to "timestamps"
         transcriptions = _rename_key_recursive(transcriptions, "timestamp", "timestamps")
+        # Whisper can emit tiny negative timestamps (for example -0.02s) on short clips.
+        # Clamp them here so ScriptLine keeps enforcing non-negative times.
+        transcriptions = _sanitize_timestamps_recursive(transcriptions)
 
         # Convert the pipeline output to ScriptLine objects
-        return [ScriptLine.from_dict(cast(Dict[str, Any], t)) for t in transcriptions]
+        return [ScriptLine.from_dict(cast(Dict[str, Any], t)) for t in cast(List, transcriptions)]
