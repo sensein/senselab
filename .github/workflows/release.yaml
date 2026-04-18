@@ -21,21 +21,21 @@ jobs:
         github.event.pull_request.base.ref == 'alpha'
       )
     steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-          fetch-tags: true
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+        fetch-tags: true
 
-      - name: Unset header
-        run: git config --local --unset http.https://github.com/.extraheader
+    - name: Unset header
+      run: git config --local --unset http.https://github.com/.extraheader
 
-      - name: Download auto
-        run: |
-          auto_download_url="$(curl -fsSL https://api.github.com/repos/intuit/auto/releases/tags/$AUTO_VERSION | jq -r '.assets[] | select(.name == "auto-linux.gz") | .browser_download_url')"
-          wget -O- "$auto_download_url" | gunzip > ~/auto
-          chmod a+x ~/auto
+    - name: Download auto
+      run: |
+        auto_download_url="$(curl -fsSL https://api.github.com/repos/intuit/auto/releases/tags/$AUTO_VERSION | jq -r '.assets[] | select(.name == "auto-linux.gz") | .browser_download_url')"
+        wget -O- "$auto_download_url" | gunzip > ~/auto
+        chmod a+x ~/auto
 
-      - name: Create release
-        run: ~/auto shipit -vv
-        env:
-          GH_TOKEN: ${{ secrets.AUTO_ORG_TOKEN }}
+    - name: Create release
+      run: ~/auto shipit -vv
+      env:
+        GH_TOKEN: ${{ secrets.AUTO_ORG_TOKEN }}
