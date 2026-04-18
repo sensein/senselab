@@ -30,13 +30,20 @@ IAM_USER_PREFIX="github-actions-ec2"
 usage() {
   cat <<'USAGE'
 Usage: setup-gpu-ci.sh --profile <aws-profile> --repo <owner/repo> --ami <ami-id> [options]
+       setup-gpu-ci.sh --profile <aws-profile> --build-ami --base-ami <ami-id> [options]
 
-Required:
+Mode 1: Configure repository (default)
   --profile <name>        AWS CLI profile to use
   --repo <owner/repo>     GitHub repository (e.g., sensein/senselab)
-  --ami <ami-id>          Pre-built AMI ID with GPU drivers + venv
+  --ami <ami-id>          Pre-built AMI ID with GPU drivers + uv
 
-Optional:
+Mode 2: Build AMI (--build-ami)
+  --profile <name>        AWS CLI profile to use
+  --build-ami             Build a new AMI from a base Deep Learning AMI
+  --base-ami <ami-id>     Base AMI (AWS Deep Learning AMI recommended)
+  --key-name <name>       EC2 key pair name for SSH access
+
+Optional (both modes):
   --region <region>       AWS region (default: us-east-1)
   --instance-type <type>  Default GPU instance type (default: g4dn.xlarge)
   --vpc <vpc-id>          VPC ID (default: auto-detect default VPC)
@@ -47,7 +54,7 @@ USAGE
   exit 1
 }
 
-PROFILE="" REPO="" AMI="" GH_PAT=""
+PROFILE="" REPO="" AMI="" GH_PAT="" BUILD_AMI=false BASE_AMI="" KEY_NAME=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -59,12 +66,112 @@ while [[ $# -gt 0 ]]; do
     --vpc)          VPC_ID="$2"; shift 2 ;;
     --working-dir)  WORKING_DIR="$2"; shift 2 ;;
     --gh-token)     GH_PAT="$2"; shift 2 ;;
+    --build-ami)    BUILD_AMI=true; shift ;;
+    --base-ami)     BASE_AMI="$2"; shift 2 ;;
+    --key-name)     KEY_NAME="$2"; shift 2 ;;
     --help|-h)      usage ;;
     *) echo "Unknown option: $1"; usage ;;
   esac
 done
 
 [[ -z "$PROFILE" ]] && { echo "ERROR: --profile is required"; usage; }
+
+# ── Mode: Build AMI ──────────────────────────────────────────────────
+if [[ "$BUILD_AMI" == "true" ]]; then
+  [[ -z "$BASE_AMI" ]] && { echo "ERROR: --base-ami is required for --build-ami"; usage; }
+  [[ -z "$KEY_NAME" ]] && { echo "ERROR: --key-name is required for --build-ami"; usage; }
+
+  AWS="aws --profile $PROFILE --region $REGION --output json"
+
+  echo "=== Building GPU CI AMI ==="
+  echo "  Base AMI: $BASE_AMI"
+  echo "  Region: $REGION"
+
+  # Get default VPC and subnet for launching
+  if [[ -z "$VPC_ID" ]]; then
+    VPC_ID=$($AWS ec2 describe-vpcs --filters "Name=is-default,Values=true" \
+      | jq -r '.Vpcs[0].VpcId // empty')
+  fi
+  BUILD_SUBNET=$($AWS ec2 describe-subnets \
+    --filters "Name=vpc-id,Values=$VPC_ID" "Name=default-for-az,Values=true" \
+    | jq -r '.Subnets[0].SubnetId')
+  BUILD_SG=$($AWS ec2 describe-security-groups \
+    --filters "Name=group-name,Values=default" "Name=vpc-id,Values=$VPC_ID" \
+    | jq -r '.SecurityGroups[0].GroupId')
+
+  # Add temporary SSH rule for current IP
+  MY_IP=$(curl -s https://checkip.amazonaws.com)
+  echo "  Adding temporary SSH access for $MY_IP"
+  $AWS ec2 authorize-security-group-ingress \
+    --group-id "$BUILD_SG" \
+    --protocol tcp --port 22 --cidr "${MY_IP}/32" >/dev/null 2>&1 || true
+
+  # Launch builder instance
+  echo "  Launching builder instance ($INSTANCE_TYPE)..."
+  BUILDER_ID=$($AWS ec2 run-instances \
+    --image-id "$BASE_AMI" \
+    --instance-type "$INSTANCE_TYPE" \
+    --key-name "$KEY_NAME" \
+    --security-group-ids "$BUILD_SG" \
+    --subnet-id "$BUILD_SUBNET" \
+    --block-device-mappings '[{"DeviceName":"/dev/xvda","Ebs":{"VolumeSize":100}}]' \
+    --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=gpu-ci-ami-builder}]' \
+    | jq -r '.Instances[0].InstanceId')
+  echo "  Instance: $BUILDER_ID"
+
+  echo "  Waiting for instance to be running..."
+  $AWS ec2 wait instance-running --instance-ids "$BUILDER_ID"
+  BUILDER_IP=$($AWS ec2 describe-instances --instance-ids "$BUILDER_ID" \
+    | jq -r '.Reservations[0].Instances[0].PublicIpAddress')
+  echo "  IP: $BUILDER_IP"
+
+  # Wait for SSH to be ready
+  echo "  Waiting for SSH..."
+  for i in $(seq 1 30); do
+    if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes \
+         -i ~/.ssh/${KEY_NAME}.pem ec2-user@"$BUILDER_IP" 'true' 2>/dev/null; then
+      break
+    fi
+    sleep 5
+  done
+
+  # Configure the instance
+  echo "  Installing uv and system dependencies..."
+  ssh -o StrictHostKeyChecking=no -i ~/.ssh/${KEY_NAME}.pem ec2-user@"$BUILDER_IP" \
+    'sudo dnf install -y jq git && curl -LsSf https://astral.sh/uv/install.sh | sh' 2>&1
+
+  # Verify GPU
+  echo "  Verifying GPU..."
+  ssh -o StrictHostKeyChecking=no -i ~/.ssh/${KEY_NAME}.pem ec2-user@"$BUILDER_IP" \
+    'nvidia-smi && export PATH="$HOME/.local/bin:$PATH" && uv --version'
+
+  # Create AMI
+  echo "  Creating AMI snapshot..."
+  NEW_AMI=$($AWS ec2 create-image \
+    --instance-id "$BUILDER_ID" \
+    --name "gpu-ci-$(date +%Y%m%d)" \
+    --description "Amazon Linux 2023 + CUDA + uv for GPU CI" \
+    --no-reboot \
+    | jq -r '.ImageId')
+  echo "  AMI: $NEW_AMI"
+
+  # Terminate builder
+  echo "  Terminating builder instance..."
+  $AWS ec2 terminate-instances --instance-ids "$BUILDER_ID" >/dev/null
+
+  # Remove temporary SSH rule
+  $AWS ec2 revoke-security-group-ingress \
+    --group-id "$BUILD_SG" \
+    --protocol tcp --port 22 --cidr "${MY_IP}/32" >/dev/null 2>&1 || true
+
+  echo ""
+  echo "=== AMI build complete ==="
+  echo "  AMI ID: $NEW_AMI"
+  echo "  Use with: ./scripts/setup-gpu-ci.sh --profile $PROFILE --repo <owner/repo> --ami $NEW_AMI"
+  exit 0
+fi
+
+# ── Mode: Configure repository ────────────────────────────────────────
 [[ -z "$REPO" ]] && { echo "ERROR: --repo is required"; usage; }
 [[ -z "$AMI" ]] && { echo "ERROR: --ami is required"; usage; }
 
@@ -166,16 +273,19 @@ REPO_SLUG=$(echo "$REPO" | tr '/' '-')
 IAM_USER="${IAM_USER_PREFIX}-${REPO_SLUG}"
 
 USER_EXISTS=$($AWS iam get-user --user-name "$IAM_USER" 2>/dev/null | jq -r '.User.UserName // empty' || true)
+CREATED_NEW_USER=false
 
 if [[ -n "$USER_EXISTS" ]]; then
   echo "  IAM user '$IAM_USER' already exists"
-  echo "  Checking for existing access keys..."
   KEY_COUNT=$($AWS iam list-access-keys --user-name "$IAM_USER" | jq '.AccessKeyMetadata | length')
   if [[ "$KEY_COUNT" -gt 0 ]]; then
-    echo "  WARNING: User has $KEY_COUNT existing access key(s)."
-    echo "  To rotate: delete old keys via AWS console, then re-run this script."
+    echo "  User has $KEY_COUNT existing access key(s)"
+  else
+    echo "  User has no access keys — will create one"
+    CREATED_NEW_USER=true
   fi
 else
+  CREATED_NEW_USER=true
   echo "  Creating IAM user: $IAM_USER"
   $AWS iam create-user --user-name "$IAM_USER" >/dev/null
 
@@ -221,8 +331,8 @@ set +x 2>/dev/null || true
 # Check if secrets already exist (gh secret list returns them)
 EXISTING_SECRETS=$(gh secret list --repo "$REPO" 2>/dev/null | awk '{print $1}' || true)
 
-if echo "$EXISTING_SECRETS" | grep -q "^AWS_KEY_ID$"; then
-  echo "  AWS_KEY_ID secret already exists — skipping key creation"
+if echo "$EXISTING_SECRETS" | grep -q "^AWS_KEY_ID$" && [[ "$CREATED_NEW_USER" == "false" ]]; then
+  echo "  AWS_KEY_ID secret already exists and IAM user has keys — skipping"
   echo "  To rotate: delete the secret in GitHub and the IAM key, then re-run."
 else
   echo "  Creating new access key and setting GitHub secrets..."
