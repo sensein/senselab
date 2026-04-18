@@ -1,6 +1,7 @@
 {
-    "onlyPublishWithReleaseLabel": true,
+    "onlyPublishWithReleaseLabel": false,
     "baseBranch": "main",
+    "prereleaseBranches": ["alpha"],
     "author": "bot <fabiocat@mit.edu>",
     "noVersionPrefix": true,
     "plugins": ["git-tag"]

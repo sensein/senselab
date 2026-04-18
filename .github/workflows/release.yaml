@@ -1,33 +1,33 @@
-name: Auto-release
+name: Auto-release on PR merge
 
 on:
-  push:
-    branches:
-    - main
+  pull_request:
+    branches: [main, alpha]
+    types: [closed]
 
 env:
-  AUTO_VERSION: v11.1.2
+  AUTO_VERSION: v11.2.1
 
 jobs:
   auto-release:
+    name: Create release
     runs-on: ubuntu-latest
-
+    # Stable release: merged PR to main with 'release' label
+    # Alpha pre-release: merged PR to alpha (no label needed)
+    if: >-
+      github.event.pull_request.merged == true &&
+      (
+        contains(github.event.pull_request.labels.*.name, 'release') ||
+        github.event.pull_request.base.ref == 'alpha'
+      )
     steps:
     - uses: actions/checkout@v5
-
-    - name: Prepare repository
-        # Fetch full git history and tags
-      run: git fetch --unshallow --tags
+      with:
+        fetch-depth: 0
+        fetch-tags: true
 
     - name: Unset header
-        # checkout@v2 adds a header that makes branch protection report errors
-        # because the Github action bot is not a collaborator on the repo
       run: git config --local --unset http.https://github.com/.extraheader
-
-    - name: Set up Python
-      uses: actions/setup-python@v6
-      with:
-        python-version: '3.11'
 
     - name: Download auto
       run: |
@@ -36,7 +36,6 @@ jobs:
         chmod a+x ~/auto
 
     - name: Create release
-      run: |
-        ~/auto shipit -vv
+      run: ~/auto shipit -vv
       env:
         GH_TOKEN: ${{ secrets.AUTO_ORG_TOKEN }}
