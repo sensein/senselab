@@ -7,6 +7,7 @@ from typing import ClassVar, Dict, Generic, Optional, Tuple, TypeVar, Union
 
 import requests
 import torch
+from dotenv import dotenv_values, find_dotenv
 from huggingface_hub import HfApi
 from huggingface_hub.errors import RepositoryNotFoundError, RevisionNotFoundError
 from huggingface_hub.hf_api import ModelInfo
@@ -81,14 +82,11 @@ class HFModel(SenselabModel[PROVIDER_T]):
         """
         path_or_uri = info.data["path_or_uri"]
         if not isinstance(path_or_uri, Path):
-            # hf_result = cls._hf_cache.setdefault((str(path_or_uri),value),
-            #        check_hf_repo_exists(repo_id=str(path_or_uri), revision=value, repo_type="model"))
             if (str(path_or_uri), value) not in cls._hf_cache:
-                hf_result = check_hf_repo_exists(repo_id=str(path_or_uri), revision=value, repo_type="model")
-                print("called hf repo:", path_or_uri, value)
-                cls._hf_cache[(str(path_or_uri), value)] = hf_result
+                cls._hf_cache[(str(path_or_uri), value)] = check_hf_repo_exists(
+                    repo_id=str(path_or_uri), revision=value, repo_type="model"
+                )
 
-            # if not hf_result:
             if not cls._hf_cache[(str(path_or_uri), value)]:
                 raise ValueError(
                     f"The huggingface model: path_or_uri ({path_or_uri}) or "
@@ -105,7 +103,7 @@ class HFModel(SenselabModel[PROVIDER_T]):
         if isinstance(self.path_or_uri, Path):
             raise ValueError("Model info is only available for remote resources and not for files.")
         if not self.info:
-            api = HfApi()
+            api = HfApi(token=get_huggingface_token())
             self.info = api.model_info(repo_id=self.path_or_uri, revision=self.revision)
         return self.info
 
@@ -216,20 +214,48 @@ def is_torch_model(file_path: Path) -> bool:
         return False
 
 
+def get_huggingface_token(env_file_path: Optional[Union[str, Path]] = None) -> Optional[str]:
+    """Return a Hugging Face token from the environment or a local `.env` file."""
+    token_env_vars = ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_HUB_TOKEN")
+    for env_var in token_env_vars:
+        token = os.getenv(env_var)
+        if token:
+            return token
+
+    dotenv_path = Path(env_file_path).expanduser() if env_file_path is not None else Path(find_dotenv(usecwd=True))
+    if not dotenv_path.is_file():
+        return None
+
+    dotenv_values_dict = dotenv_values(dotenv_path)
+    for env_var in token_env_vars:
+        token = dotenv_values_dict.get(env_var)
+        if token:
+            return str(token)
+    return None
+
+
 def check_hf_repo_exists(repo_id: str, revision: str = "main", repo_type: str = "model") -> bool:
-    """Private function to check if a Hugging Face repository exists."""
-    api = HfApi()
+    """Check if a Hugging Face repository exists.
+
+    For models, uses :func:`ensure_hf_model` which coordinates across
+    processes via file locking and caches results on the shared filesystem.
+    """
+    if repo_type == "model":
+        from senselab.utils.dependencies import ensure_hf_model
+
+        try:
+            ensure_hf_model(repo_id, revision)
+            return True
+        except Exception:
+            return False
+
+    # Non-model repos (rare): direct API check
+    api = HfApi(token=get_huggingface_token())
     try:
-        if repo_type == "model":
-            api.model_info(repo_id=repo_id, revision=revision)
-        else:
-            api.list_repo_commits(repo_id=repo_id, revision=revision, repo_type=repo_type)
+        api.list_repo_commits(repo_id=repo_id, revision=revision, repo_type=repo_type)
         return True
     except (RepositoryNotFoundError, RevisionNotFoundError):
         return False
-    except Exception as e:
-        raise RuntimeError(f"An error occurred checking HF repos not related to Repository and revisions existing: {e}")
-        # return False
 
 
 @lru_cache(maxsize=128)
