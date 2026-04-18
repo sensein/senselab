@@ -11,6 +11,7 @@ on:
 
 jobs:
   build-docs:
+    if: ${{ !github.event.release.prerelease }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
