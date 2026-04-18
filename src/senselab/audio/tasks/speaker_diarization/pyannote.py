@@ -9,6 +9,7 @@ from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, PyannoteAudioModel, ScriptLine, _select_device_and_dtype
 from senselab.utils.data_structures.logging import logger
 from senselab.utils.data_structures.model import get_huggingface_token
+from senselab.utils.dependencies import retry_on_transient_error
 
 try:
     from pyannote.audio import Pipeline
@@ -60,7 +61,8 @@ class PyannoteDiarization:
         )
         key = f"{model.path_or_uri}-{model.revision}-{device}"
         if key not in cls._pipelines:
-            pipeline = Pipeline.from_pretrained(
+            pipeline = retry_on_transient_error(
+                Pipeline.from_pretrained,
                 checkpoint=f"{model.path_or_uri}",
                 revision=f"{model.revision}",
                 token=get_huggingface_token(),

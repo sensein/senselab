@@ -7,6 +7,7 @@ import torch.nn.functional as F
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, SpeechBrainModel, _select_device_and_dtype
+from senselab.utils.dependencies import retry_on_transient_error
 
 try:
     from speechbrain.inference.speaker import EncoderClassifier
@@ -51,8 +52,8 @@ class SpeechBrainEmbeddings:
         )
         key = f"{model.path_or_uri}-{model.revision}-{device.value}"
         if key not in cls._models:
-            cls._models[key] = EncoderClassifier.from_hparams(
-                source=model.path_or_uri, run_opts={"device": device.value}
+            cls._models[key] = retry_on_transient_error(
+                EncoderClassifier.from_hparams, source=model.path_or_uri, run_opts={"device": device.value}
             )
         return cls._models[key]
 

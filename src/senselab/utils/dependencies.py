@@ -7,7 +7,7 @@ import threading
 import time
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional, TypeVar
 
 logger = logging.getLogger("senselab")
 
@@ -21,6 +21,88 @@ def torchaudio_available() -> bool:
         return True
     except (ImportError, RuntimeError):
         return False
+
+
+# ---------------------------------------------------------------------------
+# General-purpose retry for transient network errors
+# ---------------------------------------------------------------------------
+
+_TRANSIENT_EXCEPTIONS = (
+    ConnectionError,
+    TimeoutError,
+    OSError,
+)
+
+try:
+    from urllib.error import HTTPError as UrllibHTTPError
+
+    _TRANSIENT_EXCEPTIONS = (*_TRANSIENT_EXCEPTIONS, UrllibHTTPError)  # type: ignore[assignment]
+except ImportError:
+    pass
+
+try:
+    from requests.exceptions import ConnectionError as RequestsConnectionError
+    from requests.exceptions import HTTPError as RequestsHTTPError
+    from requests.exceptions import Timeout as RequestsTimeout
+
+    _TRANSIENT_EXCEPTIONS = (*_TRANSIENT_EXCEPTIONS, RequestsConnectionError, RequestsHTTPError, RequestsTimeout)  # type: ignore[assignment]
+except ImportError:
+    pass
+
+
+def _is_transient(exc: Exception) -> bool:
+    """Return True if the exception looks like a transient network error."""
+    if isinstance(exc, _TRANSIENT_EXCEPTIONS):
+        # For HTTP errors, only retry on server-side codes (5xx) and 429 (rate limit)
+        status = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+        if status is not None:
+            return int(status) >= 429
+        return True
+    return False
+
+
+_T = TypeVar("_T")
+
+
+def retry_on_transient_error(
+    fn: Callable[..., _T],
+    *args: object,
+    max_retries: Optional[int] = None,
+    **kwargs: object,
+) -> _T:
+    """Call *fn* with retries on transient network errors.
+
+    Retries with exponential backoff (1s, 2s, 4s, ...) on connection errors,
+    timeouts, and HTTP 5xx/429 responses.  Non-transient exceptions (including
+    HTTP 4xx other than 429) are raised immediately.
+
+    Args:
+        fn: The callable to invoke.
+        *args: Positional arguments forwarded to *fn*.
+        max_retries: Override for ``SENSELAB_HF_MAX_RETRIES`` (default 3).
+        **kwargs: Keyword arguments forwarded to *fn*.
+
+    Returns:
+        The return value of *fn*.
+    """
+    retries = max_retries if max_retries is not None else int(os.environ.get("SENSELAB_HF_MAX_RETRIES", "3"))
+    for attempt in range(retries):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:
+            if _is_transient(exc) and attempt < retries - 1:
+                wait = 2**attempt
+                logger.warning(
+                    "Transient error on attempt %d/%d: %s. Retrying in %ds...",
+                    attempt + 1,
+                    retries,
+                    exc,
+                    wait,
+                )
+                time.sleep(wait)
+            else:
+                raise
+    raise RuntimeError("Unreachable")  # pragma: no cover
 
 
 # ---------------------------------------------------------------------------
@@ -263,42 +345,27 @@ def ensure_hf_model(repo_id: str, revision: str = "main", token: Optional[str] =
                 return str(cached["commit_hash"])
             raise _cached_error(cached)
 
-        # Download with retries
+        # Download with retries on transient errors
         resolved_token = token or get_huggingface_token()
-        max_retries = int(os.environ.get("SENSELAB_HF_MAX_RETRIES", "3"))
-        for attempt in range(max_retries):
-            try:
-                snapshot_download(
-                    repo_id=repo_id,
-                    revision=revision,
-                    token=resolved_token,
-                )
-                commit_hash = _get_cached_commit_hash(repo_id, revision)
-                _write_result_cache(repo_id, revision, status="ok", commit_hash=commit_hash)
-                return commit_hash
-            except (RepositoryNotFoundError, RevisionNotFoundError) as exc:
-                _write_result_cache(
-                    repo_id,
-                    revision,
-                    status="error",
-                    error_type=type(exc).__name__,
-                    error_message=str(exc),
-                )
-                raise
-            except Exception as exc:
-                if attempt < max_retries - 1:
-                    wait = 2**attempt
-                    logger.warning(
-                        "HF download attempt %d/%d failed for %s@%s: %s. Retrying in %ds...",
-                        attempt + 1,
-                        max_retries,
-                        repo_id,
-                        revision,
-                        exc,
-                        wait,
-                    )
-                    time.sleep(wait)
-                else:
-                    raise
+        try:
+            retry_on_transient_error(
+                snapshot_download,
+                repo_id=repo_id,
+                revision=revision,
+                token=resolved_token,
+            )
+            commit_hash = _get_cached_commit_hash(repo_id, revision)
+            _write_result_cache(repo_id, revision, status="ok", commit_hash=commit_hash)
+            return commit_hash
+        except (RepositoryNotFoundError, RevisionNotFoundError) as exc:
+            # Definitive failure — cache so other processes don't repeat the API call
+            _write_result_cache(
+                repo_id,
+                revision,
+                status="error",
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
+            raise
     # Should never reach here, but satisfy mypy
     raise RuntimeError("Unreachable")  # pragma: no cover

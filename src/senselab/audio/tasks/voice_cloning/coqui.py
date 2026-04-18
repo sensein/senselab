@@ -13,6 +13,7 @@ from pathlib import Path
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import CoquiTTSModel, DeviceType, _select_device_and_dtype
+from senselab.utils.dependencies import retry_on_transient_error
 
 
 class CoquiVoiceCloner:
@@ -32,7 +33,7 @@ class CoquiVoiceCloner:
         )
         key = f"{model_id}-{device.value}"
         if key not in cls._models:
-            tts = TTS(model_id).to(device=device.value)
+            tts = retry_on_transient_error(TTS, model_id).to(device=device.value)
             cls._models[key] = tts
         return cls._models[key]
 
