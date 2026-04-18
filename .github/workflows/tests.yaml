@@ -173,20 +173,12 @@ jobs:
     - uses: actions/checkout@v5
       with:
         fetch-depth: 1
-    - name: Set up venv from pre-installed base
+    - name: Set up environment with uv
       run: |
         set -ex
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
-        BASE_VENV="${EC2_USER_HOME}/senselab-env"
-        if [ -d "$BASE_VENV" ]; then
-          echo "Found pre-installed base venv at $BASE_VENV"
-          cp -a "$BASE_VENV" .venv
-        else
-          echo "No base venv found — creating from scratch"
-          uv venv --python 3.11
-        fi
         mkdir -p "$WORKING_DIR" "$HF_HOME" "$TORCH_HOME"
-        uv pip install ".[dev]"
+        uv sync --group dev
     - name: Verify GPU access
       run: |
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
@@ -302,20 +294,12 @@ jobs:
     - uses: actions/checkout@v5
       with:
         fetch-depth: 1
-    - name: Set up venv from pre-installed base
+    - name: Set up environment with uv
       run: |
         set -ex
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
-        BASE_VENV="${EC2_USER_HOME}/senselab-env"
-        if [ -d "$BASE_VENV" ]; then
-          echo "Found pre-installed base venv at $BASE_VENV"
-          cp -a "$BASE_VENV" .venv
-        else
-          echo "No base venv found — creating from scratch"
-          uv venv --python 3.11
-        fi
         mkdir -p "$WORKING_DIR" "$HF_HOME" "$TORCH_HOME"
-        uv pip install ".[text,video,dev]"
+        uv sync --extra text --extra video --group dev
     - name: Verify GPU access
       run: |
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
@@ -435,16 +419,8 @@ jobs:
       run: |
         set -ex
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
-        BASE_VENV="${EC2_USER_HOME}/senselab-env"
-        if [ -d "$BASE_VENV" ]; then
-          echo "Found pre-installed base venv at $BASE_VENV"
-          cp -a "$BASE_VENV" .venv
-        else
-          echo "No base venv found — creating from scratch"
-          uv venv --python 3.12
-        fi
         mkdir -p "$WORKING_DIR" "$HF_HOME" "$TORCH_HOME"
-        uv pip install ".[text,video,dev]"
+        uv sync --python 3.12 --extra text --extra video --group dev
     - name: Verify GPU access
       run: |
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"

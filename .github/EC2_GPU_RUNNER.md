@@ -65,41 +65,17 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 source $HOME/.local/bin/env
 ```
 
-#### Create the pre-installed senselab venv
-
-The CI workflow expects a venv at `~/senselab-env` with heavy dependencies
-already installed. This avoids re-downloading multi-GB packages on every run.
-
-```bash
-uv venv --python 3.12 ~/senselab-env
-
-# Install the heavy GPU dependencies into the base venv
-uv pip install \
-  torch \
-  torchaudio \
-  torchvision \
-  transformers \
-  datasets \
-  speechbrain \
-  pyannote-audio \
-  accelerate \
-  pytest \
-  pytest-xdist \
-  pytest-cov
-```
-
 #### Verify GPU access
 
+The CI workflow uses `uv sync` to create a fresh venv on each run, so no
+pre-built venv is needed. This allows testing with different PyTorch versions
+without rebuilding the AMI. The AMI only needs CUDA drivers and uv.
+
+Verify the NVIDIA driver and CUDA are functional:
+
 ```bash
-source ~/senselab-env/bin/activate
-python -c "
-import torch
-assert torch.cuda.is_available(), 'CUDA not available'
-print(f'GPU: {torch.cuda.get_device_name(0)}')
-print(f'CUDA: {torch.version.cuda}')
-print(f'PyTorch: {torch.__version__}')
-"
-deactivate
+nvidia-smi
+python3 -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
 ```
 
 ### 3. Create the AMI
@@ -195,11 +171,13 @@ Add labels to PRs for custom instance selection:
 }
 ```
 
-## Updating the base venv
+## Updating the AMI
 
-When upgrading PyTorch or other dependencies:
+The AMI only contains CUDA drivers and uv — Python dependencies are installed
+fresh on each run via `uv sync`. Rebuild the AMI only when:
 
-1. Launch an instance from the current AMI
-2. SSH in and update: `uv pip install --upgrade torch torchaudio torchvision`
-3. Create a new AMI snapshot
-4. Update `AWS_IMAGE_ID` in GitHub repo variables
+- NVIDIA drivers need updating
+- uv needs updating
+- System packages (jq, git, ffmpeg) need updating
+
+To rebuild, repeat steps 1-4 above with a newer base AMI.
