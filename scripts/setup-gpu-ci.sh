@@ -42,6 +42,7 @@ Mode 2: Build AMI (--build-ami)
   --build-ami             Build a new AMI from a base Deep Learning AMI
   --base-ami <ami-id>     Base AMI (AWS Deep Learning AMI recommended)
   --key-name <name>       EC2 key pair name for SSH access
+  --ssh-key <path>        Path to SSH private key (default: ~/.ssh/<key-name>.pem)
 
 Optional (both modes):
   --region <region>       AWS region (default: us-east-1)
@@ -54,7 +55,7 @@ USAGE
   exit 1
 }
 
-PROFILE="" REPO="" AMI="" GH_PAT="" BUILD_AMI=false BASE_AMI="" KEY_NAME=""
+PROFILE="" REPO="" AMI="" GH_PAT="" BUILD_AMI=false BASE_AMI="" KEY_NAME="" SSH_KEY=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -69,6 +70,7 @@ while [[ $# -gt 0 ]]; do
     --build-ami)    BUILD_AMI=true; shift ;;
     --base-ami)     BASE_AMI="$2"; shift 2 ;;
     --key-name)     KEY_NAME="$2"; shift 2 ;;
+    --ssh-key)      SSH_KEY="$2"; shift 2 ;;
     --help|-h)      usage ;;
     *) echo "Unknown option: $1"; usage ;;
   esac
@@ -79,13 +81,40 @@ done
 # ── Mode: Build AMI ──────────────────────────────────────────────────
 if [[ "$BUILD_AMI" == "true" ]]; then
   [[ -z "$BASE_AMI" ]] && { echo "ERROR: --base-ami is required for --build-ami"; usage; }
-  [[ -z "$KEY_NAME" ]] && { echo "ERROR: --key-name is required for --build-ami"; usage; }
 
   AWS="aws --profile $PROFILE --region $REGION --output json"
 
+  # Resolve SSH key path: --ssh-key > --key-name derived path > error
+  if [[ -z "$SSH_KEY" && -n "$KEY_NAME" ]]; then
+    for candidate in ~/.ssh/"${KEY_NAME}.pem" ~/.ssh/"${KEY_NAME}" ~/.ssh/id_rsa ~/.ssh/id_ed25519; do
+      if [[ -f "$candidate" ]]; then
+        SSH_KEY="$candidate"
+        break
+      fi
+    done
+  fi
+  [[ -z "$SSH_KEY" ]] && { echo "ERROR: --ssh-key <path> or --key-name with matching key file is required for --build-ami"; usage; }
+  [[ ! -f "$SSH_KEY" ]] && { echo "ERROR: SSH key not found: $SSH_KEY"; exit 1; }
+
+  # Detect SSH user from base AMI (Amazon Linux = ec2-user, Ubuntu = ubuntu)
+  AMI_NAME=$($AWS ec2 describe-images --image-ids "$BASE_AMI" \
+    | jq -r '.Images[0].Name // ""')
+  if echo "$AMI_NAME" | grep -qi ubuntu; then
+    SSH_USER="ubuntu"
+  else
+    SSH_USER="ec2-user"
+  fi
+
+  # Detect root device from base AMI
+  ROOT_DEVICE=$($AWS ec2 describe-images --image-ids "$BASE_AMI" \
+    | jq -r '.Images[0].RootDeviceName // "/dev/xvda"')
+
   echo "=== Building GPU CI AMI ==="
-  echo "  Base AMI: $BASE_AMI"
+  echo "  Base AMI: $BASE_AMI ($AMI_NAME)"
   echo "  Region: $REGION"
+  echo "  SSH key: $SSH_KEY"
+  echo "  SSH user: $SSH_USER"
+  echo "  Root device: $ROOT_DEVICE"
 
   # Get default VPC and subnet for launching
   if [[ -z "$VPC_ID" ]]; then
@@ -106,16 +135,20 @@ if [[ "$BUILD_AMI" == "true" ]]; then
     --group-id "$BUILD_SG" \
     --protocol tcp --port 22 --cidr "${MY_IP}/32" >/dev/null 2>&1 || true
 
+  # Build launch args
+  LAUNCH_ARGS=(
+    --image-id "$BASE_AMI"
+    --instance-type "$INSTANCE_TYPE"
+    --security-group-ids "$BUILD_SG"
+    --subnet-id "$BUILD_SUBNET"
+    --block-device-mappings "[{\"DeviceName\":\"${ROOT_DEVICE}\",\"Ebs\":{\"VolumeSize\":100}}]"
+    --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=${REPO_SLUG:-gpu-ci}-ami-builder}]"
+  )
+  [[ -n "$KEY_NAME" ]] && LAUNCH_ARGS+=(--key-name "$KEY_NAME")
+
   # Launch builder instance
   echo "  Launching builder instance ($INSTANCE_TYPE)..."
-  BUILDER_ID=$($AWS ec2 run-instances \
-    --image-id "$BASE_AMI" \
-    --instance-type "$INSTANCE_TYPE" \
-    --key-name "$KEY_NAME" \
-    --security-group-ids "$BUILD_SG" \
-    --subnet-id "$BUILD_SUBNET" \
-    --block-device-mappings '[{"DeviceName":"/dev/xvda","Ebs":{"VolumeSize":100}}]' \
-    --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=gpu-ci-ami-builder}]' \
+  BUILDER_ID=$($AWS ec2 run-instances "${LAUNCH_ARGS[@]}" \
     | jq -r '.Instances[0].InstanceId')
   echo "  Instance: $BUILDER_ID"
 
@@ -125,32 +158,42 @@ if [[ "$BUILD_AMI" == "true" ]]; then
     | jq -r '.Reservations[0].Instances[0].PublicIpAddress')
   echo "  IP: $BUILDER_IP"
 
+  SSH_OPTS=(-o StrictHostKeyChecking=no -o ConnectTimeout=5)
+  [[ "$SSH_KEY" == *.pem || "$SSH_KEY" == *id_* ]] && SSH_OPTS+=(-i "$SSH_KEY")
+
   # Wait for SSH to be ready
   echo "  Waiting for SSH..."
   for i in $(seq 1 30); do
-    if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes \
-         -i ~/.ssh/${KEY_NAME}.pem ec2-user@"$BUILDER_IP" 'true' 2>/dev/null; then
+    if ssh "${SSH_OPTS[@]}" -o BatchMode=yes "${SSH_USER}@${BUILDER_IP}" 'true' 2>/dev/null; then
       break
     fi
     sleep 5
   done
 
-  # Configure the instance
+  # Configure the instance — detect package manager (dnf for AL2023, apt for Ubuntu)
   echo "  Installing uv and system dependencies..."
-  ssh -o StrictHostKeyChecking=no -i ~/.ssh/${KEY_NAME}.pem ec2-user@"$BUILDER_IP" \
-    'sudo dnf install -y jq git && curl -LsSf https://astral.sh/uv/install.sh | sh' 2>&1
+  ssh "${SSH_OPTS[@]}" "${SSH_USER}@${BUILDER_IP}" bash -s <<'REMOTE_SETUP'
+set -ex
+if command -v dnf &>/dev/null; then
+  sudo dnf install -y jq git
+elif command -v apt-get &>/dev/null; then
+  sudo apt-get update && sudo apt-get install -y jq git
+fi
+curl -LsSf https://astral.sh/uv/install.sh | sh
+REMOTE_SETUP
 
   # Verify GPU
   echo "  Verifying GPU..."
-  ssh -o StrictHostKeyChecking=no -i ~/.ssh/${KEY_NAME}.pem ec2-user@"$BUILDER_IP" \
+  ssh "${SSH_OPTS[@]}" "${SSH_USER}@${BUILDER_IP}" \
     'nvidia-smi && export PATH="$HOME/.local/bin:$PATH" && uv --version'
 
   # Create AMI
+  REPO_SLUG=$(echo "${REPO:-gpu-ci}" | tr '/' '-')
   echo "  Creating AMI snapshot..."
   NEW_AMI=$($AWS ec2 create-image \
     --instance-id "$BUILDER_ID" \
-    --name "gpu-ci-$(date +%Y%m%d)" \
-    --description "Amazon Linux 2023 + CUDA + uv for GPU CI" \
+    --name "${REPO_SLUG}-gpu-ci-$(date +%Y%m%d)" \
+    --description "GPU CI AMI with CUDA + uv (built from $BASE_AMI)" \
     --no-reboot \
     | jq -r '.ImageId')
   echo "  AMI: $NEW_AMI"
@@ -167,7 +210,7 @@ if [[ "$BUILD_AMI" == "true" ]]; then
   echo ""
   echo "=== AMI build complete ==="
   echo "  AMI ID: $NEW_AMI"
-  echo "  Use with: ./scripts/setup-gpu-ci.sh --profile $PROFILE --repo <owner/repo> --ami $NEW_AMI"
+  echo "  Use with: ./scripts/setup-gpu-ci.sh --profile $PROFILE --repo <owner/repo> --ami $NEW_AMI --region $REGION"
   exit 0
 fi
 
