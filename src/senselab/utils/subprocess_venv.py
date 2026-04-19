@@ -3,15 +3,21 @@
 Uses uv to create and manage isolated virtual environments for backends
 that conflict with the core senselab installation. IPC uses a temp
 directory with:
-- manifest.json: call spec + JSON-serializable args
+- manifest.json: call spec + JSON-serializable args + file metadata
 - *.safetensors: tensor data (via safetensors, already a dep)
 - *.flac: audio data (lossless compressed via torchaudio)
 - *.npy: numpy arrays
 
-The subprocess runs a shim that unpacks, calls the function, and
-packs the result using the same format.
+File references include optional integrity metadata:
+- checksum (SHA-256) for verifying data integrity
+- readonly flag to prevent in-place modification
+- file locks with heartbeat for concurrent access safety
+
+Safety features are configurable via ``safe_mode`` to minimize
+overhead for simple single-process workflows.
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -19,6 +25,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -27,6 +36,108 @@ from filelock import FileLock
 logger = logging.getLogger("senselab")
 
 _DEFAULT_CACHE_DIR = Path.home() / ".cache" / "senselab" / "venvs"
+
+
+# ── File reference with integrity metadata ────────────────────────────
+
+
+@dataclass
+class FileRef:
+    """A file reference with optional integrity and concurrency metadata.
+
+    Use this to wrap file paths passed to ``call_in_venv`` when you need
+    checksum verification, read-only enforcement, or file locking.
+
+    For simple workflows, pass raw ``Path`` objects instead — no overhead.
+
+    Args:
+        path: Path to the file.
+        readonly: If True, the subprocess receives a read-only copy or
+            is instructed not to modify the file in-place. Default True.
+        checksum: If True, compute SHA-256 before sending and verify
+            after receiving. Catches corruption or unintended mutation.
+        lock: If True, acquire a file lock (with heartbeat) for the
+            duration of the subprocess call. Prevents parallel processes
+            from mutating the file.
+        lock_timeout: Max seconds to wait for the lock. Default 300.
+    """
+
+    path: Path
+    readonly: bool = True
+    checksum: bool = False
+    lock: bool = False
+    lock_timeout: int = 300
+    _computed_hash: Optional[str] = field(default=None, repr=False)
+
+    def compute_checksum(self) -> str:
+        """Compute SHA-256 of the file."""
+        h = hashlib.sha256()
+        with open(self.path, "rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                h.update(chunk)
+        self._computed_hash = h.hexdigest()
+        return self._computed_hash
+
+    def verify_checksum(self) -> bool:
+        """Verify the file matches the previously computed checksum."""
+        if self._computed_hash is None:
+            raise ValueError("No checksum computed yet — call compute_checksum() first")
+        current = hashlib.sha256()
+        with open(self.path, "rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                current.update(chunk)
+        return current.hexdigest() == self._computed_hash
+
+    def to_manifest(self) -> dict:
+        """Serialize metadata for the IPC manifest."""
+        entry: dict = {
+            "type": "fileref",
+            "path": str(self.path),
+            "readonly": self.readonly,
+        }
+        if self.checksum and self._computed_hash:
+            entry["checksum"] = self._computed_hash
+        return entry
+
+
+class _FileLockWithHeartbeat:
+    """A file lock that touches a heartbeat file while held.
+
+    Other processes can check the heartbeat to distinguish a live lock
+    holder from a crashed one.
+    """
+
+    def __init__(self, path: Path, timeout: int = 300, heartbeat_interval: int = 15) -> None:
+        self._lock = FileLock(str(path.with_suffix(".lock")), timeout=timeout)
+        self._heartbeat_path = path.with_suffix(".heartbeat")
+        self._interval = heartbeat_interval
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    def _beat(self) -> None:
+        while not self._stop.wait(self._interval):
+            try:
+                self._heartbeat_path.touch()
+            except OSError:
+                pass
+
+    def __enter__(self) -> "_FileLockWithHeartbeat":
+        self._lock.acquire()
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._beat, daemon=True)
+        self._thread.start()
+        self._heartbeat_path.touch()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=5)
+        try:
+            self._heartbeat_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        self._lock.release()
 
 
 def _cache_dir() -> Path:
@@ -123,6 +234,7 @@ def _pack_value(key: str, value: object, data_dir: Path) -> dict:
     """Pack a single value into the container, returning its manifest entry.
 
     Codec selection by type:
+    - FileRef → path reference with integrity metadata
     - torch.Tensor → safetensors (fast, safe, HF standard)
     - numpy.ndarray → .npy (native numpy)
     - senselab Audio → .flac (lossless compressed audio)
@@ -135,6 +247,12 @@ def _pack_value(key: str, value: object, data_dir: Path) -> dict:
     import numpy as np
     import torch
     from safetensors.torch import save_file
+
+    # FileRef → path reference with integrity metadata
+    if isinstance(value, FileRef):
+        if value.checksum:
+            value.compute_checksum()
+        return value.to_manifest()
 
     # torch.Tensor → safetensors
     if isinstance(value, torch.Tensor):
@@ -201,6 +319,14 @@ def _unpack_value(entry: dict, data_dir: Path) -> object:
         return {"waveform": waveform, "sampling_rate": sr}
     if btype == "path":
         return Path(entry["value"])
+    if btype == "fileref":
+        ref_path = Path(entry["path"])
+        if entry.get("checksum"):
+            ref = FileRef(path=ref_path, checksum=True)
+            ref._computed_hash = entry["checksum"]
+            if not ref.verify_checksum():
+                raise ValueError(f"Checksum mismatch for {ref_path} — file was modified during transfer")
+        return ref_path
     if btype == "image":
         from PIL import Image
 
@@ -243,6 +369,8 @@ for key, entry in manifest.get("entries", {}).items():
         args[key] = {"waveform": wf, "sampling_rate": sr}
     elif t == "path":
         args[key] = Path(entry["value"])
+    elif t == "fileref":
+        args[key] = Path(entry["path"])
     elif t == "image":
         from PIL import Image
         args[key] = Image.open(str(data_dir / entry["file"]))
@@ -317,24 +445,31 @@ def call_in_venv(
     args: Optional[dict[str, object]] = None,
     python_version: Optional[str] = None,
     timeout: int = 600,
+    safe_mode: bool = False,
 ) -> object:
     """Call a function in an isolated venv using container-based IPC.
 
     Data is serialized using efficient codecs:
-    - torch.Tensor -> safetensors (fast, safe, HF standard)
-    - numpy.ndarray -> .npy
-    - senselab Audio -> .flac (lossless compressed)
-    - everything else -> JSON
+    - torch.Tensor → safetensors (fast, safe, HF standard)
+    - numpy.ndarray → .npy
+    - senselab Audio → .flac (lossless compressed)
+    - FileRef → path with checksum/lock metadata
+    - PIL Image → .png, bytes → .bin, Pydantic → JSON
+    - everything else → JSON
 
     Args:
         name: Venv identifier.
         requirements: Pip install specs.
         module: Python module path (e.g., "TTS.api").
         function: Function name.
-        args: Keyword arguments. Tensors, arrays, and Audio objects
-            are automatically serialized efficiently.
+        args: Keyword arguments. Tensors, arrays, Audio objects, and
+            FileRef objects are handled automatically. Use FileRef to
+            wrap paths that need checksum or lock protection.
         python_version: Python version for the venv.
         timeout: Max execution time in seconds.
+        safe_mode: If True, automatically wrap all Path args as FileRef
+            with checksum=True and readonly=True. Default False for
+            minimal overhead in simple workflows.
 
     Returns:
         The function's return value with blobs loaded back to native types.
@@ -342,57 +477,86 @@ def call_in_venv(
     venv_dir = ensure_venv(name, requirements, python_version)
     python = str(venv_dir / "bin" / "python")
 
-    with tempfile.TemporaryDirectory(prefix="senselab-ipc-") as tmpdir:
-        container = Path(tmpdir)
-        data_dir = container / "data"
-        data_dir.mkdir()
+    # In safe_mode, auto-wrap Path args as FileRef with checksum + readonly
+    effective_args = dict(args or {})
+    if safe_mode:
+        for key, value in effective_args.items():
+            if isinstance(value, Path) and value.is_file():
+                effective_args[key] = FileRef(path=value, readonly=True, checksum=True)
 
-        # Pack args
-        entries: dict[str, object] = {}
-        for key, value in (args or {}).items():
-            entries[key] = _pack_value(key, value, data_dir)
+    # Collect FileRef locks to hold during execution
+    file_locks: list[_FileLockWithHeartbeat] = []
+    for value in effective_args.values():
+        if isinstance(value, FileRef) and value.lock:
+            fl = _FileLockWithHeartbeat(value.path, timeout=value.lock_timeout)
+            fl.__enter__()
+            file_locks.append(fl)
 
-        manifest = {
-            "call": {"module": module, "function": function},
-            "entries": entries,
-        }
-        (container / "manifest.json").write_text(json.dumps(manifest, default=str))
+    try:
+        with tempfile.TemporaryDirectory(prefix="senselab-ipc-") as tmpdir:
+            container = Path(tmpdir)
+            data_dir = container / "data"
+            data_dir.mkdir()
 
-        # Execute in subprocess
-        try:
-            result = subprocess.run(
-                [python, "-c", _SHIM],
-                input=str(container),
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(f"Venv '{name}' timed out after {timeout}s") from exc
+            # Pack args
+            entries: dict[str, object] = {}
+            for key, value in effective_args.items():
+                entries[key] = _pack_value(key, value, data_dir)
 
-        if result.returncode != 0:
-            raise RuntimeError(f"Venv '{name}' failed:\n{result.stderr}")
+            manifest = {
+                "call": {"module": module, "function": function},
+                "entries": entries,
+            }
+            (container / "manifest.json").write_text(json.dumps(manifest, default=str))
 
-        # Unpack result
-        ret_dir = container / "return"
-        if not ret_dir.exists():
-            return None
+            # Execute in subprocess
+            try:
+                result = subprocess.run(
+                    [python, "-c", _SHIM],
+                    input=str(container),
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError(f"Venv '{name}' timed out after {timeout}s") from exc
 
-        ret_manifest = json.loads((ret_dir / "manifest.json").read_text())
-        ret_data = ret_dir / "data"
+            if result.returncode != 0:
+                raise RuntimeError(f"Venv '{name}' failed:\n{result.stderr}")
 
-        unpacked: dict[str, object] = {}
-        for key, entry in ret_manifest.get("entries", {}).items():
-            unpacked[key] = _unpack_value(entry, ret_data)
+            # Verify checksums on FileRef args after subprocess completes
+            for value in effective_args.values():
+                if isinstance(value, FileRef) and value.checksum and value.readonly:
+                    if not value.verify_checksum():
+                        raise ValueError(
+                            f"File {value.path} was modified during subprocess execution "
+                            f"(readonly=True was specified)"
+                        )
 
-        # Unwrap single result
-        if len(unpacked) == 1 and "__result__" in unpacked:
-            return unpacked["__result__"]
+            # Unpack result
+            ret_dir = container / "return"
+            if not ret_dir.exists():
+                return None
 
-        # Reconstruct sequences
-        if unpacked.get("__is_sequence__"):
-            seq_len = int(unpacked.get("__sequence_len__", 0))  # type: ignore[arg-type]
-            return [unpacked.get(f"__item_{i}__") for i in range(seq_len)]
+            ret_manifest = json.loads((ret_dir / "manifest.json").read_text())
+            ret_data = ret_dir / "data"
 
-        # Filter out internal keys
-        return {k: v for k, v in unpacked.items() if not k.startswith("__")}
+            unpacked: dict[str, object] = {}
+            for key, entry in ret_manifest.get("entries", {}).items():
+                unpacked[key] = _unpack_value(entry, ret_data)
+
+            # Unwrap single result
+            if len(unpacked) == 1 and "__result__" in unpacked:
+                return unpacked["__result__"]
+
+            # Reconstruct sequences
+            if unpacked.get("__is_sequence__"):
+                seq_len = int(unpacked.get("__sequence_len__", 0))  # type: ignore[arg-type]
+                return [unpacked.get(f"__item_{i}__") for i in range(seq_len)]
+
+            # Filter out internal keys
+            return {k: v for k, v in unpacked.items() if not k.startswith("__")}
+    finally:
+        # Release all file locks
+        for fl in file_locks:
+            fl.__exit__(None, None, None)
