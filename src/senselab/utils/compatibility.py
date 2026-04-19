@@ -10,6 +10,7 @@ requirements. Used for:
 """
 
 import importlib
+import os
 import sys
 from dataclasses import dataclass, field
 from typing import Optional
@@ -43,7 +44,7 @@ class CompatibilityEntry:
     """Compatibility metadata for a single function."""
 
     required_deps: list[str] = field(default_factory=list)
-    python_versions: VersionRange = field(default_factory=lambda: VersionRange(">=3.11,<3.13"))
+    python_versions: VersionRange = field(default_factory=lambda: VersionRange(">=3.11"))
     torch_versions: VersionRange = field(default_factory=lambda: VersionRange(">=2.8,<3.0"))
     gpu_required: bool = False
     isolated: bool = False
@@ -85,9 +86,10 @@ COMPATIBILITY_MATRIX: dict[str, CompatibilityEntry] = {
         gpu_required=True,
         install_hint="pip install senselab",
     ),
-    # ── Audio: Voice Cloning (ISOLATED) ──
+    # ── Audio: Voice Cloning (ISOLATED — coqui-tts needs Python <=3.11) ──
     "audio.tasks.voice_cloning.clone_voices": CompatibilityEntry(
         required_deps=["coqui-tts"],
+        python_versions=VersionRange(">=3.10,<3.12"),  # coqui-tts constraint
         dep_versions={"coqui-tts": ">=0.27,<1.0", "torch": ">=2.4,<2.9"},
         gpu_required=True,
         isolated=True,
@@ -117,9 +119,10 @@ COMPATIBILITY_MATRIX: dict[str, CompatibilityEntry] = {
         gpu_required=True,
         install_hint="pip install senselab",
     ),
-    # ── Audio: Features Extraction (PPGs - ISOLATED) ──
+    # ── Audio: Features Extraction (PPGs - ISOLATED — espnet needs Python <=3.11) ──
     "audio.tasks.features_extraction.extract_ppg_from_audios": CompatibilityEntry(
         required_deps=["ppgs", "espnet"],
+        python_versions=VersionRange(">=3.10,<3.12"),  # espnet constraint
         dep_versions={"ppgs": ">=0.0.9,<0.0.10", "espnet": ">=202205", "torch": ">=2.0,<2.9"},
         gpu_required=True,
         isolated=True,
@@ -239,9 +242,14 @@ def generate_test_matrix() -> list[dict[str, str]]:
     """
     matrix: list[dict[str, str]] = []
 
-    # Extract unique Python and torch version ranges
-    python_versions_to_test = ["3.11", "3.12"]
-    torch_versions_to_test = ["2.8", "2.10"]  # min tested, max tested
+    # Versions to test — expand as new releases are validated
+    # These should track the latest stable releases
+    python_versions_to_test = os.environ.get(
+        "SENSELAB_TEST_PYTHON_VERSIONS", "3.11,3.12,3.13"
+    ).split(",")
+    torch_versions_to_test = os.environ.get(
+        "SENSELAB_TEST_TORCH_VERSIONS", "2.8,2.10"
+    ).split(",")
 
     for func_key, entry in COMPATIBILITY_MATRIX.items():
         if entry.isolated:
