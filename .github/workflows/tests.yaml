@@ -163,15 +163,9 @@ jobs:
       TRANSFORMERS_CACHE: ${{ vars.WORKING_DIR }}/huggingface/transformers
       TORCH_HOME: ${{ vars.WORKING_DIR }}/torch
     steps:
-    - name: Create isolated workspace
-      run: |
-        WORKSPACE="${WORKING_DIR}/py${{ matrix.python-version }}"
-        echo "WORKSPACE=${WORKSPACE}" >> $GITHUB_ENV
-        mkdir -p "${WORKSPACE}"
     - uses: actions/checkout@v5
       with:
         fetch-depth: 1
-        path: ${{ env.WORKING_DIR }}/py${{ matrix.python-version }}/senselab
     - name: Install system dependencies
       run: |
         if command -v dnf &>/dev/null; then
@@ -179,23 +173,20 @@ jobs:
         elif command -v apt-get &>/dev/null; then
           sudo apt-get update && sudo apt-get install -y ffmpeg
         fi
-    - name: Set up environment with uv (Python ${{ matrix.python-version }})
-      working-directory: ${{ env.WORKING_DIR }}/py${{ matrix.python-version }}/senselab
+    - name: Set up isolated venv (Python ${{ matrix.python-version }})
       run: |
         set -euxo pipefail
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
-        echo "=== Debug info ==="
-        pwd
-        ls pyproject.toml
+        VENV_DIR="${WORKING_DIR}/venv-py${{ matrix.python-version }}"
+        echo "VENV_DIR=${VENV_DIR}" >> $GITHUB_ENV
         uv --version
-        echo "=== Installing ==="
-        uv sync --python ${{ matrix.python-version }} --extra text --extra video --group dev --verbose
+        uv venv --python ${{ matrix.python-version }} "${VENV_DIR}"
+        VIRTUAL_ENV="${VENV_DIR}" uv pip install -e ".[text,video]" --group dev --verbose
     - name: Verify GPU access
-      working-directory: ${{ env.WORKING_DIR }}/py${{ matrix.python-version }}/senselab
       run: |
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
         nvidia-smi
-        uv run python -c "
+        VIRTUAL_ENV="${VENV_DIR}" uv run python -c "
         import torch
         assert torch.cuda.is_available(), 'CUDA not available'
         n = torch.cuda.device_count()
@@ -206,13 +197,12 @@ jobs:
         print(f'PyTorch: {torch.__version__}')
         "
     - name: Run unit tests
-      working-directory: ${{ env.WORKING_DIR }}/py${{ matrix.python-version }}/senselab
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: |
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
-        uv run pytest src/tests \
+        VIRTUAL_ENV="${VENV_DIR}" uv run pytest src/tests \
           --junitxml=pytest.xml \
           --cov-report=term-missing:skip-covered \
           --cov-report=xml:coverage.xml \
