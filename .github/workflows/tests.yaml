@@ -62,6 +62,8 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        # torchcodec needs FFmpeg shared libraries at runtime
+        DYLD_LIBRARY_PATH: /opt/homebrew/lib:${{ env.DYLD_LIBRARY_PATH }}
       run: |
         uv run pytest -n auto \
           --junitxml=pytest.xml \
