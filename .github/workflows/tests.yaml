@@ -6,11 +6,13 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   macos-tests:
-    if: false  # Temporarily disabled while debugging EC2 GPU tests
+    if: >-
+      github.event.pull_request.draft == false &&
+      contains(github.event.pull_request.labels.*.name, 'macos-test')
     name: macOS-tests
     runs-on: ${{ matrix.os }}
     strategy:
@@ -60,6 +62,8 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        # torchcodec needs FFmpeg shared libraries at runtime
+        DYLD_LIBRARY_PATH: /opt/homebrew/lib:${{ env.DYLD_LIBRARY_PATH }}
       run: |
         uv run pytest -n auto \
           --junitxml=pytest.xml \
