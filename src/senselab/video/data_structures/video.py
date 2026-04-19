@@ -10,7 +10,7 @@ import torch
 from pydantic import BaseModel, Field
 
 try:
-    from torchcodec.decoders import VideoDecoder
+    from torchcodec.decoders import AudioDecoder, VideoDecoder
 
     TORCHCODEC_AVAILABLE = True
 except (ImportError, RuntimeError) as _torchcodec_err:
@@ -176,12 +176,19 @@ class Video(BaseModel):
             )
         decoder = VideoDecoder(str(self._file_path))
         metadata = decoder.metadata
-        self._frame_rate = metadata.average_fps if hasattr(metadata, "average_fps") else None
-        # Decode all video frames
-        frames = []
-        for frame in decoder:
-            frames.append(frame.data)
+        self._frame_rate = getattr(metadata, "average_fps", None)
+        # Decode all video frames — torchcodec returns (C, H, W), permute to (H, W, C)
+        frames = [frame.data.permute(1, 2, 0) for frame in decoder]
         self._frames = torch.stack(frames) if frames else torch.empty(0)
+
+        # Decode audio stream if present (AudioDecoder available since torchcodec 0.3)
+        try:
+            audio_decoder = AudioDecoder(str(self._file_path))
+            samples = audio_decoder.get_all_samples()
+            if samples.data.numel() > 0:
+                self._audio = Audio(waveform=samples.data, sampling_rate=samples.sample_rate)
+        except Exception:
+            pass  # No audio stream or decoding failed — video-only is fine
 
     def generate_id(self) -> str:
         """Generate a unique identifier for the Video instance.
