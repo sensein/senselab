@@ -20,7 +20,6 @@ from senselab.utils.data_structures import (
 )
 from senselab.utils.data_structures.logging import logger
 from senselab.utils.data_structures.model import get_huggingface_token
-from senselab.utils.dependencies import hf_local_files_only
 
 
 class HuggingFaceASR:
@@ -76,7 +75,6 @@ class HuggingFaceASR:
                     batch_size=batch_size,
                     device=device.value,
                     token=get_huggingface_token(),
-                    model_kwargs={"local_files_only": hf_local_files_only(str(model.path_or_uri), model.revision)},
                 ),
             )
         return cls._pipelines[key]

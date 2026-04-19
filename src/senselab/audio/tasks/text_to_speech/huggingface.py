@@ -6,7 +6,6 @@ from transformers import Pipeline, pipeline
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, HFModel, _select_device_and_dtype
-from senselab.utils.dependencies import hf_local_files_only
 
 
 class HuggingFaceTTS:
@@ -41,7 +40,6 @@ class HuggingFaceTTS:
                     model=model.path_or_uri,
                     revision=model.revision,
                     device=device.value,
-                    model_kwargs={"local_files_only": hf_local_files_only(str(model.path_or_uri), model.revision)},
                 ),
             )
         return cls._pipelines[key]
