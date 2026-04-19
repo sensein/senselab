@@ -106,8 +106,7 @@ class CompatibilityReport:
             lines.append("\n  Candidates to TIGHTEN:")
             for r in self.should_tighten:
                 lines.append(
-                    f"    {r.function_key}: FAILED on Python {r.python_version} "
-                    f"/ torch {r.torch_version}: {r.error}"
+                    f"    {r.function_key}: FAILED on Python {r.python_version} / torch {r.torch_version}: {r.error}"
                 )
         return "\n".join(lines)
 
@@ -151,11 +150,13 @@ def _probe_function(
         mod = import_map.get(dep, dep.replace("-", "_"))
         dep_imports.append(f"import {mod}")
 
-    test_script = "\n".join([
-        "import sys",
-        *dep_imports,
-        "print('OK')",
-    ])
+    test_script = "\n".join(
+        [
+            "import sys",
+            *dep_imports,
+            "print('OK')",
+        ]
+    )
 
     # Create a probe venv
     venv_name = f"probe-py{python_version}-torch{torch_version}"
@@ -169,7 +170,9 @@ def _probe_function(
         python = str(venv_dir / "bin" / "python")
         result = subprocess.run(
             [python, "-c", test_script],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True,
+            text=True,
+            timeout=60,
         )
         actual_passed = result.returncode == 0
         error = result.stderr.strip() if not actual_passed else None

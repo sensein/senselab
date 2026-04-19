@@ -195,8 +195,7 @@ def check_compatibility(function_key: str) -> bool:
     py_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     if not entry.python_versions.contains(py_ver):
         raise RuntimeError(
-            f"Function '{function_key}' requires Python {entry.python_versions}, "
-            f"but you are running Python {py_ver}."
+            f"Function '{function_key}' requires Python {entry.python_versions}, but you are running Python {py_ver}."
         )
 
     # Isolated backends don't need deps in the host environment
@@ -244,23 +243,21 @@ def generate_test_matrix() -> list[dict[str, str]]:
 
     # Versions to test — expand as new releases are validated
     # These should track the latest stable releases
-    python_versions_to_test = os.environ.get(
-        "SENSELAB_TEST_PYTHON_VERSIONS", "3.11,3.12,3.13,3.14"
-    ).split(",")
-    torch_versions_to_test = os.environ.get(
-        "SENSELAB_TEST_TORCH_VERSIONS", "2.8,2.10"
-    ).split(",")
+    python_versions_to_test = os.environ.get("SENSELAB_TEST_PYTHON_VERSIONS", "3.11,3.12,3.13,3.14").split(",")
+    torch_versions_to_test = os.environ.get("SENSELAB_TEST_TORCH_VERSIONS", "2.8,2.10").split(",")
 
     for func_key, entry in COMPATIBILITY_MATRIX.items():
         if entry.isolated:
             # Isolated backends test in their own venv — separate config
-            matrix.append({
-                "function_key": func_key,
-                "python_version": entry.venv_python or "3.11",
-                "torch_version": "venv-managed",
-                "deps": ",".join(entry.venv_requirements),
-                "isolated": "true",
-            })
+            matrix.append(
+                {
+                    "function_key": func_key,
+                    "python_version": entry.venv_python or "3.11",
+                    "torch_version": "venv-managed",
+                    "deps": ",".join(entry.venv_requirements),
+                    "isolated": "true",
+                }
+            )
             continue
 
         for py_ver in python_versions_to_test:
@@ -269,13 +266,15 @@ def generate_test_matrix() -> list[dict[str, str]]:
             for torch_ver in torch_versions_to_test:
                 if not entry.torch_versions.contains(f"{torch_ver}.0"):
                     continue
-                matrix.append({
-                    "function_key": func_key,
-                    "python_version": py_ver,
-                    "torch_version": torch_ver,
-                    "deps": ",".join(f"{d}{entry.dep_versions.get(d, '')}" for d in entry.required_deps),
-                    "isolated": "false",
-                })
+                matrix.append(
+                    {
+                        "function_key": func_key,
+                        "python_version": py_ver,
+                        "torch_version": torch_ver,
+                        "deps": ",".join(f"{d}{entry.dep_versions.get(d, '')}" for d in entry.required_deps),
+                        "isolated": "false",
+                    }
+                )
 
     return matrix
 
@@ -302,17 +301,18 @@ def generate_matrix_markdown() -> str:
         gpu = "Yes" if entry.gpu_required else "No"
         isolated = f"Yes ({entry.venv_name})" if entry.isolated else "No"
         lines.append(
-            f"| `{key}` | {deps} | {dep_vers} | {gpu} | {isolated} "
-            f"| {entry.python_versions} | {entry.torch_versions} |"
+            f"| `{key}` | {deps} | {dep_vers} | {gpu} | {isolated} | {entry.python_versions} | {entry.torch_versions} |"
         )
 
-    lines.extend([
-        "",
-        "## Test Matrix",
-        "",
-        "| Function | Python | Torch | Deps | Isolated |",
-        "|----------|--------|-------|------|----------|",
-    ])
+    lines.extend(
+        [
+            "",
+            "## Test Matrix",
+            "",
+            "| Function | Python | Torch | Deps | Isolated |",
+            "|----------|--------|-------|------|----------|",
+        ]
+    )
     for row in generate_test_matrix():
         lines.append(
             f"| `{row['function_key']}` | {row['python_version']} | {row['torch_version']} "

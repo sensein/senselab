@@ -66,8 +66,8 @@ nlp = [
   "nltk~=3.9"
 ]
 text = [
-  "sentence-transformers>=5.1,<5.4",
-  "pylangacq~=0.19"
+  "sentence-transformers>=5.1",
+  "pylangacq>=0.20"
 ]
 video = [
   "av~=15.0",

@@ -158,9 +158,7 @@ def _find_uv() -> str:
     ]:
         if candidate.is_file():
             return str(candidate)
-    raise FileNotFoundError(
-        "uv not found. Install with: curl -LsSf https://astral.sh/uv/install.sh | sh"
-    )
+    raise FileNotFoundError("uv not found. Install with: curl -LsSf https://astral.sh/uv/install.sh | sh")
 
 
 # ── Venv management ──────────────────────────────────────────────────
@@ -202,7 +200,9 @@ def ensure_venv(
         try:
             subprocess.run(
                 [uv, "venv", "--python", py_ver, str(venv_dir)],
-                check=True, capture_output=True, text=True,
+                check=True,
+                capture_output=True,
+                text=True,
             )
         except subprocess.CalledProcessError as exc:
             logger.error("Failed to create venv '%s': %s", name, exc.stderr)
@@ -213,16 +213,22 @@ def ensure_venv(
         try:
             subprocess.run(
                 [uv, "pip", "install", "--python", str(venv_dir / "bin" / "python"), *all_reqs],
-                check=True, capture_output=True, text=True,
+                check=True,
+                capture_output=True,
+                text=True,
             )
         except subprocess.CalledProcessError as exc:
             logger.error("Failed to install in venv '%s': %s", name, exc.stderr)
             raise
 
-        marker.write_text(json.dumps({
-            "requirements": sorted(requirements),
-            "python_version": py_ver,
-        }))
+        marker.write_text(
+            json.dumps(
+                {
+                    "requirements": sorted(requirements),
+                    "python_version": py_ver,
+                }
+            )
+        )
         logger.info("Venv '%s' ready at %s", name, venv_dir)
         return venv_dir
 
@@ -283,7 +289,7 @@ def _pack_value(key: str, value: object, data_dir: Path) -> dict:
     # PIL Image → PNG (lossless)
     if type(value).__module__.startswith("PIL") or type(value).__name__ == "Image":
         path = data_dir / f"{key}.png"
-        value.save(str(path), format="PNG")  # type: ignore[union-attr]
+        getattr(value, "save")(str(path), format="PNG")
         return {"type": "image", "file": f"{key}.png"}
 
     # bytes/bytearray → raw binary
@@ -294,8 +300,11 @@ def _pack_value(key: str, value: object, data_dir: Path) -> dict:
 
     # Pydantic BaseModel → JSON via model_dump
     if hasattr(value, "model_dump_json"):
-        return {"type": "pydantic", "model_class": f"{type(value).__module__}.{type(value).__name__}",
-                "value": json.loads(value.model_dump_json())}  # type: ignore[union-attr]
+        return {
+            "type": "pydantic",
+            "model_class": f"{type(value).__module__}.{type(value).__name__}",
+            "value": json.loads(value.model_dump_json()),
+        }  # type: ignore[union-attr]
 
     # JSON-serializable fallback
     return {"type": "json", "value": value}
@@ -341,7 +350,7 @@ def _unpack_value(entry: dict, data_dir: Path) -> object:
 
 # ── Subprocess shim (embedded, runs in the isolated venv) ─────────────
 
-_SHIM = r'''
+_SHIM = r"""
 import json, sys
 from pathlib import Path
 import numpy as np
@@ -431,7 +440,7 @@ else:
 
 (ret / "manifest.json").write_text(json.dumps({"entries": ret_entries}, default=str))
 print("OK")
-'''
+"""
 
 
 # ── Public API ────────────────────────────────────────────────────────
@@ -529,8 +538,7 @@ def call_in_venv(
                 if isinstance(value, FileRef) and value.checksum and value.readonly:
                     if not value.verify_checksum():
                         raise ValueError(
-                            f"File {value.path} was modified during subprocess execution "
-                            f"(readonly=True was specified)"
+                            f"File {value.path} was modified during subprocess execution (readonly=True was specified)"
                         )
 
             # Unpack result
@@ -551,7 +559,7 @@ def call_in_venv(
 
             # Reconstruct sequences
             if unpacked.get("__is_sequence__"):
-                seq_len = int(unpacked.get("__sequence_len__", 0))  # type: ignore[arg-type]
+                seq_len = int(str(unpacked.get("__sequence_len__", 0)))
                 return [unpacked.get(f"__item_{i}__") for i in range(seq_len)]
 
             # Filter out internal keys
