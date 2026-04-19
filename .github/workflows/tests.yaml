@@ -10,7 +10,9 @@ concurrency:
 
 jobs:
   macos-tests:
-    if: false  # Temporarily disabled while debugging EC2 GPU tests
+    if: >-
+      github.event.pull_request.draft == false &&
+      contains(github.event.pull_request.labels.*.name, 'macos-test')
     name: macOS-tests
     runs-on: ${{ matrix.os }}
     strategy:
