@@ -120,22 +120,35 @@ def ensure_venv(
 
 
 def _pack_value(key: str, value: object, data_dir: Path) -> dict:
-    """Pack a single value, returning its manifest entry."""
+    """Pack a single value into the container, returning its manifest entry.
+
+    Codec selection by type:
+    - torch.Tensor → safetensors (fast, safe, HF standard)
+    - numpy.ndarray → .npy (native numpy)
+    - senselab Audio → .flac (lossless compressed audio)
+    - senselab Video / Path to video → path reference (no copy)
+    - PIL.Image → .png (lossless)
+    - bytes/bytearray → .bin (raw binary)
+    - Pydantic BaseModel → .json (via model_dump_json)
+    - everything else → JSON
+    """
     import numpy as np
     import torch
     from safetensors.torch import save_file
 
+    # torch.Tensor → safetensors
     if isinstance(value, torch.Tensor):
         path = data_dir / f"{key}.safetensors"
         save_file({"data": value.detach().cpu()}, str(path))
         return {"type": "tensor", "file": f"{key}.safetensors"}
 
+    # numpy.ndarray → .npy
     if isinstance(value, np.ndarray):
         path = data_dir / f"{key}.npy"
         np.save(str(path), value)
         return {"type": "ndarray", "file": f"{key}.npy"}
 
-    # senselab Audio object
+    # senselab Audio (has waveform + sampling_rate) → FLAC
     if hasattr(value, "waveform") and hasattr(value, "sampling_rate"):
         import torchaudio
 
@@ -143,7 +156,30 @@ def _pack_value(key: str, value: object, data_dir: Path) -> dict:
         torchaudio.save(str(path), value.waveform.cpu(), value.sampling_rate, format="flac")
         return {"type": "audio", "file": f"{key}.flac", "sr": value.sampling_rate}
 
-    # JSON-serializable scalar/dict/list
+    # senselab Video or file path → pass path reference (no copy)
+    if hasattr(value, "_file_path") and getattr(value, "_file_path", None) is not None:
+        return {"type": "path", "value": str(value._file_path)}
+    if isinstance(value, Path):
+        return {"type": "path", "value": str(value)}
+
+    # PIL Image → PNG (lossless)
+    if type(value).__module__.startswith("PIL") or type(value).__name__ == "Image":
+        path = data_dir / f"{key}.png"
+        value.save(str(path), format="PNG")  # type: ignore[union-attr]
+        return {"type": "image", "file": f"{key}.png"}
+
+    # bytes/bytearray → raw binary
+    if isinstance(value, (bytes, bytearray)):
+        path = data_dir / f"{key}.bin"
+        path.write_bytes(value)
+        return {"type": "binary", "file": f"{key}.bin"}
+
+    # Pydantic BaseModel → JSON via model_dump
+    if hasattr(value, "model_dump_json"):
+        return {"type": "pydantic", "model_class": f"{type(value).__module__}.{type(value).__name__}",
+                "value": json.loads(value.model_dump_json())}  # type: ignore[union-attr]
+
+    # JSON-serializable fallback
     return {"type": "json", "value": value}
 
 
@@ -155,8 +191,7 @@ def _unpack_value(entry: dict, data_dir: Path) -> object:
 
     btype = entry["type"]
     if btype == "tensor":
-        tensors = load_file(str(data_dir / entry["file"]))
-        return tensors["data"]
+        return load_file(str(data_dir / entry["file"]))["data"]
     if btype == "ndarray":
         return np.load(str(data_dir / entry["file"]), allow_pickle=False)
     if btype == "audio":
@@ -164,6 +199,17 @@ def _unpack_value(entry: dict, data_dir: Path) -> object:
 
         waveform, sr = torchaudio.load(str(data_dir / entry["file"]))
         return {"waveform": waveform, "sampling_rate": sr}
+    if btype == "path":
+        return Path(entry["value"])
+    if btype == "image":
+        from PIL import Image
+
+        return Image.open(str(data_dir / entry["file"]))
+    if btype == "binary":
+        return (data_dir / entry["file"]).read_bytes()
+    if btype == "pydantic":
+        # Caller is responsible for reconstructing the model
+        return entry.get("value")
     return entry.get("value")
 
 
@@ -172,18 +218,18 @@ def _unpack_value(entry: dict, data_dir: Path) -> object:
 _SHIM = r'''
 import json, sys
 from pathlib import Path
+import numpy as np
 
 container = Path(sys.stdin.read().strip())
 manifest = json.loads((container / "manifest.json").read_text())
 data_dir = container / "data"
 
-# Unpack args
-import numpy as np
 try:
-    from safetensors.torch import load_file as _st_load
+    from safetensors.torch import load_file as _st_load, save_file as _st_save
 except ImportError:
-    _st_load = None
+    _st_load = _st_save = None
 
+# ── Unpack args ──
 args = {}
 for key, entry in manifest.get("entries", {}).items():
     t = entry["type"]
@@ -195,15 +241,22 @@ for key, entry in manifest.get("entries", {}).items():
         import torchaudio
         wf, sr = torchaudio.load(str(data_dir / entry["file"]))
         args[key] = {"waveform": wf, "sampling_rate": sr}
-    elif t == "json":
+    elif t == "path":
+        args[key] = Path(entry["value"])
+    elif t == "image":
+        from PIL import Image
+        args[key] = Image.open(str(data_dir / entry["file"]))
+    elif t == "binary":
+        args[key] = (data_dir / entry["file"]).read_bytes()
+    else:
         args[key] = entry.get("value")
 
-# Call function
+# ── Call function ──
 call = manifest["call"]
 mod = __import__(call["module"], fromlist=[call["function"]])
 result = getattr(mod, call["function"])(**args)
 
-# Pack result
+# ── Pack result ──
 ret = container / "return"
 ret.mkdir(exist_ok=True)
 rd = ret / "data"
@@ -214,9 +267,9 @@ def pack(name, obj):
     try:
         import torch
         if isinstance(obj, torch.Tensor):
-            from safetensors.torch import save_file
-            save_file({"data": obj.detach().cpu()}, str(rd / f"{name}.safetensors"))
-            return {"type": "tensor", "file": f"{name}.safetensors"}
+            if _st_save:
+                _st_save({"data": obj.detach().cpu()}, str(rd / f"{name}.safetensors"))
+                return {"type": "tensor", "file": f"{name}.safetensors"}
     except ImportError:
         pass
     if isinstance(obj, np.ndarray):
@@ -226,11 +279,25 @@ def pack(name, obj):
         import torchaudio
         torchaudio.save(str(rd / f"{name}.flac"), obj.waveform.cpu(), obj.sampling_rate, format="flac")
         return {"type": "audio", "file": f"{name}.flac"}
+    if isinstance(obj, Path):
+        return {"type": "path", "value": str(obj)}
+    if isinstance(obj, (bytes, bytearray)):
+        (rd / f"{name}.bin").write_bytes(obj)
+        return {"type": "binary", "file": f"{name}.bin"}
+    if hasattr(obj, "save") and hasattr(obj, "mode"):  # PIL Image
+        (rd / f"{name}.png").parent.mkdir(exist_ok=True)
+        obj.save(str(rd / f"{name}.png"), format="PNG")
+        return {"type": "image", "file": f"{name}.png"}
     return {"type": "json", "value": obj}
 
 if isinstance(result, dict):
     for k, v in result.items():
         ret_entries[k] = pack(k, v)
+elif isinstance(result, (list, tuple)):
+    for i, v in enumerate(result):
+        ret_entries[f"__item_{i}__"] = pack(f"item_{i}", v)
+    ret_entries["__is_sequence__"] = {"type": "json", "value": True}
+    ret_entries["__sequence_len__"] = {"type": "json", "value": len(result)}
 else:
     ret_entries["__result__"] = pack("result", result)
 
@@ -321,4 +388,11 @@ def call_in_venv(
         # Unwrap single result
         if len(unpacked) == 1 and "__result__" in unpacked:
             return unpacked["__result__"]
-        return unpacked
+
+        # Reconstruct sequences
+        if unpacked.get("__is_sequence__"):
+            seq_len = int(unpacked.get("__sequence_len__", 0))  # type: ignore[arg-type]
+            return [unpacked.get(f"__item_{i}__") for i in range(seq_len)]
+
+        # Filter out internal keys
+        return {k: v for k, v in unpacked.items() if not k.startswith("__")}
