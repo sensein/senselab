@@ -131,10 +131,13 @@ COMPATIBILITY_MATRIX: dict[str, CompatibilityEntry] = {
         venv_python="3.11",
         install_hint="Automatically provisioned in isolated environment",
     ),
-    # ── Text: Embeddings ──
+    # ── Text: Embeddings (sentence-transformers backend) ──
+    # NOTE: sentence-transformers >=5.4 imports torchcodec at module level,
+    # which throws RuntimeError on macOS (no FFmpeg). Import must be lazy
+    # with (ImportError, RuntimeError) guard. Tracked upstream.
     "text.tasks.embeddings_extraction.extract_embeddings_from_text": CompatibilityEntry(
-        required_deps=["transformers"],
-        dep_versions={"transformers": ">=4.40,<5.0"},
+        required_deps=["transformers", "sentence-transformers"],
+        dep_versions={"transformers": ">=4.40,<5.0", "sentence-transformers": ">=5.1"},
         gpu_required=True,
         install_hint="pip install senselab",
     ),
