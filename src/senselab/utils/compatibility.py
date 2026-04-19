@@ -245,7 +245,7 @@ def generate_test_matrix() -> list[dict[str, str]]:
     # Versions to test — expand as new releases are validated
     # These should track the latest stable releases
     python_versions_to_test = os.environ.get(
-        "SENSELAB_TEST_PYTHON_VERSIONS", "3.11,3.12,3.13"
+        "SENSELAB_TEST_PYTHON_VERSIONS", "3.11,3.12,3.13,3.14"
     ).split(",")
     torch_versions_to_test = os.environ.get(
         "SENSELAB_TEST_TORCH_VERSIONS", "2.8,2.10"
