@@ -21,9 +21,11 @@ from typing import List, Optional
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speaker_diarization.nvidia import diarize_audios_with_nvidia_sortformer
 from senselab.audio.tasks.speaker_diarization.pyannote import diarize_audios_with_pyannote
+from senselab.utils.compatibility import requires_compatibility
 from senselab.utils.data_structures import DeviceType, HFModel, PyannoteAudioModel, ScriptLine, SenselabModel
 
 
+@requires_compatibility("audio.tasks.voice_activity_detection.detect_human_voice_activity_in_audios")
 def detect_human_voice_activity_in_audios(
     audios: List[Audio],
     model: Optional[SenselabModel] = None,

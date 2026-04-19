@@ -7,9 +7,11 @@ import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.ssl_embeddings.self_supervised_features import SSLEmbeddingsFactory
+from senselab.utils.compatibility import requires_compatibility
 from senselab.utils.data_structures import DeviceType, HFModel, SenselabModel
 
 
+@requires_compatibility("audio.tasks.ssl_embeddings.extract_ssl_embeddings_from_audios")
 def extract_ssl_embeddings_from_audios(
     audios: List[Audio],
     model: SenselabModel,

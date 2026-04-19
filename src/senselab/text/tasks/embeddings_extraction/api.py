@@ -6,9 +6,11 @@ import torch
 
 from senselab.text.tasks.embeddings_extraction.huggingface import HFFactory
 from senselab.text.tasks.embeddings_extraction.sentence_transformers import SentenceTransformerFactory
+from senselab.utils.compatibility import requires_compatibility
 from senselab.utils.data_structures import DeviceType, HFModel, SenselabModel, SentenceTransformersModel
 
 
+@requires_compatibility("text.tasks.embeddings_extraction.extract_embeddings_from_text")
 def extract_embeddings_from_text(
     pieces_of_text: List[str], model: SenselabModel, device: Optional[DeviceType] = None
 ) -> List[torch.Tensor]:

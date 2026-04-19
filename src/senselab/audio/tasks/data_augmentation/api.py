@@ -5,6 +5,7 @@ from typing import List, Optional, Union
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.data_augmentation.audiomentations import augment_audios_with_audiomentations
 from senselab.audio.tasks.data_augmentation.torch_audiomentations import augment_audios_with_torch_audiomentations
+from senselab.utils.compatibility import requires_compatibility
 from senselab.utils.data_structures import DeviceType
 
 try:
@@ -22,6 +23,7 @@ except ModuleNotFoundError:
     TORCH_AUDIOMENTATIONS_AVAILABLE = False
 
 
+@requires_compatibility("audio.tasks.data_augmentation.augment_audios")
 def augment_audios(
     audios: List[Audio], augmentation: Union["TorchAudiomentationsCompose", "AudiomentationsCompose"]
 ) -> List[Audio]:
