@@ -85,7 +85,7 @@ def classify_emotions_from_speech(
 
 def _get_ser_type(model: HFModel) -> SERType:
     """Get the type of SER the model is likely used for based on the labels it is set to predict."""
-    config = AutoConfig.from_pretrained(model.path_or_uri)
+    config = AutoConfig.from_pretrained(model.path_or_uri, revision=model.revision)
     id2label = config.id2label
     # print(id2label)
     if id2label:
