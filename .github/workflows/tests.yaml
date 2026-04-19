@@ -157,15 +157,26 @@ jobs:
         python-version: ['3.11', '3.12']
     env:
       EC2_USER_HOME: /home/ec2-user
-      WORKING_DIR: ${{ vars.WORKING_DIR }}
-      HF_HOME: ${{ vars.WORKING_DIR }}/huggingface
-      HF_DATASETS_CACHE: ${{ vars.WORKING_DIR }}/huggingface/datasets
-      TRANSFORMERS_CACHE: ${{ vars.WORKING_DIR }}/huggingface/transformers
-      TORCH_HOME: ${{ vars.WORKING_DIR }}/torch
+      UV_CACHE_DIR: /scratch/uv-cache
+      HF_HOME: /scratch/huggingface
+      HF_DATASETS_CACHE: /scratch/huggingface/datasets
+      TRANSFORMERS_CACHE: /scratch/huggingface/transformers
+      TORCH_HOME: /scratch/torch
     steps:
     - uses: actions/checkout@v5
       with:
         fetch-depth: 1
+    - name: Prepare scratch storage
+      run: |
+        set -ex
+        # Mount instance store if not already mounted
+        if ! mountpoint -q /scratch; then
+          sudo mkfs.ext4 -F /dev/nvme1n1 2>/dev/null || true
+          sudo mkdir -p /scratch
+          sudo mount /dev/nvme1n1 /scratch || true
+          sudo chown $(whoami) /scratch
+        fi
+        mkdir -p "$UV_CACHE_DIR" "$HF_HOME" "$TORCH_HOME"
     - name: Install system dependencies
       run: |
         if command -v dnf &>/dev/null; then
@@ -173,20 +184,17 @@ jobs:
         elif command -v apt-get &>/dev/null; then
           sudo apt-get update && sudo apt-get install -y ffmpeg
         fi
-    - name: Set up isolated venv (Python ${{ matrix.python-version }})
+    - name: Set up environment (Python ${{ matrix.python-version }})
       run: |
         set -euxo pipefail
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
-        VENV_DIR="${WORKING_DIR}/venv-py${{ matrix.python-version }}"
-        echo "VENV_DIR=${VENV_DIR}" >> $GITHUB_ENV
         uv --version
-        uv venv --python ${{ matrix.python-version }} "${VENV_DIR}"
-        VIRTUAL_ENV="${VENV_DIR}" uv pip install -e ".[text,video]" --group dev --verbose
+        uv sync --python ${{ matrix.python-version }} --extra text --extra video --group dev
     - name: Verify GPU access
       run: |
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
         nvidia-smi
-        VIRTUAL_ENV="${VENV_DIR}" uv run python -c "
+        uv run python -c "
         import torch
         assert torch.cuda.is_available(), 'CUDA not available'
         n = torch.cuda.device_count()
@@ -202,7 +210,7 @@ jobs:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: |
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
-        VIRTUAL_ENV="${VENV_DIR}" uv run pytest src/tests \
+        uv run pytest src/tests \
           --junitxml=pytest.xml \
           --cov-report=term-missing:skip-covered \
           --cov-report=xml:coverage.xml \
