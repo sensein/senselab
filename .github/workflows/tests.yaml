@@ -150,7 +150,7 @@ jobs:
     runs-on: ${{ needs.start-runner.outputs.label }}
     defaults:
       run:
-        shell: bash -leo pipefail {0}
+        shell: bash -eo pipefail {0}
     strategy:
       fail-fast: false
       matrix:
@@ -170,7 +170,9 @@ jobs:
       run: |
         set -ex
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
-        which uv && uv --version
+        echo "Working directory: $(pwd)"
+        ls pyproject.toml || { echo "ERROR: pyproject.toml not found in $(pwd)"; exit 1; }
+        uv --version
         mkdir -p "$WORKING_DIR" "$HF_HOME" "$TORCH_HOME"
         uv sync --python ${{ matrix.python-version }} --extra text --extra video --group dev
     - name: Verify GPU access
@@ -194,8 +196,6 @@ jobs:
         elif command -v apt-get &>/dev/null; then
           sudo apt-get update && sudo apt-get install -y ffmpeg
         fi
-        sudo systemctl start docker || true
-        sudo chmod 666 /var/run/docker.sock || true
     - name: Run unit tests
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
