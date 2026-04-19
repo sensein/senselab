@@ -195,9 +195,7 @@ class Audio(BaseModel):
             self._sampling_rate = decoder.metadata.sample_rate
 
             if stop_seconds is not None:
-                samples = decoder.get_samples_played_in_range(
-                    start_seconds=start_seconds, stop_seconds=stop_seconds
-                )
+                samples = decoder.get_samples_played_in_range(start_seconds=start_seconds, stop_seconds=stop_seconds)
             elif start_seconds > 0:
                 samples = decoder.get_samples_played_in_range(start_seconds=start_seconds)
             else:
@@ -323,9 +321,7 @@ class Audio(BaseModel):
             RuntimeError: If saving fails.
         """
         if not TORCHCODEC_AVAILABLE and not TORCHAUDIO_AVAILABLE:
-            raise RuntimeError(
-                "Neither torchcodec nor torchaudio is available for saving audio."
-            )
+            raise RuntimeError("Neither torchcodec nor torchaudio is available for saving audio.")
 
         if self.waveform.ndim != 2:
             raise ValueError("Waveform must be a 2D tensor with shape (num_channels, num_samples).")
