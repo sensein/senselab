@@ -1,9 +1,15 @@
 """Runtime subprocess venv manager for isolated backend dependencies.
 
 Uses uv to create and manage isolated virtual environments for backends
-that conflict with the core senselab installation (e.g., different torch
-versions, Python version requirements). Functions in isolated backends
-are called via subprocess with JSON IPC.
+that conflict with the core senselab installation. IPC uses a temp
+directory with:
+- manifest.json: call spec + JSON-serializable args
+- *.safetensors: tensor data (via safetensors, already a dep)
+- *.flac: audio data (lossless compressed via torchaudio)
+- *.npy: numpy arrays
+
+The subprocess runs a shim that unpacks, calls the function, and
+packs the result using the same format.
 """
 
 import json
@@ -14,7 +20,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional
 
 from filelock import FileLock
 
@@ -35,7 +41,6 @@ def _find_uv() -> str:
     uv = shutil.which("uv")
     if uv:
         return uv
-    # Check common locations
     for candidate in [
         Path.home() / ".local" / "bin" / "uv",
         Path.home() / ".cargo" / "bin" / "uv",
@@ -45,6 +50,9 @@ def _find_uv() -> str:
     raise FileNotFoundError(
         "uv not found. Install with: curl -LsSf https://astral.sh/uv/install.sh | sh"
     )
+
+
+# ── Venv management ──────────────────────────────────────────────────
 
 
 def ensure_venv(
@@ -57,8 +65,7 @@ def ensure_venv(
     Args:
         name: Unique identifier for this venv (e.g., "coqui", "ppgs").
         requirements: List of pip install specs (e.g., ["coqui-tts~=0.27"]).
-        python_version: Python version to use (e.g., "3.11"). Defaults to
-            the current interpreter's version.
+        python_version: Python version (e.g., "3.11"). Defaults to current.
 
     Returns:
         Path to the venv directory.
@@ -68,193 +75,250 @@ def ensure_venv(
     marker = venv_dir / ".senselab-installed"
 
     with FileLock(str(lock_path), timeout=600):
-        # Check if venv already exists and is valid
         if marker.is_file():
             stored = json.loads(marker.read_text())
             if stored.get("requirements") == sorted(requirements):
                 logger.debug("Reusing existing venv: %s", venv_dir)
                 return venv_dir
 
-        # Create fresh venv
         uv = _find_uv()
         py_ver = python_version or f"{sys.version_info.major}.{sys.version_info.minor}"
-
         logger.info("Creating isolated venv '%s' with Python %s", name, py_ver)
 
-        # Remove old venv if exists
         if venv_dir.exists():
             shutil.rmtree(venv_dir)
 
-        # Create venv
         try:
             subprocess.run(
                 [uv, "venv", "--python", py_ver, str(venv_dir)],
-                check=True,
-                capture_output=True,
-                text=True,
+                check=True, capture_output=True, text=True,
             )
         except subprocess.CalledProcessError as exc:
             logger.error("Failed to create venv '%s': %s", name, exc.stderr)
             raise
 
-        # Install requirements
-        if requirements:
-            try:
-                subprocess.run(
-                    [uv, "pip", "install", "--python", str(venv_dir / "bin" / "python"), *requirements],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
-            except subprocess.CalledProcessError as exc:
-                logger.error("Failed to install requirements in venv '%s': %s", name, exc.stderr)
-                raise
+        # Always include safetensors + numpy for IPC serialization
+        all_reqs = [*requirements, "safetensors", "numpy"]
+        try:
+            subprocess.run(
+                [uv, "pip", "install", "--python", str(venv_dir / "bin" / "python"), *all_reqs],
+                check=True, capture_output=True, text=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            logger.error("Failed to install in venv '%s': %s", name, exc.stderr)
+            raise
 
-        # Write marker with installed requirements
         marker.write_text(json.dumps({
             "requirements": sorted(requirements),
             "python_version": py_ver,
         }))
-
         logger.info("Venv '%s' ready at %s", name, venv_dir)
         return venv_dir
 
 
-def run_in_venv(
-    name: str,
-    requirements: list[str],
-    script: str,
-    args: Optional[dict[str, object]] = None,
-    python_version: Optional[str] = None,
-    timeout: int = 600,
-) -> object:
-    """Execute a Python script in an isolated venv via subprocess.
+# ── Container pack/unpack (host side) ─────────────────────────────────
 
-    The script receives args as JSON on stdin and must print its result
-    as JSON to stdout. Stderr is captured for error reporting.
 
-    Args:
-        name: Venv identifier.
-        requirements: Pip install specs for this venv.
-        script: Python script to execute (as a string).
-        args: Dictionary of arguments, serialized as JSON to stdin.
-        python_version: Python version for the venv.
-        timeout: Maximum execution time in seconds.
+def _pack_value(key: str, value: object, data_dir: Path) -> dict:
+    """Pack a single value, returning its manifest entry."""
+    import numpy as np
+    import torch
+    from safetensors.torch import save_file
 
-    Returns:
-        The deserialized JSON result from the script's stdout.
+    if isinstance(value, torch.Tensor):
+        path = data_dir / f"{key}.safetensors"
+        save_file({"data": value.detach().cpu()}, str(path))
+        return {"type": "tensor", "file": f"{key}.safetensors"}
 
-    Raises:
-        RuntimeError: If the script fails or returns non-JSON output.
-    """
-    venv_dir = ensure_venv(name, requirements, python_version)
-    python = str(venv_dir / "bin" / "python")
+    if isinstance(value, np.ndarray):
+        path = data_dir / f"{key}.npy"
+        np.save(str(path), value)
+        return {"type": "ndarray", "file": f"{key}.npy"}
 
-    input_json = json.dumps(args or {})
+    # senselab Audio object
+    if hasattr(value, "waveform") and hasattr(value, "sampling_rate"):
+        import torchaudio
 
+        path = data_dir / f"{key}.flac"
+        torchaudio.save(str(path), value.waveform.cpu(), value.sampling_rate, format="flac")
+        return {"type": "audio", "file": f"{key}.flac", "sr": value.sampling_rate}
+
+    # JSON-serializable scalar/dict/list
+    return {"type": "json", "value": value}
+
+
+def _unpack_value(entry: dict, data_dir: Path) -> object:
+    """Unpack a single value from its manifest entry."""
+    import numpy as np
+    import torch
+    from safetensors.torch import load_file
+
+    btype = entry["type"]
+    if btype == "tensor":
+        tensors = load_file(str(data_dir / entry["file"]))
+        return tensors["data"]
+    if btype == "ndarray":
+        return np.load(str(data_dir / entry["file"]), allow_pickle=False)
+    if btype == "audio":
+        import torchaudio
+
+        waveform, sr = torchaudio.load(str(data_dir / entry["file"]))
+        return {"waveform": waveform, "sampling_rate": sr}
+    return entry.get("value")
+
+
+# ── Subprocess shim (embedded, runs in the isolated venv) ─────────────
+
+_SHIM = r'''
+import json, sys
+from pathlib import Path
+
+container = Path(sys.stdin.read().strip())
+manifest = json.loads((container / "manifest.json").read_text())
+data_dir = container / "data"
+
+# Unpack args
+import numpy as np
+try:
+    from safetensors.torch import load_file as _st_load
+except ImportError:
+    _st_load = None
+
+args = {}
+for key, entry in manifest.get("entries", {}).items():
+    t = entry["type"]
+    if t == "tensor" and _st_load:
+        args[key] = _st_load(str(data_dir / entry["file"]))["data"]
+    elif t == "ndarray":
+        args[key] = np.load(str(data_dir / entry["file"]), allow_pickle=False)
+    elif t == "audio":
+        import torchaudio
+        wf, sr = torchaudio.load(str(data_dir / entry["file"]))
+        args[key] = {"waveform": wf, "sampling_rate": sr}
+    elif t == "json":
+        args[key] = entry.get("value")
+
+# Call function
+call = manifest["call"]
+mod = __import__(call["module"], fromlist=[call["function"]])
+result = getattr(mod, call["function"])(**args)
+
+# Pack result
+ret = container / "return"
+ret.mkdir(exist_ok=True)
+rd = ret / "data"
+rd.mkdir(exist_ok=True)
+ret_entries = {}
+
+def pack(name, obj):
     try:
-        result = subprocess.run(
-            [python, "-c", script],
-            input=input_json,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(
-            f"Isolated venv '{name}' timed out after {timeout}s"
-        ) from exc
+        import torch
+        if isinstance(obj, torch.Tensor):
+            from safetensors.torch import save_file
+            save_file({"data": obj.detach().cpu()}, str(rd / f"{name}.safetensors"))
+            return {"type": "tensor", "file": f"{name}.safetensors"}
+    except ImportError:
+        pass
+    if isinstance(obj, np.ndarray):
+        np.save(str(rd / f"{name}.npy"), obj)
+        return {"type": "ndarray", "file": f"{name}.npy"}
+    if hasattr(obj, "waveform") and hasattr(obj, "sampling_rate"):
+        import torchaudio
+        torchaudio.save(str(rd / f"{name}.flac"), obj.waveform.cpu(), obj.sampling_rate, format="flac")
+        return {"type": "audio", "file": f"{name}.flac"}
+    return {"type": "json", "value": obj}
 
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"Isolated venv '{name}' failed (exit {result.returncode}):\n{result.stderr}"
-        )
+if isinstance(result, dict):
+    for k, v in result.items():
+        ret_entries[k] = pack(k, v)
+else:
+    ret_entries["__result__"] = pack("result", result)
 
-    stdout = result.stdout.strip()
-    if not stdout:
-        return None
-
-    try:
-        return json.loads(stdout)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(
-            f"Isolated venv '{name}' returned non-JSON output:\n{stdout}\nstderr:\n{result.stderr}"
-        ) from exc
+(ret / "manifest.json").write_text(json.dumps({"entries": ret_entries}, default=str))
+print("OK")
+'''
 
 
-def run_function_in_venv(
+# ── Public API ────────────────────────────────────────────────────────
+
+
+def call_in_venv(
     name: str,
     requirements: list[str],
     module: str,
     function: str,
-    input_files: Optional[dict[str, str]] = None,
-    output_file: Optional[str] = None,
     args: Optional[dict[str, object]] = None,
     python_version: Optional[str] = None,
     timeout: int = 600,
 ) -> object:
-    """Execute a function from a module in an isolated venv.
+    """Call a function in an isolated venv using container-based IPC.
 
-    For large data (audio, tensors), use input_files and output_file
-    to pass file paths instead of serializing data through JSON.
+    Data is serialized using efficient codecs:
+    - torch.Tensor -> safetensors (fast, safe, HF standard)
+    - numpy.ndarray -> .npy
+    - senselab Audio -> .flac (lossless compressed)
+    - everything else -> JSON
 
     Args:
         name: Venv identifier.
         requirements: Pip install specs.
-        module: Module path (e.g., "TTS.api").
-        function: Function name in the module.
-        input_files: Dict mapping argument names to file paths for large data.
-        output_file: Path where the function should write its output.
-        args: JSON-serializable arguments.
+        module: Python module path (e.g., "TTS.api").
+        function: Function name.
+        args: Keyword arguments. Tensors, arrays, and Audio objects
+            are automatically serialized efficiently.
         python_version: Python version for the venv.
-        timeout: Maximum execution time in seconds.
+        timeout: Max execution time in seconds.
 
     Returns:
-        The function's return value (deserialized from JSON), or the
-        output_file path if output_file was specified.
+        The function's return value with blobs loaded back to native types.
     """
-    script = f'''
-import json
-import sys
+    venv_dir = ensure_venv(name, requirements, python_version)
+    python = str(venv_dir / "bin" / "python")
 
-args = json.loads(sys.stdin.read())
-input_files = args.pop("__input_files__", {{}})
-output_file = args.pop("__output_file__", None)
+    with tempfile.TemporaryDirectory(prefix="senselab-ipc-") as tmpdir:
+        container = Path(tmpdir)
+        data_dir = container / "data"
+        data_dir.mkdir()
 
-from {module} import {function}
-result = {function}(**args)
+        # Pack args
+        entries: dict[str, object] = {}
+        for key, value in (args or {}).items():
+            entries[key] = _pack_value(key, value, data_dir)
 
-if output_file:
-    # Write result to file — handle tensors, arrays, and plain data
-    try:
-        import torch
-        if isinstance(result, torch.Tensor):
-            result = result.detach().cpu()
-    except ImportError:
-        pass
-    import numpy as np
-    if hasattr(result, 'numpy') or isinstance(result, np.ndarray):
-        arr = result.numpy() if hasattr(result, 'numpy') else result
-        np.save(output_file, arr)
-    else:
-        with open(output_file, 'w') as f:
-            json.dump(result, f)
-    print(json.dumps({{"output_file": output_file}}))
-else:
-    print(json.dumps(result, default=str))
-'''
+        manifest = {
+            "call": {"module": module, "function": function},
+            "entries": entries,
+        }
+        (container / "manifest.json").write_text(json.dumps(manifest, default=str))
 
-    full_args = dict(args or {})
-    if input_files:
-        full_args["__input_files__"] = input_files
-    if output_file:
-        full_args["__output_file__"] = output_file
+        # Execute in subprocess
+        try:
+            result = subprocess.run(
+                [python, "-c", _SHIM],
+                input=str(container),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(f"Venv '{name}' timed out after {timeout}s") from exc
 
-    return run_in_venv(
-        name=name,
-        requirements=requirements,
-        script=script,
-        args=full_args,
-        python_version=python_version,
-        timeout=timeout,
-    )
+        if result.returncode != 0:
+            raise RuntimeError(f"Venv '{name}' failed:\n{result.stderr}")
+
+        # Unpack result
+        ret_dir = container / "return"
+        if not ret_dir.exists():
+            return None
+
+        ret_manifest = json.loads((ret_dir / "manifest.json").read_text())
+        ret_data = ret_dir / "data"
+
+        unpacked: dict[str, object] = {}
+        for key, entry in ret_manifest.get("entries", {}).items():
+            unpacked[key] = _unpack_value(entry, ret_data)
+
+        # Unwrap single result
+        if len(unpacked) == 1 and "__result__" in unpacked:
+            return unpacked["__result__"]
+        return unpacked
