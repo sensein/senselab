@@ -5,7 +5,6 @@ from typing import Dict, List, Optional
 import torch
 
 from senselab.utils.data_structures import DeviceType, SentenceTransformersModel, _select_device_and_dtype
-from senselab.utils.dependencies import hf_local_files_only
 
 try:
     from sentence_transformers import SentenceTransformer
@@ -50,7 +49,6 @@ class SentenceTransformerFactory:
                 model_name_or_path=str(model.path_or_uri),
                 revision=model.revision,
                 device=device.value,
-                local_files_only=hf_local_files_only(str(model.path_or_uri), model.revision),
             )
         return cls._pipelines[key]
 

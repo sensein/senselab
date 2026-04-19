@@ -6,7 +6,6 @@ import torch
 from transformers import AutoModel, AutoTokenizer, PreTrainedModel, PreTrainedTokenizer
 
 from senselab.utils.data_structures import DeviceType, HFModel, _select_device_and_dtype
-from senselab.utils.dependencies import hf_local_files_only
 
 
 class HFFactory:
@@ -34,7 +33,6 @@ class HFFactory:
                 pretrained_model_name_or_path=model.path_or_uri,
                 revision=model.revision,
                 use_fast=True,
-                local_files_only=hf_local_files_only(str(model.path_or_uri), model.revision),
             )
         return cls._tokenizers[key]
 
@@ -60,7 +58,6 @@ class HFFactory:
                 model.path_or_uri,
                 revision=model.revision,
                 low_cpu_mem_usage=True,
-                local_files_only=hf_local_files_only(str(model.path_or_uri), model.revision),
             ).eval()
             if device == DeviceType.CUDA:
                 try:

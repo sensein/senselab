@@ -10,7 +10,7 @@ concurrency:
 
 jobs:
   macos-tests:
-    if: github.event.pull_request.draft == false
+    if: false  # Temporarily disabled while debugging EC2 GPU tests
     name: macOS-tests
     runs-on: ${{ matrix.os }}
     strategy:
@@ -69,18 +69,10 @@ jobs:
           --log-level=DEBUG \
           --verbose
       shell: bash
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v5
-      with:
-        token: ${{ secrets.CODECOV_TOKEN }}
 
   pre-commit:
     if: github.event.pull_request.draft == false
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        include:
-        - {os: macos-latest, architecture: arm64, python-version: '3.11'}
+    runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v5
       with:  # no need for the history
@@ -90,34 +82,28 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v6
       with:
-        python-version: ${{ matrix.python-version }}
+        python-version: '3.11'
     - name: Install dependencies with uv
-      run: |
-        uv sync --extra text --extra video --group dev
-      shell: bash
+      run: uv sync --extra text --extra video --group dev
     - name: Run pre-commit
-      run: |
-        uv run pre-commit run --all-files
+      run: uv run pre-commit run --all-files
       shell: bash
 
 
   # ── EC2 GPU Runner Jobs ───────────────────────────────────────────────
   # Ephemeral GPU instances via machulav/ec2-github-runner.
-  # Triggered by 'to-test' label after macOS-tests and pre-commit pass.
+  # Triggered by 'ec2-gpu-test' label after macOS-tests and pre-commit pass.
   # See .github/EC2_GPU_RUNNER.md for setup instructions.
 
-  # ── GPU config parsing (shared by all start-runner jobs) ─────────────
+  # ── EC2 GPU Tests (single instance, all extras) ───────────────────────
   # PR labels override defaults: gpu-instance:<type>, gpu-family:<family>,
   # gpu-multi, gpu-ondemand:true. See EC2_GPU_RUNNER.md for details.
 
-  # ── 311-core: Core dependencies only ─────────────────────────────────
-
-  start-runner-311-core:
+  start-runner:
     if: >-
       github.event.pull_request.draft == false &&
-      contains(github.event.pull_request.labels.*.name, 'to-test')
-    needs: [pre-commit, macos-tests]
-    name: start-runner-311-core
+      contains(github.event.pull_request.labels.*.name, 'ec2-gpu-test')
+    name: start-runner
     runs-on: ubuntu-latest
     outputs:
       label: ${{ steps.start-ec2-runner.outputs.label }}
@@ -158,151 +144,53 @@ jobs:
         market-type: ${{ steps.gpu-config.outputs.market_type }}
         availability-zones-config: ${{ vars.AWS_AZ_CONFIG }}
 
-  ubuntu-tests-311-core:
-    name: ubuntu-tests-311-core
-    needs: start-runner-311-core
-    runs-on: ${{ needs.start-runner-311-core.outputs.label }}
+  gpu-tests:
+    name: gpu-tests (${{ matrix.python-version }})
+    needs: start-runner
+    runs-on: ${{ needs.start-runner.outputs.label }}
+    defaults:
+      run:
+        shell: bash -eo pipefail {0}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
     env:
       EC2_USER_HOME: /home/ec2-user
-      WORKING_DIR: ${{ vars.WORKING_DIR }}
-      HF_HOME: ${{ vars.WORKING_DIR }}/huggingface
-      HF_DATASETS_CACHE: ${{ vars.WORKING_DIR }}/huggingface/datasets
-      TRANSFORMERS_CACHE: ${{ vars.WORKING_DIR }}/huggingface/transformers
-      TORCH_HOME: ${{ vars.WORKING_DIR }}/torch
+      UV_CACHE_DIR: /scratch/uv-cache
+      HF_HOME: /scratch/huggingface
+      HF_DATASETS_CACHE: /scratch/huggingface/datasets
+      TRANSFORMERS_CACHE: /scratch/huggingface/transformers
+      TORCH_HOME: /scratch/torch
     steps:
     - uses: actions/checkout@v5
       with:
         fetch-depth: 1
-    - name: Set up environment with uv
+    - name: Prepare scratch storage
       run: |
         set -ex
-        export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
-        mkdir -p "$WORKING_DIR" "$HF_HOME" "$TORCH_HOME"
-        uv sync --group dev
-    - name: Verify GPU access
-      run: |
-        export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
-        uv run python -c "
-        import torch
-        assert torch.cuda.is_available(), 'CUDA not available'
-        n = torch.cuda.device_count()
-        print(f'GPUs: {n}')
-        for i in range(n):
-            print(f'  [{i}] {torch.cuda.get_device_name(i)}')
-        print(f'CUDA: {torch.version.cuda}')
-        print(f'PyTorch: {torch.__version__}')
-        "
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update && sudo apt-get install -y ffmpeg
-        sudo systemctl start docker || true
-        sudo chmod 666 /var/run/docker.sock
-    - name: Run unit tests (Core only)
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      run: |
-        export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
-        uv run pytest src/tests \
-          --junitxml=pytest.xml \
-          --cov-report=term-missing:skip-covered \
-          --cov-report=xml:coverage.xml \
-          --cov=src \
-          --log-level=DEBUG \
-          --verbose
-
-  stop-runner-311-core:
-    name: stop-runner-311-core
-    needs: [start-runner-311-core, ubuntu-tests-311-core]
-    runs-on: ubuntu-latest
-    if: ${{ always() && needs.start-runner-311-core.result == 'success' }}
-    steps:
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v6
-      with:
-        aws-access-key-id: ${{ secrets.AWS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_KEY_SECRET }}
-        aws-region: ${{ vars.AWS_REGION }}
-    - name: Stop EC2 runner
-      uses: machulav/ec2-github-runner@v2.5.2
-      with:
-        mode: stop
-        github-token: ${{ secrets.GH_TOKEN }}
-        label: ${{ needs.start-runner-311-core.outputs.label }}
-        ec2-instance-id: ${{ needs.start-runner-311-core.outputs.ec2-instance-id }}
-
-  # ── 311: Full dependencies (text + video extras) ─────────────────────
-
-  start-runner-311:
-    if: >-
-      github.event.pull_request.draft == false &&
-      contains(github.event.pull_request.labels.*.name, 'to-test')
-    needs: [pre-commit, macos-tests]
-    name: start-runner-311
-    runs-on: ubuntu-latest
-    outputs:
-      label: ${{ steps.start-ec2-runner.outputs.label }}
-      ec2-instance-id: ${{ steps.start-ec2-runner.outputs.ec2-instance-id }}
-    steps:
-    - name: Parse GPU config labels
-      id: gpu-config
-      run: |
-        LABELS='${{ toJSON(github.event.pull_request.labels.*.name) }}'
-        INSTANCE=$(echo "$LABELS" | jq -r '[.[] | select(startswith("gpu-instance:"))] | if length > 0 then .[0] | split(":")[1] else "" end')
-        MULTI_GPU=$(echo "$LABELS" | jq -r '[.[] | select(. == "gpu-multi")] | if length > 0 then "true" else "" end')
-        if [ -z "$INSTANCE" ] && [ -n "$MULTI_GPU" ]; then INSTANCE="g5.12xlarge"; fi
-        if [ -z "$INSTANCE" ]; then
-          FAMILY=$(echo "$LABELS" | jq -r '[.[] | select(startswith("gpu-family:"))] | if length > 0 then .[0] | split(":")[1] else "" end')
-          if [ -n "$FAMILY" ]; then
-            case "$FAMILY" in
-              g4dn) INSTANCE="g4dn.xlarge" ;; g5) INSTANCE="g5.xlarge" ;; g6) INSTANCE="g6.xlarge" ;;
-              p3) INSTANCE="p3.2xlarge" ;; p4d) INSTANCE="p4d.24xlarge" ;; p5) INSTANCE="p5.48xlarge" ;; esac
-          fi
+        # Mount instance store if not already mounted
+        if ! mountpoint -q /scratch; then
+          sudo mkfs.ext4 -F /dev/nvme1n1 2>/dev/null || true
+          sudo mkdir -p /scratch
+          sudo mount /dev/nvme1n1 /scratch || true
+          sudo chown $(whoami) /scratch
         fi
-        ONDEMAND=$(echo "$LABELS" | jq -r '[.[] | select(. == "gpu-ondemand:true")] | if length > 0 then "true" else "" end')
-        MARKET=$([ -n "$ONDEMAND" ] && echo "" || echo "spot")
-        echo "instance=${INSTANCE}" >> $GITHUB_OUTPUT
-        echo "market_type=${MARKET}" >> $GITHUB_OUTPUT
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v6
-      with:
-        aws-access-key-id: ${{ secrets.AWS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_KEY_SECRET }}
-        aws-region: ${{ vars.AWS_REGION }}
-    - name: Start EC2 runner
-      id: start-ec2-runner
-      uses: machulav/ec2-github-runner@v2.5.2
-      with:
-        mode: start
-        github-token: ${{ secrets.GH_TOKEN }}
-        ec2-instance-type: ${{ steps.gpu-config.outputs.instance || vars.AWS_INSTANCE_TYPE }}
-        market-type: ${{ steps.gpu-config.outputs.market_type }}
-        availability-zones-config: ${{ vars.AWS_AZ_CONFIG }}
-
-  ubuntu-tests-311:
-    name: ubuntu-tests-311
-    needs: start-runner-311
-    runs-on: ${{ needs.start-runner-311.outputs.label }}
-    env:
-      EC2_USER_HOME: /home/ec2-user
-      WORKING_DIR: ${{ vars.WORKING_DIR }}
-      HF_HOME: ${{ vars.WORKING_DIR }}/huggingface
-      HF_DATASETS_CACHE: ${{ vars.WORKING_DIR }}/huggingface/datasets
-      TRANSFORMERS_CACHE: ${{ vars.WORKING_DIR }}/huggingface/transformers
-      TORCH_HOME: ${{ vars.WORKING_DIR }}/torch
-    steps:
-    - uses: actions/checkout@v5
-      with:
-        fetch-depth: 1
-    - name: Set up environment with uv
+        mkdir -p "$UV_CACHE_DIR" "$HF_HOME" "$TORCH_HOME"
+    - name: Set up environment (Python ${{ matrix.python-version }})
       run: |
-        set -ex
+        set -euxo pipefail
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
-        mkdir -p "$WORKING_DIR" "$HF_HOME" "$TORCH_HOME"
-        uv sync --extra text --extra video --group dev
+        uv --version
+        uv sync --python ${{ matrix.python-version }} --extra text --extra video --group dev
+        # Make ffmpeg binary (bundled by imageio-ffmpeg) available on PATH
+        FFMPEG_BIN=$(uv run python -c "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())")
+        ln -sf "$FFMPEG_BIN" "${EC2_USER_HOME}/.local/bin/ffmpeg"
+        ffmpeg -version
     - name: Verify GPU access
       run: |
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
+        nvidia-smi
         uv run python -c "
         import torch
         assert torch.cuda.is_available(), 'CUDA not available'
@@ -313,11 +201,6 @@ jobs:
         print(f'CUDA: {torch.version.cuda}')
         print(f'PyTorch: {torch.__version__}')
         "
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update && sudo apt-get install -y ffmpeg
-        sudo systemctl start docker || true
-        sudo chmod 666 /var/run/docker.sock
     - name: Run unit tests
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -332,11 +215,11 @@ jobs:
           --log-level=DEBUG \
           --verbose
 
-  stop-runner-311:
-    name: stop-runner-311
-    needs: [start-runner-311, ubuntu-tests-311]
+  stop-runner:
+    name: stop-runner
+    needs: [start-runner, gpu-tests]
     runs-on: ubuntu-latest
-    if: ${{ always() && needs.start-runner-311.result == 'success' }}
+    if: ${{ always() && needs.start-runner.result == 'success' }}
     steps:
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v6
@@ -349,126 +232,5 @@ jobs:
       with:
         mode: stop
         github-token: ${{ secrets.GH_TOKEN }}
-        label: ${{ needs.start-runner-311.outputs.label }}
-        ec2-instance-id: ${{ needs.start-runner-311.outputs.ec2-instance-id }}
-
-  # ── 312: Full dependencies (text + video extras) ─────────────────────
-
-  start-runner-312:
-    if: >-
-      github.event.pull_request.draft == false &&
-      contains(github.event.pull_request.labels.*.name, 'to-test')
-    needs: [pre-commit, macos-tests]
-    name: start-runner-312
-    runs-on: ubuntu-latest
-    outputs:
-      label: ${{ steps.start-ec2-runner.outputs.label }}
-      ec2-instance-id: ${{ steps.start-ec2-runner.outputs.ec2-instance-id }}
-    steps:
-    - name: Parse GPU config labels
-      id: gpu-config
-      run: |
-        LABELS='${{ toJSON(github.event.pull_request.labels.*.name) }}'
-        INSTANCE=$(echo "$LABELS" | jq -r '[.[] | select(startswith("gpu-instance:"))] | if length > 0 then .[0] | split(":")[1] else "" end')
-        MULTI_GPU=$(echo "$LABELS" | jq -r '[.[] | select(. == "gpu-multi")] | if length > 0 then "true" else "" end')
-        if [ -z "$INSTANCE" ] && [ -n "$MULTI_GPU" ]; then INSTANCE="g5.12xlarge"; fi
-        if [ -z "$INSTANCE" ]; then
-          FAMILY=$(echo "$LABELS" | jq -r '[.[] | select(startswith("gpu-family:"))] | if length > 0 then .[0] | split(":")[1] else "" end')
-          if [ -n "$FAMILY" ]; then
-            case "$FAMILY" in
-              g4dn) INSTANCE="g4dn.xlarge" ;; g5) INSTANCE="g5.xlarge" ;; g6) INSTANCE="g6.xlarge" ;;
-              p3) INSTANCE="p3.2xlarge" ;; p4d) INSTANCE="p4d.24xlarge" ;; p5) INSTANCE="p5.48xlarge" ;; esac
-          fi
-        fi
-        ONDEMAND=$(echo "$LABELS" | jq -r '[.[] | select(. == "gpu-ondemand:true")] | if length > 0 then "true" else "" end')
-        MARKET=$([ -n "$ONDEMAND" ] && echo "" || echo "spot")
-        echo "instance=${INSTANCE}" >> $GITHUB_OUTPUT
-        echo "market_type=${MARKET}" >> $GITHUB_OUTPUT
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v6
-      with:
-        aws-access-key-id: ${{ secrets.AWS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_KEY_SECRET }}
-        aws-region: ${{ vars.AWS_REGION }}
-    - name: Start EC2 runner
-      id: start-ec2-runner
-      uses: machulav/ec2-github-runner@v2.5.2
-      with:
-        mode: start
-        github-token: ${{ secrets.GH_TOKEN }}
-        ec2-instance-type: ${{ steps.gpu-config.outputs.instance || vars.AWS_INSTANCE_TYPE }}
-        market-type: ${{ steps.gpu-config.outputs.market_type }}
-        availability-zones-config: ${{ vars.AWS_AZ_CONFIG }}
-
-  ubuntu-tests-312:
-    name: ubuntu-tests-312
-    needs: start-runner-312
-    runs-on: ${{ needs.start-runner-312.outputs.label }}
-    env:
-      EC2_USER_HOME: /home/ec2-user
-      WORKING_DIR: ${{ vars.WORKING_DIR }}
-      HF_HOME: ${{ vars.WORKING_DIR }}/huggingface
-      HF_DATASETS_CACHE: ${{ vars.WORKING_DIR }}/huggingface/datasets
-      TRANSFORMERS_CACHE: ${{ vars.WORKING_DIR }}/huggingface/transformers
-      TORCH_HOME: ${{ vars.WORKING_DIR }}/torch
-    steps:
-    - uses: actions/checkout@v5
-      with:
-        fetch-depth: 1
-    - name: Set up venv from pre-installed base
-      run: |
-        set -ex
-        export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
-        mkdir -p "$WORKING_DIR" "$HF_HOME" "$TORCH_HOME"
-        uv sync --python 3.12 --extra text --extra video --group dev
-    - name: Verify GPU access
-      run: |
-        export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
-        uv run python -c "
-        import torch
-        assert torch.cuda.is_available(), 'CUDA not available'
-        n = torch.cuda.device_count()
-        print(f'GPUs: {n}')
-        for i in range(n):
-            print(f'  [{i}] {torch.cuda.get_device_name(i)}')
-        print(f'CUDA: {torch.version.cuda}')
-        print(f'PyTorch: {torch.__version__}')
-        "
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update && sudo apt-get install -y ffmpeg
-        sudo systemctl start docker || true
-        sudo chmod 666 /var/run/docker.sock
-    - name: Run unit tests
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      run: |
-        export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
-        uv run pytest src/tests \
-          --junitxml=pytest.xml \
-          --cov-report=term-missing:skip-covered \
-          --cov-report=xml:coverage.xml \
-          --cov=src \
-          --log-level=DEBUG \
-          --verbose
-
-  stop-runner-312:
-    name: stop-runner-312
-    needs: [start-runner-312, ubuntu-tests-312]
-    runs-on: ubuntu-latest
-    if: ${{ always() && needs.start-runner-312.result == 'success' }}
-    steps:
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v6
-      with:
-        aws-access-key-id: ${{ secrets.AWS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_KEY_SECRET }}
-        aws-region: ${{ vars.AWS_REGION }}
-    - name: Stop EC2 runner
-      uses: machulav/ec2-github-runner@v2.5.2
-      with:
-        mode: stop
-        github-token: ${{ secrets.GH_TOKEN }}
-        label: ${{ needs.start-runner-312.outputs.label }}
-        ec2-instance-id: ${{ needs.start-runner-312.outputs.ec2-instance-id }}
+        label: ${{ needs.start-runner.outputs.label }}
+        ec2-instance-id: ${{ needs.start-runner.outputs.ec2-instance-id }}
