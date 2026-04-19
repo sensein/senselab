@@ -27,6 +27,7 @@ _PPGS_REQUIREMENTS = [
     "torch~=2.8",
     "torchaudio~=2.8",
     "numpy",
+    "soundfile",
 ]
 _PPGS_PYTHON = "3.11"
 
@@ -38,8 +39,8 @@ import traceback
 from pathlib import Path
 
 import numpy as np
+import soundfile as sf
 import torch
-import torchaudio
 
 args = json.loads(sys.stdin.read())
 audio_paths = args["audio_paths"]
@@ -52,7 +53,8 @@ gpu = 0 if device == "cuda" else None
 
 output_paths = []
 for i, audio_path in enumerate(audio_paths):
-    waveform, sr = torchaudio.load(audio_path)
+    data, sr = sf.read(audio_path, dtype="float32")
+    waveform = torch.from_numpy(data).unsqueeze(0) if data.ndim == 1 else torch.from_numpy(data.T)
     try:
         posteriorgram = ppgs.from_audio(
             torch.unsqueeze(waveform, dim=0),

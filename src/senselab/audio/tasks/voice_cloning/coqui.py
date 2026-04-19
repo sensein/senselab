@@ -17,7 +17,7 @@ from senselab.utils.subprocess_venv import ensure_venv
 
 # Coqui venv specification
 _COQUI_VENV = "coqui"
-_COQUI_REQUIREMENTS = ["coqui-tts~=0.27", "torch~=2.8", "torchaudio~=2.8", "numpy"]
+_COQUI_REQUIREMENTS = ["coqui-tts~=0.27", "torch~=2.8", "torchaudio~=2.8", "numpy", "soundfile"]
 _COQUI_PYTHON = "3.11"
 
 # Worker script — runs inside the isolated venv (no senselab imports)
@@ -26,8 +26,8 @@ import json
 import sys
 from pathlib import Path
 
+import soundfile as sf
 import torch
-import torchaudio
 from TTS.api import TTS
 
 args = json.loads(sys.stdin.read())
@@ -53,8 +53,10 @@ output_sample_rate = (
 
 output_paths = []
 for i, (src_path, tgt_path) in enumerate(zip(source_paths, target_paths)):
-    src_wav, src_sr = torchaudio.load(src_path)
-    tgt_wav, tgt_sr = torchaudio.load(tgt_path)
+    src_data, src_sr = sf.read(src_path, dtype="float32")
+    tgt_data, tgt_sr = sf.read(tgt_path, dtype="float32")
+    src_wav = torch.from_numpy(src_data).unsqueeze(0) if src_data.ndim == 1 else torch.from_numpy(src_data.T)
+    tgt_wav = torch.from_numpy(tgt_data).unsqueeze(0) if tgt_data.ndim == 1 else torch.from_numpy(tgt_data.T)
 
     if expected_sample_rate is not None:
         if src_sr != expected_sample_rate:
@@ -78,7 +80,7 @@ for i, (src_path, tgt_path) in enumerate(zip(source_paths, target_paths)):
 
     sr = output_sample_rate or src_sr
     out_path = str(Path(output_dir) / f"cloned_{i}.flac")
-    torchaudio.save(out_path, converted, sr, format="flac")
+    sf.write(out_path, converted.squeeze().numpy(), sr, format="FLAC")
     output_paths.append(out_path)
 
 print(json.dumps({"output_paths": output_paths}))
