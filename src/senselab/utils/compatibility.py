@@ -168,12 +168,16 @@ _IMPORT_MAP: dict[str, str] = {
 
 
 def _get_installed_version(package_name: str) -> Optional[str]:
-    """Get the installed version of a package, or None if not installed."""
-    import_name = _IMPORT_MAP.get(package_name, package_name.replace("-", "_"))
+    """Get the installed version of a package without importing it.
+
+    Uses importlib.metadata to read version from package metadata,
+    avoiding slow imports and side effects (e.g., torchcodec RuntimeError).
+    """
+    from importlib.metadata import PackageNotFoundError, version
+
     try:
-        mod = importlib.import_module(import_name)
-        return getattr(mod, "__version__", None)
-    except (ImportError, RuntimeError):
+        return version(package_name)
+    except PackageNotFoundError:
         return None
 
 

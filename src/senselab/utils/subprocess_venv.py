@@ -208,8 +208,9 @@ def ensure_venv(
             logger.error("Failed to create venv '%s': %s", name, exc.stderr)
             raise
 
-        # Always include safetensors + numpy for IPC serialization
-        all_reqs = [*requirements, "safetensors", "numpy"]
+        # Always include IPC serialization deps (safetensors for tensors,
+        # numpy for arrays, torchaudio for FLAC audio encoding)
+        all_reqs = [*requirements, "safetensors", "numpy", "torchaudio"]
         try:
             subprocess.run(
                 [uv, "pip", "install", "--python", str(venv_dir / "bin" / "python"), *all_reqs],
@@ -385,6 +386,8 @@ for key, entry in manifest.get("entries", {}).items():
         args[key] = Image.open(str(data_dir / entry["file"]))
     elif t == "binary":
         args[key] = (data_dir / entry["file"]).read_bytes()
+    elif t == "pydantic":
+        args[key] = entry.get("value")  # passed as dict; callee reconstructs if needed
     else:
         args[key] = entry.get("value")
 
