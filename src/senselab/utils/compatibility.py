@@ -66,9 +66,11 @@ COMPATIBILITY_MATRIX: dict[str, CompatibilityEntry] = {
         install_hint="pip install senselab",
     ),
     # ── Audio: Speaker Diarization ──
+    # NOTE: pyannote-audio depends on torchcodec, which requires FFmpeg system
+    # libraries (not pip). torchcodec version must match torch (0.7↔2.8, 0.10↔2.10).
     "audio.tasks.speaker_diarization.diarize_audios": CompatibilityEntry(
-        required_deps=["pyannote-audio", "torchaudio"],
-        dep_versions={"pyannote-audio": ">=3.0,<5.0", "torchaudio": ">=2.8,<3.0"},
+        required_deps=["pyannote-audio", "torchaudio", "torchcodec"],
+        dep_versions={"pyannote-audio": ">=3.0,<5.0", "torchaudio": ">=2.8,<3.0", "torchcodec": ">=0.7"},
         gpu_required=True,
         install_hint="pip install senselab",
     ),
