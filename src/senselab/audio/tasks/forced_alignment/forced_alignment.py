@@ -593,8 +593,12 @@ def align_transcriptions(
         model_dict = DEFAULT_ALIGN_MODELS_HF.get(language.language_code, DEFAULT_ALIGN_MODELS_HF["en"])
         model_variant: HFModel = HFModel(path_or_uri=model_dict["path_or_uri"], revision=model_dict["revision"])
         if model_variant.path_or_uri not in loaded_processors_and_models:
-            processor = Wav2Vec2Processor.from_pretrained(model_variant.path_or_uri)
-            model = Wav2Vec2ForCTC.from_pretrained(model_variant.path_or_uri).to(device.value)
+            processor = Wav2Vec2Processor.from_pretrained(
+                model_variant.path_or_uri, revision=model_variant.revision
+            )
+            model = Wav2Vec2ForCTC.from_pretrained(
+                model_variant.path_or_uri, revision=model_variant.revision
+            ).to(device.value)
             loaded_processors_and_models[model_variant.path_or_uri] = (processor, model)
 
         processor, model = loaded_processors_and_models[model_variant.path_or_uri]
