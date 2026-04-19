@@ -177,19 +177,16 @@ jobs:
           sudo chown $(whoami) /scratch
         fi
         mkdir -p "$UV_CACHE_DIR" "$HF_HOME" "$TORCH_HOME"
-    - name: Install system dependencies
-      run: |
-        if command -v dnf &>/dev/null; then
-          sudo dnf install -y ffmpeg-free || true
-        elif command -v apt-get &>/dev/null; then
-          sudo apt-get update && sudo apt-get install -y ffmpeg
-        fi
     - name: Set up environment (Python ${{ matrix.python-version }})
       run: |
         set -euxo pipefail
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
         uv --version
         uv sync --python ${{ matrix.python-version }} --extra text --extra video --group dev
+        # Make ffmpeg binary (bundled by imageio-ffmpeg) available on PATH
+        FFMPEG_BIN=$(uv run python -c "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())")
+        ln -sf "$FFMPEG_BIN" "${EC2_USER_HOME}/.local/bin/ffmpeg"
+        ffmpeg -version
     - name: Verify GPU access
       run: |
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
