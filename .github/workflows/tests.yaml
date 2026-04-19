@@ -163,19 +163,35 @@ jobs:
       TRANSFORMERS_CACHE: ${{ vars.WORKING_DIR }}/huggingface/transformers
       TORCH_HOME: ${{ vars.WORKING_DIR }}/torch
     steps:
+    - name: Create isolated workspace
+      run: |
+        WORKSPACE="${WORKING_DIR}/py${{ matrix.python-version }}"
+        echo "WORKSPACE=${WORKSPACE}" >> $GITHUB_ENV
+        mkdir -p "${WORKSPACE}"
     - uses: actions/checkout@v5
       with:
         fetch-depth: 1
-    - name: Set up environment with uv (Python ${{ matrix.python-version }})
+        path: ${{ env.WORKING_DIR }}/py${{ matrix.python-version }}/senselab
+    - name: Install system dependencies
       run: |
-        set -ex
+        if command -v dnf &>/dev/null; then
+          sudo dnf install -y ffmpeg-free || true
+        elif command -v apt-get &>/dev/null; then
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+        fi
+    - name: Set up environment with uv (Python ${{ matrix.python-version }})
+      working-directory: ${{ env.WORKING_DIR }}/py${{ matrix.python-version }}/senselab
+      run: |
+        set -euxo pipefail
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
-        echo "Working directory: $(pwd)"
-        ls pyproject.toml || { echo "ERROR: pyproject.toml not found in $(pwd)"; exit 1; }
+        echo "=== Debug info ==="
+        pwd
+        ls pyproject.toml
         uv --version
-        mkdir -p "$WORKING_DIR" "$HF_HOME" "$TORCH_HOME"
-        uv sync --python ${{ matrix.python-version }} --extra text --extra video --group dev
+        echo "=== Installing ==="
+        uv sync --python ${{ matrix.python-version }} --extra text --extra video --group dev --verbose
     - name: Verify GPU access
+      working-directory: ${{ env.WORKING_DIR }}/py${{ matrix.python-version }}/senselab
       run: |
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
         nvidia-smi
@@ -189,14 +205,8 @@ jobs:
         print(f'CUDA: {torch.version.cuda}')
         print(f'PyTorch: {torch.__version__}')
         "
-    - name: Install system dependencies
-      run: |
-        if command -v dnf &>/dev/null; then
-          sudo dnf install -y ffmpeg-free || true
-        elif command -v apt-get &>/dev/null; then
-          sudo apt-get update && sudo apt-get install -y ffmpeg
-        fi
     - name: Run unit tests
+      working-directory: ${{ env.WORKING_DIR }}/py${{ matrix.python-version }}/senselab
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
