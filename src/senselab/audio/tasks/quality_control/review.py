@@ -19,9 +19,12 @@ except ImportError:
 
     def labeling_function(**kwargs: object) -> Callable:  # type: ignore[misc]
         """No-op decorator when snorkel is not installed."""
+
         def decorator(fn: Callable) -> Callable:
             return fn
+
         return decorator
+
 
 from senselab.audio.tasks.quality_control.taxonomies import (
     BIOACOUSTIC_ACTIVITY_TAXONOMY,

@@ -233,16 +233,17 @@ def check_compatibility(function_key: str) -> bool:
     if entry is None:
         return True
 
-    # Check Python version range
+    # Isolated backends run in their own subprocess venv with their own
+    # Python version — don't check host Python or host deps
+    if entry.isolated:
+        return True
+
+    # Check Python version range (host Python, for non-isolated functions)
     py_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     if not entry.python_versions.contains(py_ver):
         raise RuntimeError(
             f"Function '{function_key}' requires Python {entry.python_versions}, but you are running Python {py_ver}."
         )
-
-    # Isolated backends don't need deps in the host environment
-    if entry.isolated:
-        return True
 
     # Check each required dependency — presence AND version
     for dep in entry.required_deps:
