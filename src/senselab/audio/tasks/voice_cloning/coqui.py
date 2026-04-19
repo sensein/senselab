@@ -7,9 +7,7 @@ Audio data is serialized as FLAC for efficient lossless transfer.
 
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional, Union
-
-import torch
+from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import CoquiTTSModel, DeviceType
@@ -50,22 +48,20 @@ class CoquiVoiceCloner:
         if len(source_audios) != len(target_audios):
             raise ValueError("Number of source and target audios must be the same.")
 
-        for i, (src, tgt) in enumerate(zip(source_audios, target_audios)):
-            if src.waveform.squeeze().dim() != 1 or tgt.waveform.squeeze().dim() != 1:
-                raise ValueError(f"[Pair {i}] Only mono audio is supported.")
-
-        # Serialize audio to temp FLAC files
         with tempfile.TemporaryDirectory(prefix="senselab-coqui-") as tmpdir:
             tmp = Path(tmpdir)
 
-            # Write source/target audio files
+            # Validate and serialize in a single pass
             source_paths = []
             target_paths = []
             for i, (src, tgt) in enumerate(zip(source_audios, target_audios)):
+                if src.waveform.squeeze().dim() != 1 or tgt.waveform.squeeze().dim() != 1:
+                    raise ValueError(f"[Pair {i}] Only mono audio is supported.")
+
                 src_path = str(tmp / f"source_{i}.flac")
                 tgt_path = str(tmp / f"target_{i}.flac")
-                _save_audio_flac(src, src_path)
-                _save_audio_flac(tgt, tgt_path)
+                src.save_to_file(src_path, format="flac")
+                tgt.save_to_file(tgt_path, format="flac")
                 source_paths.append(src_path)
                 target_paths.append(tgt_path)
 
@@ -90,35 +86,6 @@ class CoquiVoiceCloner:
             cloned_audios = []
             output_paths = result.get("output_paths", []) if isinstance(result, dict) else []
             for out_path in output_paths:
-                audio = _load_audio_flac(out_path)
-                cloned_audios.append(audio)
+                cloned_audios.append(Audio(filepath=out_path))
 
             return cloned_audios
-
-
-def _save_audio_flac(audio: Audio, path: str) -> None:
-    """Save Audio to FLAC (lossless, compressed)."""
-    try:
-        from torchcodec.encoders import AudioEncoder
-
-        encoder = AudioEncoder(samples=audio.waveform, sample_rate=audio.sampling_rate)
-        encoder.to_file(path)
-    except (ImportError, RuntimeError):
-        import torchaudio
-
-        torchaudio.save(path, audio.waveform, audio.sampling_rate, format="flac")
-
-
-def _load_audio_flac(path: str) -> Audio:
-    """Load Audio from FLAC."""
-    try:
-        from torchcodec.decoders import AudioDecoder
-
-        decoder = AudioDecoder(path)
-        samples = decoder.get_all_samples()
-        return Audio(waveform=samples.data, sampling_rate=samples.sample_rate)
-    except (ImportError, RuntimeError):
-        import torchaudio
-
-        waveform, sr = torchaudio.load(path)
-        return Audio(waveform=waveform, sampling_rate=sr)
