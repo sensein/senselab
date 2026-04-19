@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from joblib import Memory, Parallel, delayed
 
 from senselab.audio.data_structures import Audio
+from senselab.utils.compatibility import requires_compatibility
 from senselab.utils.data_structures import DeviceType
 from senselab.utils.data_structures.logging import logger
 
@@ -29,6 +30,7 @@ from .torchaudio import extract_torchaudio_features_from_audios
 from .torchaudio_squim import extract_objective_quality_features_from_audios
 
 
+@requires_compatibility("audio.tasks.features_extraction.extract_features_from_audios")
 def extract_features_from_audios(
     audios: List[Audio],
     opensmile: Union[Dict[str, str], bool] = True,

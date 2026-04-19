@@ -4,6 +4,7 @@ from typing import Any, Optional
 
 import numpy as np
 
+from senselab.utils.compatibility import requires_compatibility
 from senselab.video.data_structures.pose import ImagePose
 from senselab.video.tasks.pose_estimation.estimate import (
     MediaPipePoseEstimator,
@@ -12,6 +13,7 @@ from senselab.video.tasks.pose_estimation.estimate import (
 from senselab.video.tasks.pose_estimation.visualization import visualize
 
 
+@requires_compatibility("video.tasks.pose_estimation.estimate_pose")
 def estimate_pose(image_path: str, model: str, **kwargs: Any) -> ImagePose:  # noqa ANN401
     """Estimate poses in an image using the specified model.
 
