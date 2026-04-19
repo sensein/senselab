@@ -135,13 +135,15 @@ class CoquiVoiceCloner:
                 target_paths.append(tgt_path)
 
             # Run worker in isolated venv
-            input_json = json.dumps({
-                "source_paths": source_paths,
-                "target_paths": target_paths,
-                "model_id": str(model.path_or_uri),
-                "device": device.value if device else "cpu",
-                "output_dir": str(tmp),
-            })
+            input_json = json.dumps(
+                {
+                    "source_paths": source_paths,
+                    "target_paths": target_paths,
+                    "model_id": str(model.path_or_uri),
+                    "device": device.value if device else "cpu",
+                    "output_dir": str(tmp),
+                }
+            )
 
             result = subprocess.run(
                 [python, "-c", _WORKER_SCRIPT],

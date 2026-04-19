@@ -104,11 +104,13 @@ def extract_ppgs_from_audios(audios: List[Audio], device: Optional[DeviceType] =
             audio_paths.append(path)
 
         # Run worker in isolated venv
-        input_json = json.dumps({
-            "audio_paths": audio_paths,
-            "device": device.value,
-            "output_dir": str(tmp),
-        })
+        input_json = json.dumps(
+            {
+                "audio_paths": audio_paths,
+                "device": device.value,
+                "output_dir": str(tmp),
+            }
+        )
 
         result = subprocess.run(
             [python, "-c", _WORKER_SCRIPT],
