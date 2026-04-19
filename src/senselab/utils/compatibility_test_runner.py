@@ -28,8 +28,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from senselab.utils.compatibility import COMPATIBILITY_MATRIX, VersionRange
-from senselab.utils.subprocess_venv import _find_uv, ensure_venv
+from senselab.utils.compatibility import COMPATIBILITY_MATRIX, CompatibilityEntry, VersionRange
+from senselab.utils.subprocess_venv import ensure_venv
 
 logger = logging.getLogger("senselab")
 
@@ -187,30 +187,101 @@ def _probe_function(
     )
 
 
+def _extract_upper_bound(spec_str: str) -> Optional[str]:
+    """Extract the upper bound version from a PEP 440 specifier.
+
+    E.g., ">=3.11,<3.13" → "3.13", ">=2.8" → None (no upper bound).
+    """
+    for part in spec_str.split(","):
+        part = part.strip()
+        if part.startswith("<") and not part.startswith("<="):
+            return part[1:]
+        if part.startswith("<="):
+            return part[2:]
+    return None
+
+
+def _next_minor(version: str) -> str:
+    """Bump the minor version by 1. E.g., "3.12" → "3.13", "2.8" → "2.9"."""
+    parts = version.split(".")
+    parts[-1] = str(int(parts[-1]) + 1)
+    return ".".join(parts)
+
+
+def _versions_to_probe(entry: CompatibilityEntry) -> tuple[list[str], list[str]]:
+    """Determine which versions to probe for a function.
+
+    Strategy: test one version inside each boundary (should pass) and
+    one version just outside the upper bound (should fail). We don't
+    test below the lower bound — no need to support older versions.
+
+    Returns:
+        (python_versions, torch_versions) to probe.
+    """
+    py_versions = set()
+    torch_versions = set()
+
+    # Python: one inside (highest supported), one just above upper bound
+    py_upper = _extract_upper_bound(str(entry.python_versions))
+    if py_upper:
+        # Test the version just below the upper bound (should pass)
+        below = py_upper.split(".")
+        below[-1] = str(int(below[-1]) - 1)
+        py_versions.add(".".join(below))
+        # Test the upper bound itself (should fail)
+        py_versions.add(py_upper)
+    else:
+        # No upper bound — test latest known versions (should pass)
+        py_versions.update(["3.13", "3.14"])
+
+    # Torch: same logic
+    torch_upper = _extract_upper_bound(str(entry.torch_versions))
+    if torch_upper:
+        below = torch_upper.split(".")
+        below[-1] = str(int(below[-1]) - 1)
+        torch_versions.add(".".join(below))
+        torch_versions.add(torch_upper)
+    else:
+        torch_versions.update(["2.10"])  # latest known
+
+    return sorted(py_versions), sorted(torch_versions)
+
+
 def run_compatibility_probes(
+    functions: Optional[list[str]] = None,
     python_versions: Optional[list[str]] = None,
     torch_versions: Optional[list[str]] = None,
-    functions: Optional[list[str]] = None,
 ) -> CompatibilityReport:
-    """Run compatibility probes across version combinations.
+    """Run compatibility probes at version boundaries.
+
+    For each function, probes ONE version inside the boundary (should pass)
+    and ONE version just outside the upper bound (should fail). Does NOT
+    test below the lower bound — we don't need to support older versions.
+
+    Override auto-detection with explicit python_versions/torch_versions
+    to probe specific combos.
 
     Args:
-        python_versions: Python versions to test. Default: ["3.11", "3.12", "3.13", "3.14"]
-        torch_versions: Torch versions to test. Default: ["2.8", "2.10"]
-        functions: Function keys to test. Default: all non-isolated functions.
+        functions: Function keys to test. Default: all non-isolated.
+        python_versions: Override: specific Python versions to test.
+        torch_versions: Override: specific torch versions to test.
 
     Returns:
         CompatibilityReport with results.
     """
-    py_versions = python_versions or ["3.11", "3.12", "3.13", "3.14"]
-    t_versions = torch_versions or ["2.8", "2.10"]
     func_keys = functions or [k for k, v in COMPATIBILITY_MATRIX.items() if not v.isolated]
-
     report = CompatibilityReport()
 
     for func_key in func_keys:
-        for py_ver in py_versions:
-            for t_ver in t_versions:
+        entry = COMPATIBILITY_MATRIX[func_key]
+
+        if python_versions and torch_versions:
+            py_vers, t_vers = python_versions, torch_versions
+        else:
+            py_vers, t_vers = _versions_to_probe(entry)
+
+        for py_ver in py_vers:
+            for t_ver in t_vers:
                 logger.info("Probing %s on Python %s / torch %s", func_key, py_ver, t_ver)
                 result = _probe_function(func_key, py_ver, t_ver)
                 report.results.append(result)
