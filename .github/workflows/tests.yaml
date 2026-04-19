@@ -69,18 +69,10 @@ jobs:
           --log-level=DEBUG \
           --verbose
       shell: bash
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v5
-      with:
-        token: ${{ secrets.CODECOV_TOKEN }}
 
   pre-commit:
     if: github.event.pull_request.draft == false
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        include:
-        - {os: macos-latest, architecture: arm64, python-version: '3.11'}
+    runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v5
       with:  # no need for the history
@@ -90,14 +82,11 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v6
       with:
-        python-version: ${{ matrix.python-version }}
+        python-version: '3.11'
     - name: Install dependencies with uv
-      run: |
-        uv sync --extra text --extra video --group dev
-      shell: bash
+      run: uv sync --extra text --extra video --group dev
     - name: Run pre-commit
-      run: |
-        uv run pre-commit run --all-files
+      run: uv run pre-commit run --all-files
       shell: bash
 
 
@@ -116,7 +105,6 @@ jobs:
     if: >-
       github.event.pull_request.draft == false &&
       contains(github.event.pull_request.labels.*.name, 'to-test')
-    needs: [pre-commit, macos-tests]
     name: start-runner-311-core
     runs-on: ubuntu-latest
     outputs:
@@ -237,7 +225,6 @@ jobs:
     if: >-
       github.event.pull_request.draft == false &&
       contains(github.event.pull_request.labels.*.name, 'to-test')
-    needs: [pre-commit, macos-tests]
     name: start-runner-311
     runs-on: ubuntu-latest
     outputs:
@@ -358,7 +345,6 @@ jobs:
     if: >-
       github.event.pull_request.draft == false &&
       contains(github.event.pull_request.labels.*.name, 'to-test')
-    needs: [pre-commit, macos-tests]
     name: start-runner-312
     runs-on: ubuntu-latest
     outputs:
