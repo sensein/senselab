@@ -9,6 +9,7 @@ from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import Participant, SenselabDataset, Session
 from senselab.utils.dependencies import torchaudio_available
 from senselab.video.data_structures import Video
+from senselab.video.data_structures.video import TORCHCODEC_AVAILABLE
 from tests.audio.conftest import MONO_AUDIO_PATH, STEREO_AUDIO_PATH
 from tests.video.conftest import VIDEO_PATH
 
@@ -174,7 +175,10 @@ def test_audio_dataset_splits() -> None:
     )
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE or not AV_AVAILABLE, reason="torchaudio or av are not installed")
+@pytest.mark.skipif(
+    not TORCHAUDIO_AVAILABLE or not AV_AVAILABLE or not TORCHCODEC_AVAILABLE,
+    reason="torchaudio, av, or torchcodec not available",
+)
 def test_convert_senselab_dataset_to_hf_datasets() -> None:
     """Tests the conversion of Senselab dataset to HuggingFace."""
     dataset = SenselabDataset(
