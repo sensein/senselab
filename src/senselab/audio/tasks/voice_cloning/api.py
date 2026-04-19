@@ -5,9 +5,11 @@ from typing import Any, List, Optional
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.voice_cloning.coqui import CoquiVoiceCloner
 from senselab.audio.tasks.voice_cloning.sparc import SparcVoiceCloner
+from senselab.utils.compatibility import requires_compatibility
 from senselab.utils.data_structures import CoquiTTSModel, DeviceType
 
 
+@requires_compatibility("audio.tasks.voice_cloning.clone_voices")
 def clone_voices(
     source_audios: List[Audio],
     target_audios: List[Audio],

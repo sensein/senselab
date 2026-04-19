@@ -5,9 +5,11 @@ from typing import Any, List, Optional, Tuple, TypeGuard
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.text_to_speech.coqui import CoquiTTS
 from senselab.audio.tasks.text_to_speech.huggingface import HuggingFaceTTS
+from senselab.utils.compatibility import requires_compatibility
 from senselab.utils.data_structures import CoquiTTSModel, DeviceType, HFModel, Language, SenselabModel, TorchModel
 
 
+@requires_compatibility("audio.tasks.text_to_speech.synthesize_texts")
 def synthesize_texts(
     texts: List[str],
     model: Optional[SenselabModel] = None,

@@ -143,6 +143,39 @@ COMPATIBILITY_MATRIX: dict[str, CompatibilityEntry] = {
         gpu_required=True,
         install_hint="pip install senselab",
     ),
+    # ── Audio: Data Augmentation ──
+    "audio.tasks.data_augmentation.augment_audios": CompatibilityEntry(
+        required_deps=["audiomentations", "torch-audiomentations"],
+        dep_versions={"audiomentations": ">=0.42", "torch-audiomentations": ">=0.12"},
+        install_hint="pip install senselab",
+    ),
+    # ── Audio: SSL Embeddings ──
+    "audio.tasks.ssl_embeddings.extract_ssl_embeddings_from_audios": CompatibilityEntry(
+        required_deps=["transformers"],
+        dep_versions={"transformers": ">=4.40,<5.0"},
+        gpu_required=True,
+        install_hint="pip install senselab",
+    ),
+    # ── Audio: Voice Activity Detection ──
+    "audio.tasks.voice_activity_detection.detect_human_voice_activity_in_audios": CompatibilityEntry(
+        required_deps=["pyannote-audio", "torchaudio"],
+        dep_versions={"pyannote-audio": ">=3.0,<5.0", "torchaudio": ">=2.8,<3.0"},
+        gpu_required=True,
+        install_hint="pip install senselab",
+    ),
+    # ── Audio: Speech Emotion Recognition ──
+    "audio.tasks.classification.classify_emotions_from_speech": CompatibilityEntry(
+        required_deps=["transformers"],
+        dep_versions={"transformers": ">=4.40,<5.0"},
+        gpu_required=True,
+        install_hint="pip install senselab",
+    ),
+    # ── Audio: Features Extraction (general — torchaudio) ──
+    "audio.tasks.features_extraction.extract_features_from_audios": CompatibilityEntry(
+        required_deps=["torchaudio"],
+        dep_versions={"torchaudio": ">=2.8,<3.0"},
+        install_hint="pip install senselab",
+    ),
     # ── Video: Pose Estimation ──
     "video.tasks.pose_estimation.estimate_pose": CompatibilityEntry(
         required_deps=["ultralytics", "opencv-python-headless"],
@@ -200,16 +233,17 @@ def check_compatibility(function_key: str) -> bool:
     if entry is None:
         return True
 
-    # Check Python version range
+    # Isolated backends run in their own subprocess venv with their own
+    # Python version — don't check host Python or host deps
+    if entry.isolated:
+        return True
+
+    # Check Python version range (host Python, for non-isolated functions)
     py_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     if not entry.python_versions.contains(py_ver):
         raise RuntimeError(
             f"Function '{function_key}' requires Python {entry.python_versions}, but you are running Python {py_ver}."
         )
-
-    # Isolated backends don't need deps in the host environment
-    if entry.isolated:
-        return True
 
     # Check each required dependency — presence AND version
     for dep in entry.required_deps:
@@ -231,6 +265,31 @@ def check_compatibility(function_key: str) -> bool:
             )
 
     return True
+
+
+def requires_compatibility(function_key: str):  # noqa: ANN201
+    """Decorator that checks compatibility before calling a function.
+
+    Usage::
+
+        @requires_compatibility("audio.tasks.speech_to_text.transcribe_audios")
+        def transcribe_audios(...):
+            ...
+    """
+    import functools
+    from typing import Callable, TypeVar
+
+    F = TypeVar("F", bound=Callable)
+
+    def decorator(fn: F) -> F:
+        @functools.wraps(fn)
+        def wrapper(*args: object, **kwargs: object) -> object:
+            check_compatibility(function_key)
+            return fn(*args, **kwargs)
+
+        return wrapper  # type: ignore[return-value]
+
+    return decorator
 
 
 # ── Test matrix generation ────────────────────────────────────────────

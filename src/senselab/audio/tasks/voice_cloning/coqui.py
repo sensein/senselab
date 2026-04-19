@@ -1,41 +1,26 @@
-"""This module contains functions for voice cloning using Coqui TTS."""
+"""Voice cloning using Coqui TTS via isolated subprocess venv.
 
-from typing import Any, Dict, List, Optional, Union
+Coqui TTS has conflicting dependencies (pins old torch versions, requires
+Python <=3.11). It runs in an isolated subprocess venv managed by uv.
+Audio data is serialized as FLAC for efficient lossless transfer.
+"""
 
-try:
-    from TTS.api import TTS
-
-    TTS_AVAILABLE = True
-except ModuleNotFoundError:
-    TTS_AVAILABLE = False
-
+import tempfile
 from pathlib import Path
+from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
-from senselab.utils.data_structures import CoquiTTSModel, DeviceType, _select_device_and_dtype
-from senselab.utils.dependencies import retry_on_transient_error
+from senselab.utils.data_structures import CoquiTTSModel, DeviceType
+from senselab.utils.subprocess_venv import call_in_venv
+
+# Coqui venv specification
+_COQUI_VENV = "coqui"
+_COQUI_REQUIREMENTS = ["coqui-tts~=0.27", "torch~=2.8", "torchaudio~=2.8"]
+_COQUI_PYTHON = "3.11"
 
 
 class CoquiVoiceCloner:
-    """A factory for managing voice cloning pipelines using Coqui TTS."""
-
-    _models: Dict[str, "TTS"] = {}
-
-    @classmethod
-    def _get_tts_model(cls, model_id: Union[str, Path], user_preference: Optional[DeviceType] = None) -> "TTS":
-        """Get or create a TTS voice conversion pipeline."""
-        if not TTS_AVAILABLE:
-            raise ModuleNotFoundError(
-                "`coqui-tts` is not available. Please install senselab audio dependencies using `pip install senselab`."
-            )
-        device, _ = _select_device_and_dtype(
-            user_preference=user_preference, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
-        )
-        key = f"{model_id}-{device.value}"
-        if key not in cls._models:
-            tts = retry_on_transient_error(TTS, model_id).to(device=device.value)
-            cls._models[key] = tts
-        return cls._models[key]
+    """Voice cloning via Coqui TTS in an isolated subprocess venv."""
 
     @classmethod
     def clone_voices(
@@ -47,86 +32,60 @@ class CoquiVoiceCloner:
     ) -> List[Audio]:
         """Clone voices from source audios to target audios using Coqui TTS.
 
+        The actual Coqui TTS operations run in an isolated subprocess venv
+        with its own Python and torch version. Audio is transferred via
+        lossless FLAC files.
+
         Args:
-            source_audios (List[Audio]): List of source audio objects.
-            target_audios (List[Audio]): List of target audio objects.
-            model (CoquiTTSModel, optional): The Coqui TTS model to use for voice conversion.
-                All Coqui TTS models are supported, including
-                "voice_conversion_models/multilingual/multi-dataset/knnvc",
-                "voice_conversion_models/multilingual/vctk/freevc24",
-                "voice_conversion_models/multilingual/multi-dataset/openvoice_v1",
-                "voice_conversion_models/multilingual/multi-dataset/openvoice_v2".
-                If None, the default model "voice_conversion_models/multilingual/multi-dataset/knnvc" is used.
-            device (Optional[DeviceType], optional): The device to run the model on.
-                Defaults to None.
+            source_audios: List of source audio objects.
+            target_audios: List of target audio objects.
+            model: Coqui TTS model. Default: knnvc voice conversion.
+            device: Device preference (CUDA or CPU).
         """
-        # Validate model
         if model is None:
             model = CoquiTTSModel(path_or_uri="voice_conversion_models/multilingual/multi-dataset/knnvc")
-        if model._scope != "voice_conversion_models":
-            all_models = TTS.list_models()
-            voice_conversion_models = [m for m in all_models if m.startswith("voice_conversion_models")]
-            raise ValueError(
-                f"Model {model.path_or_uri} is not a voice conversion model. "
-                f"Available voice conversion models: {voice_conversion_models}"
-            )
-
-        # Get TTS pipeline
-        tts = cls._get_tts_model(model_id=model.path_or_uri, user_preference=device)
-
-        # Validate sampling rates
-        audio_config = tts.voice_converter.vc_config.audio
-
-        expected_sample_rate = (
-            audio_config.input_sample_rate
-            if hasattr(audio_config, "input_sample_rate")
-            else getattr(audio_config, "sample_rate", None)
-        )
-
-        output_sample_rate = (
-            audio_config.output_sample_rate
-            if hasattr(audio_config, "output_sample_rate")
-            else getattr(audio_config, "sample_rate", None)
-        )
 
         if len(source_audios) != len(target_audios):
             raise ValueError("Number of source and target audios must be the same.")
 
-        for i, (source_audio, target_audio) in enumerate(zip(source_audios, target_audios)):
-            source_path = (
-                source_audio.filepath() if hasattr(source_audio, "filepath") and source_audio.filepath() else ""
+        with tempfile.TemporaryDirectory(prefix="senselab-coqui-") as tmpdir:
+            tmp = Path(tmpdir)
+
+            # Validate and serialize in a single pass
+            source_paths = []
+            target_paths = []
+            for i, (src, tgt) in enumerate(zip(source_audios, target_audios)):
+                if src.waveform.squeeze().dim() != 1 or tgt.waveform.squeeze().dim() != 1:
+                    raise ValueError(f"[Pair {i}] Only mono audio is supported.")
+
+                src_path = str(tmp / f"source_{i}.flac")
+                tgt_path = str(tmp / f"target_{i}.flac")
+                src.save_to_file(src_path, format="flac")
+                tgt.save_to_file(tgt_path, format="flac")
+                source_paths.append(src_path)
+                target_paths.append(tgt_path)
+
+            # Call coqui in isolated venv
+            result = call_in_venv(
+                name=_COQUI_VENV,
+                requirements=_COQUI_REQUIREMENTS,
+                module="senselab.audio.tasks.voice_cloning._coqui_worker",
+                function="run_voice_cloning",
+                args={
+                    "source_paths": source_paths,
+                    "target_paths": target_paths,
+                    "model_id": str(model.path_or_uri),
+                    "device": device.value if device else "cpu",
+                    "output_dir": str(tmp),
+                },
+                python_version=_COQUI_PYTHON,
+                timeout=600,
             )
-            target_path = (
-                target_audio.filepath() if hasattr(target_audio, "filepath") and target_audio.filepath() else ""
-            )
 
-            source_desc = f"{source_audio.generate_id()}{f' ({source_path})' if source_path else ''}"
-            target_desc = f"{target_audio.generate_id()}{f' ({target_path})' if target_path else ''}"
+            # Load results
+            cloned_audios = []
+            output_paths = result.get("output_paths", []) if isinstance(result, dict) else []
+            for out_path in output_paths:
+                cloned_audios.append(Audio(filepath=out_path))
 
-            if source_audio.waveform.squeeze().dim() != 1 or target_audio.waveform.squeeze().dim() != 1:
-                raise ValueError(
-                    f"[Pair index {i}] Only mono audio files are supported. "
-                    f"Source: {source_desc}, Target: {target_desc}."
-                )
-
-            if source_audio.sampling_rate != expected_sample_rate or target_audio.sampling_rate != expected_sample_rate:
-                raise ValueError(
-                    f"[Pair index {i}] Expected sample rate {expected_sample_rate}, but got "
-                    f"{source_audio.sampling_rate} (source) and {target_audio.sampling_rate} (target). "
-                    f"Source: {source_desc}, Target: {target_desc}."
-                )
-
-            # Ensure mono audio
-            source_waveform = source_audio.waveform.squeeze()
-            target_waveform = target_audio.waveform.squeeze()
-            if source_waveform.dim() > 1 or target_waveform.dim() > 1:
-                raise ValueError("Both source and target audios must be mono.")
-
-        cloned_audios = []
-        for source_audio, target_audio in zip(source_audios, target_audios):
-            # Perform voice conversion
-            converted_waveform = tts.voice_conversion(source_wav=source_waveform, target_wav=target_waveform)
-
-            cloned_audios.append(Audio(waveform=converted_waveform, sampling_rate=output_sample_rate))
-
-        return cloned_audios
+            return cloned_audios

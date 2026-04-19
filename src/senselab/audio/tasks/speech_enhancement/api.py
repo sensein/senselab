@@ -4,9 +4,11 @@ from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speech_enhancement.speechbrain import SpeechBrainEnhancer
+from senselab.utils.compatibility import requires_compatibility
 from senselab.utils.data_structures import DeviceType, SpeechBrainModel
 
 
+@requires_compatibility("audio.tasks.speech_enhancement.enhance_audios")
 def enhance_audios(
     audios: List[Audio],
     model: Optional[SpeechBrainModel] = None,

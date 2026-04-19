@@ -187,10 +187,14 @@ jobs:
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
         uv --version
         uv sync --python ${{ matrix.python-version }} --extra text --extra video --group dev
-        # Make ffmpeg binary (bundled by imageio-ffmpeg) available on PATH
-        FFMPEG_BIN=$(uv run python -c "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())")
-        ln -sf "$FFMPEG_BIN" "${EC2_USER_HOME}/.local/bin/ffmpeg"
-        ffmpeg -version
+        # Make ffmpeg available on PATH (non-fatal — some tests skip without it)
+        set +e
+        FFMPEG_BIN=$(uv run python -c "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())" 2>/dev/null)
+        if [ -n "$FFMPEG_BIN" ]; then
+          ln -sf "$FFMPEG_BIN" "${EC2_USER_HOME}/.local/bin/ffmpeg"
+        fi
+        ffmpeg -version 2>/dev/null || echo "ffmpeg not on PATH (some tests may skip)"
+        set -e
     - name: Verify GPU access
       run: |
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
