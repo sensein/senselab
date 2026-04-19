@@ -143,7 +143,7 @@ jobs:
         echo "instance=${INSTANCE}" >> $GITHUB_OUTPUT
         echo "market_type=${MARKET}" >> $GITHUB_OUTPUT
     - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v6
+      uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ secrets.AWS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_KEY_SECRET }}
@@ -218,7 +218,7 @@ jobs:
     if: ${{ always() && needs.start-runner-311-core.result == 'success' }}
     steps:
     - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v6
+      uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ secrets.AWS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_KEY_SECRET }}
@@ -264,7 +264,7 @@ jobs:
         echo "instance=${INSTANCE}" >> $GITHUB_OUTPUT
         echo "market_type=${MARKET}" >> $GITHUB_OUTPUT
     - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v6
+      uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ secrets.AWS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_KEY_SECRET }}
@@ -339,7 +339,7 @@ jobs:
     if: ${{ always() && needs.start-runner-311.result == 'success' }}
     steps:
     - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v6
+      uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ secrets.AWS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_KEY_SECRET }}
@@ -385,7 +385,7 @@ jobs:
         echo "instance=${INSTANCE}" >> $GITHUB_OUTPUT
         echo "market_type=${MARKET}" >> $GITHUB_OUTPUT
     - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v6
+      uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ secrets.AWS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_KEY_SECRET }}
@@ -460,7 +460,7 @@ jobs:
     if: ${{ always() && needs.start-runner-312.result == 'success' }}
     steps:
     - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v6
+      uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ secrets.AWS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_KEY_SECRET }}
