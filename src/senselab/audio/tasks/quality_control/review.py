@@ -6,8 +6,22 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
-from snorkel.labeling import PandasLFApplier, labeling_function
-from snorkel.labeling.model import LabelModel
+
+try:
+    from snorkel.labeling import PandasLFApplier, labeling_function
+    from snorkel.labeling.model import LabelModel
+
+    SNORKEL_AVAILABLE = True
+except ImportError:
+    SNORKEL_AVAILABLE = False
+    PandasLFApplier = None  # type: ignore[assignment, misc]
+    LabelModel = None  # type: ignore[assignment, misc]
+
+    def labeling_function(**kwargs: object) -> Callable:  # type: ignore[misc]
+        """No-op decorator when snorkel is not installed."""
+        def decorator(fn: Callable) -> Callable:
+            return fn
+        return decorator
 
 from senselab.audio.tasks.quality_control.taxonomies import (
     BIOACOUSTIC_ACTIVITY_TAXONOMY,
@@ -243,6 +257,11 @@ def review_files(
         EXCLUDE. This is guaranteed by: (1) a composite labeling function that
         always fires, and (2) a binary LabelModel (cardinality=2).
     """
+    if not SNORKEL_AVAILABLE:
+        raise ImportError(
+            "Package 'snorkel' is required for review_files() but is not installed.\n"
+            "Install with: pip install 'snorkel>=0.10'"
+        )
     # Handle both DataFrame and file path inputs
     if isinstance(df_path, pd.DataFrame):
         df = df_path.copy()
