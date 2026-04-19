@@ -10,11 +10,12 @@ import torch
 from pydantic import BaseModel, Field
 
 try:
-    from torchvision.io import read_video
+    from torchcodec.decoders import VideoDecoder
 
-    TORCHVISION_VIDEO_AVAILABLE = True
-except (ImportError, AttributeError):
-    TORCHVISION_VIDEO_AVAILABLE = False
+    TORCHCODEC_AVAILABLE = True
+except (ImportError, RuntimeError) as _torchcodec_err:
+    TORCHCODEC_AVAILABLE = False
+    _torchcodec_err_msg = str(_torchcodec_err)
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.constants import SENSELAB_NAMESPACE
@@ -155,8 +156,7 @@ class Video(BaseModel):
     def _load_from_filepath(self) -> None:
         """Lazy-loads video (and optionally audio) from the given file path.
 
-        Uses torchvision.io.read_video to load video data and extract the frame rate.
-        If audio is present, a private Audio instance is created.
+        Uses torchcodec.VideoDecoder to load video frames and extract metadata.
 
         Raises:
             ValueError: If no file path is available for lazy loading.
@@ -167,43 +167,21 @@ class Video(BaseModel):
             raise ValueError("No file path available for lazy loading.")
         if not os.path.exists(self._file_path):
             raise FileNotFoundError(f"File {self._file_path} does not exist.")
-        if TORCHVISION_VIDEO_AVAILABLE:
-            # Use torchvision (available in older versions)
-            v_frames, a_frames, v_metadata = read_video(filename=self._file_path, pts_unit="sec")
-            self._frames = v_frames
-            self._frame_rate = v_metadata.get("video_fps")
-            audio_fps = v_metadata.get("audio_fps")
-            if a_frames is not None and a_frames.size(0) > 0 and audio_fps:
-                self._audio = Audio(waveform=a_frames, sampling_rate=audio_fps)
-        elif AV_AVAILABLE:
-            # Fallback to PyAV (works with all torchvision versions)
-            import av
-
-            container = av.open(str(self._file_path))
-            video_stream = container.streams.video[0]
-            self._frame_rate = float(video_stream.average_rate) if video_stream.average_rate else None
-            frames = []
-            for frame in container.decode(video=0):
-                img = frame.to_ndarray(format="rgb24")
-                frames.append(torch.from_numpy(img))
-            self._frames = torch.stack(frames) if frames else torch.empty(0)
-
-            # Extract audio if available
-            if container.streams.audio:
-                container.seek(0)
-                audio_stream = container.streams.audio[0]
-                audio_frames = []
-                for frame in container.decode(audio=0):
-                    audio_frames.append(torch.from_numpy(frame.to_ndarray()))
-                if audio_frames:
-                    waveform = torch.cat(audio_frames, dim=-1)
-                    self._audio = Audio(waveform=waveform, sampling_rate=audio_stream.rate)
-            container.close()
-        else:
-            raise ModuleNotFoundError(
-                "Neither torchvision.io.read_video nor av (PyAV) is available. "
-                "Install with: pip install 'senselab[video]'"
+        if not TORCHCODEC_AVAILABLE:
+            raise RuntimeError(
+                f"torchcodec failed to load: {_torchcodec_err_msg}\n"
+                "torchcodec is a core senselab dependency. Ensure FFmpeg is "
+                "installed system-wide (brew install ffmpeg / dnf install ffmpeg-free) "
+                "and torchcodec version matches your torch version."
             )
+        decoder = VideoDecoder(str(self._file_path))
+        metadata = decoder.metadata
+        self._frame_rate = metadata.average_fps if hasattr(metadata, "average_fps") else None
+        # Decode all video frames
+        frames = []
+        for frame in decoder:
+            frames.append(frame.data)
+        self._frames = torch.stack(frames) if frames else torch.empty(0)
 
     def generate_id(self) -> str:
         """Generate a unique identifier for the Video instance.
