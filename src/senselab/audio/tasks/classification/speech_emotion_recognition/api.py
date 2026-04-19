@@ -14,7 +14,6 @@ from transformers import AutoConfig
 from senselab.audio.data_structures import Audio, AudioClassificationResult
 from senselab.audio.tasks.classification.huggingface import HuggingFaceAudioClassifier
 from senselab.utils.data_structures import DeviceType, HFModel, SenselabModel, logger
-from senselab.utils.dependencies import hf_local_files_only
 
 
 class SERType(Enum):
@@ -86,9 +85,7 @@ def classify_emotions_from_speech(
 
 def _get_ser_type(model: HFModel) -> SERType:
     """Get the type of SER the model is likely used for based on the labels it is set to predict."""
-    config = AutoConfig.from_pretrained(
-        model.path_or_uri, local_files_only=hf_local_files_only(str(model.path_or_uri), model.revision)
-    )
+    config = AutoConfig.from_pretrained(model.path_or_uri)
     id2label = config.id2label
     # print(id2label)
     if id2label:

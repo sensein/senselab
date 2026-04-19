@@ -22,7 +22,6 @@ from senselab.audio.tasks.forced_alignment.data_structures import (
 )
 from senselab.audio.tasks.preprocessing import extract_segments, pad_audios
 from senselab.utils.data_structures import DeviceType, HFModel, Language, ScriptLine, _select_device_and_dtype
-from senselab.utils.dependencies import hf_local_files_only
 
 try:
     from nltk.tokenize.punkt import PunktParameters, PunktSentenceTokenizer
@@ -594,9 +593,8 @@ def align_transcriptions(
         model_dict = DEFAULT_ALIGN_MODELS_HF.get(language.language_code, DEFAULT_ALIGN_MODELS_HF["en"])
         model_variant: HFModel = HFModel(path_or_uri=model_dict["path_or_uri"], revision=model_dict["revision"])
         if model_variant.path_or_uri not in loaded_processors_and_models:
-            _local = hf_local_files_only(str(model_variant.path_or_uri), model_variant.revision)
-            processor = Wav2Vec2Processor.from_pretrained(model_variant.path_or_uri, local_files_only=_local)
-            model = Wav2Vec2ForCTC.from_pretrained(model_variant.path_or_uri, local_files_only=_local).to(device.value)
+            processor = Wav2Vec2Processor.from_pretrained(model_variant.path_or_uri)
+            model = Wav2Vec2ForCTC.from_pretrained(model_variant.path_or_uri).to(device.value)
             loaded_processors_and_models[model_variant.path_or_uri] = (processor, model)
 
         processor, model = loaded_processors_and_models[model_variant.path_or_uri]

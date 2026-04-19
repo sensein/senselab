@@ -13,7 +13,6 @@ from transformers import Pipeline, pipeline
 from senselab.audio.data_structures import Audio, AudioClassificationResult
 from senselab.utils.data_structures import DeviceType, HFModel, _select_device_and_dtype
 from senselab.utils.data_structures.logging import logger
-from senselab.utils.dependencies import hf_local_files_only
 
 
 class HuggingFaceAudioClassifier:
@@ -58,7 +57,6 @@ class HuggingFaceAudioClassifier:
                     function_to_apply=function_to_apply,  # TODO: parameter ignored in transformer code, bug reported
                     # https://github.com/huggingface/transformers/issues/35739
                     device=device.value,
-                    model_kwargs={"local_files_only": hf_local_files_only(str(model.path_or_uri), model.revision)},
                 ),
             )
         return cls._pipelines[key]

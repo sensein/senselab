@@ -92,7 +92,7 @@ jobs:
 
   # ── EC2 GPU Runner Jobs ───────────────────────────────────────────────
   # Ephemeral GPU instances via machulav/ec2-github-runner.
-  # Triggered by 'to-test' label after macOS-tests and pre-commit pass.
+  # Triggered by 'ec2-gpu-test' label after macOS-tests and pre-commit pass.
   # See .github/EC2_GPU_RUNNER.md for setup instructions.
 
   # ── EC2 GPU Tests (single instance, all extras) ───────────────────────
@@ -102,7 +102,7 @@ jobs:
   start-runner:
     if: >-
       github.event.pull_request.draft == false &&
-      contains(github.event.pull_request.labels.*.name, 'to-test')
+      contains(github.event.pull_request.labels.*.name, 'ec2-gpu-test')
     name: start-runner
     runs-on: ubuntu-latest
     outputs:
