@@ -14,6 +14,7 @@ try:
 except ModuleNotFoundError:
     AV_AVAILABLE = False
 
+from senselab.video.data_structures.video import TORCHCODEC_AVAILABLE
 
 filepath = os.path.abspath("src/tests/data_for_testing/video_48khz_stereo_16bits.mp4")
 
@@ -25,7 +26,7 @@ def test_video_import_error() -> None:
         Video(filepath=filepath).frames
 
 
-@pytest.mark.skipif(not AV_AVAILABLE, reason="AV is not available.")
+@pytest.mark.skipif(not AV_AVAILABLE or not TORCHCODEC_AVAILABLE, reason="AV or torchcodec not available.")
 def test_constructor() -> None:
     """Test Video constructor by mocking read_video."""
     metadata = {"participant": "test_subject"}
@@ -40,7 +41,7 @@ def test_constructor() -> None:
     assert video.metadata == metadata
 
 
-@pytest.mark.skipif(not AV_AVAILABLE, reason="AV is not available.")
+@pytest.mark.skipif(not AV_AVAILABLE or not TORCHCODEC_AVAILABLE, reason="AV or torchcodec not available.")
 def test_constructor_wrong_filepath() -> None:
     """Test Video constructor with wrong filepath."""
     with pytest.raises(FileNotFoundError):

@@ -77,6 +77,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -z "$PROFILE" ]] && { echo "ERROR: --profile is required"; usage; }
+REPO_SLUG=$(echo "${REPO:-gpu-ci}" | tr '/' '-')
 
 # ── Mode: Build AMI ──────────────────────────────────────────────────
 if [[ "$BUILD_AMI" == "true" ]]; then
@@ -120,16 +121,20 @@ if [[ "$BUILD_AMI" == "true" ]]; then
   if [[ -z "$VPC_ID" ]]; then
     VPC_ID=$($AWS ec2 describe-vpcs --filters "Name=is-default,Values=true" \
       | jq -r '.Vpcs[0].VpcId // empty')
+    [[ -z "$VPC_ID" ]] && { echo "ERROR: No default VPC found. Specify --vpc explicitly."; exit 1; }
   fi
   BUILD_SUBNET=$($AWS ec2 describe-subnets \
     --filters "Name=vpc-id,Values=$VPC_ID" "Name=default-for-az,Values=true" \
-    | jq -r '.Subnets[0].SubnetId')
+    | jq -r '.Subnets[0].SubnetId // empty')
+  [[ -z "$BUILD_SUBNET" ]] && { echo "ERROR: No subnets found in VPC $VPC_ID"; exit 1; }
   BUILD_SG=$($AWS ec2 describe-security-groups \
     --filters "Name=group-name,Values=default" "Name=vpc-id,Values=$VPC_ID" \
-    | jq -r '.SecurityGroups[0].GroupId')
+    | jq -r '.SecurityGroups[0].GroupId // empty')
+  [[ -z "$BUILD_SG" ]] && { echo "ERROR: No default security group found in VPC $VPC_ID"; exit 1; }
 
   # Add temporary SSH rule for current IP
-  MY_IP=$(curl -s https://checkip.amazonaws.com)
+  MY_IP=$(curl -s https://checkip.amazonaws.com) || { echo "ERROR: Failed to detect public IP"; exit 1; }
+  [[ -z "$MY_IP" ]] && { echo "ERROR: Public IP detection returned empty result"; exit 1; }
   echo "  Adding temporary SSH access for $MY_IP"
   $AWS ec2 authorize-security-group-ingress \
     --group-id "$BUILD_SG" \
@@ -163,12 +168,20 @@ if [[ "$BUILD_AMI" == "true" ]]; then
 
   # Wait for SSH to be ready
   echo "  Waiting for SSH..."
+  SSH_SUCCESS=false
   for i in $(seq 1 30); do
     if ssh "${SSH_OPTS[@]}" -o BatchMode=yes "${SSH_USER}@${BUILDER_IP}" 'true' 2>/dev/null; then
+      SSH_SUCCESS=true
       break
     fi
     sleep 5
   done
+  if [[ "$SSH_SUCCESS" == "false" ]]; then
+    echo "ERROR: SSH connection timed out after 150 seconds"
+    echo "  Terminating builder instance..."
+    $AWS ec2 terminate-instances --instance-ids "$BUILDER_ID" >/dev/null
+    exit 1
+  fi
 
   # Configure the instance — detect package manager (dnf for AL2023, apt for Ubuntu)
   echo "  Installing uv and system dependencies..."
@@ -188,7 +201,6 @@ REMOTE_SETUP
     'nvidia-smi && export PATH="$HOME/.local/bin:$PATH" && uv --version'
 
   # Create AMI
-  REPO_SLUG=$(echo "${REPO:-gpu-ci}" | tr '/' '-')
   echo "  Creating AMI snapshot..."
   NEW_AMI=$($AWS ec2 create-image \
     --instance-id "$BUILDER_ID" \
@@ -303,7 +315,8 @@ AZ_CONFIG=$(echo "$SUBNETS_JSON" | jq -c --arg ami "$AMI" --arg sg "$SG_ID" \
   '[.[] | {imageId: $ami, subnetId: .subnetId, securityGroupId: $sg}]')
 
 # Primary subnet (first AZ)
-PRIMARY_SUBNET=$(echo "$SUBNETS_JSON" | jq -r '.[0].subnetId')
+PRIMARY_SUBNET=$(echo "$SUBNETS_JSON" | jq -r '.[0].subnetId // empty')
+[[ -z "$PRIMARY_SUBNET" ]] && { echo "ERROR: No subnets found in VPC $VPC_ID"; exit 1; }
 echo "  Primary subnet: $PRIMARY_SUBNET"
 echo "  AZ config: $AZ_CONFIG"
 
@@ -312,7 +325,6 @@ echo ""
 echo "=== Step 4: IAM User ==="
 
 # Derive a repo-specific IAM user name
-REPO_SLUG=$(echo "$REPO" | tr '/' '-')
 IAM_USER="${IAM_USER_PREFIX}-${REPO_SLUG}"
 
 USER_EXISTS=$($AWS iam get-user --user-name "$IAM_USER" 2>/dev/null | jq -r '.User.UserName // empty' || true)
@@ -389,6 +401,12 @@ if echo "$EXISTING_SECRETS" | grep -q "^AWS_KEY_ID$" && [[ "$CREATED_NEW_USER" =
   echo "  To rotate: delete the secret in GitHub and the IAM key, then re-run."
 else
   echo "  Creating new access key and setting GitHub secrets..."
+  EXISTING_KEY_COUNT=$($AWS iam list-access-keys --user-name "$IAM_USER" | jq '.AccessKeyMetadata | length')
+  if [[ "$EXISTING_KEY_COUNT" -ge 2 ]]; then
+    echo "  ERROR: IAM user '$IAM_USER' already has 2 access keys (AWS limit)."
+    echo "  Delete one manually: aws --profile $PROFILE iam delete-access-key --user-name $IAM_USER --access-key-id <KEY_ID>"
+    exit 1
+  fi
   KEY_JSON=$($AWS iam create-access-key --user-name "$IAM_USER")
   _AK=$(echo "$KEY_JSON" | jq -r '.AccessKey.AccessKeyId')
   _SK=$(echo "$KEY_JSON" | jq -r '.AccessKey.SecretAccessKey')

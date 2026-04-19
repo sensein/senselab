@@ -10,7 +10,7 @@ try:
     from sentence_transformers import SentenceTransformer
 
     SENTENCETRANSFORMERS_AVAILABLE = True
-except ModuleNotFoundError:
+except (ImportError, RuntimeError):
     SENTENCETRANSFORMERS_AVAILABLE = False
 
 
