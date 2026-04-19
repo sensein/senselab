@@ -9,9 +9,11 @@ from typing import Any, List, Optional
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speech_to_text.huggingface import HuggingFaceASR
+from senselab.utils.compatibility import requires_compatibility
 from senselab.utils.data_structures import DeviceType, HFModel, Language, ScriptLine, SenselabModel
 
 
+@requires_compatibility("audio.tasks.speech_to_text.transcribe_audios")
 def transcribe_audios(
     audios: List[Audio],
     model: SenselabModel,

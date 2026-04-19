@@ -6,9 +6,11 @@ import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speaker_embeddings.speechbrain import SpeechBrainEmbeddings
+from senselab.utils.compatibility import requires_compatibility
 from senselab.utils.data_structures import DeviceType, SpeechBrainModel
 
 
+@requires_compatibility("audio.tasks.speaker_embeddings.extract_speaker_embeddings_from_audios")
 def extract_speaker_embeddings_from_audios(
     audios: List[Audio],
     model: Optional[SpeechBrainModel] = None,
