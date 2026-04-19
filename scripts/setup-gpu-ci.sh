@@ -379,19 +379,14 @@ if echo "$EXISTING_SECRETS" | grep -q "^AWS_KEY_ID$" && [[ "$CREATED_NEW_USER" =
   echo "  To rotate: delete the secret in GitHub and the IAM key, then re-run."
 else
   echo "  Creating new access key and setting GitHub secrets..."
-  # Create key, extract fields, pipe directly to gh — NEVER echo
   KEY_JSON=$($AWS iam create-access-key --user-name "$IAM_USER")
-
-  # Pipe key ID directly to gh secret set
-  echo "$KEY_JSON" | jq -r '.AccessKey.AccessKeyId' \
-    | gh secret set AWS_KEY_ID --repo "$REPO" --body -
-
-  # Pipe secret key directly to gh secret set
-  echo "$KEY_JSON" | jq -r '.AccessKey.SecretAccessKey' \
-    | gh secret set AWS_KEY_SECRET --repo "$REPO" --body -
-
-  # Clear the variable immediately
+  _AK=$(echo "$KEY_JSON" | jq -r '.AccessKey.AccessKeyId')
+  _SK=$(echo "$KEY_JSON" | jq -r '.AccessKey.SecretAccessKey')
   KEY_JSON=""
+
+  gh secret set AWS_KEY_ID --repo "$REPO" --body "$_AK"
+  gh secret set AWS_KEY_SECRET --repo "$REPO" --body "$_SK"
+  _AK="" _SK=""
   echo "  Set AWS_KEY_ID and AWS_KEY_SECRET secrets"
 fi
 
@@ -400,11 +395,11 @@ if echo "$EXISTING_SECRETS" | grep -q "^GH_TOKEN$"; then
   echo "  GH_TOKEN secret already exists — skipping"
 else
   if [[ -n "$GH_PAT" ]]; then
-    echo "$GH_PAT" | gh secret set GH_TOKEN --repo "$REPO" --body -
+    gh secret set GH_TOKEN --repo "$REPO" --body "$GH_PAT"
     GH_PAT=""
     echo "  Set GH_TOKEN secret from --gh-token parameter"
   elif [[ -n "${GH_TOKEN:-}" ]]; then
-    echo "$GH_TOKEN" | gh secret set GH_TOKEN --repo "$REPO" --body -
+    gh secret set GH_TOKEN --repo "$REPO" --body "$GH_TOKEN"
     echo "  Set GH_TOKEN secret from GH_TOKEN env var"
   else
     echo "  WARNING: GH_TOKEN secret not set. You must set it manually:"
