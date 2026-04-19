@@ -129,7 +129,8 @@ if [[ "$BUILD_AMI" == "true" ]]; then
   [[ -z "$BUILD_SUBNET" ]] && { echo "ERROR: No subnets found in VPC $VPC_ID"; exit 1; }
   BUILD_SG=$($AWS ec2 describe-security-groups \
     --filters "Name=group-name,Values=default" "Name=vpc-id,Values=$VPC_ID" \
-    | jq -r '.SecurityGroups[0].GroupId')
+    | jq -r '.SecurityGroups[0].GroupId // empty')
+  [[ -z "$BUILD_SG" ]] && { echo "ERROR: No default security group found in VPC $VPC_ID"; exit 1; }
 
   # Add temporary SSH rule for current IP
   MY_IP=$(curl -s https://checkip.amazonaws.com) || { echo "ERROR: Failed to detect public IP"; exit 1; }

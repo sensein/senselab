@@ -86,21 +86,29 @@ def ensure_venv(
             shutil.rmtree(venv_dir)
 
         # Create venv
-        subprocess.run(
-            [uv, "venv", "--python", py_ver, str(venv_dir)],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-
-        # Install requirements
-        if requirements:
+        try:
             subprocess.run(
-                [uv, "pip", "install", "--python", str(venv_dir / "bin" / "python"), *requirements],
+                [uv, "venv", "--python", py_ver, str(venv_dir)],
                 check=True,
                 capture_output=True,
                 text=True,
             )
+        except subprocess.CalledProcessError as exc:
+            logger.error("Failed to create venv '%s': %s", name, exc.stderr)
+            raise
+
+        # Install requirements
+        if requirements:
+            try:
+                subprocess.run(
+                    [uv, "pip", "install", "--python", str(venv_dir / "bin" / "python"), *requirements],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            except subprocess.CalledProcessError as exc:
+                logger.error("Failed to install requirements in venv '%s': %s", name, exc.stderr)
+                raise
 
         # Write marker with installed requirements
         marker.write_text(json.dumps({
@@ -217,13 +225,17 @@ from {module} import {function}
 result = {function}(**args)
 
 if output_file:
-    # Write result to file (caller handles format)
-    import torch
-    if hasattr(result, 'numpy'):
-        import numpy as np
-        np.save(output_file, result.numpy() if hasattr(result, 'numpy') else result)
-    elif isinstance(result, torch.Tensor):
-        torch.save(result, output_file)
+    # Write result to file — handle tensors, arrays, and plain data
+    try:
+        import torch
+        if isinstance(result, torch.Tensor):
+            result = result.detach().cpu()
+    except ImportError:
+        pass
+    import numpy as np
+    if hasattr(result, 'numpy') or isinstance(result, np.ndarray):
+        arr = result.numpy() if hasattr(result, 'numpy') else result
+        np.save(output_file, arr)
     else:
         with open(output_file, 'w') as f:
             json.dump(result, f)
