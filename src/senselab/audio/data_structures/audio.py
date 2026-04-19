@@ -10,6 +10,15 @@ import torch
 from pydantic import BaseModel, Field, PrivateAttr
 
 from senselab.utils.constants import SENSELAB_NAMESPACE
+
+try:
+    from torchcodec.decoders import AudioDecoder
+    from torchcodec.encoders import AudioEncoder
+
+    TORCHCODEC_AVAILABLE = True
+except (ImportError, RuntimeError):
+    TORCHCODEC_AVAILABLE = False
+
 from senselab.utils.dependencies import torchaudio_available
 
 TORCHAUDIO_AVAILABLE = torchaudio_available()
@@ -126,7 +135,10 @@ class Audio(BaseModel):
         If the sampling rate is not set and a file is available, it is inferred from the file metadata.
         """
         if self._sampling_rate is None:
-            if self._file_path and TORCHAUDIO_AVAILABLE:
+            if self._file_path and TORCHCODEC_AVAILABLE:
+                decoder = AudioDecoder(str(self._file_path))
+                self._sampling_rate = decoder.metadata.sample_rate
+            elif self._file_path and TORCHAUDIO_AVAILABLE:
                 info = torchaudio.info(self._file_path)
                 self._sampling_rate = info.sample_rate
             else:
@@ -160,7 +172,7 @@ class Audio(BaseModel):
     def _lazy_load_data_from_filepath(self, filepath: Union[str, os.PathLike]) -> torch.Tensor:
         """Lazy-loads audio data from the given filepath.
 
-        Converts the stored offset and duration (in seconds) to the required frame indices for torchaudio.
+        Converts the stored offset and duration (in seconds) to torchcodec range parameters.
 
         Args:
             filepath: The path to the audio file.
@@ -169,40 +181,60 @@ class Audio(BaseModel):
             A torch.Tensor containing the loaded audio data.
 
         Raises:
-            ModuleNotFoundError: If torchaudio is not available.
+            RuntimeError: If torchcodec is not available.
             ValueError: If the offset or duration exceeds the file duration.
         """
-        if not TORCHAUDIO_AVAILABLE:
-            raise ModuleNotFoundError(
-                "`torchaudio` is not installed. "
-                "Please install senselab audio dependencies using `pip install senselab`."
+        if TORCHCODEC_AVAILABLE:
+            # Preferred: torchcodec AudioDecoder (modern, maintained)
+            start_seconds = self._offset_in_sec if self._offset_in_sec else 0.0
+            stop_seconds = None
+            if self._duration_in_sec is not None and self._duration_in_sec > 0:
+                stop_seconds = start_seconds + self._duration_in_sec
+
+            decoder = AudioDecoder(str(filepath))
+            self._sampling_rate = decoder.metadata.sample_rate
+
+            if stop_seconds is not None:
+                samples = decoder.get_samples_played_in_range(
+                    start_seconds=start_seconds, stop_seconds=stop_seconds
+                )
+            elif start_seconds > 0:
+                samples = decoder.get_samples_played_in_range(start_seconds=start_seconds)
+            else:
+                samples = decoder.get_all_samples()
+
+            return samples.data  # shape: (num_channels, num_samples)
+
+        if TORCHAUDIO_AVAILABLE:
+            # Fallback: torchaudio (deprecated, will be removed in torch 2.9+)
+            info = torchaudio.info(filepath)
+            self._sampling_rate = info.sample_rate
+            total_frames = info.num_frames
+
+            frame_offset = int(self._offset_in_sec * self.sampling_rate)
+            if frame_offset > total_frames:
+                raise ValueError(
+                    f"Offset ({self._offset_in_sec} s) exceeds the audio file duration "
+                    f"({total_frames / self.sampling_rate:.2f} s)."
+                )
+            if self._duration_in_sec is not None and self._duration_in_sec > 0:
+                num_frames = int(self._duration_in_sec * self.sampling_rate)
+                num_frames = min(num_frames, total_frames - frame_offset)
+            else:
+                num_frames = -1
+
+            array, _ = torchaudio.load(
+                filepath,
+                frame_offset=frame_offset,
+                num_frames=num_frames,
+                backend=self._backend,
             )
+            return array
 
-        info = torchaudio.info(filepath)
-        self._sampling_rate = info.sample_rate
-        total_frames = info.num_frames
-
-        # Convert offset_in_sec and duration_in_sec to frame indices.
-        frame_offset = int(self._offset_in_sec * self.sampling_rate)
-        if frame_offset > total_frames:
-            raise ValueError(
-                f"Offset ({self._offset_in_sec} s) exceeds the audio file duration "
-                f"({total_frames / self.sampling_rate:.2f} s)."
-            )
-        if self._duration_in_sec is not None and self._duration_in_sec > 0:
-            num_frames = int(self._duration_in_sec * self.sampling_rate)
-            # Ensure we don't exceed the file length.
-            num_frames = min(num_frames, total_frames - frame_offset)
-        else:
-            num_frames = -1  # Indicates full file reading
-
-        array, _ = torchaudio.load(
-            filepath,
-            frame_offset=frame_offset,
-            num_frames=num_frames,
-            backend=self._backend,
+        raise RuntimeError(
+            "Neither torchcodec nor torchaudio is available for audio loading. "
+            "Ensure FFmpeg is installed system-wide and torchcodec/torchaudio matches your torch version."
         )
-        return array
 
     def filepath(self) -> Union[str, None]:
         """Returns the file path of the audio if available."""
@@ -274,26 +306,25 @@ class Audio(BaseModel):
         backend: Optional[str] = None,
         compression: Optional[Union[float, int]] = None,
     ) -> None:
-        """Saves the Audio object to a file using torchaudio.save.
+        """Saves the Audio object to a file using torchcodec AudioEncoder.
 
         Args:
             file_path: Destination file path.
-            format: Audio format (e.g. "wav", "ogg", "flac"). Inferred from the file extension if None.
-            encoding: Encoding to use (e.g. "PCM_S", "PCM_U"). Effective for formats like wav and flac.
-            bits_per_sample: Bit depth (e.g. 8, 16, 24, 32, 64).
-            buffer_size: Buffer size in bytes for processing.
-            backend: I/O backend to use (e.g. "ffmpeg", "sox", "soundfile").
-            compression: Compression level for supported formats (e.g. mp3, flac, ogg).
+            format: Audio format (e.g. "wav", "ogg", "flac", "mp3"). Inferred from the file extension if None.
+            encoding: Encoding hint (used by soundfile fallback).
+            bits_per_sample: Bit depth hint (used by soundfile fallback).
+            buffer_size: Buffer size (unused with torchcodec).
+            backend: I/O backend hint (unused with torchcodec).
+            compression: Compression level hint (unused with torchcodec).
 
         Raises:
-            ModuleNotFoundError: If torchaudio is not available.
+            ModuleNotFoundError: If torchcodec encoder is not available.
             ValueError: If the waveform dimensions or sampling rate are invalid.
             RuntimeError: If saving fails.
         """
-        if not TORCHAUDIO_AVAILABLE:
-            raise ModuleNotFoundError(
-                "`torchaudio` is not installed. "
-                "Please install senselab audio dependencies using `pip install senselab`."
+        if not TORCHCODEC_AVAILABLE and not TORCHAUDIO_AVAILABLE:
+            raise RuntimeError(
+                "Neither torchcodec nor torchaudio is available for saving audio."
             )
 
         if self.waveform.ndim != 2:
@@ -308,18 +339,25 @@ class Audio(BaseModel):
         try:
             if not os.path.exists(output_dir):
                 os.makedirs(output_dir)
-            torchaudio.save(
-                uri=file_path,
-                src=self.waveform,
-                sample_rate=self.sampling_rate,
-                channels_first=True,
-                format=format,
-                encoding=encoding,
-                bits_per_sample=bits_per_sample,
-                buffer_size=buffer_size,
-                backend=backend,
-                compression=compression,
-            )
+            if TORCHCODEC_AVAILABLE:
+                encoder = AudioEncoder(
+                    samples=self.waveform,
+                    sample_rate=self.sampling_rate,
+                )
+                encoder.to_file(file_path)
+            else:
+                torchaudio.save(
+                    uri=file_path,
+                    src=self.waveform,
+                    sample_rate=self.sampling_rate,
+                    channels_first=True,
+                    format=format,
+                    encoding=encoding,
+                    bits_per_sample=bits_per_sample,
+                    buffer_size=buffer_size,
+                    backend=backend,
+                    compression=compression,
+                )
         except Exception as e:
             raise RuntimeError(f"Error saving audio to file: {e}") from e
 
