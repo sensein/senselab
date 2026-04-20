@@ -6,25 +6,11 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.voice_cloning import clone_voices
 from senselab.utils.data_structures import CoquiTTSModel, DeviceType
 
-try:
-    from sparc import SPARC  # noqa: F401
-
-    SPARC_AVAILABLE = True
-except ModuleNotFoundError:
-    SPARC_AVAILABLE = False
-
 
 @pytest.fixture
 def vc_model() -> CoquiTTSModel:
     """Fixture for Coqui TTS model."""
     return CoquiTTSModel(path_or_uri="voice_conversion_models/multilingual/multi-dataset/knnvc")
-
-
-@pytest.mark.skipif(SPARC_AVAILABLE, reason="SPARC is available")
-def test_clone_voices_sparc_not_available(any_device: DeviceType) -> None:
-    """Test when SPARC is not available."""
-    with pytest.raises((ModuleNotFoundError, RuntimeError)):
-        clone_voices(source_audios=[], target_audios=[], model=None, device=any_device)
 
 
 def test_clone_voices_length_mismatch(
@@ -38,9 +24,8 @@ def test_clone_voices_length_mismatch(
         clone_voices(source_audios=source_audios, target_audios=target_audios, model=vc_model, device=gpu_device)
 
 
-@pytest.mark.skipif(not SPARC_AVAILABLE, reason="SPARC is not available")
 def test_clone_voices_valid_input_sparc(resampled_mono_audio_sample: Audio, gpu_device: DeviceType) -> None:
-    """Test cloning voices with valid input using SPARC."""
+    """Test cloning voices with valid input using SPARC (subprocess venv)."""
     source_audios = [resampled_mono_audio_sample, resampled_mono_audio_sample]
     target_audios = [resampled_mono_audio_sample, resampled_mono_audio_sample]
 

@@ -46,13 +46,6 @@ try:
 except ModuleNotFoundError:
     PPGS_AVAILABLE = False
 
-try:
-    import sparc
-
-    SPARC_AVAILABLE = True
-except ModuleNotFoundError:
-    SPARC_AVAILABLE = False
-
 
 @pytest.mark.skip(reason="opensmile is a core dependency and always installed; missing-dep path cannot be tested")
 def test_missing_opensmile_dependency() -> None:
@@ -355,14 +348,13 @@ def test_extract_ppgs_from_audios(resampled_mono_audio_sample: Audio) -> None:
     assert all(isinstance(features, torch.Tensor) for features in result)
 
 
-@pytest.mark.skipif(SPARC_AVAILABLE, reason="sparc is installed.")
+@pytest.mark.skip(reason="sparc runs in subprocess venv; missing-dep path cannot be tested")
 def test_missing_sparc_dependency() -> None:
     """Test that a ModuleNotFoundError is raised when sparc is not installed."""
     with pytest.raises(ModuleNotFoundError):
         SparcFeatureExtractor.extract_sparc_features([Audio(waveform=torch.rand(1, 16000), sampling_rate=16000)])
 
 
-@pytest.mark.skipif(not SPARC_AVAILABLE, reason="sparc is not installed.")
 def test_extract_sparc_features(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of sparc from audio."""
     result = SparcFeatureExtractor.extract_sparc_features([resampled_mono_audio_sample])
@@ -375,7 +367,6 @@ def test_extract_sparc_features(resampled_mono_audio_sample: Audio) -> None:
         )
 
 
-@pytest.mark.skipif(not SPARC_AVAILABLE, reason="sparc is not installed.")
 def test_extract_sparc_features_resample() -> None:
     """Test extraction of sparc from audio."""
     result = SparcFeatureExtractor.extract_sparc_features(
@@ -390,17 +381,12 @@ def test_extract_sparc_features_resample() -> None:
         )
 
 
-@pytest.mark.skipif(not SPARC_AVAILABLE, reason="sparc is not installed.")
 def test_extract_sparc_features_wrong_sample_rate() -> None:
     """Test that a ValueError is raised when sparc has wrong sampling rate."""
     with pytest.raises(ValueError):
         SparcFeatureExtractor.extract_sparc_features([Audio(waveform=torch.rand(1, 44100), sampling_rate=44100)])
 
 
-@pytest.mark.skipif(
-    not SPARC_AVAILABLE,
-    reason="SPARC is not installed.",
-)
 def test_extract_features_from_audios(resampled_mono_audio_sample: Audio) -> None:
     """Simple test for extract_features_from_audios.
 
