@@ -199,7 +199,8 @@ jobs:
           bash /tmp/miniforge.sh -b -p "${CONDA_PREFIX}"
           rm /tmp/miniforge.sh
         fi
-        "${CONDA_PREFIX}/bin/conda" install -y -p "${CONDA_PREFIX}" ffmpeg
+        # torchcodec 0.7 needs FFmpeg <= 7 (libavutil.so.59 or earlier)
+        "${CONDA_PREFIX}/bin/conda" install -y -p "${CONDA_PREFIX}" 'ffmpeg<8'
         echo "${CONDA_PREFIX}/lib" | sudo tee /etc/ld.so.conf.d/miniforge.conf
         sudo ldconfig
         ldconfig -p | grep libavutil
