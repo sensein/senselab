@@ -5,36 +5,24 @@ import torch
 from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
 
 from senselab.audio.data_structures import Audio
-from senselab.audio.tasks.forced_alignment.forced_alignment import remove_chunks_by_level
+from senselab.audio.tasks.forced_alignment.data_structures import (
+    Point,
+    SingleSegment,
+)
+from senselab.audio.tasks.forced_alignment.evaluation import compare_alignments
+from senselab.audio.tasks.forced_alignment.forced_alignment import (
+    _align_segments,
+    _align_transcription,
+    _can_align_segment,
+    _get_prediction_matrix,
+    _merge_repeats,
+    _preprocess_segments,
+    align_transcriptions,
+    remove_chunks_by_level,
+)
+from senselab.audio.tasks.speech_to_text import transcribe_audios
 from senselab.utils.data_structures import DeviceType, Language, ScriptLine
-
-try:
-    import nltk  # noqa: F401
-
-    NLTK_AVAILABLE = True
-except ModuleNotFoundError:
-    NLTK_AVAILABLE = False
-
-from senselab.utils.dependencies import torchaudio_available
-
-TORCHAUDIO_AVAILABLE = torchaudio_available()
-if TORCHAUDIO_AVAILABLE:
-    from senselab.audio.tasks.forced_alignment.data_structures import (
-        Point,
-        SingleSegment,
-    )
-    from senselab.audio.tasks.forced_alignment.evaluation import compare_alignments
-    from senselab.audio.tasks.forced_alignment.forced_alignment import (
-        _align_segments,
-        _align_transcription,
-        _can_align_segment,
-        _get_prediction_matrix,
-        _merge_repeats,
-        _preprocess_segments,
-        align_transcriptions,
-    )
-    from senselab.audio.tasks.speech_to_text import transcribe_audios
-    from senselab.utils.data_structures.model import HFModel
+from senselab.utils.data_structures.model import HFModel
 
 
 @pytest.fixture
@@ -357,7 +345,6 @@ def aligned_scriptline_fixture_resampled_mono_audio() -> ScriptLine:
     )
 
 
-@pytest.mark.skipif(not NLTK_AVAILABLE or not TORCHAUDIO_AVAILABLE, reason="nltk or torchaudio are not installed")
 def test_preprocess_segments() -> None:
     """Test preprocessing of segments."""
     transcript = [SingleSegment(start=0.0, end=1.0, text="test")]
@@ -368,14 +355,12 @@ def test_preprocess_segments() -> None:
     assert preprocessed_segments[0]["clean_char"] == ["T", "E", "S", "T"]
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed")
 def test_can_align_segment(dummy_segment: "SingleSegment") -> None:
     """Test if a segment can be aligned."""
     model_dictionary = {"t": 0, "e": 1, "s": 2}
     assert _can_align_segment(dummy_segment, model_dictionary, 0.0, 10.0)
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed")
 def test_merge_repeats() -> None:
     """Test merging of repeated tokens."""
     path = [Point(0, 0, 1.0), Point(0, 1, 1.0), Point(1, 2, 1.0)]
@@ -384,19 +369,15 @@ def test_merge_repeats() -> None:
     assert len(segments) == 2
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed")
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
-def test_get_prediction_matrix(dummy_model: tuple) -> None:
+def test_get_prediction_matrix(dummy_model: tuple, any_device: DeviceType) -> None:
     """Test generation of prediction matrix."""
     model, _ = dummy_model
     waveform_segment = torch.randn(1, 16000)
-    prediction_matrix = _get_prediction_matrix(model, waveform_segment, None, "huggingface", DeviceType.CPU)
+    prediction_matrix = _get_prediction_matrix(model, waveform_segment, None, "huggingface", any_device)
     assert prediction_matrix.shape[0] > 0
 
 
-@pytest.mark.skipif(not NLTK_AVAILABLE or not TORCHAUDIO_AVAILABLE, reason="nltk or torchaudio are not installed")
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
-def test_align_segments(mono_audio_sample: Audio, dummy_model: tuple) -> None:
+def test_align_segments(mono_audio_sample: Audio, dummy_model: tuple, any_device: DeviceType) -> None:
     """Test alignment of segments."""
     model, processor = dummy_model
     model_dictionary = processor.tokenizer.get_vocab()
@@ -419,7 +400,7 @@ def test_align_segments(mono_audio_sample: Audio, dummy_model: tuple) -> None:
         model_lang=Language(language_code="en"),
         model_type="huggingface",
         audio=mono_audio_sample,
-        device=DeviceType.CPU,
+        device=any_device,
         max_duration=10.0,
     )
 
@@ -428,8 +409,6 @@ def test_align_segments(mono_audio_sample: Audio, dummy_model: tuple) -> None:
     assert all(isinstance(segment, (ScriptLine, type(None))) for segment in aligned_segments)
 
 
-@pytest.mark.skipif(not NLTK_AVAILABLE or not TORCHAUDIO_AVAILABLE, reason="nltk or torchaudio are not installed")
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_align_transcriptions_multilingual(
     resampled_mono_audio_sample: Audio, aligned_scriptline_fixture_resampled_mono_audio: ScriptLine
 ) -> None:
@@ -473,9 +452,9 @@ def test_align_transcriptions_multilingual(
         raise ValueError(f"aligned_transcription_en is not a ScriptLine. Got: {aligned_transcription_en}")
 
 
-@pytest.mark.skipif(not NLTK_AVAILABLE or not TORCHAUDIO_AVAILABLE, reason="nltk or torchaudio are not installed")
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
-def test_align_transcription_faked(resampled_mono_audio_sample: Audio, dummy_model: tuple) -> None:
+def test_align_transcription_faked(
+    resampled_mono_audio_sample: Audio, dummy_model: tuple, any_device: DeviceType
+) -> None:
     """Test alignment of transcription."""
     model, processor = dummy_model
     transcript = [
@@ -498,14 +477,12 @@ def test_align_transcription_faked(resampled_mono_audio_sample: Audio, dummy_mod
             "type": "huggingface",
         },
         audio=resampled_mono_audio_sample,
-        device=DeviceType.CPU,
+        device=any_device,
     )
     assert aligned_result[0] is not None
     assert aligned_result[0].text == "test"
 
 
-@pytest.mark.skipif(not NLTK_AVAILABLE or not TORCHAUDIO_AVAILABLE, reason="nltk or torchaudio are not installed")
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_align_transcriptions_curiosity_audio_fixture(
     resampled_had_that_curiosity_audio_sample: Audio, script_line_fixture_curiosity: ScriptLine
 ) -> None:

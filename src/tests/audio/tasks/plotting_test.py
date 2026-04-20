@@ -13,15 +13,8 @@ from senselab.audio.tasks.plotting.plotting import (
     plot_specgram,
     plot_waveform,
 )
-from senselab.utils.dependencies import torchaudio_available
-
-TORCHAUDIO_AVAILABLE = torchaudio_available()
 
 
-@pytest.mark.skipif(
-    not TORCHAUDIO_AVAILABLE,
-    reason="Torchaudio is not available.",
-)
 class TestPlotWaveform:
     """Tests for the plot_waveform function."""
 
@@ -91,10 +84,6 @@ class TestPlotWaveform:
         mock_show.assert_called_once_with(block=False)
 
 
-@pytest.mark.skipif(
-    not TORCHAUDIO_AVAILABLE,
-    reason="Torchaudio is not available.",
-)
 class TestPlotSpecgram:
     """Tests for the plot_specgram function."""
 
@@ -151,10 +140,6 @@ class TestPlotSpecgram:
             plot_specgram(audio)
 
 
-@pytest.mark.skipif(
-    not TORCHAUDIO_AVAILABLE,
-    reason="Torchaudio is not available.",
-)
 class TestPlayAudio:
     """Tests for the play_audio function."""
 
@@ -250,10 +235,6 @@ class TestPlayAudio:
         mock_display.assert_called_once()
 
 
-@pytest.mark.skipif(
-    not TORCHAUDIO_AVAILABLE,
-    reason="Torchaudio is not available.",
-)
 class TestPlottingIntegration:
     """Integration tests for plotting functions."""
 

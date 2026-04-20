@@ -1,14 +1,10 @@
 """This script is for testing the voice cloning API."""
 
 import pytest
-import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.voice_cloning import clone_voices
 from senselab.utils.data_structures import CoquiTTSModel, DeviceType
-from senselab.utils.dependencies import torchaudio_available
-
-TORCHAUDIO_AVAILABLE = torchaudio_available()
 
 try:
     from TTS.api import TTS
@@ -38,34 +34,33 @@ def test_clone_voices_tts_not_available() -> None:
         CoquiTTSModel(path_or_uri="voice_conversion_models/multilingual/multi-dataset/knnvc")
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 @pytest.mark.skipif(SPARC_AVAILABLE, reason="SPARC is available")
-def test_clone_voices_sparc_not_available() -> None:
+def test_clone_voices_sparc_not_available(gpu_device: DeviceType) -> None:
     """Test when SPARC is not available."""
     with pytest.raises((ModuleNotFoundError, RuntimeError)):
-        clone_voices(source_audios=[], target_audios=[], model=None, device=DeviceType.CUDA)
+        clone_voices(source_audios=[], target_audios=[], model=None, device=gpu_device)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE or not TTS_AVAILABLE, reason="torchaudio or TTS are not available")
-def test_clone_voices_length_mismatch(resampled_mono_audio_sample: Audio, vc_model: CoquiTTSModel) -> None:
+@pytest.mark.skipif(not TTS_AVAILABLE, reason="TTS is not available")
+def test_clone_voices_length_mismatch(
+    resampled_mono_audio_sample: Audio, vc_model: CoquiTTSModel, gpu_device: DeviceType
+) -> None:
     """Test length mismatch in source and target audios."""
     source_audios = [resampled_mono_audio_sample]
     target_audios = [resampled_mono_audio_sample, resampled_mono_audio_sample]
 
     with pytest.raises(ValueError, match="The list of source and target audios must have the same length"):
-        clone_voices(source_audios=source_audios, target_audios=target_audios, model=vc_model, device=DeviceType.CUDA)
+        clone_voices(source_audios=source_audios, target_audios=target_audios, model=vc_model, device=gpu_device)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE or not SPARC_AVAILABLE, reason="torchaudio or SPARC are not available")
-def test_clone_voices_valid_input_sparc(resampled_mono_audio_sample: Audio) -> None:
+@pytest.mark.skipif(not SPARC_AVAILABLE, reason="SPARC is not available")
+def test_clone_voices_valid_input_sparc(resampled_mono_audio_sample: Audio, gpu_device: DeviceType) -> None:
     """Test cloning voices with valid input."""
     source_audios = [resampled_mono_audio_sample, resampled_mono_audio_sample]
     target_audios = [resampled_mono_audio_sample, resampled_mono_audio_sample]
 
     cloned_output = clone_voices(
-        source_audios=source_audios, target_audios=target_audios, model=None, device=DeviceType.CUDA
+        source_audios=source_audios, target_audios=target_audios, model=None, device=gpu_device
     )
     assert isinstance(cloned_output, list), "Output must be a list."
     assert len(cloned_output) == 2, "Output list should contain exactly two audio samples."
@@ -82,7 +77,7 @@ def test_clone_voices_valid_input_sparc(resampled_mono_audio_sample: Audio) -> N
     )
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE or not TTS_AVAILABLE, reason="torchaudio or TTS are not available")
+@pytest.mark.skipif(not TTS_AVAILABLE, reason="TTS is not available")
 def test_clone_voices_valid_input(resampled_mono_audio_sample: Audio, vc_model: CoquiTTSModel) -> None:
     """Test cloning voices with valid input."""
     source_audios = [resampled_mono_audio_sample, resampled_mono_audio_sample]
@@ -110,7 +105,7 @@ def test_clone_voices_valid_input(resampled_mono_audio_sample: Audio, vc_model: 
         pytest.fail(f"An unexpected exception occurred: {e}")
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE or not TTS_AVAILABLE, reason="torchaudio or TTS are not available")
+@pytest.mark.skipif(not TTS_AVAILABLE, reason="TTS is not available")
 def test_clone_voices_unsupported_model(resampled_mono_audio_sample: Audio) -> None:
     """Test unsupported model."""
     source_audios = [resampled_mono_audio_sample]
@@ -121,7 +116,7 @@ def test_clone_voices_unsupported_model(resampled_mono_audio_sample: Audio) -> N
         clone_voices(source_audios=source_audios, target_audios=target_audios, model=unsupported_model, device=None)
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE or not TTS_AVAILABLE, reason="torchaudio or TTS are not available")
+@pytest.mark.skipif(not TTS_AVAILABLE, reason="TTS is not available")
 def test_clone_voices_stereo_audio(resampled_stereo_audio_sample: Audio, vc_model: CoquiTTSModel) -> None:
     """Test unsupported stereo audio."""
     source_audios = [resampled_stereo_audio_sample]
@@ -131,7 +126,7 @@ def test_clone_voices_stereo_audio(resampled_stereo_audio_sample: Audio, vc_mode
         clone_voices(source_audios=source_audios, target_audios=target_audios, model=vc_model, device=None)
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE or not TTS_AVAILABLE, reason="torchaudio or TTS are not available")
+@pytest.mark.skipif(not TTS_AVAILABLE, reason="TTS is not available")
 def test_clone_voices_invalid_sampling_rate(mono_audio_sample: Audio, vc_model: CoquiTTSModel) -> None:
     """Test unsupported sampling rate."""
     source_audios = [mono_audio_sample]

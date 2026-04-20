@@ -6,14 +6,19 @@ import pytest
 import torch
 
 from senselab.text.tasks.embeddings_extraction import extract_embeddings_from_text
-from senselab.utils.data_structures import HFModel, SentenceTransformersModel
+from senselab.utils.data_structures import DeviceType, HFModel, SentenceTransformersModel
 
-try:
-    from sentence_transformers import SentenceTransformer
+_DEVICES = [DeviceType.CPU]
+if torch.cuda.is_available():
+    _DEVICES.append(DeviceType.CUDA)
+if torch.backends.mps.is_available():
+    _DEVICES.append(DeviceType.MPS)
 
-    SENTENCETRANSFORMERS_AVAILABLE = True
-except (ImportError, RuntimeError):
-    SENTENCETRANSFORMERS_AVAILABLE = False
+
+@pytest.fixture(params=_DEVICES, ids=lambda d: f"device={d.value}")
+def any_device(request: pytest.FixtureRequest) -> DeviceType:
+    """Parameterize over all available devices (cpu, mps, cuda)."""
+    return request.param
 
 
 @pytest.fixture
@@ -28,7 +33,7 @@ def sentencetransformers_model() -> SentenceTransformersModel:
     return SentenceTransformersModel(path_or_uri="sentence-transformers/all-MiniLM-L6-v2", revision="main")
 
 
-@pytest.mark.skipif(SENTENCETRANSFORMERS_AVAILABLE, reason="SentenceTransformers is installed")
+@pytest.mark.skip(reason="sentence-transformers is always installed in test environment")
 def test_extract_sentencetransformers_embeddings_from_text_import_error() -> None:
     """Test extract_embeddings_from_text import error."""
     with pytest.raises(ModuleNotFoundError):
@@ -37,21 +42,20 @@ def test_extract_sentencetransformers_embeddings_from_text_import_error() -> Non
         )
 
 
-@pytest.mark.skipif(not SENTENCETRANSFORMERS_AVAILABLE, reason="SentenceTransformers is not installed")
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_extract_sentencetransformers_embeddings_from_text(
-    sample_texts: List[str], sentencetransformers_model: SentenceTransformersModel
+    sample_texts: List[str], sentencetransformers_model: SentenceTransformersModel, any_device: DeviceType
 ) -> None:
     """Test extract_embeddings_from_text."""
-    embeddings = extract_embeddings_from_text(sample_texts, sentencetransformers_model)
+    embeddings = extract_embeddings_from_text(sample_texts, sentencetransformers_model, device=any_device)
     assert isinstance(embeddings, List)
     assert embeddings[0].shape == torch.Size([384])  # shape of "sentence-transformers/all-MiniLM-L6-v2"
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
-def test_extract_huggingface_embeddings_from_text(sample_texts: List[str], hf_model: HFModel) -> None:
+def test_extract_huggingface_embeddings_from_text(
+    sample_texts: List[str], hf_model: HFModel, any_device: DeviceType
+) -> None:
     """Test extract_embeddings_from_text."""
-    embeddings = extract_embeddings_from_text(sample_texts, hf_model)
+    embeddings = extract_embeddings_from_text(sample_texts, hf_model, device=any_device)
     assert isinstance(embeddings, List)
     print(embeddings[0].shape)
     # 7 layers for "sentence-transformers/all-MiniLM-L6-v2" (6 is the sequence Length in this case)
