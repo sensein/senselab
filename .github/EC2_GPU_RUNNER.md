@@ -58,6 +58,16 @@ All commands below run as `ec2-user`.
 sudo dnf install -y jq git
 ```
 
+#### Install build tools (for runtime FFmpeg compilation)
+
+The CI workflow compiles FFmpeg from source at runtime to match
+torchcodec's requirements. The AMI needs build tools pre-installed:
+
+```bash
+sudo dnf install -y autoconf automake bzip2 bzip2-devel cmake gcc gcc-c++ \
+  libtool make nasm yasm zlib-devel openssl-devel
+```
+
 #### Install uv
 
 ```bash
@@ -69,7 +79,8 @@ source $HOME/.local/bin/env
 
 The CI workflow uses `uv sync` to create a fresh venv on each run, so no
 pre-built venv is needed. This allows testing with different PyTorch versions
-without rebuilding the AMI. The AMI only needs CUDA drivers and uv.
+without rebuilding the AMI. The AMI only needs CUDA drivers, build tools,
+and uv.
 
 Verify the NVIDIA driver and CUDA are functional:
 

@@ -183,14 +183,32 @@ jobs:
         mkdir -p "$UV_CACHE_DIR" "$HF_HOME" "$TORCH_HOME"
     - name: Install FFmpeg shared libraries
       run: |
-        # torchcodec needs FFmpeg <= 7 shared libs (libavutil, libavcodec, etc.)
-        # AL2023 doesn't ship FFmpeg in default repos.
-        # Install via rpmfusion (Fedora 39 is ABI-compatible with AL2023).
-        sudo dnf install -y \
-          https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-39.noarch.rpm 2>/dev/null || true
-        sudo dnf install -y ffmpeg-free ffmpeg-free-devel 2>/dev/null || \
-          echo "FFmpeg install failed — torchcodec will use torchaudio fallback"
-        ldconfig -p 2>/dev/null | grep libavutil || echo "libavutil not in ldconfig"
+        # torchcodec needs FFmpeg shared libs (libavutil, libavcodec, etc.)
+        # AL2023 doesn't ship FFmpeg — compile from source.
+        # Build tools (gcc, cmake, nasm, etc.) must be pre-installed in the AMI.
+        # Cache the build on scratch storage to avoid recompiling on every run.
+        FFMPEG_PREFIX=/usr/local
+        if ldconfig -p 2>/dev/null | grep -q libavutil; then
+          echo "FFmpeg shared libs already available"
+        else
+          echo "Building FFmpeg from source..."
+          cd /tmp
+          FFMPEG_VERSION=7.1.1
+          curl -sL "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.bz2" | tar xj
+          cd "ffmpeg-${FFMPEG_VERSION}"
+          ./configure \
+            --prefix="${FFMPEG_PREFIX}" \
+            --enable-shared \
+            --disable-static \
+            --enable-gpl \
+            --disable-doc \
+            --disable-programs
+          make -j$(nproc)
+          sudo make install
+          sudo ldconfig
+          cd /tmp && rm -rf "ffmpeg-${FFMPEG_VERSION}"
+        fi
+        ldconfig -p | grep libavutil
     - name: Set up environment (Python ${{ matrix.python-version }})
       run: |
         set -euxo pipefail
