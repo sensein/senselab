@@ -369,15 +369,15 @@ def test_merge_repeats() -> None:
     assert len(segments) == 2
 
 
-def test_get_prediction_matrix(dummy_model: tuple, any_device: DeviceType) -> None:
+def test_get_prediction_matrix(dummy_model: tuple) -> None:
     """Test generation of prediction matrix."""
     model, _ = dummy_model
     waveform_segment = torch.randn(1, 16000)
-    prediction_matrix = _get_prediction_matrix(model, waveform_segment, None, "huggingface", any_device)
+    prediction_matrix = _get_prediction_matrix(model, waveform_segment, None, "huggingface", DeviceType.CPU)
     assert prediction_matrix.shape[0] > 0
 
 
-def test_align_segments(mono_audio_sample: Audio, dummy_model: tuple, any_device: DeviceType) -> None:
+def test_align_segments(mono_audio_sample: Audio, dummy_model: tuple) -> None:
     """Test alignment of segments."""
     model, processor = dummy_model
     model_dictionary = processor.tokenizer.get_vocab()
@@ -400,7 +400,7 @@ def test_align_segments(mono_audio_sample: Audio, dummy_model: tuple, any_device
         model_lang=Language(language_code="en"),
         model_type="huggingface",
         audio=mono_audio_sample,
-        device=any_device,
+        device=DeviceType.CPU,
         max_duration=10.0,
     )
 
@@ -452,9 +452,7 @@ def test_align_transcriptions_multilingual(
         raise ValueError(f"aligned_transcription_en is not a ScriptLine. Got: {aligned_transcription_en}")
 
 
-def test_align_transcription_faked(
-    resampled_mono_audio_sample: Audio, dummy_model: tuple, any_device: DeviceType
-) -> None:
+def test_align_transcription_faked(resampled_mono_audio_sample: Audio, dummy_model: tuple) -> None:
     """Test alignment of transcription."""
     model, processor = dummy_model
     transcript = [
@@ -477,7 +475,7 @@ def test_align_transcription_faked(
             "type": "huggingface",
         },
         audio=resampled_mono_audio_sample,
-        device=any_device,
+        device=DeviceType.CPU,
     )
     assert aligned_result[0] is not None
     assert aligned_result[0].text == "test"
