@@ -58,33 +58,12 @@ All commands below run as `ec2-user`.
 sudo dnf install -y jq git
 ```
 
-#### Install miniforge (for runtime FFmpeg)
-
-The CI workflow installs FFmpeg shared libraries from conda-forge at
-runtime to match torchcodec's requirements. Miniforge can be
-pre-installed in the AMI to speed up CI, but the workflow will install
-it automatically if missing:
-
-```bash
-curl -fsSL https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh \
-  -o /tmp/miniforge.sh
-bash /tmp/miniforge.sh -b -p /opt/miniforge
-rm /tmp/miniforge.sh
-```
-
-#### Install uv
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-source $HOME/.local/bin/env
-```
-
 #### Verify GPU access
 
-The CI workflow uses `uv sync` to create a fresh venv on each run, so no
-pre-built venv is needed. This allows testing with different PyTorch versions
-without rebuilding the AMI. The AMI only needs CUDA drivers and uv.
-Miniforge and FFmpeg are installed automatically by the workflow if missing.
+The AMI only needs NVIDIA drivers and basic system tools. Everything
+else (uv, miniforge, FFmpeg, Python, packages) is installed
+automatically by the CI workflow at runtime. This keeps the AMI thin
+and avoids version lock-in.
 
 Verify the NVIDIA driver and CUDA are functional:
 
