@@ -20,14 +20,6 @@ TORCHAUDIO_AVAILABLE = torchaudio_available()
 if TORCHAUDIO_AVAILABLE:
     import torchaudio
 
-try:
-    from TTS.api import TTS
-
-    TTS_AVAILABLE = True
-except ModuleNotFoundError:
-    TTS_AVAILABLE = False
-    TTS = None  # This is to avoid errors during pdoc documentation generation
-
 # Define the TypeVar for provider types
 PROVIDER_T = TypeVar("PROVIDER_T")
 
@@ -135,16 +127,13 @@ class CoquiTTSModel(SenselabModel[PROVIDER_T]):
     def validate_path_or_uri(cls, value: Union[str, Path]) -> Union[str, Path]:
         """Validate the path_or_uri.
 
-        This check is only for remote resources and not for files.
-        It checks if the specified torch model ID and revision exist in the
-        remote Hub.
+        Coqui TTS runs in an isolated subprocess venv.  Validation queries
+        the model list via the subprocess venv (installs it on first call).
         """
-        if not TTS_AVAILABLE:
-            raise ModuleNotFoundError(
-                "`coqui-tts` is not installed. Please install senselab audio dependencies using `pip install senselab`."
-            )
         if not isinstance(value, Path):
-            model_ids = TTS().list_models()
+            from senselab.audio.tasks.voice_cloning.coqui import list_coqui_models
+
+            model_ids = list_coqui_models()
             if value not in model_ids:
                 raise ValueError(f"Model {value} not found. Available models: {model_ids}")
             cls._scope = value.split("/")[0]

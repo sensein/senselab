@@ -8,9 +8,10 @@ from senselab.audio.tasks.text_to_speech import synthesize_texts
 from senselab.audio.tasks.text_to_speech.huggingface import HuggingFaceTTS
 from senselab.utils.data_structures import CoquiTTSModel, DeviceType, HFModel, Language, SenselabModel, TorchModel
 
-# Try to import Coqui TTS
+# Coqui TTS synthesis still uses direct TTS import (not subprocess venv yet).
+# Guard this test until it's migrated.
 try:
-    from TTS.api import TTS
+    from TTS.api import TTS  # noqa: F401
 
     TTS_AVAILABLE = True
 except ModuleNotFoundError:
@@ -57,7 +58,7 @@ def test_synthesize_texts_with_bark(hf_model: HFModel, gpu_device: DeviceType) -
     assert audios[0].sampling_rate > 0
 
 
-@pytest.mark.skipif(not TTS_AVAILABLE, reason="Coqui TTS is not available")
+@pytest.mark.skipif(not TTS_AVAILABLE, reason="Coqui TTS synthesis not yet migrated to subprocess venv")
 def test_synthesize_texts_with_coqui_model(coqui_tts_model: CoquiTTSModel, gpu_device: DeviceType) -> None:
     """Test synthesizing texts."""
     texts = ["Hello world", "Hello world again."]
