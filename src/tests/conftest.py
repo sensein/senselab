@@ -11,7 +11,6 @@ The only things NOT checked here are:
 """
 
 import importlib
-import warnings
 
 import pytest
 
@@ -21,6 +20,7 @@ REQUIRED_DEPS = {
     # Core dependencies
     "torch": "torch",
     "torchaudio": "torchaudio",
+    "torchcodec": "torchcodec",
     "torchvision": "torchvision",
     "transformers": "transformers",
     "speechbrain": "speechbrain",
@@ -48,15 +48,6 @@ REQUIRED_DEPS = {
     "speech-articulatory-coding": "articulatory_coding",
 }
 
-# torchcodec needs FFmpeg shared libs installed system-wide.
-# This is a hard requirement for a complete test environment, but
-# since AL2023 doesn't ship FFmpeg in default repos, we warn for now
-# and fall back to torchaudio.  TODO: bake FFmpeg into the AMI and
-# promote this to REQUIRED_DEPS.
-SYSTEM_DEPS = {
-    "torchcodec": "torchcodec",
-}
-
 
 def pytest_configure(config: pytest.Config) -> None:
     """Verify all dependencies are importable at session start."""
@@ -67,23 +58,6 @@ def pytest_configure(config: pytest.Config) -> None:
         except (ImportError, RuntimeError) as e:
             missing.append(f"  {name} ({module}): {e}")
 
-    sys_missing = []
-    for name, module in SYSTEM_DEPS.items():
-        try:
-            importlib.import_module(module)
-        except (ImportError, RuntimeError) as e:
-            sys_missing.append(f"  {name} ({module}): {e}")
-
-    if sys_missing:
-        warnings.warn(
-            "System dependencies unavailable (torchaudio fallback will be used):\n"
-            + "\n".join(sys_missing)
-            + "\n\nTo fix: install FFmpeg <= 7 shared libs system-wide.\n"
-            "  Linux: sudo dnf install ffmpeg-free ffmpeg-free-devel (via rpmfusion)\n"
-            "  macOS: brew install ffmpeg@7",
-            stacklevel=1,
-        )
-
     if missing:
         lines = [
             "\n\nDependencies failed to import — test environment is broken.\n",
@@ -92,7 +66,8 @@ def pytest_configure(config: pytest.Config) -> None:
             "  1. Install Python packages:  uv sync --all-extras --group dev",
             "  2. System dependencies:",
             "     - FFmpeg <= 7 shared libs (required by torchcodec).",
-            "       Linux: sudo dnf install ffmpeg-free ffmpeg-free-devel (via rpmfusion)",
+            "       The CI workflow compiles FFmpeg from source; ensure build",
+            "       tools are available (gcc, cmake, nasm — see EC2_GPU_RUNNER.md).",
             "       macOS: brew install ffmpeg@7",
             "     - libsndfile (required by soundfile, usually bundled)",
             "",
