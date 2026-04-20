@@ -38,8 +38,6 @@ REQUIRED_DEPS = {
     "datasets": "datasets",
     "scikit-learn": "sklearn",
     "soundfile": "soundfile",
-    # Extra: text
-    "sentence-transformers": "sentence_transformers",
     "pylangacq": "pylangacq",
     # Extra: nlp
     "jiwer": "jiwer",
@@ -60,6 +58,9 @@ REQUIRED_DEPS = {
 # shared libs or torchcodec removes the libpython dependency.
 SOFT_DEPS = {
     "torchcodec": "torchcodec",
+    # sentence-transformers >=5.4 imports torchcodec at module level,
+    # so it fails when torchcodec can't load FFmpeg libs.
+    "sentence-transformers": "sentence_transformers",
 }
 
 
