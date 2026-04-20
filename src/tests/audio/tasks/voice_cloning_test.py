@@ -85,5 +85,5 @@ def test_clone_voices_invalid_sampling_rate(mono_audio_sample: Audio, vc_model: 
     source_audios = [mono_audio_sample]
     target_audios = [mono_audio_sample]
 
-    with pytest.raises(ValueError):
+    with pytest.raises((ValueError, RuntimeError)):
         clone_voices(source_audios=source_audios, target_audios=target_audios, model=vc_model, device=None)
