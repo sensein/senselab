@@ -17,26 +17,25 @@ maintainers = [
 ]
 license = {file = "LICENSE.md"}
 readme = "README.md"
-requires-python = ">=3.11,<3.13"
+requires-python = ">=3.11,<3.15"
 keywords = ["audio", "voice", "speech", "video", "pose", "face", "text", "nlp"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "License :: OSI Approved :: Apache Software License",
   "Operating System :: OS Independent"
 ]
 dependencies = [
-  # PyTorch ecosystem — all must be same minor version
-  # torch 2.8 ↔ torchaudio 2.8 ↔ torchvision 0.23 ↔ torchcodec 0.7
-  # torch 2.9 ↔ torchaudio 2.9 ↔ torchvision 0.24 ↔ torchcodec 0.9
-  # torch 2.10 ↔ torchaudio 2.10 ↔ torchvision 0.25 ↔ torchcodec 0.10
-  # Requires FFmpeg shared libraries at runtime (system install, not pip)
-  "torch~=2.8; sys_platform != 'darwin' or platform_machine == 'arm64'",
-  "torchvision~=0.23",
-  "torchcodec~=0.7",
-  "torchaudio~=2.8",
-  "transformers>=4.40",
+  # PyTorch ecosystem — uv resolves compatible versions automatically
+  # torch ↔ torchaudio ↔ torchvision ↔ torchcodec must be compatible
+  "torch>=2.8; sys_platform != 'darwin' or platform_machine == 'arm64'",
+  "torchvision>=0.23",
+  "torchcodec>=0.7",
+  "torchaudio>=2.8",
+  "transformers>=4.52",
   "datasets>=3.6",
   "accelerate",
   "huggingface-hub>=0.34",
@@ -52,7 +51,7 @@ dependencies = [
   "matplotlib>=3.10",
   "joblib>=1.5",
   "packaging>=23.0",
-  # Audio processing backends (core — must coexist with modern torch)
+  # Audio processing backends
   "praat-parselmouth>=0.4",
   "audiomentations>=0.42",
   "torch-audiomentations>=0.12",
@@ -167,7 +166,7 @@ exclude = [
 line-length = 120
 indent-width = 4
 src = ["src"]
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["ANN", "D", "E", "F", "I"]
