@@ -183,6 +183,6 @@ def _from_dict_to_hf_dataset(
     # Cast audio columns
     for column in audio_columns:
         if column in dataset.column_names:
-            dataset = dataset.cast_column(column, Audio())
+            dataset = dataset.cast_column(column, Audio(num_channels=None))
 
     return dataset

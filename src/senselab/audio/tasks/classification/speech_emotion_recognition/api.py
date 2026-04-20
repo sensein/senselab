@@ -87,21 +87,18 @@ def _get_ser_type(model: HFModel) -> SERType:
     """Get the type of SER the model is likely used for based on the labels it is set to predict."""
     try:
         config = AutoConfig.from_pretrained(model.path_or_uri, revision=model.revision)
-    except (TypeError, Exception):
-        # Some model configs have null fields that newer huggingface_hub rejects.
-        # Fall back to loading the raw config dict.
-        from huggingface_hub import hf_hub_download
+    except Exception:
+        # Some model configs have null fields that newer huggingface_hub strict
+        # validation rejects (e.g., vocab_size: null). Fall back to raw config.
         import json
+        from types import SimpleNamespace
+
+        from huggingface_hub import hf_hub_download
 
         config_path = hf_hub_download(model.path_or_uri, "config.json", revision=model.revision)
         with open(config_path) as f:
             config_dict = json.load(f)
-
-        class _ConfigProxy:
-            def __init__(self, d: dict) -> None:
-                self.id2label = d.get("id2label", {})
-
-        config = _ConfigProxy(config_dict)
+        config = SimpleNamespace(id2label=config_dict.get("id2label", {}))
     id2label = config.id2label
     # print(id2label)
     if id2label:
