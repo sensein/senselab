@@ -44,8 +44,9 @@ REQUIRED_DEPS = {
     "av": "av",
     "opencv": "cv2",
     "ultralytics": "ultralytics",
-    # Extra: articulatory
-    "speech-articulatory-coding": "articulatory_coding",
+    # Note: speech-articulatory-coding (sparc) is in the articulatory extra
+    # but imports are guarded in code (isolated backend). Checked via
+    # SPARC_AVAILABLE in test files, not here.
 }
 
 # torchcodec needs FFmpeg shared libs AND libpython as a shared library.
