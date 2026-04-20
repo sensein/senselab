@@ -27,10 +27,10 @@ def resnet_model() -> SpeechBrainModel:
 
 
 def test_extract_speaker_embeddings_from_empty_audio_list(
-    ecapa_model: SpeechBrainModel, any_device: DeviceType
+    ecapa_model: SpeechBrainModel, cpu_cuda_device: DeviceType
 ) -> None:
     """Test extracting speaker embeddings from an empty audio list returns an empty list."""
-    embeddings = extract_speaker_embeddings_from_audios(audios=[], model=ecapa_model, device=any_device)
+    embeddings = extract_speaker_embeddings_from_audios(audios=[], model=ecapa_model, device=cpu_cuda_device)
     assert isinstance(embeddings, list)
     assert len(embeddings) == 0
 
@@ -40,23 +40,23 @@ def test_extract_speaker_embeddings_from_audio(
     ecapa_model: SpeechBrainModel,
     xvector_model: SpeechBrainModel,
     resnet_model: SpeechBrainModel,
-    any_device: DeviceType,
+    cpu_cuda_device: DeviceType,
 ) -> None:
     """Test extracting speaker embeddings from audio."""
     embeddings = extract_speaker_embeddings_from_audios(
-        audios=[resampled_mono_audio_sample], model=ecapa_model, device=any_device
+        audios=[resampled_mono_audio_sample], model=ecapa_model, device=cpu_cuda_device
     )
     assert isinstance(embeddings, list) and all(isinstance(embedding, Tensor) for embedding in embeddings)
     assert all(embedding.size(0) == 192 for embedding in embeddings)
 
     embeddings = extract_speaker_embeddings_from_audios(
-        audios=[resampled_mono_audio_sample], model=xvector_model, device=any_device
+        audios=[resampled_mono_audio_sample], model=xvector_model, device=cpu_cuda_device
     )
     assert isinstance(embeddings, list) and all(isinstance(embedding, Tensor) for embedding in embeddings)
     assert all(embedding.size(0) == 512 for embedding in embeddings)
 
     embeddings = extract_speaker_embeddings_from_audios(
-        audios=[resampled_mono_audio_sample], model=resnet_model, device=any_device
+        audios=[resampled_mono_audio_sample], model=resnet_model, device=cpu_cuda_device
     )
     assert isinstance(embeddings, list) and all(isinstance(embedding, Tensor) for embedding in embeddings)
     assert all(embedding.size(0) == 256 for embedding in embeddings)
@@ -67,23 +67,23 @@ def test_extract_speaker_embeddings_from_multiple_audios(
     ecapa_model: SpeechBrainModel,
     xvector_model: SpeechBrainModel,
     resnet_model: SpeechBrainModel,
-    any_device: DeviceType,
+    cpu_cuda_device: DeviceType,
 ) -> None:
     """Test extracting speaker embeddings from multiple audios."""
     embeddings = extract_speaker_embeddings_from_audios(
-        audios=[resampled_mono_audio_sample, resampled_mono_audio_sample], model=ecapa_model, device=any_device
+        audios=[resampled_mono_audio_sample, resampled_mono_audio_sample], model=ecapa_model, device=cpu_cuda_device
     )
     assert isinstance(embeddings, list) and all(isinstance(embedding, Tensor) for embedding in embeddings)
     assert all(embedding.size(0) == 192 for embedding in embeddings)
 
     embeddings = extract_speaker_embeddings_from_audios(
-        audios=[resampled_mono_audio_sample, resampled_mono_audio_sample], model=xvector_model, device=any_device
+        audios=[resampled_mono_audio_sample, resampled_mono_audio_sample], model=xvector_model, device=cpu_cuda_device
     )
     assert isinstance(embeddings, list) and all(isinstance(embedding, Tensor) for embedding in embeddings)
     assert all(embedding.size(0) == 512 for embedding in embeddings)
 
     embeddings = extract_speaker_embeddings_from_audios(
-        audios=[resampled_mono_audio_sample, resampled_mono_audio_sample], model=resnet_model, device=any_device
+        audios=[resampled_mono_audio_sample, resampled_mono_audio_sample], model=resnet_model, device=cpu_cuda_device
     )
     assert isinstance(embeddings, list) and all(isinstance(embedding, Tensor) for embedding in embeddings)
     assert all(embedding.size(0) == 256 for embedding in embeddings)
@@ -95,23 +95,25 @@ def test_extract_speaker_embeddings_from_multiple_audios_different_sizes(
     ecapa_model: SpeechBrainModel,
     xvector_model: SpeechBrainModel,
     resnet_model: SpeechBrainModel,
-    any_device: DeviceType,
+    cpu_cuda_device: DeviceType,
 ) -> None:
     """Test extracting speaker embeddings from multiple audios of differing lengths."""
     embeddings = extract_speaker_embeddings_from_audios(
-        audios=[resampled_mono_audio_sample, resampled_mono_audio_sample_x2], model=ecapa_model, device=any_device
+        audios=[resampled_mono_audio_sample, resampled_mono_audio_sample_x2], model=ecapa_model, device=cpu_cuda_device
     )
     assert isinstance(embeddings, list) and all(isinstance(embedding, Tensor) for embedding in embeddings)
     assert all(embedding.size(0) == 192 for embedding in embeddings)
 
     embeddings = extract_speaker_embeddings_from_audios(
-        audios=[resampled_mono_audio_sample, resampled_mono_audio_sample_x2], model=xvector_model, device=any_device
+        audios=[resampled_mono_audio_sample, resampled_mono_audio_sample_x2],
+        model=xvector_model,
+        device=cpu_cuda_device,
     )
     assert isinstance(embeddings, list) and all(isinstance(embedding, Tensor) for embedding in embeddings)
     assert all(embedding.size(0) == 512 for embedding in embeddings)
 
     embeddings = extract_speaker_embeddings_from_audios(
-        audios=[resampled_mono_audio_sample, resampled_mono_audio_sample_x2], model=resnet_model, device=any_device
+        audios=[resampled_mono_audio_sample, resampled_mono_audio_sample_x2], model=resnet_model, device=cpu_cuda_device
     )
     assert isinstance(embeddings, list) and all(isinstance(embedding, Tensor) for embedding in embeddings)
     assert all(embedding.size(0) == 256 for embedding in embeddings)
@@ -135,15 +137,15 @@ def test_extract_speechbrain_speaker_embeddings_from_audio_resampled(
     ecapa_model: SpeechBrainModel,
     xvector_model: SpeechBrainModel,
     resnet_model: SpeechBrainModel,
-    any_device: DeviceType,
+    cpu_cuda_device: DeviceType,
 ) -> None:
     """Test extracting speaker embeddings from audio."""
     with pytest.raises(ValueError):
-        extract_speaker_embeddings_from_audios(audios=[mono_audio_sample], model=ecapa_model, device=any_device)
+        extract_speaker_embeddings_from_audios(audios=[mono_audio_sample], model=ecapa_model, device=cpu_cuda_device)
     with pytest.raises(ValueError):
-        extract_speaker_embeddings_from_audios(audios=[mono_audio_sample], model=xvector_model, device=any_device)
+        extract_speaker_embeddings_from_audios(audios=[mono_audio_sample], model=xvector_model, device=cpu_cuda_device)
     with pytest.raises(ValueError):
-        extract_speaker_embeddings_from_audios(audios=[mono_audio_sample], model=resnet_model, device=any_device)
+        extract_speaker_embeddings_from_audios(audios=[mono_audio_sample], model=resnet_model, device=cpu_cuda_device)
 
 
 def test_extract_speechbrain_speaker_embeddings_from_stereo_audio(
@@ -151,12 +153,14 @@ def test_extract_speechbrain_speaker_embeddings_from_stereo_audio(
     ecapa_model: SpeechBrainModel,
     xvector_model: SpeechBrainModel,
     resnet_model: SpeechBrainModel,
-    any_device: DeviceType,
+    cpu_cuda_device: DeviceType,
 ) -> None:
     """Test extracting speaker embeddings from audio."""
     with pytest.raises(ValueError):
-        extract_speaker_embeddings_from_audios(audios=[stereo_audio_sample], model=ecapa_model, device=any_device)
+        extract_speaker_embeddings_from_audios(audios=[stereo_audio_sample], model=ecapa_model, device=cpu_cuda_device)
     with pytest.raises(ValueError):
-        extract_speaker_embeddings_from_audios(audios=[stereo_audio_sample], model=xvector_model, device=any_device)
+        extract_speaker_embeddings_from_audios(
+            audios=[stereo_audio_sample], model=xvector_model, device=cpu_cuda_device
+        )
     with pytest.raises(ValueError):
-        extract_speaker_embeddings_from_audios(audios=[stereo_audio_sample], model=resnet_model, device=any_device)
+        extract_speaker_embeddings_from_audios(audios=[stereo_audio_sample], model=resnet_model, device=cpu_cuda_device)

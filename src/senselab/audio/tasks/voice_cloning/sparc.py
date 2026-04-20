@@ -12,7 +12,7 @@ from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, Language, _select_device_and_dtype
-from senselab.utils.subprocess_venv import ensure_venv
+from senselab.utils.subprocess_venv import ensure_venv, parse_subprocess_result
 
 # Reuse the same venv spec as features_extraction/sparc.py
 _SPARC_VENV = "sparc"
@@ -152,10 +152,7 @@ class SparcVoiceCloner:
                 timeout=600,
             )
 
-            if result.returncode != 0:
-                raise RuntimeError(f"SPARC venv failed:\n{result.stderr}")
-
-            output = json.loads(result.stdout.strip().splitlines()[-1])
+            output = parse_subprocess_result(result, "SPARC")
 
             # Load results eagerly (tempdir is cleaned up after this block)
             cloned_audios = []

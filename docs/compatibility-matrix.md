@@ -1,139 +1,73 @@
 # Senselab Compatibility Matrix
 
-| Function | Required Deps | Dep Versions | GPU | Isolated | Python | Torch |
-|----------|--------------|-------------|-----|----------|--------|-------|
-| `audio.tasks.classification.classify_audios` | transformers | transformers>=4.40,<5.0 | Yes | No | >=3.11 | >=2.8,<3.0 |
-| `audio.tasks.classification.classify_emotions_from_speech` | transformers | transformers>=4.40,<5.0 | Yes | No | >=3.11 | >=2.8,<3.0 |
-| `audio.tasks.data_augmentation.augment_audios` | audiomentations, torch-audiomentations | audiomentations>=0.42, torch-audiomentations>=0.12 | No | No | >=3.11 | >=2.8,<3.0 |
-| `audio.tasks.features_extraction.extract_features_from_audios` | torchaudio | torchaudio>=2.8,<3.0 | No | No | >=3.11 | >=2.8,<3.0 |
-| `audio.tasks.features_extraction.extract_ppg_from_audios` | ppgs, espnet | ppgs>=0.0.9,<0.0.10, espnet>=202205, torch>=2.0,<2.9 | Yes | Yes (ppgs) | >=3.10,<3.12 | >=2.8,<3.0 |
-| `audio.tasks.forced_alignment.align_transcriptions` | transformers, torchaudio | transformers>=4.40,<5.0, torchaudio>=2.8,<3.0 | Yes | No | >=3.11 | >=2.8,<3.0 |
-| `audio.tasks.speaker_diarization.diarize_audios` | pyannote-audio, torchaudio, torchcodec | pyannote-audio>=3.0,<5.0, torchaudio>=2.8,<3.0, torchcodec>=0.7 | Yes | No | >=3.11 | >=2.8,<3.0 |
-| `audio.tasks.speaker_embeddings.extract_speaker_embeddings_from_audios` | speechbrain, torchaudio | speechbrain>=1.0,<2.0, torchaudio>=2.8,<3.0 | Yes | No | >=3.11 | >=2.8,<3.0 |
-| `audio.tasks.speech_enhancement.enhance_audios` | speechbrain, torchaudio | speechbrain>=1.0,<2.0, torchaudio>=2.8,<3.0 | Yes | No | >=3.11 | >=2.8,<3.0 |
-| `audio.tasks.speech_to_text.transcribe_audios` | transformers, torchaudio | transformers>=4.40,<5.0, torchaudio>=2.8,<3.0 | No | No | >=3.11 | >=2.8,<3.0 |
-| `audio.tasks.ssl_embeddings.extract_ssl_embeddings_from_audios` | transformers | transformers>=4.40,<5.0 | Yes | No | >=3.11 | >=2.8,<3.0 |
-| `audio.tasks.text_to_speech.synthesize_texts` | transformers | transformers>=4.40,<5.0 | Yes | No | >=3.11 | >=2.8,<3.0 |
-| `audio.tasks.voice_activity_detection.detect_human_voice_activity_in_audios` | pyannote-audio, torchaudio | pyannote-audio>=3.0,<5.0, torchaudio>=2.8,<3.0 | Yes | No | >=3.11 | >=2.8,<3.0 |
-| `audio.tasks.voice_cloning.clone_voices` | coqui-tts | coqui-tts>=0.27,<1.0, torch>=2.4,<2.9 | Yes | Yes (coqui) | >=3.10,<3.12 | >=2.8,<3.0 |
-| `text.tasks.embeddings_extraction.extract_embeddings_from_text` | transformers, sentence-transformers | transformers>=4.40,<5.0, sentence-transformers>=5.1 | Yes | No | >=3.11 | >=2.8,<3.0 |
-| `video.tasks.pose_estimation.estimate_pose` | ultralytics, opencv-python-headless | ultralytics>=8.0,<9.0, opencv-python-headless>=4.8,<5.0 | No | No | >=3.11 | >=2.8,<3.0 |
+Minimum and maximum tested versions of senselab dependencies across Python versions.
+Lower bounds verified by pinning each package to its minimum in an isolated venv.
+Upper bounds verified by running the full test suite (490+ tests passing).
 
-## Test Matrix
+## Python Support
 
-| Function | Python | Torch | Deps | Isolated |
-|----------|--------|-------|------|----------|
-| `audio.tasks.speech_to_text.transcribe_audios` | 3.11 | 2.8 | transformers>=4.40,<5.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.speech_to_text.transcribe_audios` | 3.11 | 2.10 | transformers>=4.40,<5.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.speech_to_text.transcribe_audios` | 3.12 | 2.8 | transformers>=4.40,<5.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.speech_to_text.transcribe_audios` | 3.12 | 2.10 | transformers>=4.40,<5.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.speech_to_text.transcribe_audios` | 3.13 | 2.8 | transformers>=4.40,<5.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.speech_to_text.transcribe_audios` | 3.13 | 2.10 | transformers>=4.40,<5.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.speech_to_text.transcribe_audios` | 3.14 | 2.8 | transformers>=4.40,<5.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.speech_to_text.transcribe_audios` | 3.14 | 2.10 | transformers>=4.40,<5.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.speaker_diarization.diarize_audios` | 3.11 | 2.8 | pyannote-audio>=3.0,<5.0,torchaudio>=2.8,<3.0,torchcodec>=0.7 | false |
-| `audio.tasks.speaker_diarization.diarize_audios` | 3.11 | 2.10 | pyannote-audio>=3.0,<5.0,torchaudio>=2.8,<3.0,torchcodec>=0.7 | false |
-| `audio.tasks.speaker_diarization.diarize_audios` | 3.12 | 2.8 | pyannote-audio>=3.0,<5.0,torchaudio>=2.8,<3.0,torchcodec>=0.7 | false |
-| `audio.tasks.speaker_diarization.diarize_audios` | 3.12 | 2.10 | pyannote-audio>=3.0,<5.0,torchaudio>=2.8,<3.0,torchcodec>=0.7 | false |
-| `audio.tasks.speaker_diarization.diarize_audios` | 3.13 | 2.8 | pyannote-audio>=3.0,<5.0,torchaudio>=2.8,<3.0,torchcodec>=0.7 | false |
-| `audio.tasks.speaker_diarization.diarize_audios` | 3.13 | 2.10 | pyannote-audio>=3.0,<5.0,torchaudio>=2.8,<3.0,torchcodec>=0.7 | false |
-| `audio.tasks.speaker_diarization.diarize_audios` | 3.14 | 2.8 | pyannote-audio>=3.0,<5.0,torchaudio>=2.8,<3.0,torchcodec>=0.7 | false |
-| `audio.tasks.speaker_diarization.diarize_audios` | 3.14 | 2.10 | pyannote-audio>=3.0,<5.0,torchaudio>=2.8,<3.0,torchcodec>=0.7 | false |
-| `audio.tasks.speaker_embeddings.extract_speaker_embeddings_from_audios` | 3.11 | 2.8 | speechbrain>=1.0,<2.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.speaker_embeddings.extract_speaker_embeddings_from_audios` | 3.11 | 2.10 | speechbrain>=1.0,<2.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.speaker_embeddings.extract_speaker_embeddings_from_audios` | 3.12 | 2.8 | speechbrain>=1.0,<2.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.speaker_embeddings.extract_speaker_embeddings_from_audios` | 3.12 | 2.10 | speechbrain>=1.0,<2.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.speaker_embeddings.extract_speaker_embeddings_from_audios` | 3.13 | 2.8 | speechbrain>=1.0,<2.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.speaker_embeddings.extract_speaker_embeddings_from_audios` | 3.13 | 2.10 | speechbrain>=1.0,<2.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.speaker_embeddings.extract_speaker_embeddings_from_audios` | 3.14 | 2.8 | speechbrain>=1.0,<2.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.speaker_embeddings.extract_speaker_embeddings_from_audios` | 3.14 | 2.10 | speechbrain>=1.0,<2.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.speech_enhancement.enhance_audios` | 3.11 | 2.8 | speechbrain>=1.0,<2.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.speech_enhancement.enhance_audios` | 3.11 | 2.10 | speechbrain>=1.0,<2.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.speech_enhancement.enhance_audios` | 3.12 | 2.8 | speechbrain>=1.0,<2.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.speech_enhancement.enhance_audios` | 3.12 | 2.10 | speechbrain>=1.0,<2.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.speech_enhancement.enhance_audios` | 3.13 | 2.8 | speechbrain>=1.0,<2.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.speech_enhancement.enhance_audios` | 3.13 | 2.10 | speechbrain>=1.0,<2.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.speech_enhancement.enhance_audios` | 3.14 | 2.8 | speechbrain>=1.0,<2.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.speech_enhancement.enhance_audios` | 3.14 | 2.10 | speechbrain>=1.0,<2.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.voice_cloning.clone_voices` | 3.11 | venv-managed | coqui-tts~=0.27,torch~=2.8 | true |
-| `audio.tasks.text_to_speech.synthesize_texts` | 3.11 | 2.8 | transformers>=4.40,<5.0 | false |
-| `audio.tasks.text_to_speech.synthesize_texts` | 3.11 | 2.10 | transformers>=4.40,<5.0 | false |
-| `audio.tasks.text_to_speech.synthesize_texts` | 3.12 | 2.8 | transformers>=4.40,<5.0 | false |
-| `audio.tasks.text_to_speech.synthesize_texts` | 3.12 | 2.10 | transformers>=4.40,<5.0 | false |
-| `audio.tasks.text_to_speech.synthesize_texts` | 3.13 | 2.8 | transformers>=4.40,<5.0 | false |
-| `audio.tasks.text_to_speech.synthesize_texts` | 3.13 | 2.10 | transformers>=4.40,<5.0 | false |
-| `audio.tasks.text_to_speech.synthesize_texts` | 3.14 | 2.8 | transformers>=4.40,<5.0 | false |
-| `audio.tasks.text_to_speech.synthesize_texts` | 3.14 | 2.10 | transformers>=4.40,<5.0 | false |
-| `audio.tasks.classification.classify_audios` | 3.11 | 2.8 | transformers>=4.40,<5.0 | false |
-| `audio.tasks.classification.classify_audios` | 3.11 | 2.10 | transformers>=4.40,<5.0 | false |
-| `audio.tasks.classification.classify_audios` | 3.12 | 2.8 | transformers>=4.40,<5.0 | false |
-| `audio.tasks.classification.classify_audios` | 3.12 | 2.10 | transformers>=4.40,<5.0 | false |
-| `audio.tasks.classification.classify_audios` | 3.13 | 2.8 | transformers>=4.40,<5.0 | false |
-| `audio.tasks.classification.classify_audios` | 3.13 | 2.10 | transformers>=4.40,<5.0 | false |
-| `audio.tasks.classification.classify_audios` | 3.14 | 2.8 | transformers>=4.40,<5.0 | false |
-| `audio.tasks.classification.classify_audios` | 3.14 | 2.10 | transformers>=4.40,<5.0 | false |
-| `audio.tasks.forced_alignment.align_transcriptions` | 3.11 | 2.8 | transformers>=4.40,<5.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.forced_alignment.align_transcriptions` | 3.11 | 2.10 | transformers>=4.40,<5.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.forced_alignment.align_transcriptions` | 3.12 | 2.8 | transformers>=4.40,<5.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.forced_alignment.align_transcriptions` | 3.12 | 2.10 | transformers>=4.40,<5.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.forced_alignment.align_transcriptions` | 3.13 | 2.8 | transformers>=4.40,<5.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.forced_alignment.align_transcriptions` | 3.13 | 2.10 | transformers>=4.40,<5.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.forced_alignment.align_transcriptions` | 3.14 | 2.8 | transformers>=4.40,<5.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.forced_alignment.align_transcriptions` | 3.14 | 2.10 | transformers>=4.40,<5.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.features_extraction.extract_ppg_from_audios` | 3.11 | venv-managed | ppgs>=0.0.9,<0.0.10,espnet,snorkel>=0.10.0,<0.11.0,lightning~=2.4 | true |
-| `text.tasks.embeddings_extraction.extract_embeddings_from_text` | 3.11 | 2.8 | transformers>=4.40,<5.0,sentence-transformers>=5.1 | false |
-| `text.tasks.embeddings_extraction.extract_embeddings_from_text` | 3.11 | 2.10 | transformers>=4.40,<5.0,sentence-transformers>=5.1 | false |
-| `text.tasks.embeddings_extraction.extract_embeddings_from_text` | 3.12 | 2.8 | transformers>=4.40,<5.0,sentence-transformers>=5.1 | false |
-| `text.tasks.embeddings_extraction.extract_embeddings_from_text` | 3.12 | 2.10 | transformers>=4.40,<5.0,sentence-transformers>=5.1 | false |
-| `text.tasks.embeddings_extraction.extract_embeddings_from_text` | 3.13 | 2.8 | transformers>=4.40,<5.0,sentence-transformers>=5.1 | false |
-| `text.tasks.embeddings_extraction.extract_embeddings_from_text` | 3.13 | 2.10 | transformers>=4.40,<5.0,sentence-transformers>=5.1 | false |
-| `text.tasks.embeddings_extraction.extract_embeddings_from_text` | 3.14 | 2.8 | transformers>=4.40,<5.0,sentence-transformers>=5.1 | false |
-| `text.tasks.embeddings_extraction.extract_embeddings_from_text` | 3.14 | 2.10 | transformers>=4.40,<5.0,sentence-transformers>=5.1 | false |
-| `audio.tasks.data_augmentation.augment_audios` | 3.11 | 2.8 | audiomentations>=0.42,torch-audiomentations>=0.12 | false |
-| `audio.tasks.data_augmentation.augment_audios` | 3.11 | 2.10 | audiomentations>=0.42,torch-audiomentations>=0.12 | false |
-| `audio.tasks.data_augmentation.augment_audios` | 3.12 | 2.8 | audiomentations>=0.42,torch-audiomentations>=0.12 | false |
-| `audio.tasks.data_augmentation.augment_audios` | 3.12 | 2.10 | audiomentations>=0.42,torch-audiomentations>=0.12 | false |
-| `audio.tasks.data_augmentation.augment_audios` | 3.13 | 2.8 | audiomentations>=0.42,torch-audiomentations>=0.12 | false |
-| `audio.tasks.data_augmentation.augment_audios` | 3.13 | 2.10 | audiomentations>=0.42,torch-audiomentations>=0.12 | false |
-| `audio.tasks.data_augmentation.augment_audios` | 3.14 | 2.8 | audiomentations>=0.42,torch-audiomentations>=0.12 | false |
-| `audio.tasks.data_augmentation.augment_audios` | 3.14 | 2.10 | audiomentations>=0.42,torch-audiomentations>=0.12 | false |
-| `audio.tasks.ssl_embeddings.extract_ssl_embeddings_from_audios` | 3.11 | 2.8 | transformers>=4.40,<5.0 | false |
-| `audio.tasks.ssl_embeddings.extract_ssl_embeddings_from_audios` | 3.11 | 2.10 | transformers>=4.40,<5.0 | false |
-| `audio.tasks.ssl_embeddings.extract_ssl_embeddings_from_audios` | 3.12 | 2.8 | transformers>=4.40,<5.0 | false |
-| `audio.tasks.ssl_embeddings.extract_ssl_embeddings_from_audios` | 3.12 | 2.10 | transformers>=4.40,<5.0 | false |
-| `audio.tasks.ssl_embeddings.extract_ssl_embeddings_from_audios` | 3.13 | 2.8 | transformers>=4.40,<5.0 | false |
-| `audio.tasks.ssl_embeddings.extract_ssl_embeddings_from_audios` | 3.13 | 2.10 | transformers>=4.40,<5.0 | false |
-| `audio.tasks.ssl_embeddings.extract_ssl_embeddings_from_audios` | 3.14 | 2.8 | transformers>=4.40,<5.0 | false |
-| `audio.tasks.ssl_embeddings.extract_ssl_embeddings_from_audios` | 3.14 | 2.10 | transformers>=4.40,<5.0 | false |
-| `audio.tasks.voice_activity_detection.detect_human_voice_activity_in_audios` | 3.11 | 2.8 | pyannote-audio>=3.0,<5.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.voice_activity_detection.detect_human_voice_activity_in_audios` | 3.11 | 2.10 | pyannote-audio>=3.0,<5.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.voice_activity_detection.detect_human_voice_activity_in_audios` | 3.12 | 2.8 | pyannote-audio>=3.0,<5.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.voice_activity_detection.detect_human_voice_activity_in_audios` | 3.12 | 2.10 | pyannote-audio>=3.0,<5.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.voice_activity_detection.detect_human_voice_activity_in_audios` | 3.13 | 2.8 | pyannote-audio>=3.0,<5.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.voice_activity_detection.detect_human_voice_activity_in_audios` | 3.13 | 2.10 | pyannote-audio>=3.0,<5.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.voice_activity_detection.detect_human_voice_activity_in_audios` | 3.14 | 2.8 | pyannote-audio>=3.0,<5.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.voice_activity_detection.detect_human_voice_activity_in_audios` | 3.14 | 2.10 | pyannote-audio>=3.0,<5.0,torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.classification.classify_emotions_from_speech` | 3.11 | 2.8 | transformers>=4.40,<5.0 | false |
-| `audio.tasks.classification.classify_emotions_from_speech` | 3.11 | 2.10 | transformers>=4.40,<5.0 | false |
-| `audio.tasks.classification.classify_emotions_from_speech` | 3.12 | 2.8 | transformers>=4.40,<5.0 | false |
-| `audio.tasks.classification.classify_emotions_from_speech` | 3.12 | 2.10 | transformers>=4.40,<5.0 | false |
-| `audio.tasks.classification.classify_emotions_from_speech` | 3.13 | 2.8 | transformers>=4.40,<5.0 | false |
-| `audio.tasks.classification.classify_emotions_from_speech` | 3.13 | 2.10 | transformers>=4.40,<5.0 | false |
-| `audio.tasks.classification.classify_emotions_from_speech` | 3.14 | 2.8 | transformers>=4.40,<5.0 | false |
-| `audio.tasks.classification.classify_emotions_from_speech` | 3.14 | 2.10 | transformers>=4.40,<5.0 | false |
-| `audio.tasks.features_extraction.extract_features_from_audios` | 3.11 | 2.8 | torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.features_extraction.extract_features_from_audios` | 3.11 | 2.10 | torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.features_extraction.extract_features_from_audios` | 3.12 | 2.8 | torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.features_extraction.extract_features_from_audios` | 3.12 | 2.10 | torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.features_extraction.extract_features_from_audios` | 3.13 | 2.8 | torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.features_extraction.extract_features_from_audios` | 3.13 | 2.10 | torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.features_extraction.extract_features_from_audios` | 3.14 | 2.8 | torchaudio>=2.8,<3.0 | false |
-| `audio.tasks.features_extraction.extract_features_from_audios` | 3.14 | 2.10 | torchaudio>=2.8,<3.0 | false |
-| `video.tasks.pose_estimation.estimate_pose` | 3.11 | 2.8 | ultralytics>=8.0,<9.0,opencv-python-headless>=4.8,<5.0 | false |
-| `video.tasks.pose_estimation.estimate_pose` | 3.11 | 2.10 | ultralytics>=8.0,<9.0,opencv-python-headless>=4.8,<5.0 | false |
-| `video.tasks.pose_estimation.estimate_pose` | 3.12 | 2.8 | ultralytics>=8.0,<9.0,opencv-python-headless>=4.8,<5.0 | false |
-| `video.tasks.pose_estimation.estimate_pose` | 3.12 | 2.10 | ultralytics>=8.0,<9.0,opencv-python-headless>=4.8,<5.0 | false |
-| `video.tasks.pose_estimation.estimate_pose` | 3.13 | 2.8 | ultralytics>=8.0,<9.0,opencv-python-headless>=4.8,<5.0 | false |
-| `video.tasks.pose_estimation.estimate_pose` | 3.13 | 2.10 | ultralytics>=8.0,<9.0,opencv-python-headless>=4.8,<5.0 | false |
-| `video.tasks.pose_estimation.estimate_pose` | 3.14 | 2.8 | ultralytics>=8.0,<9.0,opencv-python-headless>=4.8,<5.0 | false |
-| `video.tasks.pose_estimation.estimate_pose` | 3.14 | 2.10 | ultralytics>=8.0,<9.0,opencv-python-headless>=4.8,<5.0 | false |
+| Python | Status | Notes |
+|--------|--------|-------|
+| 3.11 | Supported | Lowest supported; all lower bounds verified |
+| 3.12 | Supported (default) | Google Colab default |
+| 3.13 | Supported | praat-parselmouth needs >=0.4.5 |
+| 3.14 | Supported | torch needs >=2.9; praat-parselmouth needs >=0.4.7 |
+
+## Core Dependencies
+
+| Package | pyproject.toml | Py 3.11 min | Py 3.12 min | Py 3.13 min | Py 3.14 min | Tested upper |
+|---------|---------------|-------------|-------------|-------------|-------------|-------------|
+| torch | >=2.8 | 2.8.0 | 2.8.0 | 2.8.0 | 2.9.0 | 2.11.0 |
+| torchaudio | >=2.8 | 2.8.0 | 2.8.0 | 2.8.0 | 2.9.0 | 2.11.0 |
+| torchvision | >=0.23 | 0.23.0 | 0.23.0 | 0.23.0 | 0.24.0 | 0.26.0 |
+| torchcodec | >=0.7 | 0.7.0 | 0.7.0 | 0.7.0 | 0.9.0 | 0.11.1 |
+| transformers | >=5.0 | 5.0.0 | 5.0.0 | 5.0.0 | 5.0.0 | 5.5.4 |
+| huggingface-hub | >=1.3 | 1.3.0 | 1.3.0 | 1.3.0 | 1.3.0 | 1.11.0 |
+| speechbrain | >=1.0 | 1.0.0 | 1.0.0 | 1.0.0 | 1.0.0 | 1.1.0 |
+| pyannote-audio | >=4.0 | 4.0.0 | 4.0.0 | 4.0.0 | 4.0.0 | 4.0.4 |
+| pydantic | >=2.11 | 2.11.0 | 2.11.0 | 2.11.0 | 2.11.0 | 2.13.3 |
+| scikit-learn | >=1.7 | 1.7.0 | 1.7.0 | 1.7.0 | 1.7.0 | 1.8.0 |
+| praat-parselmouth | >=0.4.3 | 0.4.3 | 0.4.3 | 0.4.5 | 0.4.7 | 0.4.7 |
+| opensmile | >=2.6 | 2.6.0 | 2.6.0 | 2.6.0 | 2.6.0 | 2.6.0 |
+| umap-learn | >=0.5.4 | 0.5.4 | 0.5.4 | 0.5.4 | 0.5.4 | 0.5.12 |
+| audiomentations | >=0.42 | 0.42.0 | 0.42.0 | 0.42.0 | 0.42.0 | 0.43.1 |
+| vocos | >=0.1 | 0.1.0 | 0.1.0 | 0.1.0 | 0.1.0 | 0.1.0 |
+
+## Optional Dependencies (extras)
+
+| Package | Extra | pyproject.toml | Tested |
+|---------|-------|---------------|--------|
+| sentence-transformers | text | >=5.1 | 5.4.1 |
+| pylangacq | text | >=0.20 | 0.23.0 |
+| jiwer | nlp | >=3.0 | 4.0.0 |
+| nltk | nlp | >=3.9 | 3.9.4 |
+| av | video | >=15 | 17.0.1 |
+| opencv-python-headless | video | >=4.11 | 4.13.0 |
+| ultralytics | video | >=8.3 | 8.4.40 |
+
+## Isolated Backends (subprocess venvs)
+
+These packages run in their own isolated virtual environments managed by uv.
+They are not installed in the main senselab environment.
+
+| Backend | Venv Python | torch | Key deps | Purpose |
+|---------|-------------|-------|----------|---------|
+| coqui-tts ~0.27 | 3.11 | >=2.8,<2.9 | transformers >=4.52,<5 | Voice cloning (knnvc) |
+| ppgs >=0.0.9 | 3.11 | >=2.8,<2.9 | espnet, snorkel, lightning | Phonetic posteriorgrams |
+| sparc >=0.1 | 3.11 | >=2.8,<2.9 | librosa, torchcrepe, penn | Articulatory features + voice cloning |
+| continuous-ser | 3.12 | >=2.8 | transformers <5, hf-hub <1.0 | Continuous emotion (audeering model) |
+
+## System Dependencies
+
+| Dependency | Required by | Install method |
+|-----------|-------------|----------------|
+| FFmpeg shared libs (<=7) | torchcodec | `bash scripts/install-ffmpeg.sh` (miniforge/conda-forge) |
+| libsndfile | soundfile | Usually bundled with soundfile pip package |
+
+## Notes
+
+- Python 3.14 requires torch >=2.9 (2.8.x doesn't have 3.14 wheels)
+- praat-parselmouth minimum varies by Python (build toolchain compatibility)
+- torchcodec requires FFmpeg shared libraries at runtime (not just the CLI binary)
+- On macOS, homebrew FFmpeg 8 is incompatible with torchcodec; use `scripts/install-ffmpeg.sh`
+- torchaudio.info() removed in 2.11; senselab uses soundfile.info() as fallback

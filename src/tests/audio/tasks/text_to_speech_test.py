@@ -36,10 +36,10 @@ def coqui_tts_model() -> CoquiTTSModel:
     return CoquiTTSModel(path_or_uri="tts_models/multilingual/multi-dataset/xtts_v2", revision="main")
 
 
-def test_synthesize_texts_with_mms_tts(hf_model2: HFModel, any_device: DeviceType) -> None:
+def test_synthesize_texts_with_mms_tts(hf_model2: HFModel, cpu_cuda_device: DeviceType) -> None:
     """Test synthesizing texts with mms-tts-eng (Tier 1)."""
     texts = ["Hello world", "Hello world again."]
-    audios = synthesize_texts(texts=texts, model=hf_model2, device=any_device)
+    audios = synthesize_texts(texts=texts, model=hf_model2, device=cpu_cuda_device)
 
     assert len(audios) == 2
     assert isinstance(audios[0], Audio)
@@ -72,10 +72,10 @@ def test_synthesize_texts_with_coqui_model(coqui_tts_model: CoquiTTSModel, gpu_d
     assert audios[0].sampling_rate > 0
 
 
-def test_huggingface_tts_pipeline_factory(hf_model: HFModel, any_device: DeviceType) -> None:
+def test_huggingface_tts_pipeline_factory(hf_model: HFModel, cpu_cuda_device: DeviceType) -> None:
     """Test Hugging Face TTS pipeline factory."""
-    pipeline1 = HuggingFaceTTS._get_hf_tts_pipeline(model=hf_model, device=any_device)
-    pipeline2 = HuggingFaceTTS._get_hf_tts_pipeline(model=hf_model, device=any_device)
+    pipeline1 = HuggingFaceTTS._get_hf_tts_pipeline(model=hf_model, device=cpu_cuda_device)
+    pipeline2 = HuggingFaceTTS._get_hf_tts_pipeline(model=hf_model, device=cpu_cuda_device)
 
     assert pipeline1 is pipeline2  # Check if the same instance is returned
 
