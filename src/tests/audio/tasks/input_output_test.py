@@ -37,9 +37,10 @@ def test_read_audios_torchaudio_not_installed() -> None:
         ([MONO_AUDIO_PATH, STEREO_AUDIO_PATH]),  # Test multiple files
     ],
 )
-@patch("torchaudio.load")  # Mock torchaudio.load
+@patch("senselab.audio.data_structures.audio.TORCHCODEC_AVAILABLE", False)
+@patch("torchaudio.load")
 def test_read_audio_lazy_loading(mock_torchaudio_load: MagicMock, audio_paths: List[str | os.PathLike]) -> None:
-    """Test lazy audio loading by mocking torchaudio.load."""
+    """Test lazy audio loading by mocking torchaudio.load (forces torchaudio path)."""
     # Mock `torchaudio.load` to return a fake waveform tensor and sample rate
     fake_waveform = torch.tensor([[1.0, 2.0, 3.0, 4.0]])
     fake_sample_rate = 48000
