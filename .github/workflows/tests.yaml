@@ -217,29 +217,16 @@ jobs:
           sudo chown $(whoami) /scratch
         fi
         mkdir -p "$UV_CACHE_DIR" "$HF_HOME" "$TORCH_HOME"
-    - name: Install tools (uv, miniforge, FFmpeg)
+    - name: Install uv
       run: |
-        set -euxo pipefail
-        # Install uv if not present
         if ! command -v uv &>/dev/null; then
           curl -LsSf https://astral.sh/uv/install.sh | sh
         fi
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
         uv --version
-
-        # Install miniforge + FFmpeg shared libs for torchcodec
-        CONDA_PREFIX=/opt/miniforge
-        if ! command -v "${CONDA_PREFIX}/bin/conda" &>/dev/null; then
-          curl -fsSL https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh \
-            -o /tmp/miniforge.sh
-          bash /tmp/miniforge.sh -b -p "${CONDA_PREFIX}"
-          rm /tmp/miniforge.sh
-        fi
-        # torchcodec 0.7 needs FFmpeg <= 7 (libavutil.so.59 or earlier)
-        "${CONDA_PREFIX}/bin/conda" install -y -p "${CONDA_PREFIX}" 'ffmpeg<8'
-        echo "${CONDA_PREFIX}/lib" | sudo tee /etc/ld.so.conf.d/miniforge.conf
-        sudo ldconfig
-        ldconfig -p | grep libavutil
+    - name: Install FFmpeg shared libraries
+      run: |
+        bash scripts/install-ffmpeg.sh
     - name: Set up environment (Python ${{ matrix.python-version }})
       run: |
         set -euxo pipefail

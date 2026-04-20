@@ -34,29 +34,22 @@ def test_read_audios_torchaudio_not_installed() -> None:
     [
         ([MONO_AUDIO_PATH]),
         ([STEREO_AUDIO_PATH]),
-        ([MONO_AUDIO_PATH, STEREO_AUDIO_PATH]),  # Test multiple files
+        ([MONO_AUDIO_PATH, STEREO_AUDIO_PATH]),
     ],
 )
-@patch("senselab.audio.data_structures.audio.TORCHCODEC_AVAILABLE", False)
-@patch("torchaudio.load")
-def test_read_audio_lazy_loading(mock_torchaudio_load: MagicMock, audio_paths: List[str | os.PathLike]) -> None:
-    """Test lazy audio loading by mocking torchaudio.load (forces torchaudio path)."""
-    # Mock `torchaudio.load` to return a fake waveform tensor and sample rate
-    fake_waveform = torch.tensor([[1.0, 2.0, 3.0, 4.0]])
-    fake_sample_rate = 48000
-    mock_torchaudio_load.return_value = (fake_waveform, fake_sample_rate)
-
-    # audio_paths = [MONO_AUDIO_PATH, STEREO_AUDIO_PATH]
-
+def test_read_audio_lazy_loading(audio_paths: List[str | os.PathLike]) -> None:
+    """Test lazy audio loading — waveforms not loaded until accessed."""
     processed_audios = read_audios(audio_paths)
-    mock_torchaudio_load.assert_not_called()
 
-    for idx, processed_audio in enumerate(processed_audios):
-        _ = processed_audio.waveform
-        mock_torchaudio_load.assert_called_with(audio_paths[idx], frame_offset=0, num_frames=-1, backend=None)
-
-        _ = processed_audio.waveform
-        assert mock_torchaudio_load.call_count == (idx + 1)
+    for processed_audio in processed_audios:
+        # Waveform should not be loaded yet (lazy)
+        assert processed_audio._waveform is None
+        # Accessing waveform triggers load
+        waveform = processed_audio.waveform
+        assert waveform is not None
+        assert waveform.shape[0] > 0
+        # Second access returns cached
+        assert processed_audio.waveform is waveform
 
 
 @pytest.mark.parametrize(
