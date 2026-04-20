@@ -67,7 +67,7 @@ for i, audio_path in enumerate(audio_paths):
         posteriorgram = torch.tensor(float("nan"))
 
     out_path = str(Path(output_dir) / f"ppg_{i}.npy")
-    np.save(out_path, posteriorgram.numpy())
+    np.save(out_path, posteriorgram.float().numpy())
     output_paths.append(out_path)
 
 print(json.dumps({"output_paths": output_paths}))
