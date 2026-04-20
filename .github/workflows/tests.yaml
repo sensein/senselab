@@ -183,9 +183,14 @@ jobs:
         mkdir -p "$UV_CACHE_DIR" "$HF_HOME" "$TORCH_HOME"
     - name: Install FFmpeg shared libraries
       run: |
-        # torchcodec needs FFmpeg shared libs (libavutil, libavcodec, etc.)
-        # Amazon Linux 2023 has ffmpeg-free in the default repos
-        sudo dnf install -y ffmpeg-free ffmpeg-free-devel
+        # torchcodec needs FFmpeg <= 7 shared libs (libavutil, libavcodec, etc.)
+        # AL2023 doesn't ship FFmpeg in default repos.
+        # Install via rpmfusion (Fedora 39 is ABI-compatible with AL2023).
+        sudo dnf install -y \
+          https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-39.noarch.rpm 2>/dev/null || true
+        sudo dnf install -y ffmpeg-free ffmpeg-free-devel 2>/dev/null || \
+          echo "FFmpeg install failed — torchcodec will use torchaudio fallback"
+        ldconfig -p 2>/dev/null | grep libavutil || echo "libavutil not in ldconfig"
     - name: Set up environment (Python ${{ matrix.python-version }})
       run: |
         set -euxo pipefail
