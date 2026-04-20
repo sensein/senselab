@@ -230,9 +230,9 @@ jobs:
         set -euxo pipefail
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
         uv sync --python ${{ matrix.python-version }} --all-extras --group dev
-        # torchcodec needs libpython on LD_LIBRARY_PATH — resolve() follows
-        # the venv symlink to the real uv-managed Python install
-        PYTHON_LIB_DIR=$(uv run python -c "import pathlib, sys; print(pathlib.Path(sys.executable).resolve().parent.parent / 'lib')")
+        # torchcodec needs libpython on LD_LIBRARY_PATH.
+        # Search uv-managed Python, system lib dirs for libpython.
+        PYTHON_LIB_DIR=$(uv run python -c "import pathlib,sys;v=f'{sys.version_info.major}.{sys.version_info.minor}';exe=pathlib.Path(sys.executable).resolve();candidates=[exe.parent.parent/'lib',pathlib.Path('/usr/lib/x86_64-linux-gnu'),pathlib.Path('/usr/lib64'),pathlib.Path('/usr/local/lib')];print(next((str(d) for d in candidates if list(d.glob(f'libpython{v}*'))),str(exe.parent.parent/'lib')))")
         echo "PYTHON_LIB_DIR=${PYTHON_LIB_DIR}" >> $GITHUB_ENV
     - name: Verify GPU access
       env:
