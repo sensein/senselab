@@ -194,7 +194,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.11', '3.12']
+        python-version: ['3.11', '3.12', '3.13', '3.14']
     env:
       EC2_USER_HOME: /home/ec2-user
       UV_CACHE_DIR: /scratch/uv-cache

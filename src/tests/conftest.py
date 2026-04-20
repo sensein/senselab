@@ -38,6 +38,8 @@ REQUIRED_DEPS = {
     "datasets": "datasets",
     "scikit-learn": "sklearn",
     "soundfile": "soundfile",
+    "torchcodec": "torchcodec",
+    "sentence-transformers": "sentence_transformers",
     "pylangacq": "pylangacq",
     # Extra: nlp
     "jiwer": "jiwer",
@@ -50,18 +52,7 @@ REQUIRED_DEPS = {
     # and are not checked here.
 }
 
-# torchcodec needs FFmpeg shared libs AND libpython as a shared library.
-# uv's python-build-standalone doesn't include libpython.so (static build),
-# so torchcodec's native extension fails to load on those environments.
-# We warn instead of aborting — torchaudio provides a fallback for all
-# audio I/O operations.  TODO: resolve once python-build-standalone ships
-# shared libs or torchcodec removes the libpython dependency.
-SOFT_DEPS = {
-    "torchcodec": "torchcodec",
-    # sentence-transformers >=5.4 imports torchcodec at module level,
-    # so it fails when torchcodec can't load FFmpeg libs.
-    "sentence-transformers": "sentence_transformers",
-}
+SOFT_DEPS: dict[str, str] = {}
 
 
 def pytest_configure(config: pytest.Config) -> None:
