@@ -63,10 +63,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-articulatory = [
-  # speech-articulatory-coding (sparc) runs in isolated subprocess venv.
-  # Kept as an extra for backward compatibility but not required in main env.
-]
 nlp = [
   "jiwer>=3.0",
   "nltk>=3.9"
