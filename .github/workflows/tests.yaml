@@ -181,13 +181,19 @@ jobs:
           sudo chown $(whoami) /scratch
         fi
         mkdir -p "$UV_CACHE_DIR" "$HF_HOME" "$TORCH_HOME"
+    - name: Install FFmpeg shared libraries
+      run: |
+        # torchcodec needs FFmpeg shared libs (libavutil, libavcodec, etc.)
+        # Amazon Linux 2023 has ffmpeg in the default repos
+        sudo dnf install -y ffmpeg-free ffmpeg-free-devel 2>/dev/null \
+          || echo "FFmpeg install failed (torchcodec will fall back to torchaudio)"
     - name: Set up environment (Python ${{ matrix.python-version }})
       run: |
         set -euxo pipefail
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
         uv --version
-        uv sync --python ${{ matrix.python-version }} --extra text --extra video --group dev
-        # Make ffmpeg available on PATH (non-fatal — some tests skip without it)
+        uv sync --python ${{ matrix.python-version }} --all-extras --group dev
+        # Make ffmpeg CLI available on PATH via imageio bundle (fallback)
         set +e
         FFMPEG_BIN=$(uv run python -c "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())" 2>/dev/null)
         if [ -n "$FFMPEG_BIN" ]; then
