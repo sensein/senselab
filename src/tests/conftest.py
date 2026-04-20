@@ -11,7 +11,6 @@ The only things NOT checked here are:
 """
 
 import importlib
-import warnings
 
 import pytest
 
@@ -21,6 +20,7 @@ REQUIRED_DEPS = {
     # Core dependencies
     "torch": "torch",
     "torchaudio": "torchaudio",
+    "torchcodec": "torchcodec",
     "torchvision": "torchvision",
     "transformers": "transformers",
     "speechbrain": "speechbrain",
@@ -48,13 +48,6 @@ REQUIRED_DEPS = {
     "speech-articulatory-coding": "articulatory_coding",
 }
 
-# Dependencies that need system libraries beyond pip install.
-# Failure is a warning (tests using them will skip/fail individually)
-# rather than aborting the entire session.
-SOFT_DEPS = {
-    "torchcodec": "torchcodec",  # needs FFmpeg <= 7 shared libs
-}
-
 
 def pytest_configure(config: pytest.Config) -> None:
     """Verify all dependencies are importable at session start."""
@@ -65,21 +58,6 @@ def pytest_configure(config: pytest.Config) -> None:
         except (ImportError, RuntimeError) as e:
             missing.append(f"  {name} ({module}): {e}")
 
-    soft_missing = []
-    for name, module in SOFT_DEPS.items():
-        try:
-            importlib.import_module(module)
-        except (ImportError, RuntimeError) as e:
-            soft_missing.append(f"  {name} ({module}): {e}")
-
-    if soft_missing:
-        warnings.warn(
-            "Optional system dependencies unavailable (tests needing them will fail individually):\n"
-            + "\n".join(soft_missing)
-            + "\n\nTo fix: install FFmpeg <= 7 system-wide (torchcodec needs libavutil shared libs).",
-            stacklevel=1,
-        )
-
     if missing:
         lines = [
             "\n\nDependencies failed to import — test environment is broken.\n",
@@ -87,9 +65,10 @@ def pytest_configure(config: pytest.Config) -> None:
             "\nHow to fix:",
             "  1. Install Python packages:  uv sync --all-extras --group dev",
             "  2. System dependencies:",
-            "     - FFmpeg <= 7 (required by torchcodec; macOS homebrew has FFmpeg 8",
-            "       which causes RPATH failures — use `brew install ffmpeg@7` or set",
-            "       DYLD_LIBRARY_PATH=/opt/homebrew/lib)",
+            "     - FFmpeg <= 7 shared libs (required by torchcodec).",
+            "       Linux: sudo dnf install ffmpeg-free ffmpeg-free-devel",
+            "       macOS: brew install ffmpeg@7 (homebrew FFmpeg 8 is incompatible;",
+            "              set DYLD_LIBRARY_PATH=/opt/homebrew/lib if needed)",
             "     - libsndfile (required by soundfile, usually bundled)",
             "",
         ]

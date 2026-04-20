@@ -184,9 +184,8 @@ jobs:
     - name: Install FFmpeg shared libraries
       run: |
         # torchcodec needs FFmpeg shared libs (libavutil, libavcodec, etc.)
-        # Amazon Linux 2023 has ffmpeg in the default repos
-        sudo dnf install -y ffmpeg-free ffmpeg-free-devel 2>/dev/null \
-          || echo "FFmpeg install failed (torchcodec will fall back to torchaudio)"
+        # Amazon Linux 2023 has ffmpeg-free in the default repos
+        sudo dnf install -y ffmpeg-free ffmpeg-free-devel
     - name: Set up environment (Python ${{ matrix.python-version }})
       run: |
         set -euxo pipefail
