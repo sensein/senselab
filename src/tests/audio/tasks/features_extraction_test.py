@@ -383,14 +383,13 @@ def test_extract_praat_parselmouth_features_from_audios(resampled_mono_audio_sam
     assert all(isinstance(features, dict) for features in result)
 
 
-@pytest.mark.skipif(PPGS_AVAILABLE, reason="ppgs is installed.")
+@pytest.mark.skip(reason="ppgs is now auto-provisioned via subprocess venv — no missing dep scenario")
 def test_missing_ppg_dependency() -> None:
-    """Test that a ModuleNotFoundError is raised when ppgs is not installed."""
-    with pytest.raises(ModuleNotFoundError):
-        extract_ppgs_from_audios([Audio(waveform=torch.rand(1, 16000), sampling_rate=16000)])
+    """Test is obsolete — ppgs runs in isolated subprocess venv."""
+    pass
 
 
-@pytest.mark.skipif(not PPGS_AVAILABLE, reason="ppgs is not installed.")
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="PPGs subprocess venv test requires GPU")
 def test_extract_ppgs_from_audios(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of ppgs from audio."""
     result = extract_ppgs_from_audios([resampled_mono_audio_sample])
@@ -442,8 +441,8 @@ def test_extract_sparc_features_wrong_sample_rate() -> None:
 
 
 @pytest.mark.skipif(
-    not (OPENSMILE_AVAILABLE and PARSELMOUTH_AVAILABLE and TORCHAUDIO_AVAILABLE and SPARC_AVAILABLE and PPGS_AVAILABLE),
-    reason="One or more required dependencies (openSMILE, Praat-Parselmouth, or torchaudio) are not installed.",
+    not (OPENSMILE_AVAILABLE and PARSELMOUTH_AVAILABLE and TORCHAUDIO_AVAILABLE and SPARC_AVAILABLE),
+    reason="One or more required dependencies (openSMILE, Praat-Parselmouth, torchaudio, or SPARC) are not installed.",
 )
 def test_extract_features_from_audios(resampled_mono_audio_sample: Audio) -> None:
     """Simple test for extract_features_from_audios.

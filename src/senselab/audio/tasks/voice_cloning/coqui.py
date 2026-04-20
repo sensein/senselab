@@ -5,18 +5,86 @@ Python <=3.11). It runs in an isolated subprocess venv managed by uv.
 Audio data is serialized as FLAC for efficient lossless transfer.
 """
 
+import json
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import CoquiTTSModel, DeviceType
-from senselab.utils.subprocess_venv import call_in_venv
+from senselab.utils.subprocess_venv import ensure_venv
 
 # Coqui venv specification
 _COQUI_VENV = "coqui"
-_COQUI_REQUIREMENTS = ["coqui-tts~=0.27", "torch~=2.8", "torchaudio~=2.8"]
+_COQUI_REQUIREMENTS = ["coqui-tts~=0.27", "torch~=2.8", "torchaudio~=2.8", "numpy", "soundfile"]
 _COQUI_PYTHON = "3.11"
+
+# Worker script — runs inside the isolated venv (no senselab imports)
+_WORKER_SCRIPT = r"""
+import json
+import sys
+from pathlib import Path
+
+import soundfile as sf
+import torch
+from TTS.api import TTS
+
+args = json.loads(sys.stdin.read())
+source_paths = args["source_paths"]
+target_paths = args["target_paths"]
+model_id = args["model_id"]
+device = args["device"]
+output_dir = args["output_dir"]
+
+tts = TTS(model_id).to(device=device)
+audio_config = tts.voice_converter.vc_config.audio
+
+expected_sample_rate = (
+    audio_config.input_sample_rate
+    if hasattr(audio_config, "input_sample_rate")
+    else getattr(audio_config, "sample_rate", None)
+)
+output_sample_rate = (
+    audio_config.output_sample_rate
+    if hasattr(audio_config, "output_sample_rate")
+    else getattr(audio_config, "sample_rate", expected_sample_rate)
+)
+
+output_paths = []
+for i, (src_path, tgt_path) in enumerate(zip(source_paths, target_paths)):
+    src_data, src_sr = sf.read(src_path, dtype="float32")
+    tgt_data, tgt_sr = sf.read(tgt_path, dtype="float32")
+    src_wav = torch.from_numpy(src_data).unsqueeze(0) if src_data.ndim == 1 else torch.from_numpy(src_data.T)
+    tgt_wav = torch.from_numpy(tgt_data).unsqueeze(0) if tgt_data.ndim == 1 else torch.from_numpy(tgt_data.T)
+
+    if expected_sample_rate is not None:
+        if src_sr != expected_sample_rate:
+            raise ValueError(
+                f"[Pair {i}] Source sample rate {src_sr} != model expected {expected_sample_rate}"
+            )
+        if tgt_sr != expected_sample_rate:
+            raise ValueError(
+                f"[Pair {i}] Target sample rate {tgt_sr} != model expected {expected_sample_rate}"
+            )
+
+    converted = tts.voice_conversion(
+        source_wav=src_wav.squeeze(),
+        target_wav=tgt_wav.squeeze(),
+    )
+
+    if not isinstance(converted, torch.Tensor):
+        converted = torch.tensor(converted)
+    if converted.dim() == 1:
+        converted = converted.unsqueeze(0)
+
+    sr = output_sample_rate or src_sr
+    out_path = str(Path(output_dir) / f"cloned_{i}.flac")
+    sf.write(out_path, converted.squeeze().cpu().numpy(), sr, format="FLAC")
+    output_paths.append(out_path)
+
+print(json.dumps({"output_paths": output_paths}))
+"""
 
 
 class CoquiVoiceCloner:
@@ -48,6 +116,9 @@ class CoquiVoiceCloner:
         if len(source_audios) != len(target_audios):
             raise ValueError("Number of source and target audios must be the same.")
 
+        venv_dir = ensure_venv(_COQUI_VENV, _COQUI_REQUIREMENTS, python_version=_COQUI_PYTHON)
+        python = str(venv_dir / "bin" / "python")
+
         with tempfile.TemporaryDirectory(prefix="senselab-coqui-") as tmpdir:
             tmp = Path(tmpdir)
 
@@ -65,27 +136,34 @@ class CoquiVoiceCloner:
                 source_paths.append(src_path)
                 target_paths.append(tgt_path)
 
-            # Call coqui in isolated venv
-            result = call_in_venv(
-                name=_COQUI_VENV,
-                requirements=_COQUI_REQUIREMENTS,
-                module="senselab.audio.tasks.voice_cloning._coqui_worker",
-                function="run_voice_cloning",
-                args={
+            # Run worker in isolated venv
+            input_json = json.dumps(
+                {
                     "source_paths": source_paths,
                     "target_paths": target_paths,
                     "model_id": str(model.path_or_uri),
                     "device": device.value if device else "cpu",
                     "output_dir": str(tmp),
-                },
-                python_version=_COQUI_PYTHON,
+                }
+            )
+
+            result = subprocess.run(
+                [python, "-c", _WORKER_SCRIPT],
+                input=input_json,
+                capture_output=True,
+                text=True,
                 timeout=600,
             )
 
+            if result.returncode != 0:
+                raise RuntimeError(f"Coqui venv failed:\n{result.stderr}")
+
+            # Parse last line only — libraries may print to stdout during init
+            output = json.loads(result.stdout.strip().splitlines()[-1])
+
             # Load results
             cloned_audios = []
-            output_paths = result.get("output_paths", []) if isinstance(result, dict) else []
-            for out_path in output_paths:
+            for out_path in output.get("output_paths", []):
                 cloned_audios.append(Audio(filepath=out_path))
 
             return cloned_audios

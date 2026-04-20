@@ -181,4 +181,3 @@ fresh on each run via `uv sync`. Rebuild the AMI only when:
 - System packages (jq, git, ffmpeg) need updating
 
 To rebuild, repeat steps 1-4 above with a newer base AMI.
-# EC2 GPU smoke test - Sat Apr 18 20:44:59 EDT 2026
