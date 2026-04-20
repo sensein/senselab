@@ -211,16 +211,7 @@ jobs:
         uv sync --python ${{ matrix.python-version }} --all-extras --group dev
         # torchcodec needs libpython on LD_LIBRARY_PATH (uv's Python has it
         # in the managed install dir, not in a standard location)
-        PYTHON_LIB_DIR=$(uv run python -c "
-import sysconfig, pathlib, sys
-# Check LIBDIR first, then search near the Python binary
-libdir = sysconfig.get_config_var('LIBDIR')
-if pathlib.Path(libdir).glob('libpython*.so*'):
-    print(libdir)
-else:
-    # uv-managed Python: libs are next to the binary
-    print(str(pathlib.Path(sys.executable).parent.parent / 'lib'))
-")
+        PYTHON_LIB_DIR=$(uv run python -c "import sysconfig, pathlib, sys; libdir = sysconfig.get_config_var('LIBDIR'); print(libdir if list(pathlib.Path(libdir).glob('libpython*.so*')) else str(pathlib.Path(sys.executable).parent.parent / 'lib'))")
         echo "PYTHON_LIB_DIR=${PYTHON_LIB_DIR}" >> $GITHUB_ENV
     - name: Verify GPU access
       env:
