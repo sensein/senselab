@@ -100,7 +100,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.12']
+        python-version: ['3.11', '3.12', '3.13', '3.14']
     steps:
     - uses: actions/checkout@v5
       with:
@@ -112,9 +112,7 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
     - name: Install FFmpeg shared libraries
-      run: |
-        sudo apt-get update -qq
-        sudo apt-get install -y -qq ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswresample-dev
+      run: bash scripts/install-ffmpeg.sh
     - name: Install dependencies with uv
       run: uv sync --all-extras --group dev
     - name: Run CPU tests
