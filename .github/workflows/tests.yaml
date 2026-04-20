@@ -209,7 +209,14 @@ jobs:
         set -euxo pipefail
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
         uv sync --python ${{ matrix.python-version }} --all-extras --group dev
+        # Find Python shared lib dir and export for torchcodec
+        PYTHON_LIB_DIR=$(uv run python -c "import sysconfig; print(sysconfig.get_config_var('LIBDIR'))")
+        echo "PYTHON_LIB_DIR=${PYTHON_LIB_DIR}" >> $GITHUB_ENV
+      env:
+        LD_LIBRARY_PATH: /opt/miniforge/lib
     - name: Verify GPU access
+      env:
+        LD_LIBRARY_PATH: /opt/miniforge/lib:${{ env.PYTHON_LIB_DIR }}
       run: |
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
         nvidia-smi
@@ -227,6 +234,7 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        LD_LIBRARY_PATH: /opt/miniforge/lib:${{ env.PYTHON_LIB_DIR }}
       run: |
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
         uv run pytest src/tests \
