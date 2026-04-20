@@ -87,6 +87,21 @@ print(json.dumps({"output_paths": output_paths}))
 """
 
 
+def list_coqui_models() -> list:
+    """List available Coqui TTS models via the isolated subprocess venv."""
+    venv_dir = ensure_venv(_COQUI_VENV, _COQUI_REQUIREMENTS, python_version=_COQUI_PYTHON)
+    python = str(venv_dir / "bin" / "python")
+    result = subprocess.run(
+        [python, "-c", "from TTS.api import TTS; import json; print(json.dumps(list(TTS().list_models())))"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to list Coqui models:\n{result.stderr}")
+    return json.loads(result.stdout.strip().splitlines()[-1])
+
+
 class CoquiVoiceCloner:
     """Voice cloning via Coqui TTS in an isolated subprocess venv."""
 

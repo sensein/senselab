@@ -7,14 +7,7 @@ from senselab.audio.tasks.voice_cloning import clone_voices
 from senselab.utils.data_structures import CoquiTTSModel, DeviceType
 
 try:
-    from TTS.api import TTS
-
-    TTS_AVAILABLE = True
-except ModuleNotFoundError:
-    TTS_AVAILABLE = False
-
-try:
-    from sparc import SPARC
+    from sparc import SPARC  # noqa: F401
 
     SPARC_AVAILABLE = True
 except ModuleNotFoundError:
@@ -27,13 +20,6 @@ def vc_model() -> CoquiTTSModel:
     return CoquiTTSModel(path_or_uri="voice_conversion_models/multilingual/multi-dataset/knnvc")
 
 
-@pytest.mark.skipif(TTS_AVAILABLE, reason="TTS is available")
-def test_clone_voices_tts_not_available() -> None:
-    """Test when TTS is not available."""
-    with pytest.raises(ModuleNotFoundError):
-        CoquiTTSModel(path_or_uri="voice_conversion_models/multilingual/multi-dataset/knnvc")
-
-
 @pytest.mark.skipif(SPARC_AVAILABLE, reason="SPARC is available")
 def test_clone_voices_sparc_not_available(any_device: DeviceType) -> None:
     """Test when SPARC is not available."""
@@ -41,7 +27,6 @@ def test_clone_voices_sparc_not_available(any_device: DeviceType) -> None:
         clone_voices(source_audios=[], target_audios=[], model=None, device=any_device)
 
 
-@pytest.mark.skipif(not TTS_AVAILABLE, reason="TTS is not available")
 def test_clone_voices_length_mismatch(
     resampled_mono_audio_sample: Audio, vc_model: CoquiTTSModel, gpu_device: DeviceType
 ) -> None:
@@ -55,7 +40,7 @@ def test_clone_voices_length_mismatch(
 
 @pytest.mark.skipif(not SPARC_AVAILABLE, reason="SPARC is not available")
 def test_clone_voices_valid_input_sparc(resampled_mono_audio_sample: Audio, gpu_device: DeviceType) -> None:
-    """Test cloning voices with valid input."""
+    """Test cloning voices with valid input using SPARC."""
     source_audios = [resampled_mono_audio_sample, resampled_mono_audio_sample]
     target_audios = [resampled_mono_audio_sample, resampled_mono_audio_sample]
 
@@ -68,55 +53,39 @@ def test_clone_voices_valid_input_sparc(resampled_mono_audio_sample: Audio, gpu_
     source_duration = source_audios[0].waveform.shape[1]
     cloned_duration = cloned_output[0].waveform.shape[1]
 
-    # Set tolerance to 1% of source duration
     tolerance = 0.01 * source_duration
-
-    # Check if the absolute difference is within the tolerance
     assert abs(source_duration - cloned_duration) <= tolerance, (
         f"Cloned audio duration is not within acceptable range. Source: {source_duration}, Cloned: {cloned_duration}"
     )
 
 
-@pytest.mark.skipif(not TTS_AVAILABLE, reason="TTS is not available")
 def test_clone_voices_valid_input(resampled_mono_audio_sample: Audio, vc_model: CoquiTTSModel) -> None:
-    """Test cloning voices with valid input."""
+    """Test cloning voices with valid input via Coqui subprocess venv."""
     source_audios = [resampled_mono_audio_sample, resampled_mono_audio_sample]
     target_audios = [resampled_mono_audio_sample, resampled_mono_audio_sample]
 
-    try:
-        cloned_output = clone_voices(
-            source_audios=source_audios, target_audios=target_audios, model=vc_model, device=None
-        )
-        assert isinstance(cloned_output, list), "Output must be a list."
-        assert len(cloned_output) == 2, "Output list should contain exactly two audio samples."
-        assert isinstance(cloned_output[0], Audio), "Each item in the output list should be an instance of Audio."
-        source_duration = source_audios[0].waveform.shape[1]
-        cloned_duration = cloned_output[0].waveform.shape[1]
+    cloned_output = clone_voices(source_audios=source_audios, target_audios=target_audios, model=vc_model, device=None)
+    assert isinstance(cloned_output, list), "Output must be a list."
+    assert len(cloned_output) == 2, "Output list should contain exactly two audio samples."
+    assert isinstance(cloned_output[0], Audio), "Each item in the output list should be an instance of Audio."
+    source_duration = source_audios[0].waveform.shape[1]
+    cloned_duration = cloned_output[0].waveform.shape[1]
 
-        # Set tolerance to 1% of source duration
-        tolerance = 0.01 * source_duration
-
-        # Check if the absolute difference is within the tolerance
-        assert abs(source_duration - cloned_duration) <= tolerance, (
-            f"Cloned audio duration is not within acceptable range. Source: {source_duration}, "
-            f"Cloned: {cloned_duration}"
-        )
-    except Exception as e:
-        pytest.fail(f"An unexpected exception occurred: {e}")
+    tolerance = 0.01 * source_duration
+    assert abs(source_duration - cloned_duration) <= tolerance, (
+        f"Cloned audio duration is not within acceptable range. Source: {source_duration}, Cloned: {cloned_duration}"
+    )
 
 
-@pytest.mark.skipif(not TTS_AVAILABLE, reason="TTS is not available")
 def test_clone_voices_unsupported_model(resampled_mono_audio_sample: Audio) -> None:
     """Test unsupported model."""
     source_audios = [resampled_mono_audio_sample]
     target_audios = [resampled_mono_audio_sample]
-    # this uri doesn't exist
     with pytest.raises(ValueError, match="Model sensein/senselab not found. Available models:"):
         unsupported_model: CoquiTTSModel = CoquiTTSModel(path_or_uri="sensein/senselab")
         clone_voices(source_audios=source_audios, target_audios=target_audios, model=unsupported_model, device=None)
 
 
-@pytest.mark.skipif(not TTS_AVAILABLE, reason="TTS is not available")
 def test_clone_voices_stereo_audio(resampled_stereo_audio_sample: Audio, vc_model: CoquiTTSModel) -> None:
     """Test unsupported stereo audio."""
     source_audios = [resampled_stereo_audio_sample]
@@ -126,7 +95,6 @@ def test_clone_voices_stereo_audio(resampled_stereo_audio_sample: Audio, vc_mode
         clone_voices(source_audios=source_audios, target_audios=target_audios, model=vc_model, device=None)
 
 
-@pytest.mark.skipif(not TTS_AVAILABLE, reason="TTS is not available")
 def test_clone_voices_invalid_sampling_rate(mono_audio_sample: Audio, vc_model: CoquiTTSModel) -> None:
     """Test unsupported sampling rate."""
     source_audios = [mono_audio_sample]
