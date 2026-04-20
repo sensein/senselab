@@ -31,11 +31,11 @@ def pyannote_model() -> PyannoteAudioModel:
 
 
 def test_detect_human_voice_activity_in_audios(
-    resampled_mono_audio_sample: Audio, pyannote_model: PyannoteAudioModel, any_device: DeviceType
+    resampled_mono_audio_sample: Audio, pyannote_model: PyannoteAudioModel, cpu_cuda_device: DeviceType
 ) -> None:
     """Test detecting human voice activity in audios."""
     results = detect_human_voice_activity_in_audios(
-        audios=[resampled_mono_audio_sample], model=pyannote_model, device=any_device
+        audios=[resampled_mono_audio_sample], model=pyannote_model, device=cpu_cuda_device
     )
     assert len(results) == 1
     assert all(chunk.speaker == "VOICE" for chunk in results[0])

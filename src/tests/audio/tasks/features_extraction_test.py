@@ -387,6 +387,7 @@ def test_extract_sparc_features_wrong_sample_rate() -> None:
         SparcFeatureExtractor.extract_sparc_features([Audio(waveform=torch.rand(1, 44100), sampling_rate=44100)])
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="ppgs requires GPU (bfloat16)")
 def test_extract_features_from_audios(resampled_mono_audio_sample: Audio) -> None:
     """Simple test for extract_features_from_audios.
 

@@ -93,7 +93,7 @@ def hf_model2() -> HFModel:
     return HFModel(path_or_uri="facebook/seamless-m4t-unity-small")
 
 
-def test_hf_asr_pipeline_factory(hf_model: HFModel, any_device: DeviceType) -> None:
+def test_hf_asr_pipeline_factory(hf_model: HFModel, cpu_cuda_device: DeviceType) -> None:
     """Test ASR pipeline factory."""
     pipeline1 = HuggingFaceASR._get_hf_asr_pipeline(
         model=hf_model,
@@ -101,7 +101,7 @@ def test_hf_asr_pipeline_factory(hf_model: HFModel, any_device: DeviceType) -> N
         max_new_tokens=128,
         chunk_length_s=30,
         batch_size=1,
-        device=any_device,
+        device=cpu_cuda_device,
     )
     pipeline2 = HuggingFaceASR._get_hf_asr_pipeline(
         model=hf_model,
@@ -109,7 +109,7 @@ def test_hf_asr_pipeline_factory(hf_model: HFModel, any_device: DeviceType) -> N
         max_new_tokens=128,
         chunk_length_s=30,
         batch_size=1,
-        device=any_device,
+        device=cpu_cuda_device,
     )
     assert pipeline1 is pipeline2  # Check if the same instance is returned (this is the case for serial execution)
 
@@ -132,7 +132,7 @@ def test_transcribe_audios_with_params(
     resampled_mono_audio_sample: Audio,
     resampled_mono_audio_sample_x2: Audio,
     hf_model: HFModel,
-    any_device: DeviceType,
+    cpu_cuda_device: DeviceType,
 ) -> None:
     """Test transcribing audios."""
     transcripts = transcribe_audios(
@@ -140,7 +140,7 @@ def test_transcribe_audios_with_params(
         model=hf_model,
         language=Language(language_code="English"),
         return_timestamps=False,
-        device=any_device,
+        device=cpu_cuda_device,
     )
     assert len(transcripts) == 2
     assert isinstance(transcripts[0], ScriptLine)
@@ -152,31 +152,31 @@ def test_transcribe_audios_with_unsupported_params(
     resampled_mono_audio_sample: Audio,
     resampled_mono_audio_sample_x2: Audio,
     hf_model: HFModel,
-    any_device: DeviceType,
+    cpu_cuda_device: DeviceType,
 ) -> None:
     """Test transcribing audios with an unsupported param."""
     with pytest.raises(TypeError, match="got an unexpected keyword argument"):
         transcribe_audios(
             audios=[resampled_mono_audio_sample, resampled_mono_audio_sample_x2],
             model=hf_model,
-            device=any_device,
+            device=cpu_cuda_device,
             unsupported_param="unsupported_param",
         )
 
 
 def test_transcribe_stereo_audio(
-    resampled_stereo_audio_sample: Audio, hf_model: HFModel, any_device: DeviceType
+    resampled_stereo_audio_sample: Audio, hf_model: HFModel, cpu_cuda_device: DeviceType
 ) -> None:
     """Test transcribing stereo audio."""
     # Create a mock stereo audio sample
     with pytest.raises(ValueError, match="Stereo audio is not supported"):
-        transcribe_audios(audios=[resampled_stereo_audio_sample], model=hf_model, device=any_device)
+        transcribe_audios(audios=[resampled_stereo_audio_sample], model=hf_model, device=cpu_cuda_device)
 
 
 def test_transcribe_audio_with_wrong_sampling_rate(
-    mono_audio_sample: Audio, hf_model: HFModel, any_device: DeviceType
+    mono_audio_sample: Audio, hf_model: HFModel, cpu_cuda_device: DeviceType
 ) -> None:
     """Test transcribing stereo audio."""
     # Create a mock stereo audio sample
     with pytest.raises(ValueError, match="Incorrect sampling rate."):
-        transcribe_audios(audios=[mono_audio_sample], model=hf_model, device=any_device)
+        transcribe_audios(audios=[mono_audio_sample], model=hf_model, device=cpu_cuda_device)

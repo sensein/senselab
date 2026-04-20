@@ -11,13 +11,13 @@ from senselab.utils.data_structures import DeviceType, HFModel
 from tests.audio.conftest import MONO_AUDIO_PATH
 
 
-def test_speech_emotion_recognition_continuous(any_device: DeviceType) -> None:
+def test_speech_emotion_recognition_continuous(cpu_cuda_device: DeviceType) -> None:
     """Tests continuous speech emotion recognition (Tier 2: ~661MB model)."""
     audio_dataset = [Audio(filepath=MONO_AUDIO_PATH)]
     resampled = resample_audios(audio_dataset, 16000)
 
     result = classify_emotions_from_speech(
-        resampled, HFModel(path_or_uri="audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim"), device=any_device
+        resampled, HFModel(path_or_uri="audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim"), device=cpu_cuda_device
     )
     labels = result[0].get_labels()
 
