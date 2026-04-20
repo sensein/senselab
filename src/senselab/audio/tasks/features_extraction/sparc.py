@@ -70,7 +70,9 @@ for i, audio_path in enumerate(audio_paths):
             elif isinstance(val, np.ndarray):
                 result[key] = val.tolist()
             elif isinstance(val, tuple):
-                result[key] = list(val)
+                result[key] = [float(v) for v in val]
+            elif isinstance(val, (np.integer, np.floating)):
+                result[key] = val.item()
             else:
                 result[key] = val
     except Exception as e:

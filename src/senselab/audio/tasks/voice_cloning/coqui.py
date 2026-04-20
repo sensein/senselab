@@ -17,7 +17,14 @@ from senselab.utils.subprocess_venv import ensure_venv
 
 # Coqui venv specification
 _COQUI_VENV = "coqui"
-_COQUI_REQUIREMENTS = ["coqui-tts~=0.27", "torch~=2.8", "torchaudio~=2.8", "numpy", "soundfile"]
+_COQUI_REQUIREMENTS = [
+    "coqui-tts~=0.27",
+    "torch~=2.8",
+    "torchaudio~=2.8",
+    "transformers<4.52",  # coqui-tts 0.27 uses isin_mps_friendly removed in newer transformers
+    "numpy",
+    "soundfile",
+]
 _COQUI_PYTHON = "3.11"
 
 # Worker script — runs inside the isolated venv (no senselab imports)
