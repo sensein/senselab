@@ -35,10 +35,10 @@ def test_clone_voices_tts_not_available() -> None:
 
 
 @pytest.mark.skipif(SPARC_AVAILABLE, reason="SPARC is available")
-def test_clone_voices_sparc_not_available(gpu_device: DeviceType) -> None:
+def test_clone_voices_sparc_not_available(any_device: DeviceType) -> None:
     """Test when SPARC is not available."""
     with pytest.raises((ModuleNotFoundError, RuntimeError)):
-        clone_voices(source_audios=[], target_audios=[], model=None, device=gpu_device)
+        clone_voices(source_audios=[], target_audios=[], model=None, device=any_device)
 
 
 @pytest.mark.skipif(not TTS_AVAILABLE, reason="TTS is not available")

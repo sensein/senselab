@@ -12,8 +12,12 @@ The only things NOT checked here are:
 
 import importlib
 import warnings
+from typing import List
 
 import pytest
+import torch
+
+from senselab.utils.data_structures import DeviceType
 
 # All dependencies that must be importable in the test environment.
 # Grouped by pyproject.toml section for clarity.
@@ -101,3 +105,47 @@ def pytest_configure(config: pytest.Config) -> None:
             "",
         ]
         pytest.exit("\n".join(lines), returncode=1)
+
+
+# ---------------------------------------------------------------------------
+# Device parameterization fixtures (available to ALL tests)
+# ---------------------------------------------------------------------------
+def _available_devices() -> List[DeviceType]:
+    """Detect available compute devices."""
+    devices = [DeviceType.CPU]
+    if torch.cuda.is_available():
+        devices.append(DeviceType.CUDA)
+    if torch.backends.mps.is_available():
+        devices.append(DeviceType.MPS)
+    return devices
+
+
+def _gpu_devices() -> List[DeviceType]:
+    """Detect available GPU devices (MPS or CUDA)."""
+    return [d for d in _available_devices() if d != DeviceType.CPU]
+
+
+AVAILABLE_DEVICES = _available_devices()
+GPU_DEVICES = _gpu_devices()
+
+
+@pytest.fixture(params=AVAILABLE_DEVICES, ids=lambda d: f"device={d.value}")
+def any_device(request: pytest.FixtureRequest) -> DeviceType:
+    """Parameterize over all available devices (cpu, mps, cuda).
+
+    Use for Tier 1 and Tier 2 models that can run on any device.
+    """
+    return request.param
+
+
+@pytest.fixture(
+    params=GPU_DEVICES if GPU_DEVICES else [pytest.param("skip", marks=pytest.mark.skip("No GPU available"))],
+    ids=lambda d: f"device={d.value}" if isinstance(d, DeviceType) else "no-gpu",
+)
+def gpu_device(request: pytest.FixtureRequest) -> DeviceType:
+    """Parameterize over GPU-only devices (mps, cuda).
+
+    Use for Tier 3 models that are too slow on CPU.
+    Skips automatically if no GPU is available.
+    """
+    return request.param
