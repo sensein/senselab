@@ -11,6 +11,7 @@ The only things NOT checked here are:
 """
 
 import importlib
+import warnings
 
 import pytest
 
@@ -20,7 +21,6 @@ REQUIRED_DEPS = {
     # Core dependencies
     "torch": "torch",
     "torchaudio": "torchaudio",
-    "torchcodec": "torchcodec",
     "torchvision": "torchvision",
     "transformers": "transformers",
     "speechbrain": "speechbrain",
@@ -48,6 +48,13 @@ REQUIRED_DEPS = {
     "speech-articulatory-coding": "articulatory_coding",
 }
 
+# Dependencies that need system libraries beyond pip install.
+# Failure is a warning (tests using them will skip/fail individually)
+# rather than aborting the entire session.
+SOFT_DEPS = {
+    "torchcodec": "torchcodec",  # needs FFmpeg <= 7 shared libs
+}
+
 
 def pytest_configure(config: pytest.Config) -> None:
     """Verify all dependencies are importable at session start."""
@@ -57,6 +64,21 @@ def pytest_configure(config: pytest.Config) -> None:
             importlib.import_module(module)
         except (ImportError, RuntimeError) as e:
             missing.append(f"  {name} ({module}): {e}")
+
+    soft_missing = []
+    for name, module in SOFT_DEPS.items():
+        try:
+            importlib.import_module(module)
+        except (ImportError, RuntimeError) as e:
+            soft_missing.append(f"  {name} ({module}): {e}")
+
+    if soft_missing:
+        warnings.warn(
+            "Optional system dependencies unavailable (tests needing them will fail individually):\n"
+            + "\n".join(soft_missing)
+            + "\n\nTo fix: install FFmpeg <= 7 system-wide (torchcodec needs libavutil shared libs).",
+            stacklevel=1,
+        )
 
     if missing:
         lines = [
