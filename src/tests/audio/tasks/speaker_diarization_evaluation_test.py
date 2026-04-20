@@ -5,22 +5,14 @@ import pytest
 from senselab.audio.tasks.speaker_diarization_evaluation import calculate_diarization_error_rate
 from senselab.utils.data_structures import ScriptLine
 
-try:
-    import pyannote.audio  # noqa: F401
 
-    PYANNOTEAUDIO_AVAILABLE = True
-except ModuleNotFoundError:
-    PYANNOTEAUDIO_AVAILABLE = False
-
-
-@pytest.mark.skipif(PYANNOTEAUDIO_AVAILABLE, reason="Pyannote Audio is installed.")
+@pytest.mark.skip(reason="pyannote-audio is a core dependency and always installed; missing-dep path cannot be tested")
 def test_diarization_error_rate_no_pyannote_audio() -> None:
     """Tests speaker diarization error rate when Pyannote Audio is not installed."""
     with pytest.raises(ModuleNotFoundError):
         calculate_diarization_error_rate([], [])
 
 
-@pytest.mark.skipif(not PYANNOTEAUDIO_AVAILABLE, reason="Pyannote Audio is not installed.")
 def test_diarization_error_rate_non_existent_speaker() -> None:
     """Tests speaker diarization error rate when a non-existent speaker is found.
 
@@ -52,7 +44,6 @@ def test_diarization_error_rate_non_existent_speaker() -> None:
     assert diarization["speaker_mapping"] == speaker_mapping
 
 
-@pytest.mark.skipif(not PYANNOTEAUDIO_AVAILABLE, reason="Pyannote Audio is not installed.")
 def test_diarization_error_rate_undetected_speaker() -> None:
     """Tests speaker diarization error rate when a speaker goes undetected.
 
