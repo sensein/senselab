@@ -62,7 +62,7 @@ COMPATIBILITY_MATRIX: dict[str, CompatibilityEntry] = {
     # ── Audio: Speech to Text ──
     "audio.tasks.speech_to_text.transcribe_audios": CompatibilityEntry(
         required_deps=["transformers", "torchaudio"],
-        dep_versions={"transformers": ">=4.52", "torchaudio": ">=2.8"},
+        dep_versions={"transformers": ">=5.0", "torchaudio": ">=2.8"},
         install_hint="pip install senselab",
     ),
     # ── Audio: Speaker Diarization ──
@@ -94,19 +94,19 @@ COMPATIBILITY_MATRIX: dict[str, CompatibilityEntry] = {
     # ── Audio: Text to Speech ──
     "audio.tasks.text_to_speech.synthesize_texts": CompatibilityEntry(
         required_deps=["transformers"],
-        dep_versions={"transformers": ">=4.52"},
+        dep_versions={"transformers": ">=5.0"},
         install_hint="pip install senselab",
     ),
     # ── Audio: Classification ──
     "audio.tasks.classification.classify_audios": CompatibilityEntry(
         required_deps=["transformers"],
-        dep_versions={"transformers": ">=4.52"},
+        dep_versions={"transformers": ">=5.0"},
         install_hint="pip install senselab",
     ),
     # ── Audio: Forced Alignment ──
     "audio.tasks.forced_alignment.align_transcriptions": CompatibilityEntry(
         required_deps=["transformers", "torchaudio"],
-        dep_versions={"transformers": ">=4.52", "torchaudio": ">=2.8"},
+        dep_versions={"transformers": ">=5.0", "torchaudio": ">=2.8"},
         install_hint="pip install senselab",
     ),
     # ── Audio: Features Extraction (PPGs - ISOLATED) ──
@@ -129,7 +129,7 @@ COMPATIBILITY_MATRIX: dict[str, CompatibilityEntry] = {
     # ── Text: Embeddings ──
     "text.tasks.embeddings_extraction.extract_embeddings_from_text": CompatibilityEntry(
         required_deps=["transformers", "sentence-transformers"],
-        dep_versions={"transformers": ">=4.52", "sentence-transformers": ">=5.1"},
+        dep_versions={"transformers": ">=5.0", "sentence-transformers": ">=5.1"},
         install_hint="pip install senselab",
     ),
     # ── Audio: Data Augmentation ──
@@ -141,7 +141,7 @@ COMPATIBILITY_MATRIX: dict[str, CompatibilityEntry] = {
     # ── Audio: SSL Embeddings ──
     "audio.tasks.ssl_embeddings.extract_ssl_embeddings_from_audios": CompatibilityEntry(
         required_deps=["transformers"],
-        dep_versions={"transformers": ">=4.52"},
+        dep_versions={"transformers": ">=5.0"},
         install_hint="pip install senselab",
     ),
     # ── Audio: Voice Activity Detection ──
@@ -153,7 +153,7 @@ COMPATIBILITY_MATRIX: dict[str, CompatibilityEntry] = {
     # ── Audio: Speech Emotion Recognition ──
     "audio.tasks.classification.classify_emotions_from_speech": CompatibilityEntry(
         required_deps=["transformers"],
-        dep_versions={"transformers": ">=4.52"},
+        dep_versions={"transformers": ">=5.0"},
         install_hint="pip install senselab",
     ),
     # ── Audio: Features Extraction (general — torchaudio) ──
