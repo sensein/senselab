@@ -35,7 +35,7 @@ dependencies = [
   "torchcodec>=0.7",
   "torchaudio>=2.8",
   # ML frameworks (these pull packaging, joblib, etc.)
-  "huggingface-hub>=0.34,<1.0",  # 1.x strict validation rejects null fields in some model configs
+  "huggingface-hub>=1.0",
   "transformers>=4.52",
   "datasets>=3.6",
   "accelerate",
