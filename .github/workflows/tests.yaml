@@ -184,30 +184,17 @@ jobs:
     - name: Install FFmpeg shared libraries
       run: |
         # torchcodec needs FFmpeg shared libs (libavutil, libavcodec, etc.)
-        # AL2023 doesn't ship FFmpeg — compile from source.
-        # Build tools (gcc, cmake, nasm, etc.) must be pre-installed in the AMI.
-        # Cache the build on scratch storage to avoid recompiling on every run.
-        FFMPEG_PREFIX=/usr/local
-        if ldconfig -p 2>/dev/null | grep -q libavutil; then
-          echo "FFmpeg shared libs already available"
-        else
-          echo "Building FFmpeg from source..."
-          cd /tmp
-          FFMPEG_VERSION=7.1.1
-          curl -sL "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.bz2" | tar xj
-          cd "ffmpeg-${FFMPEG_VERSION}"
-          ./configure \
-            --prefix="${FFMPEG_PREFIX}" \
-            --enable-shared \
-            --disable-static \
-            --enable-gpl \
-            --disable-doc \
-            --disable-programs
-          make -j$(nproc)
-          sudo make install
-          sudo ldconfig
-          cd /tmp && rm -rf "ffmpeg-${FFMPEG_VERSION}"
+        # Install via miniforge/conda-forge — fast, no compilation needed.
+        if ! command -v conda &>/dev/null; then
+          curl -fsSL https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh \
+            -o /tmp/miniforge.sh
+          bash /tmp/miniforge.sh -b -p /opt/miniforge
+          rm /tmp/miniforge.sh
         fi
+        /opt/miniforge/bin/conda install -y -p /opt/miniforge ffmpeg
+        # Make libs visible to the linker
+        echo "/opt/miniforge/lib" | sudo tee /etc/ld.so.conf.d/miniforge.conf
+        sudo ldconfig
         ldconfig -p | grep libavutil
     - name: Set up environment (Python ${{ matrix.python-version }})
       run: |
