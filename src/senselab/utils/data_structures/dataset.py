@@ -330,12 +330,12 @@ class SenselabDataset(BaseModel):
                 "frames": {"image": Sequence(feature=Image())},
                 "frame_rate": Value("float32"),
                 "metadata": {},
-                "audio": HFAudio(mono=False, sampling_rate=48000),
+                "audio": HFAudio(sampling_rate=48000, num_channels=None),  # None preserves original channels
                 "audio_metadata": Value("string"),
             }
         )
 
-        audio_dataset = Dataset.from_dict(senselab_dict["audios"]).cast_column("audio", HFAudio(mono=False))
+        audio_dataset = Dataset.from_dict(senselab_dict["audios"]).cast_column("audio", HFAudio(num_channels=None))
 
         video_dataset = Dataset.from_dict(senselab_dict["videos"], features=features)
         # print(video_dataset[0])

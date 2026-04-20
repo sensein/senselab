@@ -33,10 +33,10 @@ def test_pyannote_not_installed(pyannote_model: PyannoteAudioModel) -> None:
 
 
 def test_diarize_audios(
-    resampled_mono_audio_sample: Audio, pyannote_model: PyannoteAudioModel, any_device: DeviceType
+    resampled_mono_audio_sample: Audio, pyannote_model: PyannoteAudioModel, cpu_cuda_device: DeviceType
 ) -> None:
     """Test diarizing audios."""
-    results = diarize_audios(audios=[resampled_mono_audio_sample], model=pyannote_model, device=any_device)
+    results = diarize_audios(audios=[resampled_mono_audio_sample], model=pyannote_model, device=cpu_cuda_device)
     assert len(results) == 1
     assert isinstance(results[0][0], ScriptLine)
 
@@ -57,25 +57,25 @@ def test_diarize_audios_with_nvidia_sortformer(resampled_mono_audio_sample: Audi
 
 
 def test_diarize_audios_with_pyannote(
-    resampled_mono_audio_sample: Audio, pyannote_model: PyannoteAudioModel, any_device: DeviceType
+    resampled_mono_audio_sample: Audio, pyannote_model: PyannoteAudioModel, cpu_cuda_device: DeviceType
 ) -> None:
     """Test diarizing audios with Pyannote."""
     results = diarize_audios_with_pyannote(
-        audios=[resampled_mono_audio_sample], model=pyannote_model, device=any_device, num_speakers=2
+        audios=[resampled_mono_audio_sample], model=pyannote_model, device=cpu_cuda_device, num_speakers=2
     )
     assert len(results) == 1
     assert isinstance(results[0][0], ScriptLine)
 
 
-def test_pyannote_pipeline_factory(pyannote_model: PyannoteAudioModel, any_device: DeviceType) -> None:
+def test_pyannote_pipeline_factory(pyannote_model: PyannoteAudioModel, cpu_cuda_device: DeviceType) -> None:
     """Test Pyannote pipeline factory."""
     pipeline1 = PyannoteDiarization._get_pyannote_diarization_pipeline(
         model=pyannote_model,
-        device=any_device,
+        device=cpu_cuda_device,
     )
     pipeline2 = PyannoteDiarization._get_pyannote_diarization_pipeline(
         model=pyannote_model,
-        device=any_device,
+        device=cpu_cuda_device,
     )
     assert pipeline1 is pipeline2  # Check if the same instance is returned
 
@@ -104,16 +104,16 @@ def test_pyannote_pipeline_factory_forwards_hf_token(monkeypatch: pytest.MonkeyP
 
 
 def test_diarize_audios_with_pyannote_invalid_sampling_rate(
-    mono_audio_sample: Audio, pyannote_model: PyannoteAudioModel, any_device: DeviceType
+    mono_audio_sample: Audio, pyannote_model: PyannoteAudioModel, cpu_cuda_device: DeviceType
 ) -> None:
     """Test diarizing audios with unsupported sampling_rate."""
     with pytest.raises(ValueError):
-        diarize_audios(audios=[mono_audio_sample], model=pyannote_model, device=any_device)
+        diarize_audios(audios=[mono_audio_sample], model=pyannote_model, device=cpu_cuda_device)
 
 
 def test_diarize_stereo_audios_with_pyannote_invalid(
-    resampled_stereo_audio_sample: Audio, pyannote_model: PyannoteAudioModel, any_device: DeviceType
+    resampled_stereo_audio_sample: Audio, pyannote_model: PyannoteAudioModel, cpu_cuda_device: DeviceType
 ) -> None:
     """Test diarizing audios with unsupported number of channels."""
     with pytest.raises(ValueError):
-        diarize_audios(audios=[resampled_stereo_audio_sample], model=pyannote_model, device=any_device)
+        diarize_audios(audios=[resampled_stereo_audio_sample], model=pyannote_model, device=cpu_cuda_device)

@@ -339,7 +339,6 @@ def test_missing_ppg_dependency() -> None:
     pass
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="PPGs subprocess venv test requires GPU")
 def test_extract_ppgs_from_audios(resampled_mono_audio_sample: Audio) -> None:
     """Test extraction of ppgs from audio."""
     result = extract_ppgs_from_audios([resampled_mono_audio_sample])

@@ -138,9 +138,14 @@ class Audio(BaseModel):
             if self._file_path and TORCHCODEC_AVAILABLE:
                 decoder = AudioDecoder(str(self._file_path))
                 self._sampling_rate = decoder.metadata.sample_rate
-            elif self._file_path and TORCHAUDIO_AVAILABLE:
-                info = torchaudio.info(self._file_path)
-                self._sampling_rate = info.sample_rate
+            elif self._file_path:
+                # Fallback: use soundfile to get sample rate (always available,
+                # works even when torchcodec can't load and torchaudio.info is
+                # removed in torchaudio 2.11+)
+                import soundfile as sf
+
+                info = sf.info(str(self._file_path))
+                self._sampling_rate = info.samplerate
             else:
                 raise ValueError("Sampling rate is not available.")
         assert self._sampling_rate is not None, "Sampling rate should be set."
@@ -204,10 +209,13 @@ class Audio(BaseModel):
             return samples.data  # shape: (num_channels, num_samples)
 
         if TORCHAUDIO_AVAILABLE:
-            # Fallback: torchaudio (deprecated, will be removed in torch 2.9+)
-            info = torchaudio.info(filepath)
-            self._sampling_rate = info.sample_rate
-            total_frames = info.num_frames
+            # Fallback: torchaudio for loading, soundfile for metadata
+            # (torchaudio.info removed in 2.11+)
+            import soundfile as sf
+
+            sf_info = sf.info(str(filepath))
+            self._sampling_rate = sf_info.samplerate
+            total_frames = sf_info.frames
 
             frame_offset = int(self._offset_in_sec * self.sampling_rate)
             if frame_offset > total_frames:

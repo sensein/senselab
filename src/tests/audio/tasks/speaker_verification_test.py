@@ -19,12 +19,12 @@ from senselab.utils.data_structures import DeviceType
 
 
 @pytest.mark.large_model
-def test_verify_speaker(mono_audio_sample: Audio, any_device: DeviceType) -> None:
+def test_verify_speaker(mono_audio_sample: Audio, cpu_cuda_device: DeviceType) -> None:
     """Tests the verify_speaker function to ensure it does not fail."""
     mono_audio_sample = resample_audios([mono_audio_sample], 16000)[0]
     assert mono_audio_sample.sampling_rate == 16000
     mono_audio_samples = [(mono_audio_sample, mono_audio_sample)] * 3
-    scores_and_predictions = verify_speaker(mono_audio_samples, device=any_device)
+    scores_and_predictions = verify_speaker(mono_audio_samples, device=cpu_cuda_device)
     assert scores_and_predictions
     assert len(scores_and_predictions[0]) == 2
     assert isinstance(scores_and_predictions[0][0], float)

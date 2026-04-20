@@ -27,29 +27,22 @@ def check_basic_audio_properties(audio: Audio) -> None:
     assert audio.sampling_rate == 48000
 
 
-@patch("senselab.audio.data_structures.audio.TORCHCODEC_AVAILABLE", False)
-@patch("torchaudio.load")
-def test_audio_lazy_loading(mock_torchaudio_load: MagicMock) -> None:
-    """Test lazy audio loading by mocking torchaudio.load.
-
-    Patches TORCHCODEC_AVAILABLE to False to force the torchaudio code path.
-    """
-    fake_waveform = torch.tensor([[1.0, 2.0, 3.0, 4.0]])
-    fake_sample_rate = 48000
-    mock_torchaudio_load.return_value = (fake_waveform, fake_sample_rate)
-
+def test_audio_lazy_loading() -> None:
+    """Test lazy audio loading — waveform is not loaded until accessed."""
     audio = Audio(filepath=MONO_AUDIO_PATH)
 
-    mock_torchaudio_load.assert_not_called()
-    assert audio.sampling_rate == 48000, "Sampling rate should be set even if the audio is not loaded"
+    # Waveform should not be loaded yet (lazy)
+    assert audio._waveform is None, "Waveform should not be loaded on construction"
+    assert audio.sampling_rate == 48000, "Sampling rate should be available without loading waveform"
 
-    _ = audio.waveform
-    mock_torchaudio_load.assert_called_once_with(MONO_AUDIO_PATH, frame_offset=0, num_frames=-1, backend=None)
+    # Accessing waveform triggers load
+    waveform = audio.waveform
+    assert waveform is not None
+    assert waveform.shape[0] > 0
 
-    _ = audio.waveform
-    mock_torchaudio_load.assert_called_once()
-
-    assert torch.equal(audio.waveform, fake_waveform)
+    # Second access should return same object (cached)
+    waveform2 = audio.waveform
+    assert waveform is waveform2
 
 
 def test_audio_creation_full_file() -> None:

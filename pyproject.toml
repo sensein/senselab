@@ -17,49 +17,43 @@ maintainers = [
 ]
 license = {file = "LICENSE.md"}
 readme = "README.md"
-requires-python = ">=3.11,<3.13"
+requires-python = ">=3.11,<3.15"
 keywords = ["audio", "voice", "speech", "video", "pose", "face", "text", "nlp"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "License :: OSI Approved :: Apache Software License",
   "Operating System :: OS Independent"
 ]
 dependencies = [
-  # PyTorch ecosystem — all must be same minor version
-  # torch 2.8 ↔ torchaudio 2.8 ↔ torchvision 0.23 ↔ torchcodec 0.7
-  # torch 2.9 ↔ torchaudio 2.9 ↔ torchvision 0.24 ↔ torchcodec 0.9
-  # torch 2.10 ↔ torchaudio 2.10 ↔ torchvision 0.25 ↔ torchcodec 0.10
-  # Requires FFmpeg shared libraries at runtime (system install, not pip)
-  "torch~=2.8; sys_platform != 'darwin' or platform_machine == 'arm64'",
-  "torchvision~=0.23",
-  "torchcodec~=0.7",
-  "torchaudio~=2.8",
-  "transformers>=4.40",
+  # PyTorch ecosystem
+  "torch>=2.8; sys_platform != 'darwin' or platform_machine == 'arm64'",
+  "torchvision>=0.23",
+  "torchcodec>=0.7",
+  "torchaudio>=2.8",
+  # ML frameworks (these pull packaging, joblib, etc.)
+  "huggingface-hub>=1.3",  # transformers>=5.0 needs hf-hub>=1.3
+  "transformers>=5.0",  # >=5.0 required for huggingface-hub>=1.0 compatibility
   "datasets>=3.6",
   "accelerate",
-  "huggingface-hub>=0.34",
+  "speechbrain>=1.0",
+  # Audio processing backends (pyannote pulls matplotlib, torch-audiomentations)
+  "pyannote-audio>=4.0",
+  "audiomentations>=0.42",
+  "opensmile>=2.6",
+  "vocos>=0.1",
+  "praat-parselmouth>=0.4.3",  # 0.4.0-0.4.2 fail on Python 3.12+
   # Data / utilities
   "pydantic>=2.11",
   "pycountry>=24.6",
   "iso639>=0.1",
   "scikit-learn>=1.7",
-  "umap-learn>=0.5",
-  "python-ffmpeg>=2.0",
+  "umap-learn>=0.5.4",  # 0.5.0-0.5.3 fail on Python 3.12+
   "python-dotenv>=1.0",
-  "nest-asyncio>=1.6",
-  "matplotlib>=3.10",
-  "joblib>=1.5",
-  "packaging>=23.0",
-  # Audio processing backends (core — must coexist with modern torch)
-  "praat-parselmouth>=0.4",
-  "audiomentations>=0.42",
-  "torch-audiomentations>=0.12",
-  "speechbrain>=1.0",
-  "pyannote-audio>=4.0",
-  "opensmile>=2.6",
-  "vocos>=0.1"
+  "nest-asyncio>=1.6"
 ]
 
 [project.optional-dependencies]
@@ -167,7 +161,7 @@ exclude = [
 line-length = 120
 indent-width = 4
 src = ["src"]
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["ANN", "D", "E", "F", "I"]

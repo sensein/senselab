@@ -13,7 +13,7 @@ from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import CoquiTTSModel, DeviceType
-from senselab.utils.subprocess_venv import ensure_venv
+from senselab.utils.subprocess_venv import ensure_venv, parse_subprocess_result
 
 # Coqui venv specification
 _COQUI_VENV = "coqui"
@@ -33,64 +33,68 @@ import json
 import sys
 from pathlib import Path
 
-import soundfile as sf
-import torch
-from TTS.api import TTS
+try:
+    import soundfile as sf
+    import torch
+    from TTS.api import TTS
 
-args = json.loads(sys.stdin.read())
-source_paths = args["source_paths"]
-target_paths = args["target_paths"]
-model_id = args["model_id"]
-device = args["device"]
-output_dir = args["output_dir"]
+    args = json.loads(sys.stdin.read())
+    source_paths = args["source_paths"]
+    target_paths = args["target_paths"]
+    model_id = args["model_id"]
+    device = args["device"]
+    output_dir = args["output_dir"]
 
-tts = TTS(model_id).to(device=device)
-audio_config = tts.voice_converter.vc_config.audio
+    tts = TTS(model_id).to(device=device)
+    audio_config = tts.voice_converter.vc_config.audio
 
-expected_sample_rate = (
-    audio_config.input_sample_rate
-    if hasattr(audio_config, "input_sample_rate")
-    else getattr(audio_config, "sample_rate", None)
-)
-output_sample_rate = (
-    audio_config.output_sample_rate
-    if hasattr(audio_config, "output_sample_rate")
-    else getattr(audio_config, "sample_rate", expected_sample_rate)
-)
-
-output_paths = []
-for i, (src_path, tgt_path) in enumerate(zip(source_paths, target_paths)):
-    src_data, src_sr = sf.read(src_path, dtype="float32")
-    tgt_data, tgt_sr = sf.read(tgt_path, dtype="float32")
-    src_wav = torch.from_numpy(src_data).unsqueeze(0) if src_data.ndim == 1 else torch.from_numpy(src_data.T)
-    tgt_wav = torch.from_numpy(tgt_data).unsqueeze(0) if tgt_data.ndim == 1 else torch.from_numpy(tgt_data.T)
-
-    if expected_sample_rate is not None:
-        if src_sr != expected_sample_rate:
-            raise ValueError(
-                f"[Pair {i}] Source sample rate {src_sr} != model expected {expected_sample_rate}"
-            )
-        if tgt_sr != expected_sample_rate:
-            raise ValueError(
-                f"[Pair {i}] Target sample rate {tgt_sr} != model expected {expected_sample_rate}"
-            )
-
-    converted = tts.voice_conversion(
-        source_wav=src_wav.squeeze(),
-        target_wav=tgt_wav.squeeze(),
+    expected_sample_rate = (
+        audio_config.input_sample_rate
+        if hasattr(audio_config, "input_sample_rate")
+        else getattr(audio_config, "sample_rate", None)
+    )
+    output_sample_rate = (
+        audio_config.output_sample_rate
+        if hasattr(audio_config, "output_sample_rate")
+        else getattr(audio_config, "sample_rate", expected_sample_rate)
     )
 
-    if not isinstance(converted, torch.Tensor):
-        converted = torch.tensor(converted)
-    if converted.dim() == 1:
-        converted = converted.unsqueeze(0)
+    output_paths = []
+    for i, (src_path, tgt_path) in enumerate(zip(source_paths, target_paths)):
+        src_data, src_sr = sf.read(src_path, dtype="float32")
+        tgt_data, tgt_sr = sf.read(tgt_path, dtype="float32")
+        src_wav = torch.from_numpy(src_data).unsqueeze(0) if src_data.ndim == 1 else torch.from_numpy(src_data.T)
+        tgt_wav = torch.from_numpy(tgt_data).unsqueeze(0) if tgt_data.ndim == 1 else torch.from_numpy(tgt_data.T)
 
-    sr = output_sample_rate or src_sr
-    out_path = str(Path(output_dir) / f"cloned_{i}.flac")
-    sf.write(out_path, converted.squeeze().cpu().numpy(), sr, format="FLAC")
-    output_paths.append(out_path)
+        if expected_sample_rate is not None:
+            if src_sr != expected_sample_rate:
+                raise ValueError(
+                    f"[Pair {i}] Source sample rate {src_sr} != model expected {expected_sample_rate}"
+                )
+            if tgt_sr != expected_sample_rate:
+                raise ValueError(
+                    f"[Pair {i}] Target sample rate {tgt_sr} != model expected {expected_sample_rate}"
+                )
 
-print(json.dumps({"output_paths": output_paths}))
+        converted = tts.voice_conversion(
+            source_wav=src_wav.squeeze(),
+            target_wav=tgt_wav.squeeze(),
+        )
+
+        if not isinstance(converted, torch.Tensor):
+            converted = torch.tensor(converted)
+        if converted.dim() == 1:
+            converted = converted.unsqueeze(0)
+
+        sr = output_sample_rate or src_sr
+        out_path = str(Path(output_dir) / f"cloned_{i}.flac")
+        sf.write(out_path, converted.squeeze().cpu().numpy(), sr, format="FLAC")
+        output_paths.append(out_path)
+
+    print(json.dumps({"output_paths": output_paths}))
+except Exception as exc:
+    print(json.dumps({"error": {"type": type(exc).__name__, "message": str(exc)}}))
+    sys.exit(1)
 """
 
 
@@ -102,7 +106,7 @@ def list_coqui_models() -> list:
         [python, "-c", "from TTS.api import TTS; import json; print(json.dumps(list(TTS().list_models())))"],
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=300,  # cold start can be slow (venv creation + TTS model list download)
     )
     if result.returncode != 0:
         raise RuntimeError(f"Failed to list Coqui models:\n{result.stderr}")
@@ -177,11 +181,7 @@ class CoquiVoiceCloner:
                 timeout=600,
             )
 
-            if result.returncode != 0:
-                raise RuntimeError(f"Coqui venv failed:\n{result.stderr}")
-
-            # Parse last line only — libraries may print to stdout during init
-            output = json.loads(result.stdout.strip().splitlines()[-1])
+            output = parse_subprocess_result(result, "Coqui")
 
             # Load results eagerly (tempdir is cleaned up after this block)
             cloned_audios = []

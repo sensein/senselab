@@ -38,7 +38,7 @@ REQUIRED_DEPS = {
     "datasets": "datasets",
     "scikit-learn": "sklearn",
     "soundfile": "soundfile",
-    # Extra: text
+    "torchcodec": "torchcodec",
     "sentence-transformers": "sentence_transformers",
     "pylangacq": "pylangacq",
     # Extra: nlp
@@ -52,15 +52,7 @@ REQUIRED_DEPS = {
     # and are not checked here.
 }
 
-# torchcodec needs FFmpeg shared libs AND libpython as a shared library.
-# uv's python-build-standalone doesn't include libpython.so (static build),
-# so torchcodec's native extension fails to load on those environments.
-# We warn instead of aborting — torchaudio provides a fallback for all
-# audio I/O operations.  TODO: resolve once python-build-standalone ships
-# shared libs or torchcodec removes the libpython dependency.
-SOFT_DEPS = {
-    "torchcodec": "torchcodec",
-}
+SOFT_DEPS: dict[str, str] = {}
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -120,12 +112,17 @@ def _available_devices() -> List[DeviceType]:
 
 
 def _gpu_devices() -> List[DeviceType]:
-    """Detect available GPU devices (MPS or CUDA)."""
-    return [d for d in _available_devices() if d != DeviceType.CPU]
+    """Detect available GPU devices (CUDA only).
+
+    MPS is excluded because most ML backends (speechbrain, pyannote,
+    HF pipelines) don't fully support it with current torch versions.
+    """
+    return [d for d in _available_devices() if d == DeviceType.CUDA]
 
 
 AVAILABLE_DEVICES = _available_devices()
 GPU_DEVICES = _gpu_devices()
+CPU_CUDA_DEVICES = [d for d in AVAILABLE_DEVICES if d != DeviceType.MPS]
 
 
 @pytest.fixture(params=AVAILABLE_DEVICES, ids=lambda d: f"device={d.value}")
@@ -146,5 +143,16 @@ def gpu_device(request: pytest.FixtureRequest) -> DeviceType:
 
     Use for Tier 3 models that are too slow on CPU.
     Skips automatically if no GPU is available.
+    """
+    return request.param
+
+
+@pytest.fixture(params=CPU_CUDA_DEVICES, ids=lambda d: f"device={d.value}")
+def cpu_cuda_device(request: pytest.FixtureRequest) -> DeviceType:
+    """Parameterize over CPU and CUDA only (no MPS).
+
+    Use for backends that don't support MPS (speechbrain, pyannote,
+    some HF pipelines). MPS support varies by model — use any_device
+    only for models verified to work on MPS.
     """
     return request.param
