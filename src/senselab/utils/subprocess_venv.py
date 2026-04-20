@@ -148,7 +148,12 @@ def _cache_dir() -> Path:
 
 
 def _find_uv() -> str:
-    """Find the uv binary."""
+    """Find the uv binary, auto-installing if not present.
+
+    Checks PATH and common install locations. If uv is not found,
+    installs it automatically (needed for environments like Google Colab
+    where uv is not pre-installed).
+    """
     uv = shutil.which("uv")
     if uv:
         return uv
@@ -158,7 +163,20 @@ def _find_uv() -> str:
     ]:
         if candidate.is_file():
             return str(candidate)
-    raise FileNotFoundError("uv not found. Install with: curl -LsSf https://astral.sh/uv/install.sh | sh")
+
+    # Auto-install uv (e.g., on Google Colab or fresh environments)
+    logger.info("uv not found — installing automatically...")
+    result = subprocess.run(
+        ["pip", "install", "uv"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if result.returncode == 0:
+        uv = shutil.which("uv")
+        if uv:
+            return uv
+    raise FileNotFoundError("uv not found and auto-install failed. Install with: pip install uv")
 
 
 # ── Venv management ──────────────────────────────────────────────────
