@@ -29,36 +29,31 @@ classifiers = [
   "Operating System :: OS Independent"
 ]
 dependencies = [
-  # PyTorch ecosystem — uv resolves compatible versions automatically
-  # torch ↔ torchaudio ↔ torchvision ↔ torchcodec must be compatible
+  # PyTorch ecosystem
   "torch>=2.8; sys_platform != 'darwin' or platform_machine == 'arm64'",
   "torchvision>=0.23",
   "torchcodec>=0.7",
   "torchaudio>=2.8",
+  # ML frameworks (these pull packaging, joblib, etc.)
+  "huggingface-hub>=0.34,<1.0",  # 1.x strict validation rejects null fields in some model configs
   "transformers>=4.52",
   "datasets>=3.6",
   "accelerate",
-  "huggingface-hub>=0.34",
+  "speechbrain>=1.0",
+  # Audio processing backends (pyannote pulls matplotlib, torch-audiomentations)
+  "pyannote-audio>=4.0",
+  "audiomentations>=0.42",
+  "opensmile>=2.6",
+  "vocos>=0.1",
+  "praat-parselmouth>=0.4",
   # Data / utilities
   "pydantic>=2.11",
   "pycountry>=24.6",
   "iso639>=0.1",
   "scikit-learn>=1.7",
   "umap-learn>=0.5",
-  "python-ffmpeg>=2.0",
   "python-dotenv>=1.0",
   "nest-asyncio>=1.6",
-  "matplotlib>=3.10",
-  "joblib>=1.5",
-  "packaging>=23.0",
-  # Audio processing backends
-  "praat-parselmouth>=0.4",
-  "audiomentations>=0.42",
-  "torch-audiomentations>=0.12",
-  "speechbrain>=1.0",
-  "pyannote-audio>=4.0",
-  "opensmile>=2.6",
-  "vocos>=0.1"
 ]
 
 [project.optional-dependencies]

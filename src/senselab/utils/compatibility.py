@@ -62,85 +62,74 @@ COMPATIBILITY_MATRIX: dict[str, CompatibilityEntry] = {
     # ── Audio: Speech to Text ──
     "audio.tasks.speech_to_text.transcribe_audios": CompatibilityEntry(
         required_deps=["transformers", "torchaudio"],
-        dep_versions={"transformers": ">=4.40,<5.0", "torchaudio": ">=2.8,<3.0"},
+        dep_versions={"transformers": ">=4.52", "torchaudio": ">=2.8"},
         install_hint="pip install senselab",
     ),
     # ── Audio: Speaker Diarization ──
-    # NOTE: pyannote-audio depends on torchcodec, which requires FFmpeg system
-    # libraries (not pip). torchcodec version must match torch (0.7↔2.8, 0.10↔2.10).
     "audio.tasks.speaker_diarization.diarize_audios": CompatibilityEntry(
-        required_deps=["pyannote-audio", "torchaudio", "torchcodec"],
-        dep_versions={"pyannote-audio": ">=3.0,<5.0", "torchaudio": ">=2.8,<3.0", "torchcodec": ">=0.7"},
-        gpu_required=True,
+        required_deps=["pyannote-audio", "torchaudio"],
+        dep_versions={"pyannote-audio": ">=3.0", "torchaudio": ">=2.8"},
         install_hint="pip install senselab",
     ),
     # ── Audio: Speaker Embeddings ──
     "audio.tasks.speaker_embeddings.extract_speaker_embeddings_from_audios": CompatibilityEntry(
         required_deps=["speechbrain", "torchaudio"],
-        dep_versions={"speechbrain": ">=1.0,<2.0", "torchaudio": ">=2.8,<3.0"},
-        gpu_required=True,
+        dep_versions={"speechbrain": ">=1.0", "torchaudio": ">=2.8"},
         install_hint="pip install senselab",
     ),
     # ── Audio: Speech Enhancement ──
     "audio.tasks.speech_enhancement.enhance_audios": CompatibilityEntry(
         required_deps=["speechbrain", "torchaudio"],
-        dep_versions={"speechbrain": ">=1.0,<2.0", "torchaudio": ">=2.8,<3.0"},
-        gpu_required=True,
+        dep_versions={"speechbrain": ">=1.0", "torchaudio": ">=2.8"},
         install_hint="pip install senselab",
     ),
-    # ── Audio: Voice Cloning (ISOLATED — coqui-tts needs Python <=3.11) ──
+    # ── Audio: Voice Cloning (ISOLATED — coqui + sparc in subprocess venvs) ──
     "audio.tasks.voice_cloning.clone_voices": CompatibilityEntry(
-        required_deps=["coqui-tts"],
-        python_versions=VersionRange(">=3.10,<3.12"),  # coqui-tts constraint
-        dep_versions={"coqui-tts": ">=0.27,<1.0", "torch": ">=2.4,<2.9"},
-        gpu_required=True,
+        required_deps=[],
         isolated=True,
         venv_name="coqui",
-        venv_requirements=["coqui-tts~=0.27", "torch~=2.8"],
         venv_python="3.11",
         install_hint="Automatically provisioned in isolated environment",
     ),
     # ── Audio: Text to Speech ──
     "audio.tasks.text_to_speech.synthesize_texts": CompatibilityEntry(
         required_deps=["transformers"],
-        dep_versions={"transformers": ">=4.40,<5.0"},
-        gpu_required=True,
+        dep_versions={"transformers": ">=4.52"},
         install_hint="pip install senselab",
     ),
     # ── Audio: Classification ──
     "audio.tasks.classification.classify_audios": CompatibilityEntry(
         required_deps=["transformers"],
-        dep_versions={"transformers": ">=4.40,<5.0"},
-        gpu_required=True,
+        dep_versions={"transformers": ">=4.52"},
         install_hint="pip install senselab",
     ),
     # ── Audio: Forced Alignment ──
     "audio.tasks.forced_alignment.align_transcriptions": CompatibilityEntry(
         required_deps=["transformers", "torchaudio"],
-        dep_versions={"transformers": ">=4.40,<5.0", "torchaudio": ">=2.8,<3.0"},
-        gpu_required=True,
+        dep_versions={"transformers": ">=4.52", "torchaudio": ">=2.8"},
         install_hint="pip install senselab",
     ),
-    # ── Audio: Features Extraction (PPGs - ISOLATED — espnet needs Python <=3.11) ──
+    # ── Audio: Features Extraction (PPGs - ISOLATED) ──
     "audio.tasks.features_extraction.extract_ppg_from_audios": CompatibilityEntry(
-        required_deps=["ppgs", "espnet"],
-        python_versions=VersionRange(">=3.10,<3.12"),  # espnet constraint
-        dep_versions={"ppgs": ">=0.0.9,<0.0.10", "espnet": ">=202205", "torch": ">=2.0,<2.9"},
+        required_deps=[],
         gpu_required=True,
         isolated=True,
         venv_name="ppgs",
-        venv_requirements=["ppgs>=0.0.9,<0.0.10", "espnet", "snorkel>=0.10.0,<0.11.0", "lightning~=2.4"],
         venv_python="3.11",
         install_hint="Automatically provisioned in isolated environment",
     ),
-    # ── Text: Embeddings (sentence-transformers backend) ──
-    # NOTE: sentence-transformers >=5.4 imports torchcodec at module level,
-    # which throws RuntimeError on macOS (no FFmpeg). Import must be lazy
-    # with (ImportError, RuntimeError) guard. Tracked upstream.
+    # ── Audio: Features Extraction (SPARC - ISOLATED) ──
+    "audio.tasks.features_extraction.extract_sparc_features": CompatibilityEntry(
+        required_deps=[],
+        isolated=True,
+        venv_name="sparc",
+        venv_python="3.11",
+        install_hint="Automatically provisioned in isolated environment",
+    ),
+    # ── Text: Embeddings ──
     "text.tasks.embeddings_extraction.extract_embeddings_from_text": CompatibilityEntry(
         required_deps=["transformers", "sentence-transformers"],
-        dep_versions={"transformers": ">=4.40,<5.0", "sentence-transformers": ">=5.1"},
-        gpu_required=True,
+        dep_versions={"transformers": ">=4.52", "sentence-transformers": ">=5.1"},
         install_hint="pip install senselab",
     ),
     # ── Audio: Data Augmentation ──
@@ -152,34 +141,31 @@ COMPATIBILITY_MATRIX: dict[str, CompatibilityEntry] = {
     # ── Audio: SSL Embeddings ──
     "audio.tasks.ssl_embeddings.extract_ssl_embeddings_from_audios": CompatibilityEntry(
         required_deps=["transformers"],
-        dep_versions={"transformers": ">=4.40,<5.0"},
-        gpu_required=True,
+        dep_versions={"transformers": ">=4.52"},
         install_hint="pip install senselab",
     ),
     # ── Audio: Voice Activity Detection ──
     "audio.tasks.voice_activity_detection.detect_human_voice_activity_in_audios": CompatibilityEntry(
         required_deps=["pyannote-audio", "torchaudio"],
-        dep_versions={"pyannote-audio": ">=3.0,<5.0", "torchaudio": ">=2.8,<3.0"},
-        gpu_required=True,
+        dep_versions={"pyannote-audio": ">=3.0", "torchaudio": ">=2.8"},
         install_hint="pip install senselab",
     ),
     # ── Audio: Speech Emotion Recognition ──
     "audio.tasks.classification.classify_emotions_from_speech": CompatibilityEntry(
         required_deps=["transformers"],
-        dep_versions={"transformers": ">=4.40,<5.0"},
-        gpu_required=True,
+        dep_versions={"transformers": ">=4.52"},
         install_hint="pip install senselab",
     ),
     # ── Audio: Features Extraction (general — torchaudio) ──
     "audio.tasks.features_extraction.extract_features_from_audios": CompatibilityEntry(
         required_deps=["torchaudio"],
-        dep_versions={"torchaudio": ">=2.8,<3.0"},
+        dep_versions={"torchaudio": ">=2.8"},
         install_hint="pip install senselab",
     ),
     # ── Video: Pose Estimation ──
     "video.tasks.pose_estimation.estimate_pose": CompatibilityEntry(
         required_deps=["ultralytics", "opencv-python-headless"],
-        dep_versions={"ultralytics": ">=8.0,<9.0", "opencv-python-headless": ">=4.8,<5.0"},
+        dep_versions={"ultralytics": ">=8.0", "opencv-python-headless": ">=4.8"},
         install_hint="pip install 'senselab[video]'",
     ),
 }

@@ -85,7 +85,23 @@ def classify_emotions_from_speech(
 
 def _get_ser_type(model: HFModel) -> SERType:
     """Get the type of SER the model is likely used for based on the labels it is set to predict."""
-    config = AutoConfig.from_pretrained(model.path_or_uri, revision=model.revision)
+    try:
+        config = AutoConfig.from_pretrained(model.path_or_uri, revision=model.revision)
+    except (TypeError, Exception):
+        # Some model configs have null fields that newer huggingface_hub rejects.
+        # Fall back to loading the raw config dict.
+        from huggingface_hub import hf_hub_download
+        import json
+
+        config_path = hf_hub_download(model.path_or_uri, "config.json", revision=model.revision)
+        with open(config_path) as f:
+            config_dict = json.load(f)
+
+        class _ConfigProxy:
+            def __init__(self, d: dict) -> None:
+                self.id2label = d.get("id2label", {})
+
+        config = _ConfigProxy(config_dict)
     id2label = config.id2label
     # print(id2label)
     if id2label:
