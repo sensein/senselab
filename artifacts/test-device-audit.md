@@ -55,7 +55,7 @@ def any_device(request):
     """Parameterize over all available devices (cpu, mps, cuda)."""
     return request.param
 
-@pytest.fixture(params=GPU_DEVICES or pytest.param("skip", marks=pytest.mark.skip("No GPU")), 
+@pytest.fixture(params=GPU_DEVICES or pytest.param("skip", marks=pytest.mark.skip("No GPU")),
                 ids=lambda d: f"device={d}")
 def gpu_device(request):
     """Parameterize over GPU-only devices (mps, cuda). Skip if none available."""
