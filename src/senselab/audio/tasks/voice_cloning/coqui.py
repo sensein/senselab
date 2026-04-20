@@ -183,9 +183,11 @@ class CoquiVoiceCloner:
             # Parse last line only — libraries may print to stdout during init
             output = json.loads(result.stdout.strip().splitlines()[-1])
 
-            # Load results
+            # Load results eagerly (tempdir is cleaned up after this block)
             cloned_audios = []
             for out_path in output.get("output_paths", []):
-                cloned_audios.append(Audio(filepath=out_path))
+                audio = Audio(filepath=out_path)
+                _ = audio.waveform  # force load before tempdir cleanup
+                cloned_audios.append(audio)
 
             return cloned_audios
