@@ -38,8 +38,6 @@ REQUIRED_DEPS = {
     "datasets": "datasets",
     "scikit-learn": "sklearn",
     "soundfile": "soundfile",
-    "torchcodec": "torchcodec",
-    "sentence-transformers": "sentence_transformers",
     "pylangacq": "pylangacq",
     # Extra: nlp
     "jiwer": "jiwer",
@@ -52,7 +50,13 @@ REQUIRED_DEPS = {
     # and are not checked here.
 }
 
-SOFT_DEPS: dict[str, str] = {}
+# torchcodec and sentence-transformers need FFmpeg shared libs + libpython.
+# uv's python-build-standalone doesn't ship libpython.so for all versions.
+# Warn instead of abort — torchaudio provides fallback for audio I/O.
+SOFT_DEPS = {
+    "torchcodec": "torchcodec",
+    "sentence-transformers": "sentence_transformers",
+}
 
 
 def pytest_configure(config: pytest.Config) -> None:
