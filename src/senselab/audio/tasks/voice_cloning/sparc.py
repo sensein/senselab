@@ -18,8 +18,8 @@ from senselab.utils.subprocess_venv import ensure_venv
 _SPARC_VENV = "sparc"
 _SPARC_REQUIREMENTS = [
     "speech-articulatory-coding>=0.1",
-    "torch~=2.8",
-    "torchaudio~=2.8",
+    "torch>=2.8,<2.9",
+    "torchaudio>=2.8,<2.9",
     "numpy",
     "soundfile",
     "librosa",
