@@ -8,18 +8,6 @@ import torch
 from senselab.text.tasks.embeddings_extraction import extract_embeddings_from_text
 from senselab.utils.data_structures import DeviceType, HFModel, SentenceTransformersModel
 
-_DEVICES = [DeviceType.CPU]
-if torch.cuda.is_available():
-    _DEVICES.append(DeviceType.CUDA)
-if torch.backends.mps.is_available():
-    _DEVICES.append(DeviceType.MPS)
-
-
-@pytest.fixture(params=_DEVICES, ids=lambda d: f"device={d.value}")
-def any_device(request: pytest.FixtureRequest) -> DeviceType:
-    """Parameterize over all available devices (cpu, mps, cuda)."""
-    return request.param
-
 
 @pytest.fixture
 def hf_model() -> HFModel:
