@@ -24,8 +24,8 @@ _PPGS_REQUIREMENTS = [
     "espnet",
     "snorkel>=0.10.0,<0.11.0",
     "lightning~=2.4",
-    "torch~=2.8",
-    "torchaudio~=2.8",
+    "torch>=2.8,<2.9",
+    "torchaudio>=2.8,<2.9",
     "numpy",
     "soundfile",
 ]

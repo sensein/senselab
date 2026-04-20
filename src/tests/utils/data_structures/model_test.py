@@ -8,12 +8,9 @@ from huggingface_hub import HfApi
 
 from senselab.utils.data_structures import HFModel, check_hf_repo_exists
 from senselab.utils.data_structures.model import get_huggingface_token
-from senselab.utils.dependencies import torchaudio_available
-
-TORCHAUDIO_AVAILABLE = torchaudio_available()
 
 
-@pytest.mark.skipif(TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
+@pytest.mark.skip(reason="torchaudio is a core dependency and always installed; missing-dep path cannot be tested")
 def test_check_torchaudio_model_init() -> None:
     """Test torchaudio model initialization."""
     with pytest.raises(ModuleNotFoundError):

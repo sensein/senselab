@@ -63,9 +63,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-articulatory = [
-  "speech-articulatory-coding>=0.1"
-]
 nlp = [
   "jiwer>=3.0",
   "nltk>=3.9"
@@ -164,7 +161,8 @@ exclude = [
   "build",
   "dist",
   "node_modules",
-  "venv"
+  "venv",
+  "scripts"
 ]
 line-length = 120
 indent-width = 4

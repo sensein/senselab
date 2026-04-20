@@ -1,9 +1,6 @@
 """Tests for the text to speech task."""
 
-from typing import Callable
-
 import pytest
-import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.preprocessing import extract_segments, resample_audios
@@ -11,16 +8,10 @@ from senselab.audio.tasks.text_to_speech import synthesize_texts
 from senselab.audio.tasks.text_to_speech.huggingface import HuggingFaceTTS
 from senselab.utils.data_structures import CoquiTTSModel, DeviceType, HFModel, Language, SenselabModel, TorchModel
 
+# Coqui TTS synthesis still uses direct TTS import (not subprocess venv yet).
+# Guard this test until it's migrated.
 try:
-    import vocos
-
-    VOCOS_AVAILABLE = True
-except ModuleNotFoundError:
-    VOCOS_AVAILABLE = False
-
-# Try to import Coqui TTS
-try:
-    from TTS.api import TTS
+    from TTS.api import TTS  # noqa: F401
 
     TTS_AVAILABLE = True
 except ModuleNotFoundError:
@@ -45,12 +36,10 @@ def coqui_tts_model() -> CoquiTTSModel:
     return CoquiTTSModel(path_or_uri="tts_models/multilingual/multi-dataset/xtts_v2", revision="main")
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
-@pytest.mark.parametrize("hf_model", ["hf_model", "hf_model2"], indirect=True)
-def test_synthesize_texts_with_hf_model(hf_model: HFModel) -> None:
-    """Test synthesizing texts."""
+def test_synthesize_texts_with_mms_tts(hf_model2: HFModel, any_device: DeviceType) -> None:
+    """Test synthesizing texts with mms-tts-eng (Tier 1)."""
     texts = ["Hello world", "Hello world again."]
-    audios = synthesize_texts(texts=texts, model=hf_model, device=DeviceType.CUDA)
+    audios = synthesize_texts(texts=texts, model=hf_model2, device=any_device)
 
     assert len(audios) == 2
     assert isinstance(audios[0], Audio)
@@ -58,13 +47,23 @@ def test_synthesize_texts_with_hf_model(hf_model: HFModel) -> None:
     assert audios[0].sampling_rate > 0
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
-@pytest.mark.skipif(not TTS_AVAILABLE, reason="Coqui TTS is not available")
-def test_synthesize_texts_with_coqui_model(coqui_tts_model: CoquiTTSModel) -> None:
+def test_synthesize_texts_with_bark(hf_model: HFModel, gpu_device: DeviceType) -> None:
+    """Test synthesizing texts with bark-small (Tier 3)."""
+    texts = ["Hello world", "Hello world again."]
+    audios = synthesize_texts(texts=texts, model=hf_model, device=gpu_device)
+
+    assert len(audios) == 2
+    assert isinstance(audios[0], Audio)
+    assert audios[0].waveform is not None
+    assert audios[0].sampling_rate > 0
+
+
+@pytest.mark.skipif(not TTS_AVAILABLE, reason="Coqui TTS synthesis not yet migrated to subprocess venv")
+def test_synthesize_texts_with_coqui_model(coqui_tts_model: CoquiTTSModel, gpu_device: DeviceType) -> None:
     """Test synthesizing texts."""
     texts = ["Hello world", "Hello world again."]
     audios = synthesize_texts(
-        texts=texts, model=coqui_tts_model, device=DeviceType.CUDA, language=Language(language_code="en")
+        texts=texts, model=coqui_tts_model, device=gpu_device, language=Language(language_code="en")
     )
 
     assert len(audios) == 2
@@ -73,20 +72,14 @@ def test_synthesize_texts_with_coqui_model(coqui_tts_model: CoquiTTSModel) -> No
     assert audios[0].sampling_rate > 0
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
-@pytest.mark.parametrize("device", [DeviceType.CPU, DeviceType.CUDA])  # MPS is not available for now
-def test_huggingface_tts_pipeline_factory(hf_model: HFModel, device: DeviceType, is_device_available: Callable) -> None:
+def test_huggingface_tts_pipeline_factory(hf_model: HFModel, any_device: DeviceType) -> None:
     """Test Hugging Face TTS pipeline factory."""
-    if not is_device_available(device):
-        pytest.skip(f"{device} is not available")
-
-    pipeline1 = HuggingFaceTTS._get_hf_tts_pipeline(model=hf_model, device=device)
-    pipeline2 = HuggingFaceTTS._get_hf_tts_pipeline(model=hf_model, device=device)
+    pipeline1 = HuggingFaceTTS._get_hf_tts_pipeline(model=hf_model, device=any_device)
+    pipeline2 = HuggingFaceTTS._get_hf_tts_pipeline(model=hf_model, device=any_device)
 
     assert pipeline1 is pipeline2  # Check if the same instance is returned
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_invalid_model() -> None:
     """Test synthesize_texts with invalid model."""
     texts = ["Hello world"]

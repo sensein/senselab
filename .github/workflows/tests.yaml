@@ -42,7 +42,7 @@ jobs:
       shell: bash
     - name: Install dependencies with uv
       run: |
-        uv sync --extra text --extra video --group dev
+        uv sync --all-extras --group dev
       shell: bash
     - name: check files
       run: |
@@ -88,7 +88,7 @@ jobs:
       with:
         python-version: '3.11'
     - name: Install dependencies with uv
-      run: uv sync --extra text --extra video --group dev
+      run: uv sync --all-extras --group dev
     - name: Run pre-commit
       run: uv run pre-commit run --all-files
       shell: bash
@@ -181,21 +181,41 @@ jobs:
           sudo chown $(whoami) /scratch
         fi
         mkdir -p "$UV_CACHE_DIR" "$HF_HOME" "$TORCH_HOME"
+    - name: Install tools (uv, miniforge, FFmpeg)
+      run: |
+        set -euxo pipefail
+        # Install uv if not present
+        if ! command -v uv &>/dev/null; then
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+        fi
+        export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
+        uv --version
+
+        # Install miniforge + FFmpeg shared libs for torchcodec
+        CONDA_PREFIX=/opt/miniforge
+        if ! command -v "${CONDA_PREFIX}/bin/conda" &>/dev/null; then
+          curl -fsSL https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh \
+            -o /tmp/miniforge.sh
+          bash /tmp/miniforge.sh -b -p "${CONDA_PREFIX}"
+          rm /tmp/miniforge.sh
+        fi
+        # torchcodec 0.7 needs FFmpeg <= 7 (libavutil.so.59 or earlier)
+        "${CONDA_PREFIX}/bin/conda" install -y -p "${CONDA_PREFIX}" 'ffmpeg<8'
+        echo "${CONDA_PREFIX}/lib" | sudo tee /etc/ld.so.conf.d/miniforge.conf
+        sudo ldconfig
+        ldconfig -p | grep libavutil
     - name: Set up environment (Python ${{ matrix.python-version }})
       run: |
         set -euxo pipefail
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
-        uv --version
-        uv sync --python ${{ matrix.python-version }} --extra text --extra video --group dev
-        # Make ffmpeg available on PATH (non-fatal — some tests skip without it)
-        set +e
-        FFMPEG_BIN=$(uv run python -c "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())" 2>/dev/null)
-        if [ -n "$FFMPEG_BIN" ]; then
-          ln -sf "$FFMPEG_BIN" "${EC2_USER_HOME}/.local/bin/ffmpeg"
-        fi
-        ffmpeg -version 2>/dev/null || echo "ffmpeg not on PATH (some tests may skip)"
-        set -e
+        uv sync --python ${{ matrix.python-version }} --all-extras --group dev
+        # torchcodec needs libpython on LD_LIBRARY_PATH — resolve() follows
+        # the venv symlink to the real uv-managed Python install
+        PYTHON_LIB_DIR=$(uv run python -c "import pathlib, sys; print(pathlib.Path(sys.executable).resolve().parent.parent / 'lib')")
+        echo "PYTHON_LIB_DIR=${PYTHON_LIB_DIR}" >> $GITHUB_ENV
     - name: Verify GPU access
+      env:
+        LD_LIBRARY_PATH: /opt/miniforge/lib:${{ env.PYTHON_LIB_DIR }}
       run: |
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
         nvidia-smi
@@ -213,6 +233,7 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        LD_LIBRARY_PATH: /opt/miniforge/lib:${{ env.PYTHON_LIB_DIR }}
       run: |
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
         uv run pytest src/tests \
