@@ -125,7 +125,8 @@ def extract_ppgs_from_audios(audios: List[Audio], device: Optional[DeviceType] =
         if result.returncode != 0:
             raise RuntimeError(f"PPGs venv failed:\n{result.stderr}")
 
-        output = json.loads(result.stdout.strip())
+        # Parse last line only — libraries may print to stdout during init
+        output = json.loads(result.stdout.strip().splitlines()[-1])
 
         # Load results
         posteriorgrams = []

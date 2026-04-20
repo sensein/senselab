@@ -80,7 +80,7 @@ for i, (src_path, tgt_path) in enumerate(zip(source_paths, target_paths)):
 
     sr = output_sample_rate or src_sr
     out_path = str(Path(output_dir) / f"cloned_{i}.flac")
-    sf.write(out_path, converted.squeeze().numpy(), sr, format="FLAC")
+    sf.write(out_path, converted.squeeze().cpu().numpy(), sr, format="FLAC")
     output_paths.append(out_path)
 
 print(json.dumps({"output_paths": output_paths}))
@@ -158,7 +158,8 @@ class CoquiVoiceCloner:
             if result.returncode != 0:
                 raise RuntimeError(f"Coqui venv failed:\n{result.stderr}")
 
-            output = json.loads(result.stdout.strip())
+            # Parse last line only — libraries may print to stdout during init
+            output = json.loads(result.stdout.strip().splitlines()[-1])
 
             # Load results
             cloned_audios = []
