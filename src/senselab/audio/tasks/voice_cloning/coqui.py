@@ -106,7 +106,7 @@ def list_coqui_models() -> list:
         [python, "-c", "from TTS.api import TTS; import json; print(json.dumps(list(TTS().list_models())))"],
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=300,  # cold start can be slow (venv creation + TTS model list download)
     )
     if result.returncode != 0:
         raise RuntimeError(f"Failed to list Coqui models:\n{result.stderr}")
