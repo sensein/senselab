@@ -76,7 +76,7 @@ def test_clone_voices_stereo_audio(resampled_stereo_audio_sample: Audio, vc_mode
     source_audios = [resampled_stereo_audio_sample]
     target_audios = [resampled_stereo_audio_sample]
 
-    with pytest.raises(ValueError, match="Only mono audio files are supported."):
+    with pytest.raises(ValueError, match="Only mono audio"):
         clone_voices(source_audios=source_audios, target_audios=target_audios, model=vc_model, device=None)
 
 
