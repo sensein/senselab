@@ -11,6 +11,7 @@ The only things NOT checked here are:
 """
 
 import importlib
+import warnings
 
 import pytest
 
@@ -20,7 +21,6 @@ REQUIRED_DEPS = {
     # Core dependencies
     "torch": "torch",
     "torchaudio": "torchaudio",
-    "torchcodec": "torchcodec",
     "torchvision": "torchvision",
     "transformers": "transformers",
     "speechbrain": "speechbrain",
@@ -48,6 +48,16 @@ REQUIRED_DEPS = {
     "speech-articulatory-coding": "articulatory_coding",
 }
 
+# torchcodec needs FFmpeg shared libs AND libpython as a shared library.
+# uv's python-build-standalone doesn't include libpython.so (static build),
+# so torchcodec's native extension fails to load on those environments.
+# We warn instead of aborting — torchaudio provides a fallback for all
+# audio I/O operations.  TODO: resolve once python-build-standalone ships
+# shared libs or torchcodec removes the libpython dependency.
+SOFT_DEPS = {
+    "torchcodec": "torchcodec",
+}
+
 
 def pytest_configure(config: pytest.Config) -> None:
     """Verify all dependencies are importable at session start."""
@@ -58,6 +68,22 @@ def pytest_configure(config: pytest.Config) -> None:
         except (ImportError, RuntimeError) as e:
             missing.append(f"  {name} ({module}): {e}")
 
+    soft_missing = []
+    for name, module in SOFT_DEPS.items():
+        try:
+            importlib.import_module(module)
+        except (ImportError, RuntimeError) as e:
+            soft_missing.append(f"  {name} ({module}): {e}")
+
+    if soft_missing:
+        warnings.warn(
+            "Optional system deps unavailable (torchaudio fallback will be used):\n"
+            + "\n".join(soft_missing)
+            + "\n\nTo fix: install FFmpeg <= 7 shared libs AND ensure Python was"
+            " built with --enable-shared (uv's python-build-standalone is static).",
+            stacklevel=1,
+        )
+
     if missing:
         lines = [
             "\n\nDependencies failed to import — test environment is broken.\n",
@@ -66,10 +92,11 @@ def pytest_configure(config: pytest.Config) -> None:
             "  1. Install Python packages:  uv sync --all-extras --group dev",
             "  2. System dependencies:",
             "     - FFmpeg <= 7 shared libs (required by torchcodec).",
-            "       The CI workflow compiles FFmpeg from source; ensure build",
-            "       tools are available (gcc, cmake, nasm — see EC2_GPU_RUNNER.md).",
+            "       CI installs via: conda install 'ffmpeg<8' (miniforge/conda-forge)",
             "       macOS: brew install ffmpeg@7",
-            "     - libsndfile (required by soundfile, usually bundled)",
+            "     - libpython shared library (torchcodec needs libpython3.XX.so)",
+            "       Note: uv's python-build-standalone is static — torchcodec uses",
+            "       torchaudio as fallback when libpython.so is unavailable.",
             "",
         ]
         pytest.exit("\n".join(lines), returncode=1)
