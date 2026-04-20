@@ -5,28 +5,16 @@ import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.voice_activity_detection import detect_human_voice_activity_in_audios
-from senselab.utils.data_structures import PyannoteAudioModel, SenselabModel
-
-try:
-    import pyannote.audio
-
-    PYANNOTE_INSTALLED = True
-except ModuleNotFoundError:
-    PYANNOTE_INSTALLED = False
-
-from senselab.utils.dependencies import torchaudio_available
-
-TORCHAUDIO_AVAILABLE = torchaudio_available()
+from senselab.utils.data_structures import DeviceType, PyannoteAudioModel, SenselabModel
 
 
-@pytest.mark.skipif(PYANNOTE_INSTALLED, reason="Pyannote is installed")
+@pytest.mark.skip(reason="pyannote-audio is a core dependency and always installed in test environment")
 def test_detect_human_voice_activity_in_audios_import_error() -> None:
     """Test that a ModuleNotFoundError is raised when Pyannote is not installed."""
     with pytest.raises(ModuleNotFoundError):
         detect_human_voice_activity_in_audios(audios=[Audio(waveform=torch.rand(1, 16000), sampling_rate=16000)])
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="Torchaudio is not available")
 def test_detect_human_voice_activity_in_audios_with_invalid_model(mono_audio_sample: Audio) -> None:
     """Test detecting human voice activity with an invalid model."""
     with pytest.raises(NotImplementedError):
@@ -42,14 +30,12 @@ def pyannote_model() -> PyannoteAudioModel:
     return PyannoteAudioModel(path_or_uri="pyannote/speaker-diarization-community-1")
 
 
-@pytest.mark.skipif(
-    not PYANNOTE_INSTALLED or not TORCHAUDIO_AVAILABLE, reason="Pyannote or torchaudio are not installed"
-)
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_detect_human_voice_activity_in_audios(
-    resampled_mono_audio_sample: Audio, pyannote_model: PyannoteAudioModel
+    resampled_mono_audio_sample: Audio, pyannote_model: PyannoteAudioModel, any_device: DeviceType
 ) -> None:
     """Test detecting human voice activity in audios."""
-    results = detect_human_voice_activity_in_audios(audios=[resampled_mono_audio_sample], model=pyannote_model)
+    results = detect_human_voice_activity_in_audios(
+        audios=[resampled_mono_audio_sample], model=pyannote_model, device=any_device
+    )
     assert len(results) == 1
     assert all(chunk.speaker == "VOICE" for chunk in results[0])

@@ -17,7 +17,14 @@ from senselab.utils.subprocess_venv import ensure_venv
 
 # Coqui venv specification
 _COQUI_VENV = "coqui"
-_COQUI_REQUIREMENTS = ["coqui-tts~=0.27", "torch~=2.8", "torchaudio~=2.8", "numpy", "soundfile"]
+_COQUI_REQUIREMENTS = [
+    "coqui-tts~=0.27",
+    "torch>=2.8,<2.9",
+    "torchaudio>=2.8,<2.9",
+    "transformers>=4.52,<5",  # coqui-tts 0.27 needs >=4.52; isin_mps_friendly removed in 5.0
+    "numpy",
+    "soundfile",
+]
 _COQUI_PYTHON = "3.11"
 
 # Worker script — runs inside the isolated venv (no senselab imports)
@@ -85,6 +92,21 @@ for i, (src_path, tgt_path) in enumerate(zip(source_paths, target_paths)):
 
 print(json.dumps({"output_paths": output_paths}))
 """
+
+
+def list_coqui_models() -> list:
+    """List available Coqui TTS models via the isolated subprocess venv."""
+    venv_dir = ensure_venv(_COQUI_VENV, _COQUI_REQUIREMENTS, python_version=_COQUI_PYTHON)
+    python = str(venv_dir / "bin" / "python")
+    result = subprocess.run(
+        [python, "-c", "from TTS.api import TTS; import json; print(json.dumps(list(TTS().list_models())))"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to list Coqui models:\n{result.stderr}")
+    return json.loads(result.stdout.strip().splitlines()[-1])
 
 
 class CoquiVoiceCloner:
@@ -161,9 +183,11 @@ class CoquiVoiceCloner:
             # Parse last line only — libraries may print to stdout during init
             output = json.loads(result.stdout.strip().splitlines()[-1])
 
-            # Load results
+            # Load results eagerly (tempdir is cleaned up after this block)
             cloned_audios = []
             for out_path in output.get("output_paths", []):
-                cloned_audios.append(Audio(filepath=out_path))
+                audio = Audio(filepath=out_path)
+                _ = audio.waveform  # force load before tempdir cleanup
+                cloned_audios.append(audio)
 
             return cloned_audios

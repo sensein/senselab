@@ -18,16 +18,10 @@ from senselab.audio.tasks.input_output import (
     read_audios,
     save_audios,
 )
-from senselab.utils.dependencies import torchaudio_available
 from tests.audio.conftest import MONO_AUDIO_PATH, STEREO_AUDIO_PATH
 
-TORCHAUDIO_AVAILABLE = torchaudio_available()
 
-
-@pytest.mark.skipif(
-    TORCHAUDIO_AVAILABLE,
-    reason="Torchaudio is available.",
-)
+@pytest.mark.skip(reason="torchaudio is a core dependency and always installed; missing-dep path cannot be tested")
 def test_read_audios_torchaudio_not_installed() -> None:
     """Tests the read_audios function when torchaudio is not installed."""
     with pytest.raises(ModuleNotFoundError):
@@ -43,10 +37,10 @@ def test_read_audios_torchaudio_not_installed() -> None:
         ([MONO_AUDIO_PATH, STEREO_AUDIO_PATH]),  # Test multiple files
     ],
 )
-@patch("torchaudio.load")  # Mock torchaudio.load
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
+@patch("senselab.audio.data_structures.audio.TORCHCODEC_AVAILABLE", False)
+@patch("torchaudio.load")
 def test_read_audio_lazy_loading(mock_torchaudio_load: MagicMock, audio_paths: List[str | os.PathLike]) -> None:
-    """Test lazy audio loading by mocking torchaudio.load."""
+    """Test lazy audio loading by mocking torchaudio.load (forces torchaudio path)."""
     # Mock `torchaudio.load` to return a fake waveform tensor and sample rate
     fake_waveform = torch.tensor([[1.0, 2.0, 3.0, 4.0]])
     fake_sample_rate = 48000
@@ -65,10 +59,6 @@ def test_read_audio_lazy_loading(mock_torchaudio_load: MagicMock, audio_paths: L
         assert mock_torchaudio_load.call_count == (idx + 1)
 
 
-@pytest.mark.skipif(
-    not TORCHAUDIO_AVAILABLE,
-    reason="Torchaudio is not available.",
-)
 @pytest.mark.parametrize(
     "audio_paths",
     [
@@ -98,10 +88,6 @@ def test_read_audios(audio_paths: List[str | os.PathLike]) -> None:
         )
 
 
-@pytest.mark.skipif(
-    not TORCHAUDIO_AVAILABLE,
-    reason="Torchaudio is not available.",
-)
 def test_save_audios() -> None:
     """Test the `save_audios` function."""
     # Create temporary directory for saving audio files
