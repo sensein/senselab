@@ -21,6 +21,7 @@ _NEMO_VENV = "nemo-diarization"
 _NEMO_REQUIREMENTS = [
     "nemo_toolkit[asr]",
     "torch>=2.8,<2.9",
+    "torchaudio>=2.8,<2.9",
     "soundfile",
 ]
 _NEMO_PYTHON = "3.12"
