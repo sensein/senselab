@@ -18,7 +18,7 @@
             "path": "tutorials/audio/conversational_data_exploration.ipynb",
             "requires_gpu": true,
             "requires_hf_token": true,
-            "timeout": 900,
+            "timeout": 1800,
             "category": "audio"
         },
         {
