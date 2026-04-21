@@ -58,18 +58,12 @@ All commands below run as `ec2-user`.
 sudo dnf install -y jq git
 ```
 
-#### Install uv
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-source $HOME/.local/bin/env
-```
-
 #### Verify GPU access
 
-The CI workflow uses `uv sync` to create a fresh venv on each run, so no
-pre-built venv is needed. This allows testing with different PyTorch versions
-without rebuilding the AMI. The AMI only needs CUDA drivers and uv.
+The AMI only needs NVIDIA drivers and basic system tools. Everything
+else (uv, miniforge, FFmpeg, Python, packages) is installed
+automatically by the CI workflow at runtime. This keeps the AMI thin
+and avoids version lock-in.
 
 Verify the NVIDIA driver and CUDA are functional:
 

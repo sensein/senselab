@@ -42,7 +42,7 @@ jobs:
       shell: bash
     - name: Install dependencies with uv
       run: |
-        uv sync --extra text --extra video --group dev
+        uv sync --all-extras --group dev
       shell: bash
     - name: check files
       run: |
@@ -88,11 +88,98 @@ jobs:
       with:
         python-version: '3.11'
     - name: Install dependencies with uv
-      run: uv sync --extra text --extra video --group dev
+      run: uv sync --all-extras --group dev
     - name: Run pre-commit
       run: uv run pre-commit run --all-files
       shell: bash
 
+  tutorial-cpu-tests:
+    if: >-
+      github.event.pull_request.draft == false &&
+      contains(github.event.pull_request.labels.*.name, 'test-tutorials')
+    name: tutorial-cpu-tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 1
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+    - name: Install FFmpeg
+      run: bash scripts/install-ffmpeg.sh
+    - name: Install dependencies
+      run: uv sync --all-extras --group dev
+    - name: Run all tutorial notebooks (CPU)
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      run: |
+        uv run python -c "
+        import json, subprocess, sys
+        manifest = json.load(open('tutorials/manifest.json'))
+        failed = []
+        for t in manifest['tutorials']:
+            if t.get('skip'):
+                print(f'SKIP ({t.get(\"skip_reason\",\"manual\")}): {t[\"path\"]}')
+                continue
+            timeout = t.get('timeout_cpu', t.get('timeout', 600))
+            print(f'RUN: {t[\"path\"]} (timeout={timeout}s)')
+            r = subprocess.run(
+                ['uv', 'run', 'papermill', t['path'], '/dev/null',
+                 '--cwd', '.', '-k', 'python3',
+                 '--execution-timeout', str(timeout)],
+                capture_output=True, text=True, timeout=timeout + 120
+            )
+            if r.returncode != 0:
+                print(f'FAIL: {t[\"path\"]}')
+                print(r.stderr[-500:] if r.stderr else '')
+                failed.append(t['path'])
+            else:
+                print(f'PASS: {t[\"path\"]}')
+        if failed:
+            print(f'\n{len(failed)} tutorial(s) failed:')
+            for f in failed: print(f'  {f}')
+            sys.exit(1)
+        print(f'\nAll tutorials passed (CPU)!')
+        "
+
+  cpu-tests:
+    if: github.event.pull_request.draft == false
+    name: cpu-tests (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ${{ contains(github.event.pull_request.labels.*.name, 'full-matrix') && fromJSON('["3.11","3.12","3.13","3.14"]') || fromJSON('["3.12"]') }}
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 1
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v6
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Install FFmpeg shared libraries
+      run: bash scripts/install-ffmpeg.sh
+    - name: Install dependencies with uv
+      run: uv sync --all-extras --group dev
+    - name: Run CPU tests
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      run: |
+        uv run pytest src/tests \
+          --junitxml=pytest.xml \
+          --cov-report=term-missing:skip-covered \
+          --cov-report=xml:coverage.xml \
+          --cov=src \
+          --log-level=DEBUG \
+          --verbose
 
   # ── EC2 GPU Runner Jobs ───────────────────────────────────────────────
   # Ephemeral GPU instances via machulav/ec2-github-runner.
@@ -158,7 +245,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.11', '3.12']
+        python-version: ${{ contains(github.event.pull_request.labels.*.name, 'full-matrix') && fromJSON('["3.11","3.12","3.13","3.14"]') || fromJSON('["3.12"]') }}
     env:
       EC2_USER_HOME: /home/ec2-user
       UV_CACHE_DIR: /scratch/uv-cache
@@ -181,21 +268,28 @@ jobs:
           sudo chown $(whoami) /scratch
         fi
         mkdir -p "$UV_CACHE_DIR" "$HF_HOME" "$TORCH_HOME"
+    - name: Install uv
+      run: |
+        if ! command -v uv &>/dev/null; then
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+        fi
+        export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
+        uv --version
+    - name: Install FFmpeg shared libraries
+      run: |
+        bash scripts/install-ffmpeg.sh
     - name: Set up environment (Python ${{ matrix.python-version }})
       run: |
         set -euxo pipefail
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
-        uv --version
-        uv sync --python ${{ matrix.python-version }} --extra text --extra video --group dev
-        # Make ffmpeg available on PATH (non-fatal — some tests skip without it)
-        set +e
-        FFMPEG_BIN=$(uv run python -c "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())" 2>/dev/null)
-        if [ -n "$FFMPEG_BIN" ]; then
-          ln -sf "$FFMPEG_BIN" "${EC2_USER_HOME}/.local/bin/ffmpeg"
-        fi
-        ffmpeg -version 2>/dev/null || echo "ffmpeg not on PATH (some tests may skip)"
-        set -e
+        uv sync --python ${{ matrix.python-version }} --python-preference only-managed --all-extras --group dev
+        # torchcodec needs libpython on LD_LIBRARY_PATH.
+        # Search uv-managed Python, system lib dirs for libpython.
+        PYTHON_LIB_DIR=$(uv run python -c "import pathlib,sys;v=f'{sys.version_info.major}.{sys.version_info.minor}';exe=pathlib.Path(sys.executable).resolve();candidates=[exe.parent.parent/'lib',pathlib.Path('/usr/lib/x86_64-linux-gnu'),pathlib.Path('/usr/lib64'),pathlib.Path('/usr/local/lib')];print(next((str(d) for d in candidates if list(d.glob(f'libpython{v}*'))),str(exe.parent.parent/'lib')))")
+        echo "PYTHON_LIB_DIR=${PYTHON_LIB_DIR}" >> $GITHUB_ENV
     - name: Verify GPU access
+      env:
+        LD_LIBRARY_PATH: /opt/miniforge/lib:${{ env.PYTHON_LIB_DIR }}
       run: |
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
         nvidia-smi
@@ -213,6 +307,7 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        LD_LIBRARY_PATH: /opt/miniforge/lib:${{ env.PYTHON_LIB_DIR }}
       run: |
         export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
         uv run pytest src/tests \
@@ -222,6 +317,43 @@ jobs:
           --cov=src \
           --log-level=DEBUG \
           --verbose
+    - name: Run all tutorial notebooks (GPU)
+      if: >-
+        matrix.python-version == '3.12' &&
+        contains(github.event.pull_request.labels.*.name, 'test-tutorials')
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        LD_LIBRARY_PATH: /opt/miniforge/lib:${{ env.PYTHON_LIB_DIR }}
+      run: |
+        export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
+        uv run python -c "
+        import json, subprocess, sys
+        manifest = json.load(open('tutorials/manifest.json'))
+        failed = []
+        for t in manifest['tutorials']:
+            if t.get('skip'):
+                print(f'SKIP: {t[\"path\"]} ({t.get(\"skip_reason\", \"manual\")})')
+                continue
+            timeout = t.get('timeout_gpu', t.get('timeout', 600))
+            print(f'RUN: {t[\"path\"]} (timeout={timeout}s)')
+            r = subprocess.run(
+                ['uv', 'run', 'papermill', t['path'], '/dev/null',
+                 '--cwd', '.', '-k', 'python3',
+                 '--execution-timeout', str(timeout)],
+                capture_output=True, text=True, timeout=timeout + 120
+            )
+            if r.returncode != 0:
+                print(f'FAIL: {t[\"path\"]}')
+                print(r.stderr[-500:] if r.stderr else '')
+                failed.append(t['path'])
+            else:
+                print(f'PASS: {t[\"path\"]}')
+        if failed:
+            print(f'{len(failed)} tutorial(s) failed:')
+            for f in failed: print(f'  {f}')
+            sys.exit(1)
+        print('All tutorials passed (GPU)!')
+        "
 
   stop-runner:
     name: stop-runner

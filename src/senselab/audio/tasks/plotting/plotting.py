@@ -1,6 +1,13 @@
 """This module contains functions for plotting audio-related data."""
 
+import os
 from typing import Any, Dict, Tuple, Union
+
+# Use non-interactive backend when not in a notebook (e.g., papermill, CI)
+if not os.environ.get("DISPLAY") and "inline" not in os.environ.get("MPLBACKEND", ""):
+    import matplotlib
+
+    matplotlib.use("agg")
 
 import matplotlib.pyplot as plt
 import numpy as np

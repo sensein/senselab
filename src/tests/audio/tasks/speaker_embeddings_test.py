@@ -1,23 +1,11 @@
 """Tests for speaker_embeddings.py."""
 
 import pytest
-import torch
 from torch import Tensor
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speaker_embeddings import extract_speaker_embeddings_from_audios
-from senselab.utils.data_structures import SenselabModel, SpeechBrainModel
-
-try:
-    import speechbrain  # noqa: F401
-
-    SPEECHBRAIN_AVAILABLE = True
-except ModuleNotFoundError:
-    SPEECHBRAIN_AVAILABLE = False
-
-from senselab.utils.dependencies import torchaudio_available
-
-TORCHAUDIO_AVAILABLE = torchaudio_available()
+from senselab.utils.data_structures import DeviceType, SenselabModel, SpeechBrainModel
 
 
 @pytest.fixture
@@ -38,104 +26,99 @@ def resnet_model() -> SpeechBrainModel:
     return SpeechBrainModel(path_or_uri="speechbrain/spkrec-resnet-voxceleb", revision="main")
 
 
-@pytest.mark.skipif(
-    not TORCHAUDIO_AVAILABLE or not SPEECHBRAIN_AVAILABLE, reason="SpeechBrain or torchaudio are not installed"
-)
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
-def test_extract_speaker_embeddings_from_empty_audio_list(ecapa_model: SpeechBrainModel) -> None:
+def test_extract_speaker_embeddings_from_empty_audio_list(
+    ecapa_model: SpeechBrainModel, cpu_cuda_device: DeviceType
+) -> None:
     """Test extracting speaker embeddings from an empty audio list returns an empty list."""
-    embeddings = extract_speaker_embeddings_from_audios(audios=[], model=ecapa_model)
+    embeddings = extract_speaker_embeddings_from_audios(audios=[], model=ecapa_model, device=cpu_cuda_device)
     assert isinstance(embeddings, list)
     assert len(embeddings) == 0
 
 
-@pytest.mark.skipif(
-    not TORCHAUDIO_AVAILABLE or not SPEECHBRAIN_AVAILABLE, reason="SpeechBrain or torchaudio are not installed"
-)
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_extract_speaker_embeddings_from_audio(
     resampled_mono_audio_sample: Audio,
     ecapa_model: SpeechBrainModel,
     xvector_model: SpeechBrainModel,
     resnet_model: SpeechBrainModel,
+    cpu_cuda_device: DeviceType,
 ) -> None:
     """Test extracting speaker embeddings from audio."""
-    embeddings = extract_speaker_embeddings_from_audios(audios=[resampled_mono_audio_sample], model=ecapa_model)
+    embeddings = extract_speaker_embeddings_from_audios(
+        audios=[resampled_mono_audio_sample], model=ecapa_model, device=cpu_cuda_device
+    )
     assert isinstance(embeddings, list) and all(isinstance(embedding, Tensor) for embedding in embeddings)
     assert all(embedding.size(0) == 192 for embedding in embeddings)
 
-    embeddings = extract_speaker_embeddings_from_audios(audios=[resampled_mono_audio_sample], model=xvector_model)
+    embeddings = extract_speaker_embeddings_from_audios(
+        audios=[resampled_mono_audio_sample], model=xvector_model, device=cpu_cuda_device
+    )
     assert isinstance(embeddings, list) and all(isinstance(embedding, Tensor) for embedding in embeddings)
     assert all(embedding.size(0) == 512 for embedding in embeddings)
 
-    embeddings = extract_speaker_embeddings_from_audios(audios=[resampled_mono_audio_sample], model=resnet_model)
+    embeddings = extract_speaker_embeddings_from_audios(
+        audios=[resampled_mono_audio_sample], model=resnet_model, device=cpu_cuda_device
+    )
     assert isinstance(embeddings, list) and all(isinstance(embedding, Tensor) for embedding in embeddings)
     assert all(embedding.size(0) == 256 for embedding in embeddings)
 
 
-@pytest.mark.skipif(
-    not TORCHAUDIO_AVAILABLE or not SPEECHBRAIN_AVAILABLE, reason="SpeechBrain or torchaudio are not installed"
-)
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_extract_speaker_embeddings_from_multiple_audios(
     resampled_mono_audio_sample: Audio,
     ecapa_model: SpeechBrainModel,
     xvector_model: SpeechBrainModel,
     resnet_model: SpeechBrainModel,
+    cpu_cuda_device: DeviceType,
 ) -> None:
     """Test extracting speaker embeddings from multiple audios."""
     embeddings = extract_speaker_embeddings_from_audios(
-        audios=[resampled_mono_audio_sample, resampled_mono_audio_sample], model=ecapa_model
+        audios=[resampled_mono_audio_sample, resampled_mono_audio_sample], model=ecapa_model, device=cpu_cuda_device
     )
     assert isinstance(embeddings, list) and all(isinstance(embedding, Tensor) for embedding in embeddings)
     assert all(embedding.size(0) == 192 for embedding in embeddings)
 
     embeddings = extract_speaker_embeddings_from_audios(
-        audios=[resampled_mono_audio_sample, resampled_mono_audio_sample], model=xvector_model
+        audios=[resampled_mono_audio_sample, resampled_mono_audio_sample], model=xvector_model, device=cpu_cuda_device
     )
     assert isinstance(embeddings, list) and all(isinstance(embedding, Tensor) for embedding in embeddings)
     assert all(embedding.size(0) == 512 for embedding in embeddings)
 
     embeddings = extract_speaker_embeddings_from_audios(
-        audios=[resampled_mono_audio_sample, resampled_mono_audio_sample], model=resnet_model
+        audios=[resampled_mono_audio_sample, resampled_mono_audio_sample], model=resnet_model, device=cpu_cuda_device
     )
     assert isinstance(embeddings, list) and all(isinstance(embedding, Tensor) for embedding in embeddings)
     assert all(embedding.size(0) == 256 for embedding in embeddings)
 
 
-@pytest.mark.skipif(
-    not TORCHAUDIO_AVAILABLE or not SPEECHBRAIN_AVAILABLE, reason="SpeechBrain or torchaudio are not installed"
-)
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_extract_speaker_embeddings_from_multiple_audios_different_sizes(
     resampled_mono_audio_sample: Audio,
     resampled_mono_audio_sample_x2: Audio,
     ecapa_model: SpeechBrainModel,
     xvector_model: SpeechBrainModel,
     resnet_model: SpeechBrainModel,
+    cpu_cuda_device: DeviceType,
 ) -> None:
     """Test extracting speaker embeddings from multiple audios of differing lengths."""
     embeddings = extract_speaker_embeddings_from_audios(
-        audios=[resampled_mono_audio_sample, resampled_mono_audio_sample_x2], model=ecapa_model
+        audios=[resampled_mono_audio_sample, resampled_mono_audio_sample_x2], model=ecapa_model, device=cpu_cuda_device
     )
     assert isinstance(embeddings, list) and all(isinstance(embedding, Tensor) for embedding in embeddings)
     assert all(embedding.size(0) == 192 for embedding in embeddings)
 
     embeddings = extract_speaker_embeddings_from_audios(
-        audios=[resampled_mono_audio_sample, resampled_mono_audio_sample_x2], model=xvector_model
+        audios=[resampled_mono_audio_sample, resampled_mono_audio_sample_x2],
+        model=xvector_model,
+        device=cpu_cuda_device,
     )
     assert isinstance(embeddings, list) and all(isinstance(embedding, Tensor) for embedding in embeddings)
     assert all(embedding.size(0) == 512 for embedding in embeddings)
 
     embeddings = extract_speaker_embeddings_from_audios(
-        audios=[resampled_mono_audio_sample, resampled_mono_audio_sample_x2], model=resnet_model
+        audios=[resampled_mono_audio_sample, resampled_mono_audio_sample_x2], model=resnet_model, device=cpu_cuda_device
     )
     assert isinstance(embeddings, list) and all(isinstance(embedding, Tensor) for embedding in embeddings)
     assert all(embedding.size(0) == 256 for embedding in embeddings)
 
 
-@pytest.mark.skipif(not SPEECHBRAIN_AVAILABLE, reason="torchaudio is not installed")
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_error_wrong_model(resampled_mono_audio_sample: Audio) -> None:
     """Test raising error when using a non-existent model."""
     with pytest.raises(ValueError):
@@ -149,49 +132,35 @@ def test_error_wrong_model(resampled_mono_audio_sample: Audio) -> None:
         )
 
 
-@pytest.mark.skipif(
-    not TORCHAUDIO_AVAILABLE or not SPEECHBRAIN_AVAILABLE, reason="SpeechBrain or torchaudio are not installed"
-)
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_extract_speechbrain_speaker_embeddings_from_audio_resampled(
     mono_audio_sample: Audio,
     ecapa_model: SpeechBrainModel,
     xvector_model: SpeechBrainModel,
     resnet_model: SpeechBrainModel,
+    cpu_cuda_device: DeviceType,
 ) -> None:
     """Test extracting speaker embeddings from audio."""
-    # Testing with the ecapa model
     with pytest.raises(ValueError):
-        extract_speaker_embeddings_from_audios(audios=[mono_audio_sample], model=ecapa_model)
-
-    # Testing with the xvector model
+        extract_speaker_embeddings_from_audios(audios=[mono_audio_sample], model=ecapa_model, device=cpu_cuda_device)
     with pytest.raises(ValueError):
-        extract_speaker_embeddings_from_audios(audios=[mono_audio_sample], model=xvector_model)
-
-    # Testing with the resnet model
+        extract_speaker_embeddings_from_audios(audios=[mono_audio_sample], model=xvector_model, device=cpu_cuda_device)
     with pytest.raises(ValueError):
-        extract_speaker_embeddings_from_audios(audios=[mono_audio_sample], model=resnet_model)
+        extract_speaker_embeddings_from_audios(audios=[mono_audio_sample], model=resnet_model, device=cpu_cuda_device)
 
 
-@pytest.mark.skipif(
-    not TORCHAUDIO_AVAILABLE or not SPEECHBRAIN_AVAILABLE, reason="SpeechBrain or torchaudio are not installed"
-)
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_extract_speechbrain_speaker_embeddings_from_stereo_audio(
     stereo_audio_sample: Audio,
     ecapa_model: SpeechBrainModel,
     xvector_model: SpeechBrainModel,
     resnet_model: SpeechBrainModel,
+    cpu_cuda_device: DeviceType,
 ) -> None:
     """Test extracting speaker embeddings from audio."""
-    # Testing with the ecapa model
     with pytest.raises(ValueError):
-        extract_speaker_embeddings_from_audios(audios=[stereo_audio_sample], model=ecapa_model)
-
-    # Testing with the xvector model
+        extract_speaker_embeddings_from_audios(audios=[stereo_audio_sample], model=ecapa_model, device=cpu_cuda_device)
     with pytest.raises(ValueError):
-        extract_speaker_embeddings_from_audios(audios=[stereo_audio_sample], model=xvector_model)
-
-    # Testing with the resnet model
+        extract_speaker_embeddings_from_audios(
+            audios=[stereo_audio_sample], model=xvector_model, device=cpu_cuda_device
+        )
     with pytest.raises(ValueError):
-        extract_speaker_embeddings_from_audios(audios=[stereo_audio_sample], model=resnet_model)
+        extract_speaker_embeddings_from_audios(audios=[stereo_audio_sample], model=resnet_model, device=cpu_cuda_device)

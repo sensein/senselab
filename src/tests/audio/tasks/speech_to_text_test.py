@@ -1,19 +1,14 @@
 """Tests for the speech to text task."""
 
-from typing import Callable
 from unittest.mock import Mock
 
 import pytest
-import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speech_to_text import huggingface as huggingface_asr_module
 from senselab.audio.tasks.speech_to_text import transcribe_audios
 from senselab.audio.tasks.speech_to_text.huggingface import HuggingFaceASR
 from senselab.utils.data_structures import DeviceType, HFModel, Language, ScriptLine
-from senselab.utils.dependencies import torchaudio_available
-
-TORCHAUDIO_AVAILABLE = torchaudio_available()
 
 
 def test_scriptline_from_dict() -> None:
@@ -98,20 +93,15 @@ def hf_model2() -> HFModel:
     return HFModel(path_or_uri="facebook/seamless-m4t-unity-small")
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
-@pytest.mark.parametrize("device", [DeviceType.CPU, DeviceType.CUDA])  # MPS is not available for now
-def test_hf_asr_pipeline_factory(hf_model: HFModel, device: DeviceType, is_device_available: Callable) -> None:
+def test_hf_asr_pipeline_factory(hf_model: HFModel, cpu_cuda_device: DeviceType) -> None:
     """Test ASR pipeline factory."""
-    if not is_device_available(device):
-        pytest.skip(f"{device} is not available")
-
     pipeline1 = HuggingFaceASR._get_hf_asr_pipeline(
         model=hf_model,
         return_timestamps="word",
         max_new_tokens=128,
         chunk_length_s=30,
         batch_size=1,
-        device=device,
+        device=cpu_cuda_device,
     )
     pipeline2 = HuggingFaceASR._get_hf_asr_pipeline(
         model=hf_model,
@@ -119,13 +109,11 @@ def test_hf_asr_pipeline_factory(hf_model: HFModel, device: DeviceType, is_devic
         max_new_tokens=128,
         chunk_length_s=30,
         batch_size=1,
-        device=device,
+        device=cpu_cuda_device,
     )
     assert pipeline1 is pipeline2  # Check if the same instance is returned (this is the case for serial execution)
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not available")
-# @pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 @pytest.mark.parametrize("hf_model", ["hf_model", "hf_model2"], indirect=True)
 def test_transcribe_audios(
     resampled_mono_audio_sample: Audio, resampled_mono_audio_sample_x2: Audio, hf_model: HFModel
@@ -139,11 +127,12 @@ def test_transcribe_audios(
     assert transcripts[0].text is not None and "This is Peter. This is Johnny. Kenny." in transcripts[0].text
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not available")
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 @pytest.mark.parametrize("hf_model", ["hf_model", "hf_model2"], indirect=True)
 def test_transcribe_audios_with_params(
-    resampled_mono_audio_sample: Audio, resampled_mono_audio_sample_x2: Audio, hf_model: HFModel
+    resampled_mono_audio_sample: Audio,
+    resampled_mono_audio_sample_x2: Audio,
+    hf_model: HFModel,
+    cpu_cuda_device: DeviceType,
 ) -> None:
     """Test transcribing audios."""
     transcripts = transcribe_audios(
@@ -151,6 +140,7 @@ def test_transcribe_audios_with_params(
         model=hf_model,
         language=Language(language_code="English"),
         return_timestamps=False,
+        device=cpu_cuda_device,
     )
     assert len(transcripts) == 2
     assert isinstance(transcripts[0], ScriptLine)
@@ -158,33 +148,35 @@ def test_transcribe_audios_with_params(
     # the transcript is not correct with our sample audio
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not available")
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
 def test_transcribe_audios_with_unsupported_params(
-    resampled_mono_audio_sample: Audio, resampled_mono_audio_sample_x2: Audio, hf_model: HFModel
+    resampled_mono_audio_sample: Audio,
+    resampled_mono_audio_sample_x2: Audio,
+    hf_model: HFModel,
+    cpu_cuda_device: DeviceType,
 ) -> None:
     """Test transcribing audios with an unsupported param."""
     with pytest.raises(TypeError, match="got an unexpected keyword argument"):
         transcribe_audios(
             audios=[resampled_mono_audio_sample, resampled_mono_audio_sample_x2],
             model=hf_model,
+            device=cpu_cuda_device,
             unsupported_param="unsupported_param",
         )
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not available")
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
-def test_transcribe_stereo_audio(resampled_stereo_audio_sample: Audio, hf_model: HFModel) -> None:
+def test_transcribe_stereo_audio(
+    resampled_stereo_audio_sample: Audio, hf_model: HFModel, cpu_cuda_device: DeviceType
+) -> None:
     """Test transcribing stereo audio."""
     # Create a mock stereo audio sample
     with pytest.raises(ValueError, match="Stereo audio is not supported"):
-        transcribe_audios(audios=[resampled_stereo_audio_sample], model=hf_model)
+        transcribe_audios(audios=[resampled_stereo_audio_sample], model=hf_model, device=cpu_cuda_device)
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not available")
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU is not available")
-def test_transcribe_audio_with_wrong_sampling_rate(mono_audio_sample: Audio, hf_model: HFModel) -> None:
+def test_transcribe_audio_with_wrong_sampling_rate(
+    mono_audio_sample: Audio, hf_model: HFModel, cpu_cuda_device: DeviceType
+) -> None:
     """Test transcribing stereo audio."""
     # Create a mock stereo audio sample
     with pytest.raises(ValueError, match="Incorrect sampling rate."):
-        transcribe_audios(audios=[mono_audio_sample], model=hf_model)
+        transcribe_audios(audios=[mono_audio_sample], model=hf_model, device=cpu_cuda_device)

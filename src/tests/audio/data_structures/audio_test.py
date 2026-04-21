@@ -7,21 +7,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
+import torchaudio
 
 from senselab.audio.data_structures import Audio
-from senselab.utils.dependencies import torchaudio_available
 from tests.audio.conftest import MONO_AUDIO_PATH, STEREO_AUDIO_PATH
-
-TORCHAUDIO_AVAILABLE = torchaudio_available()
-if TORCHAUDIO_AVAILABLE:
-    import torchaudio
-
-try:
-    import soundfile
-
-    SOUNDFILE_AVAILABLE = True
-except ModuleNotFoundError:
-    SOUNDFILE_AVAILABLE = False
 
 
 def load_audio(file_path: str) -> Tuple[torch.Tensor, int]:
@@ -38,37 +27,30 @@ def check_basic_audio_properties(audio: Audio) -> None:
     assert audio.sampling_rate == 48000
 
 
-@patch("torchaudio.load")  # Mock torchaudio.load
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
-def test_audio_lazy_loading(mock_torchaudio_load: MagicMock) -> None:
-    """Test lazy audio loading by mocking torchaudio.load."""
-    # Mock `torchaudio.load` to return a fake waveform tensor and sample rate
-    fake_waveform = torch.tensor([[1.0, 2.0, 3.0, 4.0]])
-    fake_sample_rate = 48000
-    mock_torchaudio_load.return_value = (fake_waveform, fake_sample_rate)
-
+def test_audio_lazy_loading() -> None:
+    """Test lazy audio loading — waveform is not loaded until accessed."""
     audio = Audio(filepath=MONO_AUDIO_PATH)
 
-    mock_torchaudio_load.assert_not_called()
-    assert audio.sampling_rate == 48000, "Sampling rate should be set even if the audio is not loaded"
+    # Waveform should not be loaded yet (lazy)
+    assert audio._waveform is None, "Waveform should not be loaded on construction"
+    assert audio.sampling_rate == 48000, "Sampling rate should be available without loading waveform"
 
-    _ = audio.waveform
-    mock_torchaudio_load.assert_called_once_with(MONO_AUDIO_PATH, frame_offset=0, num_frames=-1, backend=None)
+    # Accessing waveform triggers load
+    waveform = audio.waveform
+    assert waveform is not None
+    assert waveform.shape[0] > 0
 
-    _ = audio.waveform
-    mock_torchaudio_load.assert_called_once()
+    # Second access should return same object (cached)
+    waveform2 = audio.waveform
+    assert waveform is waveform2
 
-    assert torch.equal(audio.waveform, fake_waveform)
 
-
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 def test_audio_creation_full_file() -> None:
     """Tests loading the full audio file without offset or duration."""
     audio = Audio(filepath=MONO_AUDIO_PATH)
     check_basic_audio_properties(audio)
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 def test_audio_creation_with_offset() -> None:
     """Tests loading audio with a positive offset."""
     test_offset = 1.0
@@ -83,7 +65,6 @@ def test_audio_creation_with_offset() -> None:
     )
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 def test_audio_creation_with_duration() -> None:
     """Tests loading a specific duration of an audio file."""
     test_duration = 2.0
@@ -99,7 +80,6 @@ def test_audio_creation_with_duration() -> None:
     )
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 def test_audio_creation_with_offset_and_duration() -> None:
     """Tests loading audio with both an offset and a duration."""
     test_duration = 2.0
@@ -117,21 +97,18 @@ def test_audio_creation_with_offset_and_duration() -> None:
     )
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 def test_audio_creation_negative_offset() -> None:
     """Tests that a negative offset raises an error."""
     with pytest.raises(ValueError, match="Offset must be a non-negative value"):
         Audio(filepath=MONO_AUDIO_PATH, offset_in_sec=-1.0)
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 def test_audio_creation_negative_duration() -> None:
     """Tests that a negative duration (except -1) raises an error."""
     with pytest.raises(ValueError, match="Duration must be -1 .* or a positive value"):
         Audio(filepath=MONO_AUDIO_PATH, duration_in_sec=-0.5)
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 def test_audio_creation_full_duration() -> None:
     """Tests loading the full audio file with duration=-1."""
     audio = Audio(filepath=MONO_AUDIO_PATH, duration_in_sec=-1)
@@ -141,7 +118,6 @@ def test_audio_creation_full_duration() -> None:
     assert audio == full_audio, "Setting duration manually to -1 fails to return full audio"
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 def test_audio_creation_stereo_audio() -> None:
     """Tests loading a stereo audio file."""
     audio = Audio(filepath=STEREO_AUDIO_PATH)
@@ -149,21 +125,19 @@ def test_audio_creation_stereo_audio() -> None:
     assert audio.waveform.shape[0] == 2
 
 
-@pytest.mark.skipif(TORCHAUDIO_AVAILABLE, reason="torchaudio is installed.")
+@pytest.mark.skip(reason="torchaudio is a core dependency and always installed; missing-dep path cannot be tested")
 def test_audio_creation_error() -> None:
     """Tests audio creation with missing torchaudio."""
     with pytest.raises(ModuleNotFoundError):
         Audio(filepath=MONO_AUDIO_PATH).waveform
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 def test_audio_creation_invalid_backend() -> None:
     """Tests that an invalid backend raises an error."""
     with pytest.raises(ValueError, match="Unsupported backend"):
         Audio(filepath=MONO_AUDIO_PATH, backend="invalid_backend")
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 @pytest.mark.parametrize(
     "audio_fixture, audio_path",
     [
@@ -182,7 +156,6 @@ def test_audio_creation(audio_fixture: str, audio_path: str, request: pytest.Fix
     assert audio == audio_sample, "Audios are not exactly equivalent"
 
 
-@pytest.mark.skipif(not SOUNDFILE_AVAILABLE, reason="soundfile is not installed.")
 @pytest.mark.parametrize(
     "audio_path",
     [MONO_AUDIO_PATH, STEREO_AUDIO_PATH],
@@ -205,7 +178,6 @@ def test_audio_stream(audio_path: str) -> None:
         )
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 @pytest.mark.parametrize(
     "audio_fixture",
     ["mono_audio_sample", "stereo_audio_sample"],
@@ -231,7 +203,6 @@ def test_audio_save_to_file(audio_fixture: str, request: pytest.FixtureRequest) 
         assert audio_sample.sampling_rate == loaded_sampling_rate, "Sampling rate does not match."
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 @pytest.mark.parametrize(
     "audio_fixture, audio_path",
     [
@@ -247,7 +218,6 @@ def test_audio_creation_uuid(audio_fixture: str, audio_path: str, request: pytes
     assert audio_sample == audio_uuid, "Audio with different IDs should still be equivalent"
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 def test_audio_single_tensor(mono_audio_sample: Audio) -> None:
     """Tests mono audio creation with single tensor."""
     mono_audio_data, mono_sr = load_audio(MONO_AUDIO_PATH)
@@ -257,7 +227,6 @@ def test_audio_single_tensor(mono_audio_sample: Audio) -> None:
     )
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 def test_audio_no_waveform() -> None:
     """Lazy audio changes allow for no waveform to be passed so test that error is raised."""
     _, mono_sr = load_audio(MONO_AUDIO_PATH)
@@ -266,7 +235,6 @@ def test_audio_no_waveform() -> None:
         _ = Audio(sampling_rate=mono_sr)
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 @pytest.mark.parametrize(
     "audio_fixture, audio_path",
     [
@@ -281,7 +249,6 @@ def test_audio_from_list(audio_fixture: str, audio_path: str, request: pytest.Fi
     assert torch.equal(audio_sample.waveform, audio_from_list.waveform), "List audio should've been converted to Tensor"
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 @pytest.mark.parametrize(
     "audio_fixture, window_size, step_size",
     [
@@ -310,7 +277,6 @@ def test_window_generator_overlap(
     )
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 @pytest.mark.parametrize(
     "audio_fixture, window_size, step_size",
     [
@@ -339,7 +305,6 @@ def test_window_generator_exact_fit(
     )
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 @pytest.mark.parametrize(
     "audio_fixture, window_size, step_size",
     [
@@ -364,7 +329,6 @@ def test_window_generator_step_greater_than_window(
     )
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 @pytest.mark.parametrize(
     "audio_fixture",
     [
@@ -387,7 +351,6 @@ def test_window_generator_window_greater_than_audio(audio_fixture: str, request:
     )
 
 
-@pytest.mark.skipif(not TORCHAUDIO_AVAILABLE, reason="torchaudio is not installed.")
 @pytest.mark.parametrize(
     "audio_fixture",
     [

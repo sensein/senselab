@@ -358,6 +358,12 @@ def ensure_hf_model(repo_id: str, revision: str = "main", token: Optional[str] =
             _write_result_cache(repo_id, revision, status="ok", commit_hash=commit_hash)
             return commit_hash
         except (RepositoryNotFoundError, RevisionNotFoundError) as exc:
+            # GatedRepoError (subclass of RepositoryNotFoundError) means the repo
+            # exists but requires auth — do NOT cache as definitive failure.
+            from huggingface_hub.errors import GatedRepoError
+
+            if isinstance(exc, GatedRepoError):
+                raise
             # Definitive failure — cache so other processes don't repeat the API call
             _write_result_cache(
                 repo_id,
