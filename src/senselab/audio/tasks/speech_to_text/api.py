@@ -83,6 +83,9 @@ def transcribe_audios(
         ... )
         >>> lines[0].timestamps
     """
+    if not audios:
+        return []
+
     try:
         if isinstance(model, HFModel):
             return HuggingFaceASR.transcribe_audios_with_transformers(

@@ -5,7 +5,7 @@ import uuid
 from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
-import PIL
+import PIL.Image
 import torch
 from pydantic import BaseModel, Field
 

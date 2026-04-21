@@ -252,6 +252,15 @@ def ensure_venv(
         return venv_dir
 
 
+def _clean_subprocess_env() -> dict:
+    """Return a copy of os.environ without keys that break subprocess venvs.
+
+    Strips MPLBACKEND (matplotlib_inline backend not available in subprocesses)
+    and other notebook-specific env vars that cause errors in isolated venvs.
+    """
+    return {k: v for k, v in os.environ.items() if k not in ("MPLBACKEND",)}
+
+
 # ── Subprocess result parsing with error propagation ──────────────────
 
 
