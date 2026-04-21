@@ -150,7 +150,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.11', '3.12', '3.13', '3.14']
+        python-version: ${{ contains(github.event.pull_request.labels.*.name, 'full-matrix') && fromJSON('["3.11","3.12","3.13","3.14"]') || fromJSON('["3.12"]') }}
     steps:
     - uses: actions/checkout@v5
       with:
@@ -242,7 +242,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.11', '3.12', '3.13', '3.14']
+        python-version: ${{ contains(github.event.pull_request.labels.*.name, 'full-matrix') && fromJSON('["3.11","3.12","3.13","3.14"]') || fromJSON('["3.12"]') }}
     env:
       EC2_USER_HOME: /home/ec2-user
       UV_CACHE_DIR: /scratch/uv-cache
