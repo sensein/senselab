@@ -1,0 +1,142 @@
+{
+    "tutorials": [
+        {
+            "path": "tutorials/audio/00_getting_started.ipynb",
+            "benefits_from_gpu": false,
+            "requires_hf_token": true,
+            "timeout_cpu": 600,
+            "timeout_gpu": 300,
+            "category": "audio"
+        },
+        {
+            "path": "tutorials/audio/audio_data_augmentation.ipynb",
+            "benefits_from_gpu": false,
+            "requires_hf_token": false,
+            "timeout_cpu": 300,
+            "timeout_gpu": 300,
+            "category": "audio"
+        },
+        {
+            "path": "tutorials/audio/conversational_data_exploration.ipynb",
+            "benefits_from_gpu": true,
+            "requires_hf_token": true,
+            "timeout_cpu": 1800,
+            "timeout_gpu": 600,
+            "category": "audio"
+        },
+        {
+            "path": "tutorials/audio/extract_speaker_embeddings.ipynb",
+            "benefits_from_gpu": false,
+            "requires_hf_token": false,
+            "timeout_cpu": 300,
+            "timeout_gpu": 300,
+            "category": "audio"
+        },
+        {
+            "path": "tutorials/audio/features_extraction.ipynb",
+            "benefits_from_gpu": false,
+            "requires_hf_token": false,
+            "timeout_cpu": 600,
+            "timeout_gpu": 300,
+            "category": "audio"
+        },
+        {
+            "path": "tutorials/audio/forced_alignment.ipynb",
+            "benefits_from_gpu": false,
+            "requires_hf_token": false,
+            "timeout_cpu": 300,
+            "timeout_gpu": 300,
+            "category": "audio"
+        },
+        {
+            "path": "tutorials/audio/speaker_diarization.ipynb",
+            "benefits_from_gpu": false,
+            "requires_hf_token": true,
+            "timeout_cpu": 600,
+            "timeout_gpu": 300,
+            "category": "audio"
+        },
+        {
+            "path": "tutorials/audio/speaker_verification.ipynb",
+            "benefits_from_gpu": false,
+            "requires_hf_token": false,
+            "timeout_cpu": 300,
+            "timeout_gpu": 300,
+            "category": "audio"
+        },
+        {
+            "path": "tutorials/audio/speech_emotion_recognition.ipynb",
+            "benefits_from_gpu": true,
+            "requires_hf_token": false,
+            "timeout_cpu": 1200,
+            "timeout_gpu": 300,
+            "category": "audio"
+        },
+        {
+            "path": "tutorials/audio/speech_enhancement.ipynb",
+            "benefits_from_gpu": false,
+            "requires_hf_token": false,
+            "timeout_cpu": 300,
+            "timeout_gpu": 300,
+            "category": "audio"
+        },
+        {
+            "path": "tutorials/audio/speech_to_text.ipynb",
+            "benefits_from_gpu": false,
+            "requires_hf_token": false,
+            "timeout_cpu": 300,
+            "timeout_gpu": 300,
+            "category": "audio"
+        },
+        {
+            "path": "tutorials/audio/text_to_speech.ipynb",
+            "benefits_from_gpu": true,
+            "requires_hf_token": false,
+            "timeout_cpu": 600,
+            "timeout_gpu": 300,
+            "category": "audio"
+        },
+        {
+            "path": "tutorials/audio/voice_activity_detection.ipynb",
+            "benefits_from_gpu": false,
+            "requires_hf_token": true,
+            "timeout_cpu": 300,
+            "timeout_gpu": 300,
+            "category": "audio"
+        },
+        {
+            "path": "tutorials/audio/voice_cloning.ipynb",
+            "benefits_from_gpu": true,
+            "requires_hf_token": false,
+            "timeout_cpu": 600,
+            "timeout_gpu": 300,
+            "category": "audio"
+        },
+        {
+            "path": "tutorials/video/pose_estimation.ipynb",
+            "benefits_from_gpu": false,
+            "requires_hf_token": false,
+            "timeout_cpu": 300,
+            "timeout_gpu": 300,
+            "category": "video"
+        },
+        {
+            "path": "tutorials/utils/dimensionality_reduction.ipynb",
+            "benefits_from_gpu": false,
+            "requires_hf_token": false,
+            "timeout_cpu": 300,
+            "timeout_gpu": 300,
+            "category": "utils"
+        },
+        {
+            "path": "tutorials/senselab-ai/senselab_ai_intro.ipynb",
+            "benefits_from_gpu": false,
+            "requires_hf_token": false,
+            "timeout_cpu": 120,
+            "timeout_gpu": 120,
+            "category": "senselab-ai",
+            "skip": true,
+            "skip_reason": "Guide with screenshots, not executable code"
+        }
+    ]
+}

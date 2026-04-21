@@ -87,6 +87,8 @@ class HuggingFaceAudioClassifier:
             List[AudioClassificationResult]: The list of classification results,
                 where each result contains the classified label and their score.
         """
+        if not audios:
+            return []
 
         def _audio_to_huggingface_dict(audio: Audio) -> Dict:
             """Convert an Audio object to a dictionary that can be used by the transformers pipeline.
