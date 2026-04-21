@@ -94,7 +94,9 @@ jobs:
       shell: bash
 
   tutorial-cpu-tests:
-    if: github.event.pull_request.draft == false
+    if: >-
+      github.event.pull_request.draft == false &&
+      contains(github.event.pull_request.labels.*.name, 'test-tutorials')
     name: tutorial-cpu-tests
     runs-on: ubuntu-latest
     steps:
@@ -111,7 +113,7 @@ jobs:
       run: bash scripts/install-ffmpeg.sh
     - name: Install dependencies
       run: uv sync --all-extras --group dev
-    - name: Run CPU tutorial notebooks
+    - name: Run all tutorial notebooks (CPU)
       env:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: |
@@ -123,15 +125,13 @@ jobs:
             if t.get('skip'):
                 print(f'SKIP ({t.get(\"skip_reason\",\"manual\")}): {t[\"path\"]}')
                 continue
-            if t['requires_gpu']:
-                print(f'SKIP (GPU): {t[\"path\"]}')
-                continue
-            print(f'RUN: {t[\"path\"]}')
+            timeout = t.get('timeout_cpu', t.get('timeout', 600))
+            print(f'RUN: {t[\"path\"]} (timeout={timeout}s)')
             r = subprocess.run(
                 ['uv', 'run', 'papermill', t['path'], '/dev/null',
                  '--cwd', '.', '-k', 'python3',
-                 '--execution-timeout', str(t['timeout'])],
-                capture_output=True, text=True, timeout=t['timeout'] + 120
+                 '--execution-timeout', str(timeout)],
+                capture_output=True, text=True, timeout=timeout + 120
             )
             if r.returncode != 0:
                 print(f'FAIL: {t[\"path\"]}')
@@ -143,7 +143,7 @@ jobs:
             print(f'\n{len(failed)} tutorial(s) failed:')
             for f in failed: print(f'  {f}')
             sys.exit(1)
-        print(f'\nAll CPU tutorials passed!')
+        print(f'\nAll tutorials passed (CPU)!')
         "
 
   cpu-tests:
@@ -317,8 +317,10 @@ jobs:
           --cov=src \
           --log-level=DEBUG \
           --verbose
-    - name: Run GPU tutorial notebooks
-      if: matrix.python-version == '3.12'
+    - name: Run all tutorial notebooks (GPU)
+      if: >-
+        matrix.python-version == '3.12' &&
+        contains(github.event.pull_request.labels.*.name, 'test-tutorials')
       env:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
         LD_LIBRARY_PATH: /opt/miniforge/lib:${{ env.PYTHON_LIB_DIR }}
@@ -332,14 +334,13 @@ jobs:
             if t.get('skip'):
                 print(f'SKIP: {t[\"path\"]} ({t.get(\"skip_reason\", \"manual\")})')
                 continue
-            if not t['requires_gpu']:
-                continue
-            print(f'RUN: {t[\"path\"]}')
+            timeout = t.get('timeout_gpu', t.get('timeout', 600))
+            print(f'RUN: {t[\"path\"]} (timeout={timeout}s)')
             r = subprocess.run(
                 ['uv', 'run', 'papermill', t['path'], '/dev/null',
                  '--cwd', '.', '-k', 'python3',
-                 '--execution-timeout', str(t['timeout'])],
-                capture_output=True, text=True, timeout=t['timeout'] + 120
+                 '--execution-timeout', str(timeout)],
+                capture_output=True, text=True, timeout=timeout + 120
             )
             if r.returncode != 0:
                 print(f'FAIL: {t[\"path\"]}')
@@ -348,10 +349,10 @@ jobs:
             else:
                 print(f'PASS: {t[\"path\"]}')
         if failed:
-            print(f'{len(failed)} GPU tutorial(s) failed:')
+            print(f'{len(failed)} tutorial(s) failed:')
             for f in failed: print(f'  {f}')
             sys.exit(1)
-        print('All GPU tutorials passed!')
+        print('All tutorials passed (GPU)!')
         "
 
   stop-runner:
