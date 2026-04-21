@@ -1,0 +1,123 @@
+{
+    "tutorials": [
+        {
+            "path": "tutorials/audio/00_getting_started.ipynb",
+            "requires_gpu": false,
+            "requires_hf_token": true,
+            "timeout": 600,
+            "category": "audio"
+        },
+        {
+            "path": "tutorials/audio/audio_data_augmentation.ipynb",
+            "requires_gpu": false,
+            "requires_hf_token": false,
+            "timeout": 300,
+            "category": "audio"
+        },
+        {
+            "path": "tutorials/audio/conversational_data_exploration.ipynb",
+            "requires_gpu": true,
+            "requires_hf_token": true,
+            "timeout": 900,
+            "category": "audio"
+        },
+        {
+            "path": "tutorials/audio/extract_speaker_embeddings.ipynb",
+            "requires_gpu": false,
+            "requires_hf_token": false,
+            "timeout": 300,
+            "category": "audio"
+        },
+        {
+            "path": "tutorials/audio/features_extraction.ipynb",
+            "requires_gpu": false,
+            "requires_hf_token": false,
+            "timeout": 600,
+            "category": "audio"
+        },
+        {
+            "path": "tutorials/audio/forced_alignment.ipynb",
+            "requires_gpu": false,
+            "requires_hf_token": false,
+            "timeout": 300,
+            "category": "audio"
+        },
+        {
+            "path": "tutorials/audio/speaker_diarization.ipynb",
+            "requires_gpu": false,
+            "requires_hf_token": true,
+            "timeout": 600,
+            "category": "audio"
+        },
+        {
+            "path": "tutorials/audio/speaker_verification.ipynb",
+            "requires_gpu": false,
+            "requires_hf_token": false,
+            "timeout": 300,
+            "category": "audio"
+        },
+        {
+            "path": "tutorials/audio/speech_emotion_recognition.ipynb",
+            "requires_gpu": true,
+            "requires_hf_token": false,
+            "timeout": 600,
+            "category": "audio"
+        },
+        {
+            "path": "tutorials/audio/speech_enhancement.ipynb",
+            "requires_gpu": false,
+            "requires_hf_token": false,
+            "timeout": 300,
+            "category": "audio"
+        },
+        {
+            "path": "tutorials/audio/speech_to_text.ipynb",
+            "requires_gpu": false,
+            "requires_hf_token": false,
+            "timeout": 300,
+            "category": "audio"
+        },
+        {
+            "path": "tutorials/audio/text_to_speech.ipynb",
+            "requires_gpu": true,
+            "requires_hf_token": false,
+            "timeout": 600,
+            "category": "audio"
+        },
+        {
+            "path": "tutorials/audio/voice_activity_detection.ipynb",
+            "requires_gpu": false,
+            "requires_hf_token": true,
+            "timeout": 300,
+            "category": "audio"
+        },
+        {
+            "path": "tutorials/audio/voice_cloning.ipynb",
+            "requires_gpu": true,
+            "requires_hf_token": false,
+            "timeout": 600,
+            "category": "audio"
+        },
+        {
+            "path": "tutorials/video/pose_estimation.ipynb",
+            "requires_gpu": false,
+            "requires_hf_token": false,
+            "timeout": 300,
+            "category": "video"
+        },
+        {
+            "path": "tutorials/utils/dimensionality_reduction.ipynb",
+            "requires_gpu": false,
+            "requires_hf_token": false,
+            "timeout": 300,
+            "category": "utils"
+        },
+        {
+            "path": "tutorials/senselab-ai/senselab_ai_intro.ipynb",
+            "requires_gpu": false,
+            "requires_hf_token": false,
+            "timeout": 120,
+            "category": "senselab-ai"
+        }
+    ]
+}

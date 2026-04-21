@@ -71,12 +71,12 @@
 
 **Independent Test**: Push a PR, verify tutorial-tests job runs and reports results
 
-- [ ] T023 [US2] Add `papermill` to dev dependencies in `pyproject.toml`
-- [ ] T024 [US2] Create tutorial manifest file `tutorials/manifest.json` mapping each notebook to requirements (cpu/gpu, timeout, extras)
-- [ ] T025 [US2] Add `tutorial-cpu-tests` job to `.github/workflows/tests.yaml` — runs CPU notebooks via papermill on ubuntu Python 3.12
-- [ ] T026 [US2] Add `tutorial-gpu-tests` job to `.github/workflows/tests.yaml` — runs GPU notebooks via papermill on EC2 (label-triggered)
-- [ ] T027 [US2] Verify CPU tutorial CI job passes on all CPU notebooks
-- [ ] T028 [US2] Verify GPU tutorial CI job passes on all GPU notebooks
+- [x] T023 [US2] Add `papermill` to dev dependencies in `pyproject.toml`
+- [x] T024 [US2] Create tutorial manifest file `tutorials/manifest.json` mapping each notebook to requirements (cpu/gpu, timeout, extras)
+- [x] T025 [US2] Add `tutorial-cpu-tests` job to `.github/workflows/tests.yaml` — runs CPU notebooks via papermill on ubuntu Python 3.12
+- [x] T026 [US2] Add `tutorial-gpu-tests` job to `.github/workflows/tests.yaml` — runs GPU notebooks via papermill on EC2 (label-triggered)
+- [x] T027 [US2] Verify CPU tutorial CI job passes on all CPU notebooks
+- [x] T028 [US2] Verify GPU tutorial CI job passes on all GPU notebooks
 
 **Checkpoint**: CI runs tutorials automatically. Regressions caught before merge.
 

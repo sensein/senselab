@@ -93,6 +93,56 @@ jobs:
       run: uv run pre-commit run --all-files
       shell: bash
 
+  tutorial-cpu-tests:
+    if: github.event.pull_request.draft == false
+    name: tutorial-cpu-tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 1
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+    - name: Install FFmpeg
+      run: bash scripts/install-ffmpeg.sh
+    - name: Install dependencies
+      run: uv sync --all-extras --group dev
+    - name: Run CPU tutorial notebooks
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      run: |
+        uv run python -c "
+        import json, subprocess, sys
+        manifest = json.load(open('tutorials/manifest.json'))
+        failed = []
+        for t in manifest['tutorials']:
+            if t['requires_gpu']:
+                print(f'SKIP (GPU): {t[\"path\"]}')
+                continue
+            print(f'RUN: {t[\"path\"]}')
+            r = subprocess.run(
+                ['uv', 'run', 'papermill', t['path'], '/dev/null',
+                 '--cwd', '.', '-k', 'python3',
+                 '--execution-timeout', str(t['timeout'])],
+                capture_output=True, text=True, timeout=t['timeout'] + 60
+            )
+            if r.returncode != 0:
+                print(f'FAIL: {t[\"path\"]}')
+                print(r.stderr[-500:] if r.stderr else '')
+                failed.append(t['path'])
+            else:
+                print(f'PASS: {t[\"path\"]}')
+        if failed:
+            print(f'\n{len(failed)} tutorial(s) failed:')
+            for f in failed: print(f'  {f}')
+            sys.exit(1)
+        print(f'\nAll CPU tutorials passed!')
+        "
+
   cpu-tests:
     if: github.event.pull_request.draft == false
     name: cpu-tests (${{ matrix.python-version }})
@@ -264,6 +314,39 @@ jobs:
           --cov=src \
           --log-level=DEBUG \
           --verbose
+    - name: Run GPU tutorial notebooks
+      if: matrix.python-version == '3.12'
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        LD_LIBRARY_PATH: /opt/miniforge/lib:${{ env.PYTHON_LIB_DIR }}
+      run: |
+        export PATH="${EC2_USER_HOME}/.local/bin:$PATH"
+        uv run python -c "
+        import json, subprocess, sys
+        manifest = json.load(open('tutorials/manifest.json'))
+        failed = []
+        for t in manifest['tutorials']:
+            if not t['requires_gpu']:
+                continue
+            print(f'RUN: {t[\"path\"]}')
+            r = subprocess.run(
+                ['uv', 'run', 'papermill', t['path'], '/dev/null',
+                 '--cwd', '.', '-k', 'python3',
+                 '--execution-timeout', str(t['timeout'])],
+                capture_output=True, text=True, timeout=t['timeout'] + 60
+            )
+            if r.returncode != 0:
+                print(f'FAIL: {t[\"path\"]}')
+                print(r.stderr[-500:] if r.stderr else '')
+                failed.append(t['path'])
+            else:
+                print(f'PASS: {t[\"path\"]}')
+        if failed:
+            print(f'{len(failed)} GPU tutorial(s) failed:')
+            for f in failed: print(f'  {f}')
+            sys.exit(1)
+        print('All GPU tutorials passed!')
+        "
 
   stop-runner:
     name: stop-runner
