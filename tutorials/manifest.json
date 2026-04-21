@@ -68,7 +68,7 @@
             "path": "tutorials/audio/speech_emotion_recognition.ipynb",
             "benefits_from_gpu": true,
             "requires_hf_token": false,
-            "timeout_cpu": 600,
+            "timeout_cpu": 1200,
             "timeout_gpu": 300,
             "category": "audio"
         },
