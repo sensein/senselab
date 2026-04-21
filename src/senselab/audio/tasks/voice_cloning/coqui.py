@@ -6,6 +6,7 @@ Audio data is serialized as FLAC for efficient lossless transfer.
 """
 
 import json
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -13,7 +14,7 @@ from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import CoquiTTSModel, DeviceType
-from senselab.utils.subprocess_venv import ensure_venv, parse_subprocess_result
+from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result
 
 # Coqui venv specification
 _COQUI_VENV = "coqui"
@@ -102,11 +103,13 @@ def list_coqui_models() -> list:
     """List available Coqui TTS models via the isolated subprocess venv."""
     venv_dir = ensure_venv(_COQUI_VENV, _COQUI_REQUIREMENTS, python_version=_COQUI_PYTHON)
     python = str(venv_dir / "bin" / "python")
+    env = _clean_subprocess_env()
     result = subprocess.run(
         [python, "-c", "from TTS.api import TTS; import json; print(json.dumps(list(TTS().list_models())))"],
         capture_output=True,
         text=True,
         timeout=300,  # cold start can be slow (venv creation + TTS model list download)
+        env=env,
     )
     if result.returncode != 0:
         raise RuntimeError(f"Failed to list Coqui models:\n{result.stderr}")
@@ -173,12 +176,15 @@ class CoquiVoiceCloner:
                 }
             )
 
+            # Clear MPLBACKEND to avoid matplotlib_inline errors in subprocess
+            env = {k: v for k, v in os.environ.items() if k != "MPLBACKEND"}
             result = subprocess.run(
                 [python, "-c", _WORKER_SCRIPT],
                 input=input_json,
                 capture_output=True,
                 text=True,
                 timeout=600,
+                env=env,
             )
 
             output = parse_subprocess_result(result, "Coqui")
