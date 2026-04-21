@@ -12,6 +12,7 @@ repos:
   hooks:
   - id: mypy
     args: [--ignore-missing-imports, --extra-checks]
+    exclude: ^scripts/
     additional_dependencies:
     - pydantic>=1.10.4
     - types-requests

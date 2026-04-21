@@ -148,7 +148,12 @@ def _cache_dir() -> Path:
 
 
 def _find_uv() -> str:
-    """Find the uv binary."""
+    """Find the uv binary, auto-installing if not present.
+
+    Checks PATH and common install locations. If uv is not found,
+    installs it automatically (needed for environments like Google Colab
+    where uv is not pre-installed).
+    """
     uv = shutil.which("uv")
     if uv:
         return uv
@@ -158,7 +163,20 @@ def _find_uv() -> str:
     ]:
         if candidate.is_file():
             return str(candidate)
-    raise FileNotFoundError("uv not found. Install with: curl -LsSf https://astral.sh/uv/install.sh | sh")
+
+    # Auto-install uv (e.g., on Google Colab or fresh environments)
+    logger.info("uv not found — installing automatically...")
+    result = subprocess.run(
+        ["pip", "install", "uv"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if result.returncode == 0:
+        uv = shutil.which("uv")
+        if uv:
+            return uv
+    raise FileNotFoundError("uv not found and auto-install failed. Install with: pip install uv")
 
 
 # ── Venv management ──────────────────────────────────────────────────
@@ -232,6 +250,59 @@ def ensure_venv(
         )
         logger.info("Venv '%s' ready at %s", name, venv_dir)
         return venv_dir
+
+
+def _clean_subprocess_env() -> dict:
+    """Return a copy of os.environ without keys that break subprocess venvs.
+
+    Strips MPLBACKEND (matplotlib_inline backend not available in subprocesses)
+    and other notebook-specific env vars that cause errors in isolated venvs.
+    """
+    return {k: v for k, v in os.environ.items() if k not in ("MPLBACKEND",)}
+
+
+# ── Subprocess result parsing with error propagation ──────────────────
+
+
+def parse_subprocess_result(result: "subprocess.CompletedProcess[str]", venv_label: str = "subprocess") -> dict:
+    """Parse a subprocess result, raising the original exception type if it failed.
+
+    Worker scripts should print JSON to stdout. If the JSON contains an
+    ``"error"`` key with ``"type"`` and ``"message"``, the original exception
+    is reconstructed and raised.
+
+    Args:
+        result: The completed subprocess result.
+        venv_label: Label for error messages (e.g., "Coqui", "SPARC").
+
+    Returns:
+        Parsed JSON dict from the last line of stdout.
+
+    Raises:
+        ValueError, RuntimeError, etc.: Reconstructed from worker error JSON.
+        RuntimeError: If the subprocess failed without structured error output.
+    """
+    if result.returncode != 0:
+        # Try to extract structured error from stdout
+        stdout_lines = (result.stdout or "").strip().splitlines()
+        if stdout_lines:
+            try:
+                output = json.loads(stdout_lines[-1])
+                if "error" in output:
+                    err = output["error"]
+                    exc_type = err.get("type", "RuntimeError")
+                    exc_msg = err.get("message", "Unknown error")
+                    # Reconstruct common exception types
+                    exc_class = {"ValueError": ValueError, "TypeError": TypeError}.get(exc_type, RuntimeError)
+                    raise exc_class(exc_msg)
+            except json.JSONDecodeError:
+                pass
+        raise RuntimeError(f"{venv_label} venv failed:\n{result.stderr}")
+
+    stdout_lines = (result.stdout or "").strip().splitlines()
+    if not stdout_lines:
+        raise RuntimeError(f"{venv_label} venv produced no output")
+    return json.loads(stdout_lines[-1])
 
 
 # ── Container pack/unpack (host side) ─────────────────────────────────

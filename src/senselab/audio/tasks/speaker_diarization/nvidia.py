@@ -1,114 +1,139 @@
-"""This module implements the NVIDIA Sortformer Diarization task (via Docker)."""
+"""NVIDIA Sortformer diarization via isolated subprocess venv.
+
+NeMo toolkit has dependency conflicts with the main senselab environment
+(pins older transformers). Runs in an isolated subprocess venv managed by uv.
+"""
 
 from __future__ import annotations
 
 import json
-import os
-import shutil
 import subprocess
 import tempfile
+from pathlib import Path
 from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, HFModel, ScriptLine, _select_device_and_dtype
+from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result
+
+# NeMo venv specification
+_NEMO_VENV = "nemo-diarization"
+_NEMO_REQUIREMENTS = [
+    "nemo_toolkit[asr]",
+    "torch>=2.8,<2.9",
+    "torchaudio>=2.8,<2.9",
+    "soundfile",
+]
+_NEMO_PYTHON = "3.12"
+
+# Worker script — runs inside the isolated venv
+_WORKER_SCRIPT = r"""
+import json
+import sys
+from pathlib import Path
+
+try:
+    import nemo.collections.asr as nemo_asr
+    import torch
+
+    args = json.loads(sys.stdin.read())
+    audio_paths = args["audio_paths"]
+    model_name = args["model_name"]
+    device = args["device"]
+    output_dir = args["output_dir"]
+
+    model = nemo_asr.models.SortformerEncLabelModel.from_pretrained(model_name)
+    if device == "cuda" and torch.cuda.is_available():
+        model = model.cuda()
+
+    all_results = []
+    for audio_path in audio_paths:
+        with torch.no_grad():
+            diar_output = model.diarize(
+                audio=audio_path,
+                batch_size=1,
+                num_workers=0,
+                verbose=False,
+            )
+
+        # diar_output is List[List[str]] — format: "start end speaker"
+        segments = []
+        if diar_output and diar_output[0]:
+            for line in diar_output[0]:
+                parts = line.strip().split()
+                if len(parts) >= 3:
+                    start = float(parts[0])
+                    end = float(parts[1])
+                    speaker = parts[2]
+                    segments.append({
+                        "speaker": speaker,
+                        "start": start,
+                        "end": end,
+                    })
+        all_results.append(segments)
+
+    print(json.dumps({"results": all_results}))
+except Exception as exc:
+    print(json.dumps({"error": {"type": type(exc).__name__, "message": str(exc)}}))
+    sys.exit(1)
+"""
 
 
 def diarize_audios_with_nvidia_sortformer(
     audios: List[Audio],
     model: Optional[HFModel] = None,
     device: Optional[DeviceType] = None,
-    docker_image: str = "nvcr.io/nvidia/nemo:25.09",
 ) -> List[List[ScriptLine]]:
-    """Diarize audios with NVIDIA Sortformer (NeMo) via Docker, returning per-speaker segments.
+    """Diarize audios with NVIDIA Sortformer (NeMo) via subprocess venv.
 
     Args:
-        audios (list[Audio]): Audio clips to diarize (mono, correct sample rate).
-        model (HFModel | None): HF model to use (default: "nvidia/diar_sortformer_4spk-v1").
-        device (DeviceType | None): CPU or CUDA (default picked by _select_device_and_dtype()).
-        docker_image (str): Docker image containing NeMo Sortformer.
+        audios: Audio clips to diarize (mono, correct sample rate).
+        model: HF model to use (default: "nvidia/diar_sortformer_4spk-v1").
+        device: CPU or CUDA.
 
     Returns:
-        list[list[ScriptLine]]: One list per input audio with (speaker, start, end), sorted by start time.
-
-    Raises:
-        RuntimeError: If Docker is not running or the container fails.
-        ValueError: If input is invalid.
+        One list per input audio with (speaker, start, end), sorted by start time.
     """
     model_name = model.path_or_uri if model is not None else "nvidia/diar_sortformer_4spk-v1"
-    device = device or _select_device_and_dtype(compatible_devices=[DeviceType.CUDA, DeviceType.CPU])[0]
+    device_type = device or _select_device_and_dtype(compatible_devices=[DeviceType.CUDA, DeviceType.CPU])[0]
 
-    results: List[List[ScriptLine]] = []
+    venv_dir = ensure_venv(_NEMO_VENV, _NEMO_REQUIREMENTS, python_version=_NEMO_PYTHON)
+    python = str(venv_dir / "bin" / "python")
 
-    for audio in audios:
-        # Isolated temp workdir we mount at /app inside the container
-        with tempfile.TemporaryDirectory(prefix="nemo_work_") as workdir:
-            workdir = os.path.abspath(workdir)
-            wav_rel = "input.wav"
-            out_rel = "out.json"
-            worker_rel = "nemo_diarization_worker.py"
+    with tempfile.TemporaryDirectory(prefix="senselab-nemo-") as tmpdir:
+        tmp = Path(tmpdir)
 
-            # 1) Write audio into workdir
-            wav_path = os.path.join(workdir, wav_rel)
-            audio.save_to_file(wav_path)
+        # Serialize audios to WAV
+        audio_paths = []
+        for i, audio in enumerate(audios):
+            path = str(tmp / f"audio_{i}.wav")
+            audio.save_to_file(path)
+            audio_paths.append(path)
 
-            # 2) Copy worker script into workdir
-            worker_src = os.path.abspath(os.path.join(os.path.dirname(__file__), "nemo_diarization_worker.py"))
-            if not os.path.exists(worker_src):
-                raise FileNotFoundError(f"Worker script not found: {worker_src}")
-            worker_dst = os.path.join(workdir, worker_rel)
-            shutil.copy2(worker_src, worker_dst)
+        input_json = json.dumps(
+            {
+                "audio_paths": audio_paths,
+                "model_name": model_name,
+                "device": device_type.value,
+                "output_dir": str(tmp),
+            }
+        )
 
-            # 3) Build docker command
-            base_cmd = [
-                "docker",
-                "run",
-                "--rm",
-                "-v",
-                f"{workdir}:/app",
-                "-w",
-                "/app",
-                # persist HF cache to speed up repeated runs:
-                "-v",
-                f"{os.path.expanduser('~')}/.cache/huggingface:/root/.cache/huggingface",
-            ]
+        env = _clean_subprocess_env()
+        result = subprocess.run(
+            [python, "-c", _WORKER_SCRIPT],
+            input=input_json,
+            capture_output=True,
+            text=True,
+            timeout=600,
+            env=env,
+        )
 
-            cmd = base_cmd + [
-                docker_image,
-                "python",
-                worker_rel,
-                "--audio",
-                f"/app/{wav_rel}",
-                "--model",
-                model_name,
-                "--device",
-                device.value,
-                "--out",
-                f"/app/{out_rel}",
-            ]
+        output = parse_subprocess_result(result, "NeMo Sortformer")
 
-            # 4) Run container
-            try:
-                proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
-            except subprocess.CalledProcessError as e:
-                raise RuntimeError(
-                    f"NeMo Docker worker failed.\nExit code: {e.returncode}\nStdout: {e.stdout}\nStderr: {e.stderr}"
-                ) from e
-
-            # 5) Read JSON from file produced by the worker
-            out_path = os.path.join(workdir, out_rel)
-            if not os.path.exists(out_path):
-                raise RuntimeError(
-                    f"NeMo Docker worker did not produce output file.\nStdout: {proc.stdout}\nStderr: {proc.stderr}"
-                )
-
-            with open(out_path, "r", encoding="utf-8") as f:
-                output = json.load(f)
-
-            if isinstance(output, dict) and "error" in output:
-                raise RuntimeError(f"NeMo Docker worker error: {output['error']}")
-
-            segments = output.get("segments", [])
-            script_lines: List[ScriptLine] = [
+        results: List[List[ScriptLine]] = []
+        for segments in output.get("results", []):
+            script_lines = [
                 ScriptLine(
                     speaker=str(seg.get("speaker", "")),
                     start=float(seg.get("start", 0.0)),
@@ -118,4 +143,4 @@ def diarize_audios_with_nvidia_sortformer(
             ]
             results.append(sorted(script_lines, key=lambda x: x.start or 0.0))
 
-    return results
+        return results

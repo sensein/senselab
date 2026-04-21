@@ -52,6 +52,9 @@ def explore_conversation(
     Returns:
         List[Dict[str, Any]]: List of JSON-serializable dicts, one per speaker segment.
     """
+    if not audio_file_paths:
+        return []
+
     if speaker_diarization_model is None:
         speaker_diarization_model = PyannoteAudioModel(
             path_or_uri="pyannote/speaker-diarization-community-1", revision="main"

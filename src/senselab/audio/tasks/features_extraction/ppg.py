@@ -15,7 +15,7 @@ import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, _select_device_and_dtype, logger
-from senselab.utils.subprocess_venv import ensure_venv
+from senselab.utils.subprocess_venv import ensure_venv, parse_subprocess_result
 
 # PPGs venv specification
 _PPGS_VENV = "ppgs"
@@ -24,8 +24,8 @@ _PPGS_REQUIREMENTS = [
     "espnet",
     "snorkel>=0.10.0,<0.11.0",
     "lightning~=2.4",
-    "torch~=2.8",
-    "torchaudio~=2.8",
+    "torch>=2.8,<2.9",
+    "torchaudio>=2.8,<2.9",
     "numpy",
     "soundfile",
 ]
@@ -67,7 +67,7 @@ for i, audio_path in enumerate(audio_paths):
         posteriorgram = torch.tensor(float("nan"))
 
     out_path = str(Path(output_dir) / f"ppg_{i}.npy")
-    np.save(out_path, posteriorgram.numpy())
+    np.save(out_path, posteriorgram.float().numpy())
     output_paths.append(out_path)
 
 print(json.dumps({"output_paths": output_paths}))
@@ -122,11 +122,7 @@ def extract_ppgs_from_audios(audios: List[Audio], device: Optional[DeviceType] =
             timeout=600,
         )
 
-        if result.returncode != 0:
-            raise RuntimeError(f"PPGs venv failed:\n{result.stderr}")
-
-        # Parse last line only — libraries may print to stdout during init
-        output = json.loads(result.stdout.strip().splitlines()[-1])
+        output = parse_subprocess_result(result, "PPGs")
 
         # Load results
         posteriorgrams = []
