@@ -117,7 +117,9 @@
             "requires_gpu": false,
             "requires_hf_token": false,
             "timeout": 120,
-            "category": "senselab-ai"
+            "category": "senselab-ai",
+            "skip": true,
+            "skip_reason": "Guide with screenshots, not executable code"
         }
     ]
 }

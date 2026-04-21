@@ -120,6 +120,9 @@ jobs:
         manifest = json.load(open('tutorials/manifest.json'))
         failed = []
         for t in manifest['tutorials']:
+            if t.get('skip'):
+                print(f'SKIP ({t.get(\"skip_reason\",\"manual\")}): {t[\"path\"]}')
+                continue
             if t['requires_gpu']:
                 print(f'SKIP (GPU): {t[\"path\"]}')
                 continue
@@ -326,6 +329,8 @@ jobs:
         manifest = json.load(open('tutorials/manifest.json'))
         failed = []
         for t in manifest['tutorials']:
+            if t.get('skip'):
+                continue
             if not t['requires_gpu']:
                 continue
             print(f'RUN: {t[\"path\"]}')
