@@ -56,20 +56,19 @@ try:
                 verbose=False,
             )
 
-        # diar_output is List[List[str]] — each inner list has RTTM-style strings
+        # diar_output is List[List[str]] — format: "start end speaker"
         segments = []
         if diar_output and diar_output[0]:
             for line in diar_output[0]:
-                # Parse RTTM: "SPEAKER <file> 1 <start> <dur> <NA> <NA> <spk> <NA> <NA>"
                 parts = line.strip().split()
-                if len(parts) >= 8 and parts[0] == "SPEAKER":
-                    start = float(parts[3])
-                    duration = float(parts[4])
-                    speaker = parts[7]
+                if len(parts) >= 3:
+                    start = float(parts[0])
+                    end = float(parts[1])
+                    speaker = parts[2]
                     segments.append({
                         "speaker": speaker,
                         "start": start,
-                        "end": start + duration,
+                        "end": end,
                     })
         all_results.append(segments)
 
