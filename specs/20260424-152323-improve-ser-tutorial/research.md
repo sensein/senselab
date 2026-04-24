@@ -15,7 +15,7 @@
 - `superb/wav2vec2-base-superb-er`: WORKS — produces clear discrimination (0.67 neutral vs 0.32 happy on test audio)
 - `ehcalabres/wav2vec2-lg-xlsr-en-speech-emotion-recognition`: WORKS — confirms near-uniform (~0.127) on same audio
 - `audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim`: WORKS — runs in subprocess venv
-- `speechbrain/emotion-recognition-wav2vec2-IEMOCAP`: FAILS — AttributeError, incompatible with current speechbrain
+- `speechbrain/emotion-recognition-wav2vec2-IEMOCAP`: WORKS with custom Pretrained subclass (model defines modules `wav2vec2, avg_pool, output_mlp` but EncoderClassifier expects `compute_features, mean_var_norm, embedding_model, classifier`). Fix: create a custom `EmotionRecognizer(Pretrained)` with correct MODULES_NEEDED. 4-class: neu/ang/hap/sad. Produces very confident scores (1.0 neutral on casual speech)
 - `emotion2vec/emotion2vec_plus_large`: FAILS — no model_type in config.json, needs custom API (not HF pipeline)
 
 **Literature survey** (INTERSPEECH/ICASSP/ACL 2024-2025):

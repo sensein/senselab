@@ -31,11 +31,11 @@
 
 ### Implementation
 
-- [ ] T004 [US1] Create the notebook structure in tutorials/audio/speech_emotion_recognition.ipynb — title, Colab badge, overview, install cell, restart admonition, imports, device setup, recording widget, load audio cell (same pattern as other tutorials)
-- [ ] T005 [US1] Add "Speech Emotion Recognition" section in tutorials/audio/speech_emotion_recognition.ipynb — run the best-performing model (from research) on the user's audio, display emotion scores as a labeled bar chart with clear visual hierarchy
-- [ ] T006 [US1] Add "Understanding Emotion Scores" section in tutorials/audio/speech_emotion_recognition.ipynb — explain near-uniform distributions, acted vs natural speech, relative ordering vs absolute scores, dimensional vs categorical approaches
-- [ ] T007 [US1] Add acted speech comparison in tutorials/audio/speech_emotion_recognition.ipynb — load a RAVDESS sample with clear acted emotion, run the same model, show the contrast in score distribution vs natural speech
-- [ ] T008 [US1] Test US1 locally: `uv run papermill tutorials/audio/speech_emotion_recognition.ipynb /dev/null --cwd . -k python3 --execution-timeout 1200`
+- [x] T004 [US1] Create the notebook structure in tutorials/audio/speech_emotion_recognition.ipynb — title, Colab badge, overview, install cell, restart admonition, imports, device setup, recording widget, load audio cell (same pattern as other tutorials)
+- [x] T005 [US1] Add "Speech Emotion Recognition" section in tutorials/audio/speech_emotion_recognition.ipynb — run the best-performing model (from research) on the user's audio, display emotion scores as a labeled bar chart with clear visual hierarchy
+- [x] T006 [US1] Add "Understanding Emotion Scores" section in tutorials/audio/speech_emotion_recognition.ipynb — explain near-uniform distributions, acted vs natural speech, relative ordering vs absolute scores, dimensional vs categorical approaches
+- [x] T007 [US1] Add acted speech comparison in tutorials/audio/speech_emotion_recognition.ipynb — load a RAVDESS sample with clear acted emotion, run the same model, show the contrast in score distribution vs natural speech
+- [x] T008 [US1] Test US1 locally: `uv run papermill tutorials/audio/speech_emotion_recognition.ipynb /dev/null --cwd . -k python3 --execution-timeout 1200`
 
 **Checkpoint**: Tutorial produces meaningful emotion scores with interpretation guidance
 
@@ -49,9 +49,9 @@
 
 ### Implementation
 
-- [ ] T009 [US2] Add "Model Comparison" section in tutorials/audio/speech_emotion_recognition.ipynb — run at least 3 models (best discrete, RAVDESS-trained, continuous/dimensional) on the same audio, display side-by-side bar charts
-- [ ] T010 [US2] Add comparison table and model selection guidance in tutorials/audio/speech_emotion_recognition.ipynb — print table with model name, training data, best use case, and scores; explain when to use each model
-- [ ] T011 [US2] Test US2 locally with papermill
+- [x] T009 [US2] Add "Model Comparison" section in tutorials/audio/speech_emotion_recognition.ipynb — run at least 3 models (best discrete, RAVDESS-trained, continuous/dimensional) on the same audio, display side-by-side bar charts
+- [x] T010 [US2] Add comparison table and model selection guidance in tutorials/audio/speech_emotion_recognition.ipynb — print table with model name, training data, best use case, and scores; explain when to use each model
+- [x] T011 [US2] Test US2 locally with papermill
 
 **Checkpoint**: Multiple models compared with clear guidance
 
@@ -65,9 +65,9 @@
 
 ### Implementation
 
-- [ ] T012 [US3] Add "Text Sentiment from Transcription" section in tutorials/audio/speech_emotion_recognition.ipynb — transcribe audio with whisper-large-v3-turbo, run text sentiment (cardiffnlp/twitter-roberta-base-sentiment-latest via transformers pipeline), display results
-- [ ] T013 [US3] Add "Comparing Acoustic Emotion and Text Sentiment" section in tutorials/audio/speech_emotion_recognition.ipynb — side-by-side display of acoustic emotion scores and text sentiment, explain when they agree/disagree and what that means
-- [ ] T014 [US3] Test US3 locally with papermill
+- [x] T012 [US3] Add "Text Sentiment from Transcription" section in tutorials/audio/speech_emotion_recognition.ipynb — transcribe audio with whisper-large-v3-turbo, run text sentiment (cardiffnlp/twitter-roberta-base-sentiment-latest via transformers pipeline), display results
+- [x] T013 [US3] Add "Comparing Acoustic Emotion and Text Sentiment" section in tutorials/audio/speech_emotion_recognition.ipynb — side-by-side display of acoustic emotion scores and text sentiment, explain when they agree/disagree and what that means
+- [x] T014 [US3] Test US3 locally with papermill
 
 **Checkpoint**: Text sentiment complements acoustic emotion
 
@@ -75,10 +75,10 @@
 
 ## Phase 5: Polish & Cross-Cutting Concerns
 
-- [ ] T015 Add "Applying to Your Own Data" section in tutorials/audio/speech_emotion_recognition.ipynb — how to load own audio, batch-process multiple files, choose the right model, tips for better results
-- [ ] T016 Add summary table comparing all approaches in tutorials/audio/speech_emotion_recognition.ipynb
-- [ ] T017 Clear all outputs and run pre-commit: `uv run pre-commit run --all-files`
-- [ ] T018 Run full test: `uv run papermill tutorials/audio/speech_emotion_recognition.ipynb /dev/null --cwd . -k python3 --execution-timeout 1200`
+- [x] T015 Add "Applying to Your Own Data" section in tutorials/audio/speech_emotion_recognition.ipynb — how to load own audio, batch-process multiple files, choose the right model, tips for better results
+- [x] T016 Add summary table comparing all approaches in tutorials/audio/speech_emotion_recognition.ipynb
+- [x] T017 Clear all outputs and run pre-commit: `uv run pre-commit run --all-files`
+- [x] T018 Run full test: `uv run papermill tutorials/audio/speech_emotion_recognition.ipynb /dev/null --cwd . -k python3 --execution-timeout 1200`
 - [ ] T019 Push to branch, create PR to alpha with `test-tutorials` label
 - [ ] T020 Verify CI passes and merge
 
