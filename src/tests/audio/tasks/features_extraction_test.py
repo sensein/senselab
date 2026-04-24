@@ -8,7 +8,13 @@ import torch
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.features_extraction import extract_features_from_audios
 from senselab.audio.tasks.features_extraction.opensmile import extract_opensmile_features_from_audios
-from senselab.audio.tasks.features_extraction.ppg import extract_ppgs_from_audios
+from senselab.audio.tasks.features_extraction.ppg import (
+    _extract_ppg_segments,
+    _to_frame_major_posteriorgram,
+    extract_mean_phoneme_durations,
+    extract_ppgs_from_audios,
+    plot_ppg_phoneme_timeline,
+)
 from senselab.audio.tasks.features_extraction.praat_parselmouth import (
     extract_audio_duration,
     extract_cpp_descriptors,
@@ -384,6 +390,178 @@ def test_extract_sparc_features_wrong_sample_rate() -> None:
     """Test that a ValueError is raised when sparc has wrong sampling rate."""
     with pytest.raises(ValueError):
         SparcFeatureExtractor.extract_sparc_features([Audio(waveform=torch.rand(1, 44100), sampling_rate=44100)])
+
+
+# ---------------------------------------------------------------------------
+# PPG phoneme duration analysis tests (use synthetic posteriorgrams)
+# ---------------------------------------------------------------------------
+
+
+def _make_synthetic_ppg(
+    phoneme_pattern: list[int],
+    num_phonemes: int = 40,
+) -> torch.Tensor:
+    """Build a synthetic PPG tensor with a known argmax sequence.
+
+    Args:
+        phoneme_pattern: Per-frame dominant phoneme index.
+        num_phonemes: Total number of phoneme classes.
+
+    Returns:
+        Tensor of shape ``(1, num_phonemes, num_frames)``.
+    """
+    num_frames = len(phoneme_pattern)
+    # Start with a uniform-ish floor and set the argmax phoneme high
+    ppg = torch.full((num_phonemes, num_frames), 0.01)
+    for frame_idx, phoneme_idx in enumerate(phoneme_pattern):
+        ppg[phoneme_idx, frame_idx] = 0.95
+    return ppg.unsqueeze(0)  # (1, phonemes, frames)
+
+
+def test_to_frame_major_posteriorgram_3d() -> None:
+    """Test _to_frame_major_posteriorgram with a (1, phonemes, frames) input."""
+    ppg = torch.rand(1, 40, 100)
+    result = _to_frame_major_posteriorgram(ppg)
+    assert result.shape == (100, 40)
+
+
+def test_to_frame_major_posteriorgram_2d() -> None:
+    """Test _to_frame_major_posteriorgram with a (phonemes, frames) input."""
+    ppg = torch.rand(40, 100)
+    result = _to_frame_major_posteriorgram(ppg)
+    assert result.shape == (100, 40)
+
+
+def test_to_frame_major_posteriorgram_already_frame_major() -> None:
+    """Test _to_frame_major_posteriorgram when input is already (frames, phonemes)."""
+    ppg = torch.rand(100, 40)
+    result = _to_frame_major_posteriorgram(ppg)
+    assert result.shape == (100, 40)
+
+
+def test_to_frame_major_posteriorgram_too_few_dims() -> None:
+    """Test that a 1-D tensor raises ValueError."""
+    ppg = torch.rand(40)
+    with pytest.raises(ValueError, match="Expected at least a 2-D"):
+        _to_frame_major_posteriorgram(ppg)
+
+
+def test_extract_ppg_segments_basic() -> None:
+    """Test segment extraction with a simple known pattern."""
+    # Pattern: 10 frames of phoneme 0, then 5 frames of phoneme 1
+    pattern = [0] * 10 + [1] * 5
+    ppg = _make_synthetic_ppg(pattern)
+    audio = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000)
+    frame_major = _to_frame_major_posteriorgram(ppg)
+    segments = _extract_ppg_segments(audio, frame_major)
+
+    assert len(segments) == 2
+    assert segments[0]["phoneme_index"] == 0
+    assert segments[0]["frame_count"] == 10
+    assert segments[1]["phoneme_index"] == 1
+    assert segments[1]["frame_count"] == 5
+    # Total frame count
+    assert segments[0]["frame_count"] + segments[1]["frame_count"] == 15
+    # Duration should sum to total audio duration
+    total_dur = sum(s["duration_seconds"] for s in segments)
+    expected_dur = 16000 / 16000  # 1 second
+    assert abs(total_dur - expected_dur) < 1e-6
+
+
+def test_extract_ppg_segments_single_phoneme() -> None:
+    """Test segment extraction when only one phoneme is active."""
+    pattern = [5] * 20
+    ppg = _make_synthetic_ppg(pattern)
+    audio = Audio(waveform=torch.rand(1, 32000), sampling_rate=16000)
+    frame_major = _to_frame_major_posteriorgram(ppg)
+    segments = _extract_ppg_segments(audio, frame_major)
+
+    assert len(segments) == 1
+    assert segments[0]["phoneme_index"] == 5
+    assert segments[0]["frame_count"] == 20
+
+
+def test_extract_ppg_segments_empty() -> None:
+    """Test segment extraction with zero frames."""
+    ppg = torch.rand(40, 0)
+    audio = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000)
+    segments = _extract_ppg_segments(audio, ppg)
+    assert segments == []
+
+
+def test_extract_mean_phoneme_durations_basic() -> None:
+    """Test mean phoneme duration analysis with a known pattern."""
+    # 20 frames of phoneme 0, 10 frames of phoneme 1, 20 frames of phoneme 0
+    pattern = [0] * 20 + [1] * 10 + [0] * 20
+    ppg = _make_synthetic_ppg(pattern)
+    audio = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000)
+
+    result = extract_mean_phoneme_durations(audio, ppg)
+
+    assert result["frame_count"] == 50
+    assert result["phoneme_count"] == 40
+    assert abs(result["analysis_duration_seconds"] - 1.0) < 1e-6
+
+    # Phoneme "aa" (index 0) should appear twice, phoneme "ae" (index 1) once
+    dur_map = {d["phoneme"]: d for d in result["phoneme_durations"]}
+    assert "aa" in dur_map
+    assert dur_map["aa"]["count"] == 2
+    assert "ae" in dur_map
+    assert dur_map["ae"]["count"] == 1
+
+    # Mean segment duration: 3 segments, total 1 second
+    assert abs(result["mean_segment_duration_seconds"] - 1.0 / 3) < 1e-6
+
+
+def test_extract_mean_phoneme_durations_nan() -> None:
+    """Test that a NaN posteriorgram returns an empty dict."""
+    ppg = torch.tensor(float("nan"))
+    audio = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000)
+    result = extract_mean_phoneme_durations(audio, ppg)
+    assert result == {}
+
+
+def test_extract_mean_phoneme_durations_empty() -> None:
+    """Test that an empty posteriorgram returns an empty dict."""
+    ppg = torch.empty(0)
+    audio = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000)
+    result = extract_mean_phoneme_durations(audio, ppg)
+    assert result == {}
+
+
+def test_extract_mean_phoneme_durations_total_duration() -> None:
+    """Verify that per-phoneme total durations sum to audio duration."""
+    pattern = [2] * 10 + [5] * 15 + [2] * 5 + [10] * 20
+    ppg = _make_synthetic_ppg(pattern)
+    audio = Audio(waveform=torch.rand(1, 48000), sampling_rate=16000)  # 3 seconds
+
+    result = extract_mean_phoneme_durations(audio, ppg)
+    total_phoneme_dur = sum(d["total_duration_seconds"] for d in result["phoneme_durations"])
+    assert abs(total_phoneme_dur - 3.0) < 1e-6
+
+
+def test_plot_ppg_phoneme_timeline_returns_figure() -> None:
+    """Test that plot_ppg_phoneme_timeline returns a matplotlib Figure."""
+    import matplotlib
+    import matplotlib.pyplot as plt
+
+    matplotlib.use("Agg")  # non-interactive backend
+
+    pattern = [0] * 10 + [1] * 5 + [2] * 10
+    ppg = _make_synthetic_ppg(pattern)
+    audio = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000)
+
+    fig = plot_ppg_phoneme_timeline(audio, ppg, show=False)
+    assert isinstance(fig, plt.Figure)
+    plt.close(fig)
+
+
+def test_plot_ppg_phoneme_timeline_nan_raises() -> None:
+    """Test that NaN posteriorgram raises ValueError in plotting."""
+    ppg = torch.tensor(float("nan"))
+    audio = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000)
+    with pytest.raises(ValueError, match="empty or NaN"):
+        plot_ppg_phoneme_timeline(audio, ppg, show=False)
 
 
 def test_extract_features_from_audios(resampled_mono_audio_sample: Audio) -> None:
