@@ -218,7 +218,10 @@ def _to_frame_major_posteriorgram(posteriorgram: torch.Tensor) -> torch.Tensor:
     Raises:
         ValueError: If the tensor has fewer than 2 dimensions after squeezing.
     """
-    t = posteriorgram.squeeze()  # remove batch dim if present
+    t = posteriorgram.detach().cpu()
+    # Remove only the batch dimension (dim 0) if it's size 1
+    if t.ndim == 3 and t.shape[0] == 1:
+        t = t.squeeze(0)
     if t.ndim < 2:
         raise ValueError(f"Expected at least a 2-D posteriorgram after squeezing, got shape {t.shape}")
     # The ppgs library outputs (phonemes, frames) where the phoneme count
