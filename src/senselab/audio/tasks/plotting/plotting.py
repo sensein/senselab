@@ -522,6 +522,10 @@ def plot_aligned_panels(
     """
     import torchaudio.transforms as T
 
+    # Enforce mono
+    if audio.waveform.shape[0] != 1:
+        raise ValueError("plot_aligned_panels requires mono audio. Downmix multi-channel first.")
+
     if spectrogram_params is None:
         spectrogram_params = {"n_fft": 256, "hop_length": 80, "win_length": 160}
 
@@ -553,11 +557,13 @@ def plot_aligned_panels(
     def _get_spec(mel: bool) -> Tuple[np.ndarray, float, float]:
         key = "mel" if mel else "linear"
         if key not in _spec_cache:
-            wf = audio.waveform.squeeze()
+            wf = audio.waveform.squeeze().cpu()
+            # Filter out sample_rate from params for non-mel transforms
+            filtered_params = {k: v for k, v in spectrogram_params.items() if k != "sample_rate"}
             if mel:
-                transform = T.MelSpectrogram(sample_rate=sr, **spectrogram_params)
+                transform = T.MelSpectrogram(sample_rate=sr, **filtered_params)
             else:
-                transform = T.Spectrogram(**{k: v for k, v in spectrogram_params.items() if k != "sample_rate"})
+                transform = T.Spectrogram(**filtered_params)
             spec_tensor = transform(wf)
             _spec_cache[key] = _power_to_db(spec_tensor.cpu().numpy())
         spec_db = _spec_cache[key]
@@ -603,8 +609,8 @@ def plot_aligned_panels(
             elif ptype == "features":
                 data = panel.get("data", [])
                 for times, values, label, color in data:
-                    t_np = times.numpy() if torch.is_tensor(times) else np.asarray(times)
-                    v_np = values.numpy() if torch.is_tensor(values) else np.asarray(values)
+                    t_np = times.cpu().numpy() if torch.is_tensor(times) else np.asarray(times)
+                    v_np = values.cpu().numpy() if torch.is_tensor(values) else np.asarray(values)
                     ax.scatter(t_np, v_np, s=3, c=color, label=label, alpha=0.7)
                 ax.set_ylabel("Value")
                 ax.legend(loc="upper right", fontsize=7)
@@ -637,8 +643,8 @@ def plot_aligned_panels(
                 )
                 overlays = panel.get("overlays", [])
                 for ov in overlays:
-                    t_np = ov["times"].numpy() if torch.is_tensor(ov["times"]) else np.asarray(ov["times"])
-                    v_np = ov["values"].numpy() if torch.is_tensor(ov["values"]) else np.asarray(ov["values"])
+                    t_np = ov["times"].cpu().numpy() if torch.is_tensor(ov["times"]) else np.asarray(ov["times"])
+                    v_np = ov["values"].cpu().numpy() if torch.is_tensor(ov["values"]) else np.asarray(ov["values"])
                     ax.scatter(
                         t_np,
                         v_np,
