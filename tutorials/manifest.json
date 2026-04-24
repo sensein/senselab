@@ -137,7 +137,7 @@
             "category": "audio"
         },
         {
-            "path": "tutorials/audio/transcription_and_phonemic_analysis.ipynb",
+            "path": "tutorials/audio/speech_representations_lab.ipynb",
             "benefits_from_gpu": true,
             "requires_hf_token": false,
             "timeout_cpu": 1800,
@@ -145,7 +145,7 @@
             "category": "audio"
         },
         {
-            "path": "tutorials/audio/shbt205_lab.ipynb",
+            "path": "tutorials/audio/transcription_and_phonemic_analysis.ipynb",
             "benefits_from_gpu": true,
             "requires_hf_token": false,
             "timeout_cpu": 1800,

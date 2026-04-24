@@ -4,6 +4,7 @@ import traceback
 from typing import Any, Dict, List, Optional
 
 import numpy as np
+import torch.nn
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, _select_device_and_dtype, logger
@@ -13,8 +14,24 @@ TORCHAUDIO_AVAILABLE = torchaudio_available()
 if TORCHAUDIO_AVAILABLE:
     from torchaudio.pipelines import SQUIM_OBJECTIVE, SQUIM_SUBJECTIVE
 
-    objective_model = SQUIM_OBJECTIVE.get_model()
-    subjective_model = SQUIM_SUBJECTIVE.get_model()
+_objective_model = None
+_subjective_model = None
+
+
+def _get_objective_model() -> torch.nn.Module:
+    """Lazily load the SQUIM objective quality model."""
+    global _objective_model  # noqa: PLW0603
+    if _objective_model is None:
+        _objective_model = SQUIM_OBJECTIVE.get_model()
+    return _objective_model
+
+
+def _get_subjective_model() -> torch.nn.Module:
+    """Lazily load the SQUIM subjective quality model."""
+    global _subjective_model  # noqa: PLW0603
+    if _subjective_model is None:
+        _subjective_model = SQUIM_SUBJECTIVE.get_model()
+    return _subjective_model
 
 
 def extract_objective_quality_features_from_audios(
@@ -53,7 +70,7 @@ def extract_objective_quality_features_from_audios(
     for audio in audios:
         audio_features = {}
         try:
-            stoi, pesq, si_sdr = objective_model.to(device.value)(audio.waveform.to(device.value))
+            stoi, pesq, si_sdr = _get_objective_model().to(device.value)(audio.waveform.to(device.value))
             audio_features["stoi"] = stoi.cpu().item()
             audio_features["pesq"] = pesq.cpu().item()
             audio_features["si_sdr"] = si_sdr.cpu().item()
@@ -104,7 +121,7 @@ def extract_subjective_quality_features_from_audios(
     for i, audio in enumerate(audios):
         audio_features = {}
         try:
-            mos = subjective_model(audio.waveform, non_matching_references[i].waveform)
+            mos = _get_subjective_model()(audio.waveform, non_matching_references[i].waveform)
             audio_features["mos"] = mos.item()
         except RuntimeError as e:
             audio_features["mos"] = np.nan
