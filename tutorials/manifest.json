@@ -137,6 +137,14 @@
             "category": "audio"
         },
         {
+            "path": "tutorials/audio/speech_representations_lab.ipynb",
+            "benefits_from_gpu": true,
+            "requires_hf_token": false,
+            "timeout_cpu": 1800,
+            "timeout_gpu": 600,
+            "category": "audio"
+        },
+        {
             "path": "tutorials/audio/transcription_and_phonemic_analysis.ipynb",
             "benefits_from_gpu": true,
             "requires_hf_token": false,
