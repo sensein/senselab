@@ -96,7 +96,7 @@
 
 ## R10: Tutorial File Layout
 
-**Decision**: 
+**Decision**:
 - `tutorials/audio/audio_recording_and_acoustic_analysis.ipynb` (new Tutorial 1)
 - `tutorials/audio/transcription_and_phonemic_analysis.ipynb` (new Tutorial 2)
 - `tutorials/audio/00_getting_started.ipynb` (updated, already exists)

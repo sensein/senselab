@@ -9,14 +9,14 @@ Create two new pedagogical audio tutorials for senselab, update two existing cou
 
 ## Technical Context
 
-**Language/Version**: Python 3.11-3.12 (Colab uses 3.12)  
-**Primary Dependencies**: senselab (the library being tutorialized), papermill (CI execution), ipywebrtc or JS widgets (recording)  
-**Storage**: N/A (notebooks are files in the repo)  
-**Testing**: papermill for notebook execution in CI, pytest for PR #431 unit tests  
-**Target Platform**: Google Colab (primary), local Jupyter (secondary)  
-**Project Type**: Library tutorials (Jupyter notebooks)  
-**Performance Goals**: Each tutorial completes in <30 minutes for students; CI execution within timeout limits  
-**Constraints**: Must work on CPU (GPU optional); recording cells must be skippable for CI  
+**Language/Version**: Python 3.11-3.12 (Colab uses 3.12)
+**Primary Dependencies**: senselab (the library being tutorialized), papermill (CI execution), ipywebrtc or JS widgets (recording)
+**Storage**: N/A (notebooks are files in the repo)
+**Testing**: papermill for notebook execution in CI, pytest for PR #431 unit tests
+**Target Platform**: Google Colab (primary), local Jupyter (secondary)
+**Project Type**: Library tutorials (Jupyter notebooks)
+**Performance Goals**: Each tutorial completes in <30 minutes for students; CI execution within timeout limits
+**Constraints**: Must work on CPU (GPU optional); recording cells must be skippable for CI
 **Scale/Scope**: 4 notebooks (2 new, 2 updated), 1 PR merge, manifest updates
 
 ## Constitution Check

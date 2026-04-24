@@ -1,8 +1,8 @@
 # Feature Specification: Pedagogical Audio Tutorials and PPG Phoneme Durations
 
-**Feature Branch**: `20260423-213942-pedagogical-tutorials`  
-**Created**: 2026-04-23  
-**Status**: Draft  
+**Feature Branch**: `20260423-213942-pedagogical-tutorials`
+**Created**: 2026-04-23
+**Status**: Draft
 **Input**: User description: "update the tutorials in ~/Downloads/drive-download-20260424T013242Z-3-001 from a pedagogical perspective for students using the current senselab features. also revise an update the PR on getting phonemic durations from ppgs. a basic tutorial should show how senselab can be used to record an audio, look at spectrograms, extract pitch, formants and plot them. the second tutorial can focus on transcription and phonemic landmark detection on a recorded audio file. add these as two new tutorials to senselab."
 
 ## Clarifications
