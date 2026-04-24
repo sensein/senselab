@@ -1,7 +1,7 @@
 """This module contains functions for plotting audio-related data."""
 
 import os
-from typing import Any, Dict, Tuple, Union
+from typing import Any, Dict, List, Tuple, Union
 
 # Use non-interactive backend when not in a notebook (e.g., papermill, CI)
 if not os.environ.get("DISPLAY") and "inline" not in os.environ.get("MPLBACKEND", ""):
@@ -481,6 +481,184 @@ def plot_waveform_and_specgram(
 
         fig.suptitle(title)
         fig.tight_layout(rect=(0, 0, 1, 0.96))
+        plt.show(block=False)
+        return fig
+
+
+def plot_aligned_panels(
+    audio: Audio,
+    panels: List[Dict[str, Any]],
+    title: str = "",
+    figsize: Tuple[float, float] | None = None,
+    spectrogram_params: Dict[str, Any] | None = None,
+    context: _Context = "auto",
+) -> Figure:
+    """Create a multi-panel time-aligned visualization from an Audio object.
+
+    Each panel shares the same time axis. Supported panel types:
+
+    - ``{"type": "waveform"}`` -- waveform amplitude.
+    - ``{"type": "spectrogram", "mel": True/False}`` -- linear or mel spectrogram.
+    - ``{"type": "features", "data": [(times, values, label, color), ...]}`` --
+      scatter/line overlay of feature curves (e.g., pitch, formants).
+    - ``{"type": "segments", "segments": [{"label": str, "start": float, "end": float}, ...]}``
+      -- colored horizontal bars for phoneme/word segments.
+    - ``{"type": "overlay_on_spectrogram", "mel": True/False, "overlays": [...]}`` --
+      spectrogram with scatter overlays (each overlay is a dict with keys
+      ``times``, ``values``, ``label``, ``color``, and optional ``size``).
+
+    Args:
+        audio: Input mono audio.
+        panels: List of panel specification dicts (see above).
+        title: Overall figure title.
+        figsize: Base ``(width, height)`` in inches **before** context scaling.
+            Defaults to ``(14, sum_of_panel_heights)``.
+        spectrogram_params: Parameters forwarded to torchaudio spectrogram transforms.
+            Defaults to ``{"n_fft": 256, "hop_length": 80, "win_length": 160}``.
+        context: Size preset or numeric scale.
+
+    Returns:
+        matplotlib.figure.Figure: The created figure.
+    """
+    import torchaudio.transforms as T
+
+    if spectrogram_params is None:
+        spectrogram_params = {"n_fft": 256, "hop_length": 80, "win_length": 160}
+
+    sr = audio.sampling_rate
+    duration = audio.waveform.shape[1] / sr
+
+    # Height ratios
+    ratio_map = {
+        "waveform": 1,
+        "spectrogram": 2,
+        "features": 1,
+        "segments": 1,
+        "overlay_on_spectrogram": 2,
+    }
+    height_ratios = [ratio_map.get(p.get("type", "waveform"), 1) for p in panels]
+
+    scale = _resolve_scale(context)
+    rc = _rc_for_scale(scale)
+    if figsize is None:
+        base_h = float(sum(height_ratios)) * 1.8
+        base = (14.0, max(base_h, 4.0))
+    else:
+        base = figsize
+    scaled_size = (base[0] * scale, base[1] * scale)
+
+    # Helper: compute spectrogram tensor (cached across panels in this call)
+    _spec_cache: Dict[str, np.ndarray] = {}
+
+    def _get_spec(mel: bool) -> Tuple[np.ndarray, float, float]:
+        key = "mel" if mel else "linear"
+        if key not in _spec_cache:
+            wf = audio.waveform.squeeze()
+            if mel:
+                transform = T.MelSpectrogram(sample_rate=sr, **spectrogram_params)
+            else:
+                transform = T.Spectrogram(**{k: v for k, v in spectrogram_params.items() if k != "sample_rate"})
+            spec_tensor = transform(wf)
+            _spec_cache[key] = _power_to_db(spec_tensor.cpu().numpy())
+        spec_db = _spec_cache[key]
+        if mel:
+            return spec_db, 0.0, float(spec_db.shape[0] - 1)
+        else:
+            return spec_db, 0.0, float(sr / 2)
+
+    with rc_context(rc):
+        fig, axes = plt.subplots(
+            len(panels),
+            1,
+            figsize=scaled_size,
+            sharex=True,
+            gridspec_kw={"height_ratios": height_ratios},
+            squeeze=False,
+        )
+        axes_list = [axes[i, 0] for i in range(len(panels))]
+
+        waveform_np = audio.waveform.squeeze().cpu().numpy()
+        time_wav = np.linspace(0, duration, len(waveform_np), endpoint=False)
+
+        for ax, panel in zip(axes_list, panels):
+            ptype = panel.get("type", "waveform")
+
+            if ptype == "waveform":
+                ax.plot(time_wav, waveform_np, linewidth=0.3, color="steelblue")
+                ax.set_ylabel("Amplitude")
+                ax.grid(True, alpha=0.2)
+
+            elif ptype == "spectrogram":
+                mel = panel.get("mel", False)
+                spec_db, f0, f1 = _get_spec(mel)
+                ax.imshow(
+                    spec_db,
+                    aspect="auto",
+                    origin="lower",
+                    extent=[0, duration, f0, f1],
+                    cmap="magma",
+                )
+                ax.set_ylabel("Mel bins" if mel else "Frequency (Hz)")
+
+            elif ptype == "features":
+                data = panel.get("data", [])
+                for times, values, label, color in data:
+                    t_np = times.numpy() if torch.is_tensor(times) else np.asarray(times)
+                    v_np = values.numpy() if torch.is_tensor(values) else np.asarray(values)
+                    ax.scatter(t_np, v_np, s=3, c=color, label=label, alpha=0.7)
+                ax.set_ylabel("Value")
+                ax.legend(loc="upper right", fontsize=7)
+                ax.grid(True, alpha=0.3)
+
+            elif ptype == "segments":
+                seg_list = panel.get("segments", [])
+                unique_labels = sorted({s["label"] for s in seg_list})
+                y_map = {lbl: i for i, lbl in enumerate(unique_labels)}
+                cmap = plt.get_cmap("tab20", max(len(unique_labels), 1))
+                for seg in seg_list:
+                    y = y_map[seg["label"]]
+                    w = seg["end"] - seg["start"]
+                    ax.barh(y, w, left=seg["start"], height=0.7, color=cmap(y), alpha=0.85, edgecolor="none")
+                ax.set_yticks(range(len(unique_labels)))
+                ax.set_yticklabels(unique_labels, fontsize=7)
+                ax.set_ylabel("Segment")
+                ax.grid(axis="x", linestyle="--", alpha=0.3)
+
+            elif ptype == "overlay_on_spectrogram":
+                mel = panel.get("mel", False)
+                spec_db, f0, f1 = _get_spec(mel)
+                ax.imshow(
+                    spec_db,
+                    aspect="auto",
+                    origin="lower",
+                    extent=[0, duration, f0, f1],
+                    cmap="magma",
+                    alpha=0.9,
+                )
+                overlays = panel.get("overlays", [])
+                for ov in overlays:
+                    t_np = ov["times"].numpy() if torch.is_tensor(ov["times"]) else np.asarray(ov["times"])
+                    v_np = ov["values"].numpy() if torch.is_tensor(ov["values"]) else np.asarray(ov["values"])
+                    ax.scatter(
+                        t_np,
+                        v_np,
+                        s=ov.get("size", 3),
+                        c=ov["color"],
+                        label=ov.get("label", ""),
+                        zorder=3,
+                        alpha=0.7,
+                    )
+                ax.set_ylabel("Mel bins" if mel else "Frequency (Hz)")
+                if overlays:
+                    ax.legend(loc="upper right", fontsize=7)
+
+        # Shared x-axis config
+        axes_list[-1].set_xlabel("Time (seconds)")
+        axes_list[0].set_xlim(0, duration)
+
+        if title:
+            fig.suptitle(title)
+        fig.tight_layout(rect=(0, 0, 1, 0.96) if title else (0, 0, 1, 1))
         plt.show(block=False)
         return fig
 
