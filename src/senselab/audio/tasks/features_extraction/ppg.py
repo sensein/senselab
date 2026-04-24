@@ -4,11 +4,17 @@ ppgs depends on espnet, snorkel, and lightning which conflict with modern
 torch/Python. It runs in an isolated subprocess venv managed by uv.
 """
 
+from __future__ import annotations
+
 import json
+import os
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+
+if TYPE_CHECKING:
+    from matplotlib.figure import Figure
 
 import numpy as np
 import torch
@@ -16,6 +22,58 @@ import torch
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, _select_device_and_dtype, logger
 from senselab.utils.subprocess_venv import ensure_venv, parse_subprocess_result
+
+# Try to import the phoneme inventory from the ppgs library.
+# ppgs runs in a subprocess venv and may not be importable in the main env.
+try:
+    from ppgs import PHONEMES as _PPGS_PHONEMES
+
+    _PHONEME_LABELS: Tuple[str, ...] = tuple(str(p) for p in _PPGS_PHONEMES)
+except (ImportError, RuntimeError):
+    # Fallback: the 40 ARPAbet phonemes used by ppgs 0.0.9.
+    # Source: https://github.com/interactiveaudiolab/ppgs/blob/main/ppgs/data/phonemes.py
+    _PHONEME_LABELS = (
+        "aa",
+        "ae",
+        "ah",
+        "ao",
+        "aw",
+        "ay",
+        "b",
+        "ch",
+        "d",
+        "dh",
+        "eh",
+        "er",
+        "ey",
+        "f",
+        "g",
+        "hh",
+        "ih",
+        "iy",
+        "jh",
+        "k",
+        "l",
+        "m",
+        "n",
+        "ng",
+        "ow",
+        "oy",
+        "p",
+        "r",
+        "s",
+        "sh",
+        "t",
+        "th",
+        "uh",
+        "uw",
+        "v",
+        "w",
+        "y",
+        "z",
+        "zh",
+        "<silent>",
+    )
 
 # PPGs venv specification
 _PPGS_VENV = "ppgs"
@@ -114,12 +172,17 @@ def extract_ppgs_from_audios(audios: List[Audio], device: Optional[DeviceType] =
             }
         )
 
+        # Scrub MPLBACKEND so the subprocess venv's matplotlib doesn't
+        # choke on Jupyter's inline backend which isn't installed there.
+        sub_env = {k: v for k, v in os.environ.items() if k != "MPLBACKEND"}
+
         result = subprocess.run(
             [python, "-c", _WORKER_SCRIPT],
             input=input_json,
             capture_output=True,
             text=True,
             timeout=600,
+            env=sub_env,
         )
 
         output = parse_subprocess_result(result, "PPGs")
@@ -131,3 +194,280 @@ def extract_ppgs_from_audios(audios: List[Audio], device: Optional[DeviceType] =
             posteriorgrams.append(tensor)
 
         return posteriorgrams
+
+
+# ---------------------------------------------------------------------------
+# PPG phoneme duration analysis
+# ---------------------------------------------------------------------------
+
+
+def _to_frame_major_posteriorgram(posteriorgram: torch.Tensor) -> torch.Tensor:
+    """Normalize a PPG tensor to frame-major layout ``(frames, phonemes)``.
+
+    The ppgs library typically returns tensors shaped ``(1, phonemes, frames)``
+    or ``(phonemes, frames)``.  This helper squeezes any leading batch
+    dimension and transposes so that rows correspond to time frames and
+    columns correspond to phonemes.
+
+    Args:
+        posteriorgram: PPG tensor in any of the common layouts.
+
+    Returns:
+        A 2-D tensor of shape ``(frames, phonemes)``.
+
+    Raises:
+        ValueError: If the tensor has fewer than 2 dimensions after squeezing.
+    """
+    t = posteriorgram.squeeze()  # remove batch dim if present
+    if t.ndim < 2:
+        raise ValueError(f"Expected at least a 2-D posteriorgram after squeezing, got shape {t.shape}")
+    # The ppgs library outputs (phonemes, frames) where the phoneme count
+    # matches len(_PHONEME_LABELS).  Use that knowledge first; fall back to
+    # the "smaller dimension = phonemes" heuristic for unknown inventories.
+    n_phonemes = len(_PHONEME_LABELS)
+    if t.shape[0] == n_phonemes and t.shape[1] != n_phonemes:
+        # (phonemes, frames) -> (frames, phonemes)
+        t = t.T
+    elif t.shape[1] == n_phonemes and t.shape[0] != n_phonemes:
+        # Already (frames, phonemes)
+        pass
+    elif t.shape[0] < t.shape[1]:
+        # Fallback heuristic: smaller dim is phonemes
+        t = t.T
+    # else: ambiguous (e.g. square); assume already frame-major
+    return t
+
+
+def _extract_ppg_segments(
+    audio: Audio,
+    frame_major_posteriorgram: torch.Tensor,
+) -> List[Dict[str, Any]]:
+    """Find contiguous argmax-phoneme segments and compute their durations.
+
+    For every time frame the dominant phoneme is determined via ``argmax``.
+    Consecutive frames that share the same dominant phoneme are grouped
+    into a *segment*.
+
+    Args:
+        audio: The source :class:`Audio` (used to derive real-time durations).
+        frame_major_posteriorgram: PPG tensor of shape ``(frames, phonemes)``.
+
+    Returns:
+        A list of segment dicts, each containing:
+
+        - ``phoneme_index`` (int): Index into the phoneme inventory.
+        - ``phoneme`` (str): Human-readable phoneme label.
+        - ``start_frame`` (int): First frame of the segment (inclusive).
+        - ``end_frame`` (int): Last frame of the segment (inclusive).
+        - ``frame_count`` (int): Number of frames in the segment.
+        - ``start_seconds`` (float): Onset time in seconds.
+        - ``end_seconds`` (float): Offset time in seconds.
+        - ``duration_seconds`` (float): Segment duration in seconds.
+    """
+    num_frames = frame_major_posteriorgram.shape[0]
+    if num_frames == 0 or frame_major_posteriorgram.shape[1] == 0:
+        return []
+
+    total_duration = audio.waveform.shape[1] / audio.sampling_rate
+    seconds_per_frame = total_duration / num_frames
+
+    argmax_indices = torch.argmax(frame_major_posteriorgram, dim=1)
+    phoneme_labels = _PHONEME_LABELS
+    num_labels = len(phoneme_labels)
+
+    segments: List[Dict[str, Any]] = []
+    current_idx = int(argmax_indices[0].item())
+    start_frame = 0
+
+    for frame in range(1, num_frames):
+        idx = int(argmax_indices[frame].item())
+        if idx != current_idx:
+            # Close the current segment
+            label = phoneme_labels[current_idx] if current_idx < num_labels else str(current_idx)
+            frame_count = frame - start_frame
+            segments.append(
+                {
+                    "phoneme_index": current_idx,
+                    "phoneme": label,
+                    "start_frame": start_frame,
+                    "end_frame": frame - 1,
+                    "frame_count": frame_count,
+                    "start_seconds": start_frame * seconds_per_frame,
+                    "end_seconds": frame * seconds_per_frame,
+                    "duration_seconds": frame_count * seconds_per_frame,
+                }
+            )
+            current_idx = idx
+            start_frame = frame
+
+    # Final segment
+    label = phoneme_labels[current_idx] if current_idx < num_labels else str(current_idx)
+    frame_count = num_frames - start_frame
+    segments.append(
+        {
+            "phoneme_index": current_idx,
+            "phoneme": label,
+            "start_frame": start_frame,
+            "end_frame": num_frames - 1,
+            "frame_count": frame_count,
+            "start_seconds": start_frame * seconds_per_frame,
+            "end_seconds": num_frames * seconds_per_frame,
+            "duration_seconds": frame_count * seconds_per_frame,
+        }
+    )
+    return segments
+
+
+def extract_mean_phoneme_durations(
+    audio: Audio,
+    posteriorgram: torch.Tensor,
+) -> Dict[str, Any]:
+    """Compute per-phoneme duration statistics from a PPG tensor.
+
+    For each frame the dominant (argmax) phoneme is identified.  Contiguous
+    runs of the same phoneme form *segments*.  This function aggregates
+    segment counts and durations per phoneme and returns a summary dict.
+
+    Args:
+        audio: The source audio used to derive real-time durations.
+        posteriorgram: PPG tensor as returned by
+            :func:`extract_ppgs_from_audios` — typically shaped
+            ``(1, phonemes, frames)`` or ``(phonemes, frames)``.
+
+    Returns:
+        A dict with the keys:
+
+        - ``frame_count`` (int): Total number of PPG frames.
+        - ``phoneme_count`` (int): Number of phonemes in the inventory.
+        - ``analysis_duration_seconds`` (float): Audio duration in seconds.
+        - ``seconds_per_frame`` (float): Duration of one PPG frame.
+        - ``mean_segment_duration_seconds`` (float): Mean segment length
+          across *all* segments.
+        - ``phoneme_durations`` (list[dict]): Per-phoneme breakdown, each
+          containing ``phoneme``, ``count``, ``mean_duration_seconds``, and
+          ``total_duration_seconds``.
+
+        If the input tensor contains NaN values or is empty, an empty dict
+        is returned.
+    """
+    # Guard against NaN / degenerate tensors
+    if posteriorgram.numel() == 0 or torch.isnan(posteriorgram).any():
+        logger.warning("Posteriorgram is empty or contains NaN — returning empty result.")
+        return {}
+
+    frame_major = _to_frame_major_posteriorgram(posteriorgram)
+    segments = _extract_ppg_segments(audio, frame_major)
+
+    if not segments:
+        return {}
+
+    num_frames = frame_major.shape[0]
+    total_duration = audio.waveform.shape[1] / audio.sampling_rate
+    seconds_per_frame = total_duration / num_frames
+
+    # Aggregate per phoneme
+    phoneme_stats: Dict[str, Dict[str, float]] = {}
+    for seg in segments:
+        label = seg["phoneme"]
+        if label not in phoneme_stats:
+            phoneme_stats[label] = {"count": 0, "total_duration": 0.0}
+        phoneme_stats[label]["count"] += 1
+        phoneme_stats[label]["total_duration"] += seg["duration_seconds"]
+
+    phoneme_durations = []
+    for label, stats in sorted(phoneme_stats.items()):
+        count = int(stats["count"])
+        total_dur = stats["total_duration"]
+        phoneme_durations.append(
+            {
+                "phoneme": label,
+                "count": count,
+                "mean_duration_seconds": total_dur / count,
+                "total_duration_seconds": total_dur,
+            }
+        )
+
+    mean_segment_duration = sum(s["duration_seconds"] for s in segments) / len(segments)
+
+    return {
+        "frame_count": num_frames,
+        "phoneme_count": frame_major.shape[1],
+        "analysis_duration_seconds": total_duration,
+        "seconds_per_frame": seconds_per_frame,
+        "mean_segment_duration_seconds": mean_segment_duration,
+        "phoneme_durations": phoneme_durations,
+    }
+
+
+def plot_ppg_phoneme_timeline(
+    audio: Audio,
+    posteriorgram: torch.Tensor,
+    title: str = "PPG phoneme timeline",
+    show: bool = True,
+) -> Figure:
+    """Plot a horizontal-bar timeline of PPG phoneme segments.
+
+    Each contiguous run of a dominant phoneme is drawn as a coloured
+    horizontal bar.  Only phonemes that actually appear are shown on the
+    y-axis.
+
+    Args:
+        audio: The source audio used to derive real-time durations.
+        posteriorgram: PPG tensor (see :func:`extract_mean_phoneme_durations`
+            for accepted shapes).
+        title: Figure title.
+        show: Whether to call ``plt.show()`` after creating the figure.
+
+    Returns:
+        The :class:`matplotlib.figure.Figure` object.
+
+    Raises:
+        ValueError: If the posteriorgram is empty or contains NaN values.
+    """
+    import matplotlib.pyplot as plt
+
+    if posteriorgram.numel() == 0 or torch.isnan(posteriorgram).any():
+        raise ValueError("Cannot plot an empty or NaN posteriorgram.")
+
+    frame_major = _to_frame_major_posteriorgram(posteriorgram)
+    segments = _extract_ppg_segments(audio, frame_major)
+
+    if not segments:
+        raise ValueError("No segments found in posteriorgram.")
+
+    # Determine unique phonemes (preserving appearance order)
+    seen: Dict[str, int] = {}
+    for seg in segments:
+        if seg["phoneme"] not in seen:
+            seen[seg["phoneme"]] = len(seen)
+    phoneme_order = list(seen.keys())
+
+    cmap = plt.get_cmap("tab20")
+    num_colors = 20  # tab20 has 20 colours
+
+    fig, ax = plt.subplots(figsize=(14, max(3, 0.35 * len(phoneme_order))))
+
+    for seg in segments:
+        y_idx = seen[seg["phoneme"]]
+        color = cmap(seg["phoneme_index"] % num_colors)
+        start = seg["start_seconds"]
+        width = seg["duration_seconds"]
+
+        ax.barh(y_idx, width, left=start, height=0.7, color=color, edgecolor="none")
+
+        # Onset/offset markers
+        ax.plot(start, y_idx, "|", color="black", markersize=6, markeredgewidth=0.5)
+        ax.plot(start + width, y_idx, "|", color="black", markersize=6, markeredgewidth=0.5)
+
+    ax.set_yticks(range(len(phoneme_order)))
+    ax.set_yticklabels(phoneme_order)
+    ax.set_xlabel("Time (seconds)")
+    ax.set_ylabel("Phoneme")
+    ax.set_title(title)
+    ax.invert_yaxis()
+    fig.tight_layout()
+
+    if show:
+        plt.show()
+
+    return fig
