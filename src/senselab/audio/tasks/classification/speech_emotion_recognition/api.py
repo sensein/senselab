@@ -271,7 +271,7 @@ def _classify_speechbrain_ser(
         user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
     )
 
-    key = f"{model.path_or_uri}-{device_type.value}"
+    key = f"{model.path_or_uri}-{model.revision or 'main'}-{device_type.value}"
     if key not in _speechbrain_ser_models:
         # Discover required modules from the model's hyperparams
         _speechbrain_ser_models[key] = _load_speechbrain_ser_model(model, device_type)
@@ -317,24 +317,16 @@ def _load_speechbrain_ser_model(model: SpeechBrainModel, device_type: DeviceType
     Returns:
         Tuple of (recognizer, label_list).
     """
+    import yaml  # type: ignore[import-untyped]
     from huggingface_hub import hf_hub_download
     from speechbrain.inference import Pretrained
 
     # Download hyperparams to discover MODULES_NEEDED
-    hp_path = hf_hub_download(str(model.path_or_uri), "hyperparams.yaml")
+    hp_path = hf_hub_download(str(model.path_or_uri), "hyperparams.yaml", revision=model.revision)
     with open(hp_path) as f:
-        content = f.read()
+        hparams = yaml.safe_load(f)
 
-    # Extract MODULES_NEEDED from the yaml
-    modules_needed = None
-    for line in content.split("\n"):
-        if "MODULES_NEEDED" in line:
-            # Parse: MODULES_NEEDED: ["wav2vec2", "avg_pool", "output_mlp"]
-            import ast
-
-            _, _, value = line.partition(":")
-            modules_needed = ast.literal_eval(value.strip())
-            break
+    modules_needed = hparams.get("MODULES_NEEDED") if hparams else None
 
     if not modules_needed:
         raise ValueError(
