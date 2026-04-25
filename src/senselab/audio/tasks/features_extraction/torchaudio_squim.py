@@ -66,11 +66,12 @@ def extract_objective_quality_features_from_audios(
         raise ValueError("Only 16000 Hz sampling rate is supported by Torchaudio-Squim model.")
 
     features: List[Dict[str, Any]] = []
+    model = _get_objective_model().to(device.value)
 
     for audio in audios:
         audio_features = {}
         try:
-            stoi, pesq, si_sdr = _get_objective_model().to(device.value)(audio.waveform.to(device.value))
+            stoi, pesq, si_sdr = model(audio.waveform.to(device.value))
             audio_features["stoi"] = stoi.cpu().item()
             audio_features["pesq"] = pesq.cpu().item()
             audio_features["si_sdr"] = si_sdr.cpu().item()
