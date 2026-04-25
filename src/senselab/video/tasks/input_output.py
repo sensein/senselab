@@ -7,8 +7,10 @@ from typing import Any, Dict, List, Union
 
 try:
     import ffmpeg
+
+    _FFMPEG_AVAILABLE = True
 except ImportError:
-    ffmpeg = None  # type: ignore[assignment]
+    _FFMPEG_AVAILABLE = False
 
 # import shutil
 from senselab.utils.data_structures import from_strings_to_files, get_common_directory
@@ -21,6 +23,8 @@ def extract_audios_from_local_videos(
     acodec: str = "pcm_s16le",
 ) -> Dict[str, Any]:
     """Read files from disk and create a Hugging Face `Dataset` object."""
+    if not _FFMPEG_AVAILABLE:
+        raise ModuleNotFoundError("`ffmpeg-python` is not installed. Install it with `pip install ffmpeg-python`.")
 
     def _extract_audio_from_local_video(video_path: Path, output_audio_path: str, format: str, acodec: str) -> None:
         """Extract audio from a video file."""
