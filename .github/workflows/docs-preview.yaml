@@ -3,6 +3,7 @@ name: Docs Preview
 permissions:
   contents: write
   pull-requests: write
+  deployments: write
 
 on:
   pull_request:
@@ -12,6 +13,9 @@ jobs:
   build-and-deploy:
     if: github.event.action != 'closed'
     runs-on: ubuntu-latest
+    environment:
+      name: docs-preview
+      url: https://sensein.group/senselab/pr-${{ github.event.pull_request.number }}/
     steps:
     - uses: actions/checkout@v5
     - name: Install uv
@@ -37,13 +41,6 @@ jobs:
         branch: docs
         target-folder: pr-${{ github.event.pull_request.number }}
         clean: false
-    - name: Post preview link
-      uses: peter-evans/create-or-update-comment@v4
-      with:
-        issue-number: ${{ github.event.pull_request.number }}
-        body: |
-          📖 **[Docs Preview](https://sensein.group/senselab/pr-${{ github.event.pull_request.number }}/)** updated for ${{ github.sha }}
-        comment-tag: docs-preview
 
   cleanup:
     if: github.event.action == 'closed'
@@ -63,10 +60,3 @@ jobs:
           git commit -m "Remove docs preview for PR #${PR_NUM}"
           git push origin docs
         fi
-    - name: Update comment
-      uses: peter-evans/create-or-update-comment@v4
-      with:
-        issue-number: ${{ github.event.pull_request.number }}
-        body: |
-          📖 **Docs Preview**: removed (PR closed)
-        comment-tag: docs-preview
