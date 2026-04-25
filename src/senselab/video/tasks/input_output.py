@@ -24,7 +24,10 @@ def extract_audios_from_local_videos(
 ) -> Dict[str, Any]:
     """Read files from disk and create a Hugging Face `Dataset` object."""
     if not _FFMPEG_AVAILABLE:
-        raise ModuleNotFoundError("`ffmpeg-python` is not installed. Install it with `pip install ffmpeg-python`.")
+        raise ModuleNotFoundError(
+            "`ffmpeg-python` is not installed. "
+            "Install it with `pip install ffmpeg-python` and ensure FFmpeg is installed system-wide."
+        )
 
     def _extract_audio_from_local_video(video_path: Path, output_audio_path: str, format: str, acodec: str) -> None:
         """Extract audio from a video file."""
