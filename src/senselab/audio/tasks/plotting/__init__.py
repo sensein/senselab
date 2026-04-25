@@ -1,3 +1,3 @@
-"""This module contains functions for plotting audio-related data."""
+""".. include:: ./doc.md"""  # noqa: D415
 
 from .plotting import play_audio, plot_aligned_panels, plot_specgram, plot_waveform  # noqa: F401
