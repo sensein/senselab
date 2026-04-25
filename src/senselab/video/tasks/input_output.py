@@ -5,7 +5,10 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Union
 
-import ffmpeg
+try:
+    import ffmpeg
+except ImportError:
+    ffmpeg = None  # type: ignore[assignment]
 
 # import shutil
 from senselab.utils.data_structures import from_strings_to_files, get_common_directory

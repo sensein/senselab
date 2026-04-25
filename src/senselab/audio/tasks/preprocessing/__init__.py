@@ -1,3 +1,3 @@
-"""This module provides the API for the senselab audio preprocessing."""
+""".. include:: ./doc.md"""  # noqa: D415
 
 from .preprocessing import *  # noqa: F403
