@@ -36,7 +36,7 @@ print(transcript)
 # ➡️ "The quick brown fox jumps over the lazy dog."
 ```
 
-For more detailed information, check out our [**Documentation**](https://sensein.group/senselab/senselab.html) and our [**Tutorials**](https://github.com/sensein/senselab/blob/main/tutorials/audio/00_getting_started.ipynb).
+For more detailed information, check out our [**Documentation**](https://sensein.github.io/senselab) and our [**Tutorials**](https://github.com/sensein/senselab/blob/main/tutorials/audio/00_getting_started.ipynb).
 
 💡 **Tip**: Many tutorials include Google Colab badges and you can try them instantly without installing anything on your local machine.
 

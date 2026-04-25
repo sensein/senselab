@@ -1,0 +1,72 @@
+name: Docs Preview
+
+permissions:
+  contents: write
+  pull-requests: write
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+jobs:
+  build-and-deploy:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+    - uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+    - name: Install dependencies
+      run: uv sync --extra articulatory --extra text --extra video --extra senselab-ai --group dev --group docs
+    - name: Build docs
+      env:
+        PDOC_ALLOW_EXEC: '1'
+      run: |
+        APP_MODULE_NAME=$(ls -1 src | sort | head -1)
+        uv run pdoc src/"$APP_MODULE_NAME" -o docs -t docs_style/pdoc-theme --docformat google --favicon https://readthedocs.org/favicon.ico
+        touch docs/.nojekyll
+    - name: Deploy preview
+      uses: JamesIves/github-pages-deploy-action@v4
+      with:
+        folder: docs
+        branch: docs
+        target-folder: pr-${{ github.event.pull_request.number }}
+        clean: false
+    - name: Comment on PR
+      uses: peter-evans/create-or-update-comment@v4
+      with:
+        issue-number: ${{ github.event.pull_request.number }}
+        body: |
+          📖 **Docs Preview**: https://sensein.github.io/senselab/pr-${{ github.event.pull_request.number }}/
+
+          _Updated for commit ${{ github.sha }}_
+        comment-tag: docs-preview
+
+  cleanup:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: docs
+        fetch-depth: 0
+    - name: Remove preview
+      run: |
+        PR_NUM=${{ github.event.pull_request.number }}
+        if [ -d "pr-${PR_NUM}" ]; then
+          git rm -rf "pr-${PR_NUM}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -m "Remove docs preview for PR #${PR_NUM}"
+          git push origin docs
+        fi
+    - name: Update PR comment
+      uses: peter-evans/create-or-update-comment@v4
+      with:
+        issue-number: ${{ github.event.pull_request.number }}
+        body: |
+          📖 **Docs Preview**: _Removed (PR closed)_
+        comment-tag: docs-preview
