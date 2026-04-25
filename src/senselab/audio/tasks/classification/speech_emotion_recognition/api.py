@@ -323,8 +323,15 @@ def _load_speechbrain_ser_model(model: SpeechBrainModel, device_type: DeviceType
 
     # Download hyperparams to discover MODULES_NEEDED
     hp_path = hf_hub_download(str(model.path_or_uri), "hyperparams.yaml", revision=model.revision)
+
+    # SpeechBrain YAML uses custom tags (!new:, !ref, etc.) that yaml.safe_load
+    # cannot handle. Use a permissive loader subclass that ignores unknown tags.
+    class _PermissiveLoader(yaml.SafeLoader):
+        pass
+
+    _PermissiveLoader.add_multi_constructor("", lambda loader, suffix, node: None)
     with open(hp_path) as f:
-        hparams = yaml.safe_load(f)
+        hparams = yaml.load(f, Loader=_PermissiveLoader)  # noqa: S506
 
     modules_needed = hparams.get("MODULES_NEEDED") if hparams else None
 
