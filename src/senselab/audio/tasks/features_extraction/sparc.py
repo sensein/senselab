@@ -370,10 +370,11 @@ class SparcFeatureExtractor:
             sample_rate = output["sample_rate"]
             logger.info("SPARC decode produced audio at %d Hz: %s", sample_rate, audio_path)
 
-            audio = Audio(filepath=audio_path)
-            # Force lazy-load while the temp file still exists
-            _ = audio.waveform
-            return audio
+            tmp_audio = Audio(filepath=audio_path)
+            # Force lazy-load while the temp file still exists, then
+            # create a clean Audio without a filepath pointing at the
+            # (about-to-be-deleted) temp directory.
+            return Audio(waveform=tmp_audio.waveform, sampling_rate=tmp_audio.sampling_rate)
 
     @classmethod
     def convert_voice(
@@ -448,7 +449,8 @@ class SparcFeatureExtractor:
             sample_rate = output["sample_rate"]
             logger.info("SPARC convert produced audio at %d Hz: %s", sample_rate, audio_path)
 
-            audio = Audio(filepath=audio_path)
-            # Force lazy-load while the temp file still exists
-            _ = audio.waveform
-            return audio
+            tmp_audio = Audio(filepath=audio_path)
+            # Force lazy-load while the temp file still exists, then
+            # create a clean Audio without a filepath pointing at the
+            # (about-to-be-deleted) temp directory.
+            return Audio(waveform=tmp_audio.waveform, sampling_rate=tmp_audio.sampling_rate)

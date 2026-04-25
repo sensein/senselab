@@ -9,11 +9,11 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.features_extraction import extract_features_from_audios
 from senselab.audio.tasks.features_extraction.opensmile import extract_opensmile_features_from_audios
 from senselab.audio.tasks.features_extraction.ppg import (
-    _extract_ppg_segments,
-    _to_frame_major_posteriorgram,
     extract_mean_phoneme_durations,
+    extract_ppg_segments,
     extract_ppgs_from_audios,
     plot_ppg_phoneme_timeline,
+    to_frame_major_posteriorgram,
 )
 from senselab.audio.tasks.features_extraction.praat_parselmouth import (
     extract_audio_duration,
@@ -419,23 +419,23 @@ def _make_synthetic_ppg(
 
 
 def test_to_frame_major_posteriorgram_3d() -> None:
-    """Test _to_frame_major_posteriorgram with a (1, phonemes, frames) input."""
+    """Test to_frame_major_posteriorgram with a (1, phonemes, frames) input."""
     ppg = torch.rand(1, 40, 100)
-    result = _to_frame_major_posteriorgram(ppg)
+    result = to_frame_major_posteriorgram(ppg)
     assert result.shape == (100, 40)
 
 
 def test_to_frame_major_posteriorgram_2d() -> None:
-    """Test _to_frame_major_posteriorgram with a (phonemes, frames) input."""
+    """Test to_frame_major_posteriorgram with a (phonemes, frames) input."""
     ppg = torch.rand(40, 100)
-    result = _to_frame_major_posteriorgram(ppg)
+    result = to_frame_major_posteriorgram(ppg)
     assert result.shape == (100, 40)
 
 
 def test_to_frame_major_posteriorgram_already_frame_major() -> None:
-    """Test _to_frame_major_posteriorgram when input is already (frames, phonemes)."""
+    """Test to_frame_major_posteriorgram when input is already (frames, phonemes)."""
     ppg = torch.rand(100, 40)
-    result = _to_frame_major_posteriorgram(ppg)
+    result = to_frame_major_posteriorgram(ppg)
     assert result.shape == (100, 40)
 
 
@@ -443,7 +443,7 @@ def test_to_frame_major_posteriorgram_too_few_dims() -> None:
     """Test that a 1-D tensor raises ValueError."""
     ppg = torch.rand(40)
     with pytest.raises(ValueError, match="Expected at least a 2-D"):
-        _to_frame_major_posteriorgram(ppg)
+        to_frame_major_posteriorgram(ppg)
 
 
 def test_extract_ppg_segments_basic() -> None:
@@ -452,8 +452,8 @@ def test_extract_ppg_segments_basic() -> None:
     pattern = [0] * 10 + [1] * 5
     ppg = _make_synthetic_ppg(pattern)
     audio = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000)
-    frame_major = _to_frame_major_posteriorgram(ppg)
-    segments = _extract_ppg_segments(audio, frame_major)
+    frame_major = to_frame_major_posteriorgram(ppg)
+    segments = extract_ppg_segments(audio, frame_major)
 
     assert len(segments) == 2
     assert segments[0]["phoneme_index"] == 0
@@ -473,8 +473,8 @@ def test_extract_ppg_segments_single_phoneme() -> None:
     pattern = [5] * 20
     ppg = _make_synthetic_ppg(pattern)
     audio = Audio(waveform=torch.rand(1, 32000), sampling_rate=16000)
-    frame_major = _to_frame_major_posteriorgram(ppg)
-    segments = _extract_ppg_segments(audio, frame_major)
+    frame_major = to_frame_major_posteriorgram(ppg)
+    segments = extract_ppg_segments(audio, frame_major)
 
     assert len(segments) == 1
     assert segments[0]["phoneme_index"] == 5
@@ -485,7 +485,7 @@ def test_extract_ppg_segments_empty() -> None:
     """Test segment extraction with zero frames."""
     ppg = torch.rand(40, 0)
     audio = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000)
-    segments = _extract_ppg_segments(audio, ppg)
+    segments = extract_ppg_segments(audio, ppg)
     assert segments == []
 
 
