@@ -14,7 +14,7 @@ jobs:
     if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     environment:
-      name: docs-preview-pr-${{ github.event.pull_request.number }}
+      name: docs-preview
       url: https://sensein.group/senselab/pr-${{ github.event.pull_request.number }}/
     steps:
     - uses: actions/checkout@v5
@@ -60,8 +60,3 @@ jobs:
           git commit -m "Remove docs preview for PR #${PR_NUM}"
           git push origin docs
         fi
-    - name: Delete environment
-      uses: strumwolf/delete-deployment-environment@v3
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        environment: docs-preview-pr-${{ github.event.pull_request.number }}
