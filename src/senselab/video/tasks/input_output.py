@@ -78,10 +78,11 @@ def extract_audios_from_local_videos(
     with tempfile.TemporaryDirectory(prefix="senselab-video-io-") as temp_dir:
         audio_files_paths = []
         for file in formatted_files:
-            base_file_name = os.path.splitext(str(file.filepath).replace(common_path, ""))[0]
+            rel_path = os.path.relpath(file.filepath, common_path)
+            base_file_name = os.path.splitext(rel_path)[0]
             output_audio_path = os.path.join(temp_dir, f"{base_file_name}.{audio_format}")
             os.makedirs(os.path.dirname(output_audio_path), exist_ok=True)
             if _extract_audio_from_local_video(file.filepath, output_audio_path, fmt=audio_format, codec=acodec):
                 audio_files_paths.append(output_audio_path)
 
-        return read_files_from_disk(audio_files_paths)
+        return read_files_from_disk(audio_files_paths) if audio_files_paths else {}
