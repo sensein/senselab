@@ -71,14 +71,16 @@
                     <h1 class="modulename">
 <a href="./../../../senselab.html">senselab</a><wbr>.<a href="./../../audio.html">audio</a><wbr>.<a href="./../tasks.html">tasks</a><wbr>.quality_control    </h1>
 
-                        <div class="docstring"><p>Provides the API for quality control.</p>
+                        <div class="docstring"><p>Audio quality control framework for assessing recording quality.</p>
+
+<p>This module provides a framework for computing audio quality metrics (signal-to-noise ratio, clipping detection, silence ratio, etc.) and running quality checks against configurable thresholds. It includes a taxonomy of bioacoustic quality categories and supports batch evaluation of audio datasets. Results can be stored in DataFrames for analysis. See issue #472 for the QC improvement roadmap.</p>
 </div>
 
                         <input id="mod-quality_control-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 
                         <label class="view-source-button" for="mod-quality_control-view-source"><span>View Source</span></label>
 
-                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos"> 1</span></a><span class="sd">&quot;&quot;&quot;Provides the API for quality control.&quot;&quot;&quot;</span>
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos"> 1</span></a><span class="sd">&quot;&quot;&quot;.. include:: ./doc.md&quot;&quot;&quot;</span>  <span class="c1"># noqa: D415</span>
 </span><span id="L-2"><a href="#L-2"><span class="linenos"> 2</span></a>
 </span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">senselab.audio.tasks.input_output</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_audio_files_from_directory</span>
 </span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a>
@@ -738,7 +740,7 @@ windowing</li>
 <div class="attr function">
             
         <span class="def">def</span>
-        <span class="name">get_audio_files_from_directory</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">directory_path</span><span class="p">:</span> <span class="nb">str</span>,</span><span class="param">	<span class="n">audio_extensions</span><span class="p">:</span> <span class="n">Set</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;.aac&#39;</span><span class="p">,</span> <span class="s1">&#39;.m4a&#39;</span><span class="p">,</span> <span class="s1">&#39;.ogg&#39;</span><span class="p">,</span> <span class="s1">&#39;.wav&#39;</span><span class="p">,</span> <span class="s1">&#39;.wma&#39;</span><span class="p">,</span> <span class="s1">&#39;.flac&#39;</span><span class="p">,</span> <span class="s1">&#39;.mp3&#39;</span><span class="p">}</span>,</span><span class="param">	<span class="n">recursive</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span></span><span class="return-annotation">) -> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>:</span></span>
+        <span class="name">get_audio_files_from_directory</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">directory_path</span><span class="p">:</span> <span class="nb">str</span>,</span><span class="param">	<span class="n">audio_extensions</span><span class="p">:</span> <span class="n">Set</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;.m4a&#39;</span><span class="p">,</span> <span class="s1">&#39;.ogg&#39;</span><span class="p">,</span> <span class="s1">&#39;.mp3&#39;</span><span class="p">,</span> <span class="s1">&#39;.wma&#39;</span><span class="p">,</span> <span class="s1">&#39;.aac&#39;</span><span class="p">,</span> <span class="s1">&#39;.wav&#39;</span><span class="p">,</span> <span class="s1">&#39;.flac&#39;</span><span class="p">}</span>,</span><span class="param">	<span class="n">recursive</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span></span><span class="return-annotation">) -> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>:</span></span>
 
                 <label class="view-source-button" for="get_audio_files_from_directory-view-source"><span>View Source</span></label>
 

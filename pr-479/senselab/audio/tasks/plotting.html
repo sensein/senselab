@@ -47,14 +47,16 @@
                     <h1 class="modulename">
 <a href="./../../../senselab.html">senselab</a><wbr>.<a href="./../../audio.html">audio</a><wbr>.<a href="./../tasks.html">tasks</a><wbr>.plotting    </h1>
 
-                        <div class="docstring"><p>This module contains functions for plotting audio-related data.</p>
+                        <div class="docstring"><p>Audio visualization and playback utilities.</p>
+
+<p>This module provides functions for visualizing audio data: <code>plot_waveform</code> (amplitude over time), <code>plot_specgram</code> (frequency content over time, linear or mel scale), <code>plot_waveform_and_specgram</code> (stacked layout), and <code>plot_aligned_panels</code> (reusable multi-panel time-aligned visualization supporting waveform, spectrogram, feature overlays, and segment annotations on a shared time axis). Use <code>play_audio</code> for inline audio playback in Jupyter notebooks. All plotting functions support context-aware scaling for different display sizes.</p>
 </div>
 
                         <input id="mod-plotting-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 
                         <label class="view-source-button" for="mod-plotting-view-source"><span>View Source</span></label>
 
-                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;This module contains functions for plotting audio-related data.&quot;&quot;&quot;</span>
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;.. include:: ./doc.md&quot;&quot;&quot;</span>  <span class="c1"># noqa: D415</span>
 </span><span id="L-2"><a href="#L-2"><span class="linenos">2</span></a>
 </span><span id="L-3"><a href="#L-3"><span class="linenos">3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.plotting</span><span class="w"> </span><span class="kn">import</span> <span class="n">play_audio</span><span class="p">,</span> <span class="n">plot_aligned_panels</span><span class="p">,</span> <span class="n">plot_specgram</span><span class="p">,</span> <span class="n">plot_waveform</span>  <span class="c1"># noqa: F401</span>
 </span></pre></div>

@@ -47,14 +47,16 @@
                     <h1 class="modulename">
 <a href="./../../../senselab.html">senselab</a><wbr>.<a href="./../../audio.html">audio</a><wbr>.<a href="./../tasks.html">tasks</a><wbr>.input_output    </h1>
 
-                        <div class="docstring"><p>This module provides some utilities for audio input and output.</p>
+                        <div class="docstring"><p>Audio file I/O utilities for reading and writing audio data.</p>
+
+<p>This module provides <code>read_audios</code> for loading audio files from disk into senselab's <code>Audio</code> data structure, and <code>save_audios</code> for writing Audio objects back to disk. Supported formats include WAV, FLAC, MP3, and other formats supported by the underlying audio backends (torchcodec with torchaudio/soundfile fallback).</p>
 </div>
 
                         <input id="mod-input_output-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 
                         <label class="view-source-button" for="mod-input_output-view-source"><span>View Source</span></label>
 
-                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;This module provides some utilities for audio input and output.&quot;&quot;&quot;</span>
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;.. include:: ./doc.md&quot;&quot;&quot;</span>  <span class="c1"># noqa: D415</span>
 </span><span id="L-2"><a href="#L-2"><span class="linenos">2</span></a>
 </span><span id="L-3"><a href="#L-3"><span class="linenos">3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.utils</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
 </span><span id="L-4"><a href="#L-4"><span class="linenos">4</span></a>    <span class="n">get_audio_files_from_directory</span><span class="p">,</span>  <span class="c1"># noqa: F401</span>
