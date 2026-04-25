@@ -1,4 +1,4 @@
-"""This module provides some utilities for audio input and output."""
+""".. include:: ./doc.md"""  # noqa: D415
 
 from .utils import (
     get_audio_files_from_directory,  # noqa: F401

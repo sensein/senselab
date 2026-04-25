@@ -35,7 +35,7 @@ jobs:
         python-version: ${{ matrix.python-version }}
     - name: Install dependencies with uv
       run: |
-        uv sync --extra articulatory --extra text --extra video --extra senselab-ai --group dev --group docs
+        uv sync --all-extras --group dev --group docs
       shell: bash
     - name: Build docs
       env:

@@ -82,7 +82,7 @@ senselab-ai = [
 [project.urls]
 Homepage = "https://github.com/sensein/senselab"
 Repository = "https://github.com/sensein/senselab"
-Documentation = "https://sensein.github.io/senselab"
+Documentation = "https://sensein.group/senselab"
 
 [project.scripts]
 senselab-ai = "senselab.agentic_interface.launcher:senselab_ai"
