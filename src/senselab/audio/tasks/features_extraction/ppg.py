@@ -201,7 +201,7 @@ def extract_ppgs_from_audios(audios: List[Audio], device: Optional[DeviceType] =
 # ---------------------------------------------------------------------------
 
 
-def _to_frame_major_posteriorgram(posteriorgram: torch.Tensor) -> torch.Tensor:
+def to_frame_major_posteriorgram(posteriorgram: torch.Tensor) -> torch.Tensor:
     """Normalize a PPG tensor to frame-major layout ``(frames, phonemes)``.
 
     The ppgs library typically returns tensors shaped ``(1, phonemes, frames)``
@@ -241,7 +241,7 @@ def _to_frame_major_posteriorgram(posteriorgram: torch.Tensor) -> torch.Tensor:
     return t
 
 
-def _extract_ppg_segments(
+def extract_ppg_segments(
     audio: Audio,
     frame_major_posteriorgram: torch.Tensor,
 ) -> List[Dict[str, Any]]:
@@ -358,8 +358,8 @@ def extract_mean_phoneme_durations(
         logger.warning("Posteriorgram is empty or contains NaN — returning empty result.")
         return {}
 
-    frame_major = _to_frame_major_posteriorgram(posteriorgram)
-    segments = _extract_ppg_segments(audio, frame_major)
+    frame_major = to_frame_major_posteriorgram(posteriorgram)
+    segments = extract_ppg_segments(audio, frame_major)
 
     if not segments:
         return {}
@@ -432,8 +432,8 @@ def plot_ppg_phoneme_timeline(
     if posteriorgram.numel() == 0 or torch.isnan(posteriorgram).any():
         raise ValueError("Cannot plot an empty or NaN posteriorgram.")
 
-    frame_major = _to_frame_major_posteriorgram(posteriorgram)
-    segments = _extract_ppg_segments(audio, frame_major)
+    frame_major = to_frame_major_posteriorgram(posteriorgram)
+    segments = extract_ppg_segments(audio, frame_major)
 
     if not segments:
         raise ValueError("No segments found in posteriorgram.")
