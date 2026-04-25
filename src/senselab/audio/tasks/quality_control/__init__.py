@@ -1,4 +1,4 @@
-"""Provides the API for quality control."""
+""".. include:: ./doc.md"""  # noqa: D415
 
 from senselab.audio.tasks.input_output import get_audio_files_from_directory
 

@@ -1,0 +1,67 @@
+name: Docs Preview
+
+permissions:
+  contents: write
+  pull-requests: write
+  deployments: write
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+jobs:
+  build-and-deploy:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    environment:
+      name: docs-preview-pr-${{ github.event.pull_request.number }}
+      url: https://sensein.group/senselab/pr-${{ github.event.pull_request.number }}/
+    steps:
+    - uses: actions/checkout@v5
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+    - uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+    - name: Install FFmpeg
+      run: bash scripts/install-ffmpeg.sh
+    - name: Install dependencies
+      run: uv sync --all-extras --group dev --group docs
+    - name: Build docs
+      env:
+        PDOC_ALLOW_EXEC: '1'
+      run: |
+        APP_MODULE_NAME=$(ls -1 src | sort | head -1)
+        uv run pdoc src/"$APP_MODULE_NAME" -o docs -t docs_style/pdoc-theme --docformat google --favicon https://readthedocs.org/favicon.ico
+        touch docs/.nojekyll
+    - name: Deploy preview
+      uses: JamesIves/github-pages-deploy-action@v4
+      with:
+        folder: docs
+        branch: docs
+        target-folder: pr-${{ github.event.pull_request.number }}
+        clean: false
+
+  cleanup:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: docs
+        fetch-depth: 0
+    - name: Remove preview
+      run: |
+        PR_NUM=${{ github.event.pull_request.number }}
+        if [ -d "pr-${PR_NUM}" ]; then
+          git rm -rf "pr-${PR_NUM}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -m "Remove docs preview for PR #${PR_NUM}"
+          git push origin docs
+        fi
+    - name: Delete environment
+      uses: strumwolf/delete-deployment-environment@v3
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        environment: docs-preview-pr-${{ github.event.pull_request.number }}
