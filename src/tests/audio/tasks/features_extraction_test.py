@@ -418,35 +418,35 @@ def _make_synthetic_ppg(
     return ppg.unsqueeze(0)  # (1, phonemes, frames)
 
 
-def testto_frame_major_posteriorgram_3d() -> None:
+def test_to_frame_major_posteriorgram_3d() -> None:
     """Test to_frame_major_posteriorgram with a (1, phonemes, frames) input."""
     ppg = torch.rand(1, 40, 100)
     result = to_frame_major_posteriorgram(ppg)
     assert result.shape == (100, 40)
 
 
-def testto_frame_major_posteriorgram_2d() -> None:
+def test_to_frame_major_posteriorgram_2d() -> None:
     """Test to_frame_major_posteriorgram with a (phonemes, frames) input."""
     ppg = torch.rand(40, 100)
     result = to_frame_major_posteriorgram(ppg)
     assert result.shape == (100, 40)
 
 
-def testto_frame_major_posteriorgram_already_frame_major() -> None:
+def test_to_frame_major_posteriorgram_already_frame_major() -> None:
     """Test to_frame_major_posteriorgram when input is already (frames, phonemes)."""
     ppg = torch.rand(100, 40)
     result = to_frame_major_posteriorgram(ppg)
     assert result.shape == (100, 40)
 
 
-def testto_frame_major_posteriorgram_too_few_dims() -> None:
+def test_to_frame_major_posteriorgram_too_few_dims() -> None:
     """Test that a 1-D tensor raises ValueError."""
     ppg = torch.rand(40)
     with pytest.raises(ValueError, match="Expected at least a 2-D"):
         to_frame_major_posteriorgram(ppg)
 
 
-def testextract_ppg_segments_basic() -> None:
+def test_extract_ppg_segments_basic() -> None:
     """Test segment extraction with a simple known pattern."""
     # Pattern: 10 frames of phoneme 0, then 5 frames of phoneme 1
     pattern = [0] * 10 + [1] * 5
@@ -468,7 +468,7 @@ def testextract_ppg_segments_basic() -> None:
     assert abs(total_dur - expected_dur) < 1e-6
 
 
-def testextract_ppg_segments_single_phoneme() -> None:
+def test_extract_ppg_segments_single_phoneme() -> None:
     """Test segment extraction when only one phoneme is active."""
     pattern = [5] * 20
     ppg = _make_synthetic_ppg(pattern)
@@ -481,7 +481,7 @@ def testextract_ppg_segments_single_phoneme() -> None:
     assert segments[0]["frame_count"] == 20
 
 
-def testextract_ppg_segments_empty() -> None:
+def test_extract_ppg_segments_empty() -> None:
     """Test segment extraction with zero frames."""
     ppg = torch.rand(40, 0)
     audio = Audio(waveform=torch.rand(1, 16000), sampling_rate=16000)
