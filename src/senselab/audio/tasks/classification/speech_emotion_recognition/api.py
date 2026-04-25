@@ -14,9 +14,18 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, List, Optional
 
+import torch
+
 from senselab.audio.data_structures import Audio, AudioClassificationResult
 from senselab.audio.tasks.classification.huggingface import HuggingFaceAudioClassifier
-from senselab.utils.data_structures import DeviceType, HFModel, SenselabModel, _select_device_and_dtype, logger
+from senselab.utils.data_structures import (
+    DeviceType,
+    HFModel,
+    SenselabModel,
+    SpeechBrainModel,
+    _select_device_and_dtype,
+    logger,
+)
 from senselab.utils.subprocess_venv import ensure_venv, parse_subprocess_result
 
 
@@ -93,6 +102,9 @@ def classify_emotions_from_speech(
     Returns:
         List of speech emotion recognition results.
     """
+    if isinstance(model, SpeechBrainModel):
+        return _classify_speechbrain_ser(audios, model, device)
+
     if isinstance(model, HFModel):
         model_info = model.get_model_info()
         tags = model_info.tags or []
@@ -126,10 +138,10 @@ def classify_emotions_from_speech(
         return HuggingFaceAudioClassifier.classify_audios_with_transformers(
             audios=audios, model=model, device=device, **kwargs
         )
-    else:
-        raise NotImplementedError(
-            "Only Hugging Face models are supported for now. We aim to support more models in the future."
-        )
+
+    raise NotImplementedError(
+        "Only Hugging Face and SpeechBrain models are supported. Pass an HFModel or SpeechBrainModel instance."
+    )
 
 
 def _classify_continuous_ser_venv(
@@ -223,3 +235,135 @@ def _get_ser_type(model: HFModel) -> SERType:
         ):
             return SERType.DISCRETE
     return SERType.NOT_RECOGNIZED
+
+
+# ---------------------------------------------------------------------------
+# SpeechBrain SER backend
+# ---------------------------------------------------------------------------
+
+# Cache for loaded SpeechBrain SER models
+_speechbrain_ser_models: dict = {}
+
+
+def _classify_speechbrain_ser(
+    audios: List[Audio],
+    model: SpeechBrainModel,
+    device: Optional[DeviceType] = None,
+) -> List[AudioClassificationResult]:
+    """Classify emotions using a SpeechBrain model.
+
+    SpeechBrain SER models (e.g., ``speechbrain/emotion-recognition-wav2vec2-IEMOCAP``)
+    define custom module names (``wav2vec2``, ``avg_pool``, ``output_mlp``) that
+    don't match the generic ``EncoderClassifier`` expectations. This function
+    loads them via a lightweight ``Pretrained`` subclass.
+
+    Args:
+        audios: Audio objects (must be mono, 16 kHz).
+        model: A SpeechBrainModel pointing to a HuggingFace repo.
+        device: Device to run on.
+
+    Returns:
+        List of AudioClassificationResult, one per audio.
+    """
+    from speechbrain.inference import Pretrained
+
+    device_type, _ = _select_device_and_dtype(
+        user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
+    )
+
+    key = f"{model.path_or_uri}-{device_type.value}"
+    if key not in _speechbrain_ser_models:
+        # Discover required modules from the model's hyperparams
+        _speechbrain_ser_models[key] = _load_speechbrain_ser_model(model, device_type)
+
+    recognizer, label_list = _speechbrain_ser_models[key]
+
+    if not audios:
+        return []
+
+    results: List[AudioClassificationResult] = []
+    for audio in audios:
+        if audio.waveform.shape[0] != 1:
+            raise ValueError("Only mono audio is supported for SpeechBrain SER.")
+
+        wavs = audio.waveform.to(recognizer.device).float()
+        wav_lens = torch.ones(wavs.shape[0], device=recognizer.device)
+
+        with torch.no_grad():
+            # Walk through the model's modules in order
+            out = wavs
+            for mod_name in recognizer.MODULES_NEEDED:
+                mod = getattr(recognizer.mods, mod_name)
+                if mod_name == recognizer.MODULES_NEEDED[0]:
+                    # First module (feature extractor) gets wavs + lens
+                    out = mod(wavs, wav_lens)
+                elif "pool" in mod_name:
+                    out = mod(out, wav_lens)
+                    out = out.view(out.shape[0], -1)
+                else:
+                    out = mod(out)
+
+            probs = torch.nn.functional.softmax(out, dim=-1)
+
+        prob_list = probs[0].cpu().tolist()
+        results.append(AudioClassificationResult(labels=label_list, scores=prob_list))
+
+    return results
+
+
+def _load_speechbrain_ser_model(model: SpeechBrainModel, device_type: DeviceType) -> tuple:
+    """Load a SpeechBrain SER model and discover its structure.
+
+    Returns:
+        Tuple of (recognizer, label_list).
+    """
+    from huggingface_hub import hf_hub_download
+    from speechbrain.inference import Pretrained
+
+    # Download hyperparams to discover MODULES_NEEDED
+    hp_path = hf_hub_download(str(model.path_or_uri), "hyperparams.yaml")
+    with open(hp_path) as f:
+        content = f.read()
+
+    # Extract MODULES_NEEDED from the yaml
+    modules_needed = None
+    for line in content.split("\n"):
+        if "MODULES_NEEDED" in line:
+            # Parse: MODULES_NEEDED: ["wav2vec2", "avg_pool", "output_mlp"]
+            import ast
+
+            _, _, value = line.partition(":")
+            modules_needed = ast.literal_eval(value.strip())
+            break
+
+    if not modules_needed:
+        raise ValueError(
+            f"Could not determine MODULES_NEEDED from {model.path_or_uri}/hyperparams.yaml. "
+            "This SpeechBrain model may need a custom inference class."
+        )
+
+    # Create a dynamic Pretrained subclass with the correct modules
+    recognizer_cls = type(
+        "SpeechBrainSER",
+        (Pretrained,),
+        {"MODULES_NEEDED": modules_needed},
+    )
+
+    run_opts = {"device": device_type.value}
+    recognizer = recognizer_cls.from_hparams(  # type: ignore[attr-defined]
+        source=str(model.path_or_uri),
+        run_opts=run_opts,
+    )
+
+    # Extract label names from label_encoder if available
+    label_list: List[str] = []
+    if hasattr(recognizer.hparams, "label_encoder"):
+        le = recognizer.hparams.label_encoder
+        if hasattr(le, "ind2lab"):
+            n_classes = len(le.ind2lab)
+            label_list = [le.ind2lab.get(i, f"class_{i}") for i in range(n_classes)]
+
+    if not label_list:
+        logger.warning("Could not extract label names from SpeechBrain model; using generic indices.")
+
+    return recognizer, label_list
