@@ -20,7 +20,7 @@ jobs:
       with:
         python-version: '3.12'
     - name: Install dependencies
-      run: uv sync --extra articulatory --extra text --extra video --extra senselab-ai --group dev --group docs
+      run: uv sync --all-extras --group dev --group docs
     - name: Build docs
       env:
         PDOC_ALLOW_EXEC: '1'
