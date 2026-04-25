@@ -75,6 +75,9 @@ if not GPU_AVAILABLE:
 | text_to_speech | Yes | No | Speech synthesis |
 | voice_activity_detection | Optional | Yes* | Detect speech segments |
 | voice_cloning | Yes | No | Voice conversion |
+| audio_recording_and_acoustic_analysis | No | No | Recording and acoustic feature analysis |
+| transcription_and_phonemic_analysis | No | No | Transcription and phoneme-level analysis |
+| speech_representations_lab | Optional | No | Speech representation learning |
 
 *Requires accepting pyannote model terms on HuggingFace
 
