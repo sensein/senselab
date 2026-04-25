@@ -42,7 +42,7 @@ jobs:
       with:
         issue-number: ${{ github.event.pull_request.number }}
         body: |
-          📖 **Docs Preview**: https://sensein.github.io/senselab/pr-${{ github.event.pull_request.number }}/
+          📖 **Docs Preview**: https://sensein.group/senselab/pr-${{ github.event.pull_request.number }}/
 
           _Updated for commit ${{ github.sha }}_
         comment-tag: docs-preview
