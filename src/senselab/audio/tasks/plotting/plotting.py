@@ -608,10 +608,14 @@ def plot_aligned_panels(
 
             elif ptype == "features":
                 data = panel.get("data", [])
+                style = panel.get("style", "scatter")
                 for times, values, label, color in data:
                     t_np = times.cpu().numpy() if torch.is_tensor(times) else np.asarray(times)
                     v_np = values.cpu().numpy() if torch.is_tensor(values) else np.asarray(values)
-                    ax.scatter(t_np, v_np, s=3, c=color, label=label, alpha=0.7)
+                    if style == "line":
+                        ax.plot(t_np, v_np, color=color, label=label, linewidth=0.8, alpha=0.8)
+                    else:
+                        ax.scatter(t_np, v_np, s=3, c=color, label=label, alpha=0.7)
                 ax.set_ylabel("Value")
                 ax.legend(loc="upper right", fontsize=7)
                 ax.grid(True, alpha=0.3)
