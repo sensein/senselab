@@ -408,14 +408,15 @@ def plot_ppg_phoneme_timeline(
     title: str = "PPG phoneme timeline",
     show: bool = True,
 ) -> Figure:
-    """Plot a horizontal-bar timeline of PPG phoneme segments.
+    """Plot a waveform aligned with a horizontal-bar timeline of PPG phoneme segments.
 
-    Each contiguous run of a dominant phoneme is drawn as a coloured
-    horizontal bar.  Only phonemes that actually appear are shown on the
-    y-axis.
+    The top panel shows the audio waveform, and the bottom panel shows
+    each contiguous run of a dominant phoneme as a coloured horizontal bar.
+    Both panels share the same time axis.
 
     Args:
-        audio: The source audio used to derive real-time durations.
+        audio: The source audio used to derive real-time durations and
+            the waveform display.
         posteriorgram: PPG tensor (see :func:`extract_mean_phoneme_durations`
             for accepted shapes).
         title: Figure title.
@@ -428,6 +429,7 @@ def plot_ppg_phoneme_timeline(
         ValueError: If the posteriorgram is empty or contains NaN values.
     """
     import matplotlib.pyplot as plt
+    import numpy as np
 
     if posteriorgram.numel() == 0 or torch.isnan(posteriorgram).any():
         raise ValueError("Cannot plot an empty or NaN posteriorgram.")
@@ -448,26 +450,44 @@ def plot_ppg_phoneme_timeline(
     cmap = plt.get_cmap("tab20")
     num_colors = 20  # tab20 has 20 colours
 
-    fig, ax = plt.subplots(figsize=(14, max(3, 0.35 * len(phoneme_order))))
+    duration = audio.waveform.shape[1] / audio.sampling_rate
+    seg_height = max(3, 0.35 * len(phoneme_order))
 
+    fig, (ax_wav, ax_seg) = plt.subplots(
+        2,
+        1,
+        figsize=(14, 3 + seg_height),
+        sharex=True,
+        gridspec_kw={"height_ratios": [1, max(1, seg_height / 3)]},
+    )
+
+    # Waveform panel
+    waveform_np = audio.waveform.squeeze().cpu().numpy()
+    time_axis = np.linspace(0, duration, len(waveform_np), endpoint=False)
+    ax_wav.plot(time_axis, waveform_np, linewidth=0.3, color="steelblue")
+    ax_wav.set_ylabel("Amplitude")
+    ax_wav.set_title(title)
+    ax_wav.grid(True, alpha=0.2)
+
+    # Phoneme segment panel
     for seg in segments:
         y_idx = seen[seg["phoneme"]]
         color = cmap(seg["phoneme_index"] % num_colors)
         start = seg["start_seconds"]
         width = seg["duration_seconds"]
 
-        ax.barh(y_idx, width, left=start, height=0.7, color=color, edgecolor="none")
+        ax_seg.barh(y_idx, width, left=start, height=0.7, color=color, edgecolor="none")
 
         # Onset/offset markers
-        ax.plot(start, y_idx, "|", color="black", markersize=6, markeredgewidth=0.5)
-        ax.plot(start + width, y_idx, "|", color="black", markersize=6, markeredgewidth=0.5)
+        ax_seg.plot(start, y_idx, "|", color="black", markersize=6, markeredgewidth=0.5)
+        ax_seg.plot(start + width, y_idx, "|", color="black", markersize=6, markeredgewidth=0.5)
 
-    ax.set_yticks(range(len(phoneme_order)))
-    ax.set_yticklabels(phoneme_order)
-    ax.set_xlabel("Time (seconds)")
-    ax.set_ylabel("Phoneme")
-    ax.set_title(title)
-    ax.invert_yaxis()
+    ax_seg.set_yticks(range(len(phoneme_order)))
+    ax_seg.set_yticklabels(phoneme_order, fontsize=7)
+    ax_seg.set_xlabel("Time (seconds)")
+    ax_seg.set_ylabel("Phoneme")
+    ax_seg.set_xlim(0, duration)
+    ax_seg.invert_yaxis()
     fig.tight_layout()
 
     if show:
