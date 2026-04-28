@@ -79,8 +79,8 @@
 - [x] T016 Add summary table comparing all approaches in tutorials/audio/speech_emotion_recognition.ipynb
 - [x] T017 Clear all outputs and run pre-commit: `uv run pre-commit run --all-files`
 - [x] T018 Run full test: `uv run papermill tutorials/audio/speech_emotion_recognition.ipynb /dev/null --cwd . -k python3 --execution-timeout 1200`
-- [ ] T019 Push to branch, create PR to alpha with `test-tutorials` label
-- [ ] T020 Verify CI passes and merge
+- [x] T019 Push to branch, create PR to alpha with `test-tutorials` label
+- [x] T020 Verify CI passes and merge
 
 ---
 
