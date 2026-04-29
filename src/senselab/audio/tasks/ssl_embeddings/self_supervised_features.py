@@ -230,9 +230,9 @@ class SpeechBrainSSLEmbeddings:
         # Stack with zero-padding
         waveforms = torch.stack(
             [F.pad(audio.waveform, (0, int(max_len - audio.waveform.shape[1]))) for audio in audios]
-        ).squeeze()
+        ).squeeze(dim=1)  # Remove channel dim only, keep batch
 
         embeddings_batch = classifier.encode_batch(waveforms, wav_lens)
-        embeddings = [embedding.squeeze() for embedding in embeddings_batch]
+        embeddings = [embedding.squeeze(dim=0) for embedding in embeddings_batch]
 
         return embeddings

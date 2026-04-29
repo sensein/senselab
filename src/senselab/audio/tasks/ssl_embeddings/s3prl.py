@@ -139,10 +139,15 @@ class S3PRLEmbeddingExtractor:
             user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
         )
 
-        # Validate inputs
+        # Validate inputs — S3PRL models expect mono 16kHz audio
         for i, audio in enumerate(audios):
             if audio.waveform.shape[0] != 1:
                 raise ValueError(f"Audio waveform must be mono (1 channel), but got {audio.waveform.shape[0]} channels")
+            if audio.sampling_rate != 16000:
+                raise ValueError(
+                    f"S3PRL models expect 16kHz audio, but got {audio.sampling_rate}Hz. "
+                    "Resample with resample_audios() first."
+                )
 
         venv_dir = ensure_venv(_S3PRL_VENV, _S3PRL_REQUIREMENTS, python_version=_S3PRL_PYTHON)
         python = str(venv_dir / "bin" / "python")
