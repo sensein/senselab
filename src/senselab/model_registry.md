@@ -71,4 +71,3 @@ All models supported by senselab, organized by task.
 | SPARC (Articulatory) | sparc | `speech-articulatory-coding` | 14 (EMA) + pitch/loudness/periodicity | N/A | Articulatory features, voice conversion, resynthesis |
 | PPG (Phonetic Posteriorgrams) | ppgs | `ppgs` | 40 (phonemes) | N/A | Phoneme-level analysis, duration extraction |
 | OpenSMILE | opensmile | `eGeMAPSv02` | 88 (functionals) | N/A | Standard acoustic features for emotion, health assessment |
-

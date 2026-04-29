@@ -102,9 +102,7 @@ class NeMoASR:
             One ``ScriptLine`` per input audio with the transcript text.
         """
         model_name = model.path_or_uri if model is not None else "nvidia/stt_en_conformer_ctc_large"
-        device_type = device or _select_device_and_dtype(
-            compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
-        )[0]
+        device_type = device or _select_device_and_dtype(compatible_devices=[DeviceType.CUDA, DeviceType.CPU])[0]
 
         venv_dir = ensure_venv(_NEMO_VENV, _NEMO_REQUIREMENTS, python_version=_NEMO_PYTHON)
         python = str(venv_dir / "bin" / "python")
@@ -141,8 +139,6 @@ class NeMoASR:
 
             results: List[ScriptLine] = []
             for entry in output.get("results", []):
-                results.append(
-                    ScriptLine(text=entry.get("text", ""))
-                )
+                results.append(ScriptLine(text=entry.get("text", "")))
 
             return results

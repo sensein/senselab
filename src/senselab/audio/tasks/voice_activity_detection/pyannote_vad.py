@@ -134,9 +134,7 @@ class PyannoteVAD:
 
         for audio in audios:
             if audio.waveform.shape[0] != 1:
-                raise ValueError(
-                    f"Audio waveform must be mono (1 channel), but got {audio.waveform.shape[0]} channels"
-                )
+                raise ValueError(f"Audio waveform must be mono (1 channel), but got {audio.waveform.shape[0]} channels")
             if audio.sampling_rate != expected_sample_rate:
                 raise ValueError(
                     f"Audio sampling rate {audio.sampling_rate} does not match expected {expected_sample_rate}"
