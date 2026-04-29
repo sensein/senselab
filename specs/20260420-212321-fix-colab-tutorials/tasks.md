@@ -40,26 +40,26 @@
 
 ### CPU Tutorials (can be fixed in parallel)
 
-- [ ] T006 [P] [US1] Fix `tutorials/audio/00_getting_started.ipynb` — add setup cell, badge, clear outputs, verify execution
-- [ ] T007 [P] [US1] Fix `tutorials/audio/audio_data_augmentation.ipynb` — add setup cell, badge, clear outputs, verify execution
-- [ ] T008 [P] [US1] Fix `tutorials/audio/features_extraction.ipynb` — add setup cell, badge, clear outputs, verify execution
-- [ ] T009 [P] [US1] Fix `tutorials/audio/forced_alignment.ipynb` — add setup cell, badge, clear outputs, verify execution
-- [ ] T010 [P] [US1] Fix `tutorials/audio/speech_to_text.ipynb` — add setup cell, badge, clear outputs, verify execution
-- [ ] T011 [P] [US1] Fix `tutorials/video/pose_estimation.ipynb` — add setup cell, badge, clear outputs, verify execution
-- [ ] T012 [P] [US1] Fix `tutorials/utils/dimensionality_reduction.ipynb` — add setup cell, badge, clear outputs, verify execution
-- [ ] T013 [P] [US1] Fix `tutorials/senselab-ai/senselab_ai_intro.ipynb` — add setup cell, badge, clear outputs, verify execution
+- [x] T006 [P] [US1] Fix `tutorials/audio/00_getting_started.ipynb` — add setup cell, badge, clear outputs, verify execution
+- [x] T007 [P] [US1] Fix `tutorials/audio/audio_data_augmentation.ipynb` — add setup cell, badge, clear outputs, verify execution
+- [x] T008 [P] [US1] Fix `tutorials/audio/features_extraction.ipynb` — add setup cell, badge, clear outputs, verify execution
+- [x] T009 [P] [US1] Fix `tutorials/audio/forced_alignment.ipynb` — add setup cell, badge, clear outputs, verify execution
+- [x] T010 [P] [US1] Fix `tutorials/audio/speech_to_text.ipynb` — add setup cell, badge, clear outputs, verify execution
+- [x] T011 [P] [US1] Fix `tutorials/video/pose_estimation.ipynb` — add setup cell, badge, clear outputs, verify execution
+- [x] T012 [P] [US1] Fix `tutorials/utils/dimensionality_reduction.ipynb` — add setup cell, badge, clear outputs, verify execution
+- [x] T013 [P] [US1] Fix `tutorials/senselab-ai/senselab_ai_intro.ipynb` — add setup cell, badge, clear outputs, verify execution
 
 ### GPU Tutorials (can be fixed in parallel, need GPU to fully verify)
 
-- [ ] T014 [P] [US1] Fix `tutorials/audio/conversational_data_exploration.ipynb` — add setup cell, badge, HF_TOKEN setup, GPU detection, clear outputs
-- [ ] T015 [P] [US1] Fix `tutorials/audio/extract_speaker_embeddings.ipynb` — add setup cell, badge, clear outputs, verify execution
-- [ ] T016 [P] [US1] Fix `tutorials/audio/speaker_diarization.ipynb` — add setup cell, badge, HF_TOKEN setup, GPU detection, clear outputs
-- [ ] T017 [P] [US1] Fix `tutorials/audio/speaker_verification.ipynb` — add setup cell, badge, clear outputs, verify execution
-- [ ] T018 [P] [US1] Fix `tutorials/audio/speech_emotion_recognition.ipynb` — add setup cell, badge, clear outputs, verify execution
-- [ ] T019 [P] [US1] Fix `tutorials/audio/speech_enhancement.ipynb` — add setup cell, badge, clear outputs, verify execution
-- [ ] T020 [P] [US1] Fix `tutorials/audio/text_to_speech.ipynb` — add setup cell, badge, clear outputs, verify execution
-- [ ] T021 [P] [US1] Fix `tutorials/audio/voice_activity_detection.ipynb` — add setup cell, badge, HF_TOKEN setup, GPU detection, clear outputs
-- [ ] T022 [P] [US1] Fix `tutorials/audio/voice_cloning.ipynb` — add setup cell, badge, clear outputs, verify subprocess venv works
+- [x] T014 [P] [US1] Fix `tutorials/audio/conversational_data_exploration.ipynb` — add setup cell, badge, HF_TOKEN setup, GPU detection, clear outputs
+- [x] T015 [P] [US1] Fix `tutorials/audio/extract_speaker_embeddings.ipynb` — add setup cell, badge, clear outputs, verify execution
+- [x] T016 [P] [US1] Fix `tutorials/audio/speaker_diarization.ipynb` — add setup cell, badge, HF_TOKEN setup, GPU detection, clear outputs
+- [x] T017 [P] [US1] Fix `tutorials/audio/speaker_verification.ipynb` — add setup cell, badge, clear outputs, verify execution
+- [x] T018 [P] [US1] Fix `tutorials/audio/speech_emotion_recognition.ipynb` — add setup cell, badge, clear outputs, verify execution
+- [x] T019 [P] [US1] Fix `tutorials/audio/speech_enhancement.ipynb` — add setup cell, badge, clear outputs, verify execution
+- [x] T020 [P] [US1] Fix `tutorials/audio/text_to_speech.ipynb` — add setup cell, badge, clear outputs, verify execution
+- [x] T021 [P] [US1] Fix `tutorials/audio/voice_activity_detection.ipynb` — add setup cell, badge, HF_TOKEN setup, GPU detection, clear outputs
+- [x] T022 [P] [US1] Fix `tutorials/audio/voice_cloning.ipynb` — add setup cell, badge, clear outputs, verify subprocess venv works
 
 **Checkpoint**: All 17 notebooks have setup cells, badges, and execute locally. Ready for CI.
 
@@ -88,9 +88,9 @@
 
 **Independent Test**: Lint/validate each notebook for required elements
 
-- [ ] T029 [US3] Create a tutorial structure validation script `scripts/validate-tutorials.py` that checks each notebook for: Colab badge, setup cell, GPU requirement note, cleared outputs
-- [ ] T030 [US3] Add validation script to pre-commit hooks or CI
-- [ ] T031 [US3] Review and standardize section headers across all 17 notebooks (Introduction, Setup, Example, Results pattern)
+- [x] T029 [US3] Create a tutorial structure validation script `scripts/validate-tutorials.py` that checks each notebook for: Colab badge, setup cell, GPU requirement note, cleared outputs
+- [x] T030 [US3] Add validation script to pre-commit hooks or CI
+- [x] T031 [US3] Review and standardize section headers across all 17 notebooks (Introduction, Setup, Example, Results pattern)
 
 **Checkpoint**: All notebooks pass structural validation.
 
@@ -98,9 +98,9 @@
 
 ## Phase 6: Polish & Cross-Cutting
 
-- [ ] T032 Merge all tutorial fixes to alpha via PR
-- [ ] T033 Run full CI (pre-commit + cpu-tests + tutorial-tests) and verify green
-- [ ] T034 Merge alpha to main via PR
+- [x] T032 Merge all tutorial fixes to alpha via PR
+- [x] T033 Run full CI (pre-commit + cpu-tests + tutorial-tests) and verify green
+- [x] T034 Merge alpha to main via PR
 
 ---
 

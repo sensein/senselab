@@ -9,7 +9,7 @@
 
 ## Phase 1: Setup
 
-- [ ] T001 Verify existing docs workflow still works: read .github/workflows/docs.yaml and confirm it deploys to `docs` branch on release
+- [x] T001 Verify existing docs workflow still works: read .github/workflows/docs.yaml and confirm it deploys to `docs` branch on release
 
 **Checkpoint**: Existing workflow understood
 
@@ -23,10 +23,10 @@
 
 ### Implementation
 
-- [ ] T002 [US1] Create .github/workflows/docs-preview.yaml with build-and-deploy job — triggers on `pull_request: [opened, synchronize, reopened]`, builds docs with pdoc, deploys to `docs` branch under `pr-{number}/` subdirectory using JamesIves/github-pages-deploy-action@v4 with `target-folder` parameter
-- [ ] T003 [US1] Add PR comment posting to docs-preview.yaml — use peter-evans/create-or-update-comment to post/update a comment with the preview URL (`https://sensein.github.io/senselab/pr-{number}/`), include a unique comment identifier so updates replace rather than duplicate
-- [ ] T004 [US1] Add cleanup job to docs-preview.yaml — triggers on `pull_request: [closed]`, checks out `docs` branch, removes `pr-{number}/` directory, commits and pushes, updates PR comment to note preview was removed
-- [ ] T005 [US1] Verify YAML is valid and pre-commit passes: `uv run pre-commit run --files .github/workflows/docs-preview.yaml`
+- [x] T002 [US1] Create .github/workflows/docs-preview.yaml with build-and-deploy job — triggers on `pull_request: [opened, synchronize, reopened]`, builds docs with pdoc, deploys to `docs` branch under `pr-{number}/` subdirectory using JamesIves/github-pages-deploy-action@v4 with `target-folder` parameter
+- [x] T003 [US1] Add PR comment posting to docs-preview.yaml — use peter-evans/create-or-update-comment to post/update a comment with the preview URL (`https://sensein.github.io/senselab/pr-{number}/`), include a unique comment identifier so updates replace rather than duplicate
+- [x] T004 [US1] Add cleanup job to docs-preview.yaml — triggers on `pull_request: [closed]`, checks out `docs` branch, removes `pr-{number}/` directory, commits and pushes, updates PR comment to note preview was removed
+- [x] T005 [US1] Verify YAML is valid and pre-commit passes: `uv run pre-commit run --files .github/workflows/docs-preview.yaml`
 
 **Checkpoint**: PR preview workflow ready for testing
 
@@ -40,14 +40,14 @@
 
 ### Implementation
 
-- [ ] T006 [P] [US2] Create src/senselab/audio/tasks/preprocessing/doc.md — describe resample_audios, downmix_audios_to_mono, normalize, chunk_audios; when to use each
-- [ ] T007 [P] [US2] Create src/senselab/audio/tasks/input_output/doc.md — describe read_audios, save_audios; supported formats and file I/O patterns
-- [ ] T008 [P] [US2] Create src/senselab/audio/tasks/plotting/doc.md — describe plot_waveform, plot_specgram, plot_waveform_and_specgram, plot_aligned_panels, play_audio; include panel types for plot_aligned_panels
-- [ ] T009 [P] [US2] Create src/senselab/audio/tasks/quality_control/doc.md — describe QC framework, metrics, checks, taxonomy; reference issue #472 for roadmap
-- [ ] T010 [P] [US2] Create src/senselab/audio/tasks/ssl_embeddings/doc.md — describe self-supervised learning embedding extraction; models supported
-- [ ] T011 [P] [US2] Create src/senselab/audio/tasks/speaker_diarization_evaluation/doc.md — describe DER and other diarization evaluation metrics
-- [ ] T012 [P] [US2] Create src/senselab/text/tasks/embeddings_extraction/doc.md — describe text embedding extraction; HuggingFace and sentence-transformers backends
-- [ ] T013 [US2] Build docs locally and verify all modules appear: `uv run pdoc src/senselab -t docs_style/pdoc-theme --docformat google -o /tmp/docs-test && ls /tmp/docs-test/senselab/audio/tasks/`
+- [x] T006 [P] [US2] Create src/senselab/audio/tasks/preprocessing/doc.md — describe resample_audios, downmix_audios_to_mono, normalize, chunk_audios; when to use each
+- [x] T007 [P] [US2] Create src/senselab/audio/tasks/input_output/doc.md — describe read_audios, save_audios; supported formats and file I/O patterns
+- [x] T008 [P] [US2] Create src/senselab/audio/tasks/plotting/doc.md — describe plot_waveform, plot_specgram, plot_waveform_and_specgram, plot_aligned_panels, play_audio; include panel types for plot_aligned_panels
+- [x] T009 [P] [US2] Create src/senselab/audio/tasks/quality_control/doc.md — describe QC framework, metrics, checks, taxonomy; reference issue #472 for roadmap
+- [x] T010 [P] [US2] Create src/senselab/audio/tasks/ssl_embeddings/doc.md — describe self-supervised learning embedding extraction; models supported
+- [x] T011 [P] [US2] Create src/senselab/audio/tasks/speaker_diarization_evaluation/doc.md — describe DER and other diarization evaluation metrics
+- [x] T012 [P] [US2] Create src/senselab/text/tasks/embeddings_extraction/doc.md — describe text embedding extraction; HuggingFace and sentence-transformers backends
+- [x] T013 [US2] Build docs locally and verify all modules appear: `uv run pdoc src/senselab -t docs_style/pdoc-theme --docformat google -o /tmp/docs-test && ls /tmp/docs-test/senselab/audio/tasks/`
 
 **Checkpoint**: All modules documented
 
@@ -61,9 +61,9 @@
 
 ### Implementation
 
-- [ ] T014 [US3] Fix README.md documentation URL — change `https://sensein.group/senselab/senselab.html` (line ~39) to `https://sensein.github.io/senselab`
-- [ ] T015 [US3] Verify tutorials/README.md lists all current tutorials — check against `ls tutorials/audio/*.ipynb tutorials/video/*.ipynb tutorials/utils/*.ipynb`, add any missing entries (audio_recording_and_acoustic_analysis, transcription_and_phonemic_analysis, speech_representations_lab)
-- [ ] T016 [US3] Verify README.md feature list includes recent additions — check that SPARC articulatory coding, PPG phoneme analysis, speech enhancement, plot_aligned_panels are mentioned or their categories are represented
+- [x] T014 [US3] Fix README.md documentation URL — change `https://sensein.group/senselab/senselab.html` (line ~39) to `https://sensein.github.io/senselab`
+- [x] T015 [US3] Verify tutorials/README.md lists all current tutorials — check against `ls tutorials/audio/*.ipynb tutorials/video/*.ipynb tutorials/utils/*.ipynb`, add any missing entries (audio_recording_and_acoustic_analysis, transcription_and_phonemic_analysis, speech_representations_lab)
+- [x] T016 [US3] Verify README.md feature list includes recent additions — check that SPARC articulatory coding, PPG phoneme analysis, speech enhancement, plot_aligned_panels are mentioned or their categories are represented
 
 **Checkpoint**: README and docs consistent
 
@@ -71,10 +71,10 @@
 
 ## Phase 5: Polish & Cross-Cutting
 
-- [ ] T017 Run pre-commit on all changed files: `uv run pre-commit run --all-files`
-- [ ] T018 Push to branch and create PR to alpha
-- [ ] T019 Verify CI passes (pre-commit, cpu-tests)
-- [ ] T020 Test docs preview by checking the PR's own preview deployment
+- [x] T017 Run pre-commit on all changed files: `uv run pre-commit run --all-files`
+- [x] T018 Push to branch and create PR to alpha
+- [x] T019 Verify CI passes (pre-commit, cpu-tests)
+- [x] T020 Test docs preview by checking the PR's own preview deployment
 
 ---
 
