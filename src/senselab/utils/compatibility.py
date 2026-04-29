@@ -138,11 +138,19 @@ COMPATIBILITY_MATRIX: dict[str, CompatibilityEntry] = {
         dep_versions={"audiomentations": ">=0.42", "torch-audiomentations": ">=0.12"},
         install_hint="pip install senselab",
     ),
-    # ── Audio: SSL Embeddings ──
+    # ── Audio: SSL Embeddings (HuggingFace + SpeechBrain) ──
     "audio.tasks.ssl_embeddings.extract_ssl_embeddings_from_audios": CompatibilityEntry(
         required_deps=["transformers"],
         dep_versions={"transformers": ">=5.0"},
         install_hint="pip install senselab",
+    ),
+    # ── Audio: SSL Embeddings (S3PRL - ISOLATED) ──
+    "audio.tasks.ssl_embeddings.extract_s3prl_embeddings": CompatibilityEntry(
+        required_deps=[],
+        isolated=True,
+        venv_name="s3prl",
+        venv_python="3.11",
+        install_hint="Automatically provisioned in isolated environment",
     ),
     # ── Audio: Voice Activity Detection ──
     "audio.tasks.voice_activity_detection.detect_human_voice_activity_in_audios": CompatibilityEntry(

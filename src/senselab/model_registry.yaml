@@ -1,0 +1,269 @@
+# Senselab Model Registry
+# This file lists all supported models across all tasks.
+# Generate Markdown with: uv run python scripts/generate_model_registry.py
+
+# Speaker Embeddings
+- name: ECAPA-TDNN
+  task: speaker_embeddings
+  source: speechbrain
+  model_id: speechbrain/spkrec-ecapa-voxceleb
+  embedding_dim: 192
+  parameters: 7.3M
+  training_data: VoxCeleb
+  recommended_for: Speaker verification, identification, embedding extraction
+
+- name: ResNet TDNN
+  task: speaker_embeddings
+  source: speechbrain
+  model_id: speechbrain/spkrec-resnet-voxceleb
+  embedding_dim: 192
+  parameters: 7.3M
+  training_data: VoxCeleb
+  recommended_for: Speaker verification (alternative to ECAPA-TDNN)
+
+- name: X-Vector
+  task: speaker_embeddings
+  source: speechbrain
+  model_id: speechbrain/spkrec-xvect-voxceleb
+  embedding_dim: 192
+  parameters: 7.3M
+  training_data: VoxCeleb
+  recommended_for: Speaker verification (classic approach)
+
+# SSL Embeddings - HuggingFace
+- name: wav2vec2-base
+  task: ssl_embeddings
+  source: huggingface
+  model_id: facebook/wav2vec2-base
+  embedding_dim: 768
+  parameters: 95M
+  training_data: LibriSpeech
+  recommended_for: General-purpose speech representations
+
+- name: wav2vec2-large
+  task: ssl_embeddings
+  source: huggingface
+  model_id: facebook/wav2vec2-large-lv60
+  embedding_dim: 1024
+  parameters: 315M
+  training_data: LibriVox (60k hrs)
+  recommended_for: High-quality speech representations
+
+- name: HuBERT-large
+  task: ssl_embeddings
+  source: huggingface
+  model_id: facebook/hubert-large-ll60k
+  embedding_dim: 1024
+  parameters: 315M
+  training_data: LibriLight (60k hrs)
+  recommended_for: Speech representations with clustering-based pre-training
+
+- name: WavLM-large
+  task: ssl_embeddings
+  source: huggingface
+  model_id: microsoft/wavlm-large
+  embedding_dim: 1024
+  parameters: 315M
+  training_data: LibriLight + GigaSpeech + VoxPopuli
+  recommended_for: Speaker verification, separation, and general speech
+
+- name: data2vec-audio-large
+  task: ssl_embeddings
+  source: huggingface
+  model_id: facebook/data2vec-audio-large
+  embedding_dim: 1024
+  parameters: 313M
+  training_data: LibriSpeech
+  recommended_for: Multi-modal pre-training approach for speech
+
+- name: W2V-BERT 2.0
+  task: ssl_embeddings
+  source: huggingface
+  model_id: facebook/w2v-bert-2.0
+  embedding_dim: 1024
+  parameters: 600M
+  training_data: Multilingual (143 languages)
+  recommended_for: Multilingual speech representations
+
+# SSL Embeddings - S3PRL
+- name: APC
+  task: ssl_embeddings
+  source: s3prl
+  model_id: apc
+  embedding_dim: 512
+  parameters: 4.1M
+  training_data: LibriSpeech
+  recommended_for: Autoregressive predictive coding, lightweight SSL
+
+- name: TERA
+  task: ssl_embeddings
+  source: s3prl
+  model_id: tera
+  embedding_dim: 768
+  parameters: 21.3M
+  training_data: LibriSpeech
+  recommended_for: Time-frequency representation learning
+
+- name: MockingJay
+  task: ssl_embeddings
+  source: s3prl
+  model_id: mockingjay
+  embedding_dim: 768
+  parameters: 85.1M
+  training_data: LibriSpeech
+  recommended_for: Masked reconstruction pre-training
+
+- name: DeCoAR 2.0
+  task: ssl_embeddings
+  source: s3prl
+  model_id: decoar2
+  embedding_dim: 768
+  parameters: 89.8M
+  training_data: LibriSpeech
+  recommended_for: Deep contextualized acoustic representations
+
+- name: CPC
+  task: ssl_embeddings
+  source: s3prl
+  model_id: modified_cpc
+  embedding_dim: 256
+  parameters: 1.8M
+  training_data: LibriSpeech
+  recommended_for: Contrastive predictive coding, smallest SSL model
+
+# Speech-to-Text (ASR)
+- name: Whisper Tiny
+  task: speech_to_text
+  source: huggingface
+  model_id: openai/whisper-tiny
+  parameters: 39M
+  training_data: 680k hours multilingual
+  recommended_for: Fast, resource-constrained ASR
+
+- name: Whisper Small
+  task: speech_to_text
+  source: huggingface
+  model_id: openai/whisper-small
+  parameters: 244M
+  training_data: 680k hours multilingual
+  recommended_for: Balanced speed/accuracy ASR
+
+- name: Whisper Large v3 Turbo
+  task: speech_to_text
+  source: huggingface
+  model_id: openai/whisper-large-v3-turbo
+  parameters: 809M
+  training_data: 680k hours multilingual
+  recommended_for: Best accuracy, multilingual ASR
+
+- name: NeMo Conformer CTC
+  task: speech_to_text
+  source: nemo
+  model_id: nvidia/stt_en_conformer_ctc_large
+  parameters: 120M
+  training_data: LibriSpeech + NeMo data
+  recommended_for: High-accuracy English ASR (via subprocess venv)
+
+# Speaker Diarization
+- name: Pyannote Diarization
+  task: speaker_diarization
+  source: pyannote
+  model_id: pyannote/speaker-diarization-community-1
+  parameters: N/A
+  training_data: VoxConverse + DIHARD
+  recommended_for: Multi-speaker diarization (requires HF token)
+
+- name: NeMo Sortformer
+  task: speaker_diarization
+  source: nemo
+  model_id: nvidia/diar_sortformer_4spk-v1
+  parameters: N/A
+  training_data: NVIDIA proprietary
+  recommended_for: 4-speaker diarization (via subprocess venv)
+
+# Speech Emotion Recognition
+- name: SUPERB SER (IEMOCAP)
+  task: speech_emotion_recognition
+  source: huggingface
+  model_id: superb/wav2vec2-base-superb-er
+  parameters: 95M
+  training_data: IEMOCAP
+  recommended_for: Conversational speech emotion (4 classes)
+
+- name: SpeechBrain SER (IEMOCAP)
+  task: speech_emotion_recognition
+  source: speechbrain
+  model_id: speechbrain/emotion-recognition-wav2vec2-IEMOCAP
+  parameters: 95M
+  training_data: IEMOCAP
+  recommended_for: Conversational speech emotion (4 classes, very confident)
+
+- name: XLSR SER (RAVDESS)
+  task: speech_emotion_recognition
+  source: huggingface
+  model_id: ehcalabres/wav2vec2-lg-xlsr-en-speech-emotion-recognition
+  parameters: 315M
+  training_data: RAVDESS
+  recommended_for: Acted speech emotion (8 classes)
+
+- name: Continuous SER (MSP-Podcast)
+  task: speech_emotion_recognition
+  source: huggingface
+  model_id: audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim
+  parameters: 315M
+  training_data: MSP-Podcast
+  recommended_for: Dimensional emotion (valence/arousal/dominance)
+
+# Speech Enhancement
+- name: SepFormer (16kHz)
+  task: speech_enhancement
+  source: speechbrain
+  model_id: speechbrain/sepformer-wham16k-enhancement
+  parameters: N/A
+  training_data: WHAM! noise
+  recommended_for: Speech enhancement at 16kHz
+
+- name: SepFormer (8kHz)
+  task: speech_enhancement
+  source: speechbrain
+  model_id: speechbrain/sepformer-whamr-enhancement
+  parameters: N/A
+  training_data: WHAM! + reverberation
+  recommended_for: Speech enhancement at 8kHz (with reverb)
+
+# Voice Activity Detection
+- name: Pyannote VAD
+  task: voice_activity_detection
+  source: pyannote
+  model_id: pyannote/voice-activity-detection
+  parameters: N/A
+  training_data: Various
+  recommended_for: Dedicated voice activity detection (requires HF token)
+
+# Feature Extraction
+- name: SPARC (Articulatory)
+  task: features_extraction
+  source: sparc
+  model_id: speech-articulatory-coding
+  embedding_dim: 14 (EMA) + pitch/loudness/periodicity
+  parameters: N/A
+  training_data: Various
+  recommended_for: Articulatory features, voice conversion, resynthesis
+
+- name: PPG (Phonetic Posteriorgrams)
+  task: features_extraction
+  source: ppgs
+  model_id: ppgs
+  embedding_dim: 40 (phonemes)
+  parameters: N/A
+  training_data: Various
+  recommended_for: Phoneme-level analysis, duration extraction
+
+- name: OpenSMILE
+  task: features_extraction
+  source: opensmile
+  model_id: eGeMAPSv02
+  embedding_dim: 88 (functionals)
+  parameters: N/A
+  training_data: N/A (hand-crafted)
+  recommended_for: Standard acoustic features for emotion, health assessment

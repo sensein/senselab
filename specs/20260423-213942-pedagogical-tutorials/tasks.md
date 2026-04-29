@@ -41,7 +41,7 @@
 - [x] T006 [US4] Implement `plot_ppg_phoneme_timeline(audio, posteriorgram, title, show)` in src/senselab/audio/tasks/features_extraction/ppg.py — takes Audio + PPG tensor, returns matplotlib Figure with horizontal bars for each phoneme segment
 - [x] T007 [US4] Export new functions in src/senselab/audio/tasks/features_extraction/__init__.py
 - [x] T008 [US4] Run tests locally: `uv run pytest src/tests/audio/tasks/features_extraction_test.py -v -k "ppg or phoneme"` and `uv run pre-commit run --all-files`
-- [ ] T009 [US4] Close PR #431 with comment "Superseded by fresh implementation in [new branch/PR]"
+- [x] T009 [US4] Close PR #431 with comment "Superseded by fresh implementation in [new branch/PR]"
 
 **Checkpoint**: Phoneme duration functions available in codebase, tests pass
 
@@ -104,16 +104,16 @@
 ### Implementation
 
 - [x] T032 [US3] Verify tutorials/audio/00_getting_started.ipynb uses current conventions — check install cell, restart admonition, device auto-detect, HF_TOKEN setup; fix if needed
-- [ ] T033 [US3] Create tutorials/audio/shbt205_lab.ipynb from ~/Downloads/drive-download-20260424T013242Z-3-001/SHBT205-Lab.ipynb — copy and begin adaptation
-- [ ] T034 [US3] Update install cell and add restart admonition in tutorials/audio/shbt205_lab.ipynb — `!pip install -q uv` + `!uv pip install --pre --system "senselab"`, restart admonition, auto-detect device
-- [ ] T035 [US3] Replace raw Whisper ASR with senselab API in tutorials/audio/shbt205_lab.ipynb — replace `whisper.load_model()`, `whisper.decode()` with `transcribe_audios([audio], model=HFModel("openai/whisper-base"))`
-- [ ] T036 [US3] Replace raw SPARC calls with senselab API in tutorials/audio/shbt205_lab.ipynb — replace `coder.encode()` with `SparcFeatureExtractor.extract_sparc_features([audio])`, adapt articulatory feature plotting
-- [ ] T037 [US3] Replace raw Promonet PPG calls with senselab API in tutorials/audio/shbt205_lab.ipynb — replace `promonet.preprocess.from_audio()` and `promonet.plot.from_audio()` with `extract_ppgs_from_audios([audio])`, `plot_ppg_phoneme_timeline(audio, ppg)`
-- [ ] T038 [US3] Add fallback sample audio download for CI in tutorials/audio/shbt205_lab.ipynb — conditional recording widget (Colab) with downloadable sample audio fallback
-- [ ] T039 [US3] Add pedagogical markdown context throughout tutorials/audio/shbt205_lab.ipynb — explanations for each section (audio basics, ASR, articulatory coding, PPGs)
-- [ ] T040 [US3] Clear all outputs and run pre-commit on tutorials/audio/shbt205_lab.ipynb
-- [ ] T041 [P] [US3] Test shbt205_lab.ipynb locally via papermill: `uv run papermill tutorials/audio/shbt205_lab.ipynb /dev/null --cwd . -k python3 --execution-timeout 1800`
-- [ ] T042 [P] [US3] Test 00_getting_started.ipynb locally via papermill: `uv run papermill tutorials/audio/00_getting_started.ipynb /dev/null --cwd . -k python3 --execution-timeout 600`
+- [x] T033 [US3] Create tutorials/audio/shbt205_lab.ipynb from ~/Downloads/drive-download-20260424T013242Z-3-001/SHBT205-Lab.ipynb — copy and begin adaptation
+- [x] T034 [US3] Update install cell and add restart admonition in tutorials/audio/shbt205_lab.ipynb — `!pip install -q uv` + `!uv pip install --pre --system "senselab"`, restart admonition, auto-detect device
+- [x] T035 [US3] Replace raw Whisper ASR with senselab API in tutorials/audio/shbt205_lab.ipynb — replace `whisper.load_model()`, `whisper.decode()` with `transcribe_audios([audio], model=HFModel("openai/whisper-base"))`
+- [x] T036 [US3] Replace raw SPARC calls with senselab API in tutorials/audio/shbt205_lab.ipynb — replace `coder.encode()` with `SparcFeatureExtractor.extract_sparc_features([audio])`, adapt articulatory feature plotting
+- [x] T037 [US3] Replace raw Promonet PPG calls with senselab API in tutorials/audio/shbt205_lab.ipynb — replace `promonet.preprocess.from_audio()` and `promonet.plot.from_audio()` with `extract_ppgs_from_audios([audio])`, `plot_ppg_phoneme_timeline(audio, ppg)`
+- [x] T038 [US3] Add fallback sample audio download for CI in tutorials/audio/shbt205_lab.ipynb — conditional recording widget (Colab) with downloadable sample audio fallback
+- [x] T039 [US3] Add pedagogical markdown context throughout tutorials/audio/shbt205_lab.ipynb — explanations for each section (audio basics, ASR, articulatory coding, PPGs)
+- [x] T040 [US3] Clear all outputs and run pre-commit on tutorials/audio/shbt205_lab.ipynb
+- [x] T041 [P] [US3] Test shbt205_lab.ipynb locally via papermill: `uv run papermill tutorials/audio/shbt205_lab.ipynb /dev/null --cwd . -k python3 --execution-timeout 1800`
+- [x] T042 [P] [US3] Test 00_getting_started.ipynb locally via papermill: `uv run papermill tutorials/audio/00_getting_started.ipynb /dev/null --cwd . -k python3 --execution-timeout 600`
 
 **Checkpoint**: Both course notebooks work with current senselab, pass papermill
 
@@ -123,12 +123,12 @@
 
 **Purpose**: CI integration, manifest updates, final validation
 
-- [ ] T043 Add 3 new entries to tutorials/manifest.json — audio_recording_and_acoustic_analysis (timeout_cpu: 600, timeout_gpu: 300), transcription_and_phonemic_analysis (timeout_cpu: 1800, timeout_gpu: 600), shbt205_lab (timeout_cpu: 1800, timeout_gpu: 600, requires_hf_token: true)
-- [ ] T044 Run all tutorials locally via papermill — verify all 4 new/updated notebooks plus existing tutorials still pass
-- [ ] T045 Run full pre-commit: `uv run pre-commit run --all-files`
-- [ ] T046 Run unit tests: `uv run pytest src/tests/ -q --tb=line`
-- [ ] T047 Push to branch and create PR to alpha with `test-tutorials` label
-- [ ] T048 Verify CI passes (pre-commit, cpu-tests, tutorial-cpu-tests)
+- [x] T043 Add 3 new entries to tutorials/manifest.json — audio_recording_and_acoustic_analysis (timeout_cpu: 600, timeout_gpu: 300), transcription_and_phonemic_analysis (timeout_cpu: 1800, timeout_gpu: 600), shbt205_lab (timeout_cpu: 1800, timeout_gpu: 600, requires_hf_token: true)
+- [x] T044 Run all tutorials locally via papermill — verify all 4 new/updated notebooks plus existing tutorials still pass
+- [x] T045 Run full pre-commit: `uv run pre-commit run --all-files`
+- [x] T046 Run unit tests: `uv run pytest src/tests/ -q --tb=line`
+- [x] T047 Push to branch and create PR to alpha with `test-tutorials` label
+- [x] T048 Verify CI passes (pre-commit, cpu-tests, tutorial-cpu-tests)
 
 ---
 
