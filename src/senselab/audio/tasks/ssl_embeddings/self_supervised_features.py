@@ -4,10 +4,19 @@ import os
 from typing import Dict, List, Optional, Union
 
 import torch
+import torch.nn.functional as F
 from transformers import AutoFeatureExtractor, AutoModel
 
 from senselab.audio.data_structures import Audio
-from senselab.utils.data_structures import DeviceType, HFModel, _select_device_and_dtype
+from senselab.utils.data_structures import DeviceType, HFModel, SpeechBrainModel, _select_device_and_dtype
+from senselab.utils.dependencies import retry_on_transient_error
+
+try:
+    from speechbrain.inference.speaker import EncoderClassifier
+
+    SPEECHBRAIN_AVAILABLE = True
+except ModuleNotFoundError:
+    SPEECHBRAIN_AVAILABLE = False
 
 
 class SSLEmbeddingsFactory:
@@ -121,5 +130,109 @@ class SSLEmbeddingsFactory:
             for audio in preprocessed_audios
         ]
         embeddings = [torch.cat(embedding.hidden_states) for embedding in embeddings]
+
+        return embeddings
+
+
+class SpeechBrainSSLEmbeddings:
+    """Extracts SSL embeddings using SpeechBrain encoder models.
+
+    Reuses the SpeechBrain ``EncoderClassifier`` infrastructure from
+    the speaker_embeddings module to produce fixed-dimensional embeddings
+    (e.g., ECAPA-TDNN 192-D).
+    """
+
+    _models: Dict[str, "EncoderClassifier"] = {}
+
+    @classmethod
+    def _get_model(
+        cls,
+        model: SpeechBrainModel,
+        device: Optional[DeviceType] = None,
+    ) -> "EncoderClassifier":
+        """Get or create a SpeechBrain encoder model.
+
+        Args:
+            model: The SpeechBrain model spec.
+            device: Device for inference (CPU or CUDA).
+
+        Returns:
+            The loaded EncoderClassifier.
+        """
+        if not SPEECHBRAIN_AVAILABLE:
+            raise ModuleNotFoundError(
+                "`speechbrain` is not installed. "
+                "Please install senselab audio dependencies using `pip install senselab`."
+            )
+
+        device, _ = _select_device_and_dtype(
+            user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
+        )
+        key = f"{model.path_or_uri}-{model.revision}-{device.value}"
+        if key not in cls._models:
+            cls._models[key] = retry_on_transient_error(
+                EncoderClassifier.from_hparams,
+                source=model.path_or_uri,
+                run_opts={"device": device.value},
+            )
+        return cls._models[key]
+
+    @classmethod
+    def extract_speechbrain_ssl_embeddings(
+        cls,
+        audios: List[Audio],
+        model: SpeechBrainModel,
+        device: Optional[DeviceType] = None,
+    ) -> List[torch.Tensor]:
+        """Extract embeddings from audios using a SpeechBrain encoder model.
+
+        This uses SpeechBrain's ``EncoderClassifier.encode_batch()``
+        which returns fixed-dimensional embeddings (e.g., 192-D for
+        ECAPA-TDNN, 256-D for ResNet, 512-D for x-vector).
+
+        Args:
+            audios: List of mono Audio objects (16 kHz recommended).
+            model: SpeechBrain model spec (e.g.,
+                ``SpeechBrainModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb")``).
+            device: Device for inference (CPU or CUDA).
+
+        Returns:
+            List of 1-D tensors, one embedding per audio.
+        """
+        if not SPEECHBRAIN_AVAILABLE:
+            raise ModuleNotFoundError(
+                "`speechbrain` is not installed. "
+                "Please install senselab audio dependencies using `pip install senselab`."
+            )
+
+        if len(audios) == 0:
+            return []
+
+        classifier = cls._get_model(model=model, device=device)
+        expected_sample_rate = 16000
+
+        for audio in audios:
+            if audio.waveform.shape[0] != 1:
+                raise ValueError(f"Audio waveform must be mono (1 channel), but got {audio.waveform.shape[0]} channels")
+            if audio.sampling_rate != expected_sample_rate:
+                raise ValueError(
+                    "Audio sampling rate "
+                    + str(audio.sampling_rate)
+                    + " does not match expected "
+                    + str(expected_sample_rate)
+                )
+
+        # Calculate relative lengths for batch processing
+        lengths = torch.tensor([audio.waveform.shape[1] for audio in audios])
+        max_len = torch.max(lengths)
+        wav_lens = lengths.float() / max_len
+
+        # Stack with zero-padding
+        waveforms = torch.stack(
+            [F.pad(audio.waveform, (0, int(max_len - audio.waveform.shape[1]))) for audio in audios]
+        ).squeeze(dim=1)  # Remove channel dim only, keep batch
+
+        embeddings_batch = classifier.encode_batch(waveforms, wav_lens)
+        embeddings = [embedding.squeeze(dim=0) for embedding in embeddings_batch]
 
         return embeddings
