@@ -78,6 +78,7 @@ if not GPU_AVAILABLE:
 | audio_recording_and_acoustic_analysis | No | No | Recording and acoustic feature analysis |
 | transcription_and_phonemic_analysis | Yes | No | Transcription and phoneme-level analysis |
 | speech_representations_lab | Yes | No | Acoustic vs articulatory speech representations |
+| auditory_scene_analysis | Yes | No | Windowed audio event classification with timeline |
 
 *Requires accepting pyannote model terms on HuggingFace
 
