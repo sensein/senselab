@@ -102,11 +102,14 @@ def _classify_windowed(
     top_k: int,
     **kwargs: Any,  # noqa: ANN401
 ) -> List[List[Dict[str, Any]]]:
-    """Slice audios into overlapping windows and classify each window."""
-    batch_size = 32
+    """Slice audios into overlapping windows and classify each window.
 
-    all_windows: List[Audio] = []
-    window_meta: List[List[Dict[str, float]]] = []
+    Processes one audio at a time to keep memory bounded — windows for
+    a single audio are classified in batches of 32, then discarded
+    before moving to the next audio.
+    """
+    batch_size = 32
+    output: List[List[Dict[str, Any]]] = []
 
     for audio in audios:
         sr = audio.sampling_rate
@@ -116,35 +119,31 @@ def _classify_windowed(
         win_samples = int(win_length * sr)
         hop_samples = max(1, int(hop_length * sr))
 
-        meta_for_audio: List[Dict[str, float]] = []
+        # Build windows for this audio only.
+        windows: List[Audio] = []
+        metas: List[Dict[str, float]] = []
 
         if n_samples <= win_samples:
-            all_windows.append(Audio(waveform=waveform, sampling_rate=sr))
-            meta_for_audio.append({"start": 0.0, "end": n_samples / sr})
+            windows.append(Audio(waveform=waveform, sampling_rate=sr))
+            metas.append({"start": 0.0, "end": n_samples / sr})
         else:
             start = 0
             while start + win_samples <= n_samples:
                 chunk = waveform[:, start : start + win_samples]
-                all_windows.append(Audio(waveform=chunk, sampling_rate=sr))
-                meta_for_audio.append({"start": start / sr, "end": (start + win_samples) / sr})
+                windows.append(Audio(waveform=chunk, sampling_rate=sr))
+                metas.append({"start": start / sr, "end": (start + win_samples) / sr})
                 start += hop_samples
 
-        window_meta.append(meta_for_audio)
+        # Classify this audio's windows in batches.
+        results: List[AudioClassificationResult] = []
+        for batch_start in range(0, len(windows), batch_size):
+            batch = windows[batch_start : batch_start + batch_size]
+            results.extend(_classify_whole(batch, model=model, device=device, **kwargs))
 
-    # Classify in batches.
-    all_results: List[AudioClassificationResult] = []
-    for batch_start in range(0, len(all_windows), batch_size):
-        batch = all_windows[batch_start : batch_start + batch_size]
-        all_results.extend(_classify_whole(batch, model=model, device=device, **kwargs))
-
-    # Map flat results back to per-audio, per-window dicts.
-    output: List[List[Dict[str, Any]]] = []
-    idx = 0
-    for meta_list in window_meta:
+        # Convert to per-window dicts.
         audio_results: List[Dict[str, Any]] = []
-        for meta in meta_list:
-            result = all_results[idx]
-            k = min(top_k, len(result.labels))
+        for meta, result in zip(metas, results):
+            k = min(top_k, len(result.labels)) if result.labels else 0
             audio_results.append(
                 {
                     "start": meta["start"],
@@ -155,7 +154,6 @@ def _classify_windowed(
                     "hop_length": hop_length,
                 }
             )
-            idx += 1
         output.append(audio_results)
 
     return output
@@ -172,4 +170,6 @@ def scene_results_to_segments(results: List[Dict[str, Any]]) -> List[Dict[str, A
     Returns:
         Segment dicts with ``label``, ``start``, ``end``.
     """
-    return [{"label": r["labels"][0], "start": r["start"], "end": r["end"]} for r in results]
+    return [
+        {"label": r["labels"][0] if r["labels"] else "unknown", "start": r["start"], "end": r["end"]} for r in results
+    ]
