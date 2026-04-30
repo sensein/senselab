@@ -104,56 +104,62 @@ def _classify_windowed(
 ) -> List[List[Dict[str, Any]]]:
     """Slice audios into overlapping windows and classify each window.
 
-    Processes one audio at a time to keep memory bounded — windows for
-    a single audio are classified in batches of 32, then discarded
-    before moving to the next audio.
+    Uses :meth:`Audio.window_generator` for consistent windowed iteration
+    across senselab.  Processes one audio at a time to keep memory bounded.
     """
     batch_size = 32
     output: List[List[Dict[str, Any]]] = []
 
     for audio in audios:
         sr = audio.sampling_rate
-        waveform = audio.waveform
-        n_samples = waveform.shape[1]
-
-        win_samples = int(win_length * sr)
+        win_samples = max(1, int(win_length * sr))
         hop_samples = max(1, int(hop_length * sr))
+        n_samples = audio.waveform.shape[1]
 
-        # Build windows for this audio only.
-        windows: List[Audio] = []
-        metas: List[Dict[str, float]] = []
-
-        if n_samples <= win_samples:
-            windows.append(Audio(waveform=waveform, sampling_rate=sr))
-            metas.append({"start": 0.0, "end": n_samples / sr})
-        else:
-            start = 0
-            while start + win_samples <= n_samples:
-                chunk = waveform[:, start : start + win_samples]
-                windows.append(Audio(waveform=chunk, sampling_rate=sr))
-                metas.append({"start": start / sr, "end": (start + win_samples) / sr})
-                start += hop_samples
-
-        # Classify this audio's windows in batches.
-        results: List[AudioClassificationResult] = []
-        for batch_start in range(0, len(windows), batch_size):
-            batch = windows[batch_start : batch_start + batch_size]
-            results.extend(_classify_whole(batch, model=model, device=device, **kwargs))
-
-        # Convert to per-window dicts.
+        # Iterate over windows lazily in batches for memory efficiency.
         audio_results: List[Dict[str, Any]] = []
-        for meta, result in zip(metas, results):
-            k = min(top_k, len(result.labels)) if result.labels else 0
-            audio_results.append(
-                {
-                    "start": meta["start"],
-                    "end": meta["end"],
-                    "labels": result.labels[:k],
-                    "scores": result.scores[:k],
-                    "win_length": win_length,
-                    "hop_length": hop_length,
-                }
-            )
+        batch: List[Audio] = []
+        batch_positions: List[int] = []
+        pos = 0
+
+        for window in audio.window_generator(win_samples, hop_samples):
+            batch.append(window)
+            batch_positions.append(pos)
+            pos += hop_samples
+
+            if len(batch) >= batch_size:
+                results = _classify_whole(batch, model=model, device=device, **kwargs)
+                for bp, result in zip(batch_positions, results):
+                    k = min(top_k, len(result.labels)) if result.labels else 0
+                    audio_results.append(
+                        {
+                            "start": bp / sr,
+                            "end": min(bp + win_samples, n_samples) / sr,
+                            "labels": result.labels[:k],
+                            "scores": result.scores[:k],
+                            "win_length": win_length,
+                            "hop_length": hop_length,
+                        }
+                    )
+                batch.clear()
+                batch_positions.clear()
+
+        # Process remaining windows in final batch.
+        if batch:
+            results = _classify_whole(batch, model=model, device=device, **kwargs)
+            for bp, result in zip(batch_positions, results):
+                k = min(top_k, len(result.labels)) if result.labels else 0
+                audio_results.append(
+                    {
+                        "start": bp / sr,
+                        "end": min(bp + win_samples, n_samples) / sr,
+                        "labels": result.labels[:k],
+                        "scores": result.scores[:k],
+                        "win_length": win_length,
+                        "hop_length": hop_length,
+                    }
+                )
+
         output.append(audio_results)
 
     return output

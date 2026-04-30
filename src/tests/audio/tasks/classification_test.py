@@ -68,10 +68,10 @@ def test_classify_audios_windowed_basic() -> None:
     assert len(results) == 1
     windows = results[0]
 
-    # 2s audio, 1s window, 0.5s hop → 3 windows
-    assert len(windows) == 3
+    # 2s audio, 1s window, 0.5s hop → 4 windows (last is partial via window_generator)
+    assert len(windows) == 4
 
-    expected_times = [(0.0, 1.0), (0.5, 1.5), (1.0, 2.0)]
+    expected_times = [(0.0, 1.0), (0.5, 1.5), (1.0, 2.0), (1.5, 2.0)]
     for win, (exp_start, exp_end) in zip(windows, expected_times):
         assert win["start"] == pytest.approx(exp_start, abs=1e-6)
         assert win["end"] == pytest.approx(exp_end, abs=1e-6)
@@ -114,8 +114,8 @@ def test_classify_audios_windowed_default_hop() -> None:
         results = classify_audios([audio], model=model, win_length=2.0)
 
     windows = results[0]
-    # 3s audio, 2s window, 1s hop → 2 windows
-    assert len(windows) == 2
+    # 3s audio, 2s window, 1s hop → 3 windows (last partial via window_generator)
+    assert len(windows) == 3
     assert windows[0]["hop_length"] == 1.0
 
 
