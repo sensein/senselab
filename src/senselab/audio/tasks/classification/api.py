@@ -3,9 +3,13 @@
 Currently, it supports only Hugging Face models, with plans to include more in the future.
 Users can specify the audio clips to classify, the classification model, the preferred device,
 and the model-specific parameters, and senselab handles the rest.
+
+When ``win_length`` is provided, classification runs over sliding windows,
+producing per-window results with timestamps. If omitted, the entire audio
+is classified as a single unit.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from senselab.audio.data_structures import Audio, AudioClassificationResult
 from senselab.audio.tasks.classification.huggingface import HuggingFaceAudioClassifier
@@ -18,82 +22,103 @@ def classify_audios(
     audios: List[Audio],
     model: SenselabModel,
     device: Optional[DeviceType] = None,
+    win_length: Optional[float] = None,
+    hop_length: Optional[float] = None,
+    top_k: Optional[int] = None,
     **kwargs: Any,  # noqa: ANN401
-) -> List[AudioClassificationResult]:
-    """Classify all audios using the given model.
+) -> Union[List[AudioClassificationResult], List[List[Dict[str, Any]]]]:
+    """Classify audios using the given model.
+
+    When ``win_length`` is ``None`` (default), each audio is classified as a
+    whole and the return type is ``List[AudioClassificationResult]``.
+
+    When ``win_length`` is provided (in seconds), each audio is sliced into
+    overlapping windows and classified per-window.  The return type changes
+    to ``List[List[Dict]]`` where each inner dict contains:
+
+    - ``start`` / ``end`` (float): window boundaries in seconds.
+    - ``labels`` (List[str]): top-k predicted class names.
+    - ``scores`` (List[float]): corresponding confidence values.
+    - ``win_length`` / ``hop_length`` (float): the parameters used
+      (captured for provenance).
 
     Args:
-        audios (List[Audio]): The list of audio objects to be classified.
-        model (SenselabModel): The model used for classification.
-        device (Optional[DeviceType]): The device to run the model on (default is None).
-        **kwargs: Additional keyword arguments to pass to the classification function.
+        audios: Audio objects to classify.
+        model: The classification model.
+        device: Device for inference (default: auto-select).
+        win_length: Window duration in seconds.  If ``None``, classify
+            the full audio.  If set, ``hop_length`` defaults to
+            ``win_length / 2`` when not provided.
+        hop_length: Hop (step) duration in seconds for windowed mode.
+            Ignored when ``win_length`` is ``None``.
+        top_k: Keep only the top-k labels per result.  Applies in both
+            whole-audio and windowed modes.  ``None`` keeps all labels.
+        **kwargs: Forwarded to the backend classifier.
 
     Returns:
-        List[AudioClassificationResult]: The list of classification results.
-
-    Todo:
-        - Include more models (e.g., speechbrain, nvidia)
+        ``List[AudioClassificationResult]`` in whole-audio mode, or
+        ``List[List[Dict]]`` in windowed mode.
     """
+    if win_length is not None:
+        return _classify_windowed(
+            audios=audios,
+            model=model,
+            device=device,
+            win_length=win_length,
+            hop_length=hop_length if hop_length is not None else win_length / 2,
+            top_k=top_k or 5,
+            **kwargs,
+        )
+
+    results = _classify_whole(audios=audios, model=model, device=device, **kwargs)
+
+    if top_k is not None:
+        results = [AudioClassificationResult(labels=r.labels[:top_k], scores=r.scores[:top_k]) for r in results]
+    return results
+
+
+def _classify_whole(
+    audios: List[Audio],
+    model: SenselabModel,
+    device: Optional[DeviceType] = None,
+    **kwargs: Any,  # noqa: ANN401
+) -> List[AudioClassificationResult]:
+    """Classify each audio as a single unit (no windowing)."""
     if isinstance(model, HFModel):
         return HuggingFaceAudioClassifier.classify_audios_with_transformers(
             audios=audios, model=model, device=device, **kwargs
         )
-    else:
-        raise NotImplementedError(
-            "Only Hugging Face models are supported for now. We aim to support more models in the future."
-        )
+    raise NotImplementedError(
+        "Only Hugging Face models are supported for now. We aim to support more models in the future."
+    )
 
 
-def classify_audios_in_windows(
+def _classify_windowed(
     audios: List[Audio],
     model: SenselabModel,
-    window_size: float = 1.0,
-    hop_size: float = 0.5,
-    top_k: int = 5,
-    device: Optional[DeviceType] = None,
+    device: Optional[DeviceType],
+    win_length: float,
+    hop_length: float,
+    top_k: int,
     **kwargs: Any,  # noqa: ANN401
 ) -> List[List[Dict[str, Any]]]:
-    """Classify audio in overlapping sliding windows for temporal scene analysis.
-
-    Slices each audio into overlapping windows and runs classification on every
-    window, producing a time-resolved list of classification results per audio.
-
-    Args:
-        audios: The list of audio objects to classify.
-        model: The model used for classification.
-        window_size: Window duration in seconds (default 1.0).
-        hop_size: Hop (step) duration in seconds (default 0.5).
-        top_k: Number of top labels/scores to keep per window (default 5).
-        device: The device to run the model on (default is None).
-        **kwargs: Additional keyword arguments forwarded to ``classify_audios``.
-
-    Returns:
-        A list (one entry per input audio) of lists (one entry per window).
-        Each window dict contains:
-
-        - ``start`` (float): window start time in seconds.
-        - ``end`` (float): window end time in seconds.
-        - ``labels`` (List[str]): top-k predicted labels.
-        - ``scores`` (List[float]): corresponding scores.
-    """
+    """Slice audios into overlapping windows and classify each window."""
     batch_size = 32
 
-    # Build all window Audio objects and record their provenance.
     all_windows: List[Audio] = []
-    window_meta: List[List[Dict[str, Any]]] = []  # per-audio list of {start, end}
+    window_meta: List[List[Dict[str, float]]] = []
 
     for audio in audios:
         sr = audio.sampling_rate
         waveform = audio.waveform
         n_samples = waveform.shape[1]
 
-        win_samples = int(window_size * sr)
-        hop_samples = int(hop_size * sr)
+        win_samples = int(win_length * sr)
+        hop_samples = max(1, int(hop_length * sr))
 
-        meta_for_audio: List[Dict[str, Any]] = []
+        meta_for_audio: List[Dict[str, float]] = []
 
         if n_samples <= win_samples:
-            # Audio shorter than one window -> use full audio as a single window.
             all_windows.append(Audio(waveform=waveform, sampling_rate=sr))
             meta_for_audio.append({"start": 0.0, "end": n_samples / sr})
         else:
@@ -106,11 +131,11 @@ def classify_audios_in_windows(
 
         window_meta.append(meta_for_audio)
 
-    # Classify in batches for memory efficiency.
+    # Classify in batches.
     all_results: List[AudioClassificationResult] = []
     for batch_start in range(0, len(all_windows), batch_size):
         batch = all_windows[batch_start : batch_start + batch_size]
-        all_results.extend(classify_audios(batch, model=model, device=device, **kwargs))
+        all_results.extend(_classify_whole(batch, model=model, device=device, **kwargs))
 
     # Map flat results back to per-audio, per-window dicts.
     output: List[List[Dict[str, Any]]] = []
@@ -126,6 +151,8 @@ def classify_audios_in_windows(
                     "end": meta["end"],
                     "labels": result.labels[:k],
                     "scores": result.scores[:k],
+                    "win_length": win_length,
+                    "hop_length": hop_length,
                 }
             )
             idx += 1
@@ -137,24 +164,12 @@ def classify_audios_in_windows(
 def scene_results_to_segments(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Convert windowed classification results to ``plot_aligned_panels`` segment format.
 
-    Takes the per-window results produced by :func:`classify_audios_in_windows`
-    and returns segment dicts suitable for a ``{"type": "segments", ...}`` panel,
-    using the top-1 label from each window.
+    Uses the top-1 label from each window.
 
     Args:
-        results: List of window dicts as returned by ``classify_audios_in_windows``
-            (each dict has ``start``, ``end``, ``labels``, ``scores``).
+        results: Per-window dicts from ``classify_audios(..., win_length=...)``.
 
     Returns:
-        List of dicts with keys ``label``, ``start``, ``end``.
+        Segment dicts with ``label``, ``start``, ``end``.
     """
-    segments: List[Dict[str, Any]] = []
-    for r in results:
-        segments.append(
-            {
-                "label": r["labels"][0],
-                "start": r["start"],
-                "end": r["end"],
-            }
-        )
-    return segments
+    return [{"label": r["labels"][0], "start": r["start"], "end": r["end"]} for r in results]

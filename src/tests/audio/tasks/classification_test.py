@@ -6,7 +6,7 @@ import pytest
 import torch
 
 from senselab.audio.data_structures import Audio, AudioClassificationResult
-from senselab.audio.tasks.classification.api import classify_audios_in_windows, scene_results_to_segments
+from senselab.audio.tasks.classification.api import classify_audios, scene_results_to_segments
 from senselab.audio.tasks.classification.speech_emotion_recognition import (
     classify_emotions_from_speech,
 )
@@ -54,57 +54,69 @@ def _make_dummy_result() -> AudioClassificationResult:
     )
 
 
-def test_classify_audios_in_windows_basic() -> None:
+def test_classify_audios_windowed_basic() -> None:
     """Test windowed classification returns correct window count and structure."""
-    # 2 seconds of mono audio at 16 kHz
     audio = Audio(waveform=torch.randn(1, 32000), sampling_rate=16000)
-    model: HFModel = HFModel(path_or_uri="MIT/ast-finetuned-audioset-10-10-0.4593")
+    model = HFModel(path_or_uri="MIT/ast-finetuned-audioset-10-10-0.4593")
 
     with patch(
-        "senselab.audio.tasks.classification.api.classify_audios",
+        "senselab.audio.tasks.classification.api._classify_whole",
         side_effect=lambda audios, **kw: [_make_dummy_result() for _ in audios],
     ):
-        results = classify_audios_in_windows([audio], model=model, window_size=1.0, hop_size=0.5, top_k=3)
+        results = classify_audios([audio], model=model, win_length=1.0, hop_length=0.5, top_k=3)
 
-    # Outer list: one entry per audio
     assert len(results) == 1
     windows = results[0]
 
-    # With 2s audio, 1s window, 0.5s hop: windows at 0-1, 0.5-1.5, 1.0-2.0 = 3 windows
+    # 2s audio, 1s window, 0.5s hop → 3 windows
     assert len(windows) == 3
 
-    # Verify timestamps
     expected_times = [(0.0, 1.0), (0.5, 1.5), (1.0, 2.0)]
     for win, (exp_start, exp_end) in zip(windows, expected_times):
         assert win["start"] == pytest.approx(exp_start, abs=1e-6)
         assert win["end"] == pytest.approx(exp_end, abs=1e-6)
-        assert "labels" in win
-        assert "scores" in win
-        assert len(win["labels"]) == 3  # top_k=3
+        assert len(win["labels"]) == 3
         assert len(win["scores"]) == 3
+        # Provenance captured
+        assert win["win_length"] == 1.0
+        assert win["hop_length"] == 0.5
 
 
-def test_classify_audios_in_windows_short_audio() -> None:
+def test_classify_audios_windowed_short_audio() -> None:
     """Test that audio shorter than window produces a single window."""
-    # 0.5 seconds of mono audio at 16 kHz (shorter than 1s window)
     audio = Audio(waveform=torch.randn(1, 8000), sampling_rate=16000)
-    model: HFModel = HFModel(path_or_uri="MIT/ast-finetuned-audioset-10-10-0.4593")
+    model = HFModel(path_or_uri="MIT/ast-finetuned-audioset-10-10-0.4593")
 
     with patch(
-        "senselab.audio.tasks.classification.api.classify_audios",
+        "senselab.audio.tasks.classification.api._classify_whole",
         side_effect=lambda audios, **kw: [_make_dummy_result() for _ in audios],
     ):
-        results = classify_audios_in_windows([audio], model=model, window_size=1.0, hop_size=0.5, top_k=5)
+        results = classify_audios([audio], model=model, win_length=1.0)
 
     assert len(results) == 1
     windows = results[0]
-
-    # Short audio -> single window covering the full duration
     assert len(windows) == 1
     assert windows[0]["start"] == 0.0
     assert windows[0]["end"] == pytest.approx(0.5, abs=1e-6)
-    assert len(windows[0]["labels"]) == 5
-    assert len(windows[0]["scores"]) == 5
+    # Default hop_length = win_length / 2
+    assert windows[0]["hop_length"] == 0.5
+
+
+def test_classify_audios_windowed_default_hop() -> None:
+    """Test that hop_length defaults to win_length / 2."""
+    audio = Audio(waveform=torch.randn(1, 48000), sampling_rate=16000)
+    model = HFModel(path_or_uri="MIT/ast-finetuned-audioset-10-10-0.4593")
+
+    with patch(
+        "senselab.audio.tasks.classification.api._classify_whole",
+        side_effect=lambda audios, **kw: [_make_dummy_result() for _ in audios],
+    ):
+        results = classify_audios([audio], model=model, win_length=2.0)
+
+    windows = results[0]
+    # 3s audio, 2s window, 1s hop → 2 windows
+    assert len(windows) == 2
+    assert windows[0]["hop_length"] == 1.0
 
 
 def test_scene_results_to_segments() -> None:
