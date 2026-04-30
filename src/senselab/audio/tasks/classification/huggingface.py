@@ -44,7 +44,7 @@ class HuggingFaceAudioClassifier:
         device, _ = _select_device_and_dtype(
             user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
         )
-        key = f"{model.path_or_uri}-{model.revision}-{top_k}-{function_to_apply}-{batch_size}-{device.value}"
+        key = f"{model.path_or_uri}-{model.revision}-{top_k}-{function_to_apply}-{device.value}"
         if key not in cls._pipelines:
             cls._pipelines[key] = cast(
                 Pipeline,
@@ -52,10 +52,8 @@ class HuggingFaceAudioClassifier:
                     task="audio-classification",
                     model=model.path_or_uri,
                     revision=model.revision,
-                    # top_k=top_k, #TODO: this causes a bug in the pipeline that has been reported to transformers
-                    # https://github.com/huggingface/transformers/issues/35736
-                    function_to_apply=function_to_apply,  # TODO: parameter ignored in transformer code, bug reported
-                    # https://github.com/huggingface/transformers/issues/35739
+                    top_k=top_k,
+                    function_to_apply=function_to_apply,
                     device=device.value,
                 ),
             )
