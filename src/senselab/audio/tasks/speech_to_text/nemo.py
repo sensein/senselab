@@ -23,8 +23,11 @@ _NEMO_REQUIREMENTS = [
     "nemo_toolkit[asr]",
     "torch>=2.8,<2.9",
     "torchaudio>=2.8,<2.9",
+    "pyarrow<18",  # pyarrow 24+ removed PyExtensionType
+    "matplotlib",
     "soundfile",
 ]
+# NOTE: Same `lightning` package issue as diarization — see nvidia.py comment.
 _NEMO_PYTHON = "3.12"
 
 # Worker script — runs inside the isolated venv

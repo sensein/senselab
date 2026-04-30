@@ -79,9 +79,6 @@ except (ImportError, RuntimeError):
 _PPGS_VENV = "ppgs"
 _PPGS_REQUIREMENTS = [
     "ppgs>=0.0.9,<0.0.10",
-    "espnet",
-    "snorkel>=0.10.0,<0.11.0",
-    "lightning~=2.4",
     "torch>=2.8,<2.9",
     "torchaudio>=2.8,<2.9",
     "numpy",

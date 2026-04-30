@@ -22,8 +22,15 @@ _NEMO_REQUIREMENTS = [
     "nemo_toolkit[asr]",
     "torch>=2.8,<2.9",
     "torchaudio>=2.8,<2.9",
+    "pyarrow<18",  # pyarrow 24+ removed PyExtensionType
+    "matplotlib",
     "soundfile",
 ]
+# NOTE: The `lightning` package was removed from PyPI (April 2026).
+# NeMo requires it but pytorch-lightning is not a drop-in replacement.
+# Existing cached venvs that were created when `lightning` was available
+# will continue to work. New venv creation may fail until NeMo fixes
+# their dependency on `lightning` vs `pytorch-lightning`.
 _NEMO_PYTHON = "3.12"
 
 # Worker script — runs inside the isolated venv
