@@ -130,13 +130,12 @@ def _classify_windowed(
             if len(batch) >= batch_size:
                 results = _classify_whole(batch, model=model, device=device, **kwargs)
                 for bp, result in zip(batch_positions, results):
-                    k = min(top_k, len(result.labels)) if result.labels else 0
                     audio_results.append(
                         {
                             "start": bp / sr,
                             "end": min(bp + win_samples, n_samples) / sr,
-                            "labels": result.labels[:k],
-                            "scores": result.scores[:k],
+                            "labels": result.labels[:top_k],
+                            "scores": result.scores[:top_k],
                             "win_length": win_length,
                             "hop_length": hop_length,
                         }
