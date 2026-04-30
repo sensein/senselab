@@ -20,13 +20,14 @@ from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, p
 # Reuse the same NeMo venv as diarization — it already has nemo_toolkit[asr]
 _NEMO_VENV = "nemo-diarization"
 _NEMO_REQUIREMENTS = [
-    "nemo_toolkit[asr]==1.23.0",  # NeMo 2.0 removed SortformerEncLabelModel
-    "torch>=2.1,<2.5",  # NeMo 1.23 not compatible with torch 2.8
-    "torchaudio>=2.1,<2.5",
+    "nemo_toolkit[asr]",
+    "torch>=2.8,<2.9",
+    "torchaudio>=2.8,<2.9",
     "pyarrow<18",  # pyarrow 24+ removed PyExtensionType
     "matplotlib",
     "soundfile",
 ]
+# NOTE: Same `lightning` package issue as diarization — see nvidia.py comment.
 _NEMO_PYTHON = "3.12"
 
 # Worker script — runs inside the isolated venv
