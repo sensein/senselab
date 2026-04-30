@@ -44,7 +44,7 @@ class HuggingFaceAudioClassifier:
         device, _ = _select_device_and_dtype(
             user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
         )
-        key = f"{model.path_or_uri}-{model.revision}-{top_k}-{function_to_apply}-{batch_size}-{device.value}"
+        key = f"{model.path_or_uri}-{model.revision}-{top_k}-{function_to_apply}-{device.value}"
         if key not in cls._pipelines:
             cls._pipelines[key] = cast(
                 Pipeline,
