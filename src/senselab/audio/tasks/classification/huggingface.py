@@ -52,10 +52,8 @@ class HuggingFaceAudioClassifier:
                     task="audio-classification",
                     model=model.path_or_uri,
                     revision=model.revision,
-                    # top_k=top_k, #TODO: this causes a bug in the pipeline that has been reported to transformers
-                    # https://github.com/huggingface/transformers/issues/35736
-                    function_to_apply=function_to_apply,  # TODO: parameter ignored in transformer code, bug reported
-                    # https://github.com/huggingface/transformers/issues/35739
+                    top_k=top_k,
+                    function_to_apply=function_to_apply,
                     device=device.value,
                 ),
             )
