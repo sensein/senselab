@@ -113,6 +113,14 @@
             "category": "audio"
         },
         {
+            "path": "tutorials/audio/auditory_scene_analysis.ipynb",
+            "benefits_from_gpu": true,
+            "requires_hf_token": false,
+            "timeout_cpu": 600,
+            "timeout_gpu": 300,
+            "category": "audio"
+        },
+        {
             "path": "tutorials/video/pose_estimation.ipynb",
             "benefits_from_gpu": false,
             "requires_hf_token": false,
