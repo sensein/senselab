@@ -57,7 +57,7 @@ def _make_dummy_result() -> AudioClassificationResult:
 def test_classify_audios_windowed_basic() -> None:
     """Test windowed classification returns correct window count and structure."""
     audio = Audio(waveform=torch.randn(1, 32000), sampling_rate=16000)
-    model = HFModel(path_or_uri="MIT/ast-finetuned-audioset-10-10-0.4593")
+    model: HFModel = HFModel(path_or_uri="MIT/ast-finetuned-audioset-10-10-0.4593")
 
     with patch(
         "senselab.audio.tasks.classification.api._classify_whole",
@@ -85,7 +85,7 @@ def test_classify_audios_windowed_basic() -> None:
 def test_classify_audios_windowed_short_audio() -> None:
     """Test that audio shorter than window produces a single window."""
     audio = Audio(waveform=torch.randn(1, 8000), sampling_rate=16000)
-    model = HFModel(path_or_uri="MIT/ast-finetuned-audioset-10-10-0.4593")
+    model: HFModel = HFModel(path_or_uri="MIT/ast-finetuned-audioset-10-10-0.4593")
 
     with patch(
         "senselab.audio.tasks.classification.api._classify_whole",
@@ -105,7 +105,7 @@ def test_classify_audios_windowed_short_audio() -> None:
 def test_classify_audios_windowed_default_hop() -> None:
     """Test that hop_length defaults to win_length / 2."""
     audio = Audio(waveform=torch.randn(1, 48000), sampling_rate=16000)
-    model = HFModel(path_or_uri="MIT/ast-finetuned-audioset-10-10-0.4593")
+    model: HFModel = HFModel(path_or_uri="MIT/ast-finetuned-audioset-10-10-0.4593")
 
     with patch(
         "senselab.audio.tasks.classification.api._classify_whole",
