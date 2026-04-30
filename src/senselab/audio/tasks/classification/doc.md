@@ -42,11 +42,11 @@ Note that this list of datasets is not exhaustive. If you are interested in benc
 ## Windowed Scene Classification
 
 ### Overview
-`classify_audios_in_windows` applies a sliding-window approach to audio classification, enabling temporal analysis of how the acoustic scene evolves over time. Instead of producing a single label for an entire recording, it slices the audio into overlapping windows and classifies each one independently.
+`classify_audios(..., win_length=1.0)` applies a sliding-window approach to audio classification, enabling temporal analysis of how the acoustic scene evolves over time. Instead of producing a single label for an entire recording, it slices the audio into overlapping windows using `Audio.window_generator()` and classifies each one independently.
 
 ### Default Parameters
-- **window_size**: 1.0 second — the duration of each analysis window.
-- **hop_size**: 0.5 seconds — the step between consecutive windows (50% overlap by default).
+- **win_length**: Window duration in seconds (e.g., 1.0).
+- **hop_length**: Hop duration in seconds. Defaults to `win_length / 2` (50% overlap).
 - **top_k**: 5 — the number of top-scoring labels retained per window.
 
 Windows are processed in batches of 32 for memory efficiency. If the audio is shorter than a single window, the full audio is used as one window.
@@ -58,12 +58,12 @@ Windows are processed in batches of 32 for memory efficiency. If the audio is sh
 Use `scene_results_to_segments` to convert the per-window results into segment dicts compatible with `plot_aligned_panels`:
 
 ```python
-from senselab.audio.tasks.classification import classify_audios_in_windows, scene_results_to_segments
+from senselab.audio.tasks.classification import classify_audios, scene_results_to_segments
 from senselab.audio.tasks.plotting.plotting import plot_aligned_panels
 from senselab.utils.data_structures import HFModel
 
 model = HFModel(path_or_uri="MIT/ast-finetuned-audioset-10-10-0.4593")
-results = classify_audios_in_windows([audio], model=model)
+results = classify_audios([audio], model=model, win_length=1.0)
 segments = scene_results_to_segments(results[0])
 
 plot_aligned_panels(audio, [
