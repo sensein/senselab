@@ -28,12 +28,13 @@
                    pattern=".+" required>
 
 
-            <h2>Submodules</h2>
-            <ul>
-                    <li><a href="embeddings_extraction/api.html">api</a></li>
-                    <li><a href="embeddings_extraction/huggingface.html">huggingface</a></li>
-                    <li><a href="embeddings_extraction/sentence_transformers.html">sentence_transformers</a></li>
-            </ul>
+
+            <h2>API Documentation</h2>
+                <ul class="memberlist">
+            <li>
+                    <a class="function" href="#extract_embeddings_from_text">extract_embeddings_from_text</a>
+            </li>
+    </ul>
 
 
 
@@ -61,10 +62,65 @@
                         <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;.. include:: ./doc.md&quot;&quot;&quot;</span>  <span class="c1"># noqa: D415</span>
 </span><span id="L-2"><a href="#L-2"><span class="linenos">2</span></a>
 </span><span id="L-3"><a href="#L-3"><span class="linenos">3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.api</span><span class="w"> </span><span class="kn">import</span> <span class="n">extract_embeddings_from_text</span>  <span class="c1"># noqa: F401</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos">4</span></a>
+</span><span id="L-5"><a href="#L-5"><span class="linenos">5</span></a><span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;extract_embeddings_from_text&quot;</span><span class="p">]</span>
 </span></pre></div>
 
 
             </section>
+                <section id="extract_embeddings_from_text">
+                            <input id="extract_embeddings_from_text-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+                    <div class="decorator decorator-requires_compatibility">@requires_compatibility(&#39;text.tasks.embeddings_extraction.extract_embeddings_from_text&#39;)</div>
+
+        <span class="def">def</span>
+        <span class="name">extract_embeddings_from_text</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">pieces_of_text</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>,</span><span class="param">	<span class="n">model</span><span class="p">:</span> <span class="n"><a href="../../utils/data_structures/model.html#SenselabModel">senselab.utils.data_structures.model.SenselabModel</a></span>,</span><span class="param">	<span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n"><a href="../../utils/data_structures/device.html#DeviceType">senselab.utils.data_structures.device.DeviceType</a></span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span></span><span class="return-annotation">) -> <span class="n">List</span><span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">]</span>:</span></span>
+
+                <label class="view-source-button" for="extract_embeddings_from_text-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#extract_embeddings_from_text"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="extract_embeddings_from_text-14"><a href="#extract_embeddings_from_text-14"><span class="linenos">14</span></a><span class="nd">@requires_compatibility</span><span class="p">(</span><span class="s2">&quot;text.tasks.embeddings_extraction.extract_embeddings_from_text&quot;</span><span class="p">)</span>
+</span><span id="extract_embeddings_from_text-15"><a href="#extract_embeddings_from_text-15"><span class="linenos">15</span></a><span class="k">def</span><span class="w"> </span><span class="nf">extract_embeddings_from_text</span><span class="p">(</span>
+</span><span id="extract_embeddings_from_text-16"><a href="#extract_embeddings_from_text-16"><span class="linenos">16</span></a>    <span class="n">pieces_of_text</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">model</span><span class="p">:</span> <span class="n">SenselabModel</span><span class="p">,</span> <span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">DeviceType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="extract_embeddings_from_text-17"><a href="#extract_embeddings_from_text-17"><span class="linenos">17</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">]:</span>
+</span><span id="extract_embeddings_from_text-18"><a href="#extract_embeddings_from_text-18"><span class="linenos">18</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Extracts embeddings from a list of strings using the specified model.</span>
+</span><span id="extract_embeddings_from_text-19"><a href="#extract_embeddings_from_text-19"><span class="linenos">19</span></a>
+</span><span id="extract_embeddings_from_text-20"><a href="#extract_embeddings_from_text-20"><span class="linenos">20</span></a><span class="sd">    Args:</span>
+</span><span id="extract_embeddings_from_text-21"><a href="#extract_embeddings_from_text-21"><span class="linenos">21</span></a><span class="sd">        pieces_of_text (List[str]): A list of strings to extract embeddings from.</span>
+</span><span id="extract_embeddings_from_text-22"><a href="#extract_embeddings_from_text-22"><span class="linenos">22</span></a><span class="sd">        model (SenselabModel): The model used for extracting embeddings.</span>
+</span><span id="extract_embeddings_from_text-23"><a href="#extract_embeddings_from_text-23"><span class="linenos">23</span></a><span class="sd">        device (Optional[DeviceType]): The device to run the model on. Defaults to None.</span>
+</span><span id="extract_embeddings_from_text-24"><a href="#extract_embeddings_from_text-24"><span class="linenos">24</span></a>
+</span><span id="extract_embeddings_from_text-25"><a href="#extract_embeddings_from_text-25"><span class="linenos">25</span></a><span class="sd">    Returns:</span>
+</span><span id="extract_embeddings_from_text-26"><a href="#extract_embeddings_from_text-26"><span class="linenos">26</span></a><span class="sd">        List[torch.Tensor]: A list of embeddings for the input strings.</span>
+</span><span id="extract_embeddings_from_text-27"><a href="#extract_embeddings_from_text-27"><span class="linenos">27</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="extract_embeddings_from_text-28"><a href="#extract_embeddings_from_text-28"><span class="linenos">28</span></a>    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">SentenceTransformersModel</span><span class="p">):</span>
+</span><span id="extract_embeddings_from_text-29"><a href="#extract_embeddings_from_text-29"><span class="linenos">29</span></a>        <span class="k">return</span> <span class="n">SentenceTransformerFactory</span><span class="o">.</span><span class="n">extract_text_embeddings</span><span class="p">(</span><span class="n">pieces_of_text</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">device</span><span class="p">)</span>
+</span><span id="extract_embeddings_from_text-30"><a href="#extract_embeddings_from_text-30"><span class="linenos">30</span></a>    <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">HFModel</span><span class="p">):</span>
+</span><span id="extract_embeddings_from_text-31"><a href="#extract_embeddings_from_text-31"><span class="linenos">31</span></a>        <span class="k">return</span> <span class="n">HFFactory</span><span class="o">.</span><span class="n">extract_text_embeddings</span><span class="p">(</span><span class="n">pieces_of_text</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">device</span><span class="p">)</span>
+</span><span id="extract_embeddings_from_text-32"><a href="#extract_embeddings_from_text-32"><span class="linenos">32</span></a>    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Unsupported model type for text embedding extraction.&quot;</span><span class="p">)</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Extracts embeddings from a list of strings using the specified model.</p>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>pieces_of_text (List[str]):</strong>  A list of strings to extract embeddings from.</li>
+<li><strong>model (SenselabModel):</strong>  The model used for extracting embeddings.</li>
+<li><strong>device (Optional[DeviceType]):</strong>  The device to run the model on. Defaults to None.</li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p>List[torch.Tensor]: A list of embeddings for the input strings.</p>
+</blockquote>
+</div>
+
+
+                </section>
     </main>
 <script>
     function escapeHTML(html) {

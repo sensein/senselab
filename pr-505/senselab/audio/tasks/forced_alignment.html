@@ -28,13 +28,13 @@
                    pattern=".+" required>
 
 
-            <h2>Submodules</h2>
-            <ul>
-                    <li><a href="forced_alignment/constants.html">constants</a></li>
-                    <li><a href="forced_alignment/data_structures.html">data_structures</a></li>
-                    <li><a href="forced_alignment/evaluation.html">evaluation</a></li>
-                    <li><a href="forced_alignment/forced_alignment.html">forced_alignment</a></li>
-            </ul>
+
+            <h2>API Documentation</h2>
+                <ul class="memberlist">
+            <li>
+                    <a class="function" href="#align_transcriptions">align_transcriptions</a>
+            </li>
+    </ul>
 
 
 
@@ -60,10 +60,109 @@
                         <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;This module provides the API for forced alignment.&quot;&quot;&quot;</span>
 </span><span id="L-2"><a href="#L-2"><span class="linenos">2</span></a>
 </span><span id="L-3"><a href="#L-3"><span class="linenos">3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.forced_alignment</span><span class="w"> </span><span class="kn">import</span> <span class="n">align_transcriptions</span>  <span class="c1"># noqa: F401</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos">4</span></a>
+</span><span id="L-5"><a href="#L-5"><span class="linenos">5</span></a><span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;align_transcriptions&quot;</span><span class="p">]</span>
 </span></pre></div>
 
 
             </section>
+                <section id="align_transcriptions">
+                            <input id="align_transcriptions-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="def">def</span>
+        <span class="name">align_transcriptions</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">audios_and_transcriptions_and_language</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="n"><a href="../data_structures/audio.html#Audio">senselab.audio.data_structures.audio.Audio</a></span><span class="p">,</span> <span class="n"><a href="../../utils/data_structures/script_line.html#ScriptLine">senselab.utils.data_structures.script_line.ScriptLine</a></span><span class="p">,</span> <span class="n"><a href="../../utils/data_structures/language.html#Language">senselab.utils.data_structures.language.Language</a></span><span class="p">]]</span>,</span><span class="param">	<span class="n">levels_to_keep</span><span class="p">:</span> <span class="n">Dict</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;utterance&#39;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span> <span class="s1">&#39;word&#39;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span> <span class="s1">&#39;char&#39;</span><span class="p">:</span> <span class="kc">False</span><span class="p">}</span></span><span class="return-annotation">) -> <span class="n">List</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="n"><a href="../../utils/data_structures/script_line.html#ScriptLine">senselab.utils.data_structures.script_line.ScriptLine</a></span> <span class="o">|</span> <span class="kc">None</span><span class="p">]]</span>:</span></span>
+
+                <label class="view-source-button" for="align_transcriptions-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#align_transcriptions"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="align_transcriptions-570"><a href="#align_transcriptions-570"><span class="linenos">570</span></a><span class="k">def</span><span class="w"> </span><span class="nf">align_transcriptions</span><span class="p">(</span>
+</span><span id="align_transcriptions-571"><a href="#align_transcriptions-571"><span class="linenos">571</span></a>    <span class="n">audios_and_transcriptions_and_language</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="n">Audio</span><span class="p">,</span> <span class="n">ScriptLine</span><span class="p">,</span> <span class="n">Language</span><span class="p">]],</span>
+</span><span id="align_transcriptions-572"><a href="#align_transcriptions-572"><span class="linenos">572</span></a>    <span class="n">levels_to_keep</span><span class="p">:</span> <span class="n">Dict</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;utterance&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span> <span class="s2">&quot;word&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span> <span class="s2">&quot;char&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">},</span>
+</span><span id="align_transcriptions-573"><a href="#align_transcriptions-573"><span class="linenos">573</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="n">ScriptLine</span> <span class="o">|</span> <span class="kc">None</span><span class="p">]]:</span>
+</span><span id="align_transcriptions-574"><a href="#align_transcriptions-574"><span class="linenos">574</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Align multiple transcriptions with their respective audios using a wav2vec2.0 model.</span>
+</span><span id="align_transcriptions-575"><a href="#align_transcriptions-575"><span class="linenos">575</span></a>
+</span><span id="align_transcriptions-576"><a href="#align_transcriptions-576"><span class="linenos">576</span></a><span class="sd">    Args:</span>
+</span><span id="align_transcriptions-577"><a href="#align_transcriptions-577"><span class="linenos">577</span></a><span class="sd">        audios_and_transcriptions_and_language (List[Tuple[Audio, ScriptLine, Language]]):</span>
+</span><span id="align_transcriptions-578"><a href="#align_transcriptions-578"><span class="linenos">578</span></a><span class="sd">            Each tuple contains an Audio object, a ScriptLine with transcription,</span>
+</span><span id="align_transcriptions-579"><a href="#align_transcriptions-579"><span class="linenos">579</span></a><span class="sd">            and an optional Language (default is English).</span>
+</span><span id="align_transcriptions-580"><a href="#align_transcriptions-580"><span class="linenos">580</span></a><span class="sd">        levels_to_keep (Dict): Levels of transcription to keep in output.</span>
+</span><span id="align_transcriptions-581"><a href="#align_transcriptions-581"><span class="linenos">581</span></a>
+</span><span id="align_transcriptions-582"><a href="#align_transcriptions-582"><span class="linenos">582</span></a><span class="sd">    Returns:</span>
+</span><span id="align_transcriptions-583"><a href="#align_transcriptions-583"><span class="linenos">583</span></a><span class="sd">        List[List[ScriptLine | None]]: A list of aligned results for each audio.</span>
+</span><span id="align_transcriptions-584"><a href="#align_transcriptions-584"><span class="linenos">584</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="align_transcriptions-585"><a href="#align_transcriptions-585"><span class="linenos">585</span></a>    <span class="n">aligned_script_lines</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">ScriptLine</span> <span class="o">|</span> <span class="kc">None</span><span class="p">]]</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="align_transcriptions-586"><a href="#align_transcriptions-586"><span class="linenos">586</span></a>    <span class="n">loaded_processors_and_models</span> <span class="o">=</span> <span class="p">{}</span>
+</span><span id="align_transcriptions-587"><a href="#align_transcriptions-587"><span class="linenos">587</span></a>    <span class="n">device</span> <span class="o">=</span> <span class="n">_select_device_and_dtype</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span>
+</span><span id="align_transcriptions-588"><a href="#align_transcriptions-588"><span class="linenos">588</span></a>
+</span><span id="align_transcriptions-589"><a href="#align_transcriptions-589"><span class="linenos">589</span></a>    <span class="k">for</span> <span class="n">recording</span> <span class="ow">in</span> <span class="n">audios_and_transcriptions_and_language</span><span class="p">:</span>
+</span><span id="align_transcriptions-590"><a href="#align_transcriptions-590"><span class="linenos">590</span></a>        <span class="n">audio</span><span class="p">,</span> <span class="n">transcription</span><span class="p">,</span> <span class="n">language</span> <span class="o">=</span> <span class="p">(</span><span class="o">*</span><span class="n">recording</span><span class="p">,</span> <span class="kc">None</span><span class="p">)[:</span><span class="mi">3</span><span class="p">]</span>
+</span><span id="align_transcriptions-591"><a href="#align_transcriptions-591"><span class="linenos">591</span></a>        <span class="k">if</span> <span class="n">language</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="align_transcriptions-592"><a href="#align_transcriptions-592"><span class="linenos">592</span></a>            <span class="n">language</span> <span class="o">=</span> <span class="n">Language</span><span class="p">(</span><span class="n">language_code</span><span class="o">=</span><span class="s2">&quot;en&quot;</span><span class="p">)</span>
+</span><span id="align_transcriptions-593"><a href="#align_transcriptions-593"><span class="linenos">593</span></a>
+</span><span id="align_transcriptions-594"><a href="#align_transcriptions-594"><span class="linenos">594</span></a>        <span class="n">model_dict</span> <span class="o">=</span> <span class="n">DEFAULT_ALIGN_MODELS_HF</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">language</span><span class="o">.</span><span class="n">language_code</span><span class="p">,</span> <span class="n">DEFAULT_ALIGN_MODELS_HF</span><span class="p">[</span><span class="s2">&quot;en&quot;</span><span class="p">])</span>
+</span><span id="align_transcriptions-595"><a href="#align_transcriptions-595"><span class="linenos">595</span></a>        <span class="n">model_variant</span><span class="p">:</span> <span class="n">HFModel</span> <span class="o">=</span> <span class="n">HFModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="n">model_dict</span><span class="p">[</span><span class="s2">&quot;path_or_uri&quot;</span><span class="p">],</span> <span class="n">revision</span><span class="o">=</span><span class="n">model_dict</span><span class="p">[</span><span class="s2">&quot;revision&quot;</span><span class="p">])</span>
+</span><span id="align_transcriptions-596"><a href="#align_transcriptions-596"><span class="linenos">596</span></a>        <span class="k">if</span> <span class="n">model_variant</span><span class="o">.</span><span class="n">path_or_uri</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">loaded_processors_and_models</span><span class="p">:</span>
+</span><span id="align_transcriptions-597"><a href="#align_transcriptions-597"><span class="linenos">597</span></a>            <span class="n">processor</span> <span class="o">=</span> <span class="n">Wav2Vec2Processor</span><span class="o">.</span><span class="n">from_pretrained</span><span class="p">(</span><span class="n">model_variant</span><span class="o">.</span><span class="n">path_or_uri</span><span class="p">,</span> <span class="n">revision</span><span class="o">=</span><span class="n">model_variant</span><span class="o">.</span><span class="n">revision</span><span class="p">)</span>
+</span><span id="align_transcriptions-598"><a href="#align_transcriptions-598"><span class="linenos">598</span></a>            <span class="n">model</span> <span class="o">=</span> <span class="n">Wav2Vec2ForCTC</span><span class="o">.</span><span class="n">from_pretrained</span><span class="p">(</span><span class="n">model_variant</span><span class="o">.</span><span class="n">path_or_uri</span><span class="p">,</span> <span class="n">revision</span><span class="o">=</span><span class="n">model_variant</span><span class="o">.</span><span class="n">revision</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span>
+</span><span id="align_transcriptions-599"><a href="#align_transcriptions-599"><span class="linenos">599</span></a>                <span class="n">device</span><span class="o">.</span><span class="n">value</span>
+</span><span id="align_transcriptions-600"><a href="#align_transcriptions-600"><span class="linenos">600</span></a>            <span class="p">)</span>
+</span><span id="align_transcriptions-601"><a href="#align_transcriptions-601"><span class="linenos">601</span></a>            <span class="n">loaded_processors_and_models</span><span class="p">[</span><span class="n">model_variant</span><span class="o">.</span><span class="n">path_or_uri</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">processor</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+</span><span id="align_transcriptions-602"><a href="#align_transcriptions-602"><span class="linenos">602</span></a>
+</span><span id="align_transcriptions-603"><a href="#align_transcriptions-603"><span class="linenos">603</span></a>        <span class="n">processor</span><span class="p">,</span> <span class="n">model</span> <span class="o">=</span> <span class="n">loaded_processors_and_models</span><span class="p">[</span><span class="n">model_variant</span><span class="o">.</span><span class="n">path_or_uri</span><span class="p">]</span>
+</span><span id="align_transcriptions-604"><a href="#align_transcriptions-604"><span class="linenos">604</span></a>
+</span><span id="align_transcriptions-605"><a href="#align_transcriptions-605"><span class="linenos">605</span></a>        <span class="k">if</span> <span class="n">audio</span><span class="o">.</span><span class="n">sampling_rate</span> <span class="o">!=</span> <span class="n">SAMPLE_RATE</span><span class="p">:</span>
+</span><span id="align_transcriptions-606"><a href="#align_transcriptions-606"><span class="linenos">606</span></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">audio</span><span class="o">.</span><span class="n">sampling_rate</span><span class="si">}</span><span class="s2"> rate is not equal to </span><span class="si">{</span><span class="n">SAMPLE_RATE</span><span class="si">}</span><span class="s2">.&quot;</span><span class="p">)</span>
+</span><span id="align_transcriptions-607"><a href="#align_transcriptions-607"><span class="linenos">607</span></a>
+</span><span id="align_transcriptions-608"><a href="#align_transcriptions-608"><span class="linenos">608</span></a>        <span class="n">start</span> <span class="o">=</span> <span class="n">transcription</span><span class="o">.</span><span class="n">start</span> <span class="k">if</span> <span class="n">transcription</span><span class="o">.</span><span class="n">start</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="mf">0.0</span>
+</span><span id="align_transcriptions-609"><a href="#align_transcriptions-609"><span class="linenos">609</span></a>        <span class="n">end</span> <span class="o">=</span> <span class="n">transcription</span><span class="o">.</span><span class="n">end</span> <span class="k">if</span> <span class="n">transcription</span><span class="o">.</span><span class="n">end</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">audio</span><span class="o">.</span><span class="n">waveform</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">/</span> <span class="n">audio</span><span class="o">.</span><span class="n">sampling_rate</span>
+</span><span id="align_transcriptions-610"><a href="#align_transcriptions-610"><span class="linenos">610</span></a>        <span class="n">text</span> <span class="o">=</span> <span class="n">transcription</span><span class="o">.</span><span class="n">text</span> <span class="k">if</span> <span class="n">transcription</span><span class="o">.</span><span class="n">text</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="s2">&quot;&quot;</span>
+</span><span id="align_transcriptions-611"><a href="#align_transcriptions-611"><span class="linenos">611</span></a>
+</span><span id="align_transcriptions-612"><a href="#align_transcriptions-612"><span class="linenos">612</span></a>        <span class="n">segments</span> <span class="o">=</span> <span class="p">[</span>
+</span><span id="align_transcriptions-613"><a href="#align_transcriptions-613"><span class="linenos">613</span></a>            <span class="n">SingleSegment</span><span class="p">(</span>
+</span><span id="align_transcriptions-614"><a href="#align_transcriptions-614"><span class="linenos">614</span></a>                <span class="n">start</span><span class="o">=</span><span class="n">start</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="n">end</span><span class="p">,</span> <span class="n">text</span><span class="o">=</span><span class="n">text</span><span class="p">,</span> <span class="n">clean_char</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">clean_cdx</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">clean_wdx</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">sentence_spans</span><span class="o">=</span><span class="kc">None</span>
+</span><span id="align_transcriptions-615"><a href="#align_transcriptions-615"><span class="linenos">615</span></a>            <span class="p">)</span>
+</span><span id="align_transcriptions-616"><a href="#align_transcriptions-616"><span class="linenos">616</span></a>        <span class="p">]</span>
+</span><span id="align_transcriptions-617"><a href="#align_transcriptions-617"><span class="linenos">617</span></a>
+</span><span id="align_transcriptions-618"><a href="#align_transcriptions-618"><span class="linenos">618</span></a>        <span class="k">with</span> <span class="n">threadpool_limits</span><span class="p">(</span><span class="n">limits</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">user_api</span><span class="o">=</span><span class="s2">&quot;blas&quot;</span><span class="p">):</span>
+</span><span id="align_transcriptions-619"><a href="#align_transcriptions-619"><span class="linenos">619</span></a>            <span class="n">alignment</span> <span class="o">=</span> <span class="n">_align_transcription</span><span class="p">(</span>
+</span><span id="align_transcriptions-620"><a href="#align_transcriptions-620"><span class="linenos">620</span></a>                <span class="n">transcript</span><span class="o">=</span><span class="n">segments</span><span class="p">,</span>
+</span><span id="align_transcriptions-621"><a href="#align_transcriptions-621"><span class="linenos">621</span></a>                <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span>
+</span><span id="align_transcriptions-622"><a href="#align_transcriptions-622"><span class="linenos">622</span></a>                <span class="n">align_model_metadata</span><span class="o">=</span><span class="p">{</span>
+</span><span id="align_transcriptions-623"><a href="#align_transcriptions-623"><span class="linenos">623</span></a>                    <span class="s2">&quot;dictionary&quot;</span><span class="p">:</span> <span class="n">processor</span><span class="o">.</span><span class="n">tokenizer</span><span class="o">.</span><span class="n">get_vocab</span><span class="p">(),</span>
+</span><span id="align_transcriptions-624"><a href="#align_transcriptions-624"><span class="linenos">624</span></a>                    <span class="s2">&quot;language&quot;</span><span class="p">:</span> <span class="n">language</span><span class="p">,</span>
+</span><span id="align_transcriptions-625"><a href="#align_transcriptions-625"><span class="linenos">625</span></a>                    <span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;huggingface&quot;</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model_variant</span><span class="p">,</span> <span class="n">HFModel</span><span class="p">)</span> <span class="k">else</span> <span class="s2">&quot;torchaudio&quot;</span><span class="p">,</span>
+</span><span id="align_transcriptions-626"><a href="#align_transcriptions-626"><span class="linenos">626</span></a>                <span class="p">},</span>
+</span><span id="align_transcriptions-627"><a href="#align_transcriptions-627"><span class="linenos">627</span></a>                <span class="n">audio</span><span class="o">=</span><span class="n">audio</span><span class="p">,</span>
+</span><span id="align_transcriptions-628"><a href="#align_transcriptions-628"><span class="linenos">628</span></a>                <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+</span><span id="align_transcriptions-629"><a href="#align_transcriptions-629"><span class="linenos">629</span></a>            <span class="p">)</span>
+</span><span id="align_transcriptions-630"><a href="#align_transcriptions-630"><span class="linenos">630</span></a>
+</span><span id="align_transcriptions-631"><a href="#align_transcriptions-631"><span class="linenos">631</span></a>            <span class="n">aligned_script_lines</span><span class="o">.</span><span class="n">append</span><span class="p">([</span><span class="n">item</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">item</span><span class="p">,</span> <span class="n">ScriptLine</span><span class="p">)</span> <span class="k">else</span> <span class="kc">None</span> <span class="k">for</span> <span class="n">item</span> <span class="ow">in</span> <span class="n">alignment</span><span class="p">])</span>
+</span><span id="align_transcriptions-632"><a href="#align_transcriptions-632"><span class="linenos">632</span></a>    <span class="n">aligned_script_lines</span> <span class="o">=</span> <span class="n">filter_aligned_script_lines</span><span class="p">(</span><span class="n">aligned_script_lines</span><span class="p">,</span> <span class="n">levels_to_keep</span><span class="p">)</span>
+</span><span id="align_transcriptions-633"><a href="#align_transcriptions-633"><span class="linenos">633</span></a>    <span class="k">return</span> <span class="n">aligned_script_lines</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Align multiple transcriptions with their respective audios using a wav2vec2.0 model.</p>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>audios_and_transcriptions_and_language (List[Tuple[Audio, ScriptLine, Language]]):</strong>  Each tuple contains an Audio object, a ScriptLine with transcription,
+and an optional Language (default is English).</li>
+<li><strong>levels_to_keep (Dict):</strong>  Levels of transcription to keep in output.</li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p>List[List[ScriptLine | None]]: A list of aligned results for each audio.</p>
+</blockquote>
+</div>
+
+
+                </section>
     </main>
 <script>
     function escapeHTML(html) {

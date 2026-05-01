@@ -38,11 +38,13 @@
 </ul>
 
 
-            <h2>Submodules</h2>
-            <ul>
-                    <li><a href="voice_activity_detection/api.html">api</a></li>
-                    <li><a href="voice_activity_detection/pyannote_vad.html">pyannote_vad</a></li>
-            </ul>
+
+            <h2>API Documentation</h2>
+                <ul class="memberlist">
+            <li>
+                    <a class="function" href="#detect_human_voice_activity_in_audios">detect_human_voice_activity_in_audios</a>
+            </li>
+    </ul>
 
 
 
@@ -122,10 +124,230 @@
                         <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;.. include:: ./doc.md&quot;&quot;&quot;</span>  <span class="c1"># noqa: D415</span>
 </span><span id="L-2"><a href="#L-2"><span class="linenos">2</span></a>
 </span><span id="L-3"><a href="#L-3"><span class="linenos">3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.api</span><span class="w"> </span><span class="kn">import</span> <span class="n">detect_human_voice_activity_in_audios</span>  <span class="c1"># noqa: F401</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos">4</span></a>
+</span><span id="L-5"><a href="#L-5"><span class="linenos">5</span></a><span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;detect_human_voice_activity_in_audios&quot;</span><span class="p">]</span>
 </span></pre></div>
 
 
             </section>
+                <section id="detect_human_voice_activity_in_audios">
+                            <input id="detect_human_voice_activity_in_audios-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+                    <div class="decorator decorator-requires_compatibility">@requires_compatibility(&#39;audio.tasks.voice_activity_detection.detect_human_voice_activity_in_audios&#39;)</div>
+
+        <span class="def">def</span>
+        <span class="name">detect_human_voice_activity_in_audios</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n"><a href="../data_structures/audio.html#Audio">senselab.audio.data_structures.audio.Audio</a></span><span class="p">]</span>,</span><span class="param">	<span class="n">model</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n"><a href="../../utils/data_structures/model.html#SenselabModel">senselab.utils.data_structures.model.SenselabModel</a></span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n"><a href="../../utils/data_structures/device.html#DeviceType">senselab.utils.data_structures.device.DeviceType</a></span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span></span><span class="return-annotation">) -> <span class="n">List</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="n"><a href="../../utils/data_structures/script_line.html#ScriptLine">senselab.utils.data_structures.script_line.ScriptLine</a></span><span class="p">]]</span>:</span></span>
+
+                <label class="view-source-button" for="detect_human_voice_activity_in_audios-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#detect_human_voice_activity_in_audios"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="detect_human_voice_activity_in_audios-37"><a href="#detect_human_voice_activity_in_audios-37"><span class="linenos"> 37</span></a><span class="nd">@requires_compatibility</span><span class="p">(</span><span class="s2">&quot;audio.tasks.voice_activity_detection.detect_human_voice_activity_in_audios&quot;</span><span class="p">)</span>
+</span><span id="detect_human_voice_activity_in_audios-38"><a href="#detect_human_voice_activity_in_audios-38"><span class="linenos"> 38</span></a><span class="k">def</span><span class="w"> </span><span class="nf">detect_human_voice_activity_in_audios</span><span class="p">(</span>
+</span><span id="detect_human_voice_activity_in_audios-39"><a href="#detect_human_voice_activity_in_audios-39"><span class="linenos"> 39</span></a>    <span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">],</span>
+</span><span id="detect_human_voice_activity_in_audios-40"><a href="#detect_human_voice_activity_in_audios-40"><span class="linenos"> 40</span></a>    <span class="n">model</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">SenselabModel</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="detect_human_voice_activity_in_audios-41"><a href="#detect_human_voice_activity_in_audios-41"><span class="linenos"> 41</span></a>    <span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">DeviceType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="detect_human_voice_activity_in_audios-42"><a href="#detect_human_voice_activity_in_audios-42"><span class="linenos"> 42</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="n">ScriptLine</span><span class="p">]]:</span>
+</span><span id="detect_human_voice_activity_in_audios-43"><a href="#detect_human_voice_activity_in_audios-43"><span class="linenos"> 43</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Detect human voice activity (VAD) and return time segments labeled ``&quot;VOICE&quot;``.</span>
+</span><span id="detect_human_voice_activity_in_audios-44"><a href="#detect_human_voice_activity_in_audios-44"><span class="linenos"> 44</span></a>
+</span><span id="detect_human_voice_activity_in_audios-45"><a href="#detect_human_voice_activity_in_audios-45"><span class="linenos"> 45</span></a><span class="sd">    Under the hood, this routes to one of three backends:</span>
+</span><span id="detect_human_voice_activity_in_audios-46"><a href="#detect_human_voice_activity_in_audios-46"><span class="linenos"> 46</span></a>
+</span><span id="detect_human_voice_activity_in_audios-47"><a href="#detect_human_voice_activity_in_audios-47"><span class="linenos"> 47</span></a><span class="sd">    1. **Pyannote dedicated VAD** -- when a ``PyannoteAudioModel`` with a</span>
+</span><span id="detect_human_voice_activity_in_audios-48"><a href="#detect_human_voice_activity_in_audios-48"><span class="linenos"> 48</span></a><span class="sd">       VAD-specific model ID (e.g., ``pyannote/voice-activity-detection``) is</span>
+</span><span id="detect_human_voice_activity_in_audios-49"><a href="#detect_human_voice_activity_in_audios-49"><span class="linenos"> 49</span></a><span class="sd">       passed. This uses a lightweight segmentation model purpose-built for</span>
+</span><span id="detect_human_voice_activity_in_audios-50"><a href="#detect_human_voice_activity_in_audios-50"><span class="linenos"> 50</span></a><span class="sd">       speech/non-speech detection.</span>
+</span><span id="detect_human_voice_activity_in_audios-51"><a href="#detect_human_voice_activity_in_audios-51"><span class="linenos"> 51</span></a><span class="sd">    2. **Pyannote diarization** -- when a ``PyannoteAudioModel`` with a</span>
+</span><span id="detect_human_voice_activity_in_audios-52"><a href="#detect_human_voice_activity_in_audios-52"><span class="linenos"> 52</span></a><span class="sd">       diarization model ID is passed (or ``model=None``). Diarization</span>
+</span><span id="detect_human_voice_activity_in_audios-53"><a href="#detect_human_voice_activity_in_audios-53"><span class="linenos"> 53</span></a><span class="sd">       segments are relabeled as ``&quot;VOICE&quot;``.</span>
+</span><span id="detect_human_voice_activity_in_audios-54"><a href="#detect_human_voice_activity_in_audios-54"><span class="linenos"> 54</span></a><span class="sd">    3. **NVIDIA Sortformer** -- when an ``HFModel`` whose ``path_or_uri``</span>
+</span><span id="detect_human_voice_activity_in_audios-55"><a href="#detect_human_voice_activity_in_audios-55"><span class="linenos"> 55</span></a><span class="sd">       starts with ``&quot;nvidia/diar_sortformer&quot;`` is passed. Diarization</span>
+</span><span id="detect_human_voice_activity_in_audios-56"><a href="#detect_human_voice_activity_in_audios-56"><span class="linenos"> 56</span></a><span class="sd">       segments are relabeled as ``&quot;VOICE&quot;``.</span>
+</span><span id="detect_human_voice_activity_in_audios-57"><a href="#detect_human_voice_activity_in_audios-57"><span class="linenos"> 57</span></a>
+</span><span id="detect_human_voice_activity_in_audios-58"><a href="#detect_human_voice_activity_in_audios-58"><span class="linenos"> 58</span></a><span class="sd">    Args:</span>
+</span><span id="detect_human_voice_activity_in_audios-59"><a href="#detect_human_voice_activity_in_audios-59"><span class="linenos"> 59</span></a><span class="sd">        audios (list[Audio]):</span>
+</span><span id="detect_human_voice_activity_in_audios-60"><a href="#detect_human_voice_activity_in_audios-60"><span class="linenos"> 60</span></a><span class="sd">            Audio clips to analyze. Ensure backend-specific requirements are met</span>
+</span><span id="detect_human_voice_activity_in_audios-61"><a href="#detect_human_voice_activity_in_audios-61"><span class="linenos"> 61</span></a><span class="sd">            (e.g., mono and correct sampling rate).</span>
+</span><span id="detect_human_voice_activity_in_audios-62"><a href="#detect_human_voice_activity_in_audios-62"><span class="linenos"> 62</span></a><span class="sd">        model (SenselabModel | None):</span>
+</span><span id="detect_human_voice_activity_in_audios-63"><a href="#detect_human_voice_activity_in_audios-63"><span class="linenos"> 63</span></a><span class="sd">            Backend selector:</span>
+</span><span id="detect_human_voice_activity_in_audios-64"><a href="#detect_human_voice_activity_in_audios-64"><span class="linenos"> 64</span></a>
+</span><span id="detect_human_voice_activity_in_audios-65"><a href="#detect_human_voice_activity_in_audios-65"><span class="linenos"> 65</span></a><span class="sd">            - ``None`` defaults to Pyannote diarization</span>
+</span><span id="detect_human_voice_activity_in_audios-66"><a href="#detect_human_voice_activity_in_audios-66"><span class="linenos"> 66</span></a><span class="sd">              (``pyannote/speaker-diarization-community-1``).</span>
+</span><span id="detect_human_voice_activity_in_audios-67"><a href="#detect_human_voice_activity_in_audios-67"><span class="linenos"> 67</span></a><span class="sd">            - ``PyannoteAudioModel(&quot;pyannote/voice-activity-detection&quot;)`` uses</span>
+</span><span id="detect_human_voice_activity_in_audios-68"><a href="#detect_human_voice_activity_in_audios-68"><span class="linenos"> 68</span></a><span class="sd">              the dedicated Pyannote VAD pipeline.</span>
+</span><span id="detect_human_voice_activity_in_audios-69"><a href="#detect_human_voice_activity_in_audios-69"><span class="linenos"> 69</span></a><span class="sd">            - ``PyannoteAudioModel(&quot;pyannote/speaker-diarization-community-1&quot;)``</span>
+</span><span id="detect_human_voice_activity_in_audios-70"><a href="#detect_human_voice_activity_in_audios-70"><span class="linenos"> 70</span></a><span class="sd">              uses the Pyannote diarization pipeline.</span>
+</span><span id="detect_human_voice_activity_in_audios-71"><a href="#detect_human_voice_activity_in_audios-71"><span class="linenos"> 71</span></a><span class="sd">            - ``HFModel(&quot;nvidia/diar_sortformer_4spk-v1&quot;)`` uses the NVIDIA</span>
+</span><span id="detect_human_voice_activity_in_audios-72"><a href="#detect_human_voice_activity_in_audios-72"><span class="linenos"> 72</span></a><span class="sd">              Sortformer diarization pipeline.</span>
+</span><span id="detect_human_voice_activity_in_audios-73"><a href="#detect_human_voice_activity_in_audios-73"><span class="linenos"> 73</span></a><span class="sd">        device (DeviceType | None):</span>
+</span><span id="detect_human_voice_activity_in_audios-74"><a href="#detect_human_voice_activity_in_audios-74"><span class="linenos"> 74</span></a><span class="sd">            Preferred device for inference (e.g., ``DeviceType.CPU``, ``DeviceType.CUDA``).</span>
+</span><span id="detect_human_voice_activity_in_audios-75"><a href="#detect_human_voice_activity_in_audios-75"><span class="linenos"> 75</span></a>
+</span><span id="detect_human_voice_activity_in_audios-76"><a href="#detect_human_voice_activity_in_audios-76"><span class="linenos"> 76</span></a><span class="sd">    Returns:</span>
+</span><span id="detect_human_voice_activity_in_audios-77"><a href="#detect_human_voice_activity_in_audios-77"><span class="linenos"> 77</span></a><span class="sd">        list[list[ScriptLine]]:</span>
+</span><span id="detect_human_voice_activity_in_audios-78"><a href="#detect_human_voice_activity_in_audios-78"><span class="linenos"> 78</span></a><span class="sd">            One list per input audio; each inner list contains ``ScriptLine``</span>
+</span><span id="detect_human_voice_activity_in_audios-79"><a href="#detect_human_voice_activity_in_audios-79"><span class="linenos"> 79</span></a><span class="sd">            entries with ``(start, end)`` and ``speaker=&quot;VOICE&quot;``.</span>
+</span><span id="detect_human_voice_activity_in_audios-80"><a href="#detect_human_voice_activity_in_audios-80"><span class="linenos"> 80</span></a>
+</span><span id="detect_human_voice_activity_in_audios-81"><a href="#detect_human_voice_activity_in_audios-81"><span class="linenos"> 81</span></a><span class="sd">    Raises:</span>
+</span><span id="detect_human_voice_activity_in_audios-82"><a href="#detect_human_voice_activity_in_audios-82"><span class="linenos"> 82</span></a><span class="sd">        NotImplementedError:</span>
+</span><span id="detect_human_voice_activity_in_audios-83"><a href="#detect_human_voice_activity_in_audios-83"><span class="linenos"> 83</span></a><span class="sd">            If ``model`` is not a supported type.</span>
+</span><span id="detect_human_voice_activity_in_audios-84"><a href="#detect_human_voice_activity_in_audios-84"><span class="linenos"> 84</span></a>
+</span><span id="detect_human_voice_activity_in_audios-85"><a href="#detect_human_voice_activity_in_audios-85"><span class="linenos"> 85</span></a><span class="sd">    Examples:</span>
+</span><span id="detect_human_voice_activity_in_audios-86"><a href="#detect_human_voice_activity_in_audios-86"><span class="linenos"> 86</span></a><span class="sd">        Pyannote dedicated VAD:</span>
+</span><span id="detect_human_voice_activity_in_audios-87"><a href="#detect_human_voice_activity_in_audios-87"><span class="linenos"> 87</span></a><span class="sd">            &gt;&gt;&gt; from pathlib import Path</span>
+</span><span id="detect_human_voice_activity_in_audios-88"><a href="#detect_human_voice_activity_in_audios-88"><span class="linenos"> 88</span></a><span class="sd">            &gt;&gt;&gt; from senselab.audio.data_structures import Audio</span>
+</span><span id="detect_human_voice_activity_in_audios-89"><a href="#detect_human_voice_activity_in_audios-89"><span class="linenos"> 89</span></a><span class="sd">            &gt;&gt;&gt; from senselab.utils.data_structures import DeviceType, PyannoteAudioModel</span>
+</span><span id="detect_human_voice_activity_in_audios-90"><a href="#detect_human_voice_activity_in_audios-90"><span class="linenos"> 90</span></a><span class="sd">            &gt;&gt;&gt; a1 = Audio(filepath=Path(&quot;sample1.wav&quot;).resolve())</span>
+</span><span id="detect_human_voice_activity_in_audios-91"><a href="#detect_human_voice_activity_in_audios-91"><span class="linenos"> 91</span></a><span class="sd">            &gt;&gt;&gt; mdl = PyannoteAudioModel(path_or_uri=&quot;pyannote/voice-activity-detection&quot;)</span>
+</span><span id="detect_human_voice_activity_in_audios-92"><a href="#detect_human_voice_activity_in_audios-92"><span class="linenos"> 92</span></a><span class="sd">            &gt;&gt;&gt; vad = detect_human_voice_activity_in_audios([a1], model=mdl, device=DeviceType.CPU)</span>
+</span><span id="detect_human_voice_activity_in_audios-93"><a href="#detect_human_voice_activity_in_audios-93"><span class="linenos"> 93</span></a>
+</span><span id="detect_human_voice_activity_in_audios-94"><a href="#detect_human_voice_activity_in_audios-94"><span class="linenos"> 94</span></a><span class="sd">        Pyannote diarization (default model, CPU):</span>
+</span><span id="detect_human_voice_activity_in_audios-95"><a href="#detect_human_voice_activity_in_audios-95"><span class="linenos"> 95</span></a><span class="sd">            &gt;&gt;&gt; from pathlib import Path</span>
+</span><span id="detect_human_voice_activity_in_audios-96"><a href="#detect_human_voice_activity_in_audios-96"><span class="linenos"> 96</span></a><span class="sd">            &gt;&gt;&gt; from senselab.audio.data_structures import Audio</span>
+</span><span id="detect_human_voice_activity_in_audios-97"><a href="#detect_human_voice_activity_in_audios-97"><span class="linenos"> 97</span></a><span class="sd">            &gt;&gt;&gt; from senselab.utils.data_structures import DeviceType</span>
+</span><span id="detect_human_voice_activity_in_audios-98"><a href="#detect_human_voice_activity_in_audios-98"><span class="linenos"> 98</span></a><span class="sd">            &gt;&gt;&gt; a1 = Audio(filepath=Path(&quot;sample1.wav&quot;).resolve())</span>
+</span><span id="detect_human_voice_activity_in_audios-99"><a href="#detect_human_voice_activity_in_audios-99"><span class="linenos"> 99</span></a><span class="sd">            &gt;&gt;&gt; a2 = Audio(filepath=Path(&quot;sample2.wav&quot;).resolve())</span>
+</span><span id="detect_human_voice_activity_in_audios-100"><a href="#detect_human_voice_activity_in_audios-100"><span class="linenos">100</span></a><span class="sd">            &gt;&gt;&gt; vad = detect_human_voice_activity_in_audios([a1, a2], device=DeviceType.CPU)</span>
+</span><span id="detect_human_voice_activity_in_audios-101"><a href="#detect_human_voice_activity_in_audios-101"><span class="linenos">101</span></a>
+</span><span id="detect_human_voice_activity_in_audios-102"><a href="#detect_human_voice_activity_in_audios-102"><span class="linenos">102</span></a><span class="sd">        NVIDIA Sortformer (HF), CUDA:</span>
+</span><span id="detect_human_voice_activity_in_audios-103"><a href="#detect_human_voice_activity_in_audios-103"><span class="linenos">103</span></a><span class="sd">            &gt;&gt;&gt; from pathlib import Path</span>
+</span><span id="detect_human_voice_activity_in_audios-104"><a href="#detect_human_voice_activity_in_audios-104"><span class="linenos">104</span></a><span class="sd">            &gt;&gt;&gt; from senselab.audio.data_structures import Audio</span>
+</span><span id="detect_human_voice_activity_in_audios-105"><a href="#detect_human_voice_activity_in_audios-105"><span class="linenos">105</span></a><span class="sd">            &gt;&gt;&gt; from senselab.utils.data_structures import HFModel, DeviceType</span>
+</span><span id="detect_human_voice_activity_in_audios-106"><a href="#detect_human_voice_activity_in_audios-106"><span class="linenos">106</span></a><span class="sd">            &gt;&gt;&gt; a1 = Audio(filepath=Path(&quot;sample1.wav&quot;).resolve())</span>
+</span><span id="detect_human_voice_activity_in_audios-107"><a href="#detect_human_voice_activity_in_audios-107"><span class="linenos">107</span></a><span class="sd">            &gt;&gt;&gt; hf = HFModel(path_or_uri=&quot;nvidia/diar_sortformer_4spk-v1&quot;)</span>
+</span><span id="detect_human_voice_activity_in_audios-108"><a href="#detect_human_voice_activity_in_audios-108"><span class="linenos">108</span></a><span class="sd">            &gt;&gt;&gt; vad = detect_human_voice_activity_in_audios([a1], model=hf, device=DeviceType.CUDA)</span>
+</span><span id="detect_human_voice_activity_in_audios-109"><a href="#detect_human_voice_activity_in_audios-109"><span class="linenos">109</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="detect_human_voice_activity_in_audios-110"><a href="#detect_human_voice_activity_in_audios-110"><span class="linenos">110</span></a>    <span class="k">if</span> <span class="n">model</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="detect_human_voice_activity_in_audios-111"><a href="#detect_human_voice_activity_in_audios-111"><span class="linenos">111</span></a>        <span class="n">model</span> <span class="o">=</span> <span class="n">PyannoteAudioModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="s2">&quot;pyannote/speaker-diarization-community-1&quot;</span><span class="p">,</span> <span class="n">revision</span><span class="o">=</span><span class="s2">&quot;main&quot;</span><span class="p">)</span>
+</span><span id="detect_human_voice_activity_in_audios-112"><a href="#detect_human_voice_activity_in_audios-112"><span class="linenos">112</span></a>
+</span><span id="detect_human_voice_activity_in_audios-113"><a href="#detect_human_voice_activity_in_audios-113"><span class="linenos">113</span></a>    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">PyannoteAudioModel</span><span class="p">)</span> <span class="ow">and</span> <span class="n">_is_pyannote_vad_model</span><span class="p">(</span><span class="n">model</span><span class="p">):</span>
+</span><span id="detect_human_voice_activity_in_audios-114"><a href="#detect_human_voice_activity_in_audios-114"><span class="linenos">114</span></a>        <span class="c1"># Dedicated VAD pipeline — segments already labeled &quot;VOICE&quot;</span>
+</span><span id="detect_human_voice_activity_in_audios-115"><a href="#detect_human_voice_activity_in_audios-115"><span class="linenos">115</span></a>        <span class="k">return</span> <span class="n">PyannoteVAD</span><span class="o">.</span><span class="n">detect_voice_activity</span><span class="p">(</span><span class="n">audios</span><span class="o">=</span><span class="n">audios</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+</span><span id="detect_human_voice_activity_in_audios-116"><a href="#detect_human_voice_activity_in_audios-116"><span class="linenos">116</span></a>    <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">PyannoteAudioModel</span><span class="p">):</span>
+</span><span id="detect_human_voice_activity_in_audios-117"><a href="#detect_human_voice_activity_in_audios-117"><span class="linenos">117</span></a>        <span class="c1"># Diarization-based VAD — relabel speaker segments as &quot;VOICE&quot;</span>
+</span><span id="detect_human_voice_activity_in_audios-118"><a href="#detect_human_voice_activity_in_audios-118"><span class="linenos">118</span></a>        <span class="n">results</span> <span class="o">=</span> <span class="n">diarize_audios_with_pyannote</span><span class="p">(</span><span class="n">audios</span><span class="o">=</span><span class="n">audios</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+</span><span id="detect_human_voice_activity_in_audios-119"><a href="#detect_human_voice_activity_in_audios-119"><span class="linenos">119</span></a>        <span class="k">for</span> <span class="n">sample</span> <span class="ow">in</span> <span class="n">results</span><span class="p">:</span>
+</span><span id="detect_human_voice_activity_in_audios-120"><a href="#detect_human_voice_activity_in_audios-120"><span class="linenos">120</span></a>            <span class="k">for</span> <span class="n">chunk</span> <span class="ow">in</span> <span class="n">sample</span><span class="p">:</span>
+</span><span id="detect_human_voice_activity_in_audios-121"><a href="#detect_human_voice_activity_in_audios-121"><span class="linenos">121</span></a>                <span class="n">chunk</span><span class="o">.</span><span class="n">speaker</span> <span class="o">=</span> <span class="s2">&quot;VOICE&quot;</span>
+</span><span id="detect_human_voice_activity_in_audios-122"><a href="#detect_human_voice_activity_in_audios-122"><span class="linenos">122</span></a>        <span class="k">return</span> <span class="n">results</span>
+</span><span id="detect_human_voice_activity_in_audios-123"><a href="#detect_human_voice_activity_in_audios-123"><span class="linenos">123</span></a>    <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">HFModel</span><span class="p">)</span> <span class="ow">and</span> <span class="nb">str</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">path_or_uri</span><span class="p">)</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;nvidia/diar_sortformer&quot;</span><span class="p">):</span>
+</span><span id="detect_human_voice_activity_in_audios-124"><a href="#detect_human_voice_activity_in_audios-124"><span class="linenos">124</span></a>        <span class="n">result</span> <span class="o">=</span> <span class="n">diarize_audios_with_nvidia_sortformer</span><span class="p">(</span>
+</span><span id="detect_human_voice_activity_in_audios-125"><a href="#detect_human_voice_activity_in_audios-125"><span class="linenos">125</span></a>            <span class="n">audios</span><span class="o">=</span><span class="n">audios</span><span class="p">,</span>
+</span><span id="detect_human_voice_activity_in_audios-126"><a href="#detect_human_voice_activity_in_audios-126"><span class="linenos">126</span></a>            <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span>
+</span><span id="detect_human_voice_activity_in_audios-127"><a href="#detect_human_voice_activity_in_audios-127"><span class="linenos">127</span></a>            <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+</span><span id="detect_human_voice_activity_in_audios-128"><a href="#detect_human_voice_activity_in_audios-128"><span class="linenos">128</span></a>        <span class="p">)</span>
+</span><span id="detect_human_voice_activity_in_audios-129"><a href="#detect_human_voice_activity_in_audios-129"><span class="linenos">129</span></a>        <span class="k">for</span> <span class="n">sample</span> <span class="ow">in</span> <span class="n">result</span><span class="p">:</span>
+</span><span id="detect_human_voice_activity_in_audios-130"><a href="#detect_human_voice_activity_in_audios-130"><span class="linenos">130</span></a>            <span class="k">for</span> <span class="n">chunk</span> <span class="ow">in</span> <span class="n">sample</span><span class="p">:</span>
+</span><span id="detect_human_voice_activity_in_audios-131"><a href="#detect_human_voice_activity_in_audios-131"><span class="linenos">131</span></a>                <span class="n">chunk</span><span class="o">.</span><span class="n">speaker</span> <span class="o">=</span> <span class="s2">&quot;VOICE&quot;</span>
+</span><span id="detect_human_voice_activity_in_audios-132"><a href="#detect_human_voice_activity_in_audios-132"><span class="linenos">132</span></a>        <span class="k">return</span> <span class="n">result</span>
+</span><span id="detect_human_voice_activity_in_audios-133"><a href="#detect_human_voice_activity_in_audios-133"><span class="linenos">133</span></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="detect_human_voice_activity_in_audios-134"><a href="#detect_human_voice_activity_in_audios-134"><span class="linenos">134</span></a>        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span>
+</span><span id="detect_human_voice_activity_in_audios-135"><a href="#detect_human_voice_activity_in_audios-135"><span class="linenos">135</span></a>            <span class="s2">&quot;Only Pyannote (VAD or diarization) and NVIDIA Sortformer models are supported for now.&quot;</span>
+</span><span id="detect_human_voice_activity_in_audios-136"><a href="#detect_human_voice_activity_in_audios-136"><span class="linenos">136</span></a>        <span class="p">)</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Detect human voice activity (VAD) and return time segments labeled <code>"VOICE"</code>.</p>
+
+<p>Under the hood, this routes to one of three backends:</p>
+
+<ol>
+<li><strong>Pyannote dedicated VAD</strong> -- when a <code>PyannoteAudioModel</code> with a
+VAD-specific model ID (e.g., <code>pyannote/voice-activity-detection</code>) is
+passed. This uses a lightweight segmentation model purpose-built for
+speech/non-speech detection.</li>
+<li><strong>Pyannote diarization</strong> -- when a <code>PyannoteAudioModel</code> with a
+diarization model ID is passed (or <code>model=None</code>). Diarization
+segments are relabeled as <code>"VOICE"</code>.</li>
+<li><strong>NVIDIA Sortformer</strong> -- when an <code>HFModel</code> whose <code>path_or_uri</code>
+starts with <code>"nvidia/diar_sortformer"</code> is passed. Diarization
+segments are relabeled as <code>"VOICE"</code>.</li>
+</ol>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>audios (list[Audio]):</strong>  Audio clips to analyze. Ensure backend-specific requirements are met
+(e.g., mono and correct sampling rate).</li>
+<li><p><strong>model (SenselabModel | None):</strong>  Backend selector:</p>
+
+<ul>
+<li><code>None</code> defaults to Pyannote diarization
+(<code>pyannote/speaker-diarization-community-1</code>).</li>
+<li><code>PyannoteAudioModel("pyannote/voice-activity-detection")</code> uses
+the dedicated Pyannote VAD pipeline.</li>
+<li><code>PyannoteAudioModel("pyannote/speaker-diarization-community-1")</code>
+uses the Pyannote diarization pipeline.</li>
+<li><code>HFModel("nvidia/diar_sortformer_4spk-v1")</code> uses the NVIDIA
+Sortformer diarization pipeline.</li>
+</ul></li>
+<li><strong>device (DeviceType | None):</strong>  Preferred device for inference (e.g., <code>DeviceType.CPU</code>, <code>DeviceType.CUDA</code>).</li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p>list[list[ScriptLine]]:
+      One list per input audio; each inner list contains <code>ScriptLine</code>
+      entries with <code>(start, end)</code> and <code>speaker="VOICE"</code>.</p>
+</blockquote>
+
+<h6 id="raises">Raises:</h6>
+
+<ul>
+<li><strong>NotImplementedError:</strong>  If <code>model</code> is not a supported type.</li>
+</ul>
+
+<h6 id="examples">Examples:</h6>
+
+<blockquote>
+  <p>Pyannote dedicated VAD:</p>
+  
+  <blockquote>
+    <blockquote>
+      <blockquote>
+        <p>from pathlib import Path
+        from <a href="../data_structures.html">senselab.audio.data_structures</a> import Audio
+        from <a href="../../utils/data_structures.html">senselab.utils.data_structures</a> import DeviceType, PyannoteAudioModel
+        a1 = Audio(filepath=Path("sample1.wav").resolve())
+        mdl = PyannoteAudioModel(path_or_uri="pyannote/voice-activity-detection")
+        vad = detect_human_voice_activity_in_audios([a1], model=mdl, device=DeviceType.CPU)</p>
+      </blockquote>
+    </blockquote>
+  </blockquote>
+  
+  <p>Pyannote diarization (default model, CPU):</p>
+  
+  <blockquote>
+    <blockquote>
+      <blockquote>
+        <p>from pathlib import Path
+        from <a href="../data_structures.html">senselab.audio.data_structures</a> import Audio
+        from <a href="../../utils/data_structures.html">senselab.utils.data_structures</a> import DeviceType
+        a1 = Audio(filepath=Path("sample1.wav").resolve())
+        a2 = Audio(filepath=Path("sample2.wav").resolve())
+        vad = detect_human_voice_activity_in_audios([a1, a2], device=DeviceType.CPU)</p>
+      </blockquote>
+    </blockquote>
+  </blockquote>
+  
+  <p>NVIDIA Sortformer (HF), CUDA:</p>
+  
+  <blockquote>
+    <blockquote>
+      <blockquote>
+        <p>from pathlib import Path
+        from <a href="../data_structures.html">senselab.audio.data_structures</a> import Audio
+        from <a href="../../utils/data_structures.html">senselab.utils.data_structures</a> import HFModel, DeviceType
+        a1 = Audio(filepath=Path("sample1.wav").resolve())
+        hf = HFModel(path_or_uri="nvidia/diar_sortformer_4spk-v1")
+        vad = detect_human_voice_activity_in_audios([a1], model=hf, device=DeviceType.CUDA)</p>
+      </blockquote>
+    </blockquote>
+  </blockquote>
+</blockquote>
+</div>
+
+
+                </section>
     </main>
 <script>
     function escapeHTML(html) {
