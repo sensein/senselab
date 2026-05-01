@@ -56,7 +56,7 @@ All models supported by senselab, organized by task.
 | Model | Source | Model ID | Embedding Dim | Parameters | Recommended For |
 |-------|--------|----------|---------------|------------|-----------------|
 | Audio Spectrogram Transformer (AST) | huggingface | `MIT/ast-finetuned-audioset-10-10-0.4593` | — | 87M | General-purpose auditory scene analysis, sound event detection |
-| YAMNet | huggingface | `google/yamnet` | — | 3.2M | Lightweight audio scene classification (TensorFlow-based) |
+| YAMNet | tensorflow | `google/yamnet` | — | 3.2M | Lightweight audio scene classification (TensorFlow-based; not directly supported via classify_audios) |
 
 ## Speech Enhancement
 

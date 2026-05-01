@@ -225,11 +225,11 @@
 
 - name: YAMNet
   task: audio_scene_classification
-  source: huggingface
+  source: tensorflow
   model_id: google/yamnet
   parameters: 3.2M
   training_data: AudioSet (521 classes)
-  recommended_for: Lightweight audio scene classification (TensorFlow-based)
+  recommended_for: Lightweight audio scene classification (TensorFlow-based; not directly supported via classify_audios)
 
 # Speech Enhancement
 - name: SepFormer (16kHz)
