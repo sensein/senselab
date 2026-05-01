@@ -140,7 +140,7 @@ class YAMNetClassifier:
             # Add timestamps to each window based on YAMNet's fixed windowing
             all_results: List[List[Dict[str, Any]]] = []
             for audio_idx, windows in enumerate(output.get("results", [])):
-                duration = durations[audio_idx] if audio_idx < len(durations) else 0.0
+                duration = durations[audio_idx]
                 timestamped = []
                 for i, w in enumerate(windows):
                     start = i * cls.HOP_SECONDS
