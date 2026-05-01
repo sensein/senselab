@@ -8,7 +8,7 @@ import yaml
 
 def main() -> None:
     """Read YAML and output Markdown table."""
-    registry_path = Path(__file__).parent.parent / "docs" / "model_registry.yaml"
+    registry_path = Path(__file__).parent.parent / "src" / "senselab" / "model_registry.yaml"
     with open(registry_path) as f:
         models = yaml.safe_load(f)
 

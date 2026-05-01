@@ -9,10 +9,18 @@ Audio Classification refers to the broad category of tasks of processing audio i
 A variety of models are supported by ```senselab``` for audio classification tasks. They can be explored on the [Hugging Face Hub](https://huggingface.co/models?library=transformers&pipeline_tag=audio-classification&sort=downloads). Each model varies in performance, size, license, language support, and more. Like with many models and tasks, performance may also vary depending on who the speaker is in the processed audio clips (there may be differences in terms of age, dialects, disfluencies). It is recommended to review the model card for each model before use. Also, always refer to the most recent literature for an informed decision. Unlike other tasks, the exact classification task will be based off of the dataset and class labels used to train the model, such that even two models using the same dataset might classify the audios into different categories (e.g. the LibriSpeech dataset could be used to classify age and/or gender based on the audio clips).
 
 Some popular models for different classifications include:
+
+**Auditory Scene / Sound Event Classification:**
+  - [Audio Spectrogram Transformer (AST)](https://huggingface.co/MIT/ast-finetuned-audioset-10-10-0.4593) — 521 AudioSet classes (speech, music, environmental sounds, animals, etc.). Recommended for general-purpose scene analysis.
+  - [YAMNet](https://huggingface.co/google/yamnet) — Google's AudioSet classifier (521 classes). TensorFlow-based.
+
+**Speaker / Demographics:**
   - [Age](https://huggingface.co/audeering/wav2vec2-large-robust-24-ft-age-gender)
   - [Gender](https://huggingface.co/alefiury/wav2vec2-large-xlsr-53-gender-recognition-librispeech)
-  - [Music Genre](https://huggingface.co/agercas/distilhubert-finetuned-gtzan/blob/main/config.json)
   - [Adult vs. Child Speech](https://huggingface.co/bookbot/wav2vec2-adult-child-cls)
+
+**Content:**
+  - [Music Genre](https://huggingface.co/agercas/distilhubert-finetuned-gtzan/blob/main/config.json)
   - [Emotion Recognition](https://huggingface.co/ehcalabres/wav2vec2-lg-xlsr-en-speech-emotion-recognition)
 
 ## Evaluation

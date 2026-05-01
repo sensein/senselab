@@ -214,6 +214,23 @@
   training_data: MSP-Podcast
   recommended_for: Dimensional emotion (valence/arousal/dominance)
 
+# Audio Scene Classification
+- name: Audio Spectrogram Transformer (AST)
+  task: audio_scene_classification
+  source: huggingface
+  model_id: MIT/ast-finetuned-audioset-10-10-0.4593
+  parameters: 87M
+  training_data: AudioSet (521 classes)
+  recommended_for: General-purpose auditory scene analysis, sound event detection
+
+- name: YAMNet
+  task: audio_scene_classification
+  source: huggingface
+  model_id: google/yamnet
+  parameters: 3.2M
+  training_data: AudioSet (521 classes)
+  recommended_for: Lightweight audio scene classification (TensorFlow-based)
+
 # Speech Enhancement
 - name: SepFormer (16kHz)
   task: speech_enhancement
