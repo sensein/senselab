@@ -12,7 +12,7 @@ Some popular models for different classifications include:
 
 **Auditory Scene / Sound Event Classification:**
   - [Audio Spectrogram Transformer (AST)](https://huggingface.co/MIT/ast-finetuned-audioset-10-10-0.4593) — 521 AudioSet classes (speech, music, environmental sounds, animals, etc.). Recommended for general-purpose scene analysis.
-  - [YAMNet](https://huggingface.co/google/yamnet) — Google's AudioSet classifier (521 classes). TensorFlow-based.
+  - [YAMNet](https://huggingface.co/google/yamnet) — Google's AudioSet classifier (521 classes). TensorFlow-based; not directly supported via `classify_audios` (requires TF runtime).
 
 **Speaker / Demographics:**
   - [Age](https://huggingface.co/audeering/wav2vec2-large-robust-24-ft-age-gender)
@@ -20,7 +20,7 @@ Some popular models for different classifications include:
   - [Adult vs. Child Speech](https://huggingface.co/bookbot/wav2vec2-adult-child-cls)
 
 **Content:**
-  - [Music Genre](https://huggingface.co/agercas/distilhubert-finetuned-gtzan/blob/main/config.json)
+  - [Music Genre](https://huggingface.co/agercas/distilhubert-finetuned-gtzan)
   - [Emotion Recognition](https://huggingface.co/ehcalabres/wav2vec2-lg-xlsr-en-speech-emotion-recognition)
 
 ## Evaluation
