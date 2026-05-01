@@ -26,7 +26,7 @@ from senselab.utils.data_structures import (
     _select_device_and_dtype,
     logger,
 )
-from senselab.utils.subprocess_venv import ensure_venv, parse_subprocess_result
+from senselab.utils.subprocess_venv import ensure_venv, parse_subprocess_result, venv_python
 
 
 class SERType(Enum):
@@ -160,7 +160,7 @@ def _classify_continuous_ser_venv(
     )
 
     venv_dir = ensure_venv(_CONT_SER_VENV, _CONT_SER_REQUIREMENTS, python_version=_CONT_SER_PYTHON)
-    python = str(venv_dir / "bin" / "python")
+    python = venv_python(venv_dir)
 
     with tempfile.TemporaryDirectory(prefix="senselab-ser-") as tmpdir:
         tmp = Path(tmpdir)
@@ -210,7 +210,7 @@ def _get_ser_type(model: HFModel) -> SERType:
         # Fall back to raw config dict for models with invalid fields
         from huggingface_hub import hf_hub_download
 
-        config_path = hf_hub_download(model.path_or_uri, "config.json", revision=model.revision)
+        config_path = hf_hub_download(str(model.path_or_uri), "config.json", revision=model.revision)
         with open(config_path) as f:
             config_dict = json.load(f)
         config = SimpleNamespace(id2label=config_dict.get("id2label", {}))

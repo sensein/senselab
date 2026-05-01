@@ -17,7 +17,7 @@ import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, _select_device_and_dtype, logger
-from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result
+from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
 
 # S3PRL venv specification
 _S3PRL_VENV = "s3prl"
@@ -150,7 +150,7 @@ class S3PRLEmbeddingExtractor:
                 )
 
         venv_dir = ensure_venv(_S3PRL_VENV, _S3PRL_REQUIREMENTS, python_version=_S3PRL_PYTHON)
-        python = str(venv_dir / "bin" / "python")
+        python = venv_python(venv_dir)
 
         with tempfile.TemporaryDirectory(prefix="senselab-s3prl-") as tmpdir:
             tmp = Path(tmpdir)

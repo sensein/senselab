@@ -1,12 +1,13 @@
 """This module represents the API for the speech classification task within the senselab package.
 
-Currently, it supports only Hugging Face models, with plans to include more in the future.
-Users can specify the audio clips to classify, the classification model, the preferred device,
-and the model-specific parameters, and senselab handles the rest.
+Supports HuggingFace models and YAMNet (via isolated subprocess venv).
+Users can specify the audio clips to classify, the classification model,
+the preferred device, and the model-specific parameters.
 
 When ``win_length`` is provided, classification runs over sliding windows,
 producing per-window results with timestamps. If omitted, the entire audio
-is classified as a single unit.
+is classified as a single unit (HF models) or using the model's own
+internal windowing (YAMNet).
 """
 
 from typing import Any, Dict, List, Optional, Union
@@ -14,13 +15,22 @@ from typing import Any, Dict, List, Optional, Union
 from senselab.audio.data_structures import Audio, AudioClassificationResult
 from senselab.audio.tasks.classification.huggingface import HuggingFaceAudioClassifier
 from senselab.utils.compatibility import requires_compatibility
-from senselab.utils.data_structures import DeviceType, HFModel, SenselabModel
+from senselab.utils.data_structures import DeviceType, HFModel, SenselabModel, logger
+
+_YAMNET_ALIASES = {"yamnet", "google/yamnet"}
+
+
+def _is_yamnet(model: Union[SenselabModel, str]) -> bool:
+    """Check if the model refers to YAMNet."""
+    if isinstance(model, str):
+        return model.lower() in _YAMNET_ALIASES
+    return False
 
 
 @requires_compatibility("audio.tasks.classification.classify_audios")
 def classify_audios(
     audios: List[Audio],
-    model: SenselabModel,
+    model: Union[SenselabModel, str],
     device: Optional[DeviceType] = None,
     win_length: Optional[float] = None,
     hop_length: Optional[float] = None,
@@ -29,8 +39,9 @@ def classify_audios(
 ) -> Union[List[AudioClassificationResult], List[List[Dict[str, Any]]]]:
     """Classify audios using the given model.
 
-    When ``win_length`` is ``None`` (default), each audio is classified as a
-    whole and the return type is ``List[AudioClassificationResult]``.
+    When ``win_length`` is ``None`` (default) and the model is an HF model,
+    each audio is classified as a whole and the return type is
+    ``List[AudioClassificationResult]``.
 
     When ``win_length`` is provided (in seconds), each audio is sliced into
     overlapping windows and classified per-window.  The return type changes
@@ -42,23 +53,39 @@ def classify_audios(
     - ``win_length`` / ``hop_length`` (float): the parameters used
       (captured for provenance).
 
+    **YAMNet** (``model="yamnet"``): Runs in an isolated TensorFlow
+    subprocess venv.  YAMNet uses fixed 0.96 s windows with 0.48 s hop
+    internally, so it always returns windowed results.  The ``win_length``
+    and ``hop_length`` parameters are ignored for YAMNet.
+
     Args:
         audios: Audio objects to classify.
-        model: The classification model.
-        device: Device for inference (default: auto-select).
+        model: The classification model.  Can be an ``HFModel`` for
+            HuggingFace pipelines, or ``"yamnet"`` for the YAMNet
+            subprocess backend.
+        device: Device for inference (default: auto-select).  Ignored
+            for YAMNet (TensorFlow manages devices internally).
         win_length: Window duration in seconds.  If ``None``, classify
             the full audio.  If set, ``hop_length`` defaults to
-            ``win_length / 2`` when not provided.
+            ``win_length / 2`` when not provided.  Ignored for YAMNet.
         hop_length: Hop (step) duration in seconds for windowed mode.
-            Ignored when ``win_length`` is ``None``.
+            Ignored when ``win_length`` is ``None``.  Ignored for YAMNet.
         top_k: Keep only the top-k labels per result.  Applies in both
-            whole-audio and windowed modes.  ``None`` keeps all labels.
+            whole-audio and windowed modes.  ``None`` keeps all labels
+            (defaults to 5 for windowed mode and YAMNet).
         **kwargs: Forwarded to the backend classifier.
 
     Returns:
-        ``List[AudioClassificationResult]`` in whole-audio mode, or
-        ``List[List[Dict]]`` in windowed mode.
+        ``List[AudioClassificationResult]`` in whole-audio mode (HF only), or
+        ``List[List[Dict]]`` in windowed mode or when using YAMNet.
     """
+    if _is_yamnet(model):
+        from senselab.audio.tasks.classification.yamnet import YAMNetClassifier
+
+        if win_length is not None:
+            logger.info("YAMNet uses fixed 0.96s windows; win_length/hop_length parameters are ignored.")
+        return YAMNetClassifier.classify_with_yamnet(audios=audios, top_k=top_k or 5)
+
     if win_length is not None:
         return _classify_windowed(
             audios=audios,
@@ -79,7 +106,7 @@ def classify_audios(
 
 def _classify_whole(
     audios: List[Audio],
-    model: SenselabModel,
+    model: Union[SenselabModel, str],
     device: Optional[DeviceType] = None,
     **kwargs: Any,  # noqa: ANN401
 ) -> List[AudioClassificationResult]:
@@ -89,13 +116,14 @@ def _classify_whole(
             audios=audios, model=model, device=device, **kwargs
         )
     raise NotImplementedError(
-        "Only Hugging Face models are supported for now. We aim to support more models in the future."
+        f"Model type {type(model).__name__} is not supported for whole-audio classification. "
+        "Use HFModel for HuggingFace pipelines or 'yamnet' for YAMNet."
     )
 
 
 def _classify_windowed(
     audios: List[Audio],
-    model: SenselabModel,
+    model: Union[SenselabModel, str],
     device: Optional[DeviceType],
     win_length: float,
     hop_length: float,

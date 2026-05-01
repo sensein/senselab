@@ -21,7 +21,7 @@ import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, _select_device_and_dtype, logger
-from senselab.utils.subprocess_venv import ensure_venv, parse_subprocess_result
+from senselab.utils.subprocess_venv import ensure_venv, parse_subprocess_result, venv_python
 
 # Try to import the phoneme inventory from the ppgs library.
 # ppgs runs in a subprocess venv and may not be importable in the main env.
@@ -148,7 +148,7 @@ def extract_ppgs_from_audios(audios: List[Audio], device: Optional[DeviceType] =
         raise ValueError("Only mono audio is supported by ppgs model.")
 
     venv_dir = ensure_venv(_PPGS_VENV, _PPGS_REQUIREMENTS, python_version=_PPGS_PYTHON)
-    python = str(venv_dir / "bin" / "python")
+    python = venv_python(venv_dir)
 
     with tempfile.TemporaryDirectory(prefix="senselab-ppgs-") as tmpdir:
         tmp = Path(tmpdir)

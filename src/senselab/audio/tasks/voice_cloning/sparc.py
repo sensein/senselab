@@ -12,7 +12,7 @@ from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, Language, _select_device_and_dtype
-from senselab.utils.subprocess_venv import ensure_venv, parse_subprocess_result
+from senselab.utils.subprocess_venv import ensure_venv, parse_subprocess_result, venv_python
 
 # Reuse the same venv spec as features_extraction/sparc.py
 _SPARC_VENV = "sparc"
@@ -114,7 +114,7 @@ class SparcVoiceCloner:
             raise ValueError(f"Language {lang.name} not supported. Supported: english or None (multi-language).")
 
         venv_dir = ensure_venv(_SPARC_VENV, _SPARC_REQUIREMENTS, python_version=_SPARC_PYTHON)
-        python = str(venv_dir / "bin" / "python")
+        python = venv_python(venv_dir)
 
         with tempfile.TemporaryDirectory(prefix="senselab-sparc-vc-") as tmpdir:
             tmp = Path(tmpdir)
