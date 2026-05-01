@@ -51,6 +51,13 @@ All models supported by senselab, organized by task.
 | XLSR SER (RAVDESS) | huggingface | `ehcalabres/wav2vec2-lg-xlsr-en-speech-emotion-recognition` | — | 315M | Acted speech emotion (8 classes) |
 | Continuous SER (MSP-Podcast) | huggingface | `audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim` | — | 315M | Dimensional emotion (valence/arousal/dominance) |
 
+## Audio Scene Classification
+
+| Model | Source | Model ID | Embedding Dim | Parameters | Recommended For |
+|-------|--------|----------|---------------|------------|-----------------|
+| Audio Spectrogram Transformer (AST) | huggingface | `MIT/ast-finetuned-audioset-10-10-0.4593` | — | 87M | General-purpose auditory scene analysis, sound event detection |
+| YAMNet | tensorflow | `google/yamnet` | — | 3.2M | Lightweight audio scene classification (TensorFlow-based; not directly supported via classify_audios) |
+
 ## Speech Enhancement
 
 | Model | Source | Model ID | Embedding Dim | Parameters | Recommended For |
