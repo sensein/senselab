@@ -14,7 +14,7 @@ from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, HFModel, ScriptLine, _select_device_and_dtype
-from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result
+from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
 
 # NeMo venv specification
 _NEMO_VENV = "nemo-diarization"
@@ -105,7 +105,7 @@ def diarize_audios_with_nvidia_sortformer(
     device_type = device or _select_device_and_dtype(compatible_devices=[DeviceType.CUDA, DeviceType.CPU])[0]
 
     venv_dir = ensure_venv(_NEMO_VENV, _NEMO_REQUIREMENTS, python_version=_NEMO_PYTHON)
-    python = str(venv_dir / "bin" / "python")
+    python = venv_python(venv_dir)
 
     with tempfile.TemporaryDirectory(prefix="senselab-nemo-") as tmpdir:
         tmp = Path(tmpdir)

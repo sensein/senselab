@@ -13,7 +13,7 @@ from typing import Any, Dict, List
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.preprocessing import resample_audios
-from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result
+from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
 
 _YAMNET_VENV = "yamnet"
 _YAMNET_REQUIREMENTS = [
@@ -102,7 +102,7 @@ class YAMNetClassifier:
             with ``labels``, ``scores``, ``start``, ``end``.
         """
         venv_dir = ensure_venv(_YAMNET_VENV, _YAMNET_REQUIREMENTS, python_version=_YAMNET_PYTHON)
-        python = str(venv_dir / "bin" / "python")
+        python = venv_python(venv_dir)
 
         with tempfile.TemporaryDirectory(prefix="senselab-yamnet-") as tmpdir:
             tmp = Path(tmpdir)

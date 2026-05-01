@@ -14,7 +14,7 @@ from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import CoquiTTSModel, DeviceType
-from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result
+from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
 
 # Coqui venv specification
 _COQUI_VENV = "coqui"
@@ -102,7 +102,7 @@ except Exception as exc:
 def list_coqui_models() -> list:
     """List available Coqui TTS models via the isolated subprocess venv."""
     venv_dir = ensure_venv(_COQUI_VENV, _COQUI_REQUIREMENTS, python_version=_COQUI_PYTHON)
-    python = str(venv_dir / "bin" / "python")
+    python = venv_python(venv_dir)
     env = _clean_subprocess_env()
     result = subprocess.run(
         [python, "-c", "from TTS.api import TTS; import json; print(json.dumps(list(TTS().list_models())))"],
@@ -146,7 +146,7 @@ class CoquiVoiceCloner:
             raise ValueError("Number of source and target audios must be the same.")
 
         venv_dir = ensure_venv(_COQUI_VENV, _COQUI_REQUIREMENTS, python_version=_COQUI_PYTHON)
-        python = str(venv_dir / "bin" / "python")
+        python = venv_python(venv_dir)
 
         with tempfile.TemporaryDirectory(prefix="senselab-coqui-") as tmpdir:
             tmp = Path(tmpdir)

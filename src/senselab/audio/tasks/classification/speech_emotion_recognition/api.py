@@ -26,7 +26,7 @@ from senselab.utils.data_structures import (
     _select_device_and_dtype,
     logger,
 )
-from senselab.utils.subprocess_venv import ensure_venv, parse_subprocess_result
+from senselab.utils.subprocess_venv import ensure_venv, parse_subprocess_result, venv_python
 
 
 class SERType(Enum):
@@ -160,7 +160,7 @@ def _classify_continuous_ser_venv(
     )
 
     venv_dir = ensure_venv(_CONT_SER_VENV, _CONT_SER_REQUIREMENTS, python_version=_CONT_SER_PYTHON)
-    python = str(venv_dir / "bin" / "python")
+    python = venv_python(venv_dir)
 
     with tempfile.TemporaryDirectory(prefix="senselab-ser-") as tmpdir:
         tmp = Path(tmpdir)

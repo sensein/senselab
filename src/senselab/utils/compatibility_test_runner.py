@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Optional
 
 from senselab.utils.compatibility import COMPATIBILITY_MATRIX, CompatibilityEntry, VersionRange
-from senselab.utils.subprocess_venv import ensure_venv
+from senselab.utils.subprocess_venv import ensure_venv, venv_python
 
 logger = logging.getLogger("senselab")
 
@@ -167,7 +167,7 @@ def _probe_function(
 
     try:
         venv_dir = ensure_venv(venv_name, reqs, python_version=python_version)
-        python = str(venv_dir / "bin" / "python")
+        python = venv_python(venv_dir)
         result = subprocess.run(
             [python, "-c", test_script],
             capture_output=True,
