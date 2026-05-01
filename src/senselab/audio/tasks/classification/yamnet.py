@@ -118,10 +118,12 @@ class YAMNetClassifier:
                 audio_paths.append(path)
                 durations.append(resampled.waveform.shape[1] / resampled.sampling_rate)
 
-            input_json = json.dumps({
-                "audio_paths": audio_paths,
-                "top_k": top_k,
-            })
+            input_json = json.dumps(
+                {
+                    "audio_paths": audio_paths,
+                    "top_k": top_k,
+                }
+            )
 
             env = _clean_subprocess_env()
             result = subprocess.run(
@@ -143,14 +145,16 @@ class YAMNetClassifier:
                 for i, w in enumerate(windows):
                     start = i * cls.HOP_SECONDS
                     end = min(start + cls.WINDOW_SECONDS, duration)
-                    timestamped.append({
-                        "start": start,
-                        "end": end,
-                        "labels": w["labels"],
-                        "scores": w["scores"],
-                        "win_length": cls.WINDOW_SECONDS,
-                        "hop_length": cls.HOP_SECONDS,
-                    })
+                    timestamped.append(
+                        {
+                            "start": start,
+                            "end": end,
+                            "labels": w["labels"],
+                            "scores": w["scores"],
+                            "win_length": cls.WINDOW_SECONDS,
+                            "hop_length": cls.HOP_SECONDS,
+                        }
+                    )
                 all_results.append(timestamped)
 
             return all_results
