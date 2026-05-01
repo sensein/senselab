@@ -11,6 +11,7 @@ from typing import Dict, List, Literal, Optional, cast
 from transformers import Pipeline, pipeline
 
 from senselab.audio.data_structures import Audio, AudioClassificationResult
+from senselab.audio.tasks.preprocessing import resample_audios
 from senselab.utils.data_structures import DeviceType, HFModel, _select_device_and_dtype
 from senselab.utils.data_structures.logging import logger
 
@@ -131,17 +132,15 @@ class HuggingFaceAudioClassifier:
         if expected_sampling_rate is None:
             raise ValueError("Internal error: The Hugging Face model does not specify an expected sampling rate.")
 
-        # Check that all audio objects are mono
+        # Validate mono and resample to expected rate inside the loop
+        # to avoid holding all resampled audios in memory at once
+        formatted_audios = []
         for audio in audios:
             if audio.waveform.shape[0] != 1:
                 raise ValueError(f"Stereo audio is not supported. Got {audio.waveform.shape[0]} channels")
             if audio.sampling_rate != expected_sampling_rate:
-                raise ValueError(
-                    f"Incorrect sampling rate. Expected {expected_sampling_rate}, got {audio.sampling_rate}"
-                )
-
-        # Convert the audio objects to dictionaries that can be used by the pipeline
-        formatted_audios = [_audio_to_huggingface_dict(audio) for audio in audios]
+                audio = resample_audios([audio], resample_rate=expected_sampling_rate)[0]
+            formatted_audios.append(_audio_to_huggingface_dict(audio))
 
         # Take the start time of the transcription
         start_time_transcription = time.time()

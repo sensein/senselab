@@ -17,7 +17,7 @@ import torch
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.preprocessing import resample_audios
 from senselab.utils.data_structures import DeviceType, Language, _select_device_and_dtype, logger
-from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result
+from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
 
 # SPARC venv specification
 _SPARC_VENV = "sparc"
@@ -211,7 +211,7 @@ class SparcFeatureExtractor:
             raise ValueError(f"Language {lang.name} not supported. Supported: english or None (multi-language).")
 
         venv_dir = ensure_venv(_SPARC_VENV, _SPARC_REQUIREMENTS, python_version=_SPARC_PYTHON)
-        python = str(venv_dir / "bin" / "python")
+        python = venv_python(venv_dir)
 
         with tempfile.TemporaryDirectory(prefix="senselab-sparc-") as tmpdir:
             tmp = Path(tmpdir)
@@ -331,7 +331,7 @@ class SparcFeatureExtractor:
             raise ValueError(f"Missing required feature keys: {missing}")
 
         venv_dir = ensure_venv(_SPARC_VENV, _SPARC_REQUIREMENTS, python_version=_SPARC_PYTHON)
-        python = str(venv_dir / "bin" / "python")
+        python = venv_python(venv_dir)
 
         with tempfile.TemporaryDirectory(prefix="senselab-sparc-decode-") as tmpdir:
             tmp = Path(tmpdir)
@@ -414,7 +414,7 @@ class SparcFeatureExtractor:
                 raise ValueError(f"Only mono audio is supported ({label}).")
 
         venv_dir = ensure_venv(_SPARC_VENV, _SPARC_REQUIREMENTS, python_version=_SPARC_PYTHON)
-        python = str(venv_dir / "bin" / "python")
+        python = venv_python(venv_dir)
 
         with tempfile.TemporaryDirectory(prefix="senselab-sparc-convert-") as tmpdir:
             tmp = Path(tmpdir)

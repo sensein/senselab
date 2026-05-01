@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import CoquiTTSModel, DeviceType, Language, _select_device_and_dtype
-from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result
+from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
 
 # Reuse the same coqui venv as voice_cloning
 _COQUI_VENV = "coqui"
@@ -118,7 +118,7 @@ class CoquiTTS:
             raise ValueError(f"Length of targets ({len(targets)}) must match texts ({len(texts)})")
 
         venv_dir = ensure_venv(_COQUI_VENV, _COQUI_REQUIREMENTS, python_version=_COQUI_PYTHON)
-        python = str(venv_dir / "bin" / "python")
+        python = venv_python(venv_dir)
 
         with tempfile.TemporaryDirectory(prefix="senselab-coqui-tts-") as tmpdir:
             tmp = Path(tmpdir)
