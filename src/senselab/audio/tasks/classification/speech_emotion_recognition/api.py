@@ -210,7 +210,7 @@ def _get_ser_type(model: HFModel) -> SERType:
         # Fall back to raw config dict for models with invalid fields
         from huggingface_hub import hf_hub_download
 
-        config_path = hf_hub_download(model.path_or_uri, "config.json", revision=model.revision)
+        config_path = hf_hub_download(str(model.path_or_uri), "config.json", revision=model.revision)
         with open(config_path) as f:
             config_dict = json.load(f)
         config = SimpleNamespace(id2label=config_dict.get("id2label", {}))
