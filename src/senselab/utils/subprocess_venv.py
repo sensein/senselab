@@ -231,7 +231,7 @@ def ensure_venv(
         all_reqs = [*requirements, "safetensors", "numpy", "torchaudio"]
         try:
             subprocess.run(
-                [uv, "pip", "install", "--python", str(venv_dir / "bin" / "python"), *all_reqs],
+                [uv, "pip", "install", "--python", venv_python(venv_dir), *all_reqs],
                 check=True,
                 capture_output=True,
                 text=True,
@@ -250,6 +250,16 @@ def ensure_venv(
         )
         logger.info("Venv '%s' ready at %s", name, venv_dir)
         return venv_dir
+
+
+def venv_python(venv_dir: Path) -> str:
+    """Return the path to the Python interpreter inside a venv.
+
+    Uses ``Scripts/python.exe`` on Windows, ``bin/python`` elsewhere.
+    """
+    if sys.platform == "win32":
+        return str(venv_dir / "Scripts" / "python.exe")
+    return str(venv_dir / "bin" / "python")
 
 
 def _clean_subprocess_env() -> dict:
@@ -558,7 +568,7 @@ def call_in_venv(
         The function's return value with blobs loaded back to native types.
     """
     venv_dir = ensure_venv(name, requirements, python_version)
-    python = str(venv_dir / "bin" / "python")
+    python = venv_python(venv_dir)
 
     # In safe_mode, auto-wrap Path args as FileRef with checksum + readonly
     effective_args = dict(args or {})
