@@ -72,7 +72,7 @@ video = [
 ]
 senselab-ai = [
   "jupyterlab~=4.4",
-  "notebook-intelligence~=2.3.2",
+  "notebook-intelligence>=2.3.2,<4.7.0",
   "ipywidgets~=8.1",
   "ipykernel~=7.1",
   "nbformat~=5.10",
