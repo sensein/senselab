@@ -180,6 +180,37 @@ def test_wrapper_handles_notebook_with_future_imports(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(not scalene_available, reason="scalene not installed")
+def test_wrapper_quotes_paths_with_spaces(tmp_path: Path) -> None:
+    """The 'Open with' hint shell-quotes paths so spaces are handled correctly."""
+    out_dir = tmp_path / "dir with space"
+    target = tmp_path / "tiny.py"
+    target.write_text("x = 1\n", encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(WRAPPER),
+            "--output-dir",
+            str(out_dir),
+            str(target),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    # The "Open with" line must contain a shell-quoted path so a copy-paste
+    # of the printed command works in zsh/bash.
+    open_lines = [ln for ln in result.stdout.splitlines() if ln.startswith("Open with:")]
+    assert len(open_lines) == 1, f"expected one Open-with line, got: {open_lines}"
+    line = open_lines[0]
+    # shlex.quote wraps in single quotes when the string contains a space
+    assert "'" in line and "dir with space" in line, f"path with space was not shell-quoted in: {line}"
+
+
+@pytest.mark.skipif(not scalene_available, reason="scalene not installed")
 def test_wrapper_rejects_missing_target(tmp_path: Path) -> None:
     """The wrapper exits with code 4 when the target does not exist."""
     result = subprocess.run(
