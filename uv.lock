@@ -199,6 +199,25 @@ wheels = [
 ]
 
 [[package]]
+name = "anthropic"
+version = "0.98.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "distro" },
+    { name = "docstring-parser" },
+    { name = "httpx" },
+    { name = "jiter" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/24/60/a9e4426dfe594e5eec8a9757d48e3d8dcf529a0a35a4fc8aefa352bd95fe/anthropic-0.98.1.tar.gz", hash = "sha256:62205edec42f5877df63d58be8e9443843d3e032215836e228fba1f59514a433", size = 725085, upload-time = "2026-05-04T21:40:39.496Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9b/6f/7f7f80f714e6de0784518f1999f71fd632076aefd3e22fe0ccd27ca9571f/anthropic-0.98.1-py3-none-any.whl", hash = "sha256:107ebf954415382fdcea6a94f9cf334a53199ad64794403590dc55366cefcc28", size = 699604, upload-time = "2026-05-04T21:40:41.311Z" },
+]
+
+[[package]]
 name = "anyio"
 version = "4.13.0"
 source = { registry = "https://pypi.org/simple" }
@@ -816,6 +835,24 @@ wheels = [
 ]
 
 [[package]]
+name = "claude-agent-sdk"
+version = "0.1.73"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "mcp" },
+    { name = "sniffio" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/92/d7/5207b9428813918532d52fbcc8342aa105e04cb50afb94118228a322af39/claude_agent_sdk-0.1.73.tar.gz", hash = "sha256:7dbb1e885abac558e39374da632c52e87a931861e20c67e1f36c86e7e3be7f19", size = 242906, upload-time = "2026-05-04T23:14:12.366Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b4/9d/37bac90d86f50642ba1e9b70b558cdd643da8bb1109c584ce32ad0b1fc6f/claude_agent_sdk-0.1.73-py3-none-macosx_11_0_arm64.whl", hash = "sha256:62171e16840a8d00681207f6ea133736082b5df701a87548a84ec5ab00cdf5ca", size = 63885588, upload-time = "2026-05-04T23:14:16.457Z" },
+    { url = "https://files.pythonhosted.org/packages/3e/e2/81212e886a9bc34a14b8d3588aafd3460bb37328edc4793b10e7df205e05/claude_agent_sdk-0.1.73-py3-none-macosx_11_0_x86_64.whl", hash = "sha256:a702aecfdd1d9ad7dd9fcf19aa9ebde41ffc426e28a4125b3ab2e88b49a89c47", size = 65744104, upload-time = "2026-05-04T23:14:20.345Z" },
+    { url = "https://files.pythonhosted.org/packages/80/81/2ecea14eb376d2eaf7f121fdc6ee4b00071b9b1b859ff7251d84fe0e4686/claude_agent_sdk-0.1.73-py3-none-manylinux_2_17_aarch64.whl", hash = "sha256:6cb2c38fbfd3d6be7edfc41ce342635569403a8b41f77ded07c328f20b6138cf", size = 77049373, upload-time = "2026-05-04T23:14:24.595Z" },
+    { url = "https://files.pythonhosted.org/packages/89/16/a02de4e05bd522beddf2aa02351fc670222929e9e25fff2e23add7937df6/claude_agent_sdk-0.1.73-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:938b2f1adf10e92d4e14c0b16d61f8e616171e98cdc7c3cbcd197dd857fdbc22", size = 77225319, upload-time = "2026-05-04T23:14:28.843Z" },
+    { url = "https://files.pythonhosted.org/packages/d0/6a/cb0b8b9a9110ca46e5fb2de7c4e4224e0b18ca8fd50430ca0ea4118608cd/claude_agent_sdk-0.1.73-py3-none-win_amd64.whl", hash = "sha256:85454108785058bab796e9de2d654ce5570c2d9f8de9a9889e02a751d4a43158", size = 78636611, upload-time = "2026-05-04T23:14:33.165Z" },
+]
+
+[[package]]
 name = "click"
 version = "8.3.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1217,7 +1254,7 @@ wheels = [
 
 [[package]]
 name = "datasets"
-version = "4.8.4"
+version = "4.8.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dill" },
@@ -1235,9 +1272,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "xxhash" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/22/22/73e46ac7a8c25e7ef0b3bd6f10da3465021d90219a32eb0b4d2afea4c56e/datasets-4.8.4.tar.gz", hash = "sha256:a1429ed853275ce7943a01c6d2e25475b4501eb758934362106a280470df3a52", size = 604382, upload-time = "2026-03-23T14:21:17.987Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/66/34/14cd8e76f907f7d4dca2334cfeec9f81d30fd15c25a015f99aaea694eaed/datasets-4.8.5.tar.gz", hash = "sha256:0f0c1c3d56ffff2c93b2f4c63c95bac94f3d7e8621aea2a2a576275233bba772", size = 605649, upload-time = "2026-04-27T15:43:57.384Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b0/e5/247d094108e42ac26363ab8dc57f168840cf7c05774b40ffeb0d78868fcc/datasets-4.8.4-py3-none-any.whl", hash = "sha256:cdc8bee4698e549d78bf1fed6aea2eebc760b22b084f07e6fc020c6577a6ce6d", size = 526991, upload-time = "2026-03-23T14:21:15.89Z" },
+    { url = "https://files.pythonhosted.org/packages/65/99/00f3196036501b53032c4b1ab8337a0b978dee832ed276dae3815df4e8b5/datasets-4.8.5-py3-none-any.whl", hash = "sha256:5079900781719c0e063a8efdd2cd95a31ad0c63209178669cd23cf1b926149ff", size = 528973, upload-time = "2026-04-27T15:43:53.702Z" },
 ]
 
 [[package]]
@@ -1901,7 +1938,7 @@ wheels = [
 
 [[package]]
 name = "huggingface-hub"
-version = "1.11.0"
+version = "1.13.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "filelock" },
@@ -1914,9 +1951,9 @@ dependencies = [
     { name = "typer" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/dc/89/e7aa12d8a6b9259bed10671abb25ae6fa437c0f88a86ecbf59617bae7759/huggingface_hub-1.11.0.tar.gz", hash = "sha256:15fb3713c7f9cdff7b808a94fd91664f661ab142796bb48c9cd9493e8d166278", size = 761749, upload-time = "2026-04-16T13:07:39.73Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/89/ff/ec7ed2eb43bd7ce8bb2233d109cc235c3e807ffe5e469dc09db261fac05e/huggingface_hub-1.13.0.tar.gz", hash = "sha256:f6df2dac5abe82ce2fe05873d10d5ff47bc677d616a2f521f4ee26db9415d9d0", size = 781788, upload-time = "2026-04-30T11:57:33.858Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/37/02/4f3f8997d1ea7fe0146b343e5e14bd065fa87af790d07e5576d31b31cc18/huggingface_hub-1.11.0-py3-none-any.whl", hash = "sha256:42a6de0afbfeb5e022222d36398f029679db4eb4778801aafda32257ae9131ab", size = 645499, upload-time = "2026-04-16T13:07:37.716Z" },
+    { url = "https://files.pythonhosted.org/packages/93/db/4b1cdae9460ae1f3ca020cd767f013430ce23eb1d9c890ae3a0609b38d26/huggingface_hub-1.13.0-py3-none-any.whl", hash = "sha256:e942cb50d6a08dd5306688b1ac05bda157fd2fcc88b63dae405f7bd0d3234005", size = 660643, upload-time = "2026-04-30T11:57:31.802Z" },
 ]
 
 [[package]]
@@ -3494,9 +3531,11 @@ wheels = [
 
 [[package]]
 name = "notebook-intelligence"
-version = "2.3.2"
+version = "4.6.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
+    { name = "anthropic" },
+    { name = "claude-agent-sdk" },
     { name = "cryptography" },
     { name = "fastmcp" },
     { name = "fuzy-jon" },
@@ -3507,9 +3546,9 @@ dependencies = [
     { name = "sseclient-py" },
     { name = "tiktoken" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/96/ba/935938b5aa4ae0e11d34ebc67be73b3f5d6271fc4b819cf40225a601c8da/notebook_intelligence-2.3.2.tar.gz", hash = "sha256:9cbc296efaa150190139e4fbcf3a997a3732d0473db6be1a663c85270d45753c", size = 8201573, upload-time = "2025-08-26T04:00:20.039Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/12/b0/afc0295e074bb3d46dad87694bc78bf3d9751e3bf6f7f755e4a2bb6472e5/notebook_intelligence-4.6.0.tar.gz", hash = "sha256:0625c39bde9f71e4a09751dd897c0b3643c048b84d7607b6ba96a2a98d39ab53", size = 8405119, upload-time = "2026-04-30T04:22:41.574Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/90/0d/2a4ed4a84e6424834fcb52c13f9a6a04485be1dda1be7054b3e12a771bf0/notebook_intelligence-2.3.2-py3-none-any.whl", hash = "sha256:29cbbf591836163a24a57df36aff1c2c4e681865f2b2273ea038ed56ed187cc4", size = 16243110, upload-time = "2025-08-26T04:00:15.896Z" },
+    { url = "https://files.pythonhosted.org/packages/a8/9d/467986335bf6565b010d3e75b6be855ff29662c3877292e93cb06734e63a/notebook_intelligence-4.6.0-py3-none-any.whl", hash = "sha256:22466fe295e1c36fca2c4f4932f71f48532df44c45b2cfe154834d1312a84c82", size = 16408211, upload-time = "2026-04-30T04:22:38.986Z" },
 ]
 
 [[package]]
@@ -6161,7 +6200,7 @@ requires-dist = [
     { name = "nbss-upload", marker = "extra == 'senselab-ai'", specifier = "~=0.1" },
     { name = "nest-asyncio", specifier = ">=1.6" },
     { name = "nltk", marker = "extra == 'nlp'", specifier = ">=3.9" },
-    { name = "notebook-intelligence", marker = "extra == 'senselab-ai'", specifier = "~=2.3.2" },
+    { name = "notebook-intelligence", marker = "extra == 'senselab-ai'", specifier = ">=2.3.2,<4.7.0" },
     { name = "opencv-python-headless", marker = "extra == 'video'", specifier = ">=4.11" },
     { name = "opensmile", specifier = ">=2.6" },
     { name = "praat-parselmouth", specifier = ">=0.4.3" },
@@ -6947,7 +6986,7 @@ wheels = [
 
 [[package]]
 name = "transformers"
-version = "5.5.4"
+version = "5.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "huggingface-hub" },
@@ -6960,9 +6999,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "typer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a5/1e/1e244ab2ab50a863e6b52cc55761910567fa532b69a6740f6e99c5fdbd98/transformers-5.5.4.tar.gz", hash = "sha256:2e67cadba81fc7608cc07c4dd54f524820bc3d95b1cabd0ef3db7733c4f8b82e", size = 8227649, upload-time = "2026-04-13T16:55:55.181Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4d/fe/7e84d20ac7d4d5d14bac2eab5976088d86342959fc2c0da54b4c2fc99856/transformers-5.7.0.tar.gz", hash = "sha256:a9d35cf39804e3456c1f9bc1a79ad5ffa878640a61f51f66f71c97f4b4e2ce10", size = 8401287, upload-time = "2026-04-28T18:30:09.75Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/29/fb/162a66789c65e5afa3b051309240c26bf37fbc8fea285b4546ae747995a2/transformers-5.5.4-py3-none-any.whl", hash = "sha256:0bd6281b82966fe5a7a16f553ea517a9db1dee6284d7cb224dfd88fc0dd1c167", size = 10236696, upload-time = "2026-04-13T16:55:51.497Z" },
+    { url = "https://files.pythonhosted.org/packages/60/60/86a9fe3037bec221094e2acb680219ad88b77006edba42fc0407a577ca93/transformers-5.7.0-py3-none-any.whl", hash = "sha256:869660cd8fc92badc041f5551bf755a42f4b9558c93341bf3fa3eeed7065079c", size = 10474236, upload-time = "2026-04-28T18:30:05.655Z" },
 ]
 
 [[package]]
@@ -7043,7 +7082,7 @@ wheels = [
 
 [[package]]
 name = "ultralytics"
-version = "8.4.40"
+version = "8.4.46"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "matplotlib" },
@@ -7059,9 +7098,9 @@ dependencies = [
     { name = "torchvision" },
     { name = "ultralytics-thop" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a6/ca/585359705a9f7ffa64bab0e71bd2636fd9cfcfc729a033e83639de6b9e82/ultralytics-8.4.40.tar.gz", hash = "sha256:093fc2286ce7a405bd943de29d5f540e3c3c7a8008439f5d87ca9759fa3ca191", size = 1036635, upload-time = "2026-04-20T12:10:00.824Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/cc/83/f4c346113f2d3a18752bc7da334387f284946d28070f4a89e671f653a6af/ultralytics-8.4.46.tar.gz", hash = "sha256:582392e0d75e1757e6e82d90d6eeabb0d1710b0e56f49227825855ecf54dda30", size = 1038389, upload-time = "2026-05-01T20:01:47.395Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a7/20/3ff18c04e603ac29fcfbabfeee663e0bd470029624875750e3d3c0117f0b/ultralytics-8.4.40-py3-none-any.whl", hash = "sha256:6e051f7fa3eca7d347e1f1707a761b25281555f0ad963cb3934676b085463206", size = 1228208, upload-time = "2026-04-20T12:09:56.586Z" },
+    { url = "https://files.pythonhosted.org/packages/a6/1a/5bfdb77dc86bb06fa7cd19d2e05a91cb787fa6d5a3093284f9bbd819dbcf/ultralytics-8.4.46-py3-none-any.whl", hash = "sha256:87982e71fad96424ef0356eb2d1a7a32526051c404089e979634322dc3ba4156", size = 1230103, upload-time = "2026-05-01T20:01:42.392Z" },
 ]
 
 [[package]]
