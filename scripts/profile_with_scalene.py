@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -236,8 +237,28 @@ def convert_notebook(notebook: Path, tmpdir: Path) -> Path:
         converted.rename(py_path)
         converted = py_path
     original = converted.read_text(encoding="utf-8")
-    converted.write_text(_IPYTHON_STUB + "\n" + original, encoding="utf-8")
+    converted.write_text(_inject_ipython_stub(original), encoding="utf-8")
     return converted
+
+
+_FUTURE_IMPORT_RE = re.compile(r"^\s*from\s+__future__\s+import\b")
+
+
+def _inject_ipython_stub(source: str) -> str:
+    """Return ``source`` with ``_IPYTHON_STUB`` inserted at a syntactically valid spot.
+
+    ``from __future__`` imports must be the first non-docstring/comment statement
+    in a Python file, so the stub cannot be placed before them. Walk the source
+    line-by-line, find the index just after any ``from __future__`` block, and
+    insert the stub there. When no future imports are present, the stub goes at
+    the very top.
+    """
+    lines = source.splitlines(keepends=True)
+    insert_at = 0
+    for i, line in enumerate(lines):
+        if _FUTURE_IMPORT_RE.match(line):
+            insert_at = i + 1
+    return "".join(lines[:insert_at]) + _IPYTHON_STUB + "\n" + "".join(lines[insert_at:])
 
 
 def build_run_command(

@@ -129,6 +129,57 @@ def test_wrapper_handles_notebook_with_ipython_imports(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(not scalene_available, reason="scalene not installed")
+def test_wrapper_handles_notebook_with_future_imports(tmp_path: Path) -> None:
+    """Notebook starting with `from __future__ import annotations` profiles cleanly.
+
+    `from __future__` imports must be the first statement in a Python file,
+    so the IPython stub must be injected AFTER any such imports rather than
+    blindly prepended. Regression test for the SyntaxError that prepending
+    would otherwise produce.
+    """
+    nb_path = tmp_path / "with_future.ipynb"
+    nb_path.write_text(
+        "{\n"
+        ' "cells": [{\n'
+        '  "cell_type": "code",\n'
+        '  "metadata": {},\n'
+        '  "source": [\n'
+        '    "from __future__ import annotations\\n",\n'
+        '    "import time\\n",\n'
+        '    "time.sleep(0.05)\\n",\n'
+        '    "_ = [i * i for i in range(1000)]\\n"\n'
+        "  ],\n"
+        '  "outputs": [],\n'
+        '  "execution_count": null\n'
+        " }],\n"
+        ' "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},\n'
+        '              "language_info": {"name": "python"}},\n'
+        ' "nbformat": 4, "nbformat_minor": 4\n'
+        "}\n",
+        encoding="utf-8",
+    )
+    out_dir = tmp_path / "reports"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(WRAPPER),
+            "--output-dir",
+            str(out_dir),
+            str(nb_path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+
+    assert result.returncode == 0, f"wrapper exit={result.returncode}\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    htmls = list(out_dir.glob("with_future_*.html"))
+    assert len(htmls) == 1, f"expected one HTML report, found: {htmls}"
+
+
+@pytest.mark.skipif(not scalene_available, reason="scalene not installed")
 def test_wrapper_rejects_missing_target(tmp_path: Path) -> None:
     """The wrapper exits with code 4 when the target does not exist."""
     result = subprocess.run(
