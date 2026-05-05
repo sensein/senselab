@@ -26,6 +26,7 @@ import importlib.util
 import os
 import re
 import secrets
+import shlex
 import shutil
 import subprocess
 import sys
@@ -379,11 +380,12 @@ def main(argv: list[str] | None = None) -> int:
             if args.keep_intermediate:
                 shutil.move(str(intermediate_json), str(final_json_path))
 
+    quoted_path = shlex.quote(str(report_path))
     print(f"Scalene profile written to: {report_path}")
     if sys.platform == "darwin":
-        print(f"Open with: open {report_path}")
+        print(f"Open with: open {quoted_path}")
     elif sys.platform.startswith("linux"):
-        print(f"Open with: xdg-open {report_path}")
+        print(f"Open with: xdg-open {quoted_path}")
     return EXIT_SUCCESS
 
 
