@@ -108,6 +108,10 @@ dev = [
 docs = [
   "pdoc~=16.0"
 ]
+profiling = [
+  "scalene>=2.2",
+  "nbconvert>=7"
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/senselab"]
