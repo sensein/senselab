@@ -828,6 +828,15 @@ wheels = [
 ]
 
 [[package]]
+name = "cloudpickle"
+version = "3.1.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/27/fb/576f067976d320f5f0114a8d9fa1215425441bb35627b1993e5afd8111e5/cloudpickle-3.1.2.tar.gz", hash = "sha256:7fda9eb655c9c230dab534f1983763de5835249750e85fbcef43aaa30a9a2414", size = 22330, upload-time = "2025-11-03T09:25:26.604Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/88/39/799be3f2f0f38cc727ee3b4f1445fe6d5e4133064ec2e4115069418a5bb6/cloudpickle-3.1.2-py3-none-any.whl", hash = "sha256:9acb47f6afd73f60dc1df93bb801b472f05ff42fa6c84167d25cb206be1fbf4a", size = 22228, upload-time = "2025-11-03T09:25:25.534Z" },
+]
+
+[[package]]
 name = "codespell"
 version = "2.4.2"
 source = { registry = "https://pypi.org/simple" }
@@ -3810,6 +3819,15 @@ wheels = [
 ]
 
 [[package]]
+name = "nvidia-ml-py"
+version = "13.595.45"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ce/49/c29f6e30d8662d2e94fef17739ea7309cc76aba269922ae999e4cc07f268/nvidia_ml_py-13.595.45.tar.gz", hash = "sha256:c9f34897fe0441ff35bc8f35baf80f830a20b0f4e6ce71e0a325bc0e66acf079", size = 50780, upload-time = "2026-03-19T16:59:44.956Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8a/24/fc256107d23597fa33d319505ce77160fa1a2349c096d01901ffc7cb7fc4/nvidia_ml_py-13.595.45-py3-none-any.whl", hash = "sha256:b65a7977f503d56154b14d683710125ef93594adb63fbf7e559336e3318f1376", size = 51776, upload-time = "2026-03-19T16:59:43.603Z" },
+]
+
+[[package]]
 name = "nvidia-nccl-cu13"
 version = "2.28.9"
 source = { registry = "https://pypi.org/simple" }
@@ -5879,6 +5897,35 @@ wheels = [
 ]
 
 [[package]]
+name = "scalene"
+version = "2.2.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cloudpickle" },
+    { name = "jinja2" },
+    { name = "numpy" },
+    { name = "nvidia-ml-py", marker = "sys_platform != 'darwin'" },
+    { name = "psutil" },
+    { name = "pydantic" },
+    { name = "pyyaml" },
+    { name = "rich" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/66/fc/ed550649058e9ad4bc262039c2c146c92e4d5d0b9d305c7d33d709c151f5/scalene-2.2.1.tar.gz", hash = "sha256:642f809e34d84cae5712bbe8cca76450af81f2dc4c02762b714d1710160dd791", size = 9483401, upload-time = "2026-03-22T14:49:36.825Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a4/16/79de96af863a9df1ac9a3b30fc0c9bd51fe4754c137207b2ab3a1f7ebe2f/scalene-2.2.1-cp311-cp311-macosx_15_0_universal2.whl", hash = "sha256:87be9856bd8b13d87e023ab5e96feae36fd6611912a5433e996e5c34288fe2a4", size = 1225210, upload-time = "2026-03-22T14:49:35.4Z" },
+    { url = "https://files.pythonhosted.org/packages/4c/fa/9118db832a7b8bf4eacf20273c5d9e4fe2554bda103712df35273ef193ad/scalene-2.2.1-cp311-cp311-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:3ff0507f7f176703cf4d3f51b4778e9282910699d8de717040cd4ac070aff97b", size = 1526990, upload-time = "2026-03-22T14:42:40.539Z" },
+    { url = "https://files.pythonhosted.org/packages/95/3a/10e260f5465d77191affc6ef27c04a59451a47ef7d947957c85dc12ca346/scalene-2.2.1-cp312-cp312-macosx_15_0_universal2.whl", hash = "sha256:e9625d2bf3ab1fef827f836e38134d3f56fc319513ac7632e45c36fd6c00d872", size = 1224979, upload-time = "2026-03-22T14:44:08.652Z" },
+    { url = "https://files.pythonhosted.org/packages/1f/b4/6765587712d20353f0d96951bee397e3e6303bc00f376d2561982b081efc/scalene-2.2.1-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:0eb22ef9c1bb8fb3df95365b6263a57e94eb81e777f550af1c513d7f32a50721", size = 1527444, upload-time = "2026-03-22T14:42:33.537Z" },
+    { url = "https://files.pythonhosted.org/packages/60/a6/7c5b47a3ae695ab7110919b98d60f98c0ca1e6001f3a2e2a9c18bee5c711/scalene-2.2.1-cp312-cp312-win_amd64.whl", hash = "sha256:de06f01ec97cae6939e5ff3a31e6ab0d96cfe3cf8a2146bea536a998ddac434c", size = 1158170, upload-time = "2026-03-22T14:44:52.863Z" },
+    { url = "https://files.pythonhosted.org/packages/85/f0/5697e94cf16a82999e6c5d456b457fd037ce406399b75070dafbe10173ea/scalene-2.2.1-cp313-cp313-macosx_15_0_universal2.whl", hash = "sha256:6f94c608d7186ce3d6311bf5b7270c2ba69350f96141c8e913e5fcd272d00ef2", size = 1229689, upload-time = "2026-03-22T14:49:47.403Z" },
+    { url = "https://files.pythonhosted.org/packages/ec/43/8e9bb41288713df00a8b1d0c9eabe00272cf4a93370992cbbfb26ef660f7/scalene-2.2.1-cp313-cp313-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:d6a72a3a55c3672779bcbd0d8278d9557ff99ef23d8d1b99b9cdcef3138c25b9", size = 1537230, upload-time = "2026-03-22T14:42:36.301Z" },
+    { url = "https://files.pythonhosted.org/packages/a8/86/08024979ec47aed7fa26c8c5c644539c84c935cf06657c34f745a31defb7/scalene-2.2.1-cp313-cp313-win_amd64.whl", hash = "sha256:6adf5db81cc83b644fe0d60640b0b3097cfa4ff36911bc1e9f1833023930c99a", size = 1159794, upload-time = "2026-03-22T14:44:46.863Z" },
+    { url = "https://files.pythonhosted.org/packages/4b/38/6ee3bbd6eb983bf6f25427b4110b2f2d34359e78fbb02b79b4e9c11ca565/scalene-2.2.1-cp314-cp314-macosx_15_0_universal2.whl", hash = "sha256:7e13ceaaea670c385825b9b21b58596f86f4d0b6e2a0927eefa9dcbf1444380b", size = 1229918, upload-time = "2026-03-22T14:49:37.607Z" },
+    { url = "https://files.pythonhosted.org/packages/94/1a/0e7a49db2440c31e66479c93567cc4e4f0198dbe413699a2de9d2095a8e3/scalene-2.2.1-cp314-cp314-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:edb511df0097d3091b4967c70023698306e5fa2c75e9532216904b882e3bd02e", size = 1537041, upload-time = "2026-03-22T14:42:40.067Z" },
+    { url = "https://files.pythonhosted.org/packages/c8/13/a11f6b081c7235a66da71c5230adf5a7a87ef92a6cd98c659494ec20d22e/scalene-2.2.1-cp314-cp314-win_amd64.whl", hash = "sha256:8af3834504d3a4f4ebaa489bb9266563be818972c83a826337936b6809c145e7", size = 1165782, upload-time = "2026-03-22T14:45:13.804Z" },
+]
+
+[[package]]
 name = "scikit-learn"
 version = "1.8.0"
 source = { registry = "https://pypi.org/simple" }
@@ -6093,6 +6140,10 @@ dev = [
 docs = [
     { name = "pdoc" },
 ]
+profiling = [
+    { name = "nbconvert" },
+    { name = "scalene" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -6152,6 +6203,10 @@ dev = [
     { name = "uvloop", specifier = "~=0.22" },
 ]
 docs = [{ name = "pdoc", specifier = "~=16.0" }]
+profiling = [
+    { name = "nbconvert", specifier = ">=7" },
+    { name = "scalene", specifier = ">=2.2" },
+]
 
 [[package]]
 name = "sentence-transformers"
