@@ -10,8 +10,10 @@ from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.forced_alignment.constants import (
     DEFAULT_ALIGN_MODELS_HF,
+    ISO_1_TO_3,
     LANGUAGES_WITHOUT_SPACES,
     MINIMUM_SEGMENT_SIZE,
+    MMS_MODEL_ID,
     PUNKT_ABBREVIATIONS,
     SAMPLE_RATE,
 )
@@ -566,9 +568,64 @@ def filter_aligned_script_lines(
     return [flatten_script_lines(scriptline_list) for scriptline_list in aligned_script_lines]
 
 
+def _romanize_for_mms(text: str) -> str:
+    """Romanize a transcript so MMS's Roman-script adapter can tokenize it.
+
+    MMS uses Roman characters internally; for languages written in non-Roman
+    scripts (notably Japanese kanji/kana and Chinese Hanzi) the transcript
+    must be uroman-romanized before alignment. ``uroman`` is an optional
+    dependency in the ``[nlp]`` extra and is imported lazily so default
+    senselab installs are not affected.
+
+    Raises ``ImportError`` with an actionable hint when uroman is absent.
+    """
+    try:
+        from uroman import Uroman  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise ImportError(
+            "uroman is required to align ja/zh transcripts via MMS. "
+            "Install with `uv sync --extra nlp` (adds uroman to the venv) "
+            "or pass an aligner that does not require romanization."
+        ) from exc
+    uroman = Uroman()
+    return str(uroman.romanize_string(text))
+
+
+def _load_mms_aligner(
+    iso3: str,
+    device: DeviceType,
+    cache: Dict[Any, Any],
+) -> Tuple[Any, Any]:
+    """Load (or fetch from cache) the MMS Wav2Vec2 model + processor for one language adapter.
+
+    MMS-1B-All is a single base model with one set of weights and 1100+
+    swappable per-language adapters. We cache by (model_id, iso3) so two
+    languages on the same audio reuse the base weights but swap adapters.
+
+    Return types are intentionally ``Any`` because the transformers type
+    stubs do not expose ``Wav2Vec2Processor.tokenizer`` (PreTrainedTokenizer
+    on a multi-modal processor is duck-typed), and over-annotating triggers
+    spurious mypy errors. Runtime types are
+    ``(Wav2Vec2Processor, Wav2Vec2ForCTC)`` as documented.
+    """
+    key = (MMS_MODEL_ID, iso3)
+    if key not in cache:
+        processor = Wav2Vec2Processor.from_pretrained(MMS_MODEL_ID)
+        processor.tokenizer.set_target_lang(iso3)  # type: ignore[attr-defined]
+        model = Wav2Vec2ForCTC.from_pretrained(
+            MMS_MODEL_ID,
+            target_lang=iso3,
+            ignore_mismatched_sizes=True,
+        ).to(device.value)  # type: ignore[arg-type]
+        model.load_adapter(iso3)
+        cache[key] = (processor, model)
+    return cache[key]
+
+
 def align_transcriptions(
     audios_and_transcriptions_and_language: List[Tuple[Audio, ScriptLine, Language]],
     levels_to_keep: Dict = {"utterance": False, "word": False, "char": False},
+    aligner_model: Optional[str] = None,
 ) -> List[List[ScriptLine | None]]:
     """Align multiple transcriptions with their respective audios using a wav2vec2.0 model.
 
@@ -577,29 +634,51 @@ def align_transcriptions(
             Each tuple contains an Audio object, a ScriptLine with transcription,
             and an optional Language (default is English).
         levels_to_keep (Dict): Levels of transcription to keep in output.
+        aligner_model (str | None, optional):
+            Override the default per-language wav2vec2 aligner. When set to
+            ``MMS_MODEL_ID`` (``facebook/mms-1b-all``), the multilingual MMS
+            backend is used: a single model with per-language adapters
+            covering 1100+ languages. Adapter selection is driven by the
+            language code; ja/zh transcripts are romanized via uroman
+            (optional dep, ``[nlp]`` extra) before tokenization. When
+            ``None`` (default), the per-language wav2vec2 dispatch table
+            ``DEFAULT_ALIGN_MODELS_HF`` is used as before.
 
     Returns:
         List[List[ScriptLine | None]]: A list of aligned results for each audio.
     """
     aligned_script_lines: list[list[ScriptLine | None]] = []
-    loaded_processors_and_models = {}
+    loaded_processors_and_models: Dict[Any, Any] = {}
     device = _select_device_and_dtype()[0]
+    use_mms = aligner_model == MMS_MODEL_ID
 
     for recording in audios_and_transcriptions_and_language:
         audio, transcription, language = (*recording, None)[:3]
         if language is None:
             language = Language(language_code="en")
 
-        model_dict = DEFAULT_ALIGN_MODELS_HF.get(language.language_code, DEFAULT_ALIGN_MODELS_HF["en"])
-        model_variant: HFModel = HFModel(path_or_uri=model_dict["path_or_uri"], revision=model_dict["revision"])
-        if model_variant.path_or_uri not in loaded_processors_and_models:
-            processor = Wav2Vec2Processor.from_pretrained(model_variant.path_or_uri, revision=model_variant.revision)
-            model = Wav2Vec2ForCTC.from_pretrained(model_variant.path_or_uri, revision=model_variant.revision).to(
-                device.value
-            )
-            loaded_processors_and_models[model_variant.path_or_uri] = (processor, model)
-
-        processor, model = loaded_processors_and_models[model_variant.path_or_uri]
+        if use_mms:
+            iso3 = ISO_1_TO_3.get(language.language_code)
+            if iso3 is None:
+                raise ValueError(
+                    f"MMS aligner has no ISO-639-3 mapping for language "
+                    f"{language.language_code!r}. Add it to ISO_1_TO_3 in "
+                    f"senselab.audio.tasks.forced_alignment.constants, or pass "
+                    f"a different aligner_model."
+                )
+            processor, model = _load_mms_aligner(iso3, device, loaded_processors_and_models)
+        else:
+            model_dict = DEFAULT_ALIGN_MODELS_HF.get(language.language_code, DEFAULT_ALIGN_MODELS_HF["en"])
+            model_variant: HFModel = HFModel(path_or_uri=model_dict["path_or_uri"], revision=model_dict["revision"])
+            if model_variant.path_or_uri not in loaded_processors_and_models:
+                processor = Wav2Vec2Processor.from_pretrained(
+                    model_variant.path_or_uri, revision=model_variant.revision
+                )
+                model = Wav2Vec2ForCTC.from_pretrained(model_variant.path_or_uri, revision=model_variant.revision).to(
+                    device.value
+                )  # type: ignore[arg-type]
+                loaded_processors_and_models[model_variant.path_or_uri] = (processor, model)
+            processor, model = loaded_processors_and_models[model_variant.path_or_uri]
 
         if audio.sampling_rate != SAMPLE_RATE:
             raise ValueError(f"{audio.sampling_rate} rate is not equal to {SAMPLE_RATE}.")
@@ -607,6 +686,9 @@ def align_transcriptions(
         start = transcription.start if transcription.start is not None else 0.0
         end = transcription.end if transcription.end is not None else audio.waveform.shape[1] / audio.sampling_rate
         text = transcription.text if transcription.text is not None else ""
+        # MMS uses Roman characters; ja/zh transcripts must be romanized first.
+        if use_mms and language.language_code in LANGUAGES_WITHOUT_SPACES:
+            text = _romanize_for_mms(text)
 
         segments = [
             SingleSegment(
@@ -621,7 +703,9 @@ def align_transcriptions(
                 align_model_metadata={
                     "dictionary": processor.tokenizer.get_vocab(),
                     "language": language,
-                    "type": "huggingface" if isinstance(model_variant, HFModel) else "torchaudio",
+                    # MMS shares the wav2vec2 forward pass with the per-language
+                    # HF aligners, so the trellis/backtrack code is identical.
+                    "type": "huggingface",
                 },
                 audio=audio,
                 device=device,
