@@ -59,7 +59,8 @@ dependencies = [
 [project.optional-dependencies]
 nlp = [
   "jiwer>=3.0",
-  "nltk>=3.9"
+  "nltk>=3.9",
+  "uroman>=1.3"
 ]
 text = [
   "sentence-transformers>=5.1",
