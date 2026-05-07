@@ -16,6 +16,24 @@ from senselab.utils.data_structures import DeviceType, HFModel, Language, Script
 # NeMo model ID prefixes — route to NeMo backend when detected
 _NEMO_PREFIXES = ("nvidia/stt_", "nvidia/conformer")
 
+# NVIDIA Canary-Qwen prefix — route to a separate NeMo subprocess venv
+# (canary_qwen.py) that loads SALM from nemo.collections.speechlm2.models.
+# The implementation lives in a follow-up commit; this constant is used by
+# the dispatch table below so the routing structure is settled.
+_CANARY_PREFIXES = ("nvidia/canary-",)
+
+# Alibaba Qwen3-ASR prefix — route to a separate Qwen subprocess venv
+# (qwen.py) that uses Alibaba's qwen-asr Python wrapper plus the optional
+# Qwen3-ForcedAligner companion for word-level timestamps.
+_QWEN_ASR_PREFIXES = ("Qwen/Qwen3-ASR",)
+
+# HuggingFace ASR models that are known to NOT produce native timestamps —
+# their HF pipelines reject return_timestamps. For these we default to
+# return_timestamps=False so the pipeline returns text-only ScriptLines;
+# downstream code (e.g., scripts/analyze_audio.py) can post-align via
+# senselab.audio.tasks.forced_alignment to add per-segment timestamps.
+_TIMESTAMP_LESS_HF_MODELS = ("ibm-granite/granite-speech-",)
+
 
 @requires_compatibility("audio.tasks.speech_to_text.transcribe_audios")
 def transcribe_audios(
@@ -98,7 +116,26 @@ def transcribe_audios(
     try:
         if isinstance(model, HFModel) and str(model.path_or_uri).startswith(_NEMO_PREFIXES):
             return NeMoASR.transcribe_with_nemo(audios=audios, model=model, device=device)
+        elif isinstance(model, HFModel) and str(model.path_or_uri).startswith(_CANARY_PREFIXES):
+            raise NotImplementedError(
+                "NVIDIA Canary-Qwen routing is registered but not yet wired. The "
+                "dedicated subprocess-venv backend lives at "
+                "senselab.audio.tasks.speech_to_text.canary_qwen and lands in a "
+                "follow-up commit (see specs/20260506-154425-audio-analysis-asr-extensions/tasks.md, T025-T027)."
+            )
+        elif isinstance(model, HFModel) and str(model.path_or_uri).startswith(_QWEN_ASR_PREFIXES):
+            raise NotImplementedError(
+                "Alibaba Qwen3-ASR routing is registered but not yet wired. The "
+                "dedicated subprocess-venv backend lives at "
+                "senselab.audio.tasks.speech_to_text.qwen and lands in a "
+                "follow-up commit (see specs/20260506-154425-audio-analysis-asr-extensions/tasks.md, T030-T032)."
+            )
         elif isinstance(model, HFModel):
+            # Default HF pipeline path. Models known to lack native timestamps
+            # default to return_timestamps=False so the pipeline does not raise;
+            # callers can override by passing return_timestamps explicitly.
+            if "return_timestamps" not in kwargs and str(model.path_or_uri).startswith(_TIMESTAMP_LESS_HF_MODELS):
+                kwargs["return_timestamps"] = False
             return HuggingFaceASR.transcribe_audios_with_transformers(
                 audios=audios, model=model, language=language, device=device, **kwargs
             )
