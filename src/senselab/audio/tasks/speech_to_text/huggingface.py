@@ -36,7 +36,7 @@ class HuggingFaceASR:
     def _get_hf_asr_pipeline(
         cls,
         model: HFModel,
-        return_timestamps: Optional[str],
+        return_timestamps: Union[str, bool, None],
         max_new_tokens: int,
         chunk_length_s: int,
         batch_size: int,
@@ -85,7 +85,7 @@ class HuggingFaceASR:
         audios: List[Audio],
         model: Optional[HFModel] = None,
         language: Optional[Language] = None,
-        return_timestamps: Optional[str] = "word",
+        return_timestamps: Union[str, bool, None] = "word",
         max_new_tokens: int = 128,
         chunk_length_s: int = 30,
         batch_size: int = 1,
@@ -109,8 +109,12 @@ class HuggingFaceASR:
                 HF model to use. Defaults to ``HFModel("openai/whisper-tiny")``.
             language (Language, optional):
                 Language hint (lowercased and passed via `generate_kwargs` when supported).
-            return_timestamps (str | None, optional):
-                Timestamp granularity. Defaults to ``"word"``.
+            return_timestamps (str | bool | None, optional):
+                Timestamp granularity. Defaults to ``"word"``. Pass ``False``
+                to skip timestamp output entirely (required for HF ASR models
+                that don't natively produce timestamps, e.g., IBM Granite
+                Speech 3.3 — the underlying pipeline raises if you ask for
+                timestamps it cannot produce).
             max_new_tokens (int, optional):
                 Decoder limit per chunk. Defaults to ``128``.
             chunk_length_s (int, optional):
