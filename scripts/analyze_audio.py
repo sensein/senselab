@@ -130,7 +130,7 @@ from senselab.audio.tasks.speech_to_text import transcribe_audios
 from senselab.utils.data_structures import DeviceType, HFModel, PyannoteAudioModel, SpeechBrainModel
 
 TARGET_SR = 16000
-ALL_TASKS = ("diarization", "ast", "yamnet", "features", "asr", "embeddings")
+ALL_TASKS = ("diarization", "ast", "yamnet", "features", "asr", "embeddings", "alignment")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -184,20 +184,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=[
             # Confirmed working through senselab today:
             "openai/whisper-large-v3-turbo",
-            # Pending senselab-side support (see the new feature branch
-            # tracking these). Per-model failures are captured in JSON
-            # without aborting the run, so leaving them in the default
-            # list surfaces "still broken" status on every invocation.
+            # Routes through the existing HF pipeline path with
+            # return_timestamps=False (timestamp-less HF model known-list);
+            # the script's auto-align stage adds per-segment timestamps via MMS:
+            "ibm-granite/granite-speech-3.3-8b",
+            # Pending senselab-side support — backend modules canary_qwen.py
+            # and qwen.py land in a follow-up commit. Per-model failures are
+            # captured in JSON without aborting the run.
             "nvidia/canary-qwen-2.5b",
             "Qwen/Qwen3-ASR-1.7B",
         ],
         help=(
-            "ASR models. Default compares Whisper Large v3 Turbo (works today), "
-            "NVIDIA Canary-Qwen 2.5B (pending NeMo router extension), and "
-            "Qwen3-ASR 1.7B (pending transformers/custom backend support). "
-            "Granite Speech 3.3 8B is intentionally NOT in the default list: "
-            "its model has no native timestamp output, so it's not useful for "
-            "timeline annotation."
+            "ASR models. Defaults: Whisper Large v3 Turbo (native timestamps), "
+            "IBM Granite Speech 3.3 8B (text-only via HF pipeline; auto-aligned "
+            "by this script), NVIDIA Canary-Qwen 2.5B (pending), and Qwen3-ASR "
+            "1.7B (pending). The script auto-aligns timestamp-less ASR output "
+            "via the multilingual aligner; pass --no-align-asr to skip."
         ),
     )
     parser.add_argument(
@@ -264,6 +266,46 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--no-cache",
         action="store_true",
         help="Disable cache lookup AND store. Every task runs fresh; nothing is written to the cache.",
+    )
+    # Auto-align controls. Auto-align is on by default: any ASR result without
+    # native timestamps gets post-processed through senselab.audio.tasks.forced_alignment
+    # before the LS export, so the LS bundle has region-level annotations on the
+    # timeline regardless of whether the ASR produced timestamps natively.
+    parser.add_argument(
+        "--no-align-asr",
+        action="store_true",
+        help=(
+            "Disable the auto-align stage for timestamp-less ASR. Outputs become "
+            "text-only ScriptLines; the LS export emits a single full-audio TextArea "
+            "region for each timestamp-less ASR model."
+        ),
+    )
+    parser.add_argument(
+        "--aligner-model",
+        default="facebook/mms-1b-all",
+        help=(
+            "Multilingual forced-alignment model used by the auto-align stage "
+            "(default: facebook/mms-1b-all, covers 1100+ languages via per-language "
+            "adapters). Override to swap MMS for another senselab-supported aligner."
+        ),
+    )
+    parser.add_argument(
+        "--asr-language",
+        default=None,
+        help=(
+            "Force a specific language for the auto-align stage (ISO 639-1 like 'en', "
+            "'ja' or ISO 639-3 like 'eng', 'jpn'). When omitted, the script falls back "
+            "to the ASR model's documented default language (typically English)."
+        ),
+    )
+    parser.add_argument(
+        "--qwen-asr-no-timestamps",
+        action="store_true",
+        help=(
+            "Skip Qwen3-ASR's bundled forced-aligner companion model. The ASR returns "
+            "text-only ScriptLines; the script's own auto-align stage then takes over "
+            "(unless --no-align-asr is also set)."
+        ),
     )
     return parser.parse_args(argv)
 
@@ -410,6 +452,80 @@ def cache_store(cache_dir: Path, key: str, payload: dict[str, Any]) -> None:
     """Persist ``payload`` for ``key`` under the cache dir."""
     cache_dir.mkdir(parents=True, exist_ok=True)
     (cache_dir / f"{key}.json").write_text(json.dumps(serialize(payload), indent=2, default=str), encoding="utf-8")
+
+
+def transcript_signature(text: str) -> str:
+    """sha256 of an ASR transcript text — anchors an alignment outcome to its exact input.
+
+    The alignment cache uses this as one of its keys: re-aligning the same
+    transcript on the same audio with the same params returns the cached
+    timestamps without re-loading the aligner model.
+    """
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def align_cache_key(
+    *,
+    audio_sig: str,
+    transcript_sha: str,
+    language: str | None,
+    aligner_model_id: str,
+    aligner_params: dict[str, Any],
+    wrapper_hash: str,
+    senselab_ver: str,
+) -> str:
+    """Cache key for one (audio, transcript, language, aligner) alignment call.
+
+    Independent from the ASR cache: an alignment cache hit replays prior
+    timestamps without invoking the aligner; an ASR-cache miss + alignment-cache
+    hit (or vice versa) is supported by construction.
+    """
+    payload = {
+        "schema": _CACHE_SCHEMA_VERSION,
+        "audio_signature": audio_sig,
+        "task": "alignment",
+        "transcript_sha": transcript_sha,
+        "language": language,
+        "aligner_model": aligner_model_id,
+        "aligner_params": aligner_params,
+        "wrapper_hash": wrapper_hash,
+        "senselab_version": senselab_ver,
+    }
+    return hashlib.sha256(_canonical_params(payload).encode()).hexdigest()
+
+
+def run_alignment_cached(
+    name: str,
+    fn: Any,  # noqa: ANN401
+    *args: Any,  # noqa: ANN401
+    cache_dir: Path | None,
+    cache_key_str: str,
+    provenance: dict[str, Any],
+    **kwargs: Any,  # noqa: ANN401
+) -> dict[str, Any]:
+    """Run an alignment step with cache lookup → run → store, mirroring run_task_cached.
+
+    Identical control flow to run_task_cached; the distinction is semantic — the
+    provenance includes alignment-specific fields (transcript_sha, language,
+    parent_asr_cache_key) and the cache key was built via align_cache_key.
+    Failed alignments are NOT stored, so a future fix to the aligner / a
+    senselab upgrade triggers a fresh attempt; the parent ASR cache is
+    independent and unaffected.
+    """
+    if cache_dir is not None:
+        hit = cache_lookup(cache_dir, cache_key_str)
+        if hit is not None:
+            print(f"  [{name}] alignment cache HIT ({cache_key_str[:12]}...)", flush=True)
+            hit["cache"] = "hit"
+            hit["cache_key"] = cache_key_str
+            return hit
+    outcome = run_task(name, fn, *args, **kwargs)
+    outcome["provenance"] = provenance
+    outcome["cache"] = "miss" if cache_dir is not None else "disabled"
+    outcome["cache_key"] = cache_key_str
+    if cache_dir is not None and outcome.get("status") == "ok":
+        cache_store(cache_dir, cache_key_str, outcome)
+    return outcome
 
 
 def run_task_cached(
@@ -626,6 +742,23 @@ def _top1(window: Any) -> dict[str, Any] | None:  # noqa: ANN401
     return {"label": str(top.get("label", "?")), "score": float(top.get("score", 0.0))}
 
 
+def _asr_has_timestamps(result: Any) -> bool:  # noqa: ANN401
+    """Return True if any ScriptLine in ``result`` has a non-null start or non-empty chunks.
+
+    Used by the LS export and by the auto-align stage to decide whether to skip
+    forced alignment for an ASR result that already includes time information.
+    """
+    if not result:
+        return False
+    items = result if isinstance(result, list) else [result]
+    for line in items:
+        start = getattr(line, "start", None)
+        chunks = getattr(line, "chunks", None) or []
+        if start is not None or len(chunks) > 0:
+            return True
+    return False
+
+
 def _asr_to_ls(result: Any, prefix: str, full_duration: float) -> list[dict[str, Any]]:  # noqa: ANN401
     """Convert transcribe_audios output into LS textarea regions, one per ScriptLine.
 
@@ -705,10 +838,24 @@ def build_labelstudio_task(
         )
 
     asr = pass_summary.get("asr", {})
+    alignment = pass_summary.get("alignment") or {}
+    align_by_model = alignment.get("by_model") or {}
     for model_id, model_block in (asr.get("by_model") or {}).items():
-        if model_block.get("status") == "ok":
-            from_name = f"{pass_label}__asr__{_safe(model_id)}"
-            regions.extend(_asr_to_ls(model_block.get("result"), from_name, duration_s))
+        if model_block.get("status") != "ok":
+            continue
+        from_name = f"{pass_label}__asr__{_safe(model_id)}"
+        # Three-case branch:
+        # (a) ASR with native timestamps  -> use the ASR result for per-segment regions.
+        # (b) ASR text-only + successful alignment -> use the alignment result.
+        # (c) ASR text-only + alignment skipped or failed -> single full-audio TextArea.
+        align_block = align_by_model.get(model_id) or {}
+        asr_result = model_block.get("result")
+        if _asr_has_timestamps(asr_result):
+            regions.extend(_asr_to_ls(asr_result, from_name, duration_s))
+        elif align_block.get("status") == "ok":
+            regions.extend(_asr_to_ls(align_block.get("result"), from_name, duration_s))
+        else:
+            regions.extend(_asr_to_ls(asr_result, from_name, duration_s))
 
     return {
         "data": {
