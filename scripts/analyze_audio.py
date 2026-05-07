@@ -25,19 +25,26 @@ task where the registry offers more than one).
     **MIT/ast-finetuned-audioset-10-10-0.4593**    (AST, HF)
     **google/yamnet**                              (TF subprocess venv)
 
-  speech_to_text (timestamp-capable):
-    **openai/whisper-large-v3-turbo**              (HFModel, 809M, multilingual; works)
-    **nvidia/canary-qwen-2.5b**                    (HFModel, 2.5B; pending senselab NeMo-router extension)
-    **Qwen/Qwen3-ASR-1.7B**                        (HFModel, 1.7B; pending transformers/custom backend)
-    openai/whisper-large-v3                        (HFModel, 1.55B, multilingual)
-    openai/whisper-small                           (HFModel, 244M)
-    nvidia/stt_en_conformer_ctc_large              (NeMo subprocess venv, English-only; CTC = native timestamps)
+  speech_to_text (in defaults; mix of native-timestamp and post-aligned):
+    **openai/whisper-large-v3-turbo**              (HFModel, 809M, multilingual; native timestamps)
+    **ibm-granite/granite-speech-3.3-8b**          (~9B, EN + 7 translations; text-only, post-aligned by this script)
+    **nvidia/canary-qwen-2.5b**                    (HFModel, 2.5B; text-only, post-aligned; pending NeMo backend)
+    **Qwen/Qwen3-ASR-1.7B**                        (HFModel, 1.7B; native word timestamps via Qwen forced-aligner;
+                                                    pending qwen-asr backend)
 
-  speech_to_text (NOT in defaults — no native timestamps):
-    ibm-granite/granite-speech-3.3-8b              (~9B, EN + 7 translations)
-        Granite Speech is generative seq2seq without timestamp-supervision
-        tokens; the HF pipeline correctly refuses ``return_timestamps``.
-        Excluded from defaults because it can't drive timeline annotation.
+  speech_to_text (additional, available via --asr-models):
+    openai/whisper-large-v3                        (HFModel, 1.55B, multilingual; native timestamps)
+    openai/whisper-small                           (HFModel, 244M; native timestamps)
+    nvidia/stt_en_conformer_ctc_large              (NeMo subprocess venv, English-only; native CTC timestamps)
+
+Auto-align stage: every ASR model in --asr-models that returns text-only
+ScriptLines (no native timestamps and no chunks) is automatically passed
+through the multilingual MMS forced-aligner (--aligner-model, default
+facebook/mms-1b-all, 1100+ languages via per-language adapters) to add
+per-segment timestamps. Pass --no-align-asr to skip this and emit a
+single full-audio TextArea region for those models in the LS export.
+The alignment cache is independent of the ASR cache (FR-024); changing
+the aligner re-runs only alignment, not ASR.
 
   speaker_embeddings:
     **speechbrain/spkrec-ecapa-voxceleb**          (ECAPA-TDNN)
@@ -121,13 +128,21 @@ import torch
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.classification import classify_audios
 from senselab.audio.tasks.features_extraction import extract_features_from_audios
+from senselab.audio.tasks.forced_alignment import align_transcriptions
 from senselab.audio.tasks.input_output import read_audios
 from senselab.audio.tasks.preprocessing import downmix_audios_to_mono, resample_audios
 from senselab.audio.tasks.speaker_diarization import diarize_audios
 from senselab.audio.tasks.speaker_embeddings import extract_speaker_embeddings_from_audios
 from senselab.audio.tasks.speech_enhancement import enhance_audios
 from senselab.audio.tasks.speech_to_text import transcribe_audios
-from senselab.utils.data_structures import DeviceType, HFModel, PyannoteAudioModel, SpeechBrainModel
+from senselab.utils.data_structures import (
+    DeviceType,
+    HFModel,
+    Language,
+    PyannoteAudioModel,
+    ScriptLine,
+    SpeechBrainModel,
+)
 
 TARGET_SR = 16000
 ALL_TASKS = ("diarization", "ast", "yamnet", "features", "asr", "embeddings", "alignment")
@@ -747,16 +762,35 @@ def _asr_has_timestamps(result: Any) -> bool:  # noqa: ANN401
 
     Used by the LS export and by the auto-align stage to decide whether to skip
     forced alignment for an ASR result that already includes time information.
+    Handles both ScriptLine objects (post-run, in-memory) and the dict shape that
+    the JSON cache deserializes into (post-cache-hit).
     """
     if not result:
         return False
     items = result if isinstance(result, list) else [result]
     for line in items:
-        start = getattr(line, "start", None)
-        chunks = getattr(line, "chunks", None) or []
+        if isinstance(line, dict):
+            start = line.get("start")
+            chunks = line.get("chunks") or []
+        else:
+            start = getattr(line, "start", None)
+            chunks = getattr(line, "chunks", None) or []
         if start is not None or len(chunks) > 0:
             return True
     return False
+
+
+def _extract_transcript_text(result: Any) -> str:  # noqa: ANN401
+    """Concatenate the ``text`` field of every ScriptLine / dict in an ASR result."""
+    if not result:
+        return ""
+    items = result if isinstance(result, list) else [result]
+    parts: list[str] = []
+    for line in items:
+        text = line.get("text") if isinstance(line, dict) else getattr(line, "text", None)
+        if text:
+            parts.append(str(text))
+    return " ".join(p.strip() for p in parts if p.strip())
 
 
 def _asr_to_ls(result: Any, prefix: str, full_duration: float) -> list[dict[str, Any]]:  # noqa: ANN401
@@ -1154,6 +1188,60 @@ def run_pass(
             )
             summary["asr"]["by_model"][model_id] = outcome
             write_json(pass_dir / "asr" / f"{_safe(model_id)}.json", outcome)
+
+    # Auto-align stage. Iterate every successful ASR ModelRun; when the ASR
+    # result lacks native timestamps (Granite Speech, Canary-Qwen, etc.) and
+    # the user hasn't disabled alignment, post-process the text through
+    # senselab's forced_alignment to produce per-segment timestamps. The
+    # alignment cache is independent from the ASR cache (FR-024); failed
+    # alignments preserve the ASR text but fall back to a single full-audio
+    # TextArea region in the LS export (FR-025).
+    if "asr" not in args.skip and "alignment" not in args.skip and not args.no_align_asr and "asr" in summary:
+        summary["alignment"] = {"by_model": {}}
+        align_language = (
+            Language(language_code=args.asr_language) if args.asr_language else Language(language_code="en")
+        )
+        for model_id, asr_outcome in summary["asr"]["by_model"].items():
+            if asr_outcome.get("status") != "ok":
+                continue
+            asr_result = asr_outcome.get("result")
+            if _asr_has_timestamps(asr_result):
+                # Already has native timestamps — alignment would be a no-op.
+                continue
+            transcript_text = _extract_transcript_text(asr_result)
+            if not transcript_text:
+                continue
+            transcript_sha = transcript_signature(transcript_text)
+            aligner_params = {
+                "language": align_language.language_code,
+                "romanize": align_language.language_code in ("ja", "zh"),
+            }
+            align_provenance = {
+                **_provenance_for("alignment", args.aligner_model, aligner_params),
+                "transcript_sha": transcript_sha,
+                "language": align_language.language_code,
+                "parent_asr_cache_key": asr_outcome.get("cache_key"),
+            }
+            align_key = align_cache_key(
+                audio_sig=audio_sig,
+                transcript_sha=transcript_sha,
+                language=align_language.language_code,
+                aligner_model_id=args.aligner_model,
+                aligner_params=aligner_params,
+                wrapper_hash=wrapper_hash,
+                senselab_ver=senselab_ver,
+            )
+            outcome = run_alignment_cached(
+                f"alignment[{model_id}]",
+                align_transcriptions,
+                [(audio, ScriptLine(text=transcript_text), align_language)],
+                aligner_model=args.aligner_model,
+                cache_dir=cache_dir,
+                cache_key_str=align_key,
+                provenance=align_provenance,
+            )
+            summary["alignment"]["by_model"][model_id] = outcome
+            write_json(pass_dir / "alignment" / f"{_safe(model_id)}.json", outcome)
 
     if "embeddings" not in args.skip:
         summary["embeddings"] = {"by_model": {}}
