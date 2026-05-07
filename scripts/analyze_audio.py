@@ -319,7 +319,13 @@ def prepare_audio(path: Path) -> Audio:
 # Cache schema bumps when the cache key composition or output shape changes
 # in a way that should invalidate prior cache entries even when the audio,
 # task, model, and senselab version are unchanged. Bump on breaking changes.
-_CACHE_SCHEMA_VERSION = 1
+#
+# v2: introduces alignment as a separate cache entry, separate from the
+#     ASR entry that produced its input transcript. The ASR cache key
+#     covers the ASR call's parameters; the alignment cache key adds
+#     transcript_sha and language. v1 cache entries are inert (won't be
+#     served) and can be discarded.
+_CACHE_SCHEMA_VERSION = 2
 
 
 def audio_signature(audio: Audio) -> str:
