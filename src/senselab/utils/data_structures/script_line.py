@@ -199,21 +199,40 @@ class ScriptLine(BaseModel):
             >>> sl.start, sl.end
             (0.0, 1.2)
         """
-        if "timestamps" in d:
-            start = d["timestamps"][0]
-            end = d["timestamps"][1]
-        elif "chunks" in d and "timestamps" in d["chunks"][0] and "timestamps" in d["chunks"][-1]:
+        ts = d.get("timestamps")
+        if isinstance(ts, (list, tuple)) and len(ts) >= 2:
+            start = ts[0]
+            end = ts[1]
+        elif (
+            "chunks" in d
+            and d["chunks"]
+            and isinstance(d["chunks"][0].get("timestamps"), (list, tuple))
+            and len(d["chunks"][0]["timestamps"]) >= 2
+            and isinstance(d["chunks"][-1].get("timestamps"), (list, tuple))
+            and len(d["chunks"][-1]["timestamps"]) >= 2
+        ):
             start = d["chunks"][0]["timestamps"][0]
             end = d["chunks"][-1]["timestamps"][1]
         else:
             start = None
             end = None
+
+        # Filter out fully-empty children (no text/speaker) so they do not trip
+        # ScriptLine's "at least one of text/speaker" validator. MMS-style
+        # aligners can emit placeholder subsegments with text="" and empty
+        # chunks for unrecognized characters; those carry no signal and
+        # should not block construction of the parent line.
+        def _is_meaningful(c: Dict[str, Any]) -> bool:
+            return bool(c.get("text")) or bool(c.get("speaker"))
+
+        chunks_raw = d.get("chunks") if "chunks" in d else None
+        chunks = [cls.from_dict(c) for c in chunks_raw if _is_meaningful(c)] if chunks_raw is not None else None
         return cls(
             text=d["text"] if "text" in d else None,
             speaker=d["speaker"] if "speaker" in d else None,
             start=start,
             end=end,
-            chunks=[cls.from_dict(c) for c in d["chunks"]] if "chunks" in d else None,
+            chunks=chunks,
         )
 
     def __str__(self) -> str:
