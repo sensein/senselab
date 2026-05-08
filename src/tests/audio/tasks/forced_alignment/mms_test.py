@@ -84,14 +84,13 @@ def test_mms_aligner_japanese_exercises_romanization() -> None:
     assert len(result) == 1
 
 
-def test_unknown_language_for_mms_raises_actionable_error() -> None:
-    """A language code with no ISO_1_TO_3 entry yields a clear ValueError pointing at the registry."""
-    audio = _load_16k_mono_fixture()
-    transcript = ScriptLine(text="text in unsupported language")
-    if not mms_available:
-        pytest.skip(f"facebook/mms-1b-all not in HF cache at {MMS_CACHE_DIR}")
-    with pytest.raises(ValueError, match="ISO_1_TO_3"):
-        align_transcriptions(
-            audios_and_transcriptions_and_language=[(audio, transcript, Language(language_code="xx"))],
-            aligner_model=MMS_MODEL_ID,
-        )
+def test_unknown_language_rejected_before_mms_dispatch() -> None:
+    """A language code that fails ISO validation is rejected by Language(), not by the MMS path.
+
+    senselab.utils.data_structures.Language enforces ISO-639 validity at
+    construction; the MMS aligner never sees an invalid code. This guards
+    that contract so any future relaxation of Language() validation lands
+    intentionally rather than as a silent regression.
+    """
+    with pytest.raises(ValueError, match="not a valid ISO language code"):
+        Language(language_code="xx")

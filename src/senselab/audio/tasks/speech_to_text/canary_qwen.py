@@ -72,18 +72,22 @@ try:
     all_results = []
     with torch.no_grad():
         for path in audio_paths:
+            # SALM.generate expects prompts as list[list[dict]] — a batch of
+            # conversations, where each conversation is a list of messages.
             prompts = [
-                {
-                    "role": "user",
-                    "content": f"Transcribe the following: {model.audio_locator_tag}",
-                    "audio": [path],
-                }
+                [
+                    {
+                        "role": "user",
+                        "content": f"Transcribe the following: {model.audio_locator_tag}",
+                        "audio": [path],
+                    }
+                ]
             ]
             output_ids = model.generate(prompts=prompts, max_new_tokens=512)
-            # output_ids shape: (batch, seq_len). Strip prompt tokens if present;
-            # the published example decodes the full output and trusts the
-            # model to emit the transcript without echoing the prompt.
-            ids = output_ids[0].tolist() if hasattr(output_ids, "tolist") else list(output_ids[0])
+            # output_ids shape: (batch, seq_len). Decode the full output and
+            # trust the model to emit the transcript without echoing the prompt.
+            row = output_ids[0]
+            ids = row.tolist() if hasattr(row, "tolist") else list(row)
             text = model.tokenizer.ids_to_text(ids)
             all_results.append({"text": text.strip()})
 
