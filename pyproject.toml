@@ -40,7 +40,6 @@ dependencies = [
   "datasets>=3.6",
   "accelerate",
   "peft>=0.13",  # required by Granite Speech 3.3's LoRA adapter
-
   "speechbrain>=1.0",
   # Audio processing backends (pyannote pulls matplotlib, torch-audiomentations)
   "pyannote-audio>=4.0",
@@ -199,4 +198,4 @@ skip = [
   "*.cha",
   "*.ipynb"
 ]
-ignore-words-list = ["senselab", "nd", "astroid", "wil", "SER", "te", "EXPRESSO", "VAI"]
+ignore-words-list = ["senselab", "nd", "astroid", "wil", "SER", "te", "EXPRESSO", "VAI", "vie"]
