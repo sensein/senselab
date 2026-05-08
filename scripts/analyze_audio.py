@@ -130,7 +130,7 @@ from senselab.audio.tasks.classification import classify_audios
 from senselab.audio.tasks.features_extraction import extract_features_from_audios
 from senselab.audio.tasks.forced_alignment import align_transcriptions
 from senselab.audio.tasks.input_output import read_audios
-from senselab.audio.tasks.preprocessing import downmix_audios_to_mono, resample_audios
+from senselab.audio.tasks.preprocessing import downmix_audios_to_mono, extract_segments, resample_audios
 from senselab.audio.tasks.speaker_diarization import diarize_audios
 from senselab.audio.tasks.speaker_embeddings import extract_speaker_embeddings_from_audios
 from senselab.audio.tasks.speech_enhancement import enhance_audios
@@ -265,6 +265,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=float,
         default=0.48,
         help="YAMNet sliding-window hop, seconds (default: 0.48, matches YAMNet's native 50%% overlap hop).",
+    )
+    parser.add_argument(
+        "--features-win-length",
+        type=float,
+        default=1.0,
+        help=(
+            "Sliding-window length for feature extraction, in seconds (default: 1.0). "
+            "OpenSMILE/Parselmouth/torchaudio-squim are summary statistics by design — "
+            "we re-run them per window so the resulting time series is comparable to "
+            "the rest of the analysis (diarization, AST, YAMNet, ASR)."
+        ),
+    )
+    parser.add_argument(
+        "--features-hop-length",
+        type=float,
+        default=0.5,
+        help="Hop between feature windows, in seconds (default: 0.5; 50%% overlap with the default 1.0s window).",
     )
     parser.add_argument(
         "--cache-dir",
@@ -477,6 +494,114 @@ def transcript_signature(text: str) -> str:
     timestamps without re-loading the aligner model.
     """
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _flatten_feature_dict(d: dict[str, Any], prefix: str = "") -> dict[str, Any]:
+    """Flatten a nested feature dict into a single-row dict suitable for a parquet column.
+
+    Keys are joined with ``.``; tensors are coerced to floats (mean of
+    last axis when 1-D) or skipped when high-dimensional (we don't want
+    per-window MFCC tensors as parquet cells — caller can opt back in
+    via the JSON sibling). Lists of scalars are kept as-is so pyarrow
+    can store them as a list column.
+    """
+    out: dict[str, Any] = {}
+    for k, v in d.items():
+        key = f"{prefix}{k}" if prefix else k
+        if isinstance(v, dict):
+            out.update(_flatten_feature_dict(v, prefix=f"{key}."))
+            continue
+        if hasattr(v, "ndim") and hasattr(v, "tolist"):  # torch.Tensor / np.ndarray
+            try:
+                if v.ndim == 0:
+                    out[key] = float(v.item())
+                elif v.ndim == 1 and v.shape[0] <= 64:
+                    out[key] = [float(x) for x in v.tolist()]
+                else:
+                    # multi-dim tensor (spectrogram, mfcc) — store mean as a scalar
+                    # summary; full tensor stays in the JSON sibling for callers
+                    # that want it.
+                    out[f"{key}.mean"] = float(v.mean().item())
+            except Exception:  # noqa: BLE001 — best effort
+                pass
+            continue
+        if isinstance(v, (int, float, bool)) or v is None:
+            out[key] = v
+        elif isinstance(v, str):
+            out[key] = v
+        # silently drop anything else (callable, opaque object) to keep the row clean
+    return out
+
+
+def extract_temporal_features(
+    audio: Audio,
+    *,
+    win_length: float,
+    hop_length: float,
+    device: DeviceType | None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Extract per-backend temporal features, preferring each backend's native time grid.
+
+    - **opensmile**: uses ``LowLevelDescriptors`` (native ~10 ms frame
+      grid). One row per opensmile frame.
+    - **parselmouth**: aggregates over a sliding window since the
+      senselab wrapper currently only exposes the summary form.
+    - **torchaudio_squim**: STOI/PESQ/SI-SDR are inherently global
+      quality scores — windowed externally so the resulting time series
+      is comparable to the rest.
+
+    Returns a dict ``{backend: [rows...]}`` so each backend can be
+    written to its own parquet sidecar (different columns + time grids
+    don't share a schema).
+    """
+    duration_s = float(audio.waveform.shape[1]) / float(audio.sampling_rate)
+    out: dict[str, list[dict[str, Any]]] = {"opensmile": [], "parselmouth": [], "torchaudio_squim": []}
+
+    # opensmile LLD — native windowing (DataFrame indexed by [start, end]).
+    try:
+        import opensmile as _os
+
+        smile = _os.Smile(
+            feature_set=_os.FeatureSet.eGeMAPSv02,
+            feature_level=_os.FeatureLevel.LowLevelDescriptors,
+        )
+        df = smile.process_signal(audio.waveform.squeeze().numpy(), audio.sampling_rate)
+        df = df.reset_index()
+        df["start"] = df["start"].dt.total_seconds()
+        df["end"] = df["end"].dt.total_seconds()
+        out["opensmile"] = df.to_dict(orient="records")
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [features.opensmile] warn: {exc!r}", file=sys.stderr)
+
+    # External 1 s / 0.5 s loop for the summary-style backends.
+    t = 0.0
+    idx = 0
+    while t + win_length <= duration_s + 1e-6:
+        start = round(t, 4)
+        end = round(min(t + win_length, duration_s), 4)
+        clip = extract_segments([(audio, [(start, end)])])[0][0]
+        try:
+            pm = extract_features_from_audios(
+                [clip], opensmile=False, parselmouth=True, torchaudio=False, torchaudio_squim=False, device=device
+            )[0]
+            row = _flatten_feature_dict(pm.get("praat_parselmouth", {}))
+            row.update({"start": start, "end": end, "win_index": idx})
+            out["parselmouth"].append(row)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  [features.parselmouth win {idx}] warn: {exc!r}", file=sys.stderr)
+        try:
+            sq = extract_features_from_audios(
+                [clip], opensmile=False, parselmouth=False, torchaudio=False, torchaudio_squim=True, device=device
+            )[0]
+            row = _flatten_feature_dict(sq.get("torchaudio_squim", {}))
+            row.update({"start": start, "end": end, "win_index": idx})
+            out["torchaudio_squim"].append(row)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  [features.torchaudio_squim win {idx}] warn: {exc!r}", file=sys.stderr)
+        t += hop_length
+        idx += 1
+
+    return out
 
 
 def align_cache_key(
@@ -1163,30 +1288,43 @@ def run_pass(
 
     if "features" not in args.skip:
         feat_params: dict[str, Any] = {
-            "opensmile": True,
-            "parselmouth": True,
-            "torchaudio": True,
-            "torchaudio_squim": True,
-            "sparc": False,
-            "ppgs": False,
+            "opensmile": "LowLevelDescriptors@native",
+            "parselmouth": "windowed",
+            "torchaudio_squim": "windowed",
             "device": device_label_for_provenance,
+            "win_length": args.features_win_length,
+            "hop_length": args.features_hop_length,
         }
         summary["features"] = run_task_cached(
             "features",
-            extract_features_from_audios,
-            [audio],
-            opensmile=True,
-            parselmouth=True,
-            torchaudio=True,
-            torchaudio_squim=True,
-            sparc=False,
-            ppgs=False,
+            extract_temporal_features,
+            audio,
+            win_length=args.features_win_length,
+            hop_length=args.features_hop_length,
             device=device,
             cache_dir=cache_dir,
             cache_key_str=_key("features", None, feat_params),
             provenance=_provenance_for("features", None, feat_params),
         )
-        write_json(pass_dir / "features.json", summary["features"])
+        # Each backend writes its own parquet sidecar — they have
+        # different columns and different time grids (opensmile LLD is
+        # native ~10 ms; parselmouth/torchaudio_squim follow the
+        # ``--features-*-length`` window). Cache outcome metadata stays
+        # in JSON for inspection parity with the other tasks.
+        result = summary["features"].get("result") or {}
+        if isinstance(result, dict):
+            try:
+                import pandas as pd
+
+                feat_dir = pass_dir / "features"
+                feat_dir.mkdir(parents=True, exist_ok=True)
+                for backend, rows in result.items():
+                    if not rows:
+                        continue
+                    pd.DataFrame(rows).to_parquet(feat_dir / f"{backend}.parquet", index=False)
+            except Exception as exc:  # noqa: BLE001 — best-effort sidecar
+                print(f"  [features] warn: parquet write failed: {exc!r}", file=sys.stderr)
+        write_json(pass_dir / "features.json", {**summary["features"], "result": "see features/*.parquet"})
 
     if "asr" not in args.skip:
         summary["asr"] = {"by_model": {}}
