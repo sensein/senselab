@@ -216,6 +216,7 @@ class ScriptLine(BaseModel):
         else:
             start = None
             end = None
+
         # Filter out fully-empty children (no text/speaker) so they do not trip
         # ScriptLine's "at least one of text/speaker" validator. MMS-style
         # aligners can emit placeholder subsegments with text="" and empty
@@ -225,11 +226,7 @@ class ScriptLine(BaseModel):
             return bool(c.get("text")) or bool(c.get("speaker"))
 
         chunks_raw = d.get("chunks") if "chunks" in d else None
-        chunks = (
-            [cls.from_dict(c) for c in chunks_raw if _is_meaningful(c)]
-            if chunks_raw is not None
-            else None
-        )
+        chunks = [cls.from_dict(c) for c in chunks_raw if _is_meaningful(c)] if chunks_raw is not None else None
         return cls(
             text=d["text"] if "text" in d else None,
             speaker=d["speaker"] if "speaker" in d else None,

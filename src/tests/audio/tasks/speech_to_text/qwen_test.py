@@ -46,7 +46,7 @@ def _load_16k_mono_fixture() -> Audio:
 def test_qwen_asr_with_timestamps_populates_chunks() -> None:
     """transcribe_with_qwen with return_timestamps=True yields chunks."""
     audio = _load_16k_mono_fixture()
-    model = HFModel(path_or_uri="Qwen/Qwen3-ASR-1.7B")
+    model: HFModel = HFModel(path_or_uri="Qwen/Qwen3-ASR-1.7B")
 
     result = QwenASR.transcribe_with_qwen(audios=[audio], model=model, return_timestamps=True)
 
@@ -71,7 +71,7 @@ def test_qwen_asr_with_timestamps_populates_chunks() -> None:
 def test_qwen_asr_without_timestamps_returns_text_only() -> None:
     """transcribe_with_qwen with return_timestamps=False returns text-only ScriptLines."""
     audio = _load_16k_mono_fixture()
-    model = HFModel(path_or_uri="Qwen/Qwen3-ASR-1.7B")
+    model: HFModel = HFModel(path_or_uri="Qwen/Qwen3-ASR-1.7B")
 
     result = QwenASR.transcribe_with_qwen(audios=[audio], model=model, return_timestamps=False)
 

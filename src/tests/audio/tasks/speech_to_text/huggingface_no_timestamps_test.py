@@ -51,7 +51,7 @@ def _load_16k_mono_fixture() -> Audio:
 def test_transcribe_with_return_timestamps_false_returns_text_only() -> None:
     """return_timestamps=False makes the HF ASR helper return text-only ScriptLines."""
     audio = _load_16k_mono_fixture()
-    model = HFModel(path_or_uri="facebook/wav2vec2-base-960h")
+    model: HFModel = HFModel(path_or_uri="facebook/wav2vec2-base-960h")
 
     result = HuggingFaceASR.transcribe_audios_with_transformers(
         audios=[audio],
