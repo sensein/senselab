@@ -49,7 +49,7 @@ def test_granite_speech_returns_text_only_scriptlines() -> None:
     script's auto-align stage adds per-segment timing downstream).
     """
     audio = _load_16k_mono_fixture()
-    model = HFModel(path_or_uri="ibm-granite/granite-speech-3.3-8b")
+    model: HFModel = HFModel(path_or_uri="ibm-granite/granite-speech-3.3-8b")
 
     result = GraniteSpeechASR.transcribe_with_granite(audios=[audio], model=model)
 

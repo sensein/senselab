@@ -68,9 +68,9 @@ class GraniteSpeechASR:
         from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
 
         model_name = model.path_or_uri if model is not None else "ibm-granite/granite-speech-3.3-8b"
-        device_type = device or _select_device_and_dtype(
-            compatible_devices=[DeviceType.CUDA, DeviceType.MPS, DeviceType.CPU]
-        )[0]
+        device_type = (
+            device or _select_device_and_dtype(compatible_devices=[DeviceType.CUDA, DeviceType.MPS, DeviceType.CPU])[0]
+        )
 
         # bfloat16 on accelerators (CUDA + MPS), float32 on CPU. CPU
         # bfloat16 *runs* but ~40x slower than fp32 because PyTorch's

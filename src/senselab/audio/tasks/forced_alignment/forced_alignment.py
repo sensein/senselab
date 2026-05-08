@@ -622,6 +622,14 @@ def _load_mms_aligner(
     return cache[key]
 
 
+# Module-level processor/model cache. Holds either ``(model_id, iso3) →
+# (processor, model)`` for the MMS path or ``model_id → (processor,
+# model)`` for the per-language wav2vec2 dispatch. Persists across
+# ``align_transcriptions`` calls so the 1B-parameter MMS weights load
+# once per process, not once per pass / audio.
+_ALIGNER_CACHE: Dict[Any, Any] = {}
+
+
 def align_transcriptions(
     audios_and_transcriptions_and_language: List[Tuple[Audio, ScriptLine, Language]],
     levels_to_keep: Dict = {"utterance": False, "word": False, "char": False},
@@ -648,7 +656,10 @@ def align_transcriptions(
         List[List[ScriptLine | None]]: A list of aligned results for each audio.
     """
     aligned_script_lines: list[list[ScriptLine | None]] = []
-    loaded_processors_and_models: Dict[Any, Any] = {}
+    # Module-level cache: each call into align_transcriptions reuses the
+    # 1B-parameter MMS base weights (and any wav2vec2 variants) from a
+    # prior call rather than reloading from disk every time.
+    loaded_processors_and_models: Dict[Any, Any] = _ALIGNER_CACHE
     device = _select_device_and_dtype()[0]
     use_mms = aligner_model == MMS_MODEL_ID
 
@@ -681,9 +692,8 @@ def align_transcriptions(
                 processor = Wav2Vec2Processor.from_pretrained(
                     model_variant.path_or_uri, revision=model_variant.revision
                 )
-                model = Wav2Vec2ForCTC.from_pretrained(
-                    model_variant.path_or_uri, revision=model_variant.revision
-                ).to(device.value)  # type: ignore[arg-type]
+                _w2v = Wav2Vec2ForCTC.from_pretrained(model_variant.path_or_uri, revision=model_variant.revision)
+                model = _w2v.to(device.value)  # type: ignore[arg-type]
                 loaded_processors_and_models[model_variant.path_or_uri] = (processor, model)
             processor, model = loaded_processors_and_models[model_variant.path_or_uri]
 

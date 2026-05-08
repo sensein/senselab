@@ -52,7 +52,7 @@ def test_canary_qwen_returns_text_only_scriptlines() -> None:
     script's auto-align stage adds per-segment timing downstream).
     """
     audio = _load_16k_mono_fixture()
-    model = HFModel(path_or_uri="nvidia/canary-qwen-2.5b")
+    model: HFModel = HFModel(path_or_uri="nvidia/canary-qwen-2.5b")
 
     result = CanaryQwenASR.transcribe_with_canary_qwen(audios=[audio], model=model)
 
