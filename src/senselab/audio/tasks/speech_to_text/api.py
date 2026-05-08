@@ -11,6 +11,7 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speech_to_text.canary_qwen import CanaryQwenASR
 from senselab.audio.tasks.speech_to_text.huggingface import HuggingFaceASR
 from senselab.audio.tasks.speech_to_text.nemo import NeMoASR
+from senselab.audio.tasks.speech_to_text.qwen import QwenASR
 from senselab.utils.compatibility import requires_compatibility
 from senselab.utils.data_structures import DeviceType, HFModel, Language, ScriptLine, SenselabModel
 
@@ -120,12 +121,12 @@ def transcribe_audios(
         elif isinstance(model, HFModel) and str(model.path_or_uri).startswith(_CANARY_PREFIXES):
             return CanaryQwenASR.transcribe_with_canary_qwen(audios=audios, model=model, device=device)
         elif isinstance(model, HFModel) and str(model.path_or_uri).startswith(_QWEN_ASR_PREFIXES):
-            raise NotImplementedError(
-                "Alibaba Qwen3-ASR routing is registered but not yet wired. The "
-                "dedicated subprocess-venv backend lives at "
-                "senselab.audio.tasks.speech_to_text.qwen and lands in a "
-                "follow-up commit (see specs/20260506-154425-audio-analysis-asr-extensions/tasks.md, T030-T032)."
-            )
+            qwen_kwargs: dict[str, Any] = {}
+            if "return_timestamps" in kwargs:
+                qwen_kwargs["return_timestamps"] = bool(kwargs.pop("return_timestamps"))
+            if "forced_aligner" in kwargs:
+                qwen_kwargs["forced_aligner"] = kwargs.pop("forced_aligner")
+            return QwenASR.transcribe_with_qwen(audios=audios, model=model, device=device, **qwen_kwargs)
         elif isinstance(model, HFModel):
             # Default HF pipeline path. Models known to lack native timestamps
             # default to return_timestamps=False so the pipeline does not raise;
