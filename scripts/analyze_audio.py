@@ -645,6 +645,17 @@ def _ls_textarea_region(
     }
 
 
+def _seg_attr(seg: Any, name: str) -> Any:  # noqa: ANN401
+    """Return ``seg.name`` whether ``seg`` is a Pydantic model or a JSON dict.
+
+    Cache reads deserialize ScriptLine into plain dicts; in-memory results are
+    Pydantic objects. Both shapes flow through the LS helpers.
+    """
+    if isinstance(seg, dict):
+        return seg.get(name)
+    return getattr(seg, name, None)
+
+
 def _diarization_to_ls(result: Any, prefix: str) -> list[dict[str, Any]]:  # noqa: ANN401
     """Convert diarize_audios output (List[List[ScriptLine]]) into LS regions."""
     out: list[dict[str, Any]] = []
@@ -652,9 +663,9 @@ def _diarization_to_ls(result: Any, prefix: str) -> list[dict[str, Any]]:  # noq
         return out
     segments = result[0] if isinstance(result, list) and result else []
     for i, seg in enumerate(segments):
-        start = getattr(seg, "start", None)
-        end = getattr(seg, "end", None)
-        speaker = getattr(seg, "speaker", None) or "SPEAKER_UNKNOWN"
+        start = _seg_attr(seg, "start")
+        end = _seg_attr(seg, "end")
+        speaker = _seg_attr(seg, "speaker") or "SPEAKER_UNKNOWN"
         if start is None or end is None:
             continue
         out.append(
@@ -804,9 +815,9 @@ def _asr_to_ls(result: Any, prefix: str, full_duration: float) -> list[dict[str,
         return out
     lines = result if isinstance(result, list) else [result]
     for i, line in enumerate(lines):
-        text = getattr(line, "text", None) or ""
-        start = getattr(line, "start", None)
-        end = getattr(line, "end", None)
+        text = _seg_attr(line, "text") or ""
+        start = _seg_attr(line, "start")
+        end = _seg_attr(line, "end")
         if start is None or end is None:
             start, end = 0.0, full_duration
         if not text:
@@ -887,7 +898,12 @@ def build_labelstudio_task(
         if _asr_has_timestamps(asr_result):
             regions.extend(_asr_to_ls(asr_result, from_name, duration_s))
         elif align_block.get("status") == "ok":
-            regions.extend(_asr_to_ls(align_block.get("result"), from_name, duration_s))
+            # align_transcriptions returns List[List[ScriptLine | None]] —
+            # one inner list per input audio. We always pass a single audio,
+            # so unwrap to the inner segment list.
+            ar = align_block.get("result")
+            inner = ar[0] if isinstance(ar, list) and ar and isinstance(ar[0], list) else ar
+            regions.extend(_asr_to_ls(inner, from_name, duration_s))
         else:
             regions.extend(_asr_to_ls(asr_result, from_name, duration_s))
 
@@ -1146,7 +1162,7 @@ def run_pass(
         write_json(pass_dir / "scene_agreement.json", agreement)
 
     if "features" not in args.skip:
-        params = {
+        feat_params: dict[str, Any] = {
             "opensmile": True,
             "parselmouth": True,
             "torchaudio": True,
@@ -1167,8 +1183,8 @@ def run_pass(
             ppgs=False,
             device=device,
             cache_dir=cache_dir,
-            cache_key_str=_key("features", None, params),
-            provenance=_provenance_for("features", None, params),
+            cache_key_str=_key("features", None, feat_params),
+            provenance=_provenance_for("features", None, feat_params),
         )
         write_json(pass_dir / "features.json", summary["features"])
 

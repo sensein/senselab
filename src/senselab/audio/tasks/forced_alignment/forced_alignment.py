@@ -658,11 +658,18 @@ def align_transcriptions(
             language = Language(language_code="en")
 
         if use_mms:
-            iso3 = ISO_1_TO_3.get(language.language_code)
+            code = language.language_code
+            # senselab's Language normalizes ISO-639-1 ("en") to ISO-639-3 ("eng").
+            # Accept either form: pass through 3-letter codes; map 2-letter codes
+            # via ISO_1_TO_3.
+            if len(code) == 3:
+                iso3: Optional[str] = code
+            else:
+                iso3 = ISO_1_TO_3.get(code)
             if iso3 is None:
                 raise ValueError(
                     f"MMS aligner has no ISO-639-3 mapping for language "
-                    f"{language.language_code!r}. Add it to ISO_1_TO_3 in "
+                    f"{code!r}. Add it to ISO_1_TO_3 in "
                     f"senselab.audio.tasks.forced_alignment.constants, or pass "
                     f"a different aligner_model."
                 )
@@ -674,9 +681,9 @@ def align_transcriptions(
                 processor = Wav2Vec2Processor.from_pretrained(
                     model_variant.path_or_uri, revision=model_variant.revision
                 )
-                model = Wav2Vec2ForCTC.from_pretrained(model_variant.path_or_uri, revision=model_variant.revision).to(
-                    device.value
-                )  # type: ignore[arg-type]
+                model = Wav2Vec2ForCTC.from_pretrained(
+                    model_variant.path_or_uri, revision=model_variant.revision
+                ).to(device.value)  # type: ignore[arg-type]
                 loaded_processors_and_models[model_variant.path_or_uri] = (processor, model)
             processor, model = loaded_processors_and_models[model_variant.path_or_uri]
 
