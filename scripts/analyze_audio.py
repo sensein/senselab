@@ -28,9 +28,9 @@ task where the registry offers more than one).
   speech_to_text (in defaults; mix of native-timestamp and post-aligned):
     **openai/whisper-large-v3-turbo**              (HFModel, 809M, multilingual; native timestamps)
     **ibm-granite/granite-speech-3.3-8b**          (~9B, EN + 7 translations; text-only, post-aligned by this script)
-    **nvidia/canary-qwen-2.5b**                    (HFModel, 2.5B; text-only, post-aligned; pending NeMo backend)
-    **Qwen/Qwen3-ASR-1.7B**                        (HFModel, 1.7B; native word timestamps via Qwen forced-aligner;
-                                                    pending qwen-asr backend)
+    **nvidia/canary-qwen-2.5b**                    (NeMo SALM subprocess venv, 2.5B; text-only, post-aligned)
+    **Qwen/Qwen3-ASR-1.7B**                        (qwen-asr subprocess venv, 1.7B; native word timestamps via
+                                                    Qwen3-ForcedAligner-0.6B companion)
 
   speech_to_text (additional, available via --asr-models):
     openai/whisper-large-v3                        (HFModel, 1.55B, multilingual; native timestamps)
@@ -203,18 +203,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             # return_timestamps=False (timestamp-less HF model known-list);
             # the script's auto-align stage adds per-segment timestamps via MMS:
             "ibm-granite/granite-speech-3.3-8b",
-            # Pending senselab-side support — backend modules canary_qwen.py
-            # and qwen.py land in a follow-up commit. Per-model failures are
-            # captured in JSON without aborting the run.
+            # Both routed through dedicated subprocess venvs. Per-model
+            # failures are captured in JSON without aborting the run.
             "nvidia/canary-qwen-2.5b",
             "Qwen/Qwen3-ASR-1.7B",
         ],
         help=(
             "ASR models. Defaults: Whisper Large v3 Turbo (native timestamps), "
             "IBM Granite Speech 3.3 8B (text-only via HF pipeline; auto-aligned "
-            "by this script), NVIDIA Canary-Qwen 2.5B (pending), and Qwen3-ASR "
-            "1.7B (pending). The script auto-aligns timestamp-less ASR output "
-            "via the multilingual aligner; pass --no-align-asr to skip."
+            "by this script), NVIDIA Canary-Qwen 2.5B (text-only, auto-aligned), "
+            "and Qwen3-ASR 1.7B (native word-level timestamps via the bundled "
+            "forced-aligner companion). The script auto-aligns timestamp-less "
+            "ASR output via the multilingual aligner; pass --no-align-asr to skip."
         ),
     )
     parser.add_argument(
@@ -1175,7 +1175,13 @@ def run_pass(
     if "asr" not in args.skip:
         summary["asr"] = {"by_model": {}}
         for model_id in args.asr_models:
-            params = {"device": device_label_for_provenance}
+            asr_params: dict[str, Any] = {"device": device_label_for_provenance}
+            extra_kwargs: dict[str, Any] = {}
+            # Qwen3-ASR ships its own forced-aligner companion model; allow
+            # opt-out so the script's MMS auto-align stage can take over.
+            if model_id.startswith("Qwen/Qwen3-ASR") and args.qwen_asr_no_timestamps:
+                extra_kwargs["return_timestamps"] = False
+                asr_params["return_timestamps"] = False
             outcome = run_task_cached(
                 f"asr[{model_id}]",
                 transcribe_audios,
@@ -1183,8 +1189,9 @@ def run_pass(
                 model=pick_dispatch_model(model_id, task="asr"),
                 device=device,
                 cache_dir=cache_dir,
-                cache_key_str=_key("asr", model_id, params),
-                provenance=_provenance_for("asr", model_id, params),
+                cache_key_str=_key("asr", model_id, asr_params),
+                provenance=_provenance_for("asr", model_id, asr_params),
+                **extra_kwargs,
             )
             summary["asr"]["by_model"][model_id] = outcome
             write_json(pass_dir / "asr" / f"{_safe(model_id)}.json", outcome)
