@@ -146,9 +146,9 @@
 
 ## Phase 9: Polish & Cross-Cutting Concerns
 
-- [ ] T035 Update /Users/satra/software/sensein/senselab/CLAUDE.md to add a new "Audio analysis script + ASR backend extensions" section pointing at scripts/analyze_audio.py and the new senselab APIs (MMS aligner, Canary-Qwen, Qwen3-ASR, Granite Speech). Place it after the existing "Profiling with Scalene" section.
-- [ ] T036 Run full lint and type-check on all changed files: `uv run ruff check scripts/analyze_audio.py src/senselab/audio/tasks/forced_alignment/ src/senselab/audio/tasks/speech_to_text/`, `uv run ruff format` on the same set, and `uv run mypy` on the same set. Fix any new violations.
-- [ ] T037 Run the existing senselab test suite (`uv run pytest --ignore=src/tests/scripts -x -q`) to confirm SC-003 (no impact on existing tests). Then run all new tests separately (`uv run pytest src/tests/scripts/ src/tests/audio/tasks/forced_alignment/ src/tests/audio/tasks/speech_to_text/`) and confirm all pass or skip correctly per their `skipif` guards.
+- [X] T035 Update /Users/satra/software/sensein/senselab/CLAUDE.md to add a new "Audio analysis script + ASR backend extensions" section pointing at scripts/analyze_audio.py and the new senselab APIs (MMS aligner, Canary-Qwen, Qwen3-ASR, Granite Speech). Place it after the existing "Profiling with Scalene" section.
+- [X] T036 Run full lint and type-check on all changed files: `uv run ruff check scripts/analyze_audio.py src/senselab/audio/tasks/forced_alignment/ src/senselab/audio/tasks/speech_to_text/`, `uv run ruff format` on the same set, and `uv run mypy` on the same set. Fix any new violations.
+- [X] T037 Run the existing senselab test suite (`uv run pytest --ignore=src/tests/scripts -x -q`) to confirm SC-003 (no impact on existing tests). Then run all new tests separately (`uv run pytest src/tests/scripts/ src/tests/audio/tasks/forced_alignment/ src/tests/audio/tasks/speech_to_text/`) and confirm all pass or skip correctly per their `skipif` guards.
 - [ ] T038 Run the analyze_audio.py script end-to-end against a real tutorial audio (e.g., `tutorials/audio/speech_to_text.ipynb`'s sample WAV) with the full default model list and verify all six ASR-related success criteria (SC-001 through SC-012) are satisfied. Document in artifacts/analyze_audio_e2e_validation.md.
 
 ---
