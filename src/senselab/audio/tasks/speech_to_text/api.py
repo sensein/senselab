@@ -8,6 +8,7 @@ the preferred device, and the model-specific parameters, and senselab handles th
 from typing import Any, List, Optional
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.speech_to_text.canary_qwen import CanaryQwenASR
 from senselab.audio.tasks.speech_to_text.huggingface import HuggingFaceASR
 from senselab.audio.tasks.speech_to_text.nemo import NeMoASR
 from senselab.utils.compatibility import requires_compatibility
@@ -117,12 +118,7 @@ def transcribe_audios(
         if isinstance(model, HFModel) and str(model.path_or_uri).startswith(_NEMO_PREFIXES):
             return NeMoASR.transcribe_with_nemo(audios=audios, model=model, device=device)
         elif isinstance(model, HFModel) and str(model.path_or_uri).startswith(_CANARY_PREFIXES):
-            raise NotImplementedError(
-                "NVIDIA Canary-Qwen routing is registered but not yet wired. The "
-                "dedicated subprocess-venv backend lives at "
-                "senselab.audio.tasks.speech_to_text.canary_qwen and lands in a "
-                "follow-up commit (see specs/20260506-154425-audio-analysis-asr-extensions/tasks.md, T025-T027)."
-            )
+            return CanaryQwenASR.transcribe_with_canary_qwen(audios=audios, model=model, device=device)
         elif isinstance(model, HFModel) and str(model.path_or_uri).startswith(_QWEN_ASR_PREFIXES):
             raise NotImplementedError(
                 "Alibaba Qwen3-ASR routing is registered but not yet wired. The "
