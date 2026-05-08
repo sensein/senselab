@@ -1,20 +1,30 @@
 """Speech emotion recognition API.
 
 Supports discrete (categorical) and continuous (dimensional) SER models.
-Continuous SER models that have broken config.json fields (e.g., vocab_size: null)
-are run in an isolated subprocess venv with pinned huggingface-hub<1.0.
+
+Models using the ``Wav2Vec2ForSpeechClassification`` architecture (e.g.
+``audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim`` and community
+fine-tunes) are loaded with a custom ``_Wav2Vec2EmotionModel`` class that
+matches the saved weight structure (``classifier.dense`` / ``classifier.out_proj``).
+Without this, transformers falls back to ``Wav2Vec2ForSequenceClassification``
+whose head expects different key names, leaving the regression head randomly
+initialized and producing near-0.33 outputs for every input.
+
+Other continuous SER models with broken config.json fields (e.g., vocab_size:
+null) are run in an isolated subprocess venv with pinned huggingface-hub<1.0.
 """
 
 import json
 import subprocess
 import tempfile
-import warnings
 from enum import Enum
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
 
 import torch
+import torch.nn as nn
+from transformers import PretrainedConfig
 
 from senselab.audio.data_structures import Audio, AudioClassificationResult
 from senselab.audio.tasks.classification.huggingface import HuggingFaceAudioClassifier
@@ -85,6 +95,88 @@ print(json.dumps({"results": results}))
 """
 
 
+# ---------------------------------------------------------------------------
+# Wav2Vec2ForSpeechClassification backend
+#
+# Models like audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim were saved
+# with a custom Wav2Vec2ForSpeechClassification class (not in standard
+# transformers). Their regression head weights are stored as:
+#   classifier.dense.{weight,bias}
+#   classifier.out_proj.{weight,bias}
+#
+# When the standard pipeline loads such a model it falls back to
+# Wav2Vec2ForSequenceClassification, whose head expects flat
+# classifier.{weight,bias} and projector.{weight,bias}. Neither key exists in
+# the checkpoint, so the head is randomly initialized → near-0.33 outputs.
+#
+# _Wav2Vec2EmotionModel below reproduces the original head structure so that
+# from_pretrained loads the saved weights correctly.
+# ---------------------------------------------------------------------------
+
+
+class _Wav2Vec2RegressionHead(nn.Module):
+    def __init__(self, config: PretrainedConfig) -> None:
+        super().__init__()
+        dropout_p = getattr(config, "final_dropout", 0.0) or 0.0
+        self.dense = nn.Linear(config.hidden_size, config.hidden_size)
+        self.dropout = nn.Dropout(dropout_p)
+        self.out_proj = nn.Linear(config.hidden_size, config.num_labels)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.dropout(x)
+        x = self.dense(x)
+        x = torch.tanh(x)
+        x = self.dropout(x)
+        return self.out_proj(x)
+
+
+# Lazy import guard — Wav2Vec2PreTrainedModel is only needed when this backend runs
+def _make_wav2vec2_emotion_model_class() -> type:
+    from transformers import Wav2Vec2Model, Wav2Vec2PreTrainedModel
+
+    class _Wav2Vec2EmotionModel(Wav2Vec2PreTrainedModel):
+        def __init__(self, config: PretrainedConfig) -> None:
+            super().__init__(config)
+            self.wav2vec2 = Wav2Vec2Model(config)
+            self.classifier = _Wav2Vec2RegressionHead(config)
+            self.init_weights()
+
+        def forward(self, input_values: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+            hidden = self.wav2vec2(input_values)[0]
+            pooled = hidden.mean(dim=1)
+            return pooled, self.classifier(pooled)
+
+    return _Wav2Vec2EmotionModel
+
+
+_wav2vec2_emotion_models: dict = {}
+
+
+def _uses_wav2vec2_speech_classification(model: HFModel) -> bool:
+    """Return True if the model was saved with Wav2Vec2ForSpeechClassification.
+
+    Such models have no auto_map and use a two-layer regression head whose
+    weights are stored under classifier.dense.* / classifier.out_proj.*. The
+    standard pipeline would randomly initialize those layers instead.
+    """
+    try:
+        from transformers import AutoConfig
+
+        config = AutoConfig.from_pretrained(model.path_or_uri, revision=model.revision)
+        auto_map = getattr(config, "auto_map", None)
+        architectures = getattr(config, "architectures", None) or []
+    except Exception:
+        from huggingface_hub import hf_hub_download
+
+        config_path = hf_hub_download(str(model.path_or_uri), "config.json", revision=model.revision)
+        with open(config_path) as f:
+            config_dict = json.load(f)
+        auto_map = config_dict.get("auto_map")
+        architectures = config_dict.get("architectures") or []
+
+    return bool(not auto_map and "Wav2Vec2ForSpeechClassification" in architectures)
+
+
 def classify_emotions_from_speech(
     audios: List[Audio],
     model: SenselabModel,
@@ -122,19 +214,9 @@ def classify_emotions_from_speech(
             )
 
         if ser_type == SERType.CONTINUOUS:
+            if _uses_wav2vec2_speech_classification(model):
+                return _classify_wav2vec2_speech_cls_ser(audios, model, device)
             return _classify_continuous_ser_venv(audios, model, device)
-        if ser_type == SERType.CONTINUOUS:
-            output_function_to_apply = kwargs.get("function_to_apply", None)
-            if output_function_to_apply:
-                if output_function_to_apply != "none":
-                    warnings.warn(
-                        "Senselab predicts that you are using a continuous SER model but have "
-                        "specified the parameter `function_to_apply` as something other than none. This "
-                        "might create side effects when dealing with continuous values that do not "
-                        "necessarily represent probabilities."
-                    )
-            else:
-                kwargs["function_to_apply"] = "none"
         return HuggingFaceAudioClassifier.classify_audios_with_transformers(
             audios=audios, model=model, device=device, **kwargs
         )
@@ -198,6 +280,67 @@ def _classify_continuous_ser_venv(
             results.append(AudioClassificationResult(labels=labels, scores=scores))
 
         return results
+
+
+def _classify_wav2vec2_speech_cls_ser(
+    audios: List[Audio],
+    model: HFModel,
+    device: Optional[DeviceType] = None,
+) -> List[AudioClassificationResult]:
+    """Run inference for models saved with the Wav2Vec2ForSpeechClassification architecture.
+
+    Uses a custom _Wav2Vec2EmotionModel that matches the saved weight names
+    (classifier.dense.* / classifier.out_proj.*) so the regression head is
+    loaded correctly rather than randomly initialized.
+    """
+    from transformers import AutoConfig, Wav2Vec2Processor
+
+    device_type, _ = _select_device_and_dtype(
+        user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
+    )
+
+    key = f"{model.path_or_uri}-{model.revision or 'main'}-{device_type.value}"
+    if key not in _wav2vec2_emotion_models:
+        EmotionModel = _make_wav2vec2_emotion_model_class()
+        try:
+            config = AutoConfig.from_pretrained(model.path_or_uri, revision=model.revision)
+        except Exception:
+            from huggingface_hub import hf_hub_download
+
+            config_path = hf_hub_download(str(model.path_or_uri), "config.json", revision=model.revision)
+            with open(config_path) as f:
+                config_dict = json.load(f)
+            from transformers import AutoConfig as _AC
+
+            config = _AC.for_model("wav2vec2", **config_dict)
+
+        loaded = EmotionModel.from_pretrained(  # type: ignore[attr-defined]
+            str(model.path_or_uri),
+            revision=model.revision,
+            config=config,
+        )
+        loaded = loaded.to(device_type.value)
+        loaded.eval()
+        processor = Wav2Vec2Processor.from_pretrained(str(model.path_or_uri), revision=model.revision)
+        id2label: dict = config.id2label
+        _wav2vec2_emotion_models[key] = (loaded, processor, id2label)
+
+    loaded_model, processor, id2label = _wav2vec2_emotion_models[key]
+
+    results: List[AudioClassificationResult] = []
+    for audio in audios:
+        if audio.waveform.shape[0] != 1:
+            raise ValueError("Only mono audio is supported for continuous SER.")
+        data = audio.waveform.squeeze().numpy()
+        inputs = processor(data, sampling_rate=audio.sampling_rate, return_tensors="pt", padding=True)
+        inputs = {k: v.to(device_type.value) for k, v in inputs.items()}
+        with torch.no_grad():
+            _, logits = loaded_model(inputs["input_values"])
+        scores = logits[0].cpu().tolist()
+        labels = [id2label[i] for i in range(len(scores))]
+        results.append(AudioClassificationResult(labels=labels, scores=scores))
+
+    return results
 
 
 def _get_ser_type(model: HFModel) -> SERType:
