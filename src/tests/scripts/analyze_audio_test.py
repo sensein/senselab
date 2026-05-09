@@ -297,7 +297,7 @@ def test_token_overlaps_window_with_chunks(aa: types.ModuleType) -> None:
 
 def test_comparator_skip_no_op_preserves_ls_bundle_shape(aa: types.ModuleType) -> None:
     """build_labelstudio_config with no comparator_tracks emits no comparator-track XML."""
-    summary = {"passes": {"raw_16k": {}}}
+    summary: dict[str, Any] = {"passes": {"raw_16k": {}}}
     xml_no_comparator = aa.build_labelstudio_config(summary)
     xml_explicit_empty = aa.build_labelstudio_config(summary, comparator_tracks=[])
     assert xml_no_comparator == xml_explicit_empty
@@ -317,15 +317,15 @@ def test_comparator_skip_no_op_preserves_ls_bundle_shape(aa: types.ModuleType) -
 
 def test_comparison_cache_key_changes_with_inputs(aa: types.ModuleType, tmp_path: Path) -> None:
     """comparison_cache_key flips when any input changes (including upstream cache keys)."""
-    base = dict(
-        audio_sig="A" * 64,
-        comparison_kind="within_stream",
-        task_or_pair="asr",
-        upstream_cache_keys=["k1", "k2"],
-        params={"grid": "cross_stream", "agg": "min"},
-        wrapper_hash="W" * 64,
-        senselab_ver="1.0",
-    )
+    base: dict[str, Any] = {
+        "audio_sig": "A" * 64,
+        "comparison_kind": "within_stream",
+        "task_or_pair": "asr",
+        "upstream_cache_keys": ["k1", "k2"],
+        "params": {"grid": "cross_stream", "agg": "min"},
+        "wrapper_hash": "W" * 64,
+        "senselab_ver": "1.0",
+    }
     k0 = aa.comparison_cache_key(**base)
     # Same inputs → same key
     assert aa.comparison_cache_key(**base) == k0
@@ -334,7 +334,8 @@ def test_comparison_cache_key_changes_with_inputs(aa: types.ModuleType, tmp_path
     # Any input change → different key
     assert aa.comparison_cache_key(**{**base, "comparison_kind": "cross_stream"}) != k0
     assert aa.comparison_cache_key(**{**base, "task_or_pair": "diar"}) != k0
-    assert aa.comparison_cache_key(**{**base, "params": {**base["params"], "agg": "mean"}}) != k0
+    new_params = {**base["params"], "agg": "mean"}
+    assert aa.comparison_cache_key(**{**base, "params": new_params}) != k0
 
 
 def test_disagreements_index_top_n_zero_disables(aa: types.ModuleType, tmp_path: Path) -> None:
