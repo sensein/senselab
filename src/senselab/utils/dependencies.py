@@ -121,6 +121,20 @@ def _senselab_cache_dir() -> Path:
     return cache_dir
 
 
+def speechbrain_savedir(repo_id: str, revision: Optional[str] = None) -> Path:
+    """Return a stable on-disk location for SpeechBrain ``from_hparams(savedir=...)``.
+
+    SpeechBrain's ``from_hparams`` defaults ``savedir`` to ``./pretrained_models/...``
+    (or the ``MODULES_NEEDED`` directory specified in hyperparams.yaml, e.g.
+    ``./wav2vec2_checkpoints``). That dumps multi-hundred-MB checkpoints in the
+    user's CWD — which on this repo lands inside the working tree as untracked
+    files. Pinning savedir under the senselab cache keeps SpeechBrain artifacts
+    co-located with the HuggingFace cache.
+    """
+    rev = revision or "main"
+    return _senselab_cache_dir() / "speechbrain" / _safe_key(repo_id, rev)
+
+
 def _safe_key(repo_id: str, revision: str) -> str:
     """Return a filesystem-safe key for a (repo_id, revision) pair."""
     return f"{repo_id.replace('/', '--')}--{revision}"

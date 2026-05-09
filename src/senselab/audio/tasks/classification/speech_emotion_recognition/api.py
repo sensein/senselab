@@ -37,6 +37,7 @@ from senselab.utils.data_structures import (
     _select_device_and_dtype,
     logger,
 )
+from senselab.utils.dependencies import speechbrain_savedir
 from senselab.utils.subprocess_venv import ensure_venv, parse_subprocess_result, venv_python
 
 
@@ -115,39 +116,57 @@ print(json.dumps({"results": results}))
 # ---------------------------------------------------------------------------
 
 
-class _Wav2Vec2RegressionHead(nn.Module):
-    def __init__(self, config: PretrainedConfig) -> None:
-        super().__init__()
-        dropout_p = getattr(config, "final_dropout", 0.0) or 0.0
-        self.dense = nn.Linear(config.hidden_size, config.hidden_size)
-        self.dropout = nn.Dropout(dropout_p)
-        self.out_proj = nn.Linear(config.hidden_size, config.num_labels)
+# Two head layouts share the same dense+linear structure but use different attribute
+# names for the final layer:
+#   - "out_proj": Wav2Vec2ForSpeechClassification (e.g. audeering MSP-Dim).
+#   - "output":   ehcalabres-style discrete RAVDESS checkpoints whose architecture string
+#                 is the standard Wav2Vec2ForSequenceClassification, but whose head was
+#                 saved as classifier.{dense,output}.{weight,bias}. The transformers
+#                 standard class would silently randomly-initialize that head and emit
+#                 ~uniform softmax outputs.
+_FINAL_LAYER_NAMES = ("out_proj", "output")
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.dropout(x)
-        x = self.dense(x)
-        x = torch.tanh(x)
-        x = self.dropout(x)
-        return self.out_proj(x)
+
+def _make_wav2vec2_regression_head_class(final_layer: str) -> type:
+    fl = final_layer
+
+    class _Head(nn.Module):
+        def __init__(self, config: PretrainedConfig) -> None:
+            super().__init__()
+            dropout_p = getattr(config, "final_dropout", 0.0) or 0.0
+            self.dense = nn.Linear(config.hidden_size, config.hidden_size)
+            self.dropout = nn.Dropout(dropout_p)
+            setattr(self, fl, nn.Linear(config.hidden_size, config.num_labels))
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            x = self.dropout(x)
+            x = self.dense(x)
+            x = torch.tanh(x)
+            x = self.dropout(x)
+            return cast(torch.Tensor, getattr(self, fl)(x))
+
+    return _Head
 
 
 # Lazy import guard — Wav2Vec2PreTrainedModel is only needed when this backend runs.
-# The class is built once and cached so isinstance() checks remain stable across calls.
-_wav2vec2_emotion_model_cls: Optional[type] = None
+# Classes are built once per head layout and cached so isinstance() stays stable.
+_wav2vec2_emotion_model_classes: dict[str, type] = {}
 
 
-def _make_wav2vec2_emotion_model_class() -> type:
-    global _wav2vec2_emotion_model_cls
-    if _wav2vec2_emotion_model_cls is not None:
-        return _wav2vec2_emotion_model_cls
+def _make_wav2vec2_emotion_model_class(final_layer: str = "out_proj") -> type:
+    cached = _wav2vec2_emotion_model_classes.get(final_layer)
+    if cached is not None:
+        return cached
 
     from transformers import Wav2Vec2Config, Wav2Vec2Model, Wav2Vec2PreTrainedModel
+
+    head_cls = _make_wav2vec2_regression_head_class(final_layer)
 
     class _Wav2Vec2EmotionModel(Wav2Vec2PreTrainedModel):
         def __init__(self, config: PretrainedConfig) -> None:
             super().__init__(config)
             self.wav2vec2 = Wav2Vec2Model(cast(Wav2Vec2Config, config))
-            self.classifier = _Wav2Vec2RegressionHead(config)
+            self.classifier = head_cls(config)
             # post_init populates all_tied_weights_keys / parallel plans, which the
             # transformers>=5.0 weight-loader expects when finalizing from_pretrained.
             self.post_init()
@@ -157,19 +176,81 @@ def _make_wav2vec2_emotion_model_class() -> type:
             pooled = hidden.mean(dim=1)
             return pooled, self.classifier(pooled)
 
-    _wav2vec2_emotion_model_cls = _Wav2Vec2EmotionModel
+    _wav2vec2_emotion_model_classes[final_layer] = _Wav2Vec2EmotionModel
     return _Wav2Vec2EmotionModel
 
 
 _wav2vec2_emotion_models: dict = {}
 
 
-def _uses_wav2vec2_speech_classification(model: HFModel) -> bool:
-    """Return True if the model was saved with Wav2Vec2ForSpeechClassification.
+# Some Wav2Vec2 emotion checkpoints ship only ``pytorch_model.bin`` (no safetensors,
+# no shard index) — too large to download just to peek at the head keys. For those
+# we hardcode the head layout. Every entry must be safe-to-load via
+# ``_classify_wav2vec2_speech_cls_ser`` with the listed final-layer name.
+_KNOWN_WAV2VEC2_EMOTION_HEADS: dict[str, str] = {
+    "ehcalabres/wav2vec2-lg-xlsr-en-speech-emotion-recognition": "output",
+}
 
-    Such models have no auto_map and use a two-layer regression head whose
-    weights are stored under classifier.dense.* / classifier.out_proj.*. The
-    standard pipeline would randomly initialize those layers instead.
+
+def _peek_wav2vec2_head_final_layer(model: HFModel) -> Optional[str]:
+    """Return the head's final-layer name if the checkpoint matches a known custom layout.
+
+    ``out_proj`` / ``output`` correspond to the 2-layer dense+linear layouts; ``None``
+    means the head is standard or its layout cannot be determined cheaply.
+
+    Only files whose contents are bounded in size are inspected (index manifests
+    or the safetensors tensor metadata). ``pytorch_model.bin`` checkpoints without
+    a shard index are skipped to avoid pulling hundreds of MB just to read keys.
+    """
+    name = str(model.path_or_uri)
+    if name in _KNOWN_WAV2VEC2_EMOTION_HEADS:
+        return _KNOWN_WAV2VEC2_EMOTION_HEADS[name]
+
+    try:
+        from huggingface_hub import HfApi
+
+        files = set(HfApi().list_repo_files(name, revision=model.revision))
+    except Exception:
+        return None
+
+    keys: list[str] = []
+    try:
+        from huggingface_hub import hf_hub_download
+
+        if "model.safetensors.index.json" in files:
+            p = hf_hub_download(name, "model.safetensors.index.json", revision=model.revision)
+            with open(p) as f:
+                keys = list(json.load(f).get("weight_map", {}).keys())
+        elif "pytorch_model.bin.index.json" in files:
+            p = hf_hub_download(name, "pytorch_model.bin.index.json", revision=model.revision)
+            with open(p) as f:
+                keys = list(json.load(f).get("weight_map", {}).keys())
+        elif "model.safetensors" in files:
+            from huggingface_hub import get_safetensors_metadata
+
+            meta = get_safetensors_metadata(name, revision=model.revision)
+            wm = getattr(meta, "weight_map", None) if meta is not None else None
+            keys = list(wm.keys()) if wm else []
+    except Exception:
+        return None
+
+    head_keys = {k for k in keys if not k.startswith("wav2vec2.")}
+    if "classifier.dense.weight" not in head_keys:
+        return None
+    for fl in _FINAL_LAYER_NAMES:
+        if f"classifier.{fl}.weight" in head_keys:
+            return fl
+    return None
+
+
+def _wav2vec2_emotion_head_kind(model: HFModel) -> Optional[str]:
+    """Final-layer attribute name if the model uses a 2-layer dense+linear emotion head.
+
+    ``Wav2Vec2ForSpeechClassification`` always uses ``out_proj`` (audeering pattern).
+    Some ``Wav2Vec2ForSequenceClassification`` checkpoints (ehcalabres pattern) carry
+    the same dense+linear head under ``classifier.{dense,output}.*`` — these are
+    detected by inspecting the checkpoint manifest.
+    Returns ``None`` for models the standard transformers pipeline can load correctly.
     """
     try:
         from transformers import AutoConfig
@@ -186,7 +267,16 @@ def _uses_wav2vec2_speech_classification(model: HFModel) -> bool:
         auto_map = config_dict.get("auto_map")
         architectures = config_dict.get("architectures") or []
 
-    return bool(not auto_map and "Wav2Vec2ForSpeechClassification" in architectures)
+    if auto_map:
+        return None
+
+    if "Wav2Vec2ForSpeechClassification" in architectures:
+        return "out_proj"
+
+    if "Wav2Vec2ForSequenceClassification" in architectures:
+        return _peek_wav2vec2_head_final_layer(model)
+
+    return None
 
 
 def classify_emotions_from_speech(
@@ -225,9 +315,21 @@ def classify_emotions_from_speech(
                 "'audio_classification_with_hf_models' function."
             )
 
+        # Wav2Vec2-style emotion checkpoints with a 2-layer dense+linear head — both
+        # continuous (audeering: ``out_proj``) and discrete (ehcalabres: ``output``)
+        # variants would be silently random-headed by the standard transformers
+        # pipeline, producing near-uniform outputs.
+        head_kind = _wav2vec2_emotion_head_kind(model)
+        if head_kind is not None:
+            return _classify_wav2vec2_speech_cls_ser(
+                audios,
+                model,
+                device,
+                final_layer=head_kind,
+                apply_softmax=(ser_type != SERType.CONTINUOUS),
+            )
+
         if ser_type == SERType.CONTINUOUS:
-            if _uses_wav2vec2_speech_classification(model):
-                return _classify_wav2vec2_speech_cls_ser(audios, model, device)
             return _classify_continuous_ser_venv(audios, model, device)
         return HuggingFaceAudioClassifier.classify_audios_with_transformers(
             audios=audios, model=model, device=device, **kwargs
@@ -298,12 +400,17 @@ def _classify_wav2vec2_speech_cls_ser(
     audios: List[Audio],
     model: HFModel,
     device: Optional[DeviceType] = None,
+    *,
+    final_layer: str = "out_proj",
+    apply_softmax: bool = False,
 ) -> List[AudioClassificationResult]:
-    """Run inference for models saved with the Wav2Vec2ForSpeechClassification architecture.
+    """Run inference for Wav2Vec2 emotion checkpoints with a 2-layer dense+linear head.
 
-    Uses a custom _Wav2Vec2EmotionModel that matches the saved weight names
-    (classifier.dense.* / classifier.out_proj.*) so the regression head is
-    loaded correctly rather than randomly initialized.
+    Builds a model whose ``classifier`` matches the saved weight names —
+    ``classifier.dense.*`` plus ``classifier.{final_layer}.*`` — so the head is
+    loaded correctly rather than randomly initialized. Set ``apply_softmax`` for
+    discrete-emotion checkpoints to return per-class probabilities; leave it
+    False for continuous (arousal/valence/dominance) regression heads.
     """
     from transformers import AutoConfig, Wav2Vec2FeatureExtractor
 
@@ -311,9 +418,9 @@ def _classify_wav2vec2_speech_cls_ser(
         user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
     )
 
-    key = f"{model.path_or_uri}-{model.revision or 'main'}-{device_type.value}"
+    key = f"{model.path_or_uri}-{model.revision or 'main'}-{device_type.value}-{final_layer}"
     if key not in _wav2vec2_emotion_models:
-        EmotionModel = _make_wav2vec2_emotion_model_class()
+        EmotionModel = _make_wav2vec2_emotion_model_class(final_layer)
         try:
             config = AutoConfig.from_pretrained(model.path_or_uri, revision=model.revision)
         except Exception:
@@ -363,7 +470,7 @@ def _classify_wav2vec2_speech_cls_ser(
     results: List[AudioClassificationResult] = []
     for audio in audios:
         if audio.waveform.shape[0] != 1:
-            raise ValueError("Only mono audio is supported for continuous SER.")
+            raise ValueError("Only mono audio is supported for this Wav2Vec2 emotion model.")
         if audio.sampling_rate != expected_sr:
             audio = resample_audios([audio], resample_rate=expected_sr)[0]
         data = audio.waveform.squeeze().numpy()
@@ -371,7 +478,10 @@ def _classify_wav2vec2_speech_cls_ser(
         inputs = {k: v.to(device_type.value) for k, v in inputs.items()}
         with torch.no_grad():
             _, logits = loaded_model(inputs["input_values"])
-        scores = logits[0].cpu().tolist()
+        if apply_softmax:
+            scores = torch.softmax(logits[0], dim=-1).cpu().tolist()
+        else:
+            scores = logits[0].cpu().tolist()
         # Reconcile label/score lengths defensively: a config/head mismatch can leave
         # `labels` longer or shorter than the actual model output.
         result_labels = labels[: len(scores)]
@@ -533,6 +643,7 @@ def _load_speechbrain_ser_model(model: SpeechBrainModel, device_type: DeviceType
     run_opts = {"device": device_type.value}
     recognizer = recognizer_cls.from_hparams(  # type: ignore[attr-defined]
         source=str(model.path_or_uri),
+        savedir=str(speechbrain_savedir(str(model.path_or_uri), model.revision)),
         run_opts=run_opts,
     )
 

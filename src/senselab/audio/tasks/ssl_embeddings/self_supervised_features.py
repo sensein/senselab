@@ -9,7 +9,7 @@ from transformers import AutoFeatureExtractor, AutoModel
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, HFModel, SpeechBrainModel, _select_device_and_dtype
-from senselab.utils.dependencies import retry_on_transient_error
+from senselab.utils.dependencies import retry_on_transient_error, speechbrain_savedir
 
 try:
     from speechbrain.inference.speaker import EncoderClassifier
@@ -173,6 +173,7 @@ class SpeechBrainSSLEmbeddings:
             cls._models[key] = retry_on_transient_error(
                 EncoderClassifier.from_hparams,
                 source=model.path_or_uri,
+                savedir=str(speechbrain_savedir(str(model.path_or_uri), model.revision)),
                 run_opts={"device": device.value},
             )
         return cls._models[key]
