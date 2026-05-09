@@ -218,3 +218,179 @@ def test_serialize_handles_tensors_dicts_and_lists(aa: types.ModuleType) -> None
     assert "_dtype" in out["embedding"]
     assert out["items"] == [{"a": 1}, {"a": 2}]
     assert out["ok"] is True
+
+
+# ── Phase 2 (foundational comparator) tests ───────────────────────────
+
+
+def test_comparator_cli_flags_parse(aa: types.ModuleType) -> None:
+    """parse_args accepts the new comparator flags with documented defaults."""
+    args = aa.parse_args(["/tmp/dummy.wav"])
+    assert args.cross_stream_win_length == 0.2
+    assert args.cross_stream_hop_length == 0.1
+    assert args.uncertainty_aggregator == "min"
+    assert args.phoneme_disagreement_threshold == 0.50
+    assert args.diarization_boundary_shift_ms == 50.0
+    assert args.disagreements_top_n == 100
+    assert args.asr_reference_model == "openai/whisper-large-v3-turbo"
+    assert tuple(args.skip_comparisons) == ()
+    assert "comparisons" in aa.ALL_TASKS
+
+
+def test_comparator_cli_flag_validation(aa: types.ModuleType) -> None:
+    """Out-of-range comparator flag values are rejected by argparse."""
+    with pytest.raises(SystemExit):
+        aa.parse_args(["/tmp/dummy.wav", "--cross-stream-win-length", "-1"])
+    with pytest.raises(SystemExit):
+        aa.parse_args(["/tmp/dummy.wav", "--cross-stream-hop-length", "0.5", "--cross-stream-win-length", "0.2"])
+    with pytest.raises(SystemExit):
+        aa.parse_args(["/tmp/dummy.wav", "--phoneme-disagreement-threshold", "1.5"])
+    with pytest.raises(SystemExit):
+        aa.parse_args(["/tmp/dummy.wav", "--disagreements-top-n", "-3"])
+    with pytest.raises(SystemExit):
+        aa.parse_args(["/tmp/dummy.wav", "--diarization-boundary-shift-ms", "-1"])
+
+
+def test_comparison_grid_iterates_buckets(aa: types.ModuleType) -> None:
+    """ComparisonGrid yields buckets that respect win/hop and end-of-audio."""
+    grid = aa.ComparisonGrid(win_length=1.0, hop_length=0.5, name="test")
+    buckets = list(grid.iter_buckets(2.5))
+    # Expected starts: 0.0, 0.5, 1.0, 1.5 (1.5 + 1.0 = 2.5 ≤ 2.5)
+    assert [b[0] for b in buckets] == [0.0, 0.5, 1.0, 1.5]
+    assert [b[2] for b in buckets] == [0, 1, 2, 3]
+    assert all(end - start == 1.0 for start, end, _ in buckets[:-1])
+
+
+def test_aggregate_uncertainty_min_default(aa: types.ModuleType) -> None:
+    """Min-aggregator returns 1 - min(confidences); most-doubtful model wins ranking."""
+    assert aa._aggregate_uncertainty([0.9, 0.4], "min") == pytest.approx(0.6)
+    # mean: 1 - 0.65 = 0.35
+    assert aa._aggregate_uncertainty([0.9, 0.4], "mean") == pytest.approx(0.35)
+    # disagreement_weighted with default mismatch_severity=1.0 → (1 - mean)
+    assert aa._aggregate_uncertainty([0.9, 0.4], "disagreement_weighted") == pytest.approx(0.35)
+    # harmonic_mean handles 0 via clamp
+    assert aa._aggregate_uncertainty([0.9, 0.0], "harmonic_mean") == pytest.approx(1.0, abs=1e-3)
+
+
+def test_aggregate_uncertainty_drops_none_not_zeroes(aa: types.ModuleType) -> None:
+    """Models lacking native confidence are dropped, not treated as zero."""
+    assert aa._aggregate_uncertainty([0.9, None], "min") == pytest.approx(0.1)
+    assert aa._aggregate_uncertainty([None, None], "min") is None
+
+
+def test_token_overlaps_window_with_chunks(aa: types.ModuleType) -> None:
+    """A ScriptLine-shaped result with chunks reports overlap with a window."""
+    # Mock a result with chunks at [10.0, 11.0]; query window [9.0, 10.5] → overlaps
+    line = SimpleNamespace(
+        text="hello",
+        start=10.0,
+        end=11.0,
+        chunks=[SimpleNamespace(text="hi", start=10.0, end=10.5, chunks=None)],
+    )
+    assert aa._token_overlaps_window([line], 9.0, 10.5) is True
+    assert aa._token_overlaps_window([line], 11.0, 12.0) is False
+    # Dict-shaped (cache-restored) version
+    line_dict = {"text": "hi", "start": 10.0, "end": 11.0, "chunks": [{"text": "hi", "start": 10.0, "end": 10.5}]}
+    assert aa._token_overlaps_window([line_dict], 9.0, 10.5) is True
+
+
+def test_comparator_skip_no_op_preserves_ls_bundle_shape(aa: types.ModuleType) -> None:
+    """build_labelstudio_config with no comparator_tracks emits no comparator-track XML."""
+    summary = {"passes": {"raw_16k": {}}}
+    xml_no_comparator = aa.build_labelstudio_config(summary)
+    xml_explicit_empty = aa.build_labelstudio_config(summary, comparator_tracks=[])
+    assert xml_no_comparator == xml_explicit_empty
+    assert "compare__" not in xml_no_comparator
+    # Adding a comparator track does inject the fixed-enum Labels block.
+    xml_with = aa.build_labelstudio_config(
+        summary,
+        comparator_tracks=[{"name": "raw_16k__compare__asr__a_vs_b", "with_textarea": True}],
+    )
+    assert 'name="raw_16k__compare__asr__a_vs_b"' in xml_with
+    assert '<Label value="agree"/>' in xml_with
+    assert '<Label value="disagree"/>' in xml_with
+    assert '<Label value="incomparable"/>' in xml_with
+    assert '<Label value="one_sided"/>' in xml_with
+    assert 'name="raw_16k__compare__asr__a_vs_b__text"' in xml_with
+
+
+def test_comparison_cache_key_changes_with_inputs(aa: types.ModuleType, tmp_path: Path) -> None:
+    """comparison_cache_key flips when any input changes (including upstream cache keys)."""
+    base = dict(
+        audio_sig="A" * 64,
+        comparison_kind="within_stream",
+        task_or_pair="asr",
+        upstream_cache_keys=["k1", "k2"],
+        params={"grid": "cross_stream", "agg": "min"},
+        wrapper_hash="W" * 64,
+        senselab_ver="1.0",
+    )
+    k0 = aa.comparison_cache_key(**base)
+    # Same inputs → same key
+    assert aa.comparison_cache_key(**base) == k0
+    # Order of upstream keys is normalized
+    assert aa.comparison_cache_key(**{**base, "upstream_cache_keys": ["k2", "k1"]}) == k0
+    # Any input change → different key
+    assert aa.comparison_cache_key(**{**base, "comparison_kind": "cross_stream"}) != k0
+    assert aa.comparison_cache_key(**{**base, "task_or_pair": "diar"}) != k0
+    assert aa.comparison_cache_key(**{**base, "params": {**base["params"], "agg": "mean"}}) != k0
+
+
+def test_disagreements_index_top_n_zero_disables(aa: types.ModuleType, tmp_path: Path) -> None:
+    """top_n=0 returns an index with empty entries list and zero totals."""
+    idx = aa._build_disagreements_index(
+        parquet_paths=[],
+        top_n=0,
+        aggregator="min",
+        run_dir=tmp_path,
+        config={"top_n": 0},
+        incomparable_reasons={},
+        missing_confidence_signals=[],
+    )
+    assert idx["entries"] == []
+    assert idx["totals"]["total_rows"] == 0
+
+
+def test_write_comparison_parquet_no_op_for_empty_rows(aa: types.ModuleType, tmp_path: Path) -> None:
+    """write_comparison_parquet skips writing entirely when given no rows."""
+    dest = tmp_path / "empty.parquet"
+    aa.write_comparison_parquet([], dest, provenance={"k": "v"})
+    assert not dest.exists()
+
+
+def test_write_comparison_parquet_persists_provenance(aa: types.ModuleType, tmp_path: Path) -> None:
+    """Parquet file carries the comparator_provenance metadata blob."""
+    import pyarrow.parquet as pq
+
+    rows = [
+        {
+            "start": 0.0,
+            "end": 0.2,
+            "comparison_kind": "within_stream",
+            "task": "asr",
+            "stream_pair": None,
+            "model_a": "a",
+            "model_b": "b",
+            "pass_a": "raw_16k",
+            "pass_b": "raw_16k",
+            "agree": False,
+            "mismatch_type": "text_edit",
+            "comparison_status": "ok",
+            "confidence_a": 0.8,
+            "confidence_b": 0.4,
+            "combined_uncertainty": 0.6,
+        }
+    ]
+    dest = tmp_path / "out.parquet"
+    prov = {"schema_version": 1, "wrapper_hash": "abc", "senselab_version": "1.0"}
+    aa.write_comparison_parquet(rows, dest, provenance=prov)
+    assert dest.exists()
+    table = pq.read_table(dest)
+    metadata = table.schema.metadata or {}
+    raw = metadata.get(b"comparator_provenance")
+    assert raw is not None
+    import json as _json
+
+    parsed = _json.loads(raw.decode("utf-8"))
+    assert parsed["schema_version"] == 1
+    assert parsed["wrapper_hash"] == "abc"

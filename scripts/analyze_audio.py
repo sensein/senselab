@@ -119,6 +119,8 @@ import json
 import sys
 import time
 import traceback
+from collections.abc import Iterator
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -145,7 +147,18 @@ from senselab.utils.data_structures import (
 )
 
 TARGET_SR = 16000
-ALL_TASKS = ("diarization", "ast", "yamnet", "features", "asr", "embeddings", "alignment")
+ALL_TASKS = ("diarization", "ast", "yamnet", "features", "asr", "embeddings", "alignment", "comparisons")
+COMPARISON_AXES = ("raw_vs_enhanced", "within_stream", "cross_stream")
+UNCERTAINTY_AGGREGATORS = ("min", "mean", "harmonic_mean", "disagreement_weighted")
+DEFAULT_SPEECH_PRESENCE_LABELS = (
+    "Speech",
+    "Conversation",
+    "Narration, monologue",
+    "Female speech, woman speaking",
+    "Male speech, man speaking",
+    "Child speech, kid speaking",
+    "Speech synthesizer",
+)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -339,7 +352,81 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "(unless --no-align-asr is also set)."
         ),
     )
-    return parser.parse_args(argv)
+    # ── Comparison & uncertainty stage flags ───────────────────────────
+    parser.add_argument(
+        "--skip-comparisons",
+        nargs="+",
+        choices=COMPARISON_AXES,
+        default=(),
+        help="Skip individual comparison axes. Pass --skip comparisons to skip everything new.",
+    )
+    parser.add_argument(
+        "--cross-stream-win-length",
+        type=float,
+        default=0.2,
+        help="Window length (seconds) for cross-stream comparisons (ASR↔diar, scene↔diar, ASR↔PPG).",
+    )
+    parser.add_argument(
+        "--cross-stream-hop-length",
+        type=float,
+        default=0.1,
+        help="Hop between cross-stream comparison windows (default 0.1 s; must be <= win-length).",
+    )
+    parser.add_argument(
+        "--uncertainty-aggregator",
+        choices=UNCERTAINTY_AGGREGATORS,
+        default="min",
+        help="Aggregator that combines per-model confidences for the disagreements.json ranking.",
+    )
+    parser.add_argument(
+        "--phoneme-disagreement-threshold",
+        type=float,
+        default=0.50,
+        help="Phoneme-error-rate threshold for ASR↔PPG `phoneme_disagreement` flag (default 0.50).",
+    )
+    parser.add_argument(
+        "--speech-presence-labels",
+        type=str,
+        default=",".join(DEFAULT_SPEECH_PRESENCE_LABELS),
+        help=(
+            "Comma-separated AudioSet labels that count as 'speech-present' for AST/YAMNet ↔ "
+            "diarization comparison. Default covers the AudioSet 'Speech' subtree."
+        ),
+    )
+    parser.add_argument(
+        "--asr-reference-model",
+        type=str,
+        default="openai/whisper-large-v3-turbo",
+        help="Which ASR model is the soft reference for ASR-vs-ASR WER computation.",
+    )
+    parser.add_argument(
+        "--diarization-boundary-shift-ms",
+        type=float,
+        default=50.0,
+        help=(
+            "Boundary-shift threshold (ms) for diarization disagreement detection. "
+            "Per Constitution §VIII (No Hardcoded Parameters)."
+        ),
+    )
+    parser.add_argument(
+        "--disagreements-top-n",
+        type=int,
+        default=100,
+        help="Top-N rows to emit in disagreements.json (default 100; 0 disables the index).",
+    )
+    args = parser.parse_args(argv)
+    # Comparator flag validation (cli.md "Validation").
+    if args.cross_stream_win_length <= 0:
+        parser.error("--cross-stream-win-length must be positive")
+    if args.cross_stream_hop_length <= 0 or args.cross_stream_hop_length > args.cross_stream_win_length:
+        parser.error("--cross-stream-hop-length must be positive and ≤ --cross-stream-win-length")
+    if not (0.0 <= args.phoneme_disagreement_threshold <= 1.0):
+        parser.error("--phoneme-disagreement-threshold must be in [0, 1]")
+    if args.diarization_boundary_shift_ms < 0:
+        parser.error("--diarization-boundary-shift-ms must be non-negative")
+    if args.disagreements_top_n < 0:
+        parser.error("--disagreements-top-n must be non-negative")
+    return args
 
 
 def pick_dispatch_model(model_id: str, *, task: str) -> Any:  # noqa: ANN401
@@ -399,7 +486,7 @@ def prepare_audio(path: Path) -> Audio:
 #     covers the ASR call's parameters; the alignment cache key adds
 #     transcript_sha and language. v1 cache entries are inert (won't be
 #     served) and can be discarded.
-_CACHE_SCHEMA_VERSION = 2
+_CACHE_SCHEMA_VERSION = 3
 
 
 def audio_signature(audio: Audio) -> str:
@@ -494,6 +581,362 @@ def transcript_signature(text: str) -> str:
     timestamps without re-loading the aligner model.
     """
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+# ── Comparison & uncertainty stage helpers ────────────────────────────
+
+
+def comparison_cache_key(
+    *,
+    audio_sig: str,
+    comparison_kind: str,
+    task_or_pair: str,
+    upstream_cache_keys: list[str],
+    params: dict[str, Any],
+    wrapper_hash: str,
+    senselab_ver: str,
+) -> str:
+    """Cache key for one comparator output.
+
+    Includes the sorted tuple of upstream-task cache_keys so that re-running
+    an upstream task automatically invalidates downstream comparisons that
+    depended on it (research.md §6).
+    """
+    payload = {
+        "schema": _CACHE_SCHEMA_VERSION,
+        "audio_signature": audio_sig,
+        "comparison_kind": comparison_kind,
+        "task_or_pair": task_or_pair,
+        "upstream_cache_keys": sorted(upstream_cache_keys),
+        "params": _canonical_params(params),
+        "wrapper_hash": wrapper_hash,
+        "senselab_version": senselab_ver,
+    }
+    return hashlib.sha256(_canonical_params(payload).encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class ComparisonGrid:
+    """Shared time grid that comparators project onto before differencing."""
+
+    win_length: float
+    hop_length: float
+    name: str  # "features" or "cross_stream"
+
+    def iter_buckets(self, duration_s: float) -> Iterator[tuple[float, float, int]]:
+        """Yield (start, end, idx) tuples covering [0, duration_s] at this grid."""
+        eps = 1e-6
+        t = 0.0
+        idx = 0
+        while t + self.win_length <= duration_s + eps:
+            start = round(t, 4)
+            end = round(min(t + self.win_length, duration_s), 4)
+            yield start, end, idx
+            t += self.hop_length
+            idx += 1
+
+
+# Common parquet columns shared across every comparison parquet (data-model.md).
+COMPARISON_COMMON_COLS = (
+    "start",
+    "end",
+    "comparison_kind",
+    "task",
+    "stream_pair",
+    "model_a",
+    "model_b",
+    "pass_a",
+    "pass_b",
+    "agree",
+    "mismatch_type",
+    "comparison_status",
+    "confidence_a",
+    "confidence_b",
+    "combined_uncertainty",
+)
+ASR_VS_ASR_EXTRA_COLS = ("wer", "a_text", "b_text", "reference_side")
+CLASSIFICATION_VS_CLASSIFICATION_EXTRA_COLS = (
+    "top1_a",
+    "top1_b",
+    "score_a",
+    "score_b",
+    "entropy_a",
+    "entropy_b",
+)
+DIAR_VS_DIAR_EXTRA_COLS = ("speaks_a", "speaks_b")
+ASR_VS_DIAR_EXTRA_COLS = ("asr_says_speech", "diar_says_speech")
+CLASS_VS_DIAR_EXTRA_COLS = ("class_says_speech", "diar_says_speech", "top1_label")
+ASR_VS_PPG_EXTRA_COLS = ("asr_phonemes", "ppg_phonemes", "phoneme_per", "phoneme_disagreement")
+
+
+def write_comparison_parquet(
+    rows: list[dict[str, Any]],
+    dest_path: Path,
+    provenance: dict[str, Any],
+) -> None:
+    """Write comparison rows to parquet with `comparator_provenance` metadata.
+
+    No-op when ``rows`` is empty — comparators emit no parquet rather than
+    an empty file (callers rely on absence to skip LS-track declaration).
+    """
+    if not rows:
+        return
+    import pandas as pd
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    df = pd.DataFrame(rows)
+    table = pa.Table.from_pandas(df, preserve_index=False)
+    metadata = {b"comparator_provenance": json.dumps(provenance, sort_keys=True, default=str).encode("utf-8")}
+    if table.schema.metadata:
+        merged = dict(table.schema.metadata)
+        merged.update(metadata)
+        table = table.replace_schema_metadata(merged)
+    else:
+        table = table.replace_schema_metadata(metadata)
+    pq.write_table(table, dest_path)
+
+
+def _aggregate_uncertainty(
+    confidences: list[float | None],
+    aggregator: str,
+    *,
+    mismatch_severity: float = 1.0,
+) -> float | None:
+    """Combine per-model confidences into a single sortable score in [0, 1].
+
+    Returns None when no confidences are available. Drops None entries
+    rather than treating them as zero (FR-003, FR-007).
+    """
+    vals = [c for c in confidences if c is not None]
+    if not vals:
+        return None
+    if aggregator == "min":
+        agg = min(vals)
+    elif aggregator == "mean":
+        agg = sum(vals) / len(vals)
+    elif aggregator == "harmonic_mean":
+        # Harmonic mean is undefined when any value is 0; clip to small eps.
+        clipped = [max(v, 1e-9) for v in vals]
+        agg = len(clipped) / sum(1.0 / v for v in clipped)
+    elif aggregator == "disagreement_weighted":
+        mean = sum(vals) / len(vals)
+        return float((1.0 - mean) * mismatch_severity)
+    else:
+        raise ValueError(f"unknown aggregator: {aggregator!r}")
+    # combined_uncertainty = 1 - confidence (so high uncertainty = sort first).
+    return float(1.0 - agg)
+
+
+def _token_overlaps_window(result: Any, win_start: float, win_end: float) -> bool:  # noqa: ANN401
+    """Return True if any transcript chunk's timestamp overlaps the window.
+
+    Tolerant to both Pydantic ScriptLine objects (in-memory) and JSON-restored
+    dicts (post-cache-hit). Walks ``result.chunks``; falls back to the
+    top-level start/end when chunks are absent.
+    """
+    if not result:
+        return False
+    items = result if isinstance(result, list) else [result]
+    for line in items:
+        chunks = _seg_attr(line, "chunks") or []
+        if chunks:
+            for c in chunks:
+                cs = _seg_attr(c, "start")
+                ce = _seg_attr(c, "end")
+                if cs is None or ce is None:
+                    continue
+                if float(cs) < win_end and float(ce) > win_start:
+                    return True
+        else:
+            ls = _seg_attr(line, "start")
+            le = _seg_attr(line, "end")
+            if ls is not None and le is not None and float(ls) < win_end and float(le) > win_start:
+                return True
+    return False
+
+
+def _disagreement_severity_rank(mismatch_type: str | None) -> int:
+    """Tie-breaker priority for disagreements.json ordering (lower = higher priority)."""
+    return {
+        "phoneme_disagreement": 0,
+        "text_edit": 1,
+        "speech_presence_flip": 2,
+        "label_flip": 3,
+        "boundary_shift": 4,
+    }.get(mismatch_type or "", 5)
+
+
+def _build_disagreements_index(
+    parquet_paths: list[Path],
+    top_n: int,
+    aggregator: str,
+    *,
+    run_dir: Path,
+    config: dict[str, Any],
+    incomparable_reasons: dict[str, str],
+    missing_confidence_signals: list[str],
+) -> dict[str, Any]:
+    """Aggregate every comparison parquet into the top-level disagreements index."""
+    import datetime
+    import math
+
+    import pandas as pd
+
+    entries: list[dict[str, Any]] = []
+    total_rows = 0
+    rows_by_kind: dict[str, int] = {}
+    disagreement_rows = 0
+    if top_n <= 0:
+        # Index disabled — still report totals at zero entries.
+        return {
+            "schema_version": 1,
+            "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+            "wrapper_hash": wrapper_version_hash(),
+            "senselab_version": senselab_version(),
+            "config": config,
+            "missing_confidence_signals": {
+                "models_without_native_signal": missing_confidence_signals,
+                "note": "Aggregation drops models lacking a native confidence rather than treating as zero.",
+            },
+            "incomparable_reasons": incomparable_reasons,
+            "totals": {
+                "total_rows": 0,
+                "rows_by_kind": {},
+                "disagreement_rows": 0,
+                "disagreement_rate": 0.0,
+            },
+            "entries": [],
+        }
+    for p in parquet_paths:
+        try:
+            df = pd.read_parquet(p)
+        except Exception:
+            continue
+        if df.empty:
+            continue
+        kind = str(df["comparison_kind"].iloc[0]) if "comparison_kind" in df.columns else "unknown"
+        total_rows += len(df)
+        rows_by_kind[kind] = rows_by_kind.get(kind, 0) + len(df)
+        if "agree" in df.columns:
+            disagreement_rows += int((df["agree"] == False).sum())  # noqa: E712
+        for idx, row in df.iterrows():
+            if row.get("agree", True) is True:
+                continue
+            cu = row.get("combined_uncertainty")
+            cu_val = float(cu) if cu is not None and not (isinstance(cu, float) and math.isnan(cu)) else float("nan")
+            entries.append(
+                {
+                    "rank": 0,  # filled after sort
+                    "region_id": _comparison_region_id(p, idx, row),
+                    "pass": row.get("pass_a", row.get("pass_b", "")),
+                    "comparison_kind": kind,
+                    "task": row.get("task"),
+                    "stream_pair": row.get("stream_pair"),
+                    "model_a": row.get("model_a"),
+                    "model_b": row.get("model_b"),
+                    "parquet_path": str(p.relative_to(run_dir)) if p.is_relative_to(run_dir) else str(p),
+                    "row_index": int(idx),
+                    "start": float(row["start"]),
+                    "end": float(row["end"]),
+                    "mismatch_type": row.get("mismatch_type"),
+                    "combined_uncertainty": cu_val,
+                    "ls_track_name": _comparison_ls_track_name(row),
+                    "summary": _comparison_row_summary(row),
+                }
+            )
+
+    def _sort_key(e: dict[str, Any]) -> tuple[Any, ...]:
+        cu = e["combined_uncertainty"]
+        # NaN last → flip sign so high uncertainty comes first; NaN sorts to +inf.
+        primary = -cu if cu == cu else float("inf")
+        return (primary, _disagreement_severity_rank(e["mismatch_type"]), e["start"], e["region_id"])
+
+    entries.sort(key=_sort_key)
+    entries = entries[:top_n]
+    for i, e in enumerate(entries):
+        e["rank"] = i + 1
+    return {
+        "schema_version": 1,
+        "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+        "wrapper_hash": wrapper_version_hash(),
+        "senselab_version": senselab_version(),
+        "config": config,
+        "missing_confidence_signals": {
+            "models_without_native_signal": missing_confidence_signals,
+            "note": "Aggregation drops models lacking a native confidence rather than treating as zero.",
+        },
+        "incomparable_reasons": incomparable_reasons,
+        "totals": {
+            "total_rows": total_rows,
+            "rows_by_kind": rows_by_kind,
+            "disagreement_rows": disagreement_rows,
+            "disagreement_rate": (disagreement_rows / total_rows) if total_rows else 0.0,
+        },
+        "entries": entries,
+    }
+
+
+def _comparison_region_id(parquet_path: Path, row_idx: int, row: dict[str, Any] | Any) -> str:  # noqa: ANN401
+    """Deterministic region id linking a comparison row to its LS region."""
+    pass_label = row.get("pass_a") or row.get("pass_b") or ""
+    pair = row.get("model_a") or row.get("stream_pair") or ""
+    pair2 = row.get("model_b") or ""
+    task = row.get("task") or row.get("stream_pair") or "compare"
+    suffix = f"{_safe(str(pair))}_vs_{_safe(str(pair2))}" if pair2 else _safe(str(pair))
+    return f"{pass_label}__compare__{_safe(str(task))}__{suffix}__{row_idx:04d}"
+
+
+def _comparison_ls_track_name(row: dict[str, Any] | Any) -> str:  # noqa: ANN401
+    """Track name for LS Labels region (spec FR-004)."""
+    pass_label = row.get("pass_a") or row.get("pass_b") or "pass"
+    task = row.get("task") or row.get("stream_pair") or "compare"
+    a = row.get("model_a") or ""
+    b = row.get("model_b") or ""
+    if a and b:
+        return f"{pass_label}__compare__{_safe(str(task))}__{_safe(str(a))}_vs_{_safe(str(b))}"
+    return f"{pass_label}__compare__{_safe(str(task))}__{_safe(str(a or b))}"
+
+
+def _comparison_row_summary(row: dict[str, Any] | Any) -> str:  # noqa: ANN401
+    """One-line human summary for the disagreements index entry."""
+    mt = row.get("mismatch_type") or "disagree"
+    if "wer" in row and row.get("wer") is not None:
+        a = (row.get("a_text") or "")[:30]
+        b = (row.get("b_text") or "")[:30]
+        return f"{mt} WER {float(row['wer']):.2f}: {a!r} vs {b!r}"
+    if "phoneme_per" in row and row.get("phoneme_per") is not None:
+        return f"{mt} PER {float(row['phoneme_per']):.2f}"
+    if "top1_a" in row and row.get("top1_a") is not None:
+        return f"{mt}: {row.get('top1_a')!r} vs {row.get('top1_b')!r}"
+    if "speaks_a" in row:
+        return f"{mt}: speaks_a={row.get('speaks_a')} vs speaks_b={row.get('speaks_b')}"
+    return mt
+
+
+def _comparison_ls_label_region(
+    *,
+    region_id: str,
+    from_name: str,
+    start: float,
+    end: float,
+    label: str,
+) -> dict[str, Any]:
+    """LS Labels region for a comparator track. Wraps `_ls_label_region` for symmetry."""
+    return _ls_label_region(region_id=region_id, from_name=from_name, start=start, end=end, label=label)
+
+
+def _comparison_ls_textarea_region(
+    *,
+    region_id: str,
+    from_name: str,
+    start: float,
+    end: float,
+    text: str,
+) -> dict[str, Any]:
+    """LS TextArea region for ASR-vs-ASR comparator pairs."""
+    return _ls_textarea_region(region_id=region_id, from_name=from_name, start=start, end=end, text=text)
 
 
 def _flatten_feature_dict(d: dict[str, Any], prefix: str = "") -> dict[str, Any]:
@@ -1053,12 +1496,20 @@ def _safe(model_id: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in model_id)
 
 
-def build_labelstudio_config(summary: dict[str, Any]) -> str:
+def build_labelstudio_config(
+    summary: dict[str, Any],
+    comparator_tracks: list[dict[str, Any]] | None = None,
+) -> str:
     """Build a Label Studio labeling-config XML matching this run's tracks.
 
     Generates one ``<Labels>`` control per (pass, analyzer, model) and one
     ``<TextArea>`` control per (pass, asr_model). Speakers, scene labels,
     and transcripts each become a stacked timeline annotation row.
+
+    When ``comparator_tracks`` is provided, additionally emits one fixed-enum
+    ``<Labels>`` block per comparator track (values: ``agree`` / ``disagree``
+    / ``incomparable`` / ``one_sided``) and a sibling ``<TextArea>`` block
+    for ASR-vs-ASR pairs (FR-004, contracts/ls-bundle.md).
     """
     parts: list[str] = ["<View>", '  <Audio name="audio" value="$audio"/>']
     seen_label_sets: dict[str, list[str]] = {}
@@ -1105,6 +1556,20 @@ def build_labelstudio_config(summary: dict[str, Any]) -> str:
             v_escaped = v.replace('"', "&quot;")
             parts.append(f'    <Label value="{v_escaped}"/>')
         parts.append("  </Labels>")
+
+    # Comparator tracks (FR-004 / contracts/ls-bundle.md): fixed enumerated
+    # label set per Labels block; optional sibling TextArea for ASR-vs-ASR.
+    for track in sorted(comparator_tracks or [], key=lambda t: t["name"]):
+        name = track["name"]
+        parts.append(f'  <Labels name="{name}" toName="audio">')
+        for v in ("agree", "disagree", "incomparable", "one_sided"):
+            parts.append(f'    <Label value="{v}"/>')
+        parts.append("  </Labels>")
+        if track.get("with_textarea"):
+            parts.append(
+                f'  <TextArea name="{name}__text" toName="audio" perRegion="true" '
+                f'editable="false" placeholder="WER and transcripts for this disagreement"/>'
+            )
     parts.append("</View>")
     return "\n".join(parts) + "\n"
 
