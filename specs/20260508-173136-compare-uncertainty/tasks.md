@@ -138,7 +138,7 @@ All comparator code lives in `scripts/analyze_audio.py` (single CLI script, per 
 - [X] T056 Run the script E2E on `~/Downloads/twin-1.wav` (cached upstream tasks): `uv run python scripts/analyze_audio.py ~/Downloads/twin-1.wav --output-dir artifacts/e2e_runs > "artifacts/e2e_runs/run_$(date +%Y%m%d-%H%M%S)_comparator.log" 2>&1`. Verify: parquets land under each pass's `comparisons/` subtree, `disagreements.json` exists at run-dir top, LS bundle contains the new tracks, comparator stage adds ≤30 % wall-clock overhead vs a `--skip comparisons` run (SC-004).
 - [X] T057 [P] Document the comparator stage in /Users/satra/software/sensein/senselab/CLAUDE.md by appending a new sub-section "Comparison & uncertainty stage" under the existing "Audio analysis script + ASR backend extensions" section, summarizing the new flags, the parquet/JSON/LS outputs, and a one-line link to the spec.
 - [X] T058 [P] Mark all completed tasks `[X]` in /Users/satra/software/sensein/senselab/specs/20260508-173136-compare-uncertainty/tasks.md.
-- [ ] T059 Open a PR against `alpha` from this branch with the title "comparison & uncertainty stage for analyze_audio.py" and a summary linking the spec, plan, and key acceptance scenarios. Confirm CI green before requesting review.
+- [X] T059 Open a PR against `alpha` from this branch with the title "comparison & uncertainty stage for analyze_audio.py" and a summary linking the spec, plan, and key acceptance scenarios. Confirm CI green before requesting review.
 
 ---
 
