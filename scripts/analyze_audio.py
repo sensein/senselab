@@ -939,6 +939,205 @@ def _comparison_ls_textarea_region(
     return _ls_textarea_region(region_id=region_id, from_name=from_name, start=start, end=end, text=text)
 
 
+# ── Aligned timeline plot ─────────────────────────────────────────────
+
+
+def build_aligned_timeline_plot(run_dir: Path, save_path: Path | None = None) -> Path | None:
+    """Render a multi-row aligned timeline showing diarization, ASR, scenes, and disagreement flags.
+
+    Reads ``<run_dir>/summary.json`` and any ``<run_dir>/<pass>/comparisons/...``
+    parquets plus ``<run_dir>/disagreements.json`` and writes a stacked
+    matplotlib PNG to ``<run_dir>/timeline.png`` (or the explicit ``save_path``).
+    Returns the path written, or None when there is nothing to plot.
+    """
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.patches as mpatches
+    import matplotlib.pyplot as plt
+    import pandas as pd
+
+    summary_path = run_dir / "summary.json"
+    if not summary_path.exists():
+        return None
+    summary = json.loads(summary_path.read_text())
+    passes = summary.get("passes") or {}
+
+    # Estimate total duration so all rows share the same x-axis.
+    duration = max((p.get("duration_s", 0.0) for p in passes.values() if isinstance(p, dict)), default=0.0)
+    if duration <= 0:
+        return None
+
+    # Build the row plan: list of (label, kind, payload) tuples, top-down.
+    rows: list[tuple[str, str, Any]] = []
+    for pass_label, pass_summary in passes.items():
+        if not isinstance(pass_summary, dict):
+            continue
+        # Diarization (one row per model)
+        dia = (pass_summary.get("diarization") or {}).get("by_model") or {}
+        for model_id, block in sorted(dia.items()):
+            if block.get("status") != "ok":
+                continue
+            rows.append((f"{pass_label}\ndiar:{model_id.split('/')[-1]}", "segments", block.get("result")))
+        # ASR (one row per model)
+        asr = (pass_summary.get("asr") or {}).get("by_model") or {}
+        for model_id, block in sorted(asr.items()):
+            if block.get("status") != "ok":
+                continue
+            rows.append((f"{pass_label}\nasr:{model_id.split('/')[-1]}", "asr", block.get("result")))
+        # AST
+        ast = pass_summary.get("ast") or {}
+        if ast.get("status") == "ok":
+            rows.append((f"{pass_label}\nast", "windows", {"result": ast.get("result"), "win": 10.24, "hop": 10.24}))
+        # YAMNet
+        yam = pass_summary.get("yamnet") or {}
+        if yam.get("status") == "ok":
+            rows.append((f"{pass_label}\nyamnet", "windows", {"result": yam.get("result"), "win": 0.96, "hop": 0.48}))
+
+    # Comparator parquets — group by track name; one row per parquet that has at least one row.
+    parquet_rows: list[tuple[str, pd.DataFrame]] = []
+    for parquet in sorted(run_dir.rglob("comparisons/**/*.parquet")):
+        try:
+            df = pd.read_parquet(parquet)
+        except Exception:  # noqa: BLE001
+            continue
+        if df.empty:
+            continue
+        rel = parquet.relative_to(run_dir)
+        label = "compare\n" + str(rel.with_suffix("")).replace("comparisons/", "").replace("/", "/\n")
+        parquet_rows.append((label, df))
+
+    if not rows and not parquet_rows:
+        return None
+
+    n_rows = len(rows) + len(parquet_rows)
+    fig_height = max(2.0, 0.55 * n_rows + 1.0)
+    fig, ax = plt.subplots(figsize=(max(10.0, duration / 6.0), fig_height))
+    ax.set_xlim(0, duration)
+    ax.set_ylim(0, n_rows)
+    ax.set_xlabel("Time (s)")
+    ax.set_yticks([n_rows - i - 0.5 for i in range(n_rows)])
+    ax.set_yticklabels([r[0] for r in rows] + [pr[0] for pr in parquet_rows], fontsize=7)
+    ax.tick_params(axis="x", labelsize=8)
+    ax.grid(axis="x", alpha=0.2)
+
+    cmap = matplotlib.colormaps.get_cmap("tab20")
+    speaker_color: dict[str, Any] = {}
+
+    def _color_for_speaker(spk: str) -> Any:  # noqa: ANN401
+        if spk not in speaker_color:
+            speaker_color[spk] = cmap(len(speaker_color) % 20)
+        return speaker_color[spk]
+
+    # Render upstream rows.
+    for i, (_, kind, payload) in enumerate(rows):
+        y = n_rows - i - 1  # top-down placement
+        if kind == "segments":
+            segments = payload[0] if isinstance(payload, list) and payload else []
+            for seg in segments:
+                s = _seg_attr(seg, "start")
+                e = _seg_attr(seg, "end")
+                spk = _seg_attr(seg, "speaker") or "?"
+                if s is None or e is None:
+                    continue
+                ax.barh(
+                    y + 0.15,
+                    float(e) - float(s),
+                    left=float(s),
+                    height=0.7,
+                    color=_color_for_speaker(str(spk)),
+                    edgecolor="black",
+                    linewidth=0.3,
+                )
+        elif kind == "asr":
+            items = payload if isinstance(payload, list) else [payload]
+            for line in items:
+                chunks = _seg_attr(line, "chunks") or []
+                if chunks:
+                    for c in chunks:
+                        cs = _seg_attr(c, "start")
+                        ce = _seg_attr(c, "end")
+                        if cs is None or ce is None:
+                            continue
+                        ax.barh(
+                            y + 0.15,
+                            float(ce) - float(cs),
+                            left=float(cs),
+                            height=0.7,
+                            color="#4c72b0",
+                            alpha=0.7,
+                            edgecolor="none",
+                        )
+                else:
+                    ls = _seg_attr(line, "start")
+                    le = _seg_attr(line, "end")
+                    if ls is not None and le is not None:
+                        ax.barh(
+                            y + 0.15,
+                            float(le) - float(ls),
+                            left=float(ls),
+                            height=0.7,
+                            color="#4c72b0",
+                            alpha=0.4,
+                            edgecolor="none",
+                        )
+                    else:
+                        # text-only — span the whole row
+                        ax.barh(y + 0.15, duration, left=0, height=0.7, color="#cccccc", alpha=0.3)
+        elif kind == "windows":
+            result = payload.get("result")
+            hop = payload.get("hop", 1.0)
+            win = payload.get("win", 1.0)
+            windows = result[0] if isinstance(result, list) and result else []
+            for idx, window in enumerate(windows):
+                if not isinstance(window, list) or not window:
+                    continue
+                top = max(window, key=lambda d: d.get("score", 0.0) if isinstance(d, dict) else 0.0)
+                score = float(top.get("score", 0.0)) if isinstance(top, dict) else 0.0
+                start_s = idx * hop
+                ax.barh(
+                    y + 0.15, win, left=start_s, height=0.7, color=plt.cm.viridis(score), alpha=0.85, edgecolor="none"
+                )
+
+    # Render comparator rows: one bar per disagreement, colored by combined_uncertainty.
+    for j, (_, df) in enumerate(parquet_rows):
+        y = n_rows - len(rows) - j - 1
+        # Background strip
+        ax.barh(y + 0.15, duration, left=0, height=0.7, color="#f5f5f5", edgecolor="none")
+        # Disagreement bars
+        for _idx, r in df.iterrows():
+            if r.get("agree", True) is True:
+                continue
+            cu = r.get("combined_uncertainty")
+            try:
+                cu_val = float(cu) if cu is not None else 0.5
+            except Exception:  # noqa: BLE001
+                cu_val = 0.5
+            color = plt.cm.Reds(0.3 + 0.7 * min(max(cu_val, 0.0), 1.0))
+            ax.barh(
+                y + 0.15,
+                float(r["end"]) - float(r["start"]),
+                left=float(r["start"]),
+                height=0.7,
+                color=color,
+                edgecolor="none",
+            )
+
+    # Legend hint.
+    handles = [
+        mpatches.Patch(color="#4c72b0", label="ASR token / segment"),
+        mpatches.Patch(color=plt.cm.viridis(0.7), label="Scene window (color = top-1 score)"),
+        mpatches.Patch(color=plt.cm.Reds(0.7), label="Comparator disagreement (color = combined uncertainty)"),
+    ]
+    ax.legend(handles=handles, loc="upper right", fontsize=7, framealpha=0.9)
+    ax.set_title(f"Aligned timeline · {summary.get('input_audio', run_dir.name)}", fontsize=10)
+    fig.tight_layout()
+    out = save_path or (run_dir / "timeline.png")
+    fig.savefig(out, dpi=140)
+    plt.close(fig)
+    return out
+
+
 # ── Per-task differencers (US1: raw_vs_enhanced; reused by US2/US3) ────
 
 
@@ -3237,6 +3436,16 @@ def main(argv: list[str] | None = None) -> int:
             missing_confidence_signals=_models_without_native_confidence(summaries),
         )
         write_json(run_dir / "disagreements.json", index)
+
+        # Aligned multi-row timeline figure: diarization, ASR, scene
+        # windows, and per-comparator disagreement strips share the same
+        # x-axis so the reviewer can scrub everything at once.
+        try:
+            timeline_path = build_aligned_timeline_plot(run_dir)
+            if timeline_path is not None:
+                print(f"Timeline plot: {timeline_path}")
+        except Exception as exc:  # noqa: BLE001 — best-effort sidecar
+            print(f"warn: timeline plot failed: {exc!r}", file=sys.stderr)
 
     print(f"\nDone. Summary: {run_dir / 'summary.json'}")
     print(f"Label Studio tasks:  {run_dir / 'labelstudio_tasks.json'}")
