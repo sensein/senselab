@@ -1566,9 +1566,413 @@ def compare_within_stream(
                 tracks.append({"name": f"{pass_label}__compare__scene__ast_vs_yamnet", "with_textarea": False})
         else:
             incomparable[f"{pass_label}/scene/ast_vs_yamnet"] = (
-                "AST and YAMNet ran on different grids — match "
-                "--ast-win-length / --yamnet-win-length to compare"
+                "AST and YAMNet ran on different grids — match --ast-win-length / --yamnet-win-length to compare"
             )
+
+    return parquets, tracks, incomparable
+
+
+# ── Cross-stream comparators (US3) ─────────────────────────────────────
+
+
+def _classification_top1_speech_in_window(result: Any, win_idx: int, allowlist: set[str]) -> tuple[bool, str | None]:  # noqa: ANN401
+    """Return (is_speech, top1_label) for the win_idx'th classification window.
+
+    is_speech is True iff the window's top-1 label is in ``allowlist``.
+    """
+    label, _score, _entropy = _classification_top1_in_window(result, win_idx)
+    return (label in allowlist) if label else False, label
+
+
+def _diff_asr_vs_diarization(
+    asr_result: Any,  # noqa: ANN401
+    diar_result: Any,  # noqa: ANN401
+    grid: ComparisonGrid,
+    duration_s: float,
+    *,
+    asr_model: str,
+    diar_model: str,
+    pass_label: str,
+) -> list[dict[str, Any]]:
+    """Per-bucket cross-stream rows: asr_says_speech vs diar_says_speech."""
+    rows: list[dict[str, Any]] = []
+    base_row = {
+        "comparison_kind": "cross_stream",
+        "task": None,
+        "stream_pair": "asr_vs_diarization",
+        "model_a": asr_model,
+        "model_b": diar_model,
+        "pass_a": pass_label,
+        "pass_b": pass_label,
+        "confidence_a": None,
+        "confidence_b": None,
+        "combined_uncertainty": None,
+    }
+    for start, end, _idx in grid.iter_buckets(duration_s):
+        asr_says = _token_overlaps_window(asr_result, start, end)
+        diar_says = _diar_speaks_in_window(diar_result, start, end)
+        agree = asr_says == diar_says
+        rows.append(
+            {
+                **base_row,
+                "start": start,
+                "end": end,
+                "agree": agree,
+                "mismatch_type": None if agree else "speech_presence_flip",
+                "comparison_status": "ok",
+                "asr_says_speech": asr_says,
+                "diar_says_speech": diar_says,
+            }
+        )
+    return rows
+
+
+def _diff_classification_vs_diarization(
+    class_result: Any,  # noqa: ANN401
+    diar_result: Any,  # noqa: ANN401
+    grid: ComparisonGrid,
+    duration_s: float,
+    *,
+    class_win_length: float,
+    class_hop_length: float,
+    allowlist: set[str],
+    class_model: str,
+    diar_model: str,
+    pass_label: str,
+) -> list[dict[str, Any]]:
+    """Per-bucket: AST/YAMNet 'speech-present' vs diarization 'speech-present'.
+
+    For each cross-stream-grid bucket, find the AST/YAMNet window whose center
+    is closest to the bucket center (handles AST 10.24 s grid vs YAMNet 0.96 s
+    grid) and check whether its top-1 label is in the speech allowlist.
+    """
+    rows: list[dict[str, Any]] = []
+    base_row = {
+        "comparison_kind": "cross_stream",
+        "task": None,
+        "stream_pair": "ast_vs_diarization" if class_model == "ast" else "yamnet_vs_diarization",
+        "model_a": class_model,
+        "model_b": diar_model,
+        "pass_a": pass_label,
+        "pass_b": pass_label,
+        "confidence_a": None,
+        "confidence_b": None,
+        "combined_uncertainty": None,
+    }
+    for start, end, _idx in grid.iter_buckets(duration_s):
+        center = (start + end) / 2
+        # Window index whose center [i*hop + win/2] is closest to bucket center.
+        target = center - class_win_length / 2
+        win_idx = max(0, int(round(target / class_hop_length)))
+        is_speech, top1 = _classification_top1_speech_in_window(class_result, win_idx, allowlist)
+        diar_says = _diar_speaks_in_window(diar_result, start, end)
+        agree = is_speech == diar_says
+        rows.append(
+            {
+                **base_row,
+                "start": start,
+                "end": end,
+                "agree": agree,
+                "mismatch_type": None if agree else "speech_presence_flip",
+                "comparison_status": "ok",
+                "class_says_speech": is_speech,
+                "diar_says_speech": diar_says,
+                "top1_label": top1,
+            }
+        )
+    return rows
+
+
+def _g2p_phonemes(text: str) -> list[str]:
+    """Run g2p_en on text and return the ARPAbet phoneme sequence (whitespace dropped).
+
+    Lazy import + lazy NLTK resource download. Returns an empty list when text
+    is empty. Wraps `LookupError` (missing NLTK tagger) by triggering a
+    one-time download then retrying.
+    """
+    if not text.strip():
+        return []
+    import nltk
+    from g2p_en import G2p  # type: ignore[import-untyped]
+
+    g = _g2p_phonemes._cached_g2p if hasattr(_g2p_phonemes, "_cached_g2p") else None  # type: ignore[attr-defined]
+    if g is None:
+        try:
+            g = G2p()
+        except Exception:  # noqa: BLE001
+            nltk.download("averaged_perceptron_tagger_eng", quiet=True)
+            nltk.download("cmudict", quiet=True)
+            g = G2p()
+        _g2p_phonemes._cached_g2p = g  # type: ignore[attr-defined]
+    try:
+        seq = g(text)
+    except LookupError:
+        nltk.download("averaged_perceptron_tagger_eng", quiet=True)
+        seq = g(text)
+    return [str(p).strip() for p in seq if str(p).strip() and not str(p).isspace()]
+
+
+def _diff_asr_vs_ppg(
+    asr_result: Any,  # noqa: ANN401
+    ppg_result: Any,  # noqa: ANN401
+    grid: ComparisonGrid,
+    duration_s: float,
+    *,
+    threshold: float,
+    asr_model: str,
+    pass_label: str,
+) -> list[dict[str, Any]]:
+    """Per-bucket ASR-derived phoneme sequence vs PPG argmax sequence.
+
+    PPG output shape (per the existing senselab PPG backend): a per-frame
+    list of (phoneme, score) dicts. We argmax per frame and bucket by
+    cross-stream grid, then jiwer.wer on the resulting space-separated
+    phoneme strings.
+    """
+    import jiwer
+
+    rows: list[dict[str, Any]] = []
+    base_row = {
+        "comparison_kind": "cross_stream",
+        "task": None,
+        "stream_pair": "asr_vs_ppg",
+        "model_a": asr_model,
+        "model_b": "ppg",
+        "pass_a": pass_label,
+        "pass_b": pass_label,
+        "confidence_a": None,
+        "confidence_b": None,
+        "combined_uncertainty": None,
+    }
+    # PPG result is List[List[{phoneme, score}]] — outer audio, inner frames.
+    ppg_frames = ppg_result[0] if isinstance(ppg_result, list) and ppg_result else []
+    # Frames are uniformly spaced; estimate frame_hop from duration / len.
+    n_frames = len(ppg_frames)
+    frame_hop = duration_s / n_frames if n_frames else 0.01
+    for start, end, _idx in grid.iter_buckets(duration_s):
+        text = _asr_text_in_window(asr_result, start, end)
+        asr_phonemes = _g2p_phonemes(text)
+        # Bucket the PPG argmax: frames whose center falls in [start, end).
+        first_frame = int(start / frame_hop) if frame_hop > 0 else 0
+        last_frame = int(end / frame_hop) if frame_hop > 0 else 0
+        ppg_phonemes: list[str] = []
+        prev = None
+        for f in ppg_frames[first_frame:last_frame]:
+            if not isinstance(f, list) or not f:
+                continue
+            top = max(f, key=lambda d: d.get("score", 0.0) if isinstance(d, dict) else 0.0)
+            label = str(top.get("phoneme", top.get("label", ""))) if isinstance(top, dict) else ""
+            if label and label != prev:
+                ppg_phonemes.append(label)
+                prev = label
+        if not asr_phonemes and not ppg_phonemes:
+            continue
+        a = " ".join(asr_phonemes)
+        b = " ".join(ppg_phonemes)
+        if not a or not b:
+            per = 1.0
+        else:
+            try:
+                per = float(jiwer.wer(a, b))
+            except Exception:  # noqa: BLE001
+                per = 1.0
+        rows.append(
+            {
+                **base_row,
+                "start": start,
+                "end": end,
+                "agree": per < threshold,
+                "mismatch_type": None if per < threshold else "phoneme_disagreement",
+                "comparison_status": "ok",
+                "asr_phonemes": a,
+                "ppg_phonemes": b,
+                "phoneme_per": per,
+                "phoneme_disagreement": per >= threshold,
+            }
+        )
+    return rows
+
+
+def compare_cross_stream(
+    pass_label: str,
+    pass_summary: dict[str, Any],
+    args: argparse.Namespace,
+    run_dir: Path,
+    cache_dir: Path | None,
+    audio_sig: str,
+    duration_s: float,
+    wrapper_hash: str,
+    senselab_ver: str,
+) -> tuple[list[Path], list[dict[str, Any]], dict[str, str]]:
+    """Cross-stream comparators per pass: ASR↔diar, AST/YAMNet↔diar, ASR↔PPG."""
+    parquets: list[Path] = []
+    tracks: list[dict[str, Any]] = []
+    incomparable: dict[str, str] = {}
+    grid = ComparisonGrid(
+        win_length=args.cross_stream_win_length,
+        hop_length=args.cross_stream_hop_length,
+        name="cross_stream",
+    )
+    base_dir = run_dir / pass_label / "comparisons" / "cross_stream"
+    allowlist = {s.strip() for s in args.speech_presence_labels.split(",") if s.strip()}
+
+    asr_models = (pass_summary.get("asr") or {}).get("by_model") or {}
+    diar_models = (pass_summary.get("diarization") or {}).get("by_model") or {}
+    asr_ok = {m: b for m, b in asr_models.items() if isinstance(b, dict) and b.get("status") == "ok"}
+    diar_ok = {m: b for m, b in diar_models.items() if isinstance(b, dict) and b.get("status") == "ok"}
+
+    # ASR ↔ diarization
+    for asr_m, asr_b in sorted(asr_ok.items()):
+        for diar_m, diar_b in sorted(diar_ok.items()):
+            rows = _diff_asr_vs_diarization(
+                asr_b["result"],
+                diar_b["result"],
+                grid,
+                duration_s,
+                asr_model=asr_m,
+                diar_model=diar_m,
+                pass_label=pass_label,
+            )
+            if not rows:
+                continue
+            dest = base_dir / f"asr__{_safe(asr_m)}__vs__diarization__{_safe(diar_m)}.parquet"
+            cache_key_str = comparison_cache_key(
+                audio_sig=audio_sig,
+                comparison_kind="cross_stream",
+                task_or_pair=f"{pass_label}/asr_vs_diarization/{asr_m}:{diar_m}",
+                upstream_cache_keys=[_model_block_cache_key(asr_b), _model_block_cache_key(diar_b)],
+                params=_comparator_params_for_run(args),
+                wrapper_hash=wrapper_hash,
+                senselab_ver=senselab_ver,
+            )
+            cached = cache_lookup(cache_dir, cache_key_str) if cache_dir else None
+            if cached is None:
+                provenance = {
+                    "schema_version": 1,
+                    "wrapper_hash": wrapper_hash,
+                    "senselab_version": senselab_ver,
+                    "grid": {"name": grid.name, "win_length": grid.win_length, "hop_length": grid.hop_length},
+                    "upstream_cache_keys": sorted({_model_block_cache_key(asr_b), _model_block_cache_key(diar_b)}),
+                    "comparator_params": _comparator_params_for_run(args),
+                    "cache_key": cache_key_str,
+                }
+                write_comparison_parquet(rows, dest, provenance=provenance)
+                if cache_dir is not None:
+                    cache_store(cache_dir, cache_key_str, {"parquet_path": str(dest), "rows": len(rows)})
+            parquets.append(dest)
+            tracks.append(
+                {
+                    "name": f"{pass_label}__compare__asr_vs_diarization__{_safe(asr_m)}_vs_{_safe(diar_m)}",
+                    "with_textarea": False,
+                }
+            )
+
+    # AST / YAMNet ↔ diarization
+    for cls_name, cls_block, cls_win, cls_hop in [
+        ("ast", pass_summary.get("ast") or {}, args.ast_win_length, args.ast_hop_length),
+        ("yamnet", pass_summary.get("yamnet") or {}, args.yamnet_win_length, args.yamnet_hop_length),
+    ]:
+        if cls_block.get("status") != "ok":
+            continue
+        for diar_m, diar_b in sorted(diar_ok.items()):
+            rows = _diff_classification_vs_diarization(
+                cls_block.get("result"),
+                diar_b["result"],
+                grid,
+                duration_s,
+                class_win_length=cls_win,
+                class_hop_length=cls_hop,
+                allowlist=allowlist,
+                class_model=cls_name,
+                diar_model=diar_m,
+                pass_label=pass_label,
+            )
+            if not rows:
+                continue
+            dest = base_dir / f"{cls_name}__vs__diarization__{_safe(diar_m)}.parquet"
+            cache_key_str = comparison_cache_key(
+                audio_sig=audio_sig,
+                comparison_kind="cross_stream",
+                task_or_pair=f"{pass_label}/{cls_name}_vs_diarization/{diar_m}",
+                upstream_cache_keys=[_model_block_cache_key(cls_block), _model_block_cache_key(diar_b)],
+                params=_comparator_params_for_run(args),
+                wrapper_hash=wrapper_hash,
+                senselab_ver=senselab_ver,
+            )
+            cached = cache_lookup(cache_dir, cache_key_str) if cache_dir else None
+            if cached is None:
+                provenance = {
+                    "schema_version": 1,
+                    "wrapper_hash": wrapper_hash,
+                    "senselab_version": senselab_ver,
+                    "grid": {"name": grid.name, "win_length": grid.win_length, "hop_length": grid.hop_length},
+                    "upstream_cache_keys": sorted({_model_block_cache_key(cls_block), _model_block_cache_key(diar_b)}),
+                    "comparator_params": _comparator_params_for_run(args),
+                    "cache_key": cache_key_str,
+                }
+                write_comparison_parquet(rows, dest, provenance=provenance)
+                if cache_dir is not None:
+                    cache_store(cache_dir, cache_key_str, {"parquet_path": str(dest), "rows": len(rows)})
+            parquets.append(dest)
+            tracks.append(
+                {
+                    "name": f"{pass_label}__compare__{cls_name}_vs_diarization__{_safe(diar_m)}",
+                    "with_textarea": False,
+                }
+            )
+
+    # ASR ↔ PPG (gracefully skip when no PPG result is available)
+    ppg_block = pass_summary.get("ppgs") or pass_summary.get("ppg") or {}
+    if ppg_block.get("status") == "ok":
+        for asr_m, asr_b in sorted(asr_ok.items()):
+            try:
+                rows = _diff_asr_vs_ppg(
+                    asr_b["result"],
+                    ppg_block.get("result"),
+                    grid,
+                    duration_s,
+                    threshold=args.phoneme_disagreement_threshold,
+                    asr_model=asr_m,
+                    pass_label=pass_label,
+                )
+            except Exception as exc:  # noqa: BLE001
+                incomparable[f"{pass_label}/asr_vs_ppg/{_safe(asr_m)}"] = f"phoneme comparison failed: {exc!r}"
+                continue
+            if not rows:
+                continue
+            dest = base_dir / f"asr__{_safe(asr_m)}__vs__ppg.parquet"
+            cache_key_str = comparison_cache_key(
+                audio_sig=audio_sig,
+                comparison_kind="cross_stream",
+                task_or_pair=f"{pass_label}/asr_vs_ppg/{asr_m}",
+                upstream_cache_keys=[_model_block_cache_key(asr_b), _model_block_cache_key(ppg_block)],
+                params=_comparator_params_for_run(args),
+                wrapper_hash=wrapper_hash,
+                senselab_ver=senselab_ver,
+            )
+            cached = cache_lookup(cache_dir, cache_key_str) if cache_dir else None
+            if cached is None:
+                provenance = {
+                    "schema_version": 1,
+                    "wrapper_hash": wrapper_hash,
+                    "senselab_version": senselab_ver,
+                    "grid": {"name": grid.name, "win_length": grid.win_length, "hop_length": grid.hop_length},
+                    "upstream_cache_keys": sorted({_model_block_cache_key(asr_b), _model_block_cache_key(ppg_block)}),
+                    "comparator_params": _comparator_params_for_run(args),
+                    "cache_key": cache_key_str,
+                }
+                write_comparison_parquet(rows, dest, provenance=provenance)
+                if cache_dir is not None:
+                    cache_store(cache_dir, cache_key_str, {"parquet_path": str(dest), "rows": len(rows)})
+            parquets.append(dest)
+            tracks.append(
+                {
+                    "name": f"{pass_label}__compare__asr_vs_ppg__{_safe(asr_m)}",
+                    "with_textarea": False,
+                }
+            )
+    else:
+        incomparable[f"{pass_label}/asr_vs_ppg"] = "PPG backend not provisioned"
 
     return parquets, tracks, incomparable
 
@@ -2655,6 +3059,24 @@ def main(argv: list[str] | None = None) -> int:
                 comparator_parquets.extend(ws_parquets)
                 comparator_tracks.extend(ws_tracks)
                 incomparable_reasons.update(ws_incomparable)
+        if comparison_duration > 0 and "cross_stream" not in args.skip_comparisons:
+            for pass_label, pass_summary in summaries.get("passes", {}).items():
+                if not isinstance(pass_summary, dict) or "duration_s" not in pass_summary:
+                    continue
+                cs_parquets, cs_tracks, cs_incomparable = compare_cross_stream(
+                    pass_label=pass_label,
+                    pass_summary=pass_summary,
+                    args=args,
+                    run_dir=run_dir,
+                    cache_dir=cache_dir,
+                    audio_sig=audio_signature(audio_16k),
+                    duration_s=pass_summary["duration_s"],
+                    wrapper_hash=wrapper_hash,
+                    senselab_ver=senselab_ver,
+                )
+                comparator_parquets.extend(cs_parquets)
+                comparator_tracks.extend(cs_tracks)
+                incomparable_reasons.update(cs_incomparable)
 
     # Hierarchical Label Studio export — one LS task per audio variant, each
     # carrying parallel timeline tracks (one per analyzer × model). AST and

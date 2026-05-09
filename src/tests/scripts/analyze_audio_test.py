@@ -450,9 +450,7 @@ def test_within_stream_asr_pair_emits_wer(aa: types.ModuleType, tmp_path: Path) 
             }
         },
     }
-    args = aa.parse_args(
-        ["/tmp/dummy.wav", "--cross-stream-win-length", "0.5", "--cross-stream-hop-length", "0.5"]
-    )
+    args = aa.parse_args(["/tmp/dummy.wav", "--cross-stream-win-length", "0.5", "--cross-stream-hop-length", "0.5"])
     parquets, tracks, incomparable = aa.compare_within_stream(
         pass_label="raw_16k",
         pass_summary=summary,
@@ -556,6 +554,109 @@ def test_within_stream_classification_superset_of_scene_agreement(aa: types.Modu
     assert df.iloc[0]["top1_b"] == "Speech"
     assert df["agree"].astype(bool).tolist() == [True, False]
     assert df.iloc[1]["mismatch_type"] == "label_flip"
+
+
+# ── Phase 5 (US3 cross-stream) tests ──────────────────────────────────
+
+
+def test_cross_stream_asr_speech_in_silent_window(aa: types.ModuleType) -> None:
+    """ASR returned a token in [12.0, 12.3] but diarization says silence — disagreement."""
+    asr = _mk_asr_result([(12.0, 12.3, "hello")])
+    diar = _mk_diar_result([(0.0, 11.0, "spk0"), (15.0, 20.0, "spk0")])
+    grid = aa.ComparisonGrid(win_length=0.2, hop_length=0.1, name="cross_stream")
+    rows = aa._diff_asr_vs_diarization(
+        asr,
+        diar,
+        grid,
+        duration_s=20.0,
+        asr_model="whisper",
+        diar_model="pyannote",
+        pass_label="raw_16k",
+    )
+    # Find a bucket inside [12.0, 12.3]: e.g. start=12.1
+    flag_buckets = [r for r in rows if r["start"] >= 12.0 and r["end"] <= 12.4]
+    assert flag_buckets
+    assert any(r["asr_says_speech"] is True and r["diar_says_speech"] is False for r in flag_buckets)
+    assert any(r["mismatch_type"] == "speech_presence_flip" for r in flag_buckets)
+
+
+def test_cross_stream_classification_speech_allowlist(aa: types.ModuleType) -> None:
+    """AST top-1 'Speech' in window 0, 'Music' in window 1; diar speaks only in window 1."""
+    ast_result = [
+        [
+            [{"label": "Speech", "score": 0.9}, {"label": "Music", "score": 0.1}],
+            [{"label": "Music", "score": 0.7}, {"label": "Speech", "score": 0.3}],
+        ]
+    ]
+    # win_length=0.96, hop_length=0.96 → window 0 = [0, 0.96], window 1 = [0.96, 1.92]
+    diar = _mk_diar_result([(1.0, 1.9, "spk0")])
+    grid = aa.ComparisonGrid(win_length=0.2, hop_length=0.1, name="cross_stream")
+    allowlist = {"Speech", "Conversation"}
+    rows = aa._diff_classification_vs_diarization(
+        ast_result,
+        diar,
+        grid,
+        duration_s=2.0,
+        class_win_length=0.96,
+        class_hop_length=0.96,
+        allowlist=allowlist,
+        class_model="ast",
+        diar_model="pyannote",
+        pass_label="raw_16k",
+    )
+    # Disagreements: in window 0 (AST says Speech, diar silent) and window 1 (AST says Music, diar speaks)
+    assert any(not r["agree"] for r in rows[:5])  # some early bucket disagrees
+    assert any(not r["agree"] for r in rows[15:])  # some late bucket disagrees too
+
+
+def test_cross_stream_ppg_unavailable_degrades_gracefully(aa: types.ModuleType, tmp_path: Path) -> None:
+    """When PPG is missing, compare_cross_stream records incomparable, not crash."""
+    summary = {
+        "duration_s": 1.0,
+        "asr": {"by_model": {"whisper": {"status": "ok", "result": _mk_asr_result([(0.0, 1.0, "hi")])}}},
+        "diarization": {"by_model": {"pyannote": {"status": "ok", "result": _mk_diar_result([(0.0, 1.0, "s")])}}},
+        # Note: no "ppgs" / "ppg" key
+    }
+    args = aa.parse_args(["/tmp/dummy.wav"])
+    parquets, tracks, incomparable = aa.compare_cross_stream(
+        pass_label="raw_16k",
+        pass_summary=summary,
+        args=args,
+        run_dir=tmp_path,
+        cache_dir=None,
+        audio_sig="A" * 64,
+        duration_s=1.0,
+        wrapper_hash="W",
+        senselab_ver="1.0",
+    )
+    # ASR↔diar parquet exists; PPG path is recorded as unavailable.
+    assert any("asr__whisper__vs__diarization__pyannote" in str(p) for p in parquets)
+    assert "raw_16k/asr_vs_ppg" in incomparable
+    assert "PPG" in incomparable["raw_16k/asr_vs_ppg"]
+
+
+def test_cross_stream_phoneme_per_two_tier(aa: types.ModuleType) -> None:
+    """phoneme_per is continuous; phoneme_disagreement boolean fires at the threshold."""
+    # Synthetic ASR result: a single chunk with text "hello" spanning [0.0, 1.0]
+    asr = _mk_asr_result([(0.0, 1.0, "hello")])
+    # Synthetic PPG result: 100 frames, all argmax to "M" (mismatch)
+    ppg_frames = [[{"phoneme": "M", "score": 1.0}] for _ in range(100)]
+    grid = aa.ComparisonGrid(win_length=0.5, hop_length=0.5, name="cross_stream")
+    rows = aa._diff_asr_vs_ppg(
+        asr,
+        [ppg_frames],
+        grid,
+        duration_s=1.0,
+        threshold=0.50,
+        asr_model="whisper",
+        pass_label="raw_16k",
+    )
+    # Both buckets emit a row with continuous phoneme_per and boolean disagreement.
+    assert rows
+    for r in rows:
+        assert r["phoneme_per"] >= 0.0
+        # PER == 1.0 (every phoneme differs) → flagged as disagreement.
+        assert r["phoneme_disagreement"] is True
 
 
 def test_raw_vs_enhanced_handles_failed_pass(aa: types.ModuleType, tmp_path: Path) -> None:
