@@ -988,11 +988,21 @@ def build_aligned_timeline_plot(run_dir: Path, save_path: Path | None = None) ->
         # AST
         ast = pass_summary.get("ast") or {}
         if ast.get("status") == "ok":
-            rows.append((f"{pass_label}\nast", "windows", {"result": ast.get("result"), "win": 10.24, "hop": 10.24}))
+            ast_grid = (summary.get("scene_window") or {}).get("ast") or {}
+            ast_win = float(ast_grid.get("win_length", 10.24))
+            ast_hop = float(ast_grid.get("hop_length", 10.24))
+            rows.append(
+                (f"{pass_label}\nast", "windows", {"result": ast.get("result"), "win": ast_win, "hop": ast_hop})
+            )
         # YAMNet
         yam = pass_summary.get("yamnet") or {}
         if yam.get("status") == "ok":
-            rows.append((f"{pass_label}\nyamnet", "windows", {"result": yam.get("result"), "win": 0.96, "hop": 0.48}))
+            yam_grid = (summary.get("scene_window") or {}).get("yamnet") or {}
+            yam_win = float(yam_grid.get("win_length", 0.96))
+            yam_hop = float(yam_grid.get("hop_length", 0.48))
+            rows.append(
+                (f"{pass_label}\nyamnet", "windows", {"result": yam.get("result"), "win": yam_win, "hop": yam_hop})
+            )
 
     # Comparator parquets — group by track name; one row per parquet that has at least one row.
     parquet_rows: list[tuple[str, pd.DataFrame]] = []
@@ -1022,6 +1032,8 @@ def build_aligned_timeline_plot(run_dir: Path, save_path: Path | None = None) ->
     ax.grid(axis="x", alpha=0.2)
 
     cmap = matplotlib.colormaps.get_cmap("tab20")
+    viridis = matplotlib.colormaps.get_cmap("viridis")
+    reds = matplotlib.colormaps.get_cmap("Reds")
     speaker_color: dict[str, Any] = {}
 
     def _color_for_speaker(spk: str) -> Any:  # noqa: ANN401
@@ -1096,7 +1108,7 @@ def build_aligned_timeline_plot(run_dir: Path, save_path: Path | None = None) ->
                 score = float(top.get("score", 0.0)) if isinstance(top, dict) else 0.0
                 start_s = idx * hop
                 ax.barh(
-                    y + 0.15, win, left=start_s, height=0.7, color=plt.cm.viridis(score), alpha=0.85, edgecolor="none"
+                    y + 0.15, win, left=start_s, height=0.7, color=viridis(score), alpha=0.85, edgecolor="none"
                 )
 
     # Render comparator rows: one bar per disagreement, colored by combined_uncertainty.
@@ -1113,7 +1125,7 @@ def build_aligned_timeline_plot(run_dir: Path, save_path: Path | None = None) ->
                 cu_val = float(cu) if cu is not None else 0.5
             except Exception:  # noqa: BLE001
                 cu_val = 0.5
-            color = plt.cm.Reds(0.3 + 0.7 * min(max(cu_val, 0.0), 1.0))
+            color = reds(0.3 + 0.7 * min(max(cu_val, 0.0), 1.0))
             ax.barh(
                 y + 0.15,
                 float(r["end"]) - float(r["start"]),
@@ -1126,8 +1138,8 @@ def build_aligned_timeline_plot(run_dir: Path, save_path: Path | None = None) ->
     # Legend hint.
     handles = [
         mpatches.Patch(color="#4c72b0", label="ASR token / segment"),
-        mpatches.Patch(color=plt.cm.viridis(0.7), label="Scene window (color = top-1 score)"),
-        mpatches.Patch(color=plt.cm.Reds(0.7), label="Comparator disagreement (color = combined uncertainty)"),
+        mpatches.Patch(color=viridis(0.7), label="Scene window (color = top-1 score)"),
+        mpatches.Patch(color=reds(0.7), label="Comparator disagreement (color = combined uncertainty)"),
     ]
     ax.legend(handles=handles, loc="upper right", fontsize=7, framealpha=0.9)
     ax.set_title(f"Aligned timeline · {summary.get('input_audio', run_dir.name)}", fontsize=10)
@@ -1284,8 +1296,9 @@ def _diff_classification(
     grid: ComparisonGrid,  # noqa: ARG001 — classification windowing follows result shape, not external grid
     duration_s: float,  # noqa: ARG001 — same reason
     *,
-    win_length_a: float,  # noqa: ARG001 — reserved for grid-mismatch projection
-    win_length_b: float,  # noqa: ARG001 — same
+    win_length_a: float,
+    win_length_b: float,  # noqa: ARG001 — used for shape validation; actual span is win_length_a
+    hop_length_a: float | None = None,
     **base_row: Any,  # noqa: ANN401
 ) -> list[dict[str, Any]]:
     """Compare AST/YAMNet outputs window-by-window when both ran on the same grid.
@@ -1293,27 +1306,24 @@ def _diff_classification(
     When the two outputs have different window counts (e.g. AST 10.24 s vs
     YAMNet 0.96 s), only the overlapping prefix is compared. A future
     refinement would project both onto a shared grid; for v1 we trust the
-    per-model native grid.
+    per-model native grid. ``win_length_a`` and ``hop_length_a`` (defaults
+    to ``win_length_a``) drive the per-row ``start``/``end`` so reviewers
+    see real time spans rather than integer placeholders.
     """
     rows: list[dict[str, Any]] = []
+    hop = float(hop_length_a if hop_length_a is not None else win_length_a)
+    win = float(win_length_a)
     windows_a = result_a[0] if isinstance(result_a, list) and result_a else []
     windows_b = result_b[0] if isinstance(result_b, list) and result_b else []
     n = min(len(windows_a), len(windows_b))
     for idx in range(n):
         ta, sa, ea = _classification_top1_in_window(result_a, idx)
         tb, sb, eb = _classification_top1_in_window(result_b, idx)
-        # Use the smaller of the two native window lengths for the row span;
-        # this is approximate but adequate for the timeline.
-        # (We just use the AST grid for this row's start/end; callers needing
-        # exact alignment should use cross-stream comparators.)
-        # Sentinel: idx-based span using the side-A grid (caller's
-        # responsibility to ensure both sides ran on the same grid for
-        # within_stream and raw_vs_enhanced — single-model contracts).
         rows.append(
             {
                 **base_row,
-                "start": float(idx),  # placeholder — caller can override via post-processing
-                "end": float(idx + 1),  # idem
+                "start": round(idx * hop, 4),
+                "end": round(idx * hop + win, 4),
                 "agree": ta == tb,
                 "mismatch_type": None if ta == tb else "label_flip",
                 "comparison_status": "ok",
@@ -1595,6 +1605,67 @@ def compare_raw_vs_enhanced(
             track_name = f"pass_pair__compare__{task}__{_safe(model_id)}"
             tracks.append({"name": track_name, "with_textarea": task == "asr"})
 
+    # Single-model classification tasks (AST / YAMNet) — top-level keys, not under by_model.
+    for task in ("ast", "yamnet"):
+        raw_block = raw.get(task) or {}
+        enh_block = enh.get(task) or {}
+        if raw_block.get("status") != "ok" or enh_block.get("status") != "ok":
+            continue
+        win = args.ast_win_length if task == "ast" else args.yamnet_win_length
+        hop = args.ast_hop_length if task == "ast" else args.yamnet_hop_length
+        base_row = {
+            "comparison_kind": "raw_vs_enhanced",
+            "task": task,
+            "stream_pair": None,
+            "model_a": task,
+            "model_b": task,
+            "pass_a": "raw_16k",
+            "pass_b": "enhanced_16k",
+            "confidence_a": None,
+            "confidence_b": None,
+            "combined_uncertainty": None,
+        }
+        rows = _diff_classification(
+            raw_block.get("result"),
+            enh_block.get("result"),
+            grid,
+            duration_s,
+            win_length_a=win,
+            win_length_b=win,
+            hop_length_a=hop,
+            **base_row,
+        )
+        if not rows:
+            continue
+        # Confidence = top-1 score; combined_uncertainty via aggregator.
+        _enrich_diff_classification_with_confidence(rows, aggregator=args.uncertainty_aggregator)
+        dest = base_dir / f"{task}.parquet"
+        cache_key_str = comparison_cache_key(
+            audio_sig=audio_sig,
+            comparison_kind="raw_vs_enhanced",
+            task_or_pair=f"{task}",
+            upstream_cache_keys=[_model_block_cache_key(raw_block), _model_block_cache_key(enh_block)],
+            params=_comparator_params_for_run(args),
+            wrapper_hash=wrapper_hash,
+            senselab_ver=senselab_ver,
+        )
+        cached = cache_lookup(cache_dir, cache_key_str) if cache_dir else None
+        if cached is None:
+            provenance = {
+                "schema_version": 1,
+                "wrapper_hash": wrapper_hash,
+                "senselab_version": senselab_ver,
+                "grid": {"name": f"{task}_native", "win_length": win, "hop_length": hop},
+                "upstream_cache_keys": sorted({_model_block_cache_key(raw_block), _model_block_cache_key(enh_block)}),
+                "comparator_params": _comparator_params_for_run(args),
+                "cache_key": cache_key_str,
+            }
+            write_comparison_parquet(rows, dest, provenance=provenance)
+            if cache_dir is not None:
+                cache_store(cache_dir, cache_key_str, {"parquet_path": str(dest), "rows": len(rows)})
+        parquets.append(dest)
+        tracks.append({"name": f"pass_pair__compare__{task}", "with_textarea": False})
+
     return parquets, tracks, incomparable
 
 
@@ -1735,15 +1806,10 @@ def compare_within_stream(
                 duration_s,
                 win_length_a=args.ast_win_length,
                 win_length_b=args.yamnet_win_length,
+                hop_length_a=args.ast_hop_length,
                 **base_row,
             )
             if rows:
-                # Stamp in real per-window time spans (ast hop_length ≈ ast win_length).
-                hop = args.ast_hop_length
-                win = args.ast_win_length
-                for i, r in enumerate(rows):
-                    r["start"] = round(i * hop, 4)
-                    r["end"] = round(i * hop + win, 4)
                 # US4: classification confidence = top-1 score; populate combined_uncertainty.
                 _enrich_diff_classification_with_confidence(rows, aggregator=args.uncertainty_aggregator)
                 dest = base_dir / "scene" / "ast_vs_yamnet.parquet"
@@ -1762,7 +1828,11 @@ def compare_within_stream(
                         "schema_version": 1,
                         "wrapper_hash": wrapper_hash,
                         "senselab_version": senselab_ver,
-                        "grid": {"name": "ast_native", "win_length": win, "hop_length": hop},
+                        "grid": {
+                            "name": "ast_native",
+                            "win_length": args.ast_win_length,
+                            "hop_length": args.ast_hop_length,
+                        },
                         "upstream_cache_keys": sorted(
                             {_model_block_cache_key(ast_block), _model_block_cache_key(yam_block)}
                         ),
@@ -2214,8 +2284,13 @@ def _whisper_chunk_confidence(chunk: Any) -> tuple[float | None, float | None]: 
 def _whisper_bucket_confidence(result: Any, win_start: float, win_end: float) -> float | None:  # noqa: ANN401
     """Mean Whisper confidence over the chunks overlapping [win_start, win_end].
 
-    Returns None when no overlapping chunk has an avg_logprob signal (FR-007:
-    drop, do not zero, when the native signal is absent).
+    Walks ``result.chunks`` first; when chunks are absent or carry no
+    ``avg_logprob`` (e.g., post-aligned text-only ASR backends like
+    Granite/Canary-Qwen), falls back to the segment-level ``avg_logprob``
+    on the parent ScriptLine if its [start, end] overlaps the window.
+
+    Returns None when neither chunk- nor segment-level signal is available
+    (FR-007: drop, do not zero, when the native signal is absent).
     """
     if not result:
         return None
@@ -2223,13 +2298,24 @@ def _whisper_bucket_confidence(result: Any, win_start: float, win_end: float) ->
     confidences: list[float] = []
     for line in items:
         chunks = _seg_attr(line, "chunks") or []
+        chunk_seen_any = False
         for c in chunks:
             cs = _seg_attr(c, "start")
             ce = _seg_attr(c, "end")
             if cs is None or ce is None:
                 continue
             if float(cs) < win_end and float(ce) > win_start:
+                chunk_seen_any = True
                 conf, _ = _whisper_chunk_confidence(c)
+                if conf is not None:
+                    confidences.append(conf)
+        # Fallback: when there were no overlapping chunks (or none with a
+        # signal), check the segment-level avg_logprob on the line itself.
+        if not chunk_seen_any:
+            ls = _seg_attr(line, "start")
+            le = _seg_attr(line, "end")
+            if ls is None or le is None or (float(ls) < win_end and float(le) > win_start):
+                conf, _ = _whisper_chunk_confidence(line)
                 if conf is not None:
                     confidences.append(conf)
     if not confidences:
@@ -2244,13 +2330,21 @@ def _enrich_diff_asr_with_confidence(
     result_b: Any,  # noqa: ANN401
     aggregator: str,
 ) -> None:
-    """In-place: fill confidence_a/b + combined_uncertainty on ASR-vs-ASR rows."""
+    """In-place: fill confidence_a/b + combined_uncertainty on ASR-vs-ASR rows.
+
+    For the ``disagreement_weighted`` aggregator the per-row WER is passed as
+    ``mismatch_severity`` so the weighted score actually scales with how big
+    the textual disagreement is (matches FR-003's intent).
+    """
     for r in rows:
         ca = _whisper_bucket_confidence(result_a, r["start"], r["end"])
         cb = _whisper_bucket_confidence(result_b, r["start"], r["end"])
         r["confidence_a"] = ca
         r["confidence_b"] = cb
-        r["combined_uncertainty"] = _aggregate_uncertainty([ca, cb], aggregator)
+        wer = float(r.get("wer") or 0.0)
+        r["combined_uncertainty"] = _aggregate_uncertainty(
+            [ca, cb], aggregator, mismatch_severity=max(wer, 1e-9) if wer > 0 else 1.0
+        )
 
 
 def _enrich_diff_classification_with_confidence(
