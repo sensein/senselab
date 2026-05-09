@@ -8,13 +8,40 @@ the preferred device, and the model-specific parameters, and senselab handles th
 from typing import Any, List, Optional
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.speech_to_text.canary_qwen import CanaryQwenASR
+from senselab.audio.tasks.speech_to_text.granite import GraniteSpeechASR
 from senselab.audio.tasks.speech_to_text.huggingface import HuggingFaceASR
 from senselab.audio.tasks.speech_to_text.nemo import NeMoASR
+from senselab.audio.tasks.speech_to_text.qwen import QwenASR
 from senselab.utils.compatibility import requires_compatibility
 from senselab.utils.data_structures import DeviceType, HFModel, Language, ScriptLine, SenselabModel
 
 # NeMo model ID prefixes — route to NeMo backend when detected
 _NEMO_PREFIXES = ("nvidia/stt_", "nvidia/conformer")
+
+# NVIDIA Canary-Qwen prefix — route to a separate NeMo subprocess venv
+# (canary_qwen.py) that loads SALM from nemo.collections.speechlm2.models.
+# The implementation lives in a follow-up commit; this constant is used by
+# the dispatch table below so the routing structure is settled.
+_CANARY_PREFIXES = ("nvidia/canary-",)
+
+# Alibaba Qwen3-ASR prefix — route to a separate Qwen subprocess venv
+# (qwen.py) that uses Alibaba's qwen-asr Python wrapper plus the optional
+# Qwen3-ForcedAligner companion for word-level timestamps.
+_QWEN_ASR_PREFIXES = ("Qwen/Qwen3-ASR",)
+
+# IBM Granite Speech prefix — route to a separate granite subprocess venv
+# (granite.py). Granite uses GraniteSpeechProcessor's (text, audio, device)
+# signature, not the standard HF ASR pipeline contract, so it cannot be
+# driven through HuggingFaceASR. Text-only output; auto-aligned downstream.
+_GRANITE_PREFIXES = ("ibm-granite/granite-speech-",)
+
+# HuggingFace ASR models that are known to NOT produce native timestamps —
+# their HF pipelines reject return_timestamps. For these we default to
+# return_timestamps=False so the pipeline returns text-only ScriptLines;
+# downstream code (e.g., scripts/analyze_audio.py) can post-align via
+# senselab.audio.tasks.forced_alignment to add per-segment timestamps.
+_TIMESTAMP_LESS_HF_MODELS: tuple[str, ...] = ()
 
 
 @requires_compatibility("audio.tasks.speech_to_text.transcribe_audios")
@@ -98,7 +125,23 @@ def transcribe_audios(
     try:
         if isinstance(model, HFModel) and str(model.path_or_uri).startswith(_NEMO_PREFIXES):
             return NeMoASR.transcribe_with_nemo(audios=audios, model=model, device=device)
+        elif isinstance(model, HFModel) and str(model.path_or_uri).startswith(_CANARY_PREFIXES):
+            return CanaryQwenASR.transcribe_with_canary_qwen(audios=audios, model=model, device=device)
+        elif isinstance(model, HFModel) and str(model.path_or_uri).startswith(_QWEN_ASR_PREFIXES):
+            qwen_kwargs: dict[str, Any] = {}
+            if "return_timestamps" in kwargs:
+                qwen_kwargs["return_timestamps"] = bool(kwargs.pop("return_timestamps"))
+            if "forced_aligner" in kwargs:
+                qwen_kwargs["forced_aligner"] = kwargs.pop("forced_aligner")
+            return QwenASR.transcribe_with_qwen(audios=audios, model=model, device=device, **qwen_kwargs)
+        elif isinstance(model, HFModel) and str(model.path_or_uri).startswith(_GRANITE_PREFIXES):
+            return GraniteSpeechASR.transcribe_with_granite(audios=audios, model=model, device=device)
         elif isinstance(model, HFModel):
+            # Default HF pipeline path. Models known to lack native timestamps
+            # default to return_timestamps=False so the pipeline does not raise;
+            # callers can override by passing return_timestamps explicitly.
+            if "return_timestamps" not in kwargs and str(model.path_or_uri).startswith(_TIMESTAMP_LESS_HF_MODELS):
+                kwargs["return_timestamps"] = False
             return HuggingFaceASR.transcribe_audios_with_transformers(
                 audios=audios, model=model, language=language, device=device, **kwargs
             )

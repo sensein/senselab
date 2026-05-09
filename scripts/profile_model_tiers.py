@@ -137,11 +137,7 @@ def _load_mono_16k():
     from senselab.audio.tasks.preprocessing import resample_audios
 
     mono_path = (
-        Path(__file__).resolve().parent.parent
-        / "src"
-        / "tests"
-        / "data_for_testing"
-        / "audio_48khz_mono_16bits.wav"
+        Path(__file__).resolve().parent.parent / "src" / "tests" / "data_for_testing" / "audio_48khz_mono_16bits.wav"
     )
     audio = Audio(filepath=str(mono_path))
     return resample_audios([audio], 16000)[0]
@@ -259,11 +255,7 @@ def setup_wav2vec2_emotion_dim(device: str):
     from senselab.utils.data_structures import DeviceType, HFModel
 
     mono_path = (
-        Path(__file__).resolve().parent.parent
-        / "src"
-        / "tests"
-        / "data_for_testing"
-        / "audio_48khz_mono_16bits.wav"
+        Path(__file__).resolve().parent.parent / "src" / "tests" / "data_for_testing" / "audio_48khz_mono_16bits.wav"
     )
     audio = Audio(filepath=str(mono_path))
     resampled = resample_audios([audio], 16000)
@@ -290,11 +282,7 @@ def setup_wav2vec2_xlsr_emotion(device: str):
     from senselab.utils.data_structures import DeviceType, HFModel
 
     mono_path = (
-        Path(__file__).resolve().parent.parent
-        / "src"
-        / "tests"
-        / "data_for_testing"
-        / "audio_48khz_mono_16bits.wav"
+        Path(__file__).resolve().parent.parent / "src" / "tests" / "data_for_testing" / "audio_48khz_mono_16bits.wav"
     )
     audio = Audio(filepath=str(mono_path))
     resampled = resample_audios([audio], 16000)
@@ -532,8 +520,7 @@ def print_summary_table(results: List[ProfileResult]) -> None:
     """Print a human-readable summary table."""
     print("\n" + "=" * 120)
     print(
-        f"{'Model':<55} {'Task':<22} {'Device':<6} {'Cold(s)':<8} {'Warm(s)':<8} "
-        f"{'RAM(MB)':<9} {'GPU(MB)':<9} {'Tier'}"
+        f"{'Model':<55} {'Task':<22} {'Device':<6} {'Cold(s)':<8} {'Warm(s)':<8} {'RAM(MB)':<9} {'GPU(MB)':<9} {'Tier'}"
     )
     print("-" * 120)
 
@@ -693,9 +680,7 @@ class ProfilePlugin:
 
         if torch.cuda.is_available():
             report["system"]["gpu_name"] = torch.cuda.get_device_name(0)
-            report["system"]["gpu_memory_gb"] = round(
-                torch.cuda.get_device_properties(0).total_mem / (1024**3), 1
-            )
+            report["system"]["gpu_memory_gb"] = round(torch.cuda.get_device_properties(0).total_mem / (1024**3), 1)
 
         # Summary stats
         times = [r["wall_seconds"] for r in self.results]

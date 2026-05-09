@@ -20,7 +20,7 @@ import tempfile
 from enum import Enum
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Optional, cast
 
 import torch
 import torch.nn as nn
@@ -28,6 +28,7 @@ from transformers import PretrainedConfig
 
 from senselab.audio.data_structures import Audio, AudioClassificationResult
 from senselab.audio.tasks.classification.huggingface import HuggingFaceAudioClassifier
+from senselab.audio.tasks.preprocessing import resample_audios
 from senselab.utils.data_structures import (
     DeviceType,
     HFModel,
@@ -130,22 +131,33 @@ class _Wav2Vec2RegressionHead(nn.Module):
         return self.out_proj(x)
 
 
-# Lazy import guard — Wav2Vec2PreTrainedModel is only needed when this backend runs
+# Lazy import guard — Wav2Vec2PreTrainedModel is only needed when this backend runs.
+# The class is built once and cached so isinstance() checks remain stable across calls.
+_wav2vec2_emotion_model_cls: Optional[type] = None
+
+
 def _make_wav2vec2_emotion_model_class() -> type:
-    from transformers import Wav2Vec2Model, Wav2Vec2PreTrainedModel
+    global _wav2vec2_emotion_model_cls
+    if _wav2vec2_emotion_model_cls is not None:
+        return _wav2vec2_emotion_model_cls
+
+    from transformers import Wav2Vec2Config, Wav2Vec2Model, Wav2Vec2PreTrainedModel
 
     class _Wav2Vec2EmotionModel(Wav2Vec2PreTrainedModel):
         def __init__(self, config: PretrainedConfig) -> None:
             super().__init__(config)
-            self.wav2vec2 = Wav2Vec2Model(config)
+            self.wav2vec2 = Wav2Vec2Model(cast(Wav2Vec2Config, config))
             self.classifier = _Wav2Vec2RegressionHead(config)
-            self.init_weights()
+            # post_init populates all_tied_weights_keys / parallel plans, which the
+            # transformers>=5.0 weight-loader expects when finalizing from_pretrained.
+            self.post_init()
 
-        def forward(self, input_values: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        def forward(self, input_values: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
             hidden = self.wav2vec2(input_values)[0]
             pooled = hidden.mean(dim=1)
             return pooled, self.classifier(pooled)
 
+    _wav2vec2_emotion_model_cls = _Wav2Vec2EmotionModel
     return _Wav2Vec2EmotionModel
 
 
@@ -293,7 +305,7 @@ def _classify_wav2vec2_speech_cls_ser(
     (classifier.dense.* / classifier.out_proj.*) so the regression head is
     loaded correctly rather than randomly initialized.
     """
-    from transformers import AutoConfig, Wav2Vec2Processor
+    from transformers import AutoConfig, Wav2Vec2FeatureExtractor
 
     device_type, _ = _select_device_and_dtype(
         user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
@@ -310,9 +322,15 @@ def _classify_wav2vec2_speech_cls_ser(
             config_path = hf_hub_download(str(model.path_or_uri), "config.json", revision=model.revision)
             with open(config_path) as f:
                 config_dict = json.load(f)
-            from transformers import AutoConfig as _AC
-
-            config = _AC.for_model("wav2vec2", **config_dict)
+            # config.json carries its own "model_type" key, which would collide with the positional
+            # arg to AutoConfig.for_model("wav2vec2", ...). Drop it.
+            config_dict.pop("model_type", None)
+            # Some checkpoints (e.g. audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim) ship
+            # vocab_size: null, which trips huggingface_hub>=1.0 strict-dataclass validators.
+            # The regression head doesn't use vocab_size, so let Wav2Vec2Config supply its default.
+            if config_dict.get("vocab_size") is None:
+                config_dict.pop("vocab_size", None)
+            config = AutoConfig.for_model("wav2vec2", **config_dict)
 
         loaded = EmotionModel.from_pretrained(  # type: ignore[attr-defined]
             str(model.path_or_uri),
@@ -321,24 +339,45 @@ def _classify_wav2vec2_speech_cls_ser(
         )
         loaded = loaded.to(device_type.value)
         loaded.eval()
-        processor = Wav2Vec2Processor.from_pretrained(str(model.path_or_uri), revision=model.revision)
-        id2label: dict = config.id2label
-        _wav2vec2_emotion_models[key] = (loaded, processor, id2label)
+        # Use the feature extractor directly: Wav2Vec2Processor.from_pretrained re-runs
+        # AutoConfig.from_pretrained internally (to pick a tokenizer), which would re-trip
+        # the vocab_size: null strict-validator on these checkpoints. Regression inference
+        # doesn't need a tokenizer.
+        feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(str(model.path_or_uri), revision=model.revision)
+        # Resolve labels once: HF stores id2label keys as strings in JSON; AutoConfig usually
+        # coerces them to int but the raw-dict fallback above does not. Tolerate either.
+        raw_id2label = getattr(config, "id2label", None) or {}
+        coerced: dict = {}
+        for k, v in raw_id2label.items():
+            try:
+                coerced[int(k)] = v
+            except (TypeError, ValueError):
+                continue
+        n_labels = int(getattr(config, "num_labels", len(coerced)) or len(coerced))
+        labels: List[str] = [coerced.get(i, f"class_{i}") for i in range(n_labels)]
+        expected_sr = int(getattr(feature_extractor, "sampling_rate", 16000) or 16000)
+        _wav2vec2_emotion_models[key] = (loaded, feature_extractor, labels, expected_sr)
 
-    loaded_model, processor, id2label = _wav2vec2_emotion_models[key]
+    loaded_model, feature_extractor, labels, expected_sr = _wav2vec2_emotion_models[key]
 
     results: List[AudioClassificationResult] = []
     for audio in audios:
         if audio.waveform.shape[0] != 1:
             raise ValueError("Only mono audio is supported for continuous SER.")
+        if audio.sampling_rate != expected_sr:
+            audio = resample_audios([audio], resample_rate=expected_sr)[0]
         data = audio.waveform.squeeze().numpy()
-        inputs = processor(data, sampling_rate=audio.sampling_rate, return_tensors="pt", padding=True)
+        inputs = feature_extractor(data, sampling_rate=expected_sr, return_tensors="pt", padding=True)
         inputs = {k: v.to(device_type.value) for k, v in inputs.items()}
         with torch.no_grad():
             _, logits = loaded_model(inputs["input_values"])
         scores = logits[0].cpu().tolist()
-        labels = [id2label[i] for i in range(len(scores))]
-        results.append(AudioClassificationResult(labels=labels, scores=scores))
+        # Reconcile label/score lengths defensively: a config/head mismatch can leave
+        # `labels` longer or shorter than the actual model output.
+        result_labels = labels[: len(scores)]
+        if len(result_labels) < len(scores):
+            result_labels = result_labels + [f"class_{i}" for i in range(len(result_labels), len(scores))]
+        results.append(AudioClassificationResult(labels=result_labels, scores=scores))
 
     return results
 

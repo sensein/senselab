@@ -36,7 +36,7 @@ class HuggingFaceASR:
     def _get_hf_asr_pipeline(
         cls,
         model: HFModel,
-        return_timestamps: Optional[str],
+        return_timestamps: Union[str, bool, None],
         max_new_tokens: int,
         chunk_length_s: int,
         batch_size: int,
@@ -63,19 +63,30 @@ class HuggingFaceASR:
             f"{max_new_tokens}-{chunk_length_s}-{batch_size}-{device.value}"
         )
         if key not in cls._pipelines:
+            # `return_timestamps` is handled differently per model family in
+            # transformers' AutomaticSpeechRecognitionPipeline:
+            #   * CTC models accept only "char" or "word" (False raises).
+            #   * Whisper accepts True / False / "word" / "segment".
+            #   * Other generative seq2seq (e.g., IBM Granite Speech 3.3)
+            #     accept None/False but raise on any timestamp request.
+            # When the caller asked for return_timestamps=False, the safest
+            # path across all three is to OMIT the kwarg and let each
+            # pipeline class default to its no-timestamps mode.
+            pipeline_kwargs: Dict[str, Any] = {
+                "task": "automatic-speech-recognition",
+                "model": model.path_or_uri,
+                "revision": model.revision,
+                "max_new_tokens": max_new_tokens,
+                "chunk_length_s": chunk_length_s,
+                "batch_size": batch_size,
+                "device": device.value,
+                "token": get_huggingface_token(),
+            }
+            if return_timestamps is not False:
+                pipeline_kwargs["return_timestamps"] = return_timestamps
             cls._pipelines[key] = cast(
                 Pipeline,
-                pipeline(  # type: ignore[call-overload]
-                    task="automatic-speech-recognition",
-                    model=model.path_or_uri,
-                    revision=model.revision,
-                    return_timestamps=return_timestamps,
-                    max_new_tokens=max_new_tokens,
-                    chunk_length_s=chunk_length_s,
-                    batch_size=batch_size,
-                    device=device.value,
-                    token=get_huggingface_token(),
-                ),
+                pipeline(**pipeline_kwargs),  # type: ignore[call-overload]
             )
         return cls._pipelines[key]
 
@@ -85,7 +96,7 @@ class HuggingFaceASR:
         audios: List[Audio],
         model: Optional[HFModel] = None,
         language: Optional[Language] = None,
-        return_timestamps: Optional[str] = "word",
+        return_timestamps: Union[str, bool, None] = "word",
         max_new_tokens: int = 128,
         chunk_length_s: int = 30,
         batch_size: int = 1,
@@ -109,8 +120,12 @@ class HuggingFaceASR:
                 HF model to use. Defaults to ``HFModel("openai/whisper-tiny")``.
             language (Language, optional):
                 Language hint (lowercased and passed via `generate_kwargs` when supported).
-            return_timestamps (str | None, optional):
-                Timestamp granularity. Defaults to ``"word"``.
+            return_timestamps (str | bool | None, optional):
+                Timestamp granularity. Defaults to ``"word"``. Pass ``False``
+                to skip timestamp output entirely (required for HF ASR models
+                that don't natively produce timestamps, e.g., IBM Granite
+                Speech 3.3 — the underlying pipeline raises if you ask for
+                timestamps it cannot produce).
             max_new_tokens (int, optional):
                 Decoder limit per chunk. Defaults to ``128``.
             chunk_length_s (int, optional):
