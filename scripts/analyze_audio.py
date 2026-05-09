@@ -1394,6 +1394,185 @@ def compare_raw_vs_enhanced(
     return parquets, tracks, incomparable
 
 
+def compare_within_stream(
+    pass_label: str,
+    pass_summary: dict[str, Any],
+    args: argparse.Namespace,
+    run_dir: Path,
+    cache_dir: Path | None,
+    audio_sig: str,
+    duration_s: float,
+    wrapper_hash: str,
+    senselab_ver: str,
+) -> tuple[list[Path], list[dict[str, Any]], dict[str, str]]:
+    """For each task with ≥2 successful models, emit one parquet per ordered model pair.
+
+    Outputs land at ``<run_dir>/<pass>/comparisons/<task>/<a>_vs_<b>.parquet``
+    (US2 layout in contracts/comparison-row.parquet.md).
+    """
+    import itertools
+
+    parquets: list[Path] = []
+    tracks: list[dict[str, Any]] = []
+    incomparable: dict[str, str] = {}
+
+    grid = ComparisonGrid(
+        win_length=args.cross_stream_win_length,
+        hop_length=args.cross_stream_hop_length,
+        name="cross_stream",
+    )
+    base_dir = run_dir / pass_label / "comparisons"
+    reference = args.asr_reference_model
+
+    task_specs: list[tuple[str, Any]] = [
+        ("diarization", _diff_diarization),
+        ("asr", _diff_asr),
+        ("alignment", _diff_asr),
+    ]
+    for task, differencer in task_specs:
+        models = (pass_summary.get(task) or {}).get("by_model") or {}
+        ok_models = sorted(m for m, b in models.items() if isinstance(b, dict) and b.get("status") == "ok")
+        if len(ok_models) < 2:
+            continue
+        for a, b in itertools.combinations(ok_models, 2):
+            block_a, block_b = models[a], models[b]
+            res_a, res_b = _result_or_none(block_a), _result_or_none(block_b)
+            if res_a is None or res_b is None:
+                incomparable[f"{pass_label}/{task}/{_safe(a)}_vs_{_safe(b)}"] = "upstream model not ok"
+                continue
+            ref_side = (
+                "a"
+                if (differencer is _diff_asr and a == reference)
+                else ("b" if (differencer is _diff_asr and b == reference) else "a")
+            )
+            base_row = {
+                "comparison_kind": "within_stream",
+                "task": task,
+                "stream_pair": None,
+                "model_a": a,
+                "model_b": b,
+                "pass_a": pass_label,
+                "pass_b": pass_label,
+                "confidence_a": None,
+                "confidence_b": None,
+                "combined_uncertainty": None,
+            }
+            kwargs: dict[str, Any] = {}
+            if differencer is _diff_asr:
+                kwargs["reference_side"] = ref_side
+            elif differencer is _diff_diarization:
+                kwargs["boundary_shift_ms"] = args.diarization_boundary_shift_ms
+            rows = differencer(res_a, res_b, grid, duration_s, **kwargs, **base_row)
+            if not rows:
+                continue
+            dest = base_dir / task / f"{_safe(a)}_vs_{_safe(b)}.parquet"
+            cache_key_str = comparison_cache_key(
+                audio_sig=audio_sig,
+                comparison_kind="within_stream",
+                task_or_pair=f"{pass_label}/{task}/{a}:{b}",
+                upstream_cache_keys=[_model_block_cache_key(block_a), _model_block_cache_key(block_b)],
+                params=_comparator_params_for_run(args),
+                wrapper_hash=wrapper_hash,
+                senselab_ver=senselab_ver,
+            )
+            cached = cache_lookup(cache_dir, cache_key_str) if cache_dir else None
+            if cached is None:
+                provenance = {
+                    "schema_version": 1,
+                    "wrapper_hash": wrapper_hash,
+                    "senselab_version": senselab_ver,
+                    "grid": {"name": grid.name, "win_length": grid.win_length, "hop_length": grid.hop_length},
+                    "upstream_cache_keys": sorted({_model_block_cache_key(block_a), _model_block_cache_key(block_b)}),
+                    "comparator_params": _comparator_params_for_run(args),
+                    "cache_key": cache_key_str,
+                }
+                write_comparison_parquet(rows, dest, provenance=provenance)
+                if cache_dir is not None:
+                    cache_store(cache_dir, cache_key_str, {"parquet_path": str(dest), "rows": len(rows)})
+            parquets.append(dest)
+            track_name = f"{pass_label}__compare__{task}__{_safe(a)}_vs_{_safe(b)}"
+            tracks.append({"name": track_name, "with_textarea": task == "asr"})
+
+    # Classification within-stream is special-cased: AST and YAMNet have
+    # different native window grids, so we project both onto the cross-stream
+    # grid by sampling each window's top-1 at the bucket center via the
+    # existing _classification_to_ls window math. For simplicity v1, only emit
+    # a parquet when both ran on a matching grid (existing scene_agreement.json
+    # invariant). Otherwise skip and document.
+    ast_block = pass_summary.get("ast") or {}
+    yam_block = pass_summary.get("yamnet") or {}
+    ast_ok = ast_block.get("status") == "ok"
+    yam_ok = yam_block.get("status") == "ok"
+    if ast_ok and yam_ok:
+        # Use whichever pair produced equal-length window lists.
+        ast_windows = ast_block.get("result", [[]])[0] if isinstance(ast_block.get("result"), list) else []
+        yam_windows = yam_block.get("result", [[]])[0] if isinstance(yam_block.get("result"), list) else []
+        if ast_windows and yam_windows and len(ast_windows) == len(yam_windows):
+            base_row = {
+                "comparison_kind": "within_stream",
+                "task": "scene",
+                "stream_pair": None,
+                "model_a": "ast",
+                "model_b": "yamnet",
+                "pass_a": pass_label,
+                "pass_b": pass_label,
+                "confidence_a": None,
+                "confidence_b": None,
+                "combined_uncertainty": None,
+            }
+            rows = _diff_classification(
+                ast_block.get("result"),
+                yam_block.get("result"),
+                grid,
+                duration_s,
+                win_length_a=args.ast_win_length,
+                win_length_b=args.yamnet_win_length,
+                **base_row,
+            )
+            if rows:
+                # Stamp in real per-window time spans (ast hop_length ≈ ast win_length).
+                hop = args.ast_hop_length
+                win = args.ast_win_length
+                for i, r in enumerate(rows):
+                    r["start"] = round(i * hop, 4)
+                    r["end"] = round(i * hop + win, 4)
+                dest = base_dir / "scene" / "ast_vs_yamnet.parquet"
+                cache_key_str = comparison_cache_key(
+                    audio_sig=audio_sig,
+                    comparison_kind="within_stream",
+                    task_or_pair=f"{pass_label}/scene/ast:yamnet",
+                    upstream_cache_keys=[_model_block_cache_key(ast_block), _model_block_cache_key(yam_block)],
+                    params=_comparator_params_for_run(args),
+                    wrapper_hash=wrapper_hash,
+                    senselab_ver=senselab_ver,
+                )
+                cached = cache_lookup(cache_dir, cache_key_str) if cache_dir else None
+                if cached is None:
+                    provenance = {
+                        "schema_version": 1,
+                        "wrapper_hash": wrapper_hash,
+                        "senselab_version": senselab_ver,
+                        "grid": {"name": "ast_native", "win_length": win, "hop_length": hop},
+                        "upstream_cache_keys": sorted(
+                            {_model_block_cache_key(ast_block), _model_block_cache_key(yam_block)}
+                        ),
+                        "comparator_params": _comparator_params_for_run(args),
+                        "cache_key": cache_key_str,
+                    }
+                    write_comparison_parquet(rows, dest, provenance=provenance)
+                    if cache_dir is not None:
+                        cache_store(cache_dir, cache_key_str, {"parquet_path": str(dest), "rows": len(rows)})
+                parquets.append(dest)
+                tracks.append({"name": f"{pass_label}__compare__scene__ast_vs_yamnet", "with_textarea": False})
+        else:
+            incomparable[f"{pass_label}/scene/ast_vs_yamnet"] = (
+                "AST and YAMNet ran on different grids — match "
+                "--ast-win-length / --yamnet-win-length to compare"
+            )
+
+    return parquets, tracks, incomparable
+
+
 def _flatten_feature_dict(d: dict[str, Any], prefix: str = "") -> dict[str, Any]:
     """Flatten a nested feature dict into a single-row dict suitable for a parquet column.
 
@@ -2458,6 +2637,24 @@ def main(argv: list[str] | None = None) -> int:
             comparator_parquets.extend(rve_parquets)
             comparator_tracks.extend(rve_tracks)
             incomparable_reasons.update(rve_incomparable)
+        if comparison_duration > 0 and "within_stream" not in args.skip_comparisons:
+            for pass_label, pass_summary in summaries.get("passes", {}).items():
+                if not isinstance(pass_summary, dict) or "duration_s" not in pass_summary:
+                    continue
+                ws_parquets, ws_tracks, ws_incomparable = compare_within_stream(
+                    pass_label=pass_label,
+                    pass_summary=pass_summary,
+                    args=args,
+                    run_dir=run_dir,
+                    cache_dir=cache_dir,
+                    audio_sig=audio_signature(audio_16k),
+                    duration_s=pass_summary["duration_s"],
+                    wrapper_hash=wrapper_hash,
+                    senselab_ver=senselab_ver,
+                )
+                comparator_parquets.extend(ws_parquets)
+                comparator_tracks.extend(ws_tracks)
+                incomparable_reasons.update(ws_incomparable)
 
     # Hierarchical Label Studio export — one LS task per audio variant, each
     # carrying parallel timeline tracks (one per analyzer × model). AST and

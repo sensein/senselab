@@ -431,6 +431,133 @@ def test_raw_vs_enhanced_asr_text_diff(aa: types.ModuleType) -> None:
     assert rows[1]["reference_side"] == "a"
 
 
+# ── Phase 4 (US2 within-stream) tests ─────────────────────────────────
+
+
+def test_within_stream_asr_pair_emits_wer(aa: types.ModuleType, tmp_path: Path) -> None:
+    """compare_within_stream with two ASR models emits a per-pair parquet with WER."""
+    # Coarser fixture: word "hello" alone spans bucket [0.0, 0.5]; "world"/"earth"
+    # alone spans bucket [0.5, 1.0]. Use a 0.5/0.5 grid so the buckets line up
+    # with the chunk boundaries and the disagreement is unambiguous.
+    res_a = _mk_asr_result([(0.0, 0.5, "hello"), (0.5, 1.0, "world")])
+    res_b = _mk_asr_result([(0.0, 0.5, "hello"), (0.5, 1.0, "earth")])
+    summary = {
+        "duration_s": 1.0,
+        "asr": {
+            "by_model": {
+                "whisper": {"status": "ok", "result": res_a, "cache_key": "ka"},
+                "qwen": {"status": "ok", "result": res_b, "cache_key": "kb"},
+            }
+        },
+    }
+    args = aa.parse_args(
+        ["/tmp/dummy.wav", "--cross-stream-win-length", "0.5", "--cross-stream-hop-length", "0.5"]
+    )
+    parquets, tracks, incomparable = aa.compare_within_stream(
+        pass_label="raw_16k",
+        pass_summary=summary,
+        args=args,
+        run_dir=tmp_path,
+        cache_dir=None,
+        audio_sig="A" * 64,
+        duration_s=1.0,
+        wrapper_hash="W",
+        senselab_ver="1.0",
+    )
+    assert len(parquets) == 1
+    assert any("compare__asr__" in t["name"] for t in tracks)
+
+    import pandas as pd
+
+    df = pd.read_parquet(parquets[0])
+    assert len(df) == 2
+    # Both rows have a_text + b_text; first agrees, second disagrees.
+    agree_col = df["agree"].astype(bool).tolist()
+    wer_col = df["wer"].tolist()
+    assert agree_col == [True, False]
+    assert wer_col[0] == 0.0
+    assert wer_col[1] > 0.0
+
+
+def test_within_stream_single_model_no_op(aa: types.ModuleType, tmp_path: Path) -> None:
+    """A task with only one successful model produces no within-stream parquet."""
+    summary = {
+        "duration_s": 1.0,
+        "asr": {"by_model": {"whisper": {"status": "ok", "result": _mk_asr_result([(0.0, 1.0, "hi")])}}},
+    }
+    args = aa.parse_args(["/tmp/dummy.wav"])
+    parquets, tracks, _ = aa.compare_within_stream(
+        pass_label="raw_16k",
+        pass_summary=summary,
+        args=args,
+        run_dir=tmp_path,
+        cache_dir=None,
+        audio_sig="A" * 64,
+        duration_s=1.0,
+        wrapper_hash="W",
+        senselab_ver="1.0",
+    )
+    assert parquets == []
+    assert tracks == []
+
+
+def test_within_stream_classification_superset_of_scene_agreement(aa: types.ModuleType, tmp_path: Path) -> None:
+    """AST + YAMNet on a matching grid produce a within-stream scene parquet."""
+    # Two windows each on both AST and YAMNet, agreeing on window 0, differing on window 1.
+    ast_result = [
+        [
+            [{"label": "Speech", "score": 0.9}, {"label": "Music", "score": 0.1}],
+            [{"label": "Speech", "score": 0.55}, {"label": "Music", "score": 0.45}],
+        ]
+    ]
+    yam_result = [
+        [
+            [{"label": "Speech", "score": 0.85}, {"label": "Music", "score": 0.15}],
+            [{"label": "Music", "score": 0.6}, {"label": "Speech", "score": 0.4}],
+        ]
+    ]
+    # Force matching grids by overriding the AST/YAMNet flags to YAMNet's native.
+    args = aa.parse_args(
+        [
+            "/tmp/dummy.wav",
+            "--ast-win-length",
+            "0.96",
+            "--ast-hop-length",
+            "0.96",
+            "--yamnet-win-length",
+            "0.96",
+            "--yamnet-hop-length",
+            "0.96",
+        ]
+    )
+    summary = {
+        "duration_s": 2.0,
+        "ast": {"status": "ok", "result": ast_result, "cache_key": "kast"},
+        "yamnet": {"status": "ok", "result": yam_result, "cache_key": "kyam"},
+    }
+    parquets, tracks, _ = aa.compare_within_stream(
+        pass_label="raw_16k",
+        pass_summary=summary,
+        args=args,
+        run_dir=tmp_path,
+        cache_dir=None,
+        audio_sig="A" * 64,
+        duration_s=2.0,
+        wrapper_hash="W",
+        senselab_ver="1.0",
+    )
+    scene_parquets = [p for p in parquets if "scene" in str(p)]
+    assert scene_parquets, "expected an ast_vs_yamnet parquet"
+    import pandas as pd
+
+    df = pd.read_parquet(scene_parquets[0])
+    assert len(df) == 2
+    assert df.iloc[0]["top1_a"] == "Speech"
+    assert df.iloc[0]["top1_b"] == "Speech"
+    assert df["agree"].astype(bool).tolist() == [True, False]
+    assert df.iloc[1]["mismatch_type"] == "label_flip"
+
+
 def test_raw_vs_enhanced_handles_failed_pass(aa: types.ModuleType, tmp_path: Path) -> None:
     """When one pass failed, comparator emits no parquet for that task/model (incomparable)."""
     summaries = {
