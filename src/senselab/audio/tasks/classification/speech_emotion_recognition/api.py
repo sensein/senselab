@@ -358,7 +358,12 @@ def _classify_wav2vec2_speech_cls_ser(
         with torch.no_grad():
             _, logits = loaded_model(inputs["input_values"])
         scores = logits[0].cpu().tolist()
-        results.append(AudioClassificationResult(labels=labels[: len(scores)], scores=scores))
+        # Reconcile label/score lengths defensively: a config/head mismatch can leave
+        # `labels` longer or shorter than the actual model output.
+        result_labels = labels[: len(scores)]
+        if len(result_labels) < len(scores):
+            result_labels = result_labels + [f"class_{i}" for i in range(len(result_labels), len(scores))]
+        results.append(AudioClassificationResult(labels=result_labels, scores=scores))
 
     return results
 
