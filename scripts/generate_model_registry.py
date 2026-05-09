@@ -31,7 +31,7 @@ def main() -> None:
         for m in task_models:
             name = m["name"]
             source = m["source"]
-            model_id = f'`{m["model_id"]}`'
+            model_id = f"`{m['model_id']}`"
             emb = m.get("embedding_dim", "—")
             params = m.get("parameters", "—")
             rec = m.get("recommended_for", "—")

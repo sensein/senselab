@@ -8,6 +8,54 @@ PUNKT_ABBREVIATIONS = ["dr", "vs", "mr", "mrs", "prof"]
 
 LANGUAGES_WITHOUT_SPACES = ["ja", "zh"]
 
+# MMS (Massively Multilingual Speech) — single-model fallback aligner
+# covering 1100+ languages via per-language adapters. Selected via the
+# ``align_transcriptions(..., aligner_model=MMS_MODEL_ID)`` knob; not the
+# default for the languages already in DEFAULT_ALIGN_MODELS_HF /
+# DEFAULT_ALIGN_MODELS_TORCH (preserves backwards-compat for existing
+# callers, who keep getting the same per-language wav2vec2 models).
+#
+# Weights are CC-BY-NC 4.0 (research / non-commercial). Override via
+# the public API for commercial-friendly alternatives.
+MMS_MODEL_ID = "facebook/mms-1b-all"
+
+# ISO 639-1 -> ISO 639-3 map for MMS adapter selection. MMS adapters are
+# keyed by ISO-3 codes; senselab callers (and Language objects) typically
+# carry ISO-1. Languages absent from this map cannot be auto-resolved to
+# an MMS adapter and will raise an actionable error.
+ISO_1_TO_3 = {
+    "en": "eng",
+    "fr": "fra",
+    "de": "deu",
+    "es": "spa",
+    "it": "ita",
+    "pt": "por",
+    "ja": "jpn",
+    "zh": "cmn",  # Mandarin Chinese
+    "nl": "nld",
+    "uk": "ukr",
+    "ar": "ara",
+    "cs": "ces",
+    "ru": "rus",
+    "pl": "pol",
+    "hu": "hun",
+    "fi": "fin",
+    "fa": "fas",
+    "el": "ell",
+    "tr": "tur",
+    "da": "dan",
+    "he": "heb",
+    "vi": "vie",
+    "ko": "kor",
+    "ur": "urd",
+    "te": "tel",
+    "hi": "hin",
+    "ca": "cat",
+    "ml": "mal",
+    "no": "nor",
+    "nn": "nno",
+}
+
 DEFAULT_ALIGN_MODELS_TORCH = {
     "fr": {"path_or_uri": "VOXPOPULI_ASR_BASE_10K_FR", "revision": "main"},
     "de": {"path_or_uri": "VOXPOPULI_ASR_BASE_10K_DE", "revision": "main"},
