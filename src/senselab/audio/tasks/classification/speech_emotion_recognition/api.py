@@ -457,11 +457,48 @@ def _classify_wav2vec2_speech_cls_ser(
                 config_dict.pop("vocab_size", None)
             config = AutoConfig.for_model("wav2vec2", **config_dict)
 
-        loaded = EmotionModel.from_pretrained(  # type: ignore[attr-defined]
+        loaded, loading_info = EmotionModel.from_pretrained(  # type: ignore[attr-defined]
             str(model.path_or_uri),
             revision=model.revision,
             config=config,
+            output_loading_info=True,
         )
+        # Refuse to silently emit random-head outputs. ``missing_keys`` catches the
+        # "checkpoint doesn't have a weight for our classifier layer" case (would be
+        # randomly initialized); ``mismatched_keys`` catches the equally-bad case
+        # where a weight exists but its shape doesn't match — e.g. a checkpoint with
+        # a 1024×N head loaded into an Nx N class. Both fail modes produce
+        # plausible-but-meaningless scores; convert to a loud diagnostic.
+        suspect_missing = sorted(k for k in loading_info.get("missing_keys", set()) if k.startswith("classifier."))
+        suspect_mismatched = sorted(
+            (k[0] if isinstance(k, tuple) else k)
+            for k in loading_info.get("mismatched_keys", set())
+            if (k[0] if isinstance(k, tuple) else k).startswith("classifier.")
+        )
+        if suspect_missing or suspect_mismatched:
+            raise RuntimeError(
+                "Custom Wav2Vec2 emotion head failed to load cleanly: "
+                f"missing classifier keys (would be randomly initialized)={suspect_missing}, "
+                f"shape-mismatched classifier keys={suspect_mismatched}. The output would be "
+                f"non-informative. Either add this checkpoint's head layout to "
+                f"_KNOWN_WAV2VEC2_EMOTION_HEADS / _FINAL_LAYER_NAMES in "
+                f"senselab.audio.tasks.classification.speech_emotion_recognition.api, or run "
+                f"the model through the standard transformers pipeline if it has a flat head. "
+                f"Model: {model.path_or_uri} (revision={model.revision or 'main'}), "
+                f"final_layer={final_layer}."
+            )
+        # Shape-sanity: the final layer's output dimension must match config.num_labels
+        # (or len(id2label) when num_labels is absent). A mismatch here means the head
+        # loaded but is mis-sized — every result this run would have wrong-length scores.
+        final_module = getattr(loaded.classifier, final_layer, None)
+        actual_out = getattr(final_module, "out_features", None) if final_module is not None else None
+        expected_out = int(getattr(config, "num_labels", 0) or len(getattr(config, "id2label", None) or {}))
+        if actual_out is not None and expected_out and actual_out != expected_out:
+            raise RuntimeError(
+                f"Custom Wav2Vec2 emotion head final layer has out_features={actual_out} "
+                f"but config declares num_labels={expected_out}. Refusing to run inference. "
+                f"Model: {model.path_or_uri} (revision={model.revision or 'main'})."
+            )
         loaded = loaded.to(device_type.value)
         loaded.eval()
         # Use the feature extractor directly: Wav2Vec2Processor.from_pretrained re-runs

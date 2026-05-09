@@ -59,6 +59,100 @@ def test_speech_emotion_recognition_discrete(gpu_device: DeviceType) -> None:
     assert abs(sum(scores) - 1.0) < 1e-3
 
 
+@pytest.mark.parametrize(
+    ("loading_info", "expected_substr"),
+    [
+        ({"missing_keys": {"classifier.dense.weight"}, "mismatched_keys": set()}, "missing"),
+        (
+            {"missing_keys": set(), "mismatched_keys": {("classifier.out_proj.weight", (3, 1024), (5, 1024))}},
+            "shape-mismatched",
+        ),
+    ],
+)
+def test_wav2vec2_speech_cls_ser_raises_on_random_head(
+    loading_info: dict, expected_substr: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Phase 1 guard: silent random/mismatched-shape head loads must raise.
+
+    Mocks ``EmotionModel.from_pretrained`` to return a model with a deliberately
+    "broken" load result. The classifier shapes alone are correct, so the
+    shape-sanity check passes and we exercise only the missing/mismatched-keys
+    branch of the guard.
+    """
+    from unittest.mock import MagicMock
+
+    from senselab.audio.tasks.classification.speech_emotion_recognition import api as ser_api
+
+    # Reset the per-(model, revision, device, final_layer) cache so the mock fires.
+    ser_api._wav2vec2_emotion_models.clear()
+
+    fake_model = MagicMock()
+    # The shape sanity-check expects out_features matching config.num_labels.
+    fake_model.classifier.out_proj.out_features = 3
+    fake_model.to.return_value = fake_model
+
+    fake_config = MagicMock()
+    fake_config.num_labels = 3
+    fake_config.id2label = {0: "arousal", 1: "valence", 2: "dominance"}
+
+    monkeypatch.setattr(
+        ser_api,
+        "_make_wav2vec2_emotion_model_class",
+        lambda final_layer="out_proj": MagicMock(from_pretrained=MagicMock(return_value=(fake_model, loading_info))),
+    )
+    monkeypatch.setattr("transformers.AutoConfig.from_pretrained", MagicMock(return_value=fake_config))
+    monkeypatch.setattr(
+        "transformers.Wav2Vec2FeatureExtractor.from_pretrained",
+        MagicMock(return_value=MagicMock(sampling_rate=16000)),
+    )
+
+    audios = [Audio(waveform=torch.randn(1, 16000), sampling_rate=16000)]
+    with pytest.raises(RuntimeError, match=expected_substr):
+        ser_api._classify_wav2vec2_speech_cls_ser(
+            audios,
+            HFModel(path_or_uri="audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim"),
+            device=DeviceType.CPU,
+        )
+
+
+def test_wav2vec2_speech_cls_ser_raises_on_shape_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Phase 1 guard: classifier loaded but final-layer out_features != num_labels."""
+    from unittest.mock import MagicMock
+
+    from senselab.audio.tasks.classification.speech_emotion_recognition import api as ser_api
+
+    ser_api._wav2vec2_emotion_models.clear()
+
+    fake_model = MagicMock()
+    fake_model.classifier.out_proj.out_features = 5  # config says 3
+    fake_model.to.return_value = fake_model
+
+    fake_config = MagicMock()
+    fake_config.num_labels = 3
+    fake_config.id2label = {0: "arousal", 1: "valence", 2: "dominance"}
+
+    monkeypatch.setattr(
+        ser_api,
+        "_make_wav2vec2_emotion_model_class",
+        lambda final_layer="out_proj": MagicMock(
+            from_pretrained=MagicMock(return_value=(fake_model, {"missing_keys": set(), "mismatched_keys": set()}))
+        ),
+    )
+    monkeypatch.setattr("transformers.AutoConfig.from_pretrained", MagicMock(return_value=fake_config))
+    monkeypatch.setattr(
+        "transformers.Wav2Vec2FeatureExtractor.from_pretrained",
+        MagicMock(return_value=MagicMock(sampling_rate=16000)),
+    )
+
+    audios = [Audio(waveform=torch.randn(1, 16000), sampling_rate=16000)]
+    with pytest.raises(RuntimeError, match="out_features=5"):
+        ser_api._classify_wav2vec2_speech_cls_ser(
+            audios,
+            HFModel(path_or_uri="audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim"),
+            device=DeviceType.CPU,
+        )
+
+
 def _make_dummy_result() -> AudioClassificationResult:
     """Create a dummy classification result for mocking."""
     return AudioClassificationResult(
