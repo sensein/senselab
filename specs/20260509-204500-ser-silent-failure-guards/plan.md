@@ -3,6 +3,10 @@
 **Date**: 2026-05-09
 **Branch**: `claude/ser-loading-guards` → PR target `fix/ser-wav2vec2-regression-head`
 
+**Status (post-implementation)**: Phases 1–7 implemented in this PR. Plan
+preserved for the failure-mode audit and future-extension notes; checkbox
+state below reflects what shipped.
+
 ## Problem
 
 PR #511 fixes one specific silent-failure mode (random-initialized head producing
@@ -57,7 +61,7 @@ missing or mismatched checkpoint keys.
   whose declared and actual output sizes disagree.
 - [x] T103 Existing `test_speech_emotion_recognition_continuous` passes
   unchanged (regression guard for the audeering happy path).
-- [ ] T104 Add a parametrised unit test that mocks `EmotionModel.from_pretrained`
+- [x] T104 Parametrised unit test mocks `EmotionModel.from_pretrained`
   to return loading_info with (a) `missing_keys={"classifier.dense.weight"}`,
   (b) `mismatched_keys={("classifier.out_proj.weight", ...)}`, and (c) a final
   layer whose `out_features` disagrees with `config.num_labels`. All three
@@ -88,14 +92,16 @@ custom one. The original PR-#511 bug (audeering before this work) lived here.
 
 **Tasks**
 
-- [ ] T201 In `HuggingFaceAudioClassifier.classify_audios_with_transformers`,
-  preload the model with `output_loading_info=True` once per (model_id,
-  revision, device), inspect `missing_keys` for `classifier.*` / `head.*` /
-  `score.*` entries, and `logger.warning` (don't raise — backward-compat).
-- [ ] T202 Add a `senselab` config flag `SENSELAB_STRICT_HEAD_LOAD=1` that
-  promotes that warning to a hard error. Default off.
-- [ ] T203 Test: mock loading_info; assert the warning fires for missing head
-  keys and not for unrelated misses.
+- [x] T201 `_get_hf_audio_classification_pipeline` now loads via
+  `AutoModelForAudioClassification.from_pretrained(..., output_loading_info=True)`,
+  threads the loaded instance into `pipeline(model=..., feature_extractor=...)`,
+  and runs `_check_head_loaded_cleanly` on the loading info. Suspect keys cover
+  `classifier.*`, `head.*`, `score.*`, `out_proj.*`, `projector.*`.
+- [x] T202 `SENSELAB_STRICT_HEAD_LOAD=1` env-var promotes the warning to a
+  hard `RuntimeError`. Default off (warning only).
+- [ ] T203 Test: deferred — `_check_head_loaded_cleanly` is currently exercised
+  end-to-end via the audeering / ehcalabres tests; a unit test mocking
+  `loading_info` is a follow-up.
 
 **Cost**: ~40 lines. Requires switching `pipeline()` to load the model
 explicitly first; pipeline can then accept the pre-loaded model. Existing call
@@ -128,26 +134,26 @@ Map `config.model_type` → `(base_cls, attr_name)` in a small registry.
 
 **Tasks**
 
-- [ ] T301 Build a `_BASE_REGISTRY: dict[str, tuple[type, str]]` mapping
-  `model_type` → `(base_pretrained_cls, encoder_attr_name)`. Seed with
-  `wav2vec2`, `hubert`, `wavlm`, `wav2vec2-bert`. Test that constructing a
-  class with the right attr name binds the checkpoint keys correctly.
-- [ ] T302 Refactor `_make_wav2vec2_emotion_model_class` into
-  `_make_emotion_model_class(model_type)` that pulls `(base_cls, attr_name)`
-  from the registry and uses `setattr(self, attr_name, base_cls(config))`.
-  Keep the cache keyed by `(model_type, final_layer)`.
-- [ ] T303 Extend `_wav2vec2_emotion_head_kind` (rename to
-  `_emotion_head_kind`) to consult the registry for any
-  `For{SpeechClassification,SequenceClassification}` architecture string.
-- [ ] T304 Manually verify against `superb/hubert-large-superb-er` (HuBERT,
-  flat head — should NOT be routed) and any known WavLM/wav2vec2-bert
-  emotion checkpoint. The Phase-1 guard will catch regressions: if the
-  attr-name registry is wrong for a given model_type, every checkpoint key
-  will appear missing and the `RuntimeError` from Phase 1 fires.
-- [ ] T305 Forward-pass attention-mask shim: HuBERT/WavLM forwards may want
-  `attention_mask` for variable-length batches (assumption #12). Today's
-  single-clip inference is fine; batching past one item must thread the
-  attention mask through. Defer until batching is exercised.
+- [x] T301 `_BASE_REGISTRY: dict[str, tuple[str, str]]` maps `model_type` →
+  `(base_pretrained_cls_name, encoder_attr_name)` for `wav2vec2`, `hubert`,
+  `wavlm`, `wav2vec2-bert`. Resolved lazily via `_resolve_base()` so import
+  cost only fires when the custom-head path runs.
+- [x] T302 `_make_emotion_model_class(model_type, head)` now consults the
+  registry and uses `setattr(self, attr_name, encoder_cls(config))` to bind
+  the right encoder. Cache key is `(model_type, final_layer, activation,
+  dropout_field)`. Old `_make_wav2vec2_emotion_model_class(final_layer)`
+  retained as a backwards-compatible shim.
+- [x] T303 Renamed to `_emotion_head_kind`; consults `_BASE_REGISTRY` and
+  uses the encoder's actual attribute name when peeking the checkpoint
+  manifest (so HuBERT keys with prefix `hubert.` are correctly excluded).
+  Old `_wav2vec2_emotion_head_kind` retained as backwards-compatible alias.
+- [ ] T304 Manual verification against `superb/hubert-large-superb-er` and
+  WavLM/wav2vec2-bert emotion checkpoints — deferred. The Phase-1 guard now
+  catches regressions: if the attr-name registry is wrong for a given
+  model_type, every checkpoint key will appear missing and the `RuntimeError`
+  from Phase 1 fires.
+- [ ] T305 Forward-pass attention-mask shim: deferred until batching is
+  exercised (assumption #12). Single-clip inference works as-is.
 
 **Cost**: ~120 lines once you account for T301 and T305. Test infra: at
 least one HuBERT-based test marked GPU-only (these models are larger).
@@ -173,15 +179,16 @@ checkpoint families need an entry, not a code change.
 
 **Tasks**
 
-- [ ] T401 Define `HeadEntry` dataclass and migrate the existing two
-  registry entries (audeering implicit + ehcalabres) into it with their
-  observed shapes.
-- [ ] T402 Generalize `_make_wav2vec2_regression_head_class` to accept a
-  `HeadEntry` and build the matching small head. Keep `tanh` as default
-  activation (the observed common case); warn loudly if activation is
-  inferred from defaults rather than a registry entry.
-- [ ] T403 Tests: numerical regression on both known checkpoints (audeering,
-  ehcalabres); the recorded scores must not move.
+- [x] T401 `_HeadEntry` (frozen dataclass with
+  `final_layer`/`activation`/`dropout_field`) defined and used to seed
+  `_KNOWN_HEAD_LAYOUTS`. The audeering case stays implicit (detected via
+  architecture string with default `_HeadEntry()`); ehcalabres is
+  registered with `final_layer="output"`.
+- [x] T402 `_make_regression_head_class(head: _HeadEntry)` builds the
+  matching head; activation chosen from a small `_ACTIVATIONS` table.
+- [ ] T403 Numerical-regression tests on both known checkpoints — deferred
+  (the existing audeering test still validates the bounded-score
+  invariant; numerical exactness was not previously asserted).
 
 **Cost**: ~50 lines. Substantially smaller than the original Phase 4.
 
@@ -208,10 +215,11 @@ field on properly-published models.
 
 **Tasks**
 
-- [ ] T501 Read `config.problem_type` first; only consult `_get_ser_type` for
-  legacy checkpoints with no problem_type set.
-- [ ] T502 Test: a checkpoint declaring `problem_type="regression"` whose
-  labels happen to include "happy" must NOT get softmax applied.
+- [x] T501 `_resolve_apply_softmax(model, ser_type)` reads
+  `config.problem_type` first; falls back to the keyword-based
+  `_get_ser_type` heuristic only for legacy checkpoints.
+- [ ] T502 Numerical test: deferred (no real-world `problem_type=regression`
+  emotion checkpoint with confounding labels in our test fixtures).
 
 **Cost**: ~10 lines + 1 test.
 
@@ -226,12 +234,11 @@ the caller's sampling rate through.
 
 **Tasks**
 
-- [ ] T601 In `HuggingFaceAudioClassifier.classify_audios_with_transformers`,
-  read the model's `feature_extractor.sampling_rate` and resample mismatched
-  audio before calling the pipeline. Mirror the convention already used in
-  `_classify_wav2vec2_speech_cls_ser`.
-- [ ] T602 Test: mock pipeline; pass 44.1 kHz audio; assert the audio is
-  resampled to 16 kHz before reaching the pipeline.
+- [x] T601 Verified: `HuggingFaceAudioClassifier.classify_audios_with_transformers`
+  already resamples in the audio loop (lines 141-142 pre-#511 + retained).
+  Phase 6's concern was already addressed there; no code change needed.
+- [ ] T602 Test: deferred — existing classification tests cover sampling-rate
+  scenarios end-to-end.
 
 **Cost**: ~15 lines + 1 test.
 
@@ -244,13 +251,12 @@ classification, not just SER. Will need a separate code-review pass.
 
 **Tasks**
 
-- [ ] T701 Update
-  `src/senselab/audio/tasks/classification/speech_emotion_recognition/doc.md`
-  to enumerate the supported checkpoint families and the known assumptions.
-- [ ] T702 Add a one-shot CLI helper
-  `python -m senselab.audio.tasks.classification.speech_emotion_recognition
-  --probe <model_id>` that prints the dispatcher's classification of the
-  model and warns about anything risky. Useful for users adding new models.
+- [x] T701 `doc.md` now enumerates the three dispatch paths (custom head,
+  subprocess venv, standard pipeline) and points users at the diagnostic CLI.
+- [x] T702 Diagnostic CLI: `python -m
+  senselab.audio.tasks.classification.speech_emotion_recognition --probe
+  <repo_id>` reports model_type, architectures, dispatch decision, head
+  source (registry vs. peeked), and emits advisories. No weights loaded.
 
 ## Out-of-scope (this PR)
 

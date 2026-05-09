@@ -97,8 +97,8 @@ def test_wav2vec2_speech_cls_ser_raises_on_random_head(
 
     monkeypatch.setattr(
         ser_api,
-        "_make_wav2vec2_emotion_model_class",
-        lambda final_layer="out_proj": MagicMock(from_pretrained=MagicMock(return_value=(fake_model, loading_info))),
+        "_make_emotion_model_class",
+        lambda model_type, head: MagicMock(from_pretrained=MagicMock(return_value=(fake_model, loading_info))),
     )
     monkeypatch.setattr("transformers.AutoConfig.from_pretrained", MagicMock(return_value=fake_config))
     monkeypatch.setattr(
@@ -133,8 +133,8 @@ def test_wav2vec2_speech_cls_ser_raises_on_shape_mismatch(monkeypatch: pytest.Mo
 
     monkeypatch.setattr(
         ser_api,
-        "_make_wav2vec2_emotion_model_class",
-        lambda final_layer="out_proj": MagicMock(
+        "_make_emotion_model_class",
+        lambda model_type, head: MagicMock(
             from_pretrained=MagicMock(return_value=(fake_model, {"missing_keys": set(), "mismatched_keys": set()}))
         ),
     )
