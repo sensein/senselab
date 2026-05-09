@@ -145,12 +145,14 @@ print(json.dumps({"results": results}))
 # mirror that name, so the dynamically-built emotion classifier class must use the
 # right attribute or every base-encoder weight will look "missing" and the Phase-1
 # guard will fire.
-_BASE_REGISTRY: dict[str, tuple[str, str]] = {
-    # config.model_type → (PreTrainedModel base class name in `transformers`, encoder attribute name)
-    "wav2vec2": ("Wav2Vec2PreTrainedModel", "wav2vec2"),
-    "hubert": ("HubertPreTrainedModel", "hubert"),
-    "wavlm": ("WavLMPreTrainedModel", "wavlm"),
-    "wav2vec2-bert": ("Wav2Vec2BertPreTrainedModel", "wav2vec2_bert"),
+_BASE_REGISTRY: dict[str, tuple[str, str, str]] = {
+    # config.model_type → (PreTrainedModel base class name, encoder model class name, encoder attribute name)
+    # Both class names are explicit (not derived) so future families that don't follow
+    # the ``XxxPreTrainedModel``/``XxxModel`` naming convention plug in cleanly.
+    "wav2vec2": ("Wav2Vec2PreTrainedModel", "Wav2Vec2Model", "wav2vec2"),
+    "hubert": ("HubertPreTrainedModel", "HubertModel", "hubert"),
+    "wavlm": ("WavLMPreTrainedModel", "WavLMModel", "wavlm"),
+    "wav2vec2-bert": ("Wav2Vec2BertPreTrainedModel", "Wav2Vec2BertModel", "wav2vec2_bert"),
 }
 
 
@@ -163,8 +165,7 @@ def _resolve_base(model_type: str) -> Optional[tuple[type, type, str]]:
     entry = _BASE_REGISTRY.get(model_type)
     if entry is None:
         return None
-    base_name, attr_name = entry
-    encoder_name = base_name.replace("PreTrainedModel", "Model")
+    base_name, encoder_name, attr_name = entry
     import transformers
 
     try:
@@ -380,7 +381,7 @@ def _emotion_head_kind(model: HFModel) -> Optional[tuple[str, _HeadEntry]]:
         return (model_type, _HeadEntry(final_layer="out_proj"))
 
     if any("ForSequenceClassification" in a for a in architectures):
-        encoder_attr = _BASE_REGISTRY[model_type][1]
+        encoder_attr = _BASE_REGISTRY[model_type][2]
         peeked = _peek_head_final_layer(model, encoder_attr=encoder_attr)
         if peeked is not None:
             return (model_type, _HeadEntry(final_layer=peeked))

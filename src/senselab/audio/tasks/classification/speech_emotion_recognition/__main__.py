@@ -51,9 +51,11 @@ def _probe(repo_id: str, revision: Optional[str] = None) -> int:
         print(f"id2label:     {labels[:8]}{'…' if len(labels) > 8 else ''}")
     except Exception as e:  # pragma: no cover — diagnostic path
         print(f"AutoConfig.from_pretrained failed: {type(e).__name__}: {e}")
-        print("(The dispatcher's raw-config-dict fallback would be used; routing decisions still work.)")
+        print("(The dispatcher's raw-config-dict fallback handles this; routing still works.)")
+        # ``config`` stays None below; getattr(None, ...) is safe and the advisories
+        # that depend on config.model_type get skipped via short-circuit evaluation.
 
-    # SER-type heuristic
+    # SER-type heuristic (handles AutoConfig failure via its own raw-dict fallback)
     ser_type = _get_ser_type(model)
     print(f"\nSERType heuristic: {ser_type.value}")
 
@@ -62,7 +64,7 @@ def _probe(repo_id: str, revision: Optional[str] = None) -> int:
     if head_match is not None:
         head_model_type, head_entry = head_match
         print("\nDispatch: CUSTOM in-process emotion-head class")
-        print(f"  encoder family: {head_model_type} (encoder attr: {_BASE_REGISTRY[head_model_type][1]})")
+        print(f"  encoder family: {head_model_type} (encoder attr: {_BASE_REGISTRY[head_model_type][2]})")
         print(f"  head:           {head_entry}")
         if repo_id in _KNOWN_HEAD_LAYOUTS:
             print(f"  source:         hardcoded entry in _KNOWN_HEAD_LAYOUTS[{repo_id!r}]")
