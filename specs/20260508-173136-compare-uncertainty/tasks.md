@@ -131,13 +131,13 @@ All comparator code lives in `scripts/analyze_audio.py` (single CLI script, per 
 
 **Purpose**: Lint sweep, type-check, run the existing senselab test suite to confirm SC-005, full E2E on twin-1.wav, update CLAUDE.md.
 
-- [ ] T052 Run `uv run ruff format scripts/analyze_audio.py src/tests/scripts/analyze_audio_test.py` then `uv run ruff check scripts/analyze_audio.py src/tests/scripts/analyze_audio_test.py`; fix any violations.
-- [ ] T053 Run `uv run mypy scripts/analyze_audio.py`; fix any violations.
-- [ ] T054 Run the targeted test suite `uv run pytest src/tests/scripts/ -v` and confirm all new comparator tests pass (≥27 passed counting the existing 12 + ≥15 new) within 30 seconds total (SC-006).
-- [ ] T055 Run the full senselab test suite `uv run pytest --ignore=src/tests/scripts -x -q` to confirm SC-005 (no regression in existing senselab outputs from the additive `confidence`/`uncertainty` columns added in T045).
-- [ ] T056 Run the script E2E on `~/Downloads/twin-1.wav` (cached upstream tasks): `uv run python scripts/analyze_audio.py ~/Downloads/twin-1.wav --output-dir artifacts/e2e_runs > "artifacts/e2e_runs/run_$(date +%Y%m%d-%H%M%S)_comparator.log" 2>&1`. Verify: parquets land under each pass's `comparisons/` subtree, `disagreements.json` exists at run-dir top, LS bundle contains the new tracks, comparator stage adds ≤30 % wall-clock overhead vs a `--skip comparisons` run (SC-004).
-- [ ] T057 [P] Document the comparator stage in /Users/satra/software/sensein/senselab/CLAUDE.md by appending a new sub-section "Comparison & uncertainty stage" under the existing "Audio analysis script + ASR backend extensions" section, summarizing the new flags, the parquet/JSON/LS outputs, and a one-line link to the spec.
-- [ ] T058 [P] Mark all completed tasks `[X]` in /Users/satra/software/sensein/senselab/specs/20260508-173136-compare-uncertainty/tasks.md.
+- [X] T052 Run `uv run ruff format scripts/analyze_audio.py src/tests/scripts/analyze_audio_test.py` then `uv run ruff check scripts/analyze_audio.py src/tests/scripts/analyze_audio_test.py`; fix any violations.
+- [X] T053 Run `uv run mypy scripts/analyze_audio.py`; fix any violations.
+- [X] T054 Run the targeted test suite `uv run pytest src/tests/scripts/ -v` and confirm all new comparator tests pass (≥27 passed counting the existing 12 + ≥15 new) within 30 seconds total (SC-006).
+- [X] T055 Run the full senselab test suite `uv run pytest --ignore=src/tests/scripts -x -q` to confirm SC-005 (no regression in existing senselab outputs from the additive `confidence`/`uncertainty` columns added in T045).
+- [X] T056 Run the script E2E on `~/Downloads/twin-1.wav` (cached upstream tasks): `uv run python scripts/analyze_audio.py ~/Downloads/twin-1.wav --output-dir artifacts/e2e_runs > "artifacts/e2e_runs/run_$(date +%Y%m%d-%H%M%S)_comparator.log" 2>&1`. Verify: parquets land under each pass's `comparisons/` subtree, `disagreements.json` exists at run-dir top, LS bundle contains the new tracks, comparator stage adds ≤30 % wall-clock overhead vs a `--skip comparisons` run (SC-004).
+- [X] T057 [P] Document the comparator stage in /Users/satra/software/sensein/senselab/CLAUDE.md by appending a new sub-section "Comparison & uncertainty stage" under the existing "Audio analysis script + ASR backend extensions" section, summarizing the new flags, the parquet/JSON/LS outputs, and a one-line link to the spec.
+- [X] T058 [P] Mark all completed tasks `[X]` in /Users/satra/software/sensein/senselab/specs/20260508-173136-compare-uncertainty/tasks.md.
 - [ ] T059 Open a PR against `alpha` from this branch with the title "comparison & uncertainty stage for analyze_audio.py" and a summary linking the spec, plan, and key acceptance scenarios. Confirm CI green before requesting review.
 
 ---
