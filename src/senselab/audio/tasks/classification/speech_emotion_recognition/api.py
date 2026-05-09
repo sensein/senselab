@@ -20,7 +20,7 @@ import tempfile
 from enum import Enum
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Optional
 
 import torch
 import torch.nn as nn
@@ -28,6 +28,7 @@ from transformers import PretrainedConfig
 
 from senselab.audio.data_structures import Audio, AudioClassificationResult
 from senselab.audio.tasks.classification.huggingface import HuggingFaceAudioClassifier
+from senselab.audio.tasks.preprocessing import resample_audios
 from senselab.utils.data_structures import (
     DeviceType,
     HFModel,
@@ -130,8 +131,16 @@ class _Wav2Vec2RegressionHead(nn.Module):
         return self.out_proj(x)
 
 
-# Lazy import guard — Wav2Vec2PreTrainedModel is only needed when this backend runs
+# Lazy import guard — Wav2Vec2PreTrainedModel is only needed when this backend runs.
+# The class is built once and cached so isinstance() checks remain stable across calls.
+_wav2vec2_emotion_model_cls: Optional[type] = None
+
+
 def _make_wav2vec2_emotion_model_class() -> type:
+    global _wav2vec2_emotion_model_cls
+    if _wav2vec2_emotion_model_cls is not None:
+        return _wav2vec2_emotion_model_cls
+
     from transformers import Wav2Vec2Model, Wav2Vec2PreTrainedModel
 
     class _Wav2Vec2EmotionModel(Wav2Vec2PreTrainedModel):
@@ -141,11 +150,12 @@ def _make_wav2vec2_emotion_model_class() -> type:
             self.classifier = _Wav2Vec2RegressionHead(config)
             self.init_weights()
 
-        def forward(self, input_values: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        def forward(self, input_values: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
             hidden = self.wav2vec2(input_values)[0]
             pooled = hidden.mean(dim=1)
             return pooled, self.classifier(pooled)
 
+    _wav2vec2_emotion_model_cls = _Wav2Vec2EmotionModel
     return _Wav2Vec2EmotionModel
 
 
@@ -310,9 +320,7 @@ def _classify_wav2vec2_speech_cls_ser(
             config_path = hf_hub_download(str(model.path_or_uri), "config.json", revision=model.revision)
             with open(config_path) as f:
                 config_dict = json.load(f)
-            from transformers import AutoConfig as _AC
-
-            config = _AC.for_model("wav2vec2", **config_dict)
+            config = AutoConfig.for_model("wav2vec2", **config_dict)
 
         loaded = EmotionModel.from_pretrained(  # type: ignore[attr-defined]
             str(model.path_or_uri),
@@ -322,23 +330,35 @@ def _classify_wav2vec2_speech_cls_ser(
         loaded = loaded.to(device_type.value)
         loaded.eval()
         processor = Wav2Vec2Processor.from_pretrained(str(model.path_or_uri), revision=model.revision)
-        id2label: dict = config.id2label
-        _wav2vec2_emotion_models[key] = (loaded, processor, id2label)
+        # Resolve labels once: HF stores id2label keys as strings in JSON; AutoConfig usually
+        # coerces them to int but the raw-dict fallback above does not. Tolerate either.
+        raw_id2label = getattr(config, "id2label", None) or {}
+        coerced: dict = {}
+        for k, v in raw_id2label.items():
+            try:
+                coerced[int(k)] = v
+            except (TypeError, ValueError):
+                continue
+        n_labels = int(getattr(config, "num_labels", len(coerced)) or len(coerced))
+        labels: List[str] = [coerced.get(i, f"class_{i}") for i in range(n_labels)]
+        expected_sr = int(getattr(processor.feature_extractor, "sampling_rate", 16000) or 16000)
+        _wav2vec2_emotion_models[key] = (loaded, processor, labels, expected_sr)
 
-    loaded_model, processor, id2label = _wav2vec2_emotion_models[key]
+    loaded_model, processor, labels, expected_sr = _wav2vec2_emotion_models[key]
 
     results: List[AudioClassificationResult] = []
     for audio in audios:
         if audio.waveform.shape[0] != 1:
             raise ValueError("Only mono audio is supported for continuous SER.")
+        if audio.sampling_rate != expected_sr:
+            audio = resample_audios([audio], resample_rate=expected_sr)[0]
         data = audio.waveform.squeeze().numpy()
-        inputs = processor(data, sampling_rate=audio.sampling_rate, return_tensors="pt", padding=True)
+        inputs = processor(data, sampling_rate=expected_sr, return_tensors="pt", padding=True)
         inputs = {k: v.to(device_type.value) for k, v in inputs.items()}
         with torch.no_grad():
             _, logits = loaded_model(inputs["input_values"])
         scores = logits[0].cpu().tolist()
-        labels = [id2label[i] for i in range(len(scores))]
-        results.append(AudioClassificationResult(labels=labels, scores=scores))
+        results.append(AudioClassificationResult(labels=labels[: len(scores)], scores=scores))
 
     return results
 
