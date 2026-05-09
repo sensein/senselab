@@ -40,6 +40,24 @@ from senselab.utils.data_structures import (
 from senselab.utils.dependencies import speechbrain_loading_cwd, speechbrain_savedir
 from senselab.utils.subprocess_venv import ensure_venv, parse_subprocess_result, venv_python
 
+# Exceptions for which falling back to a raw config.json read is sensible. Tests against
+# audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim show ``StrictDataclassError`` is
+# the actually-encountered case; ``ValueError`` / ``TypeError`` / ``KeyError`` cover the
+# adjacent malformed-field scenarios. ``OSError`` is intentionally excluded — that means
+# the network / file is broken, and the fallback path needs the same network hop, so it
+# can't recover. ``StrictDataclassError`` only exists in huggingface_hub>=1.0.
+try:
+    from huggingface_hub.errors import StrictDataclassError
+
+    _CONFIG_LOAD_RECOVERABLE: tuple[type[Exception], ...] = (
+        StrictDataclassError,
+        ValueError,
+        TypeError,
+        KeyError,
+    )
+except ImportError:  # pragma: no cover — older huggingface_hub
+    _CONFIG_LOAD_RECOVERABLE = (ValueError, TypeError, KeyError)
+
 
 class SERType(Enum):
     """SER types for determining model output behaviors."""
@@ -258,7 +276,7 @@ def _wav2vec2_emotion_head_kind(model: HFModel) -> Optional[str]:
         config = AutoConfig.from_pretrained(model.path_or_uri, revision=model.revision)
         auto_map = getattr(config, "auto_map", None)
         architectures = getattr(config, "architectures", None) or []
-    except Exception:
+    except _CONFIG_LOAD_RECOVERABLE:
         from huggingface_hub import hf_hub_download
 
         config_path = hf_hub_download(str(model.path_or_uri), "config.json", revision=model.revision)
@@ -423,7 +441,7 @@ def _classify_wav2vec2_speech_cls_ser(
         EmotionModel = _make_wav2vec2_emotion_model_class(final_layer)
         try:
             config = AutoConfig.from_pretrained(model.path_or_uri, revision=model.revision)
-        except Exception:
+        except _CONFIG_LOAD_RECOVERABLE:
             from huggingface_hub import hf_hub_download
 
             config_path = hf_hub_download(str(model.path_or_uri), "config.json", revision=model.revision)
@@ -498,7 +516,7 @@ def _get_ser_type(model: HFModel) -> SERType:
         from transformers import AutoConfig
 
         config = AutoConfig.from_pretrained(model.path_or_uri, revision=model.revision)
-    except Exception:
+    except _CONFIG_LOAD_RECOVERABLE:
         # Fall back to raw config dict for models with invalid fields
         from huggingface_hub import hf_hub_download
 
