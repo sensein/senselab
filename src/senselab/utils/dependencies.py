@@ -1,5 +1,6 @@
 """Lazy, cached availability checks for optional dependencies and HF model caching."""
 
+import contextlib
 import json
 import logging
 import os
@@ -7,7 +8,7 @@ import threading
 import time
 from functools import lru_cache
 from pathlib import Path
-from typing import Callable, Optional, TypeVar
+from typing import Callable, Iterator, Optional, TypeVar
 
 logger = logging.getLogger("senselab")
 
@@ -133,6 +134,27 @@ def speechbrain_savedir(repo_id: str, revision: Optional[str] = None) -> Path:
     """
     rev = revision or "main"
     return _senselab_cache_dir() / "speechbrain" / _safe_key(repo_id, rev)
+
+
+@contextlib.contextmanager
+def speechbrain_loading_cwd(savedir: Path) -> Iterator[Path]:
+    """Run a SpeechBrain ``from_hparams`` call with CWD pinned to ``savedir``.
+
+    Some SpeechBrain hparams.yaml files declare CWD-relative ``save_path`` values
+    on inner lobes (e.g. ``save_path: wav2vec2_checkpoints`` on the Wav2Vec2 lobe
+    under ``speechbrain/emotion-recognition-wav2vec2-IEMOCAP``), which the outer
+    ``savedir=`` argument does not redirect. Wrapping the loader in this context
+    causes those relative paths to resolve under ``savedir`` instead of the
+    process CWD, keeping the artifacts inside the senselab cache.
+    """
+    savedir = Path(savedir).resolve()
+    savedir.mkdir(parents=True, exist_ok=True)
+    prev = Path.cwd()
+    os.chdir(savedir)
+    try:
+        yield savedir
+    finally:
+        os.chdir(prev)
 
 
 def _safe_key(repo_id: str, revision: str) -> str:
