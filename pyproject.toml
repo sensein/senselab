@@ -39,6 +39,7 @@ dependencies = [
   "transformers>=5.0",  # >=5.0 required for huggingface-hub>=1.0 compatibility
   "datasets>=3.6",
   "accelerate",
+  "peft>=0.13",  # required by Granite Speech 3.3's LoRA adapter
   "speechbrain>=1.0",
   # Audio processing backends (pyannote pulls matplotlib, torch-audiomentations)
   "pyannote-audio>=4.0",
@@ -59,7 +60,8 @@ dependencies = [
 [project.optional-dependencies]
 nlp = [
   "jiwer>=3.0",
-  "nltk>=3.9"
+  "nltk>=3.9",
+  "uroman>=1.3"
 ]
 text = [
   "sentence-transformers>=5.1",
@@ -196,4 +198,4 @@ skip = [
   "*.cha",
   "*.ipynb"
 ]
-ignore-words-list = ["senselab", "nd", "astroid", "wil", "SER", "te", "EXPRESSO", "VAI"]
+ignore-words-list = ["senselab", "nd", "astroid", "wil", "SER", "te", "EXPRESSO", "VAI", "vie"]
