@@ -43,10 +43,20 @@ def test_speech_emotion_recognition_discrete(gpu_device: DeviceType) -> None:
         resampled, HFModel(path_or_uri="ehcalabres/wav2vec2-lg-xlsr-en-speech-emotion-recognition"), device=gpu_device
     )
     emotions = result[0].get_labels()
+    scores = result[0].get_scores()
     rav_emotions = ["angry", "calm", "disgust", "fearful", "happy", "neutral", "sad", "surprised"]
 
     for emotion in emotions:
         assert emotion in rav_emotions
+
+    # Regression guard: ehcalabres ships its head as classifier.{dense,output}.* but
+    # declares the standard Wav2Vec2ForSequenceClassification architecture, so the
+    # default transformers loader randomly initializes the head and produces
+    # ~uniform softmax (every score ≈ 1/8). After the fix the head is loaded from
+    # the checkpoint and at least one class clears 0.2.
+    assert max(scores) > 0.2, f"Discrete SER scores look randomly initialized: {dict(zip(emotions, scores))}"
+    # Probabilities should be a softmax distribution summing to 1.
+    assert abs(sum(scores) - 1.0) < 1e-3
 
 
 def _make_dummy_result() -> AudioClassificationResult:

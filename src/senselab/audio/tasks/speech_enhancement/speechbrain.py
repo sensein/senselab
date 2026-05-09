@@ -9,7 +9,7 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.preprocessing import concatenate_audios, evenly_segment_audios
 from senselab.utils.data_structures import DeviceType, SpeechBrainModel, _select_device_and_dtype
 from senselab.utils.data_structures.logging import logger
-from senselab.utils.dependencies import retry_on_transient_error
+from senselab.utils.dependencies import retry_on_transient_error, speechbrain_loading_cwd, speechbrain_savedir
 
 try:
     from speechbrain.inference.enhancement import SpectralMaskEnhancement as enhance_model
@@ -56,15 +56,23 @@ class SpeechBrainEnhancer:
         )
         key = f"{model.path_or_uri}-{model.revision}-{device.value}"
         if key not in cls._models:
-            try:
-                cls._models[key] = retry_on_transient_error(
-                    enhance_model.from_hparams, source=model.path_or_uri, run_opts={"device": device.value}
-                )
-            except Exception as e:
-                logger.info("Trying SepformerSeparation model after SpectralMaskEnhancement failed: %s", e)
-                cls._models[key] = retry_on_transient_error(
-                    separator.from_hparams, source=model.path_or_uri, run_opts={"device": device.value}
-                )
+            savedir = speechbrain_savedir(str(model.path_or_uri), model.revision)
+            with speechbrain_loading_cwd(savedir):
+                try:
+                    cls._models[key] = retry_on_transient_error(
+                        enhance_model.from_hparams,
+                        source=model.path_or_uri,
+                        savedir=str(savedir),
+                        run_opts={"device": device.value},
+                    )
+                except Exception as e:
+                    logger.info("Trying SepformerSeparation model after SpectralMaskEnhancement failed: %s", e)
+                    cls._models[key] = retry_on_transient_error(
+                        separator.from_hparams,
+                        source=model.path_or_uri,
+                        savedir=str(savedir),
+                        run_opts={"device": device.value},
+                    )
 
         return cls._models[key], device, dtype
 
