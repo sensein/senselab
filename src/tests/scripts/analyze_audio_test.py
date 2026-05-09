@@ -18,6 +18,7 @@ import sys
 import types
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 import torch
@@ -356,6 +357,108 @@ def test_write_comparison_parquet_no_op_for_empty_rows(aa: types.ModuleType, tmp
     dest = tmp_path / "empty.parquet"
     aa.write_comparison_parquet([], dest, provenance={"k": "v"})
     assert not dest.exists()
+
+
+# ── Phase 3 (US1 raw_vs_enhanced) tests ───────────────────────────────
+
+
+def _mk_diar_result(segments: list[tuple[float, float, str]]) -> list[list[Any]]:
+    """Build a List[List[ScriptLine-like]] from a list of (start, end, speaker) tuples."""
+    inner = [SimpleNamespace(text=None, speaker=spk, start=s, end=e, chunks=None) for s, e, spk in segments]
+    return [inner]
+
+
+def _mk_asr_result(chunks: list[tuple[float, float, str]]) -> list[Any]:
+    """Build a List[ScriptLine-like] with one line whose ``chunks`` come from the input."""
+    inner_chunks = [SimpleNamespace(text=t, start=s, end=e, chunks=None, speaker=None) for s, e, t in chunks]
+    return [
+        SimpleNamespace(text=" ".join(t for _, _, t in chunks), start=None, end=None, chunks=inner_chunks, speaker=None)
+    ]
+
+
+def test_raw_vs_enhanced_diarization_diff(aa: types.ModuleType, tmp_path: Path) -> None:
+    """Diarization differencer flags speech-presence flips between raw and enhanced."""
+    raw = _mk_diar_result([(0.0, 10.0, "spk0")])
+    enh = _mk_diar_result([(0.0, 5.0, "spk0"), (6.0, 10.0, "spk0")])
+    grid = aa.ComparisonGrid(win_length=0.5, hop_length=0.5, name="test")
+    base = {
+        "comparison_kind": "raw_vs_enhanced",
+        "task": "diarization",
+        "stream_pair": None,
+        "model_a": "M",
+        "model_b": "M",
+        "pass_a": "raw_16k",
+        "pass_b": "enhanced_16k",
+        "confidence_a": None,
+        "confidence_b": None,
+        "combined_uncertainty": None,
+    }
+    rows = aa._diff_diarization(raw, enh, grid, duration_s=10.0, boundary_shift_ms=50.0, **base)
+    # Bucket [5.0, 5.5] is silent in enhanced; bucket [5.5, 6.0] also silent in enhanced.
+    flipped = [r for r in rows if not r["agree"]]
+    assert flipped, "expected at least one boundary_shift bucket"
+    assert all(r["mismatch_type"] == "boundary_shift" for r in flipped)
+    assert any(5.0 <= r["start"] < 6.0 for r in flipped)
+
+
+def test_raw_vs_enhanced_asr_text_diff(aa: types.ModuleType) -> None:
+    """ASR differencer emits per-bucket WER + a_text/b_text on the cross-stream grid."""
+    raw = _mk_asr_result([(0.0, 0.5, "hello"), (0.5, 1.0, "world")])
+    enh = _mk_asr_result([(0.0, 0.5, "hello"), (0.5, 1.0, "earth")])
+    grid = aa.ComparisonGrid(win_length=0.5, hop_length=0.5, name="cross_stream")
+    base = {
+        "comparison_kind": "raw_vs_enhanced",
+        "task": "asr",
+        "stream_pair": None,
+        "model_a": "whisper",
+        "model_b": "whisper",
+        "pass_a": "raw_16k",
+        "pass_b": "enhanced_16k",
+        "confidence_a": None,
+        "confidence_b": None,
+        "combined_uncertainty": None,
+    }
+    rows = aa._diff_asr(raw, enh, grid, duration_s=1.0, reference_side="a", **base)
+    assert len(rows) == 2
+    # Bucket 0 agrees; bucket 1 disagrees with WER > 0.
+    assert rows[0]["agree"] is True
+    assert rows[0]["wer"] == 0.0
+    assert rows[1]["agree"] is False
+    assert rows[1]["wer"] > 0.0
+    assert rows[1]["mismatch_type"] == "text_edit"
+    assert "world" in rows[1]["a_text"]
+    assert "earth" in rows[1]["b_text"]
+    assert rows[1]["reference_side"] == "a"
+
+
+def test_raw_vs_enhanced_handles_failed_pass(aa: types.ModuleType, tmp_path: Path) -> None:
+    """When one pass failed, comparator emits no parquet for that task/model (incomparable)."""
+    summaries = {
+        "passes": {
+            "raw_16k": {
+                "duration_s": 1.0,
+                "diarization": {"by_model": {"M": {"status": "ok", "result": _mk_diar_result([(0.0, 1.0, "s")])}}},
+            },
+            "enhanced_16k": {
+                "duration_s": 1.0,
+                "diarization": {"by_model": {"M": {"status": "failed", "error": "boom"}}},
+            },
+        },
+    }
+    args = aa.parse_args(["/tmp/dummy.wav"])
+    parquets, tracks, incomparable = aa.compare_raw_vs_enhanced(
+        summaries=summaries,
+        args=args,
+        run_dir=tmp_path,
+        cache_dir=None,
+        audio_sig="X" * 64,
+        duration_s=1.0,
+        wrapper_hash="W",
+        senselab_ver="1.0",
+    )
+    assert parquets == []
+    assert tracks == []
+    assert "diarization/M/raw_vs_enhanced" in incomparable
 
 
 def test_write_comparison_parquet_persists_provenance(aa: types.ModuleType, tmp_path: Path) -> None:

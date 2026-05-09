@@ -939,6 +939,461 @@ def _comparison_ls_textarea_region(
     return _ls_textarea_region(region_id=region_id, from_name=from_name, start=start, end=end, text=text)
 
 
+# ── Per-task differencers (US1: raw_vs_enhanced; reused by US2/US3) ────
+
+
+def _diar_speaks_in_window(result: Any, win_start: float, win_end: float) -> bool:  # noqa: ANN401
+    """Return True if any diarization segment overlaps the window.
+
+    ``result`` may be ``List[List[ScriptLine]]`` or the same shape after a
+    cache-restored dict round-trip. We unwrap the outer list and then test
+    each segment's [start, end) against the window.
+    """
+    if not result:
+        return False
+    segments = result[0] if isinstance(result, list) and result else []
+    for seg in segments:
+        s = _seg_attr(seg, "start")
+        e = _seg_attr(seg, "end")
+        if s is None or e is None:
+            continue
+        if float(s) < win_end and float(e) > win_start:
+            return True
+    return False
+
+
+def _classification_top1_in_window(result: Any, win_idx: int) -> tuple[str | None, float | None, float | None]:  # noqa: ANN401
+    """Return (top1_label, top1_score, entropy) for the win_idx'th classification window.
+
+    Classification results are List[List[List[{label, score}]]] — outer audio,
+    middle window, inner top-K. We pick the requested window and compute the
+    top-1 + Shannon entropy over the inner distribution.
+    """
+    import math
+
+    if not result:
+        return None, None, None
+    windows = result[0] if isinstance(result, list) and result else []
+    if win_idx >= len(windows):
+        return None, None, None
+    window = windows[win_idx]
+    if not isinstance(window, list) or not window:
+        return None, None, None
+    top = max(window, key=lambda d: d.get("score", 0.0) if isinstance(d, dict) else 0.0)
+    label = str(top.get("label", "?")) if isinstance(top, dict) else None
+    score = float(top.get("score", 0.0)) if isinstance(top, dict) else None
+    # Entropy over the full distribution (clip non-positive scores).
+    probs = [max(float(d.get("score", 0.0)), 1e-12) for d in window if isinstance(d, dict)]
+    total = sum(probs) or 1.0
+    probs = [p / total for p in probs]
+    entropy = -sum(p * math.log(p) for p in probs)
+    return label, score, entropy
+
+
+def _asr_text_in_window(result: Any, win_start: float, win_end: float) -> str:  # noqa: ANN401
+    """Return concatenated transcript tokens overlapping the window.
+
+    Tokens (chunks) are preferred when present; fall back to the full
+    ScriptLine text when chunks are absent and the line's [start, end]
+    overlaps the window.
+    """
+    if not result:
+        return ""
+    items = result if isinstance(result, list) else [result]
+    pieces: list[str] = []
+    for line in items:
+        chunks = _seg_attr(line, "chunks") or []
+        if chunks:
+            for c in chunks:
+                cs = _seg_attr(c, "start")
+                ce = _seg_attr(c, "end")
+                if cs is None or ce is None:
+                    continue
+                if float(cs) < win_end and float(ce) > win_start:
+                    text = _seg_attr(c, "text") or ""
+                    if text:
+                        pieces.append(str(text).strip())
+        else:
+            ls = _seg_attr(line, "start")
+            le = _seg_attr(line, "end")
+            text = _seg_attr(line, "text") or ""
+            if not text:
+                continue
+            if ls is None or le is None or (float(ls) < win_end and float(le) > win_start):
+                pieces.append(str(text).strip())
+    return " ".join(p for p in pieces if p).strip()
+
+
+def _wer_per_window(text_a: str, text_b: str) -> float:
+    """Word error rate (clipped to [0, 1]) between two token strings.
+
+    Edge cases:
+    - both empty → 0.0 (no signal, no disagreement)
+    - one empty → 1.0 (insertion / deletion)
+    - both populated → jiwer.wer; clipped at 1.0 for sortability.
+    """
+    a, b = (text_a or "").strip(), (text_b or "").strip()
+    if not a and not b:
+        return 0.0
+    if not a or not b:
+        return 1.0
+    import jiwer  # local import — keeps cold-start fast
+
+    return float(min(jiwer.wer(a, b), 1.0))
+
+
+def _bool_pair_disagrees(a: bool | None, b: bool | None) -> bool:
+    """True only when both sides are non-null and differ."""
+    if a is None or b is None:
+        return False
+    return a != b
+
+
+def _diff_diarization(
+    result_a: Any,  # noqa: ANN401
+    result_b: Any,  # noqa: ANN401
+    grid: ComparisonGrid,
+    duration_s: float,
+    *,
+    boundary_shift_ms: float,  # noqa: ARG001 — reserved for future per-segment boundary diff
+    **base_row: Any,  # noqa: ANN401
+) -> list[dict[str, Any]]:
+    """Compare two diarization outputs on ``grid``: speaks_a vs speaks_b per bucket."""
+    rows: list[dict[str, Any]] = []
+    for start, end, _idx in grid.iter_buckets(duration_s):
+        sa = _diar_speaks_in_window(result_a, start, end)
+        sb = _diar_speaks_in_window(result_b, start, end)
+        agree = sa == sb
+        rows.append(
+            {
+                **base_row,
+                "start": start,
+                "end": end,
+                "agree": agree,
+                "mismatch_type": None if agree else "boundary_shift",
+                "comparison_status": "ok",
+                "speaks_a": sa,
+                "speaks_b": sb,
+            }
+        )
+    return rows
+
+
+def _diff_classification(
+    result_a: Any,  # noqa: ANN401
+    result_b: Any,  # noqa: ANN401
+    grid: ComparisonGrid,  # noqa: ARG001 — classification windowing follows result shape, not external grid
+    duration_s: float,  # noqa: ARG001 — same reason
+    *,
+    win_length_a: float,  # noqa: ARG001 — reserved for grid-mismatch projection
+    win_length_b: float,  # noqa: ARG001 — same
+    **base_row: Any,  # noqa: ANN401
+) -> list[dict[str, Any]]:
+    """Compare AST/YAMNet outputs window-by-window when both ran on the same grid.
+
+    When the two outputs have different window counts (e.g. AST 10.24 s vs
+    YAMNet 0.96 s), only the overlapping prefix is compared. A future
+    refinement would project both onto a shared grid; for v1 we trust the
+    per-model native grid.
+    """
+    rows: list[dict[str, Any]] = []
+    windows_a = result_a[0] if isinstance(result_a, list) and result_a else []
+    windows_b = result_b[0] if isinstance(result_b, list) and result_b else []
+    n = min(len(windows_a), len(windows_b))
+    for idx in range(n):
+        ta, sa, ea = _classification_top1_in_window(result_a, idx)
+        tb, sb, eb = _classification_top1_in_window(result_b, idx)
+        # Use the smaller of the two native window lengths for the row span;
+        # this is approximate but adequate for the timeline.
+        # (We just use the AST grid for this row's start/end; callers needing
+        # exact alignment should use cross-stream comparators.)
+        # Sentinel: idx-based span using the side-A grid (caller's
+        # responsibility to ensure both sides ran on the same grid for
+        # within_stream and raw_vs_enhanced — single-model contracts).
+        rows.append(
+            {
+                **base_row,
+                "start": float(idx),  # placeholder — caller can override via post-processing
+                "end": float(idx + 1),  # idem
+                "agree": ta == tb,
+                "mismatch_type": None if ta == tb else "label_flip",
+                "comparison_status": "ok",
+                "top1_a": ta,
+                "top1_b": tb,
+                "score_a": sa,
+                "score_b": sb,
+                "entropy_a": ea,
+                "entropy_b": eb,
+            }
+        )
+    return rows
+
+
+def _diff_asr(
+    result_a: Any,  # noqa: ANN401
+    result_b: Any,  # noqa: ANN401
+    grid: ComparisonGrid,
+    duration_s: float,
+    *,
+    reference_side: str,  # "a" or "b"
+    **base_row: Any,  # noqa: ANN401
+) -> list[dict[str, Any]]:
+    """Per-window WER between two ASR outputs on ``grid``.
+
+    Empty buckets (no speech in either result) are dropped — we only
+    emit rows where at least one side had text overlap.
+    """
+    rows: list[dict[str, Any]] = []
+    for start, end, _idx in grid.iter_buckets(duration_s):
+        a_text = _asr_text_in_window(result_a, start, end)
+        b_text = _asr_text_in_window(result_b, start, end)
+        if not a_text and not b_text:
+            continue
+        if reference_side == "b":
+            wer = _wer_per_window(b_text, a_text)
+        else:
+            wer = _wer_per_window(a_text, b_text)
+        agree = wer == 0.0
+        rows.append(
+            {
+                **base_row,
+                "start": start,
+                "end": end,
+                "agree": agree,
+                "mismatch_type": None if agree else "text_edit",
+                "comparison_status": "ok",
+                "wer": wer,
+                "a_text": a_text,
+                "b_text": b_text,
+                "reference_side": reference_side,
+            }
+        )
+    return rows
+
+
+def _comparator_params_for_run(args: argparse.Namespace) -> dict[str, Any]:
+    """Snapshot of comparator-relevant CLI flags for cache-key + provenance."""
+    return {
+        "cross_stream_win_length": args.cross_stream_win_length,
+        "cross_stream_hop_length": args.cross_stream_hop_length,
+        "uncertainty_aggregator": args.uncertainty_aggregator,
+        "phoneme_disagreement_threshold": args.phoneme_disagreement_threshold,
+        "speech_presence_labels": [s.strip() for s in args.speech_presence_labels.split(",") if s.strip()],
+        "asr_reference_model": args.asr_reference_model,
+        "diarization_boundary_shift_ms": args.diarization_boundary_shift_ms,
+    }
+
+
+def _model_block_cache_key(model_block: dict[str, Any]) -> str:
+    """Best-effort cache key for an upstream model block (falls back to '' when absent)."""
+    return str(model_block.get("cache_key") or "")
+
+
+def _result_or_none(model_block: dict[str, Any]) -> Any:  # noqa: ANN401
+    """Return the model_block's `result` only when status is ok."""
+    if not isinstance(model_block, dict):
+        return None
+    if model_block.get("status") != "ok":
+        return None
+    return model_block.get("result")
+
+
+def _attach_comparator_regions_to_ls_tasks(
+    ls_tasks: list[dict[str, Any]],
+    parquet_paths: list[Path],
+    top_n: int,
+) -> list[dict[str, Any]]:
+    """Append disagreement regions from each parquet onto the matching pass's LS task.
+
+    Reads each parquet, picks the rows where ``agree`` is False (capped at
+    top_n total across the entire run, sorted by combined_uncertainty
+    descending with NaN-last), and attaches them as Labels (and optional
+    TextArea) regions to the right pass's LS task.
+    """
+    import math
+
+    import pandas as pd
+
+    # Index ls_tasks by pass label for O(1) lookup.
+    by_pass: dict[str, dict[str, Any]] = {t["data"]["pass"]: t for t in ls_tasks if "data" in t}
+    # Aggregate disagreement rows from all parquets.
+    candidates: list[tuple[float, dict[str, Any], dict[str, Any]]] = []
+    for p in parquet_paths:
+        try:
+            df = pd.read_parquet(p)
+        except Exception:
+            continue
+        if df.empty:
+            continue
+        for idx, row in df.iterrows():
+            if row.get("agree", True) is True:
+                continue
+            cu = row.get("combined_uncertainty")
+            cu_val = float(cu) if cu is not None and not (isinstance(cu, float) and math.isnan(cu)) else float("nan")
+            row_dict = row.to_dict()
+            track_name = _comparison_ls_track_name(row_dict)
+            region_id = _comparison_region_id(p, idx, row_dict)
+            label_value = (
+                row_dict.get("comparison_status")
+                if row_dict.get("comparison_status") in ("incomparable", "one_sided")
+                else "disagree"
+            )
+            label_region = _comparison_ls_label_region(
+                region_id=region_id,
+                from_name=track_name,
+                start=float(row_dict["start"]),
+                end=float(row_dict["end"]),
+                label=label_value,
+            )
+            extras: list[dict[str, Any]] = []
+            if "wer" in row_dict and pd.notna(row_dict.get("wer")):
+                wer = float(row_dict.get("wer", 0.0))
+                a = (row_dict.get("a_text") or "")[:200]
+                b = (row_dict.get("b_text") or "")[:200]
+                extras.append(
+                    _comparison_ls_textarea_region(
+                        region_id=f"{region_id}__text",
+                        from_name=f"{track_name}__text",
+                        start=float(row_dict["start"]),
+                        end=float(row_dict["end"]),
+                        text=f"WER {wer:.2f}: A={a!r} | B={b!r}",
+                    )
+                )
+            candidates.append((cu_val, label_region, {"extras": extras, "row": row_dict}))
+
+    # Sort: NaN last (treat as +inf so they sort to the end after descending flip).
+    def _sort_key(t: tuple[float, dict[str, Any], dict[str, Any]]) -> tuple[Any, ...]:
+        cu = t[0]
+        primary = -cu if cu == cu else float("inf")
+        return (primary, _disagreement_severity_rank(t[2]["row"].get("mismatch_type")), t[1]["value"]["start"])
+
+    candidates.sort(key=_sort_key)
+    selected = candidates[:top_n]
+    for _cu, label_region, meta in selected:
+        # Find the pass — the from_name encodes it: "<pass>__compare__..."
+        from_name = label_region["from_name"]
+        pass_label = from_name.split("__compare__", 1)[0]
+        target = by_pass.get(pass_label)
+        if target is None and pass_label == "pass_pair":
+            # raw_vs_enhanced regions go on the raw_16k task by convention.
+            target = by_pass.get("raw_16k")
+        if target is None:
+            continue
+        # First prediction block holds the analyzer regions; reuse it.
+        if not target.get("predictions"):
+            continue
+        target["predictions"][0]["result"].append(label_region)
+        for extra in meta["extras"]:
+            target["predictions"][0]["result"].append(extra)
+    return ls_tasks
+
+
+def compare_raw_vs_enhanced(
+    summaries: dict[str, Any],
+    args: argparse.Namespace,
+    run_dir: Path,
+    cache_dir: Path | None,
+    audio_sig: str,
+    duration_s: float,
+    wrapper_hash: str,
+    senselab_ver: str,
+) -> tuple[list[Path], list[dict[str, Any]], dict[str, str]]:
+    """For each task × model present in BOTH passes, emit a raw_vs_enhanced parquet.
+
+    Returns ``(parquet_paths, comparator_tracks, incomparable_reasons)`` for
+    consumption by the disagreements index and the LS bundle.
+    """
+    parquets: list[Path] = []
+    tracks: list[dict[str, Any]] = []
+    incomparable: dict[str, str] = {}
+    passes = summaries.get("passes", {})
+    raw = passes.get("raw_16k") or {}
+    enh = passes.get("enhanced_16k") or {}
+    if not raw or not enh:
+        return parquets, tracks, incomparable
+
+    grid = ComparisonGrid(
+        win_length=args.cross_stream_win_length,
+        hop_length=args.cross_stream_hop_length,
+        name="cross_stream",
+    )
+    base_dir = run_dir / "comparisons" / "raw_vs_enhanced"
+
+    # Per-task by_model differencers.
+    task_specs: list[tuple[str, str, Any]] = [
+        ("diarization", "by_model", _diff_diarization),
+        ("asr", "by_model", _diff_asr),
+        ("alignment", "by_model", _diff_asr),  # alignment outputs are ScriptLines like ASR
+    ]
+    for task, _key, differencer in task_specs:
+        raw_models = (raw.get(task) or {}).get("by_model") or {}
+        enh_models = (enh.get(task) or {}).get("by_model") or {}
+        for model_id in sorted(set(raw_models) & set(enh_models)):
+            raw_block = raw_models[model_id]
+            enh_block = enh_models[model_id]
+            raw_res = _result_or_none(raw_block)
+            enh_res = _result_or_none(enh_block)
+            if raw_res is None or enh_res is None:
+                incomparable[f"{task}/{_safe(model_id)}/raw_vs_enhanced"] = (
+                    f"upstream {task}/{model_id} not ok in one of the passes"
+                )
+                continue
+            base_row = {
+                "comparison_kind": "raw_vs_enhanced",
+                "task": task,
+                "stream_pair": None,
+                "model_a": model_id,
+                "model_b": model_id,
+                "pass_a": "raw_16k",
+                "pass_b": "enhanced_16k",
+                "confidence_a": None,
+                "confidence_b": None,
+                "combined_uncertainty": None,
+            }
+            kwargs: dict[str, Any] = {}
+            if differencer is _diff_asr:
+                kwargs["reference_side"] = "a"
+            elif differencer is _diff_diarization:
+                kwargs["boundary_shift_ms"] = args.diarization_boundary_shift_ms
+            rows = differencer(raw_res, enh_res, grid, duration_s, **kwargs, **base_row)
+            if not rows:
+                continue
+            dest = base_dir / task / f"{_safe(model_id)}.parquet"
+            cache_key_str = comparison_cache_key(
+                audio_sig=audio_sig,
+                comparison_kind="raw_vs_enhanced",
+                task_or_pair=f"{task}/{model_id}",
+                upstream_cache_keys=[
+                    _model_block_cache_key(raw_block),
+                    _model_block_cache_key(enh_block),
+                ],
+                params=_comparator_params_for_run(args),
+                wrapper_hash=wrapper_hash,
+                senselab_ver=senselab_ver,
+            )
+            cached = cache_lookup(cache_dir, cache_key_str) if cache_dir else None
+            if cached is None:
+                provenance = {
+                    "schema_version": 1,
+                    "wrapper_hash": wrapper_hash,
+                    "senselab_version": senselab_ver,
+                    "grid": {"name": grid.name, "win_length": grid.win_length, "hop_length": grid.hop_length},
+                    "upstream_cache_keys": sorted(
+                        {_model_block_cache_key(raw_block), _model_block_cache_key(enh_block)}
+                    ),
+                    "comparator_params": _comparator_params_for_run(args),
+                    "cache_key": cache_key_str,
+                }
+                write_comparison_parquet(rows, dest, provenance=provenance)
+                if cache_dir is not None:
+                    cache_store(cache_dir, cache_key_str, {"parquet_path": str(dest), "rows": len(rows)})
+            parquets.append(dest)
+            track_name = f"pass_pair__compare__{task}__{_safe(model_id)}"
+            tracks.append({"name": track_name, "with_textarea": task == "asr"})
+
+    return parquets, tracks, incomparable
+
+
 def _flatten_feature_dict(d: dict[str, Any], prefix: str = "") -> dict[str, Any]:
     """Flatten a nested feature dict into a single-row dict suitable for a parquet column.
 
@@ -1976,6 +2431,34 @@ def main(argv: list[str] | None = None) -> int:
 
     write_json(run_dir / "summary.json", summaries)
 
+    # ── Comparison & uncertainty stage ─────────────────────────────────
+    # Runs only when the user did not opt out via --skip comparisons.
+    comparator_parquets: list[Path] = []
+    comparator_tracks: list[dict[str, Any]] = []
+    incomparable_reasons: dict[str, str] = {}
+    if "comparisons" not in args.skip:
+        # Pick a duration to drive the cross-stream grid: prefer raw pass's,
+        # fall back to enhanced if raw failed wholesale.
+        comparison_duration = (
+            (summaries.get("passes", {}).get("raw_16k") or {}).get("duration_s")
+            or (summaries.get("passes", {}).get("enhanced_16k") or {}).get("duration_s")
+            or 0.0
+        )
+        if comparison_duration > 0 and "raw_vs_enhanced" not in args.skip_comparisons:
+            rve_parquets, rve_tracks, rve_incomparable = compare_raw_vs_enhanced(
+                summaries=summaries,
+                args=args,
+                run_dir=run_dir,
+                cache_dir=cache_dir,
+                audio_sig=audio_signature(audio_16k),
+                duration_s=comparison_duration,
+                wrapper_hash=wrapper_hash,
+                senselab_ver=senselab_ver,
+            )
+            comparator_parquets.extend(rve_parquets)
+            comparator_tracks.extend(rve_tracks)
+            incomparable_reasons.update(rve_incomparable)
+
     # Hierarchical Label Studio export — one LS task per audio variant, each
     # carrying parallel timeline tracks (one per analyzer × model). AST and
     # YAMNet contribute regions at their own native temporal resolution.
@@ -1994,10 +2477,35 @@ def main(argv: list[str] | None = None) -> int:
         for pass_label, pass_summary in summaries["passes"].items()
         if isinstance(pass_summary, dict) and "duration_s" in pass_summary
     ]
+    # Append comparator LS regions (top-N flagged disagreements) before write.
+    if comparator_parquets and args.disagreements_top_n > 0:
+        ls_tasks = _attach_comparator_regions_to_ls_tasks(ls_tasks, comparator_parquets, args.disagreements_top_n)
     write_json(run_dir / "labelstudio_tasks.json", ls_tasks)
 
-    config_xml = build_labelstudio_config(summaries)
+    config_xml = build_labelstudio_config(summaries, comparator_tracks=comparator_tracks)
     (run_dir / "labelstudio_config.xml").write_text(config_xml, encoding="utf-8")
+
+    # ── Disagreements index ─────────────────────────────────────────────
+    if "comparisons" not in args.skip:
+        index = _build_disagreements_index(
+            parquet_paths=comparator_parquets,
+            top_n=args.disagreements_top_n,
+            aggregator=args.uncertainty_aggregator,
+            run_dir=run_dir,
+            config={
+                "top_n": args.disagreements_top_n,
+                "aggregator": args.uncertainty_aggregator,
+                "phoneme_disagreement_threshold": args.phoneme_disagreement_threshold,
+                "cross_stream_grid": {
+                    "win_length": args.cross_stream_win_length,
+                    "hop_length": args.cross_stream_hop_length,
+                },
+                "speech_presence_labels": [s.strip() for s in args.speech_presence_labels.split(",") if s.strip()],
+            },
+            incomparable_reasons=incomparable_reasons,
+            missing_confidence_signals=[],
+        )
+        write_json(run_dir / "disagreements.json", index)
 
     print(f"\nDone. Summary: {run_dir / 'summary.json'}")
     print(f"Label Studio tasks:  {run_dir / 'labelstudio_tasks.json'}")
