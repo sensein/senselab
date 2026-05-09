@@ -1358,6 +1358,11 @@ def compare_raw_vs_enhanced(
             rows = differencer(raw_res, enh_res, grid, duration_s, **kwargs, **base_row)
             if not rows:
                 continue
+            # US4: enrich rows with per-region confidence + combined_uncertainty.
+            if differencer is _diff_asr:
+                _enrich_diff_asr_with_confidence(
+                    rows, result_a=raw_res, result_b=enh_res, aggregator=args.uncertainty_aggregator
+                )
             dest = base_dir / task / f"{_safe(model_id)}.parquet"
             cache_key_str = comparison_cache_key(
                 audio_sig=audio_sig,
@@ -1465,6 +1470,10 @@ def compare_within_stream(
             rows = differencer(res_a, res_b, grid, duration_s, **kwargs, **base_row)
             if not rows:
                 continue
+            if differencer is _diff_asr:
+                _enrich_diff_asr_with_confidence(
+                    rows, result_a=res_a, result_b=res_b, aggregator=args.uncertainty_aggregator
+                )
             dest = base_dir / task / f"{_safe(a)}_vs_{_safe(b)}.parquet"
             cache_key_str = comparison_cache_key(
                 audio_sig=audio_sig,
@@ -1536,6 +1545,8 @@ def compare_within_stream(
                 for i, r in enumerate(rows):
                     r["start"] = round(i * hop, 4)
                     r["end"] = round(i * hop + win, 4)
+                # US4: classification confidence = top-1 score; populate combined_uncertainty.
+                _enrich_diff_classification_with_confidence(rows, aggregator=args.uncertainty_aggregator)
                 dest = base_dir / "scene" / "ast_vs_yamnet.parquet"
                 cache_key_str = comparison_cache_key(
                     audio_sig=audio_sig,
@@ -1975,6 +1986,107 @@ def compare_cross_stream(
         incomparable[f"{pass_label}/asr_vs_ppg"] = "PPG backend not provisioned"
 
     return parquets, tracks, incomparable
+
+
+# ── Per-region uncertainty harvesters (US4) ────────────────────────────
+
+
+def _whisper_chunk_confidence(chunk: Any) -> tuple[float | None, float | None]:  # noqa: ANN401
+    """Return (confidence, no_speech_prob) from a Whisper chunk dict / ScriptLine.
+
+    confidence = exp(avg_logprob) clipped to [0, 1] (avg_logprob is the
+    per-token mean log-prob; exp converts to a [0, 1] probability).
+    Returns (None, None) when neither field is present on the chunk.
+    """
+    import math
+
+    avg = _seg_attr(chunk, "avg_logprob")
+    nsp = _seg_attr(chunk, "no_speech_prob")
+    confidence: float | None = None
+    if avg is not None:
+        try:
+            confidence = max(0.0, min(1.0, float(math.exp(float(avg)))))
+        except Exception:  # noqa: BLE001
+            confidence = None
+    no_speech = float(nsp) if nsp is not None else None
+    return confidence, no_speech
+
+
+def _whisper_bucket_confidence(result: Any, win_start: float, win_end: float) -> float | None:  # noqa: ANN401
+    """Mean Whisper confidence over the chunks overlapping [win_start, win_end].
+
+    Returns None when no overlapping chunk has an avg_logprob signal (FR-007:
+    drop, do not zero, when the native signal is absent).
+    """
+    if not result:
+        return None
+    items = result if isinstance(result, list) else [result]
+    confidences: list[float] = []
+    for line in items:
+        chunks = _seg_attr(line, "chunks") or []
+        for c in chunks:
+            cs = _seg_attr(c, "start")
+            ce = _seg_attr(c, "end")
+            if cs is None or ce is None:
+                continue
+            if float(cs) < win_end and float(ce) > win_start:
+                conf, _ = _whisper_chunk_confidence(c)
+                if conf is not None:
+                    confidences.append(conf)
+    if not confidences:
+        return None
+    return sum(confidences) / len(confidences)
+
+
+def _enrich_diff_asr_with_confidence(
+    rows: list[dict[str, Any]],
+    *,
+    result_a: Any,  # noqa: ANN401
+    result_b: Any,  # noqa: ANN401
+    aggregator: str,
+) -> None:
+    """In-place: fill confidence_a/b + combined_uncertainty on ASR-vs-ASR rows."""
+    for r in rows:
+        ca = _whisper_bucket_confidence(result_a, r["start"], r["end"])
+        cb = _whisper_bucket_confidence(result_b, r["start"], r["end"])
+        r["confidence_a"] = ca
+        r["confidence_b"] = cb
+        r["combined_uncertainty"] = _aggregate_uncertainty([ca, cb], aggregator)
+
+
+def _enrich_diff_classification_with_confidence(
+    rows: list[dict[str, Any]],
+    *,
+    aggregator: str,
+) -> None:
+    """In-place: combined_uncertainty for classification rows from existing score_a/b."""
+    for r in rows:
+        ca = r.get("score_a")
+        cb = r.get("score_b")
+        r["confidence_a"] = float(ca) if ca is not None else None
+        r["confidence_b"] = float(cb) if cb is not None else None
+        r["combined_uncertainty"] = _aggregate_uncertainty([r["confidence_a"], r["confidence_b"]], aggregator)
+
+
+def _models_without_native_confidence(summaries: dict[str, Any]) -> list[str]:
+    """Return the model ids that contributed to comparisons but lack a native confidence signal.
+
+    Per research.md §2 only Whisper (avg_logprob) and AST/YAMNet (top-1 score
+    + entropy) currently expose native scalars. The rest are flagged.
+    """
+    KNOWN_NULL = ("pyannote", "sortformer", "ibm-granite", "canary-qwen", "Qwen/Qwen3-ASR")
+    seen: set[str] = set()
+    for pass_summary in summaries.get("passes", {}).values():
+        if not isinstance(pass_summary, dict):
+            continue
+        for task in ("diarization", "asr", "alignment"):
+            by_model = (pass_summary.get(task) or {}).get("by_model") or {}
+            for m, b in by_model.items():
+                if not isinstance(b, dict) or b.get("status") != "ok":
+                    continue
+                if any(prefix in m for prefix in KNOWN_NULL):
+                    seen.add(m)
+    return sorted(seen)
 
 
 def _flatten_feature_dict(d: dict[str, Any], prefix: str = "") -> dict[str, Any]:
@@ -3122,7 +3234,7 @@ def main(argv: list[str] | None = None) -> int:
                 "speech_presence_labels": [s.strip() for s in args.speech_presence_labels.split(",") if s.strip()],
             },
             incomparable_reasons=incomparable_reasons,
-            missing_confidence_signals=[],
+            missing_confidence_signals=_models_without_native_confidence(summaries),
         )
         write_json(run_dir / "disagreements.json", index)
 

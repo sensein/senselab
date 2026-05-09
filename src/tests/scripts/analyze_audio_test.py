@@ -659,6 +659,179 @@ def test_cross_stream_phoneme_per_two_tier(aa: types.ModuleType) -> None:
         assert r["phoneme_disagreement"] is True
 
 
+# ── Phase 6 (US4 uncertainty) tests ───────────────────────────────────
+
+
+def test_uncertainty_whisper_avg_logprob_extracted(aa: types.ModuleType) -> None:
+    """Whisper avg_logprob -> exp(avg_logprob) confidence; no_speech_prob preserved."""
+    import math
+
+    chunk = SimpleNamespace(text="hi", start=0.0, end=1.0, avg_logprob=-0.5, no_speech_prob=0.1)
+    conf, nsp = aa._whisper_chunk_confidence(chunk)
+    assert conf is not None
+    assert conf == pytest.approx(math.exp(-0.5))
+    assert nsp == 0.1
+    # Missing signal returns (None, None)
+    blank = SimpleNamespace(text="hi", start=0.0, end=1.0)
+    assert aa._whisper_chunk_confidence(blank) == (None, None)
+
+
+def test_uncertainty_aggregator_min_default_via_compare(aa: types.ModuleType, tmp_path: Path) -> None:
+    """ASR-vs-ASR rows pick up combined_uncertainty = 1 - min(confidence_a, confidence_b)."""
+    # Build two ASR results where each chunk carries an avg_logprob.
+    chunks_a = [SimpleNamespace(text="hello", start=0.0, end=0.5, avg_logprob=-0.1, chunks=None, speaker=None)]
+    chunks_b = [SimpleNamespace(text="hello", start=0.0, end=0.5, avg_logprob=-1.0, chunks=None, speaker=None)]
+    res_a = [SimpleNamespace(text="hello", start=None, end=None, chunks=chunks_a, speaker=None)]
+    res_b = [SimpleNamespace(text="hello", start=None, end=None, chunks=chunks_b, speaker=None)]
+    summary = {
+        "duration_s": 0.5,
+        "asr": {
+            "by_model": {
+                "a": {"status": "ok", "result": res_a, "cache_key": "ka"},
+                "b": {"status": "ok", "result": res_b, "cache_key": "kb"},
+            }
+        },
+    }
+    args = aa.parse_args(["/tmp/dummy.wav", "--cross-stream-win-length", "0.5", "--cross-stream-hop-length", "0.5"])
+    parquets, _, _ = aa.compare_within_stream(
+        pass_label="raw_16k",
+        pass_summary=summary,
+        args=args,
+        run_dir=tmp_path,
+        cache_dir=None,
+        audio_sig="A" * 64,
+        duration_s=0.5,
+        wrapper_hash="W",
+        senselab_ver="1.0",
+    )
+    import math
+
+    import pandas as pd
+
+    df = pd.read_parquet(parquets[0])
+    # avg_logprob: a=-0.1 -> conf 0.905; b=-1.0 -> conf 0.368. min(...) = 0.368 → uncertainty 0.632.
+    expected = 1.0 - math.exp(-1.0)
+    assert df.iloc[0]["confidence_a"] == pytest.approx(math.exp(-0.1), rel=1e-6)
+    assert df.iloc[0]["confidence_b"] == pytest.approx(math.exp(-1.0), rel=1e-6)
+    assert df.iloc[0]["combined_uncertainty"] == pytest.approx(expected, rel=1e-6)
+
+
+def test_uncertainty_missing_signal_dropped_not_zeroed(aa: types.ModuleType) -> None:
+    """A row with one None confidence sees combined_uncertainty = 1 - the other confidence."""
+    out = aa._aggregate_uncertainty([0.9, None], "min")
+    assert out == pytest.approx(0.1)
+    # Both None → None
+    assert aa._aggregate_uncertainty([None, None], "min") is None
+
+
+def test_disagreements_index_top_n_and_ordering(aa: types.ModuleType, tmp_path: Path) -> None:
+    """Disagreements index: sort by combined_uncertainty desc, mismatch priority, start asc."""
+    import pandas as pd
+
+    rows = [
+        {
+            "start": 0.0,
+            "end": 0.2,
+            "comparison_kind": "within_stream",
+            "task": "asr",
+            "stream_pair": None,
+            "model_a": "a",
+            "model_b": "b",
+            "pass_a": "raw_16k",
+            "pass_b": "raw_16k",
+            "agree": False,
+            "mismatch_type": "text_edit",
+            "comparison_status": "ok",
+            "confidence_a": 0.5,
+            "confidence_b": 0.5,
+            "combined_uncertainty": 0.5,
+        },
+        {
+            "start": 0.2,
+            "end": 0.4,
+            "comparison_kind": "within_stream",
+            "task": "asr",
+            "stream_pair": None,
+            "model_a": "a",
+            "model_b": "b",
+            "pass_a": "raw_16k",
+            "pass_b": "raw_16k",
+            "agree": False,
+            "mismatch_type": "text_edit",
+            "comparison_status": "ok",
+            "confidence_a": 0.1,
+            "confidence_b": 0.1,
+            "combined_uncertainty": 0.9,
+        },
+        {
+            "start": 0.4,
+            "end": 0.6,
+            "comparison_kind": "within_stream",
+            "task": "asr",
+            "stream_pair": None,
+            "model_a": "a",
+            "model_b": "b",
+            "pass_a": "raw_16k",
+            "pass_b": "raw_16k",
+            "agree": True,
+            "mismatch_type": None,
+            "comparison_status": "ok",
+            "confidence_a": 0.95,
+            "confidence_b": 0.95,
+            "combined_uncertainty": 0.05,
+        },
+    ]
+    parquet = tmp_path / "raw_16k" / "comparisons" / "asr" / "a_vs_b.parquet"
+    parquet.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).to_parquet(parquet, index=False)
+
+    idx = aa._build_disagreements_index(
+        parquet_paths=[parquet],
+        top_n=10,
+        aggregator="min",
+        run_dir=tmp_path,
+        config={"top_n": 10},
+        incomparable_reasons={},
+        missing_confidence_signals=[],
+    )
+    # Only the two disagreement rows make it; agree=True row is excluded.
+    assert idx["totals"]["disagreement_rows"] == 2
+    assert len(idx["entries"]) == 2
+    # Sort: highest combined_uncertainty first.
+    assert idx["entries"][0]["combined_uncertainty"] == 0.9
+    assert idx["entries"][1]["combined_uncertainty"] == 0.5
+    assert idx["entries"][0]["rank"] == 1
+    assert idx["entries"][1]["rank"] == 2
+
+
+def test_models_without_native_confidence_lists_known_null(aa: types.ModuleType) -> None:
+    """The disagreements.json missing_confidence_signals list mentions known-null backends."""
+    summaries = {
+        "passes": {
+            "raw_16k": {
+                "duration_s": 1.0,
+                "diarization": {
+                    "by_model": {
+                        "pyannote/speaker-diarization-community-1": {"status": "ok", "result": [[]]},
+                        "openai/whisper-large-v3-turbo": {"status": "ok", "result": [[]]},  # not in known-null list
+                    }
+                },
+                "asr": {
+                    "by_model": {
+                        "ibm-granite/granite-speech-3.3-8b": {"status": "ok", "result": []},
+                        "openai/whisper-large-v3-turbo": {"status": "ok", "result": []},
+                    }
+                },
+            }
+        }
+    }
+    out = aa._models_without_native_confidence(summaries)
+    assert "pyannote/speaker-diarization-community-1" in out
+    assert "ibm-granite/granite-speech-3.3-8b" in out
+    # Whisper is NOT in the null list (it has avg_logprob).
+    assert "openai/whisper-large-v3-turbo" not in out
+
+
 def test_raw_vs_enhanced_handles_failed_pass(aa: types.ModuleType, tmp_path: Path) -> None:
     """When one pass failed, comparator emits no parquet for that task/model (incomparable)."""
     summaries = {
