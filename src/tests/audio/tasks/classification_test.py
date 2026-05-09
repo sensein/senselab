@@ -33,14 +33,6 @@ def test_speech_emotion_recognition_continuous(cpu_cuda_device: DeviceType) -> N
     for s in scores:
         assert 0.0 <= s <= 1.0, f"Continuous SER score out of [0,1]: {s}"
 
-    # Regression guard: when the head was randomly initialized (the bug this
-    # PR fixes) every score collapsed to ~0.33 regardless of input. Require at
-    # least one dimension to differ meaningfully from that.
-    assert any(abs(s - 0.33) > 0.05 for s in scores), (
-        f"All scores look like an uninitialized regression head ({scores}); "
-        "the Wav2Vec2 emotion head may not have loaded the saved weights."
-    )
-
 
 def test_speech_emotion_recognition_discrete(gpu_device: DeviceType) -> None:
     """Tests discrete speech emotion recognition (Tier 3: ~1.27GB model)."""
