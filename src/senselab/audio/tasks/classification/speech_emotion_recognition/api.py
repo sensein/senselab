@@ -37,7 +37,7 @@ from senselab.utils.data_structures import (
     _select_device_and_dtype,
     logger,
 )
-from senselab.utils.dependencies import speechbrain_savedir
+from senselab.utils.dependencies import speechbrain_loading_cwd, speechbrain_savedir
 from senselab.utils.subprocess_venv import ensure_venv, parse_subprocess_result, venv_python
 
 
@@ -641,11 +641,13 @@ def _load_speechbrain_ser_model(model: SpeechBrainModel, device_type: DeviceType
     )
 
     run_opts = {"device": device_type.value}
-    recognizer = recognizer_cls.from_hparams(  # type: ignore[attr-defined]
-        source=str(model.path_or_uri),
-        savedir=str(speechbrain_savedir(str(model.path_or_uri), model.revision)),
-        run_opts=run_opts,
-    )
+    savedir = speechbrain_savedir(str(model.path_or_uri), model.revision)
+    with speechbrain_loading_cwd(savedir):
+        recognizer = recognizer_cls.from_hparams(  # type: ignore[attr-defined]
+            source=str(model.path_or_uri),
+            savedir=str(savedir),
+            run_opts=run_opts,
+        )
 
     # Extract label names from label_encoder if available
     label_list: List[str] = []
