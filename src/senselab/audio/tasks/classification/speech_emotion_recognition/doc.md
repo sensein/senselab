@@ -13,6 +13,19 @@ SER is typically split between two subcategories: discrete emotion classificatio
 ## Models
 A variety of models are supported by ```senselab``` for SER tasks. They can be explored on the [Hugging Face Hub](https://huggingface.co/models?pipeline_tag=audio-classification&library=transformers&sort=downloadss) and using search terms like "SER" or "emotion". Each model varies in performance, size, license, language support, and more. Performance may also vary depending on who is the speaker in the processed audio clips (there may be differences in terms of age, dialects, disfluencies). It is recommended to review the model card for each model before use. Also, always refer to the most recent literature for an informed decision.
 
+### Dispatch & supported checkpoint families
+`classify_emotions_from_speech` routes each model through one of three paths, in priority order:
+
+1. **Custom in-process emotion-head class** — for checkpoints that pair a recognized speech encoder (`wav2vec2`, `hubert`, `wavlm`, or `wav2vec2-bert`) with a 2-layer `dense → activation → dropout → final` head. The dispatcher detects this either from the model's `architectures` string (`Wav2Vec2ForSpeechClassification`-style) or by peeking at the checkpoint's safetensors / shard-index manifest for `classifier.dense.*` plus `classifier.{out_proj,output}.*` keys. Single-bin checkpoints that can't be peeked cheaply must be registered in `_KNOWN_HEAD_LAYOUTS`. This path is what loads `audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim` and `ehcalabres/wav2vec2-lg-xlsr-en-speech-emotion-recognition` correctly — the standard transformers pipeline silently random-initializes their heads. The path applies softmax to logits when `config.problem_type` is set to a classification value (or the head's labels look discrete), and leaves them raw when `problem_type="regression"` or labels look continuous (arousal/valence/dominance).
+2. **Subprocess venv** — for continuous SER checkpoints with broken `config.json` (e.g. `vocab_size: null`) that `huggingface_hub>=1.0`'s strict validators reject. Run in an isolated venv pinned to `huggingface_hub<1.0`.
+3. **Standard transformers `pipeline()`** — for everything else. As of [#511](https://github.com/sensein/senselab/pull/511) this path also runs a head-load check: if `loading_info.missing_keys` or `mismatched_keys` contain head-shaped entries (`classifier.*`, `head.*`, `score.*`, `out_proj.*`, `projector.*`), a warning is logged. Set `SENSELAB_STRICT_HEAD_LOAD=1` to promote that warning to a `RuntimeError`.
+
+When the dispatcher's heuristics fail (e.g. a checkpoint with a 2-layer head whose final-layer attribute name is neither `out_proj` nor `output`, or a HuBERT/WavLM emotion model not in the registry), the standard pipeline path will still emit the head-load warning so silent failures are visible. To probe a model end-to-end without running inference, use the diagnostic CLI:
+
+```bash
+python -m senselab.audio.tasks.classification.speech_emotion_recognition --probe <model_id>
+```
+
 Most major models for SER currently focus on taking large, pre-trained models and then fine-tuning those towards specific tasks. Below we list 3 of these models with some examples that others have fine-tuned for the SER task.
 
 - **[WavLM](https://arxiv.org/abs/2110.13900)**
