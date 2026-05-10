@@ -5,15 +5,65 @@ if you need to process multiple audios in parallel, pass the entire list of audi
 function at once, rather than calling the function with one audio at a time.
 """
 
+import os
 import time
 from typing import Dict, List, Literal, Optional, cast
 
-from transformers import Pipeline, pipeline
+from transformers import AutoFeatureExtractor, AutoModelForAudioClassification, Pipeline, pipeline
 
 from senselab.audio.data_structures import Audio, AudioClassificationResult
 from senselab.audio.tasks.preprocessing import resample_audios
 from senselab.utils.data_structures import DeviceType, HFModel, _select_device_and_dtype
 from senselab.utils.data_structures.logging import logger
+
+# Phase 2: head-load diagnostic for the standard pipeline path.
+# The PR-#511 family of bugs (random-init head silently produces ~uniform softmax)
+# can also fire here for any audio-classification model whose checkpoint head doesn't
+# match the standard ``Wav2Vec2ForSequenceClassification``-style flat ``classifier``.
+# We FAIL by default — the user's downstream call sites (``classify_audios`` windowed
+# segmentation, ``classify_emotions_from_speech``) would otherwise consume the corrupted
+# scores without re-checking the warning state. Set ``SENSELAB_STRICT_HEAD_LOAD=0``
+# to demote to a ``logger.warning`` if you genuinely need to load a partial-head model
+# (e.g. for fine-tuning warm-start). Key prefixes that count as "head" weights —
+# anything else (encoder/feature_extractor) we ignore because transformers correctly
+# skips unused weights and these aren't the silent-failure surface.
+_SUSPECT_HEAD_PREFIXES: tuple[str, ...] = ("classifier.", "head.", "score.", "out_proj.", "projector.")
+
+
+def _check_head_loaded_cleanly(loading_info: dict, model: HFModel) -> None:
+    """Raise (or warn, in lax mode) if the loaded checkpoint left head weights random.
+
+    transformers' loader silently random-initializes any module that doesn't have a
+    matching key in the checkpoint. For audio classification this is the difference
+    between meaningful scores and ~uniform softmax — the bug that motivated PR #511
+    on the SER-specific path. This guard surfaces the same condition for the generic
+    audio-classification path. Default: hard ``RuntimeError``. Set
+    ``SENSELAB_STRICT_HEAD_LOAD=0`` to demote to ``logger.warning``.
+    """
+    missing_head = sorted(
+        k for k in loading_info.get("missing_keys", set()) if any(k.startswith(p) for p in _SUSPECT_HEAD_PREFIXES)
+    )
+    mismatched_head = sorted(
+        (k[0] if isinstance(k, tuple) else k)
+        for k in loading_info.get("mismatched_keys", set())
+        if any((k[0] if isinstance(k, tuple) else k).startswith(p) for p in _SUSPECT_HEAD_PREFIXES)
+    )
+    if not (missing_head or mismatched_head):
+        return
+
+    msg = (
+        f"Audio classifier head loaded with suspect weights for {model.path_or_uri} "
+        f"(revision={model.revision or 'main'}): missing={missing_head}, "
+        f"mismatched_shape={mismatched_head}. The pipeline would emit ~uniform softmax. "
+        f"If this checkpoint has a custom head, use the SER-specific path "
+        f"(senselab.audio.tasks.classification.speech_emotion_recognition.api) or extend "
+        f"its head registry. Set SENSELAB_STRICT_HEAD_LOAD=0 to demote to a warning if "
+        f"you intentionally want to load a partial head (e.g. for fine-tuning warm-start)."
+    )
+    if os.environ.get("SENSELAB_STRICT_HEAD_LOAD", "1") == "0":
+        logger.warning(msg)
+        return
+    raise RuntimeError(msg)
 
 
 class HuggingFaceAudioClassifier:
@@ -49,12 +99,24 @@ class HuggingFaceAudioClassifier:
         # and batch_size are call-time parameters passed at pipe() invocation.
         key = f"{model.path_or_uri}-{model.revision}-{device.value}"
         if key not in cls._pipelines:
+            # Phase 2: load the model explicitly so we can inspect ``loading_info``
+            # for the silent-random-head failure mode that motivated PR #511.
+            # ``pipeline()`` accepts a pre-loaded model + feature_extractor, so this
+            # only adds the inspection without a second download.
+            loaded, loading_info = AutoModelForAudioClassification.from_pretrained(  # type: ignore[call-overload]
+                str(model.path_or_uri),
+                revision=model.revision,
+                output_loading_info=True,
+            )
+            _check_head_loaded_cleanly(loading_info, model)
+            feature_extractor = AutoFeatureExtractor.from_pretrained(str(model.path_or_uri), revision=model.revision)
+            loaded = loaded.to(device.value)
             cls._pipelines[key] = cast(
                 Pipeline,
                 pipeline(  # type: ignore[call-overload]
                     task="audio-classification",
-                    model=model.path_or_uri,
-                    revision=model.revision,
+                    model=loaded,
+                    feature_extractor=feature_extractor,
                     device=device.value,
                 ),
             )
