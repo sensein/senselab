@@ -1,5 +1,6 @@
 """Align function based on WhisperX implementation."""
 
+import sys
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
@@ -59,6 +60,20 @@ def _preprocess_segments(
 
     total_segments = len(transcript)
 
+    # Detect dictionary case once per call. The per-language wav2vec2 aligners use
+    # uppercase A–Z vocab (so we .upper() the transcript to match), but MMS-eng uses
+    # lowercase a–z. Picking the wrong case here silently corrupts alignment: every
+    # alphabet character misses the dict lookup and only punctuation survives, so
+    # the output chunks contain garbage. Probe by counting how the dictionary
+    # represents whichever ASCII letters it does contain — non-Latin adapters
+    # (Thai, Korean, Arabic, …) won't have either A or a, so default to
+    # ``False`` (no upper-case forcing) and let the per-character vocab lookup
+    # decide what survives.
+    dict_keys = model_dictionary.keys()
+    has_upper = any(k in dict_keys for k in "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    has_lower = any(k in dict_keys for k in "abcdefghijklmnopqrstuvwxyz")
+    dict_uses_uppercase = has_upper and not has_lower
+
     for sdx, segment in enumerate(transcript):
         if print_progress:
             base_progress = ((sdx + 1) / total_segments) * 100
@@ -76,19 +91,20 @@ def _preprocess_segments(
 
         clean_char, clean_cdx = [], []
         for cdx, char in enumerate(text):
-            char_ = char.upper()
+            char_ = char.upper() if dict_uses_uppercase else char.lower()
             if model_lang.alpha_2 not in LANGUAGES_WITHOUT_SPACES:
                 char_ = char_.replace(" ", "|")
 
             if cdx < num_leading or cdx > len(text) - num_trailing - 1:
                 continue
-            elif char_ in model_dictionary.keys():
+            elif char_ in dict_keys:
                 clean_char.append(char_)
                 clean_cdx.append(cdx)
 
         clean_wdx = []
         for wdx, wrd in enumerate(per_word):
-            if any(c in model_dictionary.keys() for c in wrd):
+            wrd_cased = wrd.upper() if dict_uses_uppercase else wrd.lower()
+            if any(c in dict_keys for c in wrd_cased):
                 clean_wdx.append(wdx)
 
         punkt_param = PunktParameters()
@@ -195,7 +211,15 @@ def _assign_timestamps(
         if cdx in clean_cdx:
             char_seg_index = clean_cdx.index(cdx)
             char_seg = char_segments[char_seg_index]
-            char_dict = {"text": char, "timestamps": [round(x * ratio + t1, 3) for x in [char_seg.start, char_seg.end]]}
+            # ``char_seg.score`` is the mean per-frame CTC posterior probability
+            # for this character (from ``_merge_repeats``). Propagate it so
+            # downstream consumers (e.g. analyze_audio's utterance axis) can
+            # surface it as a per-token / per-bucket confidence signal.
+            char_dict = {
+                "text": char,
+                "timestamps": [round(x * ratio + t1, 3) for x in [char_seg.start, char_seg.end]],
+                "score": float(char_seg.score),
+            }
             current_word_dict["chunks"].append(char_dict)
             current_word_dict["text"] += char
 
@@ -205,6 +229,10 @@ def _assign_timestamps(
             if current_word_dict["chunks"]:
                 merged_timestamps = [t for c in current_word_dict["chunks"] for t in c["timestamps"]]
                 current_word_dict["timestamps"] = [min(merged_timestamps), max(merged_timestamps)]
+                # Word score = mean of its char scores.
+                char_scores = [c.get("score") for c in current_word_dict["chunks"] if c.get("score") is not None]
+                if char_scores:
+                    current_word_dict["score"] = float(sum(char_scores) / len(char_scores))
             current_subsegment_dict["text"] += current_word_dict["text"]
             current_subsegment_dict["chunks"].append(current_word_dict)
             current_word_dict = {"text": "", "timestamps": [], "chunks": []}
@@ -213,6 +241,10 @@ def _assign_timestamps(
             if current_subsegment_dict["chunks"]:
                 merged_timestamps = [t for c in current_subsegment_dict["chunks"] for t in c["timestamps"]]
                 current_subsegment_dict["timestamps"] = [min(merged_timestamps), max(merged_timestamps)]
+                # Sentence score = mean of its word scores.
+                word_scores = [w.get("score") for w in current_subsegment_dict["chunks"] if w.get("score") is not None]
+                if word_scores:
+                    current_subsegment_dict["score"] = float(sum(word_scores) / len(word_scores))
             aligned_segment_dict["chunks"].append(current_subsegment_dict)
             current_subsegment_dict = {"text": "", "timestamps": [], "chunks": []}
 
@@ -223,6 +255,10 @@ def _assign_timestamps(
 
     aligned_segment_dict["timestamps"][0] = aligned_segment_dict["chunks"][0]["timestamps"][0]
     aligned_segment_dict["timestamps"][1] = aligned_segment_dict["chunks"][-1]["timestamps"][1]
+    # Line score = mean of its sentence scores.
+    sentence_scores = [s.get("score") for s in aligned_segment_dict["chunks"] if s.get("score") is not None]
+    if sentence_scores:
+        aligned_segment_dict["score"] = float(sum(sentence_scores) / len(sentence_scores))
     return aligned_segment_dict
 
 
@@ -277,6 +313,14 @@ def _align_single_segment(
 
     char_segments = _merge_repeats(path, text_clean)
     duration = t2 - t1
+    # ``ratio`` maps trellis steps back to seconds. Senselab's ``Audio.waveform``
+    # is shaped ``(channels, samples)`` (typically ``(1, N)`` after the upstream
+    # mono downmix), so ``waveform_segment.size(0) == 1`` and the formula
+    # collapses to ``duration / (trellis_frames - 1)`` — i.e. seconds per trellis
+    # frame. Do not "fix" this to ``.shape[-1]`` (sample count): doing so
+    # multiplies the ratio by N and inflates timestamps into the millions of
+    # seconds, which is what produced the spurious chunk start/end values
+    # observed in earlier Granite/Canary alignment outputs.
     ratio = duration * waveform_segment.size(0) / (trellis.size(0) - 1)
     aligned_segment = _assign_timestamps(segment, char_segments, ratio, t1, model_lang)
     return aligned_segment
@@ -688,20 +732,35 @@ def align_transcriptions(
         else:
             model_dict = DEFAULT_ALIGN_MODELS_HF.get(language.language_code, DEFAULT_ALIGN_MODELS_HF["en"])
             model_variant: HFModel = HFModel(path_or_uri=model_dict["path_or_uri"], revision=model_dict["revision"])
-            if model_variant.path_or_uri not in loaded_processors_and_models:
+            # Cache key includes revision: same model id + different revision would
+            # otherwise silently serve the first revision's weights.
+            cache_key = f"{model_variant.path_or_uri}@{model_variant.revision or 'main'}"
+            if cache_key not in loaded_processors_and_models:
                 processor = Wav2Vec2Processor.from_pretrained(
                     model_variant.path_or_uri, revision=model_variant.revision
                 )
                 _w2v = Wav2Vec2ForCTC.from_pretrained(model_variant.path_or_uri, revision=model_variant.revision)
                 model = _w2v.to(device.value)  # type: ignore[arg-type]
-                loaded_processors_and_models[model_variant.path_or_uri] = (processor, model)
-            processor, model = loaded_processors_and_models[model_variant.path_or_uri]
+                loaded_processors_and_models[cache_key] = (processor, model)
+            processor, model = loaded_processors_and_models[cache_key]
 
         if audio.sampling_rate != SAMPLE_RATE:
             raise ValueError(f"{audio.sampling_rate} rate is not equal to {SAMPLE_RATE}.")
 
+        # Defaulting start/end to (0, full_duration) when the ASR layer hasn't
+        # provided them spreads the alignment over the entire audio — including
+        # all non-speech regions. Warn so the caller knows the result will be
+        # poor on long clips with sparse speech.
+        full_duration = audio.waveform.shape[-1] / audio.sampling_rate
+        if transcription.start is None or transcription.end is None:
+            print(
+                "warn: align_transcriptions called with no start/end on the input "
+                "ScriptLine; alignment will span the entire audio "
+                f"({full_duration:.2f} s). Pass timestamped ASR output for better quality.",
+                file=sys.stderr,
+            )
         start = transcription.start if transcription.start is not None else 0.0
-        end = transcription.end if transcription.end is not None else audio.waveform.shape[1] / audio.sampling_rate
+        end = transcription.end if transcription.end is not None else full_duration
         text = transcription.text if transcription.text is not None else ""
         # MMS uses Roman characters; ja/zh transcripts must be romanized first.
         if use_mms and language.language_code in LANGUAGES_WITHOUT_SPACES:

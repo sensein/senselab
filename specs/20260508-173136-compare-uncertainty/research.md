@@ -1,121 +1,226 @@
 # Phase 0 Research — Comparison & Uncertainty Stage
 
-## 1. Token-timestamp inventory across ASR backends
+**Date**: 2026-05-09
 
-**Decision**: Use the post-auto-align ScriptLine tree as the single source of truth. After the auto-align stage from PR #510, every successful ASR result carries either (a) native chunks with `start`/`end` per chunk, or (b) MMS-aligned segments with `start`/`end` per segment.
-
-**Per-backend status as merged in PR #510**:
-
-| Backend | Native granularity | After auto-align | Token-overlap-with-window check |
-|---|---|---|---|
-| openai/whisper-large-v3-turbo | word-level chunks (`return_timestamps="word"`) | unchanged (already has timestamps) | Iterate chunks; any `chunk.start < win_end and chunk.end > win_start` → speech |
-| ibm-granite/granite-speech-3.3-8b | text-only ScriptLine, no chunks | MMS-aligned to per-segment chunks | Iterate aligned chunks |
-| nvidia/canary-qwen-2.5b | text-only ScriptLine, no chunks | MMS-aligned to per-segment chunks | Iterate aligned chunks |
-| Qwen/Qwen3-ASR-1.7B | word-level chunks via Qwen3-ForcedAligner-0.6B companion | unchanged | Iterate chunks |
-
-**Rationale**: All four backends converge to the same shape post-auto-align. The comparator does not need backend-specific code — just iterate `result.chunks or []` and test interval overlap. When alignment failed (recorded as `comparison_status="incomparable"` per FR-010), the row reports that status rather than a false negative.
-
-**Alternatives considered**: (a) Use the top-level ScriptLine `start`/`end` only — rejected because Granite/Canary-Qwen would only contribute one giant span. (b) Re-run a per-backend tokenizer — rejected because it duplicates auto-align's work.
-
-## 2. Confidence signals per backend
-
-**Decision**:
-
-| Backend | Native scalar in [0, 1] | Wired in v1? | Source |
-|---|---|---|---|
-| Whisper (HF pipeline) | `1 - exp(-avg_logprob)` per chunk; `1 - no_speech_prob` per chunk | Yes | `pipe(audio, return_timestamps="word")` returns per-chunk `avg_logprob` and `no_speech_prob` when `return_token_timestamps` is enabled — confirm via probe and add the kwarg if not already on |
-| pyannote diarization | None per-segment (post-processed) | No (null) | Documented as missing in `disagreements.json`; future work could pull `segmentation` raw scores |
-| Sortformer (NeMo subprocess) | None per-segment exposed | No (null) | Same as above |
-| AST (HF pipeline classify_audios) | top-1 score in [0, 1]; full distribution available | Yes — emit `top1_score`, `entropy`, `margin_to_top2` | Already in the per-window dict from `classify_audios` |
-| YAMNet (subprocess venv) | top-1 score in [0, 1] | Yes — same shape as AST | Already in the per-window dict |
-| Granite | None native per-segment | No (null in v1) | Could compute per-token mean log-prob from a future `output_scores=True`; deferred to keep the in-process backend simple |
-| Canary-Qwen | None native | No (null in v1) | Same — would require subprocess worker change |
-| Qwen3-ASR | None natively exposed by the wrapper | No (null in v1) | The wrapper hides token logits |
-| MMS auto-aligner | Per-segment trellis log-probability | Yes | Already produced internally; needs surfacing on the alignment ScriptLine output |
-
-**Rationale**: Wire what's cheap and already in the existing dicts (Whisper avg_logprob, AST/YAMNet top1+entropy, MMS trellis score) for v1; document Granite/Canary-Qwen/Qwen3-ASR/pyannote as null. Constitution VII (Simplicity First) and the spec's FR-007 ("for models with no native signal, the columns MUST be null with the omission documented") explicitly support partial coverage.
-
-**Alternatives considered**: Force confidence on every backend via Monte-Carlo dropout / ensemble — rejected as out-of-scope by the spec's last assumption.
-
-## 3. G2P library choice
-
-**Decision**: `g2p_en` (English-only, ~1 MB, pure-Python with bundled CMUdict) for v1. Add to `[nlp]` extra alongside `uroman`.
-
-**Rationale**:
-
-- `g2p_en` produces ARPAbet phonemes that match the senselab PPG backend's inventory (the existing PPG output uses ARPAbet labels — visible in `artifacts/sample1_ppg_segments.json`).
-- No system dependency (espeak required by `phonemizer` is a non-starter on macOS-arm64 + `uv`-managed environments without homebrew).
-- ~1 MB install footprint. Trivially fits in the existing `[nlp]` extra.
-- English-only matches the dominant use case for the senselab pipeline as it stands.
-
-**Multi-language handling**: For non-English transcripts, the comparator records `phoneme_status="g2p_unsupported_language"` and skips ASR↔PPG comparison for that row. PPG itself is English-only at present, so this matches the upstream constraint.
-
-**Alternatives considered**: `phonemizer` (multi-language but needs espeak system dep — rejected); `epitran` (multi-language, no system dep, but uses IPA — would need IPA→ARPAbet mapping table — rejected for v1, kept as a follow-up if non-English ASR↔PPG becomes common).
-
-## 4. WER computation per window
-
-**Decision**: Use `jiwer.wer(reference, hypothesis)` from the `[nlp]` extra. Per-window inputs are the concatenated tokens whose timestamp ranges overlap each cross-stream-grid bucket. The "reference" model defaults to Whisper (most established) and is overridable via `--asr-reference-model`. Empty bucket on both sides → WER = 0; empty on one side → WER = 1.
-
-**Rationale**: `jiwer` is mature, well-tested, already in the `[nlp]` extra (>=3.0), and produces the standard WER metric reviewers expect. Picking Whisper as default reference matches industry practice.
-
-**Edge cases documented in the contract**:
-
-- Bucket entirely silent on both sides: skip — no row emitted (silence is the signal).
-- Bucket has reference text but hypothesis is empty: WER = 1.0, mismatch_type = "deletion".
-- Bucket has hypothesis but reference is empty: WER = 1.0, mismatch_type = "insertion".
-- Both sides have text and they differ: WER ∈ (0, ∞] (jiwer can exceed 1 for many insertions); cap at 1.0 in the parquet for sortability.
-
-## 5. AST/YAMNet speech-presence label allowlist
-
-**Decision**: Default allowlist is the AudioSet "Human voice → Speech" subtree:
-
-```text
-{
-  "Speech",
-  "Conversation",
-  "Narration, monologue",
-  "Female speech, woman speaking",
-  "Male speech, man speaking",
-  "Child speech, kid speaking",
-  "Speech synthesizer",
-}
-```
-
-User can override via `--speech-presence-labels label1,label2,...`. The list is recorded in the comparison parquet provenance so historical runs are audit-able even if defaults change.
-
-**Rationale**: These seven labels are the direct children of "Speech" in the AudioSet ontology and match the user expectation of "anything resembling a person speaking". Singing and laughter are deliberately excluded from the default — they are speech-adjacent but a human reviewer would normally not call them "speech in this region".
-
-**Alternatives considered**: A broader set including "Singing", "Laughter", "Crying" — rejected because it would inflate cross-stream agreement with diarization (which only finds speech turns, not vocal events) and produce more false-positive disagreements.
-
-## 6. Cache-key composition for the comparator
-
-**Decision**: Per FR-005, the comparator cache key is
-
-```text
-sha256(
-    audio_signature,
-    comparison_kind,        # raw_vs_enhanced | within_stream | cross_stream
-    task_or_pair,           # e.g. "asr" or "asr/whisper-large-v3-turbo:Qwen3-ASR-1.7B"
-    upstream_cache_keys,    # sorted tuple of the upstream task cache_keys feeding this comparison
-    params,                 # comparator-specific params (grid, threshold, aggregator, allowlist)
-    wrapper_hash,           # script SHA — already used by upstream tasks
-    senselab_version,
-    schema_version=1,       # bump when we change the parquet shape
-)
-```
-
-**Rationale**: Including `upstream_cache_keys` in the key means re-running an upstream task automatically invalidates downstream comparisons that depended on it. This satisfies SC-003 (cache replay ≥95 %) without manual cache-busting.
-
-**Alternatives considered**: (a) Time-based invalidation — rejected, doesn't compose with the existing content-addressable design. (b) Compute cache key on the comparison output rather than input — rejected, requires running the comparison to know if it would have hit.
-
-## 7. LS Labels enumeration strategy
-
-**Decision**: One `<Labels>` block per (pass, comparison_kind, task) actually used in the run, with the *fixed* enumerated value set `{"agree", "disagree", "incomparable", "one_sided"}`. The model pair is encoded in the track *name* (e.g. `raw_16k__compare__asr__whisper_vs_qwen`), not in the label values. For ASR-vs-ASR specifically, an additional `<TextArea>` track per pair carries the WER score and both transcripts so reviewers can read the actual disagreement text.
-
-**Rationale**: A fixed label set keeps the LS XML stable and small regardless of how many models the user adds. Per-pair information lives in the track name, which is already how the existing diarization / ASR tracks are namespaced (`<pass>__<task>__<model>`).
-
-**Alternatives considered**: Per-pair label values like `disagree-whisper-qwen` — rejected because it would require regenerating the XML config every time the model set changes and combinatorially explode for runs with many models.
+This document captures the design decisions that flow into the implementation plan. Each
+decision is paired with the rationale and a brief note on alternatives considered.
 
 ---
 
-**All NEEDS CLARIFICATION items resolved**: yes (none in the plan; the five spec-level clarifications were captured in `spec.md ## Clarifications` and translated into FR-002/FR-003/FR-008/FR-009 rewrites + the new CLI flags above).
+## Decision 1 — Per-axis uncertainty math
+
+**Decision**: Each axis uses a per-axis rule for raw vote → bucket scalar; sub-signals within
+the axis collapse via the shared `--uncertainty-aggregator` flag (`min` / `mean` /
+`harmonic_mean` / `disagreement_weighted`, default `min` over confidences ≡ `max` over
+uncertainties).
+
+- **presence**: Shannon entropy `H = -Σ p_i log p_i` over binary "speech-present" votes from
+  the contributing models, normalized to `[0, 1]` by dividing by `log(n_contributing_models)`
+  so a 50/50 vote saturates at `1.0` independent of how many models voted. Edge cases:
+  exactly one contributing model → entropy is 0 (no disagreement signal possible — the row
+  is still emitted with `aggregated_uncertainty = 1 − model_native_confidence` if the model
+  exposes one, else `null`); zero contributing models → no row.
+- **identity**: per FR-017, three sub-signals:
+  - Cross-model speaker-label disagreement = `1 − (n_agreeing_pairs / n_pairs)` over the
+    speaker labels assigned by every diar model that has a segment overlapping the bucket.
+    `n_pairs = C(k, 2)` where k = number of diar models with overlap. Edge case: k = 1 →
+    sub-signal contributes `null`.
+  - Same-model raw-vs-enhanced speaker-label = bool: did the same diar model assign different
+    speaker labels to overlapping segments on the two passes? Mapped to `0.0` (agree) /
+    `1.0` (disagree). Only emitted on the raw_vs_enhanced/identity parquet.
+  - Across-time speaker-change = `1 − cos_similarity(emb_this_bucket, emb_prev_bucket_same_track)`.
+    Embeddings come from `senselab.audio.tasks.speaker_embeddings.extract_speaker_embeddings`
+    invoked once per *diarization segment*; a bucket inherits the embedding of the
+    diarization segment that overlaps it. The "previous bucket on the same track" is the
+    most recent prior bucket whose dominant diar speaker label matches; if none exists,
+    sub-signal contributes `null`.
+- **utterance**: per FR-016, three sub-signals:
+  - ASR pairwise mean WER = `mean(jiwer.wer(t_i, t_j) for all i < j)` clipped to `[0, 1]`,
+    where each `t_i` is the per-bucket text from contributing ASR model i (resolved via
+    alignment block per FR-013 for text-only models). Edge case: only one ASR has text →
+    sub-signal contributes `null`.
+  - Whisper native = `1 − exp(avg_logprob)` clipped to `[0, 1]`, averaged across all Whisper
+    chunks overlapping the bucket. Edge case: no avg_logprob in the chunks → sub-signal
+    contributes `null`.
+  - PPG-ASR PER = the existing `_diff_asr_vs_ppg` phoneme-error-rate output, mean across
+    contributing ASR models for the bucket. Edge case: PPG not provisioned → sub-signal
+    contributes `null`.
+
+**Rationale**: presence is a binary classification problem (Bernoulli votes → entropy is the
+canonical disagreement scalar). Identity and utterance have heterogeneous sub-signals that
+can't naively be summed, so the per-axis aggregator gives reviewers a single knob that
+controls how the sub-signals combine.
+
+**Alternatives considered**:
+- Single uniform aggregator across all axes — rejected: forcing one rule for the binary,
+  categorical, and textual axes throws away signal; the 2026-05-09 clarify explicitly chose
+  per-axis rules (Q3 option A).
+- Disagreement-weighted formula `(1 − mean_confidence) × disagreement_severity` as the only
+  rule — rejected: still useful as one of the four `--uncertainty-aggregator` options, but
+  not a strong default for utterance (where `1 − mean_confidence` of Whisper alone often
+  dominates the WER signal).
+
+---
+
+## Decision 2 — Per-bucket model contribution policy
+
+**Decision**: Maximally inclusive — every model whose output naturally encodes the axis votes.
+
+| Axis | Models per default run | Vote shape |
+|---|---|---|
+| presence | pyannote, Sortformer, whisper-turbo, granite, canary-qwen, qwen3-asr, AST, YAMNet | bool (8 votes max) |
+| identity (cross-model sub-signal) | pyannote, Sortformer | speaker_label string (2 votes max) |
+| identity (across-time sub-signal) | ECAPA, ResNet | float cosine distance (2 votes max) |
+| utterance | whisper-turbo, granite, canary-qwen, qwen3-asr, PPG (when present) | str (transcript) + optional float (avg_logprob, PER) |
+
+A model that emits an unusable / null signal in a bucket is dropped from that bucket's vote
+(no zero-imputation), per FR-007.
+
+**Rationale**: the 2026-05-09 clarify chose option A — "Maximally inclusive: every model whose
+output naturally encodes the axis contributes." Excluding contributors discards real
+evidence; the aggregator already handles the heterogeneous-confidence-magnitudes question.
+
+**Alternatives considered**:
+- Diarization-canonical for presence/identity, ASR-canonical for utterance — rejected: too
+  rigid; on enhanced audio where pyannote loses speech but whisper still picks up text,
+  diar-canonical would mark presence as "no" and reviewers would miss the disagreement.
+- User-configurable `--{presence,identity,utterance}-models` flags — deferred: the default A
+  is the right baseline and the flag adds CLI surface area for a niche case.
+
+---
+
+## Decision 3 — Speaker-embedding source for identity across-time sub-signal
+
+**Decision**: Reuse `extract_speaker_embeddings` per *diarization segment* (not per bucket).
+A bucket inherits the embedding of the diarization segment that overlaps it; cosine distance
+is computed against the previous bucket's embedding only when they sit on the same
+diarization speaker track.
+
+Implementation outline:
+
+1. After diarization runs (existing pipeline stage), iterate the segments of the *first*
+   successful diar model (deterministic preference: pyannote first, Sortformer second).
+2. For each segment, slice the audio waveform to `[seg.start, seg.end]` and call
+   `extract_speaker_embeddings(audio_slices, model=ECAPA)` — and once more for ResNet —
+   batched per pass to amortize model load cost.
+3. Cache the resulting per-segment embeddings under the existing analyze_audio cache, keyed
+   by `(audio_signature, "speaker_embeddings_per_segment", seg_signature, model_id,
+   wrapper_hash, senselab_version)`.
+4. At per-bucket aggregation time, look up the embedding of the segment overlapping each
+   bucket; compute cosine to the previous bucket on the same speaker track; emit the
+   `1 − cos_sim` value as the across-time sub-signal.
+
+**Rationale**: per-bucket embedding extraction (slicing the audio to every 0.5 s window and
+running ECAPA on each) would add ≈ 120 inferences per minute per pass per embedding model =
+480 calls/min — costly and noisy (0.5 s is below ECAPA's recommended ≈ 2 s minimum input).
+Per-segment extraction matches the granularity at which the embedding is actually meaningful
+(one speaker turn), is cheap (≈ 10 segments / minute), and reuses the existing senselab API
+verbatim. The across-time signal is preserved because diarization speaker-track transitions
+between segments are exactly the points where we want to detect a speaker change.
+
+**Alternatives considered**:
+- Per-bucket extraction — rejected: ≈ 50× more compute, sub-second windows below the model's
+  reliable input length.
+- Use only the *single* full-audio embedding the existing speaker_embeddings task already
+  produces — rejected: that gives one vector for the whole pass, no temporal information at
+  all.
+
+---
+
+## Decision 4 — Plot row layout
+
+**Decision**: 5-row figure — presence (raw solid + enhanced dashed), identity (raw + enhanced
+overlay), utterance (raw + enhanced overlay), raw-vs-enhanced delta strip with one band per
+axis, reference context row (raw diar speakers + raw ASR token spans). All rows share the
+x-axis; uncertainty rows share a y-axis range of `[0, 1]`.
+
+**Rationale**: the 2026-05-09 clarify chose option A (Q4). Three rows would lose the
+head-to-head raw-vs-enhanced overlay; six would scatter the comparison across the figure;
+the chosen design preserves overlay AND the "did enhancement help?" delta in a single
+readable layout.
+
+---
+
+## Decision 5 — Output layout and naming
+
+**Decision**: Per FR-018 —
+
+```text
+<run_dir>/
+├── <pass>/
+│   └── uncertainty/
+│       ├── presence.parquet
+│       ├── identity.parquet
+│       └── utterance.parquet
+├── uncertainty/
+│   └── raw_vs_enhanced/
+│       ├── presence.parquet
+│       ├── identity.parquet
+│       └── utterance.parquet
+├── disagreements.json
+└── timeline.png
+```
+
+9 parquets total per default two-pass run.
+
+**Rationale**: filesystem layout matches what reviewers ask for ("show me the three
+uncertainty time series"); the per-pass / raw_vs_enhanced split mirrors the existing
+analyze_audio per-task / raw_vs_enhanced split for consistency.
+
+---
+
+## Decision 6 — ASR text resolution for text-only models
+
+**Decision**: For text-only ASR backends (Granite Speech 3.3, Canary-Qwen) the comparator
+consults the post-MMS alignment block when the raw ASR result lacks per-token timestamps
+(FR-013). Without alignment, text without a time anchor is treated as
+`asr_says_speech = false` for that window — it produces no token overlap.
+
+**Rationale**: broadcasting a text-only ASR's full transcript across every comparison window
+is the wrong default; it inflates speech-presence votes uniformly across the audio and
+destroys the temporal precision that the rest of the comparator depends on.
+
+---
+
+## Decision 7 — Cross-stream grid default
+
+**Decision**: `--cross-stream-win-length 0.5` and `--cross-stream-hop-length 0.5` (i.e.
+non-overlapping). AST / YAMNet windows are projected onto this grid using floor-based
+index lookup (`win_idx = floor(start / native_hop)`).
+
+**Rationale**: finer grids over-resolve every signal in the system (Whisper word-level ≈
+20 ms; pyannote frames ≈ 62.5 ms; AST window 10.24 s) and overlap double-counts buckets.
+0.5 s non-overlapping is coarse enough that each bucket is independently meaningful and
+fine enough to localize disagreements within an utterance.
+
+---
+
+## Decision 8 — Aggregator default
+
+**Decision**: Default `--uncertainty-aggregator min` (over confidences) ≡ `max` over
+uncertainties. The most-doubtful contributing signal sets the bucket's uncertainty.
+
+**Rationale**: reviewers reading the disagreements.json index want to find the cases where
+*any* signal raises a flag; `min` of confidences surfaces those efficiently. `mean` /
+`harmonic_mean` / `disagreement_weighted` remain available for specific workflows.
+
+---
+
+## Decision 9 — Phoneme-disagreement threshold
+
+**Decision**: Two-tier — emit a continuous `phoneme_per` (phoneme error rate) on every
+ASR-vs-PPG row, and set a boolean `phoneme_disagreement = true` only when
+`phoneme_per >= --phoneme-disagreement-threshold` (default `0.50`). LS regions are produced
+only for rows where `phoneme_disagreement` is true.
+
+**Rationale**: the continuous PER feeds the utterance axis aggregator; the boolean keeps the
+LS bundle from drowning in low-PER segments where ASR and PPG disagree by one phoneme.
+
+---
+
+## Open follow-ups (not in scope)
+
+- Configurable LS bin thresholds (`--ls-low-threshold`, `--ls-high-threshold`).
+- Per-axis `--{presence,identity,utterance}-models` overrides for advanced workflows.
+- Ensemble / Monte-Carlo dropout uncertainty for individual models.
+- Cross-language phoneme inventory unification beyond English ARPAbet + uroman.

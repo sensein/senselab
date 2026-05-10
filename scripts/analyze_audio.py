@@ -134,9 +134,14 @@ from senselab.audio.tasks.forced_alignment import align_transcriptions
 from senselab.audio.tasks.input_output import read_audios
 from senselab.audio.tasks.preprocessing import downmix_audios_to_mono, extract_segments, resample_audios
 from senselab.audio.tasks.speaker_diarization import diarize_audios
-from senselab.audio.tasks.speaker_embeddings import extract_speaker_embeddings_from_audios
 from senselab.audio.tasks.speech_enhancement import enhance_audios
 from senselab.audio.tasks.speech_to_text import transcribe_audios
+from senselab.audio.workflows.audio_analysis.harvesters import (
+    classification_window_top1 as _classification_window_top1,
+)
+from senselab.audio.workflows.audio_analysis.harvesters import (
+    classification_windows as _classification_windows,
+)
 from senselab.utils.data_structures import (
     DeviceType,
     HFModel,
@@ -147,7 +152,7 @@ from senselab.utils.data_structures import (
 )
 
 TARGET_SR = 16000
-ALL_TASKS = ("diarization", "ast", "yamnet", "features", "asr", "embeddings", "alignment", "comparisons")
+ALL_TASKS = ("diarization", "ast", "yamnet", "features", "asr", "alignment", "comparisons")
 COMPARISON_AXES = ("raw_vs_enhanced", "within_stream", "cross_stream")
 UNCERTAINTY_AGGREGATORS = ("min", "mean", "harmonic_mean", "disagreement_weighted")
 DEFAULT_SPEECH_PRESENCE_LABELS = (
@@ -326,6 +331,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--ppg",
+        action="store_true",
+        help=(
+            "Run the PPG (phonetic posteriorgram) backend on each pass and feed it into "
+            "the comparator's utterance axis as a per-frame phoneme-disagreement signal "
+            "(`phoneme_per_to_ppg` per ASR vote). Off by default — enabling pulls the "
+            "ppgs subprocess venv (~1.4 GB)."
+        ),
+    )
+    parser.add_argument(
         "--aligner-model",
         default="facebook/mms-1b-all",
         help=(
@@ -363,14 +378,100 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--cross-stream-win-length",
         type=float,
-        default=0.2,
-        help="Window length (seconds) for cross-stream comparisons (ASR↔diar, scene↔diar, ASR↔PPG).",
+        default=0.5,
+        help=(
+            "Window length (seconds) for cross-stream / within-stream comparisons "
+            "(presence + identity axes). Default 0.5 s non-overlapping; finer grids "
+            "over-resolve the underlying signals (Whisper word-level ≈ 20 ms but "
+            "pyannote frames ≈ 62.5 ms, AST window 10.24 s). Utterance has its own grid — "
+            "see ``--utterance-win-length``."
+        ),
     )
     parser.add_argument(
         "--cross-stream-hop-length",
         type=float,
-        default=0.1,
-        help="Hop between cross-stream comparison windows (default 0.1 s; must be <= win-length).",
+        default=0.5,
+        help="Hop between cross-stream comparison windows (default 0.5 s, non-overlapping; must be <= win-length).",
+    )
+    parser.add_argument(
+        "--utterance-win-length",
+        type=float,
+        default=1.0,
+        help=(
+            "Window length (seconds) for the utterance axis. Defaults to 1.0 s — wider "
+            "than the presence/identity grid because most words don't fit inside a 0.5 s "
+            "window. Combined with the 0.5 s hop default, every word lands fully inside "
+            "at least one bucket."
+        ),
+    )
+    parser.add_argument(
+        "--utterance-hop-length",
+        type=float,
+        default=0.5,
+        help=(
+            "Hop between utterance windows (default 0.5 s, half the default win — "
+            "windows overlap so words straddling a 0.5 s boundary still land inside "
+            "at least one bucket). Must be <= --utterance-win-length."
+        ),
+    )
+    parser.add_argument(
+        "--embedding-window-s",
+        type=float,
+        default=1.0,
+        help=(
+            "Window length (seconds) for fixed-grid speaker-embedding extraction. "
+            "Defaults to 1.0 s — the smallest window that pairs reliably with the "
+            "0.5 s comparator bucket grid (one embedding per bucket center)."
+        ),
+    )
+    parser.add_argument(
+        "--embedding-hop-s",
+        type=float,
+        default=0.5,
+        help="Hop between embedding windows. Defaults to 0.5 s. Must be <= --embedding-window-s.",
+    )
+    parser.add_argument(
+        "--identity-same-speaker-floor",
+        type=float,
+        default=0.30,
+        help=(
+            "Cosine distance ≤ this is treated as confidently same-speaker for the "
+            "identity axis (uncertainty 0 for same-claim, 1 for change-claim). "
+            "Defaults to 0.30 — typical ECAPA same-speaker noise level on VoxCeleb."
+        ),
+    )
+    parser.add_argument(
+        "--identity-diff-speaker-floor",
+        type=float,
+        default=0.70,
+        help=(
+            "Cosine distance ≥ this is treated as confidently different-speaker for "
+            "the identity axis. Defaults to 0.70. Distances between the two floors "
+            "interpolate linearly. Must be > --identity-same-speaker-floor."
+        ),
+    )
+    parser.add_argument(
+        "--identity-cluster-cosine-threshold",
+        type=float,
+        default=0.5,
+        help=(
+            "Cosine similarity threshold for clustering (diar_model, raw_label) into "
+            "pass-wide speaker IDs. Used to recognize that pyannote 'SPEAKER_00' and "
+            "sortformer 'speaker_2' refer to the same person when their mean "
+            "embeddings are close. Defaults to 0.5 (~ECAPA EER on VoxCeleb)."
+        ),
+    )
+    parser.add_argument(
+        "--clustering-algorithm",
+        choices=["spectral", "kmeans"],
+        default="spectral",
+        help=(
+            "Clustering algorithm for the windowed speaker-embedding step that "
+            "estimates n_speakers per pass. 'spectral' (default) uses a precomputed "
+            "cosine-similarity affinity, which handles non-convex speaker clusters "
+            "better than k-means; 'kmeans' is the legacy choice. Spectral falls back "
+            "to k-means automatically if a k fails."
+        ),
     )
     parser.add_argument(
         "--uncertainty-aggregator",
@@ -386,11 +487,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--speech-presence-labels",
-        type=str,
-        default=",".join(DEFAULT_SPEECH_PRESENCE_LABELS),
+        nargs="+",
+        default=list(DEFAULT_SPEECH_PRESENCE_LABELS),
+        metavar="LABEL",
         help=(
-            "Comma-separated AudioSet labels that count as 'speech-present' for AST/YAMNet ↔ "
-            "diarization comparison. Default covers the AudioSet 'Speech' subtree."
+            "AudioSet labels (one per arg) that count as 'speech-present' for AST/YAMNet ↔ "
+            "diarization comparison. AudioSet labels themselves contain commas "
+            "(e.g. 'Narration, monologue'), so use space-separated quoted args rather than a "
+            "single comma string. Default covers the AudioSet 'Speech' subtree."
         ),
     )
     parser.add_argument(
@@ -420,6 +524,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--cross-stream-win-length must be positive")
     if args.cross_stream_hop_length <= 0 or args.cross_stream_hop_length > args.cross_stream_win_length:
         parser.error("--cross-stream-hop-length must be positive and ≤ --cross-stream-win-length")
+    if args.utterance_win_length <= 0:
+        parser.error("--utterance-win-length must be positive")
+    if args.utterance_hop_length <= 0 or args.utterance_hop_length > args.utterance_win_length:
+        parser.error("--utterance-hop-length must be positive and ≤ --utterance-win-length")
     if not (0.0 <= args.phoneme_disagreement_threshold <= 1.0):
         parser.error("--phoneme-disagreement-threshold must be in [0, 1]")
     if args.diarization_boundary_shift_ms < 0:
@@ -486,7 +594,73 @@ def prepare_audio(path: Path) -> Audio:
 #     covers the ASR call's parameters; the alignment cache key adds
 #     transcript_sha and language. v1 cache entries are inert (won't be
 #     served) and can be discarded.
-_CACHE_SCHEMA_VERSION = 3
+_CACHE_SCHEMA_VERSION = 1
+
+
+def _sync_cache_with_schema_version(cache_dir: Path) -> None:
+    """Keep the on-disk cache state and ``_CACHE_SCHEMA_VERSION`` in sync.
+
+    The cache directory carries a ``.schema_version`` marker file. On each run:
+
+    - If the directory is empty / missing the marker → the cache was just
+      created (or manually cleared). Write the current schema version. No
+      data wipe is needed because there's nothing to wipe.
+    - If the marker exists and matches the current code version → keep cache.
+    - If the marker exists but doesn't match → the code has bumped the
+      schema since the cache was populated. Wipe all cache entries and
+      rewrite the marker with the current version.
+
+    Bidirectional invariant: clearing the cache resets the version to current
+    automatically (since the marker is recreated); bumping the version in
+    code wipes the cache automatically (since the marker mismatch triggers
+    the wipe). The user never has to manually delete cache files when they
+    edit the schema number.
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    marker = cache_dir / ".schema_version"
+    on_disk_version: int | None = None
+    if marker.exists():
+        try:
+            on_disk_version = int(marker.read_text().strip())
+        except (ValueError, OSError):
+            on_disk_version = None
+
+    # Has the cache been populated with non-marker entries?
+    has_entries = any(p.name != ".schema_version" for p in cache_dir.iterdir())
+
+    if on_disk_version == _CACHE_SCHEMA_VERSION:
+        return
+
+    if on_disk_version is None and not has_entries:
+        # Fresh / cleared cache. Write current version, no wipe needed.
+        marker.write_text(str(_CACHE_SCHEMA_VERSION))
+        print(
+            f"Cache: initialized {cache_dir} at schema_version={_CACHE_SCHEMA_VERSION}",
+            file=sys.stderr,
+        )
+        return
+
+    # Mismatch — wipe and rewrite the marker.
+    n_removed = 0
+    for p in cache_dir.iterdir():
+        if p.name == ".schema_version":
+            continue
+        try:
+            if p.is_dir():
+                import shutil
+
+                shutil.rmtree(p)
+            else:
+                p.unlink()
+            n_removed += 1
+        except OSError as exc:
+            print(f"warn: cache wipe failed to remove {p}: {exc!r}", file=sys.stderr)
+    marker.write_text(str(_CACHE_SCHEMA_VERSION))
+    print(
+        f"Cache: schema bumped from {on_disk_version!r} → {_CACHE_SCHEMA_VERSION}; "
+        f"wiped {n_removed} stale entries from {cache_dir}",
+        file=sys.stderr,
+    )
 
 
 def audio_signature(audio: Audio) -> str:
@@ -581,1805 +755,6 @@ def transcript_signature(text: str) -> str:
     timestamps without re-loading the aligner model.
     """
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-# ── Comparison & uncertainty stage helpers ────────────────────────────
-
-
-def comparison_cache_key(
-    *,
-    audio_sig: str,
-    comparison_kind: str,
-    task_or_pair: str,
-    upstream_cache_keys: list[str],
-    params: dict[str, Any],
-    wrapper_hash: str,
-    senselab_ver: str,
-) -> str:
-    """Cache key for one comparator output.
-
-    Includes the sorted tuple of upstream-task cache_keys so that re-running
-    an upstream task automatically invalidates downstream comparisons that
-    depended on it (research.md §6).
-    """
-    payload = {
-        "schema": _CACHE_SCHEMA_VERSION,
-        "audio_signature": audio_sig,
-        "comparison_kind": comparison_kind,
-        "task_or_pair": task_or_pair,
-        "upstream_cache_keys": sorted(upstream_cache_keys),
-        "params": _canonical_params(params),
-        "wrapper_hash": wrapper_hash,
-        "senselab_version": senselab_ver,
-    }
-    return hashlib.sha256(_canonical_params(payload).encode("utf-8")).hexdigest()
-
-
-@dataclass(frozen=True)
-class ComparisonGrid:
-    """Shared time grid that comparators project onto before differencing."""
-
-    win_length: float
-    hop_length: float
-    name: str  # "features" or "cross_stream"
-
-    def iter_buckets(self, duration_s: float) -> Iterator[tuple[float, float, int]]:
-        """Yield (start, end, idx) tuples covering [0, duration_s] at this grid."""
-        eps = 1e-6
-        t = 0.0
-        idx = 0
-        while t + self.win_length <= duration_s + eps:
-            start = round(t, 4)
-            end = round(min(t + self.win_length, duration_s), 4)
-            yield start, end, idx
-            t += self.hop_length
-            idx += 1
-
-
-# Common parquet columns shared across every comparison parquet (data-model.md).
-COMPARISON_COMMON_COLS = (
-    "start",
-    "end",
-    "comparison_kind",
-    "task",
-    "stream_pair",
-    "model_a",
-    "model_b",
-    "pass_a",
-    "pass_b",
-    "agree",
-    "mismatch_type",
-    "comparison_status",
-    "confidence_a",
-    "confidence_b",
-    "combined_uncertainty",
-)
-ASR_VS_ASR_EXTRA_COLS = ("wer", "a_text", "b_text", "reference_side")
-CLASSIFICATION_VS_CLASSIFICATION_EXTRA_COLS = (
-    "top1_a",
-    "top1_b",
-    "score_a",
-    "score_b",
-    "entropy_a",
-    "entropy_b",
-)
-DIAR_VS_DIAR_EXTRA_COLS = ("speaks_a", "speaks_b")
-ASR_VS_DIAR_EXTRA_COLS = ("asr_says_speech", "diar_says_speech")
-CLASS_VS_DIAR_EXTRA_COLS = ("class_says_speech", "diar_says_speech", "top1_label")
-ASR_VS_PPG_EXTRA_COLS = ("asr_phonemes", "ppg_phonemes", "phoneme_per", "phoneme_disagreement")
-
-
-def write_comparison_parquet(
-    rows: list[dict[str, Any]],
-    dest_path: Path,
-    provenance: dict[str, Any],
-) -> None:
-    """Write comparison rows to parquet with `comparator_provenance` metadata.
-
-    No-op when ``rows`` is empty — comparators emit no parquet rather than
-    an empty file (callers rely on absence to skip LS-track declaration).
-    """
-    if not rows:
-        return
-    import pandas as pd
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-
-    dest_path.parent.mkdir(parents=True, exist_ok=True)
-    df = pd.DataFrame(rows)
-    table = pa.Table.from_pandas(df, preserve_index=False)
-    metadata = {b"comparator_provenance": json.dumps(provenance, sort_keys=True, default=str).encode("utf-8")}
-    if table.schema.metadata:
-        merged = dict(table.schema.metadata)
-        merged.update(metadata)
-        table = table.replace_schema_metadata(merged)
-    else:
-        table = table.replace_schema_metadata(metadata)
-    pq.write_table(table, dest_path)
-
-
-def _aggregate_uncertainty(
-    confidences: list[float | None],
-    aggregator: str,
-    *,
-    mismatch_severity: float = 1.0,
-) -> float | None:
-    """Combine per-model confidences into a single sortable score in [0, 1].
-
-    Returns None when no confidences are available. Drops None entries
-    rather than treating them as zero (FR-003, FR-007).
-    """
-    vals = [c for c in confidences if c is not None]
-    if not vals:
-        return None
-    if aggregator == "min":
-        agg = min(vals)
-    elif aggregator == "mean":
-        agg = sum(vals) / len(vals)
-    elif aggregator == "harmonic_mean":
-        # Harmonic mean is undefined when any value is 0; clip to small eps.
-        clipped = [max(v, 1e-9) for v in vals]
-        agg = len(clipped) / sum(1.0 / v for v in clipped)
-    elif aggregator == "disagreement_weighted":
-        mean = sum(vals) / len(vals)
-        return float((1.0 - mean) * mismatch_severity)
-    else:
-        raise ValueError(f"unknown aggregator: {aggregator!r}")
-    # combined_uncertainty = 1 - confidence (so high uncertainty = sort first).
-    return float(1.0 - agg)
-
-
-def _token_overlaps_window(result: Any, win_start: float, win_end: float) -> bool:  # noqa: ANN401
-    """Return True if any transcript chunk's timestamp overlaps the window.
-
-    Tolerant to both Pydantic ScriptLine objects (in-memory) and JSON-restored
-    dicts (post-cache-hit). Walks ``result.chunks``; falls back to the
-    top-level start/end when chunks are absent.
-    """
-    if not result:
-        return False
-    items = result if isinstance(result, list) else [result]
-    for line in items:
-        chunks = _seg_attr(line, "chunks") or []
-        if chunks:
-            for c in chunks:
-                cs = _seg_attr(c, "start")
-                ce = _seg_attr(c, "end")
-                if cs is None or ce is None:
-                    continue
-                if float(cs) < win_end and float(ce) > win_start:
-                    return True
-        else:
-            ls = _seg_attr(line, "start")
-            le = _seg_attr(line, "end")
-            if ls is not None and le is not None and float(ls) < win_end and float(le) > win_start:
-                return True
-    return False
-
-
-def _disagreement_severity_rank(mismatch_type: str | None) -> int:
-    """Tie-breaker priority for disagreements.json ordering (lower = higher priority)."""
-    return {
-        "phoneme_disagreement": 0,
-        "text_edit": 1,
-        "speech_presence_flip": 2,
-        "label_flip": 3,
-        "boundary_shift": 4,
-    }.get(mismatch_type or "", 5)
-
-
-def _build_disagreements_index(
-    parquet_paths: list[Path],
-    top_n: int,
-    aggregator: str,
-    *,
-    run_dir: Path,
-    config: dict[str, Any],
-    incomparable_reasons: dict[str, str],
-    missing_confidence_signals: list[str],
-) -> dict[str, Any]:
-    """Aggregate every comparison parquet into the top-level disagreements index."""
-    import datetime
-    import math
-
-    import pandas as pd
-
-    entries: list[dict[str, Any]] = []
-    total_rows = 0
-    rows_by_kind: dict[str, int] = {}
-    disagreement_rows = 0
-    if top_n <= 0:
-        # Index disabled — still report totals at zero entries.
-        return {
-            "schema_version": 1,
-            "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
-            "wrapper_hash": wrapper_version_hash(),
-            "senselab_version": senselab_version(),
-            "config": config,
-            "missing_confidence_signals": {
-                "models_without_native_signal": missing_confidence_signals,
-                "note": "Aggregation drops models lacking a native confidence rather than treating as zero.",
-            },
-            "incomparable_reasons": incomparable_reasons,
-            "totals": {
-                "total_rows": 0,
-                "rows_by_kind": {},
-                "disagreement_rows": 0,
-                "disagreement_rate": 0.0,
-            },
-            "entries": [],
-        }
-    for p in parquet_paths:
-        try:
-            df = pd.read_parquet(p)
-        except Exception:
-            continue
-        if df.empty:
-            continue
-        kind = str(df["comparison_kind"].iloc[0]) if "comparison_kind" in df.columns else "unknown"
-        total_rows += len(df)
-        rows_by_kind[kind] = rows_by_kind.get(kind, 0) + len(df)
-        if "agree" in df.columns:
-            disagreement_rows += int((df["agree"] == False).sum())  # noqa: E712
-        for idx, row in df.iterrows():
-            if row.get("agree", True) is True:
-                continue
-            cu = row.get("combined_uncertainty")
-            cu_val = float(cu) if cu is not None and not (isinstance(cu, float) and math.isnan(cu)) else float("nan")
-            entries.append(
-                {
-                    "rank": 0,  # filled after sort
-                    "region_id": _comparison_region_id(p, idx, row),
-                    "pass": row.get("pass_a", row.get("pass_b", "")),
-                    "comparison_kind": kind,
-                    "task": row.get("task"),
-                    "stream_pair": row.get("stream_pair"),
-                    "model_a": row.get("model_a"),
-                    "model_b": row.get("model_b"),
-                    "parquet_path": str(p.relative_to(run_dir)) if p.is_relative_to(run_dir) else str(p),
-                    "row_index": int(idx),
-                    "start": float(row["start"]),
-                    "end": float(row["end"]),
-                    "mismatch_type": row.get("mismatch_type"),
-                    "combined_uncertainty": cu_val,
-                    "ls_track_name": _comparison_ls_track_name(row),
-                    "summary": _comparison_row_summary(row),
-                }
-            )
-
-    def _sort_key(e: dict[str, Any]) -> tuple[Any, ...]:
-        cu = e["combined_uncertainty"]
-        # NaN last → flip sign so high uncertainty comes first; NaN sorts to +inf.
-        primary = -cu if cu == cu else float("inf")
-        return (primary, _disagreement_severity_rank(e["mismatch_type"]), e["start"], e["region_id"])
-
-    entries.sort(key=_sort_key)
-    entries = entries[:top_n]
-    for i, e in enumerate(entries):
-        e["rank"] = i + 1
-    return {
-        "schema_version": 1,
-        "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
-        "wrapper_hash": wrapper_version_hash(),
-        "senselab_version": senselab_version(),
-        "config": config,
-        "missing_confidence_signals": {
-            "models_without_native_signal": missing_confidence_signals,
-            "note": "Aggregation drops models lacking a native confidence rather than treating as zero.",
-        },
-        "incomparable_reasons": incomparable_reasons,
-        "totals": {
-            "total_rows": total_rows,
-            "rows_by_kind": rows_by_kind,
-            "disagreement_rows": disagreement_rows,
-            "disagreement_rate": (disagreement_rows / total_rows) if total_rows else 0.0,
-        },
-        "entries": entries,
-    }
-
-
-def _comparison_region_id(parquet_path: Path, row_idx: int, row: dict[str, Any] | Any) -> str:  # noqa: ANN401
-    """Deterministic region id linking a comparison row to its LS region."""
-    pass_label = row.get("pass_a") or row.get("pass_b") or ""
-    pair = row.get("model_a") or row.get("stream_pair") or ""
-    pair2 = row.get("model_b") or ""
-    task = row.get("task") or row.get("stream_pair") or "compare"
-    suffix = f"{_safe(str(pair))}_vs_{_safe(str(pair2))}" if pair2 else _safe(str(pair))
-    return f"{pass_label}__compare__{_safe(str(task))}__{suffix}__{row_idx:04d}"
-
-
-def _comparison_ls_track_name(row: dict[str, Any] | Any) -> str:  # noqa: ANN401
-    """Track name for LS Labels region (spec FR-004)."""
-    pass_label = row.get("pass_a") or row.get("pass_b") or "pass"
-    task = row.get("task") or row.get("stream_pair") or "compare"
-    a = row.get("model_a") or ""
-    b = row.get("model_b") or ""
-    if a and b:
-        return f"{pass_label}__compare__{_safe(str(task))}__{_safe(str(a))}_vs_{_safe(str(b))}"
-    return f"{pass_label}__compare__{_safe(str(task))}__{_safe(str(a or b))}"
-
-
-def _comparison_row_summary(row: dict[str, Any] | Any) -> str:  # noqa: ANN401
-    """One-line human summary for the disagreements index entry."""
-    mt = row.get("mismatch_type") or "disagree"
-    if "wer" in row and row.get("wer") is not None:
-        a = (row.get("a_text") or "")[:30]
-        b = (row.get("b_text") or "")[:30]
-        return f"{mt} WER {float(row['wer']):.2f}: {a!r} vs {b!r}"
-    if "phoneme_per" in row and row.get("phoneme_per") is not None:
-        return f"{mt} PER {float(row['phoneme_per']):.2f}"
-    if "top1_a" in row and row.get("top1_a") is not None:
-        return f"{mt}: {row.get('top1_a')!r} vs {row.get('top1_b')!r}"
-    if "speaks_a" in row:
-        return f"{mt}: speaks_a={row.get('speaks_a')} vs speaks_b={row.get('speaks_b')}"
-    return mt
-
-
-def _comparison_ls_label_region(
-    *,
-    region_id: str,
-    from_name: str,
-    start: float,
-    end: float,
-    label: str,
-) -> dict[str, Any]:
-    """LS Labels region for a comparator track. Wraps `_ls_label_region` for symmetry."""
-    return _ls_label_region(region_id=region_id, from_name=from_name, start=start, end=end, label=label)
-
-
-def _comparison_ls_textarea_region(
-    *,
-    region_id: str,
-    from_name: str,
-    start: float,
-    end: float,
-    text: str,
-) -> dict[str, Any]:
-    """LS TextArea region for ASR-vs-ASR comparator pairs."""
-    return _ls_textarea_region(region_id=region_id, from_name=from_name, start=start, end=end, text=text)
-
-
-# ── Aligned timeline plot ─────────────────────────────────────────────
-
-
-def build_aligned_timeline_plot(run_dir: Path, save_path: Path | None = None) -> Path | None:
-    """Render a multi-row aligned timeline showing diarization, ASR, scenes, and disagreement flags.
-
-    Reads ``<run_dir>/summary.json`` and any ``<run_dir>/<pass>/comparisons/...``
-    parquets plus ``<run_dir>/disagreements.json`` and writes a stacked
-    matplotlib PNG to ``<run_dir>/timeline.png`` (or the explicit ``save_path``).
-    Returns the path written, or None when there is nothing to plot.
-    """
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.patches as mpatches
-    import matplotlib.pyplot as plt
-    import pandas as pd
-
-    summary_path = run_dir / "summary.json"
-    if not summary_path.exists():
-        return None
-    summary = json.loads(summary_path.read_text())
-    passes = summary.get("passes") or {}
-
-    # Estimate total duration so all rows share the same x-axis.
-    duration = max((p.get("duration_s", 0.0) for p in passes.values() if isinstance(p, dict)), default=0.0)
-    if duration <= 0:
-        return None
-
-    # Build the row plan: list of (label, kind, payload) tuples, top-down.
-    rows: list[tuple[str, str, Any]] = []
-    for pass_label, pass_summary in passes.items():
-        if not isinstance(pass_summary, dict):
-            continue
-        # Diarization (one row per model)
-        dia = (pass_summary.get("diarization") or {}).get("by_model") or {}
-        for model_id, block in sorted(dia.items()):
-            if block.get("status") != "ok":
-                continue
-            rows.append((f"{pass_label}\ndiar:{model_id.split('/')[-1]}", "segments", block.get("result")))
-        # ASR (one row per model)
-        asr = (pass_summary.get("asr") or {}).get("by_model") or {}
-        for model_id, block in sorted(asr.items()):
-            if block.get("status") != "ok":
-                continue
-            rows.append((f"{pass_label}\nasr:{model_id.split('/')[-1]}", "asr", block.get("result")))
-        # AST
-        ast = pass_summary.get("ast") or {}
-        if ast.get("status") == "ok":
-            ast_grid = (summary.get("scene_window") or {}).get("ast") or {}
-            ast_win = float(ast_grid.get("win_length", 10.24))
-            ast_hop = float(ast_grid.get("hop_length", 10.24))
-            rows.append(
-                (f"{pass_label}\nast", "windows", {"result": ast.get("result"), "win": ast_win, "hop": ast_hop})
-            )
-        # YAMNet
-        yam = pass_summary.get("yamnet") or {}
-        if yam.get("status") == "ok":
-            yam_grid = (summary.get("scene_window") or {}).get("yamnet") or {}
-            yam_win = float(yam_grid.get("win_length", 0.96))
-            yam_hop = float(yam_grid.get("hop_length", 0.48))
-            rows.append(
-                (f"{pass_label}\nyamnet", "windows", {"result": yam.get("result"), "win": yam_win, "hop": yam_hop})
-            )
-
-    # Comparator parquets — group by track name; one row per parquet that has at least one row.
-    parquet_rows: list[tuple[str, pd.DataFrame]] = []
-    for parquet in sorted(run_dir.rglob("comparisons/**/*.parquet")):
-        try:
-            df = pd.read_parquet(parquet)
-        except Exception:  # noqa: BLE001
-            continue
-        if df.empty:
-            continue
-        rel = parquet.relative_to(run_dir)
-        label = "compare\n" + str(rel.with_suffix("")).replace("comparisons/", "").replace("/", "/\n")
-        parquet_rows.append((label, df))
-
-    if not rows and not parquet_rows:
-        return None
-
-    n_rows = len(rows) + len(parquet_rows)
-    fig_height = max(2.0, 0.55 * n_rows + 1.0)
-    fig, ax = plt.subplots(figsize=(max(10.0, duration / 6.0), fig_height))
-    ax.set_xlim(0, duration)
-    ax.set_ylim(0, n_rows)
-    ax.set_xlabel("Time (s)")
-    ax.set_yticks([n_rows - i - 0.5 for i in range(n_rows)])
-    ax.set_yticklabels([r[0] for r in rows] + [pr[0] for pr in parquet_rows], fontsize=7)
-    ax.tick_params(axis="x", labelsize=8)
-    ax.grid(axis="x", alpha=0.2)
-
-    cmap = matplotlib.colormaps.get_cmap("tab20")
-    viridis = matplotlib.colormaps.get_cmap("viridis")
-    reds = matplotlib.colormaps.get_cmap("Reds")
-    speaker_color: dict[str, Any] = {}
-
-    def _color_for_speaker(spk: str) -> Any:  # noqa: ANN401
-        if spk not in speaker_color:
-            speaker_color[spk] = cmap(len(speaker_color) % 20)
-        return speaker_color[spk]
-
-    # Render upstream rows.
-    for i, (_, kind, payload) in enumerate(rows):
-        y = n_rows - i - 1  # top-down placement
-        if kind == "segments":
-            segments = payload[0] if isinstance(payload, list) and payload else []
-            for seg in segments:
-                s = _seg_attr(seg, "start")
-                e = _seg_attr(seg, "end")
-                spk = _seg_attr(seg, "speaker") or "?"
-                if s is None or e is None:
-                    continue
-                ax.barh(
-                    y + 0.15,
-                    float(e) - float(s),
-                    left=float(s),
-                    height=0.7,
-                    color=_color_for_speaker(str(spk)),
-                    edgecolor="black",
-                    linewidth=0.3,
-                )
-        elif kind == "asr":
-            items = payload if isinstance(payload, list) else [payload]
-            for line in items:
-                chunks = _seg_attr(line, "chunks") or []
-                if chunks:
-                    for c in chunks:
-                        cs = _seg_attr(c, "start")
-                        ce = _seg_attr(c, "end")
-                        if cs is None or ce is None:
-                            continue
-                        ax.barh(
-                            y + 0.15,
-                            float(ce) - float(cs),
-                            left=float(cs),
-                            height=0.7,
-                            color="#4c72b0",
-                            alpha=0.7,
-                            edgecolor="none",
-                        )
-                else:
-                    ls = _seg_attr(line, "start")
-                    le = _seg_attr(line, "end")
-                    if ls is not None and le is not None:
-                        ax.barh(
-                            y + 0.15,
-                            float(le) - float(ls),
-                            left=float(ls),
-                            height=0.7,
-                            color="#4c72b0",
-                            alpha=0.4,
-                            edgecolor="none",
-                        )
-                    else:
-                        # text-only — span the whole row
-                        ax.barh(y + 0.15, duration, left=0, height=0.7, color="#cccccc", alpha=0.3)
-        elif kind == "windows":
-            result = payload.get("result")
-            hop = payload.get("hop", 1.0)
-            win = payload.get("win", 1.0)
-            windows = result[0] if isinstance(result, list) and result else []
-            for idx, window in enumerate(windows):
-                if not isinstance(window, list) or not window:
-                    continue
-                top = max(window, key=lambda d: d.get("score", 0.0) if isinstance(d, dict) else 0.0)
-                score = float(top.get("score", 0.0)) if isinstance(top, dict) else 0.0
-                start_s = idx * hop
-                ax.barh(
-                    y + 0.15, win, left=start_s, height=0.7, color=viridis(score), alpha=0.85, edgecolor="none"
-                )
-
-    # Render comparator rows: one bar per disagreement, colored by combined_uncertainty.
-    for j, (_, df) in enumerate(parquet_rows):
-        y = n_rows - len(rows) - j - 1
-        # Background strip
-        ax.barh(y + 0.15, duration, left=0, height=0.7, color="#f5f5f5", edgecolor="none")
-        # Disagreement bars
-        for _idx, r in df.iterrows():
-            if r.get("agree", True) is True:
-                continue
-            cu = r.get("combined_uncertainty")
-            try:
-                cu_val = float(cu) if cu is not None else 0.5
-            except Exception:  # noqa: BLE001
-                cu_val = 0.5
-            color = reds(0.3 + 0.7 * min(max(cu_val, 0.0), 1.0))
-            ax.barh(
-                y + 0.15,
-                float(r["end"]) - float(r["start"]),
-                left=float(r["start"]),
-                height=0.7,
-                color=color,
-                edgecolor="none",
-            )
-
-    # Legend hint.
-    handles = [
-        mpatches.Patch(color="#4c72b0", label="ASR token / segment"),
-        mpatches.Patch(color=viridis(0.7), label="Scene window (color = top-1 score)"),
-        mpatches.Patch(color=reds(0.7), label="Comparator disagreement (color = combined uncertainty)"),
-    ]
-    ax.legend(handles=handles, loc="upper right", fontsize=7, framealpha=0.9)
-    ax.set_title(f"Aligned timeline · {summary.get('input_audio', run_dir.name)}", fontsize=10)
-    fig.tight_layout()
-    out = save_path or (run_dir / "timeline.png")
-    fig.savefig(out, dpi=140)
-    plt.close(fig)
-    return out
-
-
-# ── Per-task differencers (US1: raw_vs_enhanced; reused by US2/US3) ────
-
-
-def _diar_speaks_in_window(result: Any, win_start: float, win_end: float) -> bool:  # noqa: ANN401
-    """Return True if any diarization segment overlaps the window.
-
-    ``result`` may be ``List[List[ScriptLine]]`` or the same shape after a
-    cache-restored dict round-trip. We unwrap the outer list and then test
-    each segment's [start, end) against the window.
-    """
-    if not result:
-        return False
-    segments = result[0] if isinstance(result, list) and result else []
-    for seg in segments:
-        s = _seg_attr(seg, "start")
-        e = _seg_attr(seg, "end")
-        if s is None or e is None:
-            continue
-        if float(s) < win_end and float(e) > win_start:
-            return True
-    return False
-
-
-def _classification_top1_in_window(result: Any, win_idx: int) -> tuple[str | None, float | None, float | None]:  # noqa: ANN401
-    """Return (top1_label, top1_score, entropy) for the win_idx'th classification window.
-
-    Classification results are List[List[List[{label, score}]]] — outer audio,
-    middle window, inner top-K. We pick the requested window and compute the
-    top-1 + Shannon entropy over the inner distribution.
-    """
-    import math
-
-    if not result:
-        return None, None, None
-    windows = result[0] if isinstance(result, list) and result else []
-    if win_idx >= len(windows):
-        return None, None, None
-    window = windows[win_idx]
-    if not isinstance(window, list) or not window:
-        return None, None, None
-    top = max(window, key=lambda d: d.get("score", 0.0) if isinstance(d, dict) else 0.0)
-    label = str(top.get("label", "?")) if isinstance(top, dict) else None
-    score = float(top.get("score", 0.0)) if isinstance(top, dict) else None
-    # Entropy over the full distribution (clip non-positive scores).
-    probs = [max(float(d.get("score", 0.0)), 1e-12) for d in window if isinstance(d, dict)]
-    total = sum(probs) or 1.0
-    probs = [p / total for p in probs]
-    entropy = -sum(p * math.log(p) for p in probs)
-    return label, score, entropy
-
-
-def _asr_text_in_window(result: Any, win_start: float, win_end: float) -> str:  # noqa: ANN401
-    """Return concatenated transcript tokens overlapping the window.
-
-    Tokens (chunks) are preferred when present; fall back to the full
-    ScriptLine text when chunks are absent and the line's [start, end]
-    overlaps the window.
-    """
-    if not result:
-        return ""
-    items = result if isinstance(result, list) else [result]
-    pieces: list[str] = []
-    for line in items:
-        chunks = _seg_attr(line, "chunks") or []
-        if chunks:
-            for c in chunks:
-                cs = _seg_attr(c, "start")
-                ce = _seg_attr(c, "end")
-                if cs is None or ce is None:
-                    continue
-                if float(cs) < win_end and float(ce) > win_start:
-                    text = _seg_attr(c, "text") or ""
-                    if text:
-                        pieces.append(str(text).strip())
-        else:
-            ls = _seg_attr(line, "start")
-            le = _seg_attr(line, "end")
-            text = _seg_attr(line, "text") or ""
-            if not text:
-                continue
-            if ls is None or le is None or (float(ls) < win_end and float(le) > win_start):
-                pieces.append(str(text).strip())
-    return " ".join(p for p in pieces if p).strip()
-
-
-def _wer_per_window(text_a: str, text_b: str) -> float:
-    """Word error rate (clipped to [0, 1]) between two token strings.
-
-    Edge cases:
-    - both empty → 0.0 (no signal, no disagreement)
-    - one empty → 1.0 (insertion / deletion)
-    - both populated → jiwer.wer; clipped at 1.0 for sortability.
-    """
-    a, b = (text_a or "").strip(), (text_b or "").strip()
-    if not a and not b:
-        return 0.0
-    if not a or not b:
-        return 1.0
-    import jiwer  # local import — keeps cold-start fast
-
-    return float(min(jiwer.wer(a, b), 1.0))
-
-
-def _bool_pair_disagrees(a: bool | None, b: bool | None) -> bool:
-    """True only when both sides are non-null and differ."""
-    if a is None or b is None:
-        return False
-    return a != b
-
-
-def _diff_diarization(
-    result_a: Any,  # noqa: ANN401
-    result_b: Any,  # noqa: ANN401
-    grid: ComparisonGrid,
-    duration_s: float,
-    *,
-    boundary_shift_ms: float,  # noqa: ARG001 — reserved for future per-segment boundary diff
-    **base_row: Any,  # noqa: ANN401
-) -> list[dict[str, Any]]:
-    """Compare two diarization outputs on ``grid``: speaks_a vs speaks_b per bucket."""
-    rows: list[dict[str, Any]] = []
-    for start, end, _idx in grid.iter_buckets(duration_s):
-        sa = _diar_speaks_in_window(result_a, start, end)
-        sb = _diar_speaks_in_window(result_b, start, end)
-        agree = sa == sb
-        rows.append(
-            {
-                **base_row,
-                "start": start,
-                "end": end,
-                "agree": agree,
-                "mismatch_type": None if agree else "boundary_shift",
-                "comparison_status": "ok",
-                "speaks_a": sa,
-                "speaks_b": sb,
-            }
-        )
-    return rows
-
-
-def _diff_classification(
-    result_a: Any,  # noqa: ANN401
-    result_b: Any,  # noqa: ANN401
-    grid: ComparisonGrid,  # noqa: ARG001 — classification windowing follows result shape, not external grid
-    duration_s: float,  # noqa: ARG001 — same reason
-    *,
-    win_length_a: float,
-    win_length_b: float,  # noqa: ARG001 — used for shape validation; actual span is win_length_a
-    hop_length_a: float | None = None,
-    **base_row: Any,  # noqa: ANN401
-) -> list[dict[str, Any]]:
-    """Compare AST/YAMNet outputs window-by-window when both ran on the same grid.
-
-    When the two outputs have different window counts (e.g. AST 10.24 s vs
-    YAMNet 0.96 s), only the overlapping prefix is compared. A future
-    refinement would project both onto a shared grid; for v1 we trust the
-    per-model native grid. ``win_length_a`` and ``hop_length_a`` (defaults
-    to ``win_length_a``) drive the per-row ``start``/``end`` so reviewers
-    see real time spans rather than integer placeholders.
-    """
-    rows: list[dict[str, Any]] = []
-    hop = float(hop_length_a if hop_length_a is not None else win_length_a)
-    win = float(win_length_a)
-    windows_a = result_a[0] if isinstance(result_a, list) and result_a else []
-    windows_b = result_b[0] if isinstance(result_b, list) and result_b else []
-    n = min(len(windows_a), len(windows_b))
-    for idx in range(n):
-        ta, sa, ea = _classification_top1_in_window(result_a, idx)
-        tb, sb, eb = _classification_top1_in_window(result_b, idx)
-        rows.append(
-            {
-                **base_row,
-                "start": round(idx * hop, 4),
-                "end": round(idx * hop + win, 4),
-                "agree": ta == tb,
-                "mismatch_type": None if ta == tb else "label_flip",
-                "comparison_status": "ok",
-                "top1_a": ta,
-                "top1_b": tb,
-                "score_a": sa,
-                "score_b": sb,
-                "entropy_a": ea,
-                "entropy_b": eb,
-            }
-        )
-    return rows
-
-
-def _diff_asr(
-    result_a: Any,  # noqa: ANN401
-    result_b: Any,  # noqa: ANN401
-    grid: ComparisonGrid,
-    duration_s: float,
-    *,
-    reference_side: str,  # "a" or "b"
-    **base_row: Any,  # noqa: ANN401
-) -> list[dict[str, Any]]:
-    """Per-window WER between two ASR outputs on ``grid``.
-
-    Empty buckets (no speech in either result) are dropped — we only
-    emit rows where at least one side had text overlap.
-    """
-    rows: list[dict[str, Any]] = []
-    for start, end, _idx in grid.iter_buckets(duration_s):
-        a_text = _asr_text_in_window(result_a, start, end)
-        b_text = _asr_text_in_window(result_b, start, end)
-        if not a_text and not b_text:
-            continue
-        if reference_side == "b":
-            wer = _wer_per_window(b_text, a_text)
-        else:
-            wer = _wer_per_window(a_text, b_text)
-        agree = wer == 0.0
-        rows.append(
-            {
-                **base_row,
-                "start": start,
-                "end": end,
-                "agree": agree,
-                "mismatch_type": None if agree else "text_edit",
-                "comparison_status": "ok",
-                "wer": wer,
-                "a_text": a_text,
-                "b_text": b_text,
-                "reference_side": reference_side,
-            }
-        )
-    return rows
-
-
-def _comparator_params_for_run(args: argparse.Namespace) -> dict[str, Any]:
-    """Snapshot of comparator-relevant CLI flags for cache-key + provenance."""
-    return {
-        "cross_stream_win_length": args.cross_stream_win_length,
-        "cross_stream_hop_length": args.cross_stream_hop_length,
-        "uncertainty_aggregator": args.uncertainty_aggregator,
-        "phoneme_disagreement_threshold": args.phoneme_disagreement_threshold,
-        "speech_presence_labels": [s.strip() for s in args.speech_presence_labels.split(",") if s.strip()],
-        "asr_reference_model": args.asr_reference_model,
-        "diarization_boundary_shift_ms": args.diarization_boundary_shift_ms,
-    }
-
-
-def _model_block_cache_key(model_block: dict[str, Any]) -> str:
-    """Best-effort cache key for an upstream model block (falls back to '' when absent)."""
-    return str(model_block.get("cache_key") or "")
-
-
-def _result_or_none(model_block: dict[str, Any]) -> Any:  # noqa: ANN401
-    """Return the model_block's `result` only when status is ok."""
-    if not isinstance(model_block, dict):
-        return None
-    if model_block.get("status") != "ok":
-        return None
-    return model_block.get("result")
-
-
-def _attach_comparator_regions_to_ls_tasks(
-    ls_tasks: list[dict[str, Any]],
-    parquet_paths: list[Path],
-    top_n: int,
-) -> list[dict[str, Any]]:
-    """Append disagreement regions from each parquet onto the matching pass's LS task.
-
-    Reads each parquet, picks the rows where ``agree`` is False (capped at
-    top_n total across the entire run, sorted by combined_uncertainty
-    descending with NaN-last), and attaches them as Labels (and optional
-    TextArea) regions to the right pass's LS task.
-    """
-    import math
-
-    import pandas as pd
-
-    # Index ls_tasks by pass label for O(1) lookup.
-    by_pass: dict[str, dict[str, Any]] = {t["data"]["pass"]: t for t in ls_tasks if "data" in t}
-    # Aggregate disagreement rows from all parquets.
-    candidates: list[tuple[float, dict[str, Any], dict[str, Any]]] = []
-    for p in parquet_paths:
-        try:
-            df = pd.read_parquet(p)
-        except Exception:
-            continue
-        if df.empty:
-            continue
-        for idx, row in df.iterrows():
-            if row.get("agree", True) is True:
-                continue
-            cu = row.get("combined_uncertainty")
-            cu_val = float(cu) if cu is not None and not (isinstance(cu, float) and math.isnan(cu)) else float("nan")
-            row_dict = row.to_dict()
-            track_name = _comparison_ls_track_name(row_dict)
-            region_id = _comparison_region_id(p, idx, row_dict)
-            label_value = (
-                row_dict.get("comparison_status")
-                if row_dict.get("comparison_status") in ("incomparable", "one_sided")
-                else "disagree"
-            )
-            label_region = _comparison_ls_label_region(
-                region_id=region_id,
-                from_name=track_name,
-                start=float(row_dict["start"]),
-                end=float(row_dict["end"]),
-                label=label_value,
-            )
-            extras: list[dict[str, Any]] = []
-            if "wer" in row_dict and pd.notna(row_dict.get("wer")):
-                wer = float(row_dict.get("wer", 0.0))
-                a = (row_dict.get("a_text") or "")[:200]
-                b = (row_dict.get("b_text") or "")[:200]
-                extras.append(
-                    _comparison_ls_textarea_region(
-                        region_id=f"{region_id}__text",
-                        from_name=f"{track_name}__text",
-                        start=float(row_dict["start"]),
-                        end=float(row_dict["end"]),
-                        text=f"WER {wer:.2f}: A={a!r} | B={b!r}",
-                    )
-                )
-            candidates.append((cu_val, label_region, {"extras": extras, "row": row_dict}))
-
-    # Sort: NaN last (treat as +inf so they sort to the end after descending flip).
-    def _sort_key(t: tuple[float, dict[str, Any], dict[str, Any]]) -> tuple[Any, ...]:
-        cu = t[0]
-        primary = -cu if cu == cu else float("inf")
-        return (primary, _disagreement_severity_rank(t[2]["row"].get("mismatch_type")), t[1]["value"]["start"])
-
-    candidates.sort(key=_sort_key)
-    selected = candidates[:top_n]
-    for _cu, label_region, meta in selected:
-        # Find the pass — the from_name encodes it: "<pass>__compare__..."
-        from_name = label_region["from_name"]
-        pass_label = from_name.split("__compare__", 1)[0]
-        target = by_pass.get(pass_label)
-        if target is None and pass_label == "pass_pair":
-            # raw_vs_enhanced regions go on the raw_16k task by convention.
-            target = by_pass.get("raw_16k")
-        if target is None:
-            continue
-        # First prediction block holds the analyzer regions; reuse it.
-        if not target.get("predictions"):
-            continue
-        target["predictions"][0]["result"].append(label_region)
-        for extra in meta["extras"]:
-            target["predictions"][0]["result"].append(extra)
-    return ls_tasks
-
-
-def compare_raw_vs_enhanced(
-    summaries: dict[str, Any],
-    args: argparse.Namespace,
-    run_dir: Path,
-    cache_dir: Path | None,
-    audio_sig: str,
-    duration_s: float,
-    wrapper_hash: str,
-    senselab_ver: str,
-) -> tuple[list[Path], list[dict[str, Any]], dict[str, str]]:
-    """For each task × model present in BOTH passes, emit a raw_vs_enhanced parquet.
-
-    Returns ``(parquet_paths, comparator_tracks, incomparable_reasons)`` for
-    consumption by the disagreements index and the LS bundle.
-    """
-    parquets: list[Path] = []
-    tracks: list[dict[str, Any]] = []
-    incomparable: dict[str, str] = {}
-    passes = summaries.get("passes", {})
-    raw = passes.get("raw_16k") or {}
-    enh = passes.get("enhanced_16k") or {}
-    if not raw or not enh:
-        return parquets, tracks, incomparable
-
-    grid = ComparisonGrid(
-        win_length=args.cross_stream_win_length,
-        hop_length=args.cross_stream_hop_length,
-        name="cross_stream",
-    )
-    base_dir = run_dir / "comparisons" / "raw_vs_enhanced"
-
-    # Per-task by_model differencers.
-    task_specs: list[tuple[str, str, Any]] = [
-        ("diarization", "by_model", _diff_diarization),
-        ("asr", "by_model", _diff_asr),
-        ("alignment", "by_model", _diff_asr),  # alignment outputs are ScriptLines like ASR
-    ]
-    for task, _key, differencer in task_specs:
-        raw_models = (raw.get(task) or {}).get("by_model") or {}
-        enh_models = (enh.get(task) or {}).get("by_model") or {}
-        for model_id in sorted(set(raw_models) & set(enh_models)):
-            raw_block = raw_models[model_id]
-            enh_block = enh_models[model_id]
-            raw_res = _result_or_none(raw_block)
-            enh_res = _result_or_none(enh_block)
-            if raw_res is None or enh_res is None:
-                incomparable[f"{task}/{_safe(model_id)}/raw_vs_enhanced"] = (
-                    f"upstream {task}/{model_id} not ok in one of the passes"
-                )
-                continue
-            base_row = {
-                "comparison_kind": "raw_vs_enhanced",
-                "task": task,
-                "stream_pair": None,
-                "model_a": model_id,
-                "model_b": model_id,
-                "pass_a": "raw_16k",
-                "pass_b": "enhanced_16k",
-                "confidence_a": None,
-                "confidence_b": None,
-                "combined_uncertainty": None,
-            }
-            kwargs: dict[str, Any] = {}
-            if differencer is _diff_asr:
-                kwargs["reference_side"] = "a"
-            elif differencer is _diff_diarization:
-                kwargs["boundary_shift_ms"] = args.diarization_boundary_shift_ms
-            rows = differencer(raw_res, enh_res, grid, duration_s, **kwargs, **base_row)
-            if not rows:
-                continue
-            # US4: enrich rows with per-region confidence + combined_uncertainty.
-            if differencer is _diff_asr:
-                _enrich_diff_asr_with_confidence(
-                    rows, result_a=raw_res, result_b=enh_res, aggregator=args.uncertainty_aggregator
-                )
-            dest = base_dir / task / f"{_safe(model_id)}.parquet"
-            cache_key_str = comparison_cache_key(
-                audio_sig=audio_sig,
-                comparison_kind="raw_vs_enhanced",
-                task_or_pair=f"{task}/{model_id}",
-                upstream_cache_keys=[
-                    _model_block_cache_key(raw_block),
-                    _model_block_cache_key(enh_block),
-                ],
-                params=_comparator_params_for_run(args),
-                wrapper_hash=wrapper_hash,
-                senselab_ver=senselab_ver,
-            )
-            cached = cache_lookup(cache_dir, cache_key_str) if cache_dir else None
-            if cached is None:
-                provenance = {
-                    "schema_version": 1,
-                    "wrapper_hash": wrapper_hash,
-                    "senselab_version": senselab_ver,
-                    "grid": {"name": grid.name, "win_length": grid.win_length, "hop_length": grid.hop_length},
-                    "upstream_cache_keys": sorted(
-                        {_model_block_cache_key(raw_block), _model_block_cache_key(enh_block)}
-                    ),
-                    "comparator_params": _comparator_params_for_run(args),
-                    "cache_key": cache_key_str,
-                }
-                write_comparison_parquet(rows, dest, provenance=provenance)
-                if cache_dir is not None:
-                    cache_store(cache_dir, cache_key_str, {"parquet_path": str(dest), "rows": len(rows)})
-            parquets.append(dest)
-            track_name = f"pass_pair__compare__{task}__{_safe(model_id)}"
-            tracks.append({"name": track_name, "with_textarea": task == "asr"})
-
-    # Single-model classification tasks (AST / YAMNet) — top-level keys, not under by_model.
-    for task in ("ast", "yamnet"):
-        raw_block = raw.get(task) or {}
-        enh_block = enh.get(task) or {}
-        if raw_block.get("status") != "ok" or enh_block.get("status") != "ok":
-            continue
-        win = args.ast_win_length if task == "ast" else args.yamnet_win_length
-        hop = args.ast_hop_length if task == "ast" else args.yamnet_hop_length
-        base_row = {
-            "comparison_kind": "raw_vs_enhanced",
-            "task": task,
-            "stream_pair": None,
-            "model_a": task,
-            "model_b": task,
-            "pass_a": "raw_16k",
-            "pass_b": "enhanced_16k",
-            "confidence_a": None,
-            "confidence_b": None,
-            "combined_uncertainty": None,
-        }
-        rows = _diff_classification(
-            raw_block.get("result"),
-            enh_block.get("result"),
-            grid,
-            duration_s,
-            win_length_a=win,
-            win_length_b=win,
-            hop_length_a=hop,
-            **base_row,
-        )
-        if not rows:
-            continue
-        # Confidence = top-1 score; combined_uncertainty via aggregator.
-        _enrich_diff_classification_with_confidence(rows, aggregator=args.uncertainty_aggregator)
-        dest = base_dir / f"{task}.parquet"
-        cache_key_str = comparison_cache_key(
-            audio_sig=audio_sig,
-            comparison_kind="raw_vs_enhanced",
-            task_or_pair=f"{task}",
-            upstream_cache_keys=[_model_block_cache_key(raw_block), _model_block_cache_key(enh_block)],
-            params=_comparator_params_for_run(args),
-            wrapper_hash=wrapper_hash,
-            senselab_ver=senselab_ver,
-        )
-        cached = cache_lookup(cache_dir, cache_key_str) if cache_dir else None
-        if cached is None:
-            provenance = {
-                "schema_version": 1,
-                "wrapper_hash": wrapper_hash,
-                "senselab_version": senselab_ver,
-                "grid": {"name": f"{task}_native", "win_length": win, "hop_length": hop},
-                "upstream_cache_keys": sorted({_model_block_cache_key(raw_block), _model_block_cache_key(enh_block)}),
-                "comparator_params": _comparator_params_for_run(args),
-                "cache_key": cache_key_str,
-            }
-            write_comparison_parquet(rows, dest, provenance=provenance)
-            if cache_dir is not None:
-                cache_store(cache_dir, cache_key_str, {"parquet_path": str(dest), "rows": len(rows)})
-        parquets.append(dest)
-        tracks.append({"name": f"pass_pair__compare__{task}", "with_textarea": False})
-
-    return parquets, tracks, incomparable
-
-
-def compare_within_stream(
-    pass_label: str,
-    pass_summary: dict[str, Any],
-    args: argparse.Namespace,
-    run_dir: Path,
-    cache_dir: Path | None,
-    audio_sig: str,
-    duration_s: float,
-    wrapper_hash: str,
-    senselab_ver: str,
-) -> tuple[list[Path], list[dict[str, Any]], dict[str, str]]:
-    """For each task with ≥2 successful models, emit one parquet per ordered model pair.
-
-    Outputs land at ``<run_dir>/<pass>/comparisons/<task>/<a>_vs_<b>.parquet``
-    (US2 layout in contracts/comparison-row.parquet.md).
-    """
-    import itertools
-
-    parquets: list[Path] = []
-    tracks: list[dict[str, Any]] = []
-    incomparable: dict[str, str] = {}
-
-    grid = ComparisonGrid(
-        win_length=args.cross_stream_win_length,
-        hop_length=args.cross_stream_hop_length,
-        name="cross_stream",
-    )
-    base_dir = run_dir / pass_label / "comparisons"
-    reference = args.asr_reference_model
-
-    task_specs: list[tuple[str, Any]] = [
-        ("diarization", _diff_diarization),
-        ("asr", _diff_asr),
-        ("alignment", _diff_asr),
-    ]
-    for task, differencer in task_specs:
-        models = (pass_summary.get(task) or {}).get("by_model") or {}
-        ok_models = sorted(m for m, b in models.items() if isinstance(b, dict) and b.get("status") == "ok")
-        if len(ok_models) < 2:
-            continue
-        for a, b in itertools.combinations(ok_models, 2):
-            block_a, block_b = models[a], models[b]
-            res_a, res_b = _result_or_none(block_a), _result_or_none(block_b)
-            if res_a is None or res_b is None:
-                incomparable[f"{pass_label}/{task}/{_safe(a)}_vs_{_safe(b)}"] = "upstream model not ok"
-                continue
-            ref_side = (
-                "a"
-                if (differencer is _diff_asr and a == reference)
-                else ("b" if (differencer is _diff_asr and b == reference) else "a")
-            )
-            base_row = {
-                "comparison_kind": "within_stream",
-                "task": task,
-                "stream_pair": None,
-                "model_a": a,
-                "model_b": b,
-                "pass_a": pass_label,
-                "pass_b": pass_label,
-                "confidence_a": None,
-                "confidence_b": None,
-                "combined_uncertainty": None,
-            }
-            kwargs: dict[str, Any] = {}
-            if differencer is _diff_asr:
-                kwargs["reference_side"] = ref_side
-            elif differencer is _diff_diarization:
-                kwargs["boundary_shift_ms"] = args.diarization_boundary_shift_ms
-            rows = differencer(res_a, res_b, grid, duration_s, **kwargs, **base_row)
-            if not rows:
-                continue
-            if differencer is _diff_asr:
-                _enrich_diff_asr_with_confidence(
-                    rows, result_a=res_a, result_b=res_b, aggregator=args.uncertainty_aggregator
-                )
-            dest = base_dir / task / f"{_safe(a)}_vs_{_safe(b)}.parquet"
-            cache_key_str = comparison_cache_key(
-                audio_sig=audio_sig,
-                comparison_kind="within_stream",
-                task_or_pair=f"{pass_label}/{task}/{a}:{b}",
-                upstream_cache_keys=[_model_block_cache_key(block_a), _model_block_cache_key(block_b)],
-                params=_comparator_params_for_run(args),
-                wrapper_hash=wrapper_hash,
-                senselab_ver=senselab_ver,
-            )
-            cached = cache_lookup(cache_dir, cache_key_str) if cache_dir else None
-            if cached is None:
-                provenance = {
-                    "schema_version": 1,
-                    "wrapper_hash": wrapper_hash,
-                    "senselab_version": senselab_ver,
-                    "grid": {"name": grid.name, "win_length": grid.win_length, "hop_length": grid.hop_length},
-                    "upstream_cache_keys": sorted({_model_block_cache_key(block_a), _model_block_cache_key(block_b)}),
-                    "comparator_params": _comparator_params_for_run(args),
-                    "cache_key": cache_key_str,
-                }
-                write_comparison_parquet(rows, dest, provenance=provenance)
-                if cache_dir is not None:
-                    cache_store(cache_dir, cache_key_str, {"parquet_path": str(dest), "rows": len(rows)})
-            parquets.append(dest)
-            track_name = f"{pass_label}__compare__{task}__{_safe(a)}_vs_{_safe(b)}"
-            tracks.append({"name": track_name, "with_textarea": task == "asr"})
-
-    # Classification within-stream is special-cased: AST and YAMNet have
-    # different native window grids, so we project both onto the cross-stream
-    # grid by sampling each window's top-1 at the bucket center via the
-    # existing _classification_to_ls window math. For simplicity v1, only emit
-    # a parquet when both ran on a matching grid (existing scene_agreement.json
-    # invariant). Otherwise skip and document.
-    ast_block = pass_summary.get("ast") or {}
-    yam_block = pass_summary.get("yamnet") or {}
-    ast_ok = ast_block.get("status") == "ok"
-    yam_ok = yam_block.get("status") == "ok"
-    if ast_ok and yam_ok:
-        # Use whichever pair produced equal-length window lists.
-        ast_windows = ast_block.get("result", [[]])[0] if isinstance(ast_block.get("result"), list) else []
-        yam_windows = yam_block.get("result", [[]])[0] if isinstance(yam_block.get("result"), list) else []
-        if ast_windows and yam_windows and len(ast_windows) == len(yam_windows):
-            base_row = {
-                "comparison_kind": "within_stream",
-                "task": "scene",
-                "stream_pair": None,
-                "model_a": "ast",
-                "model_b": "yamnet",
-                "pass_a": pass_label,
-                "pass_b": pass_label,
-                "confidence_a": None,
-                "confidence_b": None,
-                "combined_uncertainty": None,
-            }
-            rows = _diff_classification(
-                ast_block.get("result"),
-                yam_block.get("result"),
-                grid,
-                duration_s,
-                win_length_a=args.ast_win_length,
-                win_length_b=args.yamnet_win_length,
-                hop_length_a=args.ast_hop_length,
-                **base_row,
-            )
-            if rows:
-                # US4: classification confidence = top-1 score; populate combined_uncertainty.
-                _enrich_diff_classification_with_confidence(rows, aggregator=args.uncertainty_aggregator)
-                dest = base_dir / "scene" / "ast_vs_yamnet.parquet"
-                cache_key_str = comparison_cache_key(
-                    audio_sig=audio_sig,
-                    comparison_kind="within_stream",
-                    task_or_pair=f"{pass_label}/scene/ast:yamnet",
-                    upstream_cache_keys=[_model_block_cache_key(ast_block), _model_block_cache_key(yam_block)],
-                    params=_comparator_params_for_run(args),
-                    wrapper_hash=wrapper_hash,
-                    senselab_ver=senselab_ver,
-                )
-                cached = cache_lookup(cache_dir, cache_key_str) if cache_dir else None
-                if cached is None:
-                    provenance = {
-                        "schema_version": 1,
-                        "wrapper_hash": wrapper_hash,
-                        "senselab_version": senselab_ver,
-                        "grid": {
-                            "name": "ast_native",
-                            "win_length": args.ast_win_length,
-                            "hop_length": args.ast_hop_length,
-                        },
-                        "upstream_cache_keys": sorted(
-                            {_model_block_cache_key(ast_block), _model_block_cache_key(yam_block)}
-                        ),
-                        "comparator_params": _comparator_params_for_run(args),
-                        "cache_key": cache_key_str,
-                    }
-                    write_comparison_parquet(rows, dest, provenance=provenance)
-                    if cache_dir is not None:
-                        cache_store(cache_dir, cache_key_str, {"parquet_path": str(dest), "rows": len(rows)})
-                parquets.append(dest)
-                tracks.append({"name": f"{pass_label}__compare__scene__ast_vs_yamnet", "with_textarea": False})
-        else:
-            incomparable[f"{pass_label}/scene/ast_vs_yamnet"] = (
-                "AST and YAMNet ran on different grids — match --ast-win-length / --yamnet-win-length to compare"
-            )
-
-    return parquets, tracks, incomparable
-
-
-# ── Cross-stream comparators (US3) ─────────────────────────────────────
-
-
-def _classification_top1_speech_in_window(result: Any, win_idx: int, allowlist: set[str]) -> tuple[bool, str | None]:  # noqa: ANN401
-    """Return (is_speech, top1_label) for the win_idx'th classification window.
-
-    is_speech is True iff the window's top-1 label is in ``allowlist``.
-    """
-    label, _score, _entropy = _classification_top1_in_window(result, win_idx)
-    return (label in allowlist) if label else False, label
-
-
-def _diff_asr_vs_diarization(
-    asr_result: Any,  # noqa: ANN401
-    diar_result: Any,  # noqa: ANN401
-    grid: ComparisonGrid,
-    duration_s: float,
-    *,
-    asr_model: str,
-    diar_model: str,
-    pass_label: str,
-) -> list[dict[str, Any]]:
-    """Per-bucket cross-stream rows: asr_says_speech vs diar_says_speech."""
-    rows: list[dict[str, Any]] = []
-    base_row = {
-        "comparison_kind": "cross_stream",
-        "task": None,
-        "stream_pair": "asr_vs_diarization",
-        "model_a": asr_model,
-        "model_b": diar_model,
-        "pass_a": pass_label,
-        "pass_b": pass_label,
-        "confidence_a": None,
-        "confidence_b": None,
-        "combined_uncertainty": None,
-    }
-    for start, end, _idx in grid.iter_buckets(duration_s):
-        asr_says = _token_overlaps_window(asr_result, start, end)
-        diar_says = _diar_speaks_in_window(diar_result, start, end)
-        agree = asr_says == diar_says
-        rows.append(
-            {
-                **base_row,
-                "start": start,
-                "end": end,
-                "agree": agree,
-                "mismatch_type": None if agree else "speech_presence_flip",
-                "comparison_status": "ok",
-                "asr_says_speech": asr_says,
-                "diar_says_speech": diar_says,
-            }
-        )
-    return rows
-
-
-def _diff_classification_vs_diarization(
-    class_result: Any,  # noqa: ANN401
-    diar_result: Any,  # noqa: ANN401
-    grid: ComparisonGrid,
-    duration_s: float,
-    *,
-    class_win_length: float,
-    class_hop_length: float,
-    allowlist: set[str],
-    class_model: str,
-    diar_model: str,
-    pass_label: str,
-) -> list[dict[str, Any]]:
-    """Per-bucket: AST/YAMNet 'speech-present' vs diarization 'speech-present'.
-
-    For each cross-stream-grid bucket, find the AST/YAMNet window whose center
-    is closest to the bucket center (handles AST 10.24 s grid vs YAMNet 0.96 s
-    grid) and check whether its top-1 label is in the speech allowlist.
-    """
-    rows: list[dict[str, Any]] = []
-    base_row = {
-        "comparison_kind": "cross_stream",
-        "task": None,
-        "stream_pair": "ast_vs_diarization" if class_model == "ast" else "yamnet_vs_diarization",
-        "model_a": class_model,
-        "model_b": diar_model,
-        "pass_a": pass_label,
-        "pass_b": pass_label,
-        "confidence_a": None,
-        "confidence_b": None,
-        "combined_uncertainty": None,
-    }
-    for start, end, _idx in grid.iter_buckets(duration_s):
-        center = (start + end) / 2
-        # Window index whose center [i*hop + win/2] is closest to bucket center.
-        target = center - class_win_length / 2
-        win_idx = max(0, int(round(target / class_hop_length)))
-        is_speech, top1 = _classification_top1_speech_in_window(class_result, win_idx, allowlist)
-        diar_says = _diar_speaks_in_window(diar_result, start, end)
-        agree = is_speech == diar_says
-        rows.append(
-            {
-                **base_row,
-                "start": start,
-                "end": end,
-                "agree": agree,
-                "mismatch_type": None if agree else "speech_presence_flip",
-                "comparison_status": "ok",
-                "class_says_speech": is_speech,
-                "diar_says_speech": diar_says,
-                "top1_label": top1,
-            }
-        )
-    return rows
-
-
-def _g2p_phonemes(text: str) -> list[str]:
-    """Run g2p_en on text and return the ARPAbet phoneme sequence (whitespace dropped).
-
-    Lazy import + lazy NLTK resource download. Returns an empty list when text
-    is empty. Wraps `LookupError` (missing NLTK tagger) by triggering a
-    one-time download then retrying.
-    """
-    if not text.strip():
-        return []
-    import nltk
-    from g2p_en import G2p  # type: ignore[import-untyped]
-
-    g = _g2p_phonemes._cached_g2p if hasattr(_g2p_phonemes, "_cached_g2p") else None  # type: ignore[attr-defined]
-    if g is None:
-        try:
-            g = G2p()
-        except Exception:  # noqa: BLE001
-            nltk.download("averaged_perceptron_tagger_eng", quiet=True)
-            nltk.download("cmudict", quiet=True)
-            g = G2p()
-        _g2p_phonemes._cached_g2p = g  # type: ignore[attr-defined]
-    try:
-        seq = g(text)
-    except LookupError:
-        nltk.download("averaged_perceptron_tagger_eng", quiet=True)
-        seq = g(text)
-    return [str(p).strip() for p in seq if str(p).strip() and not str(p).isspace()]
-
-
-def _diff_asr_vs_ppg(
-    asr_result: Any,  # noqa: ANN401
-    ppg_result: Any,  # noqa: ANN401
-    grid: ComparisonGrid,
-    duration_s: float,
-    *,
-    threshold: float,
-    asr_model: str,
-    pass_label: str,
-) -> list[dict[str, Any]]:
-    """Per-bucket ASR-derived phoneme sequence vs PPG argmax sequence.
-
-    PPG output shape (per the existing senselab PPG backend): a per-frame
-    list of (phoneme, score) dicts. We argmax per frame and bucket by
-    cross-stream grid, then jiwer.wer on the resulting space-separated
-    phoneme strings.
-    """
-    import jiwer
-
-    rows: list[dict[str, Any]] = []
-    base_row = {
-        "comparison_kind": "cross_stream",
-        "task": None,
-        "stream_pair": "asr_vs_ppg",
-        "model_a": asr_model,
-        "model_b": "ppg",
-        "pass_a": pass_label,
-        "pass_b": pass_label,
-        "confidence_a": None,
-        "confidence_b": None,
-        "combined_uncertainty": None,
-    }
-    # PPG result is List[List[{phoneme, score}]] — outer audio, inner frames.
-    ppg_frames = ppg_result[0] if isinstance(ppg_result, list) and ppg_result else []
-    # Frames are uniformly spaced; estimate frame_hop from duration / len.
-    n_frames = len(ppg_frames)
-    frame_hop = duration_s / n_frames if n_frames else 0.01
-    for start, end, _idx in grid.iter_buckets(duration_s):
-        text = _asr_text_in_window(asr_result, start, end)
-        asr_phonemes = _g2p_phonemes(text)
-        # Bucket the PPG argmax: frames whose center falls in [start, end).
-        first_frame = int(start / frame_hop) if frame_hop > 0 else 0
-        last_frame = int(end / frame_hop) if frame_hop > 0 else 0
-        ppg_phonemes: list[str] = []
-        prev = None
-        for f in ppg_frames[first_frame:last_frame]:
-            if not isinstance(f, list) or not f:
-                continue
-            top = max(f, key=lambda d: d.get("score", 0.0) if isinstance(d, dict) else 0.0)
-            label = str(top.get("phoneme", top.get("label", ""))) if isinstance(top, dict) else ""
-            if label and label != prev:
-                ppg_phonemes.append(label)
-                prev = label
-        if not asr_phonemes and not ppg_phonemes:
-            continue
-        a = " ".join(asr_phonemes)
-        b = " ".join(ppg_phonemes)
-        if not a or not b:
-            per = 1.0
-        else:
-            try:
-                per = float(jiwer.wer(a, b))
-            except Exception:  # noqa: BLE001
-                per = 1.0
-        rows.append(
-            {
-                **base_row,
-                "start": start,
-                "end": end,
-                "agree": per < threshold,
-                "mismatch_type": None if per < threshold else "phoneme_disagreement",
-                "comparison_status": "ok",
-                "asr_phonemes": a,
-                "ppg_phonemes": b,
-                "phoneme_per": per,
-                "phoneme_disagreement": per >= threshold,
-            }
-        )
-    return rows
-
-
-def compare_cross_stream(
-    pass_label: str,
-    pass_summary: dict[str, Any],
-    args: argparse.Namespace,
-    run_dir: Path,
-    cache_dir: Path | None,
-    audio_sig: str,
-    duration_s: float,
-    wrapper_hash: str,
-    senselab_ver: str,
-) -> tuple[list[Path], list[dict[str, Any]], dict[str, str]]:
-    """Cross-stream comparators per pass: ASR↔diar, AST/YAMNet↔diar, ASR↔PPG."""
-    parquets: list[Path] = []
-    tracks: list[dict[str, Any]] = []
-    incomparable: dict[str, str] = {}
-    grid = ComparisonGrid(
-        win_length=args.cross_stream_win_length,
-        hop_length=args.cross_stream_hop_length,
-        name="cross_stream",
-    )
-    base_dir = run_dir / pass_label / "comparisons" / "cross_stream"
-    allowlist = {s.strip() for s in args.speech_presence_labels.split(",") if s.strip()}
-
-    asr_models = (pass_summary.get("asr") or {}).get("by_model") or {}
-    diar_models = (pass_summary.get("diarization") or {}).get("by_model") or {}
-    asr_ok = {m: b for m, b in asr_models.items() if isinstance(b, dict) and b.get("status") == "ok"}
-    diar_ok = {m: b for m, b in diar_models.items() if isinstance(b, dict) and b.get("status") == "ok"}
-
-    # ASR ↔ diarization
-    for asr_m, asr_b in sorted(asr_ok.items()):
-        for diar_m, diar_b in sorted(diar_ok.items()):
-            rows = _diff_asr_vs_diarization(
-                asr_b["result"],
-                diar_b["result"],
-                grid,
-                duration_s,
-                asr_model=asr_m,
-                diar_model=diar_m,
-                pass_label=pass_label,
-            )
-            if not rows:
-                continue
-            dest = base_dir / f"asr__{_safe(asr_m)}__vs__diarization__{_safe(diar_m)}.parquet"
-            cache_key_str = comparison_cache_key(
-                audio_sig=audio_sig,
-                comparison_kind="cross_stream",
-                task_or_pair=f"{pass_label}/asr_vs_diarization/{asr_m}:{diar_m}",
-                upstream_cache_keys=[_model_block_cache_key(asr_b), _model_block_cache_key(diar_b)],
-                params=_comparator_params_for_run(args),
-                wrapper_hash=wrapper_hash,
-                senselab_ver=senselab_ver,
-            )
-            cached = cache_lookup(cache_dir, cache_key_str) if cache_dir else None
-            if cached is None:
-                provenance = {
-                    "schema_version": 1,
-                    "wrapper_hash": wrapper_hash,
-                    "senselab_version": senselab_ver,
-                    "grid": {"name": grid.name, "win_length": grid.win_length, "hop_length": grid.hop_length},
-                    "upstream_cache_keys": sorted({_model_block_cache_key(asr_b), _model_block_cache_key(diar_b)}),
-                    "comparator_params": _comparator_params_for_run(args),
-                    "cache_key": cache_key_str,
-                }
-                write_comparison_parquet(rows, dest, provenance=provenance)
-                if cache_dir is not None:
-                    cache_store(cache_dir, cache_key_str, {"parquet_path": str(dest), "rows": len(rows)})
-            parquets.append(dest)
-            tracks.append(
-                {
-                    "name": f"{pass_label}__compare__asr_vs_diarization__{_safe(asr_m)}_vs_{_safe(diar_m)}",
-                    "with_textarea": False,
-                }
-            )
-
-    # AST / YAMNet ↔ diarization
-    for cls_name, cls_block, cls_win, cls_hop in [
-        ("ast", pass_summary.get("ast") or {}, args.ast_win_length, args.ast_hop_length),
-        ("yamnet", pass_summary.get("yamnet") or {}, args.yamnet_win_length, args.yamnet_hop_length),
-    ]:
-        if cls_block.get("status") != "ok":
-            continue
-        for diar_m, diar_b in sorted(diar_ok.items()):
-            rows = _diff_classification_vs_diarization(
-                cls_block.get("result"),
-                diar_b["result"],
-                grid,
-                duration_s,
-                class_win_length=cls_win,
-                class_hop_length=cls_hop,
-                allowlist=allowlist,
-                class_model=cls_name,
-                diar_model=diar_m,
-                pass_label=pass_label,
-            )
-            if not rows:
-                continue
-            dest = base_dir / f"{cls_name}__vs__diarization__{_safe(diar_m)}.parquet"
-            cache_key_str = comparison_cache_key(
-                audio_sig=audio_sig,
-                comparison_kind="cross_stream",
-                task_or_pair=f"{pass_label}/{cls_name}_vs_diarization/{diar_m}",
-                upstream_cache_keys=[_model_block_cache_key(cls_block), _model_block_cache_key(diar_b)],
-                params=_comparator_params_for_run(args),
-                wrapper_hash=wrapper_hash,
-                senselab_ver=senselab_ver,
-            )
-            cached = cache_lookup(cache_dir, cache_key_str) if cache_dir else None
-            if cached is None:
-                provenance = {
-                    "schema_version": 1,
-                    "wrapper_hash": wrapper_hash,
-                    "senselab_version": senselab_ver,
-                    "grid": {"name": grid.name, "win_length": grid.win_length, "hop_length": grid.hop_length},
-                    "upstream_cache_keys": sorted({_model_block_cache_key(cls_block), _model_block_cache_key(diar_b)}),
-                    "comparator_params": _comparator_params_for_run(args),
-                    "cache_key": cache_key_str,
-                }
-                write_comparison_parquet(rows, dest, provenance=provenance)
-                if cache_dir is not None:
-                    cache_store(cache_dir, cache_key_str, {"parquet_path": str(dest), "rows": len(rows)})
-            parquets.append(dest)
-            tracks.append(
-                {
-                    "name": f"{pass_label}__compare__{cls_name}_vs_diarization__{_safe(diar_m)}",
-                    "with_textarea": False,
-                }
-            )
-
-    # ASR ↔ PPG (gracefully skip when no PPG result is available)
-    ppg_block = pass_summary.get("ppgs") or pass_summary.get("ppg") or {}
-    if ppg_block.get("status") == "ok":
-        for asr_m, asr_b in sorted(asr_ok.items()):
-            try:
-                rows = _diff_asr_vs_ppg(
-                    asr_b["result"],
-                    ppg_block.get("result"),
-                    grid,
-                    duration_s,
-                    threshold=args.phoneme_disagreement_threshold,
-                    asr_model=asr_m,
-                    pass_label=pass_label,
-                )
-            except Exception as exc:  # noqa: BLE001
-                incomparable[f"{pass_label}/asr_vs_ppg/{_safe(asr_m)}"] = f"phoneme comparison failed: {exc!r}"
-                continue
-            if not rows:
-                continue
-            dest = base_dir / f"asr__{_safe(asr_m)}__vs__ppg.parquet"
-            cache_key_str = comparison_cache_key(
-                audio_sig=audio_sig,
-                comparison_kind="cross_stream",
-                task_or_pair=f"{pass_label}/asr_vs_ppg/{asr_m}",
-                upstream_cache_keys=[_model_block_cache_key(asr_b), _model_block_cache_key(ppg_block)],
-                params=_comparator_params_for_run(args),
-                wrapper_hash=wrapper_hash,
-                senselab_ver=senselab_ver,
-            )
-            cached = cache_lookup(cache_dir, cache_key_str) if cache_dir else None
-            if cached is None:
-                provenance = {
-                    "schema_version": 1,
-                    "wrapper_hash": wrapper_hash,
-                    "senselab_version": senselab_ver,
-                    "grid": {"name": grid.name, "win_length": grid.win_length, "hop_length": grid.hop_length},
-                    "upstream_cache_keys": sorted({_model_block_cache_key(asr_b), _model_block_cache_key(ppg_block)}),
-                    "comparator_params": _comparator_params_for_run(args),
-                    "cache_key": cache_key_str,
-                }
-                write_comparison_parquet(rows, dest, provenance=provenance)
-                if cache_dir is not None:
-                    cache_store(cache_dir, cache_key_str, {"parquet_path": str(dest), "rows": len(rows)})
-            parquets.append(dest)
-            tracks.append(
-                {
-                    "name": f"{pass_label}__compare__asr_vs_ppg__{_safe(asr_m)}",
-                    "with_textarea": False,
-                }
-            )
-    else:
-        incomparable[f"{pass_label}/asr_vs_ppg"] = "PPG backend not provisioned"
-
-    return parquets, tracks, incomparable
-
-
-# ── Per-region uncertainty harvesters (US4) ────────────────────────────
-
-
-def _whisper_chunk_confidence(chunk: Any) -> tuple[float | None, float | None]:  # noqa: ANN401
-    """Return (confidence, no_speech_prob) from a Whisper chunk dict / ScriptLine.
-
-    confidence = exp(avg_logprob) clipped to [0, 1] (avg_logprob is the
-    per-token mean log-prob; exp converts to a [0, 1] probability).
-    Returns (None, None) when neither field is present on the chunk.
-    """
-    import math
-
-    avg = _seg_attr(chunk, "avg_logprob")
-    nsp = _seg_attr(chunk, "no_speech_prob")
-    confidence: float | None = None
-    if avg is not None:
-        try:
-            confidence = max(0.0, min(1.0, float(math.exp(float(avg)))))
-        except Exception:  # noqa: BLE001
-            confidence = None
-    no_speech = float(nsp) if nsp is not None else None
-    return confidence, no_speech
-
-
-def _whisper_bucket_confidence(result: Any, win_start: float, win_end: float) -> float | None:  # noqa: ANN401
-    """Mean Whisper confidence over the chunks overlapping [win_start, win_end].
-
-    Walks ``result.chunks`` first; when chunks are absent or carry no
-    ``avg_logprob`` (e.g., post-aligned text-only ASR backends like
-    Granite/Canary-Qwen), falls back to the segment-level ``avg_logprob``
-    on the parent ScriptLine if its [start, end] overlaps the window.
-
-    Returns None when neither chunk- nor segment-level signal is available
-    (FR-007: drop, do not zero, when the native signal is absent).
-    """
-    if not result:
-        return None
-    items = result if isinstance(result, list) else [result]
-    confidences: list[float] = []
-    for line in items:
-        chunks = _seg_attr(line, "chunks") or []
-        chunk_seen_any = False
-        for c in chunks:
-            cs = _seg_attr(c, "start")
-            ce = _seg_attr(c, "end")
-            if cs is None or ce is None:
-                continue
-            if float(cs) < win_end and float(ce) > win_start:
-                chunk_seen_any = True
-                conf, _ = _whisper_chunk_confidence(c)
-                if conf is not None:
-                    confidences.append(conf)
-        # Fallback: when there were no overlapping chunks (or none with a
-        # signal), check the segment-level avg_logprob on the line itself.
-        if not chunk_seen_any:
-            ls = _seg_attr(line, "start")
-            le = _seg_attr(line, "end")
-            if ls is None or le is None or (float(ls) < win_end and float(le) > win_start):
-                conf, _ = _whisper_chunk_confidence(line)
-                if conf is not None:
-                    confidences.append(conf)
-    if not confidences:
-        return None
-    return sum(confidences) / len(confidences)
-
-
-def _enrich_diff_asr_with_confidence(
-    rows: list[dict[str, Any]],
-    *,
-    result_a: Any,  # noqa: ANN401
-    result_b: Any,  # noqa: ANN401
-    aggregator: str,
-) -> None:
-    """In-place: fill confidence_a/b + combined_uncertainty on ASR-vs-ASR rows.
-
-    For the ``disagreement_weighted`` aggregator the per-row WER is passed as
-    ``mismatch_severity`` so the weighted score actually scales with how big
-    the textual disagreement is (matches FR-003's intent).
-    """
-    for r in rows:
-        ca = _whisper_bucket_confidence(result_a, r["start"], r["end"])
-        cb = _whisper_bucket_confidence(result_b, r["start"], r["end"])
-        r["confidence_a"] = ca
-        r["confidence_b"] = cb
-        wer = float(r.get("wer") or 0.0)
-        r["combined_uncertainty"] = _aggregate_uncertainty(
-            [ca, cb], aggregator, mismatch_severity=max(wer, 1e-9) if wer > 0 else 1.0
-        )
-
-
-def _enrich_diff_classification_with_confidence(
-    rows: list[dict[str, Any]],
-    *,
-    aggregator: str,
-) -> None:
-    """In-place: combined_uncertainty for classification rows from existing score_a/b."""
-    for r in rows:
-        ca = r.get("score_a")
-        cb = r.get("score_b")
-        r["confidence_a"] = float(ca) if ca is not None else None
-        r["confidence_b"] = float(cb) if cb is not None else None
-        r["combined_uncertainty"] = _aggregate_uncertainty([r["confidence_a"], r["confidence_b"]], aggregator)
-
-
-def _models_without_native_confidence(summaries: dict[str, Any]) -> list[str]:
-    """Return the model ids that contributed to comparisons but lack a native confidence signal.
-
-    Per research.md §2 only Whisper (avg_logprob) and AST/YAMNet (top-1 score
-    + entropy) currently expose native scalars. The rest are flagged.
-    """
-    KNOWN_NULL = ("pyannote", "sortformer", "ibm-granite", "canary-qwen", "Qwen/Qwen3-ASR")
-    seen: set[str] = set()
-    for pass_summary in summaries.get("passes", {}).values():
-        if not isinstance(pass_summary, dict):
-            continue
-        for task in ("diarization", "asr", "alignment"):
-            by_model = (pass_summary.get(task) or {}).get("by_model") or {}
-            for m, b in by_model.items():
-                if not isinstance(b, dict) or b.get("status") != "ok":
-                    continue
-                if any(prefix in m for prefix in KNOWN_NULL):
-                    seen.add(m)
-    return sorted(seen)
 
 
 def _flatten_feature_dict(d: dict[str, Any], prefix: str = "") -> dict[str, Any]:
@@ -2703,24 +1078,26 @@ def _classification_to_ls(
     the LS regions reflect each model's own native frame stride.
     """
     out: list[dict[str, Any]] = []
-    if not result:
-        return out
-    windows = result[0] if isinstance(result, list) and result else []
+    windows = _classification_windows(result)
     for i, window in enumerate(windows):
-        if not isinstance(window, list) or not window:
+        label, score, _entropy = _classification_window_top1(window)
+        if label is None:
             continue
-        top = max(window, key=lambda d: d.get("score", 0.0))
-        label = str(top.get("label", "?"))
-        score = float(top.get("score", 0.0))
-        start = i * hop_length
+        # Prefer per-window start/end when the canonical shape carries them.
+        if isinstance(window, dict) and window.get("start") is not None and window.get("end") is not None:
+            start = float(window["start"])
+            end = float(window["end"])
+        else:
+            start = i * hop_length
+            end = start + win_length
         out.append(
             _ls_label_region(
                 region_id=_new_region_id(f"{prefix}_cls", i),
                 from_name=prefix,
                 start=start,
-                end=start + win_length,
+                end=end,
                 label=label,
-                score=score,
+                score=score if score is not None else 0.0,
             )
         )
     return out
@@ -2739,8 +1116,8 @@ def _scene_agreement(
     directly comparable. Produces a list of ``{start, end, ast, yamnet,
     agree}`` dicts plus aggregate agreement statistics.
     """
-    ast_windows = ast_result[0] if isinstance(ast_result, list) and ast_result else []
-    yamnet_windows = yamnet_result[0] if isinstance(yamnet_result, list) and yamnet_result else []
+    ast_windows = _classification_windows(ast_result)
+    yamnet_windows = _classification_windows(yamnet_result)
     pairs: list[dict[str, Any]] = []
     n = min(len(ast_windows), len(yamnet_windows))
     agree_count = 0
@@ -2773,10 +1150,10 @@ def _scene_agreement(
 
 def _top1(window: Any) -> dict[str, Any] | None:  # noqa: ANN401
     """Return the highest-scoring entry of a classify_audios window, or None."""
-    if not isinstance(window, list) or not window:
+    label, score, _entropy = _classification_window_top1(window)
+    if label is None:
         return None
-    top = max(window, key=lambda d: d.get("score", 0.0))
-    return {"label": str(top.get("label", "?")), "score": float(top.get("score", 0.0))}
+    return {"label": label, "score": score if score is not None else 0.0}
 
 
 def _asr_has_timestamps(result: Any) -> bool:  # noqa: ANN401
@@ -2939,20 +1316,15 @@ def _safe(model_id: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in model_id)
 
 
-def build_labelstudio_config(
-    summary: dict[str, Any],
-    comparator_tracks: list[dict[str, Any]] | None = None,
-) -> str:
-    """Build a Label Studio labeling-config XML matching this run's tracks.
+def build_labelstudio_config(summary: dict[str, Any]) -> str:
+    """Build a Label Studio labeling-config XML matching this run's per-task tracks.
 
     Generates one ``<Labels>`` control per (pass, analyzer, model) and one
     ``<TextArea>`` control per (pass, asr_model). Speakers, scene labels,
     and transcripts each become a stacked timeline annotation row.
 
-    When ``comparator_tracks`` is provided, additionally emits one fixed-enum
-    ``<Labels>`` block per comparator track (values: ``agree`` / ``disagree``
-    / ``incomparable`` / ``one_sided``) and a sibling ``<TextArea>`` block
-    for ASR-vs-ASR pairs (FR-004, contracts/ls-bundle.md).
+    The three-axis uncertainty tracks are appended downstream by
+    ``senselab.audio.workflows.audio_analysis.attach_uncertainty_tracks_to_ls``.
     """
     parts: list[str] = ["<View>", '  <Audio name="audio" value="$audio"/>']
     seen_label_sets: dict[str, list[str]] = {}
@@ -3000,19 +1372,6 @@ def build_labelstudio_config(
             parts.append(f'    <Label value="{v_escaped}"/>')
         parts.append("  </Labels>")
 
-    # Comparator tracks (FR-004 / contracts/ls-bundle.md): fixed enumerated
-    # label set per Labels block; optional sibling TextArea for ASR-vs-ASR.
-    for track in sorted(comparator_tracks or [], key=lambda t: t["name"]):
-        name = track["name"]
-        parts.append(f'  <Labels name="{name}" toName="audio">')
-        for v in ("agree", "disagree", "incomparable", "one_sided"):
-            parts.append(f'    <Label value="{v}"/>')
-        parts.append("  </Labels>")
-        if track.get("with_textarea"):
-            parts.append(
-                f'  <TextArea name="{name}__text" toName="audio" perRegion="true" '
-                f'editable="false" placeholder="WER and transcripts for this disagreement"/>'
-            )
     parts.append("</View>")
     return "\n".join(parts) + "\n"
 
@@ -3020,14 +1379,10 @@ def build_labelstudio_config(
 def _collect_classification_labels(result: Any) -> set[str]:  # noqa: ANN401
     """Extract the union of label strings observed in a classify_audios output."""
     labels: set[str] = set()
-    if not result:
-        return labels
-    windows = result[0] if isinstance(result, list) and result else []
-    for window in windows:
-        if not isinstance(window, list):
+    for window in _classification_windows(result):
+        if not isinstance(window, dict):
             continue
-        for entry in window:
-            label = entry.get("label") if isinstance(entry, dict) else None
+        for label in window.get("labels") or []:
             if label:
                 labels.add(str(label))
     return labels
@@ -3059,6 +1414,43 @@ def write_json(path: Path, payload: Any) -> None:  # noqa: ANN401
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(serialize(payload), fh, indent=2, default=str)
+
+
+def _speech_presence_labels(args: argparse.Namespace) -> list[str]:
+    """Resolve --speech-presence-labels into a clean list of AudioSet labels.
+
+    Argparse ``nargs="+"`` always yields a list of strings; AudioSet labels themselves
+    contain commas (e.g. ``"Narration, monologue"``) which is why the flag is space-
+    separated rather than comma-joined.
+    """
+    return [str(s).strip() for s in args.speech_presence_labels if str(s).strip()]
+
+
+_KNOWN_NULL_CONFIDENCE_MODEL_PREFIXES = (
+    "pyannote/speaker-diarization",
+    "nvidia/diar_sortformer",
+    "ibm-granite/granite-speech",
+    "nvidia/canary-qwen",
+    "Qwen/Qwen3-ASR",
+)
+
+
+def _models_without_native_signal(summaries: dict[str, Any]) -> list[str]:
+    """Return the documented set of models that do not expose a per-region confidence.
+
+    Used by the disagreements.json builder to log which contributors fall back on
+    cross-model entropy rather than a native scalar.
+    """
+    seen: set[str] = set()
+    for pass_summary in (summaries.get("passes") or {}).values():
+        if not isinstance(pass_summary, dict):
+            continue
+        for task in ("diarization", "asr"):
+            block = (pass_summary.get(task) or {}).get("by_model") or {}
+            for model_id in block:
+                if any(model_id.startswith(prefix) for prefix in _KNOWN_NULL_CONFIDENCE_MODEL_PREFIXES):
+                    seen.add(model_id)
+    return sorted(seen)
 
 
 def run_pass(
@@ -3284,6 +1676,10 @@ def run_pass(
             aligner_params = {
                 "language": align_language.language_code,
                 "romanize": align_language.language_code in ("ja", "zh"),
+                # Levels-to-keep is part of the cache key — bumping its value
+                # invalidates earlier entries that were stored with the all-False
+                # default (which produced empty chunks).
+                "levels_to_keep": "utterance+word",
             }
             align_provenance = {
                 **_provenance_for("alignment", args.aligner_model, aligner_params),
@@ -3304,6 +1700,10 @@ def run_pass(
                 f"alignment[{model_id}]",
                 align_transcriptions,
                 [(audio, ScriptLine(text=transcript_text), align_language)],
+                # Keep word-level chunks (and the utterance wrapper) so the comparator
+                # can read per-token timestamps. Default is all-False which filters
+                # everything out and leaves a meaningless punctuation-only ScriptLine.
+                levels_to_keep={"utterance": True, "word": True, "char": False},
                 aligner_model=args.aligner_model,
                 cache_dir=cache_dir,
                 cache_key_str=align_key,
@@ -3312,22 +1712,58 @@ def run_pass(
             summary["alignment"]["by_model"][model_id] = outcome
             write_json(pass_dir / "alignment" / f"{_safe(model_id)}.json", outcome)
 
-    if "embeddings" not in args.skip:
-        summary["embeddings"] = {"by_model": {}}
-        for model_id in args.embeddings_models:
-            params = {"device": device_label_for_provenance}
-            outcome = run_task_cached(
-                f"embeddings[{model_id}]",
-                extract_speaker_embeddings_from_audios,
-                [audio],
-                model=pick_dispatch_model(model_id, task="embeddings"),
-                device=device,
-                cache_dir=cache_dir,
-                cache_key_str=_key("embeddings", model_id, params),
-                provenance=_provenance_for("embeddings", model_id, params),
-            )
-            summary["embeddings"]["by_model"][model_id] = outcome
-            write_json(pass_dir / "embeddings" / f"{_safe(model_id)}.json", outcome)
+    if args.ppg:
+        from senselab.audio.tasks.features_extraction.ppg import (
+            _PHONEME_LABELS as _PPG_PHONEME_LABELS,
+        )
+        from senselab.audio.tasks.features_extraction.ppg import (
+            extract_ppgs_from_audios,
+        )
+
+        params = {"device": device_label_for_provenance}
+        outcome = run_task_cached(
+            "ppgs",
+            extract_ppgs_from_audios,
+            [audio],
+            device=device,
+            cache_dir=cache_dir,
+            cache_key_str=_key("ppgs", "ppgs/0.0.9", params),
+            provenance=_provenance_for("ppgs", "ppgs/0.0.9", params),
+        )
+        # Attach the phoneme inventory so the workflow's harvester can decode
+        # argmax indices without re-importing the ppgs library.
+        outcome["phoneme_labels"] = list(_PPG_PHONEME_LABELS)
+        summary["ppgs"] = outcome
+        # Emit a small sidecar JSON: the full (40 × N_frames) tensor is too
+        # large to dump, but the argmax-per-frame sequence + frame_hop is what
+        # the comparator actually consumes. Write it so reviewers can inspect
+        # the phoneme timeline without rerunning the PPG model.
+        from senselab.audio.workflows.audio_analysis.harvesters import ppg_argmax_per_frame
+
+        argmax_payload: dict[str, Any] = {
+            "phoneme_labels": list(_PPG_PHONEME_LABELS),
+            "per_frame_phonemes": [],
+            "frame_hop_s": 0.0,
+        }
+        if outcome.get("status") == "ok":
+            try:
+                pf, fh = ppg_argmax_per_frame(
+                    outcome.get("result"),
+                    list(_PPG_PHONEME_LABELS),
+                    audio.waveform.shape[-1] / audio.sampling_rate,
+                )
+                argmax_payload["per_frame_phonemes"] = pf
+                argmax_payload["frame_hop_s"] = float(fh)
+            except Exception as exc:  # noqa: BLE001
+                argmax_payload["argmax_error"] = repr(exc)
+        write_json(
+            pass_dir / "ppgs.json",
+            {
+                **{k: v for k, v in outcome.items() if k != "result"},
+                "result_summary": "argmax-per-frame sequence in 'argmax' field; full tensor in process memory only",
+                "argmax": argmax_payload,
+            },
+        )
 
     return summary
 
@@ -3343,6 +1779,8 @@ def main(argv: list[str] | None = None) -> int:
     device = pick_device(args.device)
     device_label = device.value if device is not None else "auto (per-task selection)"
     cache_dir: Path | None = None if args.no_cache else args.cache_dir.resolve()
+    if cache_dir is not None:
+        _sync_cache_with_schema_version(cache_dir)
     wrapper_hash = wrapper_version_hash()
     senselab_ver = senselab_version()
     print(f"Device: {device_label}")
@@ -3384,6 +1822,8 @@ def main(argv: list[str] | None = None) -> int:
         "passes": {},
     }
 
+    pass_audio: dict[str, Audio] = {"raw_16k": audio_16k}
+
     summaries["passes"]["raw_16k"] = run_pass(
         "raw_16k",
         audio_16k,
@@ -3403,6 +1843,7 @@ def main(argv: list[str] | None = None) -> int:
                 model=pick_dispatch_model(args.enhancement_model, task="enhancement"),
                 device=device,
             )[0]
+            pass_audio["enhanced_16k"] = enhanced
             summaries["passes"]["enhanced_16k"] = run_pass(
                 "enhanced_16k",
                 enhanced,
@@ -3418,70 +1859,6 @@ def main(argv: list[str] | None = None) -> int:
             summaries["passes"]["enhanced_16k"] = {"status": "failed", "error": repr(exc)}
 
     write_json(run_dir / "summary.json", summaries)
-
-    # ── Comparison & uncertainty stage ─────────────────────────────────
-    # Runs only when the user did not opt out via --skip comparisons.
-    comparator_parquets: list[Path] = []
-    comparator_tracks: list[dict[str, Any]] = []
-    incomparable_reasons: dict[str, str] = {}
-    if "comparisons" not in args.skip:
-        # Pick a duration to drive the cross-stream grid: prefer raw pass's,
-        # fall back to enhanced if raw failed wholesale.
-        comparison_duration = (
-            (summaries.get("passes", {}).get("raw_16k") or {}).get("duration_s")
-            or (summaries.get("passes", {}).get("enhanced_16k") or {}).get("duration_s")
-            or 0.0
-        )
-        if comparison_duration > 0 and "raw_vs_enhanced" not in args.skip_comparisons:
-            rve_parquets, rve_tracks, rve_incomparable = compare_raw_vs_enhanced(
-                summaries=summaries,
-                args=args,
-                run_dir=run_dir,
-                cache_dir=cache_dir,
-                audio_sig=audio_signature(audio_16k),
-                duration_s=comparison_duration,
-                wrapper_hash=wrapper_hash,
-                senselab_ver=senselab_ver,
-            )
-            comparator_parquets.extend(rve_parquets)
-            comparator_tracks.extend(rve_tracks)
-            incomparable_reasons.update(rve_incomparable)
-        if comparison_duration > 0 and "within_stream" not in args.skip_comparisons:
-            for pass_label, pass_summary in summaries.get("passes", {}).items():
-                if not isinstance(pass_summary, dict) or "duration_s" not in pass_summary:
-                    continue
-                ws_parquets, ws_tracks, ws_incomparable = compare_within_stream(
-                    pass_label=pass_label,
-                    pass_summary=pass_summary,
-                    args=args,
-                    run_dir=run_dir,
-                    cache_dir=cache_dir,
-                    audio_sig=audio_signature(audio_16k),
-                    duration_s=pass_summary["duration_s"],
-                    wrapper_hash=wrapper_hash,
-                    senselab_ver=senselab_ver,
-                )
-                comparator_parquets.extend(ws_parquets)
-                comparator_tracks.extend(ws_tracks)
-                incomparable_reasons.update(ws_incomparable)
-        if comparison_duration > 0 and "cross_stream" not in args.skip_comparisons:
-            for pass_label, pass_summary in summaries.get("passes", {}).items():
-                if not isinstance(pass_summary, dict) or "duration_s" not in pass_summary:
-                    continue
-                cs_parquets, cs_tracks, cs_incomparable = compare_cross_stream(
-                    pass_label=pass_label,
-                    pass_summary=pass_summary,
-                    args=args,
-                    run_dir=run_dir,
-                    cache_dir=cache_dir,
-                    audio_sig=audio_signature(audio_16k),
-                    duration_s=pass_summary["duration_s"],
-                    wrapper_hash=wrapper_hash,
-                    senselab_ver=senselab_ver,
-                )
-                comparator_parquets.extend(cs_parquets)
-                comparator_tracks.extend(cs_tracks)
-                incomparable_reasons.update(cs_incomparable)
 
     # Hierarchical Label Studio export — one LS task per audio variant, each
     # carrying parallel timeline tracks (one per analyzer × model). AST and
@@ -3501,45 +1878,263 @@ def main(argv: list[str] | None = None) -> int:
         for pass_label, pass_summary in summaries["passes"].items()
         if isinstance(pass_summary, dict) and "duration_s" in pass_summary
     ]
-    # Append comparator LS regions (top-N flagged disagreements) before write.
-    if comparator_parquets and args.disagreements_top_n > 0:
-        ls_tasks = _attach_comparator_regions_to_ls_tasks(ls_tasks, comparator_parquets, args.disagreements_top_n)
-    write_json(run_dir / "labelstudio_tasks.json", ls_tasks)
+    config_xml = build_labelstudio_config(summaries)
 
-    config_xml = build_labelstudio_config(summaries, comparator_tracks=comparator_tracks)
-    (run_dir / "labelstudio_config.xml").write_text(config_xml, encoding="utf-8")
-
-    # ── Disagreements index ─────────────────────────────────────────────
+    # ── Comparator: three-axis uncertainty workflow ─────────────────────
     if "comparisons" not in args.skip:
-        index = _build_disagreements_index(
-            parquet_paths=comparator_parquets,
-            top_n=args.disagreements_top_n,
-            aggregator=args.uncertainty_aggregator,
-            run_dir=run_dir,
-            config={
-                "top_n": args.disagreements_top_n,
-                "aggregator": args.uncertainty_aggregator,
-                "phoneme_disagreement_threshold": args.phoneme_disagreement_threshold,
-                "cross_stream_grid": {
-                    "win_length": args.cross_stream_win_length,
-                    "hop_length": args.cross_stream_hop_length,
-                },
-                "speech_presence_labels": [s.strip() for s in args.speech_presence_labels.split(",") if s.strip()],
-            },
-            incomparable_reasons=incomparable_reasons,
-            missing_confidence_signals=_models_without_native_confidence(summaries),
+        from senselab.audio.workflows.audio_analysis import (
+            BucketGrid,
+            attach_uncertainty_tracks_to_ls,
+            build_aligned_timeline_plot,
+            build_disagreements_index,
+            compute_uncertainty_axes,
+            write_axis_parquet,
         )
-        write_json(run_dir / "disagreements.json", index)
 
-        # Aligned multi-row timeline figure: diarization, ASR, scene
-        # windows, and per-comparator disagreement strips share the same
-        # x-axis so the reviewer can scrub everything at once.
+        grid = BucketGrid(
+            win_length=args.cross_stream_win_length,
+            hop_length=args.cross_stream_hop_length,
+        )
+        utterance_grid = BucketGrid(
+            win_length=args.utterance_win_length,
+            hop_length=args.utterance_hop_length,
+        )
+        comparator_params = {
+            "win_length": grid.win_length,
+            "hop_length": grid.hop_length,
+            "utterance_win_length": utterance_grid.win_length,
+            "utterance_hop_length": utterance_grid.hop_length,
+            "aggregator": args.uncertainty_aggregator,
+            "phoneme_disagreement_threshold": args.phoneme_disagreement_threshold,
+            "speech_presence_labels": _speech_presence_labels(args),
+            "asr_reference_model": args.asr_reference_model,
+            "diarization_boundary_shift_ms": args.diarization_boundary_shift_ms,
+            "clustering_algorithm": args.clustering_algorithm,
+        }
+
+        passes_for_compute = {
+            pl: ps for pl, ps in summaries.get("passes", {}).items() if isinstance(ps, dict) and "duration_s" in ps
+        }
+        speaker_embedding_models = list(args.embeddings_models)
+        per_window_embeddings_by_pass: dict[str, dict[str, Any]] = {}
         try:
-            timeline_path = build_aligned_timeline_plot(run_dir)
-            if timeline_path is not None:
-                print(f"Timeline plot: {timeline_path}")
-        except Exception as exc:  # noqa: BLE001 — best-effort sidecar
-            print(f"warn: timeline plot failed: {exc!r}", file=sys.stderr)
+            axis_results, incomparable_reasons, per_window_embeddings_by_pass = compute_uncertainty_axes(
+                passes=passes_for_compute,
+                grid=grid,
+                params=comparator_params,
+                audio=pass_audio,
+                speaker_embedding_models=speaker_embedding_models,
+                aggregator=args.uncertainty_aggregator,
+                speech_presence_labels=_speech_presence_labels(args),
+                utterance_grid=utterance_grid,
+                embedding_window_s=args.embedding_window_s,
+                embedding_hop_s=args.embedding_hop_s,
+                same_speaker_floor=args.identity_same_speaker_floor,
+                diff_speaker_floor=args.identity_diff_speaker_floor,
+                cluster_cosine_threshold=args.identity_cluster_cosine_threshold,
+                clustering_algorithm=args.clustering_algorithm,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"ERROR: comparator workflow failed: {exc!r}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            axis_results, incomparable_reasons = ({}, {"workflow": f"failed: {exc!r}"})
+            per_window_embeddings_by_pass = {}
+
+        # Persist 9 parquets (3 axes × 2 passes + 3 raw_vs_enhanced deltas).
+        for (pass_label, axis), result in axis_results.items():
+            if pass_label == "raw_vs_enhanced":
+                dest = run_dir / "uncertainty" / "raw_vs_enhanced" / f"{axis}.parquet"
+            else:
+                dest = run_dir / pass_label / "uncertainty" / f"{axis}.parquet"
+            write_axis_parquet(
+                result,
+                dest,
+                provenance={
+                    "schema_version": 1,
+                    "wrapper_hash": wrapper_hash,
+                    "senselab_version": senselab_ver,
+                },
+            )
+
+        # PII detection per pass — scans each ASR transcript with regex layer
+        # plus optional spaCy NER. Default-on; failures (e.g. spaCy not
+        # installed) are surfaced via stderr + the report's failures dict.
+        from senselab.audio.workflows.audio_analysis.global_summary import (
+            compute_pass_global_summary,
+        )
+        from senselab.audio.workflows.audio_analysis.harvesters import resolve_asr_result
+        from senselab.audio.workflows.audio_analysis.pii import detect_pii_in_pass, report_to_dict
+
+        pii_reports: dict[str, Any] = {}
+        for pl, ps in passes_for_compute.items():
+            align_by_model_pii = (ps.get("alignment") or {}).get("by_model") or {}
+            asr_resolved_pii: dict[str, Any] = {}
+            for m, b in ((ps.get("asr") or {}).get("by_model") or {}).items():
+                if isinstance(b, dict) and b.get("status") == "ok":
+                    asr_resolved_pii[m] = resolve_asr_result(b, align_by_model_pii.get(m))
+            pii_reports[pl] = detect_pii_in_pass(
+                pass_label=pl,
+                asr_resolved=asr_resolved_pii,
+            )
+            write_json(run_dir / pl / "pii.json", report_to_dict(pii_reports[pl]))
+
+        # Global per-pass summary: 4 claims (transcript / speaker / quality / PII)
+        # → 1 scalar each + a max() combined. Persist to summary.json.
+        global_pass_summaries: dict[str, Any] = {}
+        for pl, ps in passes_for_compute.items():
+            align_by_model_g = (ps.get("alignment") or {}).get("by_model") or {}
+            asr_resolved_g: dict[str, Any] = {}
+            for m, b in ((ps.get("asr") or {}).get("by_model") or {}).items():
+                if isinstance(b, dict) and b.get("status") == "ok":
+                    asr_resolved_g[m] = resolve_asr_result(b, align_by_model_g.get(m))
+            global_pass_summaries[pl] = compute_pass_global_summary(
+                pass_label=pl,
+                pass_summary=ps,
+                axis_results=axis_results,
+                asr_resolved=asr_resolved_g,
+                pii_report=pii_reports.get(pl),
+                expects_speech=True,
+            )
+        # Top-level: pick the lower-uncertainty pass (best of raw vs enhanced)
+        # so the bottom-line score reflects the cleaner interpretation.
+        best_pass: str | None = None
+        best_combined: float | None = None
+        for pl, gs in global_pass_summaries.items():
+            c = gs.get("combined_uncertainty")
+            if c is None:
+                continue
+            if best_combined is None or c < best_combined:
+                best_combined = c
+                best_pass = pl
+        summaries["global_uncertainty"] = {
+            "combined_uncertainty": best_combined,
+            "best_pass": best_pass,
+            "by_pass": global_pass_summaries,
+            "incomparable_reasons": incomparable_reasons,
+        }
+        # Re-persist summary.json — the original write at line 1782 happened
+        # before the comparator stage so it does not contain
+        # ``global_uncertainty``. Overwriting here keeps the on-disk summary
+        # in sync with the in-memory dict.
+        write_json(run_dir / "summary.json", summaries)
+
+        # Persist per-pass windowed speaker embeddings — one JSON per (pass, model)
+        # at ``<pass>/embeddings/<model>.json`` with the full window grid + vectors.
+        for pass_label, by_model in per_window_embeddings_by_pass.items():
+            if not by_model:
+                continue
+            for model_id, windows in by_model.items():
+                payload = {
+                    "status": "ok" if windows else "no_data",
+                    "window_s": args.embedding_window_s,
+                    "hop_s": args.embedding_hop_s,
+                    "windows": [
+                        {
+                            "start_s": float(w.start_s),
+                            "end_s": float(w.end_s),
+                            "vector": [float(x) for x in w.vector.tolist()],
+                        }
+                        for w in windows
+                    ],
+                }
+                write_json(run_dir / pass_label / "embeddings" / f"{_safe(model_id)}.json", payload)
+
+        # Attach per-axis Labels + utterance TextArea tracks to the LS bundle.
+        if axis_results:
+            ls_tasks, config_xml = attach_uncertainty_tracks_to_ls(
+                ls_tasks=ls_tasks,
+                ls_config=config_xml,
+                axis_results=axis_results,
+            )
+
+        # Disagreements index — opt-out via --disagreements-top-n 0.
+        if axis_results and args.disagreements_top_n > 0:
+            index = build_disagreements_index(
+                axis_results=axis_results,
+                top_n=args.disagreements_top_n,
+                run_dir=run_dir,
+                config={
+                    "top_n": args.disagreements_top_n,
+                    "aggregator": args.uncertainty_aggregator,
+                    "phoneme_disagreement_threshold": args.phoneme_disagreement_threshold,
+                    "bucket_grid": {
+                        "win_length": grid.win_length,
+                        "hop_length": grid.hop_length,
+                    },
+                    "speech_presence_labels": _speech_presence_labels(args),
+                    "wrapper_hash": wrapper_hash,
+                    "senselab_version": senselab_ver,
+                },
+                incomparable_reasons=incomparable_reasons,
+                models_without_native_signal=_models_without_native_signal(summaries),
+            )
+            write_json(run_dir / "disagreements.json", index)
+
+        # Timeline plot — best-effort sidecar.
+        if axis_results:
+            try:
+                duration_s = float(next(iter(passes_for_compute.values())).get("duration_s", 0.0) or 0.0)
+                # Build per-pass detail bundles for the plot's per-source rows.
+                detail_by_pass: dict[str, dict[str, Any]] = {}
+                for pass_label, pass_summary in passes_for_compute.items():
+                    align_by_model = ((pass_summary.get("alignment") or {}).get("by_model")) or {}
+                    diar_by_model: dict[str, list[Any]] = {}
+                    for m, block in ((pass_summary.get("diarization") or {}).get("by_model") or {}).items():
+                        if isinstance(block, dict) and block.get("status") == "ok":
+                            res = block.get("result")
+                            if isinstance(res, list) and res:
+                                inner = res[0] if isinstance(res[0], list) else res
+                                diar_by_model[m] = list(inner)
+                    asr_by_model: dict[str, Any] = {}
+                    for m, block in ((pass_summary.get("asr") or {}).get("by_model") or {}).items():
+                        if not (isinstance(block, dict) and block.get("status") == "ok"):
+                            continue
+                        from senselab.audio.workflows.audio_analysis.harvesters import resolve_asr_result
+
+                        asr_by_model[m] = resolve_asr_result(block, align_by_model.get(m))
+                    ppg_block = pass_summary.get("ppgs") or {}
+                    ppg_per_frame: list[str] = []
+                    ppg_frame_hop = 0.0
+                    if isinstance(ppg_block, dict) and ppg_block.get("status") == "ok":
+                        from senselab.audio.workflows.audio_analysis.harvesters import ppg_argmax_per_frame
+
+                        ppg_per_frame, ppg_frame_hop = ppg_argmax_per_frame(
+                            ppg_block.get("result"),
+                            ppg_block.get("phoneme_labels"),
+                            float(pass_summary.get("duration_s", 0.0) or 0.0),
+                        )
+                    detail_by_pass[pass_label] = {
+                        "diar_by_model": diar_by_model,
+                        "asr_by_model": asr_by_model,
+                        "per_window_embeddings": per_window_embeddings_by_pass.get(pass_label, {}),
+                        "ppg": {
+                            "per_frame_phonemes": ppg_per_frame,
+                            "frame_hop": ppg_frame_hop,
+                        },
+                    }
+                raw_pass_audio = pass_audio.get("raw_16k")
+                raw_waveform = (
+                    raw_pass_audio.waveform.detach().cpu().numpy().squeeze() if raw_pass_audio is not None else None
+                )
+                raw_sr = int(raw_pass_audio.sampling_rate) if raw_pass_audio is not None else 16000
+                timeline_path = build_aligned_timeline_plot(
+                    run_dir=run_dir,
+                    axis_results=axis_results,
+                    duration_s=duration_s,
+                    grid_hop=grid.hop_length,
+                    utterance_grid_hop=utterance_grid.hop_length,
+                    detail_by_pass=detail_by_pass,
+                    title=f"Aggregate uncertainty · {args.audio.name}",
+                    audio_waveform=raw_waveform,
+                    audio_sr=raw_sr,
+                )
+                if timeline_path is not None:
+                    print(f"Timeline plot: {timeline_path}")
+            except Exception as exc:  # noqa: BLE001 — best-effort sidecar
+                print(f"warn: timeline plot failed: {exc!r}", file=sys.stderr)
+
+    write_json(run_dir / "labelstudio_tasks.json", ls_tasks)
+    (run_dir / "labelstudio_config.xml").write_text(config_xml, encoding="utf-8")
 
     print(f"\nDone. Summary: {run_dir / 'summary.json'}")
     print(f"Label Studio tasks:  {run_dir / 'labelstudio_tasks.json'}")

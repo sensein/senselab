@@ -72,10 +72,16 @@ try:
             asr.model = asr.model.cuda()
             if getattr(asr, "forced_aligner", None) is not None:
                 asr.forced_aligner.model = asr.forced_aligner.model.cuda()
-        except Exception:
-            # If the wrapper internals diverge, fall back to letting the
-            # wrapper's own device-handling kick in.
-            pass
+        except Exception as cuda_exc:
+            # If the wrapper internals diverge or .cuda() fails (e.g. OOM), the
+            # wrapper still runs but on CPU, which is ~50× slower. Make the
+            # downgrade visible to the parent process via the subprocess log so
+            # the user can choose to abort rather than wait.
+            print(
+                f"WARN: Qwen3-ASR CUDA placement failed ({cuda_exc!r}); "
+                f"falling back to wrapper-default device (likely CPU).",
+                file=sys.stderr,
+            )
 
     results = asr.transcribe(
         audio=audio_paths,
@@ -197,8 +203,14 @@ class QwenASR:
                         )
                         for c in chunks_raw
                     ]
-                    line_start = chunks[0].start
-                    line_end = chunks[-1].end
+                    # Sort by start so out-of-order aligner output doesn't yield a
+                    # negative line span; pick the min start and max end across all
+                    # chunks rather than trusting position-0/-1.
+                    chunks.sort(key=lambda c: (c.start if c.start is not None else 0.0))
+                    valid_starts = [c.start for c in chunks if c.start is not None]
+                    valid_ends = [c.end for c in chunks if c.end is not None]
+                    line_start = min(valid_starts) if valid_starts else None
+                    line_end = max(valid_ends) if valid_ends else None
                 results.append(
                     ScriptLine(
                         text=entry.get("text", ""),

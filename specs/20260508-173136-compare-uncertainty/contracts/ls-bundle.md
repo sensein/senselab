@@ -1,87 +1,115 @@
 # Label Studio Bundle Contract — comparator additions
 
-The comparator stage extends the existing `<run_dir>/labelstudio_tasks.json` and `<run_dir>/labelstudio_config.xml` produced by PR #510. Existing tracks are unchanged.
+The comparator stage extends `<run_dir>/labelstudio_tasks.json` and
+`<run_dir>/labelstudio_config.xml` with three Labels tracks per pass plus three raw-vs-enhanced
+tracks plus one TextArea track for utterance.
 
 ## XML config additions (`labelstudio_config.xml`)
 
-For every (pass, comparison_kind, task_or_pair) that produced a non-empty parquet, append one `<Labels>` block to the existing `<View>` element:
+Six `<Labels>` blocks (3 per pass × 2 passes) plus three for `raw_vs_enhanced`:
 
 ```xml
-<Labels name="raw_16k__compare__asr__whisper_vs_granite" toName="audio">
-  <Label value="agree"/>
-  <Label value="disagree"/>
+<Labels name="raw_16k__uncertainty__presence" toName="audio">
+  <Label value="low"/>
+  <Label value="medium"/>
+  <Label value="high"/>
   <Label value="incomparable"/>
-  <Label value="one_sided"/>
+  <Label value="unavailable"/>
 </Labels>
+
+<Labels name="raw_16k__uncertainty__identity" toName="audio">
+  <Label value="low"/>
+  <Label value="medium"/>
+  <Label value="high"/>
+  <Label value="incomparable"/>
+  <Label value="unavailable"/>
+</Labels>
+
+<Labels name="raw_16k__uncertainty__utterance" toName="audio">
+  <Label value="low"/>
+  <Label value="medium"/>
+  <Label value="high"/>
+  <Label value="incomparable"/>
+  <Label value="unavailable"/>
+</Labels>
+
+<!-- … same three blocks for enhanced_16k … -->
+
+<!-- raw_vs_enhanced delta tracks -->
+<Labels name="pass_pair__uncertainty__presence" toName="audio">
+  <Label value="low"/><Label value="medium"/><Label value="high"/>
+  <Label value="incomparable"/><Label value="unavailable"/>
+</Labels>
+<!-- … identity and utterance same shape … -->
 ```
 
-For ASR-vs-ASR specifically, **also** append a TextArea block carrying the WER + both transcripts so reviewers can read the actual difference:
+Plus one TextArea sibling for the utterance tracks (one per pass + one for `pass_pair`):
 
 ```xml
-<TextArea name="raw_16k__compare__asr__whisper_vs_granite__text"
+<TextArea name="raw_16k__uncertainty__utterance__text"
           toName="audio" perRegion="true" editable="false"
-          placeholder="WER and transcripts for this disagreement"/>
+          placeholder="Per-bucket transcript consensus + dissenting models"/>
 ```
+
+## Bin mapping
+
+`aggregated_uncertainty` from each parquet row → label value:
+
+| `aggregated_uncertainty` | LS label |
+|---|---|
+| `< 0.33` | `low` |
+| `[0.33, 0.66)` | `medium` |
+| `≥ 0.66` | `high` |
+| (any) with `comparison_status == "incomparable"` | `incomparable` |
+| (any) with `comparison_status == "unavailable"` | `unavailable` |
 
 ## Tasks JSON additions (`labelstudio_tasks.json`)
 
-Each existing pass-level task gains additional `result[]` entries. One Labels region per non-`agree` row in the comparator's parquet that is also in the disagreements top-N (so we don't blow up the LS bundle for noisy regions):
+For each row in each of the 9 parquets, append one Labels region to the existing pass-level
+task (the `pass_pair` rows are appended to the `raw_16k` task by convention, since LS doesn't
+have a notion of "pass pair"):
 
 ```json
 {
-  "id": "raw_16k__compare__asr__whisper_vs_granite__0042",
-  "from_name": "raw_16k__compare__asr__whisper_vs_granite",
+  "id": "raw_16k__uncertainty__utterance__25",
+  "from_name": "raw_16k__uncertainty__utterance",
   "to_name": "audio",
   "type": "labels",
   "value": {
-    "start": 12.30,
-    "end": 12.50,
-    "labels": ["disagree"]
+    "start": 12.5,
+    "end": 13.0,
+    "labels": ["high"]
   }
 }
 ```
 
-For ASR-vs-ASR, the same `id` MUST also produce a paired TextArea region:
+Plus, for every row in the **utterance** parquets, also append one TextArea region carrying
+the per-bucket transcript consensus + dissenting-model transcripts:
 
 ```json
 {
-  "id": "raw_16k__compare__asr__whisper_vs_granite__0042__text",
-  "from_name": "raw_16k__compare__asr__whisper_vs_granite__text",
+  "id": "raw_16k__uncertainty__utterance__25__text",
+  "from_name": "raw_16k__uncertainty__utterance__text",
   "to_name": "audio",
   "type": "textarea",
   "value": {
-    "start": 12.30,
-    "end": 12.50,
-    "text": ["WER 0.6: A=\"four little rabbits\" | B=\"four white rabbits\""]
+    "start": 12.5,
+    "end": 13.0,
+    "text": [
+      "consensus: \"hello world\"\nwhisper-turbo: \"hello world\"\ngranite: \"hello word\"\ncanary-qwen: \"hello\"\nqwen3: \"hello world\""
+    ]
   }
 }
 ```
 
-## Track-name convention
+## Region-id naming
 
-The full grammar:
+`<pass>__uncertainty__<axis>__<row_idx>` — joins to `disagreements.json` entries via the
+`ls_region_id` field. The TextArea sibling appends `__text`.
 
-```text
-<pass>__compare__<task_or_pair>__<short_a>_vs_<short_b>
-```
+## Region-emission policy
 
-Where:
-
-- `<pass>` is `raw_16k`, `enhanced_16k`, or `pass_pair` (for `raw_vs_enhanced` rows).
-- `<task_or_pair>` is `diarization`, `ast`, `yamnet`, `asr`, or for cross-stream: `asr_vs_diarization`, `ast_vs_diarization`, `yamnet_vs_diarization`, `asr_vs_ppg`.
-- `<short_a>`/`<short_b>` are short identifiers derived from the model id by `_safe(model_id)` (the same helper PR #510 introduced for diarization/ASR track names).
-
-## Backwards compatibility
-
-- All existing tracks (`<pass>__diarization__<model>`, `<pass>__asr__<model>`, etc.) are preserved bit-identically.
-- New tracks are appended at the end of the `<View>` element so existing track ordering is stable.
-- A run with `--skip comparisons` produces no new tracks (FR-005, SC-005).
-
-## Region-volume control
-
-To keep the LS bundle reviewable, only rows that meet one of these conditions emit an LS region:
-
-1. The row is in the disagreements top-N (default 100).
-2. `comparison_status != "ok"` (incomparable / one_sided rows are always shown so the reviewer sees coverage gaps).
-
-This is a deliberate cap. Reviewers wanting full per-row visibility read the parquet directly. The LS bundle is for triage.
+- Every parquet row is emitted as an LS region (no top-N filtering at the LS layer — the
+  `disagreements.json` top-N drives the *ranking* but every bucket is still scrubbable).
+- For high-volume runs (long clips, many models), reviewers can hide low-uncertainty rows
+  in LS via the standard label filter (e.g. show only `high` + `medium`).

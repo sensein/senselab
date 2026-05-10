@@ -7,126 +7,180 @@
 
 ## Clarifications
 
-### Session 2026-05-08
+### Session 2026-05-09
 
-- Q: When two ASR models cover the same time window with different transcripts, what does the comparator record as the disagreement signal? → A: per-window WER (word error rate) with one model designated the soft reference, plus both transcripts retained on the row
-- Q: How should the comparator combine multiple per-model confidences into a single sortable score per region for the disagreements index? → A: ``min`` of available per-model confidences by default; aggregator selectable via a ``--uncertainty-aggregator {min,mean,harmonic_mean,disagreement_weighted}`` flag
-- Q: What time grid should cross-stream comparisons use by default? → A: dedicated ``--cross-stream-win-length`` / ``--cross-stream-hop-length`` flags; defaults 0.2 s / 0.1 s (decoupled from the features grid so each can be tuned independently)
-- Q: What rule does the comparator use to classify a window as "ASR says speech"? → A: at least one transcript token whose timestamp range overlaps the window (works uniformly across native-timestamp models and MMS-auto-aligned text-only models; pure punctuation / hallucinated text without time anchor → not speech)
-- Q: What threshold on the per-segment normalized phoneme edit distance triggers a ``phoneme_disagreement = true`` flag? → A: two-tier — emit a continuous ``phoneme_per`` (phoneme error rate) on every row, and set a boolean ``phoneme_disagreement = true`` only when ``phoneme_per >= 0.50``; threshold tunable via ``--phoneme-disagreement-threshold``
+- **Output shape** — three per-bucket uncertainty time series (`presence`, `identity`,
+  `utterance`), each in `[0, 1]`. No per-pair sidecars; pairwise WER / label-flip /
+  boundary-shift exists only as in-memory intermediate state during cross-model aggregation.
+- **Contributing models per axis** — maximally inclusive: every model whose output naturally
+  encodes the axis contributes. presence = pyannote + Sortformer + 4 ASR (token-overlap) +
+  AST + YAMNet (Speech allowlist); identity = pyannote + Sortformer (cross-model labels) +
+  ECAPA + ResNet (across-time cosine) + same-model raw-vs-enhanced; utterance = 4 ASR
+  transcripts (pairwise mean WER) + Whisper `avg_logprob` + PPG phoneme-error-rate.
+  Models with a null signal on a bucket are dropped (no zero-imputation).
+- **Per-axis aggregation** — presence uses Shannon entropy normalized by `log(n_models)`;
+  identity uses `1 − (fraction of agreeing label pairs)` + mean cosine distance + raw/enh
+  binary; utterance uses mean pairwise normalized edit distance + `1 − exp(avg_logprob)` +
+  PPG PER. Within each axis, sub-signals collapse via `--uncertainty-aggregator` (default
+  `min` over confidences ≡ `max` over uncertainties).
+- **Bucket grid** — `--cross-stream-win-length 0.5` / `--cross-stream-hop-length 0.5` (i.e.
+  non-overlapping) by default. AST / YAMNet windows project onto this grid via
+  `floor(start / native_hop)`.
+- **Text-only ASR** — Granite Speech 3.3 and Canary-Qwen emit a `ScriptLine` without
+  per-token chunks; the comparator consults the post-MMS alignment block when the raw ASR
+  result lacks timestamps. Text without any time anchor is treated as
+  `asr_says_speech = false` and contributes no transcript on the bucket.
+- **Speech-presence label parsing** — `--speech-presence-labels` takes `nargs="+"` since
+  AudioSet labels themselves contain commas (e.g. `"Narration, monologue"`).
+- **Plot layout** — 5-row figure: presence, identity, utterance (each with raw solid +
+  enhanced dashed overlay on a [0, 1] y-axis), raw-vs-enhanced delta strip with one band per
+  axis, reference row (raw diar speakers + raw ASR token spans).
+- **Disagreements ranking** — `disagreements.json` ranks rows across the 9 parquets by
+  `aggregated_uncertainty desc`, ties broken by axis priority (utterance > identity >
+  presence) then start time. Default top-N = 100; opt-out via `--disagreements-top-n 0`.
+- **Phoneme-disagreement threshold** — two-tier: continuous `phoneme_per` on every ASR↔PPG
+  contribution, plus a boolean `phoneme_disagreement` set when `phoneme_per ≥
+  --phoneme-disagreement-threshold` (default `0.50`). The continuous PER feeds the utterance
+  aggregator; the boolean controls LS region emission for the PPG sub-signal.
+- **LS bin thresholds** — `aggregated_uncertainty < 0.33` → `low`, `[0.33, 0.66)` → `medium`,
+  `≥ 0.66` → `high`. Plus `incomparable` and `unavailable` for degraded buckets.
+- **Cache schema** — `_CACHE_SCHEMA_VERSION = 1`. Cache key embeds `(audio_signature, axis,
+  pass_set, model_set, params, wrapper_hash, senselab_version, schema_version)`.
 
 ## User Scenarios & Testing *(mandatory)*
 
-### User Story 1 — Spot raw-vs-enhanced disagreements at a glance (Priority: P1)
+### User Story 1 — "Did enhancement help here?" at a glance (Priority: P1)
 
-A reviewer runs `analyze_audio.py` against a recording and gets back, alongside the existing per-task outputs, a single timeline that flags every region where the same task / model produced a different result on the raw input vs the speech-enhanced input. Wherever pyannote shifted speech boundaries, Whisper edited a word, AST flipped its top-1 label, etc., the reviewer sees a labelled region in the Label Studio bundle so they can scrub the timeline and audit the discrepancy in seconds rather than diff-ing two JSON files by hand.
+A reviewer runs `analyze_audio.py` against a recording and gets back, alongside the existing per-task outputs, three raw-vs-enhanced uncertainty time series (presence / identity / utterance). Wherever the raw and enhanced passes diverge — pyannote shifted speech boundaries, Whisper edited a word, the speaker label flipped — the corresponding axis's `aggregated_uncertainty` rises in that bucket. The reviewer scrubs the LS `pass_pair__uncertainty__*` tracks to audit the divergence in seconds rather than diff-ing two JSON files by hand.
 
-**Why this priority**: This is the original ask — "temporally-coded summary of mismatches between raw and enhanced versions". It is the cheapest one to deliver because it operates entirely on outputs that already exist in the summary, requires no new model calls, and unlocks the first concrete reviewer workflow (does enhancement help, hurt, or no-op for this clip?).
+**Why this priority**: This answers the original ask — "did enhancement help, hurt, or no-op for this clip?" — directly. It is the cheapest cut to deliver because it reuses the same per-axis aggregators as US2; only the input changes (votes from raw pass vs enhanced pass for the same model are compared on each row).
 
-**Independent Test**: Run the script twice on the same audio (one with `--no-enhancement`, one with the default two-pass mode); the first run produces no comparisons (raw-only), the second run emits a `raw_vs_enhanced.parquet` with one row per (task, model, time-bucket) where the two passes disagree, plus matching LS regions in `labelstudio_tasks.json`. Reviewer can open the LS project, scrub the timeline, and see the disagreements highlighted.
+**Independent Test**: Run the script in default two-pass mode. Verify three parquets exist at `<run_dir>/uncertainty/raw_vs_enhanced/{presence,identity,utterance}.parquet`, each with non-empty rows for buckets where the two passes disagreed and the silent-on-both rule (FR-012) excluded buckets where neither pass had any signal. Verify three matching `pass_pair__uncertainty__*` Labels tracks land in `labelstudio_tasks.json` with bins drawn from `{low, medium, high, incomparable, unavailable}`.
 
 **Acceptance Scenarios**:
 
-1. **Given** an audio with both passes successfully run, **When** the comparison stage runs, **Then** it produces a per-pass-pair parquet listing every (task, model, start, end, raw_value, enhanced_value, mismatch_type) where the two passes disagree above a per-task threshold, plus matching LS Labels-track regions on the audio timeline.
-2. **Given** raw and enhanced agreed on a region, **When** the comparison stage runs, **Then** that region produces NO row in the parquet and NO LS region (silence is the signal that nothing flipped).
-3. **Given** one pass failed for a particular task / model, **When** the comparison stage runs, **Then** the affected rows are emitted with a `comparison_status: "incomparable"` flag rather than being silently dropped, so reviewers can see *why* a comparison was skipped.
+1. **Given** both passes successfully ran with the default model set, **When** the comparator runs, **Then** three parquets emit at `<run_dir>/uncertainty/raw_vs_enhanced/{presence,identity,utterance}.parquet`. Each row's `aggregated_uncertainty ∈ [0, 1]` reflects how much the two passes diverged on that axis at that bucket, and `model_votes` carries each contributing model's raw raw-pass and enhanced-pass signals so the reviewer can audit the source of the divergence.
+2. **Given** raw and enhanced agreed on a bucket for an axis, **When** the comparator runs, **Then** the row is emitted with `aggregated_uncertainty` near `0.0`. Buckets where no model contributed any signal on either pass emit no row at all (FR-012).
+3. **Given** one pass failed for a particular model, **When** the comparator runs, **Then** that model contributes a `one_sided` vote to the bucket and the row's `comparison_status="one_sided"` flag is set, so reviewers can distinguish "enhancement changed the answer" from "enhancement broke the model".
 
 ---
 
-### User Story 2 — Surface within-stream model disagreements (Priority: P2)
+### User Story 2 — Where do my models disagree on this clip? (Priority: P2)
 
-The same reviewer also runs the script with multiple models per task (the current default already configures pyannote + Sortformer for diarization, four ASR models, AST + YAMNet for scene classification). They want to see, on the same timeline, where those models disagree among themselves on the same input — pyannote and Sortformer disagreeing on whether anyone is speaking, Whisper and Granite disagreeing on the transcript text in a region, AST and YAMNet disagreeing on the top-1 scene label.
+The same reviewer runs the script with multiple models per task (default: pyannote + Sortformer for diar, four ASR models, AST + YAMNet for scene). They want to see, per axis, where those models disagree among themselves on the *same* input — does pyannote think the bucket is silence while Whisper has a token there? Did pyannote and Sortformer assign different speaker labels to the same bucket? Are the four ASR models' transcripts mutually inconsistent?
 
-**Why this priority**: Raw vs enhanced is one mismatch axis; within-stream is the second. Doing it after raw-vs-enhanced lets us reuse the same comparator framework and the same LS bundle shape. This generalizes the existing `scene_agreement.json` output (AST vs YAMNet only, present-or-absent) into a uniform per-task parquet with explicit start/end and per-pair disagreement type.
+**Why this priority**: Raw-vs-enhanced is one mismatch axis (US1); per-pass cross-model agreement is the second. The same workflow function (`compute_uncertainty_axes`) returns both — only the output slice differs.
 
-**Independent Test**: Run with the default model set; the output bundle includes one parquet per `(task, model_a, model_b)` pair under `<pass>/comparisons/<task>__<a>_vs_<b>.parquet` plus matching LS Labels tracks named `<pass>__compare__<task>__<a>_vs_<b>` with values `agree` / `disagree-X-Y`. Reviewer can confirm the per-pair pyannote/Sortformer track shows disagreement in regions where the two models partition the audio differently.
+**Independent Test**: Run with the default model set. Verify six parquets land at `<run_dir>/<pass>/uncertainty/{presence,identity,utterance}.parquet` (3 axes × 2 passes). Verify each row's `contributing_models` lists the actual models that voted on that bucket; verify the LS bundle contains six matching `<pass>__uncertainty__*` Labels tracks plus the utterance TextArea sibling.
 
 **Acceptance Scenarios**:
 
-1. **Given** at least two models successfully ran for a task in the same pass, **When** the comparison stage runs, **Then** it emits one parquet per ordered pair plus matching LS tracks; the existing `scene_agreement.json` semantics are preserved (subset of this output).
-2. **Given** the user passed only one model for some task, **When** the comparison stage runs, **Then** that task produces no within-stream parquet (graceful no-op) without erroring.
-3. **Given** the two ASR models produce native timestamps at very different granularities (Whisper 30 s chunks vs Qwen3-ASR word-level), **When** the comparison stage runs, **Then** both are projected onto a shared time grid (same grid used by the script's existing windowed features) so disagreements are aligned to comparable buckets.
+1. **Given** at least two models contributed signal to an axis on a bucket, **When** the comparator runs, **Then** the per-pass parquet for that axis emits a row with `aggregated_uncertainty` derived from the per-axis rule (entropy for presence; cross-model label disagreement + cosine for identity; pairwise mean WER + native confidences for utterance).
+2. **Given** only one model contributed to an axis on a bucket, **When** the comparator runs, **Then** the row is still emitted but `aggregated_uncertainty` falls back to `1 − native_confidence` (when the model exposes one) or `0.0` (when no native signal exists). The fallback is documented in `disagreements.json`.
+3. **Given** two ASR models produce native timestamps at very different granularities (Whisper word-level vs Qwen3-ASR sentence-level vs Granite text-only via MMS alignment), **When** the comparator runs, **Then** all four are projected onto the bucket grid (FR-010) before voting, so the per-bucket transcript text on each row reflects only the tokens whose timestamps overlap the bucket.
 
 ---
 
-### User Story 3 — Cross-stream sanity checks (Priority: P2)
+### User Story 3 — Cross-stream sanity contributions to the three axes (Priority: P2)
 
-The reviewer wants to catch the cases where two *different* tasks should agree but don't: an ASR model returned text in a region pyannote labelled as silence, AST flagged "speech" in a region the diarization model said was non-speech, the ASR-derived phoneme sequence diverges from the PPG-based phoneme sequence over the same span. Each of these is a strong "look here" signal even when no individual model says it's uncertain.
+Cross-stream "should-agree" signals (ASR text in a region pyannote calls silence; AST/YAMNet top-1 = `Speech` while diar says non-speech; ASR-implied phoneme sequence vs PPG phoneme posteriors) feed *into* the three uncertainty axes — they do not produce separate output files. ASR token-overlap and AST/YAMNet Speech-allowlist contribute votes to the **presence** axis. ASR-vs-PPG phoneme-error-rate contributes to the **utterance** axis as one of three sub-signals.
 
-**Why this priority**: Cross-stream is the most analytically valuable but also the most opinionated — it requires a reviewer-defined notion of what counts as "should agree." Doing it after the within-stream MVP lets us validate the comparator framework first and adopt the same LS bundle shape.
+**Why this priority**: Treating cross-stream as a separate output channel was the v1 design; the v2 design folds it into the maximally-inclusive contribution policy of FR-002. The disagreement still surfaces — just as a divergence between models on the same axis row — and the row's `model_votes` exposes which model is the outlier.
 
-**Independent Test**: Run with the default model set on a clip that contains brief silence + brief speech segments. The `cross_stream.parquet` flags (a) regions where Whisper produced text but pyannote said silence (or vice versa); (b) regions where AST/YAMNet top-1 is in the {"Speech", "Conversation"} synset but diarization says non-speech (or vice versa); (c) regions where the ASR-implied phoneme sequence (via grapheme-to-phoneme on the transcript) and the PPG-based phoneme posterior sequence have edit distance above a threshold. Reviewer scrubs to the flagged regions and confirms the mismatch is real.
+**Independent Test**: Run on a clip where pyannote says silence in `[12.0, 12.3]` but Whisper returns "hello" with word-level timestamps in that range. Verify the presence parquet's row for the `[12.0, 12.5]` bucket has `model_votes["pyannote/..."].speaks=False` and `model_votes["openai/whisper-large-v3-turbo"].speaks=True`, and that `aggregated_uncertainty` is high (entropy of mixed votes). Run a second clip with PPG provisioned and verify the utterance row's `model_votes["openai/whisper-large-v3-turbo"].phoneme_per_to_ppg` is populated.
 
 **Acceptance Scenarios**:
 
-1. **Given** ASR and diarization both ran, **When** the cross-stream stage runs, **Then** for every grid-aligned window it emits `(asr_says_speech, diar_says_speech, agree)` and only the disagreements get an LS region. ``asr_says_speech`` is true iff at least one transcript token (word) whose timestamp range overlaps the window is present, so pure-punctuation outputs and hallucinated text without a time anchor do not count.
-2. **Given** AST/YAMNet and diarization both ran, **When** the cross-stream stage runs, **Then** the AudioSet "Speech" / "Conversation" / "Narration" labels are mapped to a binary speech-presence flag and compared to diarization the same way.
-3. **Given** a successful ASR run and a successful PPG run, **When** the cross-stream stage runs, **Then** the parquet contains a continuous `phoneme_per` per segment plus a `phoneme_disagreement` boolean set when `phoneme_per >= --phoneme-disagreement-threshold` (default 0.50); LS regions are produced only for segments where `phoneme_disagreement` is true.
-4. **Given** the PPG path is disabled or fails, **When** the cross-stream stage runs, **Then** the ASR↔phoneme comparison is skipped with a clear note in `disagreements.json` rather than the whole stage failing.
+1. **Given** ASR and diarization both ran, **When** the comparator runs, **Then** the presence parquet's row for each disagreeing bucket carries `speaks` votes from every contributing diar model and every contributing ASR model. `speaks` from an ASR model is `True` iff at least one transcript token whose timestamp range overlaps the bucket exists (per FR-011); pure-punctuation tokens and text without a time anchor count as `False`.
+2. **Given** AST or YAMNet ran, **When** the comparator runs, **Then** their top-1 label is mapped through the `--speech-presence-labels` allowlist (default: AudioSet "Speech" subtree) to a `speaks` boolean and contributes that vote to the presence parquet row for every bucket their native window covers.
+3. **Given** an ASR run plus a successful PPG run, **When** the comparator runs, **Then** each ASR model's `model_votes[asr].phoneme_per_to_ppg ∈ [0, 1]` is computed via grapheme-to-phoneme on the bucket's transcript and contributes to the utterance row's `aggregated_uncertainty`.
+4. **Given** PPG is disabled or unavailable, **When** the comparator runs, **Then** `phoneme_per_to_ppg` is null for every ASR vote, the sub-signal drops out of the utterance aggregator (no zero-imputation), and the omission is recorded in `disagreements.json` under `incomparable_reasons`.
 
 ---
 
-### User Story 4 — Per-region uncertainty harvested from the models themselves (Priority: P3)
+### User Story 4 — Ranked discovery via disagreements.json + timeline plot (Priority: P3)
 
-Beyond comparing models against each other, the reviewer wants to see each model's own confidence about every region it produced — Whisper's `avg_logprob` and `no_speech_prob`, pyannote's per-frame score, AST/YAMNet's top-1 score plus the entropy of the score distribution, Granite / Canary-Qwen generation confidence (token-level mean log-prob), and the MMS forced-aligner's per-segment score. Those numbers ride alongside every existing region in the LS bundle as a numeric annotation, and they ride in the parquet so reviewers can rank regions by uncertainty.
+Beyond the per-axis parquets, reviewers want a single ranked view that surfaces the top-N most-uncertain buckets across the entire run, plus a 5-row timeline plot that overlays raw vs enhanced for each axis at a glance. Native model confidences (Whisper `avg_logprob`, AST top-1 score, ECAPA cosine) ride inside `model_votes` so reviewers can drill from "this bucket is uncertain" down to "and here's which model said what".
 
-**Why this priority**: Uncertainty is a force multiplier for the previous three stories — high-uncertainty disagreements are far more interesting than low-uncertainty ones. But it touches every backend differently and is partially a metadata-plumbing exercise; doing it last lets us validate the disagreement story first and only then layer uncertainty on top of it.
+**Why this priority**: Per-axis parquets answer "is this bucket uncertain on axis X?"; the index and plot answer "where should I look first?". Ranked discovery is a force multiplier on US1–US3 but not the primary deliverable.
 
-**Independent Test**: Run the script. Each existing per-task parquet (or its successor) gains a `confidence` and `uncertainty` column populated from the underlying model's native signal; the `disagreements.json` index now ranks flagged regions by combined uncertainty so the reviewer can open the top-k worst regions first.
+**Independent Test**: Run on a clip with at least one high-uncertainty bucket per axis. Verify `<run_dir>/disagreements.json` ranks rows across the 9 parquets by `aggregated_uncertainty` desc, with axis-priority tiebreak (utterance > identity > presence) and start-time secondary tiebreak. Verify `<run_dir>/timeline.png` is a 5-row figure (presence raw+enhanced overlay, identity raw+enhanced overlay, utterance raw+enhanced overlay, raw-vs-enhanced delta strip with one band per axis, reference row).
 
 **Acceptance Scenarios**:
 
-1. **Given** Whisper produced segments with `avg_logprob` and `no_speech_prob`, **When** uncertainty extraction runs, **Then** those values appear as `confidence` and `no_speech_prob` columns on every Whisper region in both the parquet and the LS payload.
-2. **Given** AST emitted a full top-K distribution per window, **When** uncertainty extraction runs, **Then** every AST window gets a `top1_score`, `entropy`, and `margin_to_top2` column.
-3. **Given** a model that does not natively expose any confidence signal (e.g., Sortformer post-processed labels), **When** uncertainty extraction runs, **Then** the `confidence` column is null and a single line in `disagreements.json` documents which models lacked a native signal.
-4. **Given** the disagreements index is built, **When** the reviewer sorts by combined uncertainty, **Then** the highest-uncertainty disagreements appear first and link to the matching LS region IDs.
+1. **Given** Whisper produced chunks with `avg_logprob`, **When** the comparator runs, **Then** the utterance row's `model_votes["openai/whisper-large-v3-turbo"].avg_logprob` is populated and the bucket-level `1 − exp(avg_logprob)` contributes to that row's `aggregated_uncertainty` per FR-002.
+2. **Given** a model exposes no native confidence (e.g. Sortformer post-processed labels), **When** the comparator runs, **Then** that model's `native_confidence` field is null in the model_votes struct and the model's vote is dropped from the aggregator's input rather than treated as zero (FR-004). The list of such models is documented in `disagreements.json`'s `models_without_native_signal`.
+3. **Given** the comparator emits N>0 rows total and `--disagreements-top-n > 0`, **When** the index is built, **Then** `disagreements.json` lists the top-N rows with `aggregated_uncertainty desc`, axis-priority tiebreak (utterance > identity > presence), and start-time secondary tiebreak; each entry carries the source parquet path, row index, and matching `ls_region_id` so the reviewer can drill in.
+4. **Given** the run completed with at least one axis_result, **When** the timeline plot is built, **Then** `<run_dir>/timeline.png` is a 5-row figure: presence (raw solid + enhanced dashed), identity (same overlay), utterance (same overlay), raw-vs-enhanced delta strip per axis, reference (raw diar speaker bars + raw ASR token spans).
 
 ---
 
 ### Edge Cases
 
-- A pass failed entirely (e.g., enhancement crashed) — the comparison stage records `pass_status: "failed"` and emits an empty parquet rather than crashing the whole run.
-- A model only produced output on one pass and not the other — comparison rows are emitted with `comparison_status: "one_sided"` and counted distinctly from genuine disagreements.
-- Multiple ASR models produce wildly different time granularities (sentence-level vs word-level vs no-timestamps-then-MMS-aligned) — the comparator projects everything to a configurable shared time grid before differencing, with the grid documented in the parquet provenance.
-- The PPG backend is not installed or the audio is too short for the backend to run — cross-stream phoneme comparison records `phoneme_status: "unavailable"` rather than failing.
-- Confidence signals exist but at different time resolutions than the comparison grid (e.g., Whisper per-word `avg_logprob` vs AST per-10.24 s window) — confidence is averaged within each grid bucket and the original per-event values are kept in a sidecar parquet for callers who need full resolution.
-- An LS Labels track requires an enumerated label set, but `disagree-X-Y` is open-ended over many model pairs — labels are pre-declared in the LS XML config as the cartesian product of (task, model_pair) actually used in the run.
+- A pass failed entirely (e.g., enhancement crashed) — the comparator emits no rows for that pass (per FR-012) and records the failure reason in `disagreements.json`'s `incomparable_reasons` block (per FR-013).
+- A model only produced output on one pass and not the other — the affected rows on the raw-vs-enhanced parquet carry `comparison_status: "one_sided"` and that model's vote is excluded from the aggregator's input for the missing pass.
+- Multiple ASR models produce wildly different time granularities (sentence-level vs word-level vs no-timestamps-then-MMS-aligned) — every contributing ASR is projected onto the FR-010 bucket grid before voting; text-only ASR results consult the post-MMS alignment block per FR-011.
+- The PPG backend is not installed or the audio is too short for the backend to run — `phoneme_per_to_ppg` is null on every ASR vote in the utterance parquet, the sub-signal drops out of the aggregator (no zero-imputation), and the omission is logged under `incomparable_reasons` in `disagreements.json`.
+- Confidence signals exist at different time resolutions than the bucket grid (e.g., Whisper per-word `avg_logprob` vs AST per-10.24 s window) — the bucket-level scalar is the arithmetic mean of overlapping per-event values; the original per-event values remain reachable via the `model_votes` column on the same parquet row.
+- LS Labels tracks require an enumerated label set — values come from the fixed set ``{"low", "medium", "high", "incomparable", "unavailable"}`` (mapped from ``aggregated_uncertainty`` bins per FR-005).
 
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
-- **FR-001**: The script MUST add a new pipeline stage that runs after every existing per-task stage in both passes and produces a *comparison* result. Rows are keyed by ``(comparison_kind, task, model_a, model_b, pass_a, pass_b, start, end)`` for within-stream and raw-vs-enhanced (note that for raw-vs-enhanced, ``model_a == model_b`` and ``pass_a != pass_b``; for within-stream the inverse holds), and by ``(comparison_kind, stream_a, stream_b, pass, start, end)`` for cross-stream pairs.
-- **FR-002**: The comparison stage MUST emit one parquet per (pass, comparison_kind, task, model_pair) combination — i.e., one file per ordered model pair — at ``<run_dir>/<pass>/comparisons/<task>/<a>_vs_<b>.parquet`` for within-stream and ``<run_dir>/<pass>/comparisons/cross_stream/<stream_a>__vs__<stream_b>.parquet`` for cross-stream, with at minimum the columns ``start``, ``end``, ``a_value``, ``b_value``, ``agree``, ``mismatch_type``, ``comparison_status``. Raw-vs-enhanced files mirror the same per-model layout under ``<run_dir>/comparisons/raw_vs_enhanced/<task>/<model>.parquet`` (one file per model carrying both passes' values on each row). For ASR-vs-ASR comparisons, the parquet additionally carries ``wer`` (word error rate per window with one model designated the soft reference), ``a_text``, and ``b_text``; both transcripts are retained on the row so reviewers can audit the WER without re-deriving.
-- **FR-003**: The comparison stage MUST also emit a top-level ``<run_dir>/disagreements.json`` index that lists the top-N "interesting" regions across all comparison parquets, where N defaults to 100, sorted by combined uncertainty when uncertainty is available and otherwise by mismatch density. The aggregator that combines per-model confidences into a single sortable score MUST be configurable via ``--uncertainty-aggregator``; allowed values are ``min`` (default), ``mean``, ``harmonic_mean``, and ``disagreement_weighted`` (``(1 - mean_confidence) * mismatch_severity``). Models lacking a native confidence signal MUST be dropped from the aggregator's input rather than treated as zero.
-- **FR-004**: The comparison stage MUST extend ``labelstudio_tasks.json`` and ``labelstudio_config.xml`` with one Labels track per (comparison_kind, task, model_pair) actually used in the run. Track names follow ``<pass>__compare__<task>__<a>_vs_<b>`` so the model pair is encoded in the track *name*, not the label values. Label values themselves are drawn from a fixed enumerated set ``{"agree", "disagree", "incomparable", "one_sided"}``, identical across every track. ASR-vs-ASR pairs additionally declare a sibling ``<TextArea>`` track named ``<pass>__compare__<task>__<a>_vs_<b>__text`` carrying the WER plus both transcripts per disagreement region.
-- **FR-005**: The comparison stage MUST hook into the existing content-addressable cache. The cache key MUST include ``(audio_signature, comparison_kind, task, model_set, params, wrapper_hash, senselab_version, schema_version)``. Re-running with the same inputs MUST return ``cache="hit"`` for every comparison without re-reading the upstream task results.
-- **FR-006**: The comparison stage MUST be skippable via the existing ``--skip`` mechanism (``--skip comparisons`` skips everything new) and MUST be controllable per-axis via ``--skip-comparisons raw_vs_enhanced``, ``--skip-comparisons within_stream``, and ``--skip-comparisons cross_stream``. Per-region uncertainty plumbing (FR-007) and the ranked ``disagreements.json`` index (FR-003) are not separate axes: the index is opt-out via ``--disagreements-top-n 0`` and the per-region confidence columns are always emitted when the underlying signal is available (skipping the entire comparator stage with ``--skip comparisons`` is the single switch that turns everything off).
-- **FR-007**: For every region in every existing per-task output (diarization, AST, YAMNet, ASR, alignment), the script MUST emit, where the underlying model exposes one, a ``confidence`` and an ``uncertainty`` column (``confidence`` = the model's native scalar in [0, 1] when available; ``uncertainty`` = entropy or 1−confidence when no entropy is defined). When multiple native confidence events fall inside one comparison-grid bucket (e.g., several Whisper word-level ``avg_logprob`` values within a 0.2 s cross-stream bucket), the bucket-level confidence MUST be the arithmetic mean of those events. For models with no native signal, the columns MUST be null with the omission documented in ``disagreements.json``.
-- **FR-008**: ASR-vs-PPG phoneme comparison MUST run only when both an ASR result and a PPG result are present for the same audio variant, MUST project both to a shared phoneme inventory before differencing, and MUST report ``phoneme_per`` (continuous normalized phoneme error rate) on every row plus a boolean ``phoneme_disagreement`` set only when ``phoneme_per`` meets or exceeds the threshold ``--phoneme-disagreement-threshold`` (default ``0.50``). LS regions are produced only for rows where ``phoneme_disagreement`` is true.
-- **FR-009**: Cross-stream comparisons MUST be projected onto a dedicated shared time grid before differencing, so models that emit at incompatible granularities are still comparable bucket-by-bucket. The grid is controlled by ``--cross-stream-win-length`` (default ``0.2`` seconds) and ``--cross-stream-hop-length`` (default ``0.1`` seconds), decoupled from the features grid so each can be tuned independently. The grid parameters MUST be recorded in the comparison parquet provenance.
-- **FR-010**: The comparison stage MUST gracefully degrade — a single comparison failing (e.g., one model output is empty, the PPG backend is unavailable) MUST NOT abort the run; the affected rows MUST instead carry a ``comparison_status`` of ``"incomparable"`` or ``"unavailable"`` with a one-line reason in ``disagreements.json``.
-- **FR-011**: All comparison and uncertainty outputs MUST be reproducible — the wrapper version hash and senselab version MUST be recorded in every parquet's provenance, and reviewers MUST be able to diff a comparison parquet from one run against another to track stability across runs.
-- **FR-012**: The smoke-test suite MUST exercise the comparator framework on synthetic / cached upstream results so the comparison stage's logic can be tested without re-running heavy models. The existing skipif gates for venv- or weight-bound backends MUST continue to apply to the integration test that exercises the full stage.
+- **FR-001**: The script MUST add a new pipeline stage that runs after every existing per-task stage in both passes and produces three per-bucket uncertainty time series — ``presence_uncertainty`` (was there a speaker?), ``identity_uncertainty`` (was it the same speaker?), and ``utterance_uncertainty`` (what was said?) — each scaled to ``[0, 1]``.
+
+- **FR-002**: The contributing model set per axis is maximally inclusive (every model whose output naturally encodes that axis votes):
+    - **presence** — diarization (pyannote, Sortformer) + ASR token-overlap (whisper-turbo, granite, canary-qwen, qwen3-asr) + scene Speech-allowlist (AST, YAMNet). Up to 8 binary votes per bucket; computed via Shannon entropy normalized by ``log(n_contributing_models)``.
+    - **identity** — three sub-signals: (i) cross-model speaker-label disagreement = ``1 − (n_agreeing_pairs / n_pairs)`` over the speaker labels assigned by every diar model with a segment overlapping the bucket; (ii) same-model raw-vs-enhanced speaker-label disagreement (only emitted on the raw-vs-enhanced parquet); (iii) across-time speaker-change distance = ``1 − cos_similarity(emb_this_bucket, emb_prev_bucket_same_track)`` using per-segment ECAPA / ResNet embeddings projected onto the bucket grid via diarization timestamps. The three sub-signals collapse via ``--uncertainty-aggregator``.
+    - **utterance** — three sub-signals: (i) ASR pairwise mean WER (4 transcripts → 6 pairs averaged, clipped to ``[0, 1]``); (ii) Whisper native ``1 − exp(avg_logprob)`` averaged across overlapping chunks; (iii) ASR-vs-PPG phoneme-error-rate when PPG is available. Combined via ``--uncertainty-aggregator``.
+
+    A model that emits a null signal in a bucket is dropped from that bucket's vote (no zero-imputation). Pairwise per-pair comparison artefacts are NOT an output — they exist only as in-memory intermediate state during the cross-model aggregation step.
+
+- **FR-003**: The comparator MUST emit exactly the following per-run parquet layout: ``<run_dir>/<pass>/uncertainty/{presence,identity,utterance}.parquet`` (one parquet per pass per axis, six total for the default two-pass run), plus ``<run_dir>/uncertainty/raw_vs_enhanced/{presence,identity,utterance}.parquet`` (three deltas across passes). Each parquet row has columns ``start``, ``end``, ``axis``, ``aggregated_uncertainty`` ([0, 1]), ``contributing_models`` (list), ``model_votes`` (dict[model_id → raw signal: bool for presence, label for identity, transcript or float for utterance]), ``comparison_status`` ({"ok", "incomparable", "unavailable", "one_sided"}).
+
+- **FR-004**: A top-level ``<run_dir>/disagreements.json`` index ranks rows across all nine parquets by ``aggregated_uncertainty`` desc, with ties broken by axis priority (utterance > identity > presence) and then by start time. N defaults to 100, configurable via ``--disagreements-top-n``. The aggregator combining sub-signals into ``aggregated_uncertainty`` is configurable via ``--uncertainty-aggregator``; allowed values are ``min`` (default), ``mean``, ``harmonic_mean``, and ``disagreement_weighted`` (``(1 − mean_confidence) × mismatch_severity``). Models lacking a native confidence signal MUST be dropped from the aggregator's input rather than treated as zero.
+
+- **FR-005**: The Label Studio bundle MUST expose three Labels tracks per pass (``<pass>__uncertainty__{presence,identity,utterance}``) plus three raw-vs-enhanced tracks (``pass_pair__uncertainty__{presence,identity,utterance}``). Label values are drawn from the fixed enumerated set ``{"low", "medium", "high", "incomparable", "unavailable"}`` mapping ``aggregated_uncertainty`` to bins (``< 0.33`` → low, ``[0.33, 0.66)`` → medium, ``≥ 0.66`` → high). The utterance track additionally declares a sibling ``<TextArea>`` track carrying the per-bucket transcript consensus + dissenting-model transcripts so reviewers can audit which words drove the uncertainty.
+
+- **FR-006**: The summary timeline plot MUST be a five-row figure: (1) presence uncertainty, raw pass solid + enhanced pass dashed on a shared y-axis in [0, 1]; (2) identity uncertainty, same overlay; (3) utterance uncertainty, same overlay; (4) raw-vs-enhanced delta strip with one band per axis; (5) reference context — raw diarization speakers + raw ASR token spans.
+
+- **FR-007**: The comparator MUST hook into the existing content-addressable cache. The cache key MUST include ``(audio_signature, axis, pass_set, model_set, params, wrapper_hash, senselab_version, schema_version)``. Re-running with the same inputs MUST return ``cache="hit"`` for every axis without re-reading the upstream task results.
+
+- **FR-008**: The comparator MUST be skippable via ``--skip comparisons``; the disagreements index is opt-out via ``--disagreements-top-n 0``. The per-region confidence columns inherited from upstream tasks are always emitted when the underlying signal is available.
+
+- **FR-009**: ASR-vs-PPG phoneme comparison MUST run only when both an ASR result and a PPG result are present for the same audio variant, MUST project both to a shared phoneme inventory before differencing, and MUST report ``phoneme_per`` (continuous normalized phoneme error rate) plus a boolean ``phoneme_disagreement`` set only when ``phoneme_per`` meets or exceeds ``--phoneme-disagreement-threshold`` (default ``0.50``). The continuous PER feeds the utterance axis aggregator; the boolean controls LS region emission.
+
+- **FR-010**: The bucket grid is controlled by ``--cross-stream-win-length`` (default ``0.5`` s) and ``--cross-stream-hop-length`` (default ``0.5`` s, non-overlapping). AST / YAMNet windows are projected onto this grid using floor-based index lookup (``win_idx = floor(start / native_hop)``). The grid parameters MUST be recorded in every parquet's provenance.
+
+- **FR-011**: For text-only ASR backends that emit a ``ScriptLine`` without per-token chunks (Granite Speech 3.3, Canary-Qwen), the comparator MUST consult the alignment block produced by the post-MMS auto-aligner when the raw ASR result lacks timestamps. Text without any time anchor (raw ScriptLine and no alignment block) is treated as ``asr_says_speech = false`` — it produces no token overlap and no contribution to utterance text on that bucket.
+
+- **FR-012**: Buckets where no contributing model produced a usable signal on an axis MUST emit no row (silent-bucket rule extended uniformly to all axes).
+
+- **FR-013**: The comparator MUST gracefully degrade — a single signal failing (e.g., one model output is empty, the PPG backend is unavailable) MUST NOT abort the run; the affected rows MUST instead carry a ``comparison_status`` of ``"incomparable"`` or ``"unavailable"`` with a one-line reason in ``disagreements.json``.
+
+- **FR-014**: All uncertainty outputs MUST be reproducible — the wrapper version hash and senselab version MUST be recorded in every parquet's provenance, and reviewers MUST be able to diff a parquet from one run against another to track stability.
+
+- **FR-015**: The smoke-test suite MUST exercise the three-axis aggregation logic on synthetic / cached upstream results so the comparator can be tested without re-running heavy models. Existing skipif gates for venv- or weight-bound backends MUST continue to apply to the integration test that exercises the full stage.
 
 ### Key Entities
 
-- **ComparisonRow**: One row per (start, end) bucket in a comparison parquet. Carries ``comparison_kind`` (raw_vs_enhanced / within_stream / cross_stream), ``task`` or ``stream_pair``, ``a_value``, ``b_value``, ``agree``, ``mismatch_type``, ``comparison_status``, optional ``confidence_a``, ``confidence_b``, ``combined_uncertainty``.
-- **DisagreementsIndex**: The top-level JSON file enumerating the top-N flagged regions across all parquets, with each entry pointing to the source parquet path, row index, time span, and LS region id.
-- **UncertaintyAnnotation**: Per-region scalars (``confidence``, ``uncertainty``, plus task-specific extras like ``no_speech_prob`` for Whisper, ``entropy`` and ``margin_to_top2`` for AST/YAMNet, ``avg_logprob`` for Whisper / Granite / Canary-Qwen) attached to every existing per-task region.
-- **ComparisonGrid**: The shared time grid used to project incompatible-granularity outputs onto a common axis before differencing. Parameters mirror the existing ``--features-*-length`` flags.
+- **UncertaintyRow**: One row per (pass, axis, start, end) bucket in an uncertainty parquet. Carries ``axis`` ({"presence", "identity", "utterance"}), ``aggregated_uncertainty`` ([0, 1]), ``contributing_models`` (list of model_ids), ``model_votes`` (dict[model_id → raw signal]), ``comparison_status``, plus axis-specific extras (e.g., per-sub-signal scalars for identity / utterance).
+- **DisagreementsIndex**: The top-level JSON file enumerating the top-N flagged buckets across the nine parquets, with each entry pointing to the source parquet path, row index, time span, axis, and LS region id.
+- **PerSegmentSpeakerEmbedding**: A `(audio_signature, diarization_segment, embedding_model)` keyed cache entry holding the ECAPA / ResNet vector for one diarization segment; reused at bucket-aggregation time to compute the across-time identity sub-signal.
+- **BucketGrid**: The shared time grid used to project all model outputs onto a common axis before aggregation. Parameters: ``--cross-stream-win-length`` (default 0.5 s), ``--cross-stream-hop-length`` (default 0.5 s).
 
 ## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes
 
-- **SC-001**: For a typical 1-minute conversational clip, the reviewer can open the Label Studio project, identify the top-5 most uncertain disagreements via the ``disagreements.json`` index, and locate each one on the audio timeline in under 30 seconds total.
-- **SC-002**: 100 % of (task, model_pair) combinations *eligible for comparison* (i.e., a task with two or more successful models in the same pass, or any model present in both passes for raw-vs-enhanced) produce a parquet sidecar. Single-model tasks gracefully produce no within-stream parquet (no pair to compare) — that is correct behavior, not a silent drop.
-- **SC-003**: Cache replay on identical inputs hits the comparator cache for ≥95 % of comparison rows; the remaining ≤5 % are documented in ``disagreements.json`` as deliberately uncached (e.g., one-sided rows that depend on which pass succeeded).
-- **SC-004**: The new stage adds no more than 30 % wall-clock overhead on top of the existing analyze_audio run on a 1-minute clip when running on already-cached upstream task results.
-- **SC-005**: Existing analyze_audio outputs (per-task JSON, features parquets, existing LS tracks) are unchanged in shape — adding the comparison stage MUST NOT break any consumer of the existing artefacts. A reviewer who skips the new stage with ``--skip comparisons`` gets bit-for-bit the same outputs the script produces today.
-- **SC-006**: Smoke tests cover at least one happy-path scenario for each comparison kind (raw_vs_enhanced, within_stream, cross_stream) plus the four documented degradation modes (failed pass, one_sided, unavailable PPG, missing confidence signal); the tests run in under 30 seconds total without venv provisioning or model downloads.
-- **SC-007**: The reviewer can answer the question "did enhancement help here?" for a clip in under one minute by visiting the LS project and reading the ``raw_vs_enhanced`` track.
+- **SC-001**: For a typical 1-minute conversational clip, the reviewer can open the Label Studio project, identify the top-5 most uncertain buckets via the ``disagreements.json`` index, and locate each one on the audio timeline in under 30 seconds total.
+- **SC-002**: For a default two-pass run with default models, the comparator emits exactly 9 uncertainty parquets (3 axes × 2 passes + 3 raw-vs-enhanced deltas) — no per-pair sidecars. Buckets where no model contributed any signal on an axis emit no row.
+- **SC-003**: Cache replay on identical inputs hits the comparator cache for ≥95 % of buckets; the remaining ≤5 % are documented in ``disagreements.json`` as deliberately uncached (e.g., one-sided rows that depend on which pass succeeded).
+- **SC-004**: The comparator stage adds no more than 30 % wall-clock overhead on top of the existing analyze_audio run on a 1-minute clip when running on already-cached upstream task results.
+- **SC-005**: Existing analyze_audio outputs (per-task JSON, features parquets, existing LS tracks) are unchanged in shape — adding the comparator stage MUST NOT break any consumer of the existing artefacts. A reviewer who skips the new stage with ``--skip comparisons`` gets bit-for-bit the same outputs the script produces today.
+- **SC-006**: Smoke tests cover at least one happy-path scenario per axis (presence / identity / utterance) plus the documented degradation modes (failed pass, one_sided, unavailable PPG, missing confidence signal, single-model bucket); the tests run in under 30 seconds total without venv provisioning or model downloads.
+- **SC-007**: The reviewer can answer "did enhancement help here?" for a clip in under one minute by visiting the LS project and reading the three ``pass_pair__uncertainty__*`` tracks.
 
 ## Assumptions
 
