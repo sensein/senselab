@@ -18,6 +18,7 @@ import sys
 import types
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 import torch
@@ -198,8 +199,8 @@ def test_collect_classification_labels_pulls_unique_labels(aa: types.ModuleType)
     """The LS-config XML builder collects every distinct AudioSet label observed."""
     classify_result = [
         [
-            [{"label": "Speech", "score": 0.9}, {"label": "Music", "score": 0.1}],
-            [{"label": "Speech", "score": 0.8}, {"label": "Silence", "score": 0.2}],
+            {"start": 0.0, "end": 0.5, "labels": ["Speech", "Music"], "scores": [0.9, 0.1]},
+            {"start": 0.5, "end": 1.0, "labels": ["Speech", "Silence"], "scores": [0.8, 0.2]},
         ]
     ]
     labels = aa._collect_classification_labels(classify_result)
@@ -218,3 +219,112 @@ def test_serialize_handles_tensors_dicts_and_lists(aa: types.ModuleType) -> None
     assert "_dtype" in out["embedding"]
     assert out["items"] == [{"a": 1}, {"a": 2}]
     assert out["ok"] is True
+
+
+# ── Phase 2 (foundational comparator) tests ───────────────────────────
+
+
+def test_comparator_cli_flags_parse(aa: types.ModuleType) -> None:
+    """parse_args accepts the new comparator flags with documented defaults.
+
+    Defaults reflect the 2026-05-09 clarifications: cross-stream grid is now
+    0.5 s non-overlapping (the 0.1 / 0.2 grid over-resolved every signal in
+    the system), and ``--speech-presence-labels`` is ``nargs="+"`` since
+    AudioSet labels themselves contain commas (e.g. ``"Narration, monologue"``).
+    """
+    args = aa.parse_args(["/tmp/dummy.wav"])
+    assert args.cross_stream_win_length == 0.5
+    assert args.cross_stream_hop_length == 0.5
+    assert args.uncertainty_aggregator == "min"
+    assert args.phoneme_disagreement_threshold == 0.50
+    assert args.diarization_boundary_shift_ms == 50.0
+    assert args.disagreements_top_n == 100
+    assert args.asr_reference_model == "openai/whisper-large-v3-turbo"
+    assert tuple(args.skip_comparisons) == ()
+    assert "comparisons" in aa.ALL_TASKS
+    # The default labels include "Narration, monologue" — survives nargs="+".
+    assert any("Narration" in lbl for lbl in args.speech_presence_labels)
+
+
+def test_comparator_cli_flag_validation(aa: types.ModuleType) -> None:
+    """Out-of-range comparator flag values are rejected by argparse."""
+    with pytest.raises(SystemExit):
+        aa.parse_args(["/tmp/dummy.wav", "--cross-stream-win-length", "-1"])
+    with pytest.raises(SystemExit):
+        aa.parse_args(["/tmp/dummy.wav", "--cross-stream-hop-length", "0.6", "--cross-stream-win-length", "0.2"])
+    with pytest.raises(SystemExit):
+        aa.parse_args(["/tmp/dummy.wav", "--phoneme-disagreement-threshold", "1.5"])
+    with pytest.raises(SystemExit):
+        aa.parse_args(["/tmp/dummy.wav", "--disagreements-top-n", "-3"])
+    with pytest.raises(SystemExit):
+        aa.parse_args(["/tmp/dummy.wav", "--diarization-boundary-shift-ms", "-1"])
+
+
+def test_classification_to_ls_emits_regions_for_dict_shape(aa: types.ModuleType) -> None:
+    """The LS conversion must skip empty entries but emit one region per dict window."""
+    result = [
+        [
+            {"start": 0.0, "end": 0.5, "labels": ["Speech"], "scores": [0.95]},
+            {"start": 0.5, "end": 1.0, "labels": ["Music"], "scores": [0.62]},
+        ]
+    ]
+    regions = aa._classification_to_ls(result, prefix="raw__ast", win_length=0.5, hop_length=0.5)
+    assert len(regions) == 2
+    labels = [r["value"]["labels"][0] for r in regions]
+    assert labels == ["Speech", "Music"]
+
+
+def test_speech_presence_labels_preserves_multi_word_audioset_labels(aa: types.ModuleType) -> None:
+    """AudioSet labels themselves contain commas (e.g. 'Narration, monologue').
+
+    nargs="+" + space-separated quoted args means the inner commas survive parsing.
+    """
+    args = aa.parse_args(
+        [
+            "/tmp/dummy.wav",
+            "--speech-presence-labels",
+            "Speech",
+            "Narration, monologue",
+            "Female speech, woman speaking",
+        ]
+    )
+    labels = aa._speech_presence_labels(args)
+    assert "Narration, monologue" in labels
+    assert "Female speech, woman speaking" in labels
+    assert "Speech" in labels
+
+
+def test_skip_comparisons_disables_workflow_outputs(aa: types.ModuleType) -> None:
+    """``--skip comparisons`` sets ``comparisons`` in ``args.skip`` (T009b / FR-008 / SC-005).
+
+    The script's main() gates the workflow call on that exact membership.
+    """
+    args = aa.parse_args(["/tmp/dummy.wav", "--skip", "comparisons"])
+    assert "comparisons" in args.skip
+
+
+def test_disagreements_top_n_zero_disables_index_only(aa: types.ModuleType) -> None:
+    """--disagreements-top-n 0 keeps the parquets + plot; only the index file is skipped."""
+    args = aa.parse_args(["/tmp/dummy.wav", "--disagreements-top-n", "0"])
+    assert args.disagreements_top_n == 0
+    # comparisons stay enabled
+    assert "comparisons" not in args.skip
+
+
+def test_utterance_grid_defaults_to_1s_window_05s_hop(aa: types.ModuleType) -> None:
+    """Utterance has its own grid: 1.0 s window with 0.5 s hop (overlapping).
+
+    Wider than presence/identity (0.5/0.5) so most words land fully inside at least
+    one bucket — pairs with the fully-contained rule in harvest_utterance_votes.
+    """
+    args = aa.parse_args(["/tmp/dummy.wav"])
+    assert args.utterance_win_length == 1.0
+    assert args.utterance_hop_length == 0.5
+
+
+def test_utterance_grid_validation(aa: types.ModuleType) -> None:
+    """Out-of-range utterance grid values are rejected."""
+    with pytest.raises(SystemExit):
+        aa.parse_args(["/tmp/dummy.wav", "--utterance-win-length", "-1"])
+    with pytest.raises(SystemExit):
+        aa.parse_args(["/tmp/dummy.wav", "--utterance-hop-length", "1.5", "--utterance-win-length", "1.0"])

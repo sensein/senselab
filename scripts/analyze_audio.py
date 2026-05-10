@@ -119,6 +119,8 @@ import json
 import sys
 import time
 import traceback
+from collections.abc import Iterator
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -132,9 +134,14 @@ from senselab.audio.tasks.forced_alignment import align_transcriptions
 from senselab.audio.tasks.input_output import read_audios
 from senselab.audio.tasks.preprocessing import downmix_audios_to_mono, extract_segments, resample_audios
 from senselab.audio.tasks.speaker_diarization import diarize_audios
-from senselab.audio.tasks.speaker_embeddings import extract_speaker_embeddings_from_audios
 from senselab.audio.tasks.speech_enhancement import enhance_audios
 from senselab.audio.tasks.speech_to_text import transcribe_audios
+from senselab.audio.workflows.audio_analysis.harvesters import (
+    classification_window_top1 as _classification_window_top1,
+)
+from senselab.audio.workflows.audio_analysis.harvesters import (
+    classification_windows as _classification_windows,
+)
 from senselab.utils.data_structures import (
     DeviceType,
     HFModel,
@@ -145,7 +152,18 @@ from senselab.utils.data_structures import (
 )
 
 TARGET_SR = 16000
-ALL_TASKS = ("diarization", "ast", "yamnet", "features", "asr", "embeddings", "alignment")
+ALL_TASKS = ("diarization", "ast", "yamnet", "features", "asr", "alignment", "comparisons")
+COMPARISON_AXES = ("raw_vs_enhanced", "within_stream", "cross_stream")
+UNCERTAINTY_AGGREGATORS = ("min", "mean", "harmonic_mean", "disagreement_weighted")
+DEFAULT_SPEECH_PRESENCE_LABELS = (
+    "Speech",
+    "Conversation",
+    "Narration, monologue",
+    "Female speech, woman speaking",
+    "Male speech, man speaking",
+    "Child speech, kid speaking",
+    "Speech synthesizer",
+)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -313,6 +331,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--ppg",
+        action="store_true",
+        help=(
+            "Run the PPG (phonetic posteriorgram) backend on each pass and feed it into "
+            "the comparator's utterance axis as a per-frame phoneme-disagreement signal "
+            "(`phoneme_per_to_ppg` per ASR vote). Off by default — enabling pulls the "
+            "ppgs subprocess venv (~1.4 GB)."
+        ),
+    )
+    parser.add_argument(
         "--aligner-model",
         default="facebook/mms-1b-all",
         help=(
@@ -339,7 +367,174 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "(unless --no-align-asr is also set)."
         ),
     )
-    return parser.parse_args(argv)
+    # ── Comparison & uncertainty stage flags ───────────────────────────
+    parser.add_argument(
+        "--skip-comparisons",
+        nargs="+",
+        choices=COMPARISON_AXES,
+        default=(),
+        help="Skip individual comparison axes. Pass --skip comparisons to skip everything new.",
+    )
+    parser.add_argument(
+        "--cross-stream-win-length",
+        type=float,
+        default=0.5,
+        help=(
+            "Window length (seconds) for cross-stream / within-stream comparisons "
+            "(presence + identity axes). Default 0.5 s non-overlapping; finer grids "
+            "over-resolve the underlying signals (Whisper word-level ≈ 20 ms but "
+            "pyannote frames ≈ 62.5 ms, AST window 10.24 s). Utterance has its own grid — "
+            "see ``--utterance-win-length``."
+        ),
+    )
+    parser.add_argument(
+        "--cross-stream-hop-length",
+        type=float,
+        default=0.5,
+        help="Hop between cross-stream comparison windows (default 0.5 s, non-overlapping; must be <= win-length).",
+    )
+    parser.add_argument(
+        "--utterance-win-length",
+        type=float,
+        default=1.0,
+        help=(
+            "Window length (seconds) for the utterance axis. Defaults to 1.0 s — wider "
+            "than the presence/identity grid because most words don't fit inside a 0.5 s "
+            "window. Combined with the 0.5 s hop default, every word lands fully inside "
+            "at least one bucket."
+        ),
+    )
+    parser.add_argument(
+        "--utterance-hop-length",
+        type=float,
+        default=0.5,
+        help=(
+            "Hop between utterance windows (default 0.5 s, half the default win — "
+            "windows overlap so words straddling a 0.5 s boundary still land inside "
+            "at least one bucket). Must be <= --utterance-win-length."
+        ),
+    )
+    parser.add_argument(
+        "--embedding-window-s",
+        type=float,
+        default=1.0,
+        help=(
+            "Window length (seconds) for fixed-grid speaker-embedding extraction. "
+            "Defaults to 1.0 s — the smallest window that pairs reliably with the "
+            "0.5 s comparator bucket grid (one embedding per bucket center)."
+        ),
+    )
+    parser.add_argument(
+        "--embedding-hop-s",
+        type=float,
+        default=0.5,
+        help="Hop between embedding windows. Defaults to 0.5 s. Must be <= --embedding-window-s.",
+    )
+    parser.add_argument(
+        "--identity-same-speaker-floor",
+        type=float,
+        default=0.30,
+        help=(
+            "Cosine distance ≤ this is treated as confidently same-speaker for the "
+            "identity axis (uncertainty 0 for same-claim, 1 for change-claim). "
+            "Defaults to 0.30 — typical ECAPA same-speaker noise level on VoxCeleb."
+        ),
+    )
+    parser.add_argument(
+        "--identity-diff-speaker-floor",
+        type=float,
+        default=0.70,
+        help=(
+            "Cosine distance ≥ this is treated as confidently different-speaker for "
+            "the identity axis. Defaults to 0.70. Distances between the two floors "
+            "interpolate linearly. Must be > --identity-same-speaker-floor."
+        ),
+    )
+    parser.add_argument(
+        "--identity-cluster-cosine-threshold",
+        type=float,
+        default=0.5,
+        help=(
+            "Cosine similarity threshold for clustering (diar_model, raw_label) into "
+            "pass-wide speaker IDs. Used to recognize that pyannote 'SPEAKER_00' and "
+            "sortformer 'speaker_2' refer to the same person when their mean "
+            "embeddings are close. Defaults to 0.5 (~ECAPA EER on VoxCeleb)."
+        ),
+    )
+    parser.add_argument(
+        "--clustering-algorithm",
+        choices=["spectral", "kmeans"],
+        default="spectral",
+        help=(
+            "Clustering algorithm for the windowed speaker-embedding step that "
+            "estimates n_speakers per pass. 'spectral' (default) uses a precomputed "
+            "cosine-similarity affinity, which handles non-convex speaker clusters "
+            "better than k-means; 'kmeans' is the legacy choice. Spectral falls back "
+            "to k-means automatically if a k fails."
+        ),
+    )
+    parser.add_argument(
+        "--uncertainty-aggregator",
+        choices=UNCERTAINTY_AGGREGATORS,
+        default="min",
+        help="Aggregator that combines per-model confidences for the disagreements.json ranking.",
+    )
+    parser.add_argument(
+        "--phoneme-disagreement-threshold",
+        type=float,
+        default=0.50,
+        help="Phoneme-error-rate threshold for ASR↔PPG `phoneme_disagreement` flag (default 0.50).",
+    )
+    parser.add_argument(
+        "--speech-presence-labels",
+        nargs="+",
+        default=list(DEFAULT_SPEECH_PRESENCE_LABELS),
+        metavar="LABEL",
+        help=(
+            "AudioSet labels (one per arg) that count as 'speech-present' for AST/YAMNet ↔ "
+            "diarization comparison. AudioSet labels themselves contain commas "
+            "(e.g. 'Narration, monologue'), so use space-separated quoted args rather than a "
+            "single comma string. Default covers the AudioSet 'Speech' subtree."
+        ),
+    )
+    parser.add_argument(
+        "--asr-reference-model",
+        type=str,
+        default="openai/whisper-large-v3-turbo",
+        help="Which ASR model is the soft reference for ASR-vs-ASR WER computation.",
+    )
+    parser.add_argument(
+        "--diarization-boundary-shift-ms",
+        type=float,
+        default=50.0,
+        help=(
+            "Boundary-shift threshold (ms) for diarization disagreement detection. "
+            "Per Constitution §VIII (No Hardcoded Parameters)."
+        ),
+    )
+    parser.add_argument(
+        "--disagreements-top-n",
+        type=int,
+        default=100,
+        help="Top-N rows to emit in disagreements.json (default 100; 0 disables the index).",
+    )
+    args = parser.parse_args(argv)
+    # Comparator flag validation (cli.md "Validation").
+    if args.cross_stream_win_length <= 0:
+        parser.error("--cross-stream-win-length must be positive")
+    if args.cross_stream_hop_length <= 0 or args.cross_stream_hop_length > args.cross_stream_win_length:
+        parser.error("--cross-stream-hop-length must be positive and ≤ --cross-stream-win-length")
+    if args.utterance_win_length <= 0:
+        parser.error("--utterance-win-length must be positive")
+    if args.utterance_hop_length <= 0 or args.utterance_hop_length > args.utterance_win_length:
+        parser.error("--utterance-hop-length must be positive and ≤ --utterance-win-length")
+    if not (0.0 <= args.phoneme_disagreement_threshold <= 1.0):
+        parser.error("--phoneme-disagreement-threshold must be in [0, 1]")
+    if args.diarization_boundary_shift_ms < 0:
+        parser.error("--diarization-boundary-shift-ms must be non-negative")
+    if args.disagreements_top_n < 0:
+        parser.error("--disagreements-top-n must be non-negative")
+    return args
 
 
 def pick_dispatch_model(model_id: str, *, task: str) -> Any:  # noqa: ANN401
@@ -390,16 +585,81 @@ def prepare_audio(path: Path) -> Audio:
 
 # -- Cache + provenance ----------------------------------------------------
 
-# Cache schema bumps when the cache key composition or output shape changes
-# in a way that should invalidate prior cache entries even when the audio,
-# task, model, and senselab version are unchanged. Bump on breaking changes.
-#
-# v2: introduces alignment as a separate cache entry, separate from the
-#     ASR entry that produced its input transcript. The ASR cache key
-#     covers the ASR call's parameters; the alignment cache key adds
-#     transcript_sha and language. v1 cache entries are inert (won't be
-#     served) and can be discarded.
-_CACHE_SCHEMA_VERSION = 2
+# Cache schema. ``_sync_cache_with_schema_version`` keeps the on-disk marker
+# (.schema_version inside the cache dir) in lockstep with this constant: any
+# mismatch wipes the cache so we never serve a stale entry under a new schema.
+# Bump (or reset) on any breaking change to cache key composition or to the
+# shape of cached output. The current value is bundled into every cache key
+# (see ``cache_key``) and stamped into parquet provenance via
+# ``_CACHE_SCHEMA_VERSION`` references — never hardcode the literal anywhere
+# else, otherwise the constant and the stamped value will drift.
+_CACHE_SCHEMA_VERSION = 1
+
+
+def _sync_cache_with_schema_version(cache_dir: Path) -> None:
+    """Keep the on-disk cache state and ``_CACHE_SCHEMA_VERSION`` in sync.
+
+    The cache directory carries a ``.schema_version`` marker file. On each run:
+
+    - If the directory is empty / missing the marker → the cache was just
+      created (or manually cleared). Write the current schema version. No
+      data wipe is needed because there's nothing to wipe.
+    - If the marker exists and matches the current code version → keep cache.
+    - If the marker exists but doesn't match → the code has bumped the
+      schema since the cache was populated. Wipe all cache entries and
+      rewrite the marker with the current version.
+
+    Bidirectional invariant: clearing the cache resets the version to current
+    automatically (since the marker is recreated); bumping the version in
+    code wipes the cache automatically (since the marker mismatch triggers
+    the wipe). The user never has to manually delete cache files when they
+    edit the schema number.
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    marker = cache_dir / ".schema_version"
+    on_disk_version: int | None = None
+    if marker.exists():
+        try:
+            on_disk_version = int(marker.read_text().strip())
+        except (ValueError, OSError):
+            on_disk_version = None
+
+    # Has the cache been populated with non-marker entries?
+    has_entries = any(p.name != ".schema_version" for p in cache_dir.iterdir())
+
+    if on_disk_version == _CACHE_SCHEMA_VERSION:
+        return
+
+    if on_disk_version is None and not has_entries:
+        # Fresh / cleared cache. Write current version, no wipe needed.
+        marker.write_text(str(_CACHE_SCHEMA_VERSION))
+        print(
+            f"Cache: initialized {cache_dir} at schema_version={_CACHE_SCHEMA_VERSION}",
+            file=sys.stderr,
+        )
+        return
+
+    # Mismatch — wipe and rewrite the marker.
+    n_removed = 0
+    for p in cache_dir.iterdir():
+        if p.name == ".schema_version":
+            continue
+        try:
+            if p.is_dir():
+                import shutil
+
+                shutil.rmtree(p)
+            else:
+                p.unlink()
+            n_removed += 1
+        except OSError as exc:
+            print(f"warn: cache wipe failed to remove {p}: {exc!r}", file=sys.stderr)
+    marker.write_text(str(_CACHE_SCHEMA_VERSION))
+    print(
+        f"Cache: schema bumped from {on_disk_version!r} → {_CACHE_SCHEMA_VERSION}; "
+        f"wiped {n_removed} stale entries from {cache_dir}",
+        file=sys.stderr,
+    )
 
 
 def audio_signature(audio: Audio) -> str:
@@ -817,24 +1077,26 @@ def _classification_to_ls(
     the LS regions reflect each model's own native frame stride.
     """
     out: list[dict[str, Any]] = []
-    if not result:
-        return out
-    windows = result[0] if isinstance(result, list) and result else []
+    windows = _classification_windows(result)
     for i, window in enumerate(windows):
-        if not isinstance(window, list) or not window:
+        label, score, _entropy = _classification_window_top1(window)
+        if label is None:
             continue
-        top = max(window, key=lambda d: d.get("score", 0.0))
-        label = str(top.get("label", "?"))
-        score = float(top.get("score", 0.0))
-        start = i * hop_length
+        # Prefer per-window start/end when the canonical shape carries them.
+        if isinstance(window, dict) and window.get("start") is not None and window.get("end") is not None:
+            start = float(window["start"])
+            end = float(window["end"])
+        else:
+            start = i * hop_length
+            end = start + win_length
         out.append(
             _ls_label_region(
                 region_id=_new_region_id(f"{prefix}_cls", i),
                 from_name=prefix,
                 start=start,
-                end=start + win_length,
+                end=end,
                 label=label,
-                score=score,
+                score=score if score is not None else 0.0,
             )
         )
     return out
@@ -853,8 +1115,8 @@ def _scene_agreement(
     directly comparable. Produces a list of ``{start, end, ast, yamnet,
     agree}`` dicts plus aggregate agreement statistics.
     """
-    ast_windows = ast_result[0] if isinstance(ast_result, list) and ast_result else []
-    yamnet_windows = yamnet_result[0] if isinstance(yamnet_result, list) and yamnet_result else []
+    ast_windows = _classification_windows(ast_result)
+    yamnet_windows = _classification_windows(yamnet_result)
     pairs: list[dict[str, Any]] = []
     n = min(len(ast_windows), len(yamnet_windows))
     agree_count = 0
@@ -887,10 +1149,10 @@ def _scene_agreement(
 
 def _top1(window: Any) -> dict[str, Any] | None:  # noqa: ANN401
     """Return the highest-scoring entry of a classify_audios window, or None."""
-    if not isinstance(window, list) or not window:
+    label, score, _entropy = _classification_window_top1(window)
+    if label is None:
         return None
-    top = max(window, key=lambda d: d.get("score", 0.0))
-    return {"label": str(top.get("label", "?")), "score": float(top.get("score", 0.0))}
+    return {"label": label, "score": score if score is not None else 0.0}
 
 
 def _asr_has_timestamps(result: Any) -> bool:  # noqa: ANN401
@@ -1054,11 +1316,14 @@ def _safe(model_id: str) -> str:
 
 
 def build_labelstudio_config(summary: dict[str, Any]) -> str:
-    """Build a Label Studio labeling-config XML matching this run's tracks.
+    """Build a Label Studio labeling-config XML matching this run's per-task tracks.
 
     Generates one ``<Labels>`` control per (pass, analyzer, model) and one
     ``<TextArea>`` control per (pass, asr_model). Speakers, scene labels,
     and transcripts each become a stacked timeline annotation row.
+
+    The three-axis uncertainty tracks are appended downstream by
+    ``senselab.audio.workflows.audio_analysis.attach_uncertainty_tracks_to_ls``.
     """
     parts: list[str] = ["<View>", '  <Audio name="audio" value="$audio"/>']
     seen_label_sets: dict[str, list[str]] = {}
@@ -1105,6 +1370,7 @@ def build_labelstudio_config(summary: dict[str, Any]) -> str:
             v_escaped = v.replace('"', "&quot;")
             parts.append(f'    <Label value="{v_escaped}"/>')
         parts.append("  </Labels>")
+
     parts.append("</View>")
     return "\n".join(parts) + "\n"
 
@@ -1112,14 +1378,10 @@ def build_labelstudio_config(summary: dict[str, Any]) -> str:
 def _collect_classification_labels(result: Any) -> set[str]:  # noqa: ANN401
     """Extract the union of label strings observed in a classify_audios output."""
     labels: set[str] = set()
-    if not result:
-        return labels
-    windows = result[0] if isinstance(result, list) and result else []
-    for window in windows:
-        if not isinstance(window, list):
+    for window in _classification_windows(result):
+        if not isinstance(window, dict):
             continue
-        for entry in window:
-            label = entry.get("label") if isinstance(entry, dict) else None
+        for label in window.get("labels") or []:
             if label:
                 labels.add(str(label))
     return labels
@@ -1151,6 +1413,43 @@ def write_json(path: Path, payload: Any) -> None:  # noqa: ANN401
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(serialize(payload), fh, indent=2, default=str)
+
+
+def _speech_presence_labels(args: argparse.Namespace) -> list[str]:
+    """Resolve --speech-presence-labels into a clean list of AudioSet labels.
+
+    Argparse ``nargs="+"`` always yields a list of strings; AudioSet labels themselves
+    contain commas (e.g. ``"Narration, monologue"``) which is why the flag is space-
+    separated rather than comma-joined.
+    """
+    return [str(s).strip() for s in args.speech_presence_labels if str(s).strip()]
+
+
+_KNOWN_NULL_CONFIDENCE_MODEL_PREFIXES = (
+    "pyannote/speaker-diarization",
+    "nvidia/diar_sortformer",
+    "ibm-granite/granite-speech",
+    "nvidia/canary-qwen",
+    "Qwen/Qwen3-ASR",
+)
+
+
+def _models_without_native_signal(summaries: dict[str, Any]) -> list[str]:
+    """Return the documented set of models that do not expose a per-region confidence.
+
+    Used by the disagreements.json builder to log which contributors fall back on
+    cross-model entropy rather than a native scalar.
+    """
+    seen: set[str] = set()
+    for pass_summary in (summaries.get("passes") or {}).values():
+        if not isinstance(pass_summary, dict):
+            continue
+        for task in ("diarization", "asr"):
+            block = (pass_summary.get(task) or {}).get("by_model") or {}
+            for model_id in block:
+                if any(model_id.startswith(prefix) for prefix in _KNOWN_NULL_CONFIDENCE_MODEL_PREFIXES):
+                    seen.add(model_id)
+    return sorted(seen)
 
 
 def run_pass(
@@ -1376,6 +1675,10 @@ def run_pass(
             aligner_params = {
                 "language": align_language.language_code,
                 "romanize": align_language.language_code in ("ja", "zh"),
+                # Levels-to-keep is part of the cache key — bumping its value
+                # invalidates earlier entries that were stored with the all-False
+                # default (which produced empty chunks).
+                "levels_to_keep": "utterance+word",
             }
             align_provenance = {
                 **_provenance_for("alignment", args.aligner_model, aligner_params),
@@ -1396,6 +1699,10 @@ def run_pass(
                 f"alignment[{model_id}]",
                 align_transcriptions,
                 [(audio, ScriptLine(text=transcript_text), align_language)],
+                # Keep word-level chunks (and the utterance wrapper) so the comparator
+                # can read per-token timestamps. Default is all-False which filters
+                # everything out and leaves a meaningless punctuation-only ScriptLine.
+                levels_to_keep={"utterance": True, "word": True, "char": False},
                 aligner_model=args.aligner_model,
                 cache_dir=cache_dir,
                 cache_key_str=align_key,
@@ -1404,22 +1711,58 @@ def run_pass(
             summary["alignment"]["by_model"][model_id] = outcome
             write_json(pass_dir / "alignment" / f"{_safe(model_id)}.json", outcome)
 
-    if "embeddings" not in args.skip:
-        summary["embeddings"] = {"by_model": {}}
-        for model_id in args.embeddings_models:
-            params = {"device": device_label_for_provenance}
-            outcome = run_task_cached(
-                f"embeddings[{model_id}]",
-                extract_speaker_embeddings_from_audios,
-                [audio],
-                model=pick_dispatch_model(model_id, task="embeddings"),
-                device=device,
-                cache_dir=cache_dir,
-                cache_key_str=_key("embeddings", model_id, params),
-                provenance=_provenance_for("embeddings", model_id, params),
-            )
-            summary["embeddings"]["by_model"][model_id] = outcome
-            write_json(pass_dir / "embeddings" / f"{_safe(model_id)}.json", outcome)
+    if args.ppg:
+        from senselab.audio.tasks.features_extraction.ppg import (
+            _PHONEME_LABELS as _PPG_PHONEME_LABELS,
+        )
+        from senselab.audio.tasks.features_extraction.ppg import (
+            extract_ppgs_from_audios,
+        )
+
+        params = {"device": device_label_for_provenance}
+        outcome = run_task_cached(
+            "ppgs",
+            extract_ppgs_from_audios,
+            [audio],
+            device=device,
+            cache_dir=cache_dir,
+            cache_key_str=_key("ppgs", "ppgs/0.0.9", params),
+            provenance=_provenance_for("ppgs", "ppgs/0.0.9", params),
+        )
+        # Attach the phoneme inventory so the workflow's harvester can decode
+        # argmax indices without re-importing the ppgs library.
+        outcome["phoneme_labels"] = list(_PPG_PHONEME_LABELS)
+        summary["ppgs"] = outcome
+        # Emit a small sidecar JSON: the full (40 × N_frames) tensor is too
+        # large to dump, but the argmax-per-frame sequence + frame_hop is what
+        # the comparator actually consumes. Write it so reviewers can inspect
+        # the phoneme timeline without rerunning the PPG model.
+        from senselab.audio.workflows.audio_analysis.harvesters import ppg_argmax_per_frame
+
+        argmax_payload: dict[str, Any] = {
+            "phoneme_labels": list(_PPG_PHONEME_LABELS),
+            "per_frame_phonemes": [],
+            "frame_hop_s": 0.0,
+        }
+        if outcome.get("status") == "ok":
+            try:
+                pf, fh = ppg_argmax_per_frame(
+                    outcome.get("result"),
+                    list(_PPG_PHONEME_LABELS),
+                    audio.waveform.shape[-1] / audio.sampling_rate,
+                )
+                argmax_payload["per_frame_phonemes"] = pf
+                argmax_payload["frame_hop_s"] = float(fh)
+            except Exception as exc:  # noqa: BLE001
+                argmax_payload["argmax_error"] = repr(exc)
+        write_json(
+            pass_dir / "ppgs.json",
+            {
+                **{k: v for k, v in outcome.items() if k != "result"},
+                "result_summary": "argmax-per-frame sequence in 'argmax' field; full tensor in process memory only",
+                "argmax": argmax_payload,
+            },
+        )
 
     return summary
 
@@ -1435,6 +1778,8 @@ def main(argv: list[str] | None = None) -> int:
     device = pick_device(args.device)
     device_label = device.value if device is not None else "auto (per-task selection)"
     cache_dir: Path | None = None if args.no_cache else args.cache_dir.resolve()
+    if cache_dir is not None:
+        _sync_cache_with_schema_version(cache_dir)
     wrapper_hash = wrapper_version_hash()
     senselab_ver = senselab_version()
     print(f"Device: {device_label}")
@@ -1476,6 +1821,8 @@ def main(argv: list[str] | None = None) -> int:
         "passes": {},
     }
 
+    pass_audio: dict[str, Audio] = {"raw_16k": audio_16k}
+
     summaries["passes"]["raw_16k"] = run_pass(
         "raw_16k",
         audio_16k,
@@ -1495,6 +1842,7 @@ def main(argv: list[str] | None = None) -> int:
                 model=pick_dispatch_model(args.enhancement_model, task="enhancement"),
                 device=device,
             )[0]
+            pass_audio["enhanced_16k"] = enhanced
             summaries["passes"]["enhanced_16k"] = run_pass(
                 "enhanced_16k",
                 enhanced,
@@ -1529,9 +1877,262 @@ def main(argv: list[str] | None = None) -> int:
         for pass_label, pass_summary in summaries["passes"].items()
         if isinstance(pass_summary, dict) and "duration_s" in pass_summary
     ]
-    write_json(run_dir / "labelstudio_tasks.json", ls_tasks)
-
     config_xml = build_labelstudio_config(summaries)
+
+    # ── Comparator: three-axis uncertainty workflow ─────────────────────
+    if "comparisons" not in args.skip:
+        from senselab.audio.workflows.audio_analysis import (
+            BucketGrid,
+            attach_uncertainty_tracks_to_ls,
+            build_aligned_timeline_plot,
+            build_disagreements_index,
+            compute_uncertainty_axes,
+            write_axis_parquet,
+        )
+
+        grid = BucketGrid(
+            win_length=args.cross_stream_win_length,
+            hop_length=args.cross_stream_hop_length,
+        )
+        utterance_grid = BucketGrid(
+            win_length=args.utterance_win_length,
+            hop_length=args.utterance_hop_length,
+        )
+        comparator_params = {
+            "win_length": grid.win_length,
+            "hop_length": grid.hop_length,
+            "utterance_win_length": utterance_grid.win_length,
+            "utterance_hop_length": utterance_grid.hop_length,
+            "aggregator": args.uncertainty_aggregator,
+            "phoneme_disagreement_threshold": args.phoneme_disagreement_threshold,
+            "speech_presence_labels": _speech_presence_labels(args),
+            "asr_reference_model": args.asr_reference_model,
+            "diarization_boundary_shift_ms": args.diarization_boundary_shift_ms,
+            "clustering_algorithm": args.clustering_algorithm,
+        }
+
+        passes_for_compute = {
+            pl: ps for pl, ps in summaries.get("passes", {}).items() if isinstance(ps, dict) and "duration_s" in ps
+        }
+        speaker_embedding_models = list(args.embeddings_models)
+        per_window_embeddings_by_pass: dict[str, dict[str, Any]] = {}
+        try:
+            axis_results, incomparable_reasons, per_window_embeddings_by_pass = compute_uncertainty_axes(
+                passes=passes_for_compute,
+                grid=grid,
+                params=comparator_params,
+                audio=pass_audio,
+                speaker_embedding_models=speaker_embedding_models,
+                aggregator=args.uncertainty_aggregator,
+                speech_presence_labels=_speech_presence_labels(args),
+                utterance_grid=utterance_grid,
+                embedding_window_s=args.embedding_window_s,
+                embedding_hop_s=args.embedding_hop_s,
+                same_speaker_floor=args.identity_same_speaker_floor,
+                diff_speaker_floor=args.identity_diff_speaker_floor,
+                cluster_cosine_threshold=args.identity_cluster_cosine_threshold,
+                clustering_algorithm=args.clustering_algorithm,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"ERROR: comparator workflow failed: {exc!r}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            axis_results, incomparable_reasons = ({}, {"workflow": f"failed: {exc!r}"})
+            per_window_embeddings_by_pass = {}
+
+        # Persist 9 parquets (3 axes × 2 passes + 3 raw_vs_enhanced deltas).
+        for (pass_label, axis), result in axis_results.items():
+            if pass_label == "raw_vs_enhanced":
+                dest = run_dir / "uncertainty" / "raw_vs_enhanced" / f"{axis}.parquet"
+            else:
+                dest = run_dir / pass_label / "uncertainty" / f"{axis}.parquet"
+            write_axis_parquet(
+                result,
+                dest,
+                provenance={
+                    "schema_version": _CACHE_SCHEMA_VERSION,
+                    "wrapper_hash": wrapper_hash,
+                    "senselab_version": senselab_ver,
+                },
+            )
+
+        # PII detection per pass — scans each ASR transcript with regex layer
+        # plus optional spaCy NER. Default-on; failures (e.g. spaCy not
+        # installed) are surfaced via stderr + the report's failures dict.
+        from senselab.audio.workflows.audio_analysis.global_summary import (
+            compute_pass_global_summary,
+        )
+        from senselab.audio.workflows.audio_analysis.harvesters import resolve_asr_result
+        from senselab.audio.workflows.audio_analysis.pii import detect_pii_in_pass, report_to_dict
+
+        pii_reports: dict[str, Any] = {}
+        for pl, ps in passes_for_compute.items():
+            align_by_model_pii = (ps.get("alignment") or {}).get("by_model") or {}
+            asr_resolved_pii: dict[str, Any] = {}
+            for m, b in ((ps.get("asr") or {}).get("by_model") or {}).items():
+                if isinstance(b, dict) and b.get("status") == "ok":
+                    asr_resolved_pii[m] = resolve_asr_result(b, align_by_model_pii.get(m))
+            pii_reports[pl] = detect_pii_in_pass(
+                pass_label=pl,
+                asr_resolved=asr_resolved_pii,
+            )
+            write_json(run_dir / pl / "pii.json", report_to_dict(pii_reports[pl]))
+
+        # Global per-pass summary: 4 claims (transcript / speaker / quality / PII)
+        # → 1 scalar each + a max() combined. Persist to summary.json.
+        global_pass_summaries: dict[str, Any] = {}
+        for pl, ps in passes_for_compute.items():
+            align_by_model_g = (ps.get("alignment") or {}).get("by_model") or {}
+            asr_resolved_g: dict[str, Any] = {}
+            for m, b in ((ps.get("asr") or {}).get("by_model") or {}).items():
+                if isinstance(b, dict) and b.get("status") == "ok":
+                    asr_resolved_g[m] = resolve_asr_result(b, align_by_model_g.get(m))
+            global_pass_summaries[pl] = compute_pass_global_summary(
+                pass_label=pl,
+                pass_summary=ps,
+                axis_results=axis_results,
+                asr_resolved=asr_resolved_g,
+                pii_report=pii_reports.get(pl),
+                expects_speech=True,
+            )
+        # Top-level: pick the lower-uncertainty pass (best of raw vs enhanced)
+        # so the bottom-line score reflects the cleaner interpretation.
+        best_pass: str | None = None
+        best_combined: float | None = None
+        for pl, gs in global_pass_summaries.items():
+            c = gs.get("combined_uncertainty")
+            if c is None:
+                continue
+            if best_combined is None or c < best_combined:
+                best_combined = c
+                best_pass = pl
+        summaries["global_uncertainty"] = {
+            "combined_uncertainty": best_combined,
+            "best_pass": best_pass,
+            "by_pass": global_pass_summaries,
+            "incomparable_reasons": incomparable_reasons,
+        }
+        # Re-persist summary.json — the original write at line 1782 happened
+        # before the comparator stage so it does not contain
+        # ``global_uncertainty``. Overwriting here keeps the on-disk summary
+        # in sync with the in-memory dict.
+        write_json(run_dir / "summary.json", summaries)
+
+        # Persist per-pass windowed speaker embeddings — one JSON per (pass, model)
+        # at ``<pass>/embeddings/<model>.json`` with the full window grid + vectors.
+        for pass_label, by_model in per_window_embeddings_by_pass.items():
+            if not by_model:
+                continue
+            for model_id, windows in by_model.items():
+                payload = {
+                    "status": "ok" if windows else "no_data",
+                    "window_s": args.embedding_window_s,
+                    "hop_s": args.embedding_hop_s,
+                    "windows": [
+                        {
+                            "start_s": float(w.start_s),
+                            "end_s": float(w.end_s),
+                            "vector": [float(x) for x in w.vector.tolist()],
+                        }
+                        for w in windows
+                    ],
+                }
+                write_json(run_dir / pass_label / "embeddings" / f"{_safe(model_id)}.json", payload)
+
+        # Attach per-axis Labels + utterance TextArea tracks to the LS bundle.
+        if axis_results:
+            ls_tasks, config_xml = attach_uncertainty_tracks_to_ls(
+                ls_tasks=ls_tasks,
+                ls_config=config_xml,
+                axis_results=axis_results,
+            )
+
+        # Disagreements index — opt-out via --disagreements-top-n 0.
+        if axis_results and args.disagreements_top_n > 0:
+            index = build_disagreements_index(
+                axis_results=axis_results,
+                top_n=args.disagreements_top_n,
+                run_dir=run_dir,
+                config={
+                    "top_n": args.disagreements_top_n,
+                    "aggregator": args.uncertainty_aggregator,
+                    "phoneme_disagreement_threshold": args.phoneme_disagreement_threshold,
+                    "bucket_grid": {
+                        "win_length": grid.win_length,
+                        "hop_length": grid.hop_length,
+                    },
+                    "speech_presence_labels": _speech_presence_labels(args),
+                    "wrapper_hash": wrapper_hash,
+                    "senselab_version": senselab_ver,
+                },
+                incomparable_reasons=incomparable_reasons,
+                models_without_native_signal=_models_without_native_signal(summaries),
+            )
+            write_json(run_dir / "disagreements.json", index)
+
+        # Timeline plot — best-effort sidecar.
+        if axis_results:
+            try:
+                duration_s = float(next(iter(passes_for_compute.values())).get("duration_s", 0.0) or 0.0)
+                # Build per-pass detail bundles for the plot's per-source rows.
+                detail_by_pass: dict[str, dict[str, Any]] = {}
+                for pass_label, pass_summary in passes_for_compute.items():
+                    align_by_model = ((pass_summary.get("alignment") or {}).get("by_model")) or {}
+                    diar_by_model: dict[str, list[Any]] = {}
+                    for m, block in ((pass_summary.get("diarization") or {}).get("by_model") or {}).items():
+                        if isinstance(block, dict) and block.get("status") == "ok":
+                            res = block.get("result")
+                            if isinstance(res, list) and res:
+                                inner = res[0] if isinstance(res[0], list) else res
+                                diar_by_model[m] = list(inner)
+                    asr_by_model: dict[str, Any] = {}
+                    for m, block in ((pass_summary.get("asr") or {}).get("by_model") or {}).items():
+                        if not (isinstance(block, dict) and block.get("status") == "ok"):
+                            continue
+                        from senselab.audio.workflows.audio_analysis.harvesters import resolve_asr_result
+
+                        asr_by_model[m] = resolve_asr_result(block, align_by_model.get(m))
+                    ppg_block = pass_summary.get("ppgs") or {}
+                    ppg_per_frame: list[str] = []
+                    ppg_frame_hop = 0.0
+                    if isinstance(ppg_block, dict) and ppg_block.get("status") == "ok":
+                        from senselab.audio.workflows.audio_analysis.harvesters import ppg_argmax_per_frame
+
+                        ppg_per_frame, ppg_frame_hop = ppg_argmax_per_frame(
+                            ppg_block.get("result"),
+                            ppg_block.get("phoneme_labels"),
+                            float(pass_summary.get("duration_s", 0.0) or 0.0),
+                        )
+                    detail_by_pass[pass_label] = {
+                        "diar_by_model": diar_by_model,
+                        "asr_by_model": asr_by_model,
+                        "per_window_embeddings": per_window_embeddings_by_pass.get(pass_label, {}),
+                        "ppg": {
+                            "per_frame_phonemes": ppg_per_frame,
+                            "frame_hop": ppg_frame_hop,
+                        },
+                    }
+                raw_pass_audio = pass_audio.get("raw_16k")
+                raw_waveform = (
+                    raw_pass_audio.waveform.detach().cpu().numpy().squeeze() if raw_pass_audio is not None else None
+                )
+                raw_sr = int(raw_pass_audio.sampling_rate) if raw_pass_audio is not None else 16000
+                timeline_path = build_aligned_timeline_plot(
+                    run_dir=run_dir,
+                    axis_results=axis_results,
+                    duration_s=duration_s,
+                    grid_hop=grid.hop_length,
+                    utterance_grid_hop=utterance_grid.hop_length,
+                    detail_by_pass=detail_by_pass,
+                    title=f"Aggregate uncertainty · {args.audio.name}",
+                    audio_waveform=raw_waveform,
+                    audio_sr=raw_sr,
+                )
+                if timeline_path is not None:
+                    print(f"Timeline plot: {timeline_path}")
+            except Exception as exc:  # noqa: BLE001 — best-effort sidecar
+                print(f"warn: timeline plot failed: {exc!r}", file=sys.stderr)
+
+    write_json(run_dir / "labelstudio_tasks.json", ls_tasks)
     (run_dir / "labelstudio_config.xml").write_text(config_xml, encoding="utf-8")
 
     print(f"\nDone. Summary: {run_dir / 'summary.json'}")

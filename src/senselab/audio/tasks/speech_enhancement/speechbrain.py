@@ -143,6 +143,43 @@ class SpeechBrainEnhancer:
             # TODO: decide what to do with metadata
             enhanced_audio = concatenate_audios(enhanced_segments)
             enhanced_audio.metadata = audio.metadata
+
+            # Peak-normalize the enhanced waveform back to the input's peak
+            # amplitude. SepFormer (and other speechbrain enhancement models)
+            # produce arbitrarily-scaled output — empirically the peak can
+            # exceed [-1, +1] by 2-3× even when the input was already in that
+            # range. Without this normalization, downstream tasks that
+            # assume the conventional [-1, +1] dynamic range (PPG / wav2vec2
+            # CTC alignment, mel-spectrogram extractors that don't internally
+            # normalize, openSMILE LLDs) see out-of-distribution amplitudes
+            # and degrade. Peak normalization preserves the model's
+            # noise-suppression effect (relative ratios) while restoring the
+            # input's gain stage.
+            input_peak = float(audio.waveform.abs().max())
+            output_peak = float(enhanced_audio.waveform.abs().max())
+            silence_threshold = 1e-4  # ~ -80 dBFS
+            if input_peak < silence_threshold:
+                # Input is silent. SepFormer can hallucinate speech-shaped
+                # output from silence (~0.1-0.3 peak) — preserving that would
+                # propagate a hallucination through the pipeline. Zero out
+                # the output to match the input's silence.
+                enhanced_audio = Audio(
+                    waveform=torch.zeros_like(enhanced_audio.waveform),
+                    sampling_rate=enhanced_audio.sampling_rate,
+                    metadata=enhanced_audio.metadata,
+                )
+            elif output_peak > 0:
+                # ``min(input_peak / output_peak, 1.0)`` — only ATTENUATE
+                # output, never amplify. Prevents amplifying SepFormer
+                # impulsive artifacts (rare but real) above the input's
+                # clean range.
+                gain = min(input_peak / output_peak, 1.0)
+                enhanced_audio = Audio(
+                    waveform=enhanced_audio.waveform * gain,
+                    sampling_rate=enhanced_audio.sampling_rate,
+                    metadata=enhanced_audio.metadata,
+                )
+
             enhanced_audios.append(enhanced_audio)
 
         end_time_enhancement = time.time()
