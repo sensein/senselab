@@ -107,10 +107,6 @@ custom one. The original PR-#511 bug (audeering before this work) lived here.
   warn-only mode under `SENSELAB_STRICT_HEAD_LOAD=0`, and (c) silent return on
   clean loads (e.g. encoder buffer misses). Strict reviewer second pass
 
-- [ ] T203-original (legacy text, kept for traceability) Test: deferred — `_check_head_loaded_cleanly` is currently exercised
-  end-to-end via the audeering / ehcalabres tests; a unit test mocking
-  `loading_info` is a follow-up.
-
 **Cost**: ~40 lines. Requires switching `pipeline()` to load the model
 explicitly first; pipeline can then accept the pre-loaded model. Existing call
 sites in this codebase: 1 (`huggingface.py`). Manageable.
@@ -238,9 +234,6 @@ field on properly-published models.
   `problem_type`, English-emotion-word labels) is now isolated to a single
   unlikely combination; document it as a known limitation rather than a
   silent-corruption surface.
-
-- [ ] T502-original (legacy text, kept for traceability) Numerical test: deferred (no real-world `problem_type=regression`
-  emotion checkpoint with confounding labels in our test fixtures).
 
 **Cost**: ~10 lines + 1 test.
 
