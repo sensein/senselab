@@ -34,7 +34,7 @@ def _probe(repo_id: str, revision: Optional[str] = None) -> int:
 
     print(f"# Probe: {repo_id} (revision={revision or 'main'})")
 
-    model = HFModel(path_or_uri=repo_id, revision=revision or "main")
+    model: HFModel = HFModel(path_or_uri=repo_id, revision=revision or "main")
 
     # Config inspection
     config = None
