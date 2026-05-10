@@ -154,7 +154,9 @@ def _aggregate_quality(pass_summary: dict[str, Any]) -> dict[str, Any]:
     feat_block = pass_summary.get("features") or {}
     feat_result = feat_block.get("result") if isinstance(feat_block, dict) else None
     squim_rows = feat_result.get("torchaudio_squim", []) if isinstance(feat_result, dict) else []
-    stoi_vals, pesq_vals, sisdr_vals = [], [], []
+    stoi_vals: list[float] = []
+    pesq_vals: list[float] = []
+    sisdr_vals: list[float] = []
     for r in squim_rows:
         if not isinstance(r, dict):
             continue

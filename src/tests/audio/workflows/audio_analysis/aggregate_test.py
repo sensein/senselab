@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from typing import Any
 
 import pytest
 
@@ -62,7 +63,7 @@ def test_presence_uniform_silence_no_native_conf_zero_uncertainty() -> None:
 
 def test_presence_native_confidence_pulls_p_voice() -> None:
     """A YAMNet vote True with conf=0.99 plus a binary False vote → p_voice = (0.99 + 0)/2 = 0.495."""
-    votes = {
+    votes: dict[str, dict[str, Any]] = {
         "yamnet": {"speaks": True, "native_confidence": 0.99},
         "binary_dissenter": {"speaks": False, "native_confidence": None},
     }
@@ -90,7 +91,7 @@ def test_identity_low_same_label_uncertainty_means_confirmed_speaker() -> None:
     Calibrated uncertainty 0 means the audio cosine distance was at or below the
     same-speaker floor — the diar model's "same speaker" claim is confirmed.
     """
-    votes = {
+    votes: dict[str, dict[str, Any]] = {
         "pyannote": {"speaker_label": "SPEAKER_00", "cluster_id": "S0", "speaker_changed_from_prev": False},
         "pyannote::ecapa": {"same_label_uncertainty": 0.05, "change_inconsistency_uncertainty": None},
         "sortformer": {"speaker_label": "speaker_0", "cluster_id": "S0", "speaker_changed_from_prev": False},
@@ -155,7 +156,7 @@ def test_identity_no_signals_returns_none() -> None:
 
 def test_utterance_identical_phoneme_seqs_zero_distance() -> None:
     """All phoneme sources matching → all pairwise distances = 0 → uncertainty 0."""
-    votes = {
+    votes: dict[str, dict[str, Any]] = {
         "asr_a": {"text": "hello world", "phoneme_sequence": ["hh", "eh", "l", "ow"], "avg_logprob": None},
         "asr_b": {"text": "hello world", "phoneme_sequence": ["hh", "eh", "l", "ow"], "avg_logprob": None},
         "__pairwise_phoneme_distances__": {
@@ -254,7 +255,7 @@ def test_utterance_only_avg_logprob_drives_when_no_pairs() -> None:
 
 def test_utterance_ppg_contributes_via_pairwise() -> None:
     """PPG-vs-ASR distance enters the pairwise grid as ``__ppg__|<asr>``."""
-    votes = {
+    votes: dict[str, dict[str, Any]] = {
         "whisper": {"text": "hello", "phoneme_sequence": ["hh", "eh", "l", "ow"], "avg_logprob": None},
         "__pairwise_phoneme_distances__": {
             "pairs": {"__ppg__|whisper": 0.5},
@@ -267,5 +268,5 @@ def test_utterance_ppg_contributes_via_pairwise() -> None:
 
 def test_utterance_no_signal_returns_none() -> None:
     """No pairwise grid, no avg_logprob → None."""
-    votes = {"asr_a": {"text": "", "phoneme_sequence": [], "avg_logprob": None}}
+    votes: dict[str, dict[str, Any]] = {"asr_a": {"text": "", "phoneme_sequence": [], "avg_logprob": None}}
     assert aggregate_utterance(votes, aggregator="min") is None

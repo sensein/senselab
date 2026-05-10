@@ -69,7 +69,7 @@ pii = [
   # Presidio bundles purpose-built recognizers (EMAIL, PHONE, US_SSN, CREDIT_CARD,
   # IP_ADDRESS, PERSON, LOCATION, ...) on top of a spaCy NLP backbone. The
   # spaCy model itself is not pulled by pip — install it separately:
-  #   uv run python -m spacy download en_core_web_lg
+  # uv run python -m spacy download en_core_web_lg
   "presidio-analyzer>=2.2",
   "spacy>=3.7"
 ]
