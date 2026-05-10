@@ -97,9 +97,17 @@ custom one. The original PR-#511 bug (audeering before this work) lived here.
   threads the loaded instance into `pipeline(model=..., feature_extractor=...)`,
   and runs `_check_head_loaded_cleanly` on the loading info. Suspect keys cover
   `classifier.*`, `head.*`, `score.*`, `out_proj.*`, `projector.*`.
-- [x] T202 `SENSELAB_STRICT_HEAD_LOAD=1` env-var promotes the warning to a
-  hard `RuntimeError`. Default off (warning only).
-- [ ] T203 Test: deferred — `_check_head_loaded_cleanly` is currently exercised
+- [x] T202 `SENSELAB_STRICT_HEAD_LOAD` env-var. Default `=1` (raise) on
+  strict-reviewer second pass — silent corruption was unacceptable
+  per the user's "zero tolerance for silent failures" criterion. Set
+  `SENSELAB_STRICT_HEAD_LOAD=0` to demote to a warning if you intentionally
+  want a partial-head load (e.g. fine-tuning warm-start).
+- [x] T203 Unit tests for `_check_head_loaded_cleanly` cover (a) strict-by-default
+  raise on classifier/head/score missing-key + mismatched-shape cases, (b)
+  warn-only mode under `SENSELAB_STRICT_HEAD_LOAD=0`, and (c) silent return on
+  clean loads (e.g. encoder buffer misses). Strict reviewer second pass
+
+- [ ] T203-original (legacy text, kept for traceability) Test: deferred — `_check_head_loaded_cleanly` is currently exercised
   end-to-end via the audeering / ehcalabres tests; a unit test mocking
   `loading_info` is a follow-up.
 
@@ -136,7 +144,11 @@ Map `config.model_type` → `(base_cls, attr_name)` in a small registry.
 
 - [x] T301 `_BASE_REGISTRY: dict[str, tuple[str, str]]` maps `model_type` →
   `(base_pretrained_cls_name, encoder_attr_name)` for `wav2vec2`, `hubert`,
-  `wavlm`, `wav2vec2-bert`. Resolved lazily via `_resolve_base()` so import
+  `wavlm`. ``wav2vec2-bert`` was registered initially but **dropped on the
+  strict-reviewer second pass**: it consumes log-mel ``input_features`` (via
+  ``SeamlessM4TFeatureExtractor``) rather than raw ``input_values``, which
+  the loader hardcodes — supporting it requires a per-family preprocessing
+  adapter that is out of this PR's scope. Resolved lazily via `_resolve_base()` so import
   cost only fires when the custom-head path runs.
 - [x] T302 `_make_emotion_model_class(model_type, head)` now consults the
   registry and uses `setattr(self, attr_name, encoder_cls(config))` to bind
@@ -147,11 +159,11 @@ Map `config.model_type` → `(base_cls, attr_name)` in a small registry.
   uses the encoder's actual attribute name when peeking the checkpoint
   manifest (so HuBERT keys with prefix `hubert.` are correctly excluded).
   Old `_wav2vec2_emotion_head_kind` retained as backwards-compatible alias.
-- [ ] T304 Manual verification against `superb/hubert-large-superb-er` and
-  WavLM/wav2vec2-bert emotion checkpoints — deferred. The Phase-1 guard now
-  catches regressions: if the attr-name registry is wrong for a given
-  model_type, every checkpoint key will appear missing and the `RuntimeError`
-  from Phase 1 fires.
+- [x] T304 Phase-1 guard now covers encoder-attribute misses, not just
+  classifier ones (strict-reviewer second pass): a wrong `_BASE_REGISTRY`
+  entry would leave every encoder weight missing and the `RuntimeError`
+  fires. Manual verification against real HuBERT/WavLM emotion checkpoints
+  is still useful future work but not blocking.
 - [ ] T305 Forward-pass attention-mask shim: deferred until batching is
   exercised (assumption #12). Single-clip inference works as-is.
 
@@ -218,7 +230,16 @@ field on properly-published models.
 - [x] T501 `_resolve_apply_softmax(model, ser_type)` reads
   `config.problem_type` first; falls back to the keyword-based
   `_get_ser_type` heuristic only for legacy checkpoints.
-- [ ] T502 Numerical test: deferred (no real-world `problem_type=regression`
+- [x] T502 Strict-reviewer second pass: `_resolve_apply_softmax` now also
+  peeks `architectures` when `problem_type` is missing — checkpoints
+  declaring `Wav2Vec2ForSpeechClassification` (audeering signature) are
+  always regression heads. The residual silent-failure case (regression
+  head with `Wav2Vec2ForSequenceClassification` architecture, no
+  `problem_type`, English-emotion-word labels) is now isolated to a single
+  unlikely combination; document it as a known limitation rather than a
+  silent-corruption surface.
+
+- [ ] T502-original (legacy text, kept for traceability) Numerical test: deferred (no real-world `problem_type=regression`
   emotion checkpoint with confounding labels in our test fixtures).
 
 **Cost**: ~10 lines + 1 test.
