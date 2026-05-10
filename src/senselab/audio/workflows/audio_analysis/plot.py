@@ -83,7 +83,12 @@ def _cluster_speakers_by_embedding(
     )
 
     out: dict[tuple[str, str, str], str] = {}
-    seed_items: list[tuple[tuple[str, str, str], np.ndarray]] = []
+    # One seed group per (pass, synthetic embedding source) so that within
+    # a pass, the per-pass clusterer's already-distinct speaker labels never
+    # merge with each other. Cross-pass matching (raw_Peter ↔ enh_Peter)
+    # is handled inside ``assign_unified_clusters_with_seed_phase`` at the
+    # higher ``cross_group_threshold``.
+    seed_groups: dict[tuple[str, str], list[tuple[tuple[str, str, str], np.ndarray]]] = {}
     other_items: list[tuple[tuple[str, str, str], np.ndarray]] = []
 
     for pass_label, detail in detail_by_pass.items():
@@ -109,9 +114,16 @@ def _cluster_speakers_by_embedding(
                 if mean_emb is None or mean_emb.size == 0:
                     out[(pass_label, m, label)] = label
                     continue
-                (seed_items if is_seed else other_items).append(((pass_label, m, label), mean_emb))
+                if is_seed:
+                    seed_groups.setdefault((pass_label, m), []).append(((pass_label, m, label), mean_emb))
+                else:
+                    other_items.append(((pass_label, m, label), mean_emb))
 
-    out.update(assign_unified_clusters_with_seed_phase(seed_items, other_items, cosine_threshold=cosine_threshold))
+    out.update(
+        assign_unified_clusters_with_seed_phase(
+            list(seed_groups.values()), other_items, cosine_threshold=cosine_threshold
+        )
+    )
     return out
 
 

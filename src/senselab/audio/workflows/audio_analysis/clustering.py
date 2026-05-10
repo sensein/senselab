@@ -84,61 +84,102 @@ def _cos_sim(a: np.ndarray, b: np.ndarray) -> float | None:
 
 
 def assign_unified_clusters_with_seed_phase(
-    seed_items: list[tuple[K, np.ndarray]],
+    seed_groups: list[list[tuple[K, np.ndarray]]],
     other_items: list[tuple[K, np.ndarray]],
     *,
     cosine_threshold: float = 0.5,
+    cross_group_threshold: float = 0.75,
 ) -> dict[K, str]:
-    """Two-phase greedy centroid assignment with the seed pool frozen after phase 1.
+    """Group-aware seed phase + frozen-pool fallback.
 
-    Phase 1 — *seed*: each ``(key, mean_emb)`` in ``seed_items`` either matches
-    an existing centroid (cos_sim ≥ ``cosine_threshold``) or starts a new one.
-    The cluster pool grows freely.
+    ``seed_groups`` is a list of groups. Each inner list contains
+    ``(key, mean_emb)`` pairs that originated from the SAME per-source
+    clustering — they have already been validated as distinct clusters by
+    that source's min-size + silhouette guards and **MUST NOT** merge with
+    each other inside this function. Items from DIFFERENT groups may merge
+    when their centroid cosine similarity ≥ ``cross_group_threshold`` —
+    that's the cross-pass / cross-source unification (e.g. raw-pass Peter
+    matched to enhanced-pass Peter; both at cos_sim ~0.9+).
 
-    Phase 2 — *frozen*: each ``(key, mean_emb)`` in ``other_items`` MUST snap
-    to one of the seed centroids (closest by cosine, no threshold). If no
-    centroid exists at all when phase 2 starts, the item starts its own — but
-    once a single seed centroid is established, ``other_items`` can never
-    spawn new ones; instead they're tagged ``"?"`` if they fail every cosine
-    check (this is impossible without a threshold, but kept for safety).
+    Why two thresholds:
+      - ``cross_group_threshold`` (default 0.75) governs match-across-groups
+        (raw vs enhanced, ECAPA-clustering vs ResNet-clustering). Same
+        speaker across passes is typically cos_sim 0.85+, different
+        speakers within a pass sit around 0.30-0.50, so 0.75 cleanly
+        separates them.
+      - ``cosine_threshold`` (default 0.5) governs ``other_items`` matching
+        — used for pyannote / sortformer labels to snap to an existing seed
+        when their mean embedding clears the bar. Lower threshold here is
+        intentional: those models segment differently than the synthetic
+        source, so their per-label means can be noisier.
 
-    Returns ``{key → cluster_id}`` with cluster_ids of the form ``"S0"``,
-    ``"S1"``, ... — same labels both phases use.
+    Phase 1 — *seed groups*: walk each group; each ``(key, mean_emb)`` in
+    that group is assigned a NEW centroid (within-group items never share
+    a cluster id). After the group is consumed, walk a second time across
+    the existing centroid pool — if any pair of centroids have cos_sim ≥
+    ``cross_group_threshold``, merge them. This is how raw_Peter and
+    enh_Peter end up in the same unified cluster.
 
-    The intended use: ``seed_items`` carries the synthetic
-    ``embedding_silhouette/...`` diar source's per-cluster mean embeddings
-    (already validated by ``cluster_pass_speakers``'s min-size + silhouette
-    guards), and ``other_items`` carries pyannote / sortformer mean embeddings.
-    Frozen-pool semantics prevent a noisy 3-segment third "speaker" from
-    inflating the unified speaker count beyond what the embedding source
-    decided.
+    Phase 2 — *frozen pool*: each ``(key, mean_emb)`` in ``other_items``
+    snaps to the closest seed centroid (no threshold once the pool is
+    seeded). If no centroid exists yet, fall back to the legacy
+    ``cosine_threshold`` rule so the function degrades gracefully when no
+    seeds were provided.
     """
     out: dict[K, str] = {}
     centroids: list[np.ndarray] = []
-    for key, mean_emb in seed_items:
-        if mean_emb is None or mean_emb.size == 0:
-            continue
-        best_idx = None
-        best_sim = cosine_threshold
-        for ci, c in enumerate(centroids):
-            sim = _cos_sim(mean_emb, c)
-            if sim is not None and sim >= best_sim:
-                best_sim = sim
-                best_idx = ci
-        if best_idx is None:
-            centroids.append(mean_emb)
-            out[key] = f"S{len(centroids) - 1}"
-        else:
-            out[key] = f"S{best_idx}"
+    # Map cluster_id (S0..) → list of centroid indices that belong to it.
+    # We append to ``centroids`` strictly per (key) but the cluster_id may be
+    # reused when a cross-group match fires.
+    centroid_to_cluster: list[int] = []  # parallel to centroids — cluster id of each centroid
+    next_cluster_id = 0
+
+    def _add_centroid_as_new() -> int:
+        nonlocal next_cluster_id
+        cid = next_cluster_id
+        next_cluster_id += 1
+        return cid
+
+    for group in seed_groups:
+        # Each member of this group gets its own new centroid; never merge
+        # within the group. After all members are added, attempt cross-group
+        # merges by walking the existing centroid pool.
+        added_this_group: list[int] = []  # indices into ``centroids``
+        for key, mean_emb in group:
+            if mean_emb is None or mean_emb.size == 0:
+                continue
+            # Try to match against centroids that were already in the pool
+            # BEFORE this group started (i.e. from earlier groups). Skip
+            # centroids that were added by *this* group — they're guaranteed
+            # to be distinct per the upstream clusterer.
+            existing_count = len(centroids) - len(added_this_group)
+            best_idx = None
+            best_sim = cross_group_threshold
+            for ci in range(existing_count):
+                sim = _cos_sim(mean_emb, centroids[ci])
+                if sim is not None and sim >= best_sim:
+                    best_sim = sim
+                    best_idx = ci
+            if best_idx is not None:
+                centroids.append(mean_emb)
+                centroid_to_cluster.append(centroid_to_cluster[best_idx])
+                added_this_group.append(len(centroids) - 1)
+                out[key] = f"S{centroid_to_cluster[best_idx]}"
+            else:
+                cid = _add_centroid_as_new()
+                centroids.append(mean_emb)
+                centroid_to_cluster.append(cid)
+                added_this_group.append(len(centroids) - 1)
+                out[key] = f"S{cid}"
+
     seed_phase_done = bool(centroids)
     for key, mean_emb in other_items:
         if mean_emb is None or mean_emb.size == 0:
             continue
         best_idx = None
-        # When the seed phase produced any centroid, every other_item must
-        # match the closest one (no threshold). Without seeds, fall back to
-        # the cosine_threshold rule so the function still does something
-        # reasonable on a no-seed pass (legacy behavior).
+        # When the seed pool exists, snap to closest (no threshold). Without
+        # seeds, fall back to ``cosine_threshold`` so legacy callers still
+        # get reasonable behavior.
         best_sim = -1.0 if seed_phase_done else cosine_threshold
         for ci, c in enumerate(centroids):
             sim = _cos_sim(mean_emb, c)
@@ -149,10 +190,12 @@ def assign_unified_clusters_with_seed_phase(
             if seed_phase_done:
                 out[key] = "?"
             else:
+                cid = _add_centroid_as_new()
                 centroids.append(mean_emb)
-                out[key] = f"S{len(centroids) - 1}"
+                centroid_to_cluster.append(cid)
+                out[key] = f"S{cid}"
         else:
-            out[key] = f"S{best_idx}"
+            out[key] = f"S{centroid_to_cluster[best_idx]}"
     return out
 
 
@@ -197,10 +240,12 @@ def cluster_speaker_labels_by_embedding(
     emb_model = sorted(per_window_embeddings)[0]
     windows = per_window_embeddings[emb_model]
 
-    # Build (key, mean_emb) lists split into seed (synthetic embedding_silhouette
-    # source) vs other (pyannote / sortformer / etc). The shared helper enforces
-    # the freeze invariant.
-    seed_items: list[tuple[tuple[str, str], np.ndarray]] = []
+    # Build per-source (key, mean_emb) lists. Each synthetic embedding source
+    # forms its own seed group — its labels were already validated as distinct
+    # speakers by ``cluster_pass_speakers`` and must NOT merge with each other
+    # in this step. Pyannote / sortformer labels are ``other_items`` — they
+    # snap to a seed centroid.
+    seed_groups: dict[str, list[tuple[tuple[str, str], np.ndarray]]] = {}
     other_items: list[tuple[tuple[str, str], np.ndarray]] = []
     for m, block in diar_blocks.items():
         segs_by_label: dict[str, list[Any]] = {}
@@ -214,7 +259,14 @@ def cluster_speaker_labels_by_embedding(
                 # No audio support — fall back to raw_label as cluster id.
                 out[(m, raw_label)] = raw_label
                 continue
-            (seed_items if is_seed else other_items).append(((m, raw_label), mean_emb))
+            if is_seed:
+                seed_groups.setdefault(m, []).append(((m, raw_label), mean_emb))
+            else:
+                other_items.append(((m, raw_label), mean_emb))
 
-    out.update(assign_unified_clusters_with_seed_phase(seed_items, other_items, cosine_threshold=cosine_threshold))
+    out.update(
+        assign_unified_clusters_with_seed_phase(
+            list(seed_groups.values()), other_items, cosine_threshold=cosine_threshold
+        )
+    )
     return out
