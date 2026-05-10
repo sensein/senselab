@@ -141,10 +141,9 @@ print(json.dumps({"results": results}))
 # Each supported speech encoder family stores the inner backbone under a different
 # attribute name in its ``ForSequenceClassification`` / ``ForSpeechClassification``
 # class — e.g. ``self.wav2vec2`` (Wav2Vec2*), ``self.hubert`` (HuBERT),
-# ``self.wavlm`` (WavLM), ``self.wav2vec2_bert`` (Wav2Vec2-BERT). Checkpoint keys
-# mirror that name, so the dynamically-built emotion classifier class must use the
-# right attribute or every base-encoder weight will look "missing" and the Phase-1
-# guard will fire.
+# ``self.wavlm`` (WavLM). Checkpoint keys mirror that name, so the dynamically-built
+# emotion classifier class must use the right attribute or every base-encoder weight
+# will look "missing" and the Phase-1 guard will fire.
 _BASE_REGISTRY: dict[str, tuple[str, str, str]] = {
     # config.model_type → (PreTrainedModel base class name, encoder model class name, encoder attribute name)
     # Both class names are explicit (not derived) so future families that don't follow
@@ -500,7 +499,7 @@ def classify_emotions_from_speech(
                 "'audio_classification_with_hf_models' function."
             )
 
-        # Wav2Vec2 / HuBERT / WavLM / wav2vec2-bert emotion checkpoints with a 2-layer
+        # Wav2Vec2 / HuBERT / WavLM emotion checkpoints with a 2-layer
         # dense+linear head (continuous audeering-style ``out_proj`` or discrete
         # ehcalabres-style ``output``) would be silently random-headed by the
         # standard transformers pipeline. Route through the in-process custom path,

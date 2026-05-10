@@ -75,8 +75,8 @@ def _probe(repo_id: str, revision: Optional[str] = None) -> int:
             print("\nDispatch: SUBPROCESS VENV (continuous SER + huggingface_hub<1.0 pin)")
         else:
             print("\nDispatch: STANDARD transformers pipeline()")
-            print("  Phase-2 head-load check will warn if the checkpoint's head weights are missing or mis-shaped.")
-            print("  Set SENSELAB_STRICT_HEAD_LOAD=1 to promote the warning to a hard error.")
+            print("  Phase-2 head-load check raises (default strict) if the checkpoint's head weights")
+            print("  are missing or mis-shaped. Set SENSELAB_STRICT_HEAD_LOAD=0 to demote to a warning.")
 
     # Emit advisories
     print("\nAdvisories:")
