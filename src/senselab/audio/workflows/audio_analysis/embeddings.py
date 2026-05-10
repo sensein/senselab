@@ -287,15 +287,6 @@ def cluster_pass_speakers(
 
     Returns ``None`` when too few windows to cluster, or sklearn unavailable.
     """
-    if not entries or len(entries) < min_windows_for_clustering:
-        msg = (
-            f"only {len(entries) if entries else 0} embedding window(s) — "
-            f"need ≥{min_windows_for_clustering} for clustering"
-        )
-        print(f"warn: cluster_pass_speakers skipped: {msg}", file=sys.stderr)
-        if failures is not None:
-            failures[failure_key] = msg
-        return None
     try:
         from sklearn.cluster import KMeans, SpectralClustering
         from sklearn.metrics import silhouette_samples, silhouette_score
@@ -321,19 +312,50 @@ def cluster_pass_speakers(
                 continue
         vectors.append(np.asarray(w.vector, dtype=np.float64) / norm)
         valid_indices.append(i)
-    if len(vectors) < min_windows_for_clustering:
-        msg = (
-            f"only {len(vectors)} valid speech embedding window(s) "
-            f"(zero-norm + non-speech filtered) — need ≥{min_windows_for_clustering} for clustering"
-        )
-        print(f"warn: cluster_pass_speakers skipped: {msg}", file=sys.stderr)
+
+    cluster_labels: dict[int, str] = {}
+    p_voice: dict[int, float] = {}
+    for i in range(len(entries)):
+        if i not in valid_indices:
+            cluster_labels[i] = "NOISE"
+            p_voice[i] = 0.0
+
+    if not valid_indices:
+        msg = "no valid speech embedding windows (all filtered as zero-norm or non-speech)"
+        print(f"warn: cluster_pass_speakers: {msg}", file=sys.stderr)
         if failures is not None:
             failures[failure_key] = msg
-        return None
+        return {
+            "n_speakers": 0,
+            "best_silhouette": None,
+            "labels": cluster_labels,
+            "p_voice": p_voice,
+            "valid_indices": [],
+        }
+
+    # Single-utterance / quiet-environment path: when we have ≥1 valid speech
+    # window but fewer than ``min_windows_for_clustering``, there's nothing to
+    # partition — the system should report exactly one speaker, not skip. This
+    # is the "single word in an otherwise quiet recording" case.
+    if len(vectors) < min_windows_for_clustering:
+        for idx in valid_indices:
+            cluster_labels[idx] = "S0"
+            p_voice[idx] = 1.0
+        return {
+            "n_speakers": 1,
+            "best_silhouette": None,
+            "labels": cluster_labels,
+            "p_voice": p_voice,
+            "valid_indices": list(valid_indices),
+            "single_window_mode": True,
+        }
     X = np.stack(vectors, axis=0)
+
+    algorithm_used: str | None = None
 
     def _fit_predict(k: int) -> np.ndarray | None:
         """Fit the chosen clustering algorithm and return labels, or ``None`` on failure."""
+        nonlocal algorithm_used
         if algorithm == "spectral":
             try:
                 # Precomputed cosine-similarity affinity. SpectralClustering
@@ -348,19 +370,24 @@ def cluster_pass_speakers(
                     random_state=0,
                     n_init=5,
                 )
-                return sc.fit_predict(affinity)
+                labels = sc.fit_predict(affinity)
+                algorithm_used = "spectral"
+                return labels
             except Exception as exc:  # noqa: BLE001
-                # Fall back to k-means for this k. Document the fallback so
-                # the user knows spectral clustering didn't succeed.
-                print(
-                    f"warn: spectral clustering at k={k} failed ({exc!r}); falling back to k-means",
-                    file=sys.stderr,
-                )
+                msg = f"spectral clustering at k={k} failed ({exc!r}); falling back to k-means"
+                print(f"warn: {msg}", file=sys.stderr)
+                if failures is not None:
+                    failures[f"{failure_key}/spectral_k{k}"] = msg
         try:
             km = KMeans(n_clusters=k, n_init=5, random_state=0)
-            return km.fit_predict(X)
+            labels = km.fit_predict(X)
+            algorithm_used = "kmeans" if algorithm_used != "spectral" else algorithm_used
+            return labels
         except Exception as exc:  # noqa: BLE001
-            print(f"warn: clustering at k={k} failed: {exc!r}", file=sys.stderr)
+            msg = f"clustering at k={k} failed: {exc!r}"
+            print(f"warn: {msg}", file=sys.stderr)
+            if failures is not None:
+                failures[f"{failure_key}/algorithm_k{k}"] = msg
             return None
 
     best_k = 1
@@ -370,20 +397,27 @@ def cluster_pass_speakers(
     # Tiny clusters (< this fraction of all clustered windows) are treated as
     # outliers, not speakers — silhouette can otherwise reward solutions where
     # a handful of cross-talk / overlap / mislabeled windows props up the
-    # score by sitting in their own corner of the embedding space. 10% over a
-    # typical 60-window pass means a cluster needs ≥6 windows (≈3 s of
-    # speech) to count as a real speaker.
+    # score by sitting in their own corner of the embedding space.
+    #
+    # Floor of 2 (not 5) so the size gate is reachable even on tiny passes.
+    # On a 6-window pass, 0.10 * 6 = 0.6 → max(2, 1) = 2 windows per cluster
+    # (k=2 needs ≥4 windows total). On a typical 60-window pass, max(2, 6) = 6
+    # rejects 3-window outliers without dropping real speakers.
     min_cluster_fraction = 0.10
-    min_cluster_size = max(5, int(round(min_cluster_fraction * len(vectors))))
+    min_cluster_size = max(2, int(round(min_cluster_fraction * len(vectors))))
+    rejected_for_min_size = 0
+    rejected_for_silhouette = 0
     for k in range(2, k_max + 1):
         labels = _fit_predict(k)
         if labels is None:
             continue
         unique_labels, counts = np.unique(labels, return_counts=True)
         if len(unique_labels) < 2:
+            rejected_for_silhouette += 1
             continue
         # Reject the partition if any cluster is too small to be a speaker.
         if int(counts.min()) < min_cluster_size:
+            rejected_for_min_size += 1
             continue
         try:
             score = silhouette_score(X, labels, metric="cosine")
@@ -393,27 +427,51 @@ def cluster_pass_speakers(
             best_overall = score
             best_k = k
             best_labels = labels
-
-    p_voice: dict[int, float] = {}
-    cluster_labels: dict[int, str] = {}
-
-    # Tag non-speech / non-clustered windows as NOISE upfront so every output
-    # path produces a label for every window in ``entries``.
-    for i in range(len(entries)):
-        if i not in valid_indices:
-            cluster_labels[i] = "NOISE"
-            p_voice[i] = 0.0
+    if best_labels is None and rejected_for_min_size > 0 and failures is not None:
+        # Surface the silent-fall-through case: every candidate k produced a
+        # partition with at least one too-small cluster. The caller might see
+        # n_speakers=1 here when the audio actually has multiple speakers but
+        # one of them spoke too briefly to clear the size floor.
+        failures[f"{failure_key}/all_partitions_under_min_size"] = (
+            f"all {rejected_for_min_size} candidate k partitions had a cluster < {min_cluster_size} windows; "
+            f"falling through to single-cluster regime"
+        )
 
     if best_labels is not None and best_overall >= coherent_silhouette_threshold:
-        # Multi-cluster regime — multiple speakers detected.
+        # Same-speaker post-merge step. Spectral / k-means at k≥2 sometimes
+        # splits one speaker's recording into sub-clusters when prosody /
+        # distance / phonation varies. Centroids with cosine similarity
+        # ≥ ``merge_threshold`` are taken to be the same speaker and merged.
+        # This pass does NOT assume any target speaker count — it only
+        # collapses pairs that look like the same person by cosine.
+        #
+        # Threshold tradeoff:
+        #   - ECAPA same-speaker centroid cos_sim is typically 0.6+ on adult
+        #     VoxCeleb when phonetic content is reasonably matched.
+        #   - Different speakers with similar timbre (same gender + age,
+        #     children, family resemblance) can sit at cos_sim ~0.30 —
+        #     these are genuinely different people and must NOT be merged.
+        #
+        # 0.55 keeps such similar-voice distinct speakers separated while
+        # still folding in clear-cut same-speaker prosodic outliers. Audio
+        # with heavily varying within-speaker prosody (impressions, extreme
+        # distance changes) may still over-split; lower the threshold only
+        # after re-validating against any similar-voice pair you care about.
+        merge_threshold = 0.55
+        best_labels = _merge_close_clusters(X, best_labels, merge_threshold=merge_threshold)
+        unique_after_merge = sorted(set(int(x) for x in best_labels))
+        n_speakers_final = len(unique_after_merge)
+        # Renumber to S0..S(n-1) so downstream label sets are dense.
+        relabel = {old: new for new, old in enumerate(unique_after_merge)}
+        best_labels = np.array([relabel[int(x)] for x in best_labels], dtype=int)
         try:
-            per_sample = silhouette_samples(X, best_labels, metric="cosine")
+            per_sample = silhouette_samples(X, best_labels, metric="cosine") if n_speakers_final >= 2 else None
         except ValueError:
             per_sample = None
         for vi, idx in enumerate(valid_indices):
             cluster_labels[idx] = f"S{int(best_labels[vi])}"
             if per_sample is None:
-                p_voice[idx] = 0.5
+                p_voice[idx] = 1.0 if n_speakers_final == 1 else 0.5
             else:
                 p_voice[idx] = max(0.0, min(1.0, 0.5 * (float(per_sample[vi]) + 1.0)))
         # Empirical per-pass calibration band for the identity-axis cosine
@@ -424,14 +482,15 @@ def cluster_pass_speakers(
         # default fixed band when too few pairs.
         same_floor, diff_floor = _empirical_calibration_band(X, best_labels)
         return {
-            "n_speakers": int(best_k),
+            "n_speakers": n_speakers_final,
             "best_silhouette": float(best_overall),
             "labels": cluster_labels,
             "p_voice": p_voice,
             "valid_indices": list(valid_indices),
             "empirical_same_speaker_floor": same_floor,
             "empirical_diff_speaker_floor": diff_floor,
-            "algorithm": algorithm,
+            "algorithm": algorithm_used or algorithm,
+            "merged_from_k": int(best_k) if int(best_k) != n_speakers_final else None,
         }
 
     # Single-cluster regime: no clear inter-cluster separation.
@@ -476,6 +535,59 @@ def cluster_pass_speakers(
         "p_voice": p_voice,
         "valid_indices": list(valid_indices),
     }
+
+
+def _merge_close_clusters(
+    X: np.ndarray,
+    labels: np.ndarray,
+    *,
+    merge_threshold: float = 0.55,
+) -> np.ndarray:
+    """Iteratively merge the closest cluster pair while their centroid cos_sim ≥ threshold.
+
+    Speaker embedding clusterings (k-means / spectral) sometimes split one
+    speaker into prosodic sub-clusters — long continuous passage vs brief
+    utterance, near-mic vs far-mic, etc. This pass collapses those back into
+    one. Two cluster centroids with cosine similarity ≥ ``merge_threshold``
+    are taken to be the same speaker; we merge them and re-evaluate. Stops
+    when every remaining pair is below the threshold (i.e. genuinely
+    different speakers).
+
+    Vectors in ``X`` are assumed L2-normalized.
+    """
+    if X.shape[0] == 0 or labels.size == 0:
+        return labels
+    labels = labels.copy()
+    while True:
+        unique = sorted(set(int(x) for x in labels))
+        if len(unique) < 2:
+            return labels
+        centroids: dict[int, np.ndarray] = {}
+        for u in unique:
+            mask = labels == u
+            c = X[mask].mean(axis=0)
+            n = float(np.linalg.norm(c))
+            centroids[u] = (c / n) if n > 0 else c
+        best_pair: tuple[int, int] | None = None
+        best_sim = merge_threshold
+        for i, ui in enumerate(unique):
+            ci = centroids[ui]
+            if ci.size == 0 or float(np.linalg.norm(ci)) == 0:
+                continue
+            for uj in unique[i + 1 :]:
+                cj = centroids[uj]
+                if cj.size == 0 or float(np.linalg.norm(cj)) == 0:
+                    continue
+                sim = float(np.dot(ci, cj))
+                if sim >= best_sim:
+                    best_sim = sim
+                    best_pair = (ui, uj)
+        if best_pair is None:
+            return labels
+        # Merge the higher-numbered cluster into the lower one. (Cluster
+        # numbers carry no meaning here; a deterministic choice is enough.)
+        keep, drop = sorted(best_pair)
+        labels[labels == drop] = keep
 
 
 def _empirical_calibration_band(

@@ -79,72 +79,39 @@ def _cluster_speakers_by_embedding(
     from senselab.audio.workflows.audio_analysis.clustering import (
         _diar_segments,
         _mean_window_embedding_over_segments,
+        assign_unified_clusters_with_seed_phase,
     )
 
     out: dict[tuple[str, str, str], str] = {}
-    cluster_centroids: list[np.ndarray] = []
+    seed_items: list[tuple[tuple[str, str, str], np.ndarray]] = []
+    other_items: list[tuple[tuple[str, str, str], np.ndarray]] = []
 
-    # Priority: synthetic embedding-source diar first across all passes so its
-    # already-clustered S0/S1/... seed the unified cluster pool. Once seeded,
-    # freeze the pool — pyannote / sortformer labels MUST snap to a seeded
-    # centroid; they can't introduce a new "speaker" beyond what the
-    # embedding source already validated with min-size + silhouette guards.
-    seed_phase_done = False
-
-    def _model_priority(model_id: str) -> int:
-        return 0 if model_id.startswith("embedding_silhouette/") else 1
-
-    pass_labels = list(detail_by_pass.keys())
-    for phase in (0, 1):
-        for pass_label in pass_labels:
-            detail = detail_by_pass[pass_label]
-            per_window_emb_by_model = detail.get("per_window_embeddings") or {}
-            diar_by_model = detail.get("diar_by_model") or {}
-            if not per_window_emb_by_model or not any(per_window_emb_by_model.values()):
-                if phase == 1:
-                    for m, segs in diar_by_model.items():
-                        for seg in segs:
-                            spk = str(_seg_attr(seg, "speaker") or "?")
-                            out.setdefault((pass_label, m, spk), spk)
-                continue
-            emb_model = sorted(per_window_emb_by_model)[0]
-            windows = per_window_emb_by_model[emb_model]
+    for pass_label, detail in detail_by_pass.items():
+        per_window_emb_by_model = detail.get("per_window_embeddings") or {}
+        diar_by_model = detail.get("diar_by_model") or {}
+        if not per_window_emb_by_model or not any(per_window_emb_by_model.values()):
             for m, segs in diar_by_model.items():
-                if _model_priority(m) != phase:
-                    continue
-                block = {"status": "ok", "result": [list(segs)]}
-                label_segs: dict[str, list[Any]] = {}
-                for seg in _diar_segments(block):
+                for seg in segs:
                     spk = str(_seg_attr(seg, "speaker") or "?")
-                    label_segs.setdefault(spk, []).append(seg)
-                for label, label_seg_list in label_segs.items():
-                    mean_emb = _mean_window_embedding_over_segments(label_seg_list, windows)
-                    if mean_emb is None or mean_emb.size == 0:
-                        out[(pass_label, m, label)] = label
-                        continue
-                    best_idx = None
-                    best_sim = -1.0 if seed_phase_done else cosine_threshold
-                    for ci, centroid in enumerate(cluster_centroids):
-                        if mean_emb.size != centroid.size:
-                            continue
-                        na = float(np.linalg.norm(mean_emb))
-                        nb = float(np.linalg.norm(centroid))
-                        if na == 0 or nb == 0:
-                            continue
-                        sim = float(np.dot(mean_emb, centroid) / (na * nb))
-                        if sim >= best_sim:
-                            best_sim = sim
-                            best_idx = ci
-                    if best_idx is None:
-                        if seed_phase_done:
-                            out[(pass_label, m, label)] = "?"
-                        else:
-                            cluster_centroids.append(mean_emb)
-                            out[(pass_label, m, label)] = f"S{len(cluster_centroids) - 1}"
-                    else:
-                        out[(pass_label, m, label)] = f"S{best_idx}"
-        if phase == 0 and cluster_centroids:
-            seed_phase_done = True
+                    out.setdefault((pass_label, m, spk), spk)
+            continue
+        emb_model = sorted(per_window_emb_by_model)[0]
+        windows = per_window_emb_by_model[emb_model]
+        for m, segs in diar_by_model.items():
+            block = {"status": "ok", "result": [list(segs)]}
+            label_segs: dict[str, list[Any]] = {}
+            for seg in _diar_segments(block):
+                spk = str(_seg_attr(seg, "speaker") or "?")
+                label_segs.setdefault(spk, []).append(seg)
+            is_seed = m.startswith("embedding_silhouette/")
+            for label, label_seg_list in label_segs.items():
+                mean_emb = _mean_window_embedding_over_segments(label_seg_list, windows)
+                if mean_emb is None or mean_emb.size == 0:
+                    out[(pass_label, m, label)] = label
+                    continue
+                (seed_items if is_seed else other_items).append(((pass_label, m, label), mean_emb))
+
+    out.update(assign_unified_clusters_with_seed_phase(seed_items, other_items, cosine_threshold=cosine_threshold))
     return out
 
 

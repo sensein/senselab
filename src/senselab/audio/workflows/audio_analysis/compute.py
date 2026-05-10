@@ -1,9 +1,15 @@
 """Public entry point for the three-axis comparator workflow.
 
-``compute_uncertainty_axes`` is the only function callers should typically need. It is a
-pure function: it reads the in-memory ``passes`` summary produced by analyze_audio's
-per-task pipeline and returns the nine ``AxisResult`` objects (3 axes × 2 passes + 3
-raw_vs_enhanced deltas) plus an ``incomparable_reasons`` dict for the disagreements index.
+``compute_uncertainty_axes`` is the only function callers should typically need. It reads
+the in-memory ``passes`` summary produced by analyze_audio's per-task pipeline and returns
+the nine ``AxisResult`` objects (3 axes × 2 passes + 3 raw_vs_enhanced deltas) plus an
+``incomparable_reasons`` dict for the disagreements index.
+
+**Note**: this function MUTATES the caller's ``passes`` dict to inject the synthetic
+``embedding_silhouette/...`` diar source into each pass's ``diarization.by_model`` block.
+That source is consumed by the identity-axis harvester and the timeline plot. Callers
+that retain a reference to ``passes`` will see the synthetic source after this call.
+Pass a deep-copy if you need the input unchanged.
 """
 
 from __future__ import annotations
@@ -527,23 +533,26 @@ def _speech_window_mask(
 ) -> list[bool] | None:
     """Build a per-embedding-window boolean mask of "is this window speech?".
 
-    Classifier hierarchy (first available authoritative source wins):
+    **YAMNet veto, not a fallback ladder.** When YAMNet is available, its top-1
+    label decision is authoritative — even if loudness is high, AST disagrees,
+    or both. AST is only consulted when YAMNet is unavailable; openSMILE
+    loudness is consulted only when both classifiers are unavailable. This is
+    deliberate: YAMNet is trained on the AudioSet hierarchy with explicit
+    speech labels; AST is broader-coverage but noisier on speech specifically;
+    loudness is recording-conditional. Trusting YAMNet's "Music" / "Vehicle"
+    over a loud-but-non-speech window is the right call for our use case.
 
-    1. **YAMNet** (preferred): top-1 label ∈ ``speech_presence_labels`` → speech.
-       YAMNet is trained on AudioSet's full label hierarchy and is the project's
-       canonical speech-presence detector — when it says a window is "Music" or
-       "Vehicle", trust that over AST/loudness.
-    2. **AST** (fallback): used only when YAMNet is unavailable.
-    3. **Loudness** (final tiebreak): used only when both YAMNet and AST are
-       unavailable. Below per-pass 25th percentile → non-speech.
+    Tradeoff: YAMNet has known confusions (e.g. tagging child voices as "Music"
+    or "Singing"). When that happens, a real-speech window gets dropped from
+    clustering. The mitigation is upstream: tune ``speech_presence_labels`` to
+    include the singing / NORP labels you care about. We deliberately do NOT
+    let loudness override YAMNet here, because that would break the
+    silent-room-detection guarantee callers rely on (a loud window of music
+    must not be allowed to claim "speech" status).
 
     Returns ``None`` when none of the three signals are available, in which
     case the caller falls back to legacy behavior (cluster every non-zero-norm
     window).
-
-    The goal is to stop silent / non-speech windows (music, vehicle noise,
-    silence) from being clustered as a separate "speaker" — fixing the
-    n_speakers inflation bug seen on recordings with long non-speech stretches.
     """
     ast_block = pass_summary.get("ast") or {}
     yam_block = pass_summary.get("yamnet") or {}

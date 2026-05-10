@@ -585,15 +585,14 @@ def prepare_audio(path: Path) -> Audio:
 
 # -- Cache + provenance ----------------------------------------------------
 
-# Cache schema bumps when the cache key composition or output shape changes
-# in a way that should invalidate prior cache entries even when the audio,
-# task, model, and senselab version are unchanged. Bump on breaking changes.
-#
-# v2: introduces alignment as a separate cache entry, separate from the
-#     ASR entry that produced its input transcript. The ASR cache key
-#     covers the ASR call's parameters; the alignment cache key adds
-#     transcript_sha and language. v1 cache entries are inert (won't be
-#     served) and can be discarded.
+# Cache schema. ``_sync_cache_with_schema_version`` keeps the on-disk marker
+# (.schema_version inside the cache dir) in lockstep with this constant: any
+# mismatch wipes the cache so we never serve a stale entry under a new schema.
+# Bump (or reset) on any breaking change to cache key composition or to the
+# shape of cached output. The current value is bundled into every cache key
+# (see ``cache_key``) and stamped into parquet provenance via
+# ``_CACHE_SCHEMA_VERSION`` references — never hardcode the literal anywhere
+# else, otherwise the constant and the stamped value will drift.
 _CACHE_SCHEMA_VERSION = 1
 
 
@@ -1950,7 +1949,7 @@ def main(argv: list[str] | None = None) -> int:
                 result,
                 dest,
                 provenance={
-                    "schema_version": 1,
+                    "schema_version": _CACHE_SCHEMA_VERSION,
                     "wrapper_hash": wrapper_hash,
                     "senselab_version": senselab_ver,
                 },

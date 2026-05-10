@@ -20,11 +20,13 @@ universal cluster regardless of pass / model.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, TypeVar
 
 import numpy as np
 
 from senselab.audio.workflows.audio_analysis.embeddings import WindowEmbedding
+
+K = TypeVar("K")
 
 
 def _seg_attr(seg: Any, name: str) -> Any:  # noqa: ANN401
@@ -81,6 +83,79 @@ def _cos_sim(a: np.ndarray, b: np.ndarray) -> float | None:
     return float(np.dot(a, b) / (na * nb))
 
 
+def assign_unified_clusters_with_seed_phase(
+    seed_items: list[tuple[K, np.ndarray]],
+    other_items: list[tuple[K, np.ndarray]],
+    *,
+    cosine_threshold: float = 0.5,
+) -> dict[K, str]:
+    """Two-phase greedy centroid assignment with the seed pool frozen after phase 1.
+
+    Phase 1 — *seed*: each ``(key, mean_emb)`` in ``seed_items`` either matches
+    an existing centroid (cos_sim ≥ ``cosine_threshold``) or starts a new one.
+    The cluster pool grows freely.
+
+    Phase 2 — *frozen*: each ``(key, mean_emb)`` in ``other_items`` MUST snap
+    to one of the seed centroids (closest by cosine, no threshold). If no
+    centroid exists at all when phase 2 starts, the item starts its own — but
+    once a single seed centroid is established, ``other_items`` can never
+    spawn new ones; instead they're tagged ``"?"`` if they fail every cosine
+    check (this is impossible without a threshold, but kept for safety).
+
+    Returns ``{key → cluster_id}`` with cluster_ids of the form ``"S0"``,
+    ``"S1"``, ... — same labels both phases use.
+
+    The intended use: ``seed_items`` carries the synthetic
+    ``embedding_silhouette/...`` diar source's per-cluster mean embeddings
+    (already validated by ``cluster_pass_speakers``'s min-size + silhouette
+    guards), and ``other_items`` carries pyannote / sortformer mean embeddings.
+    Frozen-pool semantics prevent a noisy 3-segment third "speaker" from
+    inflating the unified speaker count beyond what the embedding source
+    decided.
+    """
+    out: dict[K, str] = {}
+    centroids: list[np.ndarray] = []
+    for key, mean_emb in seed_items:
+        if mean_emb is None or mean_emb.size == 0:
+            continue
+        best_idx = None
+        best_sim = cosine_threshold
+        for ci, c in enumerate(centroids):
+            sim = _cos_sim(mean_emb, c)
+            if sim is not None and sim >= best_sim:
+                best_sim = sim
+                best_idx = ci
+        if best_idx is None:
+            centroids.append(mean_emb)
+            out[key] = f"S{len(centroids) - 1}"
+        else:
+            out[key] = f"S{best_idx}"
+    seed_phase_done = bool(centroids)
+    for key, mean_emb in other_items:
+        if mean_emb is None or mean_emb.size == 0:
+            continue
+        best_idx = None
+        # When the seed phase produced any centroid, every other_item must
+        # match the closest one (no threshold). Without seeds, fall back to
+        # the cosine_threshold rule so the function still does something
+        # reasonable on a no-seed pass (legacy behavior).
+        best_sim = -1.0 if seed_phase_done else cosine_threshold
+        for ci, c in enumerate(centroids):
+            sim = _cos_sim(mean_emb, c)
+            if sim is not None and sim >= best_sim:
+                best_sim = sim
+                best_idx = ci
+        if best_idx is None:
+            if seed_phase_done:
+                out[key] = "?"
+            else:
+                centroids.append(mean_emb)
+                out[key] = f"S{len(centroids) - 1}"
+        else:
+            out[key] = f"S{best_idx}"
+    return out
+
+
 def cluster_speaker_labels_by_embedding(
     diar_blocks: dict[str, Any],
     per_window_embeddings: dict[str, list[WindowEmbedding]],
@@ -121,53 +196,25 @@ def cluster_speaker_labels_by_embedding(
 
     emb_model = sorted(per_window_embeddings)[0]
     windows = per_window_embeddings[emb_model]
-    cluster_centroids: list[np.ndarray] = []
 
-    # Process the synthetic ``embedding_silhouette/...`` diar source first so
-    # its already-clustered S0/S1/... seed the unified cluster centroids.
-    # Once that source is consumed, the centroid pool is **frozen**: every
-    # subsequent (model, raw_label) MUST snap to a seeded centroid (closest
-    # by cosine, no threshold), never spawn a new one. The embedding source
-    # already ran a per-pass clustering with min-size + silhouette guards —
-    # a noisy 3-segment pyannote/sortformer label can't override its decision.
-    def _model_priority(model_id: str) -> tuple[int, str]:
-        if model_id.startswith("embedding_silhouette/"):
-            return (0, model_id)
-        return (1, model_id)
-
-    sorted_models = sorted(diar_blocks.keys(), key=_model_priority)
-    seed_phase_done = False
-    for m in sorted_models:
-        block = diar_blocks[m]
-        is_seed_source = m.startswith("embedding_silhouette/")
+    # Build (key, mean_emb) lists split into seed (synthetic embedding_silhouette
+    # source) vs other (pyannote / sortformer / etc). The shared helper enforces
+    # the freeze invariant.
+    seed_items: list[tuple[tuple[str, str], np.ndarray]] = []
+    other_items: list[tuple[tuple[str, str], np.ndarray]] = []
+    for m, block in diar_blocks.items():
         segs_by_label: dict[str, list[Any]] = {}
         for seg in _diar_segments(block):
             spk = str(_seg_attr(seg, "speaker") or "?")
             segs_by_label.setdefault(spk, []).append(seg)
+        is_seed = m.startswith("embedding_silhouette/")
         for raw_label, segs in segs_by_label.items():
             mean_emb = _mean_window_embedding_over_segments(segs, windows)
             if mean_emb is None or mean_emb.size == 0:
-                # Fall back to raw_label as cluster id when we have no audio
-                # support for this label (e.g. all its windows are zero-vec).
+                # No audio support — fall back to raw_label as cluster id.
                 out[(m, raw_label)] = raw_label
                 continue
-            best_idx = None
-            best_sim = -1.0 if seed_phase_done else cosine_threshold
-            for ci, centroid in enumerate(cluster_centroids):
-                sim = _cos_sim(mean_emb, centroid)
-                if sim is not None and sim >= best_sim:
-                    best_sim = sim
-                    best_idx = ci
-            if best_idx is None:
-                if seed_phase_done:
-                    # Centroid pool is frozen — assign to "?" rather than
-                    # spawn a new unified cluster (would inflate n_speakers).
-                    out[(m, raw_label)] = "?"
-                else:
-                    cluster_centroids.append(mean_emb)
-                    out[(m, raw_label)] = f"S{len(cluster_centroids) - 1}"
-            else:
-                out[(m, raw_label)] = f"S{best_idx}"
-        if is_seed_source and cluster_centroids:
-            seed_phase_done = True
+            (seed_items if is_seed else other_items).append(((m, raw_label), mean_emb))
+
+    out.update(assign_unified_clusters_with_seed_phase(seed_items, other_items, cosine_threshold=cosine_threshold))
     return out
