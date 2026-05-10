@@ -149,10 +149,17 @@ _BASE_REGISTRY: dict[str, tuple[str, str, str]] = {
     # config.model_type → (PreTrainedModel base class name, encoder model class name, encoder attribute name)
     # Both class names are explicit (not derived) so future families that don't follow
     # the ``XxxPreTrainedModel``/``XxxModel`` naming convention plug in cleanly.
+    #
+    # NOTE: ``wav2vec2-bert`` is intentionally NOT registered here. Unlike the other three
+    # families it consumes log-mel ``input_features`` (via ``SeamlessM4TFeatureExtractor``)
+    # rather than raw ``input_values`` (via ``Wav2Vec2FeatureExtractor``); the loader at
+    # ``_classify_wav2vec2_speech_cls_ser`` hardcodes the latter, so adding wav2vec2-bert
+    # without a matching feature-extractor adapter would silently feed waveforms into a
+    # model expecting features. Add a per-family adapter (FE class + input key) before
+    # re-introducing it.
     "wav2vec2": ("Wav2Vec2PreTrainedModel", "Wav2Vec2Model", "wav2vec2"),
     "hubert": ("HubertPreTrainedModel", "HubertModel", "hubert"),
     "wavlm": ("WavLMPreTrainedModel", "WavLMModel", "wavlm"),
-    "wav2vec2-bert": ("Wav2Vec2BertPreTrainedModel", "Wav2Vec2BertModel", "wav2vec2_bert"),
 }
 
 
@@ -320,11 +327,27 @@ def _peek_head_final_layer(model: HFModel, encoder_attr: str) -> Optional[str]:
 
     head_keys = {k for k in keys if not k.startswith(f"{encoder_attr}.")}
     if "classifier.dense.weight" not in head_keys:
+        # No 2-layer dense+linear head signature → the standard pipeline can load this.
         return None
     for fl in _FINAL_LAYER_NAMES:
         if f"classifier.{fl}.weight" in head_keys:
             return fl
-    return None
+    # The checkpoint has the dense layer (a strong custom-head signature) but no recognized
+    # final-layer attribute. Falling through to the standard pipeline here would silently
+    # random-initialize the head and emit ~uniform softmax — exactly the bug this PR fixes.
+    # Refuse instead: surface the actual classifier-key list so the user (or a maintainer)
+    # can either add the final-layer name to ``_FINAL_LAYER_NAMES`` or register the
+    # checkpoint in ``_KNOWN_HEAD_LAYOUTS``.
+    classifier_keys = sorted(k for k in head_keys if k.startswith("classifier."))
+    raise RuntimeError(
+        f"Detected a custom 2-layer emotion head on {name} (revision={model.revision or 'main'}) "
+        f"with classifier keys {classifier_keys}, but its final-layer attribute name is not in "
+        f"_FINAL_LAYER_NAMES={_FINAL_LAYER_NAMES!r}. Routing this through the standard "
+        f"transformers pipeline would silently random-initialize the head and emit ~uniform "
+        f"softmax. Add the final-layer name to _FINAL_LAYER_NAMES, or register the checkpoint "
+        f"in _KNOWN_HEAD_LAYOUTS, in "
+        f"senselab.audio.tasks.classification.speech_emotion_recognition.api."
+    )
 
 
 # Backwards-compatible alias used by existing tests.
@@ -406,15 +429,20 @@ def _resolve_apply_softmax(model: HFModel, ser_type: "SERType") -> bool:
     ``["energy","pleasantness"]``) would otherwise be misclassified as discrete
     and softmax would corrupt its outputs.
 
-    Falls back to the legacy heuristic (``apply_softmax = ser_type != CONTINUOUS``)
-    only when ``problem_type`` is missing — the case for the two known checkpoints
-    (audeering and ehcalabres) and any pre-2022 head.
+    When ``problem_type`` is absent (audeering and any pre-2022 head fall here), peek
+    ``architectures``: ``Wav2Vec2ForSpeechClassification`` is the audeering signature
+    and is always a regression head. A regression checkpoint that ships neither
+    ``problem_type`` nor that architecture string but has labels resembling discrete
+    emotions will still be misrouted; ``_FINAL_LAYER_NAMES``-aware ehcalabres-style
+    checkpoints declare ``Wav2Vec2ForSequenceClassification`` so the legacy
+    keyword-based heuristic remains correct for them.
     """
     try:
         from transformers import AutoConfig
 
         config = AutoConfig.from_pretrained(model.path_or_uri, revision=model.revision)
         problem_type = getattr(config, "problem_type", None)
+        architectures = getattr(config, "architectures", None) or []
     except _CONFIG_LOAD_RECOVERABLE:
         from huggingface_hub import hf_hub_download
 
@@ -422,12 +450,17 @@ def _resolve_apply_softmax(model: HFModel, ser_type: "SERType") -> bool:
         with open(config_path) as f:
             config_dict = json.load(f)
         problem_type = config_dict.get("problem_type")
+        architectures = config_dict.get("architectures") or []
 
     if problem_type == "regression":
         return False
     if problem_type in ("single_label_classification", "multi_label_classification"):
         return True
-    # Legacy fallback: trust the keyword-based label heuristic.
+    # No problem_type — fall back to architecture string + label heuristic. Models declaring
+    # ``ForSpeechClassification`` (audeering pattern) are always regression heads.
+    if any("ForSpeechClassification" in a for a in architectures):
+        return False
+    # Legacy keyword-based label heuristic for everything else.
     return ser_type != SERType.CONTINUOUS
 
 
@@ -611,28 +644,44 @@ def _classify_wav2vec2_speech_cls_ser(
             config=config,
             output_loading_info=True,
         )
-        # Refuse to silently emit random-head outputs. ``missing_keys`` catches the
-        # "checkpoint doesn't have a weight for our classifier layer" case (would be
-        # randomly initialized); ``mismatched_keys`` catches the equally-bad case
-        # where a weight exists but its shape doesn't match. Both fail modes produce
-        # plausible-but-meaningless scores; convert to a loud diagnostic.
-        suspect_missing = sorted(k for k in loading_info.get("missing_keys", set()) if k.startswith("classifier."))
+        # Refuse to silently emit random-head outputs. The guard inspects ``missing_keys``
+        # (weight present in the model but absent from the checkpoint → randomly initialized)
+        # and ``mismatched_keys`` (weight present but shape-incompatible → also random-init
+        # for the affected layer). The check covers BOTH the classifier and the encoder
+        # backbone: a bad ``_BASE_REGISTRY`` entry (wrong encoder attribute name for the
+        # model_type) would otherwise leave every encoder weight missing while the
+        # classifier loads cleanly — silently producing meaningless output. The whitelist
+        # below is the small set of buffers HF post_init creates that aren't in checkpoints
+        # (e.g. SpecAugment's ``masked_spec_embed``); add to it only with evidence.
+        encoder_attr = _BASE_REGISTRY[model_type][2]
+        legitimately_missing_suffixes = (".masked_spec_embed",)
+
+        def _is_suspect(key: str) -> bool:
+            if key.startswith("classifier."):
+                return True
+            if key.startswith(f"{encoder_attr}.") and not any(key.endswith(s) for s in legitimately_missing_suffixes):
+                return True
+            return False
+
+        suspect_missing = sorted(k for k in loading_info.get("missing_keys", set()) if _is_suspect(k))
         suspect_mismatched = sorted(
             (k[0] if isinstance(k, tuple) else k)
             for k in loading_info.get("mismatched_keys", set())
-            if (k[0] if isinstance(k, tuple) else k).startswith("classifier.")
+            if _is_suspect(k[0] if isinstance(k, tuple) else k)
         )
         if suspect_missing or suspect_mismatched:
             raise RuntimeError(
                 "Custom emotion head failed to load cleanly: "
-                f"missing classifier keys (would be randomly initialized)={suspect_missing}, "
-                f"shape-mismatched classifier keys={suspect_mismatched}. The output would be "
-                f"non-informative. Either add this checkpoint's head layout to "
-                f"_KNOWN_HEAD_LAYOUTS / _FINAL_LAYER_NAMES in "
+                f"missing keys (would be randomly initialized)={suspect_missing}, "
+                f"shape-mismatched keys={suspect_mismatched}. The output would be "
+                f"non-informative. If the missing keys are inside ``classifier.``, add the "
+                f"checkpoint's head layout to _KNOWN_HEAD_LAYOUTS / _FINAL_LAYER_NAMES in "
                 f"senselab.audio.tasks.classification.speech_emotion_recognition.api, or run "
                 f"the model through the standard transformers pipeline if it has a flat head. "
-                f"Model: {model.path_or_uri} (revision={model.revision or 'main'}), "
-                f"model_type={model_type}, head={head}."
+                f"If they are inside ``{encoder_attr}.``, the _BASE_REGISTRY entry for "
+                f"model_type={model_type!r} is wrong — fix the (base_cls, encoder_cls, attr) "
+                f"tuple. "
+                f"Model: {model.path_or_uri} (revision={model.revision or 'main'}), head={head}."
             )
         # Shape-sanity: the final layer's output dimension must match config.num_labels
         # (or len(id2label) when num_labels is absent). A mismatch here means the head

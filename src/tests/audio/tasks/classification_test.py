@@ -1,5 +1,6 @@
 """Test audio classification APIs."""
 
+from typing import cast
 from unittest.mock import patch
 
 import pytest
@@ -224,6 +225,76 @@ def test_classify_audios_windowed_default_hop() -> None:
     # 3s audio, 2s window, 1s hop → 3 windows (last partial via window_generator)
     assert len(windows) == 3
     assert windows[0]["hop_length"] == 1.0
+
+
+@pytest.mark.parametrize(
+    "loading_info,kind",
+    [
+        ({"missing_keys": {"classifier.weight"}, "mismatched_keys": set()}, "missing"),
+        (
+            {"missing_keys": set(), "mismatched_keys": {("classifier.weight", (8, 1024), (3, 1024))}},
+            "mismatched",
+        ),
+        (
+            {"missing_keys": {"head.weight"}, "mismatched_keys": set()},
+            "missing-head",
+        ),
+        (
+            {"missing_keys": {"score.weight"}, "mismatched_keys": set()},
+            "missing-score",
+        ),
+    ],
+    ids=lambda x: x if isinstance(x, str) else "",
+)
+def test_check_head_loaded_cleanly_raises_strict_by_default(
+    monkeypatch: pytest.MonkeyPatch, loading_info: dict, kind: str
+) -> None:
+    """Phase 2 default: any suspect head-prefix miss/mismatch raises RuntimeError."""
+    from senselab.audio.tasks.classification.huggingface import _check_head_loaded_cleanly
+
+    monkeypatch.delenv("SENSELAB_STRICT_HEAD_LOAD", raising=False)
+    # ``_check_head_loaded_cleanly`` only reads ``path_or_uri`` / ``revision`` for the
+    # error message; using a SimpleNamespace avoids HFModel's hub-validation roundtrip.
+    from types import SimpleNamespace
+
+    model: HFModel = cast(HFModel, SimpleNamespace(path_or_uri="org/example", revision="main"))
+    with pytest.raises(RuntimeError, match="suspect weights"):
+        _check_head_loaded_cleanly(loading_info, model)
+
+
+def test_check_head_loaded_cleanly_warns_when_lax(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """SENSELAB_STRICT_HEAD_LOAD=0 demotes the failure to a warning."""
+    import logging
+
+    from senselab.audio.tasks.classification.huggingface import _check_head_loaded_cleanly
+
+    monkeypatch.setenv("SENSELAB_STRICT_HEAD_LOAD", "0")
+    # ``_check_head_loaded_cleanly`` only reads ``path_or_uri`` / ``revision`` for the
+    # error message; using a SimpleNamespace avoids HFModel's hub-validation roundtrip.
+    from types import SimpleNamespace
+
+    model: HFModel = cast(HFModel, SimpleNamespace(path_or_uri="org/example", revision="main"))
+    with caplog.at_level(logging.WARNING, logger="senselab"):
+        _check_head_loaded_cleanly({"missing_keys": {"classifier.weight"}, "mismatched_keys": set()}, model)
+    assert any("suspect weights" in rec.message for rec in caplog.records)
+
+
+def test_check_head_loaded_cleanly_silent_on_clean_load() -> None:
+    """No suspect keys → returns silently, no log, no raise."""
+    # ``_check_head_loaded_cleanly`` only reads ``path_or_uri`` / ``revision`` for the
+    # error message; using a SimpleNamespace avoids HFModel's hub-validation roundtrip.
+    from types import SimpleNamespace
+
+    from senselab.audio.tasks.classification.huggingface import _check_head_loaded_cleanly
+
+    model: HFModel = cast(HFModel, SimpleNamespace(path_or_uri="org/example", revision="main"))
+    # Encoder weight misses (e.g. masked_spec_embed) and unrelated keys must not trip the guard.
+    _check_head_loaded_cleanly(
+        {"missing_keys": {"wav2vec2.masked_spec_embed", "encoder.something"}, "mismatched_keys": set()},
+        model,
+    )
 
 
 def test_scene_results_to_segments() -> None:
