@@ -73,6 +73,7 @@ class ScriptLine(BaseModel):
     start: Optional[float] = None
     end: Optional[float] = None
     chunks: Optional[List["ScriptLine"]] = None
+    score: Optional[float] = None  # per-line / per-word / per-char model confidence
 
     @model_validator(mode="before")
     def validate_text_and_speaker(cls, values: Dict[str, Any], _: ValidationInfo) -> Dict[str, Any]:
@@ -233,6 +234,7 @@ class ScriptLine(BaseModel):
             start=start,
             end=end,
             chunks=chunks,
+            score=d.get("score") if "score" in d else None,
         )
 
     def __str__(self) -> str:

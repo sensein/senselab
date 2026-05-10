@@ -84,12 +84,21 @@ try:
                 ]
             ]
             output_ids = model.generate(prompts=prompts, max_new_tokens=512)
-            # output_ids shape: (batch, seq_len). Decode the full output and
-            # trust the model to emit the transcript without echoing the prompt.
+            # output_ids shape: (batch, seq_len). Decode the full output. NeMo
+            # SALM normally returns only the completion tokens, but if a future
+            # build echoes the prompt we strip the leading "Transcribe the
+            # following: ..." preamble so it doesn't leak into the transcript.
             row = output_ids[0]
             ids = row.tolist() if hasattr(row, "tolist") else list(row)
             text = model.tokenizer.ids_to_text(ids)
-            all_results.append({"text": text.strip()})
+            stripped = text.strip()
+            prompt_marker = "Transcribe the following:"
+            if prompt_marker in stripped:
+                # Take everything after the last occurrence of the marker — covers
+                # prompt-echo without dropping the marker if it appears in the
+                # source audio (vanishingly rare).
+                stripped = stripped.rsplit(prompt_marker, 1)[-1].strip()
+            all_results.append({"text": stripped})
 
     print(json.dumps({"results": all_results}))
 except Exception as exc:
