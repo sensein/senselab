@@ -16,6 +16,25 @@ from senselab.utils.data_structures import DeviceType, HFModel
 from tests.audio.conftest import MONO_AUDIO_PATH
 
 
+@pytest.fixture(autouse=True)
+def _reset_ser_module_caches() -> None:
+    """Reset per-process SER caches between tests.
+
+    Several tests monkeypatch ``transformers.AutoConfig.from_pretrained`` to return
+    a fake config for ``audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim``. The
+    module-level ``_config_memo`` introduced in PR #515 would otherwise hand back the
+    cached fake from a prior test, silently bypassing the monkeypatch in the next
+    one. Same risk for ``_wav2vec2_emotion_models`` (the constructed model cache),
+    which existing tests already reset by hand — centralising that here keeps the
+    invariant in one place.
+    """
+    from senselab.audio.tasks.classification.speech_emotion_recognition import api as ser_api
+
+    ser_api._config_memo.clear()
+    ser_api._config_memo_locks.clear()
+    ser_api._wav2vec2_emotion_models.clear()
+
+
 def test_speech_emotion_recognition_continuous(cpu_cuda_device: DeviceType) -> None:
     """Tests continuous speech emotion recognition (Tier 2: ~661MB model)."""
     audio_dataset = [Audio(filepath=MONO_AUDIO_PATH)]
@@ -84,9 +103,6 @@ def test_wav2vec2_speech_cls_ser_raises_on_random_head(
 
     from senselab.audio.tasks.classification.speech_emotion_recognition import api as ser_api
 
-    # Reset the per-(model, revision, device, final_layer) cache so the mock fires.
-    ser_api._wav2vec2_emotion_models.clear()
-
     fake_model = MagicMock()
     # The shape sanity-check expects out_features matching config.num_labels.
     fake_model.classifier.out_proj.out_features = 3
@@ -121,8 +137,6 @@ def test_wav2vec2_speech_cls_ser_raises_on_shape_mismatch(monkeypatch: pytest.Mo
     from unittest.mock import MagicMock
 
     from senselab.audio.tasks.classification.speech_emotion_recognition import api as ser_api
-
-    ser_api._wav2vec2_emotion_models.clear()
 
     fake_model = MagicMock()
     fake_model.classifier.out_proj.out_features = 5  # config says 3
@@ -295,6 +309,65 @@ def test_check_head_loaded_cleanly_silent_on_clean_load() -> None:
         {"missing_keys": {"wav2vec2.masked_spec_embed", "encoder.something"}, "mismatched_keys": set()},
         model,
     )
+
+
+@pytest.mark.parametrize(
+    ("model_type", "expected_base_name", "expected_encoder_name", "expected_attr"),
+    [
+        ("wav2vec2", "Wav2Vec2PreTrainedModel", "Wav2Vec2Model", "wav2vec2"),
+        ("hubert", "HubertPreTrainedModel", "HubertModel", "hubert"),
+        ("wavlm", "WavLMPreTrainedModel", "WavLMModel", "wavlm"),
+    ],
+)
+def test_resolve_base_returns_real_transformers_classes(
+    model_type: str, expected_base_name: str, expected_encoder_name: str, expected_attr: str
+) -> None:
+    """Smoke test: every ``_BASE_REGISTRY`` entry must resolve to real transformers classes.
+
+    A typo in the registry (e.g. ``"Wav2Vec2BasePreTrainedModel"`` instead of
+    ``"Wav2Vec2PreTrainedModel"``) would silently route through the standard pipeline
+    fallback and silently random-initialize heads. This test catches such typos at
+    test-collection time without downloading any model.
+    """
+    from senselab.audio.tasks.classification.speech_emotion_recognition.api import _resolve_base
+
+    resolved = _resolve_base(model_type)
+    assert resolved is not None, f"_BASE_REGISTRY['{model_type}'] failed to resolve"
+    base_cls, encoder_cls, attr_name = resolved
+    assert base_cls.__name__ == expected_base_name
+    assert encoder_cls.__name__ == expected_encoder_name
+    assert attr_name == expected_attr
+
+
+def test_resolve_base_unknown_model_type_returns_none() -> None:
+    """Unknown ``model_type`` → ``None`` so callers can dispatch to the standard pipeline."""
+    from senselab.audio.tasks.classification.speech_emotion_recognition.api import _resolve_base
+
+    assert _resolve_base("not-a-real-family") is None
+
+
+def test_load_config_cached_round_trips_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``_load_config_cached`` must hit ``AutoConfig.from_pretrained`` at most once per (path, revision).
+
+    Mocks ``AutoConfig.from_pretrained`` with a call counter, invokes the cache four
+    times with the same model handle, and asserts the underlying call happened once.
+    """
+    from unittest.mock import MagicMock
+
+    from senselab.audio.tasks.classification.speech_emotion_recognition import api as ser_api
+
+    # Autouse fixture should have cleared the memo before us — sanity check.
+    assert ser_api._config_memo == {}, "_config_memo leaked from a prior test"
+    fake_config = MagicMock(model_type="wav2vec2", architectures=["X"], id2label={0: "a"})
+    call_counter = MagicMock(return_value=fake_config)
+    monkeypatch.setattr("transformers.AutoConfig.from_pretrained", call_counter)
+
+    model: HFModel = HFModel(path_or_uri="audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim", revision="main")
+    for _ in range(4):
+        typed, raw = ser_api._load_config_cached(model)
+        assert typed is fake_config
+        assert raw is None
+    assert call_counter.call_count == 1, f"Expected 1 AutoConfig call, got {call_counter.call_count}"
 
 
 def test_scene_results_to_segments() -> None:
