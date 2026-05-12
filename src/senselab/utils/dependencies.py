@@ -136,6 +136,17 @@ def speechbrain_savedir(repo_id: str, revision: Optional[str] = None) -> Path:
     return _senselab_cache_dir() / "speechbrain" / _safe_key(repo_id, rev)
 
 
+# ``os.chdir`` is process-global: while this context manager holds the lock and
+# CWD is pinned to ``savedir``, any *other* thread doing CWD-relative I/O sees
+# the same redirect. To prevent concurrent SpeechBrain loaders from racing on
+# the working directory (e.g. loading two models from different threads), the
+# context serializes via this module-level lock. Code that needs the original
+# CWD inside the body must not run concurrently from another thread — that's
+# the documented trade-off. Non-SpeechBrain code paths are unaffected because
+# the lock is private to this function.
+_speechbrain_cwd_lock = threading.Lock()
+
+
 @contextlib.contextmanager
 def speechbrain_loading_cwd(savedir: Path) -> Iterator[Path]:
     """Run a SpeechBrain ``from_hparams`` call with CWD pinned to ``savedir``.
@@ -146,15 +157,24 @@ def speechbrain_loading_cwd(savedir: Path) -> Iterator[Path]:
     ``savedir=`` argument does not redirect. Wrapping the loader in this context
     causes those relative paths to resolve under ``savedir`` instead of the
     process CWD, keeping the artifacts inside the senselab cache.
+
+    **Threading caveat.** ``os.chdir`` is process-global. To prevent two threads
+    concurrently entering this context from racing on the working directory,
+    the implementation serializes via a module-level lock — concurrent
+    SpeechBrain loads will block, not interleave. This is correct but means
+    parallel-model-init use cases will load sequentially. If you need
+    concurrent SpeechBrain model construction, use multiple processes (each
+    has its own CWD) rather than threads.
     """
     savedir = Path(savedir).resolve()
     savedir.mkdir(parents=True, exist_ok=True)
-    prev = Path.cwd()
-    os.chdir(savedir)
-    try:
-        yield savedir
-    finally:
-        os.chdir(prev)
+    with _speechbrain_cwd_lock:
+        prev = Path.cwd()
+        os.chdir(savedir)
+        try:
+            yield savedir
+        finally:
+            os.chdir(prev)
 
 
 def _safe_key(repo_id: str, revision: str) -> str:

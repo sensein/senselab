@@ -20,7 +20,6 @@ import tempfile
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Callable, List, Optional, cast
 
 import torch
@@ -59,6 +58,48 @@ try:
     )
 except ImportError:  # pragma: no cover — older huggingface_hub
     _CONFIG_LOAD_RECOVERABLE = (ValueError, TypeError, KeyError)
+
+
+# Per-process memo for AutoConfig + raw config.json. Each ``classify_emotions_from_speech``
+# call previously triggered up to four ``AutoConfig.from_pretrained`` round-trips
+# (``_get_ser_type``, ``_emotion_head_kind``, ``_resolve_apply_softmax``, and the
+# loader in ``_classify_wav2vec2_speech_cls_ser``) — all hitting the same
+# (path, revision). The memo collapses that to one. Cached entries are::
+#
+#     (config, None)        — typed AutoConfig loaded successfully
+#     (None, raw_dict)      — typed load raised one of ``_CONFIG_LOAD_RECOVERABLE``;
+#                             raw ``config.json`` cached so the fallback paths share it.
+#
+# The cache is unbounded but small (~1 KB / entry); long-running processes that
+# instantiate many distinct SER models may want to clear it via ``_config_memo.clear()``.
+_config_memo: dict[tuple[str, str], tuple[Optional[Any], Optional[dict]]] = {}
+
+
+def _load_config_cached(model: "HFModel") -> tuple[Optional[Any], Optional[dict]]:
+    """Return ``(typed_config_or_None, raw_dict_or_None)`` for ``model``, memoized.
+
+    Tries ``AutoConfig.from_pretrained`` first; on ``_CONFIG_LOAD_RECOVERABLE`` falls
+    back to a raw ``config.json`` read via ``hf_hub_download``. Both outcomes are
+    cached so subsequent calls return locally without a hub round-trip.
+    """
+    key = (str(model.path_or_uri), model.revision or "main")
+    cached = _config_memo.get(key)
+    if cached is not None:
+        return cached
+    try:
+        from transformers import AutoConfig
+
+        config = AutoConfig.from_pretrained(model.path_or_uri, revision=model.revision)
+        result: tuple[Optional[Any], Optional[dict]] = (config, None)
+    except _CONFIG_LOAD_RECOVERABLE:
+        from huggingface_hub import hf_hub_download
+
+        config_path = hf_hub_download(str(model.path_or_uri), "config.json", revision=model.revision)
+        with open(config_path) as f:
+            raw = json.load(f)
+        result = (None, raw)
+    _config_memo[key] = result
+    return result
 
 
 class SERType(Enum):
@@ -373,22 +414,16 @@ def _emotion_head_kind(model: HFModel) -> Optional[tuple[str, _HeadEntry]]:
         found, use the matching head.
       - Repo registered in ``_KNOWN_HEAD_LAYOUTS``: use the registered entry.
     """
-    try:
-        from transformers import AutoConfig
-
-        config = AutoConfig.from_pretrained(model.path_or_uri, revision=model.revision)
+    config, raw = _load_config_cached(model)
+    if config is not None:
         auto_map = getattr(config, "auto_map", None)
         architectures = getattr(config, "architectures", None) or []
         model_type = getattr(config, "model_type", None)
-    except _CONFIG_LOAD_RECOVERABLE:
-        from huggingface_hub import hf_hub_download
-
-        config_path = hf_hub_download(str(model.path_or_uri), "config.json", revision=model.revision)
-        with open(config_path) as f:
-            config_dict = json.load(f)
-        auto_map = config_dict.get("auto_map")
-        architectures = config_dict.get("architectures") or []
-        model_type = config_dict.get("model_type")
+    else:
+        assert raw is not None
+        auto_map = raw.get("auto_map")
+        architectures = raw.get("architectures") or []
+        model_type = raw.get("model_type")
 
     if auto_map:
         return None
@@ -436,20 +471,14 @@ def _resolve_apply_softmax(model: HFModel, ser_type: "SERType") -> bool:
     checkpoints declare ``Wav2Vec2ForSequenceClassification`` so the legacy
     keyword-based heuristic remains correct for them.
     """
-    try:
-        from transformers import AutoConfig
-
-        config = AutoConfig.from_pretrained(model.path_or_uri, revision=model.revision)
+    config, raw = _load_config_cached(model)
+    if config is not None:
         problem_type = getattr(config, "problem_type", None)
         architectures = getattr(config, "architectures", None) or []
-    except _CONFIG_LOAD_RECOVERABLE:
-        from huggingface_hub import hf_hub_download
-
-        config_path = hf_hub_download(str(model.path_or_uri), "config.json", revision=model.revision)
-        with open(config_path) as f:
-            config_dict = json.load(f)
-        problem_type = config_dict.get("problem_type")
-        architectures = config_dict.get("architectures") or []
+    else:
+        assert raw is not None
+        problem_type = raw.get("problem_type")
+        architectures = raw.get("architectures") or []
 
     if problem_type == "regression":
         return False
@@ -619,14 +648,13 @@ def _classify_wav2vec2_speech_cls_ser(
     key = f"{model.path_or_uri}-{model.revision or 'main'}-{device_type.value}-{model_type}-{head.final_layer}"
     if key not in _wav2vec2_emotion_models:
         EmotionModel = _make_emotion_model_class(model_type, head)
-        try:
-            config = AutoConfig.from_pretrained(model.path_or_uri, revision=model.revision)
-        except _CONFIG_LOAD_RECOVERABLE:
-            from huggingface_hub import hf_hub_download
-
-            config_path = hf_hub_download(str(model.path_or_uri), "config.json", revision=model.revision)
-            with open(config_path) as f:
-                config_dict = json.load(f)
+        typed, raw = _load_config_cached(model)
+        if typed is not None:
+            config = typed
+        else:
+            assert raw is not None
+            # Copy so we don't mutate the cached raw dict.
+            config_dict = dict(raw)
             # config.json carries its own "model_type" key, which would collide with the positional
             # arg to AutoConfig.for_model(...). Drop it.
             config_dict.pop("model_type", None)
@@ -745,19 +773,12 @@ def _classify_wav2vec2_speech_cls_ser(
 
 def _get_ser_type(model: HFModel) -> SERType:
     """Get the type of SER the model is likely used for based on the labels it is set to predict."""
-    try:
-        from transformers import AutoConfig
-
-        config = AutoConfig.from_pretrained(model.path_or_uri, revision=model.revision)
-    except _CONFIG_LOAD_RECOVERABLE:
-        # Fall back to raw config dict for models with invalid fields
-        from huggingface_hub import hf_hub_download
-
-        config_path = hf_hub_download(str(model.path_or_uri), "config.json", revision=model.revision)
-        with open(config_path) as f:
-            config_dict = json.load(f)
-        config = SimpleNamespace(id2label=config_dict.get("id2label", {}))
-    id2label = config.id2label
+    typed, raw = _load_config_cached(model)
+    if typed is not None:
+        id2label = getattr(typed, "id2label", None) or {}
+    else:
+        assert raw is not None
+        id2label = raw.get("id2label", {})
     if id2label:
         labels = list(id2label.values())
         if "positive" in labels and "negative" in labels and "neutral" in labels:
