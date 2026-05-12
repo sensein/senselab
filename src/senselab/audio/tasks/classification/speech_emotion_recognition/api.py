@@ -71,10 +71,18 @@ except ImportError:  # pragma: no cover — older huggingface_hub
 #     (None, raw_dict)      — typed load raised one of ``_CONFIG_LOAD_RECOVERABLE``;
 #                             raw ``config.json`` cached so the fallback paths share it.
 #
+# Concurrency: per-(path, revision) locks rather than a single global lock, so
+# concurrent loads of *different* models don't serialize on the network. Mirrors
+# the per-key strategy ``dependencies.ensure_hf_model`` uses for artifact downloads
+# (file-based ``_HeartbeatLock`` there; in-memory ``threading.Lock`` here, since
+# this memo is single-process). The ``_config_memo_locks_guard`` only protects
+# inserts into the per-key lock map itself — held for microseconds, never across I/O.
+#
 # The cache is unbounded but small (~1 KB / entry); long-running processes that
 # instantiate many distinct SER models may want to clear it via ``_config_memo.clear()``.
 _config_memo: dict[tuple[str, str], tuple[Optional[PretrainedConfig], Optional[dict]]] = {}
-_config_memo_lock = threading.Lock()
+_config_memo_locks: dict[tuple[str, str], threading.Lock] = {}
+_config_memo_locks_guard = threading.Lock()
 
 
 def _load_config_cached(model: "HFModel") -> tuple[Optional[PretrainedConfig], Optional[dict]]:
@@ -84,15 +92,18 @@ def _load_config_cached(model: "HFModel") -> tuple[Optional[PretrainedConfig], O
     back to a raw ``config.json`` read via ``hf_hub_download``. Both outcomes are
     cached so subsequent calls return locally without a hub round-trip.
 
-    Thread-safe via double-checked locking: concurrent callers for the same
-    ``(path, revision)`` deduplicate to a single network round-trip rather than
-    each missing the cache.
+    Thread-safety: per-key double-checked locking. Concurrent callers for the same
+    ``(path, revision)`` deduplicate to a single network round-trip; concurrent
+    callers for *different* models proceed in parallel rather than serializing on
+    a shared lock.
     """
     key = (str(model.path_or_uri), model.revision or "main")
     cached = _config_memo.get(key)
     if cached is not None:
         return cached
-    with _config_memo_lock:
+    with _config_memo_locks_guard:
+        per_key_lock = _config_memo_locks.setdefault(key, threading.Lock())
+    with per_key_lock:
         cached = _config_memo.get(key)
         if cached is not None:
             return cached

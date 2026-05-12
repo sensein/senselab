@@ -31,6 +31,7 @@ def _reset_ser_module_caches() -> None:
     from senselab.audio.tasks.classification.speech_emotion_recognition import api as ser_api
 
     ser_api._config_memo.clear()
+    ser_api._config_memo_locks.clear()
     ser_api._wav2vec2_emotion_models.clear()
 
 
