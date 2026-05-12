@@ -17,6 +17,7 @@ null) are run in an isolated subprocess venv with pinned huggingface-hub<1.0.
 import json
 import subprocess
 import tempfile
+import threading
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -72,34 +73,43 @@ except ImportError:  # pragma: no cover — older huggingface_hub
 #
 # The cache is unbounded but small (~1 KB / entry); long-running processes that
 # instantiate many distinct SER models may want to clear it via ``_config_memo.clear()``.
-_config_memo: dict[tuple[str, str], tuple[Optional[Any], Optional[dict]]] = {}
+_config_memo: dict[tuple[str, str], tuple[Optional[PretrainedConfig], Optional[dict]]] = {}
+_config_memo_lock = threading.Lock()
 
 
-def _load_config_cached(model: "HFModel") -> tuple[Optional[Any], Optional[dict]]:
+def _load_config_cached(model: "HFModel") -> tuple[Optional[PretrainedConfig], Optional[dict]]:
     """Return ``(typed_config_or_None, raw_dict_or_None)`` for ``model``, memoized.
 
     Tries ``AutoConfig.from_pretrained`` first; on ``_CONFIG_LOAD_RECOVERABLE`` falls
     back to a raw ``config.json`` read via ``hf_hub_download``. Both outcomes are
     cached so subsequent calls return locally without a hub round-trip.
+
+    Thread-safe via double-checked locking: concurrent callers for the same
+    ``(path, revision)`` deduplicate to a single network round-trip rather than
+    each missing the cache.
     """
     key = (str(model.path_or_uri), model.revision or "main")
     cached = _config_memo.get(key)
     if cached is not None:
         return cached
-    try:
-        from transformers import AutoConfig
+    with _config_memo_lock:
+        cached = _config_memo.get(key)
+        if cached is not None:
+            return cached
+        try:
+            from transformers import AutoConfig
 
-        config = AutoConfig.from_pretrained(model.path_or_uri, revision=model.revision)
-        result: tuple[Optional[Any], Optional[dict]] = (config, None)
-    except _CONFIG_LOAD_RECOVERABLE:
-        from huggingface_hub import hf_hub_download
+            config = AutoConfig.from_pretrained(model.path_or_uri, revision=model.revision)
+            result: tuple[Optional[PretrainedConfig], Optional[dict]] = (config, None)
+        except _CONFIG_LOAD_RECOVERABLE:
+            from huggingface_hub import hf_hub_download
 
-        config_path = hf_hub_download(str(model.path_or_uri), "config.json", revision=model.revision)
-        with open(config_path) as f:
-            raw = json.load(f)
-        result = (None, raw)
-    _config_memo[key] = result
-    return result
+            config_path = hf_hub_download(str(model.path_or_uri), "config.json", revision=model.revision)
+            with open(config_path) as f:
+                raw = json.load(f)
+            result = (None, raw)
+        _config_memo[key] = result
+        return result
 
 
 class SERType(Enum):
