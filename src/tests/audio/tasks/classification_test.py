@@ -16,6 +16,24 @@ from senselab.utils.data_structures import DeviceType, HFModel
 from tests.audio.conftest import MONO_AUDIO_PATH
 
 
+@pytest.fixture(autouse=True)
+def _reset_ser_module_caches() -> None:
+    """Reset per-process SER caches between tests.
+
+    Several tests monkeypatch ``transformers.AutoConfig.from_pretrained`` to return
+    a fake config for ``audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim``. The
+    module-level ``_config_memo`` introduced in PR #515 would otherwise hand back the
+    cached fake from a prior test, silently bypassing the monkeypatch in the next
+    one. Same risk for ``_wav2vec2_emotion_models`` (the constructed model cache),
+    which existing tests already reset by hand — centralising that here keeps the
+    invariant in one place.
+    """
+    from senselab.audio.tasks.classification.speech_emotion_recognition import api as ser_api
+
+    ser_api._config_memo.clear()
+    ser_api._wav2vec2_emotion_models.clear()
+
+
 def test_speech_emotion_recognition_continuous(cpu_cuda_device: DeviceType) -> None:
     """Tests continuous speech emotion recognition (Tier 2: ~661MB model)."""
     audio_dataset = [Audio(filepath=MONO_AUDIO_PATH)]
@@ -84,9 +102,6 @@ def test_wav2vec2_speech_cls_ser_raises_on_random_head(
 
     from senselab.audio.tasks.classification.speech_emotion_recognition import api as ser_api
 
-    # Reset the per-(model, revision, device, final_layer) cache so the mock fires.
-    ser_api._wav2vec2_emotion_models.clear()
-
     fake_model = MagicMock()
     # The shape sanity-check expects out_features matching config.num_labels.
     fake_model.classifier.out_proj.out_features = 3
@@ -121,8 +136,6 @@ def test_wav2vec2_speech_cls_ser_raises_on_shape_mismatch(monkeypatch: pytest.Mo
     from unittest.mock import MagicMock
 
     from senselab.audio.tasks.classification.speech_emotion_recognition import api as ser_api
-
-    ser_api._wav2vec2_emotion_models.clear()
 
     fake_model = MagicMock()
     fake_model.classifier.out_proj.out_features = 5  # config says 3
@@ -342,7 +355,8 @@ def test_load_config_cached_round_trips_once(monkeypatch: pytest.MonkeyPatch) ->
 
     from senselab.audio.tasks.classification.speech_emotion_recognition import api as ser_api
 
-    ser_api._config_memo.clear()
+    # Autouse fixture should have cleared the memo before us — sanity check.
+    assert ser_api._config_memo == {}, "_config_memo leaked from a prior test"
     fake_config = MagicMock(model_type="wav2vec2", architectures=["X"], id2label={0: "a"})
     call_counter = MagicMock(return_value=fake_config)
     monkeypatch.setattr("transformers.AutoConfig.from_pretrained", call_counter)
