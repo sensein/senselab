@@ -19,6 +19,12 @@ from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, p
 
 # Reuse the same NeMo venv as diarization — it already has nemo_toolkit[asr]
 _NEMO_VENV = "nemo-diarization"
+# NOTE on the torch + torchaudio pins below: the version constraint here is
+# necessary but not sufficient on newer-CUDA hosts. The shared ``ensure_venv``
+# routes the install through the matching PyTorch wheel index
+# (``cu128``/``cu126``/``cu124``/``cu121``/``cpu``) — that's what guarantees
+# `torch` and `torchaudio` come from the same CUDA toolchain. Do not add a
+# backend-local install path that bypasses ``ensure_venv``.
 _NEMO_REQUIREMENTS = [
     "nemo_toolkit[asr]",
     "torch>=2.8,<2.9",

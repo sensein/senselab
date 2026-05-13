@@ -33,6 +33,14 @@ from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, p
 # trunk build that publishes SALM. Pinning to the trunk keeps this venv
 # updatable without affecting the stable nemo-diarization venv.
 _CANARY_VENV = "nemo-canary-qwen"
+# NOTE on the torch + torchaudio pins below: the version constraint here is
+# necessary but not sufficient on newer-CUDA hosts. PyPI's default resolver
+# can pick `torch` and `torchaudio` built for different CUDA toolchains,
+# which breaks their ABI contract at import. The shared ``ensure_venv``
+# routes the install through the matching PyTorch wheel index
+# (``cu128``/``cu126``/``cu124``/``cu121``/``cpu``) — that's what
+# guarantees the toolchain match. Do not add a backend-local install path
+# that bypasses ``ensure_venv``.
 _CANARY_REQUIREMENTS = [
     # NeMo trunk publishes SALM via nemo.collections.speechlm2.models.
     # When NeMo cuts a stable release that includes SALM, swap this for a
