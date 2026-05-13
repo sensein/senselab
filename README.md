@@ -79,6 +79,20 @@ For more detailed information, check out our [**Documentation**](https://sensein
 3. CUDA libraries matching the CUDA version expected by the PyTorch wheels (e.g., the latest pytorch 2.8 expects cuda-12.8). To install those with conda, please do:
   - ```conda config --add channels nvidia```
   - ```conda install -y nvidia/label/cuda-12.8.1::cuda-libraries-dev```
+
+    **Hosts with newer system CUDA** (e.g., CUDA 12.9): the subprocess-venv backends (`nemo-canary-qwen`, `nemo`, `qwen-asr`) auto-detect the host's CUDA version via `nvidia-smi` and route their `torch`/`torchaudio` installs through the matching PyTorch wheel index (`cu128` / `cu126` / `cu124` / `cu121` / `cpu`). No manual configuration needed.
+
+    **Internal mirrors / unsupported CUDA / CPU fallback**: set the `SENSELAB_TORCH_INDEX_URL` environment variable to override the chosen index. Common values:
+
+    ```bash
+    # Force CPU wheels (e.g. testing CPU path on a GPU host, or unsupported CUDA)
+    export SENSELAB_TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+
+    # Internal PyPI mirror that proxies PyTorch wheels
+    export SENSELAB_TORCH_INDEX_URL=https://pypi.internal.example.com/pytorch/cu128
+    ```
+
+    When no compatible `torch`+`torchaudio` binary pair exists for your host (rare; happens in the days after a CUDA major release), installation fails with a named `SenselabCudaCompatibilityError` that lists the detected host CUDA, the attempted index URL, and the recommended action — no opaque stack traces from inside `torchaudio`.
 4. Docker is required and must be running for some video models (e.g., MediaPipe-based estimators).
 Please follow the official installation instructions for your platform: [Install Docker](https://docs.docker.com/get-started/get-docker/).
 5. Some functionalities rely on HuggingFace models, and increasingly, models require authentication and signed license agreements. Instructions on how to generate a Hugging Face access token can be found here: https://huggingface.co/docs/hub/security-tokens
