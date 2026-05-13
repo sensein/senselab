@@ -21,6 +21,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -32,6 +33,14 @@ from pathlib import Path
 from typing import Optional
 
 from filelock import FileLock
+
+from senselab.utils.cuda_probe import (
+    HostCuda,
+    SenselabCudaCompatibilityError,
+    TorchIndex,
+    detect_host_cuda,
+    pick_torch_index,
+)
 
 logger = logging.getLogger("senselab")
 
@@ -202,15 +211,33 @@ def ensure_venv(
     marker = venv_dir / ".senselab-installed"
 
     with FileLock(str(lock_path), timeout=600):
+        # Resolve the torch wheel index FIRST so the marker-match check
+        # below can compare the cached index URL. Order: env override wins;
+        # otherwise probe the host. The override path skips the probe to
+        # avoid a 5-second nvidia-smi shellout when the operator has
+        # already configured one.
+        env_override = os.getenv("SENSELAB_TORCH_INDEX_URL") or None
+        if env_override:
+            host_cuda = HostCuda(version=None, source="none", raw="")
+        else:
+            host_cuda = detect_host_cuda()
+        torch_index = pick_torch_index(host_cuda, env_override=env_override)
+
         if marker.is_file():
             stored = json.loads(marker.read_text())
-            if stored.get("requirements") == sorted(requirements):
+            stored_index_url = (stored.get("torch_index") or {}).get("url")
+            if stored.get("requirements") == sorted(requirements) and stored_index_url == torch_index.url:
                 logger.debug("Reusing existing venv: %s", venv_dir)
                 return venv_dir
 
         uv = _find_uv()
         py_ver = python_version or f"{sys.version_info.major}.{sys.version_info.minor}"
-        logger.info("Creating isolated venv '%s' with Python %s", name, py_ver)
+        logger.info(
+            "Creating isolated venv '%s' with Python %s (torch index: %s)",
+            name,
+            py_ver,
+            torch_index.tag,
+        )
 
         if venv_dir.exists():
             shutil.rmtree(venv_dir)
@@ -227,17 +254,39 @@ def ensure_venv(
             raise
 
         # Always include IPC serialization deps (safetensors for tensors,
-        # numpy for arrays, torchaudio for FLAC audio encoding)
+        # numpy for arrays, torchaudio for FLAC audio encoding). Route
+        # torch/torchaudio through the chosen PyTorch wheel index; keep
+        # PyPI as the extra index so non-torch packages still resolve.
         all_reqs = [*requirements, "safetensors", "numpy", "torchaudio"]
         try:
             subprocess.run(
-                [uv, "pip", "install", "--python", venv_python(venv_dir), *all_reqs],
+                [
+                    uv,
+                    "pip",
+                    "install",
+                    "--index-url",
+                    torch_index.url,
+                    "--extra-index-url",
+                    "https://pypi.org/simple",
+                    "--python",
+                    venv_python(venv_dir),
+                    *all_reqs,
+                ],
                 check=True,
                 capture_output=True,
                 text=True,
             )
         except subprocess.CalledProcessError as exc:
             logger.error("Failed to install in venv '%s': %s", name, exc.stderr)
+            # Wipe the half-built venv before raising so the next run starts clean.
+            shutil.rmtree(venv_dir, ignore_errors=True)
+            failing = _classify_uv_failure(exc.stderr or "")
+            if failing is not None:
+                raise SenselabCudaCompatibilityError(
+                    host_cuda=host_cuda,
+                    attempted_index=torch_index,
+                    failing_packages=failing,
+                ) from exc
             raise
 
         marker.write_text(
@@ -245,11 +294,50 @@ def ensure_venv(
                 {
                     "requirements": sorted(requirements),
                     "python_version": py_ver,
+                    "torch_index": {
+                        "tag": torch_index.tag,
+                        "url": torch_index.url,
+                        "source": torch_index.source,
+                    },
                 }
             )
         )
         logger.info("Venv '%s' ready at %s", name, venv_dir)
         return venv_dir
+
+
+# Patterns uv emits when it can't find a compatible wheel — used to
+# distinguish "no matching distribution" errors (a CUDA-compat problem,
+# wrap as SenselabCudaCompatibilityError) from unrelated install errors.
+_NO_MATCHING_DIST_RE = re.compile(
+    r"(?:no matching distribution|could not find a (?:version|distribution) (?:that satisfies|for))",
+    re.IGNORECASE,
+)
+# Captures the offending package spec from uv's stderr. uv quotes the
+# requirement with backticks; pick names/version specs greedily up to the
+# closing backtick. Falls back to a bare requirement-like token.
+_FAILING_REQ_RE = re.compile(r"`([^`]+)`")
+
+
+def _classify_uv_failure(stderr: str) -> Optional[list[str]]:
+    """Return the failing package specs if stderr is a wheel-not-found error.
+
+    Returns ``None`` for any other failure (network, permission, syntax) so
+    the caller can re-raise the original ``CalledProcessError`` unchanged.
+    """
+    if not stderr or not _NO_MATCHING_DIST_RE.search(stderr):
+        return None
+    matches = _FAILING_REQ_RE.findall(stderr)
+    if matches:
+        # De-duplicate preserving order.
+        seen: set[str] = set()
+        out: list[str] = []
+        for m in matches:
+            if m not in seen:
+                seen.add(m)
+                out.append(m)
+        return out
+    return ["<unknown>"]
 
 
 def venv_python(venv_dir: Path) -> str:
