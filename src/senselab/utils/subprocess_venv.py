@@ -212,15 +212,12 @@ def ensure_venv(
 
     with FileLock(str(lock_path), timeout=600):
         # Resolve the torch wheel index FIRST so the marker-match check
-        # below can compare the cached index URL. Order: env override wins;
-        # otherwise probe the host. The override path skips the probe to
-        # avoid a 5-second nvidia-smi shellout when the operator has
-        # already configured one.
+        # below can compare the cached index URL. Order: env override
+        # decides the URL; the host-CUDA probe still runs (even with the
+        # override) so its result can be surfaced in the diagnostic when
+        # an install failure wraps into ``SenselabCudaCompatibilityError``.
         env_override = os.getenv("SENSELAB_TORCH_INDEX_URL") or None
-        if env_override:
-            host_cuda = HostCuda(version=None, source="none", raw="")
-        else:
-            host_cuda = detect_host_cuda()
+        host_cuda = detect_host_cuda()
         torch_index = pick_torch_index(host_cuda, env_override=env_override)
 
         if marker.is_file():
@@ -251,6 +248,10 @@ def ensure_venv(
             )
         except subprocess.CalledProcessError as exc:
             logger.error("Failed to create venv '%s': %s", name, exc.stderr)
+            # uv venv may have partially populated the directory; wipe it
+            # so the next run starts from a clean baseline (mirrors the
+            # install-failure cleanup below).
+            shutil.rmtree(venv_dir, ignore_errors=True)
             raise
 
         # Always include IPC serialization deps (safetensors for tensors,
@@ -277,16 +278,23 @@ def ensure_venv(
                 text=True,
             )
         except subprocess.CalledProcessError as exc:
-            logger.error("Failed to install in venv '%s': %s", name, exc.stderr)
             # Wipe the half-built venv before raising so the next run starts clean.
             shutil.rmtree(venv_dir, ignore_errors=True)
             failing = _classify_uv_failure(exc.stderr or "")
             if failing is not None:
+                # Compat-error path: the wrapped exception's message already
+                # carries the diagnostic fields (host CUDA, attempted index,
+                # failing packages, recommended action). Logging the full uv
+                # stderr would just duplicate that.
+                logger.debug("Wheel not found installing in venv '%s': %s", name, exc.stderr)
                 raise SenselabCudaCompatibilityError(
                     host_cuda=host_cuda,
                     attempted_index=torch_index,
                     failing_packages=failing,
                 ) from exc
+            # Pass-through path: log the stderr so the user can see what
+            # really went wrong (network, permission, syntax, ...).
+            logger.error("Failed to install in venv '%s': %s", name, exc.stderr)
             raise
 
         marker.write_text(
@@ -306,17 +314,20 @@ def ensure_venv(
         return venv_dir
 
 
-# Patterns uv emits when it can't find a compatible wheel — used to
-# distinguish "no matching distribution" errors (a CUDA-compat problem,
-# wrap as SenselabCudaCompatibilityError) from unrelated install errors.
-_NO_MATCHING_DIST_RE = re.compile(
-    r"(?:no matching distribution|could not find a (?:version|distribution) (?:that satisfies|for))",
-    re.IGNORECASE,
-)
-# Captures the offending package spec from uv's stderr. uv quotes the
-# requirement with backticks; pick names/version specs greedily up to the
-# closing backtick. Falls back to a bare requirement-like token.
-_FAILING_REQ_RE = re.compile(r"`([^`]+)`")
+# uv emits these phrases when it can't find a compatible wheel. The
+# package spec is captured from the same phrase — anchoring prevents
+# unrelated backticked hints (``uv cache clean``, ``--reinstall``, ...)
+# from leaking into the user-facing error as "failing packages".
+_FAILING_REQ_PATTERNS = [
+    re.compile(
+        r"no matching distribution(?: found)?(?: for)?\s+`([^`]+)`",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"could not find a (?:version|distribution) (?:that satisfies)?(?:\s+the requirement)?\s+`([^`]+)`",
+        re.IGNORECASE,
+    ),
+]
 
 
 def _classify_uv_failure(stderr: str) -> Optional[list[str]]:
@@ -325,19 +336,21 @@ def _classify_uv_failure(stderr: str) -> Optional[list[str]]:
     Returns ``None`` for any other failure (network, permission, syntax) so
     the caller can re-raise the original ``CalledProcessError`` unchanged.
     """
-    if not stderr or not _NO_MATCHING_DIST_RE.search(stderr):
+    if not stderr:
         return None
-    matches = _FAILING_REQ_RE.findall(stderr)
-    if matches:
-        # De-duplicate preserving order.
-        seen: set[str] = set()
-        out: list[str] = []
-        for m in matches:
-            if m not in seen:
-                seen.add(m)
-                out.append(m)
-        return out
-    return ["<unknown>"]
+    matches: list[str] = []
+    for pattern in _FAILING_REQ_PATTERNS:
+        matches.extend(pattern.findall(stderr))
+    if not matches:
+        return None
+    # De-duplicate preserving order.
+    seen: set[str] = set()
+    out: list[str] = []
+    for m in matches:
+        if m not in seen:
+            seen.add(m)
+            out.append(m)
+    return out
 
 
 def venv_python(venv_dir: Path) -> str:
