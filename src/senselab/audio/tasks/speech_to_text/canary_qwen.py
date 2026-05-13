@@ -25,7 +25,13 @@ from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, HFModel, ScriptLine, _select_device_and_dtype
-from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
+from senselab.utils.subprocess_venv import (
+    _clean_subprocess_env,
+    _find_uv,
+    ensure_venv,
+    parse_subprocess_result,
+    venv_python,
+)
 
 # Dedicated venv — kept separate from the existing nemo-diarization venv.
 # Canary-Qwen needs nemo_toolkit[asr,tts] (the [tts] extra pulls
@@ -147,6 +153,35 @@ class CanaryQwenASR:
         device_type = device or _select_device_and_dtype(compatible_devices=[DeviceType.CUDA, DeviceType.CPU])[0]
 
         venv_dir = ensure_venv(_CANARY_VENV, _CANARY_REQUIREMENTS, python_version=_CANARY_PYTHON)
+
+        # PyPI ships torch 2.8.x as +cu129 but torchaudio 2.8.x as +cu128 — a
+        # CUDA-tag skew that triggers a torchaudio RuntimeError ("PyTorch has
+        # CUDA 12.9 whereas TorchAudio has CUDA 12.8") at import. Force-
+        # reinstall both from the cu128 PyTorch index so they share a CUDA
+        # tag; --no-deps leaves NeMo and the nvidia-*-cu12 runtime libs in
+        # place. cu128 is forward-compatible with cu12+ and cu13 drivers.
+        cuda_fixup_marker = venv_dir / ".senselab-canary-cuda-fixup"
+        if not cuda_fixup_marker.is_file():
+            subprocess.run(
+                [
+                    _find_uv(),
+                    "pip",
+                    "install",
+                    "--python",
+                    venv_python(venv_dir),
+                    "--force-reinstall",
+                    "--no-deps",
+                    "--index-url",
+                    "https://download.pytorch.org/whl/cu128",
+                    "torch>=2.8,<2.9",
+                    "torchaudio>=2.8,<2.9",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            cuda_fixup_marker.touch()
+
         python = venv_python(venv_dir)
 
         with tempfile.TemporaryDirectory(prefix="senselab-canary-qwen-") as tmpdir:
