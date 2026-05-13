@@ -39,8 +39,8 @@ def test_detect_host_cuda_falls_through_to_nvcc_when_nvidia_smi_missing() -> Non
     """When nvidia-smi raises FileNotFoundError, nvcc must be tried next."""
     nvcc_stdout = "nvcc: NVIDIA (R) Cuda compiler driver\nrelease 12.4, V12.4.131\n"
 
-    def _runner(*args: object, **kwargs: object) -> subprocess.CompletedProcess:
-        argv = args[0]
+    def _runner(args: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        argv = args
         if argv and argv[0] == "nvidia-smi":
             raise FileNotFoundError("no nvidia-smi")
         if argv and argv[0] == "nvcc":
@@ -62,8 +62,8 @@ def test_detect_host_cuda_returns_none_when_both_probes_missing() -> None:
 def test_detect_host_cuda_returns_none_when_nvidia_smi_succeeds_without_cuda_line() -> None:
     """Defensive: a future nvidia-smi that drops the header line falls through to nvcc, then none."""
 
-    def _runner(*args: object, **kwargs: object) -> subprocess.CompletedProcess:
-        argv = args[0]
+    def _runner(args: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        argv = args
         if argv and argv[0] == "nvidia-smi":
             return _fake_run(0, stdout="some other output without the cuda line")
         if argv and argv[0] == "nvcc":

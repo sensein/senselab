@@ -9,6 +9,7 @@ behavior across the three real subprocess-venv backends.
 
 import json
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
 
@@ -61,7 +62,7 @@ class _SubprocessRecorder:
     def __init__(self) -> None:
         self.calls: list[list[str]] = []
         # Per-call hook — set to raise/return per recorded call index.
-        self.hook = None  # type: Optional[object]
+        self.hook: Optional[Callable[[list[list[str]]], subprocess.CompletedProcess]] = None
 
     def __call__(
         self,
@@ -77,7 +78,7 @@ class _SubprocessRecorder:
             Path(argv[4]).mkdir(parents=True, exist_ok=True)
         # If a hook is set, let it drive the response (raise / return).
         if self.hook is not None:
-            return self.hook(self.calls)  # type: ignore[no-any-return]
+            return self.hook(self.calls)
         return subprocess.CompletedProcess(args=argv, returncode=0, stdout="", stderr="")
 
 
