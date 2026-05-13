@@ -30,15 +30,16 @@ _QWEN_REQUIREMENTS = [
     # Pin to a known-good release; bump intentionally as Alibaba publishes new
     # versions of the wrapper. 0.0.6 is the first version that exposes both
     # Qwen3ASRModel and Qwen3ForcedAligner via from_pretrained on PyPI.
-    #
-    # NOTE: torch / torchaudio are NOT named here directly — they come in
-    # transitively (qwen-asr depends on them, and ``ensure_venv`` always
-    # appends ``torchaudio`` as an IPC dep). The CUDA-aware index routing
-    # in ``ensure_venv`` is what guarantees those transitive installs use
-    # a matching toolchain pair. If you ever add a direct ``torch`` /
-    # ``torchaudio`` pin to this list, keep going through ``ensure_venv``
-    # so the routing stays intact.
     "qwen-asr==0.0.6",
+    # ``qwen-asr`` pulls ``torch`` + ``torchaudio`` transitively, but pin
+    # them explicitly here so ``ensure_venv``'s CUDA-aware Stage 1 routes
+    # both wheels through the matched PyTorch index. Without these pins
+    # the transitives would resolve from default PyPI in Stage 2 and
+    # could split across mismatched ``+cu`` local-version tags (the
+    # ``torch==X+cu129`` / ``torchaudio==X`` ABI mismatch this PR
+    # exists to prevent).
+    "torch>=2.8,<2.9",
+    "torchaudio>=2.8,<2.9",
 ]
 _QWEN_PYTHON = "3.12"
 
