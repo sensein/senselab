@@ -9,7 +9,7 @@ Operator escape hatch for hosts where the static CUDA → PyTorch wheel index ma
 | State | Meaning |
 |---|---|
 | Unset (or empty string) | `cuda_probe.pick_torch_index()` consults the static map, picks the highest `cuXX ≤ host CUDA`, falls back to `cpu`. |
-| Set to a non-empty URL | That URL is used verbatim as the `--index-url` argument to `uv pip install`. The static map and host CUDA probe are ignored for the index choice (but the probe still runs and is recorded in the marker for diagnostic purposes). |
+| Set to a non-empty URL | That URL is used verbatim as the `--index-url` argument to `uv pip install`. The static map is bypassed for the index choice; the host CUDA probe still runs and is surfaced in any `SenselabCudaCompatibilityError` so the user can see whether the override was a sensible match for the actual host. |
 
 The override URL is passed to `uv pip install` exactly as-is. Senselab does not validate the URL is reachable or that it serves PyTorch wheels — if the operator misconfigures it, the install will fail and surface a `SenselabCudaCompatibilityError` with the override URL named in the diagnostic.
 

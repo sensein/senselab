@@ -232,21 +232,20 @@ def test_install_argv_appends_default_ipc_dependencies(
 # ── env override ───────────────────────────────────────────────────
 
 
-def test_env_override_short_circuits_probe_and_routes_through_override_url(
+def test_env_override_routes_through_override_url_and_still_probes_for_diagnostic(
     fake_cache_dir: Path,
     fake_uv: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """SENSELAB_TORCH_INDEX_URL must skip the nvidia-smi probe and use the URL verbatim."""
+    """SENSELAB_TORCH_INDEX_URL routes the install verbatim; probe still runs for diagnostic surface."""
     name = "t-override"
     override_url = "https://pypi.internal.example.com/pytorch/cu128"
     monkeypatch.setenv("SENSELAB_TORCH_INDEX_URL", override_url)
 
-    # If detect_host_cuda is called, fail the test loudly.
-    def _no_probe() -> HostCuda:
-        raise AssertionError("detect_host_cuda must not run when env override is set")
-
-    monkeypatch.setattr(subprocess_venv, "detect_host_cuda", _no_probe)
+    # Probe still runs so the host-CUDA value is available for any
+    # ``SenselabCudaCompatibilityError`` message produced on the override path.
+    host = HostCuda(version=(12, 9), source="nvidia-smi", raw="CUDA Version: 12.9")
+    monkeypatch.setattr(subprocess_venv, "detect_host_cuda", lambda: host)
 
     recorder = _SubprocessRecorder()
     monkeypatch.setattr(subprocess, "run", recorder)

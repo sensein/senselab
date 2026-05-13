@@ -23,14 +23,22 @@ from typing import Literal, Optional
 
 logger = logging.getLogger("senselab")
 
-# Static map of supported PyTorch wheel indexes, highest CUDA first. Update
-# this list when PyTorch publishes a new ``cuXX`` index (e.g. ``cu129``).
-_PYTORCH_INDEX_MAP: list[tuple[str, tuple[int, int]]] = [
-    ("cu128", (12, 8)),
-    ("cu126", (12, 6)),
-    ("cu124", (12, 4)),
-    ("cu121", (12, 1)),
-]
+# Static map of supported PyTorch wheel indexes. Update this list when
+# PyTorch publishes a new ``cuXX`` index (e.g. ``cu129``). Sorted at
+# module load by CUDA version descending — the picker iterates in that
+# order and picks the first whose CUDA is ``<=`` the host's. The
+# ``sorted`` call defends against future contributors appending an entry
+# in the wrong position.
+_PYTORCH_INDEX_MAP: list[tuple[str, tuple[int, int]]] = sorted(
+    [
+        ("cu128", (12, 8)),
+        ("cu126", (12, 6)),
+        ("cu124", (12, 4)),
+        ("cu121", (12, 1)),
+    ],
+    key=lambda entry: entry[1],
+    reverse=True,
+)
 _PYTORCH_INDEX_BASE = "https://download.pytorch.org/whl"
 _CPU_INDEX_URL = f"{_PYTORCH_INDEX_BASE}/cpu"
 _PROBE_TIMEOUT_S = 5.0
