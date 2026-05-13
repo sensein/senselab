@@ -40,7 +40,7 @@
 - failing package(s) (parsed from uv's stderr),
 - one-line action: "downgrade CUDA, fall back to CPU by setting `SENSELAB_TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu`, or wait for upstream wheels".
 
-**Rationale**: Satisfies FR-004 (single named actionable error) and SC-003 (no deep stack traces). Re-using the `uv pip install` failure as the trigger means we don't have to maintain a separate "is this wheel available" probe.
+**Rationale**: Satisfies FR-004 (single named actionable error) and SC-003 (no deep stack traces). Reusing the `uv pip install` failure as the trigger means we don't have to maintain a separate "is this wheel available" probe.
 
 **Alternatives considered**:
 - Pre-flight HEAD-request to the index URL — adds a network call, still doesn't catch "index exists but specific version missing" cases.
@@ -50,7 +50,7 @@
 
 **Decision**: Add a `torch_index` field to the marker dict. Absence of `torch_index` in an existing marker counts as mismatch → rebuild. No explicit `schema_version` field — the field-presence check is sufficient and the marker is internal state, not a public contract that needs versioning.
 
-**Rationale**: Satisfies FR-005 and SC-004. Re-uses the existing `stored.get("requirements") == sorted(requirements)` rebuild path with one additional clause. No upgrade-compatibility ceremony needed for an internal cache file.
+**Rationale**: Satisfies FR-005 and SC-004. Reuses the existing `stored.get("requirements") == sorted(requirements)` rebuild path with one additional clause. No upgrade-compatibility ceremony needed for an internal cache file.
 
 **Alternatives considered**:
 - Try `import torch` from inside the venv and catch failures. Rejected — brittle in subtle import-error landscape; would need a maintenance burden to keep up with different failure modes.
