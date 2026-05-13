@@ -217,7 +217,7 @@ def ensure_venv(
 
         try:
             subprocess.run(
-                [uv, "venv", "--python", py_ver, str(venv_dir)],
+                [uv, "venv", "--managed-python", "--python", py_ver, str(venv_dir)],
                 check=True,
                 capture_output=True,
                 text=True,
