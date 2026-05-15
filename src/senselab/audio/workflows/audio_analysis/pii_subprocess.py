@@ -322,16 +322,21 @@ try:
     def _presidio_scan(text):
         if analyzer is None:
             return []
+        # Pass the entity list through unchanged so an empty list means
+        # "scan for nothing" (Presidio semantics: entities=None scans for
+        # ALL entity types — collapsing [] → None would invert intent).
         results = analyzer.analyze(
             text=text,
-            entities=presidio_entities or None,  # None → all entities
+            entities=presidio_entities,
             language="en",
             score_threshold=presidio_score_threshold,
         )
         out = []
         for r in results:
-            # Filter to the curated PII set even when entities=None was passed.
-            if presidio_entities and r.entity_type not in presidio_entities:
+            # Belt-and-suspenders filter against Presidio returning a
+            # category outside the requested set. `is not None` rather
+            # than truthiness so an explicit empty list filters everything.
+            if presidio_entities is not None and r.entity_type not in presidio_entities:
                 continue
             out.append({
                 "text": text[r.start:r.end],

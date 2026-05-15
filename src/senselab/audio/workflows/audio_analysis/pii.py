@@ -36,6 +36,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from senselab.audio.workflows.audio_analysis.pii_subprocess import (
+    _KNOWN_DETECTORS,
     DETECTOR_GLINER,
     DETECTOR_PRESIDIO,
     detect_pii_via_subprocess,
@@ -156,7 +157,7 @@ def _compute_detection_confidence(spans: list[PiiSpan], n_asr_models: int) -> fl
     denom_asrs = max(1, n_asr_models)
     risks: list[float] = []
     for g in groups.values():
-        detector_agreement = len(g["detectors"]) / 2  # 0.5 single, 1.0 both
+        detector_agreement = len(g["detectors"]) / len(_KNOWN_DETECTORS)  # 0.5 single, 1.0 both
         asr_agreement = min(1.0, len(g["asrs"]) / denom_asrs)
         risks.append(g["max_score"] * detector_agreement * asr_agreement)
     return max(risks) if risks else 0.0
