@@ -79,6 +79,84 @@ class PiiPassReport:
     # both loaded cleanly, ``"presidio"`` when GLiNER failed but
     # Presidio worked, or ``None`` when neither detector ran.
     detector_used: str | None = None
+    # Continuous detection confidence in ``[0, 1]`` computed from per-
+    # detector raw scores plus cross-detector and cross-ASR-model
+    # agreement. ``None`` ⇔ detectors did not actually run (subprocess
+    # failure, ``detectors=[]`` short-circuit, all detectors failed to
+    # load) — distinct from ``0.0`` which means "ran, found nothing".
+    # No category-severity weighting: in pediatric / clinical voice
+    # data the most-"severe" Presidio categories (US_SSN, CREDIT_CARD)
+    # have near-zero true-positive rate and are dominated by ASR
+    # digit-hallucinations, so weighting them up would inflate exactly
+    # the hits a reviewer should de-prioritize.
+    detection_confidence: float | None = None
+
+
+def _compute_detection_confidence(spans: list[PiiSpan], n_asr_models: int) -> float:
+    """Aggregate per-span detector scores into a single ``[0, 1]`` confidence.
+
+    Combines three signals per unique ``(category, normalized_text)`` finding:
+
+    - **max raw detector confidence** on that finding (Presidio's analyzer
+      score or GLiNER's prediction probability)
+    - **cross-detector agreement** — both Presidio and GLiNER independently
+      flagged the same (category, normalized_text) (factor of 1.0) vs only
+      one detector (0.5). Two-detector agreement is the strongest "is this
+      a real entity or hallucinated?" signal we have at this layer.
+    - **cross-ASR-model agreement** — fraction of available ASR transcripts
+      that contain the finding. A span only one ASR transcribed (and that
+      neither sibling ASR confirms) is the prototypical hallucination case.
+
+    Then ``max()`` across findings — any single high-confidence corroborated
+    finding raises the alarm, matching how the transcript / single-speaker
+    axes combine their internal signals.
+
+    Deliberately NO category-severity weighting (no SSN > date scaling) —
+    in pediatric voice data the categories nominally most "severe" have
+    near-zero true-positive rate and are dominated by ASR digit
+    hallucinations; weighting them up would inflate the wrong cases.
+
+    Args:
+        spans: All PII spans collected for this pass.
+        n_asr_models: Total number of ASR backends whose transcripts were
+            scanned. Used as the denominator for cross-ASR agreement so
+            single-ASR setups don't get penalised relative to multi-ASR.
+
+    Returns:
+        Confidence in ``[0, 1]``. ``0.0`` when ``spans`` is empty (the
+        "detectors ran, nothing found" case). The "detectors did not run
+        at all" case is communicated separately via ``detector_used=None``
+        on the enclosing report; callers should branch on that, not on
+        this number.
+    """
+    if not spans:
+        return 0.0
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    for s in spans:
+        normalized = s.text.strip().lower()
+        if not normalized:
+            continue
+        key = (s.category, normalized)
+        g = groups.setdefault(
+            key,
+            {"detectors": set(), "asrs": set(), "max_score": 0.0},
+        )
+        # ``source`` shape is "presidio" or "gliner/<original_label>" —
+        # take the part before the first ``/`` so both produce one bucket.
+        detector_root = s.source.split("/", 1)[0] if s.source else "unknown"
+        g["detectors"].add(detector_root)
+        g["asrs"].add(s.asr_model)
+        if s.score is not None:
+            g["max_score"] = max(g["max_score"], float(s.score))
+    if not groups:
+        return 0.0
+    denom_asrs = max(1, n_asr_models)
+    risks: list[float] = []
+    for g in groups.values():
+        detector_agreement = len(g["detectors"]) / 2  # 0.5 single, 1.0 both
+        asr_agreement = min(1.0, len(g["asrs"]) / denom_asrs)
+        risks.append(g["max_score"] * detector_agreement * asr_agreement)
+    return max(risks) if risks else 0.0
 
 
 def _build_full_text(resolved: Any) -> str:  # noqa: ANN401 — accepts list / dict / ScriptLine
@@ -301,6 +379,12 @@ def detect_pii_in_pass(
             contains_pii = True
 
     categories = sorted({s.category for s in spans})
+    # detection_confidence is computed only on the happy path where at
+    # least one detector ran. The early-return branches above already
+    # leave it as ``None`` (the dataclass default), so a caller can
+    # distinguish "detectors ran, found nothing" (0.0) from "detectors
+    # did not actually run" (None).
+    detection_confidence = _compute_detection_confidence(spans, n_asr_models=len(spans_by_asr))
     return PiiPassReport(
         pass_label=pass_label,
         contains_pii=contains_pii,
@@ -309,6 +393,7 @@ def detect_pii_in_pass(
         spans=spans,
         failures=failures,
         detector_used=",".join(detectors_used) if detectors_used else None,
+        detection_confidence=detection_confidence,
     )
 
 
@@ -320,6 +405,7 @@ def report_to_dict(report: PiiPassReport) -> dict[str, Any]:
         "n_spans": report.n_spans,
         "categories": report.categories,
         "detector_used": report.detector_used,
+        "detection_confidence": report.detection_confidence,
         "spans": [asdict(s) for s in report.spans],
         "failures": report.failures,
     }
