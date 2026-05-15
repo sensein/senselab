@@ -90,27 +90,65 @@ _PII_REQUIREMENTS = [
 # coverage (urchade/gliner_multi-v2.1 is the usual swap).
 _DEFAULT_GLINER_MODEL = "nvidia/gliner-pii"
 
-# Labels passed to GLiNER's ``predict_entities``. nvidia/gliner-pii was
-# trained on 55+ categories; this is a curated subset that aligns with
-# Presidio's coverage and adds the medical entities Presidio doesn't
-# natively recognize. Callers can override via ``gliner_labels``.
+# Labels passed to GLiNER's ``predict_entities``. The set below is the
+# HIPAA Safe Harbor 18 identifiers (matches b2aiprep PR #256) plus two
+# clinical-voice-specific extensions (``health_condition``,
+# ``medication``). Callers can override via ``gliner_labels``.
+#
+# ──────────────────────────────────────────────────────────────────────
+# DO NOT add overlapping labels to this list.
+# ──────────────────────────────────────────────────────────────────────
+# ``nvidia/gliner-pii`` exhibits competing-claim interference: when two
+# labels can plausibly cover the same span, the model commits the span
+# to one and silently drops it from consideration under the other —
+# *even when the other would have been correct*. We discovered this
+# empirically with a diagnostic on ``john.doe@example.com``:
+#
+#   Labels passed: [person, first_name, last_name, email, email_address, ...]
+#   GLiNER output: ``John`` and ``Doe`` classified as first/last_name at
+#     score 1.0; the full ``john.doe@example.com`` substring received
+#     NO email span at any score above 0.0.
+#
+#   Labels passed: [name, address, date, phone_number, email, ssn, ...]
+#     (a flat HIPAA-style set with one ``name`` and one ``email``)
+#   GLiNER output: ``John`` and ``Doe`` as ``name`` at score 1.0,
+#     ``john.doe@example.com`` as ``email`` at score 1.0. Both caught.
+#
+# Same model, same threshold, same input — the only difference was
+# label-set granularity. The flat set wins because nothing competes.
+# So: keep this list flat (e.g. ``name`` not ``person``+``first_name``+
+# ``last_name``; ``address`` not ``address``+``street_address``+``city``;
+# ``date`` not ``date``+``date_of_birth``). If you need finer granularity
+# downstream, derive it from the matched substring or layer a second
+# model — don't fight the GLiNER trainer here.
 _DEFAULT_GLINER_LABELS = [
-    "person",
-    "first_name",
-    "last_name",
-    "email",
-    "phone_number",
+    # HIPAA Safe Harbor 18 identifiers (per 45 CFR §164.514(b)(2), and
+    # matching b2aiprep's ``hipaa_labels.json`` in PR #256 so the two
+    # projects' PII outputs share a vocabulary).
+    "name",
     "address",
-    "street_address",
-    "city",
+    "date",
+    "phone_number",
+    "fax_number",
+    "email",
     "social_security_number",
-    "credit_card_number",
-    "date_of_birth",
     "medical_record_number",
-    "patient_id",
+    "health_plan_number",
+    "account_number",
+    "license_number",
+    "vehicle_identifier",
+    "device_identifier",
+    "url",
+    "ip_address",
+    "biometric_identifier",
+    "photographic_image",
+    "unique_identifier",
+    # Clinical-voice-specific extensions. Not HIPAA Safe Harbor
+    # identifiers themselves but useful for the b2ai voice-data
+    # analysis workflow. Both are non-overlapping with the HIPAA list
+    # above so they don't trigger the competing-claim interference.
     "health_condition",
     "medication",
-    "ip_address",
 ]
 
 # GLiNER returns lowercase labels matching the prompt; Presidio returns
@@ -380,8 +418,11 @@ def detect_pii_via_subprocess(
             Pass a different id (e.g. ``urchade/gliner_multi-v2.1``) for
             multilingual coverage or smaller-model variants.
         gliner_labels: Labels passed to GLiNER's ``predict_entities``.
-            ``None`` uses the curated default mirroring Presidio's
-            coverage plus medical entities.
+            ``None`` uses ``_DEFAULT_GLINER_LABELS`` — the HIPAA Safe
+            Harbor 18 identifiers (matches b2aiprep #256) plus two
+            clinical-voice extensions. **Keep label sets flat — see
+            the ``DO NOT add overlapping labels`` warning above the
+            constant for the empirical justification.**
         gliner_threshold: Drop GLiNER predictions below this score.
         timeout: Subprocess wall-clock cap. 10 minutes is generous for
             one pass's worth of transcripts; the bulk of the time is the
