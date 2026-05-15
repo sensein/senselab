@@ -228,13 +228,15 @@ class ScriptLine(BaseModel):
             start = None
             end = None
 
-        # Filter out fully-empty children (no text/speaker) so they do not trip
-        # ScriptLine's "at least one of text/speaker" validator. MMS-style
-        # aligners can emit placeholder subsegments with text="" and empty
-        # chunks for unrecognized characters; those carry no signal and
-        # should not block construction of the parent line.
+        # Drop children that are wholly absent of text and speaker — those
+        # would trip ScriptLine's "at least one of text/speaker" validator.
+        # Empty-string text is preserved: it's a meaningful "model produced
+        # no transcript for this subsegment" signal (distinct from the key
+        # being absent / None), matching the invariant the root validator
+        # now upholds. Truthiness checks (`bool("") == False`) would silently
+        # drop those signals.
         def _is_meaningful(c: Dict[str, Any]) -> bool:
-            return bool(c.get("text")) or bool(c.get("speaker"))
+            return c.get("text") is not None or c.get("speaker") is not None
 
         chunks_raw = d.get("chunks") if "chunks" in d else None
         chunks = [cls.from_dict(c) for c in chunks_raw if _is_meaningful(c)] if chunks_raw is not None else None
