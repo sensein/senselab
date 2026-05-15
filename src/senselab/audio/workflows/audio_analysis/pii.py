@@ -10,8 +10,11 @@ venv contents and worker. Two detectors run in parallel inside the venv:
    cards, IP addresses, dates, and locations.
 2. **GLiNER PII** (``nvidia/gliner-pii`` by default) — a transformer-
    based zero-shot NER model fine-tuned on ~100k synthetic PII / PHI
-   records. Catches the long tail Presidio misses (especially medical /
-   health entities).
+   records. Defaults to the HIPAA Safe Harbor 18 identifiers (matches
+   b2aiprep #256) — catches PHI categories Presidio doesn't natively
+   recognize (medical record number, health plan number, account
+   number, fax number, URL, biometric / device / vehicle identifiers,
+   unique identifier, ...).
 
 GLiNER's lowercase labels are normalized to Presidio's uppercase scheme
 inside the worker so the cross-model corroboration logic below — which

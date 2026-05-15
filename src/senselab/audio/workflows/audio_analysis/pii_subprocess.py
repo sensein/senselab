@@ -20,8 +20,10 @@ are merged:
    entity type like ``PERSON`` / ``EMAIL_ADDRESS``.
 2. **GLiNER PII** (``nvidia/gliner-pii`` by default) — a transformer-
    based zero-shot NER model fine-tuned on ~100k synthetic PII / PHI
-   records. Catches the long tail Presidio misses (especially medical /
-   health entities and unstructured personal-context references).
+   records. Catches the HIPAA Safe Harbor identifiers Presidio doesn't
+   natively recognize (``medical_record_number``,
+   ``health_plan_number``, ``account_number``, ``fax_number``, ``url``,
+   ``biometric_identifier``, ``unique_identifier``, etc.).
 
 GLiNER's lowercase labels (``"person"``, ``"phone_number"``, ...) are
 normalized to Presidio's uppercase scheme inside the worker so the
@@ -91,9 +93,8 @@ _PII_REQUIREMENTS = [
 _DEFAULT_GLINER_MODEL = "nvidia/gliner-pii"
 
 # Labels passed to GLiNER's ``predict_entities``. The set below is the
-# HIPAA Safe Harbor 18 identifiers (matches b2aiprep PR #256) plus two
-# clinical-voice-specific extensions (``health_condition``,
-# ``medication``). Callers can override via ``gliner_labels``.
+# HIPAA Safe Harbor 18 identifiers (matches b2aiprep PR #256 verbatim).
+# Callers can override via ``gliner_labels``.
 #
 # ──────────────────────────────────────────────────────────────────────
 # DO NOT add overlapping labels to this list.
@@ -121,10 +122,26 @@ _DEFAULT_GLINER_MODEL = "nvidia/gliner-pii"
 # ``date`` not ``date``+``date_of_birth``). If you need finer granularity
 # downstream, derive it from the matched substring or layer a second
 # model — don't fight the GLiNER trainer here.
+#
+# ──────────────────────────────────────────────────────────────────────
+# DO NOT extend this list beyond the HIPAA-18 either.
+# ──────────────────────────────────────────────────────────────────────
+# An earlier revision of this constant tacked on two clinical-voice
+# extensions (``health_condition``, ``medication``) on top of the
+# HIPAA list. They aren't semantically overlapping with anything in the
+# HIPAA-18 — they cover spans neither ``email`` nor ``name`` would —
+# but adding them was enough to drop the email's GLiNER score below
+# the 0.5 threshold and cause it to silently disappear. The mechanism
+# isn't fully understood (label-list length effect on the model's
+# projection space, possibly) but the symptom is robust. Until we
+# understand it, ship the HIPAA-18 exactly. Callers who need extra
+# labels can pass them via ``gliner_labels=[...]`` and verify that
+# their specific labels don't trip the same interference on their
+# test corpus.
 _DEFAULT_GLINER_LABELS = [
-    # HIPAA Safe Harbor 18 identifiers (per 45 CFR §164.514(b)(2), and
-    # matching b2aiprep's ``hipaa_labels.json`` in PR #256 so the two
-    # projects' PII outputs share a vocabulary).
+    # HIPAA Safe Harbor 18 identifiers (per 45 CFR §164.514(b)(2),
+    # matching b2aiprep's ``hipaa_labels.json`` in PR #256 verbatim so
+    # the two projects' PII outputs share a vocabulary).
     "name",
     "address",
     "date",
@@ -143,12 +160,6 @@ _DEFAULT_GLINER_LABELS = [
     "biometric_identifier",
     "photographic_image",
     "unique_identifier",
-    # Clinical-voice-specific extensions. Not HIPAA Safe Harbor
-    # identifiers themselves but useful for the b2ai voice-data
-    # analysis workflow. Both are non-overlapping with the HIPAA list
-    # above so they don't trigger the competing-claim interference.
-    "health_condition",
-    "medication",
 ]
 
 # GLiNER returns lowercase labels matching the prompt; Presidio returns
@@ -419,10 +430,12 @@ def detect_pii_via_subprocess(
             multilingual coverage or smaller-model variants.
         gliner_labels: Labels passed to GLiNER's ``predict_entities``.
             ``None`` uses ``_DEFAULT_GLINER_LABELS`` — the HIPAA Safe
-            Harbor 18 identifiers (matches b2aiprep #256) plus two
-            clinical-voice extensions. **Keep label sets flat — see
-            the ``DO NOT add overlapping labels`` warning above the
-            constant for the empirical justification.**
+            Harbor 18 identifiers verbatim (matches b2aiprep #256).
+            **Keep label sets flat AND don't extend past the HIPAA-18
+            unless you've verified your specific additions don't trip
+            the competing-claim interference — see the ``DO NOT``
+            warnings above the constant for the empirical
+            justification.**
         gliner_threshold: Drop GLiNER predictions below this score.
         timeout: Subprocess wall-clock cap. 10 minutes is generous for
             one pass's worth of transcripts; the bulk of the time is the
