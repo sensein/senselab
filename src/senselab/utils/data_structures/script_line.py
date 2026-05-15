@@ -79,6 +79,16 @@ class ScriptLine(BaseModel):
     def validate_text_and_speaker(cls, values: Dict[str, Any], _: ValidationInfo) -> Dict[str, Any]:
         """Ensure that at least one of `text` or `speaker` is provided.
 
+        A field counts as "provided" if its value is not `None`. Empty
+        strings (`text=""`) are accepted — they represent a valid "the
+        model was called but produced no transcript for this audio"
+        signal, distinct from "the model was never called" (`text=None`).
+        This matters for ASR backends that honestly emit empty output on
+        unintelligible / silent audio (e.g. IBM Granite-Speech on heavily-
+        enhanced short clips) rather than hallucinating filler. Whitespace-
+        only strings are also accepted; the field validator below strips
+        them, so they end up indistinguishable from explicit empty input.
+
         Args:
             values: Incoming field values prior to model construction.
 
@@ -86,9 +96,9 @@ class ScriptLine(BaseModel):
             The (possibly modified) values dict.
 
         Raises:
-            ValueError: If both `text` and `speaker` are missing/empty.
+            ValueError: If both `text` and `speaker` are `None` or absent.
         """
-        if not values.get("text") and not values.get("speaker"):
+        if values.get("text") is None and values.get("speaker") is None:
             raise ValueError("At least text or speaker must be provided.")
         return values
 
@@ -218,13 +228,15 @@ class ScriptLine(BaseModel):
             start = None
             end = None
 
-        # Filter out fully-empty children (no text/speaker) so they do not trip
-        # ScriptLine's "at least one of text/speaker" validator. MMS-style
-        # aligners can emit placeholder subsegments with text="" and empty
-        # chunks for unrecognized characters; those carry no signal and
-        # should not block construction of the parent line.
+        # Drop children that are wholly absent of text and speaker — those
+        # would trip ScriptLine's "at least one of text/speaker" validator.
+        # Empty-string text is preserved: it's a meaningful "model produced
+        # no transcript for this subsegment" signal (distinct from the key
+        # being absent / None), matching the invariant the root validator
+        # now upholds. Truthiness checks (`bool("") == False`) would silently
+        # drop those signals.
         def _is_meaningful(c: Dict[str, Any]) -> bool:
-            return bool(c.get("text")) or bool(c.get("speaker"))
+            return c.get("text") is not None or c.get("speaker") is not None
 
         chunks_raw = d.get("chunks") if "chunks" in d else None
         chunks = [cls.from_dict(c) for c in chunks_raw if _is_meaningful(c)] if chunks_raw is not None else None
