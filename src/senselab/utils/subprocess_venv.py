@@ -198,6 +198,18 @@ def ensure_venv(
 ) -> Path:
     """Create or reuse an isolated virtual environment.
 
+    Whether the CUDA-aware two-stage install fires is decided by the
+    contents of ``requirements`` itself: any ``torch`` or ``torchaudio``
+    spec triggers the probe + Stage-1 install via the chosen PyTorch
+    wheel index. Backends that declare neither — including the genuinely
+    torch-free case (e.g. a venv that only consumes a pure-Python GitHub
+    repo) — skip the probe and the CUDA index entirely and do a single
+    install pass against default PyPI. Backends that need ``torch`` /
+    ``torchaudio`` (including via a transitive dep) MUST pin them in
+    their own ``_REQUIREMENTS`` so the CUDA routing applies — otherwise
+    Stage 2's transitive resolution against PyPI can split them across
+    mismatched local-version tags.
+
     Args:
         name: Unique identifier for this venv (e.g., "coqui", "ppgs").
         requirements: List of pip install specs (e.g., ["coqui-tts~=0.27"]).
@@ -211,29 +223,40 @@ def ensure_venv(
     marker = venv_dir / ".senselab-installed"
 
     with FileLock(str(lock_path), timeout=600):
-        # Resolve the torch wheel index FIRST so the marker-match check
-        # below can compare the cached index URL. Order: env override
-        # decides the URL; the host-CUDA probe still runs (even with the
-        # override) so its result can be surfaced in the diagnostic when
-        # an install failure wraps into ``SenselabCudaCompatibilityError``.
-        env_override = os.getenv("SENSELAB_TORCH_INDEX_URL") or None
-        host_cuda = detect_host_cuda()
-        torch_index = pick_torch_index(host_cuda, env_override=env_override)
+        # Auto-detect whether this venv routes torch through the CUDA
+        # index: any caller-declared torch / torchaudio spec triggers the
+        # probe + Stage-1 install. A backend that pins neither (yamnet,
+        # continuous-ser, or future torch-free venvs) skips the probe
+        # entirely — no ``nvidia-smi`` shellout, no ``torchaudio`` forced
+        # into the install. The probe still runs (when triggered) even
+        # with ``SENSELAB_TORCH_INDEX_URL`` set so its result can be
+        # surfaced in the diagnostic when an install failure wraps into
+        # ``SenselabCudaCompatibilityError``.
+        torch_specs = _torch_install_specs(requirements)
+        host_cuda: Optional[HostCuda] = None
+        torch_index: Optional[TorchIndex] = None
+        if torch_specs:
+            env_override = os.getenv("SENSELAB_TORCH_INDEX_URL") or None
+            probed = detect_host_cuda()
+            host_cuda = probed
+            torch_index = pick_torch_index(probed, env_override=env_override)
 
+        expected_index_url = torch_index.url if torch_index is not None else None
         if marker.is_file():
             stored = json.loads(marker.read_text())
             stored_index_url = (stored.get("torch_index") or {}).get("url")
-            if stored.get("requirements") == sorted(requirements) and stored_index_url == torch_index.url:
+            if stored.get("requirements") == sorted(requirements) and stored_index_url == expected_index_url:
                 logger.debug("Reusing existing venv: %s", venv_dir)
                 return venv_dir
 
         uv = _find_uv()
         py_ver = python_version or f"{sys.version_info.major}.{sys.version_info.minor}"
+        index_label = torch_index.tag if torch_index is not None else "n/a (torch-free)"
         logger.info(
             "Creating isolated venv '%s' with Python %s (torch index: %s)",
             name,
             py_ver,
-            torch_index.tag,
+            index_label,
         )
 
         if venv_dir.exists():
@@ -254,62 +277,125 @@ def ensure_venv(
             shutil.rmtree(venv_dir, ignore_errors=True)
             raise
 
-        # Always include IPC serialization deps (safetensors for tensors,
-        # numpy for arrays, torchaudio for FLAC audio encoding). Route
-        # torch/torchaudio through the chosen PyTorch wheel index; keep
-        # PyPI as the extra index so non-torch packages still resolve.
-        all_reqs = [*requirements, "safetensors", "numpy", "torchaudio"]
+        if torch_index is not None:
+            assert host_cuda is not None  # narrows the Optional for type-checkers
+            # Two-stage install — works around uv's flag-precedence quirk.
+            #
+            # uv treats ``--extra-index-url`` as having higher priority
+            # than ``--index-url`` (opposite of pip). So the obvious one-
+            # shot form ``--index-url <cuda> --extra-index-url pypi`` lets
+            # PyPI win for every package, including ``torch`` and
+            # ``torchaudio``. On hosts where PyPI ships those two with
+            # mismatched ``+cu`` local-version tags (currently
+            # ``torch==X+cu129`` vs ``torchaudio==X`` with no tag), the
+            # resulting venv hits the ABI mismatch this routing was meant
+            # to prevent (``RuntimeError: PyTorch has CUDA version 12.9
+            # whereas TorchAudio has CUDA version 12.8``).
+            #
+            # Stage 1: install caller-declared torch / torchaudio specs
+            # with ONLY the chosen CUDA index named (no ``--extra-index-
+            # url``), so the index is unambiguously primary and both
+            # wheels — plus their ``nvidia-cuda-runtime-cu12`` transitives
+            # — come from it with matched toolchains.
+            #
+            # Stage 2: install the remaining requirements (with torch +
+            # torchaudio specs filtered out so uv can't re-resolve them
+            # against PyPI) + the IPC serialization deps via default
+            # PyPI. uv sees torch / torchaudio already installed and
+            # satisfying any pin in ``requirements``, so it doesn't
+            # re-resolve them. The PyTorch index governs only the two
+            # packages it's designed for, and stale wheels on the CUDA
+            # index for utilities like setuptools or pyarrow stay out
+            # of the picture.
+            try:
+                subprocess.run(
+                    [
+                        uv,
+                        "pip",
+                        "install",
+                        "--index-url",
+                        torch_index.url,
+                        "--python",
+                        venv_python(venv_dir),
+                        *torch_specs,
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            except subprocess.CalledProcessError as exc:
+                # Wipe the half-built venv before raising so the next run starts clean.
+                shutil.rmtree(venv_dir, ignore_errors=True)
+                failing = _classify_uv_failure(exc.stderr or "")
+                if failing is not None:
+                    # Compat-error path: the wrapped exception's message already
+                    # carries the diagnostic fields (host CUDA, attempted index,
+                    # failing packages, recommended action). Logging the full uv
+                    # stderr would just duplicate that.
+                    logger.debug("Wheel not found installing torch in venv '%s': %s", name, exc.stderr)
+                    raise SenselabCudaCompatibilityError(
+                        host_cuda=host_cuda,
+                        attempted_index=torch_index,
+                        failing_packages=failing,
+                    ) from exc
+                # Pass-through path: log the stderr so the user can see what
+                # really went wrong (network, permission, syntax, ...).
+                logger.error("Failed to install torch in venv '%s': %s", name, exc.stderr)
+                raise
+
+            # Stage 2: backend requirements (minus any torch / torchaudio
+            # specs — those are already installed and listing them here
+            # without an index flag could let uv consider replacing the
+            # matched wheels with PyPI's tagless versions) plus the IPC
+            # serialization deps (safetensors + numpy). ``torchaudio``
+            # was installed in Stage 1; both safetensors and numpy are
+            # pure-Python and pull cleanly from PyPI everywhere.
+            stage_two_reqs = [r for r in requirements if _spec_pkg_name(r) not in _TORCH_PKG_NAMES] + [
+                "safetensors",
+                "numpy",
+            ]
+        else:
+            # Torch-free path: single install pass straight from default
+            # PyPI. No probe, no CUDA-index routing, no ``torchaudio``
+            # forced into the install — backends that don't declare
+            # torch / torchaudio don't pay for them.
+            stage_two_reqs = [*requirements, "safetensors", "numpy"]
+
         try:
             subprocess.run(
                 [
                     uv,
                     "pip",
                     "install",
-                    "--index-url",
-                    torch_index.url,
-                    "--extra-index-url",
-                    "https://pypi.org/simple",
                     "--python",
                     venv_python(venv_dir),
-                    *all_reqs,
+                    *stage_two_reqs,
                 ],
                 check=True,
                 capture_output=True,
                 text=True,
             )
         except subprocess.CalledProcessError as exc:
-            # Wipe the half-built venv before raising so the next run starts clean.
             shutil.rmtree(venv_dir, ignore_errors=True)
-            failing = _classify_uv_failure(exc.stderr or "")
-            if failing is not None:
-                # Compat-error path: the wrapped exception's message already
-                # carries the diagnostic fields (host CUDA, attempted index,
-                # failing packages, recommended action). Logging the full uv
-                # stderr would just duplicate that.
-                logger.debug("Wheel not found installing in venv '%s': %s", name, exc.stderr)
-                raise SenselabCudaCompatibilityError(
-                    host_cuda=host_cuda,
-                    attempted_index=torch_index,
-                    failing_packages=failing,
-                ) from exc
-            # Pass-through path: log the stderr so the user can see what
-            # really went wrong (network, permission, syntax, ...).
             logger.error("Failed to install in venv '%s': %s", name, exc.stderr)
             raise
 
-        marker.write_text(
-            json.dumps(
-                {
-                    "requirements": sorted(requirements),
-                    "python_version": py_ver,
-                    "torch_index": {
-                        "tag": torch_index.tag,
-                        "url": torch_index.url,
-                        "source": torch_index.source,
-                    },
-                }
-            )
-        )
+        marker_data: dict[str, object] = {
+            "requirements": sorted(requirements),
+            "python_version": py_ver,
+        }
+        if torch_index is not None:
+            # Only stamp the index field on torch-using venvs; the marker
+            # comparison treats its absence as "no torch routing in use",
+            # so a future call against the same name whose ``requirements``
+            # have grown a torch / torchaudio spec correctly invalidates
+            # and rebuilds.
+            marker_data["torch_index"] = {
+                "tag": torch_index.tag,
+                "url": torch_index.url,
+                "source": torch_index.source,
+            }
+        marker.write_text(json.dumps(marker_data))
         logger.info("Venv '%s' ready at %s", name, venv_dir)
         return venv_dir
 
@@ -351,6 +437,58 @@ def _classify_uv_failure(stderr: str) -> Optional[list[str]]:
             seen.add(m)
             out.append(m)
     return out
+
+
+# Packages whose install must be routed through the chosen CUDA-tagged
+# PyTorch wheel index. We don't include downstream torch-ecosystem names
+# like ``torchvision``/``torchtext`` because senselab's subprocess venvs
+# don't currently use them; add here if that changes.
+_TORCH_PKG_NAMES = frozenset({"torch", "torchaudio"})
+
+# Capture the package name at the start of a uv pip install spec, stopping
+# at the first character that isn't part of a PEP 508 distribution name —
+# extras start with ``[``, versions with one of ``<>=!~``, URL/git refs
+# with whitespace or ``@``. Matches ``torch``, ``torch>=2.8,<2.9``,
+# ``torch[gpu]==2.8``, and ``nemo_toolkit[asr,tts] @ git+https://...``.
+_PKG_NAME_RE = re.compile(r"^\s*([A-Za-z0-9._-]+)")
+
+
+def _spec_pkg_name(spec: str) -> str:
+    """Return the lowercased package name from a uv pip install spec.
+
+    Returns ``""`` for specs that don't begin with a recognizable package
+    name (e.g. a stray empty string). The match is loose by design — we
+    only need it to identify torch + torchaudio entries inside
+    ``requirements`` lists.
+    """
+    m = _PKG_NAME_RE.match(spec)
+    return m.group(1).lower() if m else ""
+
+
+def _torch_install_specs(requirements: list[str]) -> list[str]:
+    """Return the ``torch`` / ``torchaudio`` specs explicitly named in ``requirements``.
+
+    Forwards EVERY torch / torchaudio entry verbatim — so a backend
+    pinning ``["torch>=2.8", "torch<2.9"]`` as two separate constraints
+    gets both passed to uv, which combines them at resolve time. A single
+    combined spec like ``"torch>=2.8,<2.9"`` still flows through
+    unchanged.
+
+    Returns an empty list when neither package is in ``requirements``,
+    which ``ensure_venv`` treats as "skip Stage 1, skip the probe". The
+    earlier version of this helper padded the return with bare ``torch``
+    / ``torchaudio`` names so every venv routed both packages through
+    the CUDA index regardless of declared needs — that meant
+    ``torchaudio`` got force-installed in venvs (``yamnet``,
+    ``continuous-ser``) that never imported it, adding ~200 MB of wheels
+    for no reason. Backends that genuinely need ``torch`` or
+    ``torchaudio`` — including via a transitive dep like ``qwen-asr`` —
+    MUST pin them in their own ``_REQUIREMENTS`` so this helper picks
+    them up and Stage 1 routes them through the matched CUDA index.
+    Otherwise Stage 2's transitive resolution against PyPI can split
+    them across mismatched local-version tags.
+    """
+    return [spec for spec in requirements if _spec_pkg_name(spec) in _TORCH_PKG_NAMES]
 
 
 def venv_python(venv_dir: Path) -> str:
