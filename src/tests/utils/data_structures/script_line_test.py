@@ -110,6 +110,41 @@ def test_from_dict_rejects_dict_with_no_text_or_speaker() -> None:
         ScriptLine.from_dict({})
 
 
+def test_from_dict_preserves_empty_text_in_nested_chunks() -> None:
+    """Nested chunks with ``text=""`` survive ``from_dict``'s child filter.
+
+    The internal ``_is_meaningful`` filter used to drop any chunk whose
+    text was falsy, including the empty string. After the validator
+    change, empty text is a meaningful "model produced no transcript for
+    this subsegment" signal, so the filter must keep it — only chunks
+    where BOTH text and speaker are absent / ``None`` should be dropped.
+
+    Without this guarantee the empty-text fix is silently undone for
+    payloads that travel through ``from_dict`` (subprocess IPC, saved
+    JSON), which is the very path that motivated the validator change.
+    """
+    line = ScriptLine.from_dict({"text": "parent", "chunks": [{"text": ""}]})
+    assert line.chunks is not None
+    assert len(line.chunks) == 1
+    assert line.chunks[0].text == ""
+
+
+def test_from_dict_still_drops_chunks_missing_both_text_and_speaker() -> None:
+    """Children with neither text nor speaker still get filtered out.
+
+    The original purpose of the ``_is_meaningful`` filter (avoid tripping
+    the root validator on wholly-empty placeholder children, e.g. from
+    MMS-style aligners) is preserved — only its overly-aggressive
+    truthiness check is loosened.
+    """
+    line = ScriptLine.from_dict({"text": "parent", "chunks": [{"text": ""}, {}, {"start": 0.0, "end": 1.0}]})
+    # The empty-text chunk survives; the two text-and-speaker-absent
+    # chunks are dropped before they reach the validator.
+    assert line.chunks is not None
+    assert len(line.chunks) == 1
+    assert line.chunks[0].text == ""
+
+
 # ── Score / timestamp interactions (unchanged behavior, asserted here
 #     so future validator tweaks don't quietly regress them) ─────────
 
