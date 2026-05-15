@@ -79,6 +79,16 @@ class ScriptLine(BaseModel):
     def validate_text_and_speaker(cls, values: Dict[str, Any], _: ValidationInfo) -> Dict[str, Any]:
         """Ensure that at least one of `text` or `speaker` is provided.
 
+        A field counts as "provided" if its value is not `None`. Empty
+        strings (`text=""`) are accepted — they represent a valid "the
+        model was called but produced no transcript for this audio"
+        signal, distinct from "the model was never called" (`text=None`).
+        This matters for ASR backends that honestly emit empty output on
+        unintelligible / silent audio (e.g. IBM Granite-Speech on heavily-
+        enhanced short clips) rather than hallucinating filler. Whitespace-
+        only strings are also accepted; the field validator below strips
+        them, so they end up indistinguishable from explicit empty input.
+
         Args:
             values: Incoming field values prior to model construction.
 
@@ -86,9 +96,9 @@ class ScriptLine(BaseModel):
             The (possibly modified) values dict.
 
         Raises:
-            ValueError: If both `text` and `speaker` are missing/empty.
+            ValueError: If both `text` and `speaker` are `None` or absent.
         """
-        if not values.get("text") and not values.get("speaker"):
+        if values.get("text") is None and values.get("speaker") is None:
             raise ValueError("At least text or speaker must be provided.")
         return values
 
