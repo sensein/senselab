@@ -280,14 +280,34 @@ def compute_pass_global_summary(
 
     # ─── no_pii ───
     # Surface the actual detected PII spans (text + category + detector + ASR
-    # source + confidence) so the consumer can audit. The boolean ``contains_pii``
-    # flag drives the bottom-line uncertainty; the span list lets a reviewer
-    # decide whether each detection is a true positive worth redacting.
+    # source + confidence) so the consumer can audit. The continuous
+    # ``detection_confidence`` (per-span score × cross-detector agreement ×
+    # cross-ASR agreement) drives the bottom-line uncertainty; the boolean
+    # ``contains_pii`` and the span list let a reviewer decide whether each
+    # detection is a true positive worth redacting. ``None`` propagation:
+    # ``pii_report is None`` (PII stage skipped upstream) or
+    # ``pii_report.detector_used is None`` (subprocess crashed / both
+    # detectors failed to load / caller passed ``detectors=[]``) both
+    # surface as ``no_pii_uncertainty = None`` — distinct from ``0.0``
+    # ("ran, found nothing") so a downstream auditor can tell "didn't
+    # check" from "checked clean".
     if pii_report is None:
         no_pii_uncertainty: float | None = None
         pii_block: dict[str, Any] | None = None
+    elif pii_report.detector_used is None:
+        no_pii_uncertainty = None
+        pii_block = {
+            "contains_pii": pii_report.contains_pii,
+            "n_spans": pii_report.n_spans,
+            "categories": pii_report.categories,
+            "detector_used": None,
+            "detection_confidence": None,
+            "spans_by_category": {},
+            "spans": [],
+            "failures": pii_report.failures,
+        }
     else:
-        no_pii_uncertainty = 1.0 if pii_report.contains_pii else 0.0
+        no_pii_uncertainty = pii_report.detection_confidence
         # Group spans by category for a quick at-a-glance view; full per-span
         # detail lives alongside.
         from collections import defaultdict
@@ -307,6 +327,7 @@ def compute_pass_global_summary(
             "n_spans": pii_report.n_spans,
             "categories": pii_report.categories,
             "detector_used": pii_report.detector_used,
+            "detection_confidence": pii_report.detection_confidence,
             "spans_by_category": dict(spans_by_category),
             "spans": [
                 {
