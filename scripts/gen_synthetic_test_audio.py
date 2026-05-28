@@ -63,27 +63,25 @@ SPEECHT5_REVISION = "main"
 
 CMU_ARCTIC_DATASET_ID = "Matthijs/cmu-arctic-xvectors"
 
-# Deliberate speaker selection (Option 1):
+# Deliberate speaker selection (Option 1) — verified against the parquet
+# auto-conversion of ``Matthijs/cmu-arctic-xvectors`` (default/validation):
 #
-#   A — target subject. Index 7306 is the well-known SpeechT5 demo voice
-#       (commonly maps to CMU-Arctic ``slt`` — US female). Used everywhere
-#       in HF SpeechT5 tutorials, so it's the most-auditioned reference.
-#   B — intruder. Index 5306 is selected to land on a *male* CMU-Arctic
-#       speaker (likely ``rms``), guaranteeing perceptually obvious
-#       contrast with A for SC-002 / SC-003 acceptance tests.
-#   C — similar-timbre spare. Index 1000 is a *different female* CMU-Arctic
-#       voice (likely ``clb`` or another) used as the cluster-ambiguity
-#       stress test (FR-014: balanced-multi-speaker subject must be flagged
-#       ``confidence="ambiguous"``).
+#   A — target subject. Index 7306 → ``slt`` (US female). The well-known
+#       SpeechT5 demo voice — used in every HF SpeechT5 tutorial.
+#   B — intruder. Index 5306 → ``ksp`` (Indian male). Clearly different
+#       gender, accent, and timbre vs A → SC-002 / SC-003 acceptance tests
+#       get unambiguous "different person" contrast.
+#   C — similar-timbre spare. Index 2837 → ``clb`` (US female). A different
+#       US female from A; used for the cluster-ambiguity stress test
+#       (FR-014: balanced-multi-speaker subject → ``confidence="ambiguous"``).
 #
-# The *expected* speaker_id strings below are best-guess based on common HF
-# SpeechT5 demo configurations. ``_load_speaker_embeddings`` logs the
-# *observed* speaker_id from the dataset at runtime so the picked indices
-# can be verified and adjusted on first generation.
+# ``_load_speaker_embeddings`` logs the observed CMU-Arctic speaker_id at
+# runtime so the choice is verifiable; the manifest also records both the
+# expected and observed values.
 CMU_ARCTIC_SPEAKERS: dict[str, tuple[str, int]] = {
     "A": ("slt", 7306),   # target — US female
-    "B": ("rms", 5306),   # intruder — US male
-    "C": ("clb", 1000),   # similar-timbre spare — US female (different person)
+    "B": ("ksp", 5306),   # intruder — Indian male
+    "C": ("clb", 2837),   # similar-timbre spare — US female (different person)
 }
 
 SAMPLE_RATE_HZ = 16000
@@ -176,7 +174,10 @@ PII_TRANSCRIPTS: tuple[PIITranscript, ...] = (
     ),
     PIITranscript(
         "address-spoken", "ADDRESS",
-        "I live at twelve thirty-four Maple Street in Springfield.",
+        # Earlier draft used "twelve thirty-four" which SpeechT5 read as the
+        # time "12:34" — switched to a clearly-numeric word form that
+        # rendered fine in the free-mixed clip ("five hundred Oak Avenue").
+        "I live at two hundred forty-five Maple Street in Springfield.",
     ),
     PIITranscript(
         "dob-spoken", "DOB",
@@ -424,29 +425,41 @@ def _load_speaker_embeddings(
 ) -> tuple[dict[str, Any], dict[str, str]]:
     """Load the picked x-vectors and verify the observed CMU-Arctic speaker_ids.
 
+    Uses the auto-converted parquet branch of ``Matthijs/cmu-arctic-xvectors``
+    (the dataset's script-loader form is no longer supported by modern
+    ``datasets``). The parquet has ``filename`` (e.g.
+    ``cmu_us_<speaker>_arctic-...``) and ``xvector`` (512-D) columns.
+
     Returns ``(embeddings, observed_speaker_ids)`` where:
       - ``embeddings`` is ``{speaker_key -> torch.Tensor of shape (1, dim)}``
       - ``observed_speaker_ids`` is ``{speaker_key -> str}`` reflecting what the
         dataset actually reports for the picked index — useful so the user can
         confirm Option-1 deliberate selection landed on the intended speakers.
     """
+    import pyarrow.parquet as pq
     import torch
-    from datasets import load_dataset
+    from huggingface_hub import hf_hub_download
 
-    ds = load_dataset(CMU_ARCTIC_DATASET_ID, split="validation")
+    parquet_path = hf_hub_download(
+        repo_id=CMU_ARCTIC_DATASET_ID,
+        repo_type="dataset",
+        revision="refs/convert/parquet",
+        filename="default/validation/0000.parquet",
+    )
+    table = pq.read_table(parquet_path)
+    filenames = table["filename"].to_pylist()
+    xvectors = table["xvector"].to_pylist()
+
     embeddings: dict[str, torch.Tensor] = {}
     observed: dict[str, str] = {}
     for key, (expected_sid, idx) in speakers.items():
-        row = ds[idx]
-        vec = torch.tensor(row["xvector"]).unsqueeze(0)
-        # ``filename`` in CMU-Arctic xvectors is typically of the form
-        # ``cmu_us_<speaker>_arctic-...`` so we extract the speaker id from it.
-        sid = row.get("filename", "")
-        if isinstance(sid, str) and sid.startswith("cmu_us_"):
-            parts = sid.split("_")
-            observed_sid = parts[2] if len(parts) >= 3 else sid
+        vec = torch.tensor(xvectors[idx]).unsqueeze(0)
+        fn = filenames[idx]
+        if isinstance(fn, str) and fn.startswith("cmu_us_"):
+            parts = fn.split("_")
+            observed_sid = parts[2] if len(parts) >= 3 else fn
         else:
-            observed_sid = str(sid) if sid else "unknown"
+            observed_sid = str(fn) if fn else "unknown"
         embeddings[key] = vec
         observed[key] = observed_sid
         marker = "OK" if observed_sid == expected_sid else "DIFFERENT"
