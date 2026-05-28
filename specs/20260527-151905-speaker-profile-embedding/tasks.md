@@ -60,16 +60,16 @@ New package: `src/senselab/audio/workflows/speaker_profile/`. Reuses existing `a
 
 ### Tests for User Story 1
 
-- [ ] T011 [US1] Add build tests in `src/tests/audio/workflows/speaker_profile/build_test.py` using the T010a–T010b fixtures: one profile + usage record (SC-001/FR-001/FR-004); contamination tolerance with ≤20% intruder, profile closer to held-out target than intruder (SC-002); non-speech/sub-1s files auto-dropped with reason (FR-016); confidence `ok`/`low`/`insufficient` boundaries (FR-005); balanced 50/50 subject → `ambiguous` vs dominant ~85/15 → confident (FR-014/SC-007)
+- [X] T011 [US1] Add build tests in `src/tests/audio/workflows/speaker_profile/build_test.py` using the T010a–T010b fixtures: one profile + usage record (SC-001/FR-001/FR-004); contamination tolerance with ≤20% intruder, profile closer to held-out target than intruder (SC-002); non-speech/sub-1s files auto-dropped with reason (FR-016); confidence `ok`/`low`/`insufficient` boundaries (FR-005); balanced 50/50 subject → `ambiguous` vs dominant ~85/15 → confident (FR-014/SC-007)
 
 ### Implementation for User Story 1
 
-- [ ] T012 [US1] Implement cross-file dominant-cluster aggregation → L2-normalized per-model centroid + empirical calibration band, reusing `clustering.cluster_pass_speakers` / `_empirical_calibration_band` over the pooled file-tagged windows, in `src/senselab/audio/workflows/speaker_profile/build.py` (depends on T009)
-- [ ] T013 [US1] Implement the confidence policy (aggregate speech-seconds vs `min/target_confident_speech_s`; `AMBIGUITY_SHARE_RATIO` for near-equal top-two clusters; `insufficient` → decline) reading thresholds from `constants.py`, in `src/senselab/audio/workflows/speaker_profile/build.py`
-- [ ] T014 [US1] Implement per-file keep/drop decisions and `ProfileSourceFile` usage records (windows used, speech seconds, kept, drop_reason) (FR-016/FR-004) in `src/senselab/audio/workflows/speaker_profile/build.py`
-- [ ] T015 [US1] Implement optional same-session weighting (`prefer_session`, up-weight same-session windows; default unweighted; works without session metadata) (FR-013) in `src/senselab/audio/workflows/speaker_profile/build.py`
-- [ ] T016 [US1] Implement the `build_speaker_profile(...)` orchestration entrypoint tying extraction → aggregation → confidence → records → `io.save` into a `SpeakerProfile`, in `src/senselab/audio/workflows/speaker_profile/build.py`
-- [ ] T017 [US1] Implement the `build_speaker_profile` CLI per contracts/build-profile-cli.md (positional files + `--files-from`, `--subject-id`, `--output`, model/window/threshold/session flags, shared `--cache-dir`, exit codes, one-line summary) in `scripts/build_speaker_profile.py`
+- [X] T012 [US1] Implement cross-file dominant-cluster aggregation → L2-normalized per-model centroid + empirical calibration band, reusing `clustering.cluster_pass_speakers` / `_empirical_calibration_band` over the pooled file-tagged windows, in `src/senselab/audio/workflows/speaker_profile/build.py` (depends on T009)
+- [X] T013 [US1] Implement the confidence policy (aggregate speech-seconds vs `min/target_confident_speech_s`; `AMBIGUITY_SHARE_RATIO` for near-equal top-two clusters; `insufficient` → decline) reading thresholds from `constants.py`, in `src/senselab/audio/workflows/speaker_profile/build.py`
+- [X] T014 [US1] Implement per-file keep/drop decisions and `ProfileSourceFile` usage records (windows used, speech seconds, kept, drop_reason) (FR-016/FR-004) in `src/senselab/audio/workflows/speaker_profile/build.py`
+- [X] T015 [US1] Implement optional same-session weighting (`prefer_session`, up-weight same-session windows; default unweighted; works without session metadata) (FR-013) in `src/senselab/audio/workflows/speaker_profile/build.py`
+- [X] T016 [US1] Implement the `build_speaker_profile(...)` orchestration entrypoint tying extraction → aggregation → confidence → records → `io.save` into a `SpeakerProfile`, in `src/senselab/audio/workflows/speaker_profile/build.py`
+- [X] T017 [US1] Implement the `build_speaker_profile` CLI per contracts/build-profile-cli.md (positional files + `--files-from`, `--subject-id`, `--output`, model/window/threshold/session flags, shared `--cache-dir`, exit codes, one-line summary) in `scripts/build_speaker_profile.py`
 
 **Checkpoint**: A subject's files → one inspectable profile artifact. MVP complete and testable on its own.
 
