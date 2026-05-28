@@ -23,6 +23,12 @@ from senselab.audio.workflows.speaker_profile.build import (
     decide_confidence,
     extract_speech_windows_for_file,
 )
+from senselab.audio.workflows.speaker_profile.compare import (
+    compare_recording_to_profile,
+    leave_one_file_out_profile,
+    score_window,
+    within_file_holdout_profile,
+)
 from senselab.audio.workflows.speaker_profile.io import (
     ProfileSchemaError,
     load_profile,
@@ -57,8 +63,12 @@ __all__ = [
     "aggregate_dominant_cluster",
     "build_source_records",
     "build_speaker_profile",
+    "compare_recording_to_profile",
     "decide_confidence",
     "extract_speech_windows_for_file",
+    "leave_one_file_out_profile",
     "load_profile",
     "save_profile",
+    "score_window",
+    "within_file_holdout_profile",
 ]

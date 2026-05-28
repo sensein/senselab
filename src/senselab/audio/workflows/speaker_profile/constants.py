@@ -158,17 +158,36 @@ near-tie without erasing the contribution of other sessions."""
 
 
 # ---------------------------------------------------------------------------
-# Comparison-time policy (FR-008 / R6). The other-voice threshold is adaptive
-# per profile (derived from its empirical calibration band); a fixed override
-# is available via ``--profile-other-voice-threshold``. The fusion weights are
-# a placeholder pending T028's sweep.
+# Comparison-time policy. Each scored window's distance to the profile centroid
+# is mapped to a calibrated other-voice uncertainty in [0, 1] using the
+# profile's own empirical calibration band — so the *raw-distance* decision
+# boundary adapts per subject even though the cutoff on the calibrated value is
+# fixed. A CLI override replaces that calibrated cutoff with an explicit value.
 # ---------------------------------------------------------------------------
 
 OTHER_VOICE_THRESHOLD_DEFAULT: float | None = None
-"""[new] ``None`` → adaptive (derived from the profile's calibration band).
-A fixed value (CLI override) overrides per-subject calibration."""
+"""[new] ``None`` → adaptive: flag using ``OTHER_VOICE_CALIBRATED_CUTOFF`` on
+the per-subject calibrated uncertainty. A fixed value (CLI override) replaces
+that cutoff with an explicit calibrated-uncertainty threshold."""
+
+OTHER_VOICE_CALIBRATED_CUTOFF: float = 0.5
+"""[new] Validate empirically. Calibrated other-voice uncertainty at/above which
+a speech-present window is flagged ``other_voice``. ``0.5`` is the midpoint of
+the per-subject calibration band (the EER-like operating point); the band makes
+the effective raw-distance threshold adapt to the subject."""
+
+MIN_P_VOICE_FOR_COMPARISON: float = 0.5
+"""[new] Validate empirically. Speech-presence gate: windows whose reused
+``p_voice`` falls below this are scored ``unavailable`` rather than flagged, so a
+cough / breath / silence is never reported as another voice."""
+
+WITHIN_FILE_HOLDOUT_GUARD_S: float = 2.0
+"""[new] Temporal guard band for single-file within-file holdout: when the
+analyzed recording is the profile's only source file, windows within this many
+seconds of the window under test are excluded from the holdout centroid so a
+window is never scored against a centroid that contains itself."""
 
 CONSENSUS_FUSION_WEIGHTS_DEFAULT: dict[str, float] | None = None
-"""[new] VALIDATE (T028). ``None`` → unweighted mean of per-model calibrated
-uncertainties (R3). Revisit weighting if one model dominates errors in the
+"""[new] Validate empirically. ``None`` → unweighted mean of per-model
+calibrated uncertainties. Revisit weighting if one model dominates errors in the
 empirical sweep."""
