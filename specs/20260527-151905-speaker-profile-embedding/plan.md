@@ -91,7 +91,7 @@ src/tests/audio/workflows/speaker_profile/   # NEW tests
 ├── compare_test.py                 # (T018, T025)
 ├── cache_test.py                   # (T008)
 ├── io_test.py                      # (T010c)
-├── fixtures.py                     # deterministic composers (T010b)
+├── conftest.py                     # deterministic composers (T010b)
 └── regression_test.py              # SC-006 byte-identical (T029)
 
 src/tests/data_for_testing/synthetic/        # NEW committed FLAC clips + manifest.json (T010a)

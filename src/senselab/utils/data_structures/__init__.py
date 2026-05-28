@@ -12,6 +12,7 @@ from .model import (  # noqa: F401
     SentenceTransformersModel,
     SpeechBrainModel,
     TorchModel,
+    TransformersWavLMModel,
     check_hf_repo_exists,
 )
 
