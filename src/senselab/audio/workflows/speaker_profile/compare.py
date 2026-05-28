@@ -1,0 +1,255 @@
+"""Score an analyzed recording's windows against a speaker profile.
+
+This is the comparison half of the workflow (the build half lives in
+:mod:`build`). Given a profile's per-model centroids and calibration band, it
+scores each short detection window of a recording and flags likely
+**other-voice** regions:
+
+- :func:`compare_recording_to_profile` — per-window consensus scoring on the
+  short detection grid, speech-presence gating, and ``target`` /
+  ``other_voice`` / ``unavailable`` flagging.
+- :func:`leave_one_file_out_profile` — recompute the centroid excluding a
+  contributing file's windows, so a recording that helped build the profile is
+  not scored against a centroid that contains itself.
+- :func:`within_file_holdout_profile` — the single-file fallback: exclude the
+  windows near the window under test instead of a whole file.
+
+The functions are pure: callers supply already-extracted embeddings (and, for
+leave-one-out, the pooled source windows re-extracted from the shared cache).
+"""
+
+from __future__ import annotations
+
+from typing import Mapping, Sequence
+
+import numpy as np
+
+from senselab.audio.workflows.audio_analysis.embeddings import (
+    WindowEmbedding,
+    calibrate_cosine_uncertainty,
+)
+from senselab.audio.workflows.speaker_profile import constants as C
+from senselab.audio.workflows.speaker_profile.build import (
+    AggregationResult,
+    TaggedWindowEmbedding,
+    aggregate_dominant_cluster,
+)
+from senselab.audio.workflows.speaker_profile.types import ProfileComparisonResult
+
+
+def _cosine_distance(a: np.ndarray, b: np.ndarray) -> float | None:
+    """``1 - cos_sim`` between two 1-D vectors, or ``None`` on degenerate input."""
+    av = np.asarray(a, dtype=np.float64).flatten()
+    bv = np.asarray(b, dtype=np.float64).flatten()
+    if av.size == 0 or bv.size == 0 or av.size != bv.size:
+        return None
+    na = float(np.linalg.norm(av))
+    nb = float(np.linalg.norm(bv))
+    if na <= 0 or nb <= 0:
+        return None
+    cos_sim = float(np.dot(av, bv) / (na * nb))
+    return 1.0 - cos_sim
+
+
+def score_window(
+    window_vectors: Mapping[str, np.ndarray],
+    centroids: Mapping[str, Sequence[float]],
+    calibration_band: Mapping[str, tuple[float, float]],
+    *,
+    fusion_weights: Mapping[str, float] | None = None,
+) -> tuple[float | None, float | None, dict[str, float]]:
+    """Score one window's per-model embeddings against the profile centroids.
+
+    For each model present in both the window and the profile, the cosine
+    distance to that model's centroid is mapped to a calibrated other-voice
+    uncertainty via the model's own calibration band (so 192-D ECAPA / ResNet
+    and 512-D WavLM are never compared directly). The per-model uncertainties
+    are fused into a consensus.
+
+    Args:
+        window_vectors: ``{model_id -> embedding vector}`` for this time window.
+        centroids: ``{model_id -> centroid vector}`` from the profile.
+        calibration_band: ``{model_id -> (same_floor, diff_floor)}`` from the
+            profile; the literature fallback band is used for any missing model.
+        fusion_weights: Optional ``{model_id -> weight}`` for the consensus mean;
+            ``None`` is an unweighted mean.
+
+    Returns:
+        ``(similarity, other_voice_uncertainty, per_model)`` where ``similarity``
+        is ``1 - other_voice_uncertainty`` (calibrated, higher = more like the
+        target), ``other_voice_uncertainty`` is the consensus, and ``per_model``
+        maps each model to its pre-fusion uncertainty. All three are ``None`` /
+        empty when no model overlaps between the window and the profile.
+    """
+    per_model: dict[str, float] = {}
+    for model_id, centroid in centroids.items():
+        vec = window_vectors.get(model_id)
+        if vec is None:
+            continue
+        cos_dist = _cosine_distance(vec, np.asarray(centroid, dtype=np.float64))
+        if cos_dist is None:
+            continue
+        same_floor, diff_floor = calibration_band.get(
+            model_id, (C.SAME_SPEAKER_FLOOR_FALLBACK, C.DIFF_SPEAKER_FLOOR_FALLBACK)
+        )
+        per_model[model_id] = calibrate_cosine_uncertainty(
+            cos_dist, same_speaker_floor=same_floor, diff_speaker_floor=diff_floor, direction="same"
+        )
+
+    if not per_model:
+        return None, None, {}
+
+    if fusion_weights:
+        num = sum(per_model[m] * fusion_weights.get(m, 1.0) for m in per_model)
+        den = sum(fusion_weights.get(m, 1.0) for m in per_model)
+        consensus = float(num / den) if den > 0 else float(np.mean(list(per_model.values())))
+    else:
+        consensus = float(np.mean(list(per_model.values())))
+
+    similarity = 1.0 - consensus
+    return similarity, consensus, per_model
+
+
+def compare_recording_to_profile(
+    detection_windows: Mapping[str, list[WindowEmbedding]],
+    centroids: Mapping[str, Sequence[float]],
+    calibration_band: Mapping[str, tuple[float, float]],
+    *,
+    p_voice_by_window: Sequence[float | None] | None = None,
+    other_voice_threshold: float | None = C.OTHER_VOICE_THRESHOLD_DEFAULT,
+    min_p_voice: float = C.MIN_P_VOICE_FOR_COMPARISON,
+    fusion_weights: Mapping[str, float] | None = C.CONSENSUS_FUSION_WEIGHTS_DEFAULT,
+) -> list[ProfileComparisonResult]:
+    """Score every detection window of a recording against the profile.
+
+    Args:
+        detection_windows: ``{model_id -> [WindowEmbedding]}`` on the short
+            detection grid; all models share the same grid (as produced by
+            ``extract_per_window_embeddings``).
+        centroids: ``{model_id -> centroid vector}`` to score against — already
+            leave-one-file-out-adjusted by the caller when the recording
+            contributed to the profile.
+        calibration_band: ``{model_id -> (same_floor, diff_floor)}`` for the same
+            profile, used to calibrate each model's uncertainty.
+        p_voice_by_window: Optional reused presence value per window index. A
+            window below ``min_p_voice`` is scored ``unavailable`` (never
+            flagged). ``None`` disables gating (everything is scored).
+        other_voice_threshold: Calibrated-uncertainty cutoff for the
+            ``other_voice`` flag; ``None`` uses the adaptive
+            ``OTHER_VOICE_CALIBRATED_CUTOFF``.
+        min_p_voice: Presence gate threshold.
+        fusion_weights: Optional per-model consensus weights.
+
+    Returns:
+        One :class:`ProfileComparisonResult` per window, time-aligned to the
+        detection grid.
+    """
+    # Reference grid: any model's window list (they share the grid). Prefer a
+    # model that also has a centroid so indices line up with scorable vectors.
+    grid_model = next((m for m in centroids if m in detection_windows and detection_windows[m]), None)
+    if grid_model is None:
+        grid_model = next((m for m in detection_windows if detection_windows[m]), None)
+    if grid_model is None:
+        return []
+    grid = detection_windows[grid_model]
+
+    cutoff = other_voice_threshold if other_voice_threshold is not None else C.OTHER_VOICE_CALIBRATED_CUTOFF
+
+    results: list[ProfileComparisonResult] = []
+    for i, ref_w in enumerate(grid):
+        p_voice = None
+        if p_voice_by_window is not None and i < len(p_voice_by_window):
+            p_voice = p_voice_by_window[i]
+
+        # Speech-presence gate fails → unavailable, never flagged.
+        if p_voice is not None and p_voice < min_p_voice:
+            results.append(
+                ProfileComparisonResult(
+                    start=float(ref_w.start_s),
+                    end=float(ref_w.end_s),
+                    similarity=None,
+                    other_voice_uncertainty=None,
+                    flag="unavailable",
+                    p_voice=float(p_voice),
+                    per_model={},
+                )
+            )
+            continue
+
+        window_vectors: dict[str, np.ndarray] = {}
+        for model_id, windows in detection_windows.items():
+            if i < len(windows) and windows[i].vector.size > 0:
+                window_vectors[model_id] = np.asarray(windows[i].vector, dtype=np.float64)
+
+        similarity, uncertainty, per_model = score_window(
+            window_vectors, centroids, calibration_band, fusion_weights=fusion_weights
+        )
+
+        if uncertainty is None:
+            flag: str = "unavailable"
+        elif uncertainty >= cutoff:
+            flag = "other_voice"
+        else:
+            flag = "target"
+
+        results.append(
+            ProfileComparisonResult(
+                start=float(ref_w.start_s),
+                end=float(ref_w.end_s),
+                similarity=similarity,
+                other_voice_uncertainty=uncertainty,
+                flag=flag,  # type: ignore[arg-type]
+                p_voice=float(p_voice) if p_voice is not None else None,
+                per_model=per_model,
+            )
+        )
+    return results
+
+
+def leave_one_file_out_profile(
+    pooled_windows: Sequence[TaggedWindowEmbedding],
+    exclude_file_id: str,
+    *,
+    embedding_models: Sequence[str] = C.DEFAULT_EMBEDDING_MODELS,
+    prefer_session: str | None = None,
+    session_of_file: Mapping[str, str | None] | None = None,
+) -> AggregationResult | None:
+    """Recompute the profile centroid excluding one contributing file's windows.
+
+    When the recording being scored helped build the profile, its windows must
+    be removed from the centroid so the comparison is not circular. Returns
+    ``None`` when nothing remains after the exclusion (a single-file subject —
+    use :func:`within_file_holdout_profile` instead).
+    """
+    remaining = [w for w in pooled_windows if w.file_id != exclude_file_id]
+    if not remaining:
+        return None
+    return aggregate_dominant_cluster(
+        remaining,
+        embedding_models=embedding_models,
+        prefer_session=prefer_session,
+        session_of_file=session_of_file,
+    )
+
+
+def within_file_holdout_profile(
+    file_windows: Sequence[TaggedWindowEmbedding],
+    exclude_start_s: float,
+    exclude_end_s: float,
+    *,
+    embedding_models: Sequence[str] = C.DEFAULT_EMBEDDING_MODELS,
+    guard_s: float = C.WITHIN_FILE_HOLDOUT_GUARD_S,
+) -> AggregationResult | None:
+    """Single-file fallback for leave-one-file-out: hold out near the test window.
+
+    Excludes every window overlapping ``[exclude_start_s - guard_s,
+    exclude_end_s + guard_s]`` and re-aggregates the rest, so the window under
+    test is never scored against a centroid that contains itself or its
+    immediate neighbors. Returns ``None`` when too little remains.
+    """
+    lo = exclude_start_s - guard_s
+    hi = exclude_end_s + guard_s
+    remaining = [w for w in file_windows if not (w.window.start_s < hi and w.window.end_s > lo)]
+    if not remaining:
+        return None
+    return aggregate_dominant_cluster(remaining, embedding_models=embedding_models)
