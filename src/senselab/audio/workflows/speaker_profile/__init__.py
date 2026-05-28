@@ -26,7 +26,9 @@ from senselab.audio.workflows.speaker_profile.build import (
 from senselab.audio.workflows.speaker_profile.compare import (
     compare_recording_to_profile,
     leave_one_file_out_profile,
+    profile_votes_by_bucket,
     score_window,
+    summarize_other_voice,
     within_file_holdout_profile,
 )
 from senselab.audio.workflows.speaker_profile.io import (
@@ -68,7 +70,9 @@ __all__ = [
     "extract_speech_windows_for_file",
     "leave_one_file_out_profile",
     "load_profile",
+    "profile_votes_by_bucket",
     "save_profile",
     "score_window",
+    "summarize_other_voice",
     "within_file_holdout_profile",
 ]

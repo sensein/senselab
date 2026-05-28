@@ -34,7 +34,11 @@ from senselab.audio.workflows.speaker_profile.build import (
     TaggedWindowEmbedding,
     aggregate_dominant_cluster,
 )
-from senselab.audio.workflows.speaker_profile.types import ProfileComparisonResult
+from senselab.audio.workflows.speaker_profile.types import (
+    ProfileComparisonResult,
+    ProfileConfidence,
+    RecordingOtherVoiceSummary,
+)
 
 
 def _cosine_distance(a: np.ndarray, b: np.ndarray) -> float | None:
@@ -204,6 +208,107 @@ def compare_recording_to_profile(
             )
         )
     return results
+
+
+def _window_step_seconds(results: Sequence[ProfileComparisonResult]) -> list[float]:
+    """Non-overlapping per-window duration: gap to the next window's start.
+
+    The detection grid overlaps (e.g. 1 s window, 0.5 s hop), so summing raw
+    window spans double-counts time. Using each window's *step* to the next
+    (and the final window's own span) gives a coverage-correct duration so the
+    reported seconds and fractions are not inflated.
+    """
+    n = len(results)
+    steps: list[float] = []
+    for i, r in enumerate(results):
+        if i + 1 < n:
+            steps.append(max(0.0, float(results[i + 1].start) - float(r.start)))
+        else:
+            steps.append(max(0.0, float(r.end) - float(r.start)))
+    return steps
+
+
+def summarize_other_voice(
+    results: Sequence[ProfileComparisonResult],
+    profile_confidence: ProfileConfidence,
+) -> RecordingOtherVoiceSummary:
+    """Roll per-window comparison results up to a recording-level other-voice summary.
+
+    Produces the decision-ready signals that extend ``analyze_audio``'s existing
+    ``single_speaker`` claim: the fraction and duration of speech-present audio
+    flagged ``other_voice``, the peak and 95th-percentile uncertainty (robust to
+    a single spike), the speech-present denominator, and an echo of the profile
+    confidence so a downstream gate can fail-safe on a weak profile. No verdict.
+    """
+    steps = _window_step_seconds(results)
+    speech_present_seconds = 0.0
+    other_voice_seconds = 0.0
+    uncertainties: list[float] = []
+    for r, step in zip(results, steps, strict=False):
+        if r.flag == "unavailable":
+            continue
+        speech_present_seconds += step
+        if r.other_voice_uncertainty is not None:
+            uncertainties.append(float(r.other_voice_uncertainty))
+        if r.flag == "other_voice":
+            other_voice_seconds += step
+
+    fraction = (other_voice_seconds / speech_present_seconds) if speech_present_seconds > 0 else 0.0
+    peak = max(uncertainties) if uncertainties else 0.0
+    p95 = float(np.percentile(uncertainties, 95)) if uncertainties else 0.0
+
+    return RecordingOtherVoiceSummary(
+        profile_other_voice_fraction=float(fraction),
+        profile_other_voice_seconds=float(other_voice_seconds),
+        profile_peak_other_voice_uncertainty=float(peak),
+        profile_p95_other_voice_uncertainty=p95,
+        profile_speech_present_seconds=float(speech_present_seconds),
+        profile_confidence=profile_confidence,
+    )
+
+
+def profile_votes_by_bucket(
+    results: Sequence[ProfileComparisonResult],
+    bucket_bounds: Sequence[tuple[float, float]],
+) -> list[dict[str, dict[str, object]]]:
+    """Map detection-grid results onto an identity bucket grid as ``model_votes`` entries.
+
+    For each ``(start, end)`` bucket, the temporally closest comparison result
+    (by window center) supplies a ``speaker_profile/consensus`` vote carrying
+    ``{similarity, other_voice_uncertainty, flag}`` plus one
+    ``speaker_profile/<model>`` vote per model carrying its pre-fusion
+    uncertainty. These are additive: the identity aggregator ignores them, so
+    the existing per-bucket uncertainty is unchanged — they are an extra
+    reference signal in ``model_votes`` and the per-pass sidecar.
+
+    Returns one dict per bucket (empty when no result overlaps it).
+    """
+    if not results:
+        return [{} for _ in bucket_bounds]
+
+    centers = [0.5 * (float(r.start) + float(r.end)) for r in results]
+    out: list[dict[str, dict[str, object]]] = []
+    for b_start, b_end in bucket_bounds:
+        b_center = 0.5 * (b_start + b_end)
+        nearest = min(range(len(results)), key=lambda i: abs(centers[i] - b_center))
+        r = results[nearest]
+        # Only attach when the nearest window actually overlaps the bucket, so a
+        # bucket outside the scored span stays empty rather than borrowing a
+        # distant window's flag.
+        if r.end <= b_start or r.start >= b_end:
+            out.append({})
+            continue
+        vote: dict[str, dict[str, object]] = {
+            "speaker_profile/consensus": {
+                "similarity": r.similarity,
+                "other_voice_uncertainty": r.other_voice_uncertainty,
+                "flag": r.flag,
+            }
+        }
+        for model_id, unc in r.per_model.items():
+            vote[f"speaker_profile/{model_id}"] = {"other_voice_uncertainty": float(unc)}
+        out.append(vote)
+    return out
 
 
 def leave_one_file_out_profile(
