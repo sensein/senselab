@@ -1,0 +1,199 @@
+# Tasks: Speaker Profile Embedding for analyze_audio
+
+**Input**: Design documents from `/specs/20260527-151905-speaker-profile-embedding/`
+**Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/
+
+**Tests**: Included — senselab enforces `pytest` + `ruff` + `mypy` gates and ships a `*_test.py` per task module; success criteria are framed as testable. Per-story tests are written before that story's implementation and should fail first.
+
+**Organization**: Tasks grouped by user story (US1=P1, US2=P2, US3=P3) so each is independently implementable and testable.
+
+## Format: `[ID] [P?] [Story] Description`
+
+- **[P]**: Can run in parallel (different files, no dependencies on incomplete tasks)
+- **[Story]**: US1/US2/US3 for story-phase tasks only
+
+## Path Conventions
+
+Single project (senselab): library code under `src/senselab/...`, CLI under `scripts/`, tests under `src/tests/...`.
+
+New package: `src/senselab/audio/workflows/speaker_profile/`. Reuses existing `audio_analysis/{embeddings,clustering,presence,identity}.py` and `tasks/speaker_embeddings/`.
+
+---
+
+## Phase 1: Setup (Shared Infrastructure)
+
+**Purpose**: Package scaffolding and the documented-constants module that all later work references.
+
+- [X] T001 Create the `speaker_profile` package skeleton (module docstring + public exports) in `src/senselab/audio/workflows/speaker_profile/__init__.py`
+- [X] T002 [P] Define workflow dataclasses (`SpeakerProfile`, `ProfileSourceFile`, `ClusterStats`, `ProfileParams`, `ProfileComparisonResult`, `RecordingQualityIndicator`, `RecordingOtherVoiceSummary`) per data-model.md in `src/senselab/audio/workflows/speaker_profile/types.py` (the two recording-level rollups are internal compute holders whose fields populate the existing `single_speaker`/`quality` claims — not serialized as standalone objects)
+- [X] T003 [P] Create the constants module holding every threshold from research.md "Constants & Thresholds" as a named value with a comment giving its value, source (`[reuse]`/`[new]`), and validation status in `src/senselab/audio/workflows/speaker_profile/constants.py`
+
+---
+
+## Phase 2: Foundational (Blocking Prerequisites)
+
+**Purpose**: Cross-cutting infrastructure required before any story: the WavLM embedding backend (default consensus member, FR-019), shared-cache reuse keying (FR-015/R1), the per-file speech-window extractor, and profile artifact I/O.
+
+**⚠️ CRITICAL**: No user story work can begin until this phase is complete.
+
+- [ ] T004 Implement the WavLM transformers speaker-embedding backend (`WavLMForXVector`, default `microsoft/wavlm-base-plus-sv`, 16 kHz mono, 512-D, returns `list[torch.Tensor]` matching the SpeechBrain contract) in `src/senselab/audio/tasks/speaker_embeddings/wavlm.py`
+- [ ] T005 Dispatch a WavLM model handle (alongside `SpeechBrainModel`) and register the compatibility entry in `src/senselab/audio/tasks/speaker_embeddings/api.py` (depends on T004)
+- [ ] T006 [P] Add WavLM backend tests (loads, embeds, 512-D output, graceful failure → recorded reason not raise) extending `src/tests/audio/tasks/speaker_embeddings_test.py`
+- [ ] T007 Factor the cache-key "wrapper hash" basis from the analyze_audio script source into a stable shared library helper (module-level hash) so `build_speaker_profile` and `analyze_audio` produce identical keys for diarization/embedding/scene tasks (FR-015/R1) in `scripts/analyze_audio.py` and `src/senselab/audio/workflows/speaker_profile/cache.py`
+- [ ] T008 [P] Add a cross-stage cache-reuse test (running the build path then analyze_audio on the same file/params yields `cache: "hit"` for shared tasks) in `src/tests/audio/workflows/speaker_profile/cache_test.py`
+- [ ] T009a Promote the per-window speech mask into a reusable single-file helper (from `compute._speech_window_mask`: diarization + AST/YAMNet speech labels + loudness → per-window speech/non-speech) in `src/senselab/audio/workflows/audio_analysis/presence.py` (prerequisite for T009; resolves the U1 build-time gate)
+- [ ] T009 Implement the per-file speech-window extractor in `src/senselab/audio/workflows/speaker_profile/build.py`: locate speech via a **best-available presence gate** — cheap floor = diarization (all speakers) + the T009a speech mask; opportunistically fold in cached Whisper `no_speech_prob` / PPG voiced-fraction when already present; **never trigger ASR/PPG solely to gate**. Extract ≥1s windows per model via `extract_per_window_embeddings`, drop sub-1s fragments, tag each `WindowEmbedding` with its `file_id` (FR-002/FR-008 gating; no identity assignment)
+- [ ] T010 Implement profile artifact load/save (JSON per contracts/speaker-profile.schema.md: `schema_version`, invariants, atomic write, ignore-unknown-keys reader, refuse higher schema) in `src/senselab/audio/workflows/speaker_profile/io.py`
+- [ ] T010c [P] Add profile-artifact I/O tests in `src/tests/audio/workflows/speaker_profile/io_test.py`: round-trip save/load, atomic write, reader ignores unknown keys, and refuses a higher `schema_version` (per contracts/speaker-profile.schema.md)
+- [ ] T010a Create the committed synthetic test-audio generator (run once, not in CI) in `scripts/gen_synthetic_test_audio.py`: **SpeechT5** (`microsoft/speecht5_tts` + `microsoft/speecht5_hifigan`, revision-pinned, MIT) with 3 fixed CMU-Arctic x-vector speaker embeddings (A=target, B=intruder, C=similar-timbre spare) + fixed seed; synthesizes public-domain phonetically-rich text (Harvard/IEEE sentences + "The North Wind and the Sun"); writes 16 kHz mono FLAC clips + `manifest.json` (file → speaker_id, transcript, duration, session_id) to `src/tests/data_for_testing/synthetic/`. Produces a confident target subject (3–5 clips, ~30–50s), a thin subject (~15s → low-confidence), an insufficient subject (sub-1s fragments), and standalone intruder/spare clips
+- [ ] T010b Implement deterministic (seeded) fixture composers in `src/tests/audio/workflows/speaker_profile/fixtures.py`: load committed clips via `manifest.json`; compose contamination sets (mix B into A at 10/20/30% — SC-002), other-voice recordings (overlay B on A at known intervals + pure-A control — SC-003/004), and quality-ranked variants (clean A + noise at known SNRs via `data_augmentation` audiomentations — SC-005); expose ground-truth labels (target id, intruder intervals, SNRs)
+
+**Checkpoint**: Embedding backend, cache reuse, speech-mask helper, window extraction, artifact I/O, and labeled synthetic fixtures all in place — story work can begin.
+
+---
+
+## Phase 3: User Story 1 - Build a robust speaker profile for a subject (Priority: P1) 🎯 MVP
+
+**Goal**: For a subject's files, produce exactly one contamination-tolerant profile (dominant-cluster centroid per model) with a usage/preparation record and a confidence indication.
+
+**Independent Test**: Provide a subject's files (some containing a known second voice); confirm exactly one profile is produced, it is closer to clean target audio than to the intruder, non-speech/short files are dropped, and the build needs no manual chunking/silence instructions.
+
+### Tests for User Story 1
+
+- [ ] T011 [US1] Add build tests in `src/tests/audio/workflows/speaker_profile/build_test.py` using the T010a–T010b fixtures: one profile + usage record (SC-001/FR-001/FR-004); contamination tolerance with ≤20% intruder, profile closer to held-out target than intruder (SC-002); non-speech/sub-1s files auto-dropped with reason (FR-016); confidence `ok`/`low`/`insufficient` boundaries (FR-005); balanced 50/50 subject → `ambiguous` vs dominant ~85/15 → confident (FR-014/SC-007)
+
+### Implementation for User Story 1
+
+- [ ] T012 [US1] Implement cross-file dominant-cluster aggregation → L2-normalized per-model centroid + empirical calibration band, reusing `clustering.cluster_pass_speakers` / `_empirical_calibration_band` over the pooled file-tagged windows, in `src/senselab/audio/workflows/speaker_profile/build.py` (depends on T009)
+- [ ] T013 [US1] Implement the confidence policy (aggregate speech-seconds vs `min/target_confident_speech_s`; `AMBIGUITY_SHARE_RATIO` for near-equal top-two clusters; `insufficient` → decline) reading thresholds from `constants.py`, in `src/senselab/audio/workflows/speaker_profile/build.py`
+- [ ] T014 [US1] Implement per-file keep/drop decisions and `ProfileSourceFile` usage records (windows used, speech seconds, kept, drop_reason) (FR-016/FR-004) in `src/senselab/audio/workflows/speaker_profile/build.py`
+- [ ] T015 [US1] Implement optional same-session weighting (`prefer_session`, up-weight same-session windows; default unweighted; works without session metadata) (FR-013) in `src/senselab/audio/workflows/speaker_profile/build.py`
+- [ ] T016 [US1] Implement the `build_speaker_profile(...)` orchestration entrypoint tying extraction → aggregation → confidence → records → `io.save` into a `SpeakerProfile`, in `src/senselab/audio/workflows/speaker_profile/build.py`
+- [ ] T017 [US1] Implement the `build_speaker_profile` CLI per contracts/build-profile-cli.md (positional files + `--files-from`, `--subject-id`, `--output`, model/window/threshold/session flags, shared `--cache-dir`, exit codes, one-line summary) in `scripts/build_speaker_profile.py`
+
+**Checkpoint**: A subject's files → one inspectable profile artifact. MVP complete and testable on its own.
+
+---
+
+## Phase 4: User Story 2 - Flag segments likely containing another voice (Priority: P2)
+
+**Goal**: With a supplied profile, score each analyzed window's similarity to the target and flag likely other-voice regions (foreground/background), integrated into `analyze_audio`'s identity-axis outputs; gated on speech presence; non-breaking when absent.
+
+**Independent Test**: On a recording with known second-speaker intervals, flagged regions overlap them well above chance with low false-positives on target-only audio; non-speech buckets are `unavailable`; leave-one-file-out is applied for contributing files; with no profile, all other outputs are unchanged.
+
+### Tests for User Story 2
+
+- [ ] T018 [US2] Add compare tests in `src/tests/audio/workflows/speaker_profile/compare_test.py` using the T010b composers: other-voice detection rate ≥ 2× false-positive on target-only (SC-003); target-only false-flag < 10% duration (SC-004); low-`p_voice` buckets → `unavailable` not `other_voice` (FR-008); leave-one-file-out recomputation applied for a contributing file (FR-012); consensus fusion combines per-model uncertainties; existing `single_speaker` claim extended with profile sub-signals and no PASS/REVIEW verdict (FR-020)
+
+### Implementation for User Story 2
+
+- [ ] T019 [US2] Implement leave-one-file-out profile recomputation (exclude scored recording's windows; within-file holdout fallback for single-file subjects) (FR-012/R5) in `src/senselab/audio/workflows/speaker_profile/compare.py`
+- [ ] T020 [US2] Implement per-window scoring vs profile — consensus fusion of per-model calibrated cosine-uncertainties via `clustering.calibrate_cosine_uncertainty`, on the short-window (~0.5s hop) detection grid for brief-intrusion resolution (FR-017/FR-018/R3/R4) in `src/senselab/audio/workflows/speaker_profile/compare.py`
+- [ ] T021 [US2] Implement the adaptive other-voice threshold (from the profile's calibration band, with `--profile-other-voice-threshold` fixed override) plus speech-presence gating — reuse the full presence `p_voice` already computed by the analyze_audio run (`unavailable` on low `p_voice`) — and `flag` assignment (FR-008/R6) in `src/senselab/audio/workflows/speaker_profile/compare.py`
+- [ ] T022 [US2] Add `--speaker-profile` and `--profile-other-voice-threshold` inputs, load+validate the profile (treat `insufficient` as absent with a warning), and match the analyzed file against `sources[]` for leave-one-file-out, in `scripts/analyze_audio.py` (FR-007/FR-011)
+- [ ] T023 [US2] Integrate profile votes into the identity axis (`model_votes["speaker_profile/<model>"]` + `["speaker_profile/consensus"]` carrying similarity/other_voice_uncertainty/flag) in `src/senselab/audio/workflows/audio_analysis/identity.py` (FR-009)
+- [ ] T024 [US2] Emit the per-pass `<pass>/speaker_profile.json` sidecar (per-window flags, matching the `embeddings/*.json` convention), let profile-flagged buckets ride the existing `disagreements.json` ranking, and guard the no-profile path so non-profile outputs are byte-identical, in `scripts/analyze_audio.py` (FR-009/FR-011)
+- [ ] T024a [US2] Extend the existing per-pass `single_speaker` global-summary claim with profile sub-signals (`profile_other_voice_fraction`/`_seconds`/`_peak`/`_p95`, `profile_speech_present_seconds`, `profile_confidence`) and fold a profile-based uncertainty into its headline via the existing `max()`/intensity-weighted aggregation — decision-ready, no verdict (FR-020), computed as a `RecordingOtherVoiceSummary` (types.py) whose fields populate the claim, in `src/senselab/audio/workflows/audio_analysis/global_summary.py` (wire profile inputs from `scripts/analyze_audio.py`)
+
+**Checkpoint**: US1 + US2 both work independently; other-voice flags appear alongside existing analysis.
+
+---
+
+## Phase 5: User Story 3 - Estimate target-speaker recording quality (Priority: P3)
+
+**Goal**: With a supplied profile, produce a per-recording target-speaker quality indicator reflecting how cleanly the target voice is captured, attached to `analyze_audio` output.
+
+**Independent Test**: On recordings independently graded for target-capture quality, the indicator ranks them in the same broad order; a clean target-dominant recording scores higher than a noisy/contaminated one.
+
+### Tests for User Story 3
+
+- [ ] T025 [US3] Add quality tests in `src/tests/audio/workflows/speaker_profile/compare_test.py` using the T010b quality-ranked variants: clean target-dominant recording outranks noisy/contaminated one (SC-005); profile sub-signals present under the existing `quality` claim; quality discounted/ignored when profile confidence is `low`/`insufficient`
+
+### Implementation for User Story 3
+
+- [ ] T026 [US3] Implement `RecordingQualityIndicator` (target_match_fraction = 1 − other-voice rate over speech-present duration; mean within-profile consistency on matched windows; mean SQUIM STOI/PESQ/SI-SDR reused from `analyze_audio` on matched windows; normalized [0,1] `quality`) (FR-010/R7) in `src/senselab/audio/workflows/speaker_profile/compare.py`
+- [ ] T027 [US3] Extend the existing per-pass `quality` global-summary claim with profile target-quality sub-signals (`profile_target_quality`, `profile_target_match_fraction`, `profile_mean_target_consistency`, target-matched `profile_squim`, `profile_confidence`) and fold a target-quality uncertainty into its headline via the existing aggregation; include the detail in the per-pass `speaker_profile.json` sidecar, in `src/senselab/audio/workflows/audio_analysis/global_summary.py` (wire from `scripts/analyze_audio.py`)
+
+**Checkpoint**: All three stories independently functional.
+
+---
+
+## Phase 6: Polish & Cross-Cutting Concerns
+
+- [ ] T028 [P] Run the empirical sweeps (against the T010a–T010b fixtures) and finalize all `[new]` thresholds (`AMBIGUITY_SHARE_RATIO` — balanced 50/50 → `ambiguous`, dominant ~85/15 → confident; `min/target_confident_speech_s`; consensus fusion weights; sub-1s intrusion boundary; `min_contiguous_speech_s`); record chosen values + rationale in both `src/senselab/audio/workflows/speaker_profile/constants.py` and research.md "Constants & Thresholds"
+- [ ] T028b [P] (Optional, research) Implement per-window confidence weighting of the profile centroid — down-weight windows by Whisper `no_speech_prob`/avg_logprob, PPG voiced-fraction (opt-in given its ~1.4 GB venv), and SQUIM — flag-gated and evaluated against fixtures, in `src/senselab/audio/workflows/speaker_profile/build.py`
+- [ ] T029 [P] Add regression test asserting `analyze_audio` without `--speaker-profile` yields byte-identical non-profile outputs vs. a baseline run (SC-006) in `src/tests/audio/workflows/speaker_profile/regression_test.py`
+- [ ] T030 [P] Author module documentation in `src/senselab/audio/workflows/speaker_profile/doc.md` (purpose, pipeline, constants, caching note)
+- [ ] T031 Run the quickstart.md end-to-end validation (build → analyze → review) and the success-criteria smoke checks
+- [ ] T032 Run full quality gates (`ruff`, `mypy`, `pytest`) across all changed modules and fix findings
+
+---
+
+## Dependencies & Execution Order
+
+### Phase Dependencies
+
+- **Setup (Phase 1)**: no dependencies.
+- **Foundational (Phase 2)**: depends on Setup; BLOCKS all stories. Within it: T004→T005; T007→T008; T009a→T009; T009 depends on T002/T003; T010 depends on T002; T010a→T010b (fixtures); T010a may run in parallel with T004–T009.
+- **User Stories (Phase 3–5)**: all depend on Foundational. US2 builds on US1's profile artifact; US3 builds on US2's per-window comparison. They can be developed in parallel but share `compare.py` (US2/US3), so coordinate those.
+- **Polish (Phase 6)**: depends on the stories it touches (T028 after US1/US2 thresholds exist; T029 after US2 wiring).
+
+### User Story Dependencies
+
+- **US1 (P1)**: after Foundational. No dependency on US2/US3. ← MVP.
+- **US2 (P2)**: after Foundational; consumes a US1 profile artifact (can test against a fixture profile to stay independent).
+- **US3 (P3)**: after Foundational; reuses US2's matched-window scoring (can test against fixture comparison output to stay independent).
+
+### Within Each User Story
+
+- Story tests written first and failing → implementation.
+- `build.py` tasks (T012–T016) are sequential (same file).
+- `compare.py` tasks (T019–T021, T026) are sequential (same file).
+- `scripts/analyze_audio.py` tasks (T022, T024, T027) are sequential (same file); T007 also edits it, so it lands first in Foundational.
+
+### Parallel Opportunities
+
+- Setup: T002, T003 in parallel.
+- Foundational: T006 ∥ T008 (different test files); T004/T005 (one file chain) can run alongside T009/T010 only after T002/T003.
+- Polish: T028 ∥ T029 ∥ T030 (different files).
+- Story test-authoring tasks (T011, T018, T025) target different/again files and can be drafted in parallel with the prior story's implementation.
+
+---
+
+## Parallel Example: Setup + Foundational
+
+```bash
+# Phase 1 — parallel:
+Task: "Define workflow dataclasses in src/senselab/audio/workflows/speaker_profile/types.py"   # T002
+Task: "Create documented constants module in .../speaker_profile/constants.py"                  # T003
+
+# Phase 2 — parallel test authoring (different files):
+Task: "WavLM backend tests in src/tests/audio/tasks/speaker_embeddings_test.py"                  # T006
+Task: "Cross-stage cache-reuse test in src/tests/audio/workflows/speaker_profile/cache_test.py" # T008
+```
+
+---
+
+## Implementation Strategy
+
+### MVP First (User Story 1 only)
+
+1. Phase 1 Setup → 2. Phase 2 Foundational (note: WavLM T004–T006 can be deferred if the MVP profile runs ECAPA+ResNet only with graceful degradation) → 3. Phase 3 US1 → 4. **STOP and VALIDATE** the profile artifact against T011 → 5. Demo.
+
+### Incremental Delivery
+
+1. Setup + Foundational → foundation ready.
+2. US1 → build + inspect profiles (MVP).
+3. US2 → other-voice flags in `analyze_audio`.
+4. US3 → target-speaker quality indicator.
+5. Polish → finalize thresholds, regression-lock SC-006, docs, gates.
+
+---
+
+## Notes
+
+- [P] = different files, no incomplete dependencies.
+- Per the team preference, every threshold lands in `constants.py` as a named, documented, configurable value — `[new]`/TBD ones carry a "validate empirically (T028)" comment.
+- WavLM has no official Large-SV checkpoint; default `microsoft/wavlm-base-plus-sv`, configurable.
+- Keep `analyze_audio`'s no-profile path byte-identical (SC-006, regression-tested in T029).
+- Commit after each task or logical group; stop at any checkpoint to validate a story independently.
