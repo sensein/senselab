@@ -210,6 +210,7 @@ def compute_pass_global_summary(
     asr_resolved: dict[str, Any],
     pii_report: Any,  # noqa: ANN401 — PiiPassReport, optional
     expects_speech: bool = True,
+    profile_other_voice: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Aggregate one pass's per-bucket axes into the four-claim summary.
 
@@ -222,6 +223,11 @@ def compute_pass_global_summary(
         expects_speech: When ``True`` (default), n_speakers=0 → uncertainty 1.0
             (no-speech recording violates the "single speaker" claim). Set
             ``False`` when the caller wants n=0 to count as compliant.
+        profile_other_voice: Optional speaker-profile other-voice sub-signals
+            (the ``profile_*`` fields produced by ``summarize_other_voice``).
+            When supplied, they are added under the ``single_speaker`` claim and
+            the profile's p95 other-voice uncertainty is folded into the claim's
+            headline via ``max()``. ``None`` leaves the claim unchanged.
 
     Returns:
         Dict with the four sub-uncertainties plus a ``combined`` max() and
@@ -274,6 +280,18 @@ def compute_pass_global_summary(
         # within-track inconsistencies. Combine via max so identity drift on
         # a "single-speaker" pass still surfaces.
         single_speaker_uncertainty = max(single_speaker_uncertainty, identity_mean)
+
+    # Speaker-profile other-voice sub-signals (target-relative refinement of the
+    # same "is there >1 speaker?" question). The p95 uncertainty folds into the
+    # headline via max(); the rest are decision-ready diagnostics. No verdict.
+    if profile_other_voice is not None:
+        prof_fold = profile_other_voice.get("profile_p95_other_voice_uncertainty")
+        if prof_fold is not None:
+            single_speaker_uncertainty = (
+                float(prof_fold)
+                if single_speaker_uncertainty is None
+                else max(single_speaker_uncertainty, float(prof_fold))
+            )
 
     # ─── quality ───
     quality_block = _aggregate_quality(pass_summary)
@@ -369,6 +387,7 @@ def compute_pass_global_summary(
             "n_speakers": n_speakers,
             "identity_axis_mean": identity_mean,
             "expects_speech": expects_speech,
+            **(profile_other_voice or {}),
         },
         "quality": {
             "uncertainty": quality_block.get("uncertainty"),
