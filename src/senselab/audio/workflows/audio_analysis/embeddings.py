@@ -39,7 +39,7 @@ import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speaker_embeddings import extract_speaker_embeddings_from_audios
-from senselab.utils.data_structures import DeviceType, SpeechBrainModel
+from senselab.utils.data_structures import DeviceType, SpeechBrainModel, TransformersWavLMModel
 
 
 @dataclass(frozen=True)
@@ -86,6 +86,23 @@ def _window_starts(duration_s: float, window_s: float, hop_s: float) -> list[flo
     if not starts or starts[-1] < last - 1e-6:
         starts.append(last)
     return starts
+
+
+def _embedding_model_handle(model_id: str) -> SpeechBrainModel | TransformersWavLMModel:
+    """Build the right speaker-embedding model handle for ``model_id``.
+
+    The per-window extractor accepts a mix of backends, so the handle type — not
+    just the id string — has to be chosen here; the embedding dispatch in
+    ``extract_speaker_embeddings_from_audios`` then routes to the matching
+    backend. WavLM speaker-verification checkpoints are published under
+    ``microsoft/wavlm-*`` (e.g. ``microsoft/wavlm-base-plus-sv``); the
+    SpeechBrain speaker models are ``speechbrain/spkrec-*``. Anything that isn't
+    recognizably a WavLM checkpoint defaults to the SpeechBrain backend, which
+    preserves the original ECAPA / ResNet behavior.
+    """
+    if "wavlm" in model_id.lower():
+        return TransformersWavLMModel(path_or_uri=model_id, revision="main")
+    return SpeechBrainModel(path_or_uri=model_id, revision="main")
 
 
 def extract_per_window_embeddings(
@@ -146,8 +163,8 @@ def extract_per_window_embeddings(
     out: dict[str, list[WindowEmbedding]] = {}
     for model_id in models:
         try:
-            sb_model: SpeechBrainModel = SpeechBrainModel(path_or_uri=model_id, revision="main")
-            tensors = extract_speaker_embeddings_from_audios(audios=audio_slices, model=sb_model, device=device)
+            model_handle = _embedding_model_handle(model_id)
+            tensors = extract_speaker_embeddings_from_audios(audios=audio_slices, model=model_handle, device=device)
             entries: list[WindowEmbedding] = []
             for (start_s, end_s), t in zip(spans, tensors, strict=False):
                 vec = _flatten_to_1d(t)
