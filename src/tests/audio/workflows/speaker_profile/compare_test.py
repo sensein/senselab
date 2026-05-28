@@ -22,9 +22,12 @@ from senselab.audio.workflows.speaker_profile.build import TaggedWindowEmbedding
 from senselab.audio.workflows.speaker_profile.compare import (
     compare_recording_to_profile,
     leave_one_file_out_profile,
+    profile_votes_by_bucket,
     score_window,
+    summarize_other_voice,
     within_file_holdout_profile,
 )
+from senselab.audio.workflows.speaker_profile.types import ProfileComparisonResult
 
 _MODEL = C.ECAPA_MODEL_ID
 _MODEL2 = C.RESNET_MODEL_ID
@@ -176,6 +179,71 @@ def test_fixed_threshold_override_changes_flags() -> None:
     n_strict = sum(r.flag == "other_voice" for r in strict)
     n_lax = sum(r.flag == "other_voice" for r in lax)
     assert n_strict > n_lax
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# recording-level rollup + bucket vote mapping
+
+
+def _result(
+    start: float, flag: str, unc: float | None, per_model: dict[str, float] | None = None
+) -> ProfileComparisonResult:
+    return ProfileComparisonResult(
+        start=start,
+        end=start + 1.0,
+        similarity=(None if unc is None else 1.0 - unc),
+        other_voice_uncertainty=unc,
+        flag=flag,  # type: ignore[arg-type]
+        p_voice=None,
+        per_model=per_model or {},
+    )
+
+
+def test_summarize_other_voice_fraction_and_seconds() -> None:
+    """Rollup counts only speech-present windows and uses non-overlapping steps."""
+    # 0.5 s hop grid: 4 target, 2 other_voice, 1 unavailable.
+    results = [
+        _result(0.0, "target", 0.1),
+        _result(0.5, "target", 0.15),
+        _result(1.0, "other_voice", 0.8),
+        _result(1.5, "other_voice", 0.9),
+        _result(2.0, "target", 0.2),
+        _result(2.5, "target", 0.1),
+        _result(3.0, "unavailable", None),
+    ]
+    summary = summarize_other_voice(results, "ok")
+    # speech-present windows = 6 steps of 0.5 s = 3.0 s; other_voice = 2 * 0.5 = 1.0 s.
+    assert abs(summary.profile_speech_present_seconds - 3.0) < 1e-6
+    assert abs(summary.profile_other_voice_seconds - 1.0) < 1e-6
+    assert abs(summary.profile_other_voice_fraction - (1.0 / 3.0)) < 1e-6
+    assert summary.profile_peak_other_voice_uncertainty == 0.9
+    assert summary.profile_confidence == "ok"
+
+
+def test_summarize_other_voice_all_unavailable() -> None:
+    """No speech-present windows → zeroed rollup, no division error."""
+    results = [_result(0.0, "unavailable", None), _result(0.5, "unavailable", None)]
+    summary = summarize_other_voice(results, "low")
+    assert summary.profile_speech_present_seconds == 0.0
+    assert summary.profile_other_voice_fraction == 0.0
+    assert summary.profile_confidence == "low"
+
+
+def test_profile_votes_by_bucket_maps_and_keys() -> None:
+    """Each bucket gets a consensus vote plus one per-model vote from its window."""
+    results = [
+        _result(0.0, "target", 0.1, {_MODEL: 0.1, _MODEL2: 0.12}),
+        _result(0.5, "other_voice", 0.8, {_MODEL: 0.82, _MODEL2: 0.78}),
+    ]
+    # Buckets centered on each result's window center (0.5, 1.0) plus a far one.
+    buckets = [(0.0, 1.0), (1.0, 2.0), (5.0, 5.5)]
+    votes = profile_votes_by_bucket(results, buckets)
+    assert len(votes) == 3
+    assert votes[0]["speaker_profile/consensus"]["flag"] == "target"
+    assert f"speaker_profile/{_MODEL}" in votes[0]
+    assert votes[1]["speaker_profile/consensus"]["flag"] == "other_voice"
+    # A bucket with no overlapping window stays empty (no borrowed flag).
+    assert votes[2] == {}
 
 
 # ──────────────────────────────────────────────────────────────────────────
