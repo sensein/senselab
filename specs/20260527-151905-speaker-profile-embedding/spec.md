@@ -1,0 +1,144 @@
+# Feature Specification: Speaker Profile Embedding for analyze_audio
+
+**Feature Branch**: `20260527-151905-speaker-profile-embedding`
+**Created**: 2026-05-27
+**Status**: Draft
+**Input**: User description: "In addition to the analysis already started through analyze_audio, I want to create a speaker profile based on files from the same subject in a dataset, possibly with preference from the same session though not necessarily/this might not matter. I want this speaker profile embedding to be used with analyze audio to possibly help account if there is another voice present (whether in foreground or background) as well as to help estimate the quality of the recording. This profile will be generated from files that themselves it will test on and for which we cannot be certain there aren't already other voices in those files. We can guarantee that there is at least a certain amount of data available in these files though it is left to the algorithm to determine whether these should be chunked in any way or if silent sections should be attempted to be removed."
+
+## Clarifications
+
+### Session 2026-05-27
+
+- Q: How should profile-building select/clean speech and aggregate per-window embeddings? → A: Use `analyze_audio`'s diarization segments (from *all* speakers) plus the presence (`p_voice`) signal only to *locate speech* — not to assign speaker identity — and let our own clustering determine the target (no new standalone VAD). Embed windows of ≥~1s contiguous speech; the profile is the centroid of the dominant embedding cluster (other voices fall into minority clusters and are discarded). This clustering is independent of `analyze_audio`'s identity axis, which assigns per-file speaker identity differently (and whose cross-file labels are not guaranteed consistent).
+- Q: Where does profile-building run relative to `analyze_audio`? → A: As a standalone stage run *before* `analyze_audio`, operating across a subject's files. It reuses the shared content-addressable cache (diarization, speaker embeddings, scene classification) so `analyze_audio` does not recompute them; both stages must use identical task parameters for cache hits to carry over. The profile is an optional input to `analyze_audio`.
+- Q: How are non-speech tasks (cough, breathing) handled, given no task-type metadata exists? → A: Presence-gate using the existing speech-presence signal. Run over all of a subject's files but let speech-presence and cluster membership decide which contribute; solid free-speech/reading files dominate while few-second, cough, or breathing files drop out and receive N/A profile outputs. No task labels required.
+- Q: Minimum usable data for a confident profile, and must it be continuous? → A: ~20–30s *aggregate* of speech-present audio (target ~30s, floor ~20s) — not one continuous block — composed of windows each ≥~1s contiguous speech (sub-1s fragments dropped or merged). Below the floor → low-confidence.
+- Q: How to avoid trivial self-similarity (profile source files = analyzed files)? → A: Leave-one-file-out — score a recording against a profile built excluding that recording's own contribution.
+- Q: Which voice is the target / how to handle wrong-speaker risk? → A: Treat the dominant embedding cluster as the target (clinical assumption that the subject is present). Surface near-equal clusters as a confidence signal rather than refusing to build a profile.
+- Q: Brief intrusions shorter than the ≥1s embedding window? → A: Recognized design tension (long windows aid embedding quality but smear sub-1s intrusions); the detection-granularity mechanism (e.g., multi-scale or overlapping windows) is a research item for the planning phase, accepting coarser localization below ~1s. (Resolved in planning — see research.md R4: overlapping short-window detection pass, ~1s/~0.5s; implemented by T020.)
+- Q: Single embedding model (ECAPA) or a consensus? → A: Use a consensus. Default set = **ECAPA-TDNN + ResNet-TDNN + WavLM** (three-way), combined by score-level fusion of per-model calibrated uncertainties; a single-model fallback remains viable. The consensus may also operate at different timescales (serving the brief-intrusion mechanism above). Rationale: ECAPA and ResNet are both VoxCeleb-supervised with Fbank front-ends (partly correlated errors); WavLM is self-supervised on a large, diverse, noise/overlap-aware corpus, giving genuine error decorrelation directly relevant to other-voice and noisy-recording detection.
+- Q: Which WavLM checkpoint, and how to add it? → A: Default to `microsoft/wavlm-base-plus-sv` (the only official WavLM checkpoint with an SV/X-Vector head; `microsoft/wavlm-large` is a backbone with no SV head). Prefer a WavLM-Large SV checkpoint **if one becomes available**; keep the model id configurable. WavLM is a HuggingFace `WavLMForXVector` model, so this requires extending senselab's currently SpeechBrain-only speaker-embedding backend with a transformers WavLM path.
+- Q: Is triage/gating (deciding PASS vs. flag-for-manual-review) in scope for this feature? → A: **No — out of scope.** The speaker-profile feature stays a general, reusable *signal producer*. The downstream use case — where multi-speaker recordings must not pass through (a recall-biased gate with an asymmetric cost), fail-safe routing on low-confidence profiles, and an optional agentic reviewer that weighs *all* `analyze_audio` measures and emits a decision + rationale — belongs to a **separate future spec**. This feature must not embed any PASS/REVIEW policy or operating point.
+- Q: Given that split, what decision-ready outputs must this feature still expose? → A: Per-window similarity/flags **plus a recording-level other-voice rollup** (other-voice fraction and total duration over speech-present audio, peak and high-percentile other-voice uncertainty, and the profile confidence). Raw signals only — no PASS/REVIEW verdict — so a downstream gate can apply any operating point and fail-safe.
+- Q: Where do these outputs live, given `analyze_audio`'s existing output structure? → A: Reuse existing logic rather than a parallel structure. Per-window profile votes ride the **identity axis** (`model_votes["speaker_profile/<model>"]` + `"speaker_profile/consensus"` in `identity.parquet`) plus a per-pass `speaker_profile.json` sidecar (matching the per-task JSON convention). The per-recording rollups **extend existing claims** in `summary.json` → `global_uncertainty.by_pass[<pass>]`: other-voice sub-signals extend the **`single_speaker`** claim and target-quality sub-signals extend the **`quality`** claim, each feeding its headline `uncertainty` via the established intensity-weighted-mean / `max()` aggregation. `disagreements.json` ranking is automatic since the votes are in the identity parquet.
+
+## User Scenarios & Testing *(mandatory)*
+
+### User Story 1 - Build a robust speaker profile for a subject (Priority: P1)
+
+A researcher points the tool at the set of audio files belonging to a single subject in a dataset and asks it to build a "speaker profile" — a compact representation of that subject's voice. The researcher does not have to specify how to prepare the audio: the tool locates speech and windows it using researched, configurable defaults (reusing existing diarization and speech-presence signals) and produces one profile per subject. Crucially, the same files that the profile is built from are also the files that will later be analyzed, and any of them may already contain other voices in the foreground or background. The profile-building step must therefore tolerate contamination: it should converge on the voice that genuinely recurs across the subject's material rather than being thrown off by occasional intruding voices or noise.
+
+**Why this priority**: The profile is the foundation for everything else in this feature. Without a profile that reliably represents the target subject — even when its source material is imperfect — neither other-voice detection nor quality estimation is possible. It is independently valuable on its own: a researcher can inspect, store, and reuse the profile.
+
+**Independent Test**: Provide a subject's set of files (including some that contain a second, known voice), build the profile, and confirm that (a) exactly one profile is produced for the subject, (b) the profile is more similar to clean segments of the target speaker than to segments of the intruding speaker, and (c) the build succeeds without manual chunking or silence-removal instructions.
+
+**Acceptance Scenarios**:
+
+1. **Given** a subject with several recordings totaling at least the guaranteed minimum amount of usable speech, **When** the researcher requests a profile, **Then** the tool produces a single speaker profile for that subject along with a record of how much material was used and what preparation choices it made (chunking, silence removal).
+2. **Given** that some of the subject's files contain a second speaker, **When** the profile is built, **Then** the resulting profile represents the recurring (target) voice and is measurably closer to clean target-speaker audio than to the intruding-speaker audio.
+3. **Given** a subject whose files, after silence removal, fall below the minimum usable amount of speech, **When** a profile is requested, **Then** the tool reports that the profile is low-confidence (or cannot be built) rather than silently producing an unreliable profile.
+
+---
+
+### User Story 2 - Flag segments likely containing another voice (Priority: P2)
+
+While running `analyze_audio` on a subject's recording, the researcher wants to know which parts of the recording are likely to contain a voice other than the target subject's — whether that other voice is dominant in the foreground or faint in the background. Using the subject's profile as a reference, the analysis assigns each portion of the recording a similarity-to-profile measure and flags the portions whose similarity is low enough to suggest another voice (or the absence of the target voice). The output integrates with the existing `analyze_audio` results so the flags can be reviewed alongside diarization, transcription, and the other per-segment outputs.
+
+**Why this priority**: This is the primary motivating use case — knowing where the target subject is (and is not) the speaker directly affects how downstream measurements should be trusted. It depends on P1 but adds the main analytic value the researcher asked for.
+
+**Independent Test**: Take a recording with known regions where a second speaker is present, run the analysis with the subject's profile supplied, and confirm the flagged regions overlap the known second-speaker regions substantially better than chance, with results attached to the existing `analyze_audio` output.
+
+**Acceptance Scenarios**:
+
+1. **Given** a subject profile and a recording of that subject, **When** the analysis runs, **Then** each analyzed portion of the recording receives a similarity-to-profile measure and a flag indicating whether another voice is likely present.
+2. **Given** a recording containing a clearly different second speaker for a known interval, **When** the analysis runs, **Then** that interval is flagged as likely-other-voice at a rate meaningfully higher than for the target-only intervals.
+3. **Given** a recording that is entirely the target subject, **When** the analysis runs, **Then** the bulk of the recording is not flagged as other-voice (low false-positive rate).
+4. **Given** an analysis run where no profile is supplied for the subject, **When** the analysis runs, **Then** the other-voice flags are simply omitted and the rest of `analyze_audio` proceeds unchanged.
+
+---
+
+### User Story 3 - Estimate target-speaker recording quality (Priority: P3)
+
+The researcher wants a sense of how cleanly the target subject's voice was captured in a recording. Using the profile, the analysis derives a recording-quality indicator that reflects how consistently and clearly the target voice appears across the recording (for example, recordings dominated by the target voice with stable, profile-consistent segments score higher than recordings where the target voice is intermittent, drowned out, or competing with other voices). This indicator complements the objective audio-quality metrics `analyze_audio` already computes.
+
+**Why this priority**: Quality estimation is a valuable secondary signal for deciding which recordings are usable, but it is less central than locating other voices and builds directly on the same profile-comparison machinery from P1 and P2.
+
+**Independent Test**: Run the analysis on a set of recordings that have been independently graded for capture quality of the target speaker, and confirm the profile-based quality indicator ranks them in broadly the same order.
+
+**Acceptance Scenarios**:
+
+1. **Given** a subject profile and a recording, **When** the analysis runs, **Then** a recording-quality indicator for the target speaker is produced and attached to the `analyze_audio` output.
+2. **Given** two recordings of the same subject — one clean and target-dominant, one noisy or heavily contaminated by other voices — **When** both are analyzed, **Then** the clean recording receives the higher quality indicator.
+
+---
+
+### Edge Cases
+
+- **Subject with only one file**: A profile is still attempted from the single file (with chunking as the tool sees fit); confidence reporting should reflect the narrower basis.
+- **File that is almost entirely silence**: After silence handling, if too little speech remains, the file contributes little or nothing to the profile, and this is reflected in the usage record.
+- **File dominated by a non-target speaker**: The contamination-tolerant aggregation should down-weight or exclude such material so it does not capture the wrong voice; if the *majority* of a subject's material is a different consistent voice, the tool may build a profile of the wrong speaker — this risk must be surfaced, not hidden.
+- **Two speakers present in roughly equal amounts across all of a subject's files**: The dominant cluster is still taken as the target, but the near-equal competing cluster is reported as a reduced-confidence signal so the user knows the target voice is uncertain.
+- **A subject with a few solid files and many tiny fragments**: Typically 3–5 files (free-speech, reading passages) carry usable speech while others are a few seconds or sub-1s; per-file selection and ≥~1s windowing let the solid files dominate and drop the fragments.
+- **Brief intrusion shorter than the embedding window**: Another voice present for under ~1s may be smeared by the ≥~1s embedding window; it should still be flagged, with the understanding that localization precision below ~1s is coarser.
+- **Insufficient total data even before silence removal**: The tool reports low confidence or declines to build a profile.
+- **Analyzing a recording whose subject has no profile**: Other-voice and quality-from-profile outputs are skipped without failing the run.
+- **Self-comparison circularity**: Because the analyzed files are also the profile's source material, the comparison must not trivially report perfect self-similarity; the profile is an aggregate so that no single source segment dominates its own score.
+- **WavLM backend unavailable or fails to load**: The consensus gracefully degrades to the available models (e.g., ECAPA + ResNet-TDNN), recording the WavLM failure reason rather than aborting; results note the reduced consensus.
+
+## Requirements *(mandatory)*
+
+### Functional Requirements
+
+- **FR-001**: The system MUST accept a grouping of audio files by subject and produce exactly one speaker profile per subject from that subject's files.
+- **FR-002**: The system MUST locate speech-bearing material for profile-building from `analyze_audio`'s diarization segments across *all* diarized speakers plus a per-window speech-presence mask (scene-speech + loudness — the same signal the clustering step consumes) — using these only to find speech, not to assign speaker identity — rather than requiring a new standalone VAD or manual chunking/silence-removal instructions. The gate MAY incorporate richer presence voters (e.g., Whisper `no_speech_prob`, PPG voiced-fraction) when their outputs are already available, but MUST NOT trigger ASR/PPG solely to gate. The target speaker MUST be determined by the system's own embedding clustering (FR-003), independently of `analyze_audio`'s identity axis. Windowing and selection parameters MUST be configurable with researched defaults (windows of ≥~1s contiguous speech).
+- **FR-003**: The system MUST build the profile by aggregating per-window embeddings in a contamination-tolerant way — clustering the windows and taking the dominant cluster's centroid — so that other voices, noise, or non-speech fall into minority clusters and are excluded, and the profile represents the voice that recurs across the subject's material.
+- **FR-004**: The system MUST record, for each profile, how much usable material was used and what preparation choices were made (chunking and silence-removal decisions), so the basis for the profile is auditable.
+- **FR-005**: The system MUST report a confidence/quality indication for each profile and MUST NOT silently emit an unreliable profile when usable material falls below the minimum needed. The default minimum is ~20–30s of *aggregate* speech-present audio (target ~30s, floor ~20s; need not be continuous) composed of windows each ≥~1s contiguous speech; below the floor the profile MUST be marked low-confidence or declined. The threshold MUST be configurable.
+- **FR-006**: The system MUST allow a previously built profile to be stored and reused as input to a later `analyze_audio` run without rebuilding it.
+- **FR-015**: The system MUST run profile-building as a standalone stage that can execute *before* `analyze_audio`, reusing the shared content-addressable cache (diarization, speaker embeddings, scene classification) so that `analyze_audio` does not recompute those tasks; both stages MUST use identical task parameters for cache reuse to apply.
+- **FR-016**: The system MUST be able to ingest all of a subject's files and decide per file whether it contributes to the profile, based on available speech-present material and embedding-cluster membership, so that files with little usable speech (or that fall outside the dominant cluster) are excluded without the caller tagging them.
+- **FR-017**: The system MUST detect another voice present for short durations, including intrusions shorter than the ≥~1s embedding window, using an overlapping short-window detection pass (~1s window / ~0.5s hop) distinct from the longer profile-centroid windows and corroborated by the existing presence and identity signals; localization precision below ~1s MAY be coarser.
+- **FR-018**: The system MUST combine multiple speaker-embedding models into a consensus for both profile-building and comparison, with a default set of **ECAPA-TDNN + ResNet-TDNN + WavLM** combined by score-level fusion of per-model calibrated uncertainties (the consensus may operate at different timescales). The model set MUST be configurable and a single-model fallback MUST remain viable.
+- **FR-019**: The system MUST extend the speaker-embedding capability to support a HuggingFace transformers WavLM SV model (`WavLMForXVector`), since the current backend supports only SpeechBrain models. The default WavLM checkpoint is `microsoft/wavlm-base-plus-sv`; the checkpoint id MUST be configurable so a WavLM-Large SV checkpoint can be substituted if available.
+- **FR-020**: When a profile is supplied, the system MUST surface a recording-level other-voice rollup by **extending `analyze_audio`'s existing per-pass `single_speaker` global-summary claim** (in `summary.json` → `global_uncertainty.by_pass[<pass>]`) with profile-derived sub-signals — other-voice fraction and total duration over speech-present audio, peak and high-percentile (e.g., p95) other-voice uncertainty, and the profile confidence — feeding a profile-based uncertainty into that claim's headline via the established aggregation (intensity-weighted means, `max()` headline). It MUST reuse these existing rollup conventions rather than introduce a parallel summary structure, and MUST NOT emit a PASS/REVIEW verdict or embed any operating-point/gating policy (that is a separate, out-of-scope feature). These remain decision-ready signals for the downstream triage/review system.
+- **FR-007**: When a subject profile is supplied to `analyze_audio`, the system MUST assign each analyzed portion of the recording a measure of similarity to the profile.
+- **FR-008**: The system MUST flag portions of a recording as likely containing another voice (target voice absent or another voice co-present), based on the similarity measure, and MUST detect such voices whether they are in the foreground or the background. Profile comparison MUST be gated on speech presence (using the existing presence signal), so non-speech portions and non-speech files (e.g., cough, breathing) receive N/A rather than spurious flags.
+- **FR-009**: The system MUST integrate the similarity measures and other-voice flags into the existing `analyze_audio` per-segment outputs so they can be reviewed alongside the other analyses.
+- **FR-010**: When a profile is supplied, the system MUST produce a target-speaker recording-quality rollup reflecting how consistently and clearly the target voice is captured, and MUST surface it by **extending `analyze_audio`'s existing per-pass `quality` claim** (`global_uncertainty.by_pass[<pass>]`) with profile-derived sub-signals (target-match fraction, mean within-profile consistency, SQUIM means restricted to target-matched windows, a normalized target-quality, and profile confidence), reusing the existing claim/aggregation conventions rather than a standalone indicator.
+- **FR-011**: The system MUST treat the profile as optional input to `analyze_audio`: when no profile is available for a subject, profile-dependent outputs are omitted and all other analyses run unchanged.
+- **FR-012**: The system MUST avoid trivial self-similarity artifacts arising from the fact that profile source files are also the analyzed files, by using leave-one-file-out scoring: a recording is scored against a profile built excluding that recording's own contribution.
+- **FR-013**: The system SHOULD support an optional preference for material recorded in the same session as the recording being analyzed when selecting or weighting profile source material, while still functioning when session information is unavailable or ignored.
+- **FR-014**: The system MUST treat the dominant embedding cluster as the target speaker (consistent with the clinical assumption that the subject is present), and MUST surface near-equal competing clusters as a reduced-confidence signal rather than refusing to build a profile, so the user is informed when the target voice is less certain.
+
+### Key Entities *(include if feature involves data)*
+
+- **Subject**: A person whose recordings exist in the dataset; the unit a profile is built for. Identified by a subject identifier; may have one or more associated files and optionally session groupings.
+- **Enrollment Set**: The collection of a subject's files (and the prepared pieces derived from them) used to build that subject's profile. May overlap entirely with the files later analyzed.
+- **Speaker Profile**: The compact representation of a subject's voice produced from the enrollment set, accompanied by metadata describing usable material used, preparation choices, and a confidence indication.
+- **Segment Comparison Result**: For an analyzed recording, the per-portion similarity-to-profile measure plus the derived other-voice flag (implemented as `ProfileComparisonResult`).
+- **Recording Quality Indicator**: A per-recording summary, derived from profile comparison, of how cleanly the target speaker was captured (surfaced as profile sub-signals on `analyze_audio`'s existing `quality` claim; computed internally as `RecordingQualityIndicator`).
+
+## Success Criteria *(mandatory)*
+
+### Measurable Outcomes
+
+- **SC-001**: For a subject whose enrollment set meets the minimum-data guarantee, the tool builds exactly one profile and emits a usage/preparation record for it in 100% of runs.
+- **SC-002**: When a known second speaker contaminates up to a defined fraction (e.g., 20%) of a subject's enrollment material, the resulting profile remains closer (by the chosen similarity measure) to held-out clean target audio than to the intruding-speaker audio in at least 90% of test subjects.
+- **SC-003**: On recordings with annotated other-voice intervals, flagged regions overlap the annotated other-voice regions substantially better than chance (target: detection rate for true other-voice regions at least double the false-positive rate on target-only regions).
+- **SC-004**: On recordings that are entirely the target speaker, no more than a small fraction (target: under 10% of analyzed duration) is incorrectly flagged as other-voice.
+- **SC-005**: Across a set of recordings independently graded for target-speaker capture quality, the profile-based quality indicator ranks them in the same broad order as the human grading (positive rank correlation).
+- **SC-006**: When no profile is supplied, `analyze_audio` produces identical results for all non-profile outputs compared to a run of the prior version, confirming the feature is non-disruptive.
+- **SC-007**: Subjects whose material cannot support a reliable profile (insufficient or balanced-multi-speaker material) are reported with a non-confident status (`low`, `ambiguous`, or `insufficient`) rather than receiving a misleadingly confident profile, in 100% of such cases in the test set.
+
+## Assumptions
+
+- **Self-enrollment only**: The profile is built from the same files that will be analyzed; no separate clean enrollment recording is assumed to exist. The design must therefore be robust to source contamination rather than relying on a pristine reference.
+- **Contamination-tolerant aggregation**: Because source files may contain other voices, the profile is the centroid of the dominant cluster of per-window embeddings; minority clusters (other voices, noise) are excluded. This assumes the target speaker is the most prevalent recurring voice — appropriate for clinical data where the subject is trusted to be present.
+- **Minimum-data guarantee is configurable**: The "certain amount of data" is treated as a configurable aggregate threshold (~20–30s of speech-present audio, floor ~20s), composed of ≥~1s windows; speech selection reuses diarization + presence rather than a new VAD, and low confidence is reported when the threshold cannot be met.
+- **Reuses existing analysis machinery**: This feature builds on `analyze_audio`'s existing speaker embeddings, diarization, presence axis, and identity axis; the profile is an aggregate reference for the identity comparison. Profile-building runs as a stage *before* `analyze_audio` and shares the content-addressable cache, so expensive tasks are computed once.
+- **Speech-presence gating, not task labels**: Since senselab has no per-file task-type metadata, non-speech material (cough, breathing) is excluded via the speech-presence signal rather than task tags; the caller need not label files.
+- **Session preference is optional**: Same-session weighting is an optional refinement (FR-013); the default behavior uses all of a subject's files and does not require session metadata.
+- **Optional, non-breaking**: Supplying a profile is opt-in; existing `analyze_audio` behavior is unchanged when no profile is provided.
+- **Granularity of analysis follows existing conventions**: Other-voice similarity and flags are produced at the same per-portion (windowed) granularity that `analyze_audio` already uses for comparable per-segment outputs, plus a recording-level summary.
+- **Dataset grouping is provided**: The mapping of files to subjects (and optionally sessions) is supplied by the caller or inferable from the dataset layout; discovering subject identity from audio content alone is out of scope.
+- **Triage/gating is out of scope; this feature feeds `analyze_audio`**: The speaker profile is a signal producer that integrates into `analyze_audio`'s outputs (per-window flags, identity-axis votes, and the FR-020 recording-level summary). Deciding whether a recording passes through or is routed to manual review — including the recall-biased operating point where multi-speaker recordings must not pass, fail-safe handling of low-confidence profiles, and any agentic decision+rationale layer over all `analyze_audio` measures — is deferred to a separate future spec that consumes these outputs.
