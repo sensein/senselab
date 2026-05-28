@@ -141,6 +141,23 @@ dominant ~85/15 fixture → confident (FR-014, T011 / T028)."""
 
 
 # ---------------------------------------------------------------------------
+# Session preference. Optional same-session up-weighting applied to
+# dominant-cluster *selection* and *centroid direction* only — never to the
+# reported ``speech_seconds`` (the artifact invariant
+# ``aggregate_speech_seconds == dominant_cluster.speech_seconds`` reports real
+# seconds). Default is unweighted: when no ``prefer_session`` is given, every
+# window weighs 1.0 and the profile is identical with or without session
+# metadata.
+# ---------------------------------------------------------------------------
+
+SESSION_PREFERENCE_WEIGHT: float = 2.0
+"""[new] Validate empirically. Multiplier applied to windows whose ``session_id``
+matches ``--prefer-session`` when selecting / centering the dominant cluster.
+``1.0`` would disable the preference; ``2.0`` lets the preferred session lead a
+near-tie without erasing the contribution of other sessions."""
+
+
+# ---------------------------------------------------------------------------
 # Comparison-time policy (FR-008 / R6). The other-voice threshold is adaptive
 # per profile (derived from its empirical calibration band); a fixed override
 # is available via ``--profile-other-voice-threshold``. The fusion weights are
