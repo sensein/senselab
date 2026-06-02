@@ -139,8 +139,8 @@ New package: `src/senselab/audio/workflows/speaker_profile/`. Reuses existing `a
 
 - [ ] T028 [P] Run the empirical sweeps (against the T010a–T010b fixtures) and finalize all `[new]` thresholds (`AMBIGUITY_SHARE_RATIO` — balanced 50/50 → `ambiguous`, dominant ~85/15 → confident; `min/target_confident_speech_s`; consensus fusion weights; sub-1s intrusion boundary; `min_contiguous_speech_s`); record chosen values + rationale in both `src/senselab/audio/workflows/speaker_profile/constants.py` and research.md "Constants & Thresholds"
 - [ ] T028b [P] (Optional, research) Implement per-window confidence weighting of the profile centroid — down-weight windows by Whisper `no_speech_prob`/avg_logprob, PPG voiced-fraction (opt-in given its ~1.4 GB venv), and SQUIM — flag-gated and evaluated against fixtures, in `src/senselab/audio/workflows/speaker_profile/build.py`
-- [ ] T029 [P] Add regression test asserting `analyze_audio` without `--speaker-profile` yields byte-identical non-profile outputs vs. a baseline run (SC-006) in `src/tests/audio/workflows/speaker_profile/regression_test.py`
-- [ ] T030 [P] Author module documentation in `src/senselab/audio/workflows/speaker_profile/doc.md` (purpose, pipeline, constants, caching note)
+- [X] T029 [P] Add regression test asserting `analyze_audio` without `--speaker-profile` yields byte-identical non-profile outputs vs. a baseline run (SC-006) in `src/tests/audio/workflows/speaker_profile/regression_test.py`
+- [X] T030 [P] Author module documentation in `src/senselab/audio/workflows/speaker_profile/doc.md` (purpose, pipeline, constants, caching note)
 - [ ] T031 Run the quickstart.md end-to-end validation (build → analyze → review) and the success-criteria smoke checks
 - [ ] T032 Run full quality gates (`ruff`, `mypy`, `pytest`) across all changed modules and fix findings
 
