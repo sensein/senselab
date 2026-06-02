@@ -107,12 +107,12 @@ New package: `src/senselab/audio/workflows/speaker_profile/`. Reuses existing `a
 
 ### Tests for User Story 3
 
-- [ ] T025 [US3] Add quality tests in `src/tests/audio/workflows/speaker_profile/compare_test.py` using the T010b quality-ranked variants: clean target-dominant recording outranks noisy/contaminated one (SC-005); profile sub-signals present under the existing `quality` claim; quality discounted/ignored when profile confidence is `low`/`insufficient`
+- [X] T025 [US3] Add quality tests in `src/tests/audio/workflows/speaker_profile/compare_test.py` using the T010b quality-ranked variants: clean target-dominant recording outranks noisy/contaminated one (SC-005); profile sub-signals present under the existing `quality` claim; quality discounted/ignored when profile confidence is `low`/`insufficient`
 
 ### Implementation for User Story 3
 
-- [ ] T026 [US3] Implement `RecordingQualityIndicator` (target_match_fraction = 1 − other-voice rate over speech-present duration; mean within-profile consistency on matched windows; mean SQUIM STOI/PESQ/SI-SDR reused from `analyze_audio` on matched windows; normalized [0,1] `quality`) (FR-010/R7) in `src/senselab/audio/workflows/speaker_profile/compare.py`
-- [ ] T027 [US3] Extend the existing per-pass `quality` global-summary claim with profile target-quality sub-signals (`profile_target_quality`, `profile_target_match_fraction`, `profile_mean_target_consistency`, target-matched `profile_squim`, `profile_confidence`) and fold a target-quality uncertainty into its headline via the existing aggregation; include the detail in the per-pass `speaker_profile.json` sidecar, in `src/senselab/audio/workflows/audio_analysis/global_summary.py` (wire from `scripts/analyze_audio.py`)
+- [X] T026 [US3] Implement `RecordingQualityIndicator` (target_match_fraction = 1 − other-voice rate over speech-present duration; mean within-profile consistency on matched windows; mean SQUIM STOI/PESQ/SI-SDR reused from `analyze_audio` on matched windows; normalized [0,1] `quality`) (FR-010/R7) in `src/senselab/audio/workflows/speaker_profile/compare.py`
+- [X] T027 [US3] Extend the existing per-pass `quality` global-summary claim with profile target-quality sub-signals (`profile_target_quality`, `profile_target_match_fraction`, `profile_mean_target_consistency`, target-matched `profile_squim`, `profile_confidence`) and fold a target-quality uncertainty into its headline via the existing aggregation; include the detail in the per-pass `speaker_profile.json` sidecar, in `src/senselab/audio/workflows/audio_analysis/global_summary.py` (wire from `scripts/analyze_audio.py`)
 
 **Checkpoint**: All three stories independently functional.
 

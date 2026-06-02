@@ -191,3 +191,8 @@ CONSENSUS_FUSION_WEIGHTS_DEFAULT: dict[str, float] | None = None
 """[new] Validate empirically. ``None`` → unweighted mean of per-model
 calibrated uncertainties. Revisit weighting if one model dominates errors in the
 empirical sweep."""
+
+# Target-speaker quality (US3) deliberately has no SQUIM normalization anchors:
+# the headline ``profile_target_quality`` is profile-relative only
+# (target_match_fraction + mean_target_consistency, both natively [0,1]); SQUIM
+# is reported as raw means alongside (see ``compare.compute_target_quality``).

@@ -21,6 +21,7 @@ from senselab.audio.workflows.speaker_profile import constants as C
 from senselab.audio.workflows.speaker_profile.build import TaggedWindowEmbedding, aggregate_dominant_cluster
 from senselab.audio.workflows.speaker_profile.compare import (
     compare_recording_to_profile,
+    compute_target_quality,
     leave_one_file_out_profile,
     profile_votes_by_bucket,
     score_window,
@@ -244,6 +245,53 @@ def test_profile_votes_by_bucket_maps_and_keys() -> None:
     assert votes[1]["speaker_profile/consensus"]["flag"] == "other_voice"
     # A bucket with no overlapping window stays empty (no borrowed flag).
     assert votes[2] == {}
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# compute_target_quality (US3)
+
+
+def test_clean_recording_outranks_contaminated() -> None:
+    """SC-005: a clean target-dominant recording scores higher than a contaminated one."""
+    clean = [_result(i * 0.5, "target", 0.1) for i in range(10)]
+    contaminated = [_result(i * 0.5, "target", 0.1) for i in range(5)] + [
+        _result((5 + i) * 0.5, "other_voice", 0.85) for i in range(5)
+    ]
+    q_clean = compute_target_quality(clean, "ok")
+    q_contam = compute_target_quality(contaminated, "ok")
+    assert q_clean.profile_target_quality > q_contam.profile_target_quality
+    # Clean: all speech-present windows match the target.
+    assert q_clean.profile_target_match_fraction == 1.0
+    assert abs(q_contam.profile_target_match_fraction - 0.5) < 0.1
+
+
+def test_target_quality_echoes_confidence_and_handles_empty() -> None:
+    """Confidence is echoed; an all-unavailable recording yields a zeroed indicator."""
+    q = compute_target_quality([_result(0.0, "unavailable", None)], "low")
+    assert q.profile_confidence == "low"
+    assert q.profile_target_quality == 0.0
+    assert q.profile_target_match_fraction == 0.0
+    assert q.profile_squim is None
+
+
+def test_target_quality_reports_raw_squim_on_matched_windows() -> None:
+    """SQUIM is reported as raw means over matched windows (not folded into the scalar)."""
+    results = [_result(0.0, "target", 0.1), _result(0.5, "other_voice", 0.9), _result(1.0, "target", 0.1)]
+    squim = [
+        {"stoi": 0.9, "pesq": 3.0, "si_sdr": 12.0},
+        {"stoi": 0.4, "pesq": 1.5, "si_sdr": 2.0},  # other_voice window — excluded
+        {"stoi": 0.8, "pesq": 2.6, "si_sdr": 10.0},
+    ]
+    q = compute_target_quality(results, "ok", squim_by_window=squim)
+    assert q.profile_squim is not None
+    # Mean over the two target windows (indices 0 and 2), not the other_voice one.
+    assert abs(q.profile_squim["stoi"] - 0.85) < 1e-9
+    assert abs(q.profile_squim["pesq"] - 2.8) < 1e-9
+    assert abs(q.profile_squim["si_sdr"] - 11.0) < 1e-9
+    # The headline scalar is profile-only — independent of SQUIM.
+    q_no_squim = compute_target_quality(results, "ok")
+    assert q.profile_target_quality == q_no_squim.profile_target_quality
+    assert q_no_squim.profile_squim is None
 
 
 # ──────────────────────────────────────────────────────────────────────────

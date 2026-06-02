@@ -211,6 +211,7 @@ def compute_pass_global_summary(
     pii_report: Any,  # noqa: ANN401 — PiiPassReport, optional
     expects_speech: bool = True,
     profile_other_voice: dict[str, Any] | None = None,
+    profile_target_quality: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Aggregate one pass's per-bucket axes into the four-claim summary.
 
@@ -228,6 +229,13 @@ def compute_pass_global_summary(
             When supplied, they are added under the ``single_speaker`` claim and
             the profile's p95 other-voice uncertainty is folded into the claim's
             headline via ``max()``. ``None`` leaves the claim unchanged.
+        profile_target_quality: Optional speaker-profile target-quality
+            sub-signals (the ``profile_*`` fields produced by
+            ``compute_target_quality``). When supplied, they are added under the
+            ``quality`` claim; ``1 - profile_target_quality`` folds into the
+            claim headline via ``max()`` only when ``profile_confidence == "ok"``
+            (a weak profile is not allowed to move the quality headline). ``None``
+            leaves the claim unchanged.
 
     Returns:
         Dict with the four sub-uncertainties plus a ``combined`` max() and
@@ -295,6 +303,18 @@ def compute_pass_global_summary(
 
     # ─── quality ───
     quality_block = _aggregate_quality(pass_summary)
+
+    # Speaker-profile target-quality sub-signals. The headline only folds in a
+    # target-quality uncertainty (1 - profile_target_quality) when the profile
+    # is fully confident ("ok"); on low/ambiguous/insufficient the consumer is
+    # told to discount target quality, so we don't let a weak profile move the
+    # quality headline. The sub-signals are always recorded.
+    if profile_target_quality is not None:
+        ptq = profile_target_quality.get("profile_target_quality")
+        if ptq is not None and profile_target_quality.get("profile_confidence") == "ok":
+            fold = 1.0 - float(ptq)
+            existing = quality_block.get("uncertainty")
+            quality_block["uncertainty"] = fold if existing is None else max(float(existing), fold)
 
     # ─── no_pii ───
     # Surface the actual detected PII spans (text + category + detector + ASR
@@ -397,6 +417,7 @@ def compute_pass_global_summary(
             "pesq_uncertainty": quality_block.get("pesq_uncertainty"),
             "stoi_uncertainty": quality_block.get("stoi_uncertainty"),
             "sisdr_uncertainty": quality_block.get("sisdr_uncertainty"),
+            **(profile_target_quality or {}),
         },
         "no_pii": {
             "uncertainty": no_pii_uncertainty,
