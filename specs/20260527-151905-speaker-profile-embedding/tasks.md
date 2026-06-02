@@ -39,8 +39,8 @@ New package: `src/senselab/audio/workflows/speaker_profile/`. Reuses existing `a
 - [X] T004 Implement the WavLM transformers speaker-embedding backend (`WavLMForXVector`, default `microsoft/wavlm-base-plus-sv`, 16 kHz mono, 512-D, returns `list[torch.Tensor]` matching the SpeechBrain contract) in `src/senselab/audio/tasks/speaker_embeddings/wavlm.py`
 - [X] T005 Dispatch a WavLM model handle (alongside `SpeechBrainModel`) and register the compatibility entry in `src/senselab/audio/tasks/speaker_embeddings/api.py` (depends on T004)
 - [X] T006 [P] Add WavLM backend tests (loads, embeds, 512-D output, graceful failure → recorded reason not raise) extending `src/tests/audio/tasks/speaker_embeddings_test.py`
-- [X] T007 Factor the cache-key "wrapper hash" basis from the analyze_audio script source into a stable shared library helper (module-level hash) so `build_speaker_profile` and `analyze_audio` produce identical keys for diarization/embedding/scene tasks (FR-015/R1) in `scripts/analyze_audio.py` and `src/senselab/audio/workflows/speaker_profile/cache.py`
-- [X] T008 [P] Add a cross-stage cache-reuse test (running the build path then analyze_audio on the same file/params yields `cache: "hit"` for shared tasks) in `src/tests/audio/workflows/speaker_profile/cache_test.py`
+- [X] T007 Factor the cache-key "wrapper hash" basis from the analyze_audio script source into a stable shared library helper (module-level hash) so `build_speaker_profile` and `analyze_audio` produce identical keys for diarization/embedding/scene tasks (FR-015/R1) in `scripts/analyze_audio.py` and `src/senselab/audio/workflows/speaker_profile/cache.py` — **partially delivered**: the `cache.py` helper shipped, but the `analyze_audio.py` swap was intentionally deferred "until a second consumer exists" (it still uses `wrapper_version_hash = sha256(script source)`). That consumer now exists; the swap is scheduled in Phase 6 (T035).
+- [X] T008 [P] Add a cross-stage cache-reuse test (running the build path then analyze_audio on the same file/params yields `cache: "hit"` for shared tasks) in `src/tests/audio/workflows/speaker_profile/cache_test.py` — **helper-contract only**: `cache_test.py` covers the helper's determinism / caller-agnosticism; the real end-to-end "build → analyze → cache hit" assertion was deferred and is scheduled in Phase 6 (T036).
 - [X] T009a Promote the per-window speech mask into a reusable single-file helper (from `compute._speech_window_mask`: diarization + AST/YAMNet speech labels + loudness → per-window speech/non-speech) in `src/senselab/audio/workflows/audio_analysis/presence.py` (prerequisite for T009; resolves the U1 build-time gate)
 - [X] T009 Implement the per-file speech-window extractor in `src/senselab/audio/workflows/speaker_profile/build.py`: locate speech via a **best-available presence gate** — cheap floor = diarization (all speakers) + the T009a speech mask; opportunistically fold in cached Whisper `no_speech_prob` / PPG voiced-fraction when already present; **never trigger ASR/PPG solely to gate**. Extract ≥1s windows per model via `extract_per_window_embeddings`, drop sub-1s fragments, tag each `WindowEmbedding` with its `file_id` (FR-002/FR-008 gating; no identity assignment)
 - [X] T010 Implement profile artifact load/save (JSON per contracts/speaker-profile.schema.md: `schema_version`, invariants, atomic write, ignore-unknown-keys reader, refuse higher schema) in `src/senselab/audio/workflows/speaker_profile/io.py`
@@ -118,7 +118,24 @@ New package: `src/senselab/audio/workflows/speaker_profile/`. Reuses existing `a
 
 ---
 
-## Phase 6: Polish & Cross-Cutting Concerns
+## Phase 6: Cross-Stage Cache Reuse (finish FR-015 / R1)
+
+**Goal**: Make the profile stage and `analyze_audio` actually share cached per-file tasks (diarization, speaker embeddings, scene classification) so running `build_speaker_profile` beforehand spares `analyze_audio` from recomputing them — the performance premise of the two-stage design (R1).
+
+**Why this is in scope (and why now)**: The `cache.py` helper (T007) and its unit contract (T008) shipped in Phase 2, but the author deliberately deferred swapping `analyze_audio.py`'s script-source wrapper hash "until the second consumer exists." That consumer (`build_speaker_profile`) now exists (Phase 3) and `analyze_audio` consumes its artifact (Phase 4), so FR-015/R1 is currently *designed but not delivered or verified*. This phase is sequenced **after US3 (Phase 5)** so its `analyze_audio.py` edits don't collide with US2/US3's edits to the same file, and **before Polish** so the end-to-end and gate runs (T031/T032) cover it.
+
+**⚠️ Blast radius**: This changes cache-invalidation semantics for *all* `analyze_audio` users (not just the profile path) and triggers a one-time global cache miss. Treat it as a deliberate, standalone change — not folded into a story commit. The failure mode to guard against is the inverse of today's: the current script-source hash *over*-invalidates (safe but wasteful); a library-module hash can *under*-invalidate (serve a stale entry) if the task→module map is incomplete.
+
+- [ ] T033 Audit and complete the task→module map (`_TASK_MODULES`) in `src/senselab/audio/workflows/speaker_profile/cache.py`: for each cached task (diarization, speaker_embeddings, classification/scene, features, asr) include the full set of behavior-determining library modules (api + backends + helpers) so the library-derived hash invalidates on a real implementation change and never under-invalidates. Add a test asserting every mapped module resolves to a real importable file.
+- [ ] T034 Bump `CACHE_SCHEMA_VERSION` (`cache.py`) and `analyze_audio.py`'s `_CACHE_SCHEMA_VERSION` in lockstep so the keying change triggers one clean, intentional cache invalidation; record the bump + reason in both files.
+- [ ] T035 Swap `analyze_audio.py`'s per-task cache keying from `wrapper_version_hash()` (sha256 of the script source) to `cache.task_wrapper_hash(<task>)` per task, so each task's key reflects its implementing modules and is caller-agnostic (build ↔ analyze share entries). Keep the `cache_key` payload shape aligned with `cache.py`; preserve an explicit override path for staged rollout. Depends on T022/T024/T027 (the US2/US3 `analyze_audio.py` edits) landing first.
+- [ ] T036 Implement the deferred end-to-end cross-stage reuse test (the real T008 validation hook): run `build_speaker_profile` then `analyze_audio` on the same file with identical task params and assert `cache: "hit"` for the shared tasks (diarization, speaker embeddings, scene classification), in `src/tests/audio/workflows/speaker_profile/cache_test.py` (or a new `cache_integration_test.py`).
+
+**Checkpoint**: Running `build_speaker_profile` then `analyze_audio` on a subject's files recomputes each shared task once, not twice.
+
+---
+
+## Phase 7: Polish & Cross-Cutting Concerns
 
 - [ ] T028 [P] Run the empirical sweeps (against the T010a–T010b fixtures) and finalize all `[new]` thresholds (`AMBIGUITY_SHARE_RATIO` — balanced 50/50 → `ambiguous`, dominant ~85/15 → confident; `min/target_confident_speech_s`; consensus fusion weights; sub-1s intrusion boundary; `min_contiguous_speech_s`); record chosen values + rationale in both `src/senselab/audio/workflows/speaker_profile/constants.py` and research.md "Constants & Thresholds"
 - [ ] T028b [P] (Optional, research) Implement per-window confidence weighting of the profile centroid — down-weight windows by Whisper `no_speech_prob`/avg_logprob, PPG voiced-fraction (opt-in given its ~1.4 GB venv), and SQUIM — flag-gated and evaluated against fixtures, in `src/senselab/audio/workflows/speaker_profile/build.py`
@@ -136,7 +153,8 @@ New package: `src/senselab/audio/workflows/speaker_profile/`. Reuses existing `a
 - **Setup (Phase 1)**: no dependencies.
 - **Foundational (Phase 2)**: depends on Setup; BLOCKS all stories. Within it: T004→T005; T007→T008; T009a→T009; T009 depends on T002/T003; T010 depends on T002; T010a→T010b (fixtures); T010a may run in parallel with T004–T009.
 - **User Stories (Phase 3–5)**: all depend on Foundational. US2 builds on US1's profile artifact; US3 builds on US2's per-window comparison. They can be developed in parallel but share `compare.py` (US2/US3), so coordinate those.
-- **Polish (Phase 6)**: depends on the stories it touches (T028 after US1/US2 thresholds exist; T029 after US2 wiring).
+- **Cross-stage cache reuse (Phase 6)**: depends on US2/US3 having landed their `analyze_audio.py` edits (T022/T024/T027), since T035 swaps the cache keying in the same file; standalone from the story logic otherwise. Must land before Polish so T031/T032 exercise it.
+- **Polish (Phase 7)**: depends on the stories it touches (T028 after US1/US2 thresholds exist; T029 after US2 wiring) and on Phase 6 (T031 end-to-end / T032 gates cover the cache wiring).
 
 ### User Story Dependencies
 
@@ -149,7 +167,7 @@ New package: `src/senselab/audio/workflows/speaker_profile/`. Reuses existing `a
 - Story tests written first and failing → implementation.
 - `build.py` tasks (T012–T016) are sequential (same file).
 - `compare.py` tasks (T019–T021, T026) are sequential (same file).
-- `scripts/analyze_audio.py` tasks (T022, T024, T027) are sequential (same file); T007 also edits it, so it lands first in Foundational.
+- `scripts/analyze_audio.py` tasks (T022, T024, T027, then T035) are sequential (same file); T035 (cache keying swap) lands last, after the US2/US3 wiring.
 
 ### Parallel Opportunities
 
@@ -186,7 +204,8 @@ Task: "Cross-stage cache-reuse test in src/tests/audio/workflows/speaker_profile
 2. US1 → build + inspect profiles (MVP).
 3. US2 → other-voice flags in `analyze_audio`.
 4. US3 → target-speaker quality indicator.
-5. Polish → finalize thresholds, regression-lock SC-006, docs, gates.
+5. Cross-stage cache reuse → `build_speaker_profile` and `analyze_audio` share cached tasks (finish FR-015/R1).
+6. Polish → finalize thresholds, regression-lock SC-006, docs, gates.
 
 ---
 

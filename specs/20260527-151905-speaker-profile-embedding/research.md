@@ -20,6 +20,8 @@ This document resolves the open decisions (including the two items the spec defe
 
 **Validation hook**: an integration test runs `build_speaker_profile` then `analyze_audio` on the same file with the same params and asserts the diarization/embedding tasks report `cache: "hit"` on the second stage.
 
+**Status (as of US2)**: partially delivered. The shared `cache.py` helper (`task_wrapper_hash`, keyed on each task's implementing modules) shipped in Phase 2 and `build_speaker_profile` uses it, but `analyze_audio.py` still keys every task on `sha256(analyze_audio.py source)` — so the two stages do **not** yet share entries and FR-015/R1 is not realized end-to-end. The swap was deliberately deferred until a second consumer existed; it now does. Finishing it (audit the task→module map, bump the cache schema version, swap `analyze_audio`'s keying, add the real cross-stage `cache: "hit"` test) is scheduled as **Phase 6 (T033–T036)**, sequenced after US3 so it doesn't collide with the US2/US3 edits to `analyze_audio.py`. Trade-off to keep in mind: the current script-source hash over-invalidates (re-runs unchanged tasks on any script edit, never shares across callers); the module-based hash fixes both but must enumerate every behavior-determining module per task to avoid under-invalidation.
+
 ---
 
 ## R2. Profile aggregation — dominant-cluster centroid across files
