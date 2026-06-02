@@ -38,6 +38,7 @@ from senselab.audio.workflows.speaker_profile.types import (
     ProfileComparisonResult,
     ProfileConfidence,
     RecordingOtherVoiceSummary,
+    RecordingQualityIndicator,
 )
 
 
@@ -263,6 +264,83 @@ def summarize_other_voice(
         profile_peak_other_voice_uncertainty=float(peak),
         profile_p95_other_voice_uncertainty=p95,
         profile_speech_present_seconds=float(speech_present_seconds),
+        profile_confidence=profile_confidence,
+    )
+
+
+def compute_target_quality(
+    results: Sequence[ProfileComparisonResult],
+    profile_confidence: ProfileConfidence,
+    *,
+    squim_by_window: Sequence[dict[str, float] | None] | None = None,
+) -> RecordingQualityIndicator:
+    """Estimate how cleanly the target voice is captured in a recording.
+
+    The headline ``profile_target_quality`` is a purely **profile-relative**
+    score — the mean of two natively-[0,1] components:
+
+    1. ``target_match_fraction`` — fraction of speech-present duration flagged
+       ``target`` (i.e. ``1 - other-voice rate``).
+    2. ``mean_target_consistency`` — mean calibrated similarity to the profile
+       on the target-matched windows.
+
+    SQUIM (STOI/PESQ/SI-SDR) is reported alongside as **raw means** on the
+    target-matched windows (not folded into the headline): those metrics live on
+    different scales (STOI ~[0,1], PESQ ~[1,4.5], SI-SDR in dB), the existing
+    ``quality`` claim already maps them to uncertainty with its own anchors, and
+    a whole-file SQUIM adds little beyond that. The consumer can weigh them.
+
+    Args:
+        results: Per-window comparison results for the recording.
+        profile_confidence: Echoed onto the indicator; target quality is
+            meaningless on an ``insufficient`` profile and should be discounted
+            on ``low`` / ``ambiguous`` by the consumer.
+        squim_by_window: Optional per-window ``{"stoi","pesq","si_sdr"}`` aligned
+            to ``results`` (the caller broadcasts a whole-file score across
+            windows when that is all it has). ``None`` skips ``profile_squim``.
+
+    Returns:
+        A :class:`RecordingQualityIndicator`.
+    """
+    steps = _window_step_seconds(results)
+    speech_present_seconds = 0.0
+    matched_seconds = 0.0
+    consistencies: list[float] = []
+    matched_idx: list[int] = []
+    for i, (r, step) in enumerate(zip(results, steps, strict=False)):
+        if r.flag == "unavailable":
+            continue
+        speech_present_seconds += step
+        if r.flag == "target":
+            matched_seconds += step
+            matched_idx.append(i)
+            if r.similarity is not None:
+                consistencies.append(float(r.similarity))
+
+    target_match_fraction = (matched_seconds / speech_present_seconds) if speech_present_seconds > 0 else 0.0
+    mean_consistency = float(np.mean(consistencies)) if consistencies else 0.0
+    target_quality = float(np.mean([target_match_fraction, mean_consistency]))
+
+    profile_squim: dict[str, float] | None = None
+    if squim_by_window is not None and matched_idx:
+        per_metric: dict[str, list[float]] = {"stoi": [], "pesq": [], "si_sdr": []}
+        for i in matched_idx:
+            row = squim_by_window[i] if i < len(squim_by_window) else None
+            if not row:
+                continue
+            for metric in per_metric:
+                v = row.get(metric)
+                if v is not None:
+                    per_metric[metric].append(float(v))
+        means = {m: float(np.mean(vals)) for m, vals in per_metric.items() if vals}
+        if means:
+            profile_squim = means
+
+    return RecordingQualityIndicator(
+        profile_target_quality=target_quality,
+        profile_target_match_fraction=float(target_match_fraction),
+        profile_mean_target_consistency=mean_consistency,
+        profile_squim=profile_squim,
         profile_confidence=profile_confidence,
     )
 

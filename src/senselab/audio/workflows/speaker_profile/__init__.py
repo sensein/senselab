@@ -25,6 +25,7 @@ from senselab.audio.workflows.speaker_profile.build import (
 )
 from senselab.audio.workflows.speaker_profile.compare import (
     compare_recording_to_profile,
+    compute_target_quality,
     leave_one_file_out_profile,
     profile_votes_by_bucket,
     score_window,
@@ -66,6 +67,7 @@ __all__ = [
     "build_source_records",
     "build_speaker_profile",
     "compare_recording_to_profile",
+    "compute_target_quality",
     "decide_confidence",
     "extract_speech_windows_for_file",
     "leave_one_file_out_profile",

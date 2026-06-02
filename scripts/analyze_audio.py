@@ -692,6 +692,69 @@ def _p_voice_for_windows(
     return out
 
 
+def _squim_by_window(
+    pass_summary: dict[str, Any],
+    detection_windows: dict[str, Any],
+) -> list[dict[str, float] | None] | None:
+    """Align this pass's SQUIM (STOI/PESQ/SI-SDR) onto the embedding-window grid.
+
+    Returns one ``{"stoi","pesq","si_sdr"}`` (subset) per detection window, or
+    ``None`` when SQUIM is unavailable. When the SQUIM rows carry ``start``/``end``
+    they are time-aligned per window; otherwise the (whole-file) mean is
+    broadcast to every window — `torchaudio_squim` is typically a single
+    whole-audio score, in which case "matched-window SQUIM" degrades to the
+    whole-file value, which is the best granularity available.
+    """
+    feat = pass_summary.get("features") or {}
+    feat_result = feat.get("result") if isinstance(feat, dict) else None
+    rows = feat_result.get("torchaudio_squim", []) if isinstance(feat_result, dict) else []
+    if isinstance(rows, dict):
+        rows = [rows]
+    metric_rows: list[dict[str, Any]] = [r for r in rows if isinstance(r, dict)]
+    if not metric_rows:
+        return None
+
+    metrics = ("stoi", "pesq", "si_sdr")
+
+    def _row_metrics(r: dict[str, Any]) -> dict[str, float]:
+        out: dict[str, float] = {}
+        for m in metrics:
+            v = r.get(m)
+            if v is not None:
+                try:
+                    out[m] = float(v)
+                except (TypeError, ValueError):
+                    continue
+        return out
+
+    reference: list[Any] = next((w for w in detection_windows.values() if w), [])
+    if not reference:
+        return None
+
+    timed = [r for r in metric_rows if r.get("start") is not None and r.get("end") is not None]
+    if timed:
+        aligned: list[dict[str, float] | None] = []
+        for w in reference:
+            acc: dict[str, list[float]] = {m: [] for m in metrics}
+            for r in timed:
+                if float(r["start"]) < float(w.end_s) and float(r["end"]) > float(w.start_s):
+                    for m, v in _row_metrics(r).items():
+                        acc[m].append(v)
+            means = {m: float(sum(v) / len(v)) for m, v in acc.items() if v}
+            aligned.append(means or None)
+        return aligned
+
+    # No timestamps → broadcast the whole-file mean to every window.
+    whole: dict[str, list[float]] = {m: [] for m in metrics}
+    for r in metric_rows:
+        for m, v in _row_metrics(r).items():
+            whole[m].append(v)
+    broadcast = {m: float(sum(v) / len(v)) for m, v in whole.items() if v}
+    if not broadcast:
+        return None
+    return [dict(broadcast) for _ in reference]
+
+
 def prepare_audio(path: Path) -> Audio:
     """Read audio, downmix to mono, resample to 16 kHz."""
     audio = read_audios([str(path)])[0]
@@ -2065,12 +2128,14 @@ def main(argv: list[str] | None = None) -> int:
         # on --speaker-profile, so the no-profile path is byte-identical.
         profile_results_by_pass: dict[str, list[Any]] = {}
         profile_rollup_by_pass: dict[str, dict[str, Any]] = {}
+        profile_quality_by_pass: dict[str, dict[str, Any]] = {}
         _profile = _load_speaker_profile(args.speaker_profile) if args.speaker_profile else None
         if _profile is not None and any(per_window_embeddings_by_pass.values()):
             from dataclasses import asdict as _asdict
 
             from senselab.audio.workflows.speaker_profile.compare import (
                 compare_recording_to_profile,
+                compute_target_quality,
                 profile_votes_by_bucket,
                 summarize_other_voice,
             )
@@ -2091,6 +2156,10 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 profile_results_by_pass[pl] = results
                 profile_rollup_by_pass[pl] = _asdict(summarize_other_voice(results, _profile.confidence))
+                squim_by_window = _squim_by_window(passes_for_compute.get(pl, {}), by_model)
+                profile_quality_by_pass[pl] = _asdict(
+                    compute_target_quality(results, _profile.confidence, squim_by_window=squim_by_window)
+                )
                 # Additive: the identity aggregator ignores speaker_profile/* keys,
                 # so existing per-bucket uncertainty is unchanged.
                 id_res = axis_results.get((pl, "identity"))
@@ -2159,6 +2228,7 @@ def main(argv: list[str] | None = None) -> int:
                 pii_report=pii_reports.get(pl),
                 expects_speech=True,
                 profile_other_voice=profile_rollup_by_pass.get(pl),
+                profile_target_quality=profile_quality_by_pass.get(pl),
             )
         # Top-level: pick the lower-uncertainty pass (best of raw vs enhanced)
         # so the bottom-line score reflects the cleaner interpretation.
@@ -2224,6 +2294,7 @@ def main(argv: list[str] | None = None) -> int:
                         for r in results
                     ],
                     "other_voice": profile_rollup_by_pass.get(pass_label, {}),
+                    "quality": profile_quality_by_pass.get(pass_label, {}),
                 }
                 write_json(run_dir / pass_label / "speaker_profile.json", sidecar)
 
