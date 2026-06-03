@@ -171,10 +171,14 @@ the per-subject calibrated uncertainty. A fixed value (CLI override) replaces
 that cutoff with an explicit calibrated-uncertainty threshold."""
 
 OTHER_VOICE_CALIBRATED_CUTOFF: float = 0.5
-"""[new] Validate empirically. Calibrated other-voice uncertainty at/above which
-a speech-present window is flagged ``other_voice``. ``0.5`` is the midpoint of
-the per-subject calibration band (the EER-like operating point); the band makes
-the effective raw-distance threshold adapt to the subject."""
+"""[new] Calibrated other-voice uncertainty at/above which a speech-present
+window is flagged ``other_voice``. ``0.5`` is the midpoint of the per-subject
+calibration band (the EER-like operating point); the band makes the effective
+raw-distance threshold adapt to the subject. The T028 sensitivity sweep (see
+research.md) found this knob *insensitive* in ``[0.4, 0.7]`` on clean audio
+(target unc≈0 vs intruder unc≈1 are cleanly band-separated); the dominant
+sensitivity is input noise (which inflates false other-voice flags), not this
+cutoff — so it is kept neutral and NOT tuned to an operating point."""
 
 MIN_P_VOICE_FOR_COMPARISON: float = 0.5
 """[new] Validate empirically. Speech-presence gate: windows whose reused

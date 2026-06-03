@@ -218,6 +218,28 @@ All thresholds MUST be implemented as **named, documented, configurable** values
 | Sub-1s intrusion confidence boundary | localization low-confidence below `~1.0s` | **[new]** TBD (FR-017) | Quantify the boundary during implementation. |
 | WavLM default checkpoint | `microsoft/wavlm-base-plus-sv` | **[new]** (FR-019) | Configurable; substitute WavLM-Large SV if one becomes available. |
 
+## T028 sensitivity characterization (2026-06-03, GPU `scripts/slurm_speaker_profile_sweep.sh`)
+
+Ran on the synthetic fixtures with the full ECAPA+ResNet+WavLM consensus. **These are characterizations, not tuned production values** — synthetic TTS data; not validated on real recordings.
+
+**Degradation (pure-target recording, varying additive-noise SNR):** the embedding signals are robust to ~20 dB then degrade, but the degradation is **dominated by false other-voice flagging**, not graceful quality estimation:
+
+| SNR dB | si_sdr | stoi | target_quality | match_fraction | consistency | false_other_voice |
+|---:|---:|---:|---:|---:|---:|---:|
+| clean | 28.4 | 1.00 | 0.98 | 1.00 | 0.96 | 0.00 |
+| 20 | 20.2 | 0.97 | 0.93 | 0.97 | 0.89 | 0.03 |
+| 15 | 15.3 | 0.93 | 0.86 | 0.91 | 0.81 | 0.09 |
+| 10 | 10.2 | 0.87 | 0.77 | 0.83 | 0.71 | 0.17 |
+| 5 | 5.1 | 0.81 | 0.61 | 0.57 | 0.64 | 0.43 |
+| 0 | 0.1 | 0.74 | 0.43 | 0.26 | 0.60 | 0.74 |
+| −5 | −4.8 | 0.67 | 0.00 | 0.00 | 0.00 | 1.00 |
+
+**Implication (design):** noise makes the target's own speech read as "another voice" (false-OV 0.17→0.74 over 10→0 dB). So `target_match_fraction` / `target_quality` **conflate noise with other-voice** and are not a clean acoustic-quality proxy. The right dependency is **SQUIM → trustworthiness of the profile flags** (below ~10–15 dB the flags are unreliable and should be down-weighted), *not* embeddings → quality. SQUIM degrades cleanly/monotonically here, so it is the better acoustic-quality signal. Acting on this (gating/widening flag confidence by SQUIM, and reframing the US3 "quality" indicator as target *purity*) is a candidate refinement — deferred, consistent with the 2026-06-03 scope clarification.
+
+**Contamination (build level):** centroid drift ≈ 0.000–0.002 and target-sim flat at 0.977 (vs intruder 0.28) across 0–30% single-file signal-mix contamination — dominant-cluster aggregation is strongly contamination-tolerant (SC-002 holds with margin).
+
+**Other-voice cutoff:** on clean overlay audio, detection 0.89 / false-positive 0.00 are **flat across cutoff ∈ [0.4, 0.7]** (target unc≈0, intruder unc≈1 are cleanly band-separated). The cutoff is an insensitive knob; **noise, not the threshold, is the dominant sensitivity** → keep the cutoff at the neutral midpoint (`OTHER_VOICE_CALIBRATED_CUTOFF = 0.5`), do not tune an operating point.
+
 ## Open items carried to tasks (not blocking)
 
 - Exact margins/defaults (ambiguity margin, adaptive-threshold percentiles, consensus weighting) will be set with **small empirical sweeps** during implementation, seeded with the literature/existing defaults documented above.
