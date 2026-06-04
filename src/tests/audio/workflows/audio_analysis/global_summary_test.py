@@ -101,3 +101,11 @@ def test_quality_unchanged_without_profile() -> None:
     """No target-quality rollup → the claim carries no profile_* keys."""
     q = _call(None)["quality"]
     assert not any(k.startswith("profile_") for k in q)
+
+
+def test_quality_unscorable_target_quality_not_folded() -> None:
+    """profile_target_quality=None (recording unscorable) must NOT fold a worst-case into the headline."""
+    rollup = {"profile_target_quality": None, "profile_confidence": "ok"}
+    q = _call(None, profile_target_quality=rollup)["quality"]
+    assert q["profile_target_quality"] is None
+    assert q["uncertainty"] is None  # base (no SQUIM here) stays None; no spurious 1.0 fold

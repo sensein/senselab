@@ -80,8 +80,15 @@ def pick_device(arg: str) -> DeviceType | None:
 
 
 def _resolve_inputs(args: argparse.Namespace) -> list[tuple[Path, str | None]]:
-    """Merge positional files and ``--files-from`` into ``[(path, session_id)]``."""
-    out: list[tuple[Path, str | None]] = [(p, None) for p in args.files]
+    """Merge positional files and ``--files-from`` into ``[(path, session_id)]``.
+
+    De-duplicates by path (first occurrence wins) so a file listed both
+    positionally and in ``--files-from`` is not ingested twice (which would
+    double-count its windows in the dominant-cluster aggregation). If the first
+    occurrence carried no session but a later duplicate does, the session is
+    backfilled.
+    """
+    raw_inputs: list[tuple[Path, str | None]] = [(p, None) for p in args.files]
     if args.files_from is not None:
         for raw in args.files_from.read_text(encoding="utf-8").splitlines():
             line = raw.strip()
@@ -89,9 +96,22 @@ def _resolve_inputs(args: argparse.Namespace) -> list[tuple[Path, str | None]]:
                 continue
             if "\t" in line:
                 path_str, session = line.split("\t", 1)
-                out.append((Path(path_str.strip()), session.strip() or None))
+                raw_inputs.append((Path(path_str.strip()), session.strip() or None))
             else:
-                out.append((Path(line), None))
+                raw_inputs.append((Path(line), None))
+
+    out: list[tuple[Path, str | None]] = []
+    index_by_path: dict[str, int] = {}
+    for path, session in raw_inputs:
+        key = str(path)
+        if key in index_by_path:
+            print(f"warn: duplicate input file ignored: {path}", file=sys.stderr)
+            i = index_by_path[key]
+            if out[i][1] is None and session is not None:
+                out[i] = (out[i][0], session)
+            continue
+        index_by_path[key] = len(out)
+        out.append((path, session))
     return out
 
 
