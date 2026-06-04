@@ -236,6 +236,20 @@ Ran on the synthetic fixtures with the full ECAPA+ResNet+WavLM consensus. **Thes
 
 **Implication (design):** noise makes the target's own speech read as "another voice" (false-OV 0.17→0.74 over 10→0 dB). So `target_match_fraction` / `target_quality` **conflate noise with other-voice** and are not a clean acoustic-quality proxy. The right dependency is **SQUIM → trustworthiness of the profile flags** (below ~10–15 dB the flags are unreliable and should be down-weighted), *not* embeddings → quality. SQUIM degrades cleanly/monotonically here, so it is the better acoustic-quality signal. Acting on this (gating/widening flag confidence by SQUIM, and reframing the US3 "quality" indicator as target *purity*) is a candidate refinement — deferred, consistent with the 2026-06-03 scope clarification.
 
+**Per-model degradation breakout (GPU job 15404761):** the consensus false-other-voice explosion above is **almost entirely the Fbank models**. Standalone false-OV rate per model on the pure-target recording (each model thresholded alone at the 0.5 cutoff):
+
+| SNR dB | ecapa fOV | resnet fOV | wavlm fOV | consensus fOV |
+|---:|---:|---:|---:|---:|
+| clean | 0.06 | 0.00 | 0.00 | 0.00 |
+| 20 | 0.11 | 0.09 | 0.00 | 0.03 |
+| 15 | 0.23 | 0.17 | 0.00 | 0.09 |
+| 10 | 0.46 | 0.43 | 0.06 | 0.17 |
+| 5 | 0.86 | 0.71 | 0.11 | 0.43 |
+| 0 | 0.97 | 0.89 | 0.11 | 0.74 |
+| −5 | 1.00 | 0.97 | 0.37 | 1.00 |
+
+**WavLM is far more noise-robust than ECAPA/ResNet** (SSL, noise/overlap-aware pretraining — exactly the FR-018 decorrelation rationale). At 0 dB the Fbank models misflag ~90–97% of the target's own speech as other-voice while WavLM misflags ~11%. **Implication:** the equal-weight consensus *hurts* under noise — it lets the noise-sensitive models pollute a robust one. A **noise-aware fusion** (up-weight WavLM, or SQUIM-gated down-weighting of the Fbank models at low SNR) is the clear lever to cut noise-induced false flags — a candidate tuning, deferred per the 2026-06-03 clarification (don't lock in tuned weights here). Caveat: single recording, synthetic TTS, additive Gaussian noise; magnitudes will differ on real data/noise though the model ordering is expected to hold.
+
 **Contamination (build level):** centroid drift ≈ 0.000–0.002 and target-sim flat at 0.977 (vs intruder 0.28) across 0–30% single-file signal-mix contamination — dominant-cluster aggregation is strongly contamination-tolerant (SC-002 holds with margin).
 
 **Other-voice cutoff:** on clean overlay audio, detection 0.89 / false-positive 0.00 are **flat across cutoff ∈ [0.4, 0.7]** (target unc≈0, intruder unc≈1 are cleanly band-separated). The cutoff is an insensitive knob; **noise, not the threshold, is the dominant sensitivity** → keep the cutoff at the neutral midpoint (`OTHER_VOICE_CALIBRATED_CUTOFF = 0.5`), do not tune an operating point.
