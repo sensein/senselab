@@ -248,7 +248,18 @@ Ran on the synthetic fixtures with the full ECAPA+ResNet+WavLM consensus. **Thes
 | 0 | 0.97 | 0.89 | 0.11 | 0.74 |
 | −5 | 1.00 | 0.97 | 0.37 | 1.00 |
 
-**WavLM is far more noise-robust than ECAPA/ResNet** (SSL, noise/overlap-aware pretraining — exactly the FR-018 decorrelation rationale). At 0 dB the Fbank models misflag ~90–97% of the target's own speech as other-voice while WavLM misflags ~11%. **Implication:** the equal-weight consensus *hurts* under noise — it lets the noise-sensitive models pollute a robust one. A **noise-aware fusion** (up-weight WavLM, or SQUIM-gated down-weighting of the Fbank models at low SNR) is the clear lever to cut noise-induced false flags — a candidate tuning, deferred per the 2026-06-03 clarification (don't lock in tuned weights here). Caveat: single recording, synthetic TTS, additive Gaussian noise; magnitudes will differ on real data/noise though the model ordering is expected to hold.
+**WavLM is far more noise-robust than ECAPA/ResNet** (SSL, noise/overlap-aware pretraining — exactly the FR-018 decorrelation rationale). At 0 dB the Fbank models misflag ~90–97% of the target's own speech as other-voice while WavLM misflags ~11%.
+
+**Multi-condition cross-validation (GPU job 15405479) — exposes a robustness↔discrimination trade-off.** Leave-one-out over speaker A's 3 long passages × 5 noise seeds confirms the false-OV ordering with tight variance (0 dB mean±std: ecapa 0.98±0.02, resnet 0.93±0.04, wavlm 0.20±0.05). But per-model *detection* of an overlaid intruder reveals the opposite weakness for WavLM:
+
+| intruder | ecapa det/FP | resnet det/FP | wavlm det/FP | consensus |
+|---|---|---|---|---|
+| B (ksp, different timbre) | 0.93/0.05 | 0.89/0.01 | 0.81/0.00 | 0.89/0.01 |
+| C (clb, similar timbre) | 0.85/0.05 | 0.67/0.01 | **0.00**/0.00 | 0.48/0.01 |
+
+WavLM-base-plus-sv **completely misses the similar-timbre intruder** (0.00) while ECAPA catches 85%. So: **WavLM = noise-robust but weak fine-discrimination; ECAPA/ResNet = discriminative but noise-fragile.**
+
+**Revised implication (supersedes the naive "up-weight WavLM"):** a static WavLM up-weight would fix noise but *break* the hardest/most-important case — a same-gender / similar-voice co-speaker. The right lever is **condition-dependent fusion** (trust WavLM under low SNR; trust the Fbank pair in clean audio for fine discrimination — i.e., SQUIM-gated weighting), and/or a stronger **WavLM-Large SV** checkpoint to lift discrimination (the FR-019 substitution note). The equal-weight consensus is a mediocre hedge at both extremes. All a candidate refinement, deferred per the 2026-06-03 clarification. Caveat: synthetic TTS, 3-speaker corpus (1 target subject + 2 others), additive Gaussian noise — magnitudes will differ on real data; the qualitative trade-off is mechanistically expected.
 
 **Contamination (build level):** centroid drift ≈ 0.000–0.002 and target-sim flat at 0.977 (vs intruder 0.28) across 0–30% single-file signal-mix contamination — dominant-cluster aggregation is strongly contamination-tolerant (SC-002 holds with margin).
 
