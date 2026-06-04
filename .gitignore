@@ -192,3 +192,7 @@ tutorials/video/visualize/
 # Local tooling / scaffolding — not versioned in this repo
 .specify/
 .claude/
+
+# Local run artifacts — job logs and scratch
+logs/
+temp/
