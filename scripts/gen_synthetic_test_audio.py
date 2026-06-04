@@ -405,6 +405,46 @@ def _intruder_and_spare() -> list[FixtureRecipe]:
     return recipes
 
 
+def _additional_subjects() -> list[FixtureRecipe]:
+    """Parallel target-subject material for speakers B and C.
+
+    Synthesizes the *same* confident-subject texts used for A (the three long
+    passages + the first five Harvard sentences) in voices B and C, so each of
+    A/B/C can serve as the main target in a leave-one-subject-out analysis with
+    the other two as intruders. Appended last in :func:`_build_recipes` so A's
+    (and the existing speaker-B/C short) clips are generated in the same order
+    and remain byte-identical — this is purely additive.
+    """
+    recipes: list[FixtureRecipe] = []
+    long_specs = (
+        ("rainbow", RAINBOW_PASSAGE, "rainbow-passage"),
+        ("north-wind", NORTH_WIND_FULL, "north-wind-and-the-sun"),
+        ("grandfather", GRANDFATHER_PASSAGE, "grandfather-passage"),
+    )
+    for spk in ("B", "C"):
+        subj = f"sub-{spk}-confident"
+        for name, text, task in long_specs:
+            recipes.append(
+                FixtureRecipe(
+                    file_id=f"{subj}/ses-1/{name}.flac",
+                    speaker_key=spk,
+                    transcript=text,
+                    session_id="ses-1",
+                    clinical_task=task,
+                )
+            )
+        for i, sent in enumerate(HARVARD_SENTENCES[:5]):
+            recipes.append(
+                FixtureRecipe(
+                    file_id=f"{subj}/ses-1/harvard-{i:02d}.flac",
+                    speaker_key=spk,
+                    transcript=sent,
+                    session_id="ses-1",
+                )
+            )
+    return recipes
+
+
 def _build_recipes() -> list[FixtureRecipe]:
     """Concatenate all category recipe-builders into the full corpus."""
     return [
@@ -414,6 +454,8 @@ def _build_recipes() -> list[FixtureRecipe]:
         *_ddk_approx(),
         *_pii_free_response(),
         *_intruder_and_spare(),
+        # Appended last: additive B/C target subjects (keeps A byte-identical).
+        *_additional_subjects(),
     ]
 
 
