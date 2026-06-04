@@ -7,6 +7,16 @@
 
 **Organization**: Tasks grouped by user story (US1=P1, US2=P2, US3=P3) so each is independently implementable and testable.
 
+## Close-out status (2026-06-04)
+
+**Delivered**: Phases 1–5 (Setup, Foundational, US1, US2, US3) and the in-scope Polish tasks (T028 threshold characterization, T029 SC-006 regression lock, T030 docs, T031 quickstart end-to-end, T032 quality gates). The feature builds contamination-tolerant per-subject profiles, flags other-voice windows and emits a recording-level rollup in `analyze_audio`, and produces a target-quality indicator — all as signal producers with no embedded gating policy.
+
+**Deferred (not in scope this iteration)**:
+- **Phase 6 (T033–T036) — cross-stage cache reuse (FR-015)**: helper shipped + unit-tested; the global-blast-radius `analyze_audio` keying swap is deferred to real-data deployment. See the Phase 6 banner below and spec.md Clarifications 2026-06-04.
+- **T028b — optional per-window centroid confidence weighting**: deferred; SQUIM-gated trust identified as the right lever (2026-06-04 enhancement-probe experiments).
+
+**Empirical record (this iteration, advisory to the downstream triage spec)**: the noise-robustness vs same-gender-discrimination trade-off, the same-gender/similar-timbre blind spot, the detection-window-length sweep, and the speech-enhancement (fix and probe) investigations are documented in research.md. Net: same-gender discrimination needs a stronger discriminator (WavLM-Large SV), not preprocessing or window changes; flag-trust under noise wants SQUIM, not enhancement.
+
 ## Format: `[ID] [P?] [Story] Description`
 
 - **[P]**: Can run in parallel (different files, no dependencies on incomplete tasks)
@@ -118,7 +128,9 @@ New package: `src/senselab/audio/workflows/speaker_profile/`. Reuses existing `a
 
 ---
 
-## Phase 6: Cross-Stage Cache Reuse (finish FR-015 / R1)
+## Phase 6: Cross-Stage Cache Reuse (finish FR-015 / R1) — ⏸️ DEFERRED (2026-06-04)
+
+> **Status: DEFERRED to real-data deployment** (close-out decision 2026-06-04). The library-side helper (T007) and its unit contract (T008) shipped in Phase 2; the remaining wiring (T033–T036) is **not** done. Rationale: the keying swap (T035) changes cache-invalidation semantics for *all* `analyze_audio` users and forces a one-time global cache miss, and the current script-source hash is *safe* (over-invalidates, never serves stale). The recompute-once performance premise does not pay off during synthetic-data characterization; defer until real-data use makes it worthwhile and the `_TASK_MODULES` map can be completed without under-invalidation risk (the live task surface — `ast`/`yamnet`/`ppgs`/`alignment` — is not yet fully mapped). FR-015 is therefore designed and partially delivered (helper only), not wired or verified. See spec.md Clarifications 2026-06-04.
 
 **Goal**: Make the profile stage and `analyze_audio` actually share cached per-file tasks (diarization, speaker embeddings, scene classification) so running `build_speaker_profile` beforehand spares `analyze_audio` from recomputing them — the performance premise of the two-stage design (R1).
 
@@ -126,10 +138,10 @@ New package: `src/senselab/audio/workflows/speaker_profile/`. Reuses existing `a
 
 **⚠️ Blast radius**: This changes cache-invalidation semantics for *all* `analyze_audio` users (not just the profile path) and triggers a one-time global cache miss. Treat it as a deliberate, standalone change — not folded into a story commit. The failure mode to guard against is the inverse of today's: the current script-source hash *over*-invalidates (safe but wasteful); a library-module hash can *under*-invalidate (serve a stale entry) if the task→module map is incomplete.
 
-- [ ] T033 Audit and complete the task→module map (`_TASK_MODULES`) in `src/senselab/audio/workflows/speaker_profile/cache.py`: for each cached task (diarization, speaker_embeddings, classification/scene, features, asr) include the full set of behavior-determining library modules (api + backends + helpers) so the library-derived hash invalidates on a real implementation change and never under-invalidates. Add a test asserting every mapped module resolves to a real importable file.
-- [ ] T034 Bump `CACHE_SCHEMA_VERSION` (`cache.py`) and `analyze_audio.py`'s `_CACHE_SCHEMA_VERSION` in lockstep so the keying change triggers one clean, intentional cache invalidation; record the bump + reason in both files.
-- [ ] T035 Swap `analyze_audio.py`'s per-task cache keying from `wrapper_version_hash()` (sha256 of the script source) to `cache.task_wrapper_hash(<task>)` per task, so each task's key reflects its implementing modules and is caller-agnostic (build ↔ analyze share entries). Keep the `cache_key` payload shape aligned with `cache.py`; preserve an explicit override path for staged rollout. Depends on T022/T024/T027 (the US2/US3 `analyze_audio.py` edits) landing first.
-- [ ] T036 Implement the deferred end-to-end cross-stage reuse test (the real T008 validation hook): run `build_speaker_profile` then `analyze_audio` on the same file with identical task params and assert `cache: "hit"` for the shared tasks (diarization, speaker embeddings, scene classification), in `src/tests/audio/workflows/speaker_profile/cache_test.py` (or a new `cache_integration_test.py`).
+- [ ] T033 ⏸️ DEFERRED — Audit and complete the task→module map (`_TASK_MODULES`) in `src/senselab/audio/workflows/speaker_profile/cache.py`: for each cached task (diarization, speaker_embeddings, classification/scene, features, asr) include the full set of behavior-determining library modules (api + backends + helpers) so the library-derived hash invalidates on a real implementation change and never under-invalidates. Add a test asserting every mapped module resolves to a real importable file.
+- [ ] T034 ⏸️ DEFERRED — Bump `CACHE_SCHEMA_VERSION` (`cache.py`) and `analyze_audio.py`'s `_CACHE_SCHEMA_VERSION` in lockstep so the keying change triggers one clean, intentional cache invalidation; record the bump + reason in both files.
+- [ ] T035 ⏸️ DEFERRED — Swap `analyze_audio.py`'s per-task cache keying from `wrapper_version_hash()` (sha256 of the script source) to `cache.task_wrapper_hash(<task>)` per task, so each task's key reflects its implementing modules and is caller-agnostic (build ↔ analyze share entries). Keep the `cache_key` payload shape aligned with `cache.py`; preserve an explicit override path for staged rollout. Depends on T022/T024/T027 (the US2/US3 `analyze_audio.py` edits) landing first.
+- [ ] T036 ⏸️ DEFERRED — Implement the deferred end-to-end cross-stage reuse test (the real T008 validation hook): run `build_speaker_profile` then `analyze_audio` on the same file with identical task params and assert `cache: "hit"` for the shared tasks (diarization, speaker embeddings, scene classification), in `src/tests/audio/workflows/speaker_profile/cache_test.py` (or a new `cache_integration_test.py`).
 
 **Checkpoint**: Running `build_speaker_profile` then `analyze_audio` on a subject's files recomputes each shared task once, not twice.
 
@@ -138,7 +150,7 @@ New package: `src/senselab/audio/workflows/speaker_profile/`. Reuses existing `a
 ## Phase 7: Polish & Cross-Cutting Concerns
 
 - [X] T028 [P] **Characterize** (do not lock in) the `[new]` thresholds via a sensitivity sweep against the T010a–T010b fixtures (`AMBIGUITY_SHARE_RATIO`; `min/target_confident_speech_s`; `OTHER_VOICE_CALIBRATED_CUTOFF`; consensus fusion weights; sub-1s intrusion boundary; `min_contiguous_speech_s`): show which thresholds materially move the outputs and over what range. Per the 2026-06-03 clarification, keep defaults **provisional and configurable** — synthetic-derived values are NOT assumed to transfer to real data, so do not finalize production thresholds or tune a recall-biased operating point here. Record the sensitivity findings + caveat in `constants.py` and research.md "Constants & Thresholds". Run on a GPU compute node (sbatch), not the login node.
-- [ ] T028b [P] (Optional, research) Implement per-window confidence weighting of the profile centroid — down-weight windows by Whisper `no_speech_prob`/avg_logprob, PPG voiced-fraction (opt-in given its ~1.4 GB venv), and SQUIM — flag-gated and evaluated against fixtures, in `src/senselab/audio/workflows/speaker_profile/build.py`
+- [ ] T028b [P] ⏸️ DEFERRED (2026-06-04) (Optional, research) Implement per-window confidence weighting of the profile centroid — down-weight windows by Whisper `no_speech_prob`/avg_logprob, PPG voiced-fraction (opt-in given its ~1.4 GB venv), and SQUIM — flag-gated and evaluated against fixtures, in `src/senselab/audio/workflows/speaker_profile/build.py`. **Deferred**: optional-research; the 2026-06-04 enhancement-probe experiments concluded SQUIM-gated trust is the right per-window-reliability lever (enhancement-delta is redundant or non-discriminative). Any future per-window weighting belongs to the cross-audio/triage spec, built on SQUIM. See research.md + spec.md Clarifications 2026-06-04.
 - [X] T029 [P] Add regression test asserting `analyze_audio` without `--speaker-profile` yields byte-identical non-profile outputs vs. a baseline run (SC-006) in `src/tests/audio/workflows/speaker_profile/regression_test.py`
 - [X] T030 [P] Author module documentation in `src/senselab/audio/workflows/speaker_profile/doc.md` (purpose, pipeline, constants, caching note)
 - [X] T031 Run the quickstart.md end-to-end validation (build → analyze → review) and the success-criteria smoke checks
