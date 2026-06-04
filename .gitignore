@@ -50,6 +50,7 @@ htmlcov/
 .coverage.*
 .cache
 scripts/cache/
+scripts/local/
 nosetests.xml
 coverage.xml
 *.cover
