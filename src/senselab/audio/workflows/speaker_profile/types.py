@@ -144,7 +144,7 @@ class RecordingQualityIndicator:
     as a standalone top-level object.
     """
 
-    profile_target_quality: float  # normalized [0, 1]; higher = cleaner target capture
+    profile_target_quality: float | None  # normalized [0, 1]; higher = cleaner. None when nothing was scorable.
     profile_target_match_fraction: float  # 1 - other-voice rate over speech-present duration
     profile_mean_target_consistency: float  # mean within-profile cosine consistency on matched windows
     profile_squim: dict[str, float] | None  # STOI/PESQ/SI-SDR on target-matched windows

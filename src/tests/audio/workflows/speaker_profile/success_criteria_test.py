@@ -154,6 +154,6 @@ def test_sc005_clean_outranks_noisy_quality() -> None:
 
     q_clean = compute_target_quality(clean_results, profile.confidence)
     q_noisy = compute_target_quality(noisy_results, profile.confidence)
-    assert q_clean.profile_target_quality > q_noisy.profile_target_quality, (
-        f"clean {q_clean.profile_target_quality:.2f} ≤ noisy {q_noisy.profile_target_quality:.2f}"
-    )
+    qc, qn = q_clean.profile_target_quality, q_noisy.profile_target_quality
+    assert qc is not None and qn is not None, "target recordings should be scorable"
+    assert qc > qn, f"clean {qc:.2f} ≤ noisy {qn:.2f}"

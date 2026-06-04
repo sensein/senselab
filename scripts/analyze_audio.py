@@ -620,15 +620,21 @@ def _resolve_scoring_profile(
     *,
     embedding_models: list[str],
     device: DeviceType | None,
-) -> tuple[dict[str, list[float]], dict[str, tuple[float, float]], bool]:
-    """Return ``(centroids, calibration_band, leave_one_file_out_applied)`` for scoring.
+) -> tuple[dict[str, list[float]], dict[str, tuple[float, float]], bool, str | None]:
+    """Return ``(centroids, calibration_band, leave_one_file_out_applied, note)`` for scoring.
 
     If the analyzed recording contributed to the profile, its windows must be
     excluded from the centroid (leave-one-file-out). For a multi-file subject we
-    re-extract the *other* source files (by their stored paths) and re-aggregate.
-    When that is not possible (single-file subject or source files not on disk)
-    we fall back to the full profile centroid and report ``False``.
+    re-extract the *other* source files (by their stored paths) and re-aggregate
+    using the **profile's own build params** (model set, window/hop, session
+    preference) so the leave-one-out centroid is faithful to how the profile was
+    built — not analyze_audio's flags. When that is not possible (single-file
+    subject or sibling sources not on disk) the analyzed file's own windows are
+    still in the full centroid, so scoring against it is *not* leak-free; we
+    report ``False`` and a ``note`` so the caller can surface that (rather than
+    hiding the circularity behind a stderr line only).
     """
+    from senselab.audio.workflows.speaker_profile import constants as _C
     from senselab.audio.workflows.speaker_profile.build import extract_speech_windows_for_file
     from senselab.audio.workflows.speaker_profile.cache import audio_signature
     from senselab.audio.workflows.speaker_profile.compare import leave_one_file_out_profile
@@ -638,7 +644,18 @@ def _resolve_scoring_profile(
     if matched is None:
         # The analyzed file did not contribute → scoring against the full
         # centroid is already leak-free.
-        return profile.centroids, profile.calibration_band, False
+        return profile.centroids, profile.calibration_band, False, None
+
+    # Faithful leave-one-out: reuse the profile's stored build params, not the
+    # current run's --embeddings-models / default windowing.
+    params = getattr(profile, "params", None)
+    if params is not None and params.embedding_models:
+        emb_models = list(params.embedding_models)
+        window_s, hop_s, prefer_session = params.profile_window_s, params.profile_hop_s, params.prefer_session
+    else:
+        emb_models = list(embedding_models)
+        window_s, hop_s, prefer_session = _C.PROFILE_WINDOW_S, _C.PROFILE_HOP_S, None
+    session_of_file = {s.file_id: s.session_id for s in profile.sources}
 
     other_kept = [s for s in profile.sources if s.kept and s.file_id != matched.file_id]
     pooled: list[Any] = []
@@ -652,21 +669,34 @@ def _resolve_scoring_profile(
             print(f"warn: leave-one-file-out skipped source {p}: {exc!r}", file=sys.stderr)
             continue
         tagged, _ = extract_speech_windows_for_file(
-            audio=other_audio, file_id=s.file_id, pass_summary={}, embedding_models=embedding_models, device=device
+            audio=other_audio,
+            file_id=s.file_id,
+            pass_summary={},
+            embedding_models=emb_models,
+            device=device,
+            profile_window_s=window_s,
+            profile_hop_s=hop_s,
         )
         pooled.extend(tagged)
 
     if pooled:
-        loo = leave_one_file_out_profile(pooled, matched.file_id, embedding_models=embedding_models)
+        loo = leave_one_file_out_profile(
+            pooled,
+            matched.file_id,
+            embedding_models=emb_models,
+            prefer_session=prefer_session,
+            session_of_file=session_of_file,
+        )
         if loo is not None and loo.centroids:
-            return loo.centroids, loo.calibration_band, True
+            return loo.centroids, loo.calibration_band, True, None
 
-    print(
-        "warn: speaker-profile leave-one-file-out unavailable (single-file subject or source files "
-        "not accessible); scoring against the full profile centroid",
-        file=sys.stderr,
+    note = (
+        "this recording contributed to the profile but its sibling source files were not accessible, "
+        "so leave-one-file-out could not be applied; scored against the self-inclusive profile centroid "
+        "(NOT leak-free — its own voice biases toward 'target')"
     )
-    return profile.centroids, profile.calibration_band, False
+    print(f"warn: speaker-profile {note}", file=sys.stderr)
+    return profile.centroids, profile.calibration_band, False, note
 
 
 def _p_voice_for_windows(
@@ -2129,6 +2159,8 @@ def main(argv: list[str] | None = None) -> int:
         profile_results_by_pass: dict[str, list[Any]] = {}
         profile_rollup_by_pass: dict[str, dict[str, Any]] = {}
         profile_quality_by_pass: dict[str, dict[str, Any]] = {}
+        loo_applied = False
+        loo_note: str | None = None
         _profile = _load_speaker_profile(args.speaker_profile) if args.speaker_profile else None
         if _profile is not None and any(per_window_embeddings_by_pass.values()):
             from dataclasses import asdict as _asdict
@@ -2140,9 +2172,16 @@ def main(argv: list[str] | None = None) -> int:
                 summarize_other_voice,
             )
 
-            prof_centroids, prof_band, loo_applied = _resolve_scoring_profile(
+            prof_centroids, prof_band, loo_applied, loo_note = _resolve_scoring_profile(
                 _profile, pass_audio["raw_16k"], embedding_models=speaker_embedding_models, device=device
             )
+            if not (set(prof_centroids) & set(speaker_embedding_models)):
+                print(
+                    f"warn: speaker-profile models {sorted(prof_centroids)} do not overlap this run's "
+                    f"--embeddings-models {speaker_embedding_models}; the profile cannot score this run "
+                    f"(every window will be 'unavailable' and target-quality will be reported as unavailable)",
+                    file=sys.stderr,
+                )
             for pl, by_model in per_window_embeddings_by_pass.items():
                 if not by_model:
                     continue
@@ -2281,6 +2320,8 @@ def main(argv: list[str] | None = None) -> int:
                 sidecar = {
                     "subject_id": _profile.subject_id,
                     "profile_confidence": _profile.confidence,
+                    "leave_one_file_out_applied": loo_applied,
+                    "leave_one_file_out_note": loo_note,
                     "windows": [
                         {
                             "start": r.start,

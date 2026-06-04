@@ -259,6 +259,7 @@ def test_clean_recording_outranks_contaminated() -> None:
     ]
     q_clean = compute_target_quality(clean, "ok")
     q_contam = compute_target_quality(contaminated, "ok")
+    assert q_clean.profile_target_quality is not None and q_contam.profile_target_quality is not None
     assert q_clean.profile_target_quality > q_contam.profile_target_quality
     # Clean: all speech-present windows match the target.
     assert q_clean.profile_target_match_fraction == 1.0
@@ -269,7 +270,9 @@ def test_target_quality_echoes_confidence_and_handles_empty() -> None:
     """Confidence is echoed; an all-unavailable recording yields a zeroed indicator."""
     q = compute_target_quality([_result(0.0, "unavailable", None)], "low")
     assert q.profile_confidence == "low"
-    assert q.profile_target_quality == 0.0
+    # No scorable windows → target_quality is None ("unavailable"), not 0.0,
+    # so a consumer doesn't read "couldn't assess" as "confidently poor".
+    assert q.profile_target_quality is None
     assert q.profile_target_match_fraction == 0.0
     assert q.profile_squim is None
 

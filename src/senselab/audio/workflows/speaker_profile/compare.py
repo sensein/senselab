@@ -300,7 +300,9 @@ def compute_target_quality(
             windows when that is all it has). ``None`` skips ``profile_squim``.
 
     Returns:
-        A :class:`RecordingQualityIndicator`.
+        A :class:`RecordingQualityIndicator`. ``profile_target_quality`` is
+        ``None`` when no window was scorable (all ``unavailable``), to keep
+        "could not assess" distinct from "assessed as poor".
     """
     steps = _window_step_seconds(results)
     speech_present_seconds = 0.0
@@ -317,9 +319,19 @@ def compute_target_quality(
             if r.similarity is not None:
                 consistencies.append(float(r.similarity))
 
-    target_match_fraction = (matched_seconds / speech_present_seconds) if speech_present_seconds > 0 else 0.0
-    mean_consistency = float(np.mean(consistencies)) if consistencies else 0.0
-    target_quality = float(np.mean([target_match_fraction, mean_consistency]))
+    if speech_present_seconds <= 0:
+        # No scorable (speech-present) windows — the recording could not be
+        # assessed (all windows gated ``unavailable``, or no model overlap with
+        # the profile). Report ``None`` ("unavailable") rather than ``0.0`` so a
+        # consumer (and the global_summary fold) does not read it as a
+        # confidently-poor capture.
+        target_match_fraction = 0.0
+        mean_consistency = 0.0
+        target_quality: float | None = None
+    else:
+        target_match_fraction = matched_seconds / speech_present_seconds
+        mean_consistency = float(np.mean(consistencies)) if consistencies else 0.0
+        target_quality = float(np.mean([target_match_fraction, mean_consistency]))
 
     profile_squim: dict[str, float] | None = None
     if squim_by_window is not None and matched_idx:
