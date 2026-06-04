@@ -137,12 +137,12 @@ New package: `src/senselab/audio/workflows/speaker_profile/`. Reuses existing `a
 
 ## Phase 7: Polish & Cross-Cutting Concerns
 
-- [ ] T028 [P] **Characterize** (do not lock in) the `[new]` thresholds via a sensitivity sweep against the T010a–T010b fixtures (`AMBIGUITY_SHARE_RATIO`; `min/target_confident_speech_s`; `OTHER_VOICE_CALIBRATED_CUTOFF`; consensus fusion weights; sub-1s intrusion boundary; `min_contiguous_speech_s`): show which thresholds materially move the outputs and over what range. Per the 2026-06-03 clarification, keep defaults **provisional and configurable** — synthetic-derived values are NOT assumed to transfer to real data, so do not finalize production thresholds or tune a recall-biased operating point here. Record the sensitivity findings + caveat in `constants.py` and research.md "Constants & Thresholds". Run on a GPU compute node (sbatch), not the login node.
+- [X] T028 [P] **Characterize** (do not lock in) the `[new]` thresholds via a sensitivity sweep against the T010a–T010b fixtures (`AMBIGUITY_SHARE_RATIO`; `min/target_confident_speech_s`; `OTHER_VOICE_CALIBRATED_CUTOFF`; consensus fusion weights; sub-1s intrusion boundary; `min_contiguous_speech_s`): show which thresholds materially move the outputs and over what range. Per the 2026-06-03 clarification, keep defaults **provisional and configurable** — synthetic-derived values are NOT assumed to transfer to real data, so do not finalize production thresholds or tune a recall-biased operating point here. Record the sensitivity findings + caveat in `constants.py` and research.md "Constants & Thresholds". Run on a GPU compute node (sbatch), not the login node.
 - [ ] T028b [P] (Optional, research) Implement per-window confidence weighting of the profile centroid — down-weight windows by Whisper `no_speech_prob`/avg_logprob, PPG voiced-fraction (opt-in given its ~1.4 GB venv), and SQUIM — flag-gated and evaluated against fixtures, in `src/senselab/audio/workflows/speaker_profile/build.py`
 - [X] T029 [P] Add regression test asserting `analyze_audio` without `--speaker-profile` yields byte-identical non-profile outputs vs. a baseline run (SC-006) in `src/tests/audio/workflows/speaker_profile/regression_test.py`
 - [X] T030 [P] Author module documentation in `src/senselab/audio/workflows/speaker_profile/doc.md` (purpose, pipeline, constants, caching note)
 - [X] T031 Run the quickstart.md end-to-end validation (build → analyze → review) and the success-criteria smoke checks
-- [ ] T032 Run full quality gates (`ruff`, `mypy`, `pytest`) across all changed modules and fix findings
+- [X] T032 Run full quality gates (`ruff`, `mypy`, `pytest`) across all changed modules and fix findings
 
 ---
 
