@@ -292,6 +292,33 @@ Same-gender detection: consensus 0.16 vs 0.67 cross-gender — and crucially the
 
 **Detection-window-length sweep (throwaway corpus, 7 voices; window 0.5→4s, profiles fixed):** longer detection windows make *detection worse*, not better (correcting an earlier hypothesis). Consensus same-gender detect 0.45→0.16→0.03→0.00→0.00 and cross-gender 0.79→0.67→0.55→0.48→0.32 as the window grows 0.5→4s; brief-1s-intrusion detect 0.53→0.00. Two mechanisms: (1) a long window over *co-present* (target+intruder) audio averages toward the dominant target → masks the intruder; (2) with a fixed calibration band the window length acts as an **operating-point knob** — short windows give noisier embeddings → larger distances → more flags (sensitivity↑ *and* false-OV↑), long windows the reverse (0 dB false-OV: consensus 0.91→0.05 over the same range). So window length trades sensitivity↔specificity, not discriminability. **Crucially, WavLM same-gender detect is ~0 at every window length (0.07/0.01/0.00/0.00/0.00)** → its same-gender failure is an information/capacity floor, **not** a length artifact, so retraining WavLM on short crops would not fix it (the deficit doesn't move with length). Implication: keep short (~1 s) detection windows for the recall-biased goal (they catch brief + same-gender intrusions); manage the resulting noise false-positives via SQUIM-gated trust / WavLM rather than by lengthening windows (which would mask the very intrusions we hunt). Same-gender recall needs a stronger discriminator (ECAPA carries it best; WavLM-Large SV), not longer windows.
 
+**Speech-enhancement-before-scoring (throwaway 7 voices; SepFormer `sepformer-wham16k-enhancement` as a denoise pre-stage; profiles built from clean enrollment as the live pipeline does).** Tests whether running noisy audio through enhancement *recovers* the clean threshold behaviour or instead injects embedding distortions. **It does not recover — and it distorts.**
+
+- *No false-OV recovery (additive Gaussian).* Consensus false-OV is unchanged at 0 dB (0.62→0.62) and slightly *worse* at 5 dB (0.28→0.32); enhanced 5/0 dB never approaches the clean 0.06 baseline.
+- *Embedding-distortion diagnostic — cosine(mean window embedding, own enrolled centroid) — reveals an architecture split:*
+
+  | cond | ecapa | resnet | wavlm |
+  |---|---:|---:|---:|
+  | clean / raw | 0.938 | 0.955 | 0.990 |
+  | clean / enh | 0.928 | 0.933 | 0.986 |
+  | 5 dB / raw | 0.660 | 0.678 | 0.849 |
+  | 5 dB / enh | **0.577** | 0.650 | **0.896** |
+  | 0 dB / raw | 0.544 | 0.577 | 0.772 |
+  | 0 dB / enh | **0.498** | 0.571 | **0.833** |
+
+  Enhancement nudges even **already-clean** audio off-identity (clean/enh < clean/raw for every model; ResNet worst, −0.022) — it is never free. On noisy audio it **actively hurts the Fbank SV models** (ECAPA 5 dB 0.660→0.577: the *enhanced* signal is further from identity than the raw noisy one) while it is the **only** model WavLM helps (5 dB 0.849→0.896). The SepFormer artifacts damage the discriminative VoxCeleb-trained nets more than the original noise did; the SSL transformer prefers the denoised input. But WavLM is exactly the model that barely fires, so its recovery never reaches the equal-weight consensus (Fbank-dominated) — which is why Block 1 doesn't improve.
+- *Detection collateral.* The single-output enhancer treats a co-present intruder as "noise" and partly suppresses it: cross-gender WavLM intruder-detect falls 0.51→0.38 and same-gender consensus 0.16→0.11. The same-gender blind spot is untouched.
+
+**WHAM-style re-run (same job, pink/colored + non-stationary bursty noise — in-distribution for the WHAM-trained enhancer).** The harsh "enhancement *hurts* the Fbank models" result above is **largely an AWGN (out-of-distribution) artifact**. On realistic colored, non-stationary noise the picture softens and partly flips:
+
+- *Colored/non-stationary noise is far gentler at equal nominal SNR* — raw consensus false-OV is only 0.10 @ 5 dB and 0.17 @ 0 dB (vs AWGN 0.28 / 0.62), because pink noise concentrates energy low and the bursty envelope leaves much of the signal clean. There is simply less to fix.
+- *Enhancement now gives a small recovery* rather than a regression: consensus false-OV 0.17→**0.11** @ 0 dB (ResNet 0.32→0.20, WavLM 0.04→0.01); ECAPA roughly flat.
+- *Embedding fidelity improves for ResNet/WavLM, ECAPA neutral* — cosine-to-own-centroid @ 0 dB: ResNet 0.788→**0.814**, WavLM 0.933→**0.952**, ECAPA 0.795→0.789. The opposite of the AWGN case, where enhancement pushed ECAPA/ResNet *further* off-identity.
+
+**Two findings survive both noise types and bound the upside:** (1) enhancement still distorts **already-clean** audio identically (clean cosine drops ECAPA −0.010 / ResNet −0.022 / WavLM −0.004), so it cannot be applied blanket — it would have to be SNR-gated to low-SNR input only; (2) it still erodes co-present-intruder detection (Block 3, noise-independent: cross-gender WavLM 0.51→0.38, same-gender consensus 0.16→0.11) and does nothing for the same-gender blind spot, and ECAPA — the discrimination workhorse — never benefits.
+
+**Implication:** "denoise everything first" is the wrong lever — on out-of-distribution noise it injects artifacts the consensus-driving models dislike more than the noise, and even on in-distribution noise it taxes clean audio and erodes intruder detection. A **narrowly SNR-gated** enhancement (apply only below ~5 dB) is at best a *small* net-positive for false-OV on realistic noise (consensus 0.17→0.11 @ 0 dB) and would need to be paired with not enhancing clean/overlap material — a marginal, conditional refinement, not a fix for the structural limitations (same-gender discrimination, SQUIM-gated flag trust), which it leaves untouched.
+
 **Contamination (build level):** centroid drift ≈ 0.000–0.002 and target-sim flat at 0.977 (vs intruder 0.28) across 0–30% single-file signal-mix contamination — dominant-cluster aggregation is strongly contamination-tolerant (SC-002 holds with margin).
 
 **Other-voice cutoff:** on clean overlay audio, detection 0.89 / false-positive 0.00 are **flat across cutoff ∈ [0.4, 0.7]** (target unc≈0, intruder unc≈1 are cleanly band-separated). The cutoff is an insensitive knob; **noise, not the threshold, is the dominant sensitivity** → keep the cutoff at the neutral midpoint (`OTHER_VOICE_CALIBRATED_CUTOFF = 0.5`), do not tune an operating point.
