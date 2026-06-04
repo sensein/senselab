@@ -168,8 +168,9 @@ cython_debug/
 
 # data folder
 data/
-# pdoc documentation
-docs/
+# pdoc documentation (generated, repo-root only — anchored so hand-written
+# docs under other dirs like scripts/docs/ are not swept up)
+/docs/
 
 # Speechbrain models
 pretrained_models
