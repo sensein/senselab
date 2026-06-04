@@ -261,6 +261,33 @@ WavLM-base-plus-sv **completely misses the similar-timbre intruder** (0.00) whil
 
 **Revised implication (supersedes the naive "up-weight WavLM"):** a static WavLM up-weight would fix noise but *break* the hardest/most-important case — a same-gender / similar-voice co-speaker. The right lever is **condition-dependent fusion** (trust WavLM under low SNR; trust the Fbank pair in clean audio for fine discrimination — i.e., SQUIM-gated weighting), and/or a stronger **WavLM-Large SV** checkpoint to lift discrimination (the FR-019 substitution note). The equal-weight consensus is a mediocre hedge at both extremes. All a candidate refinement, deferred per the 2026-06-03 clarification. Caveat: synthetic TTS, 3-speaker corpus (1 target subject + 2 others), additive Gaussian noise — magnitudes will differ on real data; the qualitative trade-off is mechanistically expected.
 
+**3-subject leave-one-subject-out (GPU job 15406725; each of A/B/C as target, the other two as intruders) — generalizes the noise result and exposes a systemic same-gender blind spot.**
+
+- *Noise robustness generalizes across target voices:* at 0 dB WavLM false-OV is 0.00–0.14 for every target (slt/ksp/clb) while ECAPA/ResNet are 0.90–1.00. Voice-independent.
+- *Same-gender intruder detection is a systemic failure, not a WavLM quirk:* detection of an overlaid intruder by gender match —
+
+  | target | intruder | gender | ecapa | resnet | wavlm | consensus |
+  |---|---|---|---|---|---|---|
+  | F(slt) | M(ksp) | diff | 0.89 | 0.89 | 0.89 | 0.89 |
+  | F(slt) | F(clb) | SAME | 0.33 | 0.22 | 0.00 | **0.00** |
+  | M(ksp) | F(slt) | diff | 0.89 | 0.89 | 0.67 | 0.89 |
+  | M(ksp) | F(clb) | diff | 0.89 | 0.89 | 0.78 | 0.89 |
+  | F(clb) | F(slt) | SAME | 0.44 | 0.00 | 0.00 | **0.00** |
+  | F(clb) | M(ksp) | diff | 0.56 | 0.89 | 0.67 | 0.67 |
+
+  Cross-gender intruders are detected well by all models (~0.67–0.89); the **same-gender (both-female slt↔clb) intruder is detected 0% by the consensus in both directions** (ECAPA the only model with any signal, ≤0.44; WavLM exactly 0.00).
+
+**Headline implication:** detecting a **same-gender / similar-timbre co-speaker is a known blind spot** of this profile-similarity approach with the default models, and the consensus does not rescue it — not fixable by fusion weighting alone (WavLM contributes nothing there). It would need a stronger-discrimination embedding (WavLM-Large SV / hard-speaker-tuned) or a corroborating mechanism (diarization, relative-change). For the recall-biased downstream gate (a same-gender co-speaker must not pass), this is the key limitation to carry into the triage spec.
+
+**7-speaker systematic confirmation (throwaway corpus, ASR/SQUIM-gated, not committed):** a larger run (the `Matthijs/cmu-arctic-xvectors` set only contains 7 CMU-Arctic speakers — 2F/5M — so the extra females requested weren't available; the gain is 5 males → 20 male-male same-gender pairs) reproduces the blind spot with real sampling. Every generated clip passed an ASR round-trip gate (WER≈0.00, STOI 1.0, PESQ ~4). Over 22 same-gender vs 20 cross-gender ordered pairs:
+
+| pairing | ecapa | resnet | wavlm | consensus |
+|---|---|---|---|---|
+| same-gender | 0.52±0.25 | 0.30±0.25 | 0.01±0.02 | 0.16±0.20 |
+| cross-gender | 0.71±0.19 | 0.69±0.16 | 0.51±0.19 | 0.67±0.17 |
+
+Same-gender detection: consensus 0.16 vs 0.67 cross-gender — and crucially the equal-weight consensus (0.16) is **worse than ECAPA alone (0.52)** because averaging in WavLM's ~0 same-gender signal actively dilutes it. Noise robustness generalized too (0 dB false-OV: ecapa 0.93, resnet 0.85, wavlm 0.12 over 7 voices). So same-gender discrimination is fundamentally capped (~0.52 even for the best single model) and the equal-weight fusion is the worst of both axes; a stronger discriminator (WavLM-Large SV / hard-speaker-tuned) or corroborating mechanism is needed for the same-gender case. (Female-female is still only the slt/clb pair; male-male is now well-sampled.)
+
 **Contamination (build level):** centroid drift ≈ 0.000–0.002 and target-sim flat at 0.977 (vs intruder 0.28) across 0–30% single-file signal-mix contamination — dominant-cluster aggregation is strongly contamination-tolerant (SC-002 holds with margin).
 
 **Other-voice cutoff:** on clean overlay audio, detection 0.89 / false-positive 0.00 are **flat across cutoff ∈ [0.4, 0.7]** (target unc≈0, intruder unc≈1 are cleanly band-separated). The cutoff is an insensitive knob; **noise, not the threshold, is the dominant sensitivity** → keep the cutoff at the neutral midpoint (`OTHER_VOICE_CALIBRATED_CUTOFF = 0.5`), do not tune an operating point.
