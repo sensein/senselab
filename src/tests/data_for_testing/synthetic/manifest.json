@@ -370,6 +370,140 @@
             "transcript": "The box was thrown beside the parked truck.",
             "duration_s": 2.912,
             "session_id": null
+        },
+        {
+            "file_id": "sub-B-confident/ses-1/rainbow.flac",
+            "speaker_id": "B",
+            "speaker_id_cmu_arctic": "ksp",
+            "transcript": "When the sunlight strikes raindrops in the air, they act as a prism and form a rainbow. The rainbow is a division of white light into many beautiful colors. These take the shape of a long round arch, with its path high above, and its two ends apparently beyond the horizon.",
+            "duration_s": 17.6,
+            "session_id": "ses-1",
+            "clinical_task": "rainbow-passage"
+        },
+        {
+            "file_id": "sub-B-confident/ses-1/north-wind.flac",
+            "speaker_id": "B",
+            "speaker_id_cmu_arctic": "ksp",
+            "transcript": "The North Wind and the Sun were disputing which was the stronger, when a traveller came along wrapped in a warm cloak. They agreed that the one who first succeeded in making the traveller take his cloak off should be considered stronger than the other.",
+            "duration_s": 15.456,
+            "session_id": "ses-1",
+            "clinical_task": "north-wind-and-the-sun"
+        },
+        {
+            "file_id": "sub-B-confident/ses-1/grandfather.flac",
+            "speaker_id": "B",
+            "speaker_id_cmu_arctic": "ksp",
+            "transcript": "You wished to know all about my grandfather. Well, he is nearly ninety-three years old. He dresses himself in an ancient black frock coat, usually minus several buttons. A long beard clings to his chin, giving those who observe him a pronounced feeling of the utmost respect.",
+            "duration_s": 18.272,
+            "session_id": "ses-1",
+            "clinical_task": "grandfather-passage"
+        },
+        {
+            "file_id": "sub-B-confident/ses-1/harvard-00.flac",
+            "speaker_id": "B",
+            "speaker_id_cmu_arctic": "ksp",
+            "transcript": "The birch canoe slid on the smooth planks.",
+            "duration_s": 2.848,
+            "session_id": "ses-1"
+        },
+        {
+            "file_id": "sub-B-confident/ses-1/harvard-01.flac",
+            "speaker_id": "B",
+            "speaker_id_cmu_arctic": "ksp",
+            "transcript": "Glue the sheet to the dark blue background.",
+            "duration_s": 2.624,
+            "session_id": "ses-1"
+        },
+        {
+            "file_id": "sub-B-confident/ses-1/harvard-02.flac",
+            "speaker_id": "B",
+            "speaker_id_cmu_arctic": "ksp",
+            "transcript": "It is easy to tell the depth of a well.",
+            "duration_s": 2.784,
+            "session_id": "ses-1"
+        },
+        {
+            "file_id": "sub-B-confident/ses-1/harvard-03.flac",
+            "speaker_id": "B",
+            "speaker_id_cmu_arctic": "ksp",
+            "transcript": "These days a chicken leg is a rare dish.",
+            "duration_s": 2.816,
+            "session_id": "ses-1"
+        },
+        {
+            "file_id": "sub-B-confident/ses-1/harvard-04.flac",
+            "speaker_id": "B",
+            "speaker_id_cmu_arctic": "ksp",
+            "transcript": "Rice is often served in round bowls.",
+            "duration_s": 2.784,
+            "session_id": "ses-1"
+        },
+        {
+            "file_id": "sub-C-confident/ses-1/rainbow.flac",
+            "speaker_id": "C",
+            "speaker_id_cmu_arctic": "clb",
+            "transcript": "When the sunlight strikes raindrops in the air, they act as a prism and form a rainbow. The rainbow is a division of white light into many beautiful colors. These take the shape of a long round arch, with its path high above, and its two ends apparently beyond the horizon.",
+            "duration_s": 17.536,
+            "session_id": "ses-1",
+            "clinical_task": "rainbow-passage"
+        },
+        {
+            "file_id": "sub-C-confident/ses-1/north-wind.flac",
+            "speaker_id": "C",
+            "speaker_id_cmu_arctic": "clb",
+            "transcript": "The North Wind and the Sun were disputing which was the stronger, when a traveller came along wrapped in a warm cloak. They agreed that the one who first succeeded in making the traveller take his cloak off should be considered stronger than the other.",
+            "duration_s": 15.36,
+            "session_id": "ses-1",
+            "clinical_task": "north-wind-and-the-sun"
+        },
+        {
+            "file_id": "sub-C-confident/ses-1/grandfather.flac",
+            "speaker_id": "C",
+            "speaker_id_cmu_arctic": "clb",
+            "transcript": "You wished to know all about my grandfather. Well, he is nearly ninety-three years old. He dresses himself in an ancient black frock coat, usually minus several buttons. A long beard clings to his chin, giving those who observe him a pronounced feeling of the utmost respect.",
+            "duration_s": 17.44,
+            "session_id": "ses-1",
+            "clinical_task": "grandfather-passage"
+        },
+        {
+            "file_id": "sub-C-confident/ses-1/harvard-00.flac",
+            "speaker_id": "C",
+            "speaker_id_cmu_arctic": "clb",
+            "transcript": "The birch canoe slid on the smooth planks.",
+            "duration_s": 2.816,
+            "session_id": "ses-1"
+        },
+        {
+            "file_id": "sub-C-confident/ses-1/harvard-01.flac",
+            "speaker_id": "C",
+            "speaker_id_cmu_arctic": "clb",
+            "transcript": "Glue the sheet to the dark blue background.",
+            "duration_s": 2.496,
+            "session_id": "ses-1"
+        },
+        {
+            "file_id": "sub-C-confident/ses-1/harvard-02.flac",
+            "speaker_id": "C",
+            "speaker_id_cmu_arctic": "clb",
+            "transcript": "It is easy to tell the depth of a well.",
+            "duration_s": 2.432,
+            "session_id": "ses-1"
+        },
+        {
+            "file_id": "sub-C-confident/ses-1/harvard-03.flac",
+            "speaker_id": "C",
+            "speaker_id_cmu_arctic": "clb",
+            "transcript": "These days a chicken leg is a rare dish.",
+            "duration_s": 2.784,
+            "session_id": "ses-1"
+        },
+        {
+            "file_id": "sub-C-confident/ses-1/harvard-04.flac",
+            "speaker_id": "C",
+            "speaker_id_cmu_arctic": "clb",
+            "transcript": "Rice is often served in round bowls.",
+            "duration_s": 2.592,
+            "session_id": "ses-1"
         }
     ]
 }
