@@ -374,7 +374,31 @@ Maintainer review (Satra) raised two architectural points: (1) *"reuse the slidi
 - **(B) Keep a distinct signal, stop the pretense.** Leave the profile as its own recording-level claim (it answers a different question), but **remove the inert vote injection** (or make it explicitly display-only) so nothing reads as feeding identity when it doesn't. Smaller, honest, preserves the semantic distinction; doesn't fully satisfy "move behind identity."
 - **(C) Hybrid.** Profile votes become real identity voters for the *other-voice* sub-signal (which genuinely is an identity question), while *target-quality* stays a separate claim.
 
-**Recommendation: present A/B/C to Satra and decide before implementing** — the choice changes the data flow, the summary plumbing, and the contracts. Independent of A/B/C, the reuse fixes (shared extraction helper, shared cosine, label import, embedding cache) are unconditionally worth doing.
+**DECIDED 2026-06-05 → (C) hybrid, recall-primary.** The recall gate is the primary downstream consumer (a recording with any non-subject voice must surface), so: the profile's *other-voice / subject-identity* signal feeds the identity axis as a corroborating reference-based voter **and** retains an **independent presence-gated per-window flag** (so it can fire where the identity axis isn't measuring identity — e.g. a background voice in an otherwise non-speech region); *target-quality* stays its own claim. Still worth running A/B/C past Satra, but C is the working decision. Independent of it, the reuse fixes (shared extraction helper, shared cosine, label import, embedding cache) are unconditional.
+
+### Signal design (decided 2026-06-05) — continuous composable atoms, not verdicts
+
+This feature is a **signal producer for downstream mixed metrics** (the rank-orderable attention metric lives in the separate triage/metric-ranking spec). So it must emit **named, continuous atoms** and *not* pre-blend them into one tuned score.
+
+- **"Wrong subject" is a continuous certainty, not a binary flag.** Every voiced window already runs through `calibrate_cosine_uncertainty` against the profile band → a continuous `other_voice_uncertainty ∈ [0,1]`. The discrete `flag` is just a threshold on top and is **demoted to a derived/optional layer**, not the product. File-level "wrong subject" = aggregate of the per-window certainties (`subject_dominance` = certainty-weighted fraction of voiced time matching the subject; its complement is the "recording may not be the subject" uncertainty).
+- **Profile comparison does double duty per voiced window:** (primary, strong) *who* — subject vs not, reference-based identity attribution; (secondary, weak) *is a real speaker present* — a window strongly matching a known-speaker template is evidence of genuine voiced speech, usable as presence corroboration.
+- **Atoms to emit:**
+  - per window — `subject_similarity` / `other_voice_uncertainty` (continuous, within-profile calibrated), `voice_present` (scene-derived: speech/babble/conversation, foreground **or** background), `flag` (derived, optional).
+  - per file — `subject_dominance` (continuous) and its complement `wrong_subject_uncertainty`, `nonsubject_voice_fraction / peak / p95` (max-like recall atoms), `profile_confidence`. Kept as **distinct exposed fields, not collapsed** into one `single_speaker` `max()` — the downstream mixer needs the parts.
+
+**Three discipline constraints:**
+
+1. **Acyclic dependency.** Presence *gates* the profile (low voice-presence → not scored). Do **not** feed the profile back into that same presence signal (circular boost). Feed it forward to the identity axis + a separate "matches-known-speaker" corroboration atom the mixer can combine.
+2. **Certainty paired with confidence-of-certainty.** Always emit the per-window/​file certainty *alongside* `profile_confidence` — a flimsy (`low`/thin) profile producing "high other-voice certainty" must be down-weighted, not believed.
+3. **Within-profile calibration only.** Certainties are calibrated against *this* profile's band — meaningful within the recording, **not** comparable across recordings/subjects. Cross-file rank-ordering is explicitly the downstream metric spec's job.
+
+**Scoring gate = voice presence, not clean-speech presence.** Build-time selects *clean subject speech* for the centroid; scoring-time should gate on *any voice present* (scene-classification speech/babble/conversation labels — already computed and feeding `speech_window_mask_for_file`) so **background/secondary voice is caught** while cough/breath/silence are excluded from the *voice* flag. These are two deliberately different uses of the presence signal.
+
+**Overlap → lean on diarization.** Simultaneous subject+other speech yields a *mixed* embedding between centroids; profile-distance is moderate and unreliable there (same physics as the same-gender blind spot). Reliable overlap detection should come from **diarization overlap**, corroborating the profile rather than relying on profile-distance.
+
+**Deferred hooks (emit the raw ingredients now; solve later, likely the triage spec):**
+- *Non-subject cough/breath attribution* — speaker-embedding models are trained on speech; cough/breath is out-of-distribution and not reliably speaker-attributable. Do **not** force a subject/non-subject call on coughs with a speech model. Emit the raw ingredients (scene label `cough`/`breath`, the segment's diarization speaker) so a downstream combiner can attempt attribution later.
+- *Task-aware contextualization* — "this is a respiration task so any voiced speech is anomalous regardless of who" combines task metadata (BIDS task label) + scene classification; the profile only adds "…and it's not the subject." Out of scope; emitting `voice_present` + scene labels keeps it composable downstream.
 
 ### Scope / sequencing
 

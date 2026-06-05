@@ -160,29 +160,36 @@ New package: `src/senselab/audio/workflows/speaker_profile/`. Reuses existing `a
 
 ## Phase 8: Reuse & identity-axis integration (PR #523 review) — 🔜 PLANNED (2026-06-05)
 
-> **Driven by the PR #523 maintainer review.** Verified findings + design options are in research.md "PR #523 review — reuse/altitude refactor design". Likely a **follow-up PR** (not #523). **T040 is a blocking decision — settle it with the maintainer before T044–T045.** The embedding-cache tasks (T046–T047) are the same gap as the deferred Phase 6 (FR-015); land them together.
+> **Driven by the PR #523 maintainer review.** Verified findings, the **(C) hybrid decision**, and the continuous-signal design are in research.md "PR #523 review — reuse/altitude refactor design" + "Signal design (decided 2026-06-05)". Likely a **follow-up PR** (not #523). The embedding-cache tasks (T048–T049) are the same gap as the deferred Phase 6 (FR-015); land them together. Integration model **decided = C** (T040); still worth confirming with the maintainer but not blocking the unconditional fixes.
 
-### Blocking decision
+### Decision (resolved)
 
-- [ ] T040 ⚠️ **Decide the integration model with the maintainer** (research.md options A/B/C): does the profile become a **true reference-based voter** in `aggregate_identity` (A), stay a **distinct recording-level claim with the inert vote pretense removed** (B), or **hybrid** — other-voice as an identity voter, target-quality as its own claim (C)? Record the decision in research.md + the `analyze-audio-profile` contract. **Blocks T041, T042, T046.**
+- [X] T040 **Integration model = (C) hybrid, recall-primary** (resolved 2026-06-05; confirm with maintainer). Profile feeds the identity axis as a corroborating reference-based voter **and** keeps an independent presence-gated per-window signal (fires where identity isn't measured, e.g. background voice in non-speech regions); target-quality stays its own claim. "Wrong subject" is a **continuous certainty**, not a flag. Recorded in research.md; `analyze-audio-profile` contract to be updated in T044.
 
-### Unconditional reuse fixes (independent of T040)
+### Unconditional reuse fixes (independent of integration shape) — safe to start now
 
 - [ ] T041 Extract a shared `extract_speech_gated_windows(...)` helper into `audio_analysis` that performs the `extract_per_window_embeddings → reference-grid → speech_window_mask_for_file → None-fallback` sequence, and call it from BOTH `compute.py` and `speaker_profile/build.extract_speech_windows_for_file` so the FR-002 "same signal" guarantee is enforced by code, not by parallel hand-maintained glue.
 - [ ] T042 [P] Promote one shared cosine helper (e.g. `embeddings.cos_sim`/`cos_dist` with a single degenerate-input contract) and replace the three copies (`compare._cosine_distance`, `clustering._cos_sim`, `identity._cos_dist`); unify the `[0,1]` clipping convention.
 - [ ] T043 [P] Import `DEFAULT_SPEECH_PRESENCE_LABELS` from one canonical source shared with `analyze_audio` (remove the sync-by-comment copy in `build.py`); drop or wire the inert `build_speaker_profile --cache-dir` flag so it is not misleading.
 
-### Integration refactor (shape depends on T040)
+### Signal shape — continuous composable atoms (per the decided design)
 
-- [ ] T044 Implement the chosen integration (T040): if A/C, add the `distance-to-enrolled-centroid` reference-based voter to `aggregate_identity` so the profile other-voice uncertainty flows through the identity axis; remove the redundant `global_summary` `single_speaker` `max()` fold and the inert `model_votes["speaker_profile/*"]` injection. If B, make the injection explicitly display-only and keep the separate claim. Preserve SC-006 (no-profile path byte-identical) and re-run T029.
-- [ ] T045 Consolidate the recording-level rollup: if the profile becomes an identity voter (A/C), retire or slim `RecordingOtherVoiceSummary`/the parallel fold and let the existing identity parquet + `disagreements.json` carry the signal; keep `RecordingQualityIndicator` (target-quality) as the genuinely-distinct claim.
+- [ ] T044 Recast the profile outputs as **continuous atoms**, flag demoted to a derived layer: per-window `subject_similarity` / `other_voice_uncertainty` (already continuous via `calibrate_cosine_uncertainty`) + `voice_present`; the discrete `flag` becomes an optional threshold over the continuous value. Each certainty is **emitted paired with `profile_confidence`** (down-weight a flimsy template), and remains **within-profile calibrated only** (no cross-file ranking here). Update `types.py` + the `analyze-audio-profile` contract.
+- [ ] T045 Add the **continuous "wrong subject" / `subject_dominance`** file-level measure (certainty-weighted fraction of voiced time matching the subject; complement = "recording may not be the subject" uncertainty) — the wrong/absent-subject trigger as a continuous signal, not a boolean. Keep `nonsubject_voice_fraction / peak / p95` as max-like recall atoms.
+- [ ] T046 Switch the **scoring-time gate to voice presence** (scene speech/babble/conversation labels), distinct from the build-time clean-speech gate, so **background/secondary voice is caught** while cough/breath/silence are excluded from the voice flag. Keep the dependency **acyclic** — feed profile similarity forward into the identity voter + a separate "matches-known-speaker" corroboration atom; do NOT feed it back into the presence gate that produced it.
+- [ ] T047 Integrate per the (C) decision: add a `distance-to-enrolled-centroid` reference-based voter to `aggregate_identity` (corroboration) **while keeping the named profile sub-signals exposed** (do not collapse them into the `single_speaker` `max()` fold — the downstream mixer needs the parts); retain the independent presence-gated per-window signal; remove the *inert* `model_votes["speaker_profile/*"]` pretense (replace with the real voter). Preserve SC-006 (no-profile path byte-identical) and re-run T029. Lean on **diarization overlap** as the overlap corroborator (profile-distance is unreliable on mixed windows).
 
 ### Embedding-compute reuse (== Phase 6 / FR-015 — land together)
 
-- [ ] T046 Eliminate leave-one-file-out re-extraction: persist per-window vectors (or a reusable per-file embedding cache) so `_resolve_scoring_profile` rebuilds the LOO centroid without re-embedding every sibling. If vectors are stored in the artifact, bump the profile `schema_version` (contracts/speaker-profile.schema.md). Coordinate with T033–T036.
-- [ ] T047 Cache-wrap `extract_per_window_embeddings` (via the `cache.py` helpers) so the build and analyze stages stop re-embedding the same audio — the concrete delivery of FR-015 / Phase 6 (supersedes/*completes* T035). Note the build (2.0/1.0) vs detect (1.0/0.5) grid mismatch: the cache must key on `(audio_sig, model, window_s, hop_s)` and will only hit cross-stage where grids match, so decide whether to unify grids or accept per-grid entries.
+- [ ] T048 Eliminate leave-one-file-out re-extraction: persist per-window vectors (or a reusable per-file embedding cache) so `_resolve_scoring_profile` rebuilds the LOO centroid without re-embedding every sibling. If vectors are stored in the artifact, bump the profile `schema_version` (contracts/speaker-profile.schema.md). Coordinate with T033–T036.
+- [ ] T049 Cache-wrap `extract_per_window_embeddings` (via the `cache.py` helpers) so the build and analyze stages stop re-embedding the same audio — the concrete delivery of FR-015 / Phase 6 (*completes* T035). Note the build (2.0/1.0) vs detect (1.0/0.5) grid mismatch: the cache must key on `(audio_sig, model, window_s, hop_s)` and will only hit cross-stage where grids match, so decide whether to unify grids or accept per-grid entries.
 
-**Checkpoint**: profile other-voice scoring is expressed through (not bolted beside) the identity axis per the T040 decision; extraction/cosine/label logic is shared, not duplicated; the same audio is embedded once per grid across stages.
+### Deferred hooks (emit raw ingredients now; solve in the triage/metric spec)
+
+- [ ] T050 ⏸️ DEFERRED — Non-subject **cough/breath attribution**: speech speaker-embeddings are OOD on non-speech, so don't force a subject/non-subject call on coughs. Emit the raw ingredients (scene `cough`/`breath` label + the segment's diarization speaker) so a downstream combiner can attempt attribution later.
+- [ ] T051 ⏸️ DEFERRED — **Task-aware contextualization** ("voiced speech in a respiration task is anomalous regardless of who"): combines BIDS task metadata + scene classification downstream; this feature only ensures `voice_present` + scene labels are emitted so it stays composable.
+
+**Checkpoint**: profile emits continuous, confidence-paired, within-profile-calibrated atoms (subject-identity certainty, subject_dominance/wrong-subject, nonsubject-voice fraction/peak/p95) — exposed distinctly, fed forward into the identity axis (C) and an independent voice-gated flag — with extraction/cosine/label logic shared, the same audio embedded once per grid, and cough/task-context left as composable hooks.
 
 ---
 
