@@ -19,7 +19,6 @@ from __future__ import annotations
 from typing import Dict, List, Optional
 
 import torch
-import torch.nn.functional as F
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, TransformersWavLMModel, _select_device_and_dtype
@@ -124,12 +123,13 @@ class WavLMEmbeddings:
                     f"Audio sampling rate {audio.sampling_rate} does not match expected {expected_sample_rate}"
                 )
 
-        # Pad to common length so we can batch through the feature extractor.
-        lengths = torch.tensor([a.waveform.shape[1] for a in audios])
-        max_len = int(torch.max(lengths).item())
-        padded = [F.pad(a.waveform, (0, max_len - a.waveform.shape[1])) for a in audios]
-        # Each entry is (1, samples); squeeze channel for the extractor's expected (B, samples).
-        wave_batch = [w.squeeze(0).cpu().numpy() for w in padded]
+        # The HF feature extractor pads a batch of varying-length waveforms
+        # natively (``padding=True`` below) and emits the matching
+        # ``attention_mask`` — so we hand it the raw per-clip arrays rather than
+        # manually zero-padding to a common length first.
+        # Each entry is (1, samples); squeeze the channel dim for the
+        # extractor's expected (B, samples).
+        wave_batch = [a.waveform.squeeze(0).cpu().numpy() for a in audios]
         # The HF feature extractor returns ``input_values`` and ``attention_mask``.
         inputs = extractor(
             wave_batch,

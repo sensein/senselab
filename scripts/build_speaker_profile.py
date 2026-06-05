@@ -143,6 +143,17 @@ def main(argv: list[str] | None = None) -> int:
             print(f"warn: skipping unreadable file {path}: {exc!r}", file=sys.stderr)
             continue
         # ``file_id`` is the user-supplied path string — stable and human-readable.
+        #
+        # ``pass_summary={}`` deliberately supplies no presence signal: this
+        # standalone CLI does not run scene classification (AST/YAMNet) or
+        # openSMILE, so the per-window speech mask (FR-002) is unavailable and
+        # every speech-grid window is kept. Non-speech / silence tolerance then
+        # rests on the dominant-cluster aggregation (noise and other voices fall
+        # into minority clusters and are excluded) rather than an up-front gate.
+        # The richer presence gate engages automatically when a profile is built
+        # from cached ``analyze_audio`` passes that already carry these blocks in
+        # ``pass_summary`` (and would become cheap once cross-stage cache reuse
+        # is wired — currently deferred).
         inputs.append(ProfileInput(audio=audio, file_id=str(path), session_id=session, pass_summary={}))
 
     if not inputs:
