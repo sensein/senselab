@@ -211,6 +211,42 @@ def _flatten_to_1d(t: Any) -> np.ndarray:  # noqa: ANN401
     return arr.astype(np.float32, copy=False)
 
 
+def cos_sim(a: Any, b: Any) -> float | None:  # noqa: ANN401 — accepts any array-like / list
+    """Cosine similarity between two 1-D vectors. ``None`` on degenerate input.
+
+    Canonical cosine helper shared across the audio-analysis workflows
+    (clustering, identity axis, speaker-profile comparison) so the
+    empty / length-mismatch / zero-norm contract lives in one place. Accepts
+    numpy arrays or plain ``list[float]`` (coerced via ``np.asarray``).
+    Returns ``None`` when either vector is empty, the lengths differ, or either
+    has zero norm.
+    """
+    av = np.asarray(a, dtype=np.float64).reshape(-1)
+    bv = np.asarray(b, dtype=np.float64).reshape(-1)
+    if av.size == 0 or bv.size == 0 or av.size != bv.size:
+        return None
+    na = float(np.linalg.norm(av))
+    nb = float(np.linalg.norm(bv))
+    if na == 0.0 or nb == 0.0:
+        return None
+    return float(np.dot(av, bv) / (na * nb))
+
+
+def cos_dist(a: Any, b: Any, *, clip: bool = False) -> float | None:  # noqa: ANN401
+    """Cosine distance ``1 - cos_sim``. ``None`` on degenerate input.
+
+    ``clip=True`` bounds the result to ``[0, 1]`` (matching the identity axis,
+    which treats anti-aligned vectors as max distance); ``clip=False`` returns
+    the raw ``1 - cos`` in ``[0, 2]`` (matching the profile comparator, which
+    feeds the value to ``calibrate_cosine_uncertainty``).
+    """
+    sim = cos_sim(a, b)
+    if sim is None:
+        return None
+    dist = 1.0 - sim
+    return max(0.0, min(1.0, dist)) if clip else dist
+
+
 def window_embedding_at(
     entries: list[WindowEmbedding],
     t: float,
