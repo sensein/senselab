@@ -142,6 +142,7 @@ from senselab.audio.workflows.audio_analysis.harvesters import (
 from senselab.audio.workflows.audio_analysis.harvesters import (
     classification_windows as _classification_windows,
 )
+from senselab.audio.workflows.audio_analysis.presence import DEFAULT_SPEECH_PRESENCE_LABELS
 from senselab.utils.data_structures import (
     DeviceType,
     HFModel,
@@ -155,15 +156,8 @@ TARGET_SR = 16000
 ALL_TASKS = ("diarization", "ast", "yamnet", "features", "asr", "alignment", "comparisons")
 COMPARISON_AXES = ("raw_vs_enhanced", "within_stream", "cross_stream")
 UNCERTAINTY_AGGREGATORS = ("min", "mean", "harmonic_mean", "disagreement_weighted")
-DEFAULT_SPEECH_PRESENCE_LABELS = (
-    "Speech",
-    "Conversation",
-    "Narration, monologue",
-    "Female speech, woman speaking",
-    "Male speech, man speaking",
-    "Child speech, kid speaking",
-    "Speech synthesizer",
-)
+# DEFAULT_SPEECH_PRESENCE_LABELS is imported from audio_analysis.presence (the
+# single canonical source shared with the speaker_profile build-time gate).
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
