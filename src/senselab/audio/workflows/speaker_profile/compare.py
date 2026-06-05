@@ -27,6 +27,7 @@ import numpy as np
 from senselab.audio.workflows.audio_analysis.embeddings import (
     WindowEmbedding,
     calibrate_cosine_uncertainty,
+    cos_dist,
 )
 from senselab.audio.workflows.speaker_profile import constants as C
 from senselab.audio.workflows.speaker_profile.build import (
@@ -40,20 +41,6 @@ from senselab.audio.workflows.speaker_profile.types import (
     RecordingOtherVoiceSummary,
     RecordingQualityIndicator,
 )
-
-
-def _cosine_distance(a: np.ndarray, b: np.ndarray) -> float | None:
-    """``1 - cos_sim`` between two 1-D vectors, or ``None`` on degenerate input."""
-    av = np.asarray(a, dtype=np.float64).flatten()
-    bv = np.asarray(b, dtype=np.float64).flatten()
-    if av.size == 0 or bv.size == 0 or av.size != bv.size:
-        return None
-    na = float(np.linalg.norm(av))
-    nb = float(np.linalg.norm(bv))
-    if na <= 0 or nb <= 0:
-        return None
-    cos_sim = float(np.dot(av, bv) / (na * nb))
-    return 1.0 - cos_sim
 
 
 def score_window(
@@ -91,14 +78,14 @@ def score_window(
         vec = window_vectors.get(model_id)
         if vec is None:
             continue
-        cos_dist = _cosine_distance(vec, np.asarray(centroid, dtype=np.float64))
-        if cos_dist is None:
+        cdist = cos_dist(vec, np.asarray(centroid, dtype=np.float64))
+        if cdist is None:
             continue
         same_floor, diff_floor = calibration_band.get(
             model_id, (C.SAME_SPEAKER_FLOOR_FALLBACK, C.DIFF_SPEAKER_FLOOR_FALLBACK)
         )
         per_model[model_id] = calibrate_cosine_uncertainty(
-            cos_dist, same_speaker_floor=same_floor, diff_speaker_floor=diff_floor, direction="same"
+            cdist, same_speaker_floor=same_floor, diff_speaker_floor=diff_floor, direction="same"
         )
 
     if not per_model:
