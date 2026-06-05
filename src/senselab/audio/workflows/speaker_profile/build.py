@@ -32,7 +32,10 @@ from senselab.audio.workflows.audio_analysis.embeddings import (
     cluster_pass_speakers,
     extract_per_window_embeddings,
 )
-from senselab.audio.workflows.audio_analysis.presence import speech_window_mask_for_file
+from senselab.audio.workflows.audio_analysis.presence import (
+    DEFAULT_SPEECH_PRESENCE_LABELS,
+    speech_window_mask_for_file,
+)
 from senselab.audio.workflows.speaker_profile import constants as C
 from senselab.audio.workflows.speaker_profile.cache import audio_signature, senselab_version
 from senselab.audio.workflows.speaker_profile.io import SCHEMA_VERSION, save_profile
@@ -49,16 +52,8 @@ from senselab.utils.data_structures import DeviceType
 # These mirror ``scripts/analyze_audio.py``'s default — keeping them in sync
 # means a profile built here uses the same speech definition the identity-axis
 # clustering uses inside ``analyze_audio`` (FR-002 wording: "the same signal
-# the clustering step consumes").
-DEFAULT_SPEECH_PRESENCE_LABELS: tuple[str, ...] = (
-    "Speech",
-    "Conversation",
-    "Narration, monologue",
-    "Female speech, woman speaking",
-    "Male speech, man speaking",
-    "Child speech, kid speaking",
-    "Speech synthesizer",
-)
+# the clustering step consumes"). Imported from one canonical source so the two
+# gates cannot drift.
 
 
 @dataclass(slots=True, frozen=True)

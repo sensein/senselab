@@ -53,6 +53,21 @@ from senselab.audio.workflows.audio_analysis.harvesters import (
     whisper_bucket_no_speech_prob,
 )
 
+# Canonical AudioSet labels that count as "speech present" for the AST / YAMNet
+# presence voters and the ``speech_window_mask_for_file`` gate. Single source of
+# truth so the ``analyze_audio`` identity-axis gate and the ``speaker_profile``
+# build-time gate share one speech definition (FR-002: "the same signal the
+# clustering step consumes"). Override per-run via the CLI flag.
+DEFAULT_SPEECH_PRESENCE_LABELS: tuple[str, ...] = (
+    "Speech",
+    "Conversation",
+    "Narration, monologue",
+    "Female speech, woman speaking",
+    "Male speech, man speaking",
+    "Child speech, kid speaking",
+    "Speech synthesizer",
+)
+
 
 def _row_window_overlap(rows: list[dict[str, Any]], start: float, end: float) -> list[dict[str, Any]]:
     """Return the subset of feature rows whose window overlaps ``[start, end)``."""
