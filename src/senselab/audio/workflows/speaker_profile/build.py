@@ -671,16 +671,34 @@ def build_speaker_profile(
         except Exception as exc:  # noqa: BLE001
             failures[f"signature/{inp.file_id}"] = repr(exc)
             audio_signatures[inp.file_id] = ""
-        tagged, info = extract_speech_windows_for_file(
-            audio=inp.audio,
-            file_id=inp.file_id,
-            pass_summary=inp.pass_summary or {},
-            embedding_models=embedding_models,
-            device=device,
-            profile_window_s=profile_window_s,
-            profile_hop_s=profile_hop_s,
-            failures=failures,
-        )
+        try:
+            tagged, info = extract_speech_windows_for_file(
+                audio=inp.audio,
+                file_id=inp.file_id,
+                pass_summary=inp.pass_summary or {},
+                embedding_models=embedding_models,
+                device=device,
+                profile_window_s=profile_window_s,
+                profile_hop_s=profile_hop_s,
+                failures=failures,
+            )
+        except Exception as exc:  # noqa: BLE001 — one file's failure must not abort the whole build
+            # Honor the non-fatal contract: record the failure + a drop reason
+            # and continue, instead of crashing the build (OOM, model load,
+            # corrupt audio, …). Mirrors the info dict shape that
+            # ``extract_speech_windows_for_file`` returns.
+            failures[f"extract/{inp.file_id}"] = repr(exc)
+            sr = inp.audio.sampling_rate
+            tagged = []
+            info = {
+                "file_id": inp.file_id,
+                "duration_s": float(inp.audio.waveform.shape[-1] / sr) if sr else 0.0,
+                "speech_seconds": 0.0,
+                "windows_total": 0,
+                "windows_kept": 0,
+                "windows_dropped_non_speech": 0,
+                "drop_reason": "extraction_failed",
+            }
         pooled.extend(tagged)
         file_infos.append(info)
 
