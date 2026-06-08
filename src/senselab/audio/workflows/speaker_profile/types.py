@@ -133,6 +133,15 @@ class RecordingOtherVoiceSummary:
     profile_p95_other_voice_uncertainty: float
     profile_speech_present_seconds: float
     profile_confidence: ProfileConfidence
+    # Continuous "is the dominant voice the enrolled subject" measure: the
+    # voiced-time-weighted mean per-window subject similarity over scored
+    # windows ([0, 1]; higher = more the subject). Its complement
+    # (1 - dominance) is the "recording may not be the subject" / wrong-subject
+    # uncertainty — the profile's unique reference-based signal that the
+    # reference-free identity axis cannot produce. ``None`` when no voiced window
+    # was scorable (no signal, distinct from "confidently wrong subject").
+    # Pair with ``profile_confidence`` downstream (a weak profile down-weights it).
+    profile_subject_dominance: float | None
 
 
 @dataclass(slots=True)
