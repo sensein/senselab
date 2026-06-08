@@ -38,7 +38,7 @@ from senselab.audio.workflows.audio_analysis.harvesters import (
 from senselab.audio.workflows.audio_analysis.identity import harvest_identity_votes
 from senselab.audio.workflows.audio_analysis.presence import (
     harvest_presence_votes,
-    speech_window_mask_for_file,
+    reference_grid_and_speech_mask,
 )
 from senselab.audio.workflows.audio_analysis.types import (
     AxisResult,
@@ -166,15 +166,18 @@ def compute_uncertainty_axes(
             )
 
             cluster_failures: dict[str, str] = {}
+            # Compute the speech mask once on the shared window grid (it depends
+            # on window times, not the embedding vectors, so it applies to every
+            # model) — same helper the speaker_profile build uses (FR-002).
+            _, speech_mask = reference_grid_and_speech_mask(
+                per_window_embeddings_by_pass[pass_label],
+                pass_summary=pass_summary,
+                speech_presence_labels=speech_presence_labels,
+            )
             for emb_model_id in sorted(per_window_embeddings_by_pass[pass_label]):
                 entries = per_window_embeddings_by_pass[pass_label][emb_model_id]
                 if not entries:
                     continue
-                speech_mask = speech_window_mask_for_file(
-                    entries=entries,
-                    pass_summary=pass_summary,
-                    speech_presence_labels=speech_presence_labels,
-                )
                 emb_cluster = _cluster_pass_speakers(
                     entries,
                     failures=cluster_failures,

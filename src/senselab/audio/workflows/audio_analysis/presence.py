@@ -37,6 +37,7 @@ runs casts a vote, each calibrated to what its signal can actually answer:
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import numpy as np
@@ -568,3 +569,37 @@ def speech_window_mask_for_file(
                 continue
         mask.append(True)
     return mask
+
+
+def reference_grid_and_speech_mask(
+    per_model_windows: Mapping[str, list[WindowEmbedding]],
+    *,
+    pass_summary: dict[str, Any],
+    speech_presence_labels: Sequence[str],
+) -> tuple[list[WindowEmbedding], list[bool] | None]:
+    """Pick the reference window grid and compute the per-window speech mask once.
+
+    Shared by ``analyze_audio``'s identity-axis clustering (``compute.py``) and
+    the ``speaker_profile`` build-time gate (``build.py``) so they apply the
+    *same* speech definition (FR-002) via one code path instead of two parallel
+    inline copies.
+
+    All models in ``per_model_windows`` share the same window grid (by
+    construction in :func:`extract_per_window_embeddings`), and the mask depends
+    only on window times + scene/loudness signals — **not** on the embedding
+    vectors — so it is computed once on the first non-empty model's grid and
+    applies to every model.
+
+    Returns ``(reference_windows, mask)``. ``mask`` is ``None`` when no presence
+    signal (AST / YAMNet / loudness) is available; the caller decides the
+    "keep every window" fallback, preserving each caller's existing behavior
+    (``compute.py`` passes ``None`` straight to ``cluster_pass_speakers``;
+    ``build.py`` expands it to an all-``True`` mask).
+    """
+    reference = next((w for w in per_model_windows.values() if w), [])
+    mask = speech_window_mask_for_file(
+        entries=reference,
+        pass_summary=pass_summary,
+        speech_presence_labels=list(speech_presence_labels),
+    )
+    return reference, mask
