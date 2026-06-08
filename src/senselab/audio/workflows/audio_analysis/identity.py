@@ -55,6 +55,7 @@ from senselab.audio.workflows.audio_analysis.clustering import cluster_speaker_l
 from senselab.audio.workflows.audio_analysis.embeddings import (
     WindowEmbedding,
     calibrate_cosine_uncertainty,
+    cos_dist,
     window_index_at,
 )
 from senselab.audio.workflows.audio_analysis.grid import BucketGrid
@@ -63,24 +64,13 @@ from senselab.audio.workflows.audio_analysis.harvesters import diar_speaker_labe
 SILENT_CLUSTER_ID = "SIL"
 
 
-def _cosine_similarity(a: list[float], b: list[float]) -> float | None:
-    """Cosine similarity between two equal-length vectors. Returns None on bad inputs."""
-    if not a or not b or len(a) != len(b):
-        return None
-    dot = sum(x * y for x, y in zip(a, b))
-    norm_a = sum(x * x for x in a) ** 0.5
-    norm_b = sum(y * y for y in b) ** 0.5
-    if norm_a == 0 or norm_b == 0:
-        return None
-    return dot / (norm_a * norm_b)
-
-
 def _cos_dist(a: list[float], b: list[float]) -> float | None:
-    """Cosine distance ``1 − cos_sim`` clipped to ``[0, 1]``. None on bad inputs."""
-    sim = _cosine_similarity(a, b)
-    if sim is None:
-        return None
-    return max(0.0, min(1.0, 1.0 - sim))
+    """Cosine distance ``1 − cos_sim`` clipped to ``[0, 1]``. None on bad inputs.
+
+    Thin wrapper over the shared :func:`cos_dist` (clipped) — kept as a local
+    name so the call sites read unchanged.
+    """
+    return cos_dist(a, b, clip=True)
 
 
 def _embedding_for_bucket(

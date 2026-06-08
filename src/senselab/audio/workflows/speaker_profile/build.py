@@ -32,7 +32,10 @@ from senselab.audio.workflows.audio_analysis.embeddings import (
     cluster_pass_speakers,
     extract_per_window_embeddings,
 )
-from senselab.audio.workflows.audio_analysis.presence import speech_window_mask_for_file
+from senselab.audio.workflows.audio_analysis.presence import (
+    DEFAULT_SPEECH_PRESENCE_LABELS,
+    reference_grid_and_speech_mask,
+)
 from senselab.audio.workflows.speaker_profile import constants as C
 from senselab.audio.workflows.speaker_profile.cache import audio_signature, senselab_version
 from senselab.audio.workflows.speaker_profile.io import SCHEMA_VERSION, save_profile
@@ -49,16 +52,8 @@ from senselab.utils.data_structures import DeviceType
 # These mirror ``scripts/analyze_audio.py``'s default — keeping them in sync
 # means a profile built here uses the same speech definition the identity-axis
 # clustering uses inside ``analyze_audio`` (FR-002 wording: "the same signal
-# the clustering step consumes").
-DEFAULT_SPEECH_PRESENCE_LABELS: tuple[str, ...] = (
-    "Speech",
-    "Conversation",
-    "Narration, monologue",
-    "Female speech, woman speaking",
-    "Male speech, man speaking",
-    "Child speech, kid speaking",
-    "Speech synthesizer",
-)
+# the clustering step consumes"). Imported from one canonical source so the two
+# gates cannot drift.
 
 
 @dataclass(slots=True, frozen=True)
@@ -86,6 +81,7 @@ def extract_speech_windows_for_file(
     profile_hop_s: float = C.PROFILE_HOP_S,
     speech_presence_labels: Sequence[str] = DEFAULT_SPEECH_PRESENCE_LABELS,
     failures: dict[str, str] | None = None,
+    cache_dir: Path | None = None,
 ) -> tuple[list[TaggedWindowEmbedding], dict[str, Any]]:
     """Locate speech windows in one file and embed each per model.
 
@@ -117,6 +113,10 @@ def extract_speech_windows_for_file(
         speech_presence_labels: AudioSet labels the gate treats as speech.
         failures: Optional dict to populate with per-model load/embed failure
             reasons (mirrors the existing audio_analysis ``failures`` pattern).
+        cache_dir: Optional content-addressable cache dir threaded to
+            ``extract_per_window_embeddings`` so this file's embeddings are
+            reused across the build and analyze stages instead of recomputed
+            on the GPU (FR-015).
 
     Returns:
         ``(tagged_windows, info)`` where ``tagged_windows`` is the flat list of
@@ -153,18 +153,18 @@ def extract_speech_windows_for_file(
         hop_s=profile_hop_s,
         device=device,
         failures=failures,
+        cache_dir=cache_dir,
     )
     if not per_model_windows or not any(per_model_windows.values()):
         info["drop_reason"] = "no_embedding_windows"
         return [], info
 
-    # Use the first model's window grid for the speech mask (they share the
-    # same grid by construction in extract_per_window_embeddings).
-    reference_windows: list[WindowEmbedding] = next((w for w in per_model_windows.values() if w), [])
-    mask: list[bool] | None = speech_window_mask_for_file(
-        entries=reference_windows,
+    # Pick the reference grid + compute the speech mask via the shared helper
+    # (same code path the analyze_audio identity-axis clustering uses, FR-002).
+    reference_windows, mask = reference_grid_and_speech_mask(
+        per_model_windows,
         pass_summary=pass_summary,
-        speech_presence_labels=list(speech_presence_labels),
+        speech_presence_labels=speech_presence_labels,
     )
     # ``None`` → no AST/YAMNet/loudness available; keep every window (legacy
     # behavior matches what cluster_pass_speakers does without a mask).
@@ -647,6 +647,7 @@ def build_speaker_profile(
     prefer_session: str | None = None,
     device: DeviceType | None = None,
     output: Path | None = None,
+    cache_dir: Path | None = None,
 ) -> SpeakerProfile:
     """Build exactly one contamination-tolerant profile for ``subject_id``.
 
@@ -671,16 +672,35 @@ def build_speaker_profile(
         except Exception as exc:  # noqa: BLE001
             failures[f"signature/{inp.file_id}"] = repr(exc)
             audio_signatures[inp.file_id] = ""
-        tagged, info = extract_speech_windows_for_file(
-            audio=inp.audio,
-            file_id=inp.file_id,
-            pass_summary=inp.pass_summary or {},
-            embedding_models=embedding_models,
-            device=device,
-            profile_window_s=profile_window_s,
-            profile_hop_s=profile_hop_s,
-            failures=failures,
-        )
+        try:
+            tagged, info = extract_speech_windows_for_file(
+                audio=inp.audio,
+                file_id=inp.file_id,
+                pass_summary=inp.pass_summary or {},
+                embedding_models=embedding_models,
+                device=device,
+                profile_window_s=profile_window_s,
+                profile_hop_s=profile_hop_s,
+                failures=failures,
+                cache_dir=cache_dir,
+            )
+        except Exception as exc:  # noqa: BLE001 — one file's failure must not abort the whole build
+            # Honor the non-fatal contract: record the failure + a drop reason
+            # and continue, instead of crashing the build (OOM, model load,
+            # corrupt audio, …). Mirrors the info dict shape that
+            # ``extract_speech_windows_for_file`` returns.
+            failures[f"extract/{inp.file_id}"] = repr(exc)
+            sr = inp.audio.sampling_rate
+            tagged = []
+            info = {
+                "file_id": inp.file_id,
+                "duration_s": float(inp.audio.waveform.shape[-1] / sr) if sr else 0.0,
+                "speech_seconds": 0.0,
+                "windows_total": 0,
+                "windows_kept": 0,
+                "windows_dropped_non_speech": 0,
+                "drop_reason": "extraction_failed",
+            }
         pooled.extend(tagged)
         file_infos.append(info)
 
