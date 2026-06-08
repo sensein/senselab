@@ -142,7 +142,10 @@ from senselab.audio.workflows.audio_analysis.harvesters import (
 from senselab.audio.workflows.audio_analysis.harvesters import (
     classification_windows as _classification_windows,
 )
-from senselab.audio.workflows.audio_analysis.presence import DEFAULT_SPEECH_PRESENCE_LABELS
+from senselab.audio.workflows.audio_analysis.presence import (
+    DEFAULT_SPEECH_PRESENCE_LABELS,
+    reference_grid_and_speech_mask,
+)
 from senselab.utils.data_structures import (
     DeviceType,
     HFModel,
@@ -2180,11 +2183,22 @@ def main(argv: list[str] | None = None) -> int:
                 if not by_model:
                     continue
                 p_voice_by_window = _p_voice_for_windows(by_model, axis_results.get((pl, "presence")))
+                # Scene-derived voice-presence gate (recall): score windows where a
+                # voice is present — foreground OR background — so a non-subject
+                # background voice in an otherwise quiet stretch is caught, while
+                # cough/breath/silence stay excluded. Falls back to p_voice when
+                # scene classification is unavailable (mask is None).
+                _, voice_present_by_window = reference_grid_and_speech_mask(
+                    by_model,
+                    pass_summary=passes_for_compute.get(pl, {}),
+                    speech_presence_labels=_speech_presence_labels(args),
+                )
                 results = compare_recording_to_profile(
                     by_model,
                     prof_centroids,
                     prof_band,
                     p_voice_by_window=p_voice_by_window,
+                    voice_present_by_window=voice_present_by_window,
                     other_voice_threshold=args.profile_other_voice_threshold,
                 )
                 profile_results_by_pass[pl] = results

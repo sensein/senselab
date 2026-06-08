@@ -108,6 +108,7 @@ def compare_recording_to_profile(
     calibration_band: Mapping[str, tuple[float, float]],
     *,
     p_voice_by_window: Sequence[float | None] | None = None,
+    voice_present_by_window: Sequence[bool] | None = None,
     other_voice_threshold: float | None = C.OTHER_VOICE_THRESHOLD_DEFAULT,
     min_p_voice: float = C.MIN_P_VOICE_FOR_COMPARISON,
     fusion_weights: Mapping[str, float] | None = C.CONSENSUS_FUSION_WEIGHTS_DEFAULT,
@@ -125,7 +126,15 @@ def compare_recording_to_profile(
             profile, used to calibrate each model's uncertainty.
         p_voice_by_window: Optional reused presence value per window index. A
             window below ``min_p_voice`` is scored ``unavailable`` (never
-            flagged). ``None`` disables gating (everything is scored).
+            flagged). ``None`` disables this gate.
+        voice_present_by_window: Optional scene-derived per-window voice mask
+            (speech / babble / conversation present, foreground OR background).
+            When supplied it is the **authoritative** gate — a window with
+            ``False`` is ``unavailable`` — so background/secondary voice is
+            scored while cough/breath/silence are excluded; ``p_voice`` is then
+            recorded for info but not used to gate. When ``None``, the
+            ``p_voice`` gate above applies (legacy behavior). Both ``None`` →
+            everything is scored.
         other_voice_threshold: Calibrated-uncertainty cutoff for the
             ``other_voice`` flag; ``None`` uses the adaptive
             ``OTHER_VOICE_CALIBRATED_CUTOFF``.
@@ -153,8 +162,18 @@ def compare_recording_to_profile(
         if p_voice_by_window is not None and i < len(p_voice_by_window):
             p_voice = p_voice_by_window[i]
 
-        # Speech-presence gate fails → unavailable, never flagged.
-        if p_voice is not None and p_voice < min_p_voice:
+        voice_present: bool | None = None
+        if voice_present_by_window is not None and i < len(voice_present_by_window):
+            voice_present = bool(voice_present_by_window[i])
+
+        # Presence gate → unavailable, never flagged. The scene-derived voice
+        # mask is authoritative when supplied (recall: catch background/secondary
+        # voice, exclude cough/breath); otherwise fall back to the p_voice gate.
+        if voice_present is not None:
+            gated_out = not voice_present
+        else:
+            gated_out = p_voice is not None and p_voice < min_p_voice
+        if gated_out:
             results.append(
                 ProfileComparisonResult(
                     start=float(ref_w.start_s),
@@ -162,7 +181,7 @@ def compare_recording_to_profile(
                     similarity=None,
                     other_voice_uncertainty=None,
                     flag="unavailable",
-                    p_voice=float(p_voice),
+                    p_voice=float(p_voice) if p_voice is not None else None,
                     per_model={},
                 )
             )
