@@ -2207,14 +2207,28 @@ def main(argv: list[str] | None = None) -> int:
                 profile_quality_by_pass[pl] = _asdict(
                     compute_target_quality(results, _profile.confidence, squim_by_window=squim_by_window)
                 )
-                # Additive: the identity aggregator ignores speaker_profile/* keys,
-                # so existing per-bucket uncertainty is unchanged.
+                # Fold the profile into the identity axis as a real reference-based
+                # voter (option C): inject the per-bucket speaker_profile/* votes,
+                # then RE-AGGREGATE each bucket's identity uncertainty so the
+                # parquet + disagreements ranking reflect "is this the enrolled
+                # subject?" — not just the reference-free who-talks signal. The
+                # re-aggregation mirrors compute.py's call (raw_vs_enh=None, same
+                # aggregator); intensity_weight is loudness-derived and unchanged.
+                from senselab.audio.workflows.audio_analysis.aggregate import aggregate_identity
+
                 id_res = axis_results.get((pl, "identity"))
                 if id_res is not None and id_res.rows:
                     bounds = [(r.start, r.end) for r in id_res.rows]
                     for row, bucket_vote in zip(id_res.rows, profile_votes_by_bucket(results, bounds)):
                         if bucket_vote:
                             row.model_votes.update(bucket_vote)
+                            u = aggregate_identity(
+                                row.model_votes, raw_vs_enh=None, aggregator=args.uncertainty_aggregator
+                            )
+                            row.aggregated_uncertainty = u
+                            row.raw_aggregated_uncertainty = u
+                            row.comparison_status = "ok" if u is not None else "incomparable"
+                            row.contributing_models = sorted(row.model_votes.keys())
             print(
                 f"speaker-profile: scored subject {_profile.subject_id} "
                 f"(confidence={_profile.confidence}, leave_one_file_out={loo_applied})"

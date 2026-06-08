@@ -1,18 +1,30 @@
-"""SC-006 regression: ``--speaker-profile`` is purely additive.
+"""SC-006 regression: ``--speaker-profile`` is scoped, not invasive.
 
 Runs ``analyze_audio`` twice on the same clip — once without a profile, once
-with one — and asserts that every output which is *not* a profile addition is
-byte-identical between the two runs (after normalizing run-to-run provenance
-like timestamps and the script wrapper hash). The profiled run may only *add*:
+with one — and asserts that supplying a profile touches **only** the
+speaker-identity / target-quality outputs, leaving everything else
+byte-identical (after normalizing run-to-run provenance like timestamps and the
+script wrapper hash).
 
-- a per-pass ``speaker_profile.json`` sidecar,
-- ``profile_*`` sub-signal keys under the ``single_speaker`` / ``quality`` claims,
-- ``speaker_profile/<model>`` and ``speaker_profile/consensus`` entries inside the
-  identity-axis ``model_votes``.
+**The real invariant (post option-C integration):** the *no-profile* run is the
+baseline, and supplying a profile is allowed to change only:
 
-Everything else (presence/identity/utterance row data, AST/YAMNet/features,
-disagreements, Label Studio bundle) must be unchanged — so a pipeline run that
-supplies a profile never perturbs the existing analysis (FR-011 / SC-006).
+- the per-pass ``speaker_profile.json`` sidecar (added),
+- ``profile_*`` sub-signal keys + the ``single_speaker`` / ``quality`` headline
+  uncertainties under those claims (FR-020 / FR-010),
+- the **per-pass identity-axis aggregated uncertainty** and its
+  ``contributing_models`` / ``speaker_profile/*`` votes — because the profile is
+  now a *real reference-based identity voter* ("is this the enrolled subject?"),
+  not a decorative side-signal, and
+- ``disagreements.json`` ordering (it ranks on the identity uncertainty above).
+
+Everything else — presence/utterance row data, the ``raw_vs_enhanced`` deltas,
+AST/YAMNet/features/PII/ASR, the Label Studio bundle — must be byte-identical.
+So the feature stays **opt-in and zero-impact when off**, and when on it
+perturbs *only* the speaker-related signals it is designed to refine. (Earlier
+this test asserted the profile was *purely additive*; option C intentionally
+lets it move the identity uncertainty, so the guarantee is narrowed to the
+above — the no-profile path is still exactly unchanged.)
 
 This is a slow integration test: it invokes the real ``analyze_audio`` CLI
 twice. It skips the heaviest stages (diarization/ASR/alignment, enhancement) for
@@ -160,18 +172,27 @@ def _norm_summary(path: Path) -> Any:  # noqa: ANN401
     return d
 
 
-def _norm_parquet(path: Path) -> Any:  # noqa: ANN401
+def _norm_parquet(path: Path, *, relax_identity: bool = False) -> Any:  # noqa: ANN401
     import pyarrow.parquet as pq
 
     table = pq.read_table(path).to_pydict()
     # model_votes is a JSON-encoded string column; strip profile additions inside it.
     if "model_votes" in table:
         table["model_votes"] = [json.dumps(_strip(json.loads(s))) if s else s for s in table["model_votes"]]
+    if relax_identity:
+        # Option C: the profile is now a real reference-based identity voter, so a
+        # per-pass identity bucket's aggregated uncertainty (and its contributing
+        # model list) legitimately changes when a profile is supplied. Drop those
+        # profile-affected columns; the rest of the identity parquet (bucket
+        # bounds, comparison_status, intensity_weight, non-profile votes) must
+        # still match byte-for-byte.
+        for col in ("aggregated_uncertainty", "raw_aggregated_uncertainty", "contributing_models"):
+            table.pop(col, None)
     return _strip(table)
 
 
 def test_speaker_profile_is_additive(tmp_path: Path) -> None:
-    """Supplying a profile only adds outputs; all else is byte-identical."""
+    """Supplying a profile changes only speaker-identity/quality outputs; all else byte-identical."""
     assert _CLIP.exists(), f"missing fixture clip {_CLIP}"
     profile_path = tmp_path / "profile.json"
     _make_profile(profile_path)
@@ -192,7 +213,17 @@ def test_speaker_profile_is_additive(tmp_path: Path) -> None:
     # intended single_speaker/quality folds in summary.json) are stripped.
     for rel in sorted(base_files & prof_files):
         if rel.name.endswith(".parquet"):
-            assert _norm_parquet(base / rel) == _norm_parquet(prof / rel), f"parquet differs: {rel}"
+            # Per-pass identity parquet: relax the profile-affected uncertainty
+            # columns (option C — profile is a real identity voter). Every other
+            # parquet (presence, utterance, raw_vs_enhanced/*) must be byte-identical.
+            relax = rel.stem == "identity" and "raw_vs_enhanced" not in rel.parts
+            assert _norm_parquet(base / rel, relax_identity=relax) == _norm_parquet(prof / rel, relax_identity=relax), (
+                f"parquet differs: {rel}"
+            )
+        elif rel.name == "disagreements.json":
+            # Identity-derived ranking: legitimately reorders/reweights when the
+            # profile feeds the identity axis. Not a regression (option C).
+            continue
         elif rel.name == "summary.json":
             assert _norm_summary(base / rel) == _norm_summary(prof / rel), "summary.json differs beyond intended folds"
         elif rel.suffix == ".json":
