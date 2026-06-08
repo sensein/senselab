@@ -183,6 +183,21 @@ def aggregate_identity(
         if cross_val is not None:
             sub_signals.append(float(cross_val))
 
+    # Speaker-profile other-voice consensus, when a profile was supplied (the
+    # ``--speaker-profile`` path injects this per bucket). It is a *reference-based*
+    # voter — "is this window the enrolled subject, or someone else?" — folded
+    # into the same identity uncertainty as the reference-free voters above, so a
+    # non-subject (or wrong-subject) voice raises identity uncertainty rather than
+    # riding a separate side path. Only the fused ``speaker_profile/consensus`` is
+    # read; the per-model ``speaker_profile/<model>`` entries are display-only, so
+    # the consensus is not double-counted. No profile supplied → key absent →
+    # identity uncertainty is exactly as before (the no-profile path is unchanged).
+    prof = votes.get("speaker_profile/consensus")
+    if isinstance(prof, dict):
+        prof_ov = prof.get("other_voice_uncertainty")
+        if prof_ov is not None:
+            sub_signals.append(float(prof_ov))
+
     if raw_vs_enh is not None:
         sub_signals.append(1.0 if raw_vs_enh else 0.0)
 
