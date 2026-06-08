@@ -617,6 +617,7 @@ def _resolve_scoring_profile(
     *,
     embedding_models: list[str],
     device: DeviceType | None,
+    cache_dir: Path | None = None,
 ) -> tuple[dict[str, list[float]], dict[str, tuple[float, float]], bool, str | None]:
     """Return ``(centroids, calibration_band, leave_one_file_out_applied, note)`` for scoring.
 
@@ -673,6 +674,7 @@ def _resolve_scoring_profile(
             device=device,
             profile_window_s=window_s,
             profile_hop_s=hop_s,
+            cache_dir=cache_dir,
         )
         pooled.extend(tagged)
 
@@ -2140,6 +2142,7 @@ def main(argv: list[str] | None = None) -> int:
                 diff_speaker_floor=args.identity_diff_speaker_floor,
                 cluster_cosine_threshold=args.identity_cluster_cosine_threshold,
                 clustering_algorithm=args.clustering_algorithm,
+                cache_dir=cache_dir,
             )
         except Exception as exc:  # noqa: BLE001
             print(f"ERROR: comparator workflow failed: {exc!r}", file=sys.stderr)
@@ -2170,7 +2173,11 @@ def main(argv: list[str] | None = None) -> int:
             )
 
             prof_centroids, prof_band, loo_applied, loo_note = _resolve_scoring_profile(
-                _profile, pass_audio["raw_16k"], embedding_models=speaker_embedding_models, device=device
+                _profile,
+                pass_audio["raw_16k"],
+                embedding_models=speaker_embedding_models,
+                device=device,
+                cache_dir=cache_dir,
             )
             if not (set(prof_centroids) & set(speaker_embedding_models)):
                 print(

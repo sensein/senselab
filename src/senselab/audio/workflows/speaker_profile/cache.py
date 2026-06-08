@@ -51,6 +51,10 @@ _TASK_MODULES: dict[str, tuple[str, ...]] = {
         "senselab.audio.tasks.speaker_embeddings.api",
         "senselab.audio.tasks.speaker_embeddings.speechbrain",
         "senselab.audio.tasks.speaker_embeddings.wavlm",
+        # The per-window extraction / windowing orchestration also determines the
+        # cached result, so a change to it must invalidate the cache (avoids the
+        # under-invalidation risk of hashing only the backend modules).
+        "senselab.audio.workflows.audio_analysis.embeddings",
     ),
     "diarization": ("senselab.audio.tasks.speaker_diarization.api",),
     "classification": ("senselab.audio.tasks.classification.api",),
