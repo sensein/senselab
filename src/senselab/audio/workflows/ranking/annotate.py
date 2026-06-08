@@ -62,9 +62,22 @@ def add_annotation(store: RankingStore, annotation: Annotation) -> None:
 
 
 def add_annotations_batch(store: RankingStore, annotations: list[Annotation]) -> None:
-    """Add several annotations, applying latest-wins per item in order."""
+    """Add several annotations, applying latest-wins per item in order.
+
+    Loads and saves the store once (O(1) disk ops) rather than once per item.
+    """
+    if not annotations:
+        return
+    existing = load_annotations(store)
     for annotation in annotations:
-        add_annotation(store, annotation)
+        if annotation.label is None and annotation.score is None:
+            raise ValueError("annotation must carry at least one of label / score")
+        for a in existing:
+            if a.item_id == annotation.item_id and a.resolution == "active":
+                a.resolution = "superseded"
+        annotation.resolution = "active"
+        existing.append(annotation)
+    _save_annotations(store, annotations[-1].unit, existing)
 
 
 def sample_items(
@@ -97,18 +110,9 @@ def sample_items(
     elif strategy == "disagreement":
         boundaries = [i for i in range(1, total) if scored[i].band != scored[i - 1].band]
         anchors = boundaries or [total // 2]
-        idxs = []
-        a = 0
-        while len(idxs) < n:
-            anchor = anchors[a % len(anchors)]
-            for cand in (anchor, anchor - 1, anchor + 1):
-                if 0 <= cand < total and cand not in idxs:
-                    idxs.append(cand)
-                    break
-            a += 1
-            if a > total * 2:
-                break
-        idxs = sorted(set(idxs))[:n]
+        # rank every index by distance to its nearest band boundary, take the n closest
+        order = sorted(range(total), key=lambda i: min(abs(i - anchor) for anchor in anchors))
+        idxs = sorted(order[:n])
     else:
         raise ValueError(f"unknown sampling strategy {strategy!r}")
 

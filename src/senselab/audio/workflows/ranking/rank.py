@@ -131,8 +131,13 @@ def rank_corpus(
         created_at=created_at,
         recal=recal,
     )
-    store.write_metric_version(version, unit=table.unit)
+    # Fail fast on immutability before writing any artifact, then write the ranking
+    # parquet BEFORE recording the version, so a crash between writes leaves at worst
+    # an orphan parquet (not a manifest entry pointing at a missing ranking).
+    if store.version_path(version_id).exists():
+        raise FileExistsError(f"metric version {version_id} already exists (immutable)")
     io.write_ranking(store.ranking_path(version_id), ranking)
+    store.write_metric_version(version, unit=table.unit)
     return ranking
 
 

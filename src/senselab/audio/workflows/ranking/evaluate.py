@@ -35,8 +35,8 @@ def _spearman_kendall(goodness: np.ndarray, quality: np.ndarray) -> tuple[float 
     try:
         from scipy.stats import kendalltau, spearmanr
 
-        rho = float(spearmanr(goodness, quality).statistic)
-        tau = float(kendalltau(goodness, quality).statistic)
+        rho = float(spearmanr(goodness, quality)[0])  # [0] is the statistic across all SciPy versions
+        tau = float(kendalltau(goodness, quality)[0])
         return (rho if not np.isnan(rho) else None, tau if not np.isnan(tau) else None)
     except ImportError:
         gr = np.argsort(np.argsort(goodness)).astype(float)

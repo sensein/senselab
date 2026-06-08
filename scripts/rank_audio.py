@@ -42,6 +42,15 @@ def _emit(obj: object, as_json: bool) -> None:
         print(json.dumps(obj, default=str, indent=2))
 
 
+def _load_ranking(store: RankingStore, version: str):  # noqa: ANN201
+    """Read a ranking, or exit(2) with a clean message if the version is missing/unreadable."""
+    try:
+        return io.read_ranking(store.ranking_path(version))
+    except (FileNotFoundError, io.RankingSchemaError, OSError) as exc:
+        print(f"error: cannot read ranking for version {version!r}: {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
+
+
 def cmd_rank(args: argparse.Namespace) -> int:
     """Score + rank a corpus, creating a new metric version."""
     store = RankingStore(args.store)
@@ -64,7 +73,7 @@ def cmd_rank(args: argparse.Namespace) -> int:
 def cmd_evaluate(args: argparse.Namespace) -> int:
     """Report rank-agreement + band separation for a version."""
     store = RankingStore(args.store)
-    ranking = io.read_ranking(store.ranking_path(args.version))
+    ranking = _load_ranking(store, args.version)
     result = evaluate.evaluate_ranking(
         ranking, annotate.load_active_annotations(store), separation_target=args.separation_target
     )
@@ -83,7 +92,7 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
 def cmd_sample(args: argparse.Namespace) -> int:
     """Select items to spot-check."""
     store = RankingStore(args.store)
-    ranking = io.read_ranking(store.ranking_path(args.version))
+    ranking = _load_ranking(store, args.version)
     ids = annotate.sample_items(ranking, args.n, strategy=args.strategy, threshold_rank=args.threshold)
     for iid in ids:
         print(iid)
@@ -116,7 +125,7 @@ def cmd_update_metric(args: argparse.Namespace) -> int:
         defn = _load_definition(Path(args.metric))
         ranking = rank.update_metric_manual(store, args.signals, defn, created_at=_now(),
                                              band_fraction=args.band_fraction)
-    except (MetricError, ValueError) as exc:
+    except (MetricError, FileExistsError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     print(f"version={ranking.version_id} (manual) scored={ranking.n_scored}")
@@ -138,11 +147,15 @@ def cmd_recalibrate(args: argparse.Namespace) -> int:
         return 4
     if args.accept:
         versions = store.list_versions()
-        ranking = rank.rank_corpus(
-            store, args.signals, result.proposed_definition, created_at=_now(),
-            band_fraction=args.band_fraction, origin="recalibrated",
-            parent_version_id=versions[-1] if versions else None, recal=result,
-        )
+        try:
+            ranking = rank.rank_corpus(
+                store, args.signals, result.proposed_definition, created_at=_now(),
+                band_fraction=args.band_fraction, origin="recalibrated",
+                parent_version_id=versions[-1] if versions else None, recal=result,
+            )
+        except (MetricError, FileExistsError, ValueError) as exc:
+            print(f"error: could not write recalibrated version: {exc}", file=sys.stderr)
+            return 2
         print(f"accepted → version={ranking.version_id} (recalibrated)")
     return 0
 
@@ -150,7 +163,7 @@ def cmd_recalibrate(args: argparse.Namespace) -> int:
 def cmd_threshold(args: argparse.Namespace) -> int:
     """Triage cut readout (auto-accept vs human-review)."""
     store = RankingStore(args.store)
-    ranking = io.read_ranking(store.ranking_path(args.version))
+    ranking = _load_ranking(store, args.version)
     if args.at_rank is not None:
         result = apply_triage_threshold(ranking, annotate.load_active_annotations(store),
                                         cut=args.at_rank, cut_kind="rank")
@@ -169,8 +182,8 @@ def cmd_threshold(args: argparse.Namespace) -> int:
 def cmd_movement(args: argparse.Namespace) -> int:
     """Compare two versions and write a movement report."""
     store = RankingStore(args.store)
-    from_r = io.read_ranking(store.ranking_path(getattr(args, "from")))
-    to_r = io.read_ranking(store.ranking_path(args.to))
+    from_r = _load_ranking(store, getattr(args, "from"))
+    to_r = _load_ranking(store, args.to)
     try:
         report = movement.compute_movement(from_r, to_r, annotate.load_active_annotations(store))
     except ValueError as exc:

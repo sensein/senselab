@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
+import numpy as np
+
 from senselab.audio.workflows.ranking import io, recalibrate
 from senselab.audio.workflows.ranking.types import Annotation, MetricDefinition, SignalTerm
 
@@ -58,3 +60,14 @@ def test_refuse_single_quality_level(make_signal_table: Callable[..., Path]) -> 
     result = recalibrate.propose_recalibration(table, base, anns)
     assert result.status == "refused"
     assert "distinct quality levels" in result.message
+
+
+def test_feature_matrix_distinguishes_duplicate_signal_terms(make_signal_table: Callable[..., Path]) -> None:
+    """Two terms on the same signal (different transforms) must produce distinct feature columns."""
+    table = io.load_signal_table(make_signal_table({"s": [0.0, 5.0, 10.0]}))
+    defn = MetricDefinition(
+        name="m", terms=[SignalTerm("s", 1.0, transform="identity"), SignalTerm("s", 1.0, transform="minmax")]
+    )
+    feats = recalibrate._feature_matrix(table, defn)
+    assert len(feats) == 2  # one column per TERM, not per signal
+    assert not np.allclose(feats[0], feats[1])  # identity != minmax

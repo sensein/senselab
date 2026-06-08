@@ -73,3 +73,23 @@ def test_sample_near_threshold(aligned_signals: Path) -> None:
     ids = annotate.sample_items(ranking, 3, strategy="near-threshold", threshold_rank=10)
     ranks = {it.item_id: it.rank for it in ranking.items}
     assert all(abs((ranks[i] or 0) - 10) <= 2 for i in ids)
+
+
+def test_disagreement_returns_requested_n(aligned_signals: Path) -> None:
+    """Disagreement sampling must return the requested count, not terminate early."""
+    ranking = _aligned_ranking(aligned_signals)  # 20 items
+    ids = annotate.sample_items(ranking, 12, strategy="disagreement")
+    assert len(ids) == 12
+    assert len(set(ids)) == 12
+
+
+def test_batch_matches_sequential(store: RankingStore) -> None:
+    """Batch add yields the same active set as sequential adds (latest-wins within batch)."""
+    annotate.add_annotations_batch(
+        store,
+        [_ann("x", "poor", "t0"), _ann("y", "good", "t0"), _ann("x", "good", "t1")],
+    )
+    active = {a.item_id: a.label for a in annotate.load_active_annotations(store)}
+    assert active == {"x": "good", "y": "good"}
+    # history retained: x has a superseded entry
+    assert sum(a.resolution == "superseded" for a in annotate.load_annotations(store)) == 1

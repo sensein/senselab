@@ -6,10 +6,11 @@ import math
 from collections.abc import Callable
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from senselab.audio.workflows.ranking import io
-from senselab.audio.workflows.ranking.metric import MetricError, score_items
+from senselab.audio.workflows.ranking.metric import MetricError, _apply_transform, score_items
 from senselab.audio.workflows.ranking.types import Direction, MetricDefinition, SignalTerm
 
 
@@ -76,3 +77,22 @@ def test_empty_terms_rejected(make_signal_table: Callable[..., Path]) -> None:
     table = io.load_signal_table(path)
     with pytest.raises(MetricError):
         score_items(table, _defn([]))
+
+
+def test_minmax_preserves_nan_at_zero_span() -> None:
+    """Minmax with all-equal observed values (span 0) must keep NaN as NaN, not 0.0."""
+    out = _apply_transform(np.array([5.0, 5.0, math.nan]), "minmax", {})
+    assert math.isnan(out[2])  # missing value stays missing
+    assert out[0] == 0.0 and out[1] == 0.0
+
+
+def test_fill_does_not_pollute_transform_stats(make_signal_table: Callable[..., Path]) -> None:
+    """A fill: value must not enter the transform's fitted stats (observed = [10, 20])."""
+    path = make_signal_table({"s": [10.0, 20.0, math.nan]}, item_ids=["a", "b", "c"])
+    table = io.load_signal_table(path)
+    items = score_items(table, _defn([SignalTerm("s", 1.0, transform="minmax", missing="fill:0.0")]))
+    score = {it.item_id: it.score for it in items}
+    # minmax fit on observed [10, 20]: a→0.0, b→1.0; the fill 0.0 maps to (0-10)/10 = -1.0
+    assert score["a"] == pytest.approx(0.0)
+    assert score["b"] == pytest.approx(1.0)
+    assert score["c"] == pytest.approx(-1.0)
