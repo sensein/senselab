@@ -61,7 +61,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--cache-dir",
         type=Path,
         default=Path("artifacts/analyze_audio_cache"),
-        help="Shared content-addressable cache. Reserved for cross-stage reuse with analyze_audio.",
+        help=(
+            "Shared content-addressable cache. Per-window embeddings are cached here so a later "
+            "analyze_audio run with the same --cache-dir reuses them (cross-stage / re-run; FR-015)."
+        ),
     )
     parser.add_argument("--no-cache", action="store_true", help="Disable cache lookup/store.")
     parser.add_argument("--device", choices=["cpu", "cuda", "mps", "auto"], default="auto")
@@ -152,8 +155,9 @@ def main(argv: list[str] | None = None) -> int:
         # into minority clusters and are excluded) rather than an up-front gate.
         # The richer presence gate engages automatically when a profile is built
         # from cached ``analyze_audio`` passes that already carry these blocks in
-        # ``pass_summary`` (and would become cheap once cross-stage cache reuse
-        # is wired — currently deferred).
+        # ``pass_summary``. (Embedding compute is reused across stages via
+        # --cache-dir; the presence-gating inputs themselves are not produced by
+        # this standalone CLI.)
         inputs.append(ProfileInput(audio=audio, file_id=str(path), session_id=session, pass_summary={}))
 
     if not inputs:
@@ -172,6 +176,7 @@ def main(argv: list[str] | None = None) -> int:
         prefer_session=args.prefer_session,
         device=device,
         output=args.output,
+        cache_dir=None if args.no_cache else args.cache_dir,
     )
 
     kept = sum(1 for s in profile.sources if s.kept)

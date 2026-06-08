@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -49,6 +50,26 @@ class WindowEmbedding:
     start_s: float
     end_s: float
     vector: np.ndarray
+
+
+def _serialize_windows(entries: list[WindowEmbedding]) -> dict[str, Any]:
+    """JSON-able payload for one model's window list (for the content cache).
+
+    Vectors are float32; ``tolist()`` emits the exact float64 representations,
+    which round-trip back to the identical float32 on load — so a cached result
+    equals a freshly-computed one bit-for-bit.
+    """
+    return {"windows": [[w.start_s, w.end_s, w.vector.tolist()] for w in entries]}
+
+
+def _deserialize_windows(payload: dict[str, Any]) -> list[WindowEmbedding]:
+    """Rebuild a model's window list from :func:`_serialize_windows` output."""
+    out: list[WindowEmbedding] = []
+    for start_s, end_s, vec in payload.get("windows", []):
+        out.append(
+            WindowEmbedding(start_s=float(start_s), end_s=float(end_s), vector=np.asarray(vec, dtype=np.float32))
+        )
+    return out
 
 
 def _slice_audio(audio: Audio, start_s: float, end_s: float) -> Audio:
@@ -113,6 +134,7 @@ def extract_per_window_embeddings(
     hop_s: float = 0.5,
     device: DeviceType | None = None,
     failures: dict[str, str] | None = None,
+    cache_dir: Path | None = None,
 ) -> dict[str, list[WindowEmbedding]]:
     """Run each embedding model on every fixed window of ``audio``.
 
@@ -126,6 +148,11 @@ def extract_per_window_embeddings(
             ``{model_id → reason}`` for any model that produced an empty result.
             The caller can fold these into ``incomparable_reasons`` so silent
             empty-vote behavior is auditable.
+        cache_dir: Optional content-addressable cache directory. When given,
+            each model's window list is cached per (audio signature, model,
+            window/hop) with a caller-agnostic key, so build_speaker_profile and
+            analyze_audio (and re-runs) reuse embeddings instead of recomputing
+            them on the GPU (FR-015). ``None`` disables caching (default).
 
     Returns:
         ``{model_id → [WindowEmbedding, ...]}``. Each list shares the same window
@@ -160,8 +187,32 @@ def extract_per_window_embeddings(
         audio_slices.append(_slice_audio(audio, s, e))
         spans.append((s, e))
 
+    # Optional content-addressable cache (FR-015): per (audio, model, grid). The
+    # key is caller-agnostic (cache.py task hash), so build_speaker_profile and
+    # analyze_audio — and re-runs — reuse each other's embeddings instead of
+    # re-running the GPU models. ``cache_dir=None`` → no caching (unchanged).
+    _cache: Any = None
+    audio_sig: str | None = None
+    if cache_dir is not None:
+        from senselab.audio.workflows.speaker_profile import cache as _cache  # lazy: avoid layering cycle
+
+        audio_sig = _cache.audio_signature(audio)
+
+    def _key(model_id: str) -> str:
+        return _cache.cache_key(
+            audio_sig=audio_sig,
+            task="speaker_embeddings",
+            model_id=model_id,
+            params={"window_s": window_s, "hop_s": hop_s},
+        )
+
     out: dict[str, list[WindowEmbedding]] = {}
     for model_id in models:
+        if _cache is not None:
+            hit = _cache.cache_lookup(cache_dir, _key(model_id))
+            if hit is not None:
+                out[model_id] = _deserialize_windows(hit)
+                continue
         try:
             model_handle = _embedding_model_handle(model_id)
             tensors = extract_speaker_embeddings_from_audios(audios=audio_slices, model=model_handle, device=device)
@@ -170,6 +221,10 @@ def extract_per_window_embeddings(
                 vec = _flatten_to_1d(t)
                 entries.append(WindowEmbedding(start_s=start_s, end_s=end_s, vector=vec))
             out[model_id] = entries
+            # Cache only successful extractions, so a transient model-load failure
+            # is retried rather than cached as an empty result.
+            if _cache is not None:
+                _cache.cache_store(cache_dir, _key(model_id), _serialize_windows(entries))
         except Exception as exc:  # noqa: BLE001
             # Surface per-model failure to the caller via stderr so the user can
             # tell "model crashed" from "audio too short" — both produce an empty

@@ -81,6 +81,7 @@ def extract_speech_windows_for_file(
     profile_hop_s: float = C.PROFILE_HOP_S,
     speech_presence_labels: Sequence[str] = DEFAULT_SPEECH_PRESENCE_LABELS,
     failures: dict[str, str] | None = None,
+    cache_dir: Path | None = None,
 ) -> tuple[list[TaggedWindowEmbedding], dict[str, Any]]:
     """Locate speech windows in one file and embed each per model.
 
@@ -112,6 +113,10 @@ def extract_speech_windows_for_file(
         speech_presence_labels: AudioSet labels the gate treats as speech.
         failures: Optional dict to populate with per-model load/embed failure
             reasons (mirrors the existing audio_analysis ``failures`` pattern).
+        cache_dir: Optional content-addressable cache dir threaded to
+            ``extract_per_window_embeddings`` so this file's embeddings are
+            reused across the build and analyze stages instead of recomputed
+            on the GPU (FR-015).
 
     Returns:
         ``(tagged_windows, info)`` where ``tagged_windows`` is the flat list of
@@ -148,6 +153,7 @@ def extract_speech_windows_for_file(
         hop_s=profile_hop_s,
         device=device,
         failures=failures,
+        cache_dir=cache_dir,
     )
     if not per_model_windows or not any(per_model_windows.values()):
         info["drop_reason"] = "no_embedding_windows"
@@ -641,6 +647,7 @@ def build_speaker_profile(
     prefer_session: str | None = None,
     device: DeviceType | None = None,
     output: Path | None = None,
+    cache_dir: Path | None = None,
 ) -> SpeakerProfile:
     """Build exactly one contamination-tolerant profile for ``subject_id``.
 
@@ -675,6 +682,7 @@ def build_speaker_profile(
                 profile_window_s=profile_window_s,
                 profile_hop_s=profile_hop_s,
                 failures=failures,
+                cache_dir=cache_dir,
             )
         except Exception as exc:  # noqa: BLE001 — one file's failure must not abort the whole build
             # Honor the non-fatal contract: record the failure + a drop reason
