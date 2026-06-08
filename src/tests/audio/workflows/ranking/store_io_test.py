@@ -67,3 +67,11 @@ def test_unscorable_reported_not_dropped(store: RankingStore, make_signal_table:
     loaded = io.read_ranking(store.ranking_path("v1"))
     assert len(loaded.items) == 4
     assert loaded.n_unscorable == 1
+
+
+def test_next_version_id_monotonic_after_as_version(store: RankingStore, aligned_signals: Path) -> None:
+    """next_version_id must follow the max existing id, not the count (avoids collision)."""
+    rank_corpus(store, aligned_signals, _defn(), created_at="t0", as_version="v5")
+    nxt = store.next_version_id()
+    assert nxt not in store.list_versions()
+    assert nxt == "v6"

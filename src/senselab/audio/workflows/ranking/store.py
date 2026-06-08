@@ -96,9 +96,17 @@ class RankingStore:
         return self._manifest().get("unit")
 
     def next_version_id(self) -> str:
-        """Return the next monotonic version id (``v1``, ``v2`` …)."""
-        existing = self.list_versions()
-        return f"v{len(existing) + 1}"
+        """Return the next monotonic version id (one past the max ``vN`` present).
+
+        Derived from the highest numeric suffix, not the count, so a prior
+        out-of-sequence ``as_version`` (e.g. ``v5``) cannot cause a later
+        collision.
+        """
+        max_n = 0
+        for vid in self.list_versions():
+            if vid.startswith("v") and vid[1:].isdigit():
+                max_n = max(max_n, int(vid[1:]))
+        return f"v{max_n + 1}"
 
     # ── metric versions ──────────────────────────────────────────────────--
 

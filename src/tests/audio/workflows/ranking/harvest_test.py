@@ -30,4 +30,13 @@ def test_harvest_pivots_axes_to_signal_table(tmp_path: Path) -> None:
     assert table.unit == "segment"
     assert set(table.signal_columns) == {"presence_unc", "identity_unc"}
     assert len(table.item_ids) == 2
-    assert table.item_ids[0] == "rec1#0.00-1.00"
+    assert table.item_ids[0] == "rec1#0.000-1.000"
+
+
+def test_close_segments_do_not_collide(tmp_path: Path) -> None:
+    """Sub-10ms-apart segments must yield distinct, loadable item_ids (no duplicate id)."""
+    a = _axis_parquet(tmp_path / "a.parquet", [1.001, 1.004], [2.0, 2.0], [0.1, 0.2])
+    out = harvest_from_axis_parquets({"unc": a}, source_audio="rec1", out=tmp_path / "sig.parquet")
+    table = io.load_signal_table(out)  # raises if duplicate item_id
+    assert len(table.item_ids) == 2
+    assert len(set(table.item_ids)) == 2

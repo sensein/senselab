@@ -20,7 +20,7 @@ import pyarrow.parquet as pq
 
 
 def _segment_id(source_audio: str, start: float, end: float) -> str:
-    return f"{source_audio}#{start:.2f}-{end:.2f}"
+    return f"{source_audio}#{start:.3f}-{end:.3f}"
 
 
 def harvest_from_axis_parquets(
@@ -45,7 +45,9 @@ def harvest_from_axis_parquets(
         vals = table.column("aggregated_uncertainty").to_pylist()
         bucket: dict[tuple[float, float], float] = {}
         for s, e, v in zip(starts, ends, vals, strict=True):
-            key = (float(s), float(e))
+            # round the key to ms so it matches _segment_id's :.3f formatting exactly
+            # (distinct rounded keys → distinct item_ids; sub-ms segments merge deterministically)
+            key = (round(float(s), 3), round(float(e), 3))
             if key not in seg_index:
                 seg_index[key] = len(seg_keys)
                 seg_keys.append(key)

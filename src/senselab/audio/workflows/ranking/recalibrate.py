@@ -36,12 +36,16 @@ def _quality(annotation: Annotation) -> float | None:
     return None
 
 
-def _feature_matrix(table: SignalTable, defn: MetricDefinition) -> dict[str, np.ndarray]:
-    """Transformed feature column per term signal (NaN where the signal is missing)."""
-    feats: dict[str, np.ndarray] = {}
+def _feature_matrix(table: SignalTable, defn: MetricDefinition) -> list[np.ndarray]:
+    """One transformed feature column per TERM (NaN where the signal is missing).
+
+    Keyed by term index, not signal name, so two terms on the same signal (e.g.
+    different transforms) remain distinct columns rather than collapsing.
+    """
+    feats: list[np.ndarray] = []
     for term in defn.terms:
         raw = np.asarray(table.columns[term.signal], dtype=float)
-        feats[term.signal] = metric._apply_transform(raw, term.transform, term.transform_params)
+        feats.append(metric._apply_transform(raw, term.transform, term.transform_params))
     return feats
 
 
@@ -51,7 +55,7 @@ def _spearman(a: np.ndarray, b: np.ndarray) -> float | None:
     try:
         from scipy.stats import spearmanr
 
-        rho = float(spearmanr(a, b).statistic)
+        rho = float(spearmanr(a, b)[0])  # [0] is the statistic across all SciPy versions
     except ImportError:
         rho = float(np.corrcoef(np.argsort(np.argsort(a)), np.argsort(np.argsort(b)))[0, 1])
     return None if np.isnan(rho) else rho
@@ -68,7 +72,7 @@ def propose_recalibration(
     active = [a for a in annotations if a.resolution == "active" and a.item_id in index]
 
     feats = _feature_matrix(table, base_definition)
-    signals = [t.signal for t in base_definition.terms]
+    n_terms = len(base_definition.terms)
 
     rows: list[list[float]] = []
     quals: list[float] = []
@@ -77,7 +81,7 @@ def propose_recalibration(
         if q is None:
             continue
         i = index[a.item_id]
-        vec = [float(feats[s][i]) for s in signals]
+        vec = [float(feats[k][i]) for k in range(n_terms)]
         if any(np.isnan(v) for v in vec):
             continue  # missing signal → not usable as a clean training point
         rows.append(vec)

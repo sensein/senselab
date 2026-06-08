@@ -34,9 +34,19 @@ def _parse_missing(policy: str) -> tuple[str, float | None]:
     raise MetricError(f"unknown missing policy {policy!r}")
 
 
-def _apply_transform(values: np.ndarray, transform: str, params: dict) -> np.ndarray:
-    """Apply a per-signal transform over a column (NaNs preserved as NaN)."""
-    observed = values[~np.isnan(values)]
+def _apply_transform(
+    values: np.ndarray, transform: str, params: dict, fit_values: np.ndarray | None = None
+) -> np.ndarray:
+    """Apply a per-signal transform over a column (NaNs preserved as NaN).
+
+    Stat-fitting transforms (``zscore``/``minmax``/``rank``) fit on ``fit_values``
+    when provided (the observed, pre-fill values), else on the non-NaN entries of
+    ``values``. This keeps a ``fill:`` substitution from polluting the fitted stats.
+    """
+    if fit_values is None:
+        observed = values[~np.isnan(values)]
+    else:
+        observed = fit_values[~np.isnan(fit_values)]
     if transform == "identity":
         return values
     if transform == "zscore":
@@ -49,13 +59,22 @@ def _apply_transform(values: np.ndarray, transform: str, params: dict) -> np.nda
         lo = float(params.get("min", observed.min())) if observed.size else 0.0
         hi = float(params.get("max", observed.max())) if observed.size else 1.0
         span = hi - lo
-        return (values - lo) / span if span > 0 else np.zeros_like(values)
+        if span > 0:
+            return (values - lo) / span
+        out = np.zeros_like(values)
+        out[np.isnan(values)] = np.nan  # preserve missing values
+        return out
     if transform == "rank":
         out = np.full_like(values, np.nan)
-        if observed.size:
-            order = np.argsort(np.argsort(observed))
-            ranks = order / max(observed.size - 1, 1)
-            out[~np.isnan(values)] = ranks
+        mask = ~np.isnan(values)
+        if fit_values is None:
+            obs = values[mask]
+            if obs.size:
+                out[mask] = np.argsort(np.argsort(obs)) / max(obs.size - 1, 1)
+        elif observed.size:
+            # rank each value against the observed (pre-fill) distribution
+            sorted_obs = np.sort(observed)
+            out[mask] = np.searchsorted(sorted_obs, values[mask], side="left") / max(observed.size - 1, 1)
         return out
     if transform == "clip":
         lo = float(params.get("min", -np.inf))
@@ -101,10 +120,12 @@ def score_items(table: SignalTable, defn: MetricDefinition) -> list[RankingItem]
         raw = np.array(table.columns[term.signal], dtype=float)
         missing_mask = np.isnan(raw)
 
+        fit_values: np.ndarray | None = None
         if kind == "fill" and fill is not None:
+            fit_values = raw[~missing_mask]  # fit transform on observed values, not the fill
             raw = np.where(missing_mask, fill, raw)
 
-        transformed = _apply_transform(raw, term.transform, term.transform_params)
+        transformed = _apply_transform(raw, term.transform, term.transform_params, fit_values=fit_values)
         contribution = term.weight * transformed
 
         for i in range(n):
