@@ -34,7 +34,7 @@ from senselab.audio.workflows.audio_analysis.embeddings import (
 )
 from senselab.audio.workflows.audio_analysis.presence import (
     DEFAULT_SPEECH_PRESENCE_LABELS,
-    speech_window_mask_for_file,
+    reference_grid_and_speech_mask,
 )
 from senselab.audio.workflows.speaker_profile import constants as C
 from senselab.audio.workflows.speaker_profile.cache import audio_signature, senselab_version
@@ -153,13 +153,12 @@ def extract_speech_windows_for_file(
         info["drop_reason"] = "no_embedding_windows"
         return [], info
 
-    # Use the first model's window grid for the speech mask (they share the
-    # same grid by construction in extract_per_window_embeddings).
-    reference_windows: list[WindowEmbedding] = next((w for w in per_model_windows.values() if w), [])
-    mask: list[bool] | None = speech_window_mask_for_file(
-        entries=reference_windows,
+    # Pick the reference grid + compute the speech mask via the shared helper
+    # (same code path the analyze_audio identity-axis clustering uses, FR-002).
+    reference_windows, mask = reference_grid_and_speech_mask(
+        per_model_windows,
         pass_summary=pass_summary,
-        speech_presence_labels=list(speech_presence_labels),
+        speech_presence_labels=speech_presence_labels,
     )
     # ``None`` → no AST/YAMNet/loudness available; keep every window (legacy
     # behavior matches what cluster_pass_speakers does without a mask).
