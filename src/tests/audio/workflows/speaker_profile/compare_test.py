@@ -167,6 +167,22 @@ def test_low_presence_windows_are_unavailable_not_other_voice() -> None:
     assert all(r.flag == "target" for r in results[:4])
 
 
+def test_diar_overlap_corroborator_raises_other_voice() -> None:
+    """A diar-overlap window flips target→other_voice even when the profile reads it as target."""
+    rng = np.random.default_rng(7)
+    t = _basis(0)
+    # All windows sit on the centroid → all 'target' absent any overlap signal.
+    detection = {_MODEL: _grid(rng, [t] * 6)}
+    overlap = [False, False, True, True, False, False]
+    results = compare_recording_to_profile(
+        detection, {_MODEL: list(t)}, {_MODEL: _BAND}, diar_overlap_by_window=overlap
+    )
+    assert [r.flag for r in results] == ["target", "target", "other_voice", "other_voice", "target", "target"]
+    # Overlap windows are raised to the default floor (1.0); non-overlap untouched.
+    assert all(r.other_voice_uncertainty == 1.0 for r in results[2:4])
+    assert all(r.flag == "target" for r in (results[0], results[1], results[4], results[5]))
+
+
 def test_fixed_threshold_override_changes_flags() -> None:
     """A stricter fixed cutoff flags more windows; a lax one flags fewer."""
     rng = np.random.default_rng(5)

@@ -24,7 +24,7 @@ from typing import Any, TypeVar
 
 import numpy as np
 
-from senselab.audio.workflows.audio_analysis.embeddings import WindowEmbedding
+from senselab.audio.workflows.audio_analysis.embeddings import WindowEmbedding, cos_sim
 
 K = TypeVar("K")
 
@@ -70,17 +70,6 @@ def _mean_window_embedding_over_segments(
     if not accum:
         return None
     return np.stack(accum, axis=0).mean(axis=0)
-
-
-def _cos_sim(a: np.ndarray, b: np.ndarray) -> float | None:
-    """Cosine similarity between two equal-length 1-D arrays. None on bad input."""
-    if a.size == 0 or b.size == 0 or a.size != b.size:
-        return None
-    na = float(np.linalg.norm(a))
-    nb = float(np.linalg.norm(b))
-    if na == 0 or nb == 0:
-        return None
-    return float(np.dot(a, b) / (na * nb))
 
 
 def assign_unified_clusters_with_seed_phase(
@@ -156,7 +145,7 @@ def assign_unified_clusters_with_seed_phase(
             best_idx = None
             best_sim = cross_group_threshold
             for ci in range(existing_count):
-                sim = _cos_sim(mean_emb, centroids[ci])
+                sim = cos_sim(mean_emb, centroids[ci])
                 if sim is not None and sim >= best_sim:
                     best_sim = sim
                     best_idx = ci
@@ -182,7 +171,7 @@ def assign_unified_clusters_with_seed_phase(
         # get reasonable behavior.
         best_sim = -1.0 if seed_phase_done else cosine_threshold
         for ci, c in enumerate(centroids):
-            sim = _cos_sim(mean_emb, c)
+            sim = cos_sim(mean_emb, c)
             if sim is not None and sim >= best_sim:
                 best_sim = sim
                 best_idx = ci

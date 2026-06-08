@@ -27,6 +27,7 @@ import numpy as np
 from senselab.audio.workflows.audio_analysis.embeddings import (
     WindowEmbedding,
     calibrate_cosine_uncertainty,
+    cos_dist,
 )
 from senselab.audio.workflows.speaker_profile import constants as C
 from senselab.audio.workflows.speaker_profile.build import (
@@ -40,20 +41,6 @@ from senselab.audio.workflows.speaker_profile.types import (
     RecordingOtherVoiceSummary,
     RecordingQualityIndicator,
 )
-
-
-def _cosine_distance(a: np.ndarray, b: np.ndarray) -> float | None:
-    """``1 - cos_sim`` between two 1-D vectors, or ``None`` on degenerate input."""
-    av = np.asarray(a, dtype=np.float64).flatten()
-    bv = np.asarray(b, dtype=np.float64).flatten()
-    if av.size == 0 or bv.size == 0 or av.size != bv.size:
-        return None
-    na = float(np.linalg.norm(av))
-    nb = float(np.linalg.norm(bv))
-    if na <= 0 or nb <= 0:
-        return None
-    cos_sim = float(np.dot(av, bv) / (na * nb))
-    return 1.0 - cos_sim
 
 
 def score_window(
@@ -91,14 +78,14 @@ def score_window(
         vec = window_vectors.get(model_id)
         if vec is None:
             continue
-        cos_dist = _cosine_distance(vec, np.asarray(centroid, dtype=np.float64))
-        if cos_dist is None:
+        cdist = cos_dist(vec, np.asarray(centroid, dtype=np.float64))
+        if cdist is None:
             continue
         same_floor, diff_floor = calibration_band.get(
             model_id, (C.SAME_SPEAKER_FLOOR_FALLBACK, C.DIFF_SPEAKER_FLOOR_FALLBACK)
         )
         per_model[model_id] = calibrate_cosine_uncertainty(
-            cos_dist, same_speaker_floor=same_floor, diff_speaker_floor=diff_floor, direction="same"
+            cdist, same_speaker_floor=same_floor, diff_speaker_floor=diff_floor, direction="same"
         )
 
     if not per_model:
@@ -121,8 +108,11 @@ def compare_recording_to_profile(
     calibration_band: Mapping[str, tuple[float, float]],
     *,
     p_voice_by_window: Sequence[float | None] | None = None,
+    voice_present_by_window: Sequence[bool] | None = None,
+    diar_overlap_by_window: Sequence[bool] | None = None,
     other_voice_threshold: float | None = C.OTHER_VOICE_THRESHOLD_DEFAULT,
     min_p_voice: float = C.MIN_P_VOICE_FOR_COMPARISON,
+    diar_overlap_floor: float = C.DIAR_OVERLAP_OTHER_VOICE_FLOOR,
     fusion_weights: Mapping[str, float] | None = C.CONSENSUS_FUSION_WEIGHTS_DEFAULT,
 ) -> list[ProfileComparisonResult]:
     """Score every detection window of a recording against the profile.
@@ -138,11 +128,28 @@ def compare_recording_to_profile(
             profile, used to calibrate each model's uncertainty.
         p_voice_by_window: Optional reused presence value per window index. A
             window below ``min_p_voice`` is scored ``unavailable`` (never
-            flagged). ``None`` disables gating (everything is scored).
+            flagged). ``None`` disables this gate.
+        diar_overlap_by_window: Optional per-window mask flagging windows where
+            diarization sees 2+ distinct speakers active (overlapping speech).
+            On such a window a non-subject voice is present by definition, but the
+            profile distance is unreliable (mixed-speaker embedding), so the
+            consensus other-voice uncertainty is raised to at least
+            ``diar_overlap_floor`` (``max(profile_value, floor)``) — a
+            reference-free corroborator, applied only to already-scored windows.
+        voice_present_by_window: Optional scene-derived per-window voice mask
+            (speech / babble / conversation present, foreground OR background).
+            When supplied it is the **authoritative** gate — a window with
+            ``False`` is ``unavailable`` — so background/secondary voice is
+            scored while cough/breath/silence are excluded; ``p_voice`` is then
+            recorded for info but not used to gate. When ``None``, the
+            ``p_voice`` gate above applies (legacy behavior). Both ``None`` →
+            everything is scored.
         other_voice_threshold: Calibrated-uncertainty cutoff for the
             ``other_voice`` flag; ``None`` uses the adaptive
             ``OTHER_VOICE_CALIBRATED_CUTOFF``.
         min_p_voice: Presence gate threshold.
+        diar_overlap_floor: Floor the consensus other-voice uncertainty is raised
+            to on a ``diar_overlap_by_window`` window.
         fusion_weights: Optional per-model consensus weights.
 
     Returns:
@@ -166,8 +173,18 @@ def compare_recording_to_profile(
         if p_voice_by_window is not None and i < len(p_voice_by_window):
             p_voice = p_voice_by_window[i]
 
-        # Speech-presence gate fails → unavailable, never flagged.
-        if p_voice is not None and p_voice < min_p_voice:
+        voice_present: bool | None = None
+        if voice_present_by_window is not None and i < len(voice_present_by_window):
+            voice_present = bool(voice_present_by_window[i])
+
+        # Presence gate → unavailable, never flagged. The scene-derived voice
+        # mask is authoritative when supplied (recall: catch background/secondary
+        # voice, exclude cough/breath); otherwise fall back to the p_voice gate.
+        if voice_present is not None:
+            gated_out = not voice_present
+        else:
+            gated_out = p_voice is not None and p_voice < min_p_voice
+        if gated_out:
             results.append(
                 ProfileComparisonResult(
                     start=float(ref_w.start_s),
@@ -175,7 +192,7 @@ def compare_recording_to_profile(
                     similarity=None,
                     other_voice_uncertainty=None,
                     flag="unavailable",
-                    p_voice=float(p_voice),
+                    p_voice=float(p_voice) if p_voice is not None else None,
                     per_model={},
                 )
             )
@@ -189,6 +206,20 @@ def compare_recording_to_profile(
         similarity, uncertainty, per_model = score_window(
             window_vectors, centroids, calibration_band, fusion_weights=fusion_weights
         )
+
+        # Diarization-overlap corroborator: 2+ speakers active in this window ⇒ a
+        # non-subject voice is present even if the profile (unreliable on a
+        # mixed-speaker embedding) read it as the target. Raise the consensus
+        # uncertainty to at least the floor. Applied only to already-scored
+        # windows (does not fabricate a flag where the profile couldn't score).
+        if (
+            uncertainty is not None
+            and diar_overlap_by_window is not None
+            and i < len(diar_overlap_by_window)
+            and diar_overlap_by_window[i]
+        ):
+            uncertainty = max(uncertainty, diar_overlap_floor)
+            similarity = 1.0 - uncertainty
 
         if uncertainty is None:
             flag: str = "unavailable"
@@ -245,18 +276,26 @@ def summarize_other_voice(
     speech_present_seconds = 0.0
     other_voice_seconds = 0.0
     uncertainties: list[float] = []
+    sim_step_weighted = 0.0  # Σ step·similarity over scored windows (for subject_dominance)
+    sim_step_total = 0.0  # Σ step over windows that carried a similarity
     for r, step in zip(results, steps, strict=False):
         if r.flag == "unavailable":
             continue
         speech_present_seconds += step
         if r.other_voice_uncertainty is not None:
             uncertainties.append(float(r.other_voice_uncertainty))
+        if r.similarity is not None:
+            sim_step_weighted += step * float(r.similarity)
+            sim_step_total += step
         if r.flag == "other_voice":
             other_voice_seconds += step
 
     fraction = (other_voice_seconds / speech_present_seconds) if speech_present_seconds > 0 else 0.0
     peak = max(uncertainties) if uncertainties else 0.0
     p95 = float(np.percentile(uncertainties, 95)) if uncertainties else 0.0
+    # Continuous subject dominance: voiced-time-weighted mean subject similarity.
+    # ``None`` when nothing was scorable — "no signal", not "confidently wrong".
+    subject_dominance = (sim_step_weighted / sim_step_total) if sim_step_total > 0 else None
 
     return RecordingOtherVoiceSummary(
         profile_other_voice_fraction=float(fraction),
@@ -265,6 +304,7 @@ def summarize_other_voice(
         profile_p95_other_voice_uncertainty=p95,
         profile_speech_present_seconds=float(speech_present_seconds),
         profile_confidence=profile_confidence,
+        profile_subject_dominance=subject_dominance,
     )
 
 

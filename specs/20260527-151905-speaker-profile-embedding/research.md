@@ -53,6 +53,7 @@ This document resolves the open decisions (including the two items the spec defe
 - *All four incl. X-Vector*: diminishing returns, X-Vector weak/redundant — rejected.
 - *Concatenate embeddings into one vector*: mixes incompatible metric spaces/dims — rejected for late (score-level) fusion.
 - *Unofficial / self-fine-tuned WavLM-Large SV*: provenance risk for clinical data — deferred unless an official/validated checkpoint appears.
+- *wav2vec-BERT 2.0 as a consensus member (2026-06-05, raised on PR #523)*: in a separate analysis w2v-BERT 2.0 reportedly outscored WavLM but **still under ECAPA**. Two caveats make it a *future candidate, not a swap*: (1) **transferability** — that ranking was on a different task; what matters here is speaker discrimination (esp. same-gender) + noise robustness, where our sweeps show WavLM's role is *decorrelated robustness*, not raw discrimination (ECAPA already wins discrimination). If w2v-BERT is below ECAPA it wouldn't lift discrimination — its only plausible role is **replacing WavLM as the decorrelated/robust member**, to be judged on the consensus tradeoff, not standalone accuracy. (2) **No SV head** — w2v-BERT 2.0 is a frame encoder with no standard speaker-verification head (unlike the drop-in `wavlm-base-plus-sv` `WavLMForXVector`), so it needs pooling or an SV-finetuned checkpoint = net-new backend, not a `--embedding-models` config change. For the same-gender gap specifically, **WavLM-Large SV (above) is the more direct lever.** Model set stays configurable, so swappable later if a usable SV-capable w2v-BERT checkpoint appears; current ECAPA+ResNet+WavLM results accepted for this iteration.
 
 ---
 
@@ -353,6 +354,58 @@ Same-gender detection: consensus 0.16 vs 0.67 cross-gender — and crucially the
 **Contamination (build level):** centroid drift ≈ 0.000–0.002 and target-sim flat at 0.977 (vs intruder 0.28) across 0–30% single-file signal-mix contamination — dominant-cluster aggregation is strongly contamination-tolerant (SC-002 holds with margin).
 
 **Other-voice cutoff:** on clean overlay audio, detection 0.89 / false-positive 0.00 are **flat across cutoff ∈ [0.4, 0.7]** (target unc≈0, intruder unc≈1 are cleanly band-separated). The cutoff is an insensitive knob; **noise, not the threshold, is the dominant sensitivity** → keep the cutoff at the neutral midpoint (`OTHER_VOICE_CALIBRATED_CUTOFF = 0.5`), do not tune an operating point.
+
+## PR #523 review — reuse/altitude refactor design (2026-06-05)
+
+Maintainer review (Satra) raised two architectural points: (1) *"reuse the sliding-window embedding extraction and clustering already in the analyze script"* and (2) *"move things behind the identity signal."* A focused multi-agent review **verified both against the code** — the leaf primitives (`extract_per_window_embeddings`, `cluster_pass_speakers`, `_empirical_calibration_band`, `calibrate_cosine_uncertainty`, `speech_window_mask_for_file`) *are* genuinely reused, but the **orchestration and aggregation are parallel duplicates**, and the identity-axis integration is decorative. Verified findings:
+
+- **Inert identity votes (confirmed).** `analyze_audio` injects `model_votes["speaker_profile/<model>"]` + `/consensus` into the identity axis, but `aggregate_identity` (`aggregate.py`) only reads `same_label_uncertainty` / `change_inconsistency_uncertainty` / `__cross_diar_label_disagreement__` — there is **no `speaker_profile` reference in `identity.py`/`aggregate.py`**. The votes ride the identity *parquet/disagreements ranking* but do **not** feed the identity uncertainty; the profile signal reaches the headline only via a separate `summarize_other_voice` → `global_summary` `single_speaker` `max()` fold. So "rides the identity axis" was true only for display, not for the decision.
+- **Parallel aggregation.** Two speaker-disagreement signals (identity `identity_mean` and profile `p95_other_voice`) are computed by two separate per-window→recording pipelines and merged only at the end by `max()` in `global_summary.py`. The profile carries its own rollup dataclasses (`RecordingOtherVoiceSummary`) + `speaker_profile.json` sidecar.
+- **Orchestration duplication.** `build.extract_speech_windows_for_file` hand-reproduces the `extract → reference-grid → speech_window_mask_for_file → None-fallback` sequence that `compute.py` already runs; only the leaf calls are shared, not the glue.
+- **Duplicated embedding compute.** `extract_per_window_embeddings` is **not cache-wrapped** (`embeddings.py` calls `extract_speaker_embeddings_from_audios` directly). So the same audio is re-embedded across build (2.0/1.0) and analyze (1.0/0.5), and leave-one-file-out **re-extracts every sibling** because the artifact stores only centroids, not per-window vectors. This is the same gap as the deferred **Phase 6 / FR-015**.
+- **Minor reuse.** Three cosine helpers now exist (`compare._cosine_distance`, `clustering._cos_sim`, `identity._cos_dist`) with inconsistent clipping; `DEFAULT_SPEECH_PRESENCE_LABELS` is hand-copied from `analyze_audio` (sync-by-comment, drift risk vs the FR-002 "same signal" guarantee); `build_speaker_profile --cache-dir` is parsed but inert.
+
+**What is genuinely new (keep, not duplication):** cross-file dominant-cluster selection, session-weighted persisted per-model centroids, leave-one-file-out, SQUIM target-quality. No sklearn clustering is reimplemented in `speaker_profile/`.
+
+### The decision to settle with the maintainer FIRST (do not pre-bake)
+
+"Move behind the identity signal" hides a real semantic mismatch: the **identity axis is reference-free** (how many speakers / where do they change, within one recording) while the **profile is reference-based** (does this window match an externally-enrolled target). Folding the profile in is therefore not a free "move" — `aggregate_identity` would need a **new reference-based voter type**. Options:
+
+- **(A) True identity voter.** Add a `distance-to-enrolled-centroid` voter so the profile uncertainty flows through `aggregate_identity` like the other identity voters; drop the separate `global_summary` fold + sidecar. Cleanest per Satra, but extends the identity aggregator's semantics (reference-based voter alongside reference-free ones) and risks conflating "second speaker present" with "not the enrolled target."
+- **(B) Keep a distinct signal, stop the pretense.** Leave the profile as its own recording-level claim (it answers a different question), but **remove the inert vote injection** (or make it explicitly display-only) so nothing reads as feeding identity when it doesn't. Smaller, honest, preserves the semantic distinction; doesn't fully satisfy "move behind identity."
+- **(C) Hybrid.** Profile votes become real identity voters for the *other-voice* sub-signal (which genuinely is an identity question), while *target-quality* stays a separate claim.
+
+**DECIDED 2026-06-05 → (C) hybrid, recall-primary.** The recall gate is the primary downstream consumer (a recording with any non-subject voice must surface), so: the profile's *other-voice / subject-identity* signal feeds the identity axis as a corroborating reference-based voter **and** retains an **independent presence-gated per-window flag** (so it can fire where the identity axis isn't measuring identity — e.g. a background voice in an otherwise non-speech region); *target-quality* stays its own claim. Still worth running A/B/C past Satra, but C is the working decision. Independent of it, the reuse fixes (shared extraction helper, shared cosine, label import, embedding cache) are unconditional.
+
+### Signal design (decided 2026-06-05) — continuous composable atoms, not verdicts
+
+This feature is a **signal producer for downstream mixed metrics** (the rank-orderable attention metric lives in the separate triage/metric-ranking spec). So it must emit **named, continuous atoms** and *not* pre-blend them into one tuned score.
+
+- **"Wrong subject" is a continuous certainty, not a binary flag.** Every voiced window already runs through `calibrate_cosine_uncertainty` against the profile band → a continuous `other_voice_uncertainty ∈ [0,1]`. The discrete `flag` is just a threshold on top and is **demoted to a derived/optional layer**, not the product. File-level "wrong subject" = aggregate of the per-window certainties (`subject_dominance` = certainty-weighted fraction of voiced time matching the subject; its complement is the "recording may not be the subject" uncertainty).
+- **Profile comparison does double duty per voiced window:** (primary, strong) *who* — subject vs not, reference-based identity attribution; (secondary, weak) *is a real speaker present* — a window strongly matching a known-speaker template is evidence of genuine voiced speech, usable as presence corroboration.
+- **Atoms to emit:**
+  - per window — `subject_similarity` / `other_voice_uncertainty` (continuous, within-profile calibrated), `voice_present` (scene-derived: speech/babble/conversation, foreground **or** background), `flag` (derived, optional).
+  - per file — `subject_dominance` (continuous) and its complement `wrong_subject_uncertainty`, `nonsubject_voice_fraction / peak / p95` (max-like recall atoms), `profile_confidence`. Kept as **distinct exposed fields, not collapsed** into one `single_speaker` `max()` — the downstream mixer needs the parts.
+
+**Three discipline constraints:**
+
+1. **Acyclic dependency.** Presence *gates* the profile (low voice-presence → not scored). Do **not** feed the profile back into that same presence signal (circular boost). Feed it forward to the identity axis + a separate "matches-known-speaker" corroboration atom the mixer can combine.
+2. **Certainty paired with confidence-of-certainty.** Always emit the per-window/​file certainty *alongside* `profile_confidence` — a flimsy (`low`/thin) profile producing "high other-voice certainty" must be down-weighted, not believed.
+3. **Within-profile calibration only.** Certainties are calibrated against *this* profile's band — meaningful within the recording, **not** comparable across recordings/subjects. Cross-file rank-ordering is explicitly the downstream metric spec's job.
+
+**Scoring gate = voice presence, not clean-speech presence.** Build-time selects *clean subject speech* for the centroid; scoring-time should gate on *any voice present* (scene-classification speech/babble/conversation labels — already computed and feeding `speech_window_mask_for_file`) so **background/secondary voice is caught** while cough/breath/silence are excluded from the *voice* flag. These are two deliberately different uses of the presence signal.
+
+**Overlap → lean on diarization.** Simultaneous subject+other speech yields a *mixed* embedding between centroids; profile-distance is moderate and unreliable there (same physics as the same-gender blind spot). Reliable overlap detection should come from **diarization overlap**, corroborating the profile rather than relying on profile-distance.
+
+**Deferred hooks (emit the raw ingredients now; solve later, likely the triage spec):**
+- *Non-subject cough/breath attribution* — speaker-embedding models are trained on speech; cough/breath is out-of-distribution and not reliably speaker-attributable. Do **not** force a subject/non-subject call on coughs with a speech model. Emit the raw ingredients (scene label `cough`/`breath`, the segment's diarization speaker) so a downstream combiner can attempt attribution later.
+- *Task-aware contextualization* — "this is a respiration task so any voiced speech is anomalous regardless of who" combines task metadata (BIDS task label) + scene classification; the profile only adds "…and it's not the subject." Out of scope; emitting `voice_present` + scene labels keeps it composable downstream.
+
+### Scope / sequencing
+
+- The embedding-recompute fixes **are** Phase 6 (FR-015); fold this refactor in with it rather than treating them separately.
+- Likely a **follow-up PR**, not #523 (which stays the signal-producer). Tracked here as **Phase 8** below.
+- Contract impact to watch: profile artifact schema may gain optional per-window vectors (to kill LOO re-extraction → bump `schema_version`); the `analyze-audio-profile` integration contract changes if option A/C is chosen (votes become aggregated, not decorative).
 
 ## Open items carried to tasks (not blocking)
 

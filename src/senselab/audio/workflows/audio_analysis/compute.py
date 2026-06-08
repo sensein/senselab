@@ -15,6 +15,7 @@ Pass a deep-copy if you need the input unchanged.
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -38,7 +39,7 @@ from senselab.audio.workflows.audio_analysis.harvesters import (
 from senselab.audio.workflows.audio_analysis.identity import harvest_identity_votes
 from senselab.audio.workflows.audio_analysis.presence import (
     harvest_presence_votes,
-    speech_window_mask_for_file,
+    reference_grid_and_speech_mask,
 )
 from senselab.audio.workflows.audio_analysis.types import (
     AxisResult,
@@ -64,6 +65,7 @@ def compute_uncertainty_axes(
     diff_speaker_floor: float = 0.70,
     cluster_cosine_threshold: float = 0.5,
     clustering_algorithm: str = "spectral",
+    cache_dir: Path | None = None,
 ) -> tuple[dict[tuple[str, UncertaintyAxis], AxisResult], dict[str, str], dict[str, dict[str, list[WindowEmbedding]]]]:
     """Compute per-pass and raw-vs-enhanced uncertainty rows for all three axes.
 
@@ -102,6 +104,9 @@ def compute_uncertainty_axes(
             precomputed cosine-similarity affinity handles non-convex speaker
             clusters better than k-means; falls back automatically to k-means
             on per-k failure.
+        cache_dir: Optional content-addressable cache dir threaded to
+            ``extract_per_window_embeddings`` so per-window speaker embeddings
+            are reused across runs / stages instead of recomputed (FR-015).
 
     Returns:
         ``(axis_results, incomparable_reasons, per_window_embeddings_by_pass)`` where:
@@ -135,6 +140,7 @@ def compute_uncertainty_axes(
                     window_s=embedding_window_s,
                     hop_s=embedding_hop_s,
                     failures=emb_failures,
+                    cache_dir=cache_dir,
                 )
             except Exception as exc:  # noqa: BLE001
                 incomparable_reasons[f"{pass_label}/identity/across_time"] = (
@@ -166,15 +172,18 @@ def compute_uncertainty_axes(
             )
 
             cluster_failures: dict[str, str] = {}
+            # Compute the speech mask once on the shared window grid (it depends
+            # on window times, not the embedding vectors, so it applies to every
+            # model) — same helper the speaker_profile build uses (FR-002).
+            _, speech_mask = reference_grid_and_speech_mask(
+                per_window_embeddings_by_pass[pass_label],
+                pass_summary=pass_summary,
+                speech_presence_labels=speech_presence_labels,
+            )
             for emb_model_id in sorted(per_window_embeddings_by_pass[pass_label]):
                 entries = per_window_embeddings_by_pass[pass_label][emb_model_id]
                 if not entries:
                     continue
-                speech_mask = speech_window_mask_for_file(
-                    entries=entries,
-                    pass_summary=pass_summary,
-                    speech_presence_labels=speech_presence_labels,
-                )
                 emb_cluster = _cluster_pass_speakers(
                     entries,
                     failures=cluster_failures,

@@ -180,6 +180,18 @@ research.md) found this knob *insensitive* in ``[0.4, 0.7]`` on clean audio
 sensitivity is input noise (which inflates false other-voice flags), not this
 cutoff — so it is kept neutral and NOT tuned to an operating point."""
 
+DIAR_OVERLAP_OTHER_VOICE_FLOOR: float = 1.0
+"""[new] Diarization-overlap corroborator floor. When diarization reports 2+
+distinct speakers active in a window, a non-subject voice is present *by
+definition* — but the profile's own distance is unreliable there (the
+mixed-speaker embedding sits between centroids, the same physics as the
+same-gender blind spot). So on a diar-overlap window the consensus other-voice
+uncertainty is raised to at least this floor (``max(profile_value, floor)``),
+independent of the profile (it still corroborates even for a low-confidence
+profile). ``1.0`` trusts diar overlap as definitive multi-speaker evidence
+(recall-biased); lower it if diarization overlap is noisy on your data. The
+downstream metric spec calibrates the final operating point."""
+
 MIN_P_VOICE_FOR_COMPARISON: float = 0.5
 """[new] Validate empirically. Speech-presence gate: windows whose reused
 ``p_voice`` falls below this are scored ``unavailable`` rather than flagged, so a
