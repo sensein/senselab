@@ -220,9 +220,13 @@ def test_speaker_profile_is_additive(tmp_path: Path) -> None:
             assert _norm_parquet(base / rel, relax_identity=relax) == _norm_parquet(prof / rel, relax_identity=relax), (
                 f"parquet differs: {rel}"
             )
-        elif rel.name == "disagreements.json":
-            # Identity-derived ranking: legitimately reorders/reweights when the
-            # profile feeds the identity axis. Not a regression (option C).
+        elif rel.name in ("disagreements.json", "labelstudio_tasks.json"):
+            # Identity-derived views that re-render the identity uncertainty:
+            # disagreements ranks on it, and the Label Studio bundle bins it into
+            # the per-bucket identity track label. Both legitimately shift when
+            # the profile feeds the identity axis (option C) — not regressions.
+            # Their non-identity content is a deterministic render of the
+            # presence/utterance parquets, which are still strictly byte-checked.
             continue
         elif rel.name == "summary.json":
             assert _norm_summary(base / rel) == _norm_summary(prof / rel), "summary.json differs beyond intended folds"
