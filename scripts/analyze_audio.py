@@ -698,6 +698,45 @@ def _resolve_scoring_profile(
     return profile.centroids, profile.calibration_band, False, note
 
 
+def _diar_overlap_for_windows(
+    pass_summary: dict[str, Any],
+    detection_windows: dict[str, Any],
+) -> list[bool] | None:
+    """Per-window mask: does any diarization model report 2+ distinct speakers
+    active within the window's span (overlapping speech)?
+
+    Used to corroborate the profile's other-voice signal where the profile is
+    least reliable (a mixed-speaker embedding sits between centroids). Returns
+    ``None`` when no diarization ran (no overlap signal available).
+    """
+    from senselab.audio.workflows.audio_analysis.clustering import _diar_segments, _seg_attr
+
+    diar_blocks = (pass_summary.get("diarization") or {}).get("by_model") or {}
+    model_segs = [segs for segs in (_diar_segments(b) for b in diar_blocks.values()) if segs]
+    if not model_segs:
+        return None
+    reference: list[Any] = next((w for w in detection_windows.values() if w), [])
+    mask: list[bool] = []
+    for w in reference:
+        s, e = float(w.start_s), float(w.end_s)
+        overlap = False
+        for segs in model_segs:
+            speakers: set[str] = set()
+            for seg in segs:
+                ls, le, spk = _seg_attr(seg, "start"), _seg_attr(seg, "end"), _seg_attr(seg, "speaker")
+                if ls is None or le is None or spk is None:
+                    continue
+                if float(ls) < e and float(le) > s:  # segment overlaps the window
+                    speakers.add(str(spk))
+                    if len(speakers) >= 2:
+                        break
+            if len(speakers) >= 2:
+                overlap = True
+                break
+        mask.append(overlap)
+    return mask
+
+
 def _p_voice_for_windows(
     detection_windows: dict[str, Any],
     presence_result: Any,  # noqa: ANN401 — AxisResult | None
@@ -2200,12 +2239,16 @@ def main(argv: list[str] | None = None) -> int:
                     pass_summary=passes_for_compute.get(pl, {}),
                     speech_presence_labels=_speech_presence_labels(args),
                 )
+                # Diarization-overlap corroborator: raise other-voice where 2+
+                # speakers are active (the profile is unreliable on mixed windows).
+                diar_overlap_by_window = _diar_overlap_for_windows(passes_for_compute.get(pl, {}), by_model)
                 results = compare_recording_to_profile(
                     by_model,
                     prof_centroids,
                     prof_band,
                     p_voice_by_window=p_voice_by_window,
                     voice_present_by_window=voice_present_by_window,
+                    diar_overlap_by_window=diar_overlap_by_window,
                     other_voice_threshold=args.profile_other_voice_threshold,
                 )
                 profile_results_by_pass[pl] = results
