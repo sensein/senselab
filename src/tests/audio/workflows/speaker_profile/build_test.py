@@ -276,7 +276,7 @@ def _stub_extractor(
     runs without downloading any speaker-embedding model.
     """
 
-    def _fake(*, audio: Audio, models, window_s, hop_s, device=None, failures=None):  # noqa: ANN001, ANN202
+    def _fake(*, audio: Audio, models, window_s, hop_s, device=None, failures=None, cache_dir=None):  # noqa: ANN001, ANN202
         # Identify the file by matching waveform length → center vector.
         n_samples = audio.waveform.shape[-1]
         rng = np.random.default_rng(int(n_samples))
