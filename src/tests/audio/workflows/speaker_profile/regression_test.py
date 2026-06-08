@@ -169,6 +169,11 @@ def _norm_summary(path: Path) -> Any:  # noqa: ANN401
                 c = ps.get(claim)
                 if isinstance(c, dict):
                     c.pop("uncertainty", None)
+            # single_speaker also reports identity_axis_mean, which now reflects
+            # the profile voter (option C) — drop it as an intended change too.
+            ss = ps.get("single_speaker")
+            if isinstance(ss, dict):
+                ss.pop("identity_axis_mean", None)
     return d
 
 
@@ -181,12 +186,14 @@ def _norm_parquet(path: Path, *, relax_identity: bool = False) -> Any:  # noqa: 
         table["model_votes"] = [json.dumps(_strip(json.loads(s))) if s else s for s in table["model_votes"]]
     if relax_identity:
         # Option C: the profile is now a real reference-based identity voter, so a
-        # per-pass identity bucket's aggregated uncertainty (and its contributing
-        # model list) legitimately changes when a profile is supplied. Drop those
-        # profile-affected columns; the rest of the identity parquet (bucket
-        # bounds, comparison_status, intensity_weight, non-profile votes) must
-        # still match byte-for-byte.
-        for col in ("aggregated_uncertainty", "raw_aggregated_uncertainty", "contributing_models"):
+        # per-pass identity bucket's aggregated uncertainty, its contributing
+        # model list, and its comparison_status legitimately change when a profile
+        # is supplied — including a bucket that had no reference-free signal
+        # (``incomparable``) becoming ``ok`` because the profile now provides one.
+        # Drop those profile-affected columns; the rest of the identity parquet
+        # (bucket bounds, intensity_weight, non-profile votes) must still match
+        # byte-for-byte.
+        for col in ("aggregated_uncertainty", "raw_aggregated_uncertainty", "contributing_models", "comparison_status"):
             table.pop(col, None)
     return _strip(table)
 
