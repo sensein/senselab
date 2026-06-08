@@ -109,8 +109,10 @@ def compare_recording_to_profile(
     *,
     p_voice_by_window: Sequence[float | None] | None = None,
     voice_present_by_window: Sequence[bool] | None = None,
+    diar_overlap_by_window: Sequence[bool] | None = None,
     other_voice_threshold: float | None = C.OTHER_VOICE_THRESHOLD_DEFAULT,
     min_p_voice: float = C.MIN_P_VOICE_FOR_COMPARISON,
+    diar_overlap_floor: float = C.DIAR_OVERLAP_OTHER_VOICE_FLOOR,
     fusion_weights: Mapping[str, float] | None = C.CONSENSUS_FUSION_WEIGHTS_DEFAULT,
 ) -> list[ProfileComparisonResult]:
     """Score every detection window of a recording against the profile.
@@ -127,6 +129,13 @@ def compare_recording_to_profile(
         p_voice_by_window: Optional reused presence value per window index. A
             window below ``min_p_voice`` is scored ``unavailable`` (never
             flagged). ``None`` disables this gate.
+        diar_overlap_by_window: Optional per-window mask flagging windows where
+            diarization sees 2+ distinct speakers active (overlapping speech).
+            On such a window a non-subject voice is present by definition, but the
+            profile distance is unreliable (mixed-speaker embedding), so the
+            consensus other-voice uncertainty is raised to at least
+            ``diar_overlap_floor`` (``max(profile_value, floor)``) — a
+            reference-free corroborator, applied only to already-scored windows.
         voice_present_by_window: Optional scene-derived per-window voice mask
             (speech / babble / conversation present, foreground OR background).
             When supplied it is the **authoritative** gate — a window with
@@ -139,6 +148,8 @@ def compare_recording_to_profile(
             ``other_voice`` flag; ``None`` uses the adaptive
             ``OTHER_VOICE_CALIBRATED_CUTOFF``.
         min_p_voice: Presence gate threshold.
+        diar_overlap_floor: Floor the consensus other-voice uncertainty is raised
+            to on a ``diar_overlap_by_window`` window.
         fusion_weights: Optional per-model consensus weights.
 
     Returns:
@@ -195,6 +206,20 @@ def compare_recording_to_profile(
         similarity, uncertainty, per_model = score_window(
             window_vectors, centroids, calibration_band, fusion_weights=fusion_weights
         )
+
+        # Diarization-overlap corroborator: 2+ speakers active in this window ⇒ a
+        # non-subject voice is present even if the profile (unreliable on a
+        # mixed-speaker embedding) read it as the target. Raise the consensus
+        # uncertainty to at least the floor. Applied only to already-scored
+        # windows (does not fabricate a flag where the profile couldn't score).
+        if (
+            uncertainty is not None
+            and diar_overlap_by_window is not None
+            and i < len(diar_overlap_by_window)
+            and diar_overlap_by_window[i]
+        ):
+            uncertainty = max(uncertainty, diar_overlap_floor)
+            similarity = 1.0 - uncertainty
 
         if uncertainty is None:
             flag: str = "unavailable"
