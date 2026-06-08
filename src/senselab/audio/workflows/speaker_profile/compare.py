@@ -251,18 +251,26 @@ def summarize_other_voice(
     speech_present_seconds = 0.0
     other_voice_seconds = 0.0
     uncertainties: list[float] = []
+    sim_step_weighted = 0.0  # Σ step·similarity over scored windows (for subject_dominance)
+    sim_step_total = 0.0  # Σ step over windows that carried a similarity
     for r, step in zip(results, steps, strict=False):
         if r.flag == "unavailable":
             continue
         speech_present_seconds += step
         if r.other_voice_uncertainty is not None:
             uncertainties.append(float(r.other_voice_uncertainty))
+        if r.similarity is not None:
+            sim_step_weighted += step * float(r.similarity)
+            sim_step_total += step
         if r.flag == "other_voice":
             other_voice_seconds += step
 
     fraction = (other_voice_seconds / speech_present_seconds) if speech_present_seconds > 0 else 0.0
     peak = max(uncertainties) if uncertainties else 0.0
     p95 = float(np.percentile(uncertainties, 95)) if uncertainties else 0.0
+    # Continuous subject dominance: voiced-time-weighted mean subject similarity.
+    # ``None`` when nothing was scorable — "no signal", not "confidently wrong".
+    subject_dominance = (sim_step_weighted / sim_step_total) if sim_step_total > 0 else None
 
     return RecordingOtherVoiceSummary(
         profile_other_voice_fraction=float(fraction),
@@ -271,6 +279,7 @@ def summarize_other_voice(
         profile_p95_other_voice_uncertainty=p95,
         profile_speech_present_seconds=float(speech_present_seconds),
         profile_confidence=profile_confidence,
+        profile_subject_dominance=subject_dominance,
     )
 
 
