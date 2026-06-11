@@ -104,7 +104,8 @@ def extract_speech_windows_for_file(
             fall back to "every non-zero window" (the legacy behavior of
             ``speech_window_mask_for_file``).
         embedding_models: HF model ids for the embedding consensus
-            (default: ECAPA + ResNet + WavLM — FR-018).
+            (default: ECAPA + ResNet, matching analyze_audio's default per-window
+            set so the profile is scorable; WavLM is opt-in — FR-018/FR-019).
         device: Optional compute device override.
         profile_window_s: Long-window length for centroid-quality embeddings
             (default from ``constants.py``; FR-002 — windows are ≥~1 s
