@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 import soundfile
 import torch
+from speechbrain.inference.enhancement import SpectralMaskEnhancement as enhance_model
 from speechbrain.inference.separation import SepformerSeparation as separator
 
 from senselab.audio.data_structures import Audio
@@ -366,6 +367,20 @@ def test_driftse_input_wavs_are_written_as_float_not_pcm16(
 
     assert captured["subtypes"] == ["FLOAT"]
     assert captured["peak"] > 1.5, "an out-of-range sample was clipped on write"
+
+
+@pytest.mark.parametrize(
+    ("model_uri", "expected"),
+    [
+        ("speechbrain/sepformer-wham16k-enhancement", separator),
+        ("speechbrain/sepformer-wsj02mix", separator),
+        ("speechbrain/metricgan-plus-voicebank", enhance_model),
+        ("speechbrain/mtl-mimic-voicebank", enhance_model),
+    ],
+)
+def test_loader_for_selects_class_by_name(model_uri: str, expected: type) -> None:
+    """The interface class is chosen directly from the model name, no load needed."""
+    assert SpeechBrainEnhancer._loader_for(model_uri) is expected
 
 
 @pytest.fixture
