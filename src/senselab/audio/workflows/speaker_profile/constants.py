@@ -17,11 +17,17 @@ References:
 from __future__ import annotations
 
 # ---------------------------------------------------------------------------
-# Embedding model defaults — three-model consensus (FR-018, R3).
+# Embedding model defaults — ECAPA + ResNet (the two SpeechBrain models
+# analyze_audio also extracts per-window by default).
 #
-# ECAPA + ResNet are SpeechBrain (existing in senselab and run by analyze_audio
-# by default). WavLM is new (FR-019, transformers backend) and adds genuine
-# error decorrelation via SSL on a large noise/overlap-aware corpus.
+# A profile is only scorable at analyze time for models analyze_audio runs on
+# its per-window detection grid; that grid's default set is ECAPA + ResNet.
+# Keeping the build default identical means a default-built profile is fully
+# consumed — no enrolled-but-unscored centroid. WavLM (FR-019, transformers
+# backend) adds error decorrelation but is NOT in analyze_audio's default
+# per-window set, so a WavLM centroid built by default would never be scored
+# (the asymmetry observed on the peds run). It is therefore opt-in: pass it
+# explicitly here AND via analyze_audio --embeddings-models to actually use it.
 # ---------------------------------------------------------------------------
 
 ECAPA_MODEL_ID: str = "speechbrain/spkrec-ecapa-voxceleb"
@@ -39,10 +45,11 @@ so a WavLM-Large SV checkpoint can be substituted if one becomes available
 DEFAULT_EMBEDDING_MODELS: tuple[str, ...] = (
     ECAPA_MODEL_ID,
     RESNET_MODEL_ID,
-    WAVLM_DEFAULT_CHECKPOINT,
 )
-"""[new] Default three-model consensus set (FR-018). Configurable; a
-single-model fallback (e.g., just ECAPA) MUST remain viable."""
+"""Default embedding consensus set — ECAPA + ResNet, matching analyze_audio's
+default per-window models so a default-built profile is fully scorable. WavLM
+(:data:`WAVLM_DEFAULT_CHECKPOINT`) is opt-in via an explicit model list. A
+single-model fallback (e.g. just ECAPA) MUST remain viable."""
 
 
 # ---------------------------------------------------------------------------
