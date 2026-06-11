@@ -3,12 +3,27 @@
 from typing import List
 
 import pytest
+from speechbrain.inference.enhancement import SpectralMaskEnhancement as enhance_model
 from speechbrain.inference.separation import SepformerSeparation as separator
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speech_enhancement import enhance_audios
 from senselab.audio.tasks.speech_enhancement.speechbrain import SpeechBrainEnhancer
 from senselab.utils.data_structures import DeviceType, SpeechBrainModel
+
+
+@pytest.mark.parametrize(
+    ("model_uri", "expected"),
+    [
+        ("speechbrain/sepformer-wham16k-enhancement", separator),
+        ("speechbrain/sepformer-wsj02mix", separator),
+        ("speechbrain/metricgan-plus-voicebank", enhance_model),
+        ("speechbrain/mtl-mimic-voicebank", enhance_model),
+    ],
+)
+def test_loader_for_selects_class_by_name(model_uri: str, expected: type) -> None:
+    """The interface class is chosen directly from the model name, no load needed."""
+    assert SpeechBrainEnhancer._loader_for(model_uri) is expected
 
 
 @pytest.fixture
