@@ -1,7 +1,7 @@
 """This module provides the Speechbrain interface for speech enhancement."""
 
 import time
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 
@@ -31,6 +31,35 @@ class SpeechBrainEnhancer:
     MAX_DURATION_SECONDS = 60  # Maximum duration per segment in seconds
     MIN_LENGTH = 16  # kernel size for speechbrain/sepformer-wham16k-enhancement
     _models: Dict[str, Union["separator", "enhance_model"]] = {}
+
+    @staticmethod
+    def _loader_for(model_uri: str) -> Any:  # noqa: ANN401  # the speechbrain class (untyped third-party)
+        """Return the speechbrain inference class for an *enhancement* ``model_uri``.
+
+        Both supported model families are enhancers (denoisers); they differ only in
+        architecture, which dictates the speechbrain inference wrapper:
+
+        - SepFormer-architecture enhancement checkpoints (e.g. ``sepformer-wham16k-enhancement``,
+          ``sepformer-dns4-16k-enhancement``) load via ``SepformerSeparation`` — that is just
+          SepFormer's inference class; for an enhancement checkpoint it emits a single cleaned source.
+        - Spectral-mask checkpoints (e.g. ``metricgan-plus-voicebank``, ``mtl-mimic-voicebank``)
+          load via ``SpectralMaskEnhancement``.
+
+        The architecture is an unambiguous discriminator in the name, so we map it directly
+        rather than loading one class and falling back on the ``compute_stft``/hparams error the
+        wrong class would raise. NOTE: this is keyed on ``sepformer`` (the architecture), not on
+        "separation" — true multi-speaker separation checkpoints (e.g. ``sepformer-wsj02mix``)
+        are out of scope here, because :meth:`enhance_audios_with_speechbrain` reshapes the model
+        output to a single waveform and would garble multiple separated sources.
+
+        Args:
+            model_uri (str): The model path or URI.
+
+        Returns:
+            type: ``SepformerSeparation`` for SepFormer enhancement checkpoints,
+                else ``SpectralMaskEnhancement``.
+        """
+        return separator if "sepformer" in model_uri.lower() else enhance_model
 
     @classmethod
     def _get_speechbrain_model(
@@ -67,22 +96,15 @@ class SpeechBrainEnhancer:
             # ``revision`` arg, so we pin via the immutable snapshot path.
             _, snapshot_path = resolve_model(str(model.path_or_uri), model.revision or "main")
             savedir = speechbrain_savedir(str(model.path_or_uri), model.revision)
+            loader = cls._loader_for(str(model.path_or_uri))
+            logger.debug("Loading %s as %s", model.path_or_uri, loader.__name__)
             with speechbrain_loading_cwd(savedir):
-                try:
-                    cls._models[key] = retry_on_transient_error(
-                        enhance_model.from_hparams,
-                        source=str(snapshot_path),
-                        savedir=str(savedir),
-                        run_opts={"device": device_run_opt(device)},
-                    )
-                except Exception as e:
-                    logger.info("Trying SepformerSeparation model after SpectralMaskEnhancement failed: %s", e)
-                    cls._models[key] = retry_on_transient_error(
-                        separator.from_hparams,
-                        source=str(snapshot_path),
-                        savedir=str(savedir),
-                        run_opts={"device": device_run_opt(device)},
-                    )
+                cls._models[key] = retry_on_transient_error(
+                    loader.from_hparams,
+                    source=str(snapshot_path),
+                    savedir=str(savedir),
+                    run_opts={"device": device_run_opt(device)},
+                )
 
         return cls._models[key], device, dtype
 
