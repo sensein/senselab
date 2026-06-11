@@ -239,7 +239,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "speechbrain/spkrec-ecapa-voxceleb",
             "speechbrain/spkrec-resnet-voxceleb",
         ],
-        help="SpeechBrain speaker-embedding models. Default runs ECAPA-TDNN + ResNet-TDNN.",
+        help="SpeechBrain speaker-embedding models. Default runs ECAPA-TDNN + ResNet-TDNN. "
+        "A --speaker-profile is only scorable for models in this set, so this must be a "
+        "superset of the profile's build models (the profile default matches this default).",
     )
     parser.add_argument(
         "--enhancement-model",

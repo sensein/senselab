@@ -49,7 +49,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--embedding-models",
         nargs="+",
         default=list(C.DEFAULT_EMBEDDING_MODELS),
-        help="Embedding consensus models (default: ECAPA + ResNet + WavLM). One model → single-model profile.",
+        help="Embedding consensus models (default: ECAPA + ResNet, matching analyze_audio's "
+        "default per-window set so the profile is scorable; add WavLM explicitly to opt in). "
+        "One model → single-model profile.",
     )
     parser.add_argument("--profile-window-s", type=float, default=C.PROFILE_WINDOW_S)
     parser.add_argument("--profile-hop-s", type=float, default=C.PROFILE_HOP_S)
