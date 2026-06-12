@@ -1,7 +1,7 @@
 """This module provides the Speechbrain interface for speech enhancement."""
 
 import time
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import torch
 
@@ -33,7 +33,7 @@ class SpeechBrainEnhancer:
     _models: Dict[str, Union["separator", "enhance_model"]] = {}
 
     @staticmethod
-    def _loader_for(model_uri: str) -> Any:  # noqa: ANN401  # the speechbrain class (untyped third-party)
+    def _loader_for(model_uri: str) -> Union[type["separator"], type["enhance_model"]]:
         """Return the speechbrain inference class for an *enhancement* ``model_uri``.
 
         Both supported model families are enhancers (denoisers); they differ only in
@@ -56,8 +56,8 @@ class SpeechBrainEnhancer:
             model_uri (str): The model path or URI.
 
         Returns:
-            type: ``SepformerSeparation`` for SepFormer enhancement checkpoints,
-                else ``SpectralMaskEnhancement``.
+            The ``SepformerSeparation`` class for SepFormer enhancement checkpoints,
+            else the ``SpectralMaskEnhancement`` class.
         """
         return separator if "sepformer" in model_uri.lower() else enhance_model
 
@@ -99,12 +99,32 @@ class SpeechBrainEnhancer:
             loader = cls._loader_for(str(model.path_or_uri))
             logger.debug("Loading %s as %s", model.path_or_uri, loader.__name__)
             with speechbrain_loading_cwd(savedir):
-                cls._models[key] = retry_on_transient_error(
-                    loader.from_hparams,
-                    source=str(snapshot_path),
-                    savedir=str(savedir),
-                    run_opts={"device": device_run_opt(device)},
-                )
+                try:
+                    cls._models[key] = retry_on_transient_error(
+                        loader.from_hparams,
+                        source=str(snapshot_path),
+                        savedir=str(savedir),
+                        run_opts={"device": device_run_opt(device)},
+                    )
+                except Exception as e:
+                    # _loader_for routes by name; it is wrong only for off-convention
+                    # models -- e.g. a custom SepFormer checkpoint whose path lacks
+                    # "sepformer", which routes to SpectralMaskEnhancement. Fall back to
+                    # SepformerSeparation for that catch-all branch; a sepformer-named
+                    # model that fails to load is a genuine error, so re-raise.
+                    if loader is not enhance_model:
+                        raise
+                    logger.info(
+                        "SpectralMaskEnhancement failed for %s; trying SepformerSeparation: %s",
+                        model.path_or_uri,
+                        e,
+                    )
+                    cls._models[key] = retry_on_transient_error(
+                        separator.from_hparams,
+                        source=str(snapshot_path),
+                        savedir=str(savedir),
+                        run_opts={"device": device_run_opt(device)},
+                    )
 
         return cls._models[key], device, dtype
 
