@@ -25,6 +25,7 @@ from senselab.audio.tasks.forced_alignment.data_structures import (
 )
 from senselab.audio.tasks.preprocessing import extract_segments, pad_audios
 from senselab.utils.data_structures import DeviceType, HFModel, Language, ScriptLine, _select_device_and_dtype
+from senselab.utils.dependencies import hf_offline_loading
 
 try:
     from nltk.tokenize.punkt import PunktParameters, PunktSentenceTokenizer
@@ -654,14 +655,18 @@ def _load_mms_aligner(
     """
     key = (MMS_MODEL_ID, iso3)
     if key not in cache:
-        processor = Wav2Vec2Processor.from_pretrained(MMS_MODEL_ID)
-        processor.tokenizer.set_target_lang(iso3)  # type: ignore[attr-defined]
-        model = Wav2Vec2ForCTC.from_pretrained(
-            MMS_MODEL_ID,
-            target_lang=iso3,
-            ignore_mismatched_sizes=True,
-        ).to(device.value)  # type: ignore[arg-type]
-        model.load_adapter(iso3)
+        # Cache-once (cross-node locked) then load the base weights + per-language
+        # adapter from the local cache only, so the many parallel alignment jobs
+        # don't 429 on the HF Hub revision check for facebook/mms-1b-all.
+        with hf_offline_loading(MMS_MODEL_ID):
+            processor = Wav2Vec2Processor.from_pretrained(MMS_MODEL_ID)
+            processor.tokenizer.set_target_lang(iso3)  # type: ignore[attr-defined]
+            model = Wav2Vec2ForCTC.from_pretrained(
+                MMS_MODEL_ID,
+                target_lang=iso3,
+                ignore_mismatched_sizes=True,
+            ).to(device.value)  # type: ignore[arg-type]
+            model.load_adapter(iso3)
         cache[key] = (processor, model)
     return cache[key]
 
@@ -736,10 +741,11 @@ def align_transcriptions(
             # otherwise silently serve the first revision's weights.
             cache_key = f"{model_variant.path_or_uri}@{model_variant.revision or 'main'}"
             if cache_key not in loaded_processors_and_models:
-                processor = Wav2Vec2Processor.from_pretrained(
-                    model_variant.path_or_uri, revision=model_variant.revision
-                )
-                _w2v = Wav2Vec2ForCTC.from_pretrained(model_variant.path_or_uri, revision=model_variant.revision)
+                with hf_offline_loading(model_variant.path_or_uri, model_variant.revision or "main"):
+                    processor = Wav2Vec2Processor.from_pretrained(
+                        model_variant.path_or_uri, revision=model_variant.revision
+                    )
+                    _w2v = Wav2Vec2ForCTC.from_pretrained(model_variant.path_or_uri, revision=model_variant.revision)
                 model = _w2v.to(device.value)  # type: ignore[arg-type]
                 loaded_processors_and_models[cache_key] = (processor, model)
             processor, model = loaded_processors_and_models[cache_key]

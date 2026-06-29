@@ -23,6 +23,7 @@ from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, HFModel, ScriptLine, _select_device_and_dtype
+from senselab.utils.dependencies import hf_subprocess_env
 from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
 
 _QWEN_VENV = "qwen-asr"
@@ -185,7 +186,14 @@ class QwenASR:
                 }
             )
 
-            env = _clean_subprocess_env()
+            # Ensure the ASR model (and, when used, the companion forced aligner)
+            # are cached once (cross-node locked) and load the child offline so
+            # its from_pretrained skips the HF Hub revision check that 429s under
+            # many parallel jobs. Both Qwen3-ASR and Qwen3-ForcedAligner were
+            # observed rate-limiting, so both must be cached before going offline.
+            revision = model.revision if model is not None else "main"
+            also = [(aligner_name, "main")] if return_timestamps else None
+            env = hf_subprocess_env(model_name, revision or "main", also=also, base_env=_clean_subprocess_env())
             result = subprocess.run(
                 [python, "-c", _QWEN_WORKER_SCRIPT],
                 input=input_json,

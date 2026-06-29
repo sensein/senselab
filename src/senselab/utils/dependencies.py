@@ -8,7 +8,7 @@ import threading
 import time
 from functools import lru_cache
 from pathlib import Path
-from typing import Callable, Iterator, Optional, TypeVar
+from typing import Callable, Iterable, Iterator, Optional, TypeVar
 
 logger = logging.getLogger("senselab")
 
@@ -341,6 +341,122 @@ def hf_local_files_only(repo_id: str, revision: str = "main") -> bool:
         return True
     except Exception:
         return False
+
+
+# Env vars that switch HuggingFace libraries to local-cache-only mode. Both are
+# honored at call time (read fresh on each download/HEAD), so toggling them
+# around a load reliably suppresses the network revision-check that 429s under
+# many parallel jobs.
+_HF_OFFLINE_ENV_VARS = ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")
+
+# ``HF_HUB_OFFLINE`` is process-global. ``hf_offline_loading`` serializes its
+# temporary toggle through this lock so concurrent loaders in the same process
+# don't observe each other's env mutation. Model *loads* (not inference) thus
+# run sequentially while the env is flipped — acceptable since loads are
+# one-time and cached. (Mirrors the global-state-lock precedent of
+# ``speechbrain_loading_cwd``.)
+_hf_offline_lock = threading.RLock()
+
+
+def hf_subprocess_env(
+    repo_id: "str | os.PathLike[str]",
+    revision: str = "main",
+    *,
+    also: Optional[Iterable[tuple[str, str]]] = None,
+    base_env: Optional[dict] = None,
+) -> dict:
+    """Build an environment dict for a subprocess that loads HF model(s) offline.
+
+    Ensures every referenced snapshot is present locally first (download-once
+    across processes/nodes via :func:`ensure_hf_model`), then returns a copy of
+    ``base_env`` (default ``os.environ``) with ``HF_HUB_OFFLINE`` /
+    ``TRANSFORMERS_OFFLINE`` set to ``"1"`` so the child's ``from_pretrained``
+    skips the network revision check that rate-limits (429) under many parallel
+    jobs.
+
+    The offline flag is only set when **all** referenced models are cached — if
+    any is missing, the env is returned unchanged so the child can still
+    download it online. Use ``also`` for workers that load more than one model
+    (e.g. Qwen3-ASR + its companion forced aligner).
+
+    This is the subprocess analogue of :func:`hf_offline_loading`: in-process
+    loaders use the context manager, subprocess-venv workers (NeMo / Qwen /
+    Granite) inherit the offline flag through this env. No caller-set env vars
+    are required.
+    """
+    env = dict(os.environ if base_env is None else base_env)
+    repos = [(os.fspath(repo_id), revision), *(also or [])]
+    if all(hf_local_files_only(rid, rev) for rid, rev in repos):
+        for var in _HF_OFFLINE_ENV_VARS:
+            env[var] = "1"
+    return env
+
+
+@contextlib.contextmanager
+def hf_offline_loading(repo_id: "str | os.PathLike[str]", revision: str = "main") -> Iterator[bool]:
+    """Force local-cache-only HuggingFace loading for the duration of the block.
+
+    Ensures the snapshot is present first (download-once across processes/nodes
+    via :func:`ensure_hf_model`: cross-process heartbeat lock + retry-on-429),
+    then sets ``HF_HUB_OFFLINE`` / ``TRANSFORMERS_OFFLINE`` so ``from_pretrained``
+    / ``pipeline`` make **no** network revision-check calls during the load —
+    the source of 429 storms when many jobs load the same model at once.
+    Requires **no** caller configuration.
+
+    If the model cannot be cached (e.g. genuinely offline and never downloaded),
+    the env is left untouched and the block runs normally (online), so behavior
+    degrades gracefully rather than failing.
+
+    Yields:
+        ``True`` if offline mode was engaged (model is cached), else ``False``.
+    """
+    repo_id = os.fspath(repo_id)
+    if not hf_local_files_only(repo_id, revision):
+        yield False
+        return
+    with _hf_offline_lock:
+        saved = {var: os.environ.get(var) for var in _HF_OFFLINE_ENV_VARS}
+        for var in _HF_OFFLINE_ENV_VARS:
+            os.environ[var] = "1"
+        try:
+            yield True
+        finally:
+            for var, prev in saved.items():
+                if prev is None:
+                    os.environ.pop(var, None)
+                else:
+                    os.environ[var] = prev
+
+
+def load_hf_resilient(
+    loader: Callable[..., _T],
+    *args: object,
+    repo_id: "str | os.PathLike[str]",
+    revision: str = "main",
+    **kwargs: object,
+) -> _T:
+    """Load an HF model resiliently: cache-once, load local-only, retry on 429.
+
+    Loader-agnostic wrapper for any in-process model constructor
+    (``transformers.pipeline``, ``*.from_pretrained``, SpeechBrain
+    ``from_hparams``, ...). It:
+
+    1. Ensures the snapshot is present exactly once across processes/nodes
+       (:func:`ensure_hf_model` — cross-process heartbeat lock + retry).
+    2. Runs ``loader(*args, **kwargs)`` with HF libs in local-cache-only mode
+       (:func:`hf_offline_loading`) so no network revision-check fires.
+    3. Retries the load on any residual transient error (5xx / 429 / timeout).
+
+    ``repo_id`` / ``revision`` identify the model for the cache step and are
+    **not** forwarded to ``loader`` — pass the loader's own model/revision
+    arguments via ``*args`` / ``**kwargs`` as usual.
+    """
+
+    def _call() -> _T:
+        with hf_offline_loading(repo_id, revision):
+            return loader(*args, **kwargs)
+
+    return retry_on_transient_error(_call)
 
 
 def _cached_error(cached: dict) -> Exception:
