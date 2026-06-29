@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, HFModel, ScriptLine, _select_device_and_dtype
+from senselab.utils.dependencies import hf_offline_loading
 
 
 class GraniteSpeechASR:
@@ -81,8 +82,13 @@ class GraniteSpeechASR:
 
         cache_key = f"{model_name}@{device_type.value}"
         if cache_key not in cls._cache:
-            processor = AutoProcessor.from_pretrained(model_name)
-            mdl = AutoModelForSpeechSeq2Seq.from_pretrained(model_name, dtype=dtype)
+            # Cache-once (cross-node locked) then load from the local cache only,
+            # so parallel jobs don't 429 on the HF Hub revision check. The model
+            # id carries no explicit revision here, so the default "main" is used.
+            revision = model.revision if model is not None else "main"
+            with hf_offline_loading(model_name, revision or "main"):
+                processor = AutoProcessor.from_pretrained(model_name)
+                mdl = AutoModelForSpeechSeq2Seq.from_pretrained(model_name, dtype=dtype)
             if device_type == DeviceType.CUDA and torch.cuda.is_available():
                 mdl = mdl.cuda()
             elif device_type == DeviceType.MPS and torch.backends.mps.is_available():

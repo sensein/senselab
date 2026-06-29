@@ -20,6 +20,7 @@ from senselab.utils.data_structures import (
 )
 from senselab.utils.data_structures.logging import logger
 from senselab.utils.data_structures.model import get_huggingface_token
+from senselab.utils.dependencies import load_hf_resilient
 
 
 class HuggingFaceASR:
@@ -84,9 +85,17 @@ class HuggingFaceASR:
             }
             if return_timestamps is not False:
                 pipeline_kwargs["return_timestamps"] = return_timestamps
+            # Load via the resilient path: download-once (cross-node locked) then
+            # load from the local cache only, so parallel jobs don't 429 on the
+            # HF Hub revision check. No external env vars required.
             cls._pipelines[key] = cast(
                 Pipeline,
-                pipeline(**pipeline_kwargs),  # type: ignore[call-overload]
+                load_hf_resilient(
+                    pipeline,
+                    repo_id=model.path_or_uri,
+                    revision=model.revision or "main",
+                    **pipeline_kwargs,  # type: ignore[arg-type]
+                ),
             )
         return cls._pipelines[key]
 
