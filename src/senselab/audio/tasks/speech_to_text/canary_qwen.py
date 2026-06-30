@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.preprocessing import SegmentStrategy, segment_audios_at_pauses
 from senselab.utils.data_structures import DeviceType, HFModel, ScriptLine, _select_device_and_dtype
 from senselab.utils.dependencies import hf_subprocess_env
 from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
@@ -55,6 +56,15 @@ _CANARY_REQUIREMENTS = [
     "soundfile",
 ]
 _CANARY_PYTHON = "3.12"
+
+# Per-chunk audio ceiling for long-audio splitting. Canary-Qwen was trained on
+# audio up to 40 s and has a 1024-token total budget (prompt + audio + response)
+# at ~12.5 audio tokens/s, so whole long recordings truncate (validated: mean
+# word recovery vs Whisper falls from ~1.0 below ~1024 total tokens to ~0.28 for
+# multi-minute audio). 38 s == 475 audio tokens, leaving ample room in the budget
+# while staying inside the training window. Splitting happens at pauses via
+# ``segment_audios_at_pauses`` so no word is cut.
+_CANARY_WINDOW_S = 38.0
 
 # Worker script — runs inside the isolated venv.
 # The chat-style prompt format with ``audio_locator_tag`` plus
@@ -137,6 +147,7 @@ class CanaryQwenASR:
         audios: List[Audio],
         model: Optional[HFModel] = None,
         device: Optional[DeviceType] = None,
+        chunk_strategy: SegmentStrategy = "greedy",
     ) -> List[ScriptLine]:
         """Transcribe audios with Canary-Qwen via the dedicated subprocess venv.
 
@@ -145,6 +156,14 @@ class CanaryQwenASR:
             model: HF model id (default: ``nvidia/canary-qwen-2.5b``).
             device: CPU or CUDA. CUDA strongly recommended; CPU works but
                 is very slow for a 2.5B-parameter model.
+            chunk_strategy: How to split audio longer than the model's ~40 s
+                window so it does not truncate (see ``segment_audios_at_pauses``):
+                ``"greedy"`` (default, pause-aware greedy packing), ``"dp"``
+                (optimal pause segmentation), or ``"none"`` (no splitting —
+                long audio will truncate). ``greedy`` and ``dp`` were empirically
+                equivalent on annotated long recordings, so the simpler ``greedy``
+                is the default. Each chunk's transcript is concatenated in time
+                order into one ScriptLine per input.
 
         Returns:
             One ``ScriptLine`` per input audio with ``text`` populated.
@@ -158,14 +177,22 @@ class CanaryQwenASR:
         venv_dir = ensure_venv(_CANARY_VENV, _CANARY_REQUIREMENTS, python_version=_CANARY_PYTHON)
         python = venv_python(venv_dir)
 
+        # Split any over-window audio into <=_CANARY_WINDOW_S sub-chunks at pauses
+        # so the model never truncates. Audio within the window yields a single
+        # chunk, so behavior is unchanged for short clips.
+        chunks_per_audio = segment_audios_at_pauses(audios, max_segment_s=_CANARY_WINDOW_S, strategy=chunk_strategy)
+
         with tempfile.TemporaryDirectory(prefix="senselab-canary-qwen-") as tmpdir:
             tmp = Path(tmpdir)
 
             audio_paths: List[str] = []
-            for i, audio in enumerate(audios):
-                path = str(tmp / f"audio_{i}.wav")
-                audio.save_to_file(path)
-                audio_paths.append(path)
+            chunk_counts: List[int] = []
+            for ai, chunks in enumerate(chunks_per_audio):
+                chunk_counts.append(len(chunks))
+                for ci, chunk in enumerate(chunks):
+                    path = str(tmp / f"audio_{ai}_{ci}.wav")
+                    chunk.save_to_file(path)
+                    audio_paths.append(path)
 
             input_json = json.dumps(
                 {
@@ -185,14 +212,22 @@ class CanaryQwenASR:
                 input=input_json,
                 capture_output=True,
                 text=True,
-                timeout=1200,  # 2.5B-param model load + per-audio generate; allow 20 min.
+                # Model load + per-chunk generate; a long recording is many
+                # chunks, so allow 30 min (load dominates; chunks are fast).
+                timeout=1800,
                 env=env,
             )
 
             output = parse_subprocess_result(result, "Canary-Qwen ASR")
+            entries = output.get("results", [])
 
+            # Regroup the per-chunk transcripts back into one ScriptLine per input
+            # audio, concatenating chunk text in time order.
             results: List[ScriptLine] = []
-            for entry in output.get("results", []):
-                results.append(ScriptLine(text=entry.get("text", "")))
+            pos = 0
+            for count in chunk_counts:
+                texts = [(entries[pos + c].get("text") or "").strip() for c in range(count) if pos + c < len(entries)]
+                pos += count
+                results.append(ScriptLine(text=" ".join(t for t in texts if t)))
 
             return results
