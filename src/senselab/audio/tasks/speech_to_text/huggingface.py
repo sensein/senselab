@@ -6,6 +6,7 @@ function at once, rather than calling the function with one audio at a time.
 """
 
 import time
+from functools import partial
 from typing import Any, Dict, List, Optional, Union, cast
 
 from transformers import Pipeline, pipeline
@@ -73,10 +74,14 @@ class HuggingFaceASR:
             # When the caller asked for return_timestamps=False, the safest
             # path across all three is to OMIT the kwarg and let each
             # pipeline class default to its no-timestamps mode.
+            # ``revision`` is NOT put in pipeline_kwargs: ``load_hf_resilient``
+            # reserves the ``revision`` kwarg for its cache step and does not
+            # forward it to the loader, so passing it both ways collides. Bind it
+            # onto the loader via ``partial`` and pass it to the cache step too.
+            revision = model.revision or "main"
             pipeline_kwargs: Dict[str, Any] = {
                 "task": "automatic-speech-recognition",
                 "model": model.path_or_uri,
-                "revision": model.revision,
                 "max_new_tokens": max_new_tokens,
                 "chunk_length_s": chunk_length_s,
                 "batch_size": batch_size,
@@ -91,9 +96,9 @@ class HuggingFaceASR:
             cls._pipelines[key] = cast(
                 Pipeline,
                 load_hf_resilient(
-                    pipeline,
+                    partial(pipeline, revision=revision),
                     repo_id=model.path_or_uri,
-                    revision=model.revision or "main",
+                    revision=revision,
                     **pipeline_kwargs,  # type: ignore[arg-type]
                 ),
             )
