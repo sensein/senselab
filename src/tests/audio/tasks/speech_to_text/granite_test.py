@@ -18,7 +18,7 @@ import pytest
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.preprocessing import downmix_audios_to_mono, resample_audios
 from senselab.audio.tasks.speech_to_text.granite import GraniteSpeechASR
-from senselab.utils.data_structures import HFModel
+from senselab.utils.data_structures import DeviceType, HFModel
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 FIXTURE_WAV = REPO_ROOT / "src" / "tests" / "data_for_testing" / "audio_48khz_mono_16bits.wav"
@@ -34,6 +34,55 @@ def _load_16k_mono_fixture() -> Audio:
     if audio.sampling_rate != 16000:
         audio = resample_audios([audio], resample_rate=16000)[0]
     return audio
+
+
+def test_granite_forwards_revision_to_from_pretrained(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The requested model revision reaches both ``from_pretrained`` calls.
+
+    Regression: ``hf_offline_loading`` caches/locks the *requested* revision and
+    flips HF to offline, but the loaders were called without ``revision`` and so
+    defaulted to ``"main"`` — an offline cache-miss (or wrong version) for any
+    non-``main`` revision.
+    """
+    import contextlib
+    from collections.abc import Iterator
+
+    import transformers
+
+    from senselab.audio.tasks.speech_to_text import granite as granite_mod
+
+    recorded: dict = {}
+
+    def _fake_processor(name: str, **kwargs: object) -> object:
+        recorded["processor_revision"] = kwargs.get("revision")
+        return object()
+
+    def _fake_model(name: str, **kwargs: object) -> object:
+        recorded["model_revision"] = kwargs.get("revision")
+        return object()
+
+    @contextlib.contextmanager
+    def _noop_offline(repo_id: object, revision: str = "main") -> Iterator[bool]:
+        yield True
+
+    monkeypatch.setattr(transformers.AutoProcessor, "from_pretrained", _fake_processor)
+    monkeypatch.setattr(transformers.AutoModelForSpeechSeq2Seq, "from_pretrained", _fake_model)
+    monkeypatch.setattr(granite_mod, "hf_offline_loading", _noop_offline)
+
+    class _FakeModel:
+        path_or_uri = "fake/granite-speech"
+        revision = "rev-xyz"
+
+    granite_mod.GraniteSpeechASR._cache.clear()
+    result = granite_mod.GraniteSpeechASR.transcribe_with_granite(
+        audios=[],
+        model=_FakeModel(),  # type: ignore[arg-type]
+        device=DeviceType.CPU,
+    )
+
+    assert result == []  # no audios -> no transcription, model just loaded
+    assert recorded["processor_revision"] == "rev-xyz"
+    assert recorded["model_revision"] == "rev-xyz"
 
 
 @pytest.mark.skipif(
