@@ -82,17 +82,19 @@ def _pause_candidates(
         return []
     norm = _normalized(rms)
     thr = float(torch.quantile(rms, silence_percentile / 100.0).item())
-    quiet = rms <= thr
+    # Materialize the mask to a Python list once: element-by-element ``bool(quiet[i])``
+    # on a tensor is very slow over the many frames of a long recording.
+    quiet = (rms <= thr).tolist()
     min_frames = max(1, int(round(min_pause_s * sr / hop)))
     out: List[Tuple[float, float]] = []
-    n = rms.shape[0]
+    n = len(quiet)
     i = 0
     while i < n:
-        if not bool(quiet[i]):
+        if not quiet[i]:
             i += 1
             continue
         j = i
-        while j < n and bool(quiet[j]):
+        while j < n and quiet[j]:
             j += 1
         if (j - i) >= min_frames:
             k = i + int(rms[i:j].argmin().item())
@@ -198,6 +200,14 @@ def pause_aware_boundaries(
     """
     if max_segment_s <= 0:
         raise ValueError(f"max_segment_s must be strictly positive, got {max_segment_s!r}.")
+    if min_pause_s <= 0:
+        raise ValueError(f"min_pause_s must be strictly positive, got {min_pause_s!r}.")
+    if energy_frame_s <= 0:
+        raise ValueError(f"energy_frame_s must be strictly positive, got {energy_frame_s!r}.")
+    if not 0.0 <= silence_percentile <= 100.0:
+        raise ValueError(f"silence_percentile must be in [0, 100], got {silence_percentile!r}.")
+    if cut_penalty < 0:
+        raise ValueError(f"cut_penalty must be non-negative, got {cut_penalty!r}.")
 
     duration = audio.waveform.shape[1] / audio.sampling_rate
     if strategy == "none":
