@@ -83,8 +83,11 @@ try:
     audio_paths = args["audio_paths"]
     model_name = args["model_name"]
     device = args["device"]
+    revision = args.get("revision") or "main"
 
-    model = SALM.from_pretrained(model_name)
+    # Forward the revision the parent cached/locked; loading under offline mode
+    # without it would look for the default "main" snapshot and cache-miss.
+    model = SALM.from_pretrained(model_name, revision=revision)
     if device == "cuda" and torch.cuda.is_available():
         model = model.cuda()
 
@@ -130,6 +133,33 @@ except Exception as exc:
     print(json.dumps({"error": err}))
     sys.exit(1)
 """
+
+
+def _regroup_chunk_transcripts(entries: List[dict], chunk_counts: List[int]) -> List[str]:
+    """Concatenate per-chunk worker transcripts back into one text per input audio.
+
+    ``entries`` are the worker results in flattened chunk order; ``chunk_counts[i]``
+    is how many chunks input ``i`` was split into. Returns one joined transcript
+    per input audio, in input order.
+
+    Raises:
+        RuntimeError: if the worker returned a different number of chunk results
+            than were sent. Advancing past a shortfall would silently drop text
+            and misalign every downstream audio, so we fail loudly instead.
+    """
+    expected = sum(chunk_counts)
+    if len(entries) != expected:
+        raise RuntimeError(
+            f"Canary-Qwen returned {len(entries)} chunk transcripts but {expected} were expected "
+            "(worker likely failed on some chunks); refusing to emit a misaligned transcript."
+        )
+    texts: List[str] = []
+    pos = 0
+    for count in chunk_counts:
+        parts = [(entries[pos + c].get("text") or "").strip() for c in range(count)]
+        pos += count
+        texts.append(" ".join(t for t in parts if t))
+    return texts
 
 
 class CanaryQwenASR:
@@ -194,19 +224,22 @@ class CanaryQwenASR:
                     chunk.save_to_file(path)
                     audio_paths.append(path)
 
+            # Ensure the model is cached once (cross-node locked) and tell the
+            # child to load from the local cache only, so its SALM.from_pretrained
+            # skips the HF Hub revision check that 429s under many parallel jobs.
+            # The same revision is forwarded to the worker so it loads the cached
+            # snapshot rather than the default "main".
+            revision = (model.revision if model is not None else None) or "main"
             input_json = json.dumps(
                 {
                     "audio_paths": audio_paths,
                     "model_name": model_name,
                     "device": device_type.value,
+                    "revision": revision,
                 }
             )
 
-            # Ensure the model is cached once (cross-node locked) and tell the
-            # child to load from the local cache only, so its SALM.from_pretrained
-            # skips the HF Hub revision check that 429s under many parallel jobs.
-            revision = model.revision if model is not None else "main"
-            env = hf_subprocess_env(model_name, revision or "main", base_env=_clean_subprocess_env())
+            env = hf_subprocess_env(model_name, revision, base_env=_clean_subprocess_env())
             result = subprocess.run(
                 [python, "-c", _CANARY_WORKER_SCRIPT],
                 input=input_json,
@@ -223,11 +256,5 @@ class CanaryQwenASR:
 
             # Regroup the per-chunk transcripts back into one ScriptLine per input
             # audio, concatenating chunk text in time order.
-            results: List[ScriptLine] = []
-            pos = 0
-            for count in chunk_counts:
-                texts = [(entries[pos + c].get("text") or "").strip() for c in range(count) if pos + c < len(entries)]
-                pos += count
-                results.append(ScriptLine(text=" ".join(t for t in texts if t)))
-
-            return results
+            texts = _regroup_chunk_transcripts(entries, chunk_counts)
+            return [ScriptLine(text=t) for t in texts]

@@ -37,6 +37,16 @@ DEFAULT_SILENCE_PERCENTILE = 15.0  # frames below this energy percentile are "qu
 DEFAULT_CUT_PENALTY = 0.2  # DP per-cut penalty in normalized-badness units [0, 1]
 DEFAULT_ENERGY_FRAME_S = 0.02  # short-time RMS frame size used to locate cut points
 
+# Tolerance for the ``<= max_segment_s`` feasibility comparisons. Forced-cut
+# positions are built by repeated addition of ``max_segment_s`` (see ``_dp``),
+# so a span that is exactly ``max_segment_s`` long can read as e.g.
+# ``0.30000000000000004`` and spuriously fail an exact ``> max_segment_s``
+# guard — severing the DP chain and collapsing the output to one oversized span.
+# 1e-6 s (well below one sample at any real rate, well above float-accumulation
+# error over thousands of frames) absorbs the rounding without moving any real
+# boundary.
+_FEASIBILITY_EPS = 1e-6
+
 
 def _rms_envelope(audio: Audio, frame_s: float) -> Tuple[torch.Tensor, int, int, int]:
     """Return (per-frame RMS, hop samples, sampling_rate, n_samples)."""
@@ -140,7 +150,7 @@ def _dp(
     raw.sort()
     pts: List[Tuple[float, float]] = [raw[0]]
     for idx in range(1, len(raw)):
-        while raw[idx][0] - pts[-1][0] > max_seg:
+        while raw[idx][0] - pts[-1][0] > max_seg + _FEASIBILITY_EPS:
             ft, fb = _forced_cut(rms, hop, sr, pts[-1][0] + 0.5 * max_seg, pts[-1][0] + max_seg)
             ft = min(max(ft, pts[-1][0] + 1.0), pts[-1][0] + max_seg)
             pts.append((ft, fb))
@@ -155,7 +165,7 @@ def _dp(
         ti, bi = pts[i]
         is_end = i == m - 1
         for j in range(i - 1, -1, -1):
-            if ti - pts[j][0] > max_seg:
+            if ti - pts[j][0] > max_seg + _FEASIBILITY_EPS:
                 break
             add = 0.0 if is_end else (bi + cut_penalty)  # endpoint is not a cut
             c = cost[j] + add
@@ -186,6 +196,9 @@ def pause_aware_boundaries(
     Cuts are placed at pauses (see module docstring). Audio at or under
     ``max_segment_s`` (or ``strategy="none"``) returns a single full-length span.
     """
+    if max_segment_s <= 0:
+        raise ValueError(f"max_segment_s must be strictly positive, got {max_segment_s!r}.")
+
     duration = audio.waveform.shape[1] / audio.sampling_rate
     if strategy == "none":
         return [(0.0, duration)]
