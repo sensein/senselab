@@ -349,13 +349,17 @@ def hf_local_files_only(repo_id: str, revision: str = "main") -> bool:
 # many parallel jobs.
 _HF_OFFLINE_ENV_VARS = ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")
 
-# ``HF_HUB_OFFLINE`` is process-global. ``hf_offline_loading`` serializes its
-# temporary toggle through this lock so concurrent loaders in the same process
-# don't observe each other's env mutation. Model *loads* (not inference) thus
-# run sequentially while the env is flipped — acceptable since loads are
-# one-time and cached. (Mirrors the global-state-lock precedent of
-# ``speechbrain_loading_cwd``.)
-_hf_offline_lock = threading.RLock()
+# ``HF_HUB_OFFLINE`` is process-global. Rather than hold a lock across the whole
+# (potentially slow) model load — which would serialize even unrelated loads —
+# ``hf_offline_loading`` uses a reference count: the first engaged loader captures
+# the prior env and sets the offline vars; the last to exit restores them. This
+# lets concurrent in-process loads run in parallel while keeping the global flag
+# stable for all of them, and makes nested calls in one thread correct without
+# reentrancy tricks. The lock guards only the (fast) counter/env transitions.
+# (Global-state precedent: ``speechbrain_loading_cwd``.)
+_hf_offline_lock = threading.Lock()
+_hf_offline_depth = 0
+_hf_offline_saved_env: dict = {}
 
 
 def hf_subprocess_env(
@@ -414,18 +418,29 @@ def hf_offline_loading(repo_id: "str | os.PathLike[str]", revision: str = "main"
     if not hf_local_files_only(repo_id, revision):
         yield False
         return
+    global _hf_offline_depth
+    # First engaged loader captures the prior env and flips the offline vars;
+    # concurrent/nested loaders just bump the count and share the flag.
     with _hf_offline_lock:
-        saved = {var: os.environ.get(var) for var in _HF_OFFLINE_ENV_VARS}
-        for var in _HF_OFFLINE_ENV_VARS:
-            os.environ[var] = "1"
-        try:
-            yield True
-        finally:
-            for var, prev in saved.items():
-                if prev is None:
-                    os.environ.pop(var, None)
-                else:
-                    os.environ[var] = prev
+        if _hf_offline_depth == 0:
+            _hf_offline_saved_env.clear()
+            _hf_offline_saved_env.update({var: os.environ.get(var) for var in _HF_OFFLINE_ENV_VARS})
+            for var in _HF_OFFLINE_ENV_VARS:
+                os.environ[var] = "1"
+        _hf_offline_depth += 1
+    try:
+        yield True
+    finally:
+        # Last loader out restores the env captured by the first one in.
+        with _hf_offline_lock:
+            _hf_offline_depth -= 1
+            if _hf_offline_depth == 0:
+                for var, prev in _hf_offline_saved_env.items():
+                    if prev is None:
+                        os.environ.pop(var, None)
+                    else:
+                        os.environ[var] = prev
+                _hf_offline_saved_env.clear()
 
 
 def load_hf_resilient(

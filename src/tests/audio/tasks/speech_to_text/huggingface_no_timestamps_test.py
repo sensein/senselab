@@ -44,6 +44,49 @@ def _load_16k_mono_fixture() -> Audio:
     return audio
 
 
+def test_hf_pipeline_forwards_revision_without_collision(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_get_hf_asr_pipeline forwards the revision to the loader without collision.
+
+    Regression: ``revision`` was placed in ``pipeline_kwargs`` AND passed as the
+    reserved ``revision=`` argument of ``load_hf_resilient``, raising
+    ``TypeError: got multiple values for keyword argument 'revision'`` for every
+    HF-pipeline transcription. This test builds the pipeline with a fake loader
+    (no model download) and asserts the revision reaches it exactly once.
+    """
+    from senselab.audio.tasks.speech_to_text import huggingface as hf_mod
+    from senselab.utils import dependencies
+    from senselab.utils.data_structures import DeviceType
+
+    # Not cached -> load_hf_resilient just calls the loader once (no offline toggle).
+    monkeypatch.setattr(dependencies, "hf_local_files_only", lambda *a, **k: False)
+
+    recorded: dict = {}
+
+    def _fake_pipeline(**kwargs: object) -> object:
+        recorded.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(hf_mod, "pipeline", _fake_pipeline)
+
+    class _FakeModel:
+        path_or_uri = "openai/whisper-tiny"
+        revision = "rev-xyz"
+
+    hf_mod.HuggingFaceASR._pipelines.clear()
+    out = hf_mod.HuggingFaceASR._get_hf_asr_pipeline(
+        model=_FakeModel(),  # type: ignore[arg-type]
+        return_timestamps=False,
+        max_new_tokens=128,
+        chunk_length_s=30,
+        batch_size=1,
+        device=DeviceType.CPU,
+    )
+
+    assert out is not None
+    assert recorded["revision"] == "rev-xyz"  # forwarded to the loader exactly once
+    assert recorded["model"] == "openai/whisper-tiny"
+
+
 @pytest.mark.skipif(
     not ctc_available,
     reason=f"facebook/wav2vec2-base-960h not in HF cache at {CTC_CACHE_DIR}",

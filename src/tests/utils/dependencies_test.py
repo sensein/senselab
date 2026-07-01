@@ -70,6 +70,58 @@ def test_offline_loading_restores_on_exception(cached: None, monkeypatch: pytest
     assert "HF_HUB_OFFLINE" not in os.environ
 
 
+def test_offline_loading_nested_keeps_env_until_outermost_exit(cached: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Nested blocks keep the offline vars set until the OUTERMOST block exits."""
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+
+    with hf_offline_loading("model_a") as engaged_a:
+        assert engaged_a is True
+        assert os.environ["HF_HUB_OFFLINE"] == "1"
+        with hf_offline_loading("model_b") as engaged_b:
+            assert engaged_b is True
+            assert os.environ["HF_HUB_OFFLINE"] == "1"
+        # Inner exit must NOT clear the flag while the outer block is still active.
+        assert os.environ["HF_HUB_OFFLINE"] == "1"
+
+    assert "HF_HUB_OFFLINE" not in os.environ
+
+
+def test_offline_loading_concurrent_does_not_serialize(cached: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two cached loads can be inside the block simultaneously (no whole-load serialization).
+
+    A rendezvous barrier only releases if both threads are inside their
+    ``hf_offline_loading`` block at once. A design that holds a lock across the
+    whole block would keep the second thread out until the first exits, so the
+    barrier would time out (BrokenBarrierError).
+    """
+    import threading
+
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+
+    barrier = threading.Barrier(2, timeout=5)
+    errors: list = []
+
+    def worker() -> None:
+        try:
+            with hf_offline_loading("some/model") as engaged:
+                assert engaged is True
+                assert os.environ["HF_HUB_OFFLINE"] == "1"
+                barrier.wait()  # both threads must reach here together
+        except Exception as exc:  # BrokenBarrierError if the loads serialized
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors, f"concurrent cached loads were serialized: {errors!r}"
+    assert "HF_HUB_OFFLINE" not in os.environ  # env cleared once the last holder exits
+
+
 # ── hf_subprocess_env ──────────────────────────────────────────────
 
 
