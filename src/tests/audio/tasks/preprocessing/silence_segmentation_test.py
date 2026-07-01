@@ -124,6 +124,24 @@ def test_nonpositive_max_segment_raises(bad: float) -> None:
             pause_aware_boundaries(_make_audio(10.0), max_segment_s=bad, strategy=strategy)
 
 
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"min_pause_s": 0.0},
+        {"min_pause_s": -1.0},
+        {"energy_frame_s": 0.0},
+        {"energy_frame_s": -0.02},
+        {"silence_percentile": -1.0},
+        {"silence_percentile": 101.0},
+        {"cut_penalty": -0.1},
+    ],
+)
+def test_invalid_params_raise(kwargs: dict) -> None:
+    """Out-of-range tuning params are rejected with a clear ValueError."""
+    with pytest.raises(ValueError):
+        pause_aware_boundaries(_make_audio(10.0), max_segment_s=5.0, strategy="dp", **kwargs)
+
+
 def test_segment_audios_at_pauses_returns_subaudios() -> None:
     """segment_audios_at_pauses returns sub-Audios whose durations tile each input."""
     audio = _make_audio(20.0, silence_times=(4, 8, 12, 16))
