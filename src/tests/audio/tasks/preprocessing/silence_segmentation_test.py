@@ -100,6 +100,30 @@ def test_unknown_strategy_raises() -> None:
         pause_aware_boundaries(_make_audio(5.0), max_segment_s=38.0, strategy="bogus")  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize("max_seg", [0.99, 0.8, 0.3, 0.1])
+def test_dp_tiles_sub_second_windows(max_seg: float) -> None:
+    """DP must tile into <= max_seg spans even for small windows.
+
+    Regression: forced-cut positions are built by repeated addition of
+    ``max_seg``, so an exact-float feasibility guard (``ti - t_j > max_seg``)
+    tripped on accumulated rounding (e.g. ``0.30000000000000004 > 0.3``),
+    severed the DP chain, and returned a SINGLE full-length span far exceeding
+    the cap with no error. A comparison tolerance fixes it.
+    """
+    audio = _make_audio(30.0)  # pause-less -> all cuts are forced at the cap
+    spans = pause_aware_boundaries(audio, max_segment_s=max_seg, strategy="dp")
+    _assert_valid_tiling(spans, 30.0, max_seg)
+    assert len(spans) > 1, "DP collapsed to a single oversized span"
+
+
+@pytest.mark.parametrize("bad", [0.0, -1.0])
+def test_nonpositive_max_segment_raises(bad: float) -> None:
+    """A non-positive max_segment_s is rejected (would otherwise infinite-loop)."""
+    for strategy in ("greedy", "dp"):
+        with pytest.raises(ValueError, match="max_segment_s"):
+            pause_aware_boundaries(_make_audio(10.0), max_segment_s=bad, strategy=strategy)
+
+
 def test_segment_audios_at_pauses_returns_subaudios() -> None:
     """segment_audios_at_pauses returns sub-Audios whose durations tile each input."""
     audio = _make_audio(20.0, silence_times=(4, 8, 12, 16))

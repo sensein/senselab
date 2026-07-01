@@ -21,7 +21,11 @@ import pytest
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.preprocessing import downmix_audios_to_mono, resample_audios
-from senselab.audio.tasks.speech_to_text.canary_qwen import CanaryQwenASR
+from senselab.audio.tasks.speech_to_text.canary_qwen import (
+    _CANARY_WORKER_SCRIPT,
+    CanaryQwenASR,
+    _regroup_chunk_transcripts,
+)
 from senselab.utils.data_structures import HFModel
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
@@ -37,6 +41,39 @@ def _load_16k_mono_fixture() -> Audio:
     if audio.sampling_rate != 16000:
         audio = resample_audios([audio], resample_rate=16000)[0]
     return audio
+
+
+def test_regroup_chunk_transcripts_groups_in_input_order() -> None:
+    """Per-chunk texts are concatenated (in order) into one transcript per input."""
+    entries = [{"text": "a1"}, {"text": "a2"}, {"text": "b1"}, {"text": "c1"}, {"text": "c2"}, {"text": "c3"}]
+    texts = _regroup_chunk_transcripts(entries, [2, 1, 3])
+    assert texts == ["a1 a2", "b1", "c1 c2 c3"]
+
+
+def test_regroup_chunk_transcripts_raises_on_worker_shortfall() -> None:
+    """A worker that returns fewer chunks than sent must fail loudly, not silently.
+
+    Regression: advancing ``pos`` by the *expected* count while guarding the
+    index dropped the missing chunks AND misaligned every downstream audio,
+    silently corrupting/truncating transcripts with no error.
+    """
+    entries = [{"text": "a1"}, {"text": "a2"}, {"text": "b1"}]  # 3 returned...
+    with pytest.raises(RuntimeError, match="chunk"):
+        _regroup_chunk_transcripts(entries, [2, 1, 3])  # ...but 6 expected
+
+
+def test_canary_worker_loads_requested_revision() -> None:
+    """The worker forwards the requested revision to SALM.from_pretrained.
+
+    Regression: hf_subprocess_env caches/locks the requested revision and flips
+    the child to offline, but the worker called SALM.from_pretrained(model_name)
+    with no revision, defaulting to 'main' — an offline cache-miss for any
+    non-main revision.
+    """
+    # Worker reads a revision from its input payload...
+    assert 'args["revision"]' in _CANARY_WORKER_SCRIPT or 'args.get("revision"' in _CANARY_WORKER_SCRIPT
+    # ...and forwards it to the model loader.
+    assert "revision=revision" in _CANARY_WORKER_SCRIPT
 
 
 @pytest.mark.skipif(
