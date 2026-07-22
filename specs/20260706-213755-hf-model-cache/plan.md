@@ -78,3 +78,21 @@ src/tests/**                 # Per-backend behavior-preserving tests (existing f
 | Violation | Why Needed | Simpler Alternative Rejected Because |
 |-----------|------------|-------------------------------------|
 | — | — | — |
+
+## Extensibility: provider-agnostic core (future Tier-B providers)
+
+The coordination core — download-once via `_HeartbeatLock`, the `CachedModelRecord` sidecar, retry, and offline reuse — is factored as a **provider-agnostic** primitive so it can serve non-HuggingFace model sources later without re-implementation:
+
+```python
+ensure_cached_resource(key, fetch_fn, version_probe=None) -> Path
+```
+
+The HuggingFace adapter (this feature) supplies `HfApi().model_info(repo_id, revision=ref).sha` as its `version_probe`, giving the full FR-003/FR-015 immutable-version verification. **This feature ships ONLY the HuggingFace adapter** (per spec Assumptions / Out of Scope); the note records the seam so the extension is cheap.
+
+A **follow-up feature** (separate `/speckit.specify`) can register adapters for the non-HF backends, in two tiers:
+
+- **Tier A (full guarantees)** — sources that are actually HuggingFace-backed:
+  - **SPARC** (`sparc.load_model`): its subprocess venv already depends on `huggingface-hub`, so weights come from the Hub; capture the internal language→repo mapping and pre-stage + run its worker with the reworked `hf_subprocess_env`.
+  - **Coqui HF-hosted models** (e.g. `coqui/XTTS-v2`): route through the HF repo.
+- **Tier B (download-once + offline reuse, no SHA verification)** — sources with no immutable-version concept:
+  - **s3prl** (`torch.hub`), **yamnet** (TF-Hub), and **Coqui server-only models**: register their download as `fetch_fn` with `version_probe=None`. They gain download-once coordination, no per-load re-fetch, offline reuse, and the freeze switches — everything except HF-style SHA verification, which their source cannot provide.
