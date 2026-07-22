@@ -63,6 +63,22 @@ All findings grounded in the installed packages: `huggingface_hub` 1.11.0, `tran
 
 **Rationale**: Spec states a source with no version concept at all is out of scope. Forcing them through the HF resolver would add complexity with no 429 benefit.
 
+## D7. Defects in the existing (pre-#527) mechanism this rework must fix, not inherit
+
+A high-effort review of the pre-#527 code (`utils/data_structures/model.py` + the download-once helpers in `utils/dependencies.py`) found the "already implemented" caching does download-once coordination but has concrete defects. The rework must **fix** these, not reuse them as-is:
+
+| Pre-#527 defect | Why it bites | Design response |
+|---|---|---|
+| **`_HeartbeatLock` stale-break `unlink()`s the lockfile then re-acquires** | A live-but-CPU-starved holder (routine under 100-job load) is misjudged dead; `filelock` then locks a *new* inode at the same path → two processes write the same cache dir → **corruption**. The heartbeat proves only that the daemon thread scheduled, not that the download is healthy. | Replace with a **safe lease**: record owner identity (pid/host) + heartbeat; only take over when the owner is **provably gone**; never unlink a lock held by a live owner; bound the wait. (new task T010a) |
+| **`ensure_hf_model` returns a branch name, not a SHA** (`_get_cached_commit_hash` falls through to `return revision`) | The whole rework pins by *immutable SHA*; trusting this return would pin to `"main"`. | `resolve_model` derives the SHA **independently** via `model_info` / the `refs/<ref>` file and never trusts `ensure_hf_model`'s return. (T008) |
+| **`is_hf_model_cached` returns True under `HF_HUB_OFFLINE=1` for uncached models** | Reports success for a model that isn't present → confusing deep loader failure. | Cache-identity check verifies an actual snapshot exists; offline mode never fabricates presence. (T008) |
+| **`config.json` presence treated as "fully cached"** | A partial/aborted snapshot is treated as complete and never re-downloaded (no self-heal). | Corruption-gated fast path: `scan_cache_dir().warnings` / missing-file check → treat as absent and re-obtain. (T008) |
+| **No TTL anywhere** — cached models never re-checked; error results cached forever | Silent version staleness; a since-published revision keeps failing. | Bounded 7-day window on both success and error records (FR-004/005; data-model E3). |
+| **Only guards download + existence validation, never the load-time revision check** | The actual `from_pretrained`/`pipeline`/`from_hparams` still HEADs the Hub → the 429 source was never covered. | SHA-pin + `local_files_only=True` at the loader (D1); subprocess offline env for workers. |
+| **`_write_result_cache` is non-atomic** | Crash/concurrent write → truncated JSON → silent re-fetch. | Atomic write-then-`os.replace` (T005). |
+
+**Conclusion:** the 429 problem is not merely "not every model goes through the existing channel." Even full adoption of the pre-#527 channel would still 429 (it never covered the load path) and could corrupt the cache (the lock). A refactor, not a patch, is warranted.
+
 ---
 
 ## Resolved unknowns

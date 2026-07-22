@@ -33,14 +33,16 @@
 **⚠️ CRITICAL**: No user-story work can begin until this phase is complete.
 
 - [ ] T004 [P] Write failing tests for `CachedModelRecord` I/O in `src/tests/utils/hf_model_cache_test.py`: round-trip write/read, `schema_version` present, unknown `schema_version` → treated as absent, torn/corrupt JSON → treated as absent.
+- [ ] T004a [P] Write failing lock-safety test in `src/tests/utils/hf_model_cache_test.py`: a lock whose heartbeat has lapsed but whose **owner process is still alive** must NOT be broken — assert a waiter never acquires concurrently with a live owner (no double-holder), reproducing the pre-#527 `_HeartbeatLock` unlink-break cache-corruption race (research D7).
 - [ ] T005 Implement `CachedModelRecord` (dataclass + `schema_version`) with atomic write-then-`os.replace` read/write in `src/senselab/utils/hf_model_cache.py`, superseding `_read_result_cache`/`_write_result_cache` and adding `resolved_sha` + `last_verified_epoch` (data-model E3).
 - [ ] T006 [P] Write failing test for `ResolvedModel` shape (full-SHA invariant, `snapshot_path`, `from_cache`) in `src/tests/utils/hf_model_cache_test.py`.
 - [ ] T007 Implement `ResolvedModel` dataclass in `src/senselab/utils/hf_model_cache.py` (data-model E2).
-- [ ] T008 Implement cache-layer identity helpers in `src/senselab/utils/hf_model_cache.py`: `resolve_local_sha(repo_id, ref)` (read `refs/<ref>` / `try_to_load_from_cache(...).parent.name`, compare against `_CACHED_NO_EXIST` sentinel) and `snapshot_dir_for(repo_id, sha)`; detect partial/corrupt snapshot via `scan_cache_dir().warnings` **and treat a corrupt/partial snapshot as absent so `resolve_model` re-obtains it** (research D2/D5 gotcha 6).
+- [ ] T008 Implement cache-layer identity helpers in `src/senselab/utils/hf_model_cache.py`: `resolve_local_sha(repo_id, ref)` (read `refs/<ref>` / `try_to_load_from_cache(...).parent.name`, compare against `_CACHED_NO_EXIST` sentinel) and `snapshot_dir_for(repo_id, sha)`; detect partial/corrupt snapshot via `scan_cache_dir().warnings` **and treat a corrupt/partial snapshot as absent so `resolve_model` re-obtains it** (research D2/D5 gotcha 6). Resolve the SHA **independently** (`model_info` / `refs/<ref>`) — never trust `ensure_hf_model`'s return, which can be a branch name (research D7) — and never let `HF_HUB_OFFLINE=1` fabricate cache presence for an absent snapshot.
 - [ ] T009 Implement `resolve_model(repo_id, ref="main", *, repo_type="model", token=None)` orchestration skeleton in `src/senselab/utils/hf_model_cache.py`: freeze-precedence → record-freshness → coordinated re-check → stage → verify (each branch stubbed to be filled by US1–US3), reusing `ensure_hf_model`, `_HeartbeatLock`, `retry_on_transient_error` from `dependencies.py`. Build the coordination core as a **provider-agnostic** `ensure_cached_resource(key, fetch_fn, version_probe=None)` with the HuggingFace adapter (`model_info(...).sha` as `version_probe`) layered on top, so future non-HF Tier-B providers can reuse the download-once/offline/freeze core (see plan.md "Extensibility"). Only the HF adapter is delivered in this feature.
 - [ ] T010 Re-export the new public surface (`resolve_model`, `ResolvedModel`, `load_hf_resilient`, `hf_subprocess_env`, `run_version_freeze`) from `src/senselab/utils/dependencies.py` so existing import paths keep working (back-compat).
+- [ ] T010a Replace `_HeartbeatLock`'s unlink-based stale-break with a **safe lease** in `src/senselab/utils/dependencies.py`: record owner identity (pid/host) alongside the heartbeat, take over a lock **only when the owner is provably gone** (never unlink a lock held by a live process), and bound the total wait. This is the coordination primitive `resolve_model`'s download/re-check reuse, so it must not corrupt the cache under CPU-starved holders (research D7; makes T004a pass).
 
-**Checkpoint**: Record store + resolver scaffold exist; user stories can now be implemented.
+**Checkpoint**: Record store + resolver scaffold + a safe cross-process lock exist; user stories can now be implemented.
 
 ---
 
@@ -249,4 +251,4 @@ Task: T056 audio_analysis/pii_subprocess.py
 - [P] = different files, no incomplete-task dependency.
 - Unit tests must not touch the network or GPU — monkeypatch `HfApi.model_info` and use a temp HF cache; heavy behavior checks (T062) run on SLURM.
 - Commit after each task or logical group; keep public APIs byte-identical for un-migrated callers throughout (strangler-fig).
-- **Total: 65 tasks** — Setup 3, Foundational 7, US1 9, US2 7, US3 10, US4 23, Polish 6.
+- **Total: 67 tasks** — Setup 3, Foundational 9, US1 9, US2 7, US3 10, US4 23, Polish 6.
