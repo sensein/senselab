@@ -36,7 +36,7 @@
 - [ ] T005 Implement `CachedModelRecord` (dataclass + `schema_version`) with atomic write-then-`os.replace` read/write in `src/senselab/utils/hf_model_cache.py`, superseding `_read_result_cache`/`_write_result_cache` and adding `resolved_sha` + `last_verified_epoch` (data-model E3).
 - [ ] T006 [P] Write failing test for `ResolvedModel` shape (full-SHA invariant, `snapshot_path`, `from_cache`) in `src/tests/utils/hf_model_cache_test.py`.
 - [ ] T007 Implement `ResolvedModel` dataclass in `src/senselab/utils/hf_model_cache.py` (data-model E2).
-- [ ] T008 Implement cache-layer identity helpers in `src/senselab/utils/hf_model_cache.py`: `resolve_local_sha(repo_id, ref)` (read `refs/<ref>` / `try_to_load_from_cache(...).parent.name`, compare against `_CACHED_NO_EXIST` sentinel) and `snapshot_dir_for(repo_id, sha)`; detect partial/corrupt snapshot via `scan_cache_dir().warnings` (research D2/D5 gotcha 6).
+- [ ] T008 Implement cache-layer identity helpers in `src/senselab/utils/hf_model_cache.py`: `resolve_local_sha(repo_id, ref)` (read `refs/<ref>` / `try_to_load_from_cache(...).parent.name`, compare against `_CACHED_NO_EXIST` sentinel) and `snapshot_dir_for(repo_id, sha)`; detect partial/corrupt snapshot via `scan_cache_dir().warnings` **and treat a corrupt/partial snapshot as absent so `resolve_model` re-obtains it** (research D2/D5 gotcha 6).
 - [ ] T009 Implement `resolve_model(repo_id, ref="main", *, repo_type="model", token=None)` orchestration skeleton in `src/senselab/utils/hf_model_cache.py`: freeze-precedence → record-freshness → coordinated re-check → stage → verify (each branch stubbed to be filled by US1–US3), reusing `ensure_hf_model`, `_HeartbeatLock`, `retry_on_transient_error` from `dependencies.py`.
 - [ ] T010 Re-export the new public surface (`resolve_model`, `ResolvedModel`, `load_hf_resilient`, `hf_subprocess_env`, `run_version_freeze`) from `src/senselab/utils/dependencies.py` so existing import paths keep working (back-compat).
 
@@ -54,7 +54,9 @@
 
 - [ ] T011 [P] [US1] Test `resolve_model` performs zero network calls when the SHA snapshot is cached and record is fresh (`test_fresh_within_window_no_network`) in `src/tests/utils/hf_model_cache_test.py` (C1/SC-002).
 - [ ] T012 [P] [US1] Test download-once under concurrency: N threads first-time-load one model → exactly one `snapshot_download` (`test_download_once_concurrent`) in `src/tests/utils/hf_model_cache_test.py` (C2/SC-003).
+- [ ] T012a [P] [US1] Test corrupt/partial cache is detected and re-obtained: fabricate a dangling-symlink / `.incomplete` snapshot → assert `resolve_model` re-stages rather than loading a broken model or silently succeeding (`test_corrupt_cache_reobtained`) in `src/tests/utils/hf_model_cache_test.py` (spec Edge Cases).
 - [ ] T013 [P] [US1] Test in-process loads use `local_files_only=True` + full-SHA `revision` and never rely on `HF_HUB_OFFLINE` env toggling (`test_local_only_sha_pinned_load`) in `src/tests/utils/hf_model_cache_test.py` (research D1).
+- [ ] T013a [P] [US1] Test execution-context parity: the same cached model resolved for an in-process load (`load_hf_resilient`) and for a subprocess worker (`hf_subprocess_env`) yields the same resolved SHA and both make zero Hub calls (`test_inprocess_subprocess_parity`) in `src/tests/utils/hf_model_cache_test.py` (FR-010).
 
 ### Implementation for User Story 1
 
@@ -174,11 +176,11 @@
 
 ## Phase 7: Polish & Cross-Cutting Concerns
 
-- [ ] T058 [P] Add an SC-010 inspection test that greps `src/senselab` for residual bespoke caching/offline/version code and asserts none remains outside `hf_model_cache.py`/`dependencies.py` (`src/tests/utils/hf_model_cache_test.py`).
+- [ ] T058 [P] Add an SC-006/SC-010 inspection test that greps `src/senselab` for residual bespoke caching/offline/version code and asserts none remains outside `hf_model_cache.py`/`dependencies.py` — this is the measurable proxy for "a new backend needs only its model-specific load step" (`src/tests/utils/hf_model_cache_test.py`).
 - [ ] T059 [P] Retire or thin the old `hf_offline_loading` env-toggling context manager (deprecate with a docstring pointer to SHA-pinned loading) in `src/senselab/utils/dependencies.py`; keep `_HeartbeatLock`/`ensure_hf_model`/`retry_on_transient_error`.
 - [ ] T060 Update `src/tests/utils/dependencies_test.py` for the reworked surface (record schema, resolver, freezes) and remove tests asserting env-toggling behavior.
 - [ ] T061 [P] Write the PR description surfacing all thresholds/defaults (7-day window, retry limit, freeze env) per Constitution III / FR-012, and summarizing the migration.
-- [ ] T062 GPU/parallel validation on SLURM: run the ≥100-concurrent-job cached-load check (SC-001) and per-backend smoke tests on a GPU node; record results. (Do NOT run on the login node.)
+- [ ] T062 GPU/parallel validation on SLURM: run the ≥100-concurrent-job cached-load check (SC-001) and per-backend smoke tests on a GPU node; record results. (Do NOT run on the login node.) This is the out-of-CI validation of SC-001; T012 is the CI proxy (thread-simulated concurrency with a `model_info` call counter).
 - [ ] T063 Full quality gate: `cd src && uv run pytest && uv run ruff check . && uv run mypy`.
 
 ---
@@ -247,4 +249,4 @@ Task: T056 audio_analysis/pii_subprocess.py
 - [P] = different files, no incomplete-task dependency.
 - Unit tests must not touch the network or GPU — monkeypatch `HfApi.model_info` and use a temp HF cache; heavy behavior checks (T062) run on SLURM.
 - Commit after each task or logical group; keep public APIs byte-identical for un-migrated callers throughout (strangler-fig).
-- **Total: 63 tasks** — Setup 3, Foundational 7, US1 7, US2 7, US3 10, US4 23, Polish 6.
+- **Total: 65 tasks** — Setup 3, Foundational 7, US1 9, US2 7, US3 10, US4 23, Polish 6.
