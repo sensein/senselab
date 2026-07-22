@@ -149,9 +149,9 @@ code.
   fail with a clear error that identifies the model and the requested version.
 - **FR-009**: The caching, loading, and version-verification behavior MUST be provided by a single
   shared mechanism used uniformly by all model backends, so behavior is consistent and new backends
-  inherit it without re-implementation. All existing backends MUST be migrated onto this mechanism
-  within this feature, incrementally and behind unchanged public APIs, with per-backend tests that
-  preserve current behavior.
+  inherit it without re-implementation. All existing HuggingFace-backed backends MUST be migrated
+  onto this mechanism within this feature, incrementally and behind unchanged public APIs, with
+  per-backend tests that preserve current behavior.
 - **FR-010**: The system MUST provide the same guarantees (FR-001 through FR-009) regardless of the
   execution context in which a model runs.
 - **FR-011**: The system MUST behave correctly when multiple distinct versions of the same model are
@@ -204,8 +204,10 @@ code.
   changes).
 - **SC-009**: With a system-level freeze active, repeated runs load identical model versions and
   perform zero version re-checks, regardless of upstream changes.
-- **SC-010**: Every existing model backend loads through the shared mechanism; none retains
-  bespoke caching or version-checking code (verified by inspection at feature completion).
+- **SC-010**: Every existing HuggingFace-backed model backend loads through the shared mechanism;
+  none retains bespoke caching or version-checking code (verified by inspection at feature
+  completion). Non-HuggingFace loaders (TF-Hub/YAMNet, s3prl, SPARC, Coqui) are out of scope per
+  **Assumptions**.
 
 ## Assumptions
 

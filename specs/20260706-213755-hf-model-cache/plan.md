@@ -9,6 +9,8 @@ Provide a single shared mechanism that every senselab model backend uses to obta
 
 **Key technical driver (from research):** in the installed `huggingface_hub` 1.11 / `transformers` 4.55, offline mode is captured at *import time*, so mid-process `os.environ["HF_HUB_OFFLINE"]="1"` toggling (today's `hf_offline_loading`) does **not** reliably suppress the network revision-check. The mechanism therefore relies on **SHA-pinned `local_files_only=True` loads** (in-process) and the already-correct **fresh-import subprocess env** (subprocess workers), not env toggling.
 
+**Glossary (spec term → implementation term):** "resolved version identity" → `resolved_sha` (full commit SHA); "model hub" → the HuggingFace Hub; "requested version selector / reference" → `requested_ref`; "cached model record" → the `CachedModelRecord` sidecar JSON.
+
 ## Technical Context
 
 **Language/Version**: Python ≥3.11,<3.15 (per `pyproject.toml`); main venv currently CPython 3.12 (CI) / 3.14 (dev)
