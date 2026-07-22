@@ -25,7 +25,7 @@ jobs:
     outputs:
       deploy: ${{ steps.set-deploy-output.outputs.deploy }}
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v7
       with: # no need for the history
         fetch-depth: 0
     - name: Install uv
@@ -70,7 +70,7 @@ jobs:
           python-version: '3.11'
           deploy: true   # Only deploy from this configuration
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v7
     - uses: actions/download-artifact@v6
       with:
         name: documentation
