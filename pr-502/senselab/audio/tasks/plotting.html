@@ -28,10 +28,22 @@
                    pattern=".+" required>
 
 
-            <h2>Submodules</h2>
-            <ul>
-                    <li><a href="plotting/plotting.html">plotting</a></li>
-            </ul>
+
+            <h2>API Documentation</h2>
+                <ul class="memberlist">
+            <li>
+                    <a class="function" href="#play_audio">play_audio</a>
+            </li>
+            <li>
+                    <a class="function" href="#plot_aligned_panels">plot_aligned_panels</a>
+            </li>
+            <li>
+                    <a class="function" href="#plot_specgram">plot_specgram</a>
+            </li>
+            <li>
+                    <a class="function" href="#plot_waveform">plot_waveform</a>
+            </li>
+    </ul>
 
 
 
@@ -49,7 +61,7 @@
 
                         <div class="docstring"><p>Audio visualization and playback utilities.</p>
 
-<p>This module provides functions for visualizing audio data: <code>plot_waveform</code> (amplitude over time), <code>plot_specgram</code> (frequency content over time, linear or mel scale), <code>plot_waveform_and_specgram</code> (stacked layout), and <code>plot_aligned_panels</code> (reusable multi-panel time-aligned visualization supporting waveform, spectrogram, feature overlays, and segment annotations on a shared time axis). Use <code>play_audio</code> for inline audio playback in Jupyter notebooks. All plotting functions support context-aware scaling for different display sizes.</p>
+<p>This module provides functions for visualizing audio data: <code><a href="#plot_waveform">plot_waveform</a></code> (amplitude over time), <code><a href="#plot_specgram">plot_specgram</a></code> (frequency content over time, linear or mel scale), <code>plot_waveform_and_specgram</code> (stacked layout), and <code><a href="#plot_aligned_panels">plot_aligned_panels</a></code> (reusable multi-panel time-aligned visualization supporting waveform, spectrogram, feature overlays, and segment annotations on a shared time axis). Use <code><a href="#play_audio">play_audio</a></code> for inline audio playback in Jupyter notebooks. All plotting functions support context-aware scaling for different display sizes.</p>
 </div>
 
                         <input id="mod-plotting-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
@@ -59,10 +71,651 @@
                         <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;.. include:: ./doc.md&quot;&quot;&quot;</span>  <span class="c1"># noqa: D415</span>
 </span><span id="L-2"><a href="#L-2"><span class="linenos">2</span></a>
 </span><span id="L-3"><a href="#L-3"><span class="linenos">3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.plotting</span><span class="w"> </span><span class="kn">import</span> <span class="n">play_audio</span><span class="p">,</span> <span class="n">plot_aligned_panels</span><span class="p">,</span> <span class="n">plot_specgram</span><span class="p">,</span> <span class="n">plot_waveform</span>  <span class="c1"># noqa: F401</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos">4</span></a>
+</span><span id="L-5"><a href="#L-5"><span class="linenos">5</span></a><span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;play_audio&quot;</span><span class="p">,</span> <span class="s2">&quot;plot_aligned_panels&quot;</span><span class="p">,</span> <span class="s2">&quot;plot_specgram&quot;</span><span class="p">,</span> <span class="s2">&quot;plot_waveform&quot;</span><span class="p">]</span>
 </span></pre></div>
 
 
             </section>
+                <section id="play_audio">
+                            <input id="play_audio-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="def">def</span>
+        <span class="name">play_audio</span><span class="signature pdoc-code condensed">(<span class="param"><span class="n">audio</span><span class="p">:</span> <span class="n"><a href="../data_structures/audio.html#Audio">senselab.audio.data_structures.audio.Audio</a></span></span><span class="return-annotation">) -> <span class="kc">None</span>:</span></span>
+
+                <label class="view-source-button" for="play_audio-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#play_audio"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="play_audio-677"><a href="#play_audio-677"><span class="linenos">677</span></a><span class="k">def</span><span class="w"> </span><span class="nf">play_audio</span><span class="p">(</span><span class="n">audio</span><span class="p">:</span> <span class="n">Audio</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="play_audio-678"><a href="#play_audio-678"><span class="linenos">678</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Play an `Audio` object inline (Jupyter/IPython), supporting 1–2 channels.</span>
+</span><span id="play_audio-679"><a href="#play_audio-679"><span class="linenos">679</span></a>
+</span><span id="play_audio-680"><a href="#play_audio-680"><span class="linenos">680</span></a><span class="sd">    Uses `IPython.display.Audio` to render audio widgets in notebooks. For more</span>
+</span><span id="play_audio-681"><a href="#play_audio-681"><span class="linenos">681</span></a><span class="sd">    than two channels, downmix first.</span>
+</span><span id="play_audio-682"><a href="#play_audio-682"><span class="linenos">682</span></a>
+</span><span id="play_audio-683"><a href="#play_audio-683"><span class="linenos">683</span></a><span class="sd">    Args:</span>
+</span><span id="play_audio-684"><a href="#play_audio-684"><span class="linenos">684</span></a><span class="sd">        audio (Audio):</span>
+</span><span id="play_audio-685"><a href="#play_audio-685"><span class="linenos">685</span></a><span class="sd">            Input audio to play (mono or stereo). Sampling rate is preserved.</span>
+</span><span id="play_audio-686"><a href="#play_audio-686"><span class="linenos">686</span></a>
+</span><span id="play_audio-687"><a href="#play_audio-687"><span class="linenos">687</span></a><span class="sd">    Raises:</span>
+</span><span id="play_audio-688"><a href="#play_audio-688"><span class="linenos">688</span></a><span class="sd">        ValueError: If the waveform has more than 2 channels.</span>
+</span><span id="play_audio-689"><a href="#play_audio-689"><span class="linenos">689</span></a>
+</span><span id="play_audio-690"><a href="#play_audio-690"><span class="linenos">690</span></a><span class="sd">    Example:</span>
+</span><span id="play_audio-691"><a href="#play_audio-691"><span class="linenos">691</span></a><span class="sd">        &gt;&gt;&gt; from pathlib import Path</span>
+</span><span id="play_audio-692"><a href="#play_audio-692"><span class="linenos">692</span></a><span class="sd">        &gt;&gt;&gt; from senselab.audio.data_structures import Audio</span>
+</span><span id="play_audio-693"><a href="#play_audio-693"><span class="linenos">693</span></a><span class="sd">        &gt;&gt;&gt; a1 = Audio(filepath=Path(&quot;sample1.wav&quot;).resolve())</span>
+</span><span id="play_audio-694"><a href="#play_audio-694"><span class="linenos">694</span></a><span class="sd">        &gt;&gt;&gt; play_audio(a1)</span>
+</span><span id="play_audio-695"><a href="#play_audio-695"><span class="linenos">695</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="play_audio-696"><a href="#play_audio-696"><span class="linenos">696</span></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">IPython.display</span><span class="w"> </span><span class="kn">import</span> <span class="n">Audio</span> <span class="k">as</span> <span class="n">DisplayAudio</span>
+</span><span id="play_audio-697"><a href="#play_audio-697"><span class="linenos">697</span></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">IPython.display</span><span class="w"> </span><span class="kn">import</span> <span class="n">display</span>
+</span><span id="play_audio-698"><a href="#play_audio-698"><span class="linenos">698</span></a>
+</span><span id="play_audio-699"><a href="#play_audio-699"><span class="linenos">699</span></a>    <span class="n">waveform</span> <span class="o">=</span> <span class="n">audio</span><span class="o">.</span><span class="n">waveform</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
+</span><span id="play_audio-700"><a href="#play_audio-700"><span class="linenos">700</span></a>    <span class="n">sample_rate</span> <span class="o">=</span> <span class="n">audio</span><span class="o">.</span><span class="n">sampling_rate</span>
+</span><span id="play_audio-701"><a href="#play_audio-701"><span class="linenos">701</span></a>
+</span><span id="play_audio-702"><a href="#play_audio-702"><span class="linenos">702</span></a>    <span class="n">num_channels</span> <span class="o">=</span> <span class="n">waveform</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+</span><span id="play_audio-703"><a href="#play_audio-703"><span class="linenos">703</span></a>    <span class="k">if</span> <span class="n">num_channels</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+</span><span id="play_audio-704"><a href="#play_audio-704"><span class="linenos">704</span></a>        <span class="n">display</span><span class="p">(</span><span class="n">DisplayAudio</span><span class="p">(</span><span class="n">waveform</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">rate</span><span class="o">=</span><span class="n">sample_rate</span><span class="p">))</span>
+</span><span id="play_audio-705"><a href="#play_audio-705"><span class="linenos">705</span></a>    <span class="k">elif</span> <span class="n">num_channels</span> <span class="o">==</span> <span class="mi">2</span><span class="p">:</span>
+</span><span id="play_audio-706"><a href="#play_audio-706"><span class="linenos">706</span></a>        <span class="n">display</span><span class="p">(</span><span class="n">DisplayAudio</span><span class="p">((</span><span class="n">waveform</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">waveform</span><span class="p">[</span><span class="mi">1</span><span class="p">]),</span> <span class="n">rate</span><span class="o">=</span><span class="n">sample_rate</span><span class="p">))</span>
+</span><span id="play_audio-707"><a href="#play_audio-707"><span class="linenos">707</span></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="play_audio-708"><a href="#play_audio-708"><span class="linenos">708</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Waveform with more than 2 channels is not supported.&quot;</span><span class="p">)</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Play an <code>Audio</code> object inline (Jupyter/IPython), supporting 1–2 channels.</p>
+
+<p>Uses <code>IPython.display.Audio</code> to render audio widgets in notebooks. For more
+than two channels, downmix first.</p>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>audio (Audio):</strong>  Input audio to play (mono or stereo). Sampling rate is preserved.</li>
+</ul>
+
+<h6 id="raises">Raises:</h6>
+
+<ul>
+<li><strong>ValueError:</strong>  If the waveform has more than 2 channels.</li>
+</ul>
+
+<h6 id="example">Example:</h6>
+
+<blockquote>
+  <div class="pdoc-code codehilite">
+<pre><span></span><code><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span><span class="w"> </span><span class="nn"><a href="../data_structures.html">senselab.audio.data_structures</a></span><span class="w"> </span><span class="kn">import</span> <span class="n">Audio</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">a1</span> <span class="o">=</span> <span class="n">Audio</span><span class="p">(</span><span class="n">filepath</span><span class="o">=</span><span class="n">Path</span><span class="p">(</span><span class="s2">&quot;sample1.wav&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">resolve</span><span class="p">())</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">play_audio</span><span class="p">(</span><span class="n">a1</span><span class="p">)</span>
+</code></pre>
+  </div>
+</blockquote>
+</div>
+
+
+                </section>
+                <section id="plot_aligned_panels">
+                            <input id="plot_aligned_panels-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="def">def</span>
+        <span class="name">plot_aligned_panels</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">audio</span><span class="p">:</span> <span class="n"><a href="../data_structures/audio.html#Audio">senselab.audio.data_structures.audio.Audio</a></span>,</span><span class="param">	<span class="n">panels</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span>,</span><span class="param">	<span class="n">title</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>,</span><span class="param">	<span class="n">figsize</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">spectrogram_params</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">context</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="s1">&#39;auto&#39;</span></span><span class="return-annotation">) -> <span class="n">matplotlib</span><span class="o">.</span><span class="n">figure</span><span class="o">.</span><span class="n">Figure</span>:</span></span>
+
+                <label class="view-source-button" for="plot_aligned_panels-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#plot_aligned_panels"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="plot_aligned_panels-489"><a href="#plot_aligned_panels-489"><span class="linenos">489</span></a><span class="k">def</span><span class="w"> </span><span class="nf">plot_aligned_panels</span><span class="p">(</span>
+</span><span id="plot_aligned_panels-490"><a href="#plot_aligned_panels-490"><span class="linenos">490</span></a>    <span class="n">audio</span><span class="p">:</span> <span class="n">Audio</span><span class="p">,</span>
+</span><span id="plot_aligned_panels-491"><a href="#plot_aligned_panels-491"><span class="linenos">491</span></a>    <span class="n">panels</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]],</span>
+</span><span id="plot_aligned_panels-492"><a href="#plot_aligned_panels-492"><span class="linenos">492</span></a>    <span class="n">title</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span><span class="p">,</span>
+</span><span id="plot_aligned_panels-493"><a href="#plot_aligned_panels-493"><span class="linenos">493</span></a>    <span class="n">figsize</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="plot_aligned_panels-494"><a href="#plot_aligned_panels-494"><span class="linenos">494</span></a>    <span class="n">spectrogram_params</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="plot_aligned_panels-495"><a href="#plot_aligned_panels-495"><span class="linenos">495</span></a>    <span class="n">context</span><span class="p">:</span> <span class="n">_Context</span> <span class="o">=</span> <span class="s2">&quot;auto&quot;</span><span class="p">,</span>
+</span><span id="plot_aligned_panels-496"><a href="#plot_aligned_panels-496"><span class="linenos">496</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Figure</span><span class="p">:</span>
+</span><span id="plot_aligned_panels-497"><a href="#plot_aligned_panels-497"><span class="linenos">497</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Create a multi-panel time-aligned visualization from an Audio object.</span>
+</span><span id="plot_aligned_panels-498"><a href="#plot_aligned_panels-498"><span class="linenos">498</span></a>
+</span><span id="plot_aligned_panels-499"><a href="#plot_aligned_panels-499"><span class="linenos">499</span></a><span class="sd">    Each panel shares the same time axis. Supported panel types:</span>
+</span><span id="plot_aligned_panels-500"><a href="#plot_aligned_panels-500"><span class="linenos">500</span></a>
+</span><span id="plot_aligned_panels-501"><a href="#plot_aligned_panels-501"><span class="linenos">501</span></a><span class="sd">    - ``{&quot;type&quot;: &quot;waveform&quot;}`` -- waveform amplitude.</span>
+</span><span id="plot_aligned_panels-502"><a href="#plot_aligned_panels-502"><span class="linenos">502</span></a><span class="sd">    - ``{&quot;type&quot;: &quot;spectrogram&quot;, &quot;mel&quot;: True/False}`` -- linear or mel spectrogram.</span>
+</span><span id="plot_aligned_panels-503"><a href="#plot_aligned_panels-503"><span class="linenos">503</span></a><span class="sd">    - ``{&quot;type&quot;: &quot;features&quot;, &quot;data&quot;: [(times, values, label, color), ...]}`` --</span>
+</span><span id="plot_aligned_panels-504"><a href="#plot_aligned_panels-504"><span class="linenos">504</span></a><span class="sd">      scatter/line overlay of feature curves (e.g., pitch, formants).</span>
+</span><span id="plot_aligned_panels-505"><a href="#plot_aligned_panels-505"><span class="linenos">505</span></a><span class="sd">    - ``{&quot;type&quot;: &quot;segments&quot;, &quot;segments&quot;: [{&quot;label&quot;: str, &quot;start&quot;: float, &quot;end&quot;: float}, ...]}``</span>
+</span><span id="plot_aligned_panels-506"><a href="#plot_aligned_panels-506"><span class="linenos">506</span></a><span class="sd">      -- colored horizontal bars for phoneme/word segments.</span>
+</span><span id="plot_aligned_panels-507"><a href="#plot_aligned_panels-507"><span class="linenos">507</span></a><span class="sd">    - ``{&quot;type&quot;: &quot;overlay_on_spectrogram&quot;, &quot;mel&quot;: True/False, &quot;overlays&quot;: [...]}`` --</span>
+</span><span id="plot_aligned_panels-508"><a href="#plot_aligned_panels-508"><span class="linenos">508</span></a><span class="sd">      spectrogram with scatter overlays (each overlay is a dict with keys</span>
+</span><span id="plot_aligned_panels-509"><a href="#plot_aligned_panels-509"><span class="linenos">509</span></a><span class="sd">      ``times``, ``values``, ``label``, ``color``, and optional ``size``).</span>
+</span><span id="plot_aligned_panels-510"><a href="#plot_aligned_panels-510"><span class="linenos">510</span></a>
+</span><span id="plot_aligned_panels-511"><a href="#plot_aligned_panels-511"><span class="linenos">511</span></a><span class="sd">    Args:</span>
+</span><span id="plot_aligned_panels-512"><a href="#plot_aligned_panels-512"><span class="linenos">512</span></a><span class="sd">        audio: Input mono audio.</span>
+</span><span id="plot_aligned_panels-513"><a href="#plot_aligned_panels-513"><span class="linenos">513</span></a><span class="sd">        panels: List of panel specification dicts (see above).</span>
+</span><span id="plot_aligned_panels-514"><a href="#plot_aligned_panels-514"><span class="linenos">514</span></a><span class="sd">        title: Overall figure title.</span>
+</span><span id="plot_aligned_panels-515"><a href="#plot_aligned_panels-515"><span class="linenos">515</span></a><span class="sd">        figsize: Base ``(width, height)`` in inches **before** context scaling.</span>
+</span><span id="plot_aligned_panels-516"><a href="#plot_aligned_panels-516"><span class="linenos">516</span></a><span class="sd">            Defaults to ``(14, sum_of_panel_heights)``.</span>
+</span><span id="plot_aligned_panels-517"><a href="#plot_aligned_panels-517"><span class="linenos">517</span></a><span class="sd">        spectrogram_params: Parameters forwarded to torchaudio spectrogram transforms.</span>
+</span><span id="plot_aligned_panels-518"><a href="#plot_aligned_panels-518"><span class="linenos">518</span></a><span class="sd">            Defaults to ``{&quot;n_fft&quot;: 256, &quot;hop_length&quot;: 80, &quot;win_length&quot;: 160}``.</span>
+</span><span id="plot_aligned_panels-519"><a href="#plot_aligned_panels-519"><span class="linenos">519</span></a><span class="sd">        context: Size preset or numeric scale.</span>
+</span><span id="plot_aligned_panels-520"><a href="#plot_aligned_panels-520"><span class="linenos">520</span></a>
+</span><span id="plot_aligned_panels-521"><a href="#plot_aligned_panels-521"><span class="linenos">521</span></a><span class="sd">    Returns:</span>
+</span><span id="plot_aligned_panels-522"><a href="#plot_aligned_panels-522"><span class="linenos">522</span></a><span class="sd">        matplotlib.figure.Figure: The created figure.</span>
+</span><span id="plot_aligned_panels-523"><a href="#plot_aligned_panels-523"><span class="linenos">523</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="plot_aligned_panels-524"><a href="#plot_aligned_panels-524"><span class="linenos">524</span></a>    <span class="kn">import</span><span class="w"> </span><span class="nn">torchaudio.transforms</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">T</span>
+</span><span id="plot_aligned_panels-525"><a href="#plot_aligned_panels-525"><span class="linenos">525</span></a>
+</span><span id="plot_aligned_panels-526"><a href="#plot_aligned_panels-526"><span class="linenos">526</span></a>    <span class="c1"># Enforce mono</span>
+</span><span id="plot_aligned_panels-527"><a href="#plot_aligned_panels-527"><span class="linenos">527</span></a>    <span class="k">if</span> <span class="n">audio</span><span class="o">.</span><span class="n">waveform</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
+</span><span id="plot_aligned_panels-528"><a href="#plot_aligned_panels-528"><span class="linenos">528</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;plot_aligned_panels requires mono audio. Downmix multi-channel first.&quot;</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-529"><a href="#plot_aligned_panels-529"><span class="linenos">529</span></a>
+</span><span id="plot_aligned_panels-530"><a href="#plot_aligned_panels-530"><span class="linenos">530</span></a>    <span class="k">if</span> <span class="n">spectrogram_params</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="plot_aligned_panels-531"><a href="#plot_aligned_panels-531"><span class="linenos">531</span></a>        <span class="n">spectrogram_params</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;n_fft&quot;</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span> <span class="s2">&quot;hop_length&quot;</span><span class="p">:</span> <span class="mi">80</span><span class="p">,</span> <span class="s2">&quot;win_length&quot;</span><span class="p">:</span> <span class="mi">160</span><span class="p">}</span>
+</span><span id="plot_aligned_panels-532"><a href="#plot_aligned_panels-532"><span class="linenos">532</span></a>
+</span><span id="plot_aligned_panels-533"><a href="#plot_aligned_panels-533"><span class="linenos">533</span></a>    <span class="n">sr</span> <span class="o">=</span> <span class="n">audio</span><span class="o">.</span><span class="n">sampling_rate</span>
+</span><span id="plot_aligned_panels-534"><a href="#plot_aligned_panels-534"><span class="linenos">534</span></a>    <span class="n">duration</span> <span class="o">=</span> <span class="n">audio</span><span class="o">.</span><span class="n">waveform</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">/</span> <span class="n">sr</span>
+</span><span id="plot_aligned_panels-535"><a href="#plot_aligned_panels-535"><span class="linenos">535</span></a>
+</span><span id="plot_aligned_panels-536"><a href="#plot_aligned_panels-536"><span class="linenos">536</span></a>    <span class="c1"># Height ratios</span>
+</span><span id="plot_aligned_panels-537"><a href="#plot_aligned_panels-537"><span class="linenos">537</span></a>    <span class="n">ratio_map</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="plot_aligned_panels-538"><a href="#plot_aligned_panels-538"><span class="linenos">538</span></a>        <span class="s2">&quot;waveform&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
+</span><span id="plot_aligned_panels-539"><a href="#plot_aligned_panels-539"><span class="linenos">539</span></a>        <span class="s2">&quot;spectrogram&quot;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
+</span><span id="plot_aligned_panels-540"><a href="#plot_aligned_panels-540"><span class="linenos">540</span></a>        <span class="s2">&quot;features&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
+</span><span id="plot_aligned_panels-541"><a href="#plot_aligned_panels-541"><span class="linenos">541</span></a>        <span class="s2">&quot;segments&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
+</span><span id="plot_aligned_panels-542"><a href="#plot_aligned_panels-542"><span class="linenos">542</span></a>        <span class="s2">&quot;overlay_on_spectrogram&quot;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
+</span><span id="plot_aligned_panels-543"><a href="#plot_aligned_panels-543"><span class="linenos">543</span></a>    <span class="p">}</span>
+</span><span id="plot_aligned_panels-544"><a href="#plot_aligned_panels-544"><span class="linenos">544</span></a>    <span class="n">height_ratios</span> <span class="o">=</span> <span class="p">[</span><span class="n">ratio_map</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;type&quot;</span><span class="p">,</span> <span class="s2">&quot;waveform&quot;</span><span class="p">),</span> <span class="mi">1</span><span class="p">)</span> <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">panels</span><span class="p">]</span>
+</span><span id="plot_aligned_panels-545"><a href="#plot_aligned_panels-545"><span class="linenos">545</span></a>
+</span><span id="plot_aligned_panels-546"><a href="#plot_aligned_panels-546"><span class="linenos">546</span></a>    <span class="n">scale</span> <span class="o">=</span> <span class="n">_resolve_scale</span><span class="p">(</span><span class="n">context</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-547"><a href="#plot_aligned_panels-547"><span class="linenos">547</span></a>    <span class="n">rc</span> <span class="o">=</span> <span class="n">_rc_for_scale</span><span class="p">(</span><span class="n">scale</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-548"><a href="#plot_aligned_panels-548"><span class="linenos">548</span></a>    <span class="k">if</span> <span class="n">figsize</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="plot_aligned_panels-549"><a href="#plot_aligned_panels-549"><span class="linenos">549</span></a>        <span class="n">base_h</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="nb">sum</span><span class="p">(</span><span class="n">height_ratios</span><span class="p">))</span> <span class="o">*</span> <span class="mf">1.8</span>
+</span><span id="plot_aligned_panels-550"><a href="#plot_aligned_panels-550"><span class="linenos">550</span></a>        <span class="n">base</span> <span class="o">=</span> <span class="p">(</span><span class="mf">14.0</span><span class="p">,</span> <span class="nb">max</span><span class="p">(</span><span class="n">base_h</span><span class="p">,</span> <span class="mf">4.0</span><span class="p">))</span>
+</span><span id="plot_aligned_panels-551"><a href="#plot_aligned_panels-551"><span class="linenos">551</span></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="plot_aligned_panels-552"><a href="#plot_aligned_panels-552"><span class="linenos">552</span></a>        <span class="n">base</span> <span class="o">=</span> <span class="n">figsize</span>
+</span><span id="plot_aligned_panels-553"><a href="#plot_aligned_panels-553"><span class="linenos">553</span></a>    <span class="n">scaled_size</span> <span class="o">=</span> <span class="p">(</span><span class="n">base</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">*</span> <span class="n">scale</span><span class="p">,</span> <span class="n">base</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">*</span> <span class="n">scale</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-554"><a href="#plot_aligned_panels-554"><span class="linenos">554</span></a>
+</span><span id="plot_aligned_panels-555"><a href="#plot_aligned_panels-555"><span class="linenos">555</span></a>    <span class="c1"># Helper: compute spectrogram tensor (cached across panels in this call)</span>
+</span><span id="plot_aligned_panels-556"><a href="#plot_aligned_panels-556"><span class="linenos">556</span></a>    <span class="n">_spec_cache</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+</span><span id="plot_aligned_panels-557"><a href="#plot_aligned_panels-557"><span class="linenos">557</span></a>
+</span><span id="plot_aligned_panels-558"><a href="#plot_aligned_panels-558"><span class="linenos">558</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_get_spec</span><span class="p">(</span><span class="n">mel</span><span class="p">:</span> <span class="nb">bool</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]:</span>
+</span><span id="plot_aligned_panels-559"><a href="#plot_aligned_panels-559"><span class="linenos">559</span></a>        <span class="n">key</span> <span class="o">=</span> <span class="s2">&quot;mel&quot;</span> <span class="k">if</span> <span class="n">mel</span> <span class="k">else</span> <span class="s2">&quot;linear&quot;</span>
+</span><span id="plot_aligned_panels-560"><a href="#plot_aligned_panels-560"><span class="linenos">560</span></a>        <span class="k">if</span> <span class="n">key</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">_spec_cache</span><span class="p">:</span>
+</span><span id="plot_aligned_panels-561"><a href="#plot_aligned_panels-561"><span class="linenos">561</span></a>            <span class="n">wf</span> <span class="o">=</span> <span class="n">audio</span><span class="o">.</span><span class="n">waveform</span><span class="o">.</span><span class="n">squeeze</span><span class="p">()</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span>
+</span><span id="plot_aligned_panels-562"><a href="#plot_aligned_panels-562"><span class="linenos">562</span></a>            <span class="c1"># Filter out sample_rate from params for non-mel transforms</span>
+</span><span id="plot_aligned_panels-563"><a href="#plot_aligned_panels-563"><span class="linenos">563</span></a>            <span class="n">filtered_params</span> <span class="o">=</span> <span class="p">{</span><span class="n">k</span><span class="p">:</span> <span class="n">v</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">spectrogram_params</span><span class="o">.</span><span class="n">items</span><span class="p">()</span> <span class="k">if</span> <span class="n">k</span> <span class="o">!=</span> <span class="s2">&quot;sample_rate&quot;</span><span class="p">}</span>
+</span><span id="plot_aligned_panels-564"><a href="#plot_aligned_panels-564"><span class="linenos">564</span></a>            <span class="k">if</span> <span class="n">mel</span><span class="p">:</span>
+</span><span id="plot_aligned_panels-565"><a href="#plot_aligned_panels-565"><span class="linenos">565</span></a>                <span class="n">transform</span> <span class="o">=</span> <span class="n">T</span><span class="o">.</span><span class="n">MelSpectrogram</span><span class="p">(</span><span class="n">sample_rate</span><span class="o">=</span><span class="n">sr</span><span class="p">,</span> <span class="o">**</span><span class="n">filtered_params</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-566"><a href="#plot_aligned_panels-566"><span class="linenos">566</span></a>            <span class="k">else</span><span class="p">:</span>
+</span><span id="plot_aligned_panels-567"><a href="#plot_aligned_panels-567"><span class="linenos">567</span></a>                <span class="n">transform</span> <span class="o">=</span> <span class="n">T</span><span class="o">.</span><span class="n">Spectrogram</span><span class="p">(</span><span class="o">**</span><span class="n">filtered_params</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-568"><a href="#plot_aligned_panels-568"><span class="linenos">568</span></a>            <span class="n">spec_tensor</span> <span class="o">=</span> <span class="n">transform</span><span class="p">(</span><span class="n">wf</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-569"><a href="#plot_aligned_panels-569"><span class="linenos">569</span></a>            <span class="n">_spec_cache</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="n">_power_to_db</span><span class="p">(</span><span class="n">spec_tensor</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span><span class="o">.</span><span class="n">numpy</span><span class="p">())</span>
+</span><span id="plot_aligned_panels-570"><a href="#plot_aligned_panels-570"><span class="linenos">570</span></a>        <span class="n">spec_db</span> <span class="o">=</span> <span class="n">_spec_cache</span><span class="p">[</span><span class="n">key</span><span class="p">]</span>
+</span><span id="plot_aligned_panels-571"><a href="#plot_aligned_panels-571"><span class="linenos">571</span></a>        <span class="k">if</span> <span class="n">mel</span><span class="p">:</span>
+</span><span id="plot_aligned_panels-572"><a href="#plot_aligned_panels-572"><span class="linenos">572</span></a>            <span class="k">return</span> <span class="n">spec_db</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="nb">float</span><span class="p">(</span><span class="n">spec_db</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-573"><a href="#plot_aligned_panels-573"><span class="linenos">573</span></a>        <span class="k">else</span><span class="p">:</span>
+</span><span id="plot_aligned_panels-574"><a href="#plot_aligned_panels-574"><span class="linenos">574</span></a>            <span class="k">return</span> <span class="n">spec_db</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="nb">float</span><span class="p">(</span><span class="n">sr</span> <span class="o">/</span> <span class="mi">2</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-575"><a href="#plot_aligned_panels-575"><span class="linenos">575</span></a>
+</span><span id="plot_aligned_panels-576"><a href="#plot_aligned_panels-576"><span class="linenos">576</span></a>    <span class="k">with</span> <span class="n">rc_context</span><span class="p">(</span><span class="n">rc</span><span class="p">):</span>
+</span><span id="plot_aligned_panels-577"><a href="#plot_aligned_panels-577"><span class="linenos">577</span></a>        <span class="n">fig</span><span class="p">,</span> <span class="n">axes</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span>
+</span><span id="plot_aligned_panels-578"><a href="#plot_aligned_panels-578"><span class="linenos">578</span></a>            <span class="nb">len</span><span class="p">(</span><span class="n">panels</span><span class="p">),</span>
+</span><span id="plot_aligned_panels-579"><a href="#plot_aligned_panels-579"><span class="linenos">579</span></a>            <span class="mi">1</span><span class="p">,</span>
+</span><span id="plot_aligned_panels-580"><a href="#plot_aligned_panels-580"><span class="linenos">580</span></a>            <span class="n">figsize</span><span class="o">=</span><span class="n">scaled_size</span><span class="p">,</span>
+</span><span id="plot_aligned_panels-581"><a href="#plot_aligned_panels-581"><span class="linenos">581</span></a>            <span class="n">sharex</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+</span><span id="plot_aligned_panels-582"><a href="#plot_aligned_panels-582"><span class="linenos">582</span></a>            <span class="n">gridspec_kw</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;height_ratios&quot;</span><span class="p">:</span> <span class="n">height_ratios</span><span class="p">},</span>
+</span><span id="plot_aligned_panels-583"><a href="#plot_aligned_panels-583"><span class="linenos">583</span></a>            <span class="n">squeeze</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+</span><span id="plot_aligned_panels-584"><a href="#plot_aligned_panels-584"><span class="linenos">584</span></a>        <span class="p">)</span>
+</span><span id="plot_aligned_panels-585"><a href="#plot_aligned_panels-585"><span class="linenos">585</span></a>        <span class="n">axes_list</span> <span class="o">=</span> <span class="p">[</span><span class="n">axes</span><span class="p">[</span><span class="n">i</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">panels</span><span class="p">))]</span>
+</span><span id="plot_aligned_panels-586"><a href="#plot_aligned_panels-586"><span class="linenos">586</span></a>
+</span><span id="plot_aligned_panels-587"><a href="#plot_aligned_panels-587"><span class="linenos">587</span></a>        <span class="n">waveform_np</span> <span class="o">=</span> <span class="n">audio</span><span class="o">.</span><span class="n">waveform</span><span class="o">.</span><span class="n">squeeze</span><span class="p">()</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
+</span><span id="plot_aligned_panels-588"><a href="#plot_aligned_panels-588"><span class="linenos">588</span></a>        <span class="n">time_wav</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">duration</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">waveform_np</span><span class="p">),</span> <span class="n">endpoint</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-589"><a href="#plot_aligned_panels-589"><span class="linenos">589</span></a>
+</span><span id="plot_aligned_panels-590"><a href="#plot_aligned_panels-590"><span class="linenos">590</span></a>        <span class="k">for</span> <span class="n">ax</span><span class="p">,</span> <span class="n">panel</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">axes_list</span><span class="p">,</span> <span class="n">panels</span><span class="p">):</span>
+</span><span id="plot_aligned_panels-591"><a href="#plot_aligned_panels-591"><span class="linenos">591</span></a>            <span class="n">ptype</span> <span class="o">=</span> <span class="n">panel</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;type&quot;</span><span class="p">,</span> <span class="s2">&quot;waveform&quot;</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-592"><a href="#plot_aligned_panels-592"><span class="linenos">592</span></a>
+</span><span id="plot_aligned_panels-593"><a href="#plot_aligned_panels-593"><span class="linenos">593</span></a>            <span class="k">if</span> <span class="n">ptype</span> <span class="o">==</span> <span class="s2">&quot;waveform&quot;</span><span class="p">:</span>
+</span><span id="plot_aligned_panels-594"><a href="#plot_aligned_panels-594"><span class="linenos">594</span></a>                <span class="n">ax</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">time_wav</span><span class="p">,</span> <span class="n">waveform_np</span><span class="p">,</span> <span class="n">linewidth</span><span class="o">=</span><span class="mf">0.3</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="s2">&quot;steelblue&quot;</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-595"><a href="#plot_aligned_panels-595"><span class="linenos">595</span></a>                <span class="n">ax</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">&quot;Amplitude&quot;</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-596"><a href="#plot_aligned_panels-596"><span class="linenos">596</span></a>                <span class="n">ax</span><span class="o">.</span><span class="n">grid</span><span class="p">(</span><span class="kc">True</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.2</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-597"><a href="#plot_aligned_panels-597"><span class="linenos">597</span></a>
+</span><span id="plot_aligned_panels-598"><a href="#plot_aligned_panels-598"><span class="linenos">598</span></a>            <span class="k">elif</span> <span class="n">ptype</span> <span class="o">==</span> <span class="s2">&quot;spectrogram&quot;</span><span class="p">:</span>
+</span><span id="plot_aligned_panels-599"><a href="#plot_aligned_panels-599"><span class="linenos">599</span></a>                <span class="n">mel</span> <span class="o">=</span> <span class="n">panel</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;mel&quot;</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-600"><a href="#plot_aligned_panels-600"><span class="linenos">600</span></a>                <span class="n">spec_db</span><span class="p">,</span> <span class="n">f0</span><span class="p">,</span> <span class="n">f1</span> <span class="o">=</span> <span class="n">_get_spec</span><span class="p">(</span><span class="n">mel</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-601"><a href="#plot_aligned_panels-601"><span class="linenos">601</span></a>                <span class="n">ax</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span>
+</span><span id="plot_aligned_panels-602"><a href="#plot_aligned_panels-602"><span class="linenos">602</span></a>                    <span class="n">spec_db</span><span class="p">,</span>
+</span><span id="plot_aligned_panels-603"><a href="#plot_aligned_panels-603"><span class="linenos">603</span></a>                    <span class="n">aspect</span><span class="o">=</span><span class="s2">&quot;auto&quot;</span><span class="p">,</span>
+</span><span id="plot_aligned_panels-604"><a href="#plot_aligned_panels-604"><span class="linenos">604</span></a>                    <span class="n">origin</span><span class="o">=</span><span class="s2">&quot;lower&quot;</span><span class="p">,</span>
+</span><span id="plot_aligned_panels-605"><a href="#plot_aligned_panels-605"><span class="linenos">605</span></a>                    <span class="n">extent</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="n">duration</span><span class="p">,</span> <span class="n">f0</span><span class="p">,</span> <span class="n">f1</span><span class="p">],</span>
+</span><span id="plot_aligned_panels-606"><a href="#plot_aligned_panels-606"><span class="linenos">606</span></a>                    <span class="n">cmap</span><span class="o">=</span><span class="s2">&quot;magma&quot;</span><span class="p">,</span>
+</span><span id="plot_aligned_panels-607"><a href="#plot_aligned_panels-607"><span class="linenos">607</span></a>                <span class="p">)</span>
+</span><span id="plot_aligned_panels-608"><a href="#plot_aligned_panels-608"><span class="linenos">608</span></a>                <span class="n">ax</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">&quot;Mel bins&quot;</span> <span class="k">if</span> <span class="n">mel</span> <span class="k">else</span> <span class="s2">&quot;Frequency (Hz)&quot;</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-609"><a href="#plot_aligned_panels-609"><span class="linenos">609</span></a>
+</span><span id="plot_aligned_panels-610"><a href="#plot_aligned_panels-610"><span class="linenos">610</span></a>            <span class="k">elif</span> <span class="n">ptype</span> <span class="o">==</span> <span class="s2">&quot;features&quot;</span><span class="p">:</span>
+</span><span id="plot_aligned_panels-611"><a href="#plot_aligned_panels-611"><span class="linenos">611</span></a>                <span class="n">data</span> <span class="o">=</span> <span class="n">panel</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;data&quot;</span><span class="p">,</span> <span class="p">[])</span>
+</span><span id="plot_aligned_panels-612"><a href="#plot_aligned_panels-612"><span class="linenos">612</span></a>                <span class="n">style</span> <span class="o">=</span> <span class="n">panel</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;style&quot;</span><span class="p">,</span> <span class="s2">&quot;scatter&quot;</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-613"><a href="#plot_aligned_panels-613"><span class="linenos">613</span></a>                <span class="k">for</span> <span class="n">times</span><span class="p">,</span> <span class="n">values</span><span class="p">,</span> <span class="n">label</span><span class="p">,</span> <span class="n">color</span> <span class="ow">in</span> <span class="n">data</span><span class="p">:</span>
+</span><span id="plot_aligned_panels-614"><a href="#plot_aligned_panels-614"><span class="linenos">614</span></a>                    <span class="n">t_np</span> <span class="o">=</span> <span class="n">times</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span> <span class="k">if</span> <span class="n">torch</span><span class="o">.</span><span class="n">is_tensor</span><span class="p">(</span><span class="n">times</span><span class="p">)</span> <span class="k">else</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">times</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-615"><a href="#plot_aligned_panels-615"><span class="linenos">615</span></a>                    <span class="n">v_np</span> <span class="o">=</span> <span class="n">values</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span> <span class="k">if</span> <span class="n">torch</span><span class="o">.</span><span class="n">is_tensor</span><span class="p">(</span><span class="n">values</span><span class="p">)</span> <span class="k">else</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">values</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-616"><a href="#plot_aligned_panels-616"><span class="linenos">616</span></a>                    <span class="k">if</span> <span class="n">style</span> <span class="o">==</span> <span class="s2">&quot;line&quot;</span><span class="p">:</span>
+</span><span id="plot_aligned_panels-617"><a href="#plot_aligned_panels-617"><span class="linenos">617</span></a>                        <span class="n">ax</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">t_np</span><span class="p">,</span> <span class="n">v_np</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="n">color</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="n">label</span><span class="p">,</span> <span class="n">linewidth</span><span class="o">=</span><span class="mf">0.8</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.8</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-618"><a href="#plot_aligned_panels-618"><span class="linenos">618</span></a>                    <span class="k">else</span><span class="p">:</span>
+</span><span id="plot_aligned_panels-619"><a href="#plot_aligned_panels-619"><span class="linenos">619</span></a>                        <span class="n">ax</span><span class="o">.</span><span class="n">scatter</span><span class="p">(</span><span class="n">t_np</span><span class="p">,</span> <span class="n">v_np</span><span class="p">,</span> <span class="n">s</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="n">color</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="n">label</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.7</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-620"><a href="#plot_aligned_panels-620"><span class="linenos">620</span></a>                <span class="n">ax</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">&quot;Value&quot;</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-621"><a href="#plot_aligned_panels-621"><span class="linenos">621</span></a>                <span class="n">ax</span><span class="o">.</span><span class="n">legend</span><span class="p">(</span><span class="n">loc</span><span class="o">=</span><span class="s2">&quot;upper right&quot;</span><span class="p">,</span> <span class="n">fontsize</span><span class="o">=</span><span class="mi">7</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-622"><a href="#plot_aligned_panels-622"><span class="linenos">622</span></a>                <span class="n">ax</span><span class="o">.</span><span class="n">grid</span><span class="p">(</span><span class="kc">True</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.3</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-623"><a href="#plot_aligned_panels-623"><span class="linenos">623</span></a>
+</span><span id="plot_aligned_panels-624"><a href="#plot_aligned_panels-624"><span class="linenos">624</span></a>            <span class="k">elif</span> <span class="n">ptype</span> <span class="o">==</span> <span class="s2">&quot;segments&quot;</span><span class="p">:</span>
+</span><span id="plot_aligned_panels-625"><a href="#plot_aligned_panels-625"><span class="linenos">625</span></a>                <span class="n">seg_list</span> <span class="o">=</span> <span class="n">panel</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;segments&quot;</span><span class="p">,</span> <span class="p">[])</span>
+</span><span id="plot_aligned_panels-626"><a href="#plot_aligned_panels-626"><span class="linenos">626</span></a>                <span class="n">unique_labels</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">({</span><span class="n">s</span><span class="p">[</span><span class="s2">&quot;label&quot;</span><span class="p">]</span> <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="n">seg_list</span><span class="p">})</span>
+</span><span id="plot_aligned_panels-627"><a href="#plot_aligned_panels-627"><span class="linenos">627</span></a>                <span class="n">y_map</span> <span class="o">=</span> <span class="p">{</span><span class="n">lbl</span><span class="p">:</span> <span class="n">i</span> <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">lbl</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">unique_labels</span><span class="p">)}</span>
+</span><span id="plot_aligned_panels-628"><a href="#plot_aligned_panels-628"><span class="linenos">628</span></a>                <span class="n">cmap</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">get_cmap</span><span class="p">(</span><span class="s2">&quot;tab20&quot;</span><span class="p">,</span> <span class="nb">max</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">unique_labels</span><span class="p">),</span> <span class="mi">1</span><span class="p">))</span>
+</span><span id="plot_aligned_panels-629"><a href="#plot_aligned_panels-629"><span class="linenos">629</span></a>                <span class="k">for</span> <span class="n">seg</span> <span class="ow">in</span> <span class="n">seg_list</span><span class="p">:</span>
+</span><span id="plot_aligned_panels-630"><a href="#plot_aligned_panels-630"><span class="linenos">630</span></a>                    <span class="n">y</span> <span class="o">=</span> <span class="n">y_map</span><span class="p">[</span><span class="n">seg</span><span class="p">[</span><span class="s2">&quot;label&quot;</span><span class="p">]]</span>
+</span><span id="plot_aligned_panels-631"><a href="#plot_aligned_panels-631"><span class="linenos">631</span></a>                    <span class="n">w</span> <span class="o">=</span> <span class="n">seg</span><span class="p">[</span><span class="s2">&quot;end&quot;</span><span class="p">]</span> <span class="o">-</span> <span class="n">seg</span><span class="p">[</span><span class="s2">&quot;start&quot;</span><span class="p">]</span>
+</span><span id="plot_aligned_panels-632"><a href="#plot_aligned_panels-632"><span class="linenos">632</span></a>                    <span class="n">ax</span><span class="o">.</span><span class="n">barh</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">w</span><span class="p">,</span> <span class="n">left</span><span class="o">=</span><span class="n">seg</span><span class="p">[</span><span class="s2">&quot;start&quot;</span><span class="p">],</span> <span class="n">height</span><span class="o">=</span><span class="mf">0.7</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="n">cmap</span><span class="p">(</span><span class="n">y</span><span class="p">),</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.85</span><span class="p">,</span> <span class="n">edgecolor</span><span class="o">=</span><span class="s2">&quot;none&quot;</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-633"><a href="#plot_aligned_panels-633"><span class="linenos">633</span></a>                <span class="n">ax</span><span class="o">.</span><span class="n">set_yticks</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">unique_labels</span><span class="p">)))</span>
+</span><span id="plot_aligned_panels-634"><a href="#plot_aligned_panels-634"><span class="linenos">634</span></a>                <span class="n">ax</span><span class="o">.</span><span class="n">set_yticklabels</span><span class="p">(</span><span class="n">unique_labels</span><span class="p">,</span> <span class="n">fontsize</span><span class="o">=</span><span class="mi">7</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-635"><a href="#plot_aligned_panels-635"><span class="linenos">635</span></a>                <span class="n">ax</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">&quot;Segment&quot;</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-636"><a href="#plot_aligned_panels-636"><span class="linenos">636</span></a>                <span class="n">ax</span><span class="o">.</span><span class="n">grid</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="n">linestyle</span><span class="o">=</span><span class="s2">&quot;--&quot;</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.3</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-637"><a href="#plot_aligned_panels-637"><span class="linenos">637</span></a>
+</span><span id="plot_aligned_panels-638"><a href="#plot_aligned_panels-638"><span class="linenos">638</span></a>            <span class="k">elif</span> <span class="n">ptype</span> <span class="o">==</span> <span class="s2">&quot;overlay_on_spectrogram&quot;</span><span class="p">:</span>
+</span><span id="plot_aligned_panels-639"><a href="#plot_aligned_panels-639"><span class="linenos">639</span></a>                <span class="n">mel</span> <span class="o">=</span> <span class="n">panel</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;mel&quot;</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-640"><a href="#plot_aligned_panels-640"><span class="linenos">640</span></a>                <span class="n">spec_db</span><span class="p">,</span> <span class="n">f0</span><span class="p">,</span> <span class="n">f1</span> <span class="o">=</span> <span class="n">_get_spec</span><span class="p">(</span><span class="n">mel</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-641"><a href="#plot_aligned_panels-641"><span class="linenos">641</span></a>                <span class="n">ax</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span>
+</span><span id="plot_aligned_panels-642"><a href="#plot_aligned_panels-642"><span class="linenos">642</span></a>                    <span class="n">spec_db</span><span class="p">,</span>
+</span><span id="plot_aligned_panels-643"><a href="#plot_aligned_panels-643"><span class="linenos">643</span></a>                    <span class="n">aspect</span><span class="o">=</span><span class="s2">&quot;auto&quot;</span><span class="p">,</span>
+</span><span id="plot_aligned_panels-644"><a href="#plot_aligned_panels-644"><span class="linenos">644</span></a>                    <span class="n">origin</span><span class="o">=</span><span class="s2">&quot;lower&quot;</span><span class="p">,</span>
+</span><span id="plot_aligned_panels-645"><a href="#plot_aligned_panels-645"><span class="linenos">645</span></a>                    <span class="n">extent</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="n">duration</span><span class="p">,</span> <span class="n">f0</span><span class="p">,</span> <span class="n">f1</span><span class="p">],</span>
+</span><span id="plot_aligned_panels-646"><a href="#plot_aligned_panels-646"><span class="linenos">646</span></a>                    <span class="n">cmap</span><span class="o">=</span><span class="s2">&quot;magma&quot;</span><span class="p">,</span>
+</span><span id="plot_aligned_panels-647"><a href="#plot_aligned_panels-647"><span class="linenos">647</span></a>                    <span class="n">alpha</span><span class="o">=</span><span class="mf">0.9</span><span class="p">,</span>
+</span><span id="plot_aligned_panels-648"><a href="#plot_aligned_panels-648"><span class="linenos">648</span></a>                <span class="p">)</span>
+</span><span id="plot_aligned_panels-649"><a href="#plot_aligned_panels-649"><span class="linenos">649</span></a>                <span class="n">overlays</span> <span class="o">=</span> <span class="n">panel</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;overlays&quot;</span><span class="p">,</span> <span class="p">[])</span>
+</span><span id="plot_aligned_panels-650"><a href="#plot_aligned_panels-650"><span class="linenos">650</span></a>                <span class="k">for</span> <span class="n">ov</span> <span class="ow">in</span> <span class="n">overlays</span><span class="p">:</span>
+</span><span id="plot_aligned_panels-651"><a href="#plot_aligned_panels-651"><span class="linenos">651</span></a>                    <span class="n">t_np</span> <span class="o">=</span> <span class="n">ov</span><span class="p">[</span><span class="s2">&quot;times&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span> <span class="k">if</span> <span class="n">torch</span><span class="o">.</span><span class="n">is_tensor</span><span class="p">(</span><span class="n">ov</span><span class="p">[</span><span class="s2">&quot;times&quot;</span><span class="p">])</span> <span class="k">else</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">ov</span><span class="p">[</span><span class="s2">&quot;times&quot;</span><span class="p">])</span>
+</span><span id="plot_aligned_panels-652"><a href="#plot_aligned_panels-652"><span class="linenos">652</span></a>                    <span class="n">v_np</span> <span class="o">=</span> <span class="n">ov</span><span class="p">[</span><span class="s2">&quot;values&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span> <span class="k">if</span> <span class="n">torch</span><span class="o">.</span><span class="n">is_tensor</span><span class="p">(</span><span class="n">ov</span><span class="p">[</span><span class="s2">&quot;values&quot;</span><span class="p">])</span> <span class="k">else</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">ov</span><span class="p">[</span><span class="s2">&quot;values&quot;</span><span class="p">])</span>
+</span><span id="plot_aligned_panels-653"><a href="#plot_aligned_panels-653"><span class="linenos">653</span></a>                    <span class="n">ax</span><span class="o">.</span><span class="n">scatter</span><span class="p">(</span>
+</span><span id="plot_aligned_panels-654"><a href="#plot_aligned_panels-654"><span class="linenos">654</span></a>                        <span class="n">t_np</span><span class="p">,</span>
+</span><span id="plot_aligned_panels-655"><a href="#plot_aligned_panels-655"><span class="linenos">655</span></a>                        <span class="n">v_np</span><span class="p">,</span>
+</span><span id="plot_aligned_panels-656"><a href="#plot_aligned_panels-656"><span class="linenos">656</span></a>                        <span class="n">s</span><span class="o">=</span><span class="n">ov</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;size&quot;</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span>
+</span><span id="plot_aligned_panels-657"><a href="#plot_aligned_panels-657"><span class="linenos">657</span></a>                        <span class="n">c</span><span class="o">=</span><span class="n">ov</span><span class="p">[</span><span class="s2">&quot;color&quot;</span><span class="p">],</span>
+</span><span id="plot_aligned_panels-658"><a href="#plot_aligned_panels-658"><span class="linenos">658</span></a>                        <span class="n">label</span><span class="o">=</span><span class="n">ov</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;label&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">),</span>
+</span><span id="plot_aligned_panels-659"><a href="#plot_aligned_panels-659"><span class="linenos">659</span></a>                        <span class="n">zorder</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span>
+</span><span id="plot_aligned_panels-660"><a href="#plot_aligned_panels-660"><span class="linenos">660</span></a>                        <span class="n">alpha</span><span class="o">=</span><span class="mf">0.7</span><span class="p">,</span>
+</span><span id="plot_aligned_panels-661"><a href="#plot_aligned_panels-661"><span class="linenos">661</span></a>                    <span class="p">)</span>
+</span><span id="plot_aligned_panels-662"><a href="#plot_aligned_panels-662"><span class="linenos">662</span></a>                <span class="n">ax</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">&quot;Mel bins&quot;</span> <span class="k">if</span> <span class="n">mel</span> <span class="k">else</span> <span class="s2">&quot;Frequency (Hz)&quot;</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-663"><a href="#plot_aligned_panels-663"><span class="linenos">663</span></a>                <span class="k">if</span> <span class="n">overlays</span><span class="p">:</span>
+</span><span id="plot_aligned_panels-664"><a href="#plot_aligned_panels-664"><span class="linenos">664</span></a>                    <span class="n">ax</span><span class="o">.</span><span class="n">legend</span><span class="p">(</span><span class="n">loc</span><span class="o">=</span><span class="s2">&quot;upper right&quot;</span><span class="p">,</span> <span class="n">fontsize</span><span class="o">=</span><span class="mi">7</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-665"><a href="#plot_aligned_panels-665"><span class="linenos">665</span></a>
+</span><span id="plot_aligned_panels-666"><a href="#plot_aligned_panels-666"><span class="linenos">666</span></a>        <span class="c1"># Shared x-axis config</span>
+</span><span id="plot_aligned_panels-667"><a href="#plot_aligned_panels-667"><span class="linenos">667</span></a>        <span class="n">axes_list</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">set_xlabel</span><span class="p">(</span><span class="s2">&quot;Time (seconds)&quot;</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-668"><a href="#plot_aligned_panels-668"><span class="linenos">668</span></a>        <span class="n">axes_list</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">set_xlim</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">duration</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-669"><a href="#plot_aligned_panels-669"><span class="linenos">669</span></a>
+</span><span id="plot_aligned_panels-670"><a href="#plot_aligned_panels-670"><span class="linenos">670</span></a>        <span class="k">if</span> <span class="n">title</span><span class="p">:</span>
+</span><span id="plot_aligned_panels-671"><a href="#plot_aligned_panels-671"><span class="linenos">671</span></a>            <span class="n">fig</span><span class="o">.</span><span class="n">suptitle</span><span class="p">(</span><span class="n">title</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-672"><a href="#plot_aligned_panels-672"><span class="linenos">672</span></a>        <span class="n">fig</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">(</span><span class="n">rect</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mf">0.96</span><span class="p">)</span> <span class="k">if</span> <span class="n">title</span> <span class="k">else</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+</span><span id="plot_aligned_panels-673"><a href="#plot_aligned_panels-673"><span class="linenos">673</span></a>        <span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">block</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+</span><span id="plot_aligned_panels-674"><a href="#plot_aligned_panels-674"><span class="linenos">674</span></a>        <span class="k">return</span> <span class="n">fig</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Create a multi-panel time-aligned visualization from an Audio object.</p>
+
+<p>Each panel shares the same time axis. Supported panel types:</p>
+
+<ul>
+<li><code>{"type": "waveform"}</code> -- waveform amplitude.</li>
+<li><code>{"type": "spectrogram", "mel": True/False}</code> -- linear or mel spectrogram.</li>
+<li><code>{"type": "features", "data": [(times, values, label, color), ...]}</code> --
+scatter/line overlay of feature curves (e.g., pitch, formants).</li>
+<li><code>{"type": "segments", "segments": [{"label": str, "start": float, "end": float}, ...]}</code>
+-- colored horizontal bars for phoneme/word segments.</li>
+<li><code>{"type": "overlay_on_spectrogram", "mel": True/False, "overlays": [...]}</code> --
+spectrogram with scatter overlays (each overlay is a dict with keys
+<code>times</code>, <code>values</code>, <code>label</code>, <code>color</code>, and optional <code>size</code>).</li>
+</ul>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>audio:</strong>  Input mono audio.</li>
+<li><strong>panels:</strong>  List of panel specification dicts (see above).</li>
+<li><strong>title:</strong>  Overall figure title.</li>
+<li><strong>figsize:</strong>  Base <code>(width, height)</code> in inches <strong>before</strong> context scaling.
+Defaults to <code>(14, sum_of_panel_heights)</code>.</li>
+<li><strong>spectrogram_params:</strong>  Parameters forwarded to torchaudio spectrogram transforms.
+Defaults to <code>{"n_fft": 256, "hop_length": 80, "win_length": 160}</code>.</li>
+<li><strong>context:</strong>  Size preset or numeric scale.</li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p>matplotlib.figure.Figure: The created figure.</p>
+</blockquote>
+</div>
+
+
+                </section>
+                <section id="plot_specgram">
+                            <input id="plot_specgram-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="def">def</span>
+        <span class="name">plot_specgram</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">audio</span><span class="p">:</span> <span class="n"><a href="../data_structures/audio.html#Audio">senselab.audio.data_structures.audio.Audio</a></span>,</span><span class="param">	<span class="n">mel_scale</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>,</span><span class="param">	<span class="n">title</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;Spectrogram&#39;</span>,</span><span class="param">	<span class="o">*</span>,</span><span class="param">	<span class="n">context</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="s1">&#39;auto&#39;</span>,</span><span class="param">	<span class="n">figsize</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="o">**</span><span class="n">spect_kwargs</span><span class="p">:</span> <span class="n">Any</span></span><span class="return-annotation">) -> <span class="n">matplotlib</span><span class="o">.</span><span class="n">figure</span><span class="o">.</span><span class="n">Figure</span>:</span></span>
+
+                <label class="view-source-button" for="plot_specgram-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#plot_specgram"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="plot_specgram-212"><a href="#plot_specgram-212"><span class="linenos">212</span></a><span class="k">def</span><span class="w"> </span><span class="nf">plot_specgram</span><span class="p">(</span>
+</span><span id="plot_specgram-213"><a href="#plot_specgram-213"><span class="linenos">213</span></a>    <span class="n">audio</span><span class="p">:</span> <span class="n">Audio</span><span class="p">,</span>
+</span><span id="plot_specgram-214"><a href="#plot_specgram-214"><span class="linenos">214</span></a>    <span class="n">mel_scale</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+</span><span id="plot_specgram-215"><a href="#plot_specgram-215"><span class="linenos">215</span></a>    <span class="n">title</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;Spectrogram&quot;</span><span class="p">,</span>
+</span><span id="plot_specgram-216"><a href="#plot_specgram-216"><span class="linenos">216</span></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="plot_specgram-217"><a href="#plot_specgram-217"><span class="linenos">217</span></a>    <span class="n">context</span><span class="p">:</span> <span class="n">_Context</span> <span class="o">=</span> <span class="s2">&quot;auto&quot;</span><span class="p">,</span>
+</span><span id="plot_specgram-218"><a href="#plot_specgram-218"><span class="linenos">218</span></a>    <span class="n">figsize</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="plot_specgram-219"><a href="#plot_specgram-219"><span class="linenos">219</span></a>    <span class="o">**</span><span class="n">spect_kwargs</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>  <span class="c1"># noqa: ANN401</span>
+</span><span id="plot_specgram-220"><a href="#plot_specgram-220"><span class="linenos">220</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Figure</span><span class="p">:</span>
+</span><span id="plot_specgram-221"><a href="#plot_specgram-221"><span class="linenos">221</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Plot a (mel-)spectrogram for a **mono** `Audio` object and return the Figure.</span>
+</span><span id="plot_specgram-222"><a href="#plot_specgram-222"><span class="linenos">222</span></a>
+</span><span id="plot_specgram-223"><a href="#plot_specgram-223"><span class="linenos">223</span></a><span class="sd">    Internally calls senselab&#39;s torchaudio-based extractors:</span>
+</span><span id="plot_specgram-224"><a href="#plot_specgram-224"><span class="linenos">224</span></a><span class="sd">    `extract_spectrogram_from_audios` or `extract_mel_spectrogram_from_audios`.</span>
+</span><span id="plot_specgram-225"><a href="#plot_specgram-225"><span class="linenos">225</span></a><span class="sd">    The function expects a 2D spectrogram `[freq_bins, time_frames]`; multi-channel</span>
+</span><span id="plot_specgram-226"><a href="#plot_specgram-226"><span class="linenos">226</span></a><span class="sd">    inputs should be downmixed beforehand.</span>
+</span><span id="plot_specgram-227"><a href="#plot_specgram-227"><span class="linenos">227</span></a>
+</span><span id="plot_specgram-228"><a href="#plot_specgram-228"><span class="linenos">228</span></a><span class="sd">    Args:</span>
+</span><span id="plot_specgram-229"><a href="#plot_specgram-229"><span class="linenos">229</span></a><span class="sd">        audio (Audio):</span>
+</span><span id="plot_specgram-230"><a href="#plot_specgram-230"><span class="linenos">230</span></a><span class="sd">            Input **mono** audio. If multi-channel, downmix first.</span>
+</span><span id="plot_specgram-231"><a href="#plot_specgram-231"><span class="linenos">231</span></a><span class="sd">        mel_scale (bool, optional):</span>
+</span><span id="plot_specgram-232"><a href="#plot_specgram-232"><span class="linenos">232</span></a><span class="sd">            If `True`, plots a mel spectrogram; otherwise linear frequency. Defaults to `False`.</span>
+</span><span id="plot_specgram-233"><a href="#plot_specgram-233"><span class="linenos">233</span></a><span class="sd">        title (str, optional):</span>
+</span><span id="plot_specgram-234"><a href="#plot_specgram-234"><span class="linenos">234</span></a><span class="sd">            Figure title. Defaults to `&quot;Spectrogram&quot;`.</span>
+</span><span id="plot_specgram-235"><a href="#plot_specgram-235"><span class="linenos">235</span></a><span class="sd">        context (_Context, optional):</span>
+</span><span id="plot_specgram-236"><a href="#plot_specgram-236"><span class="linenos">236</span></a><span class="sd">            Size preset or numeric scale (`&quot;auto&quot;`, `&quot;small&quot;`, `&quot;medium&quot;`, `&quot;large&quot;`, or float).</span>
+</span><span id="plot_specgram-237"><a href="#plot_specgram-237"><span class="linenos">237</span></a><span class="sd">            Defaults to `&quot;auto&quot;`.</span>
+</span><span id="plot_specgram-238"><a href="#plot_specgram-238"><span class="linenos">238</span></a><span class="sd">        figsize (tuple[float, float] | None, optional):</span>
+</span><span id="plot_specgram-239"><a href="#plot_specgram-239"><span class="linenos">239</span></a><span class="sd">            Base `(width, height)` in inches **before** context scaling. Defaults to `(10, 4)`.</span>
+</span><span id="plot_specgram-240"><a href="#plot_specgram-240"><span class="linenos">240</span></a><span class="sd">        **spect_kwargs:</span>
+</span><span id="plot_specgram-241"><a href="#plot_specgram-241"><span class="linenos">241</span></a><span class="sd">            Passed to the underlying extractor (e.g., `n_fft=1024`, `hop_length=256`,</span>
+</span><span id="plot_specgram-242"><a href="#plot_specgram-242"><span class="linenos">242</span></a><span class="sd">            `n_mels=80`, `win_length=1024`, `f_min=0`, `f_max=None`).</span>
+</span><span id="plot_specgram-243"><a href="#plot_specgram-243"><span class="linenos">243</span></a>
+</span><span id="plot_specgram-244"><a href="#plot_specgram-244"><span class="linenos">244</span></a><span class="sd">    Returns:</span>
+</span><span id="plot_specgram-245"><a href="#plot_specgram-245"><span class="linenos">245</span></a><span class="sd">        matplotlib.figure.Figure: The created figure (also displayed).</span>
+</span><span id="plot_specgram-246"><a href="#plot_specgram-246"><span class="linenos">246</span></a>
+</span><span id="plot_specgram-247"><a href="#plot_specgram-247"><span class="linenos">247</span></a><span class="sd">    Raises:</span>
+</span><span id="plot_specgram-248"><a href="#plot_specgram-248"><span class="linenos">248</span></a><span class="sd">        ValueError: If spectrogram extraction fails, contains NaNs, or the result is not 2D.</span>
+</span><span id="plot_specgram-249"><a href="#plot_specgram-249"><span class="linenos">249</span></a>
+</span><span id="plot_specgram-250"><a href="#plot_specgram-250"><span class="linenos">250</span></a><span class="sd">    Example (linear spectrogram):</span>
+</span><span id="plot_specgram-251"><a href="#plot_specgram-251"><span class="linenos">251</span></a><span class="sd">        &gt;&gt;&gt; from pathlib import Path</span>
+</span><span id="plot_specgram-252"><a href="#plot_specgram-252"><span class="linenos">252</span></a><span class="sd">        &gt;&gt;&gt; from senselab.audio.data_structures import Audio</span>
+</span><span id="plot_specgram-253"><a href="#plot_specgram-253"><span class="linenos">253</span></a><span class="sd">        &gt;&gt;&gt; a1 = Audio(filepath=Path(&quot;sample1.wav&quot;).resolve())</span>
+</span><span id="plot_specgram-254"><a href="#plot_specgram-254"><span class="linenos">254</span></a><span class="sd">        &gt;&gt;&gt; fig = plot_specgram(a1, mel_scale=False, n_fft=1024, hop_length=256)</span>
+</span><span id="plot_specgram-255"><a href="#plot_specgram-255"><span class="linenos">255</span></a><span class="sd">        &gt;&gt;&gt; # fig.savefig(&quot;spec.png&quot;)</span>
+</span><span id="plot_specgram-256"><a href="#plot_specgram-256"><span class="linenos">256</span></a>
+</span><span id="plot_specgram-257"><a href="#plot_specgram-257"><span class="linenos">257</span></a><span class="sd">    Example (mel spectrogram):</span>
+</span><span id="plot_specgram-258"><a href="#plot_specgram-258"><span class="linenos">258</span></a><span class="sd">        &gt;&gt;&gt; from pathlib import Path</span>
+</span><span id="plot_specgram-259"><a href="#plot_specgram-259"><span class="linenos">259</span></a><span class="sd">        &gt;&gt;&gt; from senselab.audio.data_structures import Audio</span>
+</span><span id="plot_specgram-260"><a href="#plot_specgram-260"><span class="linenos">260</span></a><span class="sd">        &gt;&gt;&gt; a1 = Audio(filepath=Path(&quot;sample1.wav&quot;).resolve())</span>
+</span><span id="plot_specgram-261"><a href="#plot_specgram-261"><span class="linenos">261</span></a><span class="sd">        &gt;&gt;&gt; fig = plot_specgram(a1, mel_scale=True, n_mels=80, n_fft=1024, hop_length=256)</span>
+</span><span id="plot_specgram-262"><a href="#plot_specgram-262"><span class="linenos">262</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="plot_specgram-263"><a href="#plot_specgram-263"><span class="linenos">263</span></a>    <span class="c1"># Extract the spectrogram</span>
+</span><span id="plot_specgram-264"><a href="#plot_specgram-264"><span class="linenos">264</span></a>    <span class="k">if</span> <span class="n">mel_scale</span><span class="p">:</span>
+</span><span id="plot_specgram-265"><a href="#plot_specgram-265"><span class="linenos">265</span></a>        <span class="kn">from</span><span class="w"> </span><span class="nn">senselab.audio.tasks.features_extraction.torchaudio</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+</span><span id="plot_specgram-266"><a href="#plot_specgram-266"><span class="linenos">266</span></a>            <span class="n">extract_mel_spectrogram_from_audios</span><span class="p">,</span>
+</span><span id="plot_specgram-267"><a href="#plot_specgram-267"><span class="linenos">267</span></a>        <span class="p">)</span>
+</span><span id="plot_specgram-268"><a href="#plot_specgram-268"><span class="linenos">268</span></a>
+</span><span id="plot_specgram-269"><a href="#plot_specgram-269"><span class="linenos">269</span></a>        <span class="n">spectrogram</span> <span class="o">=</span> <span class="n">extract_mel_spectrogram_from_audios</span><span class="p">([</span><span class="n">audio</span><span class="p">],</span> <span class="o">**</span><span class="n">spect_kwargs</span><span class="p">)[</span><span class="mi">0</span><span class="p">][</span><span class="s2">&quot;mel_spectrogram&quot;</span><span class="p">]</span>
+</span><span id="plot_specgram-270"><a href="#plot_specgram-270"><span class="linenos">270</span></a>        <span class="n">y_axis_label</span> <span class="o">=</span> <span class="s2">&quot;Mel frequency (bins)&quot;</span>
+</span><span id="plot_specgram-271"><a href="#plot_specgram-271"><span class="linenos">271</span></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="plot_specgram-272"><a href="#plot_specgram-272"><span class="linenos">272</span></a>        <span class="kn">from</span><span class="w"> </span><span class="nn">senselab.audio.tasks.features_extraction.torchaudio</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+</span><span id="plot_specgram-273"><a href="#plot_specgram-273"><span class="linenos">273</span></a>            <span class="n">extract_spectrogram_from_audios</span><span class="p">,</span>
+</span><span id="plot_specgram-274"><a href="#plot_specgram-274"><span class="linenos">274</span></a>        <span class="p">)</span>
+</span><span id="plot_specgram-275"><a href="#plot_specgram-275"><span class="linenos">275</span></a>
+</span><span id="plot_specgram-276"><a href="#plot_specgram-276"><span class="linenos">276</span></a>        <span class="n">spectrogram</span> <span class="o">=</span> <span class="n">extract_spectrogram_from_audios</span><span class="p">([</span><span class="n">audio</span><span class="p">],</span> <span class="o">**</span><span class="n">spect_kwargs</span><span class="p">)[</span><span class="mi">0</span><span class="p">][</span><span class="s2">&quot;spectrogram&quot;</span><span class="p">]</span>
+</span><span id="plot_specgram-277"><a href="#plot_specgram-277"><span class="linenos">277</span></a>        <span class="n">y_axis_label</span> <span class="o">=</span> <span class="s2">&quot;Frequency [Hz]&quot;</span>
+</span><span id="plot_specgram-278"><a href="#plot_specgram-278"><span class="linenos">278</span></a>
+</span><span id="plot_specgram-279"><a href="#plot_specgram-279"><span class="linenos">279</span></a>    <span class="c1"># ---- Guard against invalid/short-audio outputs (must be exactly this phrase)</span>
+</span><span id="plot_specgram-280"><a href="#plot_specgram-280"><span class="linenos">280</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">torch</span><span class="o">.</span><span class="n">is_tensor</span><span class="p">(</span><span class="n">spectrogram</span><span class="p">):</span>
+</span><span id="plot_specgram-281"><a href="#plot_specgram-281"><span class="linenos">281</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Spectrogram extraction failed&quot;</span><span class="p">)</span>
+</span><span id="plot_specgram-282"><a href="#plot_specgram-282"><span class="linenos">282</span></a>    <span class="k">if</span> <span class="n">spectrogram</span><span class="o">.</span><span class="n">ndim</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">spectrogram</span><span class="o">.</span><span class="n">numel</span><span class="p">()</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+</span><span id="plot_specgram-283"><a href="#plot_specgram-283"><span class="linenos">283</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Spectrogram extraction failed&quot;</span><span class="p">)</span>
+</span><span id="plot_specgram-284"><a href="#plot_specgram-284"><span class="linenos">284</span></a>    <span class="k">if</span> <span class="n">spectrogram</span><span class="o">.</span><span class="n">dtype</span><span class="o">.</span><span class="n">is_floating_point</span> <span class="ow">and</span> <span class="n">torch</span><span class="o">.</span><span class="n">isnan</span><span class="p">(</span><span class="n">spectrogram</span><span class="p">)</span><span class="o">.</span><span class="n">any</span><span class="p">():</span>
+</span><span id="plot_specgram-285"><a href="#plot_specgram-285"><span class="linenos">285</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Spectrogram extraction failed&quot;</span><span class="p">)</span>
+</span><span id="plot_specgram-286"><a href="#plot_specgram-286"><span class="linenos">286</span></a>
+</span><span id="plot_specgram-287"><a href="#plot_specgram-287"><span class="linenos">287</span></a>    <span class="k">if</span> <span class="n">spectrogram</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">!=</span> <span class="mi">2</span><span class="p">:</span>
+</span><span id="plot_specgram-288"><a href="#plot_specgram-288"><span class="linenos">288</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+</span><span id="plot_specgram-289"><a href="#plot_specgram-289"><span class="linenos">289</span></a>            <span class="s2">&quot;Spectrogram must be a 2D tensor. Got shape: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">spectrogram</span><span class="o">.</span><span class="n">shape</span><span class="p">),</span>
+</span><span id="plot_specgram-290"><a href="#plot_specgram-290"><span class="linenos">290</span></a>            <span class="s2">&quot;Please make sure the input audio is mono.&quot;</span><span class="p">,</span>
+</span><span id="plot_specgram-291"><a href="#plot_specgram-291"><span class="linenos">291</span></a>        <span class="p">)</span>
+</span><span id="plot_specgram-292"><a href="#plot_specgram-292"><span class="linenos">292</span></a>
+</span><span id="plot_specgram-293"><a href="#plot_specgram-293"><span class="linenos">293</span></a>    <span class="c1"># Determine time and frequency scale</span>
+</span><span id="plot_specgram-294"><a href="#plot_specgram-294"><span class="linenos">294</span></a>    <span class="c1"># num_frames = spectrogram.size(1)</span>
+</span><span id="plot_specgram-295"><a href="#plot_specgram-295"><span class="linenos">295</span></a>    <span class="n">num_freq_bins</span> <span class="o">=</span> <span class="n">spectrogram</span><span class="o">.</span><span class="n">size</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+</span><span id="plot_specgram-296"><a href="#plot_specgram-296"><span class="linenos">296</span></a>
+</span><span id="plot_specgram-297"><a href="#plot_specgram-297"><span class="linenos">297</span></a>    <span class="c1"># Time axis in seconds</span>
+</span><span id="plot_specgram-298"><a href="#plot_specgram-298"><span class="linenos">298</span></a>    <span class="n">duration_sec</span> <span class="o">=</span> <span class="n">audio</span><span class="o">.</span><span class="n">waveform</span><span class="o">.</span><span class="n">size</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span> <span class="o">/</span> <span class="n">audio</span><span class="o">.</span><span class="n">sampling_rate</span>
+</span><span id="plot_specgram-299"><a href="#plot_specgram-299"><span class="linenos">299</span></a>    <span class="n">time_axis_start</span> <span class="o">=</span> <span class="mf">0.0</span>
+</span><span id="plot_specgram-300"><a href="#plot_specgram-300"><span class="linenos">300</span></a>    <span class="n">time_axis_end</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">duration_sec</span><span class="p">)</span>
+</span><span id="plot_specgram-301"><a href="#plot_specgram-301"><span class="linenos">301</span></a>
+</span><span id="plot_specgram-302"><a href="#plot_specgram-302"><span class="linenos">302</span></a>    <span class="c1"># Frequency axis</span>
+</span><span id="plot_specgram-303"><a href="#plot_specgram-303"><span class="linenos">303</span></a>    <span class="k">if</span> <span class="n">mel_scale</span><span class="p">:</span>
+</span><span id="plot_specgram-304"><a href="#plot_specgram-304"><span class="linenos">304</span></a>        <span class="n">freq_start</span><span class="p">,</span> <span class="n">freq_end</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span> <span class="nb">float</span><span class="p">(</span><span class="n">num_freq_bins</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
+</span><span id="plot_specgram-305"><a href="#plot_specgram-305"><span class="linenos">305</span></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="plot_specgram-306"><a href="#plot_specgram-306"><span class="linenos">306</span></a>        <span class="n">freq_start</span><span class="p">,</span> <span class="n">freq_end</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span> <span class="nb">float</span><span class="p">(</span><span class="n">audio</span><span class="o">.</span><span class="n">sampling_rate</span> <span class="o">/</span> <span class="mi">2</span><span class="p">)</span>
+</span><span id="plot_specgram-307"><a href="#plot_specgram-307"><span class="linenos">307</span></a>
+</span><span id="plot_specgram-308"><a href="#plot_specgram-308"><span class="linenos">308</span></a>    <span class="n">scale</span> <span class="o">=</span> <span class="n">_resolve_scale</span><span class="p">(</span><span class="n">context</span><span class="p">)</span>
+</span><span id="plot_specgram-309"><a href="#plot_specgram-309"><span class="linenos">309</span></a>    <span class="n">rc</span> <span class="o">=</span> <span class="n">_rc_for_scale</span><span class="p">(</span><span class="n">scale</span><span class="p">)</span>
+</span><span id="plot_specgram-310"><a href="#plot_specgram-310"><span class="linenos">310</span></a>    <span class="k">if</span> <span class="n">figsize</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="plot_specgram-311"><a href="#plot_specgram-311"><span class="linenos">311</span></a>        <span class="n">base</span> <span class="o">=</span> <span class="p">(</span><span class="mf">10.0</span><span class="p">,</span> <span class="mf">4.0</span><span class="p">)</span>
+</span><span id="plot_specgram-312"><a href="#plot_specgram-312"><span class="linenos">312</span></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="plot_specgram-313"><a href="#plot_specgram-313"><span class="linenos">313</span></a>        <span class="n">base</span> <span class="o">=</span> <span class="n">figsize</span>
+</span><span id="plot_specgram-314"><a href="#plot_specgram-314"><span class="linenos">314</span></a>    <span class="n">scaled_size</span> <span class="o">=</span> <span class="p">(</span><span class="n">base</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">*</span> <span class="n">scale</span><span class="p">,</span> <span class="n">base</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">*</span> <span class="n">scale</span><span class="p">)</span>
+</span><span id="plot_specgram-315"><a href="#plot_specgram-315"><span class="linenos">315</span></a>
+</span><span id="plot_specgram-316"><a href="#plot_specgram-316"><span class="linenos">316</span></a>    <span class="k">with</span> <span class="n">rc_context</span><span class="p">(</span><span class="n">rc</span><span class="p">):</span>
+</span><span id="plot_specgram-317"><a href="#plot_specgram-317"><span class="linenos">317</span></a>        <span class="n">fig</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">figure</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="n">scaled_size</span><span class="p">)</span>
+</span><span id="plot_specgram-318"><a href="#plot_specgram-318"><span class="linenos">318</span></a>        <span class="n">plt</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span>
+</span><span id="plot_specgram-319"><a href="#plot_specgram-319"><span class="linenos">319</span></a>            <span class="n">_power_to_db</span><span class="p">(</span><span class="n">spectrogram</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span><span class="o">.</span><span class="n">numpy</span><span class="p">()),</span>
+</span><span id="plot_specgram-320"><a href="#plot_specgram-320"><span class="linenos">320</span></a>            <span class="n">aspect</span><span class="o">=</span><span class="s2">&quot;auto&quot;</span><span class="p">,</span>
+</span><span id="plot_specgram-321"><a href="#plot_specgram-321"><span class="linenos">321</span></a>            <span class="n">origin</span><span class="o">=</span><span class="s2">&quot;lower&quot;</span><span class="p">,</span>
+</span><span id="plot_specgram-322"><a href="#plot_specgram-322"><span class="linenos">322</span></a>            <span class="n">extent</span><span class="o">=</span><span class="p">(</span><span class="n">time_axis_start</span><span class="p">,</span> <span class="n">time_axis_end</span><span class="p">,</span> <span class="n">freq_start</span><span class="p">,</span> <span class="n">freq_end</span><span class="p">),</span>
+</span><span id="plot_specgram-323"><a href="#plot_specgram-323"><span class="linenos">323</span></a>            <span class="n">cmap</span><span class="o">=</span><span class="s2">&quot;viridis&quot;</span><span class="p">,</span>
+</span><span id="plot_specgram-324"><a href="#plot_specgram-324"><span class="linenos">324</span></a>        <span class="p">)</span>
+</span><span id="plot_specgram-325"><a href="#plot_specgram-325"><span class="linenos">325</span></a>        <span class="n">plt</span><span class="o">.</span><span class="n">colorbar</span><span class="p">(</span><span class="n">label</span><span class="o">=</span><span class="s2">&quot;Magnitude (dB)&quot;</span><span class="p">)</span>
+</span><span id="plot_specgram-326"><a href="#plot_specgram-326"><span class="linenos">326</span></a>        <span class="n">plt</span><span class="o">.</span><span class="n">title</span><span class="p">(</span><span class="n">title</span><span class="p">)</span>
+</span><span id="plot_specgram-327"><a href="#plot_specgram-327"><span class="linenos">327</span></a>        <span class="n">plt</span><span class="o">.</span><span class="n">ylabel</span><span class="p">(</span><span class="n">y_axis_label</span><span class="p">)</span>
+</span><span id="plot_specgram-328"><a href="#plot_specgram-328"><span class="linenos">328</span></a>        <span class="n">plt</span><span class="o">.</span><span class="n">xlabel</span><span class="p">(</span><span class="s2">&quot;Time [s]&quot;</span><span class="p">)</span>
+</span><span id="plot_specgram-329"><a href="#plot_specgram-329"><span class="linenos">329</span></a>        <span class="n">plt</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">()</span>
+</span><span id="plot_specgram-330"><a href="#plot_specgram-330"><span class="linenos">330</span></a>        <span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">block</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+</span><span id="plot_specgram-331"><a href="#plot_specgram-331"><span class="linenos">331</span></a>        <span class="k">return</span> <span class="n">fig</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Plot a (mel-)spectrogram for a <strong>mono</strong> <code>Audio</code> object and return the Figure.</p>
+
+<p>Internally calls senselab's torchaudio-based extractors:
+<code>extract_spectrogram_from_audios</code> or <code>extract_mel_spectrogram_from_audios</code>.
+The function expects a 2D spectrogram <code>[freq_bins, time_frames]</code>; multi-channel
+inputs should be downmixed beforehand.</p>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>audio (Audio):</strong>  Input <strong>mono</strong> audio. If multi-channel, downmix first.</li>
+<li><strong>mel_scale (bool, optional):</strong>  If <code>True</code>, plots a mel spectrogram; otherwise linear frequency. Defaults to <code>False</code>.</li>
+<li><strong>title (str, optional):</strong>  Figure title. Defaults to <code>"Spectrogram"</code>.</li>
+<li><strong>context (_Context, optional):</strong>  Size preset or numeric scale (<code>"auto"</code>, <code>"small"</code>, <code>"medium"</code>, <code>"large"</code>, or float).
+Defaults to <code>"auto"</code>.</li>
+<li><strong>figsize (tuple[float, float] | None, optional):</strong>  Base <code>(width, height)</code> in inches <strong>before</strong> context scaling. Defaults to <code>(10, 4)</code>.</li>
+<li>**<strong>spect_kwargs:</strong>  Passed to the underlying extractor (e.g., <code>n_fft=1024</code>, <code>hop_length=256</code>,
+<code>n_mels=80</code>, <code>win_length=1024</code>, <code>f_min=0</code>, <code>f_max=None</code>).</li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p>matplotlib.figure.Figure: The created figure (also displayed).</p>
+</blockquote>
+
+<h6 id="raises">Raises:</h6>
+
+<ul>
+<li><strong>ValueError:</strong>  If spectrogram extraction fails, contains NaNs, or the result is not 2D.</li>
+</ul>
+
+<p>Example (linear spectrogram):</p>
+
+<blockquote>
+  <blockquote>
+    <blockquote>
+      <p>from pathlib import Path
+      from <a href="../data_structures.html">senselab.audio.data_structures</a> import Audio
+      a1 = Audio(filepath=Path("sample1.wav").resolve())
+      fig = plot_specgram(a1, mel_scale=False, n_fft=1024, hop_length=256)</p>
+      
+      <h1 id="figsavefigspecpng">fig.savefig("spec.png")</h1>
+    </blockquote>
+  </blockquote>
+</blockquote>
+
+<p>Example (mel spectrogram):</p>
+
+<blockquote>
+  <blockquote>
+    <blockquote>
+      <p>from pathlib import Path
+      from <a href="../data_structures.html">senselab.audio.data_structures</a> import Audio
+      a1 = Audio(filepath=Path("sample1.wav").resolve())
+      fig = plot_specgram(a1, mel_scale=True, n_mels=80, n_fft=1024, hop_length=256)</p>
+    </blockquote>
+  </blockquote>
+</blockquote>
+</div>
+
+
+                </section>
+                <section id="plot_waveform">
+                            <input id="plot_waveform-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="def">def</span>
+        <span class="name">plot_waveform</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">audio</span><span class="p">:</span> <span class="n"><a href="../data_structures/audio.html#Audio">senselab.audio.data_structures.audio.Audio</a></span>,</span><span class="param">	<span class="n">title</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;Waveform&#39;</span>,</span><span class="param">	<span class="n">fast</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>,</span><span class="param">	<span class="o">*</span>,</span><span class="param">	<span class="n">context</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="s1">&#39;auto&#39;</span>,</span><span class="param">	<span class="n">figsize</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span></span><span class="return-annotation">) -> <span class="n">matplotlib</span><span class="o">.</span><span class="n">figure</span><span class="o">.</span><span class="n">Figure</span>:</span></span>
+
+                <label class="view-source-button" for="plot_waveform-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#plot_waveform"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="plot_waveform-141"><a href="#plot_waveform-141"><span class="linenos">141</span></a><span class="k">def</span><span class="w"> </span><span class="nf">plot_waveform</span><span class="p">(</span>
+</span><span id="plot_waveform-142"><a href="#plot_waveform-142"><span class="linenos">142</span></a>    <span class="n">audio</span><span class="p">:</span> <span class="n">Audio</span><span class="p">,</span>
+</span><span id="plot_waveform-143"><a href="#plot_waveform-143"><span class="linenos">143</span></a>    <span class="n">title</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;Waveform&quot;</span><span class="p">,</span>
+</span><span id="plot_waveform-144"><a href="#plot_waveform-144"><span class="linenos">144</span></a>    <span class="n">fast</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+</span><span id="plot_waveform-145"><a href="#plot_waveform-145"><span class="linenos">145</span></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="plot_waveform-146"><a href="#plot_waveform-146"><span class="linenos">146</span></a>    <span class="n">context</span><span class="p">:</span> <span class="n">_Context</span> <span class="o">=</span> <span class="s2">&quot;auto&quot;</span><span class="p">,</span>
+</span><span id="plot_waveform-147"><a href="#plot_waveform-147"><span class="linenos">147</span></a>    <span class="n">figsize</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="plot_waveform-148"><a href="#plot_waveform-148"><span class="linenos">148</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Figure</span><span class="p">:</span>
+</span><span id="plot_waveform-149"><a href="#plot_waveform-149"><span class="linenos">149</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Plot the time-domain waveform of an `Audio` object and return the Figure.</span>
+</span><span id="plot_waveform-150"><a href="#plot_waveform-150"><span class="linenos">150</span></a>
+</span><span id="plot_waveform-151"><a href="#plot_waveform-151"><span class="linenos">151</span></a><span class="sd">    The plot is automatically scaled for readability using a *context* scale</span>
+</span><span id="plot_waveform-152"><a href="#plot_waveform-152"><span class="linenos">152</span></a><span class="sd">    (similar to seaborn). Use `fast=True` to lightly decimate the signal for</span>
+</span><span id="plot_waveform-153"><a href="#plot_waveform-153"><span class="linenos">153</span></a><span class="sd">    quicker rendering on very long waveforms.</span>
+</span><span id="plot_waveform-154"><a href="#plot_waveform-154"><span class="linenos">154</span></a>
+</span><span id="plot_waveform-155"><a href="#plot_waveform-155"><span class="linenos">155</span></a><span class="sd">    Args:</span>
+</span><span id="plot_waveform-156"><a href="#plot_waveform-156"><span class="linenos">156</span></a><span class="sd">        audio (Audio):</span>
+</span><span id="plot_waveform-157"><a href="#plot_waveform-157"><span class="linenos">157</span></a><span class="sd">            Input audio containing `.waveform` (shape `[C, T]`) and `.sampling_rate`.</span>
+</span><span id="plot_waveform-158"><a href="#plot_waveform-158"><span class="linenos">158</span></a><span class="sd">        title (str, optional):</span>
+</span><span id="plot_waveform-159"><a href="#plot_waveform-159"><span class="linenos">159</span></a><span class="sd">            Figure title. Defaults to `&quot;Waveform&quot;`.</span>
+</span><span id="plot_waveform-160"><a href="#plot_waveform-160"><span class="linenos">160</span></a><span class="sd">        fast (bool, optional):</span>
+</span><span id="plot_waveform-161"><a href="#plot_waveform-161"><span class="linenos">161</span></a><span class="sd">            If `True`, plots a 10× downsampled view for speed. Defaults to `False`.</span>
+</span><span id="plot_waveform-162"><a href="#plot_waveform-162"><span class="linenos">162</span></a><span class="sd">        context (_Context, optional):</span>
+</span><span id="plot_waveform-163"><a href="#plot_waveform-163"><span class="linenos">163</span></a><span class="sd">            Size preset or numeric scale. Accepted values:</span>
+</span><span id="plot_waveform-164"><a href="#plot_waveform-164"><span class="linenos">164</span></a><span class="sd">              * `&quot;auto&quot;` (detect from screen), `&quot;small&quot;`, `&quot;medium&quot;`, `&quot;large&quot;`,</span>
+</span><span id="plot_waveform-165"><a href="#plot_waveform-165"><span class="linenos">165</span></a><span class="sd">              * or a float scale factor (e.g., `1.25`). Defaults to `&quot;auto&quot;`.</span>
+</span><span id="plot_waveform-166"><a href="#plot_waveform-166"><span class="linenos">166</span></a><span class="sd">        figsize (tuple[float, float] | None, optional):</span>
+</span><span id="plot_waveform-167"><a href="#plot_waveform-167"><span class="linenos">167</span></a><span class="sd">            Base `(width, height)` in inches **before** context scaling.</span>
+</span><span id="plot_waveform-168"><a href="#plot_waveform-168"><span class="linenos">168</span></a><span class="sd">            Defaults to `(12, 2×channels)`.</span>
+</span><span id="plot_waveform-169"><a href="#plot_waveform-169"><span class="linenos">169</span></a>
+</span><span id="plot_waveform-170"><a href="#plot_waveform-170"><span class="linenos">170</span></a><span class="sd">    Returns:</span>
+</span><span id="plot_waveform-171"><a href="#plot_waveform-171"><span class="linenos">171</span></a><span class="sd">        matplotlib.figure.Figure: The created figure (also displayed).</span>
+</span><span id="plot_waveform-172"><a href="#plot_waveform-172"><span class="linenos">172</span></a>
+</span><span id="plot_waveform-173"><a href="#plot_waveform-173"><span class="linenos">173</span></a><span class="sd">    Example:</span>
+</span><span id="plot_waveform-174"><a href="#plot_waveform-174"><span class="linenos">174</span></a><span class="sd">        &gt;&gt;&gt; from pathlib import Path</span>
+</span><span id="plot_waveform-175"><a href="#plot_waveform-175"><span class="linenos">175</span></a><span class="sd">        &gt;&gt;&gt; from senselab.audio.data_structures import Audio</span>
+</span><span id="plot_waveform-176"><a href="#plot_waveform-176"><span class="linenos">176</span></a><span class="sd">        &gt;&gt;&gt; a1 = Audio(filepath=Path(&quot;sample1.wav&quot;).resolve())</span>
+</span><span id="plot_waveform-177"><a href="#plot_waveform-177"><span class="linenos">177</span></a><span class="sd">        &gt;&gt;&gt; fig = plot_waveform(a1, title=&quot;Sample 1&quot;, fast=True, context=&quot;medium&quot;)</span>
+</span><span id="plot_waveform-178"><a href="#plot_waveform-178"><span class="linenos">178</span></a><span class="sd">        &gt;&gt;&gt; # fig.savefig(&quot;waveform.png&quot;)  # optional</span>
+</span><span id="plot_waveform-179"><a href="#plot_waveform-179"><span class="linenos">179</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="plot_waveform-180"><a href="#plot_waveform-180"><span class="linenos">180</span></a>    <span class="n">waveform</span> <span class="o">=</span> <span class="n">audio</span><span class="o">.</span><span class="n">waveform</span>
+</span><span id="plot_waveform-181"><a href="#plot_waveform-181"><span class="linenos">181</span></a>    <span class="n">sample_rate</span> <span class="o">=</span> <span class="n">audio</span><span class="o">.</span><span class="n">sampling_rate</span>
+</span><span id="plot_waveform-182"><a href="#plot_waveform-182"><span class="linenos">182</span></a>
+</span><span id="plot_waveform-183"><a href="#plot_waveform-183"><span class="linenos">183</span></a>    <span class="k">if</span> <span class="n">fast</span><span class="p">:</span>
+</span><span id="plot_waveform-184"><a href="#plot_waveform-184"><span class="linenos">184</span></a>        <span class="n">waveform</span> <span class="o">=</span> <span class="n">waveform</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="p">::</span><span class="mi">10</span><span class="p">]</span>
+</span><span id="plot_waveform-185"><a href="#plot_waveform-185"><span class="linenos">185</span></a>
+</span><span id="plot_waveform-186"><a href="#plot_waveform-186"><span class="linenos">186</span></a>    <span class="n">num_channels</span><span class="p">,</span> <span class="n">num_frames</span> <span class="o">=</span> <span class="n">waveform</span><span class="o">.</span><span class="n">shape</span>
+</span><span id="plot_waveform-187"><a href="#plot_waveform-187"><span class="linenos">187</span></a>    <span class="n">time_axis</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">num_frames</span> <span class="o">/</span> <span class="n">sample_rate</span><span class="p">,</span> <span class="n">num_frames</span><span class="p">)</span>
+</span><span id="plot_waveform-188"><a href="#plot_waveform-188"><span class="linenos">188</span></a>
+</span><span id="plot_waveform-189"><a href="#plot_waveform-189"><span class="linenos">189</span></a>    <span class="n">scale</span> <span class="o">=</span> <span class="n">_resolve_scale</span><span class="p">(</span><span class="n">context</span><span class="p">)</span>
+</span><span id="plot_waveform-190"><a href="#plot_waveform-190"><span class="linenos">190</span></a>    <span class="n">rc</span> <span class="o">=</span> <span class="n">_rc_for_scale</span><span class="p">(</span><span class="n">scale</span><span class="p">)</span>
+</span><span id="plot_waveform-191"><a href="#plot_waveform-191"><span class="linenos">191</span></a>    <span class="k">if</span> <span class="n">figsize</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="plot_waveform-192"><a href="#plot_waveform-192"><span class="linenos">192</span></a>        <span class="n">base</span> <span class="o">=</span> <span class="p">(</span><span class="mf">12.0</span><span class="p">,</span> <span class="nb">max</span><span class="p">(</span><span class="mf">2.0</span> <span class="o">*</span> <span class="n">num_channels</span><span class="p">,</span> <span class="mf">2.5</span><span class="p">))</span>
+</span><span id="plot_waveform-193"><a href="#plot_waveform-193"><span class="linenos">193</span></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="plot_waveform-194"><a href="#plot_waveform-194"><span class="linenos">194</span></a>        <span class="n">base</span> <span class="o">=</span> <span class="n">figsize</span>
+</span><span id="plot_waveform-195"><a href="#plot_waveform-195"><span class="linenos">195</span></a>    <span class="n">scaled_size</span> <span class="o">=</span> <span class="p">(</span><span class="n">base</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">*</span> <span class="n">scale</span><span class="p">,</span> <span class="n">base</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">*</span> <span class="n">scale</span><span class="p">)</span>
+</span><span id="plot_waveform-196"><a href="#plot_waveform-196"><span class="linenos">196</span></a>
+</span><span id="plot_waveform-197"><a href="#plot_waveform-197"><span class="linenos">197</span></a>    <span class="k">with</span> <span class="n">rc_context</span><span class="p">(</span><span class="n">rc</span><span class="p">):</span>
+</span><span id="plot_waveform-198"><a href="#plot_waveform-198"><span class="linenos">198</span></a>        <span class="n">fig</span><span class="p">,</span> <span class="n">axes</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="n">num_channels</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="n">scaled_size</span><span class="p">,</span> <span class="n">sharex</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="plot_waveform-199"><a href="#plot_waveform-199"><span class="linenos">199</span></a>        <span class="k">if</span> <span class="n">num_channels</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+</span><span id="plot_waveform-200"><a href="#plot_waveform-200"><span class="linenos">200</span></a>            <span class="n">axes</span> <span class="o">=</span> <span class="p">[</span><span class="n">axes</span><span class="p">]</span>  <span class="c1"># ensure iterable</span>
+</span><span id="plot_waveform-201"><a href="#plot_waveform-201"><span class="linenos">201</span></a>        <span class="k">for</span> <span class="n">c</span><span class="p">,</span> <span class="n">ax</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">axes</span><span class="p">):</span>
+</span><span id="plot_waveform-202"><a href="#plot_waveform-202"><span class="linenos">202</span></a>            <span class="n">ax</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">time_axis</span><span class="o">.</span><span class="n">numpy</span><span class="p">(),</span> <span class="n">waveform</span><span class="p">[</span><span class="n">c</span><span class="p">]</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span><span class="o">.</span><span class="n">numpy</span><span class="p">())</span>
+</span><span id="plot_waveform-203"><a href="#plot_waveform-203"><span class="linenos">203</span></a>            <span class="n">ax</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Ch </span><span class="si">{</span><span class="n">c</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span><span id="plot_waveform-204"><a href="#plot_waveform-204"><span class="linenos">204</span></a>            <span class="n">ax</span><span class="o">.</span><span class="n">grid</span><span class="p">(</span><span class="kc">True</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.3</span><span class="p">)</span>
+</span><span id="plot_waveform-205"><a href="#plot_waveform-205"><span class="linenos">205</span></a>        <span class="n">fig</span><span class="o">.</span><span class="n">suptitle</span><span class="p">(</span><span class="n">title</span><span class="p">)</span>
+</span><span id="plot_waveform-206"><a href="#plot_waveform-206"><span class="linenos">206</span></a>        <span class="n">axes</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">set_xlabel</span><span class="p">(</span><span class="s2">&quot;Time [s]&quot;</span><span class="p">)</span>
+</span><span id="plot_waveform-207"><a href="#plot_waveform-207"><span class="linenos">207</span></a>        <span class="n">fig</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">(</span><span class="n">rect</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mf">0.96</span><span class="p">))</span>
+</span><span id="plot_waveform-208"><a href="#plot_waveform-208"><span class="linenos">208</span></a>        <span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">block</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+</span><span id="plot_waveform-209"><a href="#plot_waveform-209"><span class="linenos">209</span></a>        <span class="k">return</span> <span class="n">fig</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Plot the time-domain waveform of an <code>Audio</code> object and return the Figure.</p>
+
+<p>The plot is automatically scaled for readability using a <em>context</em> scale
+(similar to seaborn). Use <code>fast=True</code> to lightly decimate the signal for
+quicker rendering on very long waveforms.</p>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>audio (Audio):</strong>  Input audio containing <code>.waveform</code> (shape <code>[C, T]</code>) and <code>.sampling_rate</code>.</li>
+<li><strong>title (str, optional):</strong>  Figure title. Defaults to <code>"Waveform"</code>.</li>
+<li><strong>fast (bool, optional):</strong>  If <code>True</code>, plots a 10× downsampled view for speed. Defaults to <code>False</code>.</li>
+<li><strong>context (_Context, optional):</strong>  Size preset or numeric scale. Accepted values:
+<ul>
+<li><code>"auto"</code> (detect from screen), <code>"small"</code>, <code>"medium"</code>, <code>"large"</code>,</li>
+<li>or a float scale factor (e.g., <code>1.25</code>). Defaults to <code>"auto"</code>.</li>
+</ul></li>
+<li><strong>figsize (tuple[float, float] | None, optional):</strong>  Base <code>(width, height)</code> in inches <strong>before</strong> context scaling.
+Defaults to <code>(12, 2×channels)</code>.</li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p>matplotlib.figure.Figure: The created figure (also displayed).</p>
+</blockquote>
+
+<h6 id="example">Example:</h6>
+
+<blockquote>
+  <div class="pdoc-code codehilite">
+<pre><span></span><code><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span><span class="w"> </span><span class="nn"><a href="../data_structures.html">senselab.audio.data_structures</a></span><span class="w"> </span><span class="kn">import</span> <span class="n">Audio</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">a1</span> <span class="o">=</span> <span class="n">Audio</span><span class="p">(</span><span class="n">filepath</span><span class="o">=</span><span class="n">Path</span><span class="p">(</span><span class="s2">&quot;sample1.wav&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">resolve</span><span class="p">())</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">fig</span> <span class="o">=</span> <span class="n">plot_waveform</span><span class="p">(</span><span class="n">a1</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s2">&quot;Sample 1&quot;</span><span class="p">,</span> <span class="n">fast</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">context</span><span class="o">=</span><span class="s2">&quot;medium&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="c1"># fig.savefig(&quot;waveform.png&quot;)  # optional</span>
+</code></pre>
+  </div>
+</blockquote>
+</div>
+
+
+                </section>
     </main>
 <script>
     function escapeHTML(html) {

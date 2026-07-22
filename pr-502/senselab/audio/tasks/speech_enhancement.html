@@ -38,11 +38,13 @@
 </ul>
 
 
-            <h2>Submodules</h2>
-            <ul>
-                    <li><a href="speech_enhancement/api.html">api</a></li>
-                    <li><a href="speech_enhancement/speechbrain.html">speechbrain</a></li>
-            </ul>
+
+            <h2>API Documentation</h2>
+                <ul class="memberlist">
+            <li>
+                    <a class="function" href="#enhance_audios">enhance_audios</a>
+            </li>
+    </ul>
 
 
 
@@ -97,10 +99,73 @@ In the future, more models will be integrated.</li>
                         <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;.. include:: ./doc.md&quot;&quot;&quot;</span>  <span class="c1"># noqa: D415</span>
 </span><span id="L-2"><a href="#L-2"><span class="linenos">2</span></a>
 </span><span id="L-3"><a href="#L-3"><span class="linenos">3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.api</span><span class="w"> </span><span class="kn">import</span> <span class="n">enhance_audios</span>  <span class="c1"># noqa: F401</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos">4</span></a>
+</span><span id="L-5"><a href="#L-5"><span class="linenos">5</span></a><span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;enhance_audios&quot;</span><span class="p">]</span>
 </span></pre></div>
 
 
             </section>
+                <section id="enhance_audios">
+                            <input id="enhance_audios-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+                    <div class="decorator decorator-requires_compatibility">@requires_compatibility(&#39;audio.tasks.speech_enhancement.enhance_audios&#39;)</div>
+
+        <span class="def">def</span>
+        <span class="name">enhance_audios</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n"><a href="../data_structures/audio.html#Audio">senselab.audio.data_structures.audio.Audio</a></span><span class="p">]</span>,</span><span class="param">	<span class="n">model</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n"><a href="../../utils/data_structures/model.html#SpeechBrainModel">senselab.utils.data_structures.model.SpeechBrainModel</a></span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n"><a href="../../utils/data_structures/device.html#DeviceType">senselab.utils.data_structures.device.DeviceType</a></span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span></span><span class="return-annotation">) -> <span class="n">List</span><span class="p">[</span><span class="n"><a href="../data_structures/audio.html#Audio">senselab.audio.data_structures.audio.Audio</a></span><span class="p">]</span>:</span></span>
+
+                <label class="view-source-button" for="enhance_audios-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#enhance_audios"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="enhance_audios-12"><a href="#enhance_audios-12"><span class="linenos">12</span></a><span class="nd">@requires_compatibility</span><span class="p">(</span><span class="s2">&quot;audio.tasks.speech_enhancement.enhance_audios&quot;</span><span class="p">)</span>
+</span><span id="enhance_audios-13"><a href="#enhance_audios-13"><span class="linenos">13</span></a><span class="k">def</span><span class="w"> </span><span class="nf">enhance_audios</span><span class="p">(</span>
+</span><span id="enhance_audios-14"><a href="#enhance_audios-14"><span class="linenos">14</span></a>    <span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">],</span>
+</span><span id="enhance_audios-15"><a href="#enhance_audios-15"><span class="linenos">15</span></a>    <span class="n">model</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">SpeechBrainModel</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="enhance_audios-16"><a href="#enhance_audios-16"><span class="linenos">16</span></a>    <span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">DeviceType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="enhance_audios-17"><a href="#enhance_audios-17"><span class="linenos">17</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">]:</span>
+</span><span id="enhance_audios-18"><a href="#enhance_audios-18"><span class="linenos">18</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Enhances all audios using the given model.</span>
+</span><span id="enhance_audios-19"><a href="#enhance_audios-19"><span class="linenos">19</span></a>
+</span><span id="enhance_audios-20"><a href="#enhance_audios-20"><span class="linenos">20</span></a><span class="sd">    Args:</span>
+</span><span id="enhance_audios-21"><a href="#enhance_audios-21"><span class="linenos">21</span></a><span class="sd">        audios (List[Audio]): The list of audio objects to be enhanced.</span>
+</span><span id="enhance_audios-22"><a href="#enhance_audios-22"><span class="linenos">22</span></a><span class="sd">        model (SenselabModel): The model used for enhancement.</span>
+</span><span id="enhance_audios-23"><a href="#enhance_audios-23"><span class="linenos">23</span></a><span class="sd">            If None, the default model &quot;speechbrain/sepformer-wham16k-enhancement&quot; is used.</span>
+</span><span id="enhance_audios-24"><a href="#enhance_audios-24"><span class="linenos">24</span></a><span class="sd">        device (Optional[DeviceType]): The device to run the model on (default is None).</span>
+</span><span id="enhance_audios-25"><a href="#enhance_audios-25"><span class="linenos">25</span></a>
+</span><span id="enhance_audios-26"><a href="#enhance_audios-26"><span class="linenos">26</span></a><span class="sd">    Returns:</span>
+</span><span id="enhance_audios-27"><a href="#enhance_audios-27"><span class="linenos">27</span></a><span class="sd">        List[Audio]: The list of enhanced audio objects.</span>
+</span><span id="enhance_audios-28"><a href="#enhance_audios-28"><span class="linenos">28</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="enhance_audios-29"><a href="#enhance_audios-29"><span class="linenos">29</span></a>    <span class="k">if</span> <span class="n">model</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="enhance_audios-30"><a href="#enhance_audios-30"><span class="linenos">30</span></a>        <span class="n">model</span> <span class="o">=</span> <span class="n">SpeechBrainModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="s2">&quot;speechbrain/sepformer-wham16k-enhancement&quot;</span><span class="p">,</span> <span class="n">revision</span><span class="o">=</span><span class="s2">&quot;main&quot;</span><span class="p">)</span>
+</span><span id="enhance_audios-31"><a href="#enhance_audios-31"><span class="linenos">31</span></a>
+</span><span id="enhance_audios-32"><a href="#enhance_audios-32"><span class="linenos">32</span></a>    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">SpeechBrainModel</span><span class="p">):</span>
+</span><span id="enhance_audios-33"><a href="#enhance_audios-33"><span class="linenos">33</span></a>        <span class="k">return</span> <span class="n">SpeechBrainEnhancer</span><span class="o">.</span><span class="n">enhance_audios_with_speechbrain</span><span class="p">(</span><span class="n">audios</span><span class="o">=</span><span class="n">audios</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+</span><span id="enhance_audios-34"><a href="#enhance_audios-34"><span class="linenos">34</span></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="enhance_audios-35"><a href="#enhance_audios-35"><span class="linenos">35</span></a>        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span>
+</span><span id="enhance_audios-36"><a href="#enhance_audios-36"><span class="linenos">36</span></a>            <span class="s2">&quot;Only SpeechBrain models are supported for now. We aim to support more models in the future.&quot;</span>
+</span><span id="enhance_audios-37"><a href="#enhance_audios-37"><span class="linenos">37</span></a>        <span class="p">)</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Enhances all audios using the given model.</p>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>audios (List[Audio]):</strong>  The list of audio objects to be enhanced.</li>
+<li><strong>model (SenselabModel):</strong>  The model used for enhancement.
+If None, the default model "speechbrain/sepformer-wham16k-enhancement" is used.</li>
+<li><strong>device (Optional[DeviceType]):</strong>  The device to run the model on (default is None).</li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p>List[Audio]: The list of enhanced audio objects.</p>
+</blockquote>
+</div>
+
+
+                </section>
     </main>
 <script>
     function escapeHTML(html) {

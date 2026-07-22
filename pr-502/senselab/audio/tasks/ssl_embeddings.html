@@ -35,12 +35,13 @@
 </ul>
 
 
-            <h2>Submodules</h2>
-            <ul>
-                    <li><a href="ssl_embeddings/api.html">api</a></li>
-                    <li><a href="ssl_embeddings/s3prl.html">s3prl</a></li>
-                    <li><a href="ssl_embeddings/self_supervised_features.html">self_supervised_features</a></li>
-            </ul>
+
+            <h2>API Documentation</h2>
+                <ul class="memberlist">
+            <li>
+                    <a class="function" href="#extract_ssl_embeddings_from_audios">extract_ssl_embeddings_from_audios</a>
+            </li>
+    </ul>
 
 
 
@@ -175,10 +176,176 @@
                         <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;.. include:: ./doc.md&quot;&quot;&quot;</span>  <span class="c1"># noqa: D415</span>
 </span><span id="L-2"><a href="#L-2"><span class="linenos">2</span></a>
 </span><span id="L-3"><a href="#L-3"><span class="linenos">3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.api</span><span class="w"> </span><span class="kn">import</span> <span class="n">extract_ssl_embeddings_from_audios</span>  <span class="c1"># noqa: F401</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos">4</span></a>
+</span><span id="L-5"><a href="#L-5"><span class="linenos">5</span></a><span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;extract_ssl_embeddings_from_audios&quot;</span><span class="p">]</span>
 </span></pre></div>
 
 
             </section>
+                <section id="extract_ssl_embeddings_from_audios">
+                            <input id="extract_ssl_embeddings_from_audios-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+                    <div class="decorator decorator-requires_compatibility">@requires_compatibility(&#39;audio.tasks.ssl_embeddings.extract_ssl_embeddings_from_audios&#39;)</div>
+
+        <span class="def">def</span>
+        <span class="name">extract_ssl_embeddings_from_audios</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n"><a href="../data_structures/audio.html#Audio">senselab.audio.data_structures.audio.Audio</a></span><span class="p">]</span>,</span><span class="param">	<span class="n">model</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n"><a href="../../utils/data_structures/model.html#SenselabModel">senselab.utils.data_structures.model.SenselabModel</a></span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span>,</span><span class="param">	<span class="n">cache_dir</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">,</span> <span class="n">NoneType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n"><a href="../../utils/data_structures/device.html#DeviceType">senselab.utils.data_structures.device.DeviceType</a></span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span></span><span class="return-annotation">) -> <span class="n">List</span><span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">]</span>:</span></span>
+
+                <label class="view-source-button" for="extract_ssl_embeddings_from_audios-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#extract_ssl_embeddings_from_audios"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="extract_ssl_embeddings_from_audios-24"><a href="#extract_ssl_embeddings_from_audios-24"><span class="linenos">24</span></a><span class="nd">@requires_compatibility</span><span class="p">(</span><span class="s2">&quot;audio.tasks.ssl_embeddings.extract_ssl_embeddings_from_audios&quot;</span><span class="p">)</span>
+</span><span id="extract_ssl_embeddings_from_audios-25"><a href="#extract_ssl_embeddings_from_audios-25"><span class="linenos">25</span></a><span class="k">def</span><span class="w"> </span><span class="nf">extract_ssl_embeddings_from_audios</span><span class="p">(</span>
+</span><span id="extract_ssl_embeddings_from_audios-26"><a href="#extract_ssl_embeddings_from_audios-26"><span class="linenos">26</span></a>    <span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">],</span>
+</span><span id="extract_ssl_embeddings_from_audios-27"><a href="#extract_ssl_embeddings_from_audios-27"><span class="linenos">27</span></a>    <span class="n">model</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">SenselabModel</span><span class="p">,</span> <span class="nb">str</span><span class="p">],</span>
+</span><span id="extract_ssl_embeddings_from_audios-28"><a href="#extract_ssl_embeddings_from_audios-28"><span class="linenos">28</span></a>    <span class="n">cache_dir</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="extract_ssl_embeddings_from_audios-29"><a href="#extract_ssl_embeddings_from_audios-29"><span class="linenos">29</span></a>    <span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">DeviceType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="extract_ssl_embeddings_from_audios-30"><a href="#extract_ssl_embeddings_from_audios-30"><span class="linenos">30</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">]:</span>
+</span><span id="extract_ssl_embeddings_from_audios-31"><a href="#extract_ssl_embeddings_from_audios-31"><span class="linenos">31</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Extract embedding of audio signals from pre-trained SSL models.</span>
+</span><span id="extract_ssl_embeddings_from_audios-32"><a href="#extract_ssl_embeddings_from_audios-32"><span class="linenos">32</span></a>
+</span><span id="extract_ssl_embeddings_from_audios-33"><a href="#extract_ssl_embeddings_from_audios-33"><span class="linenos">33</span></a><span class="sd">    Dispatches to the correct backend based on the model type:</span>
+</span><span id="extract_ssl_embeddings_from_audios-34"><a href="#extract_ssl_embeddings_from_audios-34"><span class="linenos">34</span></a><span class="sd">    - **HFModel**: Uses HuggingFace Transformers (e.g., wav2vec2-base,</span>
+</span><span id="extract_ssl_embeddings_from_audios-35"><a href="#extract_ssl_embeddings_from_audios-35"><span class="linenos">35</span></a><span class="sd">      HuBERT-large, WavLM-large). Returns all hidden states concatenated</span>
+</span><span id="extract_ssl_embeddings_from_audios-36"><a href="#extract_ssl_embeddings_from_audios-36"><span class="linenos">36</span></a><span class="sd">      with shape ``[num_layers, time_frames, embedding_dim]``.</span>
+</span><span id="extract_ssl_embeddings_from_audios-37"><a href="#extract_ssl_embeddings_from_audios-37"><span class="linenos">37</span></a><span class="sd">    - **SpeechBrainModel**: Uses SpeechBrain EncoderClassifier (e.g.,</span>
+</span><span id="extract_ssl_embeddings_from_audios-38"><a href="#extract_ssl_embeddings_from_audios-38"><span class="linenos">38</span></a><span class="sd">      ECAPA-TDNN, x-vector, ResNet). Returns fixed-dimensional embeddings</span>
+</span><span id="extract_ssl_embeddings_from_audios-39"><a href="#extract_ssl_embeddings_from_audios-39"><span class="linenos">39</span></a><span class="sd">      with shape ``[embedding_dim]``.</span>
+</span><span id="extract_ssl_embeddings_from_audios-40"><a href="#extract_ssl_embeddings_from_audios-40"><span class="linenos">40</span></a><span class="sd">    - **str**: Uses S3PRL in an isolated subprocess venv (e.g., &quot;apc&quot;,</span>
+</span><span id="extract_ssl_embeddings_from_audios-41"><a href="#extract_ssl_embeddings_from_audios-41"><span class="linenos">41</span></a><span class="sd">      &quot;tera&quot;, &quot;cpc&quot;). Returns the last hidden state with shape</span>
+</span><span id="extract_ssl_embeddings_from_audios-42"><a href="#extract_ssl_embeddings_from_audios-42"><span class="linenos">42</span></a><span class="sd">      ``[time_frames, embedding_dim]``.</span>
+</span><span id="extract_ssl_embeddings_from_audios-43"><a href="#extract_ssl_embeddings_from_audios-43"><span class="linenos">43</span></a>
+</span><span id="extract_ssl_embeddings_from_audios-44"><a href="#extract_ssl_embeddings_from_audios-44"><span class="linenos">44</span></a><span class="sd">    Args:</span>
+</span><span id="extract_ssl_embeddings_from_audios-45"><a href="#extract_ssl_embeddings_from_audios-45"><span class="linenos">45</span></a><span class="sd">        audios: A list of Audio objects containing the audio signals.</span>
+</span><span id="extract_ssl_embeddings_from_audios-46"><a href="#extract_ssl_embeddings_from_audios-46"><span class="linenos">46</span></a><span class="sd">            All audios must be mono.</span>
+</span><span id="extract_ssl_embeddings_from_audios-47"><a href="#extract_ssl_embeddings_from_audios-47"><span class="linenos">47</span></a><span class="sd">        model: The model specification. Can be:</span>
+</span><span id="extract_ssl_embeddings_from_audios-48"><a href="#extract_ssl_embeddings_from_audios-48"><span class="linenos">48</span></a><span class="sd">            - ``HFModel(path_or_uri=&quot;facebook/wav2vec2-base&quot;)``</span>
+</span><span id="extract_ssl_embeddings_from_audios-49"><a href="#extract_ssl_embeddings_from_audios-49"><span class="linenos">49</span></a><span class="sd">            - ``SpeechBrainModel(path_or_uri=&quot;speechbrain/spkrec-ecapa-voxceleb&quot;)``</span>
+</span><span id="extract_ssl_embeddings_from_audios-50"><a href="#extract_ssl_embeddings_from_audios-50"><span class="linenos">50</span></a><span class="sd">            - ``&quot;apc&quot;`` or ``&quot;tera&quot;`` (S3PRL model name)</span>
+</span><span id="extract_ssl_embeddings_from_audios-51"><a href="#extract_ssl_embeddings_from_audios-51"><span class="linenos">51</span></a><span class="sd">        cache_dir: Path to cache model weights (HFModel only).</span>
+</span><span id="extract_ssl_embeddings_from_audios-52"><a href="#extract_ssl_embeddings_from_audios-52"><span class="linenos">52</span></a><span class="sd">        device: Device for inference (default: auto-select).</span>
+</span><span id="extract_ssl_embeddings_from_audios-53"><a href="#extract_ssl_embeddings_from_audios-53"><span class="linenos">53</span></a>
+</span><span id="extract_ssl_embeddings_from_audios-54"><a href="#extract_ssl_embeddings_from_audios-54"><span class="linenos">54</span></a><span class="sd">    Returns:</span>
+</span><span id="extract_ssl_embeddings_from_audios-55"><a href="#extract_ssl_embeddings_from_audios-55"><span class="linenos">55</span></a><span class="sd">        List of tensors containing the SSL embeddings for each audio.</span>
+</span><span id="extract_ssl_embeddings_from_audios-56"><a href="#extract_ssl_embeddings_from_audios-56"><span class="linenos">56</span></a>
+</span><span id="extract_ssl_embeddings_from_audios-57"><a href="#extract_ssl_embeddings_from_audios-57"><span class="linenos">57</span></a><span class="sd">    Raises:</span>
+</span><span id="extract_ssl_embeddings_from_audios-58"><a href="#extract_ssl_embeddings_from_audios-58"><span class="linenos">58</span></a><span class="sd">        NotImplementedError: If the model type is not supported.</span>
+</span><span id="extract_ssl_embeddings_from_audios-59"><a href="#extract_ssl_embeddings_from_audios-59"><span class="linenos">59</span></a><span class="sd">        ValueError: If audio is not mono or has wrong sampling rate.</span>
+</span><span id="extract_ssl_embeddings_from_audios-60"><a href="#extract_ssl_embeddings_from_audios-60"><span class="linenos">60</span></a>
+</span><span id="extract_ssl_embeddings_from_audios-61"><a href="#extract_ssl_embeddings_from_audios-61"><span class="linenos">61</span></a><span class="sd">    Examples:</span>
+</span><span id="extract_ssl_embeddings_from_audios-62"><a href="#extract_ssl_embeddings_from_audios-62"><span class="linenos">62</span></a><span class="sd">        &gt;&gt;&gt; # HuggingFace backend</span>
+</span><span id="extract_ssl_embeddings_from_audios-63"><a href="#extract_ssl_embeddings_from_audios-63"><span class="linenos">63</span></a><span class="sd">        &gt;&gt;&gt; audios = [Audio(filepath=&quot;sample.wav&quot;)]</span>
+</span><span id="extract_ssl_embeddings_from_audios-64"><a href="#extract_ssl_embeddings_from_audios-64"><span class="linenos">64</span></a><span class="sd">        &gt;&gt;&gt; model = HFModel(path_or_uri=&quot;facebook/wav2vec2-base&quot;, revision=&quot;main&quot;)</span>
+</span><span id="extract_ssl_embeddings_from_audios-65"><a href="#extract_ssl_embeddings_from_audios-65"><span class="linenos">65</span></a><span class="sd">        &gt;&gt;&gt; embeddings = extract_ssl_embeddings_from_audios(audios, model)</span>
+</span><span id="extract_ssl_embeddings_from_audios-66"><a href="#extract_ssl_embeddings_from_audios-66"><span class="linenos">66</span></a><span class="sd">        &gt;&gt;&gt; print(embeddings[0].shape)</span>
+</span><span id="extract_ssl_embeddings_from_audios-67"><a href="#extract_ssl_embeddings_from_audios-67"><span class="linenos">67</span></a><span class="sd">        [13, 209, 768] ([# of Layers, Time Frames, Embedding Size])</span>
+</span><span id="extract_ssl_embeddings_from_audios-68"><a href="#extract_ssl_embeddings_from_audios-68"><span class="linenos">68</span></a>
+</span><span id="extract_ssl_embeddings_from_audios-69"><a href="#extract_ssl_embeddings_from_audios-69"><span class="linenos">69</span></a><span class="sd">        &gt;&gt;&gt; # SpeechBrain backend</span>
+</span><span id="extract_ssl_embeddings_from_audios-70"><a href="#extract_ssl_embeddings_from_audios-70"><span class="linenos">70</span></a><span class="sd">        &gt;&gt;&gt; model = SpeechBrainModel(path_or_uri=&quot;speechbrain/spkrec-ecapa-voxceleb&quot;)</span>
+</span><span id="extract_ssl_embeddings_from_audios-71"><a href="#extract_ssl_embeddings_from_audios-71"><span class="linenos">71</span></a><span class="sd">        &gt;&gt;&gt; embeddings = extract_ssl_embeddings_from_audios(audios, model)</span>
+</span><span id="extract_ssl_embeddings_from_audios-72"><a href="#extract_ssl_embeddings_from_audios-72"><span class="linenos">72</span></a><span class="sd">        &gt;&gt;&gt; print(embeddings[0].shape)</span>
+</span><span id="extract_ssl_embeddings_from_audios-73"><a href="#extract_ssl_embeddings_from_audios-73"><span class="linenos">73</span></a><span class="sd">        [192]</span>
+</span><span id="extract_ssl_embeddings_from_audios-74"><a href="#extract_ssl_embeddings_from_audios-74"><span class="linenos">74</span></a>
+</span><span id="extract_ssl_embeddings_from_audios-75"><a href="#extract_ssl_embeddings_from_audios-75"><span class="linenos">75</span></a><span class="sd">        &gt;&gt;&gt; # S3PRL backend (isolated subprocess venv)</span>
+</span><span id="extract_ssl_embeddings_from_audios-76"><a href="#extract_ssl_embeddings_from_audios-76"><span class="linenos">76</span></a><span class="sd">        &gt;&gt;&gt; embeddings = extract_ssl_embeddings_from_audios(audios, &quot;apc&quot;)</span>
+</span><span id="extract_ssl_embeddings_from_audios-77"><a href="#extract_ssl_embeddings_from_audios-77"><span class="linenos">77</span></a><span class="sd">        &gt;&gt;&gt; print(embeddings[0].shape)</span>
+</span><span id="extract_ssl_embeddings_from_audios-78"><a href="#extract_ssl_embeddings_from_audios-78"><span class="linenos">78</span></a><span class="sd">        [time_frames, 512]</span>
+</span><span id="extract_ssl_embeddings_from_audios-79"><a href="#extract_ssl_embeddings_from_audios-79"><span class="linenos">79</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="extract_ssl_embeddings_from_audios-80"><a href="#extract_ssl_embeddings_from_audios-80"><span class="linenos">80</span></a>    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">HFModel</span><span class="p">)</span> <span class="ow">and</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">SpeechBrainModel</span><span class="p">):</span>
+</span><span id="extract_ssl_embeddings_from_audios-81"><a href="#extract_ssl_embeddings_from_audios-81"><span class="linenos">81</span></a>        <span class="k">return</span> <span class="n">SSLEmbeddingsFactory</span><span class="o">.</span><span class="n">extract_ssl_embeddings</span><span class="p">(</span>
+</span><span id="extract_ssl_embeddings_from_audios-82"><a href="#extract_ssl_embeddings_from_audios-82"><span class="linenos">82</span></a>            <span class="n">audios</span><span class="o">=</span><span class="n">audios</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span> <span class="n">cache_dir</span><span class="o">=</span><span class="n">cache_dir</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span>
+</span><span id="extract_ssl_embeddings_from_audios-83"><a href="#extract_ssl_embeddings_from_audios-83"><span class="linenos">83</span></a>        <span class="p">)</span>
+</span><span id="extract_ssl_embeddings_from_audios-84"><a href="#extract_ssl_embeddings_from_audios-84"><span class="linenos">84</span></a>    <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">SpeechBrainModel</span><span class="p">):</span>
+</span><span id="extract_ssl_embeddings_from_audios-85"><a href="#extract_ssl_embeddings_from_audios-85"><span class="linenos">85</span></a>        <span class="k">return</span> <span class="n">SpeechBrainSSLEmbeddings</span><span class="o">.</span><span class="n">extract_speechbrain_ssl_embeddings</span><span class="p">(</span><span class="n">audios</span><span class="o">=</span><span class="n">audios</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+</span><span id="extract_ssl_embeddings_from_audios-86"><a href="#extract_ssl_embeddings_from_audios-86"><span class="linenos">86</span></a>    <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="nb">str</span><span class="p">):</span>
+</span><span id="extract_ssl_embeddings_from_audios-87"><a href="#extract_ssl_embeddings_from_audios-87"><span class="linenos">87</span></a>        <span class="kn">from</span><span class="w"> </span><span class="nn">senselab.audio.tasks.ssl_embeddings.s3prl</span><span class="w"> </span><span class="kn">import</span> <span class="n">S3PRLEmbeddingExtractor</span>
+</span><span id="extract_ssl_embeddings_from_audios-88"><a href="#extract_ssl_embeddings_from_audios-88"><span class="linenos">88</span></a>
+</span><span id="extract_ssl_embeddings_from_audios-89"><a href="#extract_ssl_embeddings_from_audios-89"><span class="linenos">89</span></a>        <span class="k">return</span> <span class="n">S3PRLEmbeddingExtractor</span><span class="o">.</span><span class="n">extract_s3prl_embeddings</span><span class="p">(</span><span class="n">audios</span><span class="o">=</span><span class="n">audios</span><span class="p">,</span> <span class="n">model_name</span><span class="o">=</span><span class="n">model</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+</span><span id="extract_ssl_embeddings_from_audios-90"><a href="#extract_ssl_embeddings_from_audios-90"><span class="linenos">90</span></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="extract_ssl_embeddings_from_audios-91"><a href="#extract_ssl_embeddings_from_audios-91"><span class="linenos">91</span></a>        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span>
+</span><span id="extract_ssl_embeddings_from_audios-92"><a href="#extract_ssl_embeddings_from_audios-92"><span class="linenos">92</span></a>            <span class="sa">f</span><span class="s2">&quot;Model type </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">model</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2"> is not supported for SSL embedding extraction. &quot;</span>
+</span><span id="extract_ssl_embeddings_from_audios-93"><a href="#extract_ssl_embeddings_from_audios-93"><span class="linenos">93</span></a>            <span class="s2">&quot;Supported: HFModel (HuggingFace), SpeechBrainModel (SpeechBrain), or str (S3PRL model name).&quot;</span>
+</span><span id="extract_ssl_embeddings_from_audios-94"><a href="#extract_ssl_embeddings_from_audios-94"><span class="linenos">94</span></a>        <span class="p">)</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Extract embedding of audio signals from pre-trained SSL models.</p>
+
+<p>Dispatches to the correct backend based on the model type:</p>
+
+<ul>
+<li><strong>HFModel</strong>: Uses HuggingFace Transformers (e.g., wav2vec2-base,
+HuBERT-large, WavLM-large). Returns all hidden states concatenated
+with shape <code>[num_layers, time_frames, embedding_dim]</code>.</li>
+<li><strong>SpeechBrainModel</strong>: Uses SpeechBrain EncoderClassifier (e.g.,
+ECAPA-TDNN, x-vector, ResNet). Returns fixed-dimensional embeddings
+with shape <code>[embedding_dim]</code>.</li>
+<li><strong>str</strong>: Uses S3PRL in an isolated subprocess venv (e.g., "apc",
+"tera", "cpc"). Returns the last hidden state with shape
+<code>[time_frames, embedding_dim]</code>.</li>
+</ul>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>audios:</strong>  A list of Audio objects containing the audio signals.
+All audios must be mono.</li>
+<li><strong>model:</strong>  The model specification. Can be:
+<ul>
+<li><code>HFModel(path_or_uri="facebook/wav2vec2-base")</code></li>
+<li><code>SpeechBrainModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb")</code></li>
+<li><code>"apc"</code> or <code>"tera"</code> (S3PRL model name)</li>
+</ul></li>
+<li><strong>cache_dir:</strong>  Path to cache model weights (HFModel only).</li>
+<li><strong>device:</strong>  Device for inference (default: auto-select).</li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p>List of tensors containing the SSL embeddings for each audio.</p>
+</blockquote>
+
+<h6 id="raises">Raises:</h6>
+
+<ul>
+<li><strong>NotImplementedError:</strong>  If the model type is not supported.</li>
+<li><strong>ValueError:</strong>  If audio is not mono or has wrong sampling rate.</li>
+</ul>
+
+<h6 id="examples">Examples:</h6>
+
+<blockquote>
+  <div class="pdoc-code codehilite">
+<pre><span></span><code><span class="gp">&gt;&gt;&gt; </span><span class="c1"># HuggingFace backend</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">audios</span> <span class="o">=</span> <span class="p">[</span><span class="n">Audio</span><span class="p">(</span><span class="n">filepath</span><span class="o">=</span><span class="s2">&quot;sample.wav&quot;</span><span class="p">)]</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">model</span> <span class="o">=</span> <span class="n">HFModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="s2">&quot;facebook/wav2vec2-base&quot;</span><span class="p">,</span> <span class="n">revision</span><span class="o">=</span><span class="s2">&quot;main&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">embeddings</span> <span class="o">=</span> <span class="n">extract_ssl_embeddings_from_audios</span><span class="p">(</span><span class="n">audios</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">embeddings</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+<span class="go">[13, 209, 768] ([# of Layers, Time Frames, Embedding Size])</span>
+</code></pre>
+  </div>
+  
+  <div class="pdoc-code codehilite">
+<pre><span></span><code><span class="gp">&gt;&gt;&gt; </span><span class="c1"># SpeechBrain backend</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">model</span> <span class="o">=</span> <span class="n">SpeechBrainModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="s2">&quot;speechbrain/spkrec-ecapa-voxceleb&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">embeddings</span> <span class="o">=</span> <span class="n">extract_ssl_embeddings_from_audios</span><span class="p">(</span><span class="n">audios</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">embeddings</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+<span class="go">[192]</span>
+</code></pre>
+  </div>
+  
+  <div class="pdoc-code codehilite">
+<pre><span></span><code><span class="gp">&gt;&gt;&gt; </span><span class="c1"># S3PRL backend (isolated subprocess venv)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">embeddings</span> <span class="o">=</span> <span class="n">extract_ssl_embeddings_from_audios</span><span class="p">(</span><span class="n">audios</span><span class="p">,</span> <span class="s2">&quot;apc&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">embeddings</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+<span class="go">[time_frames, 512]</span>
+</code></pre>
+  </div>
+</blockquote>
+</div>
+
+
+                </section>
     </main>
 <script>
     function escapeHTML(html) {

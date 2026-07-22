@@ -160,7 +160,22 @@ senselab    </h1>
 
 <ul>
 <li><code>conda config --add channels nvidia</code></li>
-<li><code>conda install -y nvidia/label/cuda-12.8.1::cuda-libraries-dev</code></li>
+<li><p><code>conda install -y nvidia/label/cuda-12.8.1::cuda-libraries-dev</code></p>
+
+<p><strong>Hosts with newer system CUDA</strong> (e.g., CUDA 12.9): the subprocess-venv backends (<code>nemo-canary-qwen</code>, <code>nemo</code>, <code>qwen-asr</code>) auto-detect the host's CUDA version via <code>nvidia-smi</code> and route their <code>torch</code>/<code>torchaudio</code> installs through the matching PyTorch wheel index (<code>cu128</code> / <code>cu126</code> / <code>cu124</code> / <code>cu121</code> / <code>cpu</code>). No manual configuration needed.</p>
+
+<p><strong>Internal mirrors / unsupported CUDA / CPU fallback</strong>: set the <code>SENSELAB_TORCH_INDEX_URL</code> environment variable to override the chosen index. Common values:</p>
+
+<div class="pdoc-code codehilite">
+<pre><span></span><code><span class="c1"># Force CPU wheels (e.g. testing CPU path on a GPU host, or unsupported CUDA)</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">SENSELAB_TORCH_INDEX_URL</span><span class="o">=</span>https://download.pytorch.org/whl/cpu
+
+<span class="c1"># Internal PyPI mirror that proxies PyTorch wheels</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">SENSELAB_TORCH_INDEX_URL</span><span class="o">=</span>https://pypi.internal.example.com/pytorch/cu128
+</code></pre>
+</div>
+
+<p>When no compatible <code>torch</code>+<code>torchaudio</code> binary pair exists for your host (rare; happens in the days after a CUDA major release), installation fails with a named <code>SenselabCudaCompatibilityError</code> that lists the detected host CUDA, the attempted index URL, and the recommended action — no opaque stack traces from inside <code>torchaudio</code>.</p></li>
 </ul></li>
 <li>Docker is required and must be running for some video models (e.g., MediaPipe-based estimators).
 Please follow the official installation instructions for your platform: <a href="https://docs.docker.com/get-started/get-docker/">Install Docker</a>.</li>
