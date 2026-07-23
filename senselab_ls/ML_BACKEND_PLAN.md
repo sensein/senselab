@@ -26,22 +26,22 @@ annotator enable/version/run each aspect on its own, and keeps each `predict()` 
 ## Target layout
 
 ```
-label_studio_ml/
+senselab_ls/                   # package dir — named to NOT shadow the SDK's `label_studio_ml` import
   ML_BACKEND_PLAN.md           # this plan
   AWS_EC2_SETUP.md             # EC2 provisioning runbook
   common/
-    audio_plus.py              # build_audio_plus(incoming_ref) -> Audio+ (joins b2aiprep task/GSD/age/related audios)
-    audio_io.py                # resolve audio bytes (s3:// via boto3 / http via LS / local) + prepare_audio (mono/16k)
-    ls_regions.py              # region + config builders reused from analyze_audio
-    engine.py                  # thin senselab callers per aspect (diarize/asr/classify)
+    audio_plus.py              # build_audio_plus(ref, audio_loader, metadata_provider) -> AudioPlus
+    audio_io.py                # load_audio(ref): s3:// via boto3 / http via LS / local -> senselab Audio
+    ls_regions.py              # region builders (copied from analyze_audio; no senselab import)
+    engine.py                  # thin senselab callers per aspect (diarize now; asr/scene next) + prepare_audio
   backends/
     diarization/model.py       # DiarizationBackend(LabelStudioMLBase)   :9090
-    asr/model.py               # ASRBackend(LabelStudioMLBase)           :9091
-    scene/model.py             # SceneBackend(LabelStudioMLBase)         :9092
+    asr/model.py               # ASRBackend(LabelStudioMLBase)           :9091 (later)
+    scene/model.py             # SceneBackend(LabelStudioMLBase)         :9092 (later)
   tests/
-    test_ls_regions.py         # region-shape unit tests (write FIRST — TDD)
-    test_audio_plus.py         # Audio+ construction from a task ref (mocked b2aiprep records)
-    test_engine_smoke.py       # end-to-end on a synthetic clip, GPU-marked
+    ls_regions_test.py         # region-shape unit tests (write FIRST — TDD)
+    audio_plus_test.py         # Audio+ construction from a ref (fake loader + mocked metadata)
+    engine_smoke_test.py       # end-to-end on a synthetic clip, GPU-marked
   requirements.txt
 ```
 
@@ -183,9 +183,10 @@ Each backend is its own process/port (matches the SG ports in `AWS_EC2_SETUP.md`
 ```bash
 source /opt/lsml-venv/bin/activate
 export HF_TOKEN=... LABEL_STUDIO_URL=https://<ls-host> LABEL_STUDIO_API_KEY=...
-label-studio-ml start label_studio_ml/backends/diarization -p 9090 --host 0.0.0.0 &
-label-studio-ml start label_studio_ml/backends/asr         -p 9091 --host 0.0.0.0 &
-label-studio-ml start label_studio_ml/backends/scene       -p 9092 --host 0.0.0.0 &
+export PYTHONPATH=/opt/senselab:$PYTHONPATH   # so `senselab_ls` package is importable
+label-studio-ml start senselab_ls/backends/diarization -p 9090 --host 0.0.0.0 &
+label-studio-ml start senselab_ls/backends/asr         -p 9091 --host 0.0.0.0 &
+label-studio-ml start senselab_ls/backends/scene       -p 9092 --host 0.0.0.0 &
 ```
 
 Wrap in systemd units (or a single `docker-compose.yml` with three services) so start/stop of
