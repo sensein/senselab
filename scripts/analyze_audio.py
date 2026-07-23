@@ -39,10 +39,12 @@ task where the registry offers more than one).
     nvidia/stt_en_conformer_ctc_large              (NeMo subprocess venv, English-only; native CTC timestamps)
 
 Auto-align stage: every ASR model in --asr-models that returns text-only
-ScriptLines (no native timestamps and no chunks) is automatically passed
-through the multilingual MMS forced-aligner (--aligner-model, default
-facebook/mms-1b-all, 1100+ languages via per-language adapters) to add
-per-segment timestamps. Pass --no-align-asr to skip this and emit a
+ScriptLines (no native timestamps and no chunks) is automatically force-aligned
+to add per-word timestamps. The aligner is selectable via --aligner: 'qwen'
+(default) uses Qwen3-ForcedAligner-0.6B in the qwen-asr subprocess venv; 'mms'
+uses the multilingual facebook/mms-1b-all path (--aligner-model, 1100+ languages
+via per-language adapters). ASR models with native timestamps (CrisperWhisper,
+Qwen3-ASR) are never re-aligned. Pass --no-align-asr to skip this and emit a
 single full-audio TextArea region for those models in the LS export.
 The alignment cache is independent of the ASR cache (FR-024); changing
 the aligner re-runs only alignment, not ASR.
@@ -137,6 +139,7 @@ from senselab.audio.tasks.preprocessing import downmix_audios_to_mono, extract_s
 from senselab.audio.tasks.speaker_diarization import diarize_audios
 from senselab.audio.tasks.speech_enhancement import enhance_audios
 from senselab.audio.tasks.speech_to_text import transcribe_audios
+from senselab.audio.tasks.speech_to_text.qwen import QwenASR
 from senselab.audio.workflows.audio_analysis.harvesters import (
     classification_window_top1 as _classification_window_top1,
 )
@@ -351,13 +354,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--aligner",
+        choices=("qwen", "mms"),
+        default="qwen",
+        help=(
+            "Forced-aligner backend for text-only ASR output (no native timestamps). "
+            "'qwen' (default) uses Qwen3-ForcedAligner-0.6B in the qwen-asr subprocess "
+            "venv; 'mms' uses the multilingual facebook/mms-1b-all path. ASR models "
+            "with native timestamps (CrisperWhisper, Qwen3-ASR) are never re-aligned."
+        ),
+    )
+    parser.add_argument(
         "--aligner-model",
         default="facebook/mms-1b-all",
         help=(
-            "Multilingual forced-alignment model used by the auto-align stage "
-            "(default: facebook/mms-1b-all, covers 1100+ languages via per-language "
-            "adapters). Override to swap MMS for another senselab-supported aligner."
+            "MMS forced-alignment model used when --aligner mms (default: "
+            "facebook/mms-1b-all, 1100+ languages via per-language adapters)."
         ),
+    )
+    parser.add_argument(
+        "--qwen-aligner-model",
+        default="Qwen/Qwen3-ForcedAligner-0.6B",
+        help="Qwen forced-aligner model id used when --aligner qwen (default: Qwen/Qwen3-ForcedAligner-0.6B).",
     )
     parser.add_argument(
         "--asr-language",
@@ -1718,6 +1736,13 @@ def run_pass(
         align_language = (
             Language(language_code=args.asr_language) if args.asr_language else Language(language_code="en")
         )
+        # Aligner backend for text-only ASR: Qwen3-ForcedAligner (default) or MMS.
+        if args.aligner == "qwen":
+            aligner_fn: Any = QwenASR.align_with_qwen
+            aligner_model_id = args.qwen_aligner_model
+        else:
+            aligner_fn = align_transcriptions
+            aligner_model_id = args.aligner_model
         for model_id, asr_outcome in summary["asr"]["by_model"].items():
             if asr_outcome.get("status") != "ok":
                 continue
@@ -1738,29 +1763,30 @@ def run_pass(
                 "levels_to_keep": "utterance+word",
             }
             align_provenance = {
-                **_provenance_for("alignment", args.aligner_model, aligner_params),
+                **_provenance_for("alignment", aligner_model_id, aligner_params),
                 "transcript_sha": transcript_sha,
                 "language": align_language.language_code,
+                "aligner_backend": args.aligner,
                 "parent_asr_cache_key": asr_outcome.get("cache_key"),
             }
             align_key = align_cache_key(
                 audio_sig=audio_sig,
                 transcript_sha=transcript_sha,
                 language=align_language.language_code,
-                aligner_model_id=args.aligner_model,
+                aligner_model_id=aligner_model_id,
                 aligner_params=aligner_params,
                 wrapper_hash=wrapper_hash,
                 senselab_ver=senselab_ver,
             )
             outcome = run_alignment_cached(
                 f"alignment[{model_id}]",
-                align_transcriptions,
+                aligner_fn,
                 [(audio, ScriptLine(text=transcript_text), align_language)],
                 # Keep word-level chunks (and the utterance wrapper) so the comparator
                 # can read per-token timestamps. Default is all-False which filters
                 # everything out and leaves a meaningless punctuation-only ScriptLine.
                 levels_to_keep={"utterance": True, "word": True, "char": False},
-                aligner_model=args.aligner_model,
+                aligner_model=aligner_model_id,
                 cache_dir=cache_dir,
                 cache_key_str=align_key,
                 provenance=align_provenance,

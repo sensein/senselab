@@ -19,7 +19,7 @@ import json
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional, Sequence, Tuple
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, HFModel, ScriptLine, _select_device_and_dtype
@@ -52,6 +52,51 @@ _QWEN_PYTHON = "3.12"
 # return_timestamps=True; the caller-supplied model id is the ASR model
 # (Qwen3-ASR-1.7B / Qwen3-ASR-3B / etc.).
 _DEFAULT_FORCED_ALIGNER = "Qwen/Qwen3-ForcedAligner-0.6B"
+
+# Standalone forced-alignment worker — aligns an existing (text, audio) pair to
+# per-word timestamps via Qwen3ForcedAligner. Used to align text-only ASR output
+# (e.g. Canary) that carries no native timestamps. Qwen3ForcedAligner.align()
+# takes batched (audio, text, language) lists and returns one iterable
+# ForcedAlignResult per input, each yielding spans with .text/.start_time/.end_time.
+_QWEN_ALIGN_WORKER_SCRIPT = r"""
+import json
+import sys
+
+try:
+    import torch
+    from qwen_asr import Qwen3ForcedAligner
+
+    args = json.loads(sys.stdin.read())
+    pairs = args["pairs"]
+    aligner_name = args["aligner_model"]
+    device = args["device"]
+
+    fa = Qwen3ForcedAligner.from_pretrained(aligner_name)
+    if device == "cuda" and torch.cuda.is_available():
+        try:
+            fa.model = fa.model.cuda()
+        except Exception as cuda_exc:
+            print(f"WARN: Qwen aligner CUDA placement failed ({cuda_exc!r}); using CPU.", file=sys.stderr)
+
+    audios = [p["audio_path"] for p in pairs]
+    texts = [p["text"] for p in pairs]
+    langs = [p.get("language") or "en" for p in pairs]
+    aligned = fa.align(audios, texts, langs)
+
+    results = []
+    for r in aligned:
+        chunks = []
+        for span in r:
+            chunks.append({"text": span.text, "start": float(span.start_time), "end": float(span.end_time)})
+        results.append({"chunks": chunks})
+
+    print(json.dumps({"results": results}))
+except Exception as exc:
+    import traceback
+    err = {"type": type(exc).__name__, "message": str(exc), "traceback": traceback.format_exc(limit=5)}
+    print(json.dumps({"error": err}))
+    sys.exit(1)
+"""
 
 # Worker script — runs inside the isolated venv.
 # Uses Qwen3ASRModel.from_pretrained's built-in `forced_aligner` kwarg
@@ -220,7 +265,7 @@ class QwenASR:
                     # Sort by start so out-of-order aligner output doesn't yield a
                     # negative line span; pick the min start and max end across all
                     # chunks rather than trusting position-0/-1.
-                    chunks.sort(key=lambda c: (c.start if c.start is not None else 0.0))
+                    chunks.sort(key=lambda c: c.start if c.start is not None else 0.0)
                     valid_starts = [c.start for c in chunks if c.start is not None]
                     valid_ends = [c.end for c in chunks if c.end is not None]
                     line_start = min(valid_starts) if valid_starts else None
@@ -235,3 +280,83 @@ class QwenASR:
                 )
 
             return results
+
+    @classmethod
+    def align_with_qwen(
+        cls,
+        data: Sequence[Tuple[Audio, ScriptLine, Any]],
+        levels_to_keep: Optional[dict] = None,  # noqa: ARG003 — accepted for align_transcriptions parity
+        aligner_model: Optional[str] = None,
+        device: Optional[DeviceType] = None,
+        **_kwargs: Any,  # noqa: ANN401 — parity with align_transcriptions' extra kwargs
+    ) -> List[List[ScriptLine]]:
+        """Force-align existing (audio, transcript) pairs with Qwen3-ForcedAligner.
+
+        Drop-in alternative to ``forced_alignment.align_transcriptions`` for
+        text-only ASR output that lacks native timestamps (e.g. Canary). Runs in
+        the shared ``qwen-asr`` subprocess venv.
+
+        Args:
+            data: ``(audio, ScriptLine(text=...), Language|None)`` tuples — same
+                call form the script uses for ``align_transcriptions``.
+            levels_to_keep: Ignored (Qwen emits word-level spans); accepted only
+                for signature parity so the caller can swap aligners freely.
+            aligner_model: Aligner id (default ``Qwen/Qwen3-ForcedAligner-0.6B``).
+            device: CPU or CUDA.
+
+        Returns:
+            ``List[List[ScriptLine]]`` mirroring ``align_transcriptions``: one
+            inner list per input audio, holding a single utterance ``ScriptLine``
+            whose ``chunks`` are the aligned word spans.
+        """
+        aligner_name = aligner_model or _DEFAULT_FORCED_ALIGNER
+        device_type = device or _select_device_and_dtype(compatible_devices=[DeviceType.CUDA, DeviceType.CPU])[0]
+
+        venv_dir = ensure_venv(_QWEN_VENV, _QWEN_REQUIREMENTS, python_version=_QWEN_PYTHON)
+        python = venv_python(venv_dir)
+
+        with tempfile.TemporaryDirectory(prefix="senselab-qwen-align-") as tmpdir:
+            tmp = Path(tmpdir)
+            pairs: List[dict] = []
+            for i, (audio, script, language) in enumerate(data):
+                path = str(tmp / f"audio_{i}.wav")
+                audio.save_to_file(path)
+                pairs.append(
+                    {
+                        "audio_path": path,
+                        "text": script.text or "",
+                        "language": getattr(language, "language_code", None) or "en",
+                    }
+                )
+
+            input_json = json.dumps({"pairs": pairs, "aligner_model": aligner_name, "device": device_type.value})
+            result = subprocess.run(
+                [python, "-c", _QWEN_ALIGN_WORKER_SCRIPT],
+                input=input_json,
+                capture_output=True,
+                text=True,
+                timeout=1800,
+                env=_clean_subprocess_env(),
+            )
+            output = parse_subprocess_result(result, "Qwen forced aligner")
+
+            aligned: List[List[ScriptLine]] = []
+            for entry in output.get("results", []):
+                chunks = [
+                    ScriptLine(text=c["text"], start=float(c["start"]), end=float(c["end"]))
+                    for c in (entry.get("chunks") or [])
+                ]
+                chunks.sort(key=lambda c: c.start if c.start is not None else 0.0)
+                if not chunks:
+                    aligned.append([])
+                    continue
+                starts = [c.start for c in chunks if c.start is not None]
+                ends = [c.end for c in chunks if c.end is not None]
+                utterance = ScriptLine(
+                    text=" ".join(c.text or "" for c in chunks).strip(),
+                    start=min(starts) if starts else None,
+                    end=max(ends) if ends else None,
+                    chunks=chunks,
+                )
+                aligned.append([utterance])
+            return aligned
