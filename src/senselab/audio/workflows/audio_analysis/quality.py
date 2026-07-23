@@ -42,8 +42,15 @@ QUALITY_ANALYSIS_HOP_S = 0.25
 
 # Default normalization when no fitted calibration profile is supplied (US5 replaces
 # these via the calibration profile). Documented, bounded, uncalibrated.
-_DEFAULT_SNR_CLEAN_DB = 30.0
-_DEFAULT_SNR_FLOOR_DB = 0.0
+#
+# SNR anchors are speech-appropriate so noisy recordings read clearly more
+# degraded than clean ones: clean conversational/studio speech sits at ~25 dB+
+# SNR (-> degradation ~0), while a noisy recording at ~10-15 dB reads elevated
+# (0.5-0.75) and heavy noise (<=5 dB) saturates to 1.0. The window is narrower
+# than the old 30->0 dB span so the mid-SNR region (where "noisy" lives) is more
+# discriminative.
+_DEFAULT_SNR_CLEAN_DB = 25.0
+_DEFAULT_SNR_FLOOR_DB = 5.0
 _DEFAULT_C50_CLEAN_DB = 30.0
 _DEFAULT_C50_FLOOR_DB = -5.0
 # Upper spectral edge, not voiced-energy tilt: an 85% roll-off sits at the
