@@ -39,6 +39,7 @@ class SpeakerInfo(BaseModel):
 class AudioPlusMetadata(BaseModel):
     """The non-waveform context resolved for a single audio reference."""
 
+    recording_id: Optional[str] = None
     task: TaskInfo = Field(default_factory=TaskInfo)
     speaker: SpeakerInfo = Field(default_factory=SpeakerInfo)
     related_audio_refs: list[str] = Field(default_factory=list)
@@ -67,11 +68,13 @@ class AudioPlus(BaseModel):
     Holds the waveform (senselab ``Audio``) plus the joined task/speaker context and the
     *references* (not the loaded audio) of the speaker's related recordings. Related audios
     are materialized lazily via :meth:`load_related_audios` so a speaker's whole session is
-    never eagerly loaded.
+    never eagerly loaded. ``recording_id`` is the dataset's stable id for this recording and is
+    what a prediction is keyed by when written back into an annotation.
     """
 
     ref: str
     audio: Audio
+    recording_id: Optional[str] = None
     task: TaskInfo = Field(default_factory=TaskInfo)
     speaker: SpeakerInfo = Field(default_factory=SpeakerInfo)
     related_audio_refs: list[str] = Field(default_factory=list)
@@ -116,6 +119,7 @@ def build_audio_plus(
     return AudioPlus(
         ref=ref,
         audio=audio,
+        recording_id=meta.recording_id,
         task=meta.task,
         speaker=meta.speaker,
         related_audio_refs=meta.related_audio_refs,

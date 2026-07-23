@@ -30,7 +30,8 @@ senselab_ls/                   # package dir — named to NOT shadow the SDK's `
   ML_BACKEND_PLAN.md           # this plan
   AWS_EC2_SETUP.md             # EC2 provisioning runbook
   common/
-    audio_plus.py              # build_audio_plus(ref, audio_loader, metadata_provider) -> AudioPlus
+    audio_plus.py              # AudioPlus (+ recording_id) + build_audio_plus(ref, audio_loader, metadata_provider)
+    b2ai_metadata.py           # B2AIMetadataProvider: concrete b2ai-voice v3.x metadata join
     audio_io.py                # load_audio(ref): s3:// via boto3 / http via LS / local -> senselab Audio
     ls_regions.py              # region builders (copied from analyze_audio; no senselab import)
     engine.py                  # thin senselab callers per aspect (diarize now; asr/scene next) + prepare_audio
@@ -41,6 +42,7 @@ senselab_ls/                   # package dir — named to NOT shadow the SDK's `
   tests/
     ls_regions_test.py         # region-shape unit tests (write FIRST — TDD)
     audio_plus_test.py         # Audio+ construction from a ref (fake loader + mocked metadata)
+    b2ai_metadata_test.py      # B2AIMetadataProvider against a synthetic b2ai-like fixture
     engine_smoke_test.py       # end-to-end on a synthetic clip, GPU-marked
   requirements.txt
 ```
@@ -90,19 +92,29 @@ to derive an **Audio+** object from the audio the SDK sends in:
 audio_plus = build_audio_plus(task["data"][value_key])   # common/audio_plus.py
 ```
 
-`build_audio_plus(incoming_ref)` takes the incoming audio reference (`s3://…` key / path) and
-**generates-or-grabs** the enriched object — joining, from the **b2aiprep-generated B2AI
-dataset** keyed off that audio:
+`build_audio_plus(incoming_ref, *, audio_loader, metadata_provider)` takes the incoming audio
+reference (`s3://…` key / path) and **generates-or-grabs** the enriched object:
 - the **audio bytes** (via `common/audio_io.py`; see the S3 path below),
-- **task** name + content/prompt (the acquisition task defined in the b2aiprep dataset),
+- **recording_id** — the dataset's stable id for the recording; the key a prediction is written
+  back under when saved into an annotation,
+- **task** name + content/prompt,
 - **speaker** phenotype: **GSD (gold standard diagnosis)** + age,
 - optionally the speaker's **related audios**, so a speaker-profile aspect can build a profile
   from them.
 
-Analyzers then read what they need off Audio+ (diarization/ASR need only the waveform; a
-profile aspect uses related audios; task/phenotype can condition or annotate output). Because
-the incoming reference keys **both** the bytes and the phenotype/related-audio records, S3
-resolution and metadata lookup live together inside this one constructor.
+The metadata join is a pluggable `MetadataProvider`. The concrete implementation,
+**`common/b2ai_metadata.py::B2AIMetadataProvider(dataset_root)`**, reads the standardized
+b2ai-voice v3.x BIDS layout (specific, not a general BIDS parser):
+- `recording_id`, `task_name`, `prompts` ← the recording's `_recording-metadata.json` sidecar,
+- `age` ← `phenotype/demographics/demographics.tsv` (keyed by bare-UUID `participant_id`),
+- **GSD** ← each `phenotype/diagnosis/<condition>.tsv` column ending in `gold_standard_diagnosis`
+  (the condition-file stems where the participant is affirmative; `control` has no such column),
+- related audios ← the participant's other `ses-*/audio/*.wav`.
+
+It is wired into the backend opt-in via the `B2AI_DATASET_ROOT` env var; unset → bytes-only
+Audio+ (`NullMetadataProvider`). Analyzers then read what they need off Audio+ (diarization/ASR
+need only the waveform; a profile aspect uses related audios; task/phenotype can condition or
+annotate output).
 
 > Audio+ is derived **on demand from the SDK input**, not pre-materialized and threaded through
 > the pipeline. Its constructor is the shared entry point for `common/`. (Design note:
@@ -228,6 +240,9 @@ enable "Retrieve predictions when loading a task automatically."
   single backend that returns all tracks in one `predict` is possible but couples latencies.
 - **Engine defaults**: pyannote `speaker-diarization-community-1`; ASR model (Whisper variant);
   AST + YAMNet for scene — confirm which to enable by default.
-- **Audio+ record lookup**: how `build_audio_plus` maps an incoming audio ref → its b2aiprep
-  B2AI record (task/GSD/age/related audios) — dataset index/path, and how the gated phenotype is
-  reachable from the EC2 box (S3 layout vs a separate metadata source).
+- **Audio+ record lookup**: *resolved* for b2ai-voice v3.1 adult — `B2AIMetadataProvider`
+  (`common/b2ai_metadata.py`) parses `sub-/ses-/task-` from the ref and reads the sidecar +
+  `phenotype/` TSVs at `B2AI_DATASET_ROOT`. Still open: how the gated dataset is reachable from
+  the EC2 box (S3 mount vs local sync), and the exact "affirmative" encoding of the
+  `gold_standard_diagnosis` cells (current heuristic: non-empty & not a negative sentinel; raw
+  values are preserved in `SpeakerInfo.metadata["gsd_conditions"]`).

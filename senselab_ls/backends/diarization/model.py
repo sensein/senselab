@@ -24,11 +24,23 @@ from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType
 from senselab_ls.common import engine
 from senselab_ls.common.audio_io import load_audio
-from senselab_ls.common.audio_plus import build_audio_plus
+from senselab_ls.common.audio_plus import MetadataProvider, build_audio_plus
+from senselab_ls.common.b2ai_metadata import B2AIMetadataProvider
 from senselab_ls.common.ls_regions import diarization_to_ls
 
 DIARIZATION_MODEL_ID = os.getenv("DIA_MODEL", engine.DEFAULT_PYANNOTE_MODEL)
 MODEL_VERSION = f"senselab-diarization:{DIARIZATION_MODEL_ID}"
+
+
+def _metadata_provider() -> Optional[MetadataProvider]:
+    """Build the b2ai metadata provider when ``B2AI_DATASET_ROOT`` is set; else ``None``.
+
+    Returns:
+        A :class:`B2AIMetadataProvider` rooted at ``B2AI_DATASET_ROOT``, or ``None`` (which
+        makes ``build_audio_plus`` fall back to bytes-only Audio+).
+    """
+    root = os.getenv("B2AI_DATASET_ROOT")
+    return B2AIMetadataProvider(root) if root else None
 
 
 def _pick_device() -> Optional[DeviceType]:
@@ -72,6 +84,7 @@ class DiarizationBackend(LabelStudioMLBase):
         """
         from_name, to_name, value_key = self.label_interface.get_first_tag_occurence("Labels", "Audio")
         device = _pick_device()
+        provider = _metadata_provider()
         predictions: list[dict[str, Any]] = []
         for task in tasks:
             ref = task["data"][value_key]
@@ -84,7 +97,7 @@ class DiarizationBackend(LabelStudioMLBase):
                     http_downloader=lambda url: self.get_local_path(url, task_id=task_id),
                 )
 
-            audio_plus = build_audio_plus(ref, audio_loader=_load)
+            audio_plus = build_audio_plus(ref, audio_loader=_load, metadata_provider=provider)
             segments = engine.diarize(audio_plus.audio, model_id=DIARIZATION_MODEL_ID, device=device)
             regions = diarization_to_ls(segments, from_name, to_name=to_name)
             predictions.append({"result": regions, "model_version": self.get("model_version"), "score": 1.0})
