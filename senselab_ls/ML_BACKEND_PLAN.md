@@ -108,11 +108,15 @@ b2ai-voice v3.x BIDS layout (specific, not a general BIDS parser):
 - `recording_id`, `task_name`, `prompts` ← the recording's `_recording-metadata.json` sidecar,
 - `age` ← `phenotype/demographics/demographics.tsv` (keyed by bare-UUID `participant_id`),
 - **GSD** ← each `phenotype/diagnosis/<condition>.tsv` column ending in `gold_standard_diagnosis`
-  (the condition-file stems where the participant is affirmative; `control` has no such column),
+  (the condition-file stems where the participant is affirmative; `control` has none). The value
+  vocab is documented in the diagnosis `.json` data dictionaries: `yes`/`no`/`notCertain` for
+  most, plus `copd`/`asthma`/`bothCopdAsthma`/`neitherCopdAsthma`/`notCertain` for
+  `copd_and_asthma`. Affirmative = present and not `no`/`notCertain`/`neitherCopdAsthma`,
 - related audios ← the participant's other `ses-*/audio/*.wav`.
 
-It is wired into the backend opt-in via the `B2AI_DATASET_ROOT` env var; unset → bytes-only
-Audio+ (`NullMetadataProvider`). Analyzers then read what they need off Audio+ (diarization/ASR
+`dataset_root` may be a **local path or an `s3://bucket/prefix`** (read via boto3), since the
+dataset lives on S3. Wired into the backend opt-in via the `B2AI_DATASET_ROOT` env var; unset →
+bytes-only Audio+ (`NullMetadataProvider`). Analyzers then read what they need off Audio+ (diarization/ASR
 need only the waveform; a profile aspect uses related audios; task/phenotype can condition or
 annotate output).
 
@@ -242,7 +246,7 @@ enable "Retrieve predictions when loading a task automatically."
   AST + YAMNet for scene — confirm which to enable by default.
 - **Audio+ record lookup**: *resolved* for b2ai-voice v3.1 adult — `B2AIMetadataProvider`
   (`common/b2ai_metadata.py`) parses `sub-/ses-/task-` from the ref and reads the sidecar +
-  `phenotype/` TSVs at `B2AI_DATASET_ROOT`. Still open: how the gated dataset is reachable from
-  the EC2 box (S3 mount vs local sync), and the exact "affirmative" encoding of the
-  `gold_standard_diagnosis` cells (current heuristic: non-empty & not a negative sentinel; raw
-  values are preserved in `SpeakerInfo.metadata["gsd_conditions"]`).
+  `phenotype/` TSVs at `B2AI_DATASET_ROOT` (local path **or `s3://`** via boto3). GSD
+  affirmative-detection is driven by the documented value vocab; raw values are preserved in
+  `SpeakerInfo.metadata["gsd_details"]`. Remaining: confirm the exact S3 bucket/prefix and IAM
+  read scope for the EC2 role.
