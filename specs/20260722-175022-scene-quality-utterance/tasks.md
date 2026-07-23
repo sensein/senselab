@@ -153,7 +153,7 @@ description: "Task list for scene-aware presence axis + improved utterance uncer
 - [ ] T041 [P] FR-024: add optional quality + dominant-source rows to `plot.py` (existing 5 rows unchanged when new signals null) + test in `plot_test.py`.
 - [ ] T042 [P] FR-024: rank the new presence sub-signals in `disagreements.py` + test in `disagreements_test.py`.
 - [ ] T043 [P] Docs: update `workflows/audio_analysis/doc.md` and the CLAUDE.md workflow section describing the scene-aware presence columns + new CLI flags; cross-check against quickstart.md.
-- [ ] T044 Run quickstart.md end-to-end on a `tutorial_audio_files/` clip; confirm all new columns populate and acceptance scenarios hold.
+- [X] T044 Run quickstart.md end-to-end on a `tutorial_audio_files/` clip; confirm all new columns populate and acceptance scenarios hold.
 - [ ] T045 `uv run ruff format && uv run ruff check --fix && uv run mypy . && uv run codespell` (memory `feedback_ruff_format`).
 - [ ] T046 Full regression: `uv run pytest src/tests/audio/workflows/audio_analysis/` + confirm `aggregated_uncertainty` values unchanged vs baseline (SC-008).
 

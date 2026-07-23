@@ -57,6 +57,10 @@ _BROUHAHA_REQUIREMENTS = [
     "torch>=2.0,<2.3",
     "torchaudio>=2.0,<2.3",
     "numpy<2.0",
+    # brouhaha-vad pins pyannote 3.x but not huggingface_hub; the latest hub
+    # dropped the `use_auth_token` kwarg pyannote 3.x still passes to
+    # hf_hub_download. Pin to the era that keeps it.
+    "huggingface_hub>=0.19,<0.24",
     "soundfile",
 ]
 _BROUHAHA_PYTHON = "3.11"
