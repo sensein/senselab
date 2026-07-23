@@ -15,6 +15,7 @@ Hub (constitution VI). No new dependency.
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
@@ -116,6 +117,74 @@ def _frame_grid(inference: "Inference", num_frames: int, dur_s: float) -> tuple[
     return hop, hop
 
 
+# segmentation-3.0 (and Brouhaha) train on 10 s chunks. For recordings longer
+# than one chunk we slide a bounded window and stitch, so memory stays flat and
+# we avoid pyannote's "whole-file on a frame-based model" degradation, while
+# keeping native ~17 ms frame resolution.
+_CHUNK_S = 10.0
+_CHUNK_STEP_S = 8.0  # 2 s overlap → smooth stitching across chunk seams
+
+
+def chunked_frame_inference(
+    inference: "Inference",
+    audio: Audio,
+    chunk_s: float = _CHUNK_S,
+    step_s: float = _CHUNK_STEP_S,
+) -> tuple[np.ndarray, float, float]:
+    """Run per-frame inference over the whole recording, chunking long ones.
+
+    For clips at or under ``chunk_s`` this is a single ``window="whole"`` pass.
+    For longer recordings it slides overlapping ``chunk_s`` windows (each a
+    bounded whole-window pass), maps every chunk-local frame to an absolute
+    frame index, and averages the overlaps — yielding one continuous
+    ``(num_frames, num_classes)`` array at native frame resolution with flat
+    memory. Returns ``(data, frame_hop_s, frame_win_s)``.
+    """
+    sr = int(audio.sampling_rate)
+    total = int(audio.waveform.shape[-1])
+    dur = total / sr if sr else 0.0
+    hop, win = _frame_grid(inference, 1, max(dur, 1e-9))
+
+    if dur <= chunk_s or hop <= 0:
+        arr = _output_to_array(inference({"waveform": audio.waveform, "sample_rate": sr}))
+        if arr.ndim == 1:
+            arr = arr[:, None]
+        h, w = _frame_grid(inference, arr.shape[0], max(dur, 1e-9))
+        return arr, h, w
+
+    n_global = int(math.floor(dur / hop)) + 1
+    accum: Optional[np.ndarray] = None
+    count = np.zeros(n_global, dtype=np.float64)
+    chunk_samples = int(chunk_s * sr)
+    step_samples = max(1, int(step_s * sr))
+    start = 0
+    while start < total:
+        end = min(total, start + chunk_samples)
+        if end - start < int(0.1 * sr):  # skip a sub-100ms tail sliver
+            break
+        arr = _output_to_array(inference({"waveform": audio.waveform[:, start:end], "sample_rate": sr}))
+        if arr.ndim == 1:
+            arr = arr[:, None]
+        if accum is None:
+            accum = np.zeros((n_global, arr.shape[1]), dtype=np.float64)
+        base = int(round((start / sr) / hop))
+        for i in range(arr.shape[0]):
+            g = base + i
+            if 0 <= g < n_global:
+                accum[g] += arr[i]
+                count[g] += 1
+        if end >= total:
+            break
+        start += step_samples
+
+    if accum is None:
+        return np.zeros((0, 1)), hop, win
+    covered = np.nonzero(count > 0)[0]
+    last = int(covered[-1]) + 1 if covered.size else 0
+    data = accum[:last] / np.maximum(count[:last, None], 1.0)
+    return data, hop, win
+
+
 _inference_cache: dict[str, "Inference"] = {}
 
 
@@ -174,11 +243,8 @@ def extract_speech_frame_posteriors(
     for audio in audios:
         try:
             t0 = time.time()
-            output: Any = inference({"waveform": audio.waveform, "sample_rate": audio.sampling_rate})
-            data = _output_to_array(output)
+            data, hop_s, win_s = chunked_frame_inference(inference, audio)
             probs = _speech_prob_from_output(data)
-            dur_s = audio.waveform.shape[-1] / float(audio.sampling_rate)
-            hop_s, win_s = _frame_grid(inference, data.shape[0], dur_s)
             results.append(FramePosterior(probs=probs, frame_hop_s=hop_s, frame_win_s=win_s))
             logger.info(f"segmentation inference took {time.time() - t0:.2f}s ({probs.size} frames @ {hop_s:.4f}s)")
         except (RuntimeError, ValueError, OSError) as exc:

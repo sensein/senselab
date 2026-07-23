@@ -58,6 +58,55 @@ def test_multilabel_reduction_falls_back_to_max() -> None:
     assert np.allclose(speech, [0.9, 0.8], atol=1e-9)
 
 
+class _FakeInference:
+    """Fake pyannote Inference: emits a constant per-frame value per chunk."""
+
+    class _RF:
+        def __init__(self, step: float) -> None:
+            self.step = step
+            self.duration = step * 4
+
+    class _Model:
+        def __init__(self, step: float) -> None:
+            self.receptive_field = _FakeInference._RF(step)
+
+    def __init__(self, step: float, value: float) -> None:
+        self.model = _FakeInference._Model(step)
+        self._step = step
+        self._value = value
+        self.calls = 0
+
+    def __call__(self, d: dict) -> np.ndarray:
+        self.calls += 1
+        n_samples = int(d["waveform"].shape[-1])
+        sr = int(d["sample_rate"])
+        n_frames = max(1, int(round((n_samples / sr) / self._step)))
+        return np.full((n_frames, 1), self._value, dtype=np.float64)
+
+
+def test_chunked_inference_single_pass_short_clip() -> None:
+    """A clip <= chunk length is a single pass (one inference call)."""
+    audio = Audio(waveform=torch.full((1, 16000 * 5), 0.1, dtype=torch.float32), sampling_rate=16000)
+    inf = _FakeInference(step=0.02, value=0.8)
+    data, hop, _win = fp_mod.chunked_frame_inference(inf, audio, chunk_s=10.0, step_s=8.0)
+    assert inf.calls == 1
+    assert abs(hop - 0.02) < 1e-9
+    assert np.allclose(data, 0.8)
+
+
+def test_chunked_inference_stitches_long_clip() -> None:
+    """A clip longer than one chunk is stitched from overlapping windows."""
+    dur_s = 25.0
+    audio = Audio(waveform=torch.full((1, int(16000 * dur_s)), 0.1, dtype=torch.float32), sampling_rate=16000)
+    inf = _FakeInference(step=0.02, value=0.8)
+    data, hop, _win = fp_mod.chunked_frame_inference(inf, audio, chunk_s=10.0, step_s=8.0)
+    assert inf.calls > 1  # multiple chunks
+    assert abs(hop - 0.02) < 1e-9
+    # Continuous timeline spanning ~the whole clip at native resolution.
+    assert data.shape[0] > int(dur_s / 0.02) * 0.9
+    assert np.allclose(data, 0.8)  # overlap-averaging preserves the constant
+
+
 def test_null_safe_when_model_construction_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     """FR-023: a gated/inaccessible model (ValidationError at construction) → [None], no raise.
 

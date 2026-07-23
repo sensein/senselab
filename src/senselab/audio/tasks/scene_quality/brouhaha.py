@@ -23,11 +23,12 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.voice_activity_detection.frame_posteriors import chunked_frame_inference
 from senselab.utils.data_structures import DeviceType, PyannoteAudioModel, _select_device_and_dtype
 from senselab.utils.data_structures.logging import logger
 from senselab.utils.data_structures.model import get_huggingface_token
@@ -85,26 +86,6 @@ class BrouhahaFrames:
             float(np.nanmean(self.snr_db[lo:hi])),
             float(np.nanmean(self.c50_db[lo:hi])),
         )
-
-
-def _output_to_array(output: Any) -> np.ndarray:  # noqa: ANN401
-    """Coerce an Inference result to a float array (``window="whole"`` yields a bare array)."""
-    if hasattr(output, "sliding_window") and hasattr(output, "data"):
-        return np.asarray(output.data, dtype=np.float64)
-    return np.asarray(output, dtype=np.float64)
-
-
-def _frame_grid(inference: "Inference", num_frames: int, dur_s: float) -> tuple[float, float]:
-    """Return ``(frame_hop_s, frame_win_s)`` from the model receptive field, else uniform tiling."""
-    try:
-        rf = inference.model.receptive_field
-        step, duration = float(rf.step), float(rf.duration)
-        if step > 0:
-            return step, duration
-    except (AttributeError, TypeError, ValueError):
-        pass
-    hop = dur_s / max(1, num_frames)
-    return hop, hop
 
 
 # Cache Inference objects per (model_id, revision, device) so repeated pass calls
@@ -176,14 +157,11 @@ def extract_brouhaha_frames(
     for audio in audios:
         try:
             t0 = time.time()
-            # window="whole" returns a bare (num_frames, 3) array; frame hop comes
-            # from the model receptive field, not a SlidingWindowFeature.
-            output: Any = inference({"waveform": audio.waveform, "sample_rate": audio.sampling_rate})
-            data = _output_to_array(output)  # (num_frames, 3)
+            # Chunked per-frame inference (shared with the segmentation extractor):
+            # native ~17 ms frames, stitched, with flat memory on long recordings.
+            data, frame_hop_s, _win_s = chunked_frame_inference(inference, audio)  # (num_frames, 3)
             if data.ndim != 2 or data.shape[1] <= _C50_CHANNEL:
                 raise ValueError(f"unexpected Brouhaha output shape {data.shape}")
-            dur_s = audio.waveform.shape[-1] / float(audio.sampling_rate)
-            frame_hop_s, _win_s = _frame_grid(inference, data.shape[0], dur_s)
             results.append(
                 BrouhahaFrames(
                     vad=data[:, _VAD_CHANNEL],
