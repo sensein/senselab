@@ -30,7 +30,8 @@ label_studio_ml/
   ML_BACKEND_PLAN.md           # this plan
   AWS_EC2_SETUP.md             # EC2 provisioning runbook
   common/
-    audio_io.py                # resolve audio (s3:// via boto3 / http via LS / local) + prepare_audio (mono/16k)
+    audio_plus.py              # build_audio_plus(incoming_ref) -> Audio+ (joins b2aiprep task/GSD/age/related audios)
+    audio_io.py                # resolve audio bytes (s3:// via boto3 / http via LS / local) + prepare_audio (mono/16k)
     ls_regions.py              # region + config builders reused from analyze_audio
     engine.py                  # thin senselab callers per aspect (diarize/asr/classify)
   backends/
@@ -39,7 +40,8 @@ label_studio_ml/
     scene/model.py             # SceneBackend(LabelStudioMLBase)         :9092
   tests/
     test_ls_regions.py         # region-shape unit tests (write FIRST — TDD)
-    test_engine_smoke.py       # HAPPY_ASK.wav end-to-end, GPU-marked
+    test_audio_plus.py         # Audio+ construction from a task ref (mocked b2aiprep records)
+    test_engine_smoke.py       # end-to-end on a synthetic clip, GPU-marked
   requirements.txt
 ```
 
@@ -79,6 +81,33 @@ genuinely reused. The envelopes differ and correctly stay separate.
 > `to_name` is hardcoded to `"audio"` in the converters — fine, since each backend's config
 > uses `<Audio name="audio">`. Parameterize only if a project renames the object tag.
 
+## Audio+ — the enriched input every backend builds first
+
+A backend does **not** run models on the bare waveform. The **first step in every `predict`** is
+to derive an **Audio+** object from the audio the SDK sends in:
+
+```python
+audio_plus = build_audio_plus(task["data"][value_key])   # common/audio_plus.py
+```
+
+`build_audio_plus(incoming_ref)` takes the incoming audio reference (`s3://…` key / path) and
+**generates-or-grabs** the enriched object — joining, from the **b2aiprep-generated B2AI
+dataset** keyed off that audio:
+- the **audio bytes** (via `common/audio_io.py`; see the S3 path below),
+- **task** name + content/prompt (the acquisition task defined in the b2aiprep dataset),
+- **speaker** phenotype: **GSD (gold standard diagnosis)** + age,
+- optionally the speaker's **related audios**, so a speaker-profile aspect can build a profile
+  from them.
+
+Analyzers then read what they need off Audio+ (diarization/ASR need only the waveform; a
+profile aspect uses related audios; task/phenotype can condition or annotate output). Because
+the incoming reference keys **both** the bytes and the phenotype/related-audio records, S3
+resolution and metadata lookup live together inside this one constructor.
+
+> Audio+ is derived **on demand from the SDK input**, not pre-materialized and threaded through
+> the pipeline. Its constructor is the shared entry point for `common/`. (Design note:
+> `audio-plus-object`.)
+
 ## Backend contract (all three follow this shape)
 
 ```python
@@ -95,9 +124,9 @@ class DiarizationBackend(LabelStudioMLBase):
             "Labels", "Audio")                       # ASR backend -> ("TextArea","Audio")
         preds = []
         for task in tasks:
-            path = self.get_local_path(task["data"][value_key], task_id=task.get("id"))
-            audio = prepare_audio(Path(path))        # mono / 16 kHz
-            regions = run_aspect(audio, from_name)   # engine.diarize / asr / classify + *_to_ls
+            audio_plus = build_audio_plus(task["data"][value_key])  # bytes + task + GSD/age + related audios
+            audio = prepare_audio(audio_plus.audio)                 # mono / 16 kHz
+            regions = run_aspect(audio, from_name)                  # engine.diarize / asr / classify + *_to_ls
             preds.append({"result": regions,
                           "model_version": self.get("model_version"),
                           "score": 1.0})
@@ -114,14 +143,14 @@ class DiarizationBackend(LabelStudioMLBase):
 
 Label Studio in this project pulls its audio from an **S3 bucket** (LS cloud-storage sync), so
 `task["data"][value_key]` is typically an `s3://bucket/key` (or presigned `https`) URI.
-`common/audio_io.py` resolves audio in this order:
+`common/audio_io.py` (called by `build_audio_plus`) resolves the audio bytes in this order:
 
 1. **`s3://…` → read directly via boto3** using the EC2 instance role (S3 read granted in
    `AWS_EC2_SETUP.md` step 4). Fastest; no round-trip through Label Studio, and works even when
    the LS API is slow/unavailable. Requires the backend's IAM role to have read on that bucket.
 2. **`http(s)://…` (LS-hosted upload or presigned)** → `LabelStudioMLBase.get_local_path(url,
    task_id=…)`, which authenticates with `LABEL_STUDIO_URL` + `LABEL_STUDIO_API_KEY`.
-3. **local path** → open directly (dev/testing, e.g. `HAPPY_ASK.wav`).
+3. **local path** → open directly (dev/testing with a synthetic clip).
 
 Download to a temp file (or stream), then hand to `prepare_audio`. Because the S3 bucket is the
 same source LS syncs from, the backend and LS always see identical bytes.
@@ -170,17 +199,22 @@ enable "Retrieve predictions when loading a task automatically."
    `global_summary`/tests must still pass: `cd src && uv run pytest`).
 2. **`tests/test_ls_regions.py`** — assert region dict shapes (`type`, `from_name`,
    `value.start/end/labels|text`) for synthetic `ScriptLine`s. Write before wiring backends.
-3. **`common/engine.py`** — the three thin senselab callers + `prepare_audio` reuse.
-4. **`backends/diarization/model.py`** first (simplest, our near-term goal), then ASR, scene.
-5. **`tests/test_engine_smoke.py`** — GPU-marked, runs diarization on `HAPPY_ASK.wav`
-   (repo root) and checks non-empty speaker regions.
-6. Deploy per `AWS_EC2_SETUP.md`; run backends behind systemd.
+3. **`tests/test_audio_plus.py` + `common/audio_plus.py`** — `build_audio_plus(ref)` from a
+   task-like reference with **mocked b2aiprep records**; assert Audio+ carries bytes + task +
+   GSD/age + related audios. Tests first.
+4. **`common/engine.py`** — the three thin senselab callers + `prepare_audio` reuse.
+5. **`backends/diarization/model.py`** first (simplest, our near-term goal): `build_audio_plus`
+   → `engine.diarize`; then ASR, scene.
+6. **`tests/test_engine_smoke.py`** — GPU-marked, runs diarization on a **synthetic clip** and
+   checks non-empty speaker regions (real validation runs against b2aiprep output, which is
+   gated — see data-access rule).
+7. Deploy per `AWS_EC2_SETUP.md`; run backends behind systemd.
 
 ## Verification
 
 1. `cd src && uv run pytest && uv run ruff check .` — refactor keeps existing suite green.
 2. **Local backend**: `label-studio-ml start backends/diarization -p 9090`; then
-   `curl localhost:9090/health` → 200, and POST a task pointing at `HAPPY_ASK.wav` to
+   `curl localhost:9090/health` → 200, and POST a task pointing at a local/synthetic wav to
    `/predict` → speaker `labels` regions returned. The scaffold's `test_api.py` covers this.
 3. **EC2**: start instance, start backends, register URLs in a test LS project, import an audio
    task, open it → diarization/scene/ASR tracks appear pre-drawn; stop instance when done.
@@ -193,3 +227,6 @@ enable "Retrieve predictions when loading a task automatically."
   single backend that returns all tracks in one `predict` is possible but couples latencies.
 - **Engine defaults**: pyannote `speaker-diarization-community-1`; ASR model (Whisper variant);
   AST + YAMNet for scene — confirm which to enable by default.
+- **Audio+ record lookup**: how `build_audio_plus` maps an incoming audio ref → its b2aiprep
+  B2AI record (task/GSD/age/related audios) — dataset index/path, and how the gated phenotype is
+  reachable from the EC2 box (S3 layout vs a separate metadata source).
