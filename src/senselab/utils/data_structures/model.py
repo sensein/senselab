@@ -1,5 +1,6 @@
 """This module implements some utilities for the model class."""
 
+import logging
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -9,7 +10,7 @@ import requests
 import torch
 from dotenv import dotenv_values, find_dotenv
 from huggingface_hub import HfApi
-from huggingface_hub.errors import RepositoryNotFoundError, RevisionNotFoundError
+from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError, RevisionNotFoundError
 from huggingface_hub.hf_api import ModelInfo
 from pydantic import BaseModel, Field, PrivateAttr, ValidationInfo, field_validator
 from typing_extensions import Annotated
@@ -19,6 +20,8 @@ from senselab.utils.dependencies import torchaudio_available
 TORCHAUDIO_AVAILABLE = torchaudio_available()
 if TORCHAUDIO_AVAILABLE:
     import torchaudio
+
+logger = logging.getLogger("senselab")
 
 # Define the TypeVar for provider types
 PROVIDER_T = TypeVar("PROVIDER_T")
@@ -235,8 +238,24 @@ def check_hf_repo_exists(repo_id: str, revision: str = "main", repo_type: str = 
         try:
             ensure_hf_model(repo_id, revision)
             return True
-        except Exception:
+        except GatedRepoError:
+            # Repo exists but requires auth — surface it; do NOT report as "missing".
+            raise
+        except (RepositoryNotFoundError, RevisionNotFoundError):
+            # Genuinely absent — this is the only case that means "does not exist".
             return False
+        except Exception as exc:
+            # Transient (rate-limit / network) errors must not masquerade as
+            # "not found" — that silently turns a throttled real model into a
+            # confusing "missing". Log and re-raise so the caller sees the real,
+            # retryable error.
+            logger.warning(
+                "Could not verify HF model %s@%s (transient error; surfacing rather than reporting missing): %s",
+                repo_id,
+                revision,
+                exc,
+            )
+            raise
 
     # Non-model repos (rare): direct API check
     api = HfApi(token=get_huggingface_token())
