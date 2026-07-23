@@ -1,0 +1,195 @@
+# Plan — senselab Label Studio ML backends (multi-model, per aspect)
+
+## Context
+
+`scripts/analyze_audio.py` already runs the full senselab audio stack (diarization, AST/YAMNet
+scene classification, ASR/transcription, alignment, uncertainty) and emits **Label Studio
+predictions** as parallel `from_name` tracks plus a dynamic labeling config. It is a batch CLI:
+one process runs *every* analyzer and writes JSON tasks.
+
+We want the same capability exposed through the **HumanSignal Label Studio ML SDK**
+(`label-studio-ml`) so Label Studio can request predictions on demand — hosted on the
+on-demand EC2 box (see `AWS_EC2_SETUP.md`). Per the user's steer, we **split the monolith into
+one model call per aspect**: a diarization model, an ASR model, a scene-classification model,
+each an independent `LabelStudioMLBase` backend that LS connects separately. This lets an
+annotator enable/version/run each aspect on its own, and keeps each `predict()` small and fast.
+
+## Why split into multiple backends (vs one mega-predict)
+
+- Label Studio supports **multiple ML backends per project**; each returns its own
+  `results`/track. Diarization latency shouldn't block ASR, and vice-versa.
+- Each aspect maps to a distinct control tag already produced by analyze_audio:
+  diarization → `<Labels>`, scene → windowed `<Labels>`, ASR → per-region `<TextArea>`.
+- Independent `model_version` per backend → clean prediction provenance in LS.
+- Matches the on-demand model: start only the backend(s) you need for a session.
+
+## Target layout
+
+```
+label_studio_ml/
+  ML_BACKEND_PLAN.md           # this plan
+  AWS_EC2_SETUP.md             # EC2 provisioning runbook
+  common/
+    audio_io.py                # resolve audio (s3:// via boto3 / http via LS / local) + prepare_audio (mono/16k)
+    ls_regions.py              # region + config builders reused from analyze_audio
+    engine.py                  # thin senselab callers per aspect (diarize/asr/classify)
+  backends/
+    diarization/model.py       # DiarizationBackend(LabelStudioMLBase)   :9090
+    asr/model.py               # ASRBackend(LabelStudioMLBase)           :9091
+    scene/model.py             # SceneBackend(LabelStudioMLBase)         :9092
+  tests/
+    test_ls_regions.py         # region-shape unit tests (write FIRST — TDD)
+    test_engine_smoke.py       # HAPPY_ASK.wav end-to-end, GPU-marked
+  requirements.txt
+```
+
+## What is actually shared (the two scripts run in opposite directions)
+
+`analyze_audio.py` **authors tasks** (creates `{data.audio, predictions[], config}` offline for
+import); the ML backend **serves requests** (LS sends existing tasks, backend returns
+predictions). So the reuse is a *middle layer*, not the whole script:
+
+**Shared core → refactor into `common/` (single source of truth):**
+
+| Helper | Location | Why it is direction-agnostic |
+|---|---|---|
+| `_ls_label_region` | `analyze_audio.py:1311` | emits one `labels` region dict — identical schema whether it lands in an export task's `predictions[].result` or a `ModelResponse.result` |
+| `_ls_textarea_region` | `analyze_audio.py:1334` | same, for `textarea` regions |
+| `_diarization_to_ls` | `analyze_audio.py:1363` | `ScriptLine[]` → speaker regions |
+| `_classification_to_ls` | `analyze_audio.py:1387` | windowed scene labels |
+| `_asr_to_ls` | `analyze_audio.py:1513` | transcript → textarea (+ 3-case timestamp branch) |
+| `_safe`, `_seg_attr` | `analyze_audio.py:1632/1352` | id/label sanitization used by the converters |
+| `prepare_audio` | `analyze_audio.py:896` | load → mono → 16 kHz |
+| `pick_dispatch_model`, `pick_device` | `analyze_audio.py:579/598` | model/device resolution |
+
+**NOT shared → stays in `analyze_audio.py` (export/authoring only):**
+
+- `build_labelstudio_task` (`:1543`) — wraps regions in a `data`+`predictions` **task
+  envelope**. The backend never builds tasks; LS supplies them and the backend only returns the
+  inner `result` list inside a `ModelResponse`.
+- `build_labelstudio_config` (`:1637`) / `_collect_classification_labels` (`:1697`) — generate
+  labeling XML. The backend **reads** the project config via `self.label_interface`; it doesn't
+  generate it. (Keep this available as a one-time *project-setup* helper, not part of the serve
+  loop.)
+- argparse, multi-pass orchestration, caching, uncertainty-track attachment — batch-only.
+
+So the shared surface is the ~200 lines of region converters + audio prep + engine dispatch —
+genuinely reused. The envelopes differ and correctly stay separate.
+
+> `to_name` is hardcoded to `"audio"` in the converters — fine, since each backend's config
+> uses `<Audio name="audio">`. Parameterize only if a project renames the object tag.
+
+## Backend contract (all three follow this shape)
+
+```python
+from label_studio_ml.model import LabelStudioMLBase
+from label_studio_ml.response import ModelResponse
+
+class DiarizationBackend(LabelStudioMLBase):
+    def setup(self):
+        self.set("model_version", "senselab-pyannote-community-1")
+        # optional: warm the pipeline once (senselab caches per (uri,revision,device))
+
+    def predict(self, tasks, context=None, **kwargs) -> ModelResponse:
+        from_name, to_name, value_key = self.label_interface.get_first_tag_occurence(
+            "Labels", "Audio")                       # ASR backend -> ("TextArea","Audio")
+        preds = []
+        for task in tasks:
+            path = self.get_local_path(task["data"][value_key], task_id=task.get("id"))
+            audio = prepare_audio(Path(path))        # mono / 16 kHz
+            regions = run_aspect(audio, from_name)   # engine.diarize / asr / classify + *_to_ls
+            preds.append({"result": regions,
+                          "model_version": self.get("model_version"),
+                          "score": 1.0})
+        return ModelResponse(predictions=preds)
+```
+
+- **Diarization** — `engine.diarize(audio)` → `diarize_audios([audio], model=pyannote|sortformer, device=CUDA)` → `_diarization_to_ls`.
+- **ASR** — `engine.transcribe(audio)` → `transcribe_audios(...)` (+ alignment when no native
+  timestamps, mirroring the 3-case branch at `analyze_audio.py:1598`) → `_asr_to_ls`.
+- **Scene** — `engine.classify(audio, win, hop)` → `classify_audios(...)` (AST/YAMNet) →
+  `_classification_to_ls`.
+
+### Audio fetch — prefer S3 direct read
+
+Label Studio in this project pulls its audio from an **S3 bucket** (LS cloud-storage sync), so
+`task["data"][value_key]` is typically an `s3://bucket/key` (or presigned `https`) URI.
+`common/audio_io.py` resolves audio in this order:
+
+1. **`s3://…` → read directly via boto3** using the EC2 instance role (S3 read granted in
+   `AWS_EC2_SETUP.md` step 4). Fastest; no round-trip through Label Studio, and works even when
+   the LS API is slow/unavailable. Requires the backend's IAM role to have read on that bucket.
+2. **`http(s)://…` (LS-hosted upload or presigned)** → `LabelStudioMLBase.get_local_path(url,
+   task_id=…)`, which authenticates with `LABEL_STUDIO_URL` + `LABEL_STUDIO_API_KEY`.
+3. **local path** → open directly (dev/testing, e.g. `HAPPY_ASK.wav`).
+
+Download to a temp file (or stream), then hand to `prepare_audio`. Because the S3 bucket is the
+same source LS syncs from, the backend and LS always see identical bytes.
+
+## Labeling config
+
+Diarization/scene need their label set declared. Two options:
+1. **Static per-project config** (recommended first): one control per connected backend, e.g.
+   ```xml
+   <View>
+     <Audio name="audio" value="$audio"/>
+     <Labels name="diarization" toName="audio">
+       <Label value="SPEAKER_00"/>...<Label value="SPEAKER_UNKNOWN"/>
+     </Labels>
+     <Labels name="scene" toName="audio"><!-- AudioSet labels --></Labels>
+     <TextArea name="asr" toName="audio" perRegion="true" editable="true"/>
+   </View>
+   ```
+   Each backend's `from_name` must equal its control name (`diarization`/`scene`/`asr`).
+2. **Dynamic labels** — reuse `build_labelstudio_config` (`analyze_audio.py:1637`) to generate
+   the config from a dry run; import it into the project once.
+
+> pyannote emits `SPEAKER_00…`; predeclare enough speaker labels or a project uses dynamic
+> `value="$labels"` labeling.
+
+## Running on EC2 (multiple backends)
+
+Each backend is its own process/port (matches the SG ports in `AWS_EC2_SETUP.md`):
+
+```bash
+source /opt/lsml-venv/bin/activate
+export HF_TOKEN=... LABEL_STUDIO_URL=https://<ls-host> LABEL_STUDIO_API_KEY=...
+label-studio-ml start label_studio_ml/backends/diarization -p 9090 --host 0.0.0.0 &
+label-studio-ml start label_studio_ml/backends/asr         -p 9091 --host 0.0.0.0 &
+label-studio-ml start label_studio_ml/backends/scene       -p 9092 --host 0.0.0.0 &
+```
+
+Wrap in systemd units (or a single `docker-compose.yml` with three services) so start/stop of
+the EC2 box brings them up cleanly. In Label Studio: project → Settings → Model → add each URL;
+enable "Retrieve predictions when loading a task automatically."
+
+## Build order (TDD — tests first, per project convention)
+
+1. **Refactor** the reusable helpers out of `analyze_audio.py` into `common/ls_regions.py`;
+   keep `analyze_audio.py` importing them (no behavior change — existing
+   `global_summary`/tests must still pass: `cd src && uv run pytest`).
+2. **`tests/test_ls_regions.py`** — assert region dict shapes (`type`, `from_name`,
+   `value.start/end/labels|text`) for synthetic `ScriptLine`s. Write before wiring backends.
+3. **`common/engine.py`** — the three thin senselab callers + `prepare_audio` reuse.
+4. **`backends/diarization/model.py`** first (simplest, our near-term goal), then ASR, scene.
+5. **`tests/test_engine_smoke.py`** — GPU-marked, runs diarization on `HAPPY_ASK.wav`
+   (repo root) and checks non-empty speaker regions.
+6. Deploy per `AWS_EC2_SETUP.md`; run backends behind systemd.
+
+## Verification
+
+1. `cd src && uv run pytest && uv run ruff check .` — refactor keeps existing suite green.
+2. **Local backend**: `label-studio-ml start backends/diarization -p 9090`; then
+   `curl localhost:9090/health` → 200, and POST a task pointing at `HAPPY_ASK.wav` to
+   `/predict` → speaker `labels` regions returned. The scaffold's `test_api.py` covers this.
+3. **EC2**: start instance, start backends, register URLs in a test LS project, import an audio
+   task, open it → diarization/scene/ASR tracks appear pre-drawn; stop instance when done.
+
+## Open decisions
+
+- **Aspects for v1**: start with **diarization only** (near-term goal), add ASR + scene next?
+  Or scaffold all three now.
+- **Multi-backend vs single backend**: recommended multi-backend (one port per aspect). A
+  single backend that returns all tracks in one `predict` is possible but couples latencies.
+- **Engine defaults**: pyannote `speaker-diarization-community-1`; ASR model (Whisper variant);
+  AST + YAMNet for scene — confirm which to enable by default.
