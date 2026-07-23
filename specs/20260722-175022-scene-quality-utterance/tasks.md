@@ -150,7 +150,7 @@ description: "Task list for scene-aware presence axis + improved utterance uncer
 ## Phase 8: Polish & Cross-Cutting Concerns
 
 - [ ] T040 [P] FR-024: add `<pass>__presence__quality` and `<pass>__presence__sources` tracks to `labelstudio.py` (additive; existing `presence` track unchanged) + test in `labelstudio_test.py`.
-- [ ] T041 [P] FR-024: add optional quality + dominant-source rows to `plot.py` (existing 5 rows unchanged when new signals null) + test in `plot_test.py`.
+- [X] T041 [P] FR-024: add optional quality + dominant-source rows to `plot.py` (existing 5 rows unchanged when new signals null) + test in `plot_test.py`.
 - [ ] T042 [P] FR-024: rank the new presence sub-signals in `disagreements.py` + test in `disagreements_test.py`.
 - [ ] T043 [P] Docs: update `workflows/audio_analysis/doc.md` and the CLAUDE.md workflow section describing the scene-aware presence columns + new CLI flags; cross-check against quickstart.md.
 - [X] T044 Run quickstart.md end-to-end on a `tutorial_audio_files/` clip; confirm all new columns populate and acceptance scenarios hold.
