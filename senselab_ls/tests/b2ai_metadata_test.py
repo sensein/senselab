@@ -54,7 +54,15 @@ def dataset_root(tmp_path: Path) -> Path:
     )
     _write(
         root / "phenotype" / "diagnosis" / "depression.tsv",
-        f"participant_id\tdiagnosis_dep_gold_standard_diagnosis\n{_SUB}\tno\n",
+        f"participant_id\tdiagnosis_dmdd_gold_standard_diagnosis\n{_SUB}\tno\n",
+    )
+    _write(
+        root / "phenotype" / "diagnosis" / "anxiety.tsv",
+        f"participant_id\tdiagnosis_ad_gold_standard_diagnosis\n{_SUB}\tnotCertain\n",
+    )
+    _write(
+        root / "phenotype" / "diagnosis" / "copd_and_asthma.tsv",
+        f"participant_id\tdiagnosis_ca_copd_asthma_gold_standard_diagnosis\n{_SUB}\tbothCopdAsthma\n",
     )
     _write(root / "phenotype" / "diagnosis" / "control.tsv", f"participant_id\tdiagnosis_c_ac\n{_SUB}\t0\n")
     return root
@@ -73,7 +81,7 @@ def test_lookup_resolves_recording_and_task(dataset_root: Path) -> None:
 
 
 def test_lookup_resolves_age_and_positive_gsd(dataset_root: Path) -> None:
-    """Age parses to float; only the affirmative GSD condition is reported."""
+    """Age parses to float; affirmative GSDs (incl. multi-category copd) reported, negatives not."""
     provider = B2AIMetadataProvider(str(dataset_root))
     ref = f"sub-{_SUB}_ses-{_SES}_task-Prolonged-vowel.wav"  # bare basename also works
 
@@ -81,8 +89,11 @@ def test_lookup_resolves_age_and_positive_gsd(dataset_root: Path) -> None:
 
     assert meta.speaker.speaker_id == _SUB
     assert meta.speaker.age == 71.0
-    assert meta.speaker.gsd == "parkinsons_disease"  # depression is "no", control has no GSD col
-    assert meta.speaker.metadata["gsd_conditions"] == ["parkinsons_disease"]
+    # parkinsons ("yes") and copd_and_asthma ("bothCopdAsthma") are positive;
+    # depression ("no"), anxiety ("notCertain") and control (no GSD col) are not.
+    assert meta.speaker.metadata["gsd_conditions"] == ["copd_and_asthma", "parkinsons_disease"]
+    assert meta.speaker.gsd == "copd_and_asthma, parkinsons_disease"
+    assert meta.speaker.metadata["gsd_details"]["copd_and_asthma"] == "bothCopdAsthma"
 
 
 def test_lookup_lists_related_recordings(dataset_root: Path) -> None:
