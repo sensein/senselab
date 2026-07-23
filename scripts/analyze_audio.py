@@ -427,6 +427,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--presence-grid-win-length",
+        type=float,
+        default=0.1,
+        help=(
+            "Window length (seconds) for the presence axis (default 0.1 s ≈ one phone). "
+            "Presence uses continuous frame posteriors, so a fine grid localizes brief "
+            "events (cough onset, inter-word breath) that a 0.5 s grid smears. Quality and "
+            "source columns are broadcast onto this grid."
+        ),
+    )
+    parser.add_argument(
+        "--presence-grid-hop-length",
+        type=float,
+        default=0.02,
+        help="Hop between presence windows (default 0.02 s ≈ frame hop). Must be <= --presence-grid-win-length.",
+    )
+    parser.add_argument(
         "--embedding-window-s",
         type=float,
         default=1.0,
@@ -540,6 +557,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--utterance-win-length must be positive")
     if args.utterance_hop_length <= 0 or args.utterance_hop_length > args.utterance_win_length:
         parser.error("--utterance-hop-length must be positive and ≤ --utterance-win-length")
+    if args.presence_grid_win_length <= 0:
+        parser.error("--presence-grid-win-length must be positive")
+    if args.presence_grid_hop_length <= 0 or args.presence_grid_hop_length > args.presence_grid_win_length:
+        parser.error("--presence-grid-hop-length must be positive and ≤ --presence-grid-win-length")
     if not (0.0 <= args.phoneme_disagreement_threshold <= 1.0):
         parser.error("--phoneme-disagreement-threshold must be in [0, 1]")
     if args.diarization_boundary_shift_ms < 0:
@@ -1917,11 +1938,17 @@ def main(argv: list[str] | None = None) -> int:
             win_length=args.utterance_win_length,
             hop_length=args.utterance_hop_length,
         )
+        presence_grid = BucketGrid(
+            win_length=args.presence_grid_win_length,
+            hop_length=args.presence_grid_hop_length,
+        )
         comparator_params = {
             "win_length": grid.win_length,
             "hop_length": grid.hop_length,
             "utterance_win_length": utterance_grid.win_length,
             "utterance_hop_length": utterance_grid.hop_length,
+            "presence_win_length": presence_grid.win_length,
+            "presence_hop_length": presence_grid.hop_length,
             "aggregator": args.uncertainty_aggregator,
             "phoneme_disagreement_threshold": args.phoneme_disagreement_threshold,
             "speech_presence_labels": _speech_presence_labels(args),
@@ -1945,6 +1972,7 @@ def main(argv: list[str] | None = None) -> int:
                 aggregator=args.uncertainty_aggregator,
                 speech_presence_labels=_speech_presence_labels(args),
                 utterance_grid=utterance_grid,
+                presence_grid=presence_grid,
                 embedding_window_s=args.embedding_window_s,
                 embedding_hop_s=args.embedding_hop_s,
                 same_speaker_floor=args.identity_same_speaker_floor,

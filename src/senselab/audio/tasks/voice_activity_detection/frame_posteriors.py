@@ -1,0 +1,155 @@
+"""Continuous per-frame speech posteriors from ``pyannote/segmentation-3.0``.
+
+Unlike ``detect_human_voice_activity_in_audios`` (which runs the high-level
+``Pipeline`` and returns thresholded ``ScriptLine`` segments), this extractor
+uses the low-level ``Model`` + ``Inference`` path to obtain the **raw per-frame
+speech probability** (~16.9 ms/frame) without any segment thresholding or
+hangover smoothing — exactly what the presence axis needs to resolve brief
+events and to compute a within-bucket temporal-instability signal.
+
+``segmentation-3.0`` is a powerset model (up to 3 speakers / chunk); P(speech)
+is derived as ``1 − P(no-speaker)``. The model is gated on HuggingFace; loading
+reuses ``ensure_hf_model`` + ``get_huggingface_token`` so cached runs skip the
+Hub (constitution VI). No new dependency.
+"""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Optional
+
+import numpy as np
+
+from senselab.audio.data_structures import Audio
+from senselab.utils.data_structures import DeviceType, PyannoteAudioModel, _select_device_and_dtype
+from senselab.utils.data_structures.logging import logger
+from senselab.utils.data_structures.model import get_huggingface_token
+from senselab.utils.dependencies import ensure_hf_model, hf_local_files_only, retry_on_transient_error
+
+if TYPE_CHECKING:
+    from pyannote.audio import Inference
+
+try:
+    from pyannote.audio import Inference, Model
+
+    PYANNOTEAUDIO_AVAILABLE = True
+except (ImportError, RuntimeError):
+    PYANNOTEAUDIO_AVAILABLE = False
+
+SEGMENTATION_MODEL_ID = "pyannote/segmentation-3.0"
+SEGMENTATION_REVISION = "main"
+
+
+@dataclass
+class FramePosterior:
+    """Continuous per-frame speech probability for one audio.
+
+    Attributes:
+        probs: ``(num_frames,)`` P(speech) in ``[0, 1]``.
+        frame_hop_s: seconds between consecutive frame starts.
+        frame_win_s: analysis window per frame (seconds).
+    """
+
+    probs: np.ndarray
+    frame_hop_s: float
+    frame_win_s: float = 0.0
+
+    def mean_std_in_window(self, start_s: float, end_s: float) -> tuple[float, float]:
+        """Return ``(mean, std)`` of P(speech) over frames overlapping ``[start, end)``.
+
+        The mean is the bucket's speech-presence contribution; the std captures
+        within-bucket temporal instability (a bucket straddling an onset has
+        high frame variance). Returns ``(nan, nan)`` when no frame overlaps.
+        """
+        if self.frame_hop_s <= 0 or self.probs.size == 0:
+            return (float("nan"), float("nan"))
+        lo = max(0, int(np.floor(start_s / self.frame_hop_s)))
+        hi = min(self.probs.size, int(np.ceil(end_s / self.frame_hop_s)))
+        if hi <= lo:
+            return (float("nan"), float("nan"))
+        window = self.probs[lo:hi]
+        return (float(np.nanmean(window)), float(np.nanstd(window)))
+
+
+def _speech_prob_from_output(data: np.ndarray) -> np.ndarray:
+    """Reduce a segmentation model's per-frame output to P(speech) in ``[0, 1]``.
+
+    ``segmentation-3.0`` emits per-frame powerset class probabilities that sum
+    to ~1 with class 0 = "no speaker"; P(speech) = ``1 − P(class 0)``. If the
+    output instead looks multilabel (rows not summing to ~1), fall back to the
+    max over the class axis. Validated end-to-end in T044.
+    """
+    if data.ndim == 1:
+        return np.clip(data, 0.0, 1.0)
+    row_sums = data.sum(axis=1)
+    if np.nanmean(np.abs(row_sums - 1.0)) < 0.1:  # powerset softmax
+        return np.clip(1.0 - data[:, 0], 0.0, 1.0)
+    return np.clip(data.max(axis=1), 0.0, 1.0)
+
+
+_inference_cache: dict[str, "Inference"] = {}
+
+
+def _get_inference(model: PyannoteAudioModel, device: Optional[DeviceType]) -> "Inference":
+    """Load (and cache) a segmentation ``Inference`` for the requested model/device."""
+    import torch
+
+    device, _ = _select_device_and_dtype(user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU])
+    key = f"{model.path_or_uri}-{model.revision}-{device}"
+    if key not in _inference_cache:
+        ensure_hf_model(str(model.path_or_uri), revision=model.revision, token=get_huggingface_token())
+        loaded = retry_on_transient_error(
+            Model.from_pretrained,
+            model.path_or_uri,
+            revision=model.revision,
+            token=get_huggingface_token(),
+        )
+        if loaded is None:
+            raise ValueError(f"segmentation model {model.path_or_uri} could not be loaded.")
+        _inference_cache[key] = Inference(loaded, device=torch.device(device.value))
+    return _inference_cache[key]
+
+
+def extract_speech_frame_posteriors(
+    audios: list[Audio],
+    model: Optional[PyannoteAudioModel] = None,
+    device: Optional[DeviceType] = None,
+) -> list[Optional[FramePosterior]]:
+    """Return continuous per-frame P(speech) for each audio (``None`` on failure).
+
+    If the model cannot be loaded (not installed, gated without a token,
+    native-lib failure), every entry is ``None`` and the presence axis simply
+    omits the frame-posterior voter (FR-023) — the workflow does not abort.
+    """
+    if not PYANNOTEAUDIO_AVAILABLE:
+        logger.warning("pyannote-audio unavailable; segmentation frame posteriors will be null.")
+        return [None] * len(audios)
+    if model is None:
+        model = PyannoteAudioModel(path_or_uri=SEGMENTATION_MODEL_ID, revision=SEGMENTATION_REVISION)
+    hf_local_files_only(str(model.path_or_uri), revision=model.revision)
+    try:
+        inference = _get_inference(model=model, device=device)
+    except Exception as exc:  # noqa: BLE001 — any load failure degrades to null (FR-023)
+        logger.warning(f"Failed to load {model.path_or_uri}: {exc}. Frame posteriors will be null.")
+        return [None] * len(audios)
+
+    results: list[Optional[FramePosterior]] = []
+    for audio in audios:
+        try:
+            t0 = time.time()
+            output: Any = inference({"waveform": audio.waveform, "sample_rate": audio.sampling_rate})
+            data = np.asarray(output.data, dtype=np.float64)
+            probs = _speech_prob_from_output(data)
+            results.append(
+                FramePosterior(
+                    probs=probs,
+                    frame_hop_s=float(output.sliding_window.step),
+                    frame_win_s=float(output.sliding_window.duration),
+                )
+            )
+            logger.info(f"segmentation inference took {time.time() - t0:.2f}s ({probs.size} frames)")
+        except (RuntimeError, ValueError, OSError) as exc:
+            logger.warning(f"segmentation inference failed for one audio: {exc}")
+            results.append(None)
+    return results

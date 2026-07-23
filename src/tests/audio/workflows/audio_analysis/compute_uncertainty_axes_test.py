@@ -37,8 +37,10 @@ def _no_brouhaha(monkeypatch: pytest.MonkeyPatch) -> None:
     to inject synthetic frames.
     """
     import senselab.audio.tasks.scene_quality as sq
+    import senselab.audio.tasks.voice_activity_detection.frame_posteriors as fp
 
     monkeypatch.setattr(sq, "extract_brouhaha_frames", lambda audios, *a, **k: [None] * len(audios))
+    monkeypatch.setattr(fp, "extract_speech_frame_posteriors", lambda audios, *a, **k: [None] * len(audios))
 
 
 # ── Test fixture builders ─────────────────────────────────────────────
@@ -535,6 +537,44 @@ def test_presence_rows_carry_source_columns() -> None:
             assert abs(total - 1.0) < 1e-6
             assert r.src_dominant == "speech"
     assert presence.provenance["sound_sources"]["enabled"] is True
+
+
+def test_presence_confidence_uncertainty_split_and_instability(monkeypatch: pytest.MonkeyPatch) -> None:
+    """US3: presence_confidence + presence_uncertainty columns; frame instability lifts uncertainty."""
+    import senselab.audio.tasks.voice_activity_detection.frame_posteriors as fp
+    from senselab.audio.tasks.voice_activity_detection.frame_posteriors import FramePosterior
+
+    # Rapidly alternating posterior → high within-bucket std (instability) everywhere.
+    probs = np.tile([0.0, 1.0], 100)  # 200 frames @ 0.01 s hop = 2 s
+    monkeypatch.setattr(
+        fp,
+        "extract_speech_frame_posteriors",
+        lambda audios, *a, **k: [FramePosterior(probs=probs, frame_hop_s=0.01)] * len(audios),
+    )
+    raw_pass = {
+        "duration_s": 2.0,
+        "diarization": {"by_model": {"pyannote": _diar_block([(0.0, 2.0, "SPEAKER_00")])}},
+    }
+    axis_results, _, _ = compute_uncertainty_axes(
+        passes={"raw_16k": raw_pass},
+        grid=BucketGrid(win_length=0.5, hop_length=0.5),
+        presence_grid=BucketGrid(win_length=0.1, hop_length=0.1),
+        params={},
+        audio={"raw_16k": _silent_audio(2.0)},
+        speaker_embedding_models=[],
+        aggregator="min",
+        speech_presence_labels=["Speech"],
+        scene_quality=False,
+    )
+    presence = axis_results[("raw_16k", "presence")]
+    assert presence.rows
+    assert all(r.presence_confidence is not None for r in presence.rows)
+    assert all(r.presence_uncertainty is not None for r in presence.rows)
+    # Instability raises presence_uncertainty above the legacy decisiveness uncertainty.
+    assert any(r.presence_uncertainty > (r.aggregated_uncertainty or 0.0) + 1e-6 for r in presence.rows)
+    # aggregated_uncertainty (legacy column) is untouched by the split.
+    assert all(r.aggregated_uncertainty is None or 0.0 <= r.aggregated_uncertainty <= 1.0 for r in presence.rows)
+    assert presence.provenance["frame_posteriors"]["segmentation"]["available"] is True
 
 
 def test_presence_quality_null_when_scene_quality_disabled() -> None:

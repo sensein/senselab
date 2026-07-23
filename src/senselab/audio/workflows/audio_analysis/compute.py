@@ -55,6 +55,7 @@ def compute_uncertainty_axes(
     aggregator: str,
     speech_presence_labels: list[str],
     utterance_grid: BucketGrid | None = None,
+    presence_grid: BucketGrid | None = None,
     scene_quality: bool = True,
     sound_sources: bool = True,
     embedding_window_s: float = 2.0,
@@ -85,6 +86,11 @@ def compute_uncertainty_axes(
         utterance_grid: Optional separate bucket grid for the utterance axis (typically
             wider + overlapping than the shared grid so most words land fully inside at
             least one bucket). When ``None``, the shared ``grid`` is reused for utterance.
+        presence_grid: Optional separate (typically finer) bucket grid for the presence
+            axis, so brief events can be localized from continuous frame posteriors. When
+            ``None``, the shared ``grid`` is reused (preserving legacy behavior); the CLI
+            defaults it to 0.1 s / 0.02 s. Quality and source columns are computed on this
+            same presence grid so they align with the presence rows.
         scene_quality: When True (default), compute per-bucket audio-quality degradation
             scores (SNR / clipping / reverb / bandwidth + estimator-spread uncertainty)
             via Brouhaha + existing DSP metrics and attach them as additive columns on
@@ -251,13 +257,31 @@ def compute_uncertainty_axes(
             ppg_block = ppg_block_raw
 
         # ── presence ──
-        presence_votes = harvest_presence_votes(
-            pass_summary=pass_summary,
-            grid=grid,
-            speech_presence_labels=speech_presence_labels,
-            alignment_by_model=align_by_model,
-            per_window_embeddings=per_window_embeddings_by_pass.get(pass_label),
-        )
+        # Presence reports on its own (typically finer) grid; falls back to the
+        # shared grid when the caller doesn't provide one (legacy behavior).
+        pres_grid = presence_grid if presence_grid is not None else grid
+
+        # Frame-level speech posteriors (US3): segmentation-3.0 raw scores + the
+        # Brouhaha VAD head, as continuous fine-resolution presence voters.
+        # Computed once per pass; null-safe when a model / audio is unavailable.
+        frame_voters: dict[str, Any] = {}
+        frame_posteriors_provenance: dict[str, Any] = {}
+        brouhaha_frames = None
+        if per_pass_audio is not None:
+            from senselab.audio.tasks.voice_activity_detection.frame_posteriors import (
+                SEGMENTATION_MODEL_ID,
+                SEGMENTATION_REVISION,
+                extract_speech_frame_posteriors,
+            )
+
+            seg_fp = extract_speech_frame_posteriors([per_pass_audio])[0]
+            if seg_fp is not None:
+                frame_voters["frame_segmentation"] = seg_fp
+            frame_posteriors_provenance["segmentation"] = {
+                "id": SEGMENTATION_MODEL_ID,
+                "revision": SEGMENTATION_REVISION,
+                "available": seg_fp is not None,
+            }
 
         # Scene quality (US1): per-bucket SNR / clipping / reverb / bandwidth
         # degradation + estimator-spread uncertainty. Computed once per pass
@@ -268,6 +292,7 @@ def compute_uncertainty_axes(
         if scene_quality and per_pass_audio is not None:
             from senselab.audio.tasks.scene_quality import extract_brouhaha_frames
             from senselab.audio.tasks.scene_quality.brouhaha import BROUHAHA_MODEL_ID, BROUHAHA_REVISION
+            from senselab.audio.tasks.voice_activity_detection.frame_posteriors import FramePosterior
             from senselab.audio.workflows.audio_analysis.quality import (
                 QUALITY_ANALYSIS_HOP_S,
                 QUALITY_ANALYSIS_WIN_S,
@@ -275,8 +300,13 @@ def compute_uncertainty_axes(
             )
 
             brouhaha_frames = extract_brouhaha_frames([per_pass_audio])[0]
-            for q in harvest_quality_scores(audio=per_pass_audio, brouhaha=brouhaha_frames, grid=grid):
+            for q in harvest_quality_scores(audio=per_pass_audio, brouhaha=brouhaha_frames, grid=pres_grid):
                 quality_by_bucket[(round(q["start"], 6), round(q["end"], 6))] = q
+            # Reuse the Brouhaha VAD head as a second frame-posterior presence voter.
+            if brouhaha_frames is not None:
+                frame_voters["frame_brouhaha_vad"] = FramePosterior(
+                    probs=brouhaha_frames.vad, frame_hop_s=brouhaha_frames.frame_hop_s
+                )
             scene_quality_provenance.update(
                 {
                     "analysis_win_length": QUALITY_ANALYSIS_WIN_S,
@@ -289,6 +319,15 @@ def compute_uncertainty_axes(
                 }
             )
 
+        presence_votes = harvest_presence_votes(
+            pass_summary=pass_summary,
+            grid=pres_grid,
+            speech_presence_labels=speech_presence_labels,
+            alignment_by_model=align_by_model,
+            per_window_embeddings=per_window_embeddings_by_pass.get(pass_label),
+            frame_posteriors=frame_voters or None,
+        )
+
         # Sound sources (US2): per-bucket AudioSet→category masses from AST/YAMNet.
         source_by_bucket: dict[tuple[float, float], dict[str, Any]] = {}
         sound_sources_provenance: dict[str, Any] = {"enabled": bool(sound_sources)}
@@ -298,16 +337,17 @@ def compute_uncertainty_axes(
                 load_source_category_map,
             )
 
-            for s in harvest_source_categories(pass_summary=pass_summary, grid=grid):
+            for s in harvest_source_categories(pass_summary=pass_summary, grid=pres_grid):
                 source_by_bucket[(round(s["start"], 6), round(s["end"], 6))] = s
             sound_sources_provenance["category_map_version"] = load_source_category_map().get("version")
 
         presence_rows: list[UncertaintyRow] = []
-        # Map bucket-start → presence p_voice so identity / utterance can
-        # mask their per-bucket uncertainty by "we are confident there's
-        # speech here" (low p_voice → confident silence → don't trust the
-        # axis-specific signals → mask down).
-        presence_p_voice_by_bucket: dict[tuple[float, float], float] = {}
+        # Presence p_voice per bucket INTERVAL → identity / utterance mask their
+        # per-bucket uncertainty by "we are confident there's speech here" (low
+        # p_voice → confident silence → don't trust the axis-specific signals).
+        # Stored as (start, end, p_voice) so the mask overlap-averages correctly
+        # even when presence runs on a finer grid than identity / utterance.
+        presence_pv_intervals: list[tuple[float, float, float]] = []
         for bucket in presence_votes:
             u = aggregate_presence(bucket["votes"])
             p_v = presence_p_voice(bucket["votes"])
@@ -323,6 +363,16 @@ def compute_uncertainty_axes(
                 votes = {**votes, "__quality__": quality.get("_raw", {})}
             if source is not None:
                 votes = {**votes, "__sources__": source.get("_raw", {})}
+            # presence_uncertainty (new column) enriches the decisiveness uncertainty
+            # with within-bucket temporal instability (probabilistic OR); the legacy
+            # aggregated_uncertainty column stays exactly = aggregate_presence (SC-008).
+            instability = bucket.get("frame_instability")
+            if u is None:
+                presence_uncertainty: float | None = None
+            elif instability is None:
+                presence_uncertainty = u
+            else:
+                presence_uncertainty = max(0.0, min(1.0, 1.0 - (1.0 - u) * (1.0 - float(instability))))
             # Presence axis itself isn't masked — it IS the mask source.
             presence_rows.append(
                 UncertaintyRow(
@@ -335,6 +385,8 @@ def compute_uncertainty_axes(
                     comparison_status="ok" if u is not None else "incomparable",
                     raw_aggregated_uncertainty=u,
                     intensity_weight=1.0,
+                    presence_confidence=float(p_v) if p_v is not None else None,
+                    presence_uncertainty=presence_uncertainty,
                     quality_snr=quality.get("quality_snr") if quality else None,
                     quality_clip=quality.get("quality_clip") if quality else None,
                     quality_reverb=quality.get("quality_reverb") if quality else None,
@@ -348,22 +400,22 @@ def compute_uncertainty_axes(
                 )
             )
             if p_v is not None:
-                presence_p_voice_by_bucket[(round(bucket["start"], 6), round(bucket["end"], 6))] = float(p_v)
+                presence_pv_intervals.append((float(bucket["start"]), float(bucket["end"]), float(p_v)))
+
+        def _mask_from_pvoice(p: float) -> float:
+            """p_voice → mask weight: 1.0 if >=0.5, else linear ramp to 0 at p=0."""
+            return 1.0 if p >= 0.5 else max(0.0, min(1.0, p / 0.5))
 
         def _intensity_mask(start: float, end: float) -> float:
-            """Map presence p_voice → mask weight in [0, 1].
+            """Average presence-derived mask over presence buckets overlapping ``[start, end)``.
 
-            ``p_voice >= 0.5`` (likely voice or uncertain) → mask = 1.0 (full
-            weight, don't downweight). ``p_voice < 0.5`` → linear ramp down to
-            0.0 at ``p_voice == 0`` (confident silence → mask out the bucket).
-            Falls back to 1.0 (no masking) when presence didn't run.
+            Overlap-averaging (not closest-only) so a query bucket spanning a
+            half-voice/half-silence region is masked proportionally. Works when
+            presence runs on a finer grid than identity / utterance. Falls back to
+            1.0 (no masking) when presence produced no p_voice.
             """
-            p = presence_p_voice_by_bucket.get((round(start, 6), round(end, 6)))
-            if p is None:
-                return 1.0
-            if p >= 0.5:
-                return 1.0
-            return max(0.0, min(1.0, p / 0.5))
+            vals = [_mask_from_pvoice(p) for s_p, e_p, p in presence_pv_intervals if s_p < end and e_p > start]
+            return sum(vals) / len(vals) if vals else 1.0
 
         axis_results[(pass_label, "presence")] = AxisResult(
             pass_label=pass_label,  # type: ignore[arg-type]
@@ -372,11 +424,12 @@ def compute_uncertainty_axes(
             provenance={
                 "axis": "presence",
                 "pass": pass_label,
-                "grid": {"win_length": grid.win_length, "hop_length": grid.hop_length},
+                "grid": {"win_length": pres_grid.win_length, "hop_length": pres_grid.hop_length},
                 "comparator_params": params,
                 "contributing_model_set": sorted({m for b in presence_votes for m in b["votes"]}),
                 "scene_quality": scene_quality_provenance,
                 "sound_sources": sound_sources_provenance,
+                "frame_posteriors": frame_posteriors_provenance,
             },
         )
 
@@ -456,16 +509,9 @@ def compute_uncertainty_axes(
             u_raw = aggregate_utterance(bucket["votes"], aggregator=aggregator)
             if u_raw is None and not bucket["votes"]:
                 continue
-            # Utterance buckets may use a different (typically wider) grid
-            # than presence; average the mask across presence buckets that
-            # OVERLAP this utterance bucket (rather than picking the closest
-            # single one — the closest-only rule would ignore a half-voice
-            # half-silence bucket).
-            mask_values = []
-            for (s_p, e_p), p_v in presence_p_voice_by_bucket.items():
-                if s_p < bucket["end"] and e_p > bucket["start"]:
-                    mask_values.append(1.0 if p_v >= 0.5 else max(0.0, min(1.0, p_v / 0.5)))
-            mask = sum(mask_values) / len(mask_values) if mask_values else 1.0
+            # Utterance buckets may use a different (typically wider) grid than
+            # presence; the shared overlap-averaging mask handles that.
+            mask = _intensity_mask(bucket["start"], bucket["end"])
             utterance_rows.append(
                 UncertaintyRow(
                     start=bucket["start"],

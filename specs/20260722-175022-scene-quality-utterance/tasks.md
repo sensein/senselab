@@ -86,17 +86,17 @@ description: "Task list for scene-aware presence axis + improved utterance uncer
 
 ### Tests for User Story 3
 
-- [ ] T018 [P] [US3] Write `src/tests/audio/workflows/audio_analysis/frame_posteriors_test.py`: synthetic `FramePosterior`, assert `mean_posterior_in_window` returns correct mean + within-window std over overlapping frames; empty overlap → nan handled.
-- [ ] T019 [P] [US3] Write `src/tests/audio/workflows/audio_analysis/grid_test.py`: `presence_grid` default (0.1/0.02) yields expected bucket count vs shared grid; per-axis grids coexist; provenance records each.
+- [X] T018 [P] [US3] Write `src/tests/audio/workflows/audio_analysis/frame_posteriors_test.py`: synthetic `FramePosterior`, assert `mean_posterior_in_window` returns correct mean + within-window std over overlapping frames; empty overlap → nan handled.
+- [X] T019 [P] [US3] Write `src/tests/audio/workflows/audio_analysis/grid_test.py`: `presence_grid` default (0.1/0.02) yields expected bucket count vs shared grid; per-axis grids coexist; provenance records each.
 
 ### Implementation for User Story 3
 
-- [ ] T020 [P] [US3] Implement `frame_posteriors.py`: `extract_speech_frame_posteriors(...)` from `pyannote/segmentation-3.0` raw scores (`Model.from_pretrained`+`Inference`, max over speaker/powerset axis), `FramePosterior` dataclass, `mean_posterior_in_window` helper; `ensure_hf_model`/`local_files_only`; null-safe (contracts/frame_posteriors.md).
-- [ ] T021 [US3] Add `presence_grid: BucketGrid | None = None` to `compute_uncertainty_axes` (default 0.1/0.02), mirroring `utterance_grid` plumbing (resolve, thread into `harvest_presence_votes`, record in provenance).
-- [ ] T022 [US3] Add frame-posterior voters to `presence.py` per-bucket votes: seg-3.0 (T020) + Brouhaha VAD head (reuse T007 `BrouhahaFrames.vad`), each `mean_posterior_in_window` → `_vote_from_pvoice(mean, mean>=0.5)`; within-window std feeds uncertainty.
-- [ ] T023 [US3] Coarse-voter demotion in `presence.py`/`aggregate.py`: down-weight voters whose native resolution (via `_native_classification_grid`) is coarser than the reporting grid to a single context-prior term instead of an equal per-bucket vote (FR-014); add aggregate test.
-- [ ] T024 [US3] Surface `presence_confidence` (= `presence_p_voice`, already computed at `compute.py:259`) and `presence_uncertainty` (= `aggregate_presence`) as columns on presence rows; keep `aggregated_uncertainty` identical (FR-013, SC-008).
-- [ ] T025 [US3] Add `--presence-grid-win`/`--presence-grid-hop` to `scripts/analyze_audio.py`, wiring the new `presence_grid` (contracts/cli.md).
+- [X] T020 [P] [US3] Implement `frame_posteriors.py`: `extract_speech_frame_posteriors(...)` from `pyannote/segmentation-3.0` raw scores (`Model.from_pretrained`+`Inference`, max over speaker/powerset axis), `FramePosterior` dataclass, `mean_posterior_in_window` helper; `ensure_hf_model`/`local_files_only`; null-safe (contracts/frame_posteriors.md).
+- [X] T021 [US3] Add `presence_grid: BucketGrid | None = None` to `compute_uncertainty_axes` (default 0.1/0.02), mirroring `utterance_grid` plumbing (resolve, thread into `harvest_presence_votes`, record in provenance).
+- [X] T022 [US3] Add frame-posterior voters to `presence.py` per-bucket votes: seg-3.0 (T020) + Brouhaha VAD head (reuse T007 `BrouhahaFrames.vad`), each `mean_posterior_in_window` → `_vote_from_pvoice(mean, mean>=0.5)`; within-window std feeds uncertainty.
+- [X] T023 [US3] Coarse-voter demotion in `presence.py`/`aggregate.py`: down-weight voters whose native resolution (via `_native_classification_grid`) is coarser than the reporting grid to a single context-prior term instead of an equal per-bucket vote (FR-014); add aggregate test.
+- [X] T024 [US3] Surface `presence_confidence` (= `presence_p_voice`, already computed at `compute.py:259`) and `presence_uncertainty` (= `aggregate_presence`) as columns on presence rows; keep `aggregated_uncertainty` identical (FR-013, SC-008).
+- [X] T025 [US3] Add `--presence-grid-win`/`--presence-grid-hop` to `scripts/analyze_audio.py`, wiring the new `presence_grid` (contracts/cli.md).
 
 **Checkpoint**: US1–US3 independently functional; presence reports on the fine grid with the split.
 

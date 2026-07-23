@@ -29,92 +29,35 @@ def _normalize_transcript_for_wer(text: str) -> str:
 # ── presence ──────────────────────────────────────────────────────────
 
 
-def aggregate_presence(votes: dict[str, dict[str, Any]]) -> float | None:
-    """Calibrated "is voice present?" uncertainty in ``[0, 1]``.
+def _weighted_p_voice(votes: dict[str, dict[str, Any]]) -> float | None:
+    """Weighted mean per-voter probability of voice for one bucket, or ``None``.
 
-    The presence question is binary, but the goal is *not* to measure
-    disagreement among voters (Shannon entropy did that) — it's to tell the
-    user whether voice is present and how strongly the evidence supports
-    that conclusion. A 6-of-8 split should read as "moderate evidence for
-    voice", not "high uncertainty".
+    Each voter maps ``(speaks, native_confidence)`` to a per-voter voice
+    probability, then contributes with its optional ``weight`` (default 1.0):
 
-    Algorithm:
+    - ``native_confidence`` ``c`` with ``speaks=True`` → ``p = c``;
+      with ``speaks=False`` → ``p = 1 - c``.
+    - No ``native_confidence`` → ``p = 1.0`` if ``speaks`` else ``0.0``.
+    - ``hallucinated`` → ``p = 0.1`` (vote against voice).
 
-    1. For each voter, derive a per-voter probability of voice:
-
-       - With ``native_confidence`` ``c`` and ``speaks=True``: ``p = c``
-         (the model says "voice with confidence c").
-       - With ``native_confidence`` ``c`` and ``speaks=False``: ``p = 1 - c``
-         (the model says "silence with confidence c", so voice prob is ``1-c``).
-       - Without ``native_confidence``: ``p = 1.0`` if ``speaks=True``, else
-         ``0.0`` (binary vote — the model is fully committed either way).
-
-    2. ``p_voice = mean(per-voter probabilities)`` — equal weight per voter.
-       Models with a ``native_confidence`` that aren't sure pull ``p_voice``
-       toward 0.5 even when their boolean ``speaks`` flips one way; binary-only
-       voters get equal weight to confidence-bearing ones.
-
-    3. Uncertainty = ``1 − |2 · p_voice − 1|``: 0 when all evidence agrees
-       (either way), 1 at a perfect 50/50 split. Whether voice is more likely
-       present or absent is recoverable from ``p_voice`` itself; this metric
-       only grades how decisive the evidence is.
+    ``weight`` lets a caller demote coarse voters (whole-window scene tags,
+    per-segment no-speech probability, sentence-level ASR) on fine reporting
+    grids without dropping them (FR-014). When every weight is 1.0 (the
+    default) this is the plain mean, so existing outputs are unchanged.
     """
-    p_voice_per_voter: list[float] = []
-
+    num = 0.0
+    den = 0.0
     for v in votes.values():
-        if not isinstance(v, dict):
-            continue
-        if "speaks" not in v:
+        if not isinstance(v, dict) or "speaks" not in v:
             continue
         speak_val = v.get("speaks")
         if speak_val is None:
             continue
-        raw_nc = v.get("native_confidence")
-        nc: float | None
-        if raw_nc is None:
-            nc = None
-        else:
-            try:
-                nc = max(0.0, min(1.0, float(raw_nc)))
-            except (TypeError, ValueError):
-                nc = None
-        # ASR hallucination flag: the voter said "speaks" but the model's own
-        # silence head says otherwise — treat as a vote AGAINST voice instead
-        # of for it (reflecting that the transcript came from a hallucination,
-        # not actual audio content).
-        if v.get("hallucinated"):
-            p_voter = 0.1  # near-zero with a hint of caution rather than full 0
-        elif nc is None:
-            p_voter = 1.0 if speak_val else 0.0
-        else:
-            p_voter = nc if speak_val else (1.0 - nc)
-        p_voice_per_voter.append(p_voter)
-
-    if not p_voice_per_voter:
-        return None
-    p_voice = sum(p_voice_per_voter) / len(p_voice_per_voter)
-    return max(0.0, min(1.0, 1.0 - abs(2.0 * p_voice - 1.0)))
-
-
-def presence_p_voice(votes: dict[str, dict[str, Any]]) -> float | None:
-    """Return the calibrated probability of voice ``p_voice`` for one bucket.
-
-    Same per-voter math as ``aggregate_presence`` (each voter's
-    ``(speaks, native_confidence)`` mapped to a ``p_voice`` contribution then
-    averaged), but returns the raw probability instead of the symmetric
-    uncertainty derived from it. Used to MASK identity / utterance buckets
-    where we are confident there is no speech: when ``p_voice`` is near zero,
-    the speaker / transcript axes are not meaningfully measurable for that
-    bucket and their per-bucket uncertainty is downweighted.
-    """
-    p_voice_per_voter: list[float] = []
-    for v in votes.values():
-        if not isinstance(v, dict):
-            continue
-        if "speaks" not in v:
-            continue
-        speak_val = v.get("speaks")
-        if speak_val is None:
+        try:
+            weight = float(v.get("weight", 1.0))
+        except (TypeError, ValueError):
+            weight = 1.0
+        if weight <= 0:
             continue
         raw_nc = v.get("native_confidence")
         nc: float | None
@@ -131,10 +74,40 @@ def presence_p_voice(votes: dict[str, dict[str, Any]]) -> float | None:
             p_voter = 1.0 if speak_val else 0.0
         else:
             p_voter = nc if speak_val else (1.0 - nc)
-        p_voice_per_voter.append(p_voter)
-    if not p_voice_per_voter:
+        num += weight * p_voter
+        den += weight
+    if den <= 0:
         return None
-    return sum(p_voice_per_voter) / len(p_voice_per_voter)
+    return num / den
+
+
+def aggregate_presence(votes: dict[str, dict[str, Any]]) -> float | None:
+    """Calibrated "is voice present?" uncertainty in ``[0, 1]``.
+
+    The presence question is binary, but the goal is *not* to measure
+    disagreement among voters — it's how decisively the evidence supports a
+    conclusion. Uncertainty = ``1 − |2 · p_voice − 1|``: 0 when all evidence
+    agrees (either way), 1 at a perfect 50/50 split. Whether voice is more
+    likely present or absent is recoverable from ``p_voice`` itself
+    (``presence_p_voice``); this metric only grades decisiveness. See
+    ``_weighted_p_voice`` for the per-voter math (weights default to 1.0, so
+    this matches the historical unweighted behavior).
+    """
+    p_voice = _weighted_p_voice(votes)
+    if p_voice is None:
+        return None
+    return max(0.0, min(1.0, 1.0 - abs(2.0 * p_voice - 1.0)))
+
+
+def presence_p_voice(votes: dict[str, dict[str, Any]]) -> float | None:
+    """Return the calibrated probability of voice ``p_voice`` for one bucket.
+
+    Same per-voter math as ``aggregate_presence`` but returns the raw
+    probability rather than the symmetric uncertainty. Used both as the
+    presence-axis ``presence_confidence`` column and to MASK identity /
+    utterance buckets where we are confident there is no speech.
+    """
+    return _weighted_p_voice(votes)
 
 
 # ── identity ──────────────────────────────────────────────────────────
