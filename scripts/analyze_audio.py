@@ -26,14 +26,15 @@ task where the registry offers more than one).
     **google/yamnet**                              (TF subprocess venv)
 
   speech_to_text (in defaults; mix of native-timestamp and post-aligned):
-    **openai/whisper-large-v3-turbo**              (HFModel, 809M, multilingual; native timestamps)
-    **ibm-granite/granite-speech-3.3-8b**          (~9B, EN + 7 translations; text-only, post-aligned by this script)
+    **nyralabs/CrisperWhisper2.0_turbo**           (crisperwhisper CT2 subprocess venv; verbatim, native word
+                                                    timestamps + per-word confidence)
     **nvidia/canary-qwen-2.5b**                    (NeMo SALM subprocess venv, 2.5B; text-only, post-aligned)
     **Qwen/Qwen3-ASR-1.7B**                        (qwen-asr subprocess venv, 1.7B; native word timestamps via
                                                     Qwen3-ForcedAligner-0.6B companion)
 
   speech_to_text (additional, available via --asr-models):
-    openai/whisper-large-v3                        (HFModel, 1.55B, multilingual; native timestamps)
+    openai/whisper-large-v3-turbo                  (HFModel, 809M, multilingual; native timestamps)
+    ibm-granite/granite-speech-3.3-8b              (~9B, EN + 7 translations; text-only, post-aligned)
     openai/whisper-small                           (HFModel, 244M; native timestamps)
     nvidia/stt_en_conformer_ctc_large              (NeMo subprocess venv, English-only; native CTC timestamps)
 
@@ -215,24 +216,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--asr-models",
         nargs="+",
         default=[
-            # Confirmed working through senselab today:
-            "openai/whisper-large-v3-turbo",
-            # Routes through the existing HF pipeline path with
-            # return_timestamps=False (timestamp-less HF model known-list);
-            # the script's auto-align stage adds per-segment timestamps via MMS:
-            "ibm-granite/granite-speech-3.3-8b",
-            # Both routed through dedicated subprocess venvs. Per-model
-            # failures are captured in JSON without aborting the run.
+            # CrisperWhisper 2.0 turbo — verbatim, word-level timestamps + native
+            # per-word confidence, via the crisperwhisper CT2 subprocess venv.
+            "nyralabs/CrisperWhisper2.0_turbo",
+            # Text-only NeMo SALM (subprocess venv); auto-aligned downstream.
             "nvidia/canary-qwen-2.5b",
+            # Native word timestamps via the bundled Qwen3-ForcedAligner companion
+            # (subprocess venv). Per-model failures are captured in JSON, non-fatal.
             "Qwen/Qwen3-ASR-1.7B",
         ],
         help=(
-            "ASR models. Defaults: Whisper Large v3 Turbo (native timestamps), "
-            "IBM Granite Speech 3.3 8B (text-only via HF pipeline; auto-aligned "
-            "by this script), NVIDIA Canary-Qwen 2.5B (text-only, auto-aligned), "
-            "and Qwen3-ASR 1.7B (native word-level timestamps via the bundled "
-            "forced-aligner companion). The script auto-aligns timestamp-less "
-            "ASR output via the multilingual aligner; pass --no-align-asr to skip."
+            "ASR models. Defaults: CrisperWhisper 2.0 turbo (verbatim, native word "
+            "timestamps + confidence), NVIDIA Canary-Qwen 2.5B (text-only, "
+            "auto-aligned), and Qwen3-ASR 1.7B (native word timestamps via the "
+            "bundled Qwen3-ForcedAligner companion). Timestamp-less ASR output is "
+            "auto-aligned by the script; pass --no-align-asr to skip."
         ),
     )
     parser.add_argument(

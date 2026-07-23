@@ -9,6 +9,7 @@ from typing import Any, List, Optional
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speech_to_text.canary_qwen import CanaryQwenASR
+from senselab.audio.tasks.speech_to_text.crisperwhisper import CrisperWhisperASR
 from senselab.audio.tasks.speech_to_text.granite import GraniteSpeechASR
 from senselab.audio.tasks.speech_to_text.huggingface import HuggingFaceASR
 from senselab.audio.tasks.speech_to_text.nemo import NeMoASR
@@ -29,6 +30,12 @@ _CANARY_PREFIXES = ("nvidia/canary-",)
 # (qwen.py) that uses Alibaba's qwen-asr Python wrapper plus the optional
 # Qwen3-ForcedAligner companion for word-level timestamps.
 _QWEN_ASR_PREFIXES = ("Qwen/Qwen3-ASR",)
+
+# CrisperWhisper 2.0 prefix — route to a separate CT2 subprocess venv
+# (crisperwhisper.py) using the `crisperwhisper` package. Verbatim transcription
+# with native word timestamps + per-word confidence. (v1 "nyralabs/CrisperWhisper"
+# is plain transformers and still goes through the HuggingFaceASR path.)
+_CRISPER_PREFIXES = ("nyralabs/CrisperWhisper2.0",)
 
 # IBM Granite Speech prefix — route to a separate granite subprocess venv
 # (granite.py). Granite uses GraniteSpeechProcessor's (text, audio, device)
@@ -134,6 +141,13 @@ def transcribe_audios(
             if "forced_aligner" in kwargs:
                 qwen_kwargs["forced_aligner"] = kwargs.pop("forced_aligner")
             return QwenASR.transcribe_with_qwen(audios=audios, model=model, device=device, **qwen_kwargs)
+        elif isinstance(model, HFModel) and str(model.path_or_uri).startswith(_CRISPER_PREFIXES):
+            crisper_kwargs: dict[str, Any] = {}
+            if "language" in kwargs:
+                crisper_kwargs["language"] = kwargs.pop("language")
+            return CrisperWhisperASR.transcribe_with_crisperwhisper(
+                audios=audios, model=model, device=device, **crisper_kwargs
+            )
         elif isinstance(model, HFModel) and str(model.path_or_uri).startswith(_GRANITE_PREFIXES):
             return GraniteSpeechASR.transcribe_with_granite(audios=audios, model=model, device=device)
         elif isinstance(model, HFModel):
