@@ -25,6 +25,22 @@ from senselab.audio.workflows.audio_analysis import (
     compute_uncertainty_axes,
 )
 
+
+@pytest.fixture(autouse=True)
+def _no_brouhaha(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep these end-to-end tests offline.
+
+    ``compute_uncertainty_axes`` defaults to ``scene_quality=True``, which would
+    otherwise try to load the gated ``pyannote/brouhaha`` model. Stub the loader
+    to report the model as unavailable so the workflow exercises its null-safe
+    quality path (FR-023) without any Hub call. Individual tests can re-patch it
+    to inject synthetic frames.
+    """
+    import senselab.audio.tasks.scene_quality as sq
+
+    monkeypatch.setattr(sq, "extract_brouhaha_frames", lambda audios, *a, **k: [None] * len(audios))
+
+
 # ── Test fixture builders ─────────────────────────────────────────────
 
 
@@ -437,3 +453,69 @@ def test_identity_robust_to_diar_label_naming_conventions() -> None:
         # but that's not what drives the aggregation.
         assert py["speaker_label"].startswith("SPEAKER_")
         assert sf["speaker_label"].startswith("speaker_")
+
+
+# ── US1: scene-quality columns wired into presence rows ───────────────
+
+
+def _noise_audio(duration_s: float, sr: int = 16000) -> Audio:
+    import torch
+
+    rng = np.random.default_rng(0)
+    y = (0.1 * rng.standard_normal(int(duration_s * sr))).astype(np.float32)
+    return Audio(waveform=torch.tensor(y).reshape(1, -1), sampling_rate=sr)
+
+
+def test_presence_rows_carry_quality_columns_when_brouhaha_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    """US1: with Brouhaha frames available, presence rows expose quality_* columns."""
+    import senselab.audio.tasks.scene_quality as sq
+    from senselab.audio.tasks.scene_quality.brouhaha import BrouhahaFrames
+
+    n = int(2.0 / 0.02)
+    frames = BrouhahaFrames(vad=np.ones(n), snr_db=np.full(n, 25.0), c50_db=np.full(n, 28.0), frame_hop_s=0.02)
+    monkeypatch.setattr(sq, "extract_brouhaha_frames", lambda audios, *a, **k: [frames] * len(audios))
+
+    raw_pass = {
+        "duration_s": 2.0,
+        "diarization": {"by_model": {"pyannote": _diar_block([(0.0, 2.0, "SPEAKER_00")])}},
+    }
+    axis_results, _, _ = compute_uncertainty_axes(
+        passes={"raw_16k": raw_pass},
+        grid=BucketGrid(win_length=0.5, hop_length=0.5),
+        params={},
+        audio={"raw_16k": _noise_audio(2.0)},
+        speaker_embedding_models=[],
+        aggregator="min",
+        speech_presence_labels=["Speech"],
+    )
+    presence = axis_results[("raw_16k", "presence")]
+    assert presence.rows
+    assert any(r.quality_snr is not None for r in presence.rows)
+    for r in presence.rows:
+        for v in (r.quality_snr, r.quality_reverb, r.quality_bandwidth):
+            assert v is None or 0.0 <= v <= 1.0
+    prov = presence.provenance["scene_quality"]
+    assert prov["enabled"] is True
+    assert prov["model"]["available"] is True
+
+
+def test_presence_quality_null_when_scene_quality_disabled() -> None:
+    """scene_quality=False → no quality columns, no model load."""
+    raw_pass = {
+        "duration_s": 2.0,
+        "diarization": {"by_model": {"pyannote": _diar_block([(0.0, 2.0, "SPEAKER_00")])}},
+    }
+    axis_results, _, _ = compute_uncertainty_axes(
+        passes={"raw_16k": raw_pass},
+        grid=BucketGrid(win_length=0.5, hop_length=0.5),
+        params={},
+        audio={"raw_16k": _noise_audio(2.0)},
+        speaker_embedding_models=[],
+        aggregator="min",
+        speech_presence_labels=["Speech"],
+        scene_quality=False,
+    )
+    presence = axis_results[("raw_16k", "presence")]
+    assert presence.rows
+    assert all(r.quality_snr is None for r in presence.rows)
+    assert presence.provenance["scene_quality"]["enabled"] is False

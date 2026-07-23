@@ -55,6 +55,7 @@ def compute_uncertainty_axes(
     aggregator: str,
     speech_presence_labels: list[str],
     utterance_grid: BucketGrid | None = None,
+    scene_quality: bool = True,
     embedding_window_s: float = 2.0,
     embedding_hop_s: float = 1.0,
     same_speaker_floor: float = 0.30,
@@ -83,6 +84,10 @@ def compute_uncertainty_axes(
         utterance_grid: Optional separate bucket grid for the utterance axis (typically
             wider + overlapping than the shared grid so most words land fully inside at
             least one bucket). When ``None``, the shared ``grid`` is reused for utterance.
+        scene_quality: When True (default), compute per-bucket audio-quality degradation
+            scores (SNR / clipping / reverb / bandwidth + estimator-spread uncertainty)
+            via Brouhaha + existing DSP metrics and attach them as additive columns on
+            the presence rows. Null-safe when the model / audio is unavailable (FR-023).
         embedding_window_s: Window length (seconds) for fixed-grid speaker-embedding
             extraction. Defaults to 2.0 s (ECAPA's recommended minimum).
         embedding_hop_s: Window hop (seconds) for fixed-grid speaker-embedding
@@ -248,6 +253,37 @@ def compute_uncertainty_axes(
             alignment_by_model=align_by_model,
             per_window_embeddings=per_window_embeddings_by_pass.get(pass_label),
         )
+
+        # Scene quality (US1): per-bucket SNR / clipping / reverb / bandwidth
+        # degradation + estimator-spread uncertainty. Computed once per pass
+        # (Brouhaha inference on the whole audio, then bucketed). Additive to the
+        # presence rows; null when the model / audio is unavailable (FR-023).
+        quality_by_bucket: dict[tuple[float, float], dict[str, Any]] = {}
+        scene_quality_provenance: dict[str, Any] = {"enabled": bool(scene_quality)}
+        if scene_quality and per_pass_audio is not None:
+            from senselab.audio.tasks.scene_quality import extract_brouhaha_frames
+            from senselab.audio.tasks.scene_quality.brouhaha import BROUHAHA_MODEL_ID, BROUHAHA_REVISION
+            from senselab.audio.workflows.audio_analysis.quality import (
+                QUALITY_ANALYSIS_HOP_S,
+                QUALITY_ANALYSIS_WIN_S,
+                harvest_quality_scores,
+            )
+
+            brouhaha_frames = extract_brouhaha_frames([per_pass_audio])[0]
+            for q in harvest_quality_scores(audio=per_pass_audio, brouhaha=brouhaha_frames, grid=grid):
+                quality_by_bucket[(round(q["start"], 6), round(q["end"], 6))] = q
+            scene_quality_provenance.update(
+                {
+                    "analysis_win_length": QUALITY_ANALYSIS_WIN_S,
+                    "analysis_hop_length": QUALITY_ANALYSIS_HOP_S,
+                    "model": {
+                        "id": BROUHAHA_MODEL_ID,
+                        "revision": BROUHAHA_REVISION,
+                        "available": brouhaha_frames is not None,
+                    },
+                }
+            )
+
         presence_rows: list[UncertaintyRow] = []
         # Map bucket-start → presence p_voice so identity / utterance can
         # mask their per-bucket uncertainty by "we are confident there's
@@ -259,6 +295,12 @@ def compute_uncertainty_axes(
             p_v = presence_p_voice(bucket["votes"])
             if u is None and not bucket["votes"]:
                 continue
+            quality = quality_by_bucket.get((round(bucket["start"], 6), round(bucket["end"], 6)))
+            votes = bucket["votes"]
+            if quality is not None:
+                # Stash raw estimator values for reviewers; the "__"-prefixed key is
+                # excluded from contributing_models below.
+                votes = {**votes, "__quality__": quality.get("_raw", {})}
             # Presence axis itself isn't masked — it IS the mask source.
             presence_rows.append(
                 UncertaintyRow(
@@ -266,11 +308,16 @@ def compute_uncertainty_axes(
                     end=bucket["end"],
                     axis="presence",
                     aggregated_uncertainty=u,
-                    contributing_models=sorted(bucket["votes"].keys()),
-                    model_votes=bucket["votes"],
+                    contributing_models=sorted(k for k in votes if not k.startswith("__")),
+                    model_votes=votes,
                     comparison_status="ok" if u is not None else "incomparable",
                     raw_aggregated_uncertainty=u,
                     intensity_weight=1.0,
+                    quality_snr=quality.get("quality_snr") if quality else None,
+                    quality_clip=quality.get("quality_clip") if quality else None,
+                    quality_reverb=quality.get("quality_reverb") if quality else None,
+                    quality_bandwidth=quality.get("quality_bandwidth") if quality else None,
+                    quality_uncertainty=quality.get("quality_uncertainty") if quality else None,
                 )
             )
             if p_v is not None:
@@ -301,6 +348,7 @@ def compute_uncertainty_axes(
                 "grid": {"win_length": grid.win_length, "hop_length": grid.hop_length},
                 "comparator_params": params,
                 "contributing_model_set": sorted({m for b in presence_votes for m in b["votes"]}),
+                "scene_quality": scene_quality_provenance,
             },
         )
 
