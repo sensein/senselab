@@ -390,20 +390,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--cross-stream-win-length",
         type=float,
-        default=0.5,
+        default=0.25,
         help=(
-            "Window length (seconds) for cross-stream / within-stream comparisons "
-            "(presence + identity axes). Default 0.5 s non-overlapping; finer grids "
-            "over-resolve the underlying signals (Whisper word-level ≈ 20 ms but "
-            "pyannote frames ≈ 62.5 ms, AST window 10.24 s). Utterance has its own grid — "
-            "see ``--utterance-win-length``."
+            "Window length (seconds) for the identity axis / cross-stream / within-stream "
+            "comparisons. Default 0.25 s overlapping — fine enough to localize sub-second "
+            "speaker turns (multi-speaker clips routinely have 0.3-1 s turns). Presence has "
+            "its own finer grid (``--presence-grid-*``) and utterance its own wider one "
+            "(``--utterance-win-length``)."
         ),
     )
     parser.add_argument(
         "--cross-stream-hop-length",
         type=float,
-        default=0.5,
-        help="Hop between cross-stream comparison windows (default 0.5 s, non-overlapping; must be <= win-length).",
+        default=0.25,
+        help="Hop between identity/cross-stream windows (default 0.25 s; must be <= win-length).",
     )
     parser.add_argument(
         "--utterance-win-length",
@@ -471,8 +471,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--embedding-hop-s",
         type=float,
-        default=0.5,
-        help="Hop between embedding windows. Defaults to 0.5 s. Must be <= --embedding-window-s.",
+        default=0.25,
+        help=(
+            "Hop between embedding windows (default 0.25 s). The 1 s window is the ECAPA "
+            "minimum for a reliable embedding, but a 0.25 s hop samples it densely so "
+            "speaker-change boundaries localize to ~0.25 s. Must be <= --embedding-window-s."
+        ),
     )
     parser.add_argument(
         "--identity-same-speaker-floor",

@@ -46,7 +46,12 @@ _DEFAULT_SNR_CLEAN_DB = 30.0
 _DEFAULT_SNR_FLOOR_DB = 0.0
 _DEFAULT_C50_CLEAN_DB = 30.0
 _DEFAULT_C50_FLOOR_DB = -5.0
-_DEFAULT_BANDWIDTH_ROLLOFF_PCT = 0.85
+# Upper spectral edge, not voiced-energy tilt: an 85% roll-off sits at the
+# voiced-energy concentration (~1-2 kHz) even for full-band speech and would
+# flag every recording as band-limited. A high percentile tracks the actual
+# top of the spectrum, so full-band speech reads ~clean and telephone/codec
+# band-limiting (energy truncated at ~3.4 kHz) reads high.
+_DEFAULT_BANDWIDTH_ROLLOFF_PCT = 0.95
 # SNR-estimator spread (dB) that maps to full quality-uncertainty (=1.0).
 _SNR_SPREAD_REF_DB = 15.0
 # Below this RMS the slice is treated as silence → quality is undefined (null).
