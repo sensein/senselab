@@ -137,16 +137,40 @@ def test_null_safe_without_brouhaha() -> None:
     assert any(r["quality_bandwidth"] is not None for r in rows)
 
 
-def test_brouhaha_null_safe_when_model_construction_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    """FR-023: a gated/inaccessible Brouhaha (ValidationError at construction) → [None], no raise."""
-    if not brouhaha_mod.PYANNOTEAUDIO_AVAILABLE:
-        pytest.skip("pyannote-audio not installed")
+def test_brouhaha_null_safe_when_venv_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FR-023: if the Brouhaha venv can't be built, extract → [None], no raise."""
 
     def _boom(*args: object, **kwargs: object) -> None:
-        raise ValueError("gated repo — not in authorized list")
+        raise RuntimeError("uv failed to build the brouhaha venv")
 
-    monkeypatch.setattr(brouhaha_mod, "PyannoteAudioModel", _boom)
+    monkeypatch.setattr(brouhaha_mod, "ensure_venv", _boom)
     assert brouhaha_mod.extract_brouhaha_frames([_audio(_white_noise(0.5))]) == [None]
+
+
+def test_brouhaha_assembles_frames_from_worker_output(monkeypatch: pytest.MonkeyPatch, tmp_path: object) -> None:
+    """The subprocess results (per-chunk .npy) are loaded + stitched into BrouhahaFrames."""
+    import numpy as np
+
+    # Fake the venv + worker: write one chunk .npy and return a matching result.
+    npy = tmp_path / "chunk_0_0.npy"  # type: ignore[operator]
+    frames = np.stack([np.full(50, 0.9), np.full(50, 22.0), np.full(50, 27.0)], axis=1)  # (50, 3)
+    np.save(npy, frames)
+
+    monkeypatch.setattr(brouhaha_mod, "ensure_venv", lambda *a, **k: "/fake/venv")
+    monkeypatch.setattr(brouhaha_mod, "venv_python", lambda *a, **k: "/fake/venv/bin/python")
+    monkeypatch.setattr(
+        brouhaha_mod,
+        "parse_subprocess_result",
+        lambda *a, **k: {"results": [{"npy": str(npy), "start_s": 0.0, "audio_idx": 0, "hop": 0.02}]},
+    )
+    monkeypatch.setattr(brouhaha_mod.subprocess, "run", lambda *a, **k: None)
+
+    out = brouhaha_mod.extract_brouhaha_frames([_audio(_white_noise(1.0))])
+    assert len(out) == 1
+    bf = out[0]
+    assert bf is not None
+    assert abs(bf.frame_hop_s - 0.02) < 1e-9
+    assert np.allclose(bf.vad, 0.9) and np.allclose(bf.snr_db, 22.0) and np.allclose(bf.c50_db, 27.0)
 
 
 def test_silence_bucket_yields_null_quality() -> None:

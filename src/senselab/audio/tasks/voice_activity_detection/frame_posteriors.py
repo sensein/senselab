@@ -15,7 +15,6 @@ Hub (constitution VI). No new dependency.
 
 from __future__ import annotations
 
-import math
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
@@ -125,6 +124,40 @@ _CHUNK_S = 10.0
 _CHUNK_STEP_S = 8.0  # 2 s overlap → smooth stitching across chunk seams
 
 
+def stitch_frames(
+    chunk_arrays: list[np.ndarray],
+    chunk_starts_s: list[float],
+    hop_s: float,
+) -> np.ndarray:
+    """Overlap-average per-chunk ``(frames, C)`` arrays into one continuous timeline.
+
+    Each chunk's frame ``i`` maps to absolute frame index ``round(start/hop) + i``;
+    indices covered by multiple (overlapping) chunks are averaged. Trailing
+    uncovered frames are trimmed. Returns a ``(num_frames, C)`` array. Pure /
+    model-free so it is shared by the in-process extractor and the Brouhaha
+    subprocess path.
+    """
+    if not chunk_arrays or hop_s <= 0:
+        return np.zeros((0, 1))
+    norm = [a[:, None] if a.ndim == 1 else a for a in chunk_arrays]
+    n_classes = norm[0].shape[1]
+    n_global = 0
+    for arr, t0 in zip(norm, chunk_starts_s):
+        n_global = max(n_global, int(round(t0 / hop_s)) + arr.shape[0])
+    accum = np.zeros((n_global, n_classes), dtype=np.float64)
+    count = np.zeros(n_global, dtype=np.float64)
+    for arr, t0 in zip(norm, chunk_starts_s):
+        base = int(round(t0 / hop_s))
+        for i in range(arr.shape[0]):
+            g = base + i
+            if 0 <= g < n_global:
+                accum[g] += arr[i]
+                count[g] += 1
+    covered = np.nonzero(count > 0)[0]
+    last = int(covered[-1]) + 1 if covered.size else 0
+    return accum[:last] / np.maximum(count[:last, None], 1.0)
+
+
 def chunked_frame_inference(
     inference: "Inference",
     audio: Audio,
@@ -152,36 +185,23 @@ def chunked_frame_inference(
         h, w = _frame_grid(inference, arr.shape[0], max(dur, 1e-9))
         return arr, h, w
 
-    n_global = int(math.floor(dur / hop)) + 1
-    accum: Optional[np.ndarray] = None
-    count = np.zeros(n_global, dtype=np.float64)
     chunk_samples = int(chunk_s * sr)
     step_samples = max(1, int(step_s * sr))
+    chunk_arrays: list[np.ndarray] = []
+    chunk_starts_s: list[float] = []
     start = 0
     while start < total:
         end = min(total, start + chunk_samples)
         if end - start < int(0.1 * sr):  # skip a sub-100ms tail sliver
             break
         arr = _output_to_array(inference({"waveform": audio.waveform[:, start:end], "sample_rate": sr}))
-        if arr.ndim == 1:
-            arr = arr[:, None]
-        if accum is None:
-            accum = np.zeros((n_global, arr.shape[1]), dtype=np.float64)
-        base = int(round((start / sr) / hop))
-        for i in range(arr.shape[0]):
-            g = base + i
-            if 0 <= g < n_global:
-                accum[g] += arr[i]
-                count[g] += 1
+        chunk_arrays.append(arr)
+        chunk_starts_s.append(start / sr)
         if end >= total:
             break
         start += step_samples
 
-    if accum is None:
-        return np.zeros((0, 1)), hop, win
-    covered = np.nonzero(count > 0)[0]
-    last = int(covered[-1]) + 1 if covered.size else 0
-    data = accum[:last] / np.maximum(count[:last, None], 1.0)
+    data = stitch_frames(chunk_arrays, chunk_starts_s, hop)
     return data, hop, win
 
 
