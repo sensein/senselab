@@ -3,10 +3,15 @@
 from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.speaker_diarization.child_adult import diarize_audios_with_child_adult
 from senselab.audio.tasks.speaker_diarization.nvidia import diarize_audios_with_nvidia_sortformer
 from senselab.audio.tasks.speaker_diarization.pyannote import diarize_audios_with_pyannote
+from senselab.audio.tasks.speaker_diarization.vibevoice import diarize_audios_with_vibevoice
 from senselab.utils.compatibility import requires_compatibility
 from senselab.utils.data_structures import DeviceType, HFModel, PyannoteAudioModel, ScriptLine, SenselabModel
+
+_VIBEVOICE_PREFIXES = ("microsoft/VibeVoice",)
+_CHILD_ADULT_PREFIXES = ("AlexXu811/whisper-child-adult",)
 
 
 @requires_compatibility("audio.tasks.speaker_diarization.diarize_audios")
@@ -20,11 +25,20 @@ def diarize_audios(
 ) -> List[List[ScriptLine]]:
     """Diarize a batch of `Audio` objects, returning per-speaker time segments.
 
-    Supports **Pyannote** (default) and **NVIDIA Sortformer** (HF) backends:
+    Supports **Pyannote** (default), **NVIDIA Sortformer**, **VibeVoice-ASR-HF**, and
+    **USC-SAIL child-adult** (HF-identified) backends:
     - If `model` is a `PyannoteAudioModel`, uses Pyannote (typically expects **mono, 16 kHz**).
       Optional `num_speakers` or (`min_speakers`, `max_speakers`) are honored.
     - If `model` is an `HFModel` and `model.path_or_uri` starts with `"nvidia/diar_sortformer"`,
-    uses NVIDIA Sortformer via Docker (nvidia/diar_sortformer_4spk-v1 detects max **4 speakers**).
+      uses NVIDIA Sortformer via an isolated subprocess venv (nvidia/diar_sortformer_4spk-v1
+      detects max **4 speakers**).
+    - If `model` is an `HFModel` and `model.path_or_uri` starts with `"microsoft/VibeVoice"`,
+      uses VibeVoice-ASR-HF in-process (``transformers>=5.3``'s
+      ``VibeVoiceAsrForConditionalGeneration``).
+    - If `model` is an `HFModel` and `model.path_or_uri` starts with
+      `"AlexXu811/whisper-child-adult"`, uses the USC-SAIL child-adult classifier via an
+      isolated subprocess venv (speaker labels are `"CHILD"`/`"ADULT"`/`"OVERLAP"`/`"SILENCE"`
+      rather than speaker identities; **CUDA only**, see ``child_adult.py``).
 
     Args:
         audios (list[Audio]):
@@ -32,7 +46,9 @@ def diarize_audios(
         model (SenselabModel | None):
             Diarization backend:
               * ``PyannoteAudioModel(...)`` → Pyannote (default if ``None``).
-              * ``HFModel(...)`` → NVIDIA Sortformer.
+              * ``HFModel(path_or_uri="nvidia/diar_sortformer...")`` → NVIDIA Sortformer.
+              * ``HFModel(path_or_uri="microsoft/VibeVoice...")`` → VibeVoice-ASR-HF.
+              * ``HFModel(path_or_uri="AlexXu811/whisper-child-adult")`` → USC-SAIL child-adult.
         num_speakers (int | None):
             If known, fix the number of speakers (Pyannote only).
         min_speakers (int | None):
@@ -88,7 +104,20 @@ def diarize_audios(
             model=model,
             device=device,
         )
+    elif isinstance(model, HFModel) and str(model.path_or_uri).startswith(_VIBEVOICE_PREFIXES):
+        return diarize_audios_with_vibevoice(
+            audios=audios,
+            model=model,
+            device=device,
+        )
+    elif isinstance(model, HFModel) and str(model.path_or_uri).startswith(_CHILD_ADULT_PREFIXES):
+        return diarize_audios_with_child_adult(
+            audios=audios,
+            model=model,
+            device=device,
+        )
     else:
         raise NotImplementedError(
-            "Only Pyannote and NVIDIA Sortformer (from HuggingFace) models are supported for now."
+            "Only Pyannote, NVIDIA Sortformer, VibeVoice-ASR-HF, and the USC-SAIL child-adult "
+            "classifier (from HuggingFace) models are supported for now."
         )

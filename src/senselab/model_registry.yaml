@@ -181,6 +181,22 @@
   training_data: NVIDIA proprietary
   recommended_for: 4-speaker diarization (via subprocess venv)
 
+- name: VibeVoice-ASR-HF
+  task: speaker_diarization
+  source: microsoft
+  model_id: microsoft/VibeVoice-ASR-HF
+  parameters: 7B
+  training_data: Microsoft proprietary
+  recommended_for: Unified ASR + diarization (in-process, transformers>=5.3, CUDA recommended)
+
+- name: USC-SAIL Child-Adult Classifier
+  task: speaker_diarization
+  source: usc-sail
+  model_id: AlexXu811/whisper-child-adult
+  parameters: Whisper-base + LoRA
+  training_data: Simulated child-adult conversations
+  recommended_for: Child/adult/overlap speaker-role labeling, not identity (via subprocess venv, CUDA only)
+
 # Speech Emotion Recognition
 - name: SUPERB SER (IEMOCAP)
   task: speech_emotion_recognition

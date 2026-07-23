@@ -41,6 +41,8 @@ All models supported by senselab, organized by task.
 |-------|--------|----------|---------------|------------|-----------------|
 | Pyannote Diarization | pyannote | `pyannote/speaker-diarization-community-1` | — | N/A | Multi-speaker diarization (requires HF token) |
 | NeMo Sortformer | nemo | `nvidia/diar_sortformer_4spk-v1` | — | N/A | 4-speaker diarization (via subprocess venv) |
+| VibeVoice-ASR-HF | microsoft | `microsoft/VibeVoice-ASR-HF` | — | 7B | Unified ASR + diarization (in-process, transformers>=5.3, CUDA recommended) |
+| USC-SAIL Child-Adult Classifier | usc-sail | `AlexXu811/whisper-child-adult` | — | Whisper-base + LoRA | Child/adult/overlap speaker-role labeling, not identity (via subprocess venv, CUDA only) |
 
 ## Speech Emotion Recognition
 

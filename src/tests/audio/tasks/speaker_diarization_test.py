@@ -1,11 +1,13 @@
 """Tests for speaker diarization."""
 
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
 import torch
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.speaker_diarization import api as diarization_api
 from senselab.audio.tasks.speaker_diarization import diarize_audios
 from senselab.audio.tasks.speaker_diarization import pyannote as pyannote_module
 from senselab.audio.tasks.speaker_diarization.pyannote import PyannoteDiarization, diarize_audios_with_pyannote
@@ -17,6 +19,9 @@ if docker_is_running():
     DOCKER_AVAILABLE = True
 else:
     DOCKER_AVAILABLE = False
+
+_CHILD_ADULT_VENV_ROOT = Path.home() / ".cache" / "senselab" / "venvs" / "child-adult-diarization"
+child_adult_venv_present = _CHILD_ADULT_VENV_ROOT.exists()
 
 
 @pytest.fixture
@@ -117,3 +122,64 @@ def test_diarize_stereo_audios_with_pyannote_invalid(
     """Test diarizing audios with unsupported number of channels."""
     with pytest.raises(ValueError):
         diarize_audios(audios=[resampled_stereo_audio_sample], model=pyannote_model, device=cpu_cuda_device)
+
+
+def test_diarize_audios_dispatches_to_vibevoice(monkeypatch: pytest.MonkeyPatch) -> None:
+    """diarize_audios routes a microsoft/VibeVoice* model id to the VibeVoice backend."""
+    sentinel = [[ScriptLine(speaker="0", start=0.0, end=1.0, text="hi")]]
+    mock_fn = Mock(return_value=sentinel)
+    monkeypatch.setattr(diarization_api, "diarize_audios_with_vibevoice", mock_fn)
+
+    model = HFModel(path_or_uri="microsoft/VibeVoice-ASR-HF")
+    result = diarize_audios(audios=[], model=model)
+
+    assert result is sentinel
+    mock_fn.assert_called_once()
+
+
+def test_diarize_audios_dispatches_to_child_adult(monkeypatch: pytest.MonkeyPatch) -> None:
+    """diarize_audios routes the AlexXu811/whisper-child-adult model id to the child-adult backend."""
+    sentinel = [[ScriptLine(speaker="ADULT", start=0.0, end=1.0)]]
+    mock_fn = Mock(return_value=sentinel)
+    monkeypatch.setattr(diarization_api, "diarize_audios_with_child_adult", mock_fn)
+
+    model = HFModel(path_or_uri="AlexXu811/whisper-child-adult")
+    result = diarize_audios(audios=[], model=model)
+
+    assert result is sentinel
+    mock_fn.assert_called_once()
+
+
+@pytest.mark.skip(reason="Downloads a 7B model; run manually on a GPU machine")
+def test_diarize_audios_with_vibevoice(resampled_mono_audio_sample: Audio) -> None:
+    """Test diarizing audios with VibeVoice-ASR-HF."""
+    from senselab.audio.tasks.speaker_diarization.vibevoice import diarize_audios_with_vibevoice
+
+    model = HFModel(path_or_uri="microsoft/VibeVoice-ASR-HF")
+    results = diarize_audios_with_vibevoice(audios=[resampled_mono_audio_sample], model=model)
+    assert len(results) == 1
+    assert all(isinstance(line, ScriptLine) for line in results[0])
+
+
+@pytest.mark.skipif(
+    not child_adult_venv_present,
+    reason=f"child-adult-diarization venv not provisioned at {_CHILD_ADULT_VENV_ROOT}",
+)
+def test_diarize_audios_with_child_adult(resampled_mono_audio_sample: Audio) -> None:
+    """Test diarizing audios with the USC-SAIL child-adult classifier (requires CUDA)."""
+    from senselab.audio.tasks.speaker_diarization.child_adult import diarize_audios_with_child_adult
+
+    model = HFModel(path_or_uri="AlexXu811/whisper-child-adult")
+    results = diarize_audios_with_child_adult(audios=[resampled_mono_audio_sample], model=model, device=DeviceType.CUDA)
+    assert len(results) == 1
+    assert all(isinstance(line, ScriptLine) for line in results[0])
+    assert all(line.speaker in ("CHILD", "ADULT", "OVERLAP") for line in results[0])
+
+
+def test_diarize_audios_with_child_adult_requires_cuda() -> None:
+    """diarize_audios_with_child_adult raises a clear error when CUDA isn't available/requested."""
+    from senselab.audio.tasks.speaker_diarization.child_adult import diarize_audios_with_child_adult
+
+    model = HFModel(path_or_uri="AlexXu811/whisper-child-adult")
+    with pytest.raises(RuntimeError, match="requires CUDA"):
+        diarize_audios_with_child_adult(audios=[], model=model, device=DeviceType.CPU)
