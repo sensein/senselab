@@ -12,6 +12,7 @@ import pytest
 
 from senselab.utils.dependencies import (
     _get_cached_commit_hash,
+    hf_subprocess_env,
     load_hf_resilient,
     resolve_model,
 )
@@ -86,3 +87,47 @@ def test_load_hf_resilient_no_hub_call_when_cached(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(huggingface_hub.HfApi, "model_info", boom, raising=False)
     assert load_hf_resilient(lambda **k: "M", repo_id="org/model", revision="main") == "M"
+
+
+# --------------------------------------------------------------------------- #
+# hf_subprocess_env — offline env for subprocess-venv workers (fresh import)
+# --------------------------------------------------------------------------- #
+
+
+def test_hf_subprocess_env_sets_offline_when_all_cached(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When every referenced model is cacheable, the child env gets HF_HUB_OFFLINE / TRANSFORMERS_OFFLINE = '1'."""
+    monkeypatch.setattr(
+        "senselab.utils.dependencies.resolve_model",
+        lambda repo_id, revision="main", **k: ("0" * 40, "/tmp/snap"),
+    )
+    env = hf_subprocess_env("Qwen/Qwen3-ASR-1.7B", "main", base_env={})
+    assert env["HF_HUB_OFFLINE"] == "1"
+    assert env["TRANSFORMERS_OFFLINE"] == "1"
+
+
+def test_hf_subprocess_env_left_unchanged_when_uncacheable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If a model cannot be staged, the env is returned unchanged so the child may still download online."""
+
+    def boom(*a: object, **k: object) -> None:
+        raise RuntimeError("cannot download")
+
+    monkeypatch.setattr("senselab.utils.dependencies.resolve_model", boom)
+    env = hf_subprocess_env("org/model", "main", base_env={})
+    assert "HF_HUB_OFFLINE" not in env
+    assert "TRANSFORMERS_OFFLINE" not in env
+
+
+def test_hf_subprocess_env_stages_companion_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`also` companions (e.g. the Qwen forced aligner) are staged alongside the primary model."""
+    staged: list = []
+
+    def _stub_resolve(repo_id: str, revision: str = "main", **k: object) -> tuple:
+        staged.append(repo_id)
+        return ("0" * 40, "/tmp/snap")
+
+    monkeypatch.setattr("senselab.utils.dependencies.resolve_model", _stub_resolve)
+    env = hf_subprocess_env(
+        "Qwen/Qwen3-ASR-1.7B", "main", also=[("Qwen/Qwen3-ForcedAligner-0.6B", "main")], base_env={}
+    )
+    assert staged == ["Qwen/Qwen3-ASR-1.7B", "Qwen/Qwen3-ForcedAligner-0.6B"]
+    assert env["HF_HUB_OFFLINE"] == "1"

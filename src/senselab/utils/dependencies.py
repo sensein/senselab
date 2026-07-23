@@ -9,7 +9,7 @@ import threading
 import time
 from functools import lru_cache
 from pathlib import Path
-from typing import Callable, Iterator, Optional, Tuple, TypeVar
+from typing import Callable, Iterable, Iterator, Optional, Tuple, TypeVar
 
 logger = logging.getLogger("senselab")
 
@@ -512,3 +512,42 @@ def load_hf_resilient(
         return loader(*args, **kwargs)
 
     return retry_on_transient_error(_call)
+
+
+_HF_OFFLINE_ENV_VARS = ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")
+
+
+def hf_subprocess_env(
+    repo_id: str,
+    revision: str = "main",
+    *,
+    also: Optional[Iterable[Tuple[str, str]]] = None,
+    base_env: Optional[dict] = None,
+    token: Optional[str] = None,
+) -> dict:
+    """Build an environment for a subprocess-venv worker that loads HF model(s) offline.
+
+    Ensures every referenced model is present locally (download-once, cross-process,
+    via :func:`resolve_model`), then returns a copy of ``base_env`` (default
+    ``os.environ``) with ``HF_HUB_OFFLINE`` / ``TRANSFORMERS_OFFLINE`` = ``"1"`` so the
+    child's ``from_pretrained`` loads from the local cache with **no** Hub version
+    check — the source of 429 storms under many parallel jobs. Use ``also`` for
+    workers that load more than one model (e.g. Qwen3-ASR + its forced-aligner
+    companion).
+
+    The offline flag is set only when **all** referenced models are cacheable; if any
+    cannot be staged, the env is returned unchanged so the child can still download it
+    online. This is the subprocess analogue of :func:`load_hf_resilient`: unlike an
+    in-process env toggle (a no-op, since huggingface_hub freezes offline mode at
+    import), the child imports fresh with the flag already set, so it is honored.
+    """
+    env = dict(os.environ if base_env is None else base_env)
+    repos: list[Tuple[str, str]] = [(str(repo_id), revision), *(also or [])]
+    try:
+        for rid, rev in repos:
+            resolve_model(rid, rev, token=token)
+    except Exception:
+        return env  # a model is missing/undownloadable -> let the child try online
+    for var in _HF_OFFLINE_ENV_VARS:
+        env[var] = "1"
+    return env
