@@ -1,0 +1,7 @@
+# Runtime deps for the senselab Label Studio ML backends.
+# senselab itself is installed separately from this repo with audio extras, e.g.:
+#   uv pip install -e ".[audio]"
+label-studio-ml
+label-studio-sdk
+boto3        # s3:// audio reads via the EC2 instance role
+requests     # http(s) audio download fallback
