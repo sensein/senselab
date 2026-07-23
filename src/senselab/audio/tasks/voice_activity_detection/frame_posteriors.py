@@ -88,6 +88,34 @@ def _speech_prob_from_output(data: np.ndarray) -> np.ndarray:
     return np.clip(data.max(axis=1), 0.0, 1.0)
 
 
+def _output_to_array(output: Any) -> np.ndarray:  # noqa: ANN401
+    """Coerce an Inference result to a ``(num_frames, num_classes)`` float array.
+
+    ``window="whole"`` yields a bare numpy array; sliding modes yield a
+    ``SlidingWindowFeature`` whose frame data lives on ``.data``.
+    """
+    if hasattr(output, "sliding_window") and hasattr(output, "data"):
+        return np.asarray(output.data, dtype=np.float64)
+    return np.asarray(output, dtype=np.float64)
+
+
+def _frame_grid(inference: "Inference", num_frames: int, dur_s: float) -> tuple[float, float]:
+    """Return ``(frame_hop_s, frame_win_s)`` from the model's receptive field.
+
+    Falls back to ``dur_s / num_frames`` (uniform tiling) when the receptive
+    field isn't introspectable.
+    """
+    try:
+        rf = inference.model.receptive_field
+        step, duration = float(rf.step), float(rf.duration)
+        if step > 0:
+            return step, duration
+    except (AttributeError, TypeError, ValueError):
+        pass
+    hop = dur_s / max(1, num_frames)
+    return hop, hop
+
+
 _inference_cache: dict[str, "Inference"] = {}
 
 
@@ -107,7 +135,13 @@ def _get_inference(model: PyannoteAudioModel, device: Optional[DeviceType]) -> "
         )
         if loaded is None:
             raise ValueError(f"segmentation model {model.path_or_uri} could not be loaded.")
-        _inference_cache[key] = Inference(loaded, device=torch.device(device.value))
+        # window="whole" returns the model's NATIVE per-frame posterior (~17 ms/frame)
+        # for the entire signal. The default (sliding) mode returns a coarse
+        # per-chunk aggregate (~1 s step) that would defeat the fine presence grid.
+        # Trade-off: "whole" holds the whole signal in one forward pass — fine for
+        # the short clinical clips this workflow targets; very long recordings would
+        # need chunked stitching (future work).
+        _inference_cache[key] = Inference(loaded, window="whole", device=torch.device(device.value))
     return _inference_cache[key]
 
 
@@ -125,13 +159,15 @@ def extract_speech_frame_posteriors(
     if not PYANNOTEAUDIO_AVAILABLE:
         logger.warning("pyannote-audio unavailable; segmentation frame posteriors will be null.")
         return [None] * len(audios)
-    if model is None:
-        model = PyannoteAudioModel(path_or_uri=SEGMENTATION_MODEL_ID, revision=SEGMENTATION_REVISION)
-    hf_local_files_only(str(model.path_or_uri), revision=model.revision)
     try:
+        # PyannoteAudioModel validates id/revision against HF at construction
+        # (ValidationError for a gated repo the token can't access), so guard it too.
+        if model is None:
+            model = PyannoteAudioModel(path_or_uri=SEGMENTATION_MODEL_ID, revision=SEGMENTATION_REVISION)
+        hf_local_files_only(str(model.path_or_uri), revision=model.revision)
         inference = _get_inference(model=model, device=device)
-    except Exception as exc:  # noqa: BLE001 — any load failure degrades to null (FR-023)
-        logger.warning(f"Failed to load {model.path_or_uri}: {exc}. Frame posteriors will be null.")
+    except Exception as exc:  # noqa: BLE001 — any load/access failure degrades to null (FR-023)
+        logger.warning(f"Failed to load {SEGMENTATION_MODEL_ID}: {exc}. Frame posteriors will be null.")
         return [None] * len(audios)
 
     results: list[Optional[FramePosterior]] = []
@@ -139,16 +175,12 @@ def extract_speech_frame_posteriors(
         try:
             t0 = time.time()
             output: Any = inference({"waveform": audio.waveform, "sample_rate": audio.sampling_rate})
-            data = np.asarray(output.data, dtype=np.float64)
+            data = _output_to_array(output)
             probs = _speech_prob_from_output(data)
-            results.append(
-                FramePosterior(
-                    probs=probs,
-                    frame_hop_s=float(output.sliding_window.step),
-                    frame_win_s=float(output.sliding_window.duration),
-                )
-            )
-            logger.info(f"segmentation inference took {time.time() - t0:.2f}s ({probs.size} frames)")
+            dur_s = audio.waveform.shape[-1] / float(audio.sampling_rate)
+            hop_s, win_s = _frame_grid(inference, data.shape[0], dur_s)
+            results.append(FramePosterior(probs=probs, frame_hop_s=hop_s, frame_win_s=win_s))
+            logger.info(f"segmentation inference took {time.time() - t0:.2f}s ({probs.size} frames @ {hop_s:.4f}s)")
         except (RuntimeError, ValueError, OSError) as exc:
             logger.warning(f"segmentation inference failed for one audio: {exc}")
             results.append(None)

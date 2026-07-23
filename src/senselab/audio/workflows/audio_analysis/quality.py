@@ -7,7 +7,7 @@ quality-uncertainty score, per presence bucket:
                         senselab's existing spectral-gating and peak SNR metrics;
 - ``quality_clip``    — from ``proportion_clipped_metric`` (existing DSP);
 - ``quality_reverb``  — from Brouhaha C50;
-- ``quality_bandwidth``— from a librosa spectral-rolloff-vs-Nyquist measure;
+- ``quality_bandwidth``— from a torch.stft spectral-rolloff-vs-Nyquist measure;
 - ``quality_uncertainty`` — normalized spread among the independent SNR estimators.
 
 **Analysis resolution ≠ reporting grid.** The STFT/model estimators are unreliable
@@ -20,9 +20,11 @@ buckets are finer. See ``contracts/quality.md``.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Optional
 
 import numpy as np
+import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.quality_control.metrics import (
@@ -61,29 +63,44 @@ def _linear_db_to_degradation(value_db: float, clean_db: float, floor_db: float)
     return float(np.clip((clean_db - value_db) / span, 0.0, 1.0))
 
 
-def _mono_numpy(audio: Audio) -> np.ndarray:
-    """Return a mono float numpy view of the waveform."""
-    wf = audio.waveform
-    arr = wf.detach().cpu().numpy() if hasattr(wf, "detach") else np.asarray(wf)
-    if arr.ndim == 2 and arr.shape[0] > 1:
-        arr = arr.mean(axis=0)
-    return np.asarray(arr, dtype=np.float64).reshape(-1)
-
-
 def _bandwidth_degradation(slice_audio: Audio) -> Optional[float]:
-    """Effective-bandwidth degradation from the 85% spectral rolloff vs Nyquist."""
-    try:
-        import librosa
-    except (ImportError, RuntimeError):
+    """Effective-bandwidth degradation from the 85% spectral rolloff vs Nyquist.
+
+    Uses ``torch.stft`` (no librosa) — a band-limited signal (e.g. telephone-band
+    ≤ 4 kHz) concentrates energy in the low bins, so its rolloff frequency sits
+    well below Nyquist and the degradation approaches 1; a full-band signal rolls
+    off near Nyquist and scores near 0.
+    """
+    wf = slice_audio.waveform
+    if wf is None or wf.numel() == 0:
         return None
-    y = _mono_numpy(slice_audio)
+    y = wf.mean(dim=0) if wf.shape[0] > 1 else wf[0]
+    y = y.detach().to(torch.float32).reshape(-1)
+    n = int(y.shape[-1])
+    if n < 256:
+        return None
+    n_fft = min(2048, 1 << int(math.floor(math.log2(n))))
+    if n_fft < 256:
+        return None
+    spec = torch.stft(
+        y,
+        n_fft=n_fft,
+        hop_length=n_fft // 4,
+        window=torch.hann_window(n_fft, device=y.device),
+        center=True,
+        return_complex=True,
+    )
+    power = (spec.abs() ** 2).mean(dim=1)  # avg over frames → per-frequency-bin energy
+    total = float(power.sum().item())
+    if total <= 0:
+        return None
+    cumulative = torch.cumsum(power, dim=0) / total
+    idx = int(torch.searchsorted(cumulative, torch.tensor(_DEFAULT_BANDWIDTH_ROLLOFF_PCT)).item())
+    idx = min(idx, power.shape[0] - 1)
     sr = slice_audio.sampling_rate
-    if y.size < 256:
-        return None
-    rolloff = librosa.feature.spectral_rolloff(y=y, sr=sr, roll_percent=_DEFAULT_BANDWIDTH_ROLLOFF_PCT)
-    rolloff_hz = float(np.nanmean(rolloff)) if rolloff.size else float("nan")
     nyquist = sr / 2.0
-    if not np.isfinite(rolloff_hz) or nyquist <= 0:
+    rolloff_hz = idx * sr / n_fft  # bin index → Hz
+    if nyquist <= 0:
         return None
     return float(np.clip(1.0 - rolloff_hz / nyquist, 0.0, 1.0))
 

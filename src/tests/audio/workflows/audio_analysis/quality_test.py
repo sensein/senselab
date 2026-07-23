@@ -9,8 +9,10 @@ and the null-safe / silence edge cases (FR-023).
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import torch
 
+import senselab.audio.tasks.scene_quality.brouhaha as brouhaha_mod
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.scene_quality.brouhaha import BrouhahaFrames
 from senselab.audio.workflows.audio_analysis.grid import BucketGrid
@@ -133,6 +135,18 @@ def test_null_safe_without_brouhaha() -> None:
     assert all(r["quality_reverb"] is None for r in rows)
     assert any(r["quality_snr"] is not None for r in rows)
     assert any(r["quality_bandwidth"] is not None for r in rows)
+
+
+def test_brouhaha_null_safe_when_model_construction_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FR-023: a gated/inaccessible Brouhaha (ValidationError at construction) → [None], no raise."""
+    if not brouhaha_mod.PYANNOTEAUDIO_AVAILABLE:
+        pytest.skip("pyannote-audio not installed")
+
+    def _boom(*args: object, **kwargs: object) -> None:
+        raise ValueError("gated repo — not in authorized list")
+
+    monkeypatch.setattr(brouhaha_mod, "PyannoteAudioModel", _boom)
+    assert brouhaha_mod.extract_brouhaha_frames([_audio(_white_noise(0.5))]) == [None]
 
 
 def test_silence_bucket_yields_null_quality() -> None:

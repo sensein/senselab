@@ -87,6 +87,26 @@ class BrouhahaFrames:
         )
 
 
+def _output_to_array(output: Any) -> np.ndarray:  # noqa: ANN401
+    """Coerce an Inference result to a float array (``window="whole"`` yields a bare array)."""
+    if hasattr(output, "sliding_window") and hasattr(output, "data"):
+        return np.asarray(output.data, dtype=np.float64)
+    return np.asarray(output, dtype=np.float64)
+
+
+def _frame_grid(inference: "Inference", num_frames: int, dur_s: float) -> tuple[float, float]:
+    """Return ``(frame_hop_s, frame_win_s)`` from the model receptive field, else uniform tiling."""
+    try:
+        rf = inference.model.receptive_field
+        step, duration = float(rf.step), float(rf.duration)
+        if step > 0:
+            return step, duration
+    except (AttributeError, TypeError, ValueError):
+        pass
+    hop = dur_s / max(1, num_frames)
+    return hop, hop
+
+
 # Cache Inference objects per (model_id, revision, device) so repeated pass calls
 # reuse the initialized model.
 _inference_cache: dict[str, "Inference"] = {}
@@ -109,7 +129,10 @@ def _get_brouhaha_inference(model: PyannoteAudioModel, device: Optional[DeviceTy
         )
         if loaded is None:
             raise ValueError(f"Brouhaha model {model.path_or_uri} could not be loaded.")
-        inference = Inference(loaded, device=torch.device(device.value))
+        # window="whole" returns native per-frame (VAD, SNR, C50) for the whole
+        # signal; the default sliding mode returns a coarse per-chunk aggregate.
+        # Fine for short clinical clips; long recordings would need chunking.
+        inference = Inference(loaded, window="whole", device=torch.device(device.value))
         _inference_cache[key] = inference
     return _inference_cache[key]
 
@@ -136,29 +159,31 @@ def extract_brouhaha_frames(
         logger.warning("pyannote-audio unavailable; Brouhaha scene-quality signals will be null.")
         return [None] * len(audios)
 
-    if model is None:
-        model = PyannoteAudioModel(path_or_uri=BROUHAHA_MODEL_ID, revision=BROUHAHA_REVISION)
-
-    # Prefer offline load when the model is already cached (constitution VI).
-    hf_local_files_only(str(model.path_or_uri), revision=model.revision)
-
     try:
+        # PyannoteAudioModel validates the id/revision against HF *at construction*
+        # (raising pydantic ValidationError for a gated repo the token can't access),
+        # so this must be inside the guard too, per FR-023.
+        if model is None:
+            model = PyannoteAudioModel(path_or_uri=BROUHAHA_MODEL_ID, revision=BROUHAHA_REVISION)
+        # Prefer offline load when the model is already cached (constitution VI).
+        hf_local_files_only(str(model.path_or_uri), revision=model.revision)
         inference = _get_brouhaha_inference(model=model, device=device)
-    except Exception as exc:  # noqa: BLE001 — any load failure degrades to null quality (FR-023)
-        logger.warning(f"Failed to load Brouhaha model {model.path_or_uri}: {exc}. Scene-quality signals will be null.")
+    except Exception as exc:  # noqa: BLE001 — any load/access failure degrades to null quality (FR-023)
+        logger.warning(f"Failed to load Brouhaha model {BROUHAHA_MODEL_ID}: {exc}. Scene-quality signals will be null.")
         return [None] * len(audios)
 
     results: list[Optional[BrouhahaFrames]] = []
     for audio in audios:
         try:
             t0 = time.time()
-            # Inference on a whole file returns a SlidingWindowFeature; the pyannote
-            # type stubs are ambiguous (union), so treat it as Any here.
+            # window="whole" returns a bare (num_frames, 3) array; frame hop comes
+            # from the model receptive field, not a SlidingWindowFeature.
             output: Any = inference({"waveform": audio.waveform, "sample_rate": audio.sampling_rate})
-            data = np.asarray(output.data, dtype=np.float64)  # (num_frames, 3)
+            data = _output_to_array(output)  # (num_frames, 3)
             if data.ndim != 2 or data.shape[1] <= _C50_CHANNEL:
                 raise ValueError(f"unexpected Brouhaha output shape {data.shape}")
-            frame_hop_s = float(output.sliding_window.step)
+            dur_s = audio.waveform.shape[-1] / float(audio.sampling_rate)
+            frame_hop_s, _win_s = _frame_grid(inference, data.shape[0], dur_s)
             results.append(
                 BrouhahaFrames(
                     vad=data[:, _VAD_CHANNEL],
@@ -167,7 +192,9 @@ def extract_brouhaha_frames(
                     frame_hop_s=frame_hop_s,
                 )
             )
-            logger.info(f"Brouhaha inference took {time.time() - t0:.2f}s ({data.shape[0]} frames)")
+            logger.info(
+                f"Brouhaha inference took {time.time() - t0:.2f}s ({data.shape[0]} frames @ {frame_hop_s:.4f}s)"
+            )
         except (RuntimeError, ValueError, OSError) as exc:
             logger.warning(f"Brouhaha inference failed for one audio: {exc}")
             results.append(None)

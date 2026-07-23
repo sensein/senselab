@@ -427,6 +427,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--no-scene-quality",
+        action="store_true",
+        help=(
+            "Disable the scene-quality signals (Brouhaha SNR/C50 + DSP clipping/bandwidth). "
+            "By default scene quality is REQUIRED: if Brouhaha cannot be loaded (e.g. gated "
+            "access not granted) the run fails loudly rather than silently emitting null "
+            "quality columns. Pass this flag to intentionally run without it."
+        ),
+    )
+    parser.add_argument(
+        "--no-sound-sources",
+        action="store_true",
+        help="Disable the background sound-source category masses (speech/people/machine/environment).",
+    )
+    parser.add_argument(
         "--presence-grid-win-length",
         type=float,
         default=0.1,
@@ -1973,6 +1988,8 @@ def main(argv: list[str] | None = None) -> int:
                 speech_presence_labels=_speech_presence_labels(args),
                 utterance_grid=utterance_grid,
                 presence_grid=presence_grid,
+                scene_quality=not args.no_scene_quality,
+                sound_sources=not args.no_sound_sources,
                 embedding_window_s=args.embedding_window_s,
                 embedding_hop_s=args.embedding_hop_s,
                 same_speaker_floor=args.identity_same_speaker_floor,
@@ -1985,6 +2002,29 @@ def main(argv: list[str] | None = None) -> int:
             traceback.print_exc(file=sys.stderr)
             axis_results, incomparable_reasons = ({}, {"workflow": f"failed: {exc!r}"})
             per_window_embeddings_by_pass = {}
+
+        # Scene quality is a REQUIRED signal here unless explicitly disabled: the
+        # library degrades gracefully to null (FR-023) for reuse, but this script
+        # must not silently ship a run missing its quality columns. If the model
+        # was requested but unavailable on any pass, fail loudly with guidance.
+        if not args.no_scene_quality:
+            unavailable_passes = [
+                pl
+                for (pl, axis), result in axis_results.items()
+                if axis == "presence"
+                and pl != "raw_vs_enhanced"
+                and (result.provenance.get("scene_quality") or {}).get("model", {}).get("available") is False
+            ]
+            if unavailable_passes:
+                print(
+                    "ERROR: scene-quality model (pyannote/brouhaha) could not be loaded for "
+                    f"pass(es) {sorted(unavailable_passes)}, so SNR/reverb quality columns would be null. "
+                    "Ensure the model is accessible (request access at https://hf.co/pyannote/brouhaha, "
+                    "set HF_TOKEN) and its backend is installed, or pass --no-scene-quality to run "
+                    "without scene quality intentionally.",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
 
         # Persist 9 parquets (3 axes × 2 passes + 3 raw_vs_enhanced deltas).
         for (pass_label, axis), result in axis_results.items():
