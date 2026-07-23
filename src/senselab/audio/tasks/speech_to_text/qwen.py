@@ -40,6 +40,11 @@ _QWEN_REQUIREMENTS = [
     # exists to prevent).
     "torch>=2.8,<2.9",
     "torchaudio>=2.8,<2.9",
+    # qwen-asr depends on librosa without a floor; on Python 3.12 uv otherwise
+    # backtracks librosa -> numba -> llvmlite to the ancient llvmlite 0.36.0,
+    # which has no 3.12 support ("Cannot install on Python version 3.12.0").
+    # Pin a modern numba floor so the chain resolves to llvmlite>=0.43 (3.12-ok).
+    "numba>=0.60",
 ]
 _QWEN_PYTHON = "3.12"
 
