@@ -53,6 +53,11 @@ _CANARY_REQUIREMENTS = [
     "pyarrow<18",
     "matplotlib",
     "soundfile",
+    # NeMo pulls librosa without a floor; on Python 3.12 uv otherwise backtracks
+    # librosa -> numba -> llvmlite to llvmlite 0.36.0 (no 3.12 support). Pin a
+    # modern numba floor so the chain resolves to llvmlite>=0.43 (same fix as the
+    # qwen-asr venv).
+    "numba>=0.60",
 ]
 _CANARY_PYTHON = "3.12"
 
