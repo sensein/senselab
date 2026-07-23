@@ -45,6 +45,33 @@ class UncertaintyRow:
     intensity_weight: float | None = None
     raw_aggregated_uncertainty: float | None = None  # pre-mask value
 
+    # ── Scene-aware presence extensions (feature 20260722-175022) ────────────
+    # All default None and are populated only on the axis they belong to
+    # (presence for the confidence/quality/source columns; utterance for the
+    # token-entropy/coupling columns). They are additive: existing readers that
+    # project a fixed column set are unaffected, and ``aggregated_uncertainty``
+    # keeps its original meaning. See
+    # ``specs/20260722-175022-scene-quality-utterance/data-model.md``.
+    #
+    # Presence confidence/uncertainty split (FR-013):
+    presence_confidence: float | None = None  # calibrated mean P(speech) in [0,1]
+    presence_uncertainty: float | None = None  # decisiveness uncertainty 1-|2p-1| in [0,1]
+    # Audio-quality degradation scores, 0 = clean, 1 = fully degraded (FR-001):
+    quality_snr: float | None = None
+    quality_clip: float | None = None
+    quality_reverb: float | None = None
+    quality_bandwidth: float | None = None
+    quality_uncertainty: float | None = None  # spread among SNR estimators (FR-005)
+    # Background sound-source category masses, sum ~1 when present (FR-007):
+    src_speech: float | None = None
+    src_people: float | None = None
+    src_machine: float | None = None
+    src_environment: float | None = None
+    src_dominant: str | None = None  # argmax category name
+    # Utterance extensions (FR-017, FR-019):
+    token_entropy: float | None = None  # mean per-token ASR entropy over the bucket
+    scene_quality_coupling: float | None = None  # recorded coupling multiplier (>=1.0)
+
 
 @dataclass(slots=True)
 class AxisResult:

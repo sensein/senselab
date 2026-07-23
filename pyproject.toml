@@ -45,6 +45,7 @@ dependencies = [
   "pyannote-audio>=4.0",
   "audiomentations>=0.42",
   "opensmile>=2.6",
+  "librosa>=0.11",  # spectral rolloff for scene-quality bandwidth; already used in quality_control
   "vocos>=0.1",
   "praat-parselmouth>=0.4.3",  # 0.4.0-0.4.2 fail on Python 3.12+
   # Data / utilities

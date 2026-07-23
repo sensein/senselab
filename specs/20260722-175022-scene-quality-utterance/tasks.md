@@ -20,8 +20,8 @@ description: "Task list for scene-aware presence axis + improved utterance uncer
 
 ## Phase 1: Setup (Shared Infrastructure)
 
-- [ ] T001 Promote `librosa` from transitive to an explicit dependency in `pyproject.toml` (align with pinned `librosa==0.11.0`) and refresh `uv.lock` via `uv add librosa` (D8).
-- [ ] T002 [P] Scaffold new modules with docstrings + `__future__` imports and no logic yet: `src/senselab/audio/tasks/scene_quality/__init__.py`, `src/senselab/audio/tasks/scene_quality/brouhaha.py`, `src/senselab/audio/tasks/voice_activity_detection/frame_posteriors.py`, `src/senselab/audio/workflows/audio_analysis/quality.py`, `src/senselab/audio/workflows/audio_analysis/sound_sources.py`, `src/senselab/audio/workflows/audio_analysis/calibration.py`, and `src/senselab/audio/workflows/audio_analysis/data/` (dir).
+- [X] T001 Promote `librosa` from transitive to an explicit dependency in `pyproject.toml` (align with pinned `librosa==0.11.0`) and refresh `uv.lock` via `uv add librosa` (D8).
+- [X] T002 [P] Scaffold new modules with docstrings + `__future__` imports and no logic yet: `src/senselab/audio/tasks/scene_quality/__init__.py`, `src/senselab/audio/tasks/scene_quality/brouhaha.py`, `src/senselab/audio/tasks/voice_activity_detection/frame_posteriors.py`, `src/senselab/audio/workflows/audio_analysis/quality.py`, `src/senselab/audio/workflows/audio_analysis/sound_sources.py`, `src/senselab/audio/workflows/audio_analysis/calibration.py`, and `src/senselab/audio/workflows/audio_analysis/data/` (dir).
 
 ---
 
@@ -29,9 +29,9 @@ description: "Task list for scene-aware presence axis + improved utterance uncer
 
 **⚠️ CRITICAL**: The additive-output contract must exist before any story can emit its columns.
 
-- [ ] T003 Add new defaulted fields to `UncertaintyRow` in `src/senselab/audio/workflows/audio_analysis/types.py` per data-model.md §1 (`presence_confidence`, `presence_uncertainty`, `quality_snr`, `quality_clip`, `quality_reverb`, `quality_bandwidth`, `quality_uncertainty`, `src_speech`, `src_people`, `src_machine`, `src_environment`, `src_dominant`, `token_entropy`, `scene_quality_coupling`) — all `= None`, after existing defaulted fields (slots dataclass).
-- [ ] T004 Add matching `pa.array` columns (float64, `src_dominant` string) to `write_axis_parquet` in `src/senselab/audio/workflows/audio_analysis/io.py` per contracts/presence-parquet-columns.md, and extend the `comparator_provenance` metadata with per-axis grid params + model id/revision placeholders.
-- [ ] T005 [P] Foundational regression guard: run `uv run pytest src/tests/audio/workflows/audio_analysis/{compute_uncertainty_axes_test,disagreements_test,labelstudio_test,plot_test}.py` and confirm they still pass with the new all-null columns present (SC-008 baseline). Fix any reader that breaks on unknown columns.
+- [X] T003 Add new defaulted fields to `UncertaintyRow` in `src/senselab/audio/workflows/audio_analysis/types.py` per data-model.md §1 (`presence_confidence`, `presence_uncertainty`, `quality_snr`, `quality_clip`, `quality_reverb`, `quality_bandwidth`, `quality_uncertainty`, `src_speech`, `src_people`, `src_machine`, `src_environment`, `src_dominant`, `token_entropy`, `scene_quality_coupling`) — all `= None`, after existing defaulted fields (slots dataclass).
+- [X] T004 Add matching `pa.array` columns (float64, `src_dominant` string) to `write_axis_parquet` in `src/senselab/audio/workflows/audio_analysis/io.py` per contracts/presence-parquet-columns.md, and extend the `comparator_provenance` metadata with per-axis grid params + model id/revision placeholders.
+- [X] T005 [P] Foundational regression guard: run `uv run pytest src/tests/audio/workflows/audio_analysis/{compute_uncertainty_axes_test,disagreements_test,labelstudio_test,plot_test}.py` and confirm they still pass with the new all-null columns present (SC-008 baseline). Fix any reader that breaks on unknown columns.
 
 **Checkpoint**: Rows/parquet can carry the new columns (all null) without breaking any existing consumer.
 
