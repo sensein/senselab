@@ -285,6 +285,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="YAMNet sliding-window hop, seconds (default: 0.48, matches YAMNet's native 50%% overlap hop).",
     )
     parser.add_argument(
+        "--scene-top-k",
+        type=int,
+        default=50,
+        help=(
+            "Number of AudioSet classes to persist per AST/YAMNet window (default: 50). "
+            "Feeds the presence-axis sound-source category masses (speech/people/machine/"
+            "environment); 50 captures essentially all of the softmax mass. Raise toward the "
+            "full label count (527 AST / 521 YAMNet) for the complete distribution at ~10x the "
+            "cache size; the top-1 label (speech-presence / YAMNet-veto) is unaffected either way."
+        ),
+    )
+    parser.add_argument(
         "--features-win-length",
         type=float,
         default=1.0,
@@ -1531,7 +1543,12 @@ def run_pass(
     yam_hop = args.yamnet_hop_length
 
     if "ast" not in args.skip:
-        params = {"win_length": ast_win, "hop_length": ast_hop, "device": device_label_for_provenance}
+        params = {
+            "win_length": ast_win,
+            "hop_length": ast_hop,
+            "top_k": args.scene_top_k,
+            "device": device_label_for_provenance,
+        }
         summary["ast"] = run_task_cached(
             "ast",
             classify_audios,
@@ -1540,6 +1557,7 @@ def run_pass(
             device=device,
             win_length=ast_win,
             hop_length=ast_hop,
+            top_k=args.scene_top_k,
             cache_dir=cache_dir,
             cache_key_str=_key("ast", args.ast_model, params),
             provenance=_provenance_for("ast", args.ast_model, params),
@@ -1552,7 +1570,7 @@ def run_pass(
         # Sortformer). senselab.classify_audios's `_is_yamnet()` dispatcher
         # matches on the raw model-id *string*, not on a SenselabModel wrapper —
         # passing HFModel here would fail validation (yamnet isn't on HF).
-        params = {"win_length": yam_win, "hop_length": yam_hop}
+        params = {"win_length": yam_win, "hop_length": yam_hop, "top_k": args.scene_top_k}
         summary["yamnet"] = run_task_cached(
             "yamnet",
             classify_audios,
@@ -1560,6 +1578,7 @@ def run_pass(
             model=args.yamnet_model,
             win_length=yam_win,
             hop_length=yam_hop,
+            top_k=args.scene_top_k,
             cache_dir=cache_dir,
             cache_key_str=_key("yamnet", args.yamnet_model, params),
             provenance=_provenance_for("yamnet", args.yamnet_model, params),

@@ -499,6 +499,44 @@ def test_presence_rows_carry_quality_columns_when_brouhaha_available(monkeypatch
     assert prov["model"]["available"] is True
 
 
+def test_presence_rows_carry_source_columns() -> None:
+    """US2: AST/YAMNet windows → per-bucket src_* category masses on presence rows."""
+    windows = [
+        {
+            "start": 0.0,
+            "end": 2.0,
+            "labels": ["Speech", "Vehicle"],
+            "scores": [0.8, 0.2],
+            "win_length": 2.0,
+            "hop_length": 2.0,
+        }
+    ]
+    raw_pass = {
+        "duration_s": 2.0,
+        "diarization": {"by_model": {"pyannote": _diar_block([(0.0, 2.0, "SPEAKER_00")])}},
+        "ast": _classification_block(windows),
+    }
+    axis_results, _, _ = compute_uncertainty_axes(
+        passes={"raw_16k": raw_pass},
+        grid=BucketGrid(win_length=0.5, hop_length=0.5),
+        params={},
+        audio={"raw_16k": _silent_audio(2.0)},
+        speaker_embedding_models=[],
+        aggregator="min",
+        speech_presence_labels=["Speech"],
+        scene_quality=False,
+    )
+    presence = axis_results[("raw_16k", "presence")]
+    assert presence.rows
+    assert any(r.src_speech is not None for r in presence.rows)
+    for r in presence.rows:
+        if r.src_speech is not None:
+            total = r.src_speech + r.src_people + r.src_machine + r.src_environment
+            assert abs(total - 1.0) < 1e-6
+            assert r.src_dominant == "speech"
+    assert presence.provenance["sound_sources"]["enabled"] is True
+
+
 def test_presence_quality_null_when_scene_quality_disabled() -> None:
     """scene_quality=False → no quality columns, no model load."""
     raw_pass = {

@@ -65,15 +65,15 @@ description: "Task list for scene-aware presence axis + improved utterance uncer
 
 ### Tests for User Story 2
 
-- [ ] T012 [P] [US2] Write `src/tests/audio/workflows/audio_analysis/sound_sources_test.py`: (a) `test_category_map_covers_all_classes` — load AST `id2label` (527) + vendored YAMNet class list (521), assert every class resolves to exactly one of the 4 categories with zero silent gaps (SC-003); (b) masses from a synthetic window sum to ~1 and `src_dominant == argmax`; (c) background-machine window → `src_machine` dominant.
+- [X] T012 [P] [US2] Write `src/tests/audio/workflows/audio_analysis/sound_sources_test.py`: (a) `test_category_map_covers_all_classes` — load AST `id2label` (527) + vendored YAMNet class list (521), assert every class resolves to exactly one of the 4 categories with zero silent gaps (SC-003); (b) masses from a synthetic window sum to ~1 and `src_dominant == argmax`; (c) background-machine window → `src_machine` dominant.
 
 ### Implementation for User Story 2
 
-- [ ] T013 [P] [US2] Author `workflows/audio_analysis/data/audioset_source_map.json` (schema data-model.md §3): union of AST 527 + YAMNet 521 display names → `{speech,people,machine,environment}`, `default="environment"`, `version="1"`. Include a small vendored YAMNet class-name list if the model asset isn't importable in-process.
-- [ ] T014 [US2] Raise persisted scene classes: add `--scene-top-k` (default full 527/521) in `scripts/analyze_audio.py` and pass `top_k` to the AST + YAMNet `classify_audios(...)` windowed calls so full per-window distributions persist; verify top-1 consumers (`speech_presence_labels`, YAMNet veto) unaffected (contracts/sound_sources.md B).
-- [ ] T015 [US2] Implement `sound_sources.py::harvest_source_categories`: load + cache the map; per presence bucket, sum AST+YAMNet window `scores` into category masses (mean of available classifiers), normalize to ~1, `src_dominant = argmax`; project via center→nearest-window; log unmapped classes once each (contracts/sound_sources.md C).
-- [ ] T016 [US2] Wire `src_*` columns into `compute.py` presence rows behind `sound_sources: bool = True`; stash per-category class contributions into `model_votes`.
-- [ ] T017 [US2] Null-safe when both AST and YAMNet absent → all `src_*` null (FR-023); add test case.
+- [X] T013 [P] [US2] Author `workflows/audio_analysis/data/audioset_source_map.json` (schema data-model.md §3): union of AST 527 + YAMNet 521 display names → `{speech,people,machine,environment}`, `default="environment"`, `version="1"`. Include a small vendored YAMNet class-name list if the model asset isn't importable in-process.
+- [X] T014 [US2] Raise persisted scene classes: add `--scene-top-k` (default full 527/521) in `scripts/analyze_audio.py` and pass `top_k` to the AST + YAMNet `classify_audios(...)` windowed calls so full per-window distributions persist; verify top-1 consumers (`speech_presence_labels`, YAMNet veto) unaffected (contracts/sound_sources.md B).
+- [X] T015 [US2] Implement `sound_sources.py::harvest_source_categories`: load + cache the map; per presence bucket, sum AST+YAMNet window `scores` into category masses (mean of available classifiers), normalize to ~1, `src_dominant = argmax`; project via center→nearest-window; log unmapped classes once each (contracts/sound_sources.md C).
+- [X] T016 [US2] Wire `src_*` columns into `compute.py` presence rows behind `sound_sources: bool = True`; stash per-category class contributions into `model_votes`.
+- [X] T017 [US2] Null-safe when both AST and YAMNet absent → all `src_*` null (FR-023); add test case.
 
 **Checkpoint**: US1 + US2 both work independently on the presence parquet.
 

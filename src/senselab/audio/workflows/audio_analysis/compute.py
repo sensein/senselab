@@ -56,6 +56,7 @@ def compute_uncertainty_axes(
     speech_presence_labels: list[str],
     utterance_grid: BucketGrid | None = None,
     scene_quality: bool = True,
+    sound_sources: bool = True,
     embedding_window_s: float = 2.0,
     embedding_hop_s: float = 1.0,
     same_speaker_floor: float = 0.30,
@@ -88,6 +89,10 @@ def compute_uncertainty_axes(
             scores (SNR / clipping / reverb / bandwidth + estimator-spread uncertainty)
             via Brouhaha + existing DSP metrics and attach them as additive columns on
             the presence rows. Null-safe when the model / audio is unavailable (FR-023).
+        sound_sources: When True (default), map the AST / YAMNet AudioSet scores into
+            per-bucket source-category masses (speech / people / machine / environment)
+            + dominant category, attached as additive columns on the presence rows.
+            Null when neither classifier ran (FR-023).
         embedding_window_s: Window length (seconds) for fixed-grid speaker-embedding
             extraction. Defaults to 2.0 s (ECAPA's recommended minimum).
         embedding_hop_s: Window hop (seconds) for fixed-grid speaker-embedding
@@ -284,6 +289,19 @@ def compute_uncertainty_axes(
                 }
             )
 
+        # Sound sources (US2): per-bucket AudioSet→category masses from AST/YAMNet.
+        source_by_bucket: dict[tuple[float, float], dict[str, Any]] = {}
+        sound_sources_provenance: dict[str, Any] = {"enabled": bool(sound_sources)}
+        if sound_sources:
+            from senselab.audio.workflows.audio_analysis.sound_sources import (
+                harvest_source_categories,
+                load_source_category_map,
+            )
+
+            for s in harvest_source_categories(pass_summary=pass_summary, grid=grid):
+                source_by_bucket[(round(s["start"], 6), round(s["end"], 6))] = s
+            sound_sources_provenance["category_map_version"] = load_source_category_map().get("version")
+
         presence_rows: list[UncertaintyRow] = []
         # Map bucket-start → presence p_voice so identity / utterance can
         # mask their per-bucket uncertainty by "we are confident there's
@@ -295,12 +313,16 @@ def compute_uncertainty_axes(
             p_v = presence_p_voice(bucket["votes"])
             if u is None and not bucket["votes"]:
                 continue
-            quality = quality_by_bucket.get((round(bucket["start"], 6), round(bucket["end"], 6)))
+            bkey = (round(bucket["start"], 6), round(bucket["end"], 6))
+            quality = quality_by_bucket.get(bkey)
+            source = source_by_bucket.get(bkey)
             votes = bucket["votes"]
             if quality is not None:
                 # Stash raw estimator values for reviewers; the "__"-prefixed key is
                 # excluded from contributing_models below.
                 votes = {**votes, "__quality__": quality.get("_raw", {})}
+            if source is not None:
+                votes = {**votes, "__sources__": source.get("_raw", {})}
             # Presence axis itself isn't masked — it IS the mask source.
             presence_rows.append(
                 UncertaintyRow(
@@ -318,6 +340,11 @@ def compute_uncertainty_axes(
                     quality_reverb=quality.get("quality_reverb") if quality else None,
                     quality_bandwidth=quality.get("quality_bandwidth") if quality else None,
                     quality_uncertainty=quality.get("quality_uncertainty") if quality else None,
+                    src_speech=source.get("src_speech") if source else None,
+                    src_people=source.get("src_people") if source else None,
+                    src_machine=source.get("src_machine") if source else None,
+                    src_environment=source.get("src_environment") if source else None,
+                    src_dominant=source.get("src_dominant") if source else None,
                 )
             )
             if p_v is not None:
@@ -349,6 +376,7 @@ def compute_uncertainty_axes(
                 "comparator_params": params,
                 "contributing_model_set": sorted({m for b in presence_votes for m in b["votes"]}),
                 "scene_quality": scene_quality_provenance,
+                "sound_sources": sound_sources_provenance,
             },
         )
 
