@@ -33,13 +33,24 @@ def test_brouhaha_subprocess_venv_builds_on_cuda_host() -> None:
     no wheel satisfying brouhaha's ``torch>=2.0,<2.3`` pin (the reported bug).
     """
     from senselab.audio.tasks.scene_quality.brouhaha import (
+        _BROUHAHA_MAX_CUDA_VERSION,
         _BROUHAHA_PYTHON,
         _BROUHAHA_REQUIREMENTS,
         _BROUHAHA_VENV,
     )
     from senselab.utils.subprocess_venv import ensure_venv, venv_python
 
-    venv_dir = ensure_venv(_BROUHAHA_VENV, _BROUHAHA_REQUIREMENTS, python_version=_BROUHAHA_PYTHON)
+    # Build exactly as extract_brouhaha_frames does — with brouhaha's declared
+    # CUDA-index ceiling. This is the regression point: drop/blank the ceiling
+    # and a modern-CUDA host routes through cu128 (no torch<2.3 wheel) and this
+    # install fails.
+    assert _BROUHAHA_MAX_CUDA_VERSION is not None, "brouhaha must declare a CUDA-index ceiling"
+    venv_dir = ensure_venv(
+        _BROUHAHA_VENV,
+        _BROUHAHA_REQUIREMENTS,
+        python_version=_BROUHAHA_PYTHON,
+        max_cuda_version=_BROUHAHA_MAX_CUDA_VERSION,
+    )
     python = venv_python(venv_dir)
     result = subprocess.run(
         [str(python), "-c", "import torch, torchaudio; print(torch.__version__, torchaudio.__version__)"],
