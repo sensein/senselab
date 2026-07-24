@@ -12,9 +12,12 @@ Turnkey artifacts for running `senselab_ls/backends/diarization` on the EC2 box 
 
 ## Bring-up (on the instance)
 ```bash
+cd /opt/senselab/senselab_ls/deploy
+cp backend.env.example backend.env
+chmod 600 backend.env
+nano backend.env    # fill in the 3 "CHANGE THESE": HF_TOKEN, LABEL_STUDIO_API_KEY,
+                    # and the real bucket in B2AI_DATASET_ROOT. The rest can stay as-is.
 cd /opt/senselab
-cp senselab_ls/deploy/backend.env.example senselab_ls/deploy/backend.env
-# edit backend.env: HF_TOKEN, LABEL_STUDIO_URL, LABEL_STUDIO_API_KEY, B2AI_DATASET_ROOT
 
 # option A — systemd
 sudo cp senselab_ls/deploy/diarization.service /etc/systemd/system/
@@ -25,13 +28,12 @@ bash senselab_ls/deploy/run_diarization_backend.sh
 ```
 
 ## Register in Label Studio (HumanSignal cloud)
-1. In `backend.env`, set `LABEL_STUDIO_URL=https://app.humansignal.com` and
-   `LABEL_STUDIO_API_KEY=<token from Account & Settings → Access Token>`.
-2. Create/point a project at the audio tasks; set its labeling config to
+(`LABEL_STUDIO_URL` / `LABEL_STUDIO_API_KEY` were set in `backend.env` during bring-up.)
+1. Create/point a project at the audio tasks; set its labeling config to
    `labeling_config_diarization.xml`.
-3. Ensure the security group allows the HumanSignal egress IPs on `9090` (see
+2. Ensure the security group allows the HumanSignal egress IPs on `9090` (see
    `../AWS_EC2_SETUP.md` Step 2).
-4. Project → Settings → Model → **Connect Model** → URL `http://<ec2-public-dns>:9090`
+3. Project → Settings → Model → **Connect Model** → URL `http://<ec2-public-dns>:9090`
    (or the `https://` URL if fronted with TLS). Enable "Retrieve predictions when loading a task
    automatically".
 
