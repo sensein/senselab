@@ -127,6 +127,7 @@ celerybeat.pid
 
 # Environments
 .env
+senselab_ls/deploy/backend.env
 .venv
 env/
 venv/
