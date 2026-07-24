@@ -150,6 +150,19 @@ def test_diarize_audios_dispatches_to_child_adult(monkeypatch: pytest.MonkeyPatc
     mock_fn.assert_called_once()
 
 
+def test_diarize_audios_dispatches_to_moss(monkeypatch: pytest.MonkeyPatch) -> None:
+    """diarize_audios routes an OpenMOSS-Team/MOSS-Transcribe-Diarize model id to the MOSS backend."""
+    sentinel = [[ScriptLine(speaker="S01", start=0.0, end=1.0, text="hi")]]
+    mock_fn = Mock(return_value=sentinel)
+    monkeypatch.setattr(diarization_api, "diarize_audios_with_moss", mock_fn)
+
+    model = HFModel(path_or_uri="OpenMOSS-Team/MOSS-Transcribe-Diarize")
+    result = diarize_audios(audios=[], model=model)
+
+    assert result is sentinel
+    mock_fn.assert_called_once()
+
+
 @pytest.mark.skip(reason="Downloads a 7B model; run manually on a GPU machine")
 def test_diarize_audios_with_vibevoice(resampled_mono_audio_sample: Audio) -> None:
     """Test diarizing audios with VibeVoice-ASR-HF."""
@@ -157,6 +170,17 @@ def test_diarize_audios_with_vibevoice(resampled_mono_audio_sample: Audio) -> No
 
     model = HFModel(path_or_uri="microsoft/VibeVoice-ASR-HF")
     results = diarize_audios_with_vibevoice(audios=[resampled_mono_audio_sample], model=model)
+    assert len(results) == 1
+    assert all(isinstance(line, ScriptLine) for line in results[0])
+
+
+@pytest.mark.skip(reason="Provisions a dedicated venv and downloads a model; run manually")
+def test_diarize_audios_with_moss(resampled_mono_audio_sample: Audio) -> None:
+    """Test diarizing audios with MOSS-Transcribe-Diarize."""
+    from senselab.audio.tasks.speaker_diarization.moss import diarize_audios_with_moss
+
+    model = HFModel(path_or_uri="OpenMOSS-Team/MOSS-Transcribe-Diarize")
+    results = diarize_audios_with_moss(audios=[resampled_mono_audio_sample], model=model)
     assert len(results) == 1
     assert all(isinstance(line, ScriptLine) for line in results[0])
 

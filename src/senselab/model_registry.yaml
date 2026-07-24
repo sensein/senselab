@@ -197,6 +197,14 @@
   training_data: Simulated child-adult conversations
   recommended_for: Child/adult/overlap speaker-role labeling, not identity (via subprocess venv, CUDA only)
 
+- name: MOSS-Transcribe-Diarize
+  task: speaker_diarization
+  source: OpenMOSS-Team
+  model_id: OpenMOSS-Team/MOSS-Transcribe-Diarize
+  parameters: 0.9B
+  training_data: OpenMOSS proprietary
+  recommended_for: Unified ASR + diarization, lightweight and CPU-plausible (via subprocess venv, transformers>=5.6)
+
 # Speech Emotion Recognition
 - name: SUPERB SER (IEMOCAP)
   task: speech_emotion_recognition
