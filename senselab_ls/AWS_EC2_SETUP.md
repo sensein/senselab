@@ -241,21 +241,47 @@ aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
 
 ---
 
-## Step 6 — Connect, set secrets, start backends
+## Step 6 — Connect, configure, and start the backend
 
-**Via Console**
-1. EC2 → Instances → select it → **Connect** → **Session Manager** (or **SSH client** for the
-   `ssh` command with your `.pem`).
-2. Set secrets and start the backends (see `ML_BACKEND_PLAN.md`):
-   ```bash
-   export HF_TOKEN=... LABEL_STUDIO_URL=https://<ls-host> LABEL_STUDIO_API_KEY=...
-   ```
+Give the Step 4 bootstrap a few minutes after launch to finish before connecting.
 
-**Via CLI**
+**Connect** — Console: EC2 → Instances → select → **Connect** → **Session Manager**; or SSH:
 ```bash
 aws ssm start-session --target "$INSTANCE_ID"
-# or: ssh -i ~/.ssh/senselab-ls-ml-key.pem ubuntu@<public-dns>
+# or:  ssh -i ~/.ssh/senselab-ls-ml-key.pem ubuntu@<public-dns>
 ```
+
+**1. Confirm the bootstrap finished** (it installed uv, cloned the repo, built `/opt/lsml-venv`):
+```bash
+tail -n 20 /var/log/cloud-init-output.log     # should show the uv pip installs completing
+ls /opt/lsml-venv/bin/label-studio-ml         # this file should exist
+```
+
+**2. Set secrets via the env file** (do NOT `export` — the file persists across restarts):
+```bash
+cd /opt/senselab/senselab_ls/deploy
+cp backend.env.example backend.env
+chmod 600 backend.env
+nano backend.env      # set HF_TOKEN, LABEL_STUDIO_API_KEY, and the real bucket in B2AI_DATASET_ROOT
+```
+
+**3. Start the backend** (systemd → auto-restart + survives reboot):
+```bash
+sudo cp /opt/senselab/senselab_ls/deploy/diarization.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now diarization
+sudo systemctl status diarization --no-pager   # want: active (running)
+journalctl -u diarization -f                   # watch startup / first model download
+```
+
+**4. Health check:**
+```bash
+curl http://localhost:9090/health              # -> {"status":"UP", ...}
+```
+
+**5. Register in Label Studio (HumanSignal cloud):** follow `senselab_ls/deploy/README.md` —
+set the project's labeling config, confirm the security group allows the HumanSignal egress IPs
+on 9090 (Step 2), then **Connect Model** at `http://<ec2-public-dns>:9090`.
 
 ---
 
