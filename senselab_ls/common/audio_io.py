@@ -1,10 +1,15 @@
 """Resolve an audio reference to a senselab ``Audio``.
 
-Supports the three reference forms a Label Studio task can carry:
+Handles every reference form a Label Studio task can carry:
 
-* ``s3://bucket/key`` -- read directly via boto3 (the EC2 instance role grants S3 read),
-* ``http(s)://...`` -- an LS-hosted upload or presigned URL,
-* a local filesystem path (dev / testing).
+* ``s3://bucket/key`` -- read directly via boto3 (the EC2 instance role grants S3 read); this is
+  the b2ai path, where the ref keys both the bytes and the dataset metadata.
+* Label-Studio-hosted refs -- an uploaded file (``upload/<proj>/<file>`` or
+  ``/data/upload/...``), local-storage (``/data/local-files?d=...``), or an ``http(s)://`` URL.
+  All of these are resolved by ``http_downloader`` (i.e. ``LabelStudioMLBase.get_local_path``,
+  which downloads with ``LABEL_STUDIO_URL`` + ``LABEL_STUDIO_API_KEY`` and even presigns cloud
+  storage when given ``task_id``).
+* an existing local filesystem path (dev / testing).
 
 boto3 and requests are imported lazily so unit tests that use local paths need neither.
 """
@@ -26,22 +31,39 @@ def load_audio(
 ) -> Audio:
     """Load ``ref`` into a senselab ``Audio``.
 
+    Resolution order: ``s3://`` (boto3) → existing local file → Label-Studio-hosted (via
+    ``http_downloader``) → bare ``http(s)://`` (direct GET).
+
     Args:
-        ref: An ``s3://`` URI, an ``http(s)://`` URL, or a local path.
-        http_downloader: Optional callable that downloads an HTTP(S) URL and returns a local
-            path (e.g. ``LabelStudioMLBase.get_local_path``). When omitted, an authenticated
-            GET using ``LABEL_STUDIO_API_KEY`` is used.
+        ref: An ``s3://`` URI, a Label-Studio-hosted ref (``upload/...``, ``/data/...``,
+            ``http(s)://``), or a local path.
+        http_downloader: Callable that fetches a Label-Studio-hosted ref and returns a local
+            path -- pass ``LabelStudioMLBase.get_local_path``. Required for LS-hosted refs.
 
     Returns:
         A senselab ``Audio`` constructed from the resolved local file.
+
+    Raises:
+        FileNotFoundError: If the ref is not ``s3://``/local and no ``http_downloader`` is given.
     """
     scheme = urlparse(ref).scheme
     if scheme == "s3":
         return Audio(filepath=_download_s3(ref))
+    if scheme in ("", "file") and os.path.isfile(_strip_file_scheme(ref)):
+        return Audio(filepath=_strip_file_scheme(ref))
+    if http_downloader is not None:
+        return Audio(filepath=http_downloader(ref))
     if scheme in ("http", "https"):
-        local = http_downloader(ref) if http_downloader is not None else _download_http(ref)
-        return Audio(filepath=local)
-    return Audio(filepath=ref)
+        return Audio(filepath=_download_http(ref))
+    raise FileNotFoundError(
+        f"Cannot resolve audio ref {ref!r}: not s3://, not an existing local file, and no Label "
+        f"Studio downloader available (set LABEL_STUDIO_URL + LABEL_STUDIO_API_KEY)."
+    )
+
+
+def _strip_file_scheme(ref: str) -> str:
+    """Return ``ref`` without a leading ``file://`` scheme."""
+    return ref[len("file://") :] if ref.startswith("file://") else ref
 
 
 def _download_s3(uri: str) -> str:

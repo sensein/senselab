@@ -84,19 +84,22 @@ class DiarizationBackend(LabelStudioMLBase):
         """
         from_name, to_name, value_key = self.label_interface.get_first_tag_occurence("Labels", "Audio")
         device = _pick_device()
-        provider = _metadata_provider()
+        b2ai_provider = _metadata_provider()
         predictions: list[dict[str, Any]] = []
         for task in tasks:
-            ref = task["data"][value_key]
+            ref = str(task["data"][value_key])
             task_id = task.get("id")
 
             def _load(resolve_ref: str, task_id: object = task_id) -> Audio:
-                """Load one audio ref, downloading HTTP(S) via this task's LS credentials."""
+                """Load one audio ref, resolving LS-hosted refs via this task's LS credentials."""
                 return load_audio(
                     resolve_ref,
                     http_downloader=lambda url: self.get_local_path(url, task_id=task_id),
                 )
 
+            # Mode is auto-detected from the ref: s3:// -> b2ai mode (Audio+ metadata + related
+            # files); anything else (an LS-uploaded/standalone file) -> no dataset metadata.
+            provider = b2ai_provider if ref.startswith("s3://") else None
             audio_plus = build_audio_plus(ref, audio_loader=_load, metadata_provider=provider)
             segments = engine.diarize(audio_plus.audio, model_id=DIARIZATION_MODEL_ID, device=device)
             regions = diarization_to_ls(segments, from_name, to_name=to_name)
