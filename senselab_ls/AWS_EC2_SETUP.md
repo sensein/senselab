@@ -180,6 +180,12 @@ check that log before starting the backend.
 #!/bin/bash
 set -euxo pipefail
 export HOME=/root
+
+# System audio codecs — torchcodec/torchaudio need FFmpeg's libav* (libavutil, ...);
+# the DL AMI ships without them, so audio decoding fails until this is installed.
+export DEBIAN_FRONTEND=noninteractive
+apt-get update && apt-get install -y ffmpeg
+
 curl -LsSf https://astral.sh/uv/install.sh | sh
 export PATH="/root/.local/bin:$PATH"
 

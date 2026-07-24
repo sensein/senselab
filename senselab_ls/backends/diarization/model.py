@@ -91,10 +91,20 @@ class DiarizationBackend(LabelStudioMLBase):
             task_id = task.get("id")
 
             def _load(resolve_ref: str, task_id: object = task_id) -> Audio:
-                """Load one audio ref, resolving LS-hosted refs via this task's LS credentials."""
+                """Load one audio ref, resolving LS-hosted refs via this task's LS credentials.
+
+                Pass host + token explicitly so ``get_local_path`` uses the token directly (legacy
+                ``Token`` auth) instead of the PAT-refresh path, which otherwise falls back to the
+                machine ``HOSTNAME`` and fails with connection-refused.
+                """
                 return load_audio(
                     resolve_ref,
-                    http_downloader=lambda url: self.get_local_path(url, task_id=task_id),
+                    http_downloader=lambda url: self.get_local_path(
+                        url,
+                        task_id=task_id,
+                        ls_host=os.getenv("LABEL_STUDIO_URL"),
+                        ls_access_token=os.getenv("LABEL_STUDIO_API_KEY"),
+                    ),
                 )
 
             # Mode is auto-detected from the ref: s3:// -> b2ai mode (Audio+ metadata + related

@@ -46,3 +46,17 @@ storage, it is fetched over the LS API using `LABEL_STUDIO_URL` + `LABEL_STUDIO_
 curl http://<ec2-host>:9090/health
 ```
 First real prediction downloads the pyannote model (needs `HF_TOKEN` + the accepted licence).
+
+## Troubleshooting
+- **`torchcodec … libavutil.so.NN: cannot open shared object file`** → FFmpeg isn't installed
+  (audio decoding fails). Install it and restart: `apt-get update && apt-get install -y ffmpeg`
+  then `systemctl restart diarization`. (The Step 4 bootstrap installs it on new instances.)
+- **Health check `SSL: WRONG_VERSION_NUMBER`** → you registered `https://` but the backend serves
+  HTTP; use `http://<host>:9090` (or front it with TLS).
+- **`sh: python: not found` / service exits 0** → don't use `label-studio-ml start`; run the
+  `_wsgi.py` with the venv Python (the systemd unit already does this).
+- **`/predict` 500 with `httpx ConnectError [Errno 111] Connection refused`** (in the token /
+  `get_local_path` path) → `LABEL_STUDIO_URL` isn't set (the SDK falls back to the machine
+  hostname) and/or you're using a Personal Access Token. Set `LABEL_STUDIO_URL=https://app.humansignal.com`
+  in `backend.env` and use a **Legacy Token** for `LABEL_STUDIO_API_KEY`, then restart. (Only
+  needed for LS-hosted/uploaded audio; `s3://` tasks don't hit this path.)
