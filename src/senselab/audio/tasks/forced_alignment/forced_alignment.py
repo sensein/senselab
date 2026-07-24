@@ -25,6 +25,7 @@ from senselab.audio.tasks.forced_alignment.data_structures import (
 )
 from senselab.audio.tasks.preprocessing import extract_segments, pad_audios
 from senselab.utils.data_structures import DeviceType, HFModel, Language, ScriptLine, _select_device_and_dtype
+from senselab.utils.dependencies import load_hf_resilient
 
 try:
     from nltk.tokenize.punkt import PunktParameters, PunktSentenceTokenizer
@@ -654,10 +655,17 @@ def _load_mms_aligner(
     """
     key = (MMS_MODEL_ID, iso3)
     if key not in cache:
-        processor = Wav2Vec2Processor.from_pretrained(MMS_MODEL_ID)
+        # Resolve the ref to an immutable SHA once and load pinned + local-only so
+        # the per-call Hub version check (the 429 source) is skipped for a cached model.
+        processor = load_hf_resilient(
+            Wav2Vec2Processor.from_pretrained, MMS_MODEL_ID, repo_id=MMS_MODEL_ID, revision="main"
+        )
         processor.tokenizer.set_target_lang(iso3)  # type: ignore[attr-defined]
-        model = Wav2Vec2ForCTC.from_pretrained(
+        model = load_hf_resilient(
+            Wav2Vec2ForCTC.from_pretrained,
             MMS_MODEL_ID,
+            repo_id=MMS_MODEL_ID,
+            revision="main",
             target_lang=iso3,
             ignore_mismatched_sizes=True,
         ).to(device.value)  # type: ignore[arg-type]
@@ -736,10 +744,15 @@ def align_transcriptions(
             # otherwise silently serve the first revision's weights.
             cache_key = f"{model_variant.path_or_uri}@{model_variant.revision or 'main'}"
             if cache_key not in loaded_processors_and_models:
-                processor = Wav2Vec2Processor.from_pretrained(
-                    model_variant.path_or_uri, revision=model_variant.revision
+                repo = str(model_variant.path_or_uri)
+                rev = model_variant.revision or "main"
+                # Resolve->SHA-pin so a cached aligner loads with no per-call Hub HEAD.
+                processor = load_hf_resilient(
+                    Wav2Vec2Processor.from_pretrained, model_variant.path_or_uri, repo_id=repo, revision=rev
                 )
-                _w2v = Wav2Vec2ForCTC.from_pretrained(model_variant.path_or_uri, revision=model_variant.revision)
+                _w2v = load_hf_resilient(
+                    Wav2Vec2ForCTC.from_pretrained, model_variant.path_or_uri, repo_id=repo, revision=rev
+                )
                 model = _w2v.to(device.value)  # type: ignore[arg-type]
                 loaded_processors_and_models[cache_key] = (processor, model)
             processor, model = loaded_processors_and_models[cache_key]
