@@ -15,5 +15,5 @@ set +a
 repo_root="$(cd "${here}/../.." && pwd)"
 export PYTHONPATH="${PYTHONPATH:-}:${repo_root}"
 cd "$repo_root"
-exec "${LSML_VENV:-/opt/lsml-venv}/bin/label-studio-ml" \
-  start senselab_ls/backends/diarization -p "${PORT:-9090}" --host 0.0.0.0
+exec "${LSML_VENV:-/opt/lsml-venv}/bin/python" \
+  senselab_ls/backends/diarization/_wsgi.py -p "${PORT:-9090}" --host 0.0.0.0

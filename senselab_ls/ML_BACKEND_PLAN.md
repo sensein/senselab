@@ -37,6 +37,7 @@ senselab_ls/                   # package dir — named to NOT shadow the SDK's `
     engine.py                  # thin senselab callers per aspect (diarize now; asr/scene next) + prepare_audio
   backends/
     diarization/model.py       # DiarizationBackend(LabelStudioMLBase)   :9090
+    diarization/_wsgi.py       # WSGI entrypoint (run with venv python; exposes `app`)
     asr/model.py               # ASRBackend(LabelStudioMLBase)           :9091 (later)
     scene/model.py             # SceneBackend(LabelStudioMLBase)         :9092 (later)
   tests/
@@ -209,15 +210,16 @@ Diarization/scene need their label set declared. Two options:
 
 ## Running on EC2 (multiple backends)
 
-Each backend is its own process/port (matches the SG ports in `AWS_EC2_SETUP.md`):
+Each backend is its own process/port (matches the SG ports in `AWS_EC2_SETUP.md`). Run each
+backend's `_wsgi.py` directly with the venv Python (do **not** use `label-studio-ml start` — it
+shells out to bare `python`, which isn't on PATH on a stock Ubuntu image). Env comes from
+`backend.env`; in production use the systemd unit in `deploy/`:
 
 ```bash
-source /opt/lsml-venv/bin/activate
-export HF_TOKEN=... LABEL_STUDIO_URL=https://<ls-host> LABEL_STUDIO_API_KEY=...
-export PYTHONPATH=/opt/senselab:$PYTHONPATH   # so `senselab_ls` package is importable
-label-studio-ml start senselab_ls/backends/diarization -p 9090 --host 0.0.0.0 &
-label-studio-ml start senselab_ls/backends/asr         -p 9091 --host 0.0.0.0 &
-label-studio-ml start senselab_ls/backends/scene       -p 9092 --host 0.0.0.0 &
+cd /opt/senselab   # PYTHONPATH=/opt/senselab set via backend.env
+/opt/lsml-venv/bin/python senselab_ls/backends/diarization/_wsgi.py -p 9090 --host 0.0.0.0 &
+/opt/lsml-venv/bin/python senselab_ls/backends/asr/_wsgi.py         -p 9091 --host 0.0.0.0 &  # later
+/opt/lsml-venv/bin/python senselab_ls/backends/scene/_wsgi.py       -p 9092 --host 0.0.0.0 &  # later
 ```
 
 Wrap in systemd units (or a single `docker-compose.yml` with three services) so start/stop of
@@ -245,7 +247,7 @@ enable "Retrieve predictions when loading a task automatically."
 ## Verification
 
 1. `cd src && uv run pytest && uv run ruff check .` — refactor keeps existing suite green.
-2. **Local backend**: `label-studio-ml start backends/diarization -p 9090`; then
+2. **Local backend**: `python senselab_ls/backends/diarization/_wsgi.py -p 9090`; then
    `curl localhost:9090/health` → 200, and POST a task pointing at a local/synthetic wav to
    `/predict` → speaker `labels` regions returned. The scaffold's `test_api.py` covers this.
 3. **EC2**: start instance, start backends, register URLs in a test LS project, import an audio
