@@ -1,0 +1,17 @@
+<!--
+Label Studio labeling config for the diarization backend.
+The control name MUST be "diarization" (the backend's get_first_tag_occurence("Labels","Audio")
+returns this as from_name) and the object "audio" (value="$audio"). pyannote emits SPEAKER_00…;
+predeclare enough speaker labels, plus SPEAKER_UNKNOWN for the fallback.
+-->
+<View>
+  <Audio name="audio" value="$audio"/>
+  <Labels name="diarization" toName="audio">
+    <Label value="SPEAKER_00"/>
+    <Label value="SPEAKER_01"/>
+    <Label value="SPEAKER_02"/>
+    <Label value="SPEAKER_03"/>
+    <Label value="SPEAKER_04"/>
+    <Label value="SPEAKER_UNKNOWN"/>
+  </Labels>
+</View>

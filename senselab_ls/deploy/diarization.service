@@ -1,0 +1,15 @@
+[Unit]
+Description=senselab Label Studio diarization ML backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/senselab
+EnvironmentFile=/opt/senselab/senselab_ls/deploy/backend.env
+ExecStart=/opt/lsml-venv/bin/label-studio-ml start senselab_ls/backends/diarization -p 9090 --host 0.0.0.0
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
