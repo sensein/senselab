@@ -97,14 +97,35 @@ done
 
 ## Step 3 — Instance role (S3 audio + SSM shell) — recommended
 
-Lets the box (a) read audio **directly from S3** (the same bucket LS syncs tasks from — faster
-than the LS API round-trip) and (b) be reached via SSM without an open SSH port. Scope the S3
-policy down to the one bucket in production.
+Lets the box (a) read the b2ai dataset **directly from S3** and (b) be reached via SSM without
+an open SSH port.
+
+The b2ai dataset lives under `s3://<B2AI_DATASET_BUCKET>/data` (BIDS root: `phenotype/` +
+`sub-*/`). The backend reads it via `B2AI_DATASET_ROOT=s3://<B2AI_DATASET_BUCKET>/data`, so the
+role needs read on exactly that bucket/prefix (fill in the real bucket name — kept out of this
+repo intentionally):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Sid": "ListDatasetBucket", "Effect": "Allow", "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::<B2AI_DATASET_BUCKET>",
+      "Condition": { "StringLike": { "s3:prefix": ["data/*"] } } },
+    { "Sid": "ReadDatasetObjects", "Effect": "Allow", "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::<B2AI_DATASET_BUCKET>/data/*" }
+  ]
+}
+```
+
+> If Label Studio serves audio from a *different* bucket, add that bucket's ARNs too.
 
 **Via Console**
-1. IAM → **Roles → Create role** → Trusted entity **AWS service → EC2**.
-2. Attach policies: **AmazonSSMManagedInstanceCore** and **AmazonS3ReadOnlyAccess**.
-3. Name it `senselab-ls-ml-role` → **Create role** (an instance profile of the same name is
+1. IAM → **Policies → Create policy** → JSON tab → paste the policy above → name it
+   `senselab-b2ai-s3-read`.
+2. IAM → **Roles → Create role** → Trusted entity **AWS service → EC2**.
+3. Attach **AmazonSSMManagedInstanceCore** and **senselab-b2ai-s3-read**.
+4. Name it `senselab-ls-ml-role` → **Create role** (an instance profile of the same name is
    created automatically for Console launches).
 
 **Via CLI**
@@ -113,12 +134,13 @@ cat > /tmp/ec2-trust.json <<'JSON'
 { "Version":"2012-10-17","Statement":[{"Effect":"Allow",
   "Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}
 JSON
+# save the JSON policy above to /tmp/b2ai-s3-read.json first
 aws iam create-role --role-name senselab-ls-ml-role \
   --assume-role-policy-document file:///tmp/ec2-trust.json
 aws iam attach-role-policy --role-name senselab-ls-ml-role \
   --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
-aws iam attach-role-policy --role-name senselab-ls-ml-role \
-  --policy-arn arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+aws iam put-role-policy --role-name senselab-ls-ml-role \
+  --policy-name senselab-b2ai-s3-read --policy-document file:///tmp/b2ai-s3-read.json
 aws iam create-instance-profile --instance-profile-name senselab-ls-ml-role
 aws iam add-role-to-instance-profile --instance-profile-name senselab-ls-ml-role \
   --role-name senselab-ls-ml-role
