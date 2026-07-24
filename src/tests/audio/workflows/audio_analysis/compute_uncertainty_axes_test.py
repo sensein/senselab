@@ -533,6 +533,7 @@ def test_presence_rows_carry_source_columns() -> None:
     assert any(r.src_speech is not None for r in presence.rows)
     for r in presence.rows:
         if r.src_speech is not None:
+            assert r.src_people is not None and r.src_machine is not None and r.src_environment is not None
             total = r.src_speech + r.src_people + r.src_machine + r.src_environment
             assert abs(total - 1.0) < 1e-6
             assert r.src_dominant == "speech"
@@ -571,7 +572,7 @@ def test_presence_confidence_uncertainty_split_and_instability(monkeypatch: pyte
     assert all(r.presence_confidence is not None for r in presence.rows)
     assert all(r.presence_uncertainty is not None for r in presence.rows)
     # Instability raises presence_uncertainty above the legacy decisiveness uncertainty.
-    assert any(r.presence_uncertainty > (r.aggregated_uncertainty or 0.0) + 1e-6 for r in presence.rows)
+    assert any((r.presence_uncertainty or 0.0) > (r.aggregated_uncertainty or 0.0) + 1e-6 for r in presence.rows)
     # aggregated_uncertainty (legacy column) is untouched by the split.
     assert all(r.aggregated_uncertainty is None or 0.0 <= r.aggregated_uncertainty <= 1.0 for r in presence.rows)
     assert presence.provenance["frame_posteriors"]["segmentation"]["available"] is True
