@@ -199,13 +199,17 @@ echo 'HF_HOME=/opt/hf-cache' >> /etc/environment
 
 ## Step 5 — Launch the instance
 
-Use an AWS **Deep Learning Base OSS (Ubuntu 22.04)** AMI — NVIDIA driver + CUDA preinstalled.
-(CPU-only: a plain Ubuntu 22.04 AMI.)
+Use an AWS **Deep Learning Base AMI (Ubuntu)** — it ships the NVIDIA driver, which is all we need
+(our pip `torch` bundles its own CUDA runtime). AWS's current offering is
+**"Deep Learning Base AMI with Single CUDA (Ubuntu 24.04)"** — that is fine (any Ubuntu DL *Base*
+AMI works; the CUDA version and 22.04-vs-24.04 don't matter). Login user is `ubuntu`.
+(CPU-only: a plain Ubuntu AMI.)
 
 **Via Console**
 1. EC2 → **Instances → Launch instances**.
 2. **Name**: `senselab-ls-ml`.
-3. **AMI**: search *Deep Learning Base OSS Nvidia Driver GPU Ubuntu 22.04* → select it.
+3. **AMI**: search *Deep Learning Base AMI* → pick **Single CUDA (Ubuntu 24.04)**, **64-bit
+   (x86)** — `g4dn`/`g5` are x86 instances, so use the x86_64 AMI (not arm64).
 4. **Instance type**: `g4dn.xlarge`.
 5. **Key pair**: `senselab-ls-ml-key` (or *Proceed without* if SSM-only).
 6. **Network settings → Select existing security group** → `senselab-ls-ml-sg`.
@@ -217,8 +221,10 @@ Use an AWS **Deep Learning Base OSS (Ubuntu 22.04)** AMI — NVIDIA driver + CUD
 **Via CLI**
 ```bash
 # first: save the Step 4 bootstrap script to /tmp/user-data.sh
-AMI_ID=$(aws ssm get-parameters \
-  --names /aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-ubuntu-22.04/latest/ami-id \
+# Find the current DL Base AMI id (the SSM parameter names change; list and pick one):
+aws ssm get-parameters-by-path --path /aws/service/deeplearning/ami --recursive \
+  --query "Parameters[?contains(Name,'base') && contains(Name,'ubuntu')].Name" --output text | tr '\t' '\n' | grep ami-id
+AMI_ID=$(aws ssm get-parameters --names "<paste-the-chosen-parameter-name>" \
   --query 'Parameters[0].Value' --output text)
 INSTANCE_ID=$(aws ec2 run-instances \
   --image-id "$AMI_ID" --instance-type g4dn.xlarge \
