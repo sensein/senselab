@@ -157,11 +157,24 @@ aws iam add-role-to-instance-profile --instance-profile-name senselab-ls-ml-role
 
 ---
 
-## Step 4 — First-boot bootstrap script (shared by both paths)
+## Step 4 — First-boot bootstrap (cloud-init "user data")
 
-This installs `uv`, senselab, and the LS SDK, and puts the HF cache on the persistent volume.
-**No secrets here** — `HF_TOKEN` / `LABEL_STUDIO_*` are set post-boot (Step 6). You paste it into
-the Console launch wizard's *User data* box, or pass it to `run-instances --user-data`.
+You **don't run this by hand.** It is EC2 *user data*: a script the instance runs
+**automatically, once, as `root`, on first boot**. You supply it at launch time (Step 5), one of
+three ways:
+
+- **Console (recommended):** paste the whole script below into **Advanced details → User data**
+  in the Launch wizard (Step 5.8).
+- **CLI:** save it to `/tmp/user-data.sh` and pass `run-instances --user-data file:///tmp/user-data.sh`
+  (Step 5 CLI block already does this).
+- **Manual fallback:** if you launch *without* user data, connect after boot (Step 6) and run the
+  same commands yourself as root.
+
+It installs `uv`, clones **this branch** (which contains `senselab_ls/`), builds the venv, and
+points the HF cache at the persistent volume. **No secrets here** — `HF_TOKEN` / `LABEL_STUDIO_*`
+are set post-boot in Step 6. Progress is logged on the instance to
+`/var/log/cloud-init-output.log`; first boot takes several minutes (it pulls torch, etc.), so
+check that log before starting the backend.
 
 ```bash
 #!/bin/bash
@@ -170,12 +183,13 @@ export HOME=/root
 curl -LsSf https://astral.sh/uv/install.sh | sh
 export PATH="/root/.local/bin:$PATH"
 
-git clone https://github.com/sensein/senselab.git /opt/senselab || true
+# Clone the branch that contains senselab_ls/ (drop -b once it merges to the default branch):
+git clone -b label-studio-ml-backend-docs https://github.com/sensein/senselab.git /opt/senselab || true
 cd /opt/senselab
 uv venv /opt/lsml-venv --python 3.12
 source /opt/lsml-venv/bin/activate
 uv pip install -e ".[audio]"                      # senselab (uv-locked)
-uv pip install -r senselab_ls/requirements.txt    # backend extras: label-studio-ml + sdk + boto3
+uv pip install -r senselab_ls/requirements.txt    # backend extras: label-studio-ml (git) + sdk + redis + rq + boto3
 
 mkdir -p /opt/hf-cache
 echo 'HF_HOME=/opt/hf-cache' >> /etc/environment
@@ -202,6 +216,7 @@ Use an AWS **Deep Learning Base OSS (Ubuntu 22.04)** AMI — NVIDIA driver + CUD
 
 **Via CLI**
 ```bash
+# first: save the Step 4 bootstrap script to /tmp/user-data.sh
 AMI_ID=$(aws ssm get-parameters \
   --names /aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-ubuntu-22.04/latest/ami-id \
   --query 'Parameters[0].Value' --output text)
