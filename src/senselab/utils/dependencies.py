@@ -495,8 +495,12 @@ def load_hf_resilient(
     Resolves ``(repo_id, revision)`` to an immutable SHA (download-once), then calls
     ``loader(*args, **kwargs)``. When ``pass_revision`` (the default, for loaders that
     accept a ``revision`` — ``transformers`` ``from_pretrained``/``pipeline``,
-    ``sentence-transformers``), injects ``revision=<sha>`` and ``local_files_only=True``
-    so huggingface_hub's commit-hash shortcut returns cached files with zero network.
+    ``sentence-transformers``), injects only ``revision=<sha>``: a full commit SHA
+    triggers huggingface_hub's commit-hash shortcut, which returns cached files with
+    **zero** network (no HEAD) without needing ``local_files_only``. We deliberately do
+    NOT inject ``local_files_only`` — ``transformers.pipeline`` routes unknown kwargs
+    into the model's ``generate`` params and raises ``ValueError: model_kwargs are not
+    used by the model: ['local_files_only']`` at inference.
     Set ``pass_revision=False`` for loaders without a ``revision`` argument and point
     them at :func:`resolve_model`'s snapshot path instead. Transient errors are retried.
 
@@ -508,7 +512,6 @@ def load_hf_resilient(
         sha, _ = resolve_model(repo_id, revision, token=token)
         if pass_revision:
             kwargs.setdefault("revision", sha)
-            kwargs.setdefault("local_files_only", True)
         return loader(*args, **kwargs)
 
     return retry_on_transient_error(_call)
