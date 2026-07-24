@@ -251,6 +251,13 @@ aws ssm start-session --target "$INSTANCE_ID"
 # or:  ssh -i ~/.ssh/senselab-ls-ml-key.pem ubuntu@<public-dns>
 ```
 
+> SSM connects as the non-root **`ssm-user`** (SSH connects as **`ubuntu`**). Everything below
+> lives under `/opt` and `/var/log`, created by cloud-init as **root**, so become root once —
+> the rest of Step 6 assumes a root shell:
+> ```bash
+> sudo -i
+> ```
+
 **1. Confirm the bootstrap finished** (it installed uv, cloned the repo, built `/opt/lsml-venv`):
 ```bash
 tail -n 20 /var/log/cloud-init-output.log     # should show the uv pip installs completing
