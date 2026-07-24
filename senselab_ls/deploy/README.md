@@ -56,7 +56,8 @@ First real prediction downloads the pyannote model (needs `HF_TOKEN` + the accep
 - **`sh: python: not found` / service exits 0** → don't use `label-studio-ml start`; run the
   `_wsgi.py` with the venv Python (the systemd unit already does this).
 - **`/predict` 500 with `httpx ConnectError [Errno 111] Connection refused`** (in the token /
-  `get_local_path` path) → `LABEL_STUDIO_URL` isn't set (the SDK falls back to the machine
-  hostname) and/or you're using a Personal Access Token. Set `LABEL_STUDIO_URL=https://app.humansignal.com`
-  in `backend.env` and use a **Legacy Token** for `LABEL_STUDIO_API_KEY`, then restart. (Only
-  needed for LS-hosted/uploaded audio; `s3://` tasks don't hit this path.)
+  `get_local_path` path) → **`LABEL_STUDIO_URL` isn't set**, so the SDK's Personal-Access-Token
+  refresh falls back to the machine hostname. Set `LABEL_STUDIO_URL=https://app.humansignal.com`
+  in `backend.env` and restart. Both token types work once it's set — a **Legacy Token** is used
+  directly (no refresh, non-expiring), a **PAT** is auto-refreshed by the SDK (but expires per the
+  org TTL, so it needs rotation). Only affects LS-hosted/uploaded audio; `s3://` tasks skip it.
