@@ -93,9 +93,10 @@ class DiarizationBackend(LabelStudioMLBase):
             def _load(resolve_ref: str, task_id: object = task_id) -> Audio:
                 """Load one audio ref, resolving LS-hosted refs via this task's LS credentials.
 
-                Pass host + token explicitly so ``get_local_path`` uses the token directly (legacy
-                ``Token`` auth) instead of the PAT-refresh path, which otherwise falls back to the
-                machine ``HOSTNAME`` and fails with connection-refused.
+                We pass ``ls_host`` but NOT the token, so the SDK resolves it itself: a legacy
+                token is used directly, a Personal Access Token is refreshed. Both require
+                ``LABEL_STUDIO_URL`` to be set (the SDK otherwise falls back to the machine
+                ``HOSTNAME`` and the PAT refresh fails with connection-refused).
                 """
                 return load_audio(
                     resolve_ref,
@@ -103,7 +104,6 @@ class DiarizationBackend(LabelStudioMLBase):
                         url,
                         task_id=task_id,
                         ls_host=os.getenv("LABEL_STUDIO_URL"),
-                        ls_access_token=os.getenv("LABEL_STUDIO_API_KEY"),
                     ),
                 )
 
