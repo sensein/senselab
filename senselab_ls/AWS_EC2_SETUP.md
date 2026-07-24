@@ -68,30 +68,39 @@ chmod 400 ~/.ssh/senselab-ls-ml-key.pem
 
 ## Step 2 — Security group
 
-Restrict inbound to the **Label Studio server's** IP — that host must reach the backend ports,
-not your laptop. Never open `0.0.0.0/0`. If LS is HumanSignal-cloud, whitelist its egress range
-or front the box with TLS + a token header.
+The **Label Studio server connects inbound** to the backend ports — restrict the source to it,
+never open `0.0.0.0/0`. **app.humansignal.com (cloud)** connects from three published egress IPs
+(verify current values in the HumanSignal SaaS docs before relying on them):
+
+```
+3.219.3.197/32   34.237.73.3/32   44.216.17.242/32
+```
 
 **Via Console**
 1. EC2 → **Network & Security → Security Groups** → **Create security group**.
 2. Name `senselab-ls-ml-sg`, VPC = the default VPC.
-3. **Inbound rules → Add rule** for each:
-   - SSH `22` — Source: *My IP* (only if using SSH).
-   - Custom TCP `9090`, `9091`, `9092` — Source: Label Studio's IP/CIDR.
+3. **Inbound rules → Add rule**:
+   - SSH `22` — Source: *My IP* (only if using SSH; SSM avoids this).
+   - Custom TCP `9090` (+ `9091`/`9092` when ASR/scene land) — add one rule **per HumanSignal
+     egress IP** above as the Source.
 4. **Create security group**.
 
 **Via CLI**
 ```bash
-MY_IP=$(curl -s https://checkip.amazonaws.com)/32
-VPC_ID=$(aws ec2 describe-vpcs --filters Name=isDefault,Values=true \
-  --query 'Vpcs[0].VpcId' --output text)
 SG_ID=$(aws ec2 create-security-group --group-name senselab-ls-ml-sg \
-  --description "senselab LS ML backend" --vpc-id "$VPC_ID" --query 'GroupId' --output text)
-aws ec2 authorize-security-group-ingress --group-id "$SG_ID" --protocol tcp --port 22 --cidr "$MY_IP"
-for p in 9090 9091 9092; do
-  aws ec2 authorize-security-group-ingress --group-id "$SG_ID" --protocol tcp --port $p --cidr "$MY_IP"
+  --description "senselab LS ML backend" \
+  --vpc-id "$(aws ec2 describe-vpcs --filters Name=isDefault,Values=true --query 'Vpcs[0].VpcId' --output text)" \
+  --query 'GroupId' --output text)
+aws ec2 authorize-security-group-ingress --group-id "$SG_ID" --protocol tcp --port 22 \
+  --cidr "$(curl -s https://checkip.amazonaws.com)/32"          # SSH from your IP (optional)
+for ip in 3.219.3.197 34.237.73.3 44.216.17.242; do             # HumanSignal cloud egress IPs
+  aws ec2 authorize-security-group-ingress --group-id "$SG_ID" --protocol tcp --port 9090 --cidr "$ip/32"
 done
 ```
+
+> **HTTP vs HTTPS:** the quickest path is plain HTTP on `9090` restricted to those 3 IPs (the
+> payload is audio refs + predictions; audio bytes are fetched separately from S3). For anything
+> beyond a test, front the backend with TLS (nginx/caddy) and register the `https://` URL.
 
 ---
 

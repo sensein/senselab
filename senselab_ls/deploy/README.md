@@ -24,12 +24,20 @@ sudo systemctl daemon-reload && sudo systemctl enable --now diarization
 bash senselab_ls/deploy/run_diarization_backend.sh
 ```
 
-## Register in Label Studio
-1. Create/point a project at the audio tasks; set its labeling config to
+## Register in Label Studio (HumanSignal cloud)
+1. In `backend.env`, set `LABEL_STUDIO_URL=https://app.humansignal.com` and
+   `LABEL_STUDIO_API_KEY=<token from Account & Settings → Access Token>`.
+2. Create/point a project at the audio tasks; set its labeling config to
    `labeling_config_diarization.xml`.
-2. Project → Settings → Model → add `http://<ec2-host>:9090` (scope the security group to the LS
-   server's IP; prefer TLS + a token header). Enable "Retrieve predictions when loading a task
+3. Ensure the security group allows the HumanSignal egress IPs on `9090` (see
+   `../AWS_EC2_SETUP.md` Step 2).
+4. Project → Settings → Model → **Connect Model** → URL `http://<ec2-public-dns>:9090`
+   (or the `https://` URL if fronted with TLS). Enable "Retrieve predictions when loading a task
    automatically".
+
+**Audio source:** if task `data.audio` is an `s3://` key into the b2ai bucket, the backend reads
+it directly via the instance role (no LS round-trip). If audio is uploaded into LS/HumanSignal
+storage, it is fetched over the LS API using `LABEL_STUDIO_URL` + `LABEL_STUDIO_API_KEY`.
 
 ## Smoke test
 ```bash
