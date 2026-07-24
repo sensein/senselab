@@ -1,0 +1,133 @@
+# Tasks: Uncertainty-driven adaptive analysis workflow
+
+**Input**: Design documents from `/specs/20260723-225523-dynamic-uncertainty-workflow/`
+**Prerequisites**: plan.md, spec.md, research.md (D1–D12), data-model.md, contracts/
+
+**Implementation status (2026-07-24)**: all tasks below are implemented on branch
+`20260722-175022-scene-quality-utterance` under `src/senselab/audio/workflows/audio_analysis/`
+(`votes.py` + `adaptive/`) and `scripts/{analyze_audio,adaptive_loop,make_degradation_suite}.py`.
+The loop is **artifact-driven**: `scripts/adaptive_loop.py` runs over a completed analyze_audio run
+dir + the content-addressable cache; in-process invocation from analyze_audio itself (the full
+`contracts/cli.md` flag set) is tracked as Phase 8 follow-up T040. An independent implementation
+audit (2026-07-24) confirmed every checked claim against the code; its remaining gaps are enumerated
+in Phase 8.
+
+## Phase 1: Setup
+
+- [X] T001 Create `adaptive/` subpackage skeleton per plan.md (`__init__.py`, module files, `policy/default.yaml`)
+- [X] T002 [P] Policy loader with defaults-merge + `policy_hash` (`adaptive/policy.py`)
+- [X] T003 [P] Light-import bootstrap for minimal environments (driver-level stub of heavy package `__init__`, `scripts/adaptive_loop.py`)
+
+## Phase 2: Foundational (blocking) — belief store (Phase A of plan.md)
+
+- [X] T004 Vote model + VoteStore with shadow/coexist/purge semantics per contracts/belief-store.md (`adaptive/belief.py`)
+- [X] T005 Ingest existing run artifacts: 6 per-pass uncertainty parquets → votes
+  (`adaptive/belief.py`); per-model ASR/alignment/diarization JSONs → word streams
+  (`adaptive/interventions.load_outcomes_dir` + `adaptive/fusion.collect_word_streams`)
+- [X] T006 Re-aggregation from votes via the existing pure aggregators (`aggregate_presence/identity/utterance`), incremental over covered buckets (FR-006)
+- [X] T007 Round-1 parity check: re-aggregated values reproduce stored `aggregated_uncertainty` (harvest/aggregate split proof, D8)
+- [X] T008 Harvest/aggregate split inside the comparator: NEW pure module `votes.py`
+  (`PassHarvest`, `aggregate_pass`, `compute_pass_deltas` — stdlib-light, unit-tested in
+  `votes_test.py`) + `compute.py` refactored to `harvest_pass` (model-touching) with
+  `compute_uncertainty_axes` as a thin wrapper. Aggregation math moved verbatim; caller-dict
+  mutation now opt-out via `mutate_passes=False` (default True preserves the timeline-plot
+  contract byte-for-byte). Verify on full env: `uv run pytest src/tests/audio/workflows/audio_analysis/`
+- [X] T009 In-process vote-store integration point: `VoteStore.from_harvests(...)` consumes
+  `PassHarvest` objects directly (no parquet round-trip); the parquet ingest path remains for
+  artifact-driven runs. Round persistence stays with the loop driver by design.
+
+## Phase 3: US1 — Cost-aware triage & conditional processing (P1)
+
+- [X] T010 [US1] Triage round 0: pure decision module (`adaptive/triage.py` — frame-posterior speech
+  gate at ~100 ms aggregation per SPEECH_PRESENCE_CERTAINTY_ANALYSIS.md, Brouhaha SNR with
+  posterior-masked DSP fallback) + `run_triage` in `scripts/analyze_audio.py`; validated live with
+  segmentation-3.0 on 4 cases (clean/conversation/silent/noise-injected)
+- [X] T011 [US1] `--enhancement {auto,always,never}` + `--triage-*` thresholds + no-speech early exit
+  (skips diarization/ASR/alignment/PPG, `run_state: "no_speech"`, `triage.json` provenance) in
+  `scripts/analyze_audio.py`; `--no-enhancement` kept as alias; default `always` preserves golden compat
+- [X] T012 [US1] `run_pass` decomposed into `_stage_{diarization,scene,features,asr,alignment,ppg}`
+  (pure code motion; task names/params — hence cache keys — byte-identical). NOTE: any edit to
+  `scripts/analyze_audio.py` rotates `wrapper_version_hash` (whole-file sha256 by design), so the
+  first post-merge run re-populates the cache once.
+- [X] T013 [US1] Budget ledger with light/medium/heavy classes, per-run caps, deferral → `next_actions` (FR-018) (`adaptive/policy.py`)
+
+## Phase 4: US2 — Targeted re-processing (P1) 🎯 prototype MVP
+
+- [X] T014 [US2] Region proposal: seed ≥ θ_high, expand ≥ θ_low, gap-merge, pad, grid-quantize, top-N by uncertainty mass (FR-010) (`adaptive/regions.py`)
+- [X] T015 [US2] Deterministic policy engine: trigger→rank→admit within budget, stable total order (FR-011, FR-025) (`adaptive/policy.py`)
+- [X] T016 [US2] U2 reserve escalation via **cache replay** (policy `reserve_asr_models`, default
+  whisper-large-v3-turbo, replayed from the content-addressable cache; re-harvest with
+  `harvest_utterance_votes`, region-scoped votes, family weights) (`adaptive/interventions.py`)
+- [X] T017 [US2] Region-scope shadowing of file-scope votes from same (model, stream) on covered buckets (D5)
+- [X] T018 [US2] U1 region re-ASR with live backends on cropped audio (`adaptive/audio_io.py` + `adaptive/backends.py`; HF whisper pipeline path with policy `u1_asr_models`; enhanced stream regenerated on demand via SepFormer with recorded raw fallback). Senselab-native backend routing (subprocess venvs) remains follow-up.
+- [X] T019 [US2] Convergence marks: converged / irreducible / budget_exhausted + ε-monotonicity + max-region-rounds (FR-017) (`adaptive/convergence.py`)
+- [X] T020 [US2] `iterations.json` decision log incl. deferred/blocked entries with trigger values (FR-020)
+
+## Phase 5: US3 — Cross-signal repair (P2)
+
+- [X] T021 [US3] S1 stream election per region with recorded scores; enhancement-artifact guard degraded to available evidence (FR-015) (`adaptive/interventions.py`)
+- [X] T022 [US3] P3 hallucination adjudication over existing evidence (available indicators: native word confidence, source masses, presence p_voice); purge semantics on both axes (C10)
+- [X] T023 [US3] C9 missed-speech correction vote (`adjudicator/missed_speech`) where phonetic/text evidence contradicts low p_voice
+- [X] T024 [US3] I1 boundary refinement (`adaptive/identity_repair.py`): consensus adjacent-cosine change-point trajectory from stored per-window embeddings (live fine-hop re-embedding available in `backends.embed_windows` for full envs); boundary-confidence from prominence
+- [X] T024a [US3] I2 re-cluster: change-point + diar-boundary segmentation, p_voice-weighted pooling, deterministic average-linkage cosine clustering, cross-model co-association consensus; refined clusters drive fusion speaker attribution + `final/diarization.json`; per-bucket `__cross_diar_label_disagreement__` recomputed with the new voter
+- [X] T025 [US3] I4 overlap posterior via per-class segmentation-3.0 (`backends.overlap_posteriors`) — code-complete; gated-model validation pending (requires HF token; guards to `next_actions` otherwise)
+- [X] T026 [US3] Aleatoric floor = max(quality, overlap posterior) in `belief._decompose` (overlap term populated by I4 when available)
+
+## Phase 6: US4 — Robust conclusion (P2)
+
+- [X] T027 [US4] Word-stream extraction from all ASR sources (native chunks + MMS/Qwen alignment words) (`adaptive/fusion.py`)
+- [X] T028 [US4] Time-aligned word-slot voting with family weights + confidences; alternates below margin (FR-021, D9)
+- [X] T029 [US4] Speaker attribution from unified identity clusters at word midpoint; `final/transcript.json` + segments rollup
+- [X] T030 [US4] `final/diarization.json`, `final/presence.parquet`, `final/convergence.json` (FR-022)
+- [X] T031 [US4] U3 consensus re-alignment (`backends.consensus_align` via torchaudio MMS_FA;
+  SIGALRM-guarded with policy `fusion.consensus_alignment{,_timeout_s}`; fallback = weighted member
+  timestamps recorded in `transcript.json.timestamps`). Guard validated live (timeout path);
+  full alignment runs after the one-time bundle download on a full env.
+- [X] T032 [US4] `adaptive/ls_final.py`: `final__consensus_transcript(+__text)`, `final__diarization`,
+  `final__presence` LS tracks (additive copies under `final/`) + `disagreements_resolved.json`
+  (round-1 entries annotated with final status, Δ, and touching intervention ids). Validated on run14
+  (21 word regions, 100 resolved entries).
+- [X] T033 [US4] Calibration mechanism: `fusion.load_calibrator` (logistic / piecewise profiles),
+  policy `calibration_profile`, `calibrated: true` flag path; unit-tested. Fitting the profile itself
+  remains with the synthetic harness (scene-quality-utterance US5).
+
+## Phase 7: Validation & evaluation
+
+- [X] T034 [P] Ground-truth evaluation harness vs Label Studio export (presence acc, transcript WER fused-vs-per-model, cluster↔speaker mapping, boundary-uncertainty check, untranscribed-region check) (`adaptive/evaluate.py`)
+- [X] T035 [P] End-to-end prototype run on `audio_48khz_mono_16bits` run dir + `updated-label-a7a37522.json`
+- [X] T036 Unit tests for pure parts: shadowing, region proposal, plan ordering determinism, fusion voting (`src/tests/audio/workflows/audio_analysis/adaptive/adaptive_prototype_test.py`)
+- [X] T036a Visual round-by-round timeline `final/timeline.png` — GT vs presence/identity/utterance (round-1 vs final overlay), regions, fired interventions with Δ, irreducible hatching, confidence-colored fused words (`adaptive/plot.py`)
+- [X] T037 Determinism e2e (`adaptive_e2e_test.py::test_t037_determinism_byte_identical`,
+  env-gated on `SENSELAB_ADAPTIVE_E2E_RUN_DIR`; hermetic — U3 network path disabled) — PASSING
+  against the reference run dir (SC-004).
+- [X] T038 Golden-compat harness (`test_t038_golden_compat_preexisting_artifacts`, env-gated on
+  `SENSELAB_GOLDEN_RUN_DIR`/`SENSELAB_CANDIDATE_RUN_DIR`): value-equality over the 9 uncertainty
+  parquets + per-task result payloads (SC-005). Requires two full-pipeline runs → execute on GPU/Mac.
+- [X] T039 Degradation suite: `scripts/make_degradation_suite.py` (noise/clip/lowpass/silence/music
+  variants + injected-span manifest; suite generated under `artifacts/degradation_suite/`) +
+  `test_t039_injected_spans_attacked_or_explained` (SC-001 ≥ 70% attacked-or-explained; env-gated).
+  Full-pipeline variant runs execute on GPU/Mac.
+
+## Phase 8: Follow-ups from the 2026-07-24 implementation audit
+
+- [ ] T040 In-process adaptive integration in `scripts/analyze_audio.py` per contracts/cli.md:
+  `--max-rounds/--policy/--budget-*/--max-region-rounds/--region-top-n/--reserve-asr-models/`
+  `--enable-overlap-separation/--no-adaptive-outputs`, in-run `rounds/` + `final/` emission via
+  `VoteStore.from_harvests`, `summary.json` `adaptive` block, and the `--skip comparisons` warning.
+- [ ] T041 `P2_fine_posteriors` rule (fine-hop posterior re-analysis on crops) — also unblocks I4's
+  contract dependency ("else fires P2 first").
+- [ ] T042 Final-output schema completion vs contracts/final-outputs.md: `final/diarization.rttm`,
+  `diarization.json` `member_labels`/`overlap`, `transcript.json.language`, presence.parquet contract
+  columns (`presence_confidence`, `elected_stream`, `overlap_posterior`).
+- [ ] T043 Execute T038 (golden vs candidate full-pipeline runs) and T039 (degradation-suite pipeline
+  runs) on a GPU/Mac environment; record results in prototype-results.md.
+- [ ] T044 Exercise `VoteStore.from_harvests` (unit test + first in-process caller, with T040).
+- [ ] T045 Align contracts/interventions.md with implementation: U2 cost class (medium in code vs
+  heavy in contract) + family-majority guard; document `I2_recluster` as a catalog addition; U3 as a
+  fusion-stage step rather than a RULES entry; `max_region_rounds` enforced via convergence marks.
+
+## Dependencies
+
+Phase 2 blocks everything. US2 (Phase 4) is the MVP and depends only on Phase 2. US3 rules plug into
+the same engine. US4 consumes the final belief state. T008/T012 (full-pipeline integration) are the
+bridge from prototype to production and precede T010/T011/T018/T024/T025/T031/T032.
