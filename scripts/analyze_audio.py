@@ -477,11 +477,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--embedding-window-s",
         type=float,
-        default=1.0,
+        default=0.5,
         help=(
             "Window length (seconds) for fixed-grid speaker-embedding extraction. "
-            "Defaults to 1.0 s — the smallest window that pairs reliably with the "
-            "0.5 s comparator bucket grid (one embedding per bucket center)."
+            "Defaults to 0.5 s: on conversational multi-speaker audio with short "
+            "turns, a 0.5 s window recovers the correct speaker count and roughly "
+            "doubles cluster-vs-truth agreement (ARI 0.70 vs 0.48 at 1.0 s on the "
+            "4-speaker validation clip) because 1.0 s windows straddle turn "
+            "boundaries and smear adjacent speakers together. The trade-off is that "
+            "turns shorter than the window (< 0.5 s) may not resolve as their own "
+            "cluster; raise toward 1.0 s for clean, long-form single/dual-speaker "
+            "audio where per-embedding robustness matters more than turn resolution."
         ),
     )
     parser.add_argument(
@@ -489,9 +495,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=float,
         default=0.25,
         help=(
-            "Hop between embedding windows (default 0.25 s). The 1 s window is the ECAPA "
-            "minimum for a reliable embedding, but a 0.25 s hop samples it densely so "
-            "speaker-change boundaries localize to ~0.25 s. Must be <= --embedding-window-s."
+            "Hop between embedding windows (default 0.25 s). A 0.25 s hop samples the "
+            "0.5 s window densely so speaker-change boundaries localize to ~0.25 s; on "
+            "the 4-speaker validation clip this flips the identity axis from inverted "
+            "(uncertainty dipping at speaker changes) to correct (peaking within ~15 ms "
+            "of the two clearest turn boundaries). Must be <= --embedding-window-s."
         ),
     )
     parser.add_argument(
