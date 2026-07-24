@@ -163,6 +163,19 @@ def test_diarize_audios_dispatches_to_moss(monkeypatch: pytest.MonkeyPatch) -> N
     mock_fn.assert_called_once()
 
 
+def test_diarize_audios_dispatches_to_diarizen(monkeypatch: pytest.MonkeyPatch) -> None:
+    """diarize_audios routes a BUT-FIT/diarizen model id to the DiariZen backend."""
+    sentinel = [[ScriptLine(speaker="SPEAKER_00", start=0.0, end=1.0)]]
+    mock_fn = Mock(return_value=sentinel)
+    monkeypatch.setattr(diarization_api, "diarize_audios_with_diarizen", mock_fn)
+
+    model = HFModel(path_or_uri="BUT-FIT/diarizen-wavlm-large-s80-md")
+    result = diarize_audios(audios=[], model=model)
+
+    assert result is sentinel
+    mock_fn.assert_called_once()
+
+
 @pytest.mark.skip(reason="Downloads a 7B model; run manually on a GPU machine")
 def test_diarize_audios_with_vibevoice(resampled_mono_audio_sample: Audio) -> None:
     """Test diarizing audios with VibeVoice-ASR-HF."""
@@ -181,6 +194,17 @@ def test_diarize_audios_with_moss(resampled_mono_audio_sample: Audio) -> None:
 
     model = HFModel(path_or_uri="OpenMOSS-Team/MOSS-Transcribe-Diarize")
     results = diarize_audios_with_moss(audios=[resampled_mono_audio_sample], model=model)
+    assert len(results) == 1
+    assert all(isinstance(line, ScriptLine) for line in results[0])
+
+
+@pytest.mark.skip(reason="Provisions a dedicated venv (forked pyannote-audio) and downloads a model; run manually")
+def test_diarize_audios_with_diarizen(resampled_mono_audio_sample: Audio) -> None:
+    """Test diarizing audios with DiariZen."""
+    from senselab.audio.tasks.speaker_diarization.diarizen import diarize_audios_with_diarizen
+
+    model = HFModel(path_or_uri="BUT-FIT/diarizen-wavlm-large-s80-md")
+    results = diarize_audios_with_diarizen(audios=[resampled_mono_audio_sample], model=model)
     assert len(results) == 1
     assert all(isinstance(line, ScriptLine) for line in results[0])
 

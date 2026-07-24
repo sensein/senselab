@@ -334,6 +334,7 @@ def model_for_task(model_id: str, *, task: str) -> SenselabModel:
             or model_id.startswith("microsoft/VibeVoice")
             or model_id.startswith("AlexXu811/whisper-child-adult")
             or model_id.startswith("OpenMOSS-Team/MOSS-Transcribe-Diarize")
+            or model_id.startswith("BUT-FIT/diarizen")
         ):
             return HFModel(path_or_uri=model_id)
         return PyannoteAudioModel(path_or_uri=model_id)

@@ -205,6 +205,16 @@
   training_data: OpenMOSS proprietary
   recommended_for: Unified ASR + diarization, lightweight and CPU-plausible (via subprocess venv, transformers>=5.6)
 
+- name: DiariZen
+  task: speaker_diarization
+  source: BUT-FIT
+  model_id: BUT-FIT/diarizen-wavlm-large-s80-md
+  parameters: WavLM-large + Conformer
+  training_data: BUT-FIT proprietary
+  recommended_for: >-
+    Diarization only, no transcription (via subprocess venv installing DiariZen's
+    forked pyannote-audio; weights CC BY-NC 4.0 — non-commercial only)
+
 # Speech Emotion Recognition
 - name: SUPERB SER (IEMOCAP)
   task: speech_emotion_recognition
