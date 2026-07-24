@@ -4,6 +4,7 @@ from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speaker_diarization.child_adult import diarize_audios_with_child_adult
+from senselab.audio.tasks.speaker_diarization.moss import diarize_audios_with_moss
 from senselab.audio.tasks.speaker_diarization.nvidia import diarize_audios_with_nvidia_sortformer
 from senselab.audio.tasks.speaker_diarization.pyannote import diarize_audios_with_pyannote
 from senselab.audio.tasks.speaker_diarization.vibevoice import diarize_audios_with_vibevoice
@@ -12,6 +13,7 @@ from senselab.utils.data_structures import DeviceType, HFModel, PyannoteAudioMod
 
 _VIBEVOICE_PREFIXES = ("microsoft/VibeVoice",)
 _CHILD_ADULT_PREFIXES = ("AlexXu811/whisper-child-adult",)
+_MOSS_PREFIXES = ("OpenMOSS-Team/MOSS-Transcribe-Diarize",)
 
 
 @requires_compatibility("audio.tasks.speaker_diarization.diarize_audios")
@@ -39,6 +41,10 @@ def diarize_audios(
       `"AlexXu811/whisper-child-adult"`, uses the USC-SAIL child-adult classifier via an
       isolated subprocess venv (speaker labels are `"CHILD"`/`"ADULT"`/`"OVERLAP"`/`"SILENCE"`
       rather than speaker identities; **CUDA only**, see ``child_adult.py``).
+    - If `model` is an `HFModel` and `model.path_or_uri` starts with
+      `"OpenMOSS-Team/MOSS-Transcribe-Diarize"`, uses MOSS-Transcribe-Diarize (0.9B, Apache 2.0)
+      via an isolated subprocess venv (needs ``transformers>=5.6``, kept out of the core
+      environment — see ``moss.py``).
 
     Args:
         audios (list[Audio]):
@@ -49,6 +55,7 @@ def diarize_audios(
               * ``HFModel(path_or_uri="nvidia/diar_sortformer...")`` → NVIDIA Sortformer.
               * ``HFModel(path_or_uri="microsoft/VibeVoice...")`` → VibeVoice-ASR-HF.
               * ``HFModel(path_or_uri="AlexXu811/whisper-child-adult")`` → USC-SAIL child-adult.
+              * ``HFModel(path_or_uri="OpenMOSS-Team/MOSS-Transcribe-Diarize")`` → MOSS-Transcribe-Diarize.
         num_speakers (int | None):
             If known, fix the number of speakers (Pyannote only).
         min_speakers (int | None):
@@ -116,8 +123,14 @@ def diarize_audios(
             model=model,
             device=device,
         )
+    elif isinstance(model, HFModel) and str(model.path_or_uri).startswith(_MOSS_PREFIXES):
+        return diarize_audios_with_moss(
+            audios=audios,
+            model=model,
+            device=device,
+        )
     else:
         raise NotImplementedError(
-            "Only Pyannote, NVIDIA Sortformer, VibeVoice-ASR-HF, and the USC-SAIL child-adult "
-            "classifier (from HuggingFace) models are supported for now."
+            "Only Pyannote, NVIDIA Sortformer, VibeVoice-ASR-HF, the USC-SAIL child-adult "
+            "classifier, and MOSS-Transcribe-Diarize (from HuggingFace) models are supported for now."
         )
