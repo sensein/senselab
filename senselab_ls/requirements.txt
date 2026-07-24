@@ -1,7 +1,12 @@
-# Runtime deps for the senselab Label Studio ML backends.
-# senselab itself is installed separately from this repo with audio extras, e.g.:
-#   uv pip install -e ".[audio]"
+# Backend-only extra deps for the senselab Label Studio ML backends.
+#
+# Install on top of the senselab env at deploy time (both steps use uv):
+#   uv pip install -e ".[audio]"                     # senselab itself (uv-locked)
+#   uv pip install -r senselab_ls/requirements.txt   # these extras (resolved at deploy)
+#
+# Deliberately kept OUT of senselab's pyproject / uv.lock: label-studio-sdk and
+# label-studio-ml pull pre-release/conflicting versions that fail senselab's locked
+# resolution, so they must not enter the shared lock.
 label-studio-ml
 label-studio-sdk
-boto3        # s3:// audio reads via the EC2 instance role
-requests     # http(s) audio download fallback
+boto3>=1.34
