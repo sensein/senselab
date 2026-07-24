@@ -64,6 +64,14 @@ _BROUHAHA_REQUIREMENTS = [
     "soundfile",
 ]
 _BROUHAHA_PYTHON = "3.11"
+# The ``torch>=2.0,<2.3`` pin above has no linux-x86_64 wheel on PyTorch's newer
+# CUDA indexes (cu124/cu126/cu128), so on a modern-CUDA host the default
+# host-keyed index selection makes the Stage-1 install unsatisfiable and the
+# venv never builds. cu121 is the newest index that still publishes a
+# ``torch<2.3`` wheel (``torch==2.2.2+cu121`` + matching torchaudio), and its
+# wheels are forward-compatible with 12.x/13.x drivers for inference. Cap the
+# index here so brouhaha builds on every GPU host.
+_BROUHAHA_MAX_CUDA_VERSION = (12, 1)
 
 # Chunking for long recordings (mirrors the segmentation extractor's grid).
 _CHUNK_S = 10.0
@@ -187,7 +195,12 @@ def extract_brouhaha_frames(
     )
 
     try:
-        venv_dir = ensure_venv(_BROUHAHA_VENV, _BROUHAHA_REQUIREMENTS, python_version=_BROUHAHA_PYTHON)
+        venv_dir = ensure_venv(
+            _BROUHAHA_VENV,
+            _BROUHAHA_REQUIREMENTS,
+            python_version=_BROUHAHA_PYTHON,
+            max_cuda_version=_BROUHAHA_MAX_CUDA_VERSION,
+        )
         python = venv_python(venv_dir)
     except Exception as exc:  # noqa: BLE001 — venv build failure degrades to null (FR-023)
         logger.warning(f"Failed to prepare Brouhaha venv: {exc}. Scene-quality signals will be null.")
