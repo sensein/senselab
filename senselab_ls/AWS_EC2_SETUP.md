@@ -165,7 +165,8 @@ git clone https://github.com/sensein/senselab.git /opt/senselab || true
 cd /opt/senselab
 uv venv /opt/lsml-venv --python 3.12
 source /opt/lsml-venv/bin/activate
-uv pip install -e ".[audio]" label-studio-ml label-studio-sdk boto3
+uv pip install -e ".[audio]"                      # senselab (uv-locked)
+uv pip install -r senselab_ls/requirements.txt    # backend extras: label-studio-ml + sdk + boto3
 
 mkdir -p /opt/hf-cache
 echo 'HF_HOME=/opt/hf-cache' >> /etc/environment

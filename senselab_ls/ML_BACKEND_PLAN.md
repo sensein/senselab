@@ -44,7 +44,15 @@ senselab_ls/                   # package dir — named to NOT shadow the SDK's `
     audio_plus_test.py         # Audio+ construction from a ref (fake loader + mocked metadata)
     b2ai_metadata_test.py      # B2AIMetadataProvider against a synthetic b2ai-like fixture
     engine_smoke_test.py       # end-to-end on a synthetic clip, GPU-marked
-  requirements.txt
+  deploy/                      # systemd unit, env template, launcher, LS config, bring-up README
+  requirements.txt            # backend-only extras (label-studio-ml/sdk/boto3)
+
+**Dependencies (uv, two layers).** senselab itself is uv-locked (`uv pip install -e ".[audio]"`).
+The backend extras (`label-studio-ml`, `label-studio-sdk`, `boto3`) are installed *on top* via
+`uv pip install -r senselab_ls/requirements.txt` — kept OUT of senselab's `pyproject`/`uv.lock`
+on purpose: `label-studio-sdk`/`-ml` drag pre-release/conflicting versions that break senselab's
+locked resolution. (If we later want full uv isolation, promote `senselab_ls/` to its own uv
+project with its own `pyproject.toml` + lock, depending on senselab.)
 ```
 
 ## What is actually shared (the two scripts run in opposite directions)
