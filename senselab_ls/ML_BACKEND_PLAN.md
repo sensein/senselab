@@ -48,11 +48,18 @@ senselab_ls/                   # package dir — named to NOT shadow the SDK's `
   requirements.txt            # backend-only extras (label-studio-ml/sdk/boto3)
 
 **Dependencies (uv, two layers).** senselab itself is uv-locked (`uv pip install -e ".[audio]"`).
-The backend extras (`label-studio-ml`, `label-studio-sdk`, `boto3`) are installed *on top* via
-`uv pip install -r senselab_ls/requirements.txt` — kept OUT of senselab's `pyproject`/`uv.lock`
-on purpose: `label-studio-sdk`/`-ml` drag pre-release/conflicting versions that break senselab's
-locked resolution. (If we later want full uv isolation, promote `senselab_ls/` to its own uv
-project with its own `pyproject.toml` + lock, depending on senselab.)
+The backend extras are installed *on top* via `uv pip install -r senselab_ls/requirements.txt`,
+kept OUT of senselab's `pyproject`/`uv.lock` (they break its locked resolution). Two gotchas
+**verified against the installed SDK**, baked into `requirements.txt`:
+- the API `model.py` uses (`ModelResponse`, `self.label_interface`) is the **2.x SDK, git-only** —
+  PyPI's `label-studio-ml` is stuck at 1.0.9 and lacks it. Install
+  `label-studio-ml @ git+https://github.com/HumanSignal/label-studio-ml-backend.git` (this pulls
+  `label-studio-sdk` from git automatically).
+- `redis` and `rq` are imported at module load but **not declared** by the SDK — list them
+  explicitly or the backend won't import.
+
+(If we later want full uv isolation, promote `senselab_ls/` to its own uv project with its own
+`pyproject.toml` + lock, depending on senselab.)
 ```
 
 ## What is actually shared (the two scripts run in opposite directions)

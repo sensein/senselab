@@ -4,9 +4,19 @@
 #   uv pip install -e ".[audio]"                     # senselab itself (uv-locked)
 #   uv pip install -r senselab_ls/requirements.txt   # these extras (resolved at deploy)
 #
-# Deliberately kept OUT of senselab's pyproject / uv.lock: label-studio-sdk and
-# label-studio-ml pull pre-release/conflicting versions that fail senselab's locked
-# resolution, so they must not enter the shared lock.
-label-studio-ml
-label-studio-sdk
+# IMPORTANT — the maintained SDK (LabelStudioMLBase + ModelResponse + label_interface,
+# what model.py uses) is the 2.x line, which is NOT on PyPI. PyPI's `label-studio-ml`
+# is stuck at 1.0.9 and lacks ModelResponse/label_interface, so install from git:
+label-studio-ml @ git+https://github.com/HumanSignal/label-studio-ml-backend.git
+# ^ pulls label-studio-sdk (git) automatically.
+#
+# redis + rq are imported at module load by label_studio_ml/model.py but are NOT
+# declared as dependencies, so list them explicitly or the backend won't import:
+redis
+rq
+#
+# s3:// audio + b2ai dataset reads:
 boto3>=1.34
+#
+# Kept OUT of senselab's pyproject/uv.lock on purpose: these (esp. the git SDK +
+# label-studio-sdk) drag versions that fail senselab's locked resolution.
