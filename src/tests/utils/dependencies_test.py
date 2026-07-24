@@ -1,8 +1,8 @@
 """Tests for HF model-cache resolution helpers in ``senselab.utils.dependencies``.
 
 MVP goal: stop the per-call Hub version check (the 429 source) by resolving a
-requested ref to an immutable commit SHA once and loading pinned by that SHA with
-``local_files_only=True`` (huggingface_hub's commit-hash shortcut then does no HEAD).
+requested ref to an immutable commit SHA once and loading pinned by that SHA
+(``revision=<sha>`` — huggingface_hub's commit-hash shortcut then does no HEAD).
 """
 
 from pathlib import Path
@@ -56,8 +56,8 @@ def test_resolve_model_returns_sha_and_snapshot_path(tmp_path: Path, monkeypatch
     assert Path(got_path) == snap
 
 
-def test_load_hf_resilient_pins_sha_and_local_only(monkeypatch: pytest.MonkeyPatch) -> None:
-    """load_hf_resilient injects revision=<sha> + local_files_only=True into the loader, preserving caller kwargs."""
+def test_load_hf_resilient_pins_sha_without_local_files_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    """load_hf_resilient injects revision=<sha> ONLY (never local_files_only, which breaks pipeline)."""
     sha = "c" * 40
     monkeypatch.setattr(
         "senselab.utils.dependencies.resolve_model",
@@ -72,7 +72,9 @@ def test_load_hf_resilient_pins_sha_and_local_only(monkeypatch: pytest.MonkeyPat
     out = load_hf_resilient(loader, repo_id="org/model", revision="main", task="asr")
     assert out == "MODEL"
     assert captured["revision"] == sha
-    assert captured["local_files_only"] is True
+    # local_files_only must NOT be injected: transformers.pipeline forwards it to
+    # generate and raises "model_kwargs are not used by the model: ['local_files_only']".
+    assert "local_files_only" not in captured
     assert captured["task"] == "asr"
 
 
