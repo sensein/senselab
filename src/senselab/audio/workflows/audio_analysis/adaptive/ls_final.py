@@ -166,7 +166,15 @@ def build_final_ls_bundle(
             ]
             annotated["resolution"] = _resolution_for(entry, Path(out_dir) / "rounds")
             resolved.append(annotated)
-        payload = {"source": str(dis_path), "entries": resolved}
+        payload = {
+            "source": str(dis_path),
+            "scale_note": (
+                "final_uncertainty / delta_from_round1 are on the pre-coupling (per-vote) scale; "
+                "round-1 utterance entries from runs with FR-019 scene coupling may include the "
+                "scene multiplier in their aggregated_uncertainty (see scene_quality_coupling)."
+            ),
+            "entries": resolved,
+        }
         (final / "disagreements_resolved.json").write_text(json.dumps(payload, indent=2))
         report["disagreements_resolved"] = len(resolved)
     return report

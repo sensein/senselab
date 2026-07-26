@@ -290,6 +290,14 @@ class VoteStore:
         This is the executable proof that aggregation is a pure function of the
         vote store (tasks.md T007): a nonzero mismatch count means the split
         missed an input.
+
+        The comparison anchors on the **pre-coupling** scale: since FR-019
+        (scene→utterance coupling, scene-quality-utterance US4) the parquet's
+        ``aggregated_uncertainty`` may carry a scene multiplier that is not a
+        function of the votes alone — the pure per-vote value is preserved on
+        ``raw_aggregated_uncertainty``, which is what the belief store computes
+        and compares (identical to ``aggregated_uncertainty`` on pre-FR-019
+        artifacts and wherever coupling is 1.0).
         """
         report: dict[str, Any] = {}
         for stream in passes:
@@ -298,7 +306,10 @@ class VoteStore:
                 max_abs = 0.0
                 for bk in self.buckets(stream, axis):
                     n += 1
-                    stored = (self.row_meta.get((stream, axis, bk)) or {}).get("stored_aggregated_uncertainty")
+                    meta = self.row_meta.get((stream, axis, bk)) or {}
+                    stored = meta.get("raw_aggregated_uncertainty")
+                    if stored is None or stored != stored:  # NaN/missing → legacy column
+                        stored = meta.get("stored_aggregated_uncertainty")
                     got = self.reaggregate_bucket(stream, axis, bk, aggregator=aggregator)["aggregated_uncertainty"]
                     if stored is None or got is None:
                         if (stored is None) != (got is None):
