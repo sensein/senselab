@@ -84,8 +84,18 @@ def whisper_token_ids(pipe: Any) -> tuple[Optional[int], Optional[set]]:  # noqa
                 no_speech_id = candidate
                 break
 
-    special_ids = getattr(tokenizer, "all_special_ids", None)
-    return no_speech_id, set(special_ids) if special_ids else None
+    # Guard the conversion: a stand-in/Mock tokenizer returns a non-iterable
+    # attribute here, and blowing up would fail the whole transcription over a
+    # purely additive signal.
+    special_ids: Optional[set] = None
+    raw_special = getattr(tokenizer, "all_special_ids", None)
+    if raw_special is not None:
+        try:
+            candidates = {int(i) for i in raw_special if isinstance(i, int)}
+        except TypeError:
+            candidates = set()
+        special_ids = candidates or None
+    return no_speech_id, special_ids
 
 
 def merge_confidence_blocks(blocks: Sequence[dict[str, Any]]) -> dict[str, Any]:
@@ -256,9 +266,21 @@ def capture_token_confidence(
         )
 
     def _wrapped(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401 — passthrough
-        kwargs["output_logits"] = True
-        kwargs["return_dict_in_generate"] = True
-        result = original(*args, **kwargs)
+        # Whether the *caller* wanted a dict back. Whisper's word-timestamp path
+        # does (the pipeline sets return_token_timestamps / return_segments);
+        # plain greedy decoding does not, and handing those callers a ModelOutput
+        # where they expect a tensor breaks them downstream
+        # ("'ModelOutput' object has no attribute 'dtype'").
+        caller_wants_dict = bool(
+            kwargs.get("return_dict_in_generate")
+            or kwargs.get("return_token_timestamps")
+            or kwargs.get("return_segments")
+        )
+        try:
+            result = original(*args, **{**kwargs, "output_logits": True, "return_dict_in_generate": True})
+        except TypeError:
+            # Backend's generate doesn't accept these kwargs — run it untouched.
+            return original(*args, **kwargs)
         try:
             step_logits = _get(result, "logits")
             sequences = _get(result, "sequences")
@@ -287,6 +309,13 @@ def capture_token_confidence(
             # Confidence is strictly additive — never fail a transcription because
             # the logits came back in an unexpected shape.
             pass
+
+        # Restore the return type the caller would have seen without our flags, so
+        # observing the decoder stays invisible to the pipeline.
+        if not caller_wants_dict:
+            sequences = _get(result, "sequences")
+            if isinstance(sequences, torch.Tensor):
+                return sequences
         return result
 
     model.generate = _wrapped  # type: ignore[method-assign]

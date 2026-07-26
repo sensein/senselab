@@ -378,3 +378,58 @@ def test_nospeech_id_none_when_no_spelling_matches() -> None:
 def test_nospeech_id_none_without_tokenizer() -> None:
     """CTC/other backends without a tokenizer degrade to (None, None)."""
     assert whisper_token_ids(SimpleNamespace(tokenizer=None)) == (None, None)
+
+
+# ── Return-type preservation (regression: CI cpu-tests) ───────────────
+#     Injecting return_dict_in_generate=True changes what generate hands back.
+#     Pipelines that never asked for a dict then treat a ModelOutput as a tensor
+#     ("'ModelOutput' object has no attribute 'dtype'"), so the seam must restore
+#     the type the caller would have received.
+
+
+def test_capture_preserves_tensor_return_type() -> None:
+    """Caller didn't request a dict → it must still receive the bare tensor."""
+    pipe = _FakePipe()
+    with capture_token_confidence(pipe, no_speech_token_id=None) as captured:
+        result = pipe.model.generate(inputs=torch.zeros(1, 4))
+    assert isinstance(result, torch.Tensor), "pipeline must not be handed a ModelOutput"
+    assert result.tolist() == [[4]]
+    assert len(captured) == 1, "confidence is still harvested"
+
+
+def test_capture_preserves_dict_when_caller_requested_it() -> None:
+    """Caller asked for dict output (Whisper word timestamps) → keep the dict."""
+    pipe = _FakePipe()
+    with capture_token_confidence(pipe, no_speech_token_id=None) as captured:
+        result = pipe.model.generate(inputs=torch.zeros(1, 4), return_token_timestamps=True)
+    assert not isinstance(result, torch.Tensor)
+    assert "sequences" in result
+    assert len(captured) == 1
+
+
+def test_capture_leaves_unrecognized_result_untouched() -> None:
+    """A stand-in (Mock-like) generate result passes through unchanged."""
+
+    class _OpaqueModel:
+        def generate(self, **kwargs: object) -> str:
+            return "opaque"
+
+    pipe = _FakePipe()
+    pipe.model = _OpaqueModel()  # type: ignore[assignment]
+    with capture_token_confidence(pipe, no_speech_token_id=None):
+        assert pipe.model.generate(inputs=None) == "opaque"
+
+
+def test_special_ids_ignored_when_not_iterable() -> None:
+    """A Mock tokenizer must not blow up id resolution (CI regression)."""
+
+    class _MockLike:
+        unk_token_id = 0
+        all_special_ids = object()  # not iterable, as Mock attributes are
+
+        def convert_tokens_to_ids(self, token: str) -> object:
+            return object()
+
+    no_speech_id, special_ids = whisper_token_ids(_TokenizerPipe(_MockLike()))
+    assert no_speech_id is None
+    assert special_ids is None
