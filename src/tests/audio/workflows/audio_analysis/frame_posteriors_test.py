@@ -88,7 +88,12 @@ def test_chunked_inference_single_pass_short_clip() -> None:
     """A clip <= chunk length is a single pass (one inference call)."""
     audio = Audio(waveform=torch.full((1, 16000 * 5), 0.1, dtype=torch.float32), sampling_rate=16000)
     inf = _FakeInference(step=0.02, value=0.8)
-    data, hop, _win = fp_mod.chunked_frame_inference(inf, audio, chunk_s=10.0, step_s=8.0)
+    data, hop, _win = fp_mod.chunked_frame_inference(
+        inf,  # type: ignore[arg-type]  # duck-typed stand-in for pyannote Inference
+        audio,
+        chunk_s=10.0,
+        step_s=8.0,
+    )
     assert inf.calls == 1
     assert abs(hop - 0.02) < 1e-9
     assert np.allclose(data, 0.8)
@@ -99,7 +104,12 @@ def test_chunked_inference_stitches_long_clip() -> None:
     dur_s = 25.0
     audio = Audio(waveform=torch.full((1, int(16000 * dur_s)), 0.1, dtype=torch.float32), sampling_rate=16000)
     inf = _FakeInference(step=0.02, value=0.8)
-    data, hop, _win = fp_mod.chunked_frame_inference(inf, audio, chunk_s=10.0, step_s=8.0)
+    data, hop, _win = fp_mod.chunked_frame_inference(
+        inf,  # type: ignore[arg-type]  # duck-typed stand-in for pyannote Inference
+        audio,
+        chunk_s=10.0,
+        step_s=8.0,
+    )
     assert inf.calls > 1  # multiple chunks
     assert abs(hop - 0.02) < 1e-9
     # Continuous timeline spanning ~the whole clip at native resolution.

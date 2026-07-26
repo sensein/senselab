@@ -9,7 +9,7 @@ import json
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import torch
@@ -183,7 +183,7 @@ class SparcFeatureExtractor:
         lang: Optional[Language] = None,
         device: Optional[DeviceType] = None,
         resample: Optional[bool] = False,
-    ) -> List[Dict[str, torch.Tensor]]:
+    ) -> List[Dict[str, Any]]:
         """Extract SPARC articulatory features from audios.
 
         The SPARC model runs in an isolated subprocess venv with its own
@@ -197,7 +197,9 @@ class SparcFeatureExtractor:
 
         Returns:
             List of feature dicts with keys: ema, loudness, pitch,
-            periodicity, pitch_stats, spk_emb, ft_len.
+            periodicity, pitch_stats, spk_emb, ft_len. All values are tensors
+            except ``ft_len``, which is a plain scalar — hence the ``Any``
+            element type rather than ``torch.Tensor``.
         """
         device, _ = _select_device_and_dtype(
             user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
@@ -262,8 +264,11 @@ class SparcFeatureExtractor:
                     resampled = resample_audios(audios, resample_rate=expected_sr)
                     return cls.extract_sparc_features(resampled, lang=lang, device=device, resample=False)
 
-            # Load results
-            features_list = []
+            # Load results. Values are tensors except ``ft_len``, which stays a
+            # plain scalar (a float on the error path, an int otherwise), so the
+            # element type is widened rather than forcing a tensor and changing
+            # what consumers read.
+            features_list: List[Dict[str, Any]] = []
             for out_path in output.get("output_paths", []):
                 with open(out_path) as f:
                     raw = json.load(f)

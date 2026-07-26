@@ -47,7 +47,7 @@ def chats_to_script_lines(
                 start = None
                 end = None
 
-            words_in_utterance = [token.word for token in utterance.tokens if token.word]
+            words_in_utterance = [token.word for token in (utterance.tokens or []) if token.word]
             if len(words_in_utterance) > 0:
                 utterance_transcript = " ".join(words_in_utterance[:-1]) + words_in_utterance[-1]
             else:
