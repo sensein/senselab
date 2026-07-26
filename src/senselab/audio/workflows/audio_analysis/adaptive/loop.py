@@ -294,6 +294,7 @@ def run_adaptive_loop(
         refined_identity=refined,
         calibrated=calibrator is not None,
         timestamps_meta=timestamps_meta,
+        language=policy.get("language"),
     )
 
     # T032: LS final tracks + resolved-disagreements index (best-effort, additive).

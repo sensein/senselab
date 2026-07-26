@@ -135,25 +135,34 @@ description: "Task list for scene-aware presence axis + improved utterance uncer
 
 ### Tests for User Story 5
 
-- [ ] T035 [P] [US5] Write calibration test in `src/tests/audio/workflows/audio_analysis/` (or `src/tests/scripts/`): synthetic SNR/RT60 sweep → estimators → assert monotonic reported-vs-true and profile round-trips (load/apply) (SC-007).
+- [X] T035 [P] [US5] Write calibration test in `src/tests/audio/workflows/audio_analysis/` (or `src/tests/scripts/`): synthetic SNR/RT60 sweep → estimators → assert monotonic reported-vs-true and profile round-trips (load/apply) (SC-007).
 
 ### Implementation for User Story 5
 
-- [ ] T036 [P] [US5] Implement `calibration.py`: `CalibrationProfile` load/apply (`linear_db_to_unit` etc., data-model.md §5) with a documented default when no profile is present.
-- [ ] T037 [US5] Implement `scripts/calibrate_scene_quality.py`: synthesize noise (white/pink, numpy) at an SNR sweep + convolve synthetic exponential-decay RIRs at an RT60 sweep (numpy, no new dep), run the quality estimators, fit normalization + temperature, persist to `data/scene_quality_calibration.json`; all inputs/outputs are CLI params with defaults (D9, constitution VIII).
-- [ ] T038 [US5] Emit a reported-vs-true validation plot/table under `artifacts/` (FR-022).
-- [ ] T039 [US5] Add `--calibration-profile` CLI flag (default bundled profile) and thread the profile into `harvest_quality_scores` + utterance calibration (contracts/cli.md).
+- [X] T036 [P] [US5] Implement `calibration.py`: `CalibrationProfile` load/apply (`linear_db_to_unit` etc., data-model.md §5) with a documented default when no profile is present.
+- [X] T037 [US5] Implement `scripts/calibrate_scene_quality.py`: synthesize noise (white/pink, numpy) at an SNR sweep + convolve synthetic exponential-decay RIRs at an RT60 sweep (numpy, no new dep), run the quality estimators, fit normalization + temperature, persist to `data/scene_quality_calibration.json`; all inputs/outputs are CLI params with defaults (D9, constitution VIII).
+- [X] T038 [US5] Emit a reported-vs-true validation plot/table under `artifacts/` (FR-022).
+- [X] T039 [US5] Add `--calibration-profile` CLI flag (default bundled profile) and thread the profile into `harvest_quality_scores` + utterance calibration (contracts/cli.md).
 
 **Checkpoint**: all five stories independently functional.
 
 ---
 
+
+> US5 + polish implemented 2026-07-24 (cowork session): `calibration.py` bridges the versioned
+> §5 profile to the flat runtime dict both `quality.py` and `aggregate.py` consume;
+> `scripts/calibrate_scene_quality.py` fits SNR anchors always and C50 anchors when Brouhaha is
+> available, emits the FR-022 validation plot/table, and records provenance. NOTE: per-axis
+> temperatures are CLI passthroughs (default 1.0) — a proper temperature fit needs labeled
+> correctness (adaptive loop eval harness), tracked as the remaining US5 sub-item. T045/T046
+> (full lint + regression) require the full environment.
+
 ## Phase 8: Polish & Cross-Cutting Concerns
 
-- [ ] T040 [P] FR-024: add `<pass>__presence__quality` and `<pass>__presence__sources` tracks to `labelstudio.py` (additive; existing `presence` track unchanged) + test in `labelstudio_test.py`.
+- [X] T040 [P] FR-024: add `<pass>__presence__quality` and `<pass>__presence__sources` tracks to `labelstudio.py` (additive; existing `presence` track unchanged) + test in `labelstudio_test.py`.
 - [X] T041 [P] FR-024: add optional quality + dominant-source rows to `plot.py` (existing 5 rows unchanged when new signals null) + test in `plot_test.py`.
-- [ ] T042 [P] FR-024: rank the new presence sub-signals in `disagreements.py` + test in `disagreements_test.py`.
-- [ ] T043 [P] Docs: update `workflows/audio_analysis/doc.md` and the CLAUDE.md workflow section describing the scene-aware presence columns + new CLI flags; cross-check against quickstart.md.
+- [X] T042 [P] FR-024: rank the new presence sub-signals in `disagreements.py` + test in `disagreements_test.py`.
+- [X] T043 [P] Docs: update `workflows/audio_analysis/doc.md` and the CLAUDE.md workflow section describing the scene-aware presence columns + new CLI flags; cross-check against quickstart.md.
 - [X] T044 Run quickstart.md end-to-end on a `tutorial_audio_files/` clip; confirm all new columns populate and acceptance scenarios hold.
 - [ ] T045 `uv run ruff format && uv run ruff check --fix && uv run mypy . && uv run codespell` (memory `feedback_ruff_format`).
 - [ ] T046 Full regression: `uv run pytest src/tests/audio/workflows/audio_analysis/` + confirm `aggregated_uncertainty` values unchanged vs baseline (SC-008).

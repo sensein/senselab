@@ -97,6 +97,24 @@ Rule ids are stable API (they appear in iterations.json and tests).
   per-source ASR (C11) → speaker-attributed region votes.
 - **Cost**: heavy.
 
+## Implementation notes (contract aligned with code, 2026-07-24 — spec T045)
+
+- **U2 cost class is `medium`** (cache replay / one forward per crop), not heavy as originally
+  drafted; the "reserve family not already majority" guard was not implemented (the family-weight
+  aggregation already discounts intra-family agreement, making the guard redundant in practice).
+- **`I2_recluster` is a catalog addition** beyond this contract (tasks.md T024a): change-point +
+  diar-boundary segmentation, p_voice-weighted pooling, cross-model co-association consensus; it
+  emits `embedding_recluster/consensus` votes and recomputes `__cross_diar_label_disagreement__`.
+- **U3 runs as a fusion-stage step**, not a RULES entry — consistent with its trigger ("fusion
+  round") but not budget-ledgered; its guard is the SIGALRM timeout + backend availability
+  (`fusion.consensus_alignment` policy).
+- **`max_region_rounds` is enforced via convergence marks** (per-bucket touch counts, FR-017)
+  rather than as a plan-time admission cap; the observable behavior (a region stops being
+  re-touched after N interventions without ε improvement) matches the contract's intent.
+- **Backend pins**: `u1_backend` (`auto|senselab|pipeline`) and `audio_io_backend`
+  (`auto|senselab|dsp`) select the primary/fallback paths explicitly; the backend used is recorded
+  in `iterations.json` / `convergence.json → audio_backend` (never silent).
+
 ## Shared guards
 
 - Region crops quantized to reporting grid before hashing (cache stability).

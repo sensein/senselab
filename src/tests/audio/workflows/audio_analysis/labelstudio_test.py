@@ -175,8 +175,6 @@ def test_scene_tracks_absent_without_columns_and_for_deltas() -> None:
         ),
     }
     tasks = [{"data": {"pass": "raw_16k"}, "predictions": [{"result": []}]}]
-    _, config = attach_uncertainty_tracks_to_ls(
-        ls_tasks=tasks, ls_config="<View></View>", axis_results=axis_results
-    )
+    _, config = attach_uncertainty_tracks_to_ls(ls_tasks=tasks, ls_config="<View></View>", axis_results=axis_results)
     assert "__presence__quality" not in config
     assert "__presence__sources" not in config

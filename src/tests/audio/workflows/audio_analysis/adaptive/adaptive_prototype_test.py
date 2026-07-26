@@ -290,3 +290,26 @@ def test_policy_hash_stable_and_override(tmp_path: Path) -> None:
     assert p3["thresholds"]["theta_high"] == 0.5
     assert p3["policy_hash"] != p1["policy_hash"]
     assert p3["thresholds"]["theta_low"] == p1["thresholds"]["theta_low"]  # deep-merge kept defaults
+
+
+def test_from_harvests_in_process_integration() -> None:
+    """T044/T009: PassHarvest → VoteStore without a parquet round-trip; parity with aggregate_pass."""
+    from senselab.audio.workflows.audio_analysis.adaptive.belief import VoteStore
+    from senselab.audio.workflows.audio_analysis.aggregate import aggregate_presence
+    from senselab.audio.workflows.audio_analysis.votes import PassHarvest
+
+    harvest = PassHarvest(
+        pass_label="raw_16k",
+        presence_votes=[{"start": 0.0, "end": 0.5, "votes": {"m1": {"speaks": True}, "m2": {"speaks": False}}}],
+        identity_votes=[{"start": 0.0, "end": 1.0, "votes": {"__cross_diar_label_disagreement__": {"value": 0.5}}}],
+        utterance_votes=[],
+        quality_by_bucket={(0.0, 0.5): {"quality_snr": 0.3, "_raw": {}}},
+    )
+    store = VoteStore.from_harvests({"raw_16k": harvest})
+    votes = store.active_votes("raw_16k", "presence", (0.0, 0.5))
+    assert set(votes) == {"m1", "m2"}
+    row = store.reaggregate_bucket("raw_16k", "presence", (0.0, 0.5), aggregator="min")
+    assert row["aggregated_uncertainty"] == pytest.approx(aggregate_presence(votes))
+    assert store.row_meta[("raw_16k", "presence", (0.0, 0.5))]["quality_snr"] == 0.3
+    ident = store.reaggregate_bucket("raw_16k", "identity", (0.0, 1.0), aggregator="min")
+    assert ident["aggregated_uncertainty"] == pytest.approx(0.5)

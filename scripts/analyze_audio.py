@@ -596,6 +596,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--calibration-profile",
+        type=Path,
+        default=None,
+        help=(
+            "Scene-quality calibration profile JSON (US5, data-model §5): dB→[0,1] anchors for "
+            "SNR/C50 plus per-axis aggregator temperatures. Default: the bundled profile "
+            "(workflows/audio_analysis/data/scene_quality_calibration.json) when present, else the "
+            "documented uncalibrated defaults. Fit one with scripts/calibrate_scene_quality.py."
+        ),
+    )
+    parser.add_argument(
         "--uncertainty-aggregator",
         choices=UNCERTAINTY_AGGREGATORS,
         default="min",
@@ -2204,6 +2215,21 @@ def main(argv: list[str] | None = None) -> int:
                 "w_s": float(args.utterance_scene_coupling_weights[1]),
             },
         }
+        # US5 (T039): load + validate the calibration profile and thread its flat
+        # runtime form into BOTH consumers — the harvest (quality dB→[0,1] anchors,
+        # via the calibration kwarg below) and the aggregators (temperatures /
+        # token-entropy reference, via comparator_params["calibration"]).
+        from senselab.audio.workflows.audio_analysis.calibration import (
+            load_calibration_profile,
+            profile_to_runtime,
+        )
+
+        try:
+            calibration_runtime = profile_to_runtime(load_calibration_profile(args.calibration_profile))
+        except (OSError, ValueError, KeyError) as exc:
+            print(f"ERROR: invalid calibration profile {args.calibration_profile}: {exc}", file=sys.stderr)
+            sys.exit(2)
+        comparator_params["calibration"] = calibration_runtime
 
         passes_for_compute = {
             pl: ps for pl, ps in summaries.get("passes", {}).items() if isinstance(ps, dict) and "duration_s" in ps
@@ -2223,6 +2249,7 @@ def main(argv: list[str] | None = None) -> int:
                 presence_grid=presence_grid,
                 scene_quality=not args.no_scene_quality,
                 sound_sources=not args.no_sound_sources,
+                calibration=calibration_runtime,
                 embedding_window_s=args.embedding_window_s,
                 embedding_hop_s=args.embedding_hop_s,
                 same_speaker_floor=args.identity_same_speaker_floor,

@@ -201,6 +201,23 @@ live here (torchaudio-2.13/torchcodec decode gap + 30 s cold imports on the degr
 environmental; repo pins torchaudio 2.8) — their fallback reasons are recorded in provenance,
 demonstrating the envelope; validate the primary paths with the full-env checks below.
 
+## Integration fix (2026-07-24, after scene-spec US4 landed)
+
+Commit `581b18b3` (scene-quality-utterance US4) multiplies the utterance parquet's
+`aggregated_uncertainty` by the FR-019 scene coupling (clipped, with the pure per-vote value
+preserved on `raw_aggregated_uncertainty` and an auditable `__utterance_pre_coupling__` marker).
+Since the coupled value is no longer a function of the votes alone, the adaptive belief store now
+anchors on the **pre-coupling scale**: `parity_check` compares against `raw_aggregated_uncertainty`
+(fallback to the legacy column on pre-FR-019 artifacts), loop thresholds/deltas stay on the per-vote
+scale, and `disagreements_resolved.json` carries an explicit `scale_note`. Verified: 23/23 tests
+(incl. US4's 8 new coupling tests) and raw-anchored parity ALL CLEAN (538/538 buckets) on the
+reference artifacts. No changes needed in the US4 commits themselves.
+
+Coordination note: the branch now has two deliberate calibration surfaces — US4/US5's
+scene/utterance calibration (`params["calibration"]`, quality.py convention) and the adaptive loop's
+fused-word-confidence calibrator (`policy.calibration_profile`, logistic/piecewise). US5's profile
+doc should name both so the fitting script can optionally emit a fused-confidence section.
+
 ## Known limitations (tracked in tasks.md)
 
 - I4 overlap posteriors code-complete but unvalidated here (gated `pyannote/segmentation-3.0` needs an

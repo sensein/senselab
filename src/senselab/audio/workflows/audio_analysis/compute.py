@@ -73,6 +73,7 @@ def harvest_pass(
     diff_speaker_floor: float = 0.70,
     cluster_cosine_threshold: float = 0.5,
     clustering_algorithm: str = "spectral",
+    calibration: dict[str, Any] | None = None,
 ) -> tuple[PassHarvest, dict[str, list[WindowEmbedding]], dict[str, str]]:
     """Run every model-touching step for one pass and return its harvested votes.
 
@@ -245,7 +246,9 @@ def harvest_pass(
         )
 
         brouhaha_frames = extract_brouhaha_frames([per_pass_audio])[0]
-        for q in harvest_quality_scores(audio=per_pass_audio, brouhaha=brouhaha_frames, grid=pres_grid):
+        for q in harvest_quality_scores(
+            audio=per_pass_audio, brouhaha=brouhaha_frames, grid=pres_grid, calibration=calibration
+        ):
             quality_by_bucket[(round(q["start"], 6), round(q["end"], 6))] = q
         # Reuse the Brouhaha VAD head as a second frame-posterior presence voter.
         if brouhaha_frames is not None:
@@ -256,6 +259,7 @@ def harvest_pass(
             {
                 "analysis_win_length": QUALITY_ANALYSIS_WIN_S,
                 "analysis_hop_length": QUALITY_ANALYSIS_HOP_S,
+                "calibration_version": (calibration or {}).get("calibration_version"),
                 "model": {
                     "id": BROUHAHA_MODEL_ID,
                     "revision": BROUHAHA_REVISION,
@@ -358,6 +362,7 @@ def compute_uncertainty_axes(
     cluster_cosine_threshold: float = 0.5,
     clustering_algorithm: str = "spectral",
     mutate_passes: bool = True,
+    calibration: dict[str, Any] | None = None,
 ) -> tuple[dict[tuple[str, UncertaintyAxis], AxisResult], dict[str, str], dict[str, dict[str, list[WindowEmbedding]]]]:
     """Compute per-pass and raw-vs-enhanced uncertainty rows for all three axes.
 
@@ -418,6 +423,10 @@ def compute_uncertainty_axes(
             synthetic ``embedding_silhouette/...`` diar source into the caller's
             ``passes`` dict so downstream consumers (timeline plot) see it. When
             False the caller's dict is left untouched.
+        calibration: Optional flat runtime calibration dict (US5 — see
+            ``calibration.profile_to_runtime``): dB→[0,1] anchors consumed by the
+            quality harvest. Aggregator-side temperatures travel separately via
+            ``params["calibration"]``; pass the same dict in both places.
 
     Returns:
         ``(axis_results, incomparable_reasons, per_window_embeddings_by_pass)`` where:
@@ -454,6 +463,7 @@ def compute_uncertainty_axes(
             diff_speaker_floor=diff_speaker_floor,
             cluster_cosine_threshold=cluster_cosine_threshold,
             clustering_algorithm=clustering_algorithm,
+            calibration=calibration,
         )
         per_window_embeddings_by_pass[pass_label] = per_window_embeddings
         incomparable_reasons.update(pass_reasons)

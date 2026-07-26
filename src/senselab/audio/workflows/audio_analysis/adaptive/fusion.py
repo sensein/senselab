@@ -146,8 +146,9 @@ def build_final_outputs(
     refined_identity: dict[str, Any] | None = None,
     calibrated: bool = False,
     timestamps_meta: dict[str, Any] | None = None,
+    language: str | None = None,
 ) -> dict[str, Any]:
-    """Write final/{transcript,diarization}.json + final/presence.parquet; return transcript doc."""
+    """Write final/{transcript,diarization}.json (+.rttm) + final/presence.parquet; return transcript doc."""
     final = out_dir / "final"
     final.mkdir(parents=True, exist_ok=True)
 
@@ -184,6 +185,7 @@ def build_final_outputs(
         "policy_hash": policy.get("policy_hash"),
         "generated_from_round": generated_from_round,
         "stream": stream,
+        "language": language,
         "timestamps": timestamps_meta or {"timestamps_source": "member_vote"},
         "words": words,
         "segments": segments,
@@ -236,12 +238,47 @@ def build_final_outputs(
             c["total_speech_s"] = round(c["total_speech_s"] + (row["end"] - row["start"]), 6)
         for seg in diar_segments:
             clusters[seg["cluster_id"]]["n_segments"] += 1
+    # contracts/final-outputs.md: member_labels (refined cluster ↔ diar-model raw
+    # labels via vote co-occurrence) + per-segment overlap flag (I4 posterior).
+    identity_rows = state.axis_rows(stream, "identity")
+    member_labels: dict[str, dict[str, set]] = {}
+    for seg in diar_segments:
+        labels_for_cluster = member_labels.setdefault(str(seg["cluster_id"]), {})
+        for row in identity_rows:
+            mid = (row["start"] + row["end"]) / 2.0
+            if not (seg["start"] <= mid < seg["end"]):
+                continue
+            bk = bucket_key(row["start"], row["end"])
+            for source, payload in store.active_votes(stream, "identity", bk).items():
+                if source.startswith(("__", "embedding_")) or "::" in source:
+                    continue
+                raw_label = payload.get("speaker_label")
+                if raw_label and raw_label not in ("SIL", "<silent>"):
+                    labels_for_cluster.setdefault(source, set()).add(str(raw_label))
+        seg["overlap"] = any(
+            (row.get("overlap_posterior") or 0.0) >= 0.5
+            for row in identity_rows
+            if seg["start"] <= (row["start"] + row["end"]) / 2.0 < seg["end"]
+        )
+    for cluster in clusters.values():
+        cluster["member_labels"] = {
+            model: sorted(labels) for model, labels in (member_labels.get(str(cluster["cluster_id"])) or {}).items()
+        }
     diarization = {
         "clusters": sorted(clusters.values(), key=lambda c: c["cluster_id"]),
         "segments": diar_segments,
         "refined": refined_identity is not None,
     }
     (final / "diarization.json").write_text(json.dumps(diarization, indent=2))
+
+    # RTTM sidecar for interop (contracts/final-outputs.md).
+    audio_id = policy.get("rttm_audio_id") or "audio"
+    rttm_lines = [
+        f"SPEAKER {audio_id} 1 {seg['start']:.3f} {max(0.0, seg['end'] - seg['start']):.3f} "
+        f"<NA> <NA> {seg['cluster_id']} <NA> <NA>"
+        for seg in diar_segments
+    ]
+    (final / "diarization.rttm").write_text("\n".join(rttm_lines) + ("\n" if rttm_lines else ""))
 
     # presence.parquet — final presence belief.
     import pandas as pd
