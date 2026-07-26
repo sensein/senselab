@@ -319,6 +319,7 @@ def run_adaptive_loop(
         "aggregator": aggregator,
         "run_dir": str(run_dir),
         "fusion_stream": fusion_stream,
+        "audio_backend": ctx.get("audio_backend") or None,  # loader per stream (T048 — never silent)
         "elapsed_s": round(time.time() - t0, 3),
     }
     report = build_convergence_report(

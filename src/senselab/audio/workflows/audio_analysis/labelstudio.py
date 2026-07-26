@@ -12,9 +12,51 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from typing import Any
 
 from senselab.audio.workflows.audio_analysis.types import AxisResult, ComparisonStatus
+
+
+def load_ls_ground_truth(path: Path) -> dict[str, Any]:
+    """Parse a Label Studio export into ``{segments: [{start, end, speaker, text|None}], duration}``.
+
+    The import-side counterpart of this module's export builders (moved here
+    from the adaptive workflow — architecture-review T049): reads the standard
+    LS JSON export (list of tasks; paired ``labels``/``textarea`` results
+    sharing region ids) and yields time-ordered speaker segments with optional
+    transcripts — the ground-truth shape consumed by the adaptive loop's
+    evaluation harness.
+    """
+    tasks = json.loads(Path(path).read_text())
+    if not isinstance(tasks, list) or not tasks:
+        raise ValueError(f"unexpected LS export shape in {path}")
+    ann = (tasks[0].get("annotations") or [{}])[0]
+    by_id: dict[str, dict[str, Any]] = {}
+    duration = 0.0
+    for item in ann.get("result") or []:
+        rid = item.get("id")
+        val = item.get("value") or {}
+        duration = max(duration, float(item.get("original_length") or 0.0))
+        seg = by_id.setdefault(rid, {})
+        if item.get("type") == "labels":
+            seg.update(
+                {
+                    "start": float(val["start"]),
+                    "end": float(val["end"]),
+                    "speaker": (val.get("labels") or [None])[0],
+                }
+            )
+        elif item.get("type") == "textarea":
+            seg["text"] = " ".join(val.get("text") or []) or None
+            seg.setdefault("start", float(val["start"]))
+            seg.setdefault("end", float(val["end"]))
+    segments = sorted((s for s in by_id.values() if "start" in s), key=lambda s: s["start"])
+    for s in segments:
+        s.setdefault("text", None)
+        s.setdefault("speaker", None)
+    return {"segments": segments, "duration": duration}
+
 
 LABEL_VALUES = ("low", "medium", "high", "incomparable", "unavailable")
 LOW_THRESHOLD = 0.33

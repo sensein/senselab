@@ -29,36 +29,11 @@ from senselab.audio.workflows.audio_analysis.harvesters import _levenshtein
 _TOKEN_EQUIV = {"u": "you"}  # annotator shorthand normalization, reported separately
 
 
-def load_ls_ground_truth(path: Path) -> dict[str, Any]:
-    """Parse an LS export into {segments: [{start, end, speaker, text|None}], duration}."""
-    tasks = json.loads(Path(path).read_text())
-    if not isinstance(tasks, list) or not tasks:
-        raise ValueError(f"unexpected LS export shape in {path}")
-    ann = (tasks[0].get("annotations") or [{}])[0]
-    by_id: dict[str, dict[str, Any]] = {}
-    duration = 0.0
-    for item in ann.get("result") or []:
-        rid = item.get("id")
-        val = item.get("value") or {}
-        duration = max(duration, float(item.get("original_length") or 0.0))
-        seg = by_id.setdefault(rid, {})
-        if item.get("type") == "labels":
-            seg.update(
-                {
-                    "start": float(val["start"]),
-                    "end": float(val["end"]),
-                    "speaker": (val.get("labels") or [None])[0],
-                }
-            )
-        elif item.get("type") == "textarea":
-            seg["text"] = " ".join(val.get("text") or []) or None
-            seg.setdefault("start", float(val["start"]))
-            seg.setdefault("end", float(val["end"]))
-    segments = sorted((s for s in by_id.values() if "start" in s), key=lambda s: s["start"])
-    for s in segments:
-        s.setdefault("text", None)
-        s.setdefault("speaker", None)
-    return {"segments": segments, "duration": duration}
+# LS export *parsing* lives next to the export builders (architecture-review
+# T049); re-exported here for existing callers.
+from senselab.audio.workflows.audio_analysis.labelstudio import (  # noqa: E402, F401
+    load_ls_ground_truth,
+)
 
 
 def _tokens(text: str, *, equiv: bool) -> list[str]:
@@ -67,9 +42,15 @@ def _tokens(text: str, *, equiv: bool) -> list[str]:
 
 
 def _wer(ref: list[str], hyp: list[str]) -> float | None:
+    """WER over token lists — jiwer-backed when available (T049), Levenshtein fallback."""
     if not ref:
         return None
-    return round(_levenshtein(ref, hyp) / len(ref), 4)
+    try:
+        from senselab.audio.tasks.speech_to_text_evaluation import calculate_wer  # noqa: PLC0415
+
+        return round(float(calculate_wer(" ".join(ref), " ".join(hyp))), 4)
+    except (ImportError, ModuleNotFoundError):
+        return round(_levenshtein(ref, hyp) / len(ref), 4)
 
 
 def _in_any(mid: float, spans: list[tuple[float, float]]) -> bool:

@@ -3,27 +3,27 @@
 from __future__ import annotations
 
 import math
-import re
 import sys
 from itertools import combinations  # used by aggregate_utterance for pairwise WER
 from typing import Any
 
+# Surface-level differences (case + punctuation + repeated whitespace) are
+# stripped before pairwise WER so the utterance axis reflects *semantic*
+# disagreement rather than surface noise. The canonical normalizer moved to the
+# task layer (architecture-review T049) so task- and workflow-level WER share
+# one definition; re-exported under the historical name for existing importers.
+from senselab.audio.tasks.speech_to_text_evaluation.utils import (
+    normalize_transcript_for_wer as _normalize_transcript_for_wer,
+)
 from senselab.audio.workflows.audio_analysis.aggregators import apply_aggregator
 
-# Surface-level differences (case + punctuation + repeated whitespace) that we
-# strip before pairwise WER so the utterance axis reflects *semantic* disagreement
-# rather than surface noise. ``"first."`` and ``"first!"`` both normalize to
-# ``"first"``; ``"I"`` and ``"i"`` both normalize to ``"i"``.
-_PUNCTUATION_PATTERN = re.compile(r"[^\w\s']")
-_WHITESPACE_PATTERN = re.compile(r"\s+")
-
-
-def _normalize_transcript_for_wer(text: str) -> str:
-    """Lowercase, strip non-word punctuation, collapse whitespace."""
-    if not text:
-        return ""
-    cleaned = _PUNCTUATION_PATTERN.sub(" ", text.lower())
-    return _WHITESPACE_PATTERN.sub(" ", cleaned).strip()
+__all__ = [
+    "_normalize_transcript_for_wer",
+    "aggregate_identity",
+    "aggregate_presence",
+    "aggregate_utterance",
+    "presence_p_voice",
+]
 
 
 # ── presence ──────────────────────────────────────────────────────────

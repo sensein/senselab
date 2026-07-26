@@ -49,11 +49,18 @@ class FramePosterior:
         probs: ``(num_frames,)`` P(speech) in ``[0, 1]``.
         frame_hop_s: seconds between consecutive frame starts.
         frame_win_s: analysis window per frame (seconds).
+        per_class: optional ``(num_frames, num_classes)`` raw class posteriors —
+            powerset ``[∅, s1, s2, s3, s1s2, s1s3, s2s3]`` for pyannote 3.x
+            segmentation, or per-speaker multilabel activations for 4.x. Only
+            populated when ``extract_speech_frame_posteriors(...,
+            include_per_class=True)`` (spec 20260723-225523 FR-016); ``None``
+            otherwise so existing consumers are unaffected.
     """
 
     probs: np.ndarray
     frame_hop_s: float
     frame_win_s: float = 0.0
+    per_class: Optional[np.ndarray] = None
 
     def mean_std_in_window(self, start_s: float, end_s: float) -> tuple[float, float]:
         """Return ``(mean, std)`` of P(speech) over frames overlapping ``[start, end)``.
@@ -71,6 +78,18 @@ class FramePosterior:
         window = self.probs[lo:hi]
         return (float(np.nanmean(window)), float(np.nanstd(window)))
 
+    def overlap_probs(self) -> Optional[np.ndarray]:
+        """Per-frame P(≥ 2 concurrent speakers) from the per-class posteriors.
+
+        Powerset output (rows summing to ~1, ≥ 5 classes): sum of the
+        multi-speaker classes (columns 4+). Multilabel per-speaker output
+        (pyannote 4.x): the second-highest speaker activation. ``None`` when
+        ``per_class`` was not requested at extraction time.
+        """
+        if self.per_class is None or self.per_class.ndim != 2:
+            return None
+        return _overlap_prob_from_output(self.per_class)
+
 
 def _speech_prob_from_output(data: np.ndarray) -> np.ndarray:
     """Reduce a segmentation model's per-frame output to P(speech) in ``[0, 1]``.
@@ -86,6 +105,24 @@ def _speech_prob_from_output(data: np.ndarray) -> np.ndarray:
     if np.nanmean(np.abs(row_sums - 1.0)) < 0.1:  # powerset softmax
         return np.clip(1.0 - data[:, 0], 0.0, 1.0)
     return np.clip(data.max(axis=1), 0.0, 1.0)
+
+
+def _overlap_prob_from_output(data: np.ndarray) -> np.ndarray:
+    """Reduce per-frame class posteriors to P(overlapping speech) in ``[0, 1]``.
+
+    Mirrors :func:`_speech_prob_from_output`'s powerset-vs-multilabel detection:
+    powerset softmax (rows ~1) with ≥ 5 classes → sum of multi-speaker classes
+    (columns 4+); otherwise treat columns as per-speaker activations and take
+    the second-highest per frame (the probability a second concurrent speaker
+    is active).
+    """
+    if data.ndim != 2 or data.shape[1] < 2:
+        return np.zeros(data.shape[0] if data.ndim >= 1 else 0)
+    row_sums = data.sum(axis=1)
+    if data.shape[1] >= 5 and float(np.nanmean(np.abs(row_sums - 1.0))) < 0.1:  # powerset softmax
+        return np.clip(data[:, 4:].sum(axis=1), 0.0, 1.0)
+    sorted_desc = np.sort(data, axis=1)[:, ::-1]
+    return np.clip(sorted_desc[:, 1], 0.0, 1.0)
 
 
 def _output_to_array(output: Any) -> np.ndarray:  # noqa: ANN401
@@ -238,12 +275,18 @@ def extract_speech_frame_posteriors(
     audios: list[Audio],
     model: Optional[PyannoteAudioModel] = None,
     device: Optional[DeviceType] = None,
+    include_per_class: bool = False,
 ) -> list[Optional[FramePosterior]]:
     """Return continuous per-frame P(speech) for each audio (``None`` on failure).
 
     If the model cannot be loaded (not installed, gated without a token,
     native-lib failure), every entry is ``None`` and the presence axis simply
     omits the frame-posterior voter (FR-023) — the workflow does not abort.
+
+    With ``include_per_class=True`` the raw ``(frames, classes)`` posteriors are
+    retained on ``FramePosterior.per_class`` (enabling
+    :meth:`FramePosterior.overlap_probs` — FR-016); default ``False`` keeps the
+    historical memory profile and output shape.
     """
     if not PYANNOTEAUDIO_AVAILABLE:
         logger.warning("pyannote-audio unavailable; segmentation frame posteriors will be null.")
@@ -265,7 +308,8 @@ def extract_speech_frame_posteriors(
             t0 = time.time()
             data, hop_s, win_s = chunked_frame_inference(inference, audio)
             probs = _speech_prob_from_output(data)
-            results.append(FramePosterior(probs=probs, frame_hop_s=hop_s, frame_win_s=win_s))
+            per_class = np.asarray(data, dtype=np.float64) if include_per_class and data.ndim == 2 else None
+            results.append(FramePosterior(probs=probs, frame_hop_s=hop_s, frame_win_s=win_s, per_class=per_class))
             logger.info(f"segmentation inference took {time.time() - t0:.2f}s ({probs.size} frames @ {hop_s:.4f}s)")
         except (RuntimeError, ValueError, OSError) as exc:
             logger.warning(f"segmentation inference failed for one audio: {exc}")

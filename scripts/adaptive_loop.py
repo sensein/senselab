@@ -24,39 +24,24 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import types
 from pathlib import Path
 
 _REPO_SRC = Path(__file__).resolve().parents[1] / "src"
 
 
 def _ensure_light_importable() -> None:
-    """Make ``senselab.audio.workflows.audio_analysis.*`` submodules importable.
+    """Make senselab importable when running from a checkout without installation.
 
-    In a full environment the normal import works and this is a no-op. In a
-    minimal environment (no torch/pydantic), the package ``__init__`` chain
-    would fail on heavy imports — so we register namespace stubs for the parent
-    packages, letting Python load the *pure* submodules (aggregate, harvesters,
-    grid, adaptive.*) directly from their file paths.
+    The package ``__init__`` chain is lazy (PEP 562 — see T046 in
+    ``specs/20260723-225523-dynamic-uncertainty-workflow/architecture-review.md``),
+    so the loop's pure submodules import without torch/transformers; all that is
+    needed here is the src/ path when senselab isn't pip-installed.
     """
     try:
         import senselab.audio.workflows.audio_analysis.aggregate  # noqa: F401
-
-        return
-    except Exception:  # noqa: BLE001 — any heavy-dep failure routes to stubs
-        pass
-    if str(_REPO_SRC) not in sys.path:
-        sys.path.insert(0, str(_REPO_SRC))
-    path = _REPO_SRC
-    name = ""
-    for part in ("senselab", "audio", "workflows", "audio_analysis"):
-        path = path / part
-        name = f"{name}.{part}" if name else part
-        if name not in sys.modules:
-            mod = types.ModuleType(name)
-            mod.__path__ = [str(path)]  # type: ignore[attr-defined]
-            mod.__package__ = name
-            sys.modules[name] = mod
+    except ImportError:
+        if str(_REPO_SRC) not in sys.path:
+            sys.path.insert(0, str(_REPO_SRC))
 
 
 def main(argv: list[str] | None = None) -> int:

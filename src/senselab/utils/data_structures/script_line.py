@@ -182,6 +182,31 @@ class ScriptLine(BaseModel):
         """
         return self.chunks
 
+    def iter_leaves(self) -> List["ScriptLine"]:
+        """Return the deepest chunk nodes (typically words) in temporal order.
+
+        A leaf is a node with no ``chunks``. For a word-aligned transcript
+        (utterance → words) this yields the word lines; for a flat line it
+        yields the line itself. Consolidates the recursive walks previously
+        re-implemented across forced_alignment, plotting, and the audio
+        analysis workflow (architecture-review T049); for *serialized* trees
+        (dicts) use ``senselab.audio.tasks.speech_to_text_ensemble.iter_word_leaves``.
+
+        Returns:
+            list[ScriptLine]: leaf nodes, depth-first.
+
+        Example:
+            >>> line = ScriptLine(chunks=[ScriptLine(text="a"), ScriptLine(text="b")])
+            >>> [leaf.text for leaf in line.iter_leaves()]
+            ['a', 'b']
+        """
+        if not self.chunks:
+            return [self]
+        leaves: List["ScriptLine"] = []
+        for chunk in self.chunks:
+            leaves.extend(chunk.iter_leaves())
+        return leaves
+
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "ScriptLine":
         """Construct a `ScriptLine` from a nested dictionary.

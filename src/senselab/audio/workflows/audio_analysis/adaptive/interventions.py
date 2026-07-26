@@ -553,12 +553,16 @@ def _u1_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     language = ctx["policy"].get("language")
     ran: list[dict[str, Any]] = []
     ext_blocks: dict[str, dict[str, Any]] = {}
+    u1_backend = str(ctx["policy"].get("u1_backend", "auto"))
     for model in trigger["models"]:
-        words, err = transcribe_crop(segment, model_id=model, offset_s=crop_start, language=language)
+        meta: dict[str, Any] = {}
+        words, err = transcribe_crop(
+            segment, model_id=model, offset_s=crop_start, language=language, meta=meta, backend=u1_backend
+        )
         if words is None:
             ran.append({"model": model, "status": "failed", "error": err})
             continue
-        ran.append({"model": model, "status": "ok", "n_words": len(words)})
+        ran.append({"model": model, "status": "ok", "n_words": len(words), **meta})
         ctx.setdefault("live_asr_done", set()).add(model)
         ctx.setdefault("live_asr_words", {}).setdefault(stream, {})[model] = words
         ext_blocks[model] = {

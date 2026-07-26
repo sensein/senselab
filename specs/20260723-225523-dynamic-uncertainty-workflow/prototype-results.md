@@ -175,6 +175,32 @@ across all touched files.
 (documented per task): comparator test suite green post-split, golden-compat diff on a GPU run,
 degradation-suite pipeline runs, one-time MMS_FA download for live U3.
 
+## Sixth pass (2026-07-24) — architecture moves T046–T050 executed
+
+Per [architecture-review.md](./architecture-review.md): both parent `__init__`s are now PEP-562 lazy
+(the entire `adaptive.loop` import chain loads with zero heavy modules in a bare env; the driver's
+sys.modules stub hack is deleted); `adaptive/backends.py` is reduced to guarded task-API gateways —
+U1 through `transcribe_audios(return_timestamps="word")`, consensus alignment through the NEW
+`forced_alignment/mms_fa.py` (the previously dead torchaudio slot), overlap posteriors through
+`FramePosterior.per_class`/`overlap_probs()` (FR-016 now lives in the task module), fine-hop
+embeddings through the workflow extractor; `audio_io` replicates `prepare_audio` exactly for crop
+cache-signature parity with enhancement via `enhance_audios`; transcript fusion is promoted to
+`tasks/speech_to_text_ensemble/` (explicit `weights`); `ScriptLine.iter_leaves()`,
+`normalize_transcript_for_wer`, jiwer-backed WER, and LS ground-truth parsing moved to their named
+homes.
+
+**Why the DSP audio fallback stays (and how it's kept honest)**: it exists solely for artifact-driven
+runs outside a senselab install — the mode this prototype was built and validated in. It is now never
+silent: the loader used is recorded in `convergence.json → audio_backend` with the senselab-path
+failure reason, and policy `audio_io_backend: senselab` makes production runs fail loudly instead
+(same pattern for `u1_backend`). Verification: 15/15 unit + 3/3 votes tests, hermetic determinism e2e
+(cache-replay-only policy) passing, ruff clean; run15 — executed through the relocated code with live
+U1/I4 — reproduced every ground-truth metric exactly (fused WER 0.059/0.000, speaker accuracy 0.8095,
+boundary 1.0/0.5). Sandbox-environment notes: the senselab loader/ASR paths could not be exercised
+live here (torchaudio-2.13/torchcodec decode gap + 30 s cold imports on the degraded FS — both
+environmental; repo pins torchaudio 2.8) — their fallback reasons are recorded in provenance,
+demonstrating the envelope; validate the primary paths with the full-env checks below.
+
 ## Known limitations (tracked in tasks.md)
 
 - I4 overlap posteriors code-complete but unvalidated here (gated `pyannote/segmentation-3.0` needs an

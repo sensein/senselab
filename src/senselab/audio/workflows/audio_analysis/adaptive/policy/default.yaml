@@ -38,6 +38,10 @@ fusion:
   consensus_alignment_timeout_s: 600.0   # SIGALRM guard around bundle load + alignment
 calibration_profile:           # T033: {"type":"logistic","a":..,"b":..} or {"type":"piecewise","x":[..],"y":[..]}
                                # produced by the synthetic calibration harness; null -> calibrated: false
+audio_io_backend: auto         # T048: "auto" = senselab preprocessing (cache-signature parity)
+                               # with DSP-loader fallback; "senselab" = strict, fail loudly;
+                               # "dsp" pins the fallback. Loader used is recorded in
+                               # convergence.json -> audio_backend (never silent).
 families:                      # FR-008 — glob-style prefixes; weight = 1/|family members present|
   whisper:
   - openai/whisper-
@@ -53,6 +57,8 @@ reserve_asr_models:            # U2 escalation pool (cache replay), in order
 - openai/whisper-large-v3-turbo
 u1_asr_models:                 # U1 live re-ASR pool — env-appropriate HF whisper ids;
 - openai/whisper-base          # full installs may list the run's own backends instead
+u1_backend: auto               # T047: "auto" = senselab task API first, HF-pipeline fallback
+                               # (recorded in iterations.json); "senselab" / "pipeline" pin one path
 language:                      # optional ASR language pin for U1 (e.g. "en")
 enhancement_model: speechbrain/sepformer-wham16k-enhancement    # on-demand enhanced stream
 identity:                      # I1/I2 identity repair (stored or live embeddings)

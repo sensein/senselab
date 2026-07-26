@@ -1,4 +1,12 @@
-"""Fusion: time-aligned word-slot voting → final outputs (FR-021/022, research.md D9)."""
+"""Fusion: time-aligned word-slot voting → final outputs (FR-021/022, research.md D9).
+
+Post-T050 the fusion *math* lives in the reusable task package
+``senselab.audio.tasks.speech_to_text_ensemble`` (``fuse_word_streams`` /
+``load_calibrator`` / ``iter_word_leaves`` are re-exported here for the loop's
+callers); this module keeps the workflow-specific parts — artifact word-stream
+collection, policy → weights/params translation, speaker & presence lookups
+from the belief state, and the ``final/`` artifact writers.
+"""
 
 from __future__ import annotations
 
@@ -6,39 +14,15 @@ import json
 from pathlib import Path
 from typing import Any
 
+from senselab.audio.tasks.speech_to_text_ensemble import (  # noqa: F401 — re-exported for loop callers
+    fuse_word_streams,
+    iter_word_leaves,
+    load_calibrator,
+)
 from senselab.audio.workflows.audio_analysis.adaptive.belief import bucket_key
 from senselab.audio.workflows.audio_analysis.adaptive.policy import family_weights
-from senselab.audio.workflows.audio_analysis.aggregate import _normalize_transcript_for_wer
 
 # ── word-stream extraction ───────────────────────────────────────────────
-
-
-def iter_word_leaves(node: Any) -> list[dict[str, Any]]:  # noqa: ANN401 — recursive JSON walk
-    """Deepest (text, start, end) leaves of a serialized ScriptLine tree = words."""
-    out: list[dict[str, Any]] = []
-    if isinstance(node, list):
-        for item in node:
-            out.extend(iter_word_leaves(item))
-        return out
-    if not isinstance(node, dict):
-        return out
-    chunks = node.get("chunks")
-    if isinstance(chunks, list) and chunks:
-        for c in chunks:
-            out.extend(iter_word_leaves(c))
-        return out
-    text, start, end = node.get("text"), node.get("start"), node.get("end")
-    if text and start is not None and end is not None:
-        try:
-            word = {"text": str(text).strip(), "start": float(start), "end": float(end)}
-        except (TypeError, ValueError):
-            return out
-        score = node.get("score")
-        if isinstance(score, (int, float)) and 0.0 <= float(score) <= 1.0:
-            word["confidence"] = float(score)
-        if word["text"]:
-            out.append(word)
-    return out
 
 
 def collect_word_streams(
@@ -76,48 +60,6 @@ def collect_word_streams(
 # ── slot voting ──────────────────────────────────────────────────────────
 
 
-def load_calibrator(profile: Any) -> Any:  # noqa: ANN401 — callable | None
-    """Build a confidence calibrator from a policy profile (tasks.md T033).
-
-    Supported shapes: ``{"type": "logistic", "a": float, "b": float}`` applies
-    ``sigmoid(a · logit(c) + b)``; ``{"type": "piecewise", "x": [...], "y": [...]}``
-    linearly interpolates. ``None``/missing → no calibration (``calibrated: false``).
-    Profiles are produced by the synthetic harness (scene-quality-utterance US5).
-    """
-    if not profile:
-        return None
-    import math
-
-    kind = str(profile.get("type") or "")
-    if kind == "logistic":
-        a, b = float(profile["a"]), float(profile["b"])
-
-        def _logistic(c: float) -> float:
-            c = min(1.0 - 1e-6, max(1e-6, float(c)))
-            z = a * math.log(c / (1.0 - c)) + b
-            return round(1.0 / (1.0 + math.exp(-z)), 4)
-
-        return _logistic
-    if kind == "piecewise":
-        xs = [float(v) for v in profile["x"]]
-        ys = [float(v) for v in profile["y"]]
-        if len(xs) != len(ys) or len(xs) < 2:
-            raise ValueError("piecewise calibration profile needs matching x/y with >= 2 knots")
-
-        def _piecewise(c: float) -> float:
-            c = float(c)
-            if c <= xs[0]:
-                return round(ys[0], 4)
-            for i in range(1, len(xs)):
-                if c <= xs[i]:
-                    t = (c - xs[i - 1]) / max(1e-9, xs[i] - xs[i - 1])
-                    return round(ys[i - 1] + t * (ys[i] - ys[i - 1]), 4)
-            return round(ys[-1], 4)
-
-        return _piecewise
-    raise ValueError(f"unknown calibration profile type: {kind!r}")
-
-
 def fuse_words(
     word_streams: dict[str, list[dict[str, Any]]],
     *,
@@ -126,89 +68,25 @@ def fuse_words(
     p_voice_at: Any = None,  # noqa: ANN401 — callable (t) -> float | None
     calibrator: Any = None,  # noqa: ANN401 — callable (c) -> c' | None
 ) -> list[dict[str, Any]]:
-    """ROVER-lite: group words into time slots, vote with family × confidence weights."""
+    """Policy-driven wrapper over the reusable transcript-ensemble task (T050).
+
+    Translates the adaptive policy into the task API's explicit arguments —
+    model-family weights (FR-008) and the fusion slot/margin parameters — and
+    delegates the voting math to
+    :func:`senselab.audio.tasks.speech_to_text_ensemble.fuse_word_streams`.
+    """
     fus = policy["fusion"]
-    fam_w = family_weights(sorted(word_streams), policy)
-    entries = []
-    for model, words in word_streams.items():
-        for w in words:
-            entries.append({**w, "model": model, "mid": (w["start"] + w["end"]) / 2.0})
-    entries.sort(key=lambda e: (e["mid"], e["start"], e["model"]))
-
-    slots: list[dict[str, Any]] = []
-    for e in entries:
-        placed = False
-        for slot in slots:
-            if e["model"] in slot["models"]:
-                continue
-            ov = min(slot["end"], e["end"]) - max(slot["start"], e["start"])
-            frac = ov / max(1e-9, min(slot["end"] - slot["start"], e["end"] - e["start"]))
-            if frac >= fus["slot_overlap"] or abs(e["mid"] - slot["mid"]) <= fus["slot_mid_tol_s"]:
-                slot["members"].append(e)
-                slot["models"].add(e["model"])
-                n = len(slot["members"])
-                slot["start"] = sum(m["start"] for m in slot["members"]) / n
-                slot["end"] = sum(m["end"] for m in slot["members"]) / n
-                slot["mid"] = (slot["start"] + slot["end"]) / 2.0
-                placed = True
-                break
-        if not placed:
-            slots.append(
-                {"start": e["start"], "end": e["end"], "mid": e["mid"], "members": [e], "models": {e["model"]}}
-            )
-    slots.sort(key=lambda s: (s["start"], s["end"]))
-
-    ensemble_weight = sum(fam_w.values()) or 1.0
-    fused: list[dict[str, Any]] = []
-    for slot in slots:
-        tally: dict[str, dict[str, Any]] = {}
-        total_w = 0.0
-        for m in slot["members"]:
-            key = _normalize_transcript_for_wer(m["text"]) or m["text"].lower()
-            wt = fam_w.get(m["model"], 1.0) * float(m.get("confidence", 1.0))
-            total_w += wt
-            t = tally.setdefault(key, {"weight": 0.0, "models": [], "display": m["text"], "confs": []})
-            t["weight"] += wt
-            t["models"].append(m["model"])
-            if "confidence" in m:
-                t["confs"].append(m["confidence"])
-        if not tally or total_w <= 0:
-            continue
-        ranked = sorted(tally.items(), key=lambda kv: (-kv[1]["weight"], kv[0]))
-        win_key, win = ranked[0]
-        share = win["weight"] / total_w
-        member_conf = sum(win["confs"]) / len(win["confs"]) if win["confs"] else 1.0
-        # Abstention is evidence (contracts/belief-store.md §merge-back): a slot
-        # only some models voted in is scaled by its family-weighted coverage,
-        # so a single-witness word cannot carry confidence 1.0.
-        coverage = min(1.0, sum(fam_w.get(m, 1.0) for m in slot["models"]) / ensemble_weight)
-        raw_conf = share * member_conf * coverage
-        word = {
-            "text": win["display"],
-            "start": round(slot["start"], 4),
-            "end": round(slot["end"], 4),
-            "confidence": round(calibrator(raw_conf), 4) if calibrator else round(raw_conf, 4),
-            "coverage": round(coverage, 4),
-            "sources": sorted(set(win["models"])),
-            "alternates": [],
-            "flags": (["single_source"] if len(slot["models"]) == 1 else []),
-        }
-        if share < fus["winner_margin"]:
-            for key, alt in ranked[1:]:
-                alt_share = alt["weight"] / total_w
-                if alt_share >= fus["alternate_min_share"]:
-                    word["alternates"].append(
-                        {"text": alt["display"], "share": round(alt_share, 4), "models": sorted(set(alt["models"]))}
-                    )
-        mid = slot["mid"]
-        if speaker_at is not None:
-            word["speaker"] = speaker_at(mid)
-        if p_voice_at is not None:
-            pv = p_voice_at(mid)
-            if pv is not None and pv < 0.5:
-                word["flags"].append("low_presence")
-        fused.append(word)
-    return fused
+    return fuse_word_streams(
+        word_streams,
+        weights=family_weights(sorted(word_streams), policy),
+        slot_overlap=float(fus["slot_overlap"]),
+        slot_mid_tol_s=float(fus["slot_mid_tol_s"]),
+        winner_margin=float(fus["winner_margin"]),
+        alternate_min_share=float(fus["alternate_min_share"]),
+        speaker_at=speaker_at,
+        p_voice_at=p_voice_at,
+        calibrator=calibrator,
+    )
 
 
 # ── lookups from belief state ────────────────────────────────────────────

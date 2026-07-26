@@ -126,6 +126,39 @@ in Phase 8.
   heavy in contract) + family-majority guard; document `I2_recluster` as a catalog addition; U3 as a
   fusion-stage step rather than a RULES entry; `max_region_rounds` enforced via convergence marks.
 
+### Architecture follow-ups (see [architecture-review.md](./architecture-review.md); T046–T050 implemented 2026-07-24)
+
+- [X] T046 Lazified `audio/workflows/__init__.py` + `audio_analysis/__init__.py` (PEP-562, incl. new
+  `harvest_pass`/`PassHarvest`/`aggregate_pass` exports); `_ensure_light_importable` stub deleted —
+  verified: the full `adaptive.loop` import chain loads with ZERO heavy modules in a bare env.
+- [X] T047 `adaptive/backends.py` dissolved into guarded task-API gateways: U1 →
+  `speech_to_text.transcribe_audios` (`return_timestamps="word"`; policy `u1_backend:
+  auto|senselab|pipeline`, backend recorded in iterations.json); `consensus_align` → NEW
+  `forced_alignment/mms_fa.py` (fills the dead torchaudio slot); `overlap_posteriors` →
+  `FramePosterior.per_class` + `overlap_probs()` via `extract_speech_frame_posteriors(...,
+  include_per_class=True)` (closes T041's FR-016 dependency); `embed_windows` → the workflow's
+  `extract_per_window_embeddings` on crops.
+- [X] T048 `adaptive/audio_io.py` routes through `tasks/preprocessing` (exact `prepare_audio`
+  replication ⇒ crop `audio_signature`/cache parity) and `tasks/speech_enhancement.enhance_audios`;
+  DSP loader retained as the labeled artifact-driven-outside-senselab fallback, **never silent**:
+  loader recorded in `convergence.json → audio_backend`, policy `audio_io_backend:
+  auto|senselab|dsp` ("senselab" = strict fail-loudly for production).
+- [X] T049 (partial) `ScriptLine.iter_leaves()` added (call-site migration opportunistic);
+  `adaptive/evaluate` WER → `speech_to_text_evaluation.calculate_wer` with Levenshtein fallback;
+  canonical `normalize_transcript_for_wer` moved to `speech_to_text_evaluation/utils.py`
+  (aggregate.py re-exports the historical name); `load_ls_ground_truth` →
+  `audio_analysis/labelstudio.py`. REMAINING: `triage.dsp_snr_series` → `quality_control/metrics.py`
+  deferred until that module's pure-DSP/model-based split (it imports VAD+diarization at top today).
+- [X] T050 Transcript fusion promoted to `tasks/speech_to_text_ensemble/` (`fuse_word_streams` with
+  explicit `weights`, `load_calibrator`, `iter_word_leaves`); `adaptive/fusion.py` keeps the
+  policy→weights wrapper + artifact collection + final-output writers.
+- [ ] T051 Cache/provenance layer out of the script → `utils/tasks/cached_inference.py`; `_stage_*`
+  functions → `workflows/audio_analysis/stages.py`; `wrapper_version_hash` re-scoped to the stage
+  modules (documented invalidation-semantics change). Precondition for T040. (Own PR per review.)
+- [ ] T052 Typed adaptive internals per house style: `adaptive/types.py` dataclasses (`Region`,
+  `PlannedIntervention`, `LoopContext`, `InterventionRule`) replacing dict soup; planner + regions
+  first. (Opportunistic, own PR.)
+
 ## Dependencies
 
 Phase 2 blocks everything. US2 (Phase 4) is the MVP and depends only on Phase 2. US3 rules plug into

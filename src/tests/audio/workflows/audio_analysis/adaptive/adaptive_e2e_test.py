@@ -39,9 +39,16 @@ def test_t037_determinism_byte_identical(tmp_path: Path) -> None:
 
     run_dir = Path(_RUN_DIR or "")
     cache_dir = run_dir.parent.parent / "analyze_audio_cache"
-    # Hermetic: determinism must not depend on network-gated backends (U3 bundle download).
+    # Hermetic: determinism must not depend on live models or network-gated
+    # backends — pin cache-replay-only behavior (live re-ASR + overlap
+    # detection off, DSP audio loader, no U3 bundle download) so the test is
+    # fast and environment-independent.
     policy_override = tmp_path / "policy.yaml"
-    policy_override.write_text('fusion:\n  consensus_alignment: "off"\n')
+    policy_override.write_text(
+        'fusion:\n  consensus_alignment: "off"\n'
+        "audio_io_backend: dsp\n"
+        "rules:\n  U1_region_reasr: {enabled: false}\n  I4_overlap_detection: {enabled: false}\n"
+    )
     outs = []
     for name in ("a", "b"):
         out = tmp_path / name
