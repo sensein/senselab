@@ -86,9 +86,33 @@ def _track_name(pass_label: str, axis: str) -> str:
     return f"{pass_token}__uncertainty__{axis}"
 
 
+SOURCE_LABEL_VALUES = ("speech", "people", "machine", "environment", "unavailable")
+
+
 def _build_labels_xml(track_name: str) -> str:
     inner = "\n".join(f'  <Label value="{v}"/>' for v in LABEL_VALUES)
     return f'<Labels name="{track_name}" toName="audio">\n{inner}\n</Labels>'
+
+
+def _build_source_labels_xml(track_name: str) -> str:
+    inner = "\n".join(f'  <Label value="{v}"/>' for v in SOURCE_LABEL_VALUES)
+    return f'<Labels name="{track_name}" toName="audio">\n{inner}\n</Labels>'
+
+
+def _scene_track_name(pass_label: str, kind: str) -> str:
+    """FR-024 scene tracks: ``<pass>__presence__quality`` / ``<pass>__presence__sources``."""
+    pass_token = "pass_pair" if pass_label == "raw_vs_enhanced" else pass_label
+    return f"{pass_token}__presence__{kind}"
+
+
+def _quality_degradation(row: Any) -> float | None:  # noqa: ANN401 — UncertaintyRow duck-typed
+    """Overall degradation for the quality track: max over the four quality columns."""
+    values = [
+        v
+        for v in (row.quality_snr, row.quality_clip, row.quality_reverb, row.quality_bandwidth)
+        if v is not None and not (isinstance(v, float) and v != v)
+    ]
+    return max(values) if values else None
 
 
 def _build_textarea_xml(track_name: str) -> str:
@@ -135,11 +159,19 @@ def attach_uncertainty_tracks_to_ls(
     """
     # ── Build the new XML blocks ──
     blocks: list[str] = []
-    for (pass_label, axis), _result in axis_results.items():
+    for (pass_label, axis), result in axis_results.items():
         track = _track_name(str(pass_label), str(axis))
         blocks.append(_build_labels_xml(track))
         if axis == "utterance":
             blocks.append(_build_textarea_xml(track))
+        # FR-024 (T040): additive scene tracks on per-pass presence results —
+        # emitted only when the pass actually carries the corresponding columns
+        # (delta rows never do), so legacy bundles are byte-identical.
+        if str(axis) == "presence" and str(pass_label) != "raw_vs_enhanced":
+            if any(_quality_degradation(r) is not None for r in result.rows):
+                blocks.append(_build_labels_xml(_scene_track_name(str(pass_label), "quality")))
+            if any(r.src_dominant is not None for r in result.rows):
+                blocks.append(_build_source_labels_xml(_scene_track_name(str(pass_label), "sources")))
 
     # Inject before the closing </View> tag.
     if "</View>" in ls_config:
@@ -195,5 +227,39 @@ def attach_uncertainty_tracks_to_ls(
                         },
                     }
                 )
+            # FR-024 (T040): scene tracks ride the same presence rows.
+            if axis == "presence" and pass_label != "raw_vs_enhanced":
+                degradation = _quality_degradation(row)
+                if degradation is not None:
+                    q_track = _scene_track_name(pass_label, "quality")
+                    result_list.append(
+                        {
+                            "id": f"{q_track}__{row_idx}",
+                            "from_name": q_track,
+                            "to_name": "audio",
+                            "type": "labels",
+                            "value": {
+                                "start": float(row.start),
+                                "end": float(row.end),
+                                "labels": [uncertainty_to_label_bin(degradation, "ok")],
+                            },
+                        }
+                    )
+                if row.src_dominant is not None:
+                    s_track = _scene_track_name(pass_label, "sources")
+                    label = str(row.src_dominant)
+                    result_list.append(
+                        {
+                            "id": f"{s_track}__{row_idx}",
+                            "from_name": s_track,
+                            "to_name": "audio",
+                            "type": "labels",
+                            "value": {
+                                "start": float(row.start),
+                                "end": float(row.end),
+                                "labels": [label if label in SOURCE_LABEL_VALUES else "unavailable"],
+                            },
+                        }
+                    )
 
     return ls_tasks, ls_config

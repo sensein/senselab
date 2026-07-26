@@ -123,3 +123,50 @@ def test_disagreements_nan_uncertainty_sorts_last(tmp_path: Path) -> None:
     # Non-null first.
     assert idx["entries"][0]["aggregated_uncertainty"] == 0.5
     assert idx["entries"][1]["aggregated_uncertainty"] is None
+
+
+# ── FR-024 (T042): presence sub-signals in the index ─────────────────────
+
+
+def test_presence_entries_carry_and_tiebreak_on_sub_signals(tmp_path: Path) -> None:
+    """Presence entries expose scene sub-signals; equal-aggregated ties rank by presence_uncertainty."""
+    low_instability = UncertaintyRow(
+        start=0.0,
+        end=0.5,
+        axis="presence",
+        aggregated_uncertainty=0.7,
+        contributing_models=["m"],
+        model_votes={"m": {"speaks": True}},
+        comparison_status="ok",
+        presence_uncertainty=0.7,
+        quality_uncertainty=0.1,
+        src_dominant="speech",
+    )
+    high_instability = UncertaintyRow(
+        start=1.0,
+        end=1.5,
+        axis="presence",
+        aggregated_uncertainty=0.7,  # same primary — tiebreak must use presence_uncertainty
+        contributing_models=["m"],
+        model_votes={"m": {"speaks": True}},
+        comparison_status="ok",
+        presence_uncertainty=0.95,
+    )
+    index = build_disagreements_index(
+        axis_results={
+            ("raw_16k", "presence"): AxisResult(
+                pass_label="raw_16k", axis="presence", rows=[low_instability, high_instability]
+            )
+        },
+        top_n=10,
+        run_dir=tmp_path,
+        config={},
+        incomparable_reasons={},
+    )
+    entries = index["entries"]
+    assert entries[0]["start"] == 1.0 and entries[0]["presence_uncertainty"] == 0.95
+    assert entries[1]["presence_uncertainty"] == 0.7
+    assert entries[1]["quality_uncertainty"] == 0.1 and entries[1]["src_dominant"] == "speech"
+    assert "presence_unc=" in entries[0]["summary"]
+    # Null-safe: absent sub-signals are omitted, not null-filled.
+    assert "quality_uncertainty" not in entries[0]

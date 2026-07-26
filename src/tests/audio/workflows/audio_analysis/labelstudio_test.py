@@ -107,3 +107,76 @@ def test_attach_uncertainty_tracks_adds_xml_blocks_and_regions() -> None:
     # Bin label is "high" because aggregated_uncertainty=0.7 ≥ 0.66.
     label_regions = [r for r in raw_regions if r["type"] == "labels"]
     assert all(r["value"]["labels"] == ["high"] for r in label_regions)
+
+
+# ── FR-024 (T040): scene tracks on per-pass presence results ────────────
+
+
+def _presence_row_with_scene(start: float, *, quality_snr: float | None, src_dominant: str | None) -> UncertaintyRow:
+    return UncertaintyRow(
+        start=start,
+        end=start + 0.5,
+        axis="presence",
+        aggregated_uncertainty=0.4,
+        contributing_models=["m"],
+        model_votes={"m": {"speaks": True}},
+        comparison_status="ok",
+        quality_snr=quality_snr,
+        src_dominant=src_dominant,
+    )
+
+
+def test_scene_tracks_added_when_columns_present() -> None:
+    """Quality + sources tracks appear (additive) only for passes carrying the columns."""
+    from senselab.audio.workflows.audio_analysis.labelstudio import attach_uncertainty_tracks_to_ls
+
+    axis_results = {
+        ("raw_16k", "presence"): AxisResult(
+            pass_label="raw_16k",
+            axis="presence",
+            rows=[
+                _presence_row_with_scene(0.0, quality_snr=0.8, src_dominant="machine"),
+                _presence_row_with_scene(0.5, quality_snr=None, src_dominant=None),
+            ],
+        ),
+    }
+    tasks = [{"data": {"pass": "raw_16k"}, "predictions": [{"result": []}]}]
+    tasks_out, config = attach_uncertainty_tracks_to_ls(
+        ls_tasks=tasks, ls_config="<View></View>", axis_results=axis_results
+    )
+    assert '<Labels name="raw_16k__presence__quality"' in config
+    assert '<Labels name="raw_16k__presence__sources"' in config
+    assert '<Label value="machine"/>' in config
+    regions = tasks_out[0]["predictions"][0]["result"]
+    q_regions = [r for r in regions if r["from_name"] == "raw_16k__presence__quality"]
+    s_regions = [r for r in regions if r["from_name"] == "raw_16k__presence__sources"]
+    # Only the row with non-null columns emits scene regions (no all-"unavailable" noise).
+    assert len(q_regions) == 1 and q_regions[0]["value"]["labels"] == ["high"]  # 0.8 ≥ HIGH
+    assert len(s_regions) == 1 and s_regions[0]["value"]["labels"] == ["machine"]
+    # Existing presence track unchanged (still one region per row).
+    base = [r for r in regions if r["from_name"] == "raw_16k__uncertainty__presence"]
+    assert len(base) == 2
+
+
+def test_scene_tracks_absent_without_columns_and_for_deltas() -> None:
+    """Legacy bundles stay byte-identical: no scene tracks when columns are null / delta pass."""
+    from senselab.audio.workflows.audio_analysis.labelstudio import attach_uncertainty_tracks_to_ls
+
+    axis_results = {
+        ("raw_16k", "presence"): AxisResult(
+            pass_label="raw_16k",
+            axis="presence",
+            rows=[_presence_row_with_scene(0.0, quality_snr=None, src_dominant=None)],
+        ),
+        ("raw_vs_enhanced", "presence"): AxisResult(
+            pass_label="raw_vs_enhanced",
+            axis="presence",
+            rows=[_presence_row_with_scene(0.0, quality_snr=0.9, src_dominant="speech")],
+        ),
+    }
+    tasks = [{"data": {"pass": "raw_16k"}, "predictions": [{"result": []}]}]
+    _, config = attach_uncertainty_tracks_to_ls(
+        ls_tasks=tasks, ls_config="<View></View>", axis_results=axis_results
+    )
+    assert "__presence__quality" not in config
+    assert "__presence__sources" not in config
