@@ -21,6 +21,7 @@ from senselab.audio.workflows.audio_analysis.aggregate import (
     aggregate_identity,
     aggregate_presence,
     aggregate_utterance,
+    mean_token_entropy,
     presence_p_voice,
 )
 from senselab.audio.workflows.audio_analysis.types import AxisResult, UncertaintyRow
@@ -72,6 +73,81 @@ def intensity_mask(start: float, end: float, presence_pv_intervals: list[tuple[f
     return sum(vals) / len(vals) if vals else 1.0
 
 
+DEFAULT_UTTERANCE_SCENE_COUPLING: dict[str, float] = {"w_q": 0.5, "w_s": 0.25}
+"""Default scene→utterance coupling weights (FR-019).
+
+``w_q`` weights SNR-based quality degradation, ``w_s`` the mass of competing
+non-speech sources (machine + environment). Quality is weighted twice as heavily
+because a poor SNR degrades the acoustic evidence the ASR actually decoded, while a
+competing source may be present without overlapping the speech. At the defaults a
+fully degraded bucket with a fully competing background yields a 1.75× multiplier.
+Set both to 0.0 to disable coupling entirely.
+"""
+
+
+def _overlap_mean(start: float, end: float, values: list[tuple[float, float, float]]) -> float | None:
+    """Mean of scene values whose presence bucket overlaps ``[start, end)``.
+
+    Overlap-averaging (rather than nearest-bucket) so a wide utterance bucket
+    spanning several finer presence buckets sees their average, matching how
+    ``intensity_mask`` bridges the two grids.
+    """
+    hits = [v for s, e, v in values if s < end and e > start]
+    return sum(hits) / len(hits) if hits else None
+
+
+def scene_quality_coupling(
+    start: float,
+    end: float,
+    *,
+    quality_degradation: list[tuple[float, float, float]],
+    competing_source_mass: list[tuple[float, float, float]],
+    weights: dict[str, float],
+) -> float:
+    """Multiplier (``>= 1.0``) by which poor scene conditions inflate utterance doubt.
+
+    ``1.0 + w_q · quality_degradation + w_s · competing_source_mass``, with each term
+    dropped when the corresponding scene column is absent — so a run with
+    ``--skip`` scene features (or a pass where the estimators failed) returns exactly
+    ``1.0`` and leaves the reported uncertainty untouched (SC-008).
+
+    Args:
+        start: Utterance bucket start, seconds.
+        end: Utterance bucket end, seconds.
+        quality_degradation: ``(bucket_start, bucket_end, quality_snr)`` triples,
+            where ``quality_snr`` is 0 = clean, 1 = fully degraded.
+        competing_source_mass: ``(bucket_start, bucket_end, machine + environment)``
+            triples in ``[0, 1]``.
+        weights: ``{"w_q": float, "w_s": float}``.
+
+    Returns:
+        The coupling multiplier, at least 1.0.
+    """
+    coupling = 1.0
+    degradation = _overlap_mean(start, end, quality_degradation)
+    if degradation is not None:
+        coupling += float(weights.get("w_q", 0.0)) * max(0.0, min(1.0, degradation))
+    competing = _overlap_mean(start, end, competing_source_mass)
+    if competing is not None:
+        coupling += float(weights.get("w_s", 0.0)) * max(0.0, min(1.0, competing))
+    return max(1.0, coupling)
+
+
+def _coupling_weights(params: dict[str, Any]) -> dict[str, float]:
+    """Resolve coupling weights from ``params``, falling back to the documented defaults."""
+    raw = params.get("utterance_scene_coupling")
+    if not isinstance(raw, dict):
+        return dict(DEFAULT_UTTERANCE_SCENE_COUPLING)
+    weights = dict(DEFAULT_UTTERANCE_SCENE_COUPLING)
+    for key in ("w_q", "w_s"):
+        if key in raw:
+            try:
+                weights[key] = float(raw[key])
+            except (TypeError, ValueError):
+                continue
+    return weights
+
+
 def aggregate_pass(harvest: PassHarvest, *, aggregator: str, params: dict[str, Any]) -> dict[str, AxisResult]:
     """Fold one pass's harvested votes into the three per-axis ``AxisResult``s.
 
@@ -88,6 +164,10 @@ def aggregate_pass(harvest: PassHarvest, *, aggregator: str, params: dict[str, A
     # ── presence ──
     presence_rows: list[UncertaintyRow] = []
     presence_pv_intervals: list[tuple[float, float, float]] = []
+    # Scene columns live on the presence grid; the utterance axis reads them back by
+    # time overlap to build its coupling multiplier (FR-019).
+    quality_intervals: list[tuple[float, float, float]] = []
+    competing_intervals: list[tuple[float, float, float]] = []
     for bucket in harvest.presence_votes:
         u = aggregate_presence(bucket["votes"])
         p_v = presence_p_voice(bucket["votes"])
@@ -135,6 +215,14 @@ def aggregate_pass(harvest: PassHarvest, *, aggregator: str, params: dict[str, A
         )
         if p_v is not None:
             presence_pv_intervals.append((float(bucket["start"]), float(bucket["end"]), float(p_v)))
+        b_start, b_end = float(bucket["start"]), float(bucket["end"])
+        if quality is not None and quality.get("quality_snr") is not None:
+            quality_intervals.append((b_start, b_end, float(quality["quality_snr"])))
+        if source is not None:
+            machine = source.get("src_machine")
+            environment = source.get("src_environment")
+            if machine is not None or environment is not None:
+                competing_intervals.append((b_start, b_end, float(machine or 0.0) + float(environment or 0.0)))
 
     pres_grid = harvest.grids.get("presence", {})
     out["presence"] = AxisResult(
@@ -186,22 +274,41 @@ def aggregate_pass(harvest: PassHarvest, *, aggregator: str, params: dict[str, A
 
     # ── utterance ──
     utterance_rows: list[UncertaintyRow] = []
+    coupling_weights = _coupling_weights(params)
     for bucket in harvest.utterance_votes:
-        u_raw = aggregate_utterance(bucket["votes"], aggregator=aggregator)
+        u_raw = aggregate_utterance(bucket["votes"], aggregator=aggregator, calibration=params.get("calibration"))
         if u_raw is None and not bucket["votes"]:
             continue
         mask = intensity_mask(bucket["start"], bucket["end"], presence_pv_intervals)
+        coupling = scene_quality_coupling(
+            float(bucket["start"]),
+            float(bucket["end"]),
+            quality_degradation=quality_intervals,
+            competing_source_mass=competing_intervals,
+            weights=coupling_weights,
+        )
+        # Reported value carries the coupling (FR-019); the pre-coupling number stays
+        # visible on raw_aggregated_uncertainty and in model_votes so the adjustment is
+        # auditable rather than invisible.
+        votes = bucket["votes"]
+        u_reported = u_raw
+        if u_raw is not None:
+            u_reported = max(0.0, min(1.0, u_raw * coupling))
+            if coupling != 1.0:
+                votes = {**votes, "__utterance_pre_coupling__": {"value": u_raw}}
         utterance_rows.append(
             UncertaintyRow(
                 start=bucket["start"],
                 end=bucket["end"],
                 axis="utterance",
-                aggregated_uncertainty=u_raw,
+                aggregated_uncertainty=u_reported,
                 contributing_models=sorted(bucket["votes"].keys()),
-                model_votes=bucket["votes"],
-                comparison_status="ok" if u_raw is not None else "incomparable",
+                model_votes=votes,
+                comparison_status="ok" if u_reported is not None else "incomparable",
                 raw_aggregated_uncertainty=u_raw,
                 intensity_weight=mask,
+                token_entropy=mean_token_entropy(bucket["votes"]),
+                scene_quality_coupling=coupling,
             )
         )
     out["utterance"] = AxisResult(

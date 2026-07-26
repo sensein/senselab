@@ -56,9 +56,16 @@ class ScriptLine(BaseModel):
         start (float | None): Start time in seconds (non-negative).
         end (float | None): End time in seconds (non-negative).
         chunks (list[ScriptLine] | None): Optional nested segments, each a `ScriptLine`.
+        avg_logprob (float | None): Mean per-token log-probability, when the ASR
+            backend reports one (Whisper today); `None` otherwise.
+        no_speech_prob (float | None): Backend's own no-speech probability in `[0, 1]`.
+        token_entropy (list[float] | float | None): Per-token softmax entropy, or a
+            single pre-collapsed mean.
 
     Notes:
         - Either `text` or `speaker` must be provided (or both).
+        - The three ASR confidence fields default to `None`; only the Whisper HF
+          path populates them, so consumers must treat them as optional.
         - When printing, `__str__` shows `"speaker: text [start - end]"` if timestamps
           are present; otherwise omits the time bracket.
 
@@ -74,6 +81,16 @@ class ScriptLine(BaseModel):
     end: Optional[float] = None
     chunks: Optional[List["ScriptLine"]] = None
     score: Optional[float] = None  # per-line / per-word / per-char model confidence
+
+    # ── ASR token-confidence fields (feature 20260722-175022, data-model §6) ──
+    # Populated only by the Whisper HF path, which exposes per-step logits via
+    # `output_scores`. Every other backend leaves them None so downstream
+    # uncertainty consumers degrade gracefully (FR-017) rather than inventing a
+    # confidence the model never reported.
+    avg_logprob: Optional[float] = None  # mean per-token log-probability (negative)
+    no_speech_prob: Optional[float] = None  # Whisper's own no-speech head, in [0, 1]
+    # Per-token softmax entropy, or a single mean when the caller pre-collapsed it.
+    token_entropy: Optional[Union[List[float], float]] = None
 
     @model_validator(mode="before")
     def validate_text_and_speaker(cls, values: Dict[str, Any], _: ValidationInfo) -> Dict[str, Any]:
@@ -272,6 +289,9 @@ class ScriptLine(BaseModel):
             end=end,
             chunks=chunks,
             score=d.get("score") if "score" in d else None,
+            avg_logprob=d.get("avg_logprob"),
+            no_speech_prob=d.get("no_speech_prob"),
+            token_entropy=d.get("token_entropy"),
         )
 
     def __str__(self) -> str:

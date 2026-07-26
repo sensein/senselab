@@ -110,18 +110,19 @@ description: "Task list for scene-aware presence axis + improved utterance uncer
 
 ### Tests for User Story 4
 
-- [ ] T026 [P] [US4] Write `src/tests/audio/tasks/speech_to_text/` token test: Whisper HF path with `output_scores` populates `ScriptLine.token_entropy`/`avg_logprob`/`no_speech_prob`; non-Whisper backend leaves them `None`.
-- [ ] T027 [P] [US4] Extend `src/tests/audio/workflows/audio_analysis/aggregate_test.py`: token-entropy sub-signal folds into `aggregate_utterance`; `scene_quality_coupling` multiplier raises reported uncertainty under poor quality; falls back exactly to today's signals when token entropy is `None`.
+- [x] T026 [P] [US4] Write `src/tests/audio/tasks/speech_to_text/` token test: Whisper HF path with `output_scores` populates `ScriptLine.token_entropy`/`avg_logprob`/`no_speech_prob`; non-Whisper backend leaves them `None`.
+- [x] T027 [P] [US4] Extend `src/tests/audio/workflows/audio_analysis/aggregate_test.py`: token-entropy sub-signal folds into `aggregate_utterance`; `scene_quality_coupling` multiplier raises reported uncertainty under poor quality; falls back exactly to today's signals when token entropy is `None`.
 
 ### Implementation for User Story 4
 
-- [ ] T028 [US4] Add optional fields `avg_logprob`, `no_speech_prob`, `token_entropy` (default `None`) to `ScriptLine` in `src/senselab/utils/data_structures/script_line.py` and map them in `from_dict` (data-model.md §6).
-- [ ] T029 [US4] In `src/senselab/audio/tasks/speech_to_text/huggingface.py` (Whisper), request `generate_kwargs={"return_dict_in_generate": True, "output_scores": True}`, compute per-token softmax entropy + `avg_logprob` + `no_speech_prob`, attach onto emitted `ScriptLine`s (contracts/utterance.md A). This also revives the dead `avg_logprob` presence/utterance reads.
-- [ ] T030 [US4] Add `mean_token_entropy_in_window` + a `token_entropy` vote field in `utterance.py::harvest_utterance_votes` (None-safe); confirm overlap grid + `fully_contained=True` boundary exclusion remain (SC-005).
-- [ ] T031 [US4] Fold the token-entropy sub-signal into `aggregate.py::aggregate_utterance` via the existing `--uncertainty-aggregator` mechanism (contracts/utterance.md C).
-- [ ] T032 [US4] Map ASR confidences (Whisper `avg_logprob`, CTC score) to a common calibrated `[0,1]` scale using the `CalibrationProfile.temperature` hook (FR-018).
-- [ ] T033 [US4] Compute + record `scene_quality_coupling` multiplier (from `quality_snr` + `src_machine`+`src_environment` over the bucket span, weights `w_q`/`w_s` params) in `compute.py`/`utterance.py`; apply to reported utterance uncertainty, keep pre-coupling value in `model_votes` (FR-019).
-- [ ] T034 [US4] Add `--utterance-scene-coupling-weights` CLI flag with documented defaults (contracts/cli.md; constitution VIII).
+- [x] T028 [US4] Add optional fields `avg_logprob`, `no_speech_prob`, `token_entropy` (default `None`) to `ScriptLine` in `src/senselab/utils/data_structures/script_line.py` and map them in `from_dict` (data-model.md §6).
+- [x] T029 [US4] In `src/senselab/audio/tasks/speech_to_text/huggingface.py` (Whisper), request `generate_kwargs={"return_dict_in_generate": True, "output_scores": True}`, compute per-token softmax entropy + `avg_logprob` + `no_speech_prob`, attach onto emitted `ScriptLine`s (contracts/utterance.md A). This also revives the dead `avg_logprob` presence/utterance reads.
+  - **Deviation from contract A, as built**: passing `output_scores` through `pipe(generate_kwargs=...)` cannot work — transformers 5.5.4's `AutomaticSpeechRecognitionPipeline._forward` keeps only `sequences`/`token_timestamps` from the generate output and drops the scores before `postprocess`. Implemented instead as `speech_to_text/token_confidence.py`: a context manager that temporarily wraps `pipe.model.generate` to observe its output, leaving pipeline behavior untouched. It requests `output_logits` (raw) rather than `output_scores` (post-processor) because Whisper's logits processors suppress `<|nospeech|>` to `-inf`, which would pin `no_speech_prob` at 0 and distort the entropy.
+- [x] T030 [US4] Add `mean_token_entropy_in_window` + a `token_entropy` vote field in `utterance.py::harvest_utterance_votes` (None-safe); confirm overlap grid + `fully_contained=True` boundary exclusion remain (SC-005).
+- [x] T031 [US4] Fold the token-entropy sub-signal into `aggregate.py::aggregate_utterance` via the existing `--uncertainty-aggregator` mechanism (contracts/utterance.md C).
+- [x] T032 [US4] Map ASR confidences (Whisper `avg_logprob`, CTC score) to a common calibrated `[0,1]` scale using the `CalibrationProfile.temperature` hook (FR-018).
+- [x] T033 [US4] Compute + record `scene_quality_coupling` multiplier (from `quality_snr` + `src_machine`+`src_environment` over the bucket span, weights `w_q`/`w_s` params) in `compute.py`/`utterance.py`; apply to reported utterance uncertainty, keep pre-coupling value in `model_votes` (FR-019).
+- [x] T034 [US4] Add `--utterance-scene-coupling-weights` CLI flag with documented defaults (contracts/cli.md; constitution VIII).
 
 **Checkpoint**: US1–US4 independently functional.
 

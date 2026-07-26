@@ -5,6 +5,7 @@ import pytest
 from senselab.audio.workflows.audio_analysis.aggregate import aggregate_presence, aggregate_utterance
 from senselab.audio.workflows.audio_analysis.types import UncertaintyRow
 from senselab.audio.workflows.audio_analysis.votes import (
+    DEFAULT_UTTERANCE_SCENE_COUPLING,
     PassHarvest,
     aggregate_pass,
     compute_pass_deltas,
@@ -74,9 +75,15 @@ def test_aggregate_pass_matches_pure_aggregators_and_columns() -> None:
     assert ident.raw_aggregated_uncertainty == pytest.approx(0.8)  # mask kept out of primary
 
     utt = results["utterance"].rows[0]
-    assert utt.aggregated_uncertainty == pytest.approx(
-        aggregate_utterance(_harvest().utterance_votes[0]["votes"], aggregator="min")
-    )
+    # The fixture's presence bucket carries quality_snr=0.1, so FR-019 coupling
+    # applies: reported = raw × (1 + w_q·0.1) = raw × 1.05. The pre-coupling number
+    # stays on raw_aggregated_uncertainty.
+    utt_raw = aggregate_utterance(_harvest().utterance_votes[0]["votes"], aggregator="min")
+    assert utt_raw is not None
+    assert utt.raw_aggregated_uncertainty == pytest.approx(utt_raw)
+    expected_coupling = 1.0 + DEFAULT_UTTERANCE_SCENE_COUPLING["w_q"] * 0.1
+    assert utt.scene_quality_coupling == pytest.approx(expected_coupling)
+    assert utt.aggregated_uncertainty == pytest.approx(utt_raw * expected_coupling)
     assert results["presence"].provenance["scene_quality"] == {"enabled": True}
     assert results["utterance"].provenance["grid"] == {"win_length": 1.0, "hop_length": 1.0}
 
@@ -112,3 +119,128 @@ def test_compute_pass_deltas_pairing() -> None:
     assert deltas[0].aggregated_uncertainty == pytest.approx(0.5)
     assert "raw_16k::m" in deltas[0].model_votes and "enhanced_16k::m" in deltas[0].model_votes
     assert deltas[2].aggregated_uncertainty is None
+
+
+# ── Scene→utterance coupling (T033, FR-019) ───────────────────────────
+
+
+def _coupling_harvest(
+    *,
+    quality_snr: float | None = None,
+    src_machine: float | None = None,
+    src_environment: float | None = None,
+) -> PassHarvest:
+    """One 1 s utterance bucket over two 0.5 s presence buckets carrying scene columns."""
+    quality: dict[tuple[float, float], dict[str, object]] = {}
+    sources: dict[tuple[float, float], dict[str, object]] = {}
+    for bucket in ((0.0, 0.5), (0.5, 1.0)):
+        if quality_snr is not None:
+            quality[bucket] = {"quality_snr": quality_snr, "_raw": {}}
+        if src_machine is not None or src_environment is not None:
+            sources[bucket] = {
+                "src_machine": src_machine,
+                "src_environment": src_environment,
+                "_raw": {},
+            }
+    return PassHarvest(
+        pass_label="raw_16k",
+        presence_votes=[
+            {"start": 0.0, "end": 0.5, "votes": {"m1": {"speaks": True}}},
+            {"start": 0.5, "end": 1.0, "votes": {"m1": {"speaks": True}}},
+        ],
+        utterance_votes=[
+            {
+                "start": 0.0,
+                "end": 1.0,
+                "votes": {
+                    "a": {"text": "hi"},
+                    "b": {"text": "hi"},
+                    "__pairwise_phoneme_distances__": {"pairs": {"a|b": 0.4}, "per_source_confidence": {}},
+                },
+            }
+        ],
+        quality_by_bucket=quality,
+        source_by_bucket=sources,
+        grids={"utterance": {"win_length": 1.0, "hop_length": 1.0}},
+    )
+
+
+def test_poor_quality_raises_reported_utterance_uncertainty() -> None:
+    """FR-019: degraded audio must push utterance uncertainty up, visibly."""
+    clean = aggregate_pass(_coupling_harvest(quality_snr=0.0), aggregator="min", params={})
+    noisy = aggregate_pass(_coupling_harvest(quality_snr=1.0), aggregator="min", params={})
+    clean_row = clean["utterance"].rows[0]
+    noisy_row = noisy["utterance"].rows[0]
+    assert noisy_row.aggregated_uncertainty is not None and clean_row.aggregated_uncertainty is not None
+    assert noisy_row.aggregated_uncertainty > clean_row.aggregated_uncertainty
+
+
+def test_coupling_multiplier_is_recorded_not_hidden() -> None:
+    """The multiplier lands on its own column so the adjustment is auditable."""
+    row = aggregate_pass(_coupling_harvest(quality_snr=1.0), aggregator="min", params={})["utterance"].rows[0]
+    assert row.scene_quality_coupling is not None
+    assert row.scene_quality_coupling > 1.0
+
+
+def test_pre_coupling_value_preserved() -> None:
+    """raw_aggregated_uncertainty and model_votes keep the un-coupled number."""
+    harvest = _coupling_harvest(quality_snr=1.0)
+    expected = aggregate_utterance(harvest.utterance_votes[0]["votes"], aggregator="min")
+    row = aggregate_pass(harvest, aggregator="min", params={})["utterance"].rows[0]
+    assert row.raw_aggregated_uncertainty == pytest.approx(expected)
+    assert row.model_votes["__utterance_pre_coupling__"]["value"] == pytest.approx(expected)
+    assert row.aggregated_uncertainty != pytest.approx(expected)
+
+
+def test_clean_scene_leaves_uncertainty_untouched() -> None:
+    """Zero degradation and no competing source → coupling exactly 1.0."""
+    harvest = _coupling_harvest(quality_snr=0.0, src_machine=0.0, src_environment=0.0)
+    expected = aggregate_utterance(harvest.utterance_votes[0]["votes"], aggregator="min")
+    row = aggregate_pass(harvest, aggregator="min", params={})["utterance"].rows[0]
+    assert row.scene_quality_coupling == pytest.approx(1.0)
+    assert row.aggregated_uncertainty == pytest.approx(expected)
+
+
+def test_absent_scene_columns_are_a_no_op() -> None:
+    """Scene features disabled → identical values to the pre-feature behavior (SC-008)."""
+    harvest = _coupling_harvest()  # no quality, no sources
+    expected = aggregate_utterance(harvest.utterance_votes[0]["votes"], aggregator="min")
+    row = aggregate_pass(harvest, aggregator="min", params={})["utterance"].rows[0]
+    assert row.aggregated_uncertainty == pytest.approx(expected)
+    assert row.scene_quality_coupling == pytest.approx(1.0)
+
+
+def test_competing_non_speech_source_raises_uncertainty() -> None:
+    """A machine / environment source competing with speech raises uncertainty."""
+    quiet = aggregate_pass(_coupling_harvest(src_machine=0.0, src_environment=0.0), aggregator="min", params={})[
+        "utterance"
+    ].rows[0]
+    noisy = aggregate_pass(_coupling_harvest(src_machine=0.6, src_environment=0.4), aggregator="min", params={})[
+        "utterance"
+    ].rows[0]
+    assert noisy.aggregated_uncertainty is not None and quiet.aggregated_uncertainty is not None
+    assert noisy.aggregated_uncertainty > quiet.aggregated_uncertainty
+
+
+def test_coupled_uncertainty_clamped_to_one() -> None:
+    """The multiplier can't push the reported value out of [0, 1]."""
+    harvest = _coupling_harvest(quality_snr=1.0, src_machine=1.0, src_environment=1.0)
+    harvest.utterance_votes[0]["votes"]["__pairwise_phoneme_distances__"]["pairs"]["a|b"] = 0.95
+    row = aggregate_pass(harvest, aggregator="min", params={})["utterance"].rows[0]
+    assert row.aggregated_uncertainty == pytest.approx(1.0)
+
+
+def test_coupling_weights_configurable_via_params() -> None:
+    """Operators can retune (or disable) the coupling without a code change."""
+    harvest = _coupling_harvest(quality_snr=1.0)
+    expected = aggregate_utterance(harvest.utterance_votes[0]["votes"], aggregator="min")
+    off = aggregate_pass(harvest, aggregator="min", params={"utterance_scene_coupling": {"w_q": 0.0, "w_s": 0.0}})[
+        "utterance"
+    ].rows[0]
+    assert off.scene_quality_coupling == pytest.approx(1.0)
+    assert off.aggregated_uncertainty == pytest.approx(expected)
+
+    strong = aggregate_pass(harvest, aggregator="min", params={"utterance_scene_coupling": {"w_q": 2.0, "w_s": 0.0}})[
+        "utterance"
+    ].rows[0]
+    assert strong.scene_quality_coupling == pytest.approx(3.0)

@@ -22,6 +22,7 @@ __all__ = [
     "aggregate_identity",
     "aggregate_presence",
     "aggregate_utterance",
+    "mean_token_entropy",
     "presence_p_voice",
 ]
 
@@ -165,10 +166,75 @@ def aggregate_identity(
 # ── utterance ─────────────────────────────────────────────────────────
 
 
-def aggregate_utterance(votes: dict[str, dict[str, Any]], *, aggregator: str) -> float | None:
+_DEFAULT_TOKEN_ENTROPY_REFERENCE_NATS = 3.0
+"""Entropy (nats) treated as fully uncertain when normalizing to ``[0, 1]``.
+
+Deliberately *not* ``log(vocab)``: Whisper's vocabulary is ~51.9k tokens, so
+``log(vocab) ≈ 10.9`` nats, while real per-token entropies run ~0.05–0.5 nats when
+the decoder is confident and ~2–4 nats when it is guessing. Normalizing by
+``log(vocab)`` would compress every observed value into the bottom tenth of the
+range, making the sub-signal invisible under ``mean`` aggregation. 3.0 nats puts
+"confident" near 0 and "guessing" near 1. Override per-deployment via
+``calibration["token_entropy_reference_nats"]``.
+"""
+
+
+def _axis_temperature(calibration: dict[str, Any] | None, axis: str) -> float:
+    """Temperature for ``axis`` from a calibration profile; 1.0 (identity) by default.
+
+    ``temperature`` may be a per-axis mapping (``{"utterance": 1.5}``) or a bare
+    scalar applied to every axis. A non-positive or unparsable value falls back to
+    1.0 rather than silently inverting the mapping.
+    """
+    if not calibration:
+        return 1.0
+    raw = calibration.get("temperature")
+    if isinstance(raw, dict):
+        raw = raw.get(axis)
+    try:
+        temperature = float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 1.0
+    return temperature if temperature > 0 else 1.0
+
+
+def mean_token_entropy(votes: dict[str, dict[str, Any]]) -> float | None:
+    """Mean per-model token entropy in nats, collapsing per-token lists to their mean."""
+    per_model: list[float] = []
+    for key, vote in votes.items():
+        if key.startswith("__") or not isinstance(vote, dict):
+            continue
+        raw = vote.get("token_entropy")
+        if raw is None:
+            continue
+        if isinstance(raw, (list, tuple)):
+            values = []
+            for item in raw:
+                try:
+                    values.append(float(item))
+                except (TypeError, ValueError):
+                    continue
+            if values:
+                per_model.append(sum(values) / len(values))
+            continue
+        try:
+            per_model.append(float(raw))
+        except (TypeError, ValueError):
+            continue
+    if not per_model:
+        return None
+    return sum(per_model) / len(per_model)
+
+
+def aggregate_utterance(
+    votes: dict[str, dict[str, Any]],
+    *,
+    aggregator: str,
+    calibration: dict[str, Any] | None = None,
+) -> float | None:
     """Combine utterance sub-signals into a single uncertainty.
 
-    Two sub-signal families:
+    Three sub-signal families (the third added by FR-017):
 
     1. **Pairwise phoneme edit-distance rate** across all available phoneme
        sources in this bucket — the 4 ASR transcripts (post-g2p_en, with
@@ -178,11 +244,32 @@ def aggregate_utterance(votes: dict[str, dict[str, Any]], *, aggregator: str) ->
        Sources with no phonemes in this bucket are dropped (don't contribute
        spurious 1.0 distances). The aggregator collapses the surviving pairs
        per ``--uncertainty-aggregator`` (default ``min`` — worst-case wins).
-    2. ``1 − exp(avg_logprob)`` averaged across ASRs that expose ``avg_logprob``
+    2. ``1 − exp(avg_logprob / T)`` averaged across ASRs that expose ``avg_logprob``
        (Whisper today). Reflects the model's self-confidence. Independent of
-       the pairwise comparisons.
+       the pairwise comparisons. ``T`` is the calibration temperature (FR-018),
+       1.0 by default, which reproduces the historical mapping exactly.
+    3. **Normalized token entropy** (FR-017) — mean per-token softmax entropy over
+       the contributing models, divided by
+       ``calibration["token_entropy_reference_nats"]`` (default
+       ``_DEFAULT_TOKEN_ENTROPY_REFERENCE_NATS``) and clipped to ``[0, 1]``. Unlike
+       the pairwise family this fires when a *single* model is internally unsure,
+       so it catches doubt that transcript agreement hides. Absent (``None``) for
+       every backend that doesn't report token logits, in which case the fold
+       degrades to families 1 and 2 exactly.
+
+    Args:
+        votes: The bucket's vote dict from ``harvest_utterance_votes``.
+        aggregator: One of ``AGGREGATORS`` — how the sub-signals are collapsed.
+        calibration: Optional calibration profile supplying ``temperature`` and
+            ``token_entropy_reference_nats``. ``None`` ⇒ documented defaults, which
+            preserve the pre-calibration numbers bit-for-bit.
+
+    Returns:
+        The bucket's utterance uncertainty in ``[0, 1]``, or ``None`` when no
+        sub-signal was available.
     """
     sub_signals: list[float | None] = []
+    temperature = _axis_temperature(calibration, "utterance")
 
     # Pairwise phoneme distances (the dominant utterance signal). Each pair
     # is weighted by the joint confidence of its two sources — high-confidence
@@ -238,9 +325,12 @@ def aggregate_utterance(votes: dict[str, dict[str, Any]], *, aggregator: str) ->
     if avg_logprobs:
         try:
             mean_alp = sum(avg_logprobs) / len(avg_logprobs)
-            confidence = max(0.0, min(1.0, math.exp(mean_alp)))
+            # Temperature-scaled so backends with differently-sharp logprob
+            # distributions land on a common [0,1] scale (FR-018). T=1 is the
+            # historical mapping.
+            confidence = max(0.0, min(1.0, math.exp(mean_alp / temperature)))
             sub_signals.append(1.0 - confidence)
-        except (ValueError, OverflowError):
+        except (ValueError, OverflowError, ZeroDivisionError):
             pass
 
     # MMS-CTC alignment scores are recorded on the parquet for diagnostic
@@ -259,5 +349,19 @@ def aggregate_utterance(votes: dict[str, dict[str, Any]], *, aggregator: str) ->
             sub_signals.append(max(0.0, min(1.0, 1.0 - float(ppg_conf["value"]))))
         except (ValueError, TypeError):
             pass
+
+    # Token-level entropy (FR-017) — a single model's private doubt, which
+    # transcript agreement cannot reveal.
+    mean_entropy = mean_token_entropy(votes)
+    if mean_entropy is not None:
+        reference = _DEFAULT_TOKEN_ENTROPY_REFERENCE_NATS
+        if calibration:
+            try:
+                candidate = float(calibration.get("token_entropy_reference_nats", reference))
+                if candidate > 0:
+                    reference = candidate
+            except (TypeError, ValueError):
+                pass
+        sub_signals.append(max(0.0, min(1.0, mean_entropy / reference)))
 
     return apply_aggregator(sub_signals, aggregator)

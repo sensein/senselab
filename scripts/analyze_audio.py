@@ -494,6 +494,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Disable the background sound-source category masses (speech/people/machine/environment).",
     )
     parser.add_argument(
+        "--utterance-scene-coupling-weights",
+        type=float,
+        nargs=2,
+        metavar=("W_Q", "W_S"),
+        default=(0.5, 0.25),
+        help=(
+            "Scene-to-utterance coupling weights (FR-019): reported utterance uncertainty is "
+            "multiplied by 1 + W_Q * quality_snr + W_S * (src_machine + src_environment) over the "
+            "bucket's span, clipped to 1.0. The multiplier is recorded in the "
+            "scene_quality_coupling column and the pre-coupling value stays in "
+            "raw_aggregated_uncertainty. Defaults to 0.5 0.25; pass '0 0' to disable coupling."
+        ),
+    )
+    parser.add_argument(
         "--presence-grid-win-length",
         type=float,
         default=0.1,
@@ -2185,6 +2199,10 @@ def main(argv: list[str] | None = None) -> int:
             "asr_reference_model": args.asr_reference_model,
             "diarization_boundary_shift_ms": args.diarization_boundary_shift_ms,
             "clustering_algorithm": args.clustering_algorithm,
+            "utterance_scene_coupling": {
+                "w_q": float(args.utterance_scene_coupling_weights[0]),
+                "w_s": float(args.utterance_scene_coupling_weights[1]),
+            },
         }
 
         passes_for_compute = {

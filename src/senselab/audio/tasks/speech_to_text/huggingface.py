@@ -11,6 +11,11 @@ from typing import Any, Dict, List, Optional, Union, cast
 from transformers import Pipeline, pipeline
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.speech_to_text.token_confidence import (
+    capture_token_confidence,
+    merge_confidence_blocks,
+    whisper_token_ids,
+)
 from senselab.utils.data_structures import (
     DeviceType,
     HFModel,
@@ -20,6 +25,44 @@ from senselab.utils.data_structures import (
 )
 from senselab.utils.data_structures.logging import logger
 from senselab.utils.data_structures.model import get_huggingface_token
+
+
+def _attach_token_confidence(script_lines: List[ScriptLine], confidences: List[Dict[str, Any]]) -> None:
+    """Attach captured per-token confidence onto the emitted `ScriptLine`s, in place.
+
+    Alignment rules, in order:
+
+    1. **One block per line** — the batch case; assign 1:1.
+    2. **Single line, many blocks** — Whisper long-form calls ``generate`` once per
+       30 s window, so one transcript accumulates several blocks. Merge them:
+       concatenate the entropies, average the log-probabilities, and keep the
+       maximum no-speech probability (the most silence-like window dominates).
+    3. **Anything else** — counts we can't map confidently; leave the fields
+       ``None`` rather than risk attributing one audio's confidence to another.
+    """
+    if not confidences:
+        return
+
+    if len(confidences) == len(script_lines):
+        for line, block in zip(script_lines, confidences):
+            _set_confidence(line, block)
+        return
+
+    if len(script_lines) == 1:
+        _set_confidence(script_lines[0], merge_confidence_blocks(confidences))
+        return
+
+    logger.debug(
+        f"Token confidence not attached: {len(confidences)} generate call(s) for "
+        f"{len(script_lines)} transcript(s) — no unambiguous mapping."
+    )
+
+
+def _set_confidence(line: ScriptLine, block: Dict[str, Any]) -> None:
+    """Copy one confidence block onto a `ScriptLine`."""
+    line.avg_logprob = block.get("avg_logprob")
+    line.no_speech_prob = block.get("no_speech_prob")
+    line.token_entropy = block.get("token_entropy")
 
 
 class HuggingFaceASR:
@@ -262,11 +305,22 @@ class HuggingFaceASR:
 
         # Take the start time of the transcription
         start_time_transcription = time.time()
-        # Run the pipeline
-        transcriptions = pipe(
-            formatted_audios,
-            generate_kwargs={"language": f"{language.name.lower()}", "num_beams": 1} if language else {"num_beams": 1},
-        )
+        # Run the pipeline, observing the decoder's own per-token confidence as it
+        # goes (FR-017). The pipeline discards generate's scores before postprocess,
+        # so the seam wraps `model.generate` rather than passing `output_scores`
+        # through `generate_kwargs` — see token_confidence.py for why.
+        no_speech_token_id, special_token_ids = whisper_token_ids(pipe)
+        with capture_token_confidence(
+            pipe,
+            no_speech_token_id=no_speech_token_id,
+            special_token_ids=special_token_ids,
+        ) as token_confidences:
+            transcriptions = pipe(
+                formatted_audios,
+                generate_kwargs=(
+                    {"language": f"{language.name.lower()}", "num_beams": 1} if language else {"num_beams": 1}
+                ),
+            )
 
         # Take the end time of the transcription
         end_time_transcription = time.time()
@@ -281,4 +335,6 @@ class HuggingFaceASR:
         transcriptions = _sanitize_timestamps_recursive(transcriptions)
 
         # Convert the pipeline output to ScriptLine objects
-        return [ScriptLine.from_dict(cast(Dict[str, Any], t)) for t in cast(List, transcriptions)]
+        script_lines = [ScriptLine.from_dict(cast(Dict[str, Any], t)) for t in cast(List, transcriptions)]
+        _attach_token_confidence(script_lines, token_confidences)
+        return script_lines
