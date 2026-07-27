@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from senselab.audio.workflows.audio_analysis import calibration as cal_mod
 from senselab.audio.workflows.audio_analysis.calibration import (
     DEFAULT_PROFILE,
     PROFILE_VERSION,
@@ -15,13 +16,43 @@ from senselab.audio.workflows.audio_analysis.calibration import (
 )
 
 
-def test_default_profile_when_no_path_and_no_bundle() -> None:
-    """Absent profile → documented defaults (deep-copied, version-tagged)."""
+def test_default_profile_when_no_path_and_no_bundle(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Absent profile *and* absent bundle → documented defaults (deep-copied).
+
+    The bundle location is redirected rather than assumed missing: a fitted
+    profile now ships with the package, so relying on "no file exists" would
+    make this test assert the bundled path instead of the fallback it names.
+    """
+    monkeypatch.setattr(cal_mod, "BUNDLED_PROFILE_PATH", tmp_path / "absent.json")
     profile = load_calibration_profile(None)
     assert profile["version"] == PROFILE_VERSION
     assert profile["snr"]["clean_db"] == DEFAULT_PROFILE["snr"]["clean_db"]
     profile["snr"]["clean_db"] = -999  # must not leak into the module constant
     assert DEFAULT_PROFILE["snr"]["clean_db"] != -999
+
+
+def test_bundled_profile_preferred_over_defaults() -> None:
+    """The shipped fitted profile is the default when no path is passed.
+
+    Guards the precedence in load_calibration_profile: a package that ships a
+    fitted profile must use it, otherwise every install silently falls back to
+    the uncalibrated anchors.
+    """
+    assert cal_mod.BUNDLED_PROFILE_PATH.exists(), "a fitted profile should ship with the package"
+    profile = load_calibration_profile(None)
+    assert profile["provenance"]["fitted_by"] == "scripts/calibrate_scene_quality.py"
+    # Fitted anchors live in the estimator's own output space, which is
+    # compressed relative to true dB — so they must differ from the defaults.
+    assert profile["snr"]["clean_db"] != DEFAULT_PROFILE["snr"]["clean_db"]
+
+
+def test_bundled_profile_maps_to_runtime_keys() -> None:
+    """The shipped profile survives validation and yields the flat consumer keys."""
+    runtime = profile_to_runtime(load_calibration_profile(None))
+    for key in ("snr_clean_db", "snr_floor_db", "c50_clean_db", "c50_floor_db"):
+        assert isinstance(runtime[key], float)
+    assert runtime["snr_clean_db"] > runtime["snr_floor_db"]
+    assert runtime["c50_clean_db"] > runtime["c50_floor_db"]
 
 
 def test_profile_round_trip_and_validation(tmp_path: Path) -> None:

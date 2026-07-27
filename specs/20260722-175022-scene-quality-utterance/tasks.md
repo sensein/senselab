@@ -154,8 +154,21 @@ description: "Task list for scene-aware presence axis + improved utterance uncer
 > `scripts/calibrate_scene_quality.py` fits SNR anchors always and C50 anchors when Brouhaha is
 > available, emits the FR-022 validation plot/table, and records provenance. NOTE: per-axis
 > temperatures are CLI passthroughs (default 1.0) — a proper temperature fit needs labeled
-> correctness (adaptive loop eval harness), tracked as the remaining US5 sub-item. T045/T046
-> (full lint + regression) require the full environment.
+> correctness (adaptive loop eval harness), tracked as the remaining US5 sub-item.
+>
+> **Fitted 2026-07-26 (first bundled profile).** Ran the fitter with Brouhaha available, so both
+> the SNR and C50 anchors are measured rather than assumed; the SC-007 monotonicity gate passed.
+> `data/scene_quality_calibration.json` now ships with the package and is the default (a run
+> without `--calibration-profile` picks it up).
+>
+> The fit matters more than "one more artifact": Brouhaha's SNR estimate is strongly **compressed**
+> (fitted slope 0.41), so a true 0–30 dB sweep only spans ≈4.7–16.6 dB of estimator output. The
+> uncalibrated anchors (clean 25 dB / floor 5 dB) assumed true-dB scale and therefore scored a
+> *pristine* 30 dB clip at **0.42 degradation**, with the whole scale squashed into [0.42, 1.0] —
+> no dynamic range across the clean half, and FR-019 coupling silently inflating utterance
+> uncertainty on clean speech (1 + 0.5·0.42 ≈ 1.21×). With the fitted anchors (clean 15.75 /
+> floor 7.50, in estimator space) the same clip maps to 0.0. T045/T046 executed in the full
+> environment.
 
 ## Phase 8: Polish & Cross-Cutting Concerns
 
@@ -164,8 +177,8 @@ description: "Task list for scene-aware presence axis + improved utterance uncer
 - [X] T042 [P] FR-024: rank the new presence sub-signals in `disagreements.py` + test in `disagreements_test.py`.
 - [X] T043 [P] Docs: update `workflows/audio_analysis/doc.md` and the CLAUDE.md workflow section describing the scene-aware presence columns + new CLI flags; cross-check against quickstart.md.
 - [X] T044 Run quickstart.md end-to-end on a `tutorial_audio_files/` clip; confirm all new columns populate and acceptance scenarios hold.
-- [ ] T045 `uv run ruff format && uv run ruff check --fix && uv run mypy . && uv run codespell` (memory `feedback_ruff_format`).
-- [ ] T046 Full regression: `uv run pytest src/tests/audio/workflows/audio_analysis/` + confirm `aggregated_uncertainty` values unchanged vs baseline (SC-008).
+- [x] T045 `uv run ruff format && uv run ruff check --fix && uv run mypy . && uv run codespell` (memory `feedback_ruff_format`).
+- [x] T046 Full regression: `uv run pytest src/tests/audio/workflows/audio_analysis/` + confirm `aggregated_uncertainty` values unchanged vs baseline (SC-008).
 
 ---
 

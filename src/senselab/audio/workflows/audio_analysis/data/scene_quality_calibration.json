@@ -1,0 +1,55 @@
+{
+  "version": "1",
+  "snr": {
+    "type": "linear_db_to_unit",
+    "clean_db": 15.747,
+    "floor_db": 7.495
+  },
+  "reverb_c50": {
+    "type": "linear_db_to_unit",
+    "clean_db": 20.431,
+    "floor_db": -2.454
+  },
+  "bandwidth": {
+    "nyquist_ref_hz": 8000.0,
+    "rolloff_pct": 0.95
+  },
+  "temperature": {
+    "presence": 1.0,
+    "utterance": 1.0
+  },
+  "provenance": {
+    "fitted_by": "scripts/calibrate_scene_quality.py",
+    "audio": "audio_48khz_mono_16bits.wav",
+    "noise": "white",
+    "snr_sweep_db": [
+      30.0,
+      25.0,
+      20.0,
+      15.0,
+      10.0,
+      5.0,
+      0.0
+    ],
+    "rt60_sweep_s": [
+      0.0,
+      0.3,
+      0.6,
+      0.9,
+      1.2
+    ],
+    "seed": 0,
+    "snr_fit": {
+      "clean_db": 15.747,
+      "floor_db": 7.495,
+      "slope": 0.4126
+    },
+    "c50_fit": {
+      "clean_db": 20.431,
+      "floor_db": -2.454,
+      "slope": 0.6539
+    },
+    "temperature_note": "CLI passthrough \u2014 fit requires labeled correctness (adaptive eval harness)",
+    "timestamp_utc": "2026-07-27T00:27:25+00:00"
+  }
+}

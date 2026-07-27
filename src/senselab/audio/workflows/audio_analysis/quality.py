@@ -76,7 +76,7 @@ def _linear_db_to_degradation(value_db: float, clean_db: float, floor_db: float)
 
 
 def _bandwidth_degradation(slice_audio: Audio) -> Optional[float]:
-    """Effective-bandwidth degradation from the 85% spectral rolloff vs Nyquist.
+    """Effective-bandwidth degradation from the 95% spectral rolloff vs Nyquist.
 
     Uses ``torch.stft`` (no librosa) — a band-limited signal (e.g. telephone-band
     ≤ 4 kHz) concentrates energy in the low bins, so its rolloff frequency sits
