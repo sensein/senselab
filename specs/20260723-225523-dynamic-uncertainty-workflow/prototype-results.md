@@ -285,3 +285,40 @@ parquets with `rglob("uncertainty/*.parquet")`, which matches
 Fixed to filter `rglob("*.parquet")` on paths containing an `uncertainty` component.
 This is the second time in this spec that a task marked complete turned out never to
 have been run.
+
+### Decision on `theta_high` (2026-07-27): defer tuning, keep it configurable
+
+The finding above — presence `aggregated_uncertainty` peaks at 0.554 against a
+`theta_high` of 0.66, so no presence region is ever seeded — is **not being tuned
+around now**, by decision.
+
+Rationale: the ground truth available here is a *single* annotated clip. Fitting a
+seeding threshold to one example would fit noise, not signal. The threshold should
+be set against a benchmark set once one exists, and the same exercise should
+revisit whether presence needs its own value at all (its aggregator returns a
+decisiveness measure, `1 − |2p−1|`, which does not share a scale with the
+distance-based identity/utterance aggregators).
+
+The requirement in the meantime is only that it be adjustable without a code
+change, which it is — `thresholds.theta_high` is deep-merged from a `--policy`
+file over the packaged default:
+
+```yaml
+# theta.yaml
+thresholds:
+  theta_high: 0.45
+```
+
+```bash
+uv run python scripts/analyze_audio.py audio.wav --policy theta.yaml
+```
+
+Verified: the override applies, unrelated keys (`theta_low`) keep their defaults,
+and `policy_hash` changes so two runs differing only in this threshold remain
+distinguishable in provenance. The T039 runs recorded above used exactly this
+mechanism at 0.30.
+
+**When a benchmark set exists**, the likely shape is a per-axis threshold
+(`thresholds.theta_high` plus optional `theta_high_<axis>` overrides) rather than a
+single global value — but that machinery is deliberately not built yet, since
+building tuning knobs for a deferred decision is how config surfaces rot.

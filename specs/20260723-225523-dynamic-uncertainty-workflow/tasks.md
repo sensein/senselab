@@ -144,7 +144,10 @@ in Phase 8.
     `theta_high: 0.66` (verified: 0 regions at 0.66, 1 at 0.30). With the threshold lowered the region
     appears and the trigger evaluates, but `coarse_share` lands at **0.4967** — a hair under the
     contract's `≥ 0.5`. Retuning either `theta_high` for the presence axis or the coarse-share
-    threshold is a policy call, deliberately left to a human.
+    threshold is a policy call. **Decided 2026-07-27: defer.** Tuning against the single annotated
+    clip available would fit noise; set it against a benchmark set instead. It is adjustable today
+    via `--policy` (`thresholds.theta_high`) with no code change — see prototype-results.md
+    "Decision on `theta_high`".
 - [ ] T042 Final-output schema completion vs contracts/final-outputs.md: `final/diarization.rttm`,
   `diarization.json` `member_labels`/`overlap`, `transcript.json.language`, presence.parquet contract
   columns (`presence_confidence`, `elected_stream`, `overlap_posterior`).
