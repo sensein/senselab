@@ -133,6 +133,7 @@ import torch
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.classification import classify_audios
 from senselab.audio.tasks.features_extraction import extract_features_from_audios
+from senselab.audio.tasks.features_extraction.temporal import extract_temporal_features
 from senselab.audio.tasks.forced_alignment import align_transcriptions
 from senselab.audio.tasks.input_output import read_audios
 from senselab.audio.tasks.preprocessing import downmix_audios_to_mono, extract_segments, resample_audios
@@ -150,9 +151,9 @@ from senselab.utils.data_structures import (
     DeviceType,
     HFModel,
     Language,
-    PyannoteAudioModel,
     ScriptLine,
-    SpeechBrainModel,
+    model_for_task,
+    safe_model_id,
 )
 from senselab.utils.tasks.cached_inference import (
     CACHE_SCHEMA_VERSION as _CACHE_SCHEMA_VERSION,
@@ -697,25 +698,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return args
 
 
-def pick_dispatch_model(model_id: str, *, task: str) -> Any:  # noqa: ANN401
-    """Wrap a model id in the right SenselabModel subclass for the given task.
-
-    Routes diarization model ids to PyannoteAudioModel or HFModel based on the
-    well-known prefix, matching ``diarize_audios``'s internal dispatch logic.
-    """
-    if task == "diarization":
-        if model_id.startswith("nvidia/diar_sortformer"):
-            return HFModel(path_or_uri=model_id)
-        return PyannoteAudioModel(path_or_uri=model_id)
-    if task == "asr":
-        return HFModel(path_or_uri=model_id)
-    if task == "embeddings":
-        return SpeechBrainModel(path_or_uri=model_id)
-    if task == "enhancement":
-        return SpeechBrainModel(path_or_uri=model_id)
-    raise ValueError(f"unknown task: {task}")
-
-
 def pick_device(arg: str) -> DeviceType | None:
     """Resolve --device into a senselab DeviceType, or None for per-task auto.
 
@@ -767,114 +749,6 @@ def wrapper_version_hash() -> str:
         return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     except OSError:
         return "unknown"
-
-
-def _flatten_feature_dict(d: dict[str, Any], prefix: str = "") -> dict[str, Any]:
-    """Flatten a nested feature dict into a single-row dict suitable for a parquet column.
-
-    Keys are joined with ``.``; tensors are coerced to floats (mean of
-    last axis when 1-D) or skipped when high-dimensional (we don't want
-    per-window MFCC tensors as parquet cells — caller can opt back in
-    via the JSON sibling). Lists of scalars are kept as-is so pyarrow
-    can store them as a list column.
-    """
-    out: dict[str, Any] = {}
-    for k, v in d.items():
-        key = f"{prefix}{k}" if prefix else k
-        if isinstance(v, dict):
-            out.update(_flatten_feature_dict(v, prefix=f"{key}."))
-            continue
-        if hasattr(v, "ndim") and hasattr(v, "tolist"):  # torch.Tensor / np.ndarray
-            try:
-                if v.ndim == 0:
-                    out[key] = float(v.item())
-                elif v.ndim == 1 and v.shape[0] <= 64:
-                    out[key] = [float(x) for x in v.tolist()]
-                else:
-                    # multi-dim tensor (spectrogram, mfcc) — store mean as a scalar
-                    # summary; full tensor stays in the JSON sibling for callers
-                    # that want it.
-                    out[f"{key}.mean"] = float(v.mean().item())
-            except Exception:  # noqa: BLE001 — best effort
-                pass
-            continue
-        if isinstance(v, (int, float, bool)) or v is None:
-            out[key] = v
-        elif isinstance(v, str):
-            out[key] = v
-        # silently drop anything else (callable, opaque object) to keep the row clean
-    return out
-
-
-def extract_temporal_features(
-    audio: Audio,
-    *,
-    win_length: float,
-    hop_length: float,
-    device: DeviceType | None,
-) -> dict[str, list[dict[str, Any]]]:
-    """Extract per-backend temporal features, preferring each backend's native time grid.
-
-    - **opensmile**: uses ``LowLevelDescriptors`` (native ~10 ms frame
-      grid). One row per opensmile frame.
-    - **parselmouth**: aggregates over a sliding window since the
-      senselab wrapper currently only exposes the summary form.
-    - **torchaudio_squim**: STOI/PESQ/SI-SDR are inherently global
-      quality scores — windowed externally so the resulting time series
-      is comparable to the rest.
-
-    Returns a dict ``{backend: [rows...]}`` so each backend can be
-    written to its own parquet sidecar (different columns + time grids
-    don't share a schema).
-    """
-    duration_s = float(audio.waveform.shape[1]) / float(audio.sampling_rate)
-    out: dict[str, list[dict[str, Any]]] = {"opensmile": [], "parselmouth": [], "torchaudio_squim": []}
-
-    # opensmile LLD — native windowing (DataFrame indexed by [start, end]).
-    try:
-        import opensmile as _os
-
-        smile = _os.Smile(
-            feature_set=_os.FeatureSet.eGeMAPSv02,
-            feature_level=_os.FeatureLevel.LowLevelDescriptors,
-        )
-        df = smile.process_signal(audio.waveform.squeeze().numpy(), audio.sampling_rate)
-        df = df.reset_index()
-        df["start"] = df["start"].dt.total_seconds()
-        df["end"] = df["end"].dt.total_seconds()
-        out["opensmile"] = df.to_dict(orient="records")
-    except Exception as exc:  # noqa: BLE001
-        print(f"  [features.opensmile] warn: {exc!r}", file=sys.stderr)
-
-    # External 1 s / 0.5 s loop for the summary-style backends.
-    t = 0.0
-    idx = 0
-    while t + win_length <= duration_s + 1e-6:
-        start = round(t, 4)
-        end = round(min(t + win_length, duration_s), 4)
-        clip = extract_segments([(audio, [(start, end)])])[0][0]
-        try:
-            pm = extract_features_from_audios(
-                [clip], opensmile=False, parselmouth=True, torchaudio=False, torchaudio_squim=False, device=device
-            )[0]
-            row = _flatten_feature_dict(pm.get("praat_parselmouth", {}))
-            row.update({"start": start, "end": end, "win_index": idx})
-            out["parselmouth"].append(row)
-        except Exception as exc:  # noqa: BLE001
-            print(f"  [features.parselmouth win {idx}] warn: {exc!r}", file=sys.stderr)
-        try:
-            sq = extract_features_from_audios(
-                [clip], opensmile=False, parselmouth=False, torchaudio=False, torchaudio_squim=True, device=device
-            )[0]
-            row = _flatten_feature_dict(sq.get("torchaudio_squim", {}))
-            row.update({"start": start, "end": end, "win_index": idx})
-            out["torchaudio_squim"].append(row)
-        except Exception as exc:  # noqa: BLE001
-            print(f"  [features.torchaudio_squim win {idx}] warn: {exc!r}", file=sys.stderr)
-        t += hop_length
-        idx += 1
-
-    return out
 
 
 def _new_region_id(prefix: str, idx: int) -> str:
@@ -1137,7 +1011,7 @@ def build_labelstudio_task(
     dia = pass_summary.get("diarization", {})
     for model_id, model_block in (dia.get("by_model") or {}).items():
         if model_block.get("status") == "ok":
-            from_name = f"{pass_label}__diarization__{_safe(model_id)}"
+            from_name = f"{pass_label}__diarization__{safe_model_id(model_id)}"
             regions.extend(_diarization_to_ls(model_block.get("result"), from_name))
 
     ast_block = pass_summary.get("ast", {})
@@ -1168,7 +1042,7 @@ def build_labelstudio_task(
     for model_id, model_block in (asr.get("by_model") or {}).items():
         if model_block.get("status") != "ok":
             continue
-        from_name = f"{pass_label}__asr__{_safe(model_id)}"
+        from_name = f"{pass_label}__asr__{safe_model_id(model_id)}"
         # Three-case branch:
         # (a) ASR with native timestamps  -> use the ASR result for per-segment regions.
         # (b) ASR text-only + successful alignment -> use the alignment result.
@@ -1203,11 +1077,6 @@ def build_labelstudio_task(
     }
 
 
-def _safe(model_id: str) -> str:
-    """Sanitize a model id for use inside an LS from_name (LS allows letters, digits, underscore)."""
-    return "".join(c if c.isalnum() else "_" for c in model_id)
-
-
 def build_labelstudio_config(summary: dict[str, Any]) -> str:
     """Build a Label Studio labeling-config XML matching this run's per-task tracks.
 
@@ -1230,7 +1099,7 @@ def build_labelstudio_config(summary: dict[str, Any]) -> str:
             speakers = sorted({str(getattr(seg, "speaker", "?")) for seg in (model_block.get("result", [[]])[0] or [])})
             if not speakers:
                 speakers = ["SPEAKER_00", "SPEAKER_01"]
-            seen_label_sets[f"{pass_label}__diarization__{_safe(model_id)}"] = speakers
+            seen_label_sets[f"{pass_label}__diarization__{safe_model_id(model_id)}"] = speakers
 
         # AST scene labels
         ast = pass_summary.get("ast") or {}
@@ -1251,7 +1120,7 @@ def build_labelstudio_config(summary: dict[str, Any]) -> str:
         for model_id, model_block in asr_by_model.items():
             if model_block.get("status") != "ok":
                 continue
-            from_name = f"{pass_label}__asr__{_safe(model_id)}"
+            from_name = f"{pass_label}__asr__{safe_model_id(model_id)}"
             parts.append(
                 f'  <TextArea name="{from_name}" toName="audio" perRegion="true" '
                 f'editable="true" placeholder="ASR transcript ({model_id})"/>'
@@ -1327,14 +1196,14 @@ def _stage_diarization(audio: Audio, args: argparse.Namespace, ctx: dict[str, An
             f"diarization[{model_id}]",
             diarize_audios,
             [audio],
-            model=pick_dispatch_model(model_id, task="diarization"),
+            model=model_for_task(model_id, task="diarization"),
             device=device,
             cache_dir=ctx["cache_dir"],
             cache_key_str=ctx["key"]("diarization", model_id, params),
             provenance=ctx["prov"]("diarization", model_id, params),
         )
         summary["diarization"]["by_model"][model_id] = outcome
-        write_json(pass_dir / "diarization" / f"{_safe(model_id)}.json", outcome)
+        write_json(pass_dir / "diarization" / f"{safe_model_id(model_id)}.json", outcome)
 
 
 def _stage_scene(audio: Audio, args: argparse.Namespace, ctx: dict[str, Any]) -> None:
@@ -1465,7 +1334,7 @@ def _stage_asr(audio: Audio, args: argparse.Namespace, ctx: dict[str, Any]) -> N
             f"asr[{model_id}]",
             transcribe_audios,
             [audio],
-            model=pick_dispatch_model(model_id, task="asr"),
+            model=model_for_task(model_id, task="asr"),
             device=device,
             cache_dir=ctx["cache_dir"],
             cache_key_str=ctx["key"]("asr", model_id, asr_params),
@@ -1473,7 +1342,7 @@ def _stage_asr(audio: Audio, args: argparse.Namespace, ctx: dict[str, Any]) -> N
             **extra_kwargs,
         )
         summary["asr"]["by_model"][model_id] = outcome
-        write_json(pass_dir / "asr" / f"{_safe(model_id)}.json", outcome)
+        write_json(pass_dir / "asr" / f"{safe_model_id(model_id)}.json", outcome)
 
 
 def _stage_alignment(audio: Audio, args: argparse.Namespace, ctx: dict[str, Any]) -> None:
@@ -1543,7 +1412,7 @@ def _stage_alignment(audio: Audio, args: argparse.Namespace, ctx: dict[str, Any]
             provenance=align_provenance,
         )
         summary["alignment"]["by_model"][model_id] = outcome
-        write_json(pass_dir / "alignment" / f"{_safe(model_id)}.json", outcome)
+        write_json(pass_dir / "alignment" / f"{safe_model_id(model_id)}.json", outcome)
 
 
 def _stage_ppg(audio: Audio, args: argparse.Namespace, ctx: dict[str, Any]) -> None:
@@ -1862,7 +1731,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             enhanced = enhance_audios(
                 [audio_16k],
-                model=pick_dispatch_model(args.enhancement_model, task="enhancement"),
+                model=model_for_task(args.enhancement_model, task="enhancement"),
                 device=device,
             )[0]
             pass_audio["enhanced_16k"] = enhanced
@@ -2111,7 +1980,7 @@ def main(argv: list[str] | None = None) -> int:
                         for w in windows
                     ],
                 }
-                write_json(run_dir / pass_label / "embeddings" / f"{_safe(model_id)}.json", payload)
+                write_json(run_dir / pass_label / "embeddings" / f"{safe_model_id(model_id)}.json", payload)
 
         # Attach per-axis Labels + utterance TextArea tracks to the LS bundle.
         if axis_results:

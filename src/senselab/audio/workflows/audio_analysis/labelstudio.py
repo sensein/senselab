@@ -76,11 +76,6 @@ def uncertainty_to_label_bin(value: float | None, status: ComparisonStatus | str
     return "high"
 
 
-def _safe(model_id: str) -> str:
-    """Sanitize a model id for use in a track / region name."""
-    return re.sub(r"[^A-Za-z0-9_]+", "_", model_id).strip("_") or "model"
-
-
 def _track_name(pass_label: str, axis: str) -> str:
     pass_token = "pass_pair" if pass_label == "raw_vs_enhanced" else pass_label
     return f"{pass_token}__uncertainty__{axis}"

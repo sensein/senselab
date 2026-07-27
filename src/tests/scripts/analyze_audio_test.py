@@ -128,14 +128,6 @@ def test_asr_has_timestamps_detects_native_timestamps(aa: types.ModuleType) -> N
     assert aa._asr_has_timestamps(None) is False
 
 
-def test_safe_sanitizes_model_ids_for_filenames(aa: types.ModuleType) -> None:
-    """Forward slashes and dots in model ids must become underscore-safe stems."""
-    assert "/" not in aa._safe("openai/whisper-large-v3-turbo")
-    assert "/" not in aa._safe("speechbrain/spkrec-ecapa-voxceleb")
-    # idempotent on already-safe input
-    assert aa._safe("plain_name") == "plain_name"
-
-
 def test_collect_classification_labels_pulls_unique_labels(aa: types.ModuleType) -> None:
     """The LS-config XML builder collects every distinct AudioSet label observed."""
     classify_result = [
