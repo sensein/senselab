@@ -313,3 +313,97 @@ def test_from_harvests_in_process_integration() -> None:
     assert store.row_meta[("raw_16k", "presence", (0.0, 0.5))]["quality_snr"] == 0.3
     ident = store.reaggregate_bucket("raw_16k", "identity", (0.0, 1.0), aggregator="min")
     assert ident["aggregated_uncertainty"] == pytest.approx(0.5)
+
+
+# ── In-process ingest path (T040) ─────────────────────────────────────
+
+
+def test_run_adaptive_loop_accepts_in_process_harvests(tmp_path: Path) -> None:
+    """The loop can ingest PassHarvest objects directly, with no parquet round-trip.
+
+    This is T040's integration point: analyze_audio hands over what it just
+    computed instead of writing nine parquets and reading them back.
+    """
+    from senselab.audio.workflows.audio_analysis.adaptive.loop import run_adaptive_loop
+    from senselab.audio.workflows.audio_analysis.votes import PassHarvest
+
+    harvest = PassHarvest(
+        pass_label="raw_16k",
+        presence_votes=[
+            {"start": 0.0, "end": 0.5, "votes": {"m1": {"speaks": True}}},
+            {"start": 0.5, "end": 1.0, "votes": {"m1": {"speaks": False}}},
+        ],
+        identity_votes=[{"start": 0.0, "end": 1.0, "votes": {}}],
+        utterance_votes=[{"start": 0.0, "end": 1.0, "votes": {"a": {"text": "hi"}}}],
+        grids={"utterance": {"win_length": 1.0, "hop_length": 1.0}},
+    )
+    summary = {"passes": {"raw_16k": {"duration_s": 1.0, "audio_signature": "a" * 64}}}
+
+    log = run_adaptive_loop(
+        tmp_path,
+        harvests={"raw_16k": harvest},
+        summary=summary,
+        max_rounds=1,
+        aggregator="min",
+    )
+    assert (tmp_path / "rounds" / "1").is_dir(), "round 1 artifacts must still be emitted"
+    assert isinstance(log, dict)
+
+
+def test_in_process_path_reports_parity_as_skipped_not_passing(tmp_path: Path) -> None:
+    """A vacuous parity check would be a misleading proof — it must say "skipped".
+
+    parity_check compares re-aggregation against the *stored* parquet values. On
+    the in-process path those don't exist yet, so every bucket would be "compared:
+    0, mismatches: 0" — which reads as a pass while proving nothing.
+    """
+    import json as _json
+
+    from senselab.audio.workflows.audio_analysis.adaptive.loop import run_adaptive_loop
+    from senselab.audio.workflows.audio_analysis.votes import PassHarvest
+
+    harvest = PassHarvest(
+        pass_label="raw_16k",
+        presence_votes=[{"start": 0.0, "end": 0.5, "votes": {"m1": {"speaks": True}}}],
+        grids={"utterance": {"win_length": 1.0, "hop_length": 1.0}},
+    )
+    run_adaptive_loop(
+        tmp_path,
+        harvests={"raw_16k": harvest},
+        summary={"passes": {"raw_16k": {"duration_s": 1.0, "audio_signature": "b" * 64}}},
+        max_rounds=1,
+        aggregator="min",
+    )
+    round1 = _json.loads((tmp_path / "rounds" / "1" / "summary.json").read_text())
+    assert round1["parity_check"]["status"] == "skipped"
+    assert "stored parquet" in round1["parity_check"]["reason"]
+
+
+def test_in_process_ingest_ignores_passes_absent_from_the_summary(tmp_path: Path) -> None:
+    """Only passes the summary reports as completed may contribute votes."""
+    from senselab.audio.workflows.audio_analysis.adaptive.loop import run_adaptive_loop
+    from senselab.audio.workflows.audio_analysis.votes import PassHarvest
+
+    def _h(label: str) -> PassHarvest:
+        return PassHarvest(
+            pass_label=label,
+            presence_votes=[{"start": 0.0, "end": 0.5, "votes": {"m1": {"speaks": True}}}],
+            grids={"utterance": {"win_length": 1.0, "hop_length": 1.0}},
+        )
+
+    log = run_adaptive_loop(
+        tmp_path,
+        harvests={"raw_16k": _h("raw_16k"), "enhanced_16k": _h("enhanced_16k")},
+        # enhancement failed, so the summary has no duration_s for it
+        summary={
+            "passes": {
+                "raw_16k": {"duration_s": 1.0, "audio_signature": "c" * 64},
+                "enhanced_16k": {"status": "failed"},
+            }
+        },
+        max_rounds=1,
+        aggregator="min",
+    )
+    assert isinstance(log, dict)
+    belief = (tmp_path / "rounds" / "1").glob("belief*")
+    assert any(belief), "round-1 belief artifacts should exist for the surviving pass"

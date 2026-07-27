@@ -44,13 +44,49 @@ def run_adaptive_loop(
     out_dir: Path | None = None,
     max_rounds: int = 3,
     aggregator: str | None = None,
+    harvests: dict[str, Any] | None = None,
+    summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Run the adaptive loop over a completed analyze_audio run directory."""
+    """Run the adaptive loop over an analyze_audio run.
+
+    Two ingest paths, same loop:
+
+    - **artifact-driven** (default): reads ``summary.json`` and the nine
+      uncertainty parquets from ``run_dir``. This is what ``scripts/adaptive_loop.py``
+      does over a finished run.
+    - **in-process** (T040): the caller passes the ``PassHarvest`` objects it just
+      produced via ``harvests`` (and usually ``summary``), skipping the parquet
+      round-trip entirely.
+
+    The in-process path cannot run the parity check, and says so rather than
+    reporting a passing one: :meth:`VoteStore.parity_check` compares
+    re-aggregation against the *stored* parquet values, which don't exist yet when
+    the harvests are still in memory. A vacuous "0 mismatches" would be a
+    misleading proof, so ``parity_check.status`` is ``"skipped"`` instead.
+
+    Args:
+        run_dir: The run directory. Still required for reading policy-adjacent
+            artifacts and for output pathing, even on the in-process path.
+        cache_dir: Cache directory for intervention re-runs.
+        policy_path: Policy YAML; ``None`` uses the packaged default.
+        out_dir: Where ``rounds/`` and ``final/`` are written; defaults to ``run_dir``.
+        max_rounds: Total rounds including baseline. ``1`` = baseline only.
+        aggregator: Sub-signal aggregator; inferred from the run when ``None``.
+        harvests: Pass label → ``PassHarvest`` for the in-process path.
+        summary: Pre-loaded ``summary.json`` content; read from disk when ``None``.
+
+    Returns:
+        The loop's decision log.
+
+    Raises:
+        ValueError: If no completed passes can be determined.
+    """
     run_dir = Path(run_dir)
     out_dir = Path(out_dir) if out_dir else run_dir
     policy = load_policy(policy_path)
 
-    summary = json.loads((run_dir / "summary.json").read_text())
+    if summary is None:
+        summary = json.loads((run_dir / "summary.json").read_text())
     passes = [pl for pl, ps in (summary.get("passes") or {}).items() if isinstance(ps, dict) and "duration_s" in ps]
     if not passes:
         raise ValueError(f"no completed passes in {run_dir}/summary.json")
@@ -61,8 +97,16 @@ def run_adaptive_loop(
 
     # ── round 1: ingest + parity (harvest/aggregate split proof) ────────
     t0 = time.time()
-    store = VoteStore.from_run_dir(run_dir, passes)
-    parity = store.parity_check(passes, aggregator=aggregator)
+    parity: dict[str, Any]
+    if harvests is not None:
+        store = VoteStore.from_harvests({pl: h for pl, h in harvests.items() if pl in passes})
+        parity = {
+            "status": "skipped",
+            "reason": "in-process harvests carry no stored parquet values to compare against",
+        }
+    else:
+        store = VoteStore.from_run_dir(run_dir, passes)
+        parity = store.parity_check(passes, aggregator=aggregator)
     state = BeliefState.from_store(store, passes, aggregator=aggregator)
     utterance_grid = _grid_from_rows(state.axis_rows(passes[0], "utterance"))
     theta_low = float(policy["thresholds"]["theta_low"])
