@@ -26,6 +26,7 @@ from typing import List, Optional
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.preprocessing import SegmentStrategy, segment_audios_at_pauses
 from senselab.utils.data_structures import DeviceType, HFModel, ScriptLine, _select_device_and_dtype
+from senselab.utils.dependencies import hf_subprocess_env
 from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
 
 # Dedicated venv — kept separate from the existing nemo-diarization venv.
@@ -235,7 +236,10 @@ class CanaryQwenASR:
                 }
             )
 
-            env = _clean_subprocess_env()
+            # Stage the model once (cross-process, via the heartbeat lock) + run the
+            # worker offline so its SALM.from_pretrained makes no per-call Hub version
+            # check — the 429 source under parallel batch.
+            env = hf_subprocess_env(str(model_name), revision, base_env=_clean_subprocess_env())
             result = subprocess.run(
                 [python, "-c", _CANARY_WORKER_SCRIPT],
                 input=input_json,
