@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from senselab.audio.workflows.audio_analysis.adaptive.types import AxisName
 from senselab.audio.workflows.audio_analysis.aggregate import (
     aggregate_identity,
     aggregate_presence,
@@ -31,7 +32,8 @@ from senselab.audio.workflows.audio_analysis.aggregate import (
     presence_p_voice,
 )
 
-AXES = ("presence", "identity", "utterance")
+AXES: tuple[AxisName, ...] = ("presence", "identity", "utterance")
+"""The three uncertainty axes, typed so callers keep the narrowed literal."""
 
 _META_COLUMNS = (
     "presence_confidence",

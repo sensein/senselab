@@ -34,6 +34,7 @@ from senselab.audio.workflows.audio_analysis.adaptive.interventions import (
 )
 from senselab.audio.workflows.audio_analysis.adaptive.policy import BudgetLedger, load_policy, plan_round
 from senselab.audio.workflows.audio_analysis.adaptive.regions import propose_regions
+from senselab.audio.workflows.audio_analysis.adaptive.types import AxisName, PlannedIntervention, Region
 
 
 def run_adaptive_loop(
@@ -156,7 +157,7 @@ def run_adaptive_loop(
     for round_idx in range(2, max_rounds + 1):
         ctx["round_idx"] = round_idx
         mass_before = {f"{s}/{a}": round(state.uncertainty_mass(s, a, theta_low), 6) for s in passes for a in AXES}
-        regions: list[dict[str, Any]] = []
+        regions: list[Region] = []
         for stream in passes:
             for axis in AXES:
                 regions.extend(
@@ -174,14 +175,14 @@ def run_adaptive_loop(
             rules=RULES, regions=regions, ctx=ctx, ledger=ledger, policy=policy, round_idx=round_idx
         )
 
-        fired: list[dict[str, Any]] = []
+        fired: list[PlannedIntervention] = []
         for cand in admitted:
             rule = next(r for r in RULES if r["id"] == cand["rule"])
             entry = _iteration_entry(cand, round_idx)
             try:
                 before_vals = _bucket_values(state)
                 result = rule["execute"](cand, ctx)
-                touched: dict[tuple[str, str], set] = result.pop("touched", {})
+                touched: dict[tuple[str, AxisName], set] = result.pop("touched", {})
                 delta = {}
                 for (stream, axis), buckets in touched.items():
                     state.update_buckets(store, stream, axis, buckets, round_idx)
@@ -461,7 +462,7 @@ def _mean_over(state: BeliefState, stream: str, axis: str, buckets: set | None) 
     return sum(vals) / len(vals) if vals else None
 
 
-def _iteration_entry(cand: dict[str, Any], round_idx: int) -> dict[str, Any]:
+def _iteration_entry(cand: PlannedIntervention, round_idx: int) -> dict[str, Any]:
     return {
         "intervention_id": cand.get("intervention_id")
         or f"{round_idx}_{cand['rule']}_{cand.get('region_id') or 'global'}",

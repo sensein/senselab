@@ -193,9 +193,25 @@ in Phase 8.
 - [x] T051 Cache/provenance layer out of the script → `utils/tasks/cached_inference.py`; `_stage_*`
   functions → `workflows/audio_analysis/stages.py`; `wrapper_version_hash` re-scoped to the stage
   modules (documented invalidation-semantics change). Precondition for T040. (Own PR per review.)
-- [ ] T052 Typed adaptive internals per house style: `adaptive/types.py` dataclasses (`Region`,
+- [x] T052 Typed adaptive internals per house style: `adaptive/types.py` dataclasses (`Region`,
   `PlannedIntervention`, `LoopContext`, `InterventionRule`) replacing dict soup; planner + regions
   first. (Opportunistic, own PR.)
+  - **Implemented 2026-07-27 as `TypedDict`, not dataclasses** — a deliberate deviation. `Region` is
+    written to `rounds/<n>/regions.json` and read back by `plot.py`, `ls_final.py` and the T039
+    harness; `PlannedIntervention` lands in `final/iterations.json`. A dataclass would need
+    `to_dict`/`from_dict` at each boundary while the dict stayed the wire format, i.e. a second
+    representation to keep in sync. `plan_round` also adds `status`/`error`/`intervention_id` *after*
+    construction, which a frozen dataclass cannot express. TypedDict types the existing dicts in
+    place: zero runtime change, zero serialization change, and every consumer gets checked.
+  - **mypy immediately found three latent defects** the dict soup was hiding: `exec_status` was
+    written by `loop.py` but never declared anywhere; `region_id` was read as required while being
+    assigned only after ranking (now seeded at construction); and a test fixture built `Region`s
+    without `n_buckets`. `AxisName` is now a shared literal so `AXES` keeps its narrowing through
+    `propose_regions`.
+  - Scope was "planner + regions first" per the task: `regions.py`, `policy.py`, `convergence.py`,
+    `loop.py`. `LoopContext` and `InterventionRule` remain untyped — `ctx` is a genuinely
+    heterogeneous bag mutated across rounds, and typing it usefully means restructuring it, not
+    annotating it.
 
 ## Dependencies
 

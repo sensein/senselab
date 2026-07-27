@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from senselab.audio.workflows.audio_analysis.adaptive.types import PlannedIntervention, Region
+
 _AXIS_PRIORITY = {"utterance": 0, "identity": 1, "presence": 2}
 _COST_WEIGHT = {"light": 1.0, "medium": 4.0, "heavy": 16.0}
 
@@ -117,12 +119,12 @@ class BudgetLedger:
 def plan_round(
     *,
     rules: list[dict[str, Any]],
-    regions: list[dict[str, Any]],
+    regions: list[Region],
     ctx: dict[str, Any],
     ledger: BudgetLedger,
     policy: dict[str, Any],
     round_idx: int,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[list[PlannedIntervention], list[PlannedIntervention]]:
     """Match rules against regions, rank deterministically, admit within budget.
 
     Returns ``(admitted, not_admitted)`` where every element carries the full
@@ -131,10 +133,10 @@ def plan_round(
     inputs: stable total order (priority desc → axis priority → region start →
     rule id), floats rounded before comparison (FR-025).
     """
-    candidates: list[dict[str, Any]] = []
+    candidates: list[PlannedIntervention] = []
     for rule in rules:
         enabled = ((policy.get("rules") or {}).get(rule["id"]) or {}).get("enabled", True)
-        rule_regions: list[dict[str, Any] | None] = (
+        rule_regions: list[Region | None] = (
             [r for r in regions if r["axis"] in rule["axes"] and r.get("status") == "open"]
             if rule["axes"]
             else [None]  # stream-global rules (adjudication) run once per round
@@ -146,7 +148,7 @@ def plan_round(
             guard_reason = rule["guard"](region, ctx) if rule.get("guard") else None
             gain = float(rule["gain"](region, ctx, trigger))
             priority = round(gain / _COST_WEIGHT[rule["cost"]], 9)
-            cand = {
+            cand: PlannedIntervention = {
                 "rule": rule["id"],
                 "cost_class": rule["cost"],
                 "region_id": region["region_id"] if region else None,
@@ -162,8 +164,8 @@ def plan_round(
 
     candidates.sort(key=lambda c: (-c["priority"], _AXIS_PRIORITY.get(c["axis"], 3), c["start"], c["rule"]))
 
-    admitted: list[dict[str, Any]] = []
-    not_admitted: list[dict[str, Any]] = []
+    admitted: list[PlannedIntervention] = []
+    not_admitted: list[PlannedIntervention] = []
     for cand in candidates:
         if not cand["enabled"]:
             cand["status"] = "blocked_guard"

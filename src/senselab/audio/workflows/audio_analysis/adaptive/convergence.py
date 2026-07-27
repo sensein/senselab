@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from senselab.audio.workflows.audio_analysis.adaptive.belief import AXES, bucket_key
+from senselab.audio.workflows.audio_analysis.adaptive.types import PlannedIntervention
 
 
 def apply_convergence_marks(
@@ -67,8 +68,8 @@ def round_summary(
     state: Any,  # noqa: ANN401
     passes: list[str],
     policy: dict[str, Any],
-    fired: list[dict[str, Any]],
-    not_admitted: list[dict[str, Any]],
+    fired: list[PlannedIntervention],
+    not_admitted: list[PlannedIntervention],
     mass_before: dict[str, float],
     ledger: Any,  # noqa: ANN401
 ) -> dict[str, Any]:

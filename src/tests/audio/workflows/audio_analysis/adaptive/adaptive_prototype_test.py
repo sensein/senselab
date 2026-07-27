@@ -18,6 +18,7 @@ from senselab.audio.workflows.audio_analysis.adaptive.policy import (
     plan_round,
 )
 from senselab.audio.workflows.audio_analysis.adaptive.regions import propose_regions
+from senselab.audio.workflows.audio_analysis.adaptive.types import Region
 
 BK = bucket_key(0.0, 0.5)
 
@@ -92,7 +93,7 @@ def test_planner_is_deterministic_and_budget_bounded() -> None:
             "execute": lambda cand, c: {"touched": {}},
         }
     ]
-    regions = [
+    regions: list[Region] = [
         {
             "region_id": "rA",
             "axis": "utterance",
@@ -102,6 +103,7 @@ def test_planner_is_deterministic_and_budget_bounded() -> None:
             "crop_start": 0.0,
             "crop_end": 2.0,
             "uncertainty_mass": 0.2,
+            "n_buckets": 2,
             "status": "open",
         },
         {
@@ -113,6 +115,7 @@ def test_planner_is_deterministic_and_budget_bounded() -> None:
             "crop_start": 1.0,
             "crop_end": 4.0,
             "uncertainty_mass": 0.9,
+            "n_buckets": 2,
             "status": "open",
         },
     ]
