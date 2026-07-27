@@ -224,7 +224,10 @@ def main(argv: list[str] | None = None) -> int:
     }
     validate_profile(profile, source="fitted")
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(profile, indent=2))
+    # indent=4 + trailing newline to match the repo's pretty-format-json /
+    # end-of-file-fixer hooks, so a profile fitted into the package tree is
+    # committable without a reformat round-trip.
+    args.out.write_text(json.dumps(profile, indent=4) + "\n")
     print(f"profile: {args.out}")
 
     # ── Validation table + plot (T038 / FR-022, SC-007) ──────────────────
@@ -239,7 +242,7 @@ def main(argv: list[str] | None = None) -> int:
         "monotone_reported_vs_true": monotone,
     }
     args.table.parent.mkdir(parents=True, exist_ok=True)
-    args.table.write_text(json.dumps(table, indent=2))
+    args.table.write_text(json.dumps(table, indent=4) + "\n")
     print(f"table:   {args.table}  (monotone={monotone})")
 
     try:
