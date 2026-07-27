@@ -41,8 +41,6 @@ import traceback
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
-import torch
-
 __all__ = [
     "CACHE_SCHEMA_VERSION",
     "align_cache_key",
@@ -80,7 +78,15 @@ def senselab_version() -> str:
 
 
 def serialize(obj: Any) -> Any:  # noqa: ANN401 — recursive heterogeneous serializer
-    """Convert senselab outputs (ScriptLine, tensor, etc.) to JSON-friendly types."""
+    """Convert senselab outputs (ScriptLine, tensor, etc.) to JSON-friendly types.
+
+    ``torch`` is imported lazily so that merely deriving a cache key or writing a
+    JSON sidecar does not pull in the ML stack — which in turn keeps
+    ``stage_context`` importable without torch (there is a test asserting that).
+    After the first call it is a ``sys.modules`` lookup.
+    """
+    import torch
+
     if isinstance(obj, dict):
         return {k: serialize(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
