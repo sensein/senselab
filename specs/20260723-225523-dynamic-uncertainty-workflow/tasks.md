@@ -110,10 +110,20 @@ in Phase 8.
 
 ## Phase 8: Follow-ups from the 2026-07-24 implementation audit
 
-- [ ] T040 In-process adaptive integration in `scripts/analyze_audio.py` per contracts/cli.md:
+- [x] T040 In-process adaptive integration in `scripts/analyze_audio.py` per contracts/cli.md:
   `--max-rounds/--policy/--budget-*/--max-region-rounds/--region-top-n/--reserve-asr-models/`
   `--enable-overlap-separation/--no-adaptive-outputs`, in-run `rounds/` + `final/` emission via
   `VoteStore.from_harvests`, `summary.json` `adaptive` block, and the `--skip comparisons` warning.
+  - **Implemented 2026-07-27.** All nine flags land; `--enable-overlap-separation` maps to the
+    *shipped* `rules.I4_overlap_detection` (contracts/cli.md calls it a "v2 U4 rule, off by default",
+    but no U4 rule exists and the packaged policy already enables I4 — so the flag only overrides a
+    policy that disabled it). CLI overrides beat `--policy`, and `policy_hash` is recomputed after
+    merging so two runs differing only by `--budget-heavy` don't claim the same hash.
+    Harvests reach the loop via a new `harvests_out=` out-parameter on
+    `compute_uncertainty_axes` (an out-parameter, not a fourth return value, so no existing caller's
+    tuple arity changes). **Golden-compat verified**: `--max-rounds 1` vs `--no-adaptive-outputs`
+    produced byte-identical uncertainty parquets (3/3), an identical LS bundle, and identical
+    `summary.json` keys and values; `disagreements.json` differed only in `generated_at`.
 - [ ] T041 `P2_fine_posteriors` rule (fine-hop posterior re-analysis on crops) — also unblocks I4's
   contract dependency ("else fires P2 first").
 - [ ] T042 Final-output schema completion vs contracts/final-outputs.md: `final/diarization.rttm`,
@@ -152,7 +162,7 @@ in Phase 8.
 - [X] T050 Transcript fusion promoted to `tasks/speech_to_text_ensemble/` (`fuse_word_streams` with
   explicit `weights`, `load_calibrator`, `iter_word_leaves`); `adaptive/fusion.py` keeps the
   policy→weights wrapper + artifact collection + final-output writers.
-- [ ] T051 Cache/provenance layer out of the script → `utils/tasks/cached_inference.py`; `_stage_*`
+- [x] T051 Cache/provenance layer out of the script → `utils/tasks/cached_inference.py`; `_stage_*`
   functions → `workflows/audio_analysis/stages.py`; `wrapper_version_hash` re-scoped to the stage
   modules (documented invalidation-semantics change). Precondition for T040. (Own PR per review.)
 - [ ] T052 Typed adaptive internals per house style: `adaptive/types.py` dataclasses (`Region`,

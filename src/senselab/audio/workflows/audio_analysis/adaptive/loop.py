@@ -46,6 +46,7 @@ def run_adaptive_loop(
     aggregator: str | None = None,
     harvests: dict[str, Any] | None = None,
     summary: dict[str, Any] | None = None,
+    policy_overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run the adaptive loop over an analyze_audio run.
 
@@ -73,6 +74,7 @@ def run_adaptive_loop(
         max_rounds: Total rounds including baseline. ``1`` = baseline only.
         aggregator: Sub-signal aggregator; inferred from the run when ``None``.
         harvests: Pass label → ``PassHarvest`` for the in-process path.
+        policy_overrides: In-memory policy overrides (CLI flags), merged last.
         summary: Pre-loaded ``summary.json`` content; read from disk when ``None``.
 
     Returns:
@@ -83,7 +85,7 @@ def run_adaptive_loop(
     """
     run_dir = Path(run_dir)
     out_dir = Path(out_dir) if out_dir else run_dir
-    policy = load_policy(policy_path)
+    policy = load_policy(policy_path, policy_overrides)
 
     if summary is None:
         summary = json.loads((run_dir / "summary.json").read_text())
@@ -385,6 +387,7 @@ def run_adaptive_loop(
     )
     return {
         "run_state": run_state,
+        "policy_hash": policy.get("policy_hash"),
         "parity_check": parity,
         "rounds": len(round_summaries) + 1,
         "n_interventions_fired": sum(1 for e in iterations if e["status"] == "fired"),

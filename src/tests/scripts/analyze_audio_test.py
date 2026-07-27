@@ -316,3 +316,39 @@ def test_stage_context_carries_provenance_fields(aa: types.ModuleType, tmp_path:
     assert ctx.device_label == "auto"
     assert ctx.audio_source.endswith("x.wav")
     assert len(ctx.audio_signature) == 64
+
+
+def test_policy_overrides_are_absent_when_no_flags_given(aa: types.ModuleType) -> None:
+    """Unset adaptive flags must produce all-None overrides, which load_policy drops."""
+    from senselab.audio.workflows.audio_analysis.adaptive.policy import load_policy
+
+    overrides = aa._policy_overrides(aa.parse_args(["x.wav"]))
+    assert load_policy(None, overrides)["policy_hash"] == load_policy()["policy_hash"]
+
+
+def test_policy_overrides_map_budget_and_region_flags(aa: types.ModuleType) -> None:
+    """--budget-* and --region-* land on the policy keys the loop reads."""
+    args = aa.parse_args(
+        ["x.wav", "--budget-medium", "8", "--budget-heavy", "0", "--region-top-n", "16", "--max-region-rounds", "3"]
+    )
+    o = aa._policy_overrides(args)
+    assert o["budget"] == {"medium_per_run": 8, "heavy_per_run": 0}
+    assert o["regions"] == {"top_n_per_round": 16, "max_region_rounds": 3}
+
+
+def test_policy_overrides_pass_the_reserve_pool_in_order(aa: types.ModuleType) -> None:
+    """U2 escalation tries the reserve models in the order given."""
+    args = aa.parse_args(["x.wav", "--reserve-asr-models", "a/one", "b/two"])
+    assert aa._policy_overrides(args)["reserve_asr_models"] == ["a/one", "b/two"]
+
+
+def test_overlap_flag_only_appears_when_passed(aa: types.ModuleType) -> None:
+    """Without the flag the rules block is untouched, so the policy default stands."""
+    assert "rules" not in aa._policy_overrides(aa.parse_args(["x.wav"]))
+    on = aa._policy_overrides(aa.parse_args(["x.wav", "--enable-overlap-separation"]))
+    assert on["rules"]["I4_overlap_detection"]["enabled"] is True
+
+
+def test_max_rounds_defaults_to_three(aa: types.ModuleType) -> None:
+    """contracts/cli.md: default 3 rounds including baseline."""
+    assert aa.parse_args(["x.wav"]).max_rounds == 3

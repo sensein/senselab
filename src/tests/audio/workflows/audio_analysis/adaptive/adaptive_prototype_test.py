@@ -407,3 +407,49 @@ def test_in_process_ingest_ignores_passes_absent_from_the_summary(tmp_path: Path
     assert isinstance(log, dict)
     belief = (tmp_path / "rounds" / "1").glob("belief*")
     assert any(belief), "round-1 belief artifacts should exist for the surviving pass"
+
+
+# ── Policy override precedence (T040) ─────────────────────────────────
+
+
+def test_cli_overrides_win_over_a_policy_file(tmp_path: Path) -> None:
+    """Precedence is packaged default < --policy file < CLI flags."""
+    import json as _json
+
+    from senselab.audio.workflows.audio_analysis.adaptive.policy import load_policy
+
+    policy_file = tmp_path / "p.yaml"
+    policy_file.write_text(_json.dumps({"budget": {"heavy_per_run": 9}}))  # YAML accepts JSON
+    merged = load_policy(policy_file, {"budget": {"heavy_per_run": 0}})
+    assert merged["budget"]["heavy_per_run"] == 0, "CLI must beat the file"
+
+
+def test_none_overrides_leave_the_policy_untouched() -> None:
+    """An unset flag must not clobber the policy's value with None."""
+    from senselab.audio.workflows.audio_analysis.adaptive.policy import load_policy
+
+    default = load_policy()
+    merged = load_policy(None, {"budget": {"medium_per_run": None, "heavy_per_run": 2}})
+    assert merged["budget"]["medium_per_run"] == default["budget"]["medium_per_run"]
+    assert merged["budget"]["heavy_per_run"] == 2
+
+
+def test_policy_hash_reflects_the_overrides() -> None:
+    """Two runs differing only by --budget-heavy must not claim the same policy hash.
+
+    The hash is provenance: it has to identify the policy that actually ran, not
+    the file on disk.
+    """
+    from senselab.audio.workflows.audio_analysis.adaptive.policy import load_policy
+
+    a = load_policy(None, {"budget": {"heavy_per_run": 1}})
+    b = load_policy(None, {"budget": {"heavy_per_run": 2}})
+    assert a["policy_hash"] != b["policy_hash"]
+
+
+def test_empty_overrides_match_the_unmodified_policy() -> None:
+    """No flags set → byte-identical policy (and hash) to loading with none."""
+    from senselab.audio.workflows.audio_analysis.adaptive.policy import load_policy
+
+    assert load_policy(None, {}) == load_policy()
+    assert load_policy(None, {"budget": {"medium_per_run": None}})["policy_hash"] == load_policy()["policy_hash"]

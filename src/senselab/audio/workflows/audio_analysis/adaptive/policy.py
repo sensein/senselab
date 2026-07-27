@@ -14,8 +14,26 @@ _COST_WEIGHT = {"light": 1.0, "medium": 4.0, "heavy": 16.0}
 _DEFAULT_POLICY_PATH = Path(__file__).parent / "policy" / "default.yaml"
 
 
-def load_policy(path: Path | None = None) -> dict[str, Any]:
-    """Load the default policy, deep-merge an optional override file, attach ``policy_hash``."""
+def load_policy(path: Path | None = None, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Load the default policy, deep-merge an optional override file, attach ``policy_hash``.
+
+    Precedence is packaged default < ``path`` file < ``overrides`` — the CLI wins
+    over a policy file, per contracts/cli.md ("Overrides below win over the file").
+
+    ``policy_hash`` is computed *after* all merging, so it identifies the policy
+    that actually ran rather than the file on disk. That matters for
+    reproducibility: two runs with the same ``--policy`` but different
+    ``--budget-heavy`` must not claim the same hash.
+
+    Args:
+        path: Optional policy YAML to deep-merge over the packaged default.
+        overrides: Optional in-memory overrides (e.g. built from CLI flags),
+            deep-merged last. ``None`` values are dropped so an unset flag does
+            not clobber a file's value.
+
+    Returns:
+        The merged policy dict with ``policy_hash`` attached.
+    """
     import yaml  # type: ignore[import-untyped]
 
     with open(_DEFAULT_POLICY_PATH, encoding="utf-8") as f:
@@ -24,9 +42,24 @@ def load_policy(path: Path | None = None) -> dict[str, Any]:
         with open(path, encoding="utf-8") as f:
             override = yaml.safe_load(f) or {}
         policy = _deep_merge(policy, override)
+    if overrides:
+        policy = _deep_merge(policy, _drop_none(overrides))
     canonical = json.dumps(policy, sort_keys=True, separators=(",", ":"))
     policy["policy_hash"] = hashlib.sha256(canonical.encode()).hexdigest()
     return policy
+
+
+def _drop_none(d: dict[str, Any]) -> dict[str, Any]:
+    """Recursively strip ``None`` values so an unset CLI flag overrides nothing."""
+    out: dict[str, Any] = {}
+    for k, v in d.items():
+        if isinstance(v, dict):
+            nested = _drop_none(v)
+            if nested:
+                out[k] = nested
+        elif v is not None:
+            out[k] = v
+    return out
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:

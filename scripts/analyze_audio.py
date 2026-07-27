@@ -230,6 +230,69 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Skip the enhanced-audio pass; only run on the resampled original. Alias for --enhancement never.",
     )
+    # ── Adaptive loop (T040; contracts/cli.md) ────────────────────────
+    parser.add_argument(
+        "--max-rounds",
+        type=int,
+        default=3,
+        help=(
+            "Total adaptive rounds including the baseline. 1 = baseline only: no interventions and no "
+            "rounds/>=2, though final/ is still emitted from the round-1 belief. Use 1 for "
+            "golden-compat runs."
+        ),
+    )
+    parser.add_argument(
+        "--policy",
+        type=Path,
+        default=None,
+        help="Adaptive policy YAML, deep-merged over the packaged default. CLI overrides below win over it.",
+    )
+    parser.add_argument(
+        "--budget-medium",
+        type=int,
+        default=None,
+        help="Per-run budget for medium-cost interventions (default from the policy file).",
+    )
+    parser.add_argument(
+        "--budget-heavy",
+        type=int,
+        default=None,
+        help="Per-run budget for heavy-cost interventions (default from the policy file). 0 disables them.",
+    )
+    parser.add_argument(
+        "--max-region-rounds",
+        type=int,
+        default=None,
+        help="Cap on how many rounds may touch the same region (default from the policy file).",
+    )
+    parser.add_argument(
+        "--region-top-n",
+        type=int,
+        default=None,
+        help="How many high-uncertainty regions to admit per round (default from the policy file).",
+    )
+    parser.add_argument(
+        "--reserve-asr-models",
+        nargs="+",
+        default=None,
+        metavar="MODEL",
+        help="Reserve ASR pool for U2 escalation, in order (default from the policy file).",
+    )
+    parser.add_argument(
+        "--enable-overlap-separation",
+        action="store_true",
+        help=(
+            "Force the overlap-detection rule on, overriding a policy file that disabled it. NOTE: "
+            "contracts/cli.md calls this a 'v2 U4 rule (off by default)'; the shipped rule is "
+            "I4_overlap_detection and the packaged policy already enables it, so this flag only "
+            "matters against a policy that turns it off."
+        ),
+    )
+    parser.add_argument(
+        "--no-adaptive-outputs",
+        action="store_true",
+        help="Suppress the adaptive rounds/ and final/ artifacts (debug / regression aid).",
+    )
     parser.add_argument(
         "--enhancement",
         choices=("auto", "always", "never"),
@@ -1185,6 +1248,23 @@ def _pass_plan(args: argparse.Namespace) -> PassPlan:
     )
 
 
+def _policy_overrides(args: argparse.Namespace) -> dict[str, Any]:
+    """Build in-memory policy overrides from the adaptive CLI flags.
+
+    `None` values are dropped by `load_policy`, so an unset flag leaves the policy
+    file's value alone — the flags override, they don't reset to a CLI default.
+    """
+    overrides: dict[str, Any] = {
+        "budget": {"medium_per_run": args.budget_medium, "heavy_per_run": args.budget_heavy},
+        "regions": {"top_n_per_round": args.region_top_n, "max_region_rounds": args.max_region_rounds},
+    }
+    if args.reserve_asr_models is not None:
+        overrides["reserve_asr_models"] = list(args.reserve_asr_models)
+    if args.enable_overlap_separation:
+        overrides["rules"] = {"I4_overlap_detection": {"enabled": True}}
+    return overrides
+
+
 def _stage_context(
     label: str,
     audio: Audio,
@@ -1350,6 +1430,13 @@ def main(argv: list[str] | None = None) -> int:
     config_xml = build_labelstudio_config(summaries)
 
     # ── Comparator: three-axis uncertainty workflow ─────────────────────
+    if "comparisons" in args.skip and args.max_rounds > 1:
+        print(
+            "warn: --skip comparisons disables the belief store, so no adaptive rounds >= 2 and no "
+            "final/ will be produced (contracts/cli.md). Drop --skip comparisons to enable them.",
+            file=sys.stderr,
+        )
+
     if "comparisons" not in args.skip:
         from senselab.audio.workflows.audio_analysis import (
             BucketGrid,
@@ -1412,7 +1499,9 @@ def main(argv: list[str] | None = None) -> int:
         speaker_embedding_models = list(args.embeddings_models)
         per_window_embeddings_by_pass: dict[str, dict[str, Any]] = {}
         try:
+            harvests_by_pass: dict[str, Any] = {}
             axis_results, incomparable_reasons, per_window_embeddings_by_pass = compute_uncertainty_axes(
+                harvests_out=harvests_by_pass,
                 passes=passes_for_compute,
                 grid=grid,
                 params=comparator_params,
@@ -1653,6 +1742,46 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"Timeline plot: {timeline_path}")
             except Exception as exc:  # noqa: BLE001 — best-effort sidecar
                 print(f"warn: timeline plot failed: {exc!r}", file=sys.stderr)
+
+        # ── Adaptive loop, in-process (T040) ──────────────────────────
+        # Runs on the harvests the parquets were just built from, so the belief
+        # store needs no parquet round-trip. Gated on --no-adaptive-outputs; a
+        # --max-rounds 1 run still emits final/ from the round-1 belief.
+        if not args.no_adaptive_outputs and harvests_by_pass:
+            from senselab.audio.workflows.audio_analysis.adaptive.loop import run_adaptive_loop
+
+            try:
+                adaptive_log = run_adaptive_loop(
+                    run_dir,
+                    cache_dir=cache_dir,
+                    policy_path=args.policy,
+                    out_dir=run_dir,
+                    max_rounds=args.max_rounds,
+                    aggregator=args.uncertainty_aggregator,
+                    harvests=harvests_by_pass,
+                    summary=summaries,
+                    policy_overrides=_policy_overrides(args),
+                )
+                summaries["adaptive"] = {
+                    "enabled": True,
+                    "max_rounds": args.max_rounds,
+                    "policy": str(args.policy) if args.policy else "packaged default",
+                    "policy_hash": adaptive_log.get("policy_hash"),
+                    "rounds": adaptive_log.get("rounds"),
+                    "run_state": adaptive_log.get("run_state"),
+                    "n_interventions_fired": adaptive_log.get("n_interventions_fired"),
+                    "n_words_fused": adaptive_log.get("n_words_fused"),
+                    "parity_check": (adaptive_log.get("parity_check") or {}).get("status", "checked"),
+                    "ingest": "in_process_harvests",
+                }
+                print(f"Adaptive: {run_dir / 'final'} ({summaries['adaptive'].get('run_state')})")
+            except Exception as exc:  # noqa: BLE001 — additive artifacts must not fail the run
+                print(f"warn: adaptive loop failed: {exc!r}", file=sys.stderr)
+                summaries["adaptive"] = {"enabled": True, "status": "failed", "error": repr(exc)}
+            write_json(run_dir / "summary.json", summaries)
+        elif args.no_adaptive_outputs:
+            summaries["adaptive"] = {"enabled": False, "reason": "--no-adaptive-outputs"}
+            write_json(run_dir / "summary.json", summaries)
 
     write_json(run_dir / "labelstudio_tasks.json", ls_tasks)
     (run_dir / "labelstudio_config.xml").write_text(config_xml, encoding="utf-8")
