@@ -67,14 +67,17 @@ COMPATIBILITY_MATRIX: dict[str, CompatibilityEntry] = {
     ),
     # ── Audio: Speaker Diarization ──
     # NOTE: this entry documents the default in-process backend (Pyannote) only.
-    # diarize_audios also dispatches, by model_id prefix, to: NeMo Sortformer and
-    # the USC-SAIL child-adult classifier (both ISOLATED subprocess venvs — see
-    # nvidia.py / child_adult.py, venv_name="nemo-diarization" /
-    # "child-adult-diarization" respectively; child-adult additionally requires
-    # CUDA, no CPU path), and VibeVoice-ASR-HF (in-process like Pyannote, but needs
-    # transformers>=5.3, not just >=5.0). This flat schema can't represent multiple
-    # dispatch paths with different isolation profiles under one function — same
-    # simplification the pre-existing NeMo Sortformer entry already made.
+    # diarize_audios also dispatches, by model_id prefix, to: NeMo Sortformer, the
+    # USC-SAIL child-adult classifier, MOSS-Transcribe-Diarize, and DiariZen (all
+    # ISOLATED subprocess venvs — see nvidia.py / child_adult.py / moss.py /
+    # diarizen.py, venv_name="nemo-diarization" / "child-adult-diarization" /
+    # "moss-transcribe-diarize" / "diarizen" respectively; child-adult additionally
+    # requires CUDA, no CPU path), and VibeVoice-ASR-HF (in-process like Pyannote,
+    # but needs transformers>=5.3, not just >=5.0). This flat schema can't
+    # represent multiple dispatch paths with different isolation profiles under
+    # one function — same simplification the pre-existing NeMo Sortformer entry
+    # already made. See docs/compatibility-matrix.md's "Isolated Backends" table
+    # for each isolated backend's actual pinned versions.
     "audio.tasks.speaker_diarization.diarize_audios": CompatibilityEntry(
         required_deps=["pyannote-audio", "torchaudio"],
         dep_versions={"pyannote-audio": ">=3.0", "torchaudio": ">=2.8"},
