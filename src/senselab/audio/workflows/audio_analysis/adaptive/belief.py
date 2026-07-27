@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from senselab.audio.workflows.audio_analysis.adaptive.types import AxisName
 from senselab.audio.workflows.audio_analysis.aggregate import (
     aggregate_identity,
     aggregate_presence,
@@ -31,7 +32,8 @@ from senselab.audio.workflows.audio_analysis.aggregate import (
     presence_p_voice,
 )
 
-AXES = ("presence", "identity", "utterance")
+AXES: tuple[AxisName, ...] = ("presence", "identity", "utterance")
+"""The three uncertainty axes, typed so callers keep the narrowed literal."""
 
 _META_COLUMNS = (
     "presence_confidence",
@@ -195,6 +197,10 @@ class VoteStore:
                         )
                     if axis == "presence":
                         meta: dict[str, Any] = {"stored_aggregated_uncertainty": None}
+                        # P2's second trigger reads this; it lives on the harvest
+                        # bucket rather than in quality_by_bucket.
+                        if bucket.get("frame_instability") is not None:
+                            meta["frame_instability"] = float(bucket["frame_instability"])
                         q = harvest.quality_by_bucket.get(bk)
                         s = harvest.source_by_bucket.get(bk)
                         if q:

@@ -13,6 +13,8 @@ from .model import (  # noqa: F401
     SpeechBrainModel,
     TorchModel,
     check_hf_repo_exists,
+    model_for_task,
+    safe_model_id,
 )
 
 # Conditionally import TorchAudioModel only if torchaudio is available

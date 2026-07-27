@@ -3,12 +3,15 @@
 Reads the persisted round artifacts (no live state needed) and renders
 ``final/timeline.png``:
 
-1. ground-truth segments (when an LS export is provided) — untranscribed spans hatched;
-2. presence — final p_voice + uncertainty band;
-3. identity — round-1 vs final uncertainty, GT speaker boundaries dashed;
-4. utterance — round-1 vs final uncertainty, proposed regions, fired
+1. spectrogram — the acoustic evidence every row below is derived from, so a
+   reviewer can see *why* a span is uncertain (noise, silence, overlap) rather
+   than only that it is;
+2. ground-truth segments (when an LS export is provided) — untranscribed spans hatched;
+3. presence — final p_voice + uncertainty band;
+4. identity — round-1 vs final uncertainty, GT speaker boundaries dashed;
+5. utterance — round-1 vs final uncertainty, proposed regions, fired
    interventions, irreducible buckets hatched;
-5. fused words — text colored by confidence (green→red), speaker ticks.
+6. fused words — text colored by confidence (green→red), speaker ticks.
 """
 
 from __future__ import annotations
@@ -52,8 +55,14 @@ def build_adaptive_timeline(out_dir: Path, *, gt_path: Path | None = None, title
 
         gt = load_ls_ground_truth(gt_path)
 
-    fig, axes = plt.subplots(5, 1, figsize=(14, 11), sharex=True, height_ratios=[0.8, 1.2, 1.2, 1.4, 1.0])
-    ax_gt, ax_p, ax_i, ax_u, ax_w = axes
+    fig, axes = plt.subplots(6, 1, figsize=(14, 13), sharex=True, height_ratios=[1.3, 0.8, 1.2, 1.2, 1.4, 1.0])
+    ax_spec, ax_gt, ax_p, ax_i, ax_u, ax_w = axes
+
+    # ── row 0: spectrogram ──────────────────────────────────────────────
+    # The acoustic evidence every row below is derived from. Put first so a
+    # reviewer can see *why* a span is uncertain (noise, silence, overlap)
+    # rather than only that it is.
+    _draw_spectrogram(ax_spec, out_dir, duration)
 
     # ── row 1: ground truth ─────────────────────────────────────────────
     ax_gt.set_ylabel("ground\ntruth", rotation=0, ha="right", va="center")
@@ -202,6 +211,66 @@ def build_adaptive_timeline(out_dir: Path, *, gt_path: Path | None = None, title
     fig.savefig(dest, dpi=150)
     plt.close(fig)
     return dest
+
+
+def _draw_spectrogram(ax: Any, out_dir: Path, duration: float) -> None:  # noqa: ANN401
+    """Render the run's input audio as a dB-scaled STFT on ``ax``.
+
+    Best-effort and self-contained: the audio path comes from the run's
+    ``summary.json`` (``input_audio``), re-rooted if the run came from another
+    machine. Any failure leaves an annotated empty axis rather than losing the
+    whole figure — the spectrogram is context, not the point of the plot.
+    """
+    ax.set_ylabel("spectrogram\n(kHz)", rotation=0, ha="right", va="center")
+    try:
+        import numpy as np
+
+        from senselab.audio.workflows.audio_analysis.adaptive.loop import _resolve_input_audio
+
+        summary = json.loads((out_dir / "summary.json").read_text())
+        path = _resolve_input_audio(summary.get("input_audio"), out_dir)
+        if not path:
+            raise FileNotFoundError("input_audio not recorded in summary.json")
+
+        from senselab.audio.data_structures import Audio
+        from senselab.audio.tasks.preprocessing import downmix_audios_to_mono, resample_audios
+
+        audio = Audio(filepath=str(path))
+        if audio.waveform.shape[0] > 1:
+            audio = downmix_audios_to_mono([audio])[0]
+        audio = resample_audios([audio], 16000)[0]
+        y = audio.waveform.squeeze().detach().cpu().numpy()
+
+        n_fft, hop = 512, 128
+        # magnitude STFT via numpy so the plot adds no new dependency
+        win = np.hanning(n_fft)
+        n_frames = max(1, 1 + (len(y) - n_fft) // hop)
+        frames = np.stack([y[i * hop : i * hop + n_fft] * win for i in range(n_frames)], axis=1)
+        mag = np.abs(np.fft.rfft(frames, n=n_fft, axis=0))
+        db = 20.0 * np.log10(mag + 1e-8)
+        db = np.maximum(db, db.max() - 70.0)  # 70 dB dynamic range
+
+        ax.imshow(
+            db,
+            origin="lower",
+            aspect="auto",
+            extent=(0.0, len(y) / 16000.0, 0.0, 8.0),
+            cmap="magma",
+        )
+        ax.set_ylim(0, 8)
+        ax.set_yticks([0, 4, 8])
+    except Exception as exc:  # noqa: BLE001 — context row, never fatal
+        ax.set_yticks([])
+        ax.set_ylim(0, 1)
+        ax.text(
+            duration / 2,
+            0.5,
+            f"spectrogram unavailable ({type(exc).__name__})",
+            ha="center",
+            va="center",
+            fontsize=8,
+            alpha=0.6,
+        )
 
 
 def _step(ax: Any, df: Any, *, color: str, label: str) -> None:  # noqa: ANN401

@@ -110,21 +110,78 @@ in Phase 8.
 
 ## Phase 8: Follow-ups from the 2026-07-24 implementation audit
 
-- [ ] T040 In-process adaptive integration in `scripts/analyze_audio.py` per contracts/cli.md:
+- [x] T040 In-process adaptive integration in `scripts/analyze_audio.py` per contracts/cli.md:
   `--max-rounds/--policy/--budget-*/--max-region-rounds/--region-top-n/--reserve-asr-models/`
   `--enable-overlap-separation/--no-adaptive-outputs`, in-run `rounds/` + `final/` emission via
   `VoteStore.from_harvests`, `summary.json` `adaptive` block, and the `--skip comparisons` warning.
-- [ ] T041 `P2_fine_posteriors` rule (fine-hop posterior re-analysis on crops) — also unblocks I4's
+  - **Implemented 2026-07-27.** All nine flags land; `--enable-overlap-separation` maps to the
+    *shipped* `rules.I4_overlap_detection` (contracts/cli.md calls it a "v2 U4 rule, off by default",
+    but no U4 rule exists and the packaged policy already enables I4 — so the flag only overrides a
+    policy that disabled it). CLI overrides beat `--policy`, and `policy_hash` is recomputed after
+    merging so two runs differing only by `--budget-heavy` don't claim the same hash.
+    Harvests reach the loop via a new `harvests_out=` out-parameter on
+    `compute_uncertainty_axes` (an out-parameter, not a fourth return value, so no existing caller's
+    tuple arity changes). **Golden-compat verified**: `--max-rounds 1` vs `--no-adaptive-outputs`
+    produced byte-identical uncertainty parquets (3/3), an identical LS bundle, and identical
+    `summary.json` keys and values; `disagreements.json` differed only in `generated_at`.
+- [x] T041 `P2_fine_posteriors` rule (fine-hop posterior re-analysis on crops) — also unblocks I4's
   contract dependency ("else fires P2 first").
-- [ ] T042 Final-output schema completion vs contracts/final-outputs.md: `final/diarization.rttm`,
+  - **Implemented 2026-07-27.** Registered ahead of I4 so the planner can satisfy I4's
+    "else fires P2 first" dependency; reuses `backends.overlap_posteriors`, which already returns the
+    `speech` track alongside `overlap` and runs on the crop. Replacement presence votes enter at
+    `scope=region:<id>` (superseding, not deleting, the coarse round-1 voters) and `overlap_posterior`
+    is written on covered rows, which is what lets I4 then run "light (reuses P2 output)".
+  - **Two bugs the live run caught that unit tests did not.** (1) The trigger read vote payloads off
+    the belief row, but rows only carry `contributing_sources` (names) — payloads live in the store,
+    so `coarse` was invisible and the trigger never fired. Now reads `store.active_votes(...)`; the
+    test fixture was rewritten to build a real `VoteStore` so a fabricated row shape cannot hide this
+    again. (2) `frame_instability` never reached `row_meta`, making the second trigger branch dead; it
+    is now plumbed through `VoteStore.from_harvests` (the artifact path still lacks it — parquet has
+    no such column).
+  - **NOT observed firing end-to-end**, and the reason is a threshold boundary rather than a defect:
+    presence `aggregated_uncertainty` is a decisiveness measure (`1 − |2p−1|`) that maxes at 0.554
+    even on the noise degradation fixture, so no presence region is seeded at the default
+    `theta_high: 0.66` (verified: 0 regions at 0.66, 1 at 0.30). With the threshold lowered the region
+    appears and the trigger evaluates, but `coarse_share` lands at **0.4967** — a hair under the
+    contract's `≥ 0.5`. Retuning either `theta_high` for the presence axis or the coarse-share
+    threshold is a policy call. **Decided 2026-07-27: defer.** Tuning against the single annotated
+    clip available would fit noise; set it against a benchmark set instead. It is adjustable today
+    via `--policy` (`thresholds.theta_high`) with no code change — see prototype-results.md
+    "Decision on `theta_high`".
+- [x] T042 Final-output schema completion vs contracts/final-outputs.md: `final/diarization.rttm`,
   `diarization.json` `member_labels`/`overlap`, `transcript.json.language`, presence.parquet contract
   columns (`presence_confidence`, `elected_stream`, `overlap_posterior`).
-- [ ] T043 Execute T038 (golden vs candidate full-pipeline runs) and T039 (degradation-suite pipeline
+  - **Completed 2026-07-27.** `diarization.rttm`, `member_labels`/`overlap` and `transcript.json.language`
+    landed earlier; the three `presence.parquet` contract columns were still missing — confirmed
+    against a real full run, not assumed. Added `presence_confidence` (the calibrated P(speech), kept
+    beside the existing `p_voice` rather than renaming it so current readers don't break),
+    `elected_stream` (S1's per-region choice, defaulting to the fusion stream) and
+    `overlap_posterior` (written by I4/P2 when per-class posteriors were available, `None` elsewhere —
+    the column exists either way so the schema is stable). Verified on a full default run:
+    242/242 non-null for the first two, 97/242 for overlap_posterior.
+- [x] T043 Execute T038 (golden vs candidate full-pipeline runs) and T039 (degradation-suite pipeline
   runs) on a GPU/Mac environment; record results in prototype-results.md.
-- [ ] T044 Exercise `VoteStore.from_harvests` (unit test + first in-process caller, with T040).
-- [ ] T045 Align contracts/interventions.md with implementation: U2 cost class (medium in code vs
+  - **Executed 2026-07-27 on macOS ARM64** — see prototype-results.md "T043" for the tables.
+    T039: SC-001 **5/5 (100%)**, but 4 of 5 pass via *explained* (irreducible) rather than *improved*;
+    only `silence` reduced uncertainty. Region proposal needed `theta_high: 0.30` via `--policy`
+    because presence uncertainty peaks at 0.554 (see the T041 note). T038: all **9** parquets
+    value-equal at `atol=1e-12` plus identical ASR/diarization result payloads.
+  - **The T038 harness itself was broken and could never have passed**: it globbed
+    `rglob("uncertainty/*.parquet")`, which cannot match the cross-pass deltas at
+    `uncertainty/raw_vs_enhanced/<axis>.parquet`, so its own `assert checked >= 9` was unreachable.
+    Fixed. Second task in this spec marked complete that had never actually been run.
+- [x] T044 Exercise `VoteStore.from_harvests` (unit test + first in-process caller, with T040).
+- [x] T045 Align contracts/interventions.md with implementation: U2 cost class (medium in code vs
   heavy in contract) + family-majority guard; document `I2_recluster` as a catalog addition; U3 as a
   fusion-stage step rather than a RULES entry; `max_region_rounds` enforced via convergence marks.
+  - **Completed 2026-07-27.** All four listed items were already recorded in the contract's
+    "Implementation notes" section (2026-07-24) — but the *per-rule sections still contradicted it*:
+    `## U2_reserve_escalation` said "Cost: heavy" and listed the family-majority guard as if it
+    existed, so a reader who didn't scroll to the footnote got the wrong answer. Corrected inline at
+    the source. Also added two discrepancies the earlier pass missed: **P2** is implemented but
+    unreachable at the default `theta_high` (⚠️ noted with the measured 0.554 ceiling), and **U4 has
+    no implementation** — `--enable-overlap-separation` maps to the shipped `I4_overlap_detection`,
+    not to separation.
 
 ### Architecture follow-ups (see [architecture-review.md](./architecture-review.md); T046–T050 implemented 2026-07-24)
 
@@ -152,12 +209,28 @@ in Phase 8.
 - [X] T050 Transcript fusion promoted to `tasks/speech_to_text_ensemble/` (`fuse_word_streams` with
   explicit `weights`, `load_calibrator`, `iter_word_leaves`); `adaptive/fusion.py` keeps the
   policy→weights wrapper + artifact collection + final-output writers.
-- [ ] T051 Cache/provenance layer out of the script → `utils/tasks/cached_inference.py`; `_stage_*`
+- [x] T051 Cache/provenance layer out of the script → `utils/tasks/cached_inference.py`; `_stage_*`
   functions → `workflows/audio_analysis/stages.py`; `wrapper_version_hash` re-scoped to the stage
   modules (documented invalidation-semantics change). Precondition for T040. (Own PR per review.)
-- [ ] T052 Typed adaptive internals per house style: `adaptive/types.py` dataclasses (`Region`,
+- [x] T052 Typed adaptive internals per house style: `adaptive/types.py` dataclasses (`Region`,
   `PlannedIntervention`, `LoopContext`, `InterventionRule`) replacing dict soup; planner + regions
   first. (Opportunistic, own PR.)
+  - **Implemented 2026-07-27 as `TypedDict`, not dataclasses** — a deliberate deviation. `Region` is
+    written to `rounds/<n>/regions.json` and read back by `plot.py`, `ls_final.py` and the T039
+    harness; `PlannedIntervention` lands in `final/iterations.json`. A dataclass would need
+    `to_dict`/`from_dict` at each boundary while the dict stayed the wire format, i.e. a second
+    representation to keep in sync. `plan_round` also adds `status`/`error`/`intervention_id` *after*
+    construction, which a frozen dataclass cannot express. TypedDict types the existing dicts in
+    place: zero runtime change, zero serialization change, and every consumer gets checked.
+  - **mypy immediately found three latent defects** the dict soup was hiding: `exec_status` was
+    written by `loop.py` but never declared anywhere; `region_id` was read as required while being
+    assigned only after ranking (now seeded at construction); and a test fixture built `Region`s
+    without `n_buckets`. `AxisName` is now a shared literal so `AXES` keeps its narrowing through
+    `propose_regions`.
+  - Scope was "planner + regions first" per the task: `regions.py`, `policy.py`, `convergence.py`,
+    `loop.py`. `LoopContext` and `InterventionRule` remain untyped — `ctx` is a genuinely
+    heterogeneous bag mutated across rounds, and typing it usefully means restructuring it, not
+    annotating it.
 
 ## Dependencies
 
