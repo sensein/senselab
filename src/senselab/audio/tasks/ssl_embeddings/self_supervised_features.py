@@ -9,7 +9,12 @@ from transformers import AutoFeatureExtractor, AutoModel
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, HFModel, SpeechBrainModel, _select_device_and_dtype
-from senselab.utils.dependencies import retry_on_transient_error, speechbrain_loading_cwd, speechbrain_savedir
+from senselab.utils.dependencies import (
+    resolve_model,
+    retry_on_transient_error,
+    speechbrain_loading_cwd,
+    speechbrain_savedir,
+)
 
 try:
     from speechbrain.inference.speaker import EncoderClassifier
@@ -42,8 +47,11 @@ class SSLEmbeddingsFactory:
         """
         key = f"{model.path_or_uri}-{model.revision}"
         if key not in cls._feat_extractor:
+            # Resolve once (download-once via the heartbeat lock) + pin the SHA so a
+            # cached model makes no per-call Hub HEAD (the 429 source under batch).
+            sha, _ = resolve_model(str(model.path_or_uri), model.revision or "main")
             cls._feat_extractor[key] = AutoFeatureExtractor.from_pretrained(
-                model.path_or_uri, revision=model.revision, cache_dir=cache_dir
+                model.path_or_uri, revision=sha, cache_dir=cache_dir
             )
         return cls._feat_extractor[key]
 
@@ -66,9 +74,10 @@ class SSLEmbeddingsFactory:
         """
         key = f"{model.path_or_uri}-{model.revision}-{device.value}"
         if key not in cls._model:
-            cls._model[key] = AutoModel.from_pretrained(
-                model.path_or_uri, revision=model.revision, cache_dir=cache_dir
-            ).to(device.value)
+            sha, _ = resolve_model(str(model.path_or_uri), model.revision or "main")
+            cls._model[key] = AutoModel.from_pretrained(model.path_or_uri, revision=sha, cache_dir=cache_dir).to(
+                device.value
+            )
         return cls._model[key]
 
     @classmethod
@@ -170,11 +179,15 @@ class SpeechBrainSSLEmbeddings:
         )
         key = f"{model.path_or_uri}-{model.revision}-{device.value}"
         if key not in cls._models:
+            # Stage once (download-once via the heartbeat lock) + load from the local
+            # snapshot dir so SpeechBrain makes no per-file Hub HEAD (429 source under
+            # batch). SpeechBrain has no revision arg -> pin via the snapshot path.
+            _, snapshot_path = resolve_model(str(model.path_or_uri), model.revision or "main")
             savedir = speechbrain_savedir(str(model.path_or_uri), model.revision)
             with speechbrain_loading_cwd(savedir):
                 cls._models[key] = retry_on_transient_error(
                     EncoderClassifier.from_hparams,
-                    source=model.path_or_uri,
+                    source=str(snapshot_path),
                     savedir=str(savedir),
                     run_opts={"device": device.value},
                 )
