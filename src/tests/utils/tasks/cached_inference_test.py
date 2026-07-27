@@ -22,6 +22,9 @@ from senselab.utils.tasks.cached_inference import (
     cache_lookup,
     cache_store,
     canonical_params,
+    run_alignment_cached,
+    run_task,
+    run_task_cached,
     senselab_version,
     serialize,
     sync_cache_with_schema_version,
@@ -220,3 +223,98 @@ def test_stored_entry_is_valid_json_on_disk(tmp_path: Path) -> None:
     """Entries stay human-inspectable — the cache is a debugging surface."""
     cache_store(tmp_path, "k", {"a": 1})
     assert json.loads((tmp_path / "k.json").read_text()) == {"a": 1}
+
+
+# ── Cached task runners (T051 part 2) ─────────────────────────────────
+
+
+def test_run_task_reports_ok_with_timing() -> None:
+    """A successful call is wrapped with status/elapsed/result."""
+    out = run_task("demo", lambda x: x * 2, 21)
+    assert out["status"] == "ok"
+    assert out["result"] == 42
+    assert isinstance(out["elapsed_s"], float)
+
+
+def test_run_task_captures_failure_without_raising() -> None:
+    """Errors become structured diagnostics — one bad task can't abort a long run."""
+
+    def boom() -> None:
+        raise ValueError("nope")
+
+    out = run_task("demo", boom)
+    assert out["status"] == "failed"
+    assert "nope" in out["error"]
+    assert "ValueError" in out["traceback"]
+
+
+def test_run_task_cached_miss_runs_and_stores(tmp_path: Path) -> None:
+    """First call misses, executes, and persists the outcome with provenance."""
+    calls = []
+
+    def fn() -> str:
+        calls.append(1)
+        return "v"
+
+    out = run_task_cached("t", fn, cache_dir=tmp_path, cache_key_str="k", provenance={"p": 1})
+    assert out["cache"] == "miss" and out["result"] == "v" and out["provenance"] == {"p": 1}
+    assert len(calls) == 1
+    assert cache_lookup(tmp_path, "k") is not None
+
+
+def test_run_task_cached_hit_skips_execution(tmp_path: Path) -> None:
+    """A stored entry short-circuits the model call entirely — the whole point."""
+    calls = []
+
+    def fn() -> str:
+        calls.append(1)
+        return "v"
+
+    run_task_cached("t", fn, cache_dir=tmp_path, cache_key_str="k", provenance={})
+    out = run_task_cached("t", fn, cache_dir=tmp_path, cache_key_str="k", provenance={})
+    assert out["cache"] == "hit"
+    assert len(calls) == 1, "cache hit must not re-run the task"
+    assert out["cache_key"] == "k"
+
+
+def test_run_task_cached_disabled_never_stores(tmp_path: Path) -> None:
+    """cache_dir=None runs every time and writes nothing."""
+    out = run_task_cached("t", lambda: "v", cache_dir=None, cache_key_str="k", provenance={})
+    assert out["cache"] == "disabled"
+    assert not list(tmp_path.iterdir())
+
+
+def test_failed_task_is_not_cached(tmp_path: Path) -> None:
+    """Failures must stay retryable — a fixed aligner/upgrade should re-attempt."""
+
+    def boom() -> None:
+        raise RuntimeError("x")
+
+    out = run_task_cached("t", boom, cache_dir=tmp_path, cache_key_str="k", provenance={})
+    assert out["status"] == "failed"
+    assert cache_lookup(tmp_path, "k") is None
+
+
+def test_run_alignment_cached_shares_the_runner_semantics(tmp_path: Path) -> None:
+    """Alignment differs only in provenance/keying, not control flow."""
+    calls = []
+
+    def fn() -> str:
+        calls.append(1)
+        return "aligned"
+
+    first = run_alignment_cached("a", fn, cache_dir=tmp_path, cache_key_str="ak", provenance={"transcript_sha": "s"})
+    second = run_alignment_cached("a", fn, cache_dir=tmp_path, cache_key_str="ak", provenance={"transcript_sha": "s"})
+    assert first["cache"] == "miss" and second["cache"] == "hit"
+    assert len(calls) == 1
+
+
+def test_failed_alignment_is_not_cached(tmp_path: Path) -> None:
+    """Explicit contract from the original docstring."""
+
+    def boom() -> None:
+        raise RuntimeError("aligner down")
+
+    out = run_alignment_cached("a", boom, cache_dir=tmp_path, cache_key_str="ak", provenance={})
+    assert out["status"] == "failed"
+    assert cache_lookup(tmp_path, "ak") is None

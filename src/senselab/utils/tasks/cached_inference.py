@@ -27,6 +27,8 @@ import importlib.metadata
 import json
 import shutil
 import sys
+import time
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +41,10 @@ __all__ = [
     "cache_lookup",
     "cache_store",
     "canonical_params",
+    "run_alignment_cached",
+    "run_cached",
+    "run_task",
+    "run_task_cached",
     "senselab_version",
     "serialize",
     "sync_cache_with_schema_version",
@@ -227,4 +233,136 @@ def sync_cache_with_schema_version(cache_dir: Path) -> None:
         f"Cache: schema_version {on_disk_version} → {CACHE_SCHEMA_VERSION}; "
         f"wiped {n_removed} stale entr{'y' if n_removed == 1 else 'ies'} in {cache_dir}",
         file=sys.stderr,
+    )
+
+
+# ── Task runners ──────────────────────────────────────────────────────
+
+
+def run_task(
+    name: str,
+    fn: Any,  # noqa: ANN401 — generic dispatcher
+    *args: Any,  # noqa: ANN401
+    **kwargs: Any,  # noqa: ANN401
+) -> dict[str, Any]:
+    """Run a task with timing + structured error capture.
+
+    Never raises: a failing model becomes ``{"status": "failed", ...}`` with the
+    traceback captured, so one broken backend can't abort an hours-long
+    multi-model run.
+    """
+    print(f"  [{name}] running...", flush=True)
+    started = time.perf_counter()
+    try:
+        result = fn(*args, **kwargs)
+    except Exception as exc:  # noqa: BLE001 — diagnostic capture by design
+        elapsed = time.perf_counter() - started
+        print(f"  [{name}] FAILED in {elapsed:.1f}s: {exc}", flush=True)
+        return {
+            "status": "failed",
+            "elapsed_s": round(elapsed, 3),
+            "error": repr(exc),
+            "traceback": traceback.format_exc(limit=5),
+        }
+    elapsed = time.perf_counter() - started
+    print(f"  [{name}] ok in {elapsed:.1f}s", flush=True)
+    return {"status": "ok", "elapsed_s": round(elapsed, 3), "result": result}
+
+
+def run_cached(
+    name: str,
+    fn: Any,  # noqa: ANN401
+    *args: Any,  # noqa: ANN401
+    cache_dir: Path | None,
+    cache_key_str: str,
+    provenance: dict[str, Any],
+    hit_label: str = "cache",
+    **kwargs: Any,  # noqa: ANN401
+) -> dict[str, Any]:
+    """Cache lookup → run → store, attaching provenance to fresh results.
+
+    On a hit the stored outcome is returned with ``cache="hit"`` and the task is
+    not invoked. On a miss the task runs and, **only if it succeeded**, the
+    outcome is stored — failures stay retryable so a fixed backend or a senselab
+    upgrade triggers a fresh attempt rather than replaying a cached error.
+    ``cache_dir=None`` disables caching entirely (``cache="disabled"``).
+
+    Args:
+        name: Log label for this task.
+        fn: The callable to invoke on a miss.
+        *args: Positional arguments forwarded to ``fn``.
+        cache_dir: Cache directory, or ``None`` to disable caching.
+        cache_key_str: Precomputed key (see :func:`cache_key` / :func:`align_cache_key`).
+        provenance: Recorded on fresh outcomes for reproducibility.
+        hit_label: Wording used in the cache-hit log line.
+        **kwargs: Keyword arguments forwarded to ``fn``.
+
+    Returns:
+        The task outcome dict, annotated with ``cache`` and ``cache_key``.
+    """
+    if cache_dir is not None:
+        hit = cache_lookup(cache_dir, cache_key_str)
+        if hit is not None:
+            print(f"  [{name}] {hit_label} HIT ({cache_key_str[:12]}...)", flush=True)
+            hit["cache"] = "hit"
+            hit["cache_key"] = cache_key_str
+            return hit
+    outcome = run_task(name, fn, *args, **kwargs)
+    outcome["provenance"] = provenance
+    outcome["cache"] = "miss" if cache_dir is not None else "disabled"
+    outcome["cache_key"] = cache_key_str
+    if cache_dir is not None and outcome.get("status") == "ok":
+        cache_store(cache_dir, cache_key_str, outcome)
+    return outcome
+
+
+def run_task_cached(
+    name: str,
+    fn: Any,  # noqa: ANN401
+    *args: Any,  # noqa: ANN401
+    cache_dir: Path | None,
+    cache_key_str: str,
+    provenance: dict[str, Any],
+    **kwargs: Any,  # noqa: ANN401
+) -> dict[str, Any]:
+    """Run a model task through the cache. Thin alias over :func:`run_cached`."""
+    return run_cached(
+        name,
+        fn,
+        *args,
+        cache_dir=cache_dir,
+        cache_key_str=cache_key_str,
+        provenance=provenance,
+        **kwargs,
+    )
+
+
+def run_alignment_cached(
+    name: str,
+    fn: Any,  # noqa: ANN401
+    *args: Any,  # noqa: ANN401
+    cache_dir: Path | None,
+    cache_key_str: str,
+    provenance: dict[str, Any],
+    **kwargs: Any,  # noqa: ANN401
+) -> dict[str, Any]:
+    """Run an alignment step through the cache.
+
+    Control flow is identical to :func:`run_task_cached` — the two were literal
+    duplicates before this consolidation. The distinction is semantic: the
+    provenance carries alignment-specific fields (``transcript_sha``,
+    ``language``, ``parent_asr_cache_key``) and the key came from
+    :func:`align_cache_key`, keeping the alignment cache independent of the
+    parent ASR cache. Kept as a separate name so call sites still read as
+    alignment, and so the log line says so.
+    """
+    return run_cached(
+        name,
+        fn,
+        *args,
+        cache_dir=cache_dir,
+        cache_key_str=cache_key_str,
+        provenance=provenance,
+        hit_label="alignment cache",
+        **kwargs,
     )

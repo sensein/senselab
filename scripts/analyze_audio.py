@@ -162,6 +162,9 @@ from senselab.utils.tasks.cached_inference import (
     cache_key,
     cache_lookup,
     cache_store,
+    run_alignment_cached,
+    run_task,
+    run_task_cached,
     senselab_version,
     serialize,
     transcript_signature,
@@ -888,96 +891,6 @@ def extract_temporal_features(
         idx += 1
 
     return out
-
-
-def run_alignment_cached(
-    name: str,
-    fn: Any,  # noqa: ANN401
-    *args: Any,  # noqa: ANN401
-    cache_dir: Path | None,
-    cache_key_str: str,
-    provenance: dict[str, Any],
-    **kwargs: Any,  # noqa: ANN401
-) -> dict[str, Any]:
-    """Run an alignment step with cache lookup → run → store, mirroring run_task_cached.
-
-    Identical control flow to run_task_cached; the distinction is semantic — the
-    provenance includes alignment-specific fields (transcript_sha, language,
-    parent_asr_cache_key) and the cache key was built via align_cache_key.
-    Failed alignments are NOT stored, so a future fix to the aligner / a
-    senselab upgrade triggers a fresh attempt; the parent ASR cache is
-    independent and unaffected.
-    """
-    if cache_dir is not None:
-        hit = cache_lookup(cache_dir, cache_key_str)
-        if hit is not None:
-            print(f"  [{name}] alignment cache HIT ({cache_key_str[:12]}...)", flush=True)
-            hit["cache"] = "hit"
-            hit["cache_key"] = cache_key_str
-            return hit
-    outcome = run_task(name, fn, *args, **kwargs)
-    outcome["provenance"] = provenance
-    outcome["cache"] = "miss" if cache_dir is not None else "disabled"
-    outcome["cache_key"] = cache_key_str
-    if cache_dir is not None and outcome.get("status") == "ok":
-        cache_store(cache_dir, cache_key_str, outcome)
-    return outcome
-
-
-def run_task_cached(
-    name: str,
-    fn: Any,  # noqa: ANN401
-    *args: Any,  # noqa: ANN401
-    cache_dir: Path | None,
-    cache_key_str: str,
-    provenance: dict[str, Any],
-    **kwargs: Any,  # noqa: ANN401
-) -> dict[str, Any]:
-    """Run a task with cache lookup → run → cache store, attaching provenance.
-
-    On cache hit, the stored outcome is returned with ``cache="hit"`` (and
-    elapsed_s set to 0). On cache miss, the task runs, the outcome is stored,
-    and ``cache="miss"`` is reported.
-    """
-    if cache_dir is not None:
-        hit = cache_lookup(cache_dir, cache_key_str)
-        if hit is not None:
-            print(f"  [{name}] cache HIT ({cache_key_str[:12]}...)", flush=True)
-            hit["cache"] = "hit"
-            hit["cache_key"] = cache_key_str
-            return hit
-    outcome = run_task(name, fn, *args, **kwargs)
-    outcome["provenance"] = provenance
-    outcome["cache"] = "miss" if cache_dir is not None else "disabled"
-    outcome["cache_key"] = cache_key_str
-    if cache_dir is not None and outcome.get("status") == "ok":
-        cache_store(cache_dir, cache_key_str, outcome)
-    return outcome
-
-
-def run_task(
-    name: str,
-    fn: Any,  # noqa: ANN401 — generic dispatcher
-    *args: Any,  # noqa: ANN401
-    **kwargs: Any,  # noqa: ANN401
-) -> dict[str, Any]:
-    """Run a task with timing + structured error capture."""
-    print(f"  [{name}] running...", flush=True)
-    started = time.perf_counter()
-    try:
-        result = fn(*args, **kwargs)
-    except Exception as exc:  # noqa: BLE001 — diagnostic capture by design
-        elapsed = time.perf_counter() - started
-        print(f"  [{name}] FAILED in {elapsed:.1f}s: {exc}", flush=True)
-        return {
-            "status": "failed",
-            "elapsed_s": round(elapsed, 3),
-            "error": repr(exc),
-            "traceback": traceback.format_exc(limit=5),
-        }
-    elapsed = time.perf_counter() - started
-    print(f"  [{name}] ok in {elapsed:.1f}s", flush=True)
-    return {"status": "ok", "elapsed_s": round(elapsed, 3), "result": result}
 
 
 def _new_region_id(prefix: str, idx: int) -> str:
