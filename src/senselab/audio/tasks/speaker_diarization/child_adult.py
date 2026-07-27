@@ -173,9 +173,7 @@ def diarize_audios_with_child_adult(
         model = HFModel(path_or_uri=_CHILD_ADULT_HF_REPO)
 
     try:
-        resolved_device, _ = _select_device_and_dtype(
-            user_preference=device, compatible_devices=[DeviceType.CUDA]
-        )
+        resolved_device, _ = _select_device_and_dtype(user_preference=device, compatible_devices=[DeviceType.CUDA])
     except ValueError as exc:
         raise RuntimeError(
             "USC-SAIL child-adult classifier requires CUDA: the upstream model "
