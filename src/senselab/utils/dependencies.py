@@ -344,13 +344,27 @@ def hf_local_files_only(repo_id: str, revision: str = "main") -> bool:
 
 
 def _cached_error(cached: dict) -> Exception:
-    """Reconstruct an exception from a cached error result."""
+    """Reconstruct an exception from a cached error result.
+
+    ``huggingface_hub``'s ``HfHubHTTPError`` subclasses take ``response`` as a
+    *required* keyword-only argument, so constructing them bare raises
+    ``TypeError`` — which would surface to callers instead of the repo/revision
+    error they catch. A synthetic 404 response stands in for the original HTTP
+    response, which the cache does not retain. The response needs its ``request``
+    set too: ``HfHubHTTPError`` reads ``response.request`` while building its
+    message, and httpx raises ``RuntimeError`` for a response without one.
+    """
+    import httpx
     from huggingface_hub.errors import RepositoryNotFoundError, RevisionNotFoundError
 
     msg = cached.get("error_message", "")
+    response = httpx.Response(
+        status_code=404,
+        request=httpx.Request("GET", "https://huggingface.co"),
+    )
     if cached.get("error_type") == "RepositoryNotFoundError":
-        return RepositoryNotFoundError(msg)
-    return RevisionNotFoundError(msg)
+        return RepositoryNotFoundError(msg, response=response)
+    return RevisionNotFoundError(msg, response=response)
 
 
 def ensure_hf_model(repo_id: str, revision: str = "main", token: Optional[str] = None) -> str:

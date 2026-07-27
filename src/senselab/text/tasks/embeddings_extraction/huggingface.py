@@ -1,6 +1,6 @@
 """This module contains functions for extracting features from pre-trained self-supervised models."""
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, cast
 
 import torch
 from transformers import AutoModel, AutoTokenizer, PreTrainedModel, PreTrainedTokenizer
@@ -29,10 +29,15 @@ class HFFactory:
         """
         key = f"{model.path_or_uri}-{model.revision}"
         if key not in cls._tokenizers:
-            cls._tokenizers[key] = AutoTokenizer.from_pretrained(
-                pretrained_model_name_or_path=model.path_or_uri,
-                revision=model.revision,
-                use_fast=True,
+            # AutoTokenizer.from_pretrained is typed as a union over backend
+            # classes; the cache holds the PreTrainedTokenizer interface we use.
+            cls._tokenizers[key] = cast(
+                PreTrainedTokenizer,
+                AutoTokenizer.from_pretrained(
+                    pretrained_model_name_or_path=model.path_or_uri,
+                    revision=model.revision,
+                    use_fast=True,
+                ),
             )
         return cls._tokenizers[key]
 

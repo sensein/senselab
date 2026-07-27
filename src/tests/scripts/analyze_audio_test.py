@@ -53,9 +53,9 @@ def test_parse_args_default_invocation(aa: types.ModuleType) -> None:
     assert args.no_align_asr is False
     assert args.aligner_model == "facebook/mms-1b-all"
     assert args.asr_language is None
-    # Default model lists per spec FR-005 and contracts/cli.md
-    assert "openai/whisper-large-v3-turbo" in args.asr_models
-    assert "ibm-granite/granite-speech-3.3-8b" in args.asr_models
+    # Default model lists per spec FR-005 and contracts/cli.md (ASR overhaul:
+    # CrisperWhisper 2.0 turbo replaces Whisper, Granite removed).
+    assert "nyralabs/CrisperWhisper2.0_turbo" in args.asr_models
     assert "nvidia/canary-qwen-2.5b" in args.asr_models
     assert "Qwen/Qwen3-ASR-1.7B" in args.asr_models
     # Native temporal precision per scene-classification model (FR-008)
@@ -227,14 +227,14 @@ def test_serialize_handles_tensors_dicts_and_lists(aa: types.ModuleType) -> None
 def test_comparator_cli_flags_parse(aa: types.ModuleType) -> None:
     """parse_args accepts the new comparator flags with documented defaults.
 
-    Defaults reflect the 2026-05-09 clarifications: cross-stream grid is now
-    0.5 s non-overlapping (the 0.1 / 0.2 grid over-resolved every signal in
-    the system), and ``--speech-presence-labels`` is ``nargs="+"`` since
-    AudioSet labels themselves contain commas (e.g. ``"Narration, monologue"``).
+    Defaults reflect the finer-identity-windows retuning: the cross-stream grid
+    is 0.25 s non-overlapping (the 0.5 s grid under-resolved speaker changes),
+    and ``--speech-presence-labels`` is ``nargs="+"`` since AudioSet labels
+    themselves contain commas (e.g. ``"Narration, monologue"``).
     """
     args = aa.parse_args(["/tmp/dummy.wav"])
-    assert args.cross_stream_win_length == 0.5
-    assert args.cross_stream_hop_length == 0.5
+    assert args.cross_stream_win_length == 0.25
+    assert args.cross_stream_hop_length == 0.25
     assert args.uncertainty_aggregator == "min"
     assert args.phoneme_disagreement_threshold == 0.50
     assert args.diarization_boundary_shift_ms == 50.0

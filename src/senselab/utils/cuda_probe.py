@@ -153,6 +153,7 @@ def detect_host_cuda() -> HostCuda:
 def pick_torch_index(
     host_cuda: HostCuda,
     env_override: Optional[str] = None,
+    max_cuda_version: Optional[tuple[int, int]] = None,
 ) -> TorchIndex:
     """Choose the PyTorch wheel index URL for this host.
 
@@ -162,7 +163,23 @@ def pick_torch_index(
        ``tag="override"``, ``source="env-override"``. Highest priority.
     2. If host has no CUDA → CPU index.
     3. Pick the highest entry in the static map whose CUDA version is ``<=``
-       the host's. No match → CPU index.
+       the *effective* CUDA version, where the effective version is the host's
+       capped by ``max_cuda_version`` (see below). No match → CPU index.
+
+    Args:
+        host_cuda: Probed host CUDA capability.
+        env_override: Operator override (``SENSELAB_TORCH_INDEX_URL``); wins outright.
+        max_cuda_version: Per-venv ceiling on the CUDA index. A backend whose
+            ``torch`` pin has no wheel on the newest index the host would
+            otherwise select must declare the newest index that *does* carry
+            its wheels. Example: brouhaha pins ``torch>=2.0,<2.3``; the
+            ``cu128`` index (selected on a CUDA-12.8 host) publishes no
+            ``torch<2.3`` linux-x86_64 wheel, so the Stage-1 install is
+            unsatisfiable. Declaring ``(12, 1)`` caps the selection to
+            ``cu121`` (which carries ``torch==2.2.2+cu121`` + matching
+            ``torchaudio``), forward-compatible with 12.x/13.x drivers for
+            inference. ``None`` (default) applies no cap — backends pinning
+            modern torch (e.g. ``>=2.8``) correctly keep ``cu128``.
     """
     if env_override:
         return TorchIndex(
@@ -178,8 +195,13 @@ def pick_torch_index(
             cuda_version=None,
             source="static-map",
         )
+    # Cap the host CUDA version to the venv's ceiling so a backend pinning an
+    # older torch is not routed through an index with no compatible wheel.
+    effective = host_cuda.version
+    if max_cuda_version is not None and max_cuda_version < effective:
+        effective = max_cuda_version
     for tag, idx_version in _PYTORCH_INDEX_MAP:
-        if idx_version <= host_cuda.version:
+        if idx_version <= effective:
             return TorchIndex(
                 url=f"{_PYTORCH_INDEX_BASE}/{tag}",
                 tag=tag,

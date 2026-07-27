@@ -56,6 +56,57 @@ For more detailed information, check out our [**Documentation**](https://sensein
 
 ---
 
+## Adaptive audio analysis (uncertainty-driven)
+
+senselab can analyze a recording with its full task suite (diarization, scene/event tagging, quality
+metrics, multi-model ASR + forced alignment, speaker embeddings), quantify **where** the models are
+uncertain along three temporal axes — *presence* (is someone speaking?), *identity* (who?), and
+*utterance* (what was said?) — and then **act on that uncertainty**: a deterministic, budgeted loop
+re-processes only the uncertain regions (extra ASR models, embedding re-clustering, overlap
+detection), fuses a consensus transcript/diarization, and explains any residual uncertainty instead
+of hiding it. Design + results: `specs/20260723-225523-dynamic-uncertainty-workflow/`.
+
+It runs in two steps:
+
+```bash
+# Step 1 — analyze: run every model on the recording (results are content-addressably
+# cached, so re-runs are cheap). `--enhancement auto` adds a triage round 0 that skips
+# the speech-enhancement pass on clean audio and stops early on silent recordings.
+uv run python scripts/analyze_audio.py path/to/recording.wav --enhancement auto
+# → artifacts/analyze_audio/<name>_<timestamp>/  (per-task JSONs, 9 uncertainty
+#   parquets, Label Studio bundle, disagreements.json, timeline.png)
+
+# Step 2 — adapt: run the uncertainty-driven loop over that run directory.
+uv run python scripts/adaptive_loop.py artifacts/analyze_audio/<run_dir> \
+    --cache-dir artifacts/analyze_audio_cache \
+    --ground-truth path/to/labelstudio_export.json   # optional: scores vs human labels
+```
+
+The loop writes, under the run directory (or `--out`):
+
+- `final/transcript.json` — consensus word-level transcript (family-weighted voting across all ASR
+  models) with speaker attribution, per-word confidence, and alternates where models disagree;
+- `final/diarization.json` + `final/presence.parquet` — refined speaker segments (embedding
+  change-point + re-clustering repair) and the fused speech-presence track;
+- `final/convergence.json` + `final/iterations.json` — what the loop did and why: every intervention
+  (fired / deferred / blocked) with trigger values and measured uncertainty deltas, budget
+  accounting, and regions marked `converged` / `irreducible` (with a machine-readable reason);
+- `final/timeline.png` — ground truth (if given) vs presence / identity / utterance uncertainty per
+  round, interventions, and the confidence-colored fused words;
+- `final/labelstudio_{tasks,config}.{json,xml}` + `disagreements_resolved.json` — the original Label
+  Studio bundle with `final__*` consensus tracks added, and the round-1 disagreements annotated with
+  their resolutions.
+
+Useful knobs (all thresholds/budgets/models live in a versioned policy file —
+`src/senselab/audio/workflows/audio_analysis/adaptive/policy/default.yaml` — overridable via
+`--policy my_policy.yaml`): `--max-rounds`, `--aggregator`, per-run intervention budgets, ASR
+reserve/escalation pools, and identity-repair parameters. Runs are **deterministic**: identical
+inputs + policy produce byte-identical decision logs. `HF_TOKEN` enables the gated
+`pyannote/segmentation-3.0` overlap detector; without it the loop degrades gracefully and records
+the skipped intervention in `convergence.json → next_actions`.
+
+---
+
 ## ⚠️ System Requirements
 1. **If on macOS, this package requires an ARM64 architecture** due to PyTorch 2.2.2+ dropping support for x86-64 on macOS.
 

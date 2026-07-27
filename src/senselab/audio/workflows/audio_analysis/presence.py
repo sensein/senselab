@@ -36,7 +36,7 @@ runs casts a vote, each calibrated to what its signal can actually answer:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -50,6 +50,16 @@ from senselab.audio.workflows.audio_analysis.harvesters import (
     whisper_bucket_confidence,
     whisper_bucket_no_speech_prob,
 )
+
+if TYPE_CHECKING:
+    from senselab.audio.tasks.voice_activity_detection.frame_posteriors import FramePosterior
+
+# Reporting grids finer than this (seconds) trigger coarse-voter demotion: whole-window
+# scene tags / per-segment no-speech probability / sentence-level ASR overlap repeat one
+# value across many fine buckets and would otherwise dominate the mean (FR-014). At the
+# historical 0.5 s grid no demotion applies, so existing outputs are unchanged.
+_FINE_GRID_THRESHOLD_S = 0.5
+_COARSE_VOTER_WEIGHT = 0.25
 
 
 def _row_window_overlap(rows: list[dict[str, Any]], start: float, end: float) -> list[dict[str, Any]]:
@@ -143,12 +153,20 @@ def harvest_presence_votes(
     speech_presence_labels: list[str],
     alignment_by_model: dict[str, Any],
     per_window_embeddings: dict[str, list[Any]] | None = None,
+    frame_posteriors: dict[str, "FramePosterior"] | None = None,
 ) -> list[dict[str, Any]]:
-    """Yield ``{"start", "end", "votes"}`` per bucket for the presence axis.
+    """Yield ``{"start", "end", "votes", "frame_instability"}`` per bucket for presence.
 
     ``votes`` is a dict ``{model_id → {"speaks": bool, "native_confidence": float | None}}``
     spanning every contributing model. Buckets where no model contributed any vote are
     still emitted (caller drops them in compute._row_emit if status != ok).
+
+    ``frame_posteriors`` maps a voter name → continuous per-frame P(speech)
+    (``segmentation-3.0`` raw scores, Brouhaha VAD head). Each contributes a
+    fine-resolution voter (bucket-mean P(speech)); the within-bucket frame std
+    is aggregated into ``frame_instability`` for the ``presence_uncertainty``
+    column. On grids finer than ``_FINE_GRID_THRESHOLD_S`` the coarse voters are
+    down-weighted to ``_COARSE_VOTER_WEIGHT`` (FR-014).
     """
     duration_s = float(pass_summary.get("duration_s", 0.0) or 0.0)
     if duration_s <= 0:
@@ -314,6 +332,7 @@ def harvest_presence_votes(
                 "speaks": speaks and not hallucinated,
                 "native_confidence": nc,
                 "hallucinated": hallucinated,
+                "coarse": True,  # sentence-level: one word spans many fine buckets
             }
             if nsp is not None:
                 asr_vote["no_speech_prob"] = float(nsp)
@@ -326,6 +345,7 @@ def harvest_presence_votes(
                 votes[f"{m}::no_speech_prob"] = {
                     "speaks": nsp < 0.5,
                     "native_confidence": 1.0 - float(nsp),
+                    "coarse": True,  # per-~30 s Whisper segment
                 }
 
         # AST / YAMNet — project the bucket's CENTER onto the nearest native
@@ -340,6 +360,7 @@ def harvest_presence_votes(
                 votes["ast"] = {
                     "speaks": label in allow,
                     "native_confidence": score,
+                    "coarse": True,  # AST native window ~10.24 s
                 }
         if yam_ok:
             yam_idx = max(0, int(round(bucket_center / yam_hop))) if yam_hop > 0 else 0
@@ -348,6 +369,7 @@ def harvest_presence_votes(
                 votes["yamnet"] = {
                     "speaks": label in allow,
                     "native_confidence": score,
+                    "coarse": True,  # YAMNet native window ~0.96 s
                 }
 
         # ── Acoustic features ────────────────────────────────────────────
@@ -416,8 +438,36 @@ def harvest_presence_votes(
             if best_idx is not None and best_idx in scores:
                 p_v = scores[best_idx]
                 speaks_v = p_v >= 0.5
-                votes["embedding_silhouette"] = _vote_from_pvoice(p_v, speaks_v)
+                sil_vote = _vote_from_pvoice(p_v, speaks_v)
+                sil_vote["coarse"] = True  # embedding window ~1 s+
+                votes["embedding_silhouette"] = sil_vote
 
-        out.append({"start": start, "end": end, "votes": votes})
+        # ── Frame-posterior voters (segmentation-3.0, Brouhaha VAD) ──────
+        # Continuous per-frame P(speech): fine-resolution voters plus a
+        # within-bucket temporal-instability signal for presence_uncertainty.
+        frame_stds: list[float] = []
+        if frame_posteriors:
+            for name, fp in frame_posteriors.items():
+                if fp is None:
+                    continue
+                mean, std = fp.mean_std_in_window(start, end)
+                if not np.isfinite(mean):
+                    continue
+                votes[name] = {"speaks": mean >= 0.5, "native_confidence": float(mean)}
+                if np.isfinite(std):
+                    frame_stds.append(float(std))
+
+        # Demote coarse voters on fine reporting grids (FR-014). No-op at the
+        # historical 0.5 s grid, so legacy outputs are unchanged.
+        if grid.win_length < _FINE_GRID_THRESHOLD_S:
+            for v in votes.values():
+                if isinstance(v, dict) and v.get("coarse"):
+                    v["weight"] = _COARSE_VOTER_WEIGHT
+
+        # Within-bucket instability: std of a probability is at most 0.5, so ×2
+        # maps to [0, 1]. None when no frame voter contributed.
+        frame_instability = float(np.clip(2.0 * float(np.mean(frame_stds)), 0.0, 1.0)) if frame_stds else None
+
+        out.append({"start": start, "end": end, "votes": votes, "frame_instability": frame_instability})
 
     return out

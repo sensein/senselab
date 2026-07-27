@@ -53,6 +53,16 @@ _CANARY_REQUIREMENTS = [
     "pyarrow<18",
     "matplotlib",
     "soundfile",
+    # NeMo pulls librosa without a floor; on Python 3.12 uv otherwise backtracks
+    # librosa -> numba -> llvmlite to llvmlite 0.36.0 (no 3.12 support). Pin a
+    # modern numba floor so the chain resolves to llvmlite>=0.43 (same fix as the
+    # qwen-asr venv).
+    "numba>=0.60",
+    # SALM's Qwen LM uses a LoRA adapter -> the worker imports peft at load time,
+    # but NeMo doesn't always pull it transitively on a fresh resolve. Pin it
+    # explicitly (the senselab core lists peft for Granite; the isolated venv needs
+    # its own copy). Surfaced as "No module named 'peft'" at canary load.
+    "peft>=0.13",
 ]
 _CANARY_PYTHON = "3.12"
 

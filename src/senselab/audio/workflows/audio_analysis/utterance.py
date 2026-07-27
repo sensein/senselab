@@ -22,6 +22,7 @@ from senselab.audio.workflows.audio_analysis.harvesters import (
     asr_alignment_score_in_window,
     asr_phoneme_sequence_in_window,
     asr_text_in_window,
+    mean_token_entropy_in_window,
     ppg_argmax_confidence_per_frame,
     ppg_argmax_per_frame,
     ppg_argmax_runs_in_window,
@@ -143,6 +144,10 @@ def harvest_utterance_votes(
                 "phoneme_sequence": asr_phon_seq,
                 "avg_logprob": avg_logprob,
                 "alignment_ctc_score": ctc_score,
+                # Per-token softmax entropy (FR-017) — the model's private doubt,
+                # which transcript agreement cannot reveal. None for every backend
+                # that doesn't expose token logits.
+                "token_entropy": mean_token_entropy_in_window(resolved, start, end),
             }
 
         # Pairwise phoneme edit-distance rate across all available sources

@@ -270,3 +270,87 @@ def test_utterance_no_signal_returns_none() -> None:
     """No pairwise grid, no avg_logprob → None."""
     votes: dict[str, dict[str, Any]] = {"asr_a": {"text": "", "phoneme_sequence": [], "avg_logprob": None}}
     assert aggregate_utterance(votes, aggregator="min") is None
+
+
+# ── Utterance: token entropy, calibration, coupling (T027) ────────────
+#     Feature 20260722-175022 (FR-017 / FR-018 / FR-019).
+
+
+def _pairs(distance: float) -> dict[str, Any]:
+    """A single-pair phoneme-distance block, the dominant utterance sub-signal."""
+    return {"__pairwise_phoneme_distances__": {"pairs": {"a|b": distance}, "per_source_confidence": {}}}
+
+
+def test_utterance_token_entropy_adds_sub_signal() -> None:
+    """A high token entropy raises utterance uncertainty under the mean aggregator."""
+    without = aggregate_utterance({**_pairs(0.0)}, aggregator="mean")
+    with_entropy = aggregate_utterance(
+        {**_pairs(0.0), "m": {"text": "hi", "token_entropy": 3.0}},
+        aggregator="mean",
+    )
+    assert without is not None and with_entropy is not None
+    assert with_entropy > without
+
+
+def test_utterance_token_entropy_none_falls_back_exactly() -> None:
+    """token_entropy=None reproduces today's value bit-for-bit (SC-008)."""
+    baseline = aggregate_utterance(
+        {**_pairs(0.4), "m": {"text": "hi", "avg_logprob": -0.2}},
+        aggregator="mean",
+    )
+    with_none = aggregate_utterance(
+        {**_pairs(0.4), "m": {"text": "hi", "avg_logprob": -0.2, "token_entropy": None}},
+        aggregator="mean",
+    )
+    assert with_none == baseline
+
+
+def test_utterance_zero_token_entropy_is_full_confidence() -> None:
+    """Zero entropy contributes a 0.0 uncertainty sub-signal, not None."""
+    result = aggregate_utterance({"m": {"text": "hi", "token_entropy": 0.0}}, aggregator="mean")
+    assert result == pytest.approx(0.0, abs=1e-9)
+
+
+def test_utterance_token_entropy_saturates_at_reference() -> None:
+    """Entropy at/above the reference scale saturates the sub-signal at 1.0."""
+    huge = aggregate_utterance({"m": {"text": "hi", "token_entropy": 500.0}}, aggregator="mean")
+    assert huge == pytest.approx(1.0, abs=1e-9)
+
+
+def test_utterance_token_entropy_averaged_across_models() -> None:
+    """Per-model entropies are averaged before normalization."""
+    both = aggregate_utterance(
+        {"a": {"token_entropy": 0.0, "text": "x"}, "b": {"token_entropy": 3.0, "text": "x"}},
+        aggregator="mean",
+    )
+    single = aggregate_utterance({"a": {"token_entropy": 1.5, "text": "x"}}, aggregator="mean")
+    assert both is not None and single is not None  # guard against a trivial None == None pass
+    assert both == pytest.approx(single, abs=1e-9)
+
+
+def test_utterance_token_entropy_accepts_per_token_list() -> None:
+    """A per-token list is collapsed to its mean."""
+    as_list = aggregate_utterance({"a": {"token_entropy": [0.0, 3.0], "text": "x"}}, aggregator="mean")
+    as_mean = aggregate_utterance({"a": {"token_entropy": 1.5, "text": "x"}}, aggregator="mean")
+    assert as_list is not None and as_mean is not None  # guard against a trivial None == None pass
+    assert as_list == pytest.approx(as_mean, abs=1e-9)
+
+
+# ── Calibration (FR-018) ──────────────────────────────────────────────
+
+
+def test_default_temperature_preserves_legacy_avg_logprob_mapping() -> None:
+    """T=1 (default) keeps the historical 1 - exp(avg_logprob) exactly (SC-008)."""
+    votes: dict[str, Any] = {"m": {"text": "hi", "avg_logprob": -0.5}}
+    assert aggregate_utterance(votes, aggregator="mean") == pytest.approx(1.0 - math.exp(-0.5), abs=1e-9)
+
+
+def test_temperature_above_one_softens_reported_confidence() -> None:
+    """A higher temperature flattens confidence → lower reported uncertainty."""
+    votes: dict[str, Any] = {"m": {"text": "hi", "avg_logprob": -1.0}}
+    sharp = aggregate_utterance(votes, aggregator="mean")
+    soft = aggregate_utterance(votes, aggregator="mean", calibration={"temperature": {"utterance": 2.0}})
+    assert sharp is not None and soft is not None
+    # exp(-1/2) > exp(-1) → higher confidence → lower uncertainty.
+    assert soft < sharp
+    assert soft == pytest.approx(1.0 - math.exp(-0.5), abs=1e-9)
