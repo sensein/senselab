@@ -163,9 +163,17 @@ in Phase 8.
     `uncertainty/raw_vs_enhanced/<axis>.parquet`, so its own `assert checked >= 9` was unreachable.
     Fixed. Second task in this spec marked complete that had never actually been run.
 - [x] T044 Exercise `VoteStore.from_harvests` (unit test + first in-process caller, with T040).
-- [ ] T045 Align contracts/interventions.md with implementation: U2 cost class (medium in code vs
+- [x] T045 Align contracts/interventions.md with implementation: U2 cost class (medium in code vs
   heavy in contract) + family-majority guard; document `I2_recluster` as a catalog addition; U3 as a
   fusion-stage step rather than a RULES entry; `max_region_rounds` enforced via convergence marks.
+  - **Completed 2026-07-27.** All four listed items were already recorded in the contract's
+    "Implementation notes" section (2026-07-24) — but the *per-rule sections still contradicted it*:
+    `## U2_reserve_escalation` said "Cost: heavy" and listed the family-majority guard as if it
+    existed, so a reader who didn't scroll to the footnote got the wrong answer. Corrected inline at
+    the source. Also added two discrepancies the earlier pass missed: **P2** is implemented but
+    unreachable at the default `theta_high` (⚠️ noted with the measured 0.554 ceiling), and **U4 has
+    no implementation** — `--enable-overlap-separation` maps to the shipped `I4_overlap_detection`,
+    not to separation.
 
 ### Architecture follow-ups (see [architecture-review.md](./architecture-review.md); T046–T050 implemented 2026-07-24)
 
