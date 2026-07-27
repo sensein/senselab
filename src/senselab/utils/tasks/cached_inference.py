@@ -55,6 +55,7 @@ __all__ = [
     "run_task_cached",
     "senselab_version",
     "serialize",
+    "prune_unreachable_entries",
     "sync_cache_with_schema_version",
     "transcript_signature",
     "write_json",
@@ -245,6 +246,66 @@ def cache_store(cache_dir: Path, key: str, payload: dict[str, Any]) -> None:
     (cache_dir / f"{key}.json").write_text(json.dumps(serialize(payload), indent=2, default=str), encoding="utf-8")
 
 
+def prune_unreachable_entries(cache_dir: Path, *, senselab_ver: str) -> int:
+    """Delete cache entries no current key can ever hit; return how many were removed.
+
+    ``senselab_version`` and ``code_version`` are *inside* the cache key, so a
+    senselab release orphans every entry and a ``STAGE_VERSIONS`` bump orphans that
+    stage's. Nothing previously reclaimed them: ``CACHE_SCHEMA_VERSION`` only wipes
+    on a schema change, so the directory grew monotonically across releases and a
+    cache that looked healthy could be entirely dead weight.
+
+    An entry is unreachable when its recorded ``provenance.senselab_version``
+    differs from the running one, or its ``provenance.code_version`` no longer
+    matches the declared version for that task. Entries without provenance are
+    kept — absence of evidence isn't evidence of staleness, and a hit on them is
+    still correct.
+
+    Args:
+        cache_dir: The cache directory.
+        senselab_ver: The running senselab version.
+
+    Returns:
+        Number of entries removed.
+    """
+    try:
+        from senselab.audio.workflows.audio_analysis.stage_context import stage_code_version
+    except ImportError:  # pragma: no cover — stage versions live in the audio workflow
+        return 0
+
+    removed = 0
+    for entry in cache_dir.glob("*.json"):
+        try:
+            prov = (json.loads(entry.read_text(encoding="utf-8")) or {}).get("provenance") or {}
+        except (json.JSONDecodeError, OSError):
+            continue  # corrupt entries already read as a miss; leave them to be overwritten
+        if not prov:
+            continue
+        recorded_ver = prov.get("senselab_version")
+        stale = recorded_ver is not None and recorded_ver != senselab_ver
+        if not stale:
+            task = prov.get("task")
+            recorded_code = prov.get("code_version")
+            if task and recorded_code is not None:
+                try:
+                    stale = recorded_code != stage_code_version(str(task))
+                except KeyError:
+                    stale = True  # task no longer declares a version → unreachable
+        if stale:
+            try:
+                entry.unlink()
+                removed += 1
+            except OSError:
+                continue
+    if removed:
+        print(
+            f"Cache: pruned {removed} unreachable entr{'y' if removed == 1 else 'ies'} "
+            f"(senselab/stage version drift) in {cache_dir}",
+            file=sys.stderr,
+        )
+    return removed
+
+
 def sync_cache_with_schema_version(cache_dir: Path) -> None:
     """Keep the on-disk cache state and :data:`CACHE_SCHEMA_VERSION` in sync.
 
@@ -277,6 +338,7 @@ def sync_cache_with_schema_version(cache_dir: Path) -> None:
     has_entries = any(p.name != ".schema_version" for p in cache_dir.iterdir())
 
     if on_disk_version == CACHE_SCHEMA_VERSION:
+        prune_unreachable_entries(cache_dir, senselab_ver=senselab_version())
         return
 
     if on_disk_version is None and not has_entries:

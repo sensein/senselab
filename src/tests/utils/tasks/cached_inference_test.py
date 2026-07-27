@@ -395,3 +395,66 @@ def test_write_json_creates_parents_and_serializes(tmp_path: Path) -> None:
     payload = json.loads(target.read_text())
     assert payload["n"] == 1
     assert payload["emb"]["_tensor_shape"] == [2]
+
+
+# ── Pruning unreachable entries ───────────────────────────────────────
+
+
+def _entry(tmp_path: Path, key: str, *, senselab_ver: str, task: str, code_version: str) -> None:
+    cache_store(
+        tmp_path,
+        key,
+        {
+            "status": "ok",
+            "result": [],
+            "provenance": {"task": task, "senselab_version": senselab_ver, "code_version": code_version},
+        },
+    )
+
+
+def test_prune_removes_entries_from_another_senselab_version(tmp_path: Path) -> None:
+    """A senselab release orphans every entry — nothing could ever hit them again."""
+    from senselab.utils.tasks.cached_inference import prune_unreachable_entries
+
+    _entry(tmp_path, "old", senselab_ver="1.0.0", task="asr", code_version="asr@1")
+    _entry(tmp_path, "cur", senselab_ver="9.9.9", task="asr", code_version="asr@1")
+    assert prune_unreachable_entries(tmp_path, senselab_ver="9.9.9") == 1
+    assert cache_lookup(tmp_path, "old") is None
+    assert cache_lookup(tmp_path, "cur") is not None
+
+
+def test_prune_removes_entries_from_a_bumped_stage_version(tmp_path: Path) -> None:
+    """A STAGE_VERSIONS bump orphans that stage's entries but not other stages'."""
+    from senselab.utils.tasks.cached_inference import prune_unreachable_entries
+
+    _entry(tmp_path, "stale_asr", senselab_ver="9.9.9", task="asr", code_version="asr@0")
+    _entry(tmp_path, "live_asr", senselab_ver="9.9.9", task="asr", code_version="asr@1")
+    assert prune_unreachable_entries(tmp_path, senselab_ver="9.9.9") == 1
+    assert cache_lookup(tmp_path, "stale_asr") is None
+    assert cache_lookup(tmp_path, "live_asr") is not None
+
+
+def test_prune_removes_entries_for_undeclared_tasks(tmp_path: Path) -> None:
+    """A task no longer in STAGE_VERSIONS can never be keyed again."""
+    from senselab.utils.tasks.cached_inference import prune_unreachable_entries
+
+    _entry(tmp_path, "gone", senselab_ver="9.9.9", task="a_retired_stage", code_version="a_retired_stage@1")
+    assert prune_unreachable_entries(tmp_path, senselab_ver="9.9.9") == 1
+
+
+def test_prune_keeps_entries_without_provenance(tmp_path: Path) -> None:
+    """Absence of provenance is not evidence of staleness — a hit is still correct."""
+    from senselab.utils.tasks.cached_inference import prune_unreachable_entries
+
+    cache_store(tmp_path, "bare", {"status": "ok", "result": []})
+    assert prune_unreachable_entries(tmp_path, senselab_ver="9.9.9") == 0
+    assert cache_lookup(tmp_path, "bare") is not None
+
+
+def test_prune_is_a_noop_on_a_fully_live_cache(tmp_path: Path) -> None:
+    """The common case must cost nothing and remove nothing."""
+    from senselab.utils.tasks.cached_inference import prune_unreachable_entries, senselab_version
+
+    _entry(tmp_path, "k", senselab_ver=senselab_version(), task="diarization", code_version="diarization@1")
+    assert prune_unreachable_entries(tmp_path, senselab_ver=senselab_version()) == 0
+    assert cache_lookup(tmp_path, "k") is not None
