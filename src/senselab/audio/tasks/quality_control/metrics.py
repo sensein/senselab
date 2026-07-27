@@ -128,9 +128,10 @@ def spectral_gating_snr_metric(
     Returns:
         float: Estimated segmental SNR in dB.
     """
-    waveform: np.ndarray | torch.Tensor = audio.waveform
-    if isinstance(waveform, torch.Tensor):
-        waveform = waveform.numpy()
+    raw_waveform: np.ndarray | torch.Tensor = audio.waveform
+    # Bind the numpy view to its own name so the static type stays ndarray for
+    # librosa below, rather than remaining the input union.
+    waveform: np.ndarray = raw_waveform.numpy() if isinstance(raw_waveform, torch.Tensor) else raw_waveform
 
     if waveform.shape[0] > 1:
         waveform = np.mean(waveform, axis=0)
@@ -200,7 +201,9 @@ def proportion_clipped_metric(audio: Audio, clip_threshold: float = 1.0) -> floa
         return max_consecutive > min_consecutive
 
     for channel in waveform:
-        clipped_samples = 0
+        # `.item()` on an integer count returns int|float to the type checker, so
+        # declare the accumulator wide enough for both.
+        clipped_samples: int | float = 0
         max_val = torch.max(channel)
         # Check for clipping: either at/above threshold, or plateau pattern near threshold
         if max_val >= clip_threshold:
@@ -224,14 +227,14 @@ def amplitude_modulation_depth_metric(audio: Audio) -> float:
     Returns:
         float: Amplitude modulation depth.
     """
-    waveform = audio.waveform
-    if torch.numel(waveform) == 0:
+    raw_waveform = audio.waveform
+    if torch.numel(raw_waveform) == 0:
         return np.nan
-    assert waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
+    assert raw_waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
 
-    # Convert to numpy array if it's a torch tensor
-    if isinstance(waveform, torch.Tensor):
-        waveform = waveform.numpy()
+    # Convert to numpy array if it's a torch tensor (own name so the static type
+    # is ndarray for scipy below, not the Tensor it started as).
+    waveform: np.ndarray = raw_waveform.numpy() if isinstance(raw_waveform, torch.Tensor) else raw_waveform
 
     # Compute the analytic signal
     analytic_signal = scipy.signal.hilbert(waveform, axis=-1)
@@ -423,11 +426,11 @@ def peak_snr_from_spectral_metric(
     Returns:
         float: Peak‑SNR in decibels.
     """
-    waveform = audio.waveform
-    if torch.numel(waveform) == 0:
+    raw_waveform = audio.waveform
+    if torch.numel(raw_waveform) == 0:
         return np.nan
-    if isinstance(waveform, torch.Tensor):
-        waveform = waveform.numpy()
+    # Own name so the static type is ndarray for librosa below.
+    waveform: np.ndarray = raw_waveform.numpy() if isinstance(raw_waveform, torch.Tensor) else raw_waveform
 
     # Collapse to mono if multi-channel
     if waveform.ndim == 2 and waveform.shape[0] > 1:

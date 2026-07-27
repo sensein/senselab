@@ -25,6 +25,24 @@ from senselab.audio.workflows.audio_analysis import (
     compute_uncertainty_axes,
 )
 
+
+@pytest.fixture(autouse=True)
+def _no_brouhaha(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep these end-to-end tests offline.
+
+    ``compute_uncertainty_axes`` defaults to ``scene_quality=True``, which would
+    otherwise try to load the gated ``pyannote/brouhaha`` model. Stub the loader
+    to report the model as unavailable so the workflow exercises its null-safe
+    quality path (FR-023) without any Hub call. Individual tests can re-patch it
+    to inject synthetic frames.
+    """
+    import senselab.audio.tasks.scene_quality as sq
+    import senselab.audio.tasks.voice_activity_detection.frame_posteriors as fp
+
+    monkeypatch.setattr(sq, "extract_brouhaha_frames", lambda audios, *a, **k: [None] * len(audios))
+    monkeypatch.setattr(fp, "extract_speech_frame_posteriors", lambda audios, *a, **k: [None] * len(audios))
+
+
 # ── Test fixture builders ─────────────────────────────────────────────
 
 
@@ -437,3 +455,146 @@ def test_identity_robust_to_diar_label_naming_conventions() -> None:
         # but that's not what drives the aggregation.
         assert py["speaker_label"].startswith("SPEAKER_")
         assert sf["speaker_label"].startswith("speaker_")
+
+
+# ── US1: scene-quality columns wired into presence rows ───────────────
+
+
+def _noise_audio(duration_s: float, sr: int = 16000) -> Audio:
+    import torch
+
+    rng = np.random.default_rng(0)
+    y = (0.1 * rng.standard_normal(int(duration_s * sr))).astype(np.float32)
+    return Audio(waveform=torch.tensor(y).reshape(1, -1), sampling_rate=sr)
+
+
+def test_presence_rows_carry_quality_columns_when_brouhaha_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    """US1: with Brouhaha frames available, presence rows expose quality_* columns."""
+    import senselab.audio.tasks.scene_quality as sq
+    from senselab.audio.tasks.scene_quality.brouhaha import BrouhahaFrames
+
+    n = int(2.0 / 0.02)
+    frames = BrouhahaFrames(vad=np.ones(n), snr_db=np.full(n, 25.0), c50_db=np.full(n, 28.0), frame_hop_s=0.02)
+    monkeypatch.setattr(sq, "extract_brouhaha_frames", lambda audios, *a, **k: [frames] * len(audios))
+
+    raw_pass = {
+        "duration_s": 2.0,
+        "diarization": {"by_model": {"pyannote": _diar_block([(0.0, 2.0, "SPEAKER_00")])}},
+    }
+    axis_results, _, _ = compute_uncertainty_axes(
+        passes={"raw_16k": raw_pass},
+        grid=BucketGrid(win_length=0.5, hop_length=0.5),
+        params={},
+        audio={"raw_16k": _noise_audio(2.0)},
+        speaker_embedding_models=[],
+        aggregator="min",
+        speech_presence_labels=["Speech"],
+    )
+    presence = axis_results[("raw_16k", "presence")]
+    assert presence.rows
+    assert any(r.quality_snr is not None for r in presence.rows)
+    for r in presence.rows:
+        for v in (r.quality_snr, r.quality_reverb, r.quality_bandwidth):
+            assert v is None or 0.0 <= v <= 1.0
+    prov = presence.provenance["scene_quality"]
+    assert prov["enabled"] is True
+    assert prov["model"]["available"] is True
+
+
+def test_presence_rows_carry_source_columns() -> None:
+    """US2: AST/YAMNet windows → per-bucket src_* category masses on presence rows."""
+    windows = [
+        {
+            "start": 0.0,
+            "end": 2.0,
+            "labels": ["Speech", "Vehicle"],
+            "scores": [0.8, 0.2],
+            "win_length": 2.0,
+            "hop_length": 2.0,
+        }
+    ]
+    raw_pass = {
+        "duration_s": 2.0,
+        "diarization": {"by_model": {"pyannote": _diar_block([(0.0, 2.0, "SPEAKER_00")])}},
+        "ast": _classification_block(windows),
+    }
+    axis_results, _, _ = compute_uncertainty_axes(
+        passes={"raw_16k": raw_pass},
+        grid=BucketGrid(win_length=0.5, hop_length=0.5),
+        params={},
+        audio={"raw_16k": _silent_audio(2.0)},
+        speaker_embedding_models=[],
+        aggregator="min",
+        speech_presence_labels=["Speech"],
+        scene_quality=False,
+    )
+    presence = axis_results[("raw_16k", "presence")]
+    assert presence.rows
+    assert any(r.src_speech is not None for r in presence.rows)
+    for r in presence.rows:
+        if r.src_speech is not None:
+            assert r.src_people is not None and r.src_machine is not None and r.src_environment is not None
+            total = r.src_speech + r.src_people + r.src_machine + r.src_environment
+            assert abs(total - 1.0) < 1e-6
+            assert r.src_dominant == "speech"
+    assert presence.provenance["sound_sources"]["enabled"] is True
+
+
+def test_presence_confidence_uncertainty_split_and_instability(monkeypatch: pytest.MonkeyPatch) -> None:
+    """US3: presence_confidence + presence_uncertainty columns; frame instability lifts uncertainty."""
+    import senselab.audio.tasks.voice_activity_detection.frame_posteriors as fp
+    from senselab.audio.tasks.voice_activity_detection.frame_posteriors import FramePosterior
+
+    # Rapidly alternating posterior → high within-bucket std (instability) everywhere.
+    probs = np.tile([0.0, 1.0], 100)  # 200 frames @ 0.01 s hop = 2 s
+    monkeypatch.setattr(
+        fp,
+        "extract_speech_frame_posteriors",
+        lambda audios, *a, **k: [FramePosterior(probs=probs, frame_hop_s=0.01)] * len(audios),
+    )
+    raw_pass = {
+        "duration_s": 2.0,
+        "diarization": {"by_model": {"pyannote": _diar_block([(0.0, 2.0, "SPEAKER_00")])}},
+    }
+    axis_results, _, _ = compute_uncertainty_axes(
+        passes={"raw_16k": raw_pass},
+        grid=BucketGrid(win_length=0.5, hop_length=0.5),
+        presence_grid=BucketGrid(win_length=0.1, hop_length=0.1),
+        params={},
+        audio={"raw_16k": _silent_audio(2.0)},
+        speaker_embedding_models=[],
+        aggregator="min",
+        speech_presence_labels=["Speech"],
+        scene_quality=False,
+    )
+    presence = axis_results[("raw_16k", "presence")]
+    assert presence.rows
+    assert all(r.presence_confidence is not None for r in presence.rows)
+    assert all(r.presence_uncertainty is not None for r in presence.rows)
+    # Instability raises presence_uncertainty above the legacy decisiveness uncertainty.
+    assert any((r.presence_uncertainty or 0.0) > (r.aggregated_uncertainty or 0.0) + 1e-6 for r in presence.rows)
+    # aggregated_uncertainty (legacy column) is untouched by the split.
+    assert all(r.aggregated_uncertainty is None or 0.0 <= r.aggregated_uncertainty <= 1.0 for r in presence.rows)
+    assert presence.provenance["frame_posteriors"]["segmentation"]["available"] is True
+
+
+def test_presence_quality_null_when_scene_quality_disabled() -> None:
+    """scene_quality=False → no quality columns, no model load."""
+    raw_pass = {
+        "duration_s": 2.0,
+        "diarization": {"by_model": {"pyannote": _diar_block([(0.0, 2.0, "SPEAKER_00")])}},
+    }
+    axis_results, _, _ = compute_uncertainty_axes(
+        passes={"raw_16k": raw_pass},
+        grid=BucketGrid(win_length=0.5, hop_length=0.5),
+        params={},
+        audio={"raw_16k": _noise_audio(2.0)},
+        speaker_embedding_models=[],
+        aggregator="min",
+        speech_presence_labels=["Speech"],
+        scene_quality=False,
+    )
+    presence = axis_results[("raw_16k", "presence")]
+    assert presence.rows
+    assert all(r.quality_snr is None for r in presence.rows)
+    assert presence.provenance["scene_quality"]["enabled"] is False

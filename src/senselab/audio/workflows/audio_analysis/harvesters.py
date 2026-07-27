@@ -387,6 +387,84 @@ def whisper_bucket_avg_logprob(result: Any, win_start: float, win_end: float) ->
     return sum(logprobs) / len(logprobs)
 
 
+def _collapse_token_entropy(raw: Any) -> float | None:  # noqa: ANN401 — float | list | junk
+    """Collapse a ``token_entropy`` field to a scalar mean, or ``None`` if unusable."""
+    if raw is None:
+        return None
+    if isinstance(raw, (list, tuple)):
+        values: list[float] = []
+        for item in raw:
+            try:
+                values.append(float(item))
+            except (TypeError, ValueError):
+                continue
+        return sum(values) / len(values) if values else None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def mean_token_entropy_in_window(result: Any, win_start: float, win_end: float) -> float | None:  # noqa: ANN401
+    """Mean per-token softmax entropy (nats) attributable to ``[win_start, win_end)``.
+
+    Two shapes are handled, in priority order:
+
+    1. **Word-level** — when transcript chunks carry their own ``token_entropy``,
+       each word is assigned to exactly one bucket by its timestamp *midpoint*
+       (the contract's rule), so a word is never counted twice across
+       overlapping buckets.
+    2. **Line-level** — the Whisper capture seam attaches one entropy sequence per
+       generated sequence, with no per-token timestamps to distribute it by. Those
+       lines contribute their whole-sequence mean to every bucket they overlap.
+
+    Word-level wins when present so a coarse line value can't double-count against
+    the finer per-word evidence.
+
+    Args:
+        result: One ``ScriptLine``-like object or a list of them (Pydantic objects or
+            cache-deserialized dicts).
+        win_start: Bucket start in seconds (inclusive).
+        win_end: Bucket end in seconds (exclusive).
+
+    Returns:
+        The mean entropy in nats, or ``None`` when no contributing source reported
+        token entropy for this window.
+    """
+    if not result:
+        return None
+    items = result if isinstance(result, list) else [result]
+
+    word_values: list[float] = []
+    line_values: list[float] = []
+    for line in items:
+        for chunk in seg_attr(line, "chunks") or []:
+            value = _collapse_token_entropy(seg_attr(chunk, "token_entropy"))
+            if value is None:
+                continue
+            cs = seg_attr(chunk, "start")
+            ce = seg_attr(chunk, "end")
+            if cs is None or ce is None:
+                continue
+            midpoint = (float(cs) + float(ce)) / 2.0
+            if win_start <= midpoint < win_end:
+                word_values.append(value)
+
+        value = _collapse_token_entropy(seg_attr(line, "token_entropy"))
+        if value is None:
+            continue
+        ls = seg_attr(line, "start")
+        le = seg_attr(line, "end")
+        if ls is None or le is None or (float(ls) < win_end and float(le) > win_start):
+            line_values.append(value)
+
+    if word_values:
+        return sum(word_values) / len(word_values)
+    if line_values:
+        return sum(line_values) / len(line_values)
+    return None
+
+
 # ── Scene classification (AST / YAMNet) ───────────────────────────────
 
 

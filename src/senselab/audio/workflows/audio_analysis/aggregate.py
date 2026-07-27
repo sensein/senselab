@@ -3,118 +3,62 @@
 from __future__ import annotations
 
 import math
-import re
 import sys
 from itertools import combinations  # used by aggregate_utterance for pairwise WER
 from typing import Any
 
+# Surface-level differences (case + punctuation + repeated whitespace) are
+# stripped before pairwise WER so the utterance axis reflects *semantic*
+# disagreement rather than surface noise. The canonical normalizer moved to the
+# task layer (architecture-review T049) so task- and workflow-level WER share
+# one definition; re-exported under the historical name for existing importers.
+from senselab.audio.tasks.speech_to_text_evaluation.utils import (
+    normalize_transcript_for_wer as _normalize_transcript_for_wer,
+)
 from senselab.audio.workflows.audio_analysis.aggregators import apply_aggregator
 
-# Surface-level differences (case + punctuation + repeated whitespace) that we
-# strip before pairwise WER so the utterance axis reflects *semantic* disagreement
-# rather than surface noise. ``"first."`` and ``"first!"`` both normalize to
-# ``"first"``; ``"I"`` and ``"i"`` both normalize to ``"i"``.
-_PUNCTUATION_PATTERN = re.compile(r"[^\w\s']")
-_WHITESPACE_PATTERN = re.compile(r"\s+")
-
-
-def _normalize_transcript_for_wer(text: str) -> str:
-    """Lowercase, strip non-word punctuation, collapse whitespace."""
-    if not text:
-        return ""
-    cleaned = _PUNCTUATION_PATTERN.sub(" ", text.lower())
-    return _WHITESPACE_PATTERN.sub(" ", cleaned).strip()
+__all__ = [
+    "_normalize_transcript_for_wer",
+    "aggregate_identity",
+    "aggregate_presence",
+    "aggregate_utterance",
+    "mean_token_entropy",
+    "presence_p_voice",
+]
 
 
 # ── presence ──────────────────────────────────────────────────────────
 
 
-def aggregate_presence(votes: dict[str, dict[str, Any]]) -> float | None:
-    """Calibrated "is voice present?" uncertainty in ``[0, 1]``.
+def _weighted_p_voice(votes: dict[str, dict[str, Any]]) -> float | None:
+    """Weighted mean per-voter probability of voice for one bucket, or ``None``.
 
-    The presence question is binary, but the goal is *not* to measure
-    disagreement among voters (Shannon entropy did that) — it's to tell the
-    user whether voice is present and how strongly the evidence supports
-    that conclusion. A 6-of-8 split should read as "moderate evidence for
-    voice", not "high uncertainty".
+    Each voter maps ``(speaks, native_confidence)`` to a per-voter voice
+    probability, then contributes with its optional ``weight`` (default 1.0):
 
-    Algorithm:
+    - ``native_confidence`` ``c`` with ``speaks=True`` → ``p = c``;
+      with ``speaks=False`` → ``p = 1 - c``.
+    - No ``native_confidence`` → ``p = 1.0`` if ``speaks`` else ``0.0``.
+    - ``hallucinated`` → ``p = 0.1`` (vote against voice).
 
-    1. For each voter, derive a per-voter probability of voice:
-
-       - With ``native_confidence`` ``c`` and ``speaks=True``: ``p = c``
-         (the model says "voice with confidence c").
-       - With ``native_confidence`` ``c`` and ``speaks=False``: ``p = 1 - c``
-         (the model says "silence with confidence c", so voice prob is ``1-c``).
-       - Without ``native_confidence``: ``p = 1.0`` if ``speaks=True``, else
-         ``0.0`` (binary vote — the model is fully committed either way).
-
-    2. ``p_voice = mean(per-voter probabilities)`` — equal weight per voter.
-       Models with a ``native_confidence`` that aren't sure pull ``p_voice``
-       toward 0.5 even when their boolean ``speaks`` flips one way; binary-only
-       voters get equal weight to confidence-bearing ones.
-
-    3. Uncertainty = ``1 − |2 · p_voice − 1|``: 0 when all evidence agrees
-       (either way), 1 at a perfect 50/50 split. Whether voice is more likely
-       present or absent is recoverable from ``p_voice`` itself; this metric
-       only grades how decisive the evidence is.
+    ``weight`` lets a caller demote coarse voters (whole-window scene tags,
+    per-segment no-speech probability, sentence-level ASR) on fine reporting
+    grids without dropping them (FR-014). When every weight is 1.0 (the
+    default) this is the plain mean, so existing outputs are unchanged.
     """
-    p_voice_per_voter: list[float] = []
-
+    num = 0.0
+    den = 0.0
     for v in votes.values():
-        if not isinstance(v, dict):
-            continue
-        if "speaks" not in v:
+        if not isinstance(v, dict) or "speaks" not in v:
             continue
         speak_val = v.get("speaks")
         if speak_val is None:
             continue
-        raw_nc = v.get("native_confidence")
-        nc: float | None
-        if raw_nc is None:
-            nc = None
-        else:
-            try:
-                nc = max(0.0, min(1.0, float(raw_nc)))
-            except (TypeError, ValueError):
-                nc = None
-        # ASR hallucination flag: the voter said "speaks" but the model's own
-        # silence head says otherwise — treat as a vote AGAINST voice instead
-        # of for it (reflecting that the transcript came from a hallucination,
-        # not actual audio content).
-        if v.get("hallucinated"):
-            p_voter = 0.1  # near-zero with a hint of caution rather than full 0
-        elif nc is None:
-            p_voter = 1.0 if speak_val else 0.0
-        else:
-            p_voter = nc if speak_val else (1.0 - nc)
-        p_voice_per_voter.append(p_voter)
-
-    if not p_voice_per_voter:
-        return None
-    p_voice = sum(p_voice_per_voter) / len(p_voice_per_voter)
-    return max(0.0, min(1.0, 1.0 - abs(2.0 * p_voice - 1.0)))
-
-
-def presence_p_voice(votes: dict[str, dict[str, Any]]) -> float | None:
-    """Return the calibrated probability of voice ``p_voice`` for one bucket.
-
-    Same per-voter math as ``aggregate_presence`` (each voter's
-    ``(speaks, native_confidence)`` mapped to a ``p_voice`` contribution then
-    averaged), but returns the raw probability instead of the symmetric
-    uncertainty derived from it. Used to MASK identity / utterance buckets
-    where we are confident there is no speech: when ``p_voice`` is near zero,
-    the speaker / transcript axes are not meaningfully measurable for that
-    bucket and their per-bucket uncertainty is downweighted.
-    """
-    p_voice_per_voter: list[float] = []
-    for v in votes.values():
-        if not isinstance(v, dict):
-            continue
-        if "speaks" not in v:
-            continue
-        speak_val = v.get("speaks")
-        if speak_val is None:
+        try:
+            weight = float(v.get("weight", 1.0))
+        except (TypeError, ValueError):
+            weight = 1.0
+        if weight <= 0:
             continue
         raw_nc = v.get("native_confidence")
         nc: float | None
@@ -131,10 +75,40 @@ def presence_p_voice(votes: dict[str, dict[str, Any]]) -> float | None:
             p_voter = 1.0 if speak_val else 0.0
         else:
             p_voter = nc if speak_val else (1.0 - nc)
-        p_voice_per_voter.append(p_voter)
-    if not p_voice_per_voter:
+        num += weight * p_voter
+        den += weight
+    if den <= 0:
         return None
-    return sum(p_voice_per_voter) / len(p_voice_per_voter)
+    return num / den
+
+
+def aggregate_presence(votes: dict[str, dict[str, Any]]) -> float | None:
+    """Calibrated "is voice present?" uncertainty in ``[0, 1]``.
+
+    The presence question is binary, but the goal is *not* to measure
+    disagreement among voters — it's how decisively the evidence supports a
+    conclusion. Uncertainty = ``1 − |2 · p_voice − 1|``: 0 when all evidence
+    agrees (either way), 1 at a perfect 50/50 split. Whether voice is more
+    likely present or absent is recoverable from ``p_voice`` itself
+    (``presence_p_voice``); this metric only grades decisiveness. See
+    ``_weighted_p_voice`` for the per-voter math (weights default to 1.0, so
+    this matches the historical unweighted behavior).
+    """
+    p_voice = _weighted_p_voice(votes)
+    if p_voice is None:
+        return None
+    return max(0.0, min(1.0, 1.0 - abs(2.0 * p_voice - 1.0)))
+
+
+def presence_p_voice(votes: dict[str, dict[str, Any]]) -> float | None:
+    """Return the calibrated probability of voice ``p_voice`` for one bucket.
+
+    Same per-voter math as ``aggregate_presence`` but returns the raw
+    probability rather than the symmetric uncertainty. Used both as the
+    presence-axis ``presence_confidence`` column and to MASK identity /
+    utterance buckets where we are confident there is no speech.
+    """
+    return _weighted_p_voice(votes)
 
 
 # ── identity ──────────────────────────────────────────────────────────
@@ -192,10 +166,75 @@ def aggregate_identity(
 # ── utterance ─────────────────────────────────────────────────────────
 
 
-def aggregate_utterance(votes: dict[str, dict[str, Any]], *, aggregator: str) -> float | None:
+_DEFAULT_TOKEN_ENTROPY_REFERENCE_NATS = 3.0
+"""Entropy (nats) treated as fully uncertain when normalizing to ``[0, 1]``.
+
+Deliberately *not* ``log(vocab)``: Whisper's vocabulary is ~51.9k tokens, so
+``log(vocab) ≈ 10.9`` nats, while real per-token entropies run ~0.05–0.5 nats when
+the decoder is confident and ~2–4 nats when it is guessing. Normalizing by
+``log(vocab)`` would compress every observed value into the bottom tenth of the
+range, making the sub-signal invisible under ``mean`` aggregation. 3.0 nats puts
+"confident" near 0 and "guessing" near 1. Override per-deployment via
+``calibration["token_entropy_reference_nats"]``.
+"""
+
+
+def _axis_temperature(calibration: dict[str, Any] | None, axis: str) -> float:
+    """Temperature for ``axis`` from a calibration profile; 1.0 (identity) by default.
+
+    ``temperature`` may be a per-axis mapping (``{"utterance": 1.5}``) or a bare
+    scalar applied to every axis. A non-positive or unparsable value falls back to
+    1.0 rather than silently inverting the mapping.
+    """
+    if not calibration:
+        return 1.0
+    raw = calibration.get("temperature")
+    if isinstance(raw, dict):
+        raw = raw.get(axis)
+    try:
+        temperature = float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 1.0
+    return temperature if temperature > 0 else 1.0
+
+
+def mean_token_entropy(votes: dict[str, dict[str, Any]]) -> float | None:
+    """Mean per-model token entropy in nats, collapsing per-token lists to their mean."""
+    per_model: list[float] = []
+    for key, vote in votes.items():
+        if key.startswith("__") or not isinstance(vote, dict):
+            continue
+        raw = vote.get("token_entropy")
+        if raw is None:
+            continue
+        if isinstance(raw, (list, tuple)):
+            values = []
+            for item in raw:
+                try:
+                    values.append(float(item))
+                except (TypeError, ValueError):
+                    continue
+            if values:
+                per_model.append(sum(values) / len(values))
+            continue
+        try:
+            per_model.append(float(raw))
+        except (TypeError, ValueError):
+            continue
+    if not per_model:
+        return None
+    return sum(per_model) / len(per_model)
+
+
+def aggregate_utterance(
+    votes: dict[str, dict[str, Any]],
+    *,
+    aggregator: str,
+    calibration: dict[str, Any] | None = None,
+) -> float | None:
     """Combine utterance sub-signals into a single uncertainty.
 
-    Two sub-signal families:
+    Three sub-signal families (the third added by FR-017):
 
     1. **Pairwise phoneme edit-distance rate** across all available phoneme
        sources in this bucket — the 4 ASR transcripts (post-g2p_en, with
@@ -205,11 +244,32 @@ def aggregate_utterance(votes: dict[str, dict[str, Any]], *, aggregator: str) ->
        Sources with no phonemes in this bucket are dropped (don't contribute
        spurious 1.0 distances). The aggregator collapses the surviving pairs
        per ``--uncertainty-aggregator`` (default ``min`` — worst-case wins).
-    2. ``1 − exp(avg_logprob)`` averaged across ASRs that expose ``avg_logprob``
+    2. ``1 − exp(avg_logprob / T)`` averaged across ASRs that expose ``avg_logprob``
        (Whisper today). Reflects the model's self-confidence. Independent of
-       the pairwise comparisons.
+       the pairwise comparisons. ``T`` is the calibration temperature (FR-018),
+       1.0 by default, which reproduces the historical mapping exactly.
+    3. **Normalized token entropy** (FR-017) — mean per-token softmax entropy over
+       the contributing models, divided by
+       ``calibration["token_entropy_reference_nats"]`` (default
+       ``_DEFAULT_TOKEN_ENTROPY_REFERENCE_NATS``) and clipped to ``[0, 1]``. Unlike
+       the pairwise family this fires when a *single* model is internally unsure,
+       so it catches doubt that transcript agreement hides. Absent (``None``) for
+       every backend that doesn't report token logits, in which case the fold
+       degrades to families 1 and 2 exactly.
+
+    Args:
+        votes: The bucket's vote dict from ``harvest_utterance_votes``.
+        aggregator: One of ``AGGREGATORS`` — how the sub-signals are collapsed.
+        calibration: Optional calibration profile supplying ``temperature`` and
+            ``token_entropy_reference_nats``. ``None`` ⇒ documented defaults, which
+            preserve the pre-calibration numbers bit-for-bit.
+
+    Returns:
+        The bucket's utterance uncertainty in ``[0, 1]``, or ``None`` when no
+        sub-signal was available.
     """
     sub_signals: list[float | None] = []
+    temperature = _axis_temperature(calibration, "utterance")
 
     # Pairwise phoneme distances (the dominant utterance signal). Each pair
     # is weighted by the joint confidence of its two sources — high-confidence
@@ -265,9 +325,12 @@ def aggregate_utterance(votes: dict[str, dict[str, Any]], *, aggregator: str) ->
     if avg_logprobs:
         try:
             mean_alp = sum(avg_logprobs) / len(avg_logprobs)
-            confidence = max(0.0, min(1.0, math.exp(mean_alp)))
+            # Temperature-scaled so backends with differently-sharp logprob
+            # distributions land on a common [0,1] scale (FR-018). T=1 is the
+            # historical mapping.
+            confidence = max(0.0, min(1.0, math.exp(mean_alp / temperature)))
             sub_signals.append(1.0 - confidence)
-        except (ValueError, OverflowError):
+        except (ValueError, OverflowError, ZeroDivisionError):
             pass
 
     # MMS-CTC alignment scores are recorded on the parquet for diagnostic
@@ -286,5 +349,19 @@ def aggregate_utterance(votes: dict[str, dict[str, Any]], *, aggregator: str) ->
             sub_signals.append(max(0.0, min(1.0, 1.0 - float(ppg_conf["value"]))))
         except (ValueError, TypeError):
             pass
+
+    # Token-level entropy (FR-017) — a single model's private doubt, which
+    # transcript agreement cannot reveal.
+    mean_entropy = mean_token_entropy(votes)
+    if mean_entropy is not None:
+        reference = _DEFAULT_TOKEN_ENTROPY_REFERENCE_NATS
+        if calibration:
+            try:
+                candidate = float(calibration.get("token_entropy_reference_nats", reference))
+                if candidate > 0:
+                    reference = candidate
+            except (TypeError, ValueError):
+                pass
+        sub_signals.append(max(0.0, min(1.0, mean_entropy / reference)))
 
     return apply_aggregator(sub_signals, aggregator)

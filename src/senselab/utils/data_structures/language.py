@@ -85,7 +85,14 @@ class Language(BaseModel):
             >>> Language(language_code="eng").alpha_2
             'en'
         """
-        return pycountry.languages.get(alpha_3=self.language_code).alpha_2
+        # The field validator resolved `language_code` against pycountry on
+        # construction, so a lookup miss here is unreachable; assert it rather
+        # than let the AttributeError read as "no alpha_2" (which it also raises,
+        # legitimately, for languages that have no ISO 639-1 code).
+        language = pycountry.languages.get(alpha_3=self.language_code)
+        if language is None:  # pragma: no cover — guaranteed by the validator
+            raise AttributeError(f"No ISO 639 entry for language code {self.language_code!r}")
+        return str(language.alpha_2)
 
     @property
     def alpha_3(self) -> str:
@@ -111,4 +118,7 @@ class Language(BaseModel):
             >>> Language(language_code="eng").name
             'English'
         """
-        return pycountry.languages.get(alpha_3=self.language_code).name
+        language = pycountry.languages.get(alpha_3=self.language_code)
+        if language is None:  # pragma: no cover — guaranteed by the validator
+            raise AttributeError(f"No ISO 639 entry for language code {self.language_code!r}")
+        return str(language.name)

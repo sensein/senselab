@@ -1,5 +1,7 @@
 """This module implements some utilities for evaluating a transcription."""
 
+import re
+
 try:
     import jiwer
 
@@ -8,6 +10,29 @@ except ModuleNotFoundError:
     JIWER_AVAILABLE = False
 
 # TODO: add more metrics which take into account the meaning/intention
+
+_PUNCTUATION_PATTERN = re.compile(r"[^\w\s']")
+_WHITESPACE_PATTERN = re.compile(r"\s+")
+
+
+def normalize_transcript_for_wer(text: str) -> str:
+    """Lowercase, strip non-word punctuation, collapse whitespace.
+
+    The shared surface-normalization applied before WER-style comparisons so
+    that ``"first."`` vs ``"first!"`` and ``"I"`` vs ``"i"`` don't count as
+    errors (moved here from the audio-analysis workflow — architecture-review
+    T049 — so task- and workflow-level WER share one definition).
+
+    Args:
+        text (str): raw transcript text.
+
+    Returns:
+        str: normalized text (may be empty).
+    """
+    if not text:
+        return ""
+    cleaned = _PUNCTUATION_PATTERN.sub(" ", text.lower())
+    return _WHITESPACE_PATTERN.sub(" ", cleaned).strip()
 
 
 def calculate_wer(reference: str, hypothesis: str) -> float:

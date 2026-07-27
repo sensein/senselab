@@ -129,6 +129,41 @@ def test_pick_torch_index_no_cuda_chooses_cpu() -> None:
     assert idx.source == "static-map"
 
 
+def test_pick_torch_index_ceiling_caps_modern_host_to_cu121() -> None:
+    """The brouhaha case: a CUDA-12.8 host with a (12, 1) ceiling routes cu121, not cu128.
+
+    brouhaha pins torch<2.3, which has no wheel on cu128; the ceiling forces the
+    newest index that still carries it.
+    """
+    host = HostCuda(version=(12, 8), source="nvidia-smi", raw="CUDA Version: 12.8")
+    idx = pick_torch_index(host, max_cuda_version=(12, 1))
+    assert idx.tag == "cu121"
+    assert idx.cuda_version == (12, 1)
+    assert idx.source == "static-map"
+
+
+def test_pick_torch_index_ceiling_above_host_has_no_effect() -> None:
+    """A ceiling higher than the host CUDA never raises the selected index."""
+    host = HostCuda(version=(12, 1), source="nvcc", raw="release 12.1")
+    idx = pick_torch_index(host, max_cuda_version=(12, 6))
+    assert idx.tag == "cu121"
+
+
+def test_pick_torch_index_ceiling_ignored_when_host_has_no_cuda() -> None:
+    """On a CPU-only host the ceiling is moot — the CPU index is returned."""
+    host = HostCuda(version=None, source="none", raw="")
+    idx = pick_torch_index(host, max_cuda_version=(12, 1))
+    assert idx.tag == "cpu"
+
+
+def test_pick_torch_index_env_override_beats_ceiling() -> None:
+    """An explicit operator override wins over both host detection and the ceiling."""
+    host = HostCuda(version=(12, 8), source="nvidia-smi", raw="CUDA Version: 12.8")
+    idx = pick_torch_index(host, env_override="https://mirror.example/cu999", max_cuda_version=(12, 1))
+    assert idx.tag == "override"
+    assert idx.url == "https://mirror.example/cu999"
+
+
 def test_pick_torch_index_env_override_wins_over_host_cuda() -> None:
     """SENSELAB_TORCH_INDEX_URL must short-circuit the static map even on CUDA hosts."""
     host = HostCuda(version=(12, 9), source="nvidia-smi", raw="CUDA Version: 12.9")

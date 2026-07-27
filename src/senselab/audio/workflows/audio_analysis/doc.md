@@ -44,3 +44,26 @@ from senselab.audio.workflows.audio_analysis import (
 aggregator)` is the workflow entry point. It is a pure function: callers (such as
 `scripts/analyze_audio.py`) handle the surrounding I/O (cache lookup, parquet writing,
 disagreements.json + plot, LS bundle extension).
+
+## Scene-aware presence + calibration (spec 20260722-175022, US1–US5)
+
+The presence axis carries additive scene columns beside `aggregated_uncertainty`
+(unchanged): `presence_confidence`/`presence_uncertainty` (decisiveness +
+within-bucket temporal instability from frame posteriors), four `quality_*`
+degradation scores in `[0, 1]` (SNR / clipping / reverb / bandwidth) plus
+`quality_uncertainty` (estimator spread), and the `src_*` source-category masses
+with `src_dominant`. The utterance axis couples to the scene per FR-019: the
+reported `aggregated_uncertainty` is the per-vote value times a
+`scene_quality_coupling` multiplier (≥ 1; pre-coupling value preserved on
+`raw_aggregated_uncertainty`), and carries `token_entropy` when the Whisper
+token-confidence capture ran. The Label Studio bundle adds
+`<pass>__presence__quality` / `<pass>__presence__sources` tracks and the
+disagreements index exposes the presence sub-signals (FR-024).
+
+Calibration (US5): dB→`[0, 1]` anchors and per-axis aggregator temperatures live
+in a versioned `CalibrationProfile` JSON (`calibration.py`; documented defaults
+when absent). Fit one from synthetic sweeps with
+`scripts/calibrate_scene_quality.py` and pass it to the pipeline via
+`scripts/analyze_audio.py --calibration-profile <profile.json>`. Temperatures
+default to 1.0 — fitting them requires labeled correctness (see the adaptive
+loop's ground-truth evaluation harness).
