@@ -128,18 +128,6 @@ def test_asr_has_timestamps_detects_native_timestamps(aa: types.ModuleType) -> N
     assert aa._asr_has_timestamps(None) is False
 
 
-def test_collect_classification_labels_pulls_unique_labels(aa: types.ModuleType) -> None:
-    """The LS-config XML builder collects every distinct AudioSet label observed."""
-    classify_result = [
-        [
-            {"start": 0.0, "end": 0.5, "labels": ["Speech", "Music"], "scores": [0.9, 0.1]},
-            {"start": 0.5, "end": 1.0, "labels": ["Speech", "Silence"], "scores": [0.8, 0.2]},
-        ]
-    ]
-    labels = aa._collect_classification_labels(classify_result)
-    assert labels == {"Speech", "Music", "Silence"}
-
-
 def test_serialize_handles_tensors_dicts_and_lists(aa: types.ModuleType) -> None:
     """The output JSON serializer preserves tensor metadata + handles nested structures."""
     payload = {
@@ -191,20 +179,6 @@ def test_comparator_cli_flag_validation(aa: types.ModuleType) -> None:
         aa.parse_args(["/tmp/dummy.wav", "--disagreements-top-n", "-3"])
     with pytest.raises(SystemExit):
         aa.parse_args(["/tmp/dummy.wav", "--diarization-boundary-shift-ms", "-1"])
-
-
-def test_classification_to_ls_emits_regions_for_dict_shape(aa: types.ModuleType) -> None:
-    """The LS conversion must skip empty entries but emit one region per dict window."""
-    result = [
-        [
-            {"start": 0.0, "end": 0.5, "labels": ["Speech"], "scores": [0.95]},
-            {"start": 0.5, "end": 1.0, "labels": ["Music"], "scores": [0.62]},
-        ]
-    ]
-    regions = aa._classification_to_ls(result, prefix="raw__ast", win_length=0.5, hop_length=0.5)
-    assert len(regions) == 2
-    labels = [r["value"]["labels"][0] for r in regions]
-    assert labels == ["Speech", "Music"]
 
 
 def test_speech_presence_labels_preserves_multi_word_audioset_labels(aa: types.ModuleType) -> None:

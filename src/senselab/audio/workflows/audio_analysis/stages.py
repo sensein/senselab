@@ -37,6 +37,9 @@ from senselab.audio.tasks.speaker_diarization import diarize_audios
 from senselab.audio.tasks.speech_to_text import transcribe_audios
 from senselab.audio.tasks.speech_to_text.qwen import QwenASR
 from senselab.audio.workflows.audio_analysis.harvesters import (
+    asr_has_timestamps as _asr_has_timestamps,
+)
+from senselab.audio.workflows.audio_analysis.harvesters import (
     classification_window_top1 as _classification_window_top1,
 )
 from senselab.audio.workflows.audio_analysis.harvesters import (
@@ -112,29 +115,6 @@ def _top1(window: Any) -> dict[str, Any] | None:  # noqa: ANN401
     if label is None:
         return None
     return {"label": label, "score": score if score is not None else 0.0}
-
-
-def _asr_has_timestamps(result: Any) -> bool:  # noqa: ANN401
-    """Return True if any ScriptLine in ``result`` has a non-null start or non-empty chunks.
-
-    Used by the LS export and by the auto-align stage to decide whether to skip
-    forced alignment for an ASR result that already includes time information.
-    Handles both ScriptLine objects (post-run, in-memory) and the dict shape that
-    the JSON cache deserializes into (post-cache-hit).
-    """
-    if not result:
-        return False
-    items = result if isinstance(result, list) else [result]
-    for line in items:
-        if isinstance(line, dict):
-            start = line.get("start")
-            chunks = line.get("chunks") or []
-        else:
-            start = getattr(line, "start", None)
-            chunks = getattr(line, "chunks", None) or []
-        if start is not None or len(chunks) > 0:
-            return True
-    return False
 
 
 def _extract_transcript_text(result: Any) -> str:  # noqa: ANN401

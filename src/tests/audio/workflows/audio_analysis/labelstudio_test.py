@@ -6,6 +6,8 @@ import pytest
 
 from senselab.audio.workflows.audio_analysis.labelstudio import (
     LABEL_VALUES,
+    _classification_to_ls,
+    _collect_classification_labels,
     attach_uncertainty_tracks_to_ls,
     uncertainty_to_label_bin,
 )
@@ -178,3 +180,86 @@ def test_scene_tracks_absent_without_columns_and_for_deltas() -> None:
     _, config = attach_uncertainty_tracks_to_ls(ls_tasks=tasks, ls_config="<View></View>", axis_results=axis_results)
     assert "__presence__quality" not in config
     assert "__presence__sources" not in config
+
+
+# ── asr_has_timestamps consolidation (T051b) ──────────────────────────
+
+
+def test_chunked_but_untimed_transcript_has_no_timestamps() -> None:
+    """Chunks alone are not evidence of timing.
+
+    analyze_audio.py carried a looser duplicate that returned True whenever
+    ``chunks`` was non-empty. That made the alignment stage *skip* a
+    chunked-but-untimed transcript — precisely the input alignment exists to fix —
+    and it disagreed with ``resolve_asr_result``, which has always required a real
+    timestamp. The strict semantics is the surviving one.
+    """
+    from senselab.audio.workflows.audio_analysis.harvesters import asr_has_timestamps
+    from senselab.utils.data_structures import ScriptLine
+
+    untimed = ScriptLine(text="hello world", chunks=[ScriptLine(text="hello"), ScriptLine(text="world")])
+    assert asr_has_timestamps([untimed]) is False, "chunks without start times are not timestamps"
+
+
+def test_timestamped_chunk_is_detected() -> None:
+    """A chunk carrying a start time does count."""
+    from senselab.audio.workflows.audio_analysis.harvesters import asr_has_timestamps
+    from senselab.utils.data_structures import ScriptLine
+
+    timed = ScriptLine(text="hi", chunks=[ScriptLine(text="hi", start=0.0, end=0.5)])
+    assert asr_has_timestamps([timed]) is True
+
+
+def test_line_level_timestamp_is_detected() -> None:
+    """A line-level start counts even with no chunks."""
+    from senselab.audio.workflows.audio_analysis.harvesters import asr_has_timestamps
+    from senselab.utils.data_structures import ScriptLine
+
+    assert asr_has_timestamps([ScriptLine(text="hi", start=0.0, end=1.0)]) is True
+
+
+def test_empty_result_has_no_timestamps() -> None:
+    """Nothing in, False out."""
+    from senselab.audio.workflows.audio_analysis.harvesters import asr_has_timestamps
+
+    assert asr_has_timestamps([]) is False
+    assert asr_has_timestamps(None) is False
+
+
+def test_ls_builders_are_importable_from_the_library() -> None:
+    """T051b: the export builders now live here, not in the CLI script."""
+    from senselab.audio.workflows.audio_analysis.labelstudio import (
+        build_labelstudio_config,
+        build_labelstudio_task,
+    )
+
+    assert callable(build_labelstudio_task) and callable(build_labelstudio_config)
+
+
+# ── Moved from analyze_audio_test.py with the code they cover (T051b) ──
+
+
+def test_collect_classification_labels_pulls_unique_labels() -> None:
+    """The LS-config XML builder collects every distinct AudioSet label observed."""
+    classify_result = [
+        [
+            {"start": 0.0, "end": 0.5, "labels": ["Speech", "Music"], "scores": [0.9, 0.1]},
+            {"start": 0.5, "end": 1.0, "labels": ["Speech", "Silence"], "scores": [0.8, 0.2]},
+        ]
+    ]
+    labels = _collect_classification_labels(classify_result)
+    assert labels == {"Speech", "Music", "Silence"}
+
+
+def test_classification_to_ls_emits_regions_for_dict_shape() -> None:
+    """The LS conversion must skip empty entries but emit one region per dict window."""
+    result = [
+        [
+            {"start": 0.0, "end": 0.5, "labels": ["Speech"], "scores": [0.95]},
+            {"start": 0.5, "end": 1.0, "labels": ["Music"], "scores": [0.62]},
+        ]
+    ]
+    regions = _classification_to_ls(result, prefix="raw__ast", win_length=0.5, hop_length=0.5)
+    assert len(regions) == 2
+    labels = [r["value"]["labels"][0] for r in regions]
+    assert labels == ["Speech", "Music"]
