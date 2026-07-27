@@ -148,9 +148,17 @@ in Phase 8.
     clip available would fit noise; set it against a benchmark set instead. It is adjustable today
     via `--policy` (`thresholds.theta_high`) with no code change — see prototype-results.md
     "Decision on `theta_high`".
-- [ ] T042 Final-output schema completion vs contracts/final-outputs.md: `final/diarization.rttm`,
+- [x] T042 Final-output schema completion vs contracts/final-outputs.md: `final/diarization.rttm`,
   `diarization.json` `member_labels`/`overlap`, `transcript.json.language`, presence.parquet contract
   columns (`presence_confidence`, `elected_stream`, `overlap_posterior`).
+  - **Completed 2026-07-27.** `diarization.rttm`, `member_labels`/`overlap` and `transcript.json.language`
+    landed earlier; the three `presence.parquet` contract columns were still missing — confirmed
+    against a real full run, not assumed. Added `presence_confidence` (the calibrated P(speech), kept
+    beside the existing `p_voice` rather than renaming it so current readers don't break),
+    `elected_stream` (S1's per-region choice, defaulting to the fusion stream) and
+    `overlap_posterior` (written by I4/P2 when per-class posteriors were available, `None` elsewhere —
+    the column exists either way so the schema is stable). Verified on a full default run:
+    242/242 non-null for the first two, 97/242 for overlap_posterior.
 - [x] T043 Execute T038 (golden vs candidate full-pipeline runs) and T039 (degradation-suite pipeline
   runs) on a GPU/Mac environment; record results in prototype-results.md.
   - **Executed 2026-07-27 on macOS ARM64** — see prototype-results.md "T043" for the tables.

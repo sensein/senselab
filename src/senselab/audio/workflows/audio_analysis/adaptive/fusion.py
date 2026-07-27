@@ -294,6 +294,19 @@ def build_final_outputs(
             "status": r.get("status"),
             "irreducible_reason": r.get("irreducible_reason"),
             "round": r.get("round"),
+            # contracts/final-outputs.md columns (T042).
+            # `presence_confidence` is the calibrated P(speech) — the same quantity
+            # the workflow's presence parquet publishes under that name, kept
+            # alongside `p_voice` rather than renaming it so existing readers of
+            # this file don't break.
+            "presence_confidence": r.get("presence_confidence", r.get("p_voice")),
+            # Which pass S1 elected for this span; falls back to the fusion stream
+            # when no per-region election ran.
+            "elected_stream": (r.get("meta") or {}).get("elected_stream", stream),
+            # Written by I4 / P2 when per-class segmentation posteriors were
+            # available; None elsewhere (the column exists either way so the
+            # schema is stable).
+            "overlap_posterior": r.get("overlap_posterior", (r.get("meta") or {}).get("overlap_posterior")),
         }
         for r in state.axis_rows(stream, "presence")
     ]

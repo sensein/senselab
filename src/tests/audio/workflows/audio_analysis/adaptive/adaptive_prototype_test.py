@@ -691,3 +691,44 @@ def test_p2_execute_raises_when_posteriors_fail(monkeypatch: pytest.MonkeyPatch)
     )
     with pytest.raises(RuntimeError, match="posteriors_failed"):
         iv._p2_execute({"region": _p2_region(), "trigger": {"stream": "raw_16k"}}, ctx)
+
+
+def test_final_presence_parquet_has_contract_columns(tmp_path: Path) -> None:
+    """T042: final/presence.parquet must carry the contracts/final-outputs.md columns.
+
+    `presence_confidence`, `elected_stream` and `overlap_posterior` were absent —
+    verified against a real full run before this was added. The columns must exist
+    even when their values are None, so the schema is stable for readers.
+    """
+    pytest.importorskip("pandas")
+    import pandas as pd
+
+    from senselab.audio.workflows.audio_analysis.adaptive.belief import BeliefState, Vote, VoteStore
+    from senselab.audio.workflows.audio_analysis.adaptive.fusion import build_final_outputs
+    from senselab.audio.workflows.audio_analysis.adaptive.policy import load_policy
+
+    store = VoteStore()
+    store.add_vote(
+        Vote(
+            axis="presence",
+            bucket=(0.0, 0.5),
+            source="m1",
+            stream="raw_16k",
+            scope="file",
+            round=1,
+            payload={"speaks": True},
+        )
+    )
+    state = BeliefState.from_store(store, ["raw_16k"], aggregator="min")
+    build_final_outputs(
+        out_dir=tmp_path,
+        words=[],
+        store=store,
+        state=state,
+        stream="raw_16k",
+        policy=load_policy(),
+        generated_from_round=1,
+    )
+    cols = list(pd.read_parquet(tmp_path / "final" / "presence.parquet").columns)
+    for col in ("presence_confidence", "elected_stream", "overlap_posterior"):
+        assert col in cols, f"contract column {col!r} missing from final/presence.parquet"
