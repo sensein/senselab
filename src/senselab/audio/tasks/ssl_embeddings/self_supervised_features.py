@@ -47,11 +47,16 @@ class SSLEmbeddingsFactory:
         """
         key = f"{model.path_or_uri}-{model.revision}"
         if key not in cls._feat_extractor:
-            # Resolve once (download-once via the heartbeat lock) + pin the SHA so a
-            # cached model makes no per-call Hub HEAD (the 429 source under batch).
-            sha, _ = resolve_model(str(model.path_or_uri), model.revision or "main")
+            # SHA-pin only for the default HF cache: resolve_model stages into the
+            # default cache, so a custom cache_dir would miss it and re-download
+            # (double download). For the common cache_dir=None path this gives the
+            # full 429 fix (download-once + no Hub HEAD); a custom cache_dir keeps the
+            # prior ref-based behavior rather than staging into the wrong place.
+            revision = model.revision
+            if cache_dir is None:
+                revision, _ = resolve_model(str(model.path_or_uri), model.revision or "main")
             cls._feat_extractor[key] = AutoFeatureExtractor.from_pretrained(
-                model.path_or_uri, revision=sha, cache_dir=cache_dir
+                model.path_or_uri, revision=revision, cache_dir=cache_dir
             )
         return cls._feat_extractor[key]
 
@@ -74,8 +79,12 @@ class SSLEmbeddingsFactory:
         """
         key = f"{model.path_or_uri}-{model.revision}-{device.value}"
         if key not in cls._model:
-            sha, _ = resolve_model(str(model.path_or_uri), model.revision or "main")
-            cls._model[key] = AutoModel.from_pretrained(model.path_or_uri, revision=sha, cache_dir=cache_dir).to(
+            # SHA-pin only for the default HF cache (see _get_feature_extractor); a
+            # custom cache_dir keeps prior behavior to avoid a double download.
+            revision = model.revision
+            if cache_dir is None:
+                revision, _ = resolve_model(str(model.path_or_uri), model.revision or "main")
+            cls._model[key] = AutoModel.from_pretrained(model.path_or_uri, revision=revision, cache_dir=cache_dir).to(
                 device.value
             )
         return cls._model[key]

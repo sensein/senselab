@@ -20,6 +20,14 @@ it fails, the fix is:
 That second step is the point: it forces a human to consciously confirm the
 new load is HF-cache-safe. Do not add a file to the allowlist without wiring it
 through a helper first (the coverage assertions below check for that).
+
+Known limitations (by design — this is a static, file-granular guard):
+- It flags new *files* with loads, not a new raw load added *inside* an
+  already-reviewed file (that file already references a helper, so the
+  coverage assertion still passes). Review diffs to allowlisted files by hand.
+- Subprocess detection assumes the worker script string and its
+  ``subprocess.run``/``Popen`` launch live in the same module (true for all
+  current backends). A worker factored into a separate file would evade it.
 """
 
 from __future__ import annotations
