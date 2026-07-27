@@ -15,6 +15,7 @@ from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, HFModel, ScriptLine, _select_device_and_dtype
+from senselab.utils.dependencies import hf_subprocess_env
 from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
 
 # Reuse the same NeMo venv as diarization — it already has nemo_toolkit[asr]
@@ -134,7 +135,10 @@ class NeMoASR:
                 }
             )
 
-            env = _clean_subprocess_env()
+            # Stage the model once (cross-process, via the heartbeat lock) + run the
+            # worker offline so its from_pretrained makes no per-call Hub version
+            # check — the 429 source under parallel batch.
+            env = hf_subprocess_env(str(model_name), "main", base_env=_clean_subprocess_env())
             result = subprocess.run(
                 [python, "-c", _ASR_WORKER_SCRIPT],
                 input=input_json,
