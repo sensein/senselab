@@ -6,8 +6,9 @@ import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speaker_embeddings.speechbrain import SpeechBrainEmbeddings
+from senselab.audio.tasks.speaker_embeddings.wavlm import WavLMEmbeddings
 from senselab.utils.compatibility import requires_compatibility
-from senselab.utils.data_structures import DeviceType, SpeechBrainModel
+from senselab.utils.data_structures import DeviceType, SpeechBrainModel, TransformersWavLMModel
 
 
 @requires_compatibility("audio.tasks.speaker_embeddings.extract_speaker_embeddings_from_audios")
@@ -79,7 +80,9 @@ def extract_speaker_embeddings_from_audios(
         return SpeechBrainEmbeddings.extract_speechbrain_speaker_embeddings_from_audios(
             audios=audios, model=model, device=device
         )
-    else:
-        raise NotImplementedError(
-            "Only SpeechBrain models are supported for now. We aim to support more models in the future."
-        )
+    if isinstance(model, TransformersWavLMModel):
+        return WavLMEmbeddings.extract_wavlm_speaker_embeddings_from_audios(audios=audios, model=model, device=device)
+    raise NotImplementedError(
+        "Unsupported speaker-embedding model type "
+        f"{type(model).__name__!r}; expected SpeechBrainModel or TransformersWavLMModel."
+    )

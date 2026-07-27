@@ -15,6 +15,7 @@ Pass a deep-copy if you need the input unchanged.
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -36,7 +37,10 @@ from senselab.audio.workflows.audio_analysis.harvesters import (
     classification_windows,
 )
 from senselab.audio.workflows.audio_analysis.identity import harvest_identity_votes
-from senselab.audio.workflows.audio_analysis.presence import harvest_presence_votes
+from senselab.audio.workflows.audio_analysis.presence import (
+    harvest_presence_votes,
+    reference_grid_and_speech_mask,
+)
 from senselab.audio.workflows.audio_analysis.types import (
     AxisResult,
     UncertaintyAxis,
@@ -61,6 +65,7 @@ def compute_uncertainty_axes(
     diff_speaker_floor: float = 0.70,
     cluster_cosine_threshold: float = 0.5,
     clustering_algorithm: str = "spectral",
+    cache_dir: Path | None = None,
 ) -> tuple[dict[tuple[str, UncertaintyAxis], AxisResult], dict[str, str], dict[str, dict[str, list[WindowEmbedding]]]]:
     """Compute per-pass and raw-vs-enhanced uncertainty rows for all three axes.
 
@@ -99,6 +104,9 @@ def compute_uncertainty_axes(
             precomputed cosine-similarity affinity handles non-convex speaker
             clusters better than k-means; falls back automatically to k-means
             on per-k failure.
+        cache_dir: Optional content-addressable cache dir threaded to
+            ``extract_per_window_embeddings`` so per-window speaker embeddings
+            are reused across runs / stages instead of recomputed (FR-015).
 
     Returns:
         ``(axis_results, incomparable_reasons, per_window_embeddings_by_pass)`` where:
@@ -132,6 +140,7 @@ def compute_uncertainty_axes(
                     window_s=embedding_window_s,
                     hop_s=embedding_hop_s,
                     failures=emb_failures,
+                    cache_dir=cache_dir,
                 )
             except Exception as exc:  # noqa: BLE001
                 incomparable_reasons[f"{pass_label}/identity/across_time"] = (
@@ -163,15 +172,18 @@ def compute_uncertainty_axes(
             )
 
             cluster_failures: dict[str, str] = {}
+            # Compute the speech mask once on the shared window grid (it depends
+            # on window times, not the embedding vectors, so it applies to every
+            # model) — same helper the speaker_profile build uses (FR-002).
+            _, speech_mask = reference_grid_and_speech_mask(
+                per_window_embeddings_by_pass[pass_label],
+                pass_summary=pass_summary,
+                speech_presence_labels=speech_presence_labels,
+            )
             for emb_model_id in sorted(per_window_embeddings_by_pass[pass_label]):
                 entries = per_window_embeddings_by_pass[pass_label][emb_model_id]
                 if not entries:
                     continue
-                speech_mask = _speech_window_mask(
-                    entries=entries,
-                    pass_summary=pass_summary,
-                    speech_presence_labels=speech_presence_labels,
-                )
                 emb_cluster = _cluster_pass_speakers(
                     entries,
                     failures=cluster_failures,
@@ -525,123 +537,6 @@ def _compute_raw_vs_enhanced_delta(
     return out
 
 
-def _speech_window_mask(
-    *,
-    entries: list[WindowEmbedding],
-    pass_summary: dict[str, Any],
-    speech_presence_labels: list[str],
-) -> list[bool] | None:
-    """Build a per-embedding-window boolean mask of "is this window speech?".
-
-    **YAMNet veto, not a fallback ladder.** When YAMNet is available, its top-1
-    label decision is authoritative — even if loudness is high, AST disagrees,
-    or both. AST is only consulted when YAMNet is unavailable; openSMILE
-    loudness is consulted only when both classifiers are unavailable. This is
-    deliberate: YAMNet is trained on the AudioSet hierarchy with explicit
-    speech labels; AST is broader-coverage but noisier on speech specifically;
-    loudness is recording-conditional. Trusting YAMNet's "Music" / "Vehicle"
-    over a loud-but-non-speech window is the right call for our use case.
-
-    Tradeoff: YAMNet has known confusions (e.g. tagging child voices as "Music"
-    or "Singing"). When that happens, a real-speech window gets dropped from
-    clustering. The mitigation is upstream: tune ``speech_presence_labels`` to
-    include the singing / NORP labels you care about. We deliberately do NOT
-    let loudness override YAMNet here, because that would break the
-    silent-room-detection guarantee callers rely on (a loud window of music
-    must not be allowed to claim "speech" status).
-
-    Returns ``None`` when none of the three signals are available, in which
-    case the caller falls back to legacy behavior (cluster every non-zero-norm
-    window).
-    """
-    ast_block = pass_summary.get("ast") or {}
-    yam_block = pass_summary.get("yamnet") or {}
-    ast_ok = isinstance(ast_block, dict) and ast_block.get("status") == "ok"
-    yam_ok = isinstance(yam_block, dict) and yam_block.get("status") == "ok"
-
-    feat_block = pass_summary.get("features") or {}
-    feat_result = feat_block.get("result") if isinstance(feat_block, dict) else None
-    opensmile_rows: list[dict[str, Any]] = feat_result.get("opensmile", []) if isinstance(feat_result, dict) else []
-
-    if not (ast_ok or yam_ok or opensmile_rows):
-        return None
-
-    def _native_grid(block: dict[str, Any]) -> tuple[float, float]:
-        windows = classification_windows(block.get("result"))
-        if not windows or not isinstance(windows[0], dict):
-            return 1.0, 1.0
-        w = windows[0]
-        win_len = float(w.get("win_length", 0) or 0) or float(w.get("end", 0) - w.get("start", 0))
-        hop_len = float(w.get("hop_length", 0) or 0) or win_len
-        if win_len <= 0:
-            win_len = 1.0
-        if hop_len <= 0:
-            hop_len = win_len
-        return win_len, hop_len
-
-    ast_hop = _native_grid(ast_block)[1] if ast_ok else 0.0
-    yam_hop = _native_grid(yam_block)[1] if yam_ok else 0.0
-
-    loudness_q25: float | None = None
-    if opensmile_rows:
-        vals: list[float] = []
-        for r in opensmile_rows:
-            v = r.get("Loudness_sma3")
-            if v is None:
-                continue
-            try:
-                vf = float(v)
-            except (TypeError, ValueError):
-                continue
-            if math.isfinite(vf):
-                vals.append(vf)
-        if len(vals) >= 100:  # ~1 s of opensmile frames
-            loudness_q25 = float(np.percentile(vals, 25))
-
-    allow = set(speech_presence_labels)
-    mask: list[bool] = []
-    for w in entries:
-        center = 0.5 * (w.start_s + w.end_s)
-        # YAMNet is authoritative when available — it's the canonical
-        # AudioSet speech-presence detector.
-        if yam_ok:
-            idx = max(0, int(round(center / yam_hop))) if yam_hop > 0 else 0
-            label, _, _ = classification_top1_in_window(yam_block.get("result"), idx)
-            if label is not None:
-                mask.append(label in allow)
-                continue
-        # Fall back to AST when YAMNet unavailable.
-        if ast_ok:
-            idx = max(0, int(round(center / ast_hop))) if ast_hop > 0 else 0
-            label, _, _ = classification_top1_in_window(ast_block.get("result"), idx)
-            if label is not None:
-                mask.append(label in allow)
-                continue
-        # Final fallback: openSMILE loudness threshold.
-        if loudness_q25 is not None and opensmile_rows:
-            vals_in: list[float] = []
-            for r in opensmile_rows:
-                rs = r.get("start") or r.get("frameTime") or r.get("time")
-                re_ = r.get("end")
-                try:
-                    rs_f = float(rs) if rs is not None else None
-                    re_f = float(re_) if re_ is not None else (rs_f + 0.01 if rs_f is not None else None)
-                except (TypeError, ValueError):
-                    continue
-                if rs_f is None or re_f is None:
-                    continue
-                if rs_f < w.end_s and re_f > w.start_s:
-                    v = r.get("Loudness_sma3")
-                    if v is None:
-                        continue
-                    try:
-                        vf = float(v)
-                    except (TypeError, ValueError):
-                        continue
-                    vals_in.append(vf)
-            if vals_in:
-                mean_loud = sum(vals_in) / len(vals_in)
-                mask.append(mean_loud >= loudness_q25)
-                continue
-        mask.append(True)
-    return mask
+# NOTE: ``speech_window_mask_for_file`` (formerly the private ``_speech_window_mask``
+# defined here) was promoted to ``presence.py`` so the speaker_profile package can
+# reuse it as the build-time speech gate (T009a, FR-002). It is imported above.

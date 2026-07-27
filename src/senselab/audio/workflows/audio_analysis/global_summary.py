@@ -210,6 +210,8 @@ def compute_pass_global_summary(
     asr_resolved: dict[str, Any],
     pii_report: Any,  # noqa: ANN401 — PiiPassReport, optional
     expects_speech: bool = True,
+    profile_other_voice: dict[str, Any] | None = None,
+    profile_target_quality: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Aggregate one pass's per-bucket axes into the four-claim summary.
 
@@ -222,6 +224,18 @@ def compute_pass_global_summary(
         expects_speech: When ``True`` (default), n_speakers=0 → uncertainty 1.0
             (no-speech recording violates the "single speaker" claim). Set
             ``False`` when the caller wants n=0 to count as compliant.
+        profile_other_voice: Optional speaker-profile other-voice sub-signals
+            (the ``profile_*`` fields produced by ``summarize_other_voice``).
+            When supplied, they are added under the ``single_speaker`` claim and
+            the profile's p95 other-voice uncertainty is folded into the claim's
+            headline via ``max()``. ``None`` leaves the claim unchanged.
+        profile_target_quality: Optional speaker-profile target-quality
+            sub-signals (the ``profile_*`` fields produced by
+            ``compute_target_quality``). When supplied, they are added under the
+            ``quality`` claim; ``1 - profile_target_quality`` folds into the
+            claim headline via ``max()`` only when ``profile_confidence == "ok"``
+            (a weak profile is not allowed to move the quality headline). ``None``
+            leaves the claim unchanged.
 
     Returns:
         Dict with the four sub-uncertainties plus a ``combined`` max() and
@@ -275,8 +289,32 @@ def compute_pass_global_summary(
         # a "single-speaker" pass still surfaces.
         single_speaker_uncertainty = max(single_speaker_uncertainty, identity_mean)
 
+    # Speaker-profile other-voice sub-signals (target-relative refinement of the
+    # same "is there >1 speaker?" question). The p95 uncertainty folds into the
+    # headline via max(); the rest are decision-ready diagnostics. No verdict.
+    if profile_other_voice is not None:
+        prof_fold = profile_other_voice.get("profile_p95_other_voice_uncertainty")
+        if prof_fold is not None:
+            single_speaker_uncertainty = (
+                float(prof_fold)
+                if single_speaker_uncertainty is None
+                else max(single_speaker_uncertainty, float(prof_fold))
+            )
+
     # ─── quality ───
     quality_block = _aggregate_quality(pass_summary)
+
+    # Speaker-profile target-quality sub-signals. The headline only folds in a
+    # target-quality uncertainty (1 - profile_target_quality) when the profile
+    # is fully confident ("ok"); on low/ambiguous/insufficient the consumer is
+    # told to discount target quality, so we don't let a weak profile move the
+    # quality headline. The sub-signals are always recorded.
+    if profile_target_quality is not None:
+        ptq = profile_target_quality.get("profile_target_quality")
+        if ptq is not None and profile_target_quality.get("profile_confidence") == "ok":
+            fold = 1.0 - float(ptq)
+            existing = quality_block.get("uncertainty")
+            quality_block["uncertainty"] = fold if existing is None else max(float(existing), fold)
 
     # ─── no_pii ───
     # Surface the actual detected PII spans (text + category + detector + ASR
@@ -369,6 +407,7 @@ def compute_pass_global_summary(
             "n_speakers": n_speakers,
             "identity_axis_mean": identity_mean,
             "expects_speech": expects_speech,
+            **(profile_other_voice or {}),
         },
         "quality": {
             "uncertainty": quality_block.get("uncertainty"),
@@ -378,6 +417,7 @@ def compute_pass_global_summary(
             "pesq_uncertainty": quality_block.get("pesq_uncertainty"),
             "stoi_uncertainty": quality_block.get("stoi_uncertainty"),
             "sisdr_uncertainty": quality_block.get("sisdr_uncertainty"),
+            **(profile_target_quality or {}),
         },
         "no_pii": {
             "uncertainty": no_pii_uncertainty,

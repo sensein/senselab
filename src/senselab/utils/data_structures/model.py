@@ -106,6 +106,18 @@ class SpeechBrainModel(HFModel[PROVIDER_T]):
     pass
 
 
+class TransformersWavLMModel(HFModel[PROVIDER_T]):
+    """HuggingFace transformers WavLM model with an X-Vector / SV head.
+
+    Used by the speaker-embedding backend to load ``WavLMForXVector``
+    checkpoints (e.g. ``microsoft/wavlm-base-plus-sv``). Distinct from
+    :class:`SpeechBrainModel` so the embedding dispatch can pick the right
+    backend.
+    """
+
+    pass
+
+
 class PyannoteAudioModel(HFModel[PROVIDER_T]):
     """PyannoteAudioModel model."""
 
@@ -275,6 +287,7 @@ def check_github_repo_exists(repo_id: str, branch: str = "main") -> bool:
 SenselabModel.model_rebuild()
 HFModel.model_rebuild()
 SpeechBrainModel.model_rebuild()
+TransformersWavLMModel.model_rebuild()
 PyannoteAudioModel.model_rebuild()
 SentenceTransformersModel.model_rebuild()
 CoquiTTSModel.model_rebuild()

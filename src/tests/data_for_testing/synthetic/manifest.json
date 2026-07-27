@@ -1,0 +1,509 @@
+{
+    "schema_version": 1,
+    "sample_rate_hz": 16000,
+    "seed": 20260527,
+    "tts_model": "microsoft/speecht5_tts",
+    "tts_revision": "main",
+    "vocoder_model": "microsoft/speecht5_hifigan",
+    "speaker_xvector_dataset": "Matthijs/cmu-arctic-xvectors",
+    "speakers": {
+        "A": {
+            "xvector_index": 7306,
+            "expected_cmu_arctic_speaker_id": "slt",
+            "observed_cmu_arctic_speaker_id": "slt"
+        },
+        "B": {
+            "xvector_index": 5306,
+            "expected_cmu_arctic_speaker_id": "ksp",
+            "observed_cmu_arctic_speaker_id": "ksp"
+        },
+        "C": {
+            "xvector_index": 2837,
+            "expected_cmu_arctic_speaker_id": "clb",
+            "observed_cmu_arctic_speaker_id": "clb"
+        }
+    },
+    "clips": [
+        {
+            "file_id": "sub-A-confident/ses-1/harvard-00.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "The birch canoe slid on the smooth planks.",
+            "duration_s": 2.624,
+            "session_id": "ses-1"
+        },
+        {
+            "file_id": "sub-A-confident/ses-1/harvard-01.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "Glue the sheet to the dark blue background.",
+            "duration_s": 2.368,
+            "session_id": "ses-1"
+        },
+        {
+            "file_id": "sub-A-confident/ses-1/harvard-02.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "It is easy to tell the depth of a well.",
+            "duration_s": 2.528,
+            "session_id": "ses-1"
+        },
+        {
+            "file_id": "sub-A-confident/ses-1/harvard-03.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "These days a chicken leg is a rare dish.",
+            "duration_s": 2.656,
+            "session_id": "ses-1"
+        },
+        {
+            "file_id": "sub-A-confident/ses-1/harvard-04.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "Rice is often served in round bowls.",
+            "duration_s": 2.464,
+            "session_id": "ses-1"
+        },
+        {
+            "file_id": "sub-A-confident/ses-1/harvard-05.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "The juice of lemons makes fine punch.",
+            "duration_s": 2.368,
+            "session_id": "ses-1"
+        },
+        {
+            "file_id": "sub-A-confident/ses-1/harvard-06.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "The box was thrown beside the parked truck.",
+            "duration_s": 2.496,
+            "session_id": "ses-1"
+        },
+        {
+            "file_id": "sub-A-confident/ses-1/harvard-07.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "The hogs were fed chopped corn and garbage.",
+            "duration_s": 2.56,
+            "session_id": "ses-1"
+        },
+        {
+            "file_id": "sub-A-confident/ses-1/harvard-08.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "Four hours of steady work faced us.",
+            "duration_s": 2.336,
+            "session_id": "ses-1"
+        },
+        {
+            "file_id": "sub-A-confident/ses-1/harvard-09.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "A large size in stockings is hard to sell.",
+            "duration_s": 3.104,
+            "session_id": "ses-1"
+        },
+        {
+            "file_id": "sub-A-thin/ses-1/harvard-00.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "The juice of lemons makes fine punch.",
+            "duration_s": 2.4,
+            "session_id": "ses-1"
+        },
+        {
+            "file_id": "sub-A-thin/ses-1/harvard-01.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "The box was thrown beside the parked truck.",
+            "duration_s": 2.592,
+            "session_id": "ses-1"
+        },
+        {
+            "file_id": "sub-A-insufficient/ses-1/single-word.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "Rice.",
+            "duration_s": 0.512,
+            "session_id": "ses-1"
+        },
+        {
+            "file_id": "sub-A-confident/ses-1/rainbow.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "When the sunlight strikes raindrops in the air, they act as a prism and form a rainbow. The rainbow is a division of white light into many beautiful colors. These take the shape of a long round arch, with its path high above, and its two ends apparently beyond the horizon.",
+            "duration_s": 18.528,
+            "session_id": "ses-1",
+            "clinical_task": "rainbow-passage"
+        },
+        {
+            "file_id": "sub-A-confident/ses-1/north-wind.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "The North Wind and the Sun were disputing which was the stronger, when a traveller came along wrapped in a warm cloak. They agreed that the one who first succeeded in making the traveller take his cloak off should be considered stronger than the other.",
+            "duration_s": 14.976,
+            "session_id": "ses-1",
+            "clinical_task": "north-wind-and-the-sun"
+        },
+        {
+            "file_id": "sub-A-confident/ses-1/grandfather.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "You wished to know all about my grandfather. Well, he is nearly ninety-three years old. He dresses himself in an ancient black frock coat, usually minus several buttons. A long beard clings to his chin, giving those who observe him a pronounced feeling of the utmost respect.",
+            "duration_s": 17.504,
+            "session_id": "ses-1",
+            "clinical_task": "grandfather-passage"
+        },
+        {
+            "file_id": "sub-A-confident/ses-1/animal-naming-00.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "Cat.",
+            "duration_s": 0.416,
+            "session_id": "ses-1",
+            "clinical_task": "animal-naming"
+        },
+        {
+            "file_id": "sub-A-confident/ses-1/animal-naming-01.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "Dog.",
+            "duration_s": 0.512,
+            "session_id": "ses-1",
+            "clinical_task": "animal-naming"
+        },
+        {
+            "file_id": "sub-A-confident/ses-1/animal-naming-02.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "Elephant.",
+            "duration_s": 0.8,
+            "session_id": "ses-1",
+            "clinical_task": "animal-naming"
+        },
+        {
+            "file_id": "sub-A-confident/ses-1/animal-naming-03.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "Mouse.",
+            "duration_s": 0.576,
+            "session_id": "ses-1",
+            "clinical_task": "animal-naming"
+        },
+        {
+            "file_id": "sub-A-confident/ses-1/animal-naming-04.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "Tiger.",
+            "duration_s": 0.64,
+            "session_id": "ses-1",
+            "clinical_task": "animal-naming"
+        },
+        {
+            "file_id": "sub-A-confident/ses-1/picture-naming-00.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "Window.",
+            "duration_s": 0.64,
+            "session_id": "ses-1",
+            "clinical_task": "picture-naming"
+        },
+        {
+            "file_id": "sub-A-confident/ses-1/picture-naming-01.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "Pumpkin.",
+            "duration_s": 0.672,
+            "session_id": "ses-1",
+            "clinical_task": "picture-naming"
+        },
+        {
+            "file_id": "sub-A-confident/ses-1/picture-naming-02.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "Carrot.",
+            "duration_s": 0.544,
+            "session_id": "ses-1",
+            "clinical_task": "picture-naming"
+        },
+        {
+            "file_id": "sub-A-confident/ses-1/picture-naming-03.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "Hammer.",
+            "duration_s": 0.576,
+            "session_id": "ses-1",
+            "clinical_task": "picture-naming"
+        },
+        {
+            "file_id": "sub-A-confident/ses-1/picture-naming-04.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "Telephone.",
+            "duration_s": 0.8,
+            "session_id": "ses-1",
+            "clinical_task": "picture-naming"
+        },
+        {
+            "file_id": "sub-A-confident/ses-1/counting.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "One, two, three, four, five, six, seven, eight, nine, ten.",
+            "duration_s": 3.648,
+            "session_id": "ses-1",
+            "clinical_task": "counting-1-10"
+        },
+        {
+            "file_id": "sub-A-confident/ses-1/ddk-pataka-approx.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "Pa-ta-ka, pa-ta-ka, pa-ta-ka, pa-ta-ka, pa-ta-ka, pa-ta-ka.",
+            "duration_s": 5.44,
+            "session_id": "ses-1",
+            "clinical_task": "ddk-pataka",
+            "tts_approximation": true,
+            "notes": {
+                "caveat": "SpeechT5 reads this with natural prosody between syllables rather than the rhythmic rapid articulation of clinical DDK; useful as a repeated-nonsense-syllable stress test only."
+            }
+        },
+        {
+            "file_id": "pii-test/intro-name.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "Hi, my name is John Smith.",
+            "duration_s": 1.952,
+            "session_id": null,
+            "pii_category": "NAME"
+        },
+        {
+            "file_id": "pii-test/contact-phone.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "You can reach me at five five five, one two three, four five six seven.",
+            "duration_s": 4.576,
+            "session_id": null,
+            "pii_category": "PHONE"
+        },
+        {
+            "file_id": "pii-test/email-spoken.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "My email is example dot user at example dot com.",
+            "duration_s": 3.84,
+            "session_id": null,
+            "pii_category": "EMAIL"
+        },
+        {
+            "file_id": "pii-test/address-spoken.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "I live at two hundred forty-five Maple Street in Springfield.",
+            "duration_s": 4.128,
+            "session_id": null,
+            "pii_category": "ADDRESS"
+        },
+        {
+            "file_id": "pii-test/dob-spoken.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "I was born on March third, nineteen eighty-five.",
+            "duration_s": 3.04,
+            "session_id": null,
+            "pii_category": "DOB"
+        },
+        {
+            "file_id": "pii-test/medication.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "I take ibuprofen for my headaches.",
+            "duration_s": 2.496,
+            "session_id": null,
+            "pii_category": "MEDICATION"
+        },
+        {
+            "file_id": "pii-test/free-mixed.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "My name is Jane Doe, my date of birth is January twelfth nineteen ninety, and I currently live at five hundred Oak Avenue.",
+            "duration_s": 8.0,
+            "session_id": null,
+            "pii_category": "MIXED"
+        },
+        {
+            "file_id": "pii-test/free-no-pii.flac",
+            "speaker_id": "A",
+            "speaker_id_cmu_arctic": "slt",
+            "transcript": "I really enjoyed the hike this weekend. The weather was perfect and we saw a lot of wildlife.",
+            "duration_s": 5.888,
+            "session_id": null,
+            "pii_category": "NONE"
+        },
+        {
+            "file_id": "speaker-B/clip-00.flac",
+            "speaker_id": "B",
+            "speaker_id_cmu_arctic": "ksp",
+            "transcript": "The hogs were fed chopped corn and garbage.",
+            "duration_s": 2.784,
+            "session_id": null
+        },
+        {
+            "file_id": "speaker-B/clip-01.flac",
+            "speaker_id": "B",
+            "speaker_id_cmu_arctic": "ksp",
+            "transcript": "Four hours of steady work faced us.",
+            "duration_s": 2.496,
+            "session_id": null
+        },
+        {
+            "file_id": "speaker-B/clip-02.flac",
+            "speaker_id": "B",
+            "speaker_id_cmu_arctic": "ksp",
+            "transcript": "A large size in stockings is hard to sell.",
+            "duration_s": 3.296,
+            "session_id": null
+        },
+        {
+            "file_id": "speaker-C/clip-00.flac",
+            "speaker_id": "C",
+            "speaker_id_cmu_arctic": "clb",
+            "transcript": "The box was thrown beside the parked truck.",
+            "duration_s": 2.912,
+            "session_id": null
+        },
+        {
+            "file_id": "sub-B-confident/ses-1/rainbow.flac",
+            "speaker_id": "B",
+            "speaker_id_cmu_arctic": "ksp",
+            "transcript": "When the sunlight strikes raindrops in the air, they act as a prism and form a rainbow. The rainbow is a division of white light into many beautiful colors. These take the shape of a long round arch, with its path high above, and its two ends apparently beyond the horizon.",
+            "duration_s": 17.6,
+            "session_id": "ses-1",
+            "clinical_task": "rainbow-passage"
+        },
+        {
+            "file_id": "sub-B-confident/ses-1/north-wind.flac",
+            "speaker_id": "B",
+            "speaker_id_cmu_arctic": "ksp",
+            "transcript": "The North Wind and the Sun were disputing which was the stronger, when a traveller came along wrapped in a warm cloak. They agreed that the one who first succeeded in making the traveller take his cloak off should be considered stronger than the other.",
+            "duration_s": 15.456,
+            "session_id": "ses-1",
+            "clinical_task": "north-wind-and-the-sun"
+        },
+        {
+            "file_id": "sub-B-confident/ses-1/grandfather.flac",
+            "speaker_id": "B",
+            "speaker_id_cmu_arctic": "ksp",
+            "transcript": "You wished to know all about my grandfather. Well, he is nearly ninety-three years old. He dresses himself in an ancient black frock coat, usually minus several buttons. A long beard clings to his chin, giving those who observe him a pronounced feeling of the utmost respect.",
+            "duration_s": 18.272,
+            "session_id": "ses-1",
+            "clinical_task": "grandfather-passage"
+        },
+        {
+            "file_id": "sub-B-confident/ses-1/harvard-00.flac",
+            "speaker_id": "B",
+            "speaker_id_cmu_arctic": "ksp",
+            "transcript": "The birch canoe slid on the smooth planks.",
+            "duration_s": 2.848,
+            "session_id": "ses-1"
+        },
+        {
+            "file_id": "sub-B-confident/ses-1/harvard-01.flac",
+            "speaker_id": "B",
+            "speaker_id_cmu_arctic": "ksp",
+            "transcript": "Glue the sheet to the dark blue background.",
+            "duration_s": 2.624,
+            "session_id": "ses-1"
+        },
+        {
+            "file_id": "sub-B-confident/ses-1/harvard-02.flac",
+            "speaker_id": "B",
+            "speaker_id_cmu_arctic": "ksp",
+            "transcript": "It is easy to tell the depth of a well.",
+            "duration_s": 2.784,
+            "session_id": "ses-1"
+        },
+        {
+            "file_id": "sub-B-confident/ses-1/harvard-03.flac",
+            "speaker_id": "B",
+            "speaker_id_cmu_arctic": "ksp",
+            "transcript": "These days a chicken leg is a rare dish.",
+            "duration_s": 2.816,
+            "session_id": "ses-1"
+        },
+        {
+            "file_id": "sub-B-confident/ses-1/harvard-04.flac",
+            "speaker_id": "B",
+            "speaker_id_cmu_arctic": "ksp",
+            "transcript": "Rice is often served in round bowls.",
+            "duration_s": 2.784,
+            "session_id": "ses-1"
+        },
+        {
+            "file_id": "sub-C-confident/ses-1/rainbow.flac",
+            "speaker_id": "C",
+            "speaker_id_cmu_arctic": "clb",
+            "transcript": "When the sunlight strikes raindrops in the air, they act as a prism and form a rainbow. The rainbow is a division of white light into many beautiful colors. These take the shape of a long round arch, with its path high above, and its two ends apparently beyond the horizon.",
+            "duration_s": 17.536,
+            "session_id": "ses-1",
+            "clinical_task": "rainbow-passage"
+        },
+        {
+            "file_id": "sub-C-confident/ses-1/north-wind.flac",
+            "speaker_id": "C",
+            "speaker_id_cmu_arctic": "clb",
+            "transcript": "The North Wind and the Sun were disputing which was the stronger, when a traveller came along wrapped in a warm cloak. They agreed that the one who first succeeded in making the traveller take his cloak off should be considered stronger than the other.",
+            "duration_s": 15.36,
+            "session_id": "ses-1",
+            "clinical_task": "north-wind-and-the-sun"
+        },
+        {
+            "file_id": "sub-C-confident/ses-1/grandfather.flac",
+            "speaker_id": "C",
+            "speaker_id_cmu_arctic": "clb",
+            "transcript": "You wished to know all about my grandfather. Well, he is nearly ninety-three years old. He dresses himself in an ancient black frock coat, usually minus several buttons. A long beard clings to his chin, giving those who observe him a pronounced feeling of the utmost respect.",
+            "duration_s": 17.44,
+            "session_id": "ses-1",
+            "clinical_task": "grandfather-passage"
+        },
+        {
+            "file_id": "sub-C-confident/ses-1/harvard-00.flac",
+            "speaker_id": "C",
+            "speaker_id_cmu_arctic": "clb",
+            "transcript": "The birch canoe slid on the smooth planks.",
+            "duration_s": 2.816,
+            "session_id": "ses-1"
+        },
+        {
+            "file_id": "sub-C-confident/ses-1/harvard-01.flac",
+            "speaker_id": "C",
+            "speaker_id_cmu_arctic": "clb",
+            "transcript": "Glue the sheet to the dark blue background.",
+            "duration_s": 2.496,
+            "session_id": "ses-1"
+        },
+        {
+            "file_id": "sub-C-confident/ses-1/harvard-02.flac",
+            "speaker_id": "C",
+            "speaker_id_cmu_arctic": "clb",
+            "transcript": "It is easy to tell the depth of a well.",
+            "duration_s": 2.432,
+            "session_id": "ses-1"
+        },
+        {
+            "file_id": "sub-C-confident/ses-1/harvard-03.flac",
+            "speaker_id": "C",
+            "speaker_id_cmu_arctic": "clb",
+            "transcript": "These days a chicken leg is a rare dish.",
+            "duration_s": 2.784,
+            "session_id": "ses-1"
+        },
+        {
+            "file_id": "sub-C-confident/ses-1/harvard-04.flac",
+            "speaker_id": "C",
+            "speaker_id_cmu_arctic": "clb",
+            "transcript": "Rice is often served in round bowls.",
+            "duration_s": 2.592,
+            "session_id": "ses-1"
+        }
+    ]
+}

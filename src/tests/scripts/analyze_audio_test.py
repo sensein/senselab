@@ -328,3 +328,23 @@ def test_utterance_grid_validation(aa: types.ModuleType) -> None:
         aa.parse_args(["/tmp/dummy.wav", "--utterance-win-length", "-1"])
     with pytest.raises(SystemExit):
         aa.parse_args(["/tmp/dummy.wav", "--utterance-hop-length", "1.5", "--utterance-win-length", "1.0"])
+
+
+def test_diar_overlap_for_windows(aa: types.ModuleType) -> None:
+    """Per-window 2+-speaker overlap mask from a pass's diarization (T047a corroborator input)."""
+    # 4 contiguous 1 s detection windows: [0,1] [1,2] [2,3] [3,4].
+    windows = {"ecapa": [SimpleNamespace(start_s=float(i), end_s=float(i + 1)) for i in range(4)]}
+    # Speaker A talks the whole clip; speaker B only [1.5, 2.5] → overlap only where both are active.
+    segs = [
+        {"start": 0.0, "end": 4.0, "speaker": "A"},
+        {"start": 1.5, "end": 2.5, "speaker": "B"},
+    ]
+    ps = {"diarization": {"by_model": {"pyannote": {"status": "ok", "result": segs}}}}
+    assert aa._diar_overlap_for_windows(ps, windows) == [False, True, True, False]
+
+    # No diarization ran → no overlap signal (keeps the profile path additive).
+    assert aa._diar_overlap_for_windows({}, windows) is None
+
+    # A single speaker is never an overlap.
+    solo = {"diarization": {"by_model": {"pyannote": {"status": "ok", "result": [segs[0]]}}}}
+    assert aa._diar_overlap_for_windows(solo, windows) == [False, False, False, False]

@@ -142,6 +142,10 @@ from senselab.audio.workflows.audio_analysis.harvesters import (
 from senselab.audio.workflows.audio_analysis.harvesters import (
     classification_windows as _classification_windows,
 )
+from senselab.audio.workflows.audio_analysis.presence import (
+    DEFAULT_SPEECH_PRESENCE_LABELS,
+    reference_grid_and_speech_mask,
+)
 from senselab.utils.data_structures import (
     DeviceType,
     HFModel,
@@ -155,15 +159,8 @@ TARGET_SR = 16000
 ALL_TASKS = ("diarization", "ast", "yamnet", "features", "asr", "alignment", "comparisons")
 COMPARISON_AXES = ("raw_vs_enhanced", "within_stream", "cross_stream")
 UNCERTAINTY_AGGREGATORS = ("min", "mean", "harmonic_mean", "disagreement_weighted")
-DEFAULT_SPEECH_PRESENCE_LABELS = (
-    "Speech",
-    "Conversation",
-    "Narration, monologue",
-    "Female speech, woman speaking",
-    "Male speech, man speaking",
-    "Child speech, kid speaking",
-    "Speech synthesizer",
-)
+# DEFAULT_SPEECH_PRESENCE_LABELS is imported from audio_analysis.presence (the
+# single canonical source shared with the speaker_profile build-time gate).
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -242,7 +239,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "speechbrain/spkrec-ecapa-voxceleb",
             "speechbrain/spkrec-resnet-voxceleb",
         ],
-        help="SpeechBrain speaker-embedding models. Default runs ECAPA-TDNN + ResNet-TDNN.",
+        help="SpeechBrain speaker-embedding models. Default runs ECAPA-TDNN + ResNet-TDNN. "
+        "A --speaker-profile is only scorable for models in this set, so this must be a "
+        "superset of the profile's build models (the profile default matches this default).",
     )
     parser.add_argument(
         "--enhancement-model",
@@ -518,6 +517,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=100,
         help="Top-N rows to emit in disagreements.json (default 100; 0 disables the index).",
     )
+    parser.add_argument(
+        "--speaker-profile",
+        type=Path,
+        default=None,
+        help=(
+            "Path to a speaker-profile artifact (from build_speaker_profile). When given, "
+            "flags likely other-voice regions against the target and extends the single_speaker "
+            "claim. With no profile, all other outputs are unchanged."
+        ),
+    )
+    parser.add_argument(
+        "--profile-other-voice-threshold",
+        type=float,
+        default=None,
+        help=(
+            "Override the adaptive per-subject other-voice cutoff with a fixed calibrated-"
+            "uncertainty threshold in [0, 1]. Only used with --speaker-profile."
+        ),
+    )
     args = parser.parse_args(argv)
     # Comparator flag validation (cli.md "Validation").
     if args.cross_stream_win_length <= 0:
@@ -572,6 +590,239 @@ def pick_device(arg: str) -> DeviceType | None:
     if arg == "cpu":
         return DeviceType.CPU
     return None
+
+
+# -- Speaker-profile other-voice scoring (optional) ------------------------
+
+
+def _load_speaker_profile(path: Path) -> Any:  # noqa: ANN401 — SpeakerProfile | None
+    """Load a speaker-profile artifact; treat an ``insufficient`` profile as absent."""
+    from senselab.audio.workflows.speaker_profile.io import ProfileSchemaError, load_profile
+
+    try:
+        profile = load_profile(path)
+    except (OSError, ProfileSchemaError) as exc:
+        print(f"warn: could not read --speaker-profile {path}: {exc!r}; proceeding without it", file=sys.stderr)
+        return None
+    if profile.confidence == "insufficient" or not profile.centroids:
+        print(
+            f"warn: --speaker-profile {path} has confidence='insufficient'; treating as no profile",
+            file=sys.stderr,
+        )
+        return None
+    return profile
+
+
+def _resolve_scoring_profile(
+    profile: Any,  # noqa: ANN401 — SpeakerProfile
+    analyzed_audio: Audio,
+    *,
+    embedding_models: list[str],
+    device: DeviceType | None,
+    cache_dir: Path | None = None,
+) -> tuple[dict[str, list[float]], dict[str, tuple[float, float]], bool, str | None]:
+    """Return ``(centroids, calibration_band, leave_one_file_out_applied, note)`` for scoring.
+
+    If the analyzed recording contributed to the profile, its windows must be
+    excluded from the centroid (leave-one-file-out). For a multi-file subject we
+    re-extract the *other* source files (by their stored paths) and re-aggregate
+    using the **profile's own build params** (model set, window/hop, session
+    preference) so the leave-one-out centroid is faithful to how the profile was
+    built — not analyze_audio's flags. When that is not possible (single-file
+    subject or sibling sources not on disk) the analyzed file's own windows are
+    still in the full centroid, so scoring against it is *not* leak-free; we
+    report ``False`` and a ``note`` so the caller can surface that (rather than
+    hiding the circularity behind a stderr line only).
+    """
+    from senselab.audio.workflows.speaker_profile import constants as _C
+    from senselab.audio.workflows.speaker_profile.build import extract_speech_windows_for_file
+    from senselab.audio.workflows.speaker_profile.cache import audio_signature
+    from senselab.audio.workflows.speaker_profile.compare import leave_one_file_out_profile
+
+    sig = audio_signature(analyzed_audio)
+    matched = next((s for s in profile.sources if s.audio_signature == sig), None)
+    if matched is None:
+        # The analyzed file did not contribute → scoring against the full
+        # centroid is already leak-free.
+        return profile.centroids, profile.calibration_band, False, None
+
+    # Faithful leave-one-out: reuse the profile's stored build params, not the
+    # current run's --embeddings-models / default windowing.
+    params = getattr(profile, "params", None)
+    if params is not None and params.embedding_models:
+        emb_models = list(params.embedding_models)
+        window_s, hop_s, prefer_session = params.profile_window_s, params.profile_hop_s, params.prefer_session
+    else:
+        emb_models = list(embedding_models)
+        window_s, hop_s, prefer_session = _C.PROFILE_WINDOW_S, _C.PROFILE_HOP_S, None
+    session_of_file = {s.file_id: s.session_id for s in profile.sources}
+
+    other_kept = [s for s in profile.sources if s.kept and s.file_id != matched.file_id]
+    pooled: list[Any] = []
+    for s in other_kept:
+        p = Path(s.file_id)
+        if not p.exists():
+            continue
+        try:
+            other_audio = prepare_audio(p)
+        except Exception as exc:  # noqa: BLE001 — a missing/unreadable source is non-fatal
+            print(f"warn: leave-one-file-out skipped source {p}: {exc!r}", file=sys.stderr)
+            continue
+        tagged, _ = extract_speech_windows_for_file(
+            audio=other_audio,
+            file_id=s.file_id,
+            pass_summary={},
+            embedding_models=emb_models,
+            device=device,
+            profile_window_s=window_s,
+            profile_hop_s=hop_s,
+            cache_dir=cache_dir,
+        )
+        pooled.extend(tagged)
+
+    if pooled:
+        loo = leave_one_file_out_profile(
+            pooled,
+            matched.file_id,
+            embedding_models=emb_models,
+            prefer_session=prefer_session,
+            session_of_file=session_of_file,
+        )
+        if loo is not None and loo.centroids:
+            return loo.centroids, loo.calibration_band, True, None
+
+    note = (
+        "this recording contributed to the profile but its sibling source files were not accessible, "
+        "so leave-one-file-out could not be applied; scored against the self-inclusive profile centroid "
+        "(NOT leak-free — its own voice biases toward 'target')"
+    )
+    print(f"warn: speaker-profile {note}", file=sys.stderr)
+    return profile.centroids, profile.calibration_band, False, note
+
+
+def _diar_overlap_for_windows(
+    pass_summary: dict[str, Any],
+    detection_windows: dict[str, Any],
+) -> list[bool] | None:
+    """Per-window mask: does any diarization model report 2+ distinct speakers
+    active within the window's span (overlapping speech)?
+
+    Used to corroborate the profile's other-voice signal where the profile is
+    least reliable (a mixed-speaker embedding sits between centroids). Returns
+    ``None`` when no diarization ran (no overlap signal available).
+    """
+    from senselab.audio.workflows.audio_analysis.clustering import _diar_segments, _seg_attr
+
+    diar_blocks = (pass_summary.get("diarization") or {}).get("by_model") or {}
+    model_segs = [segs for segs in (_diar_segments(b) for b in diar_blocks.values()) if segs]
+    if not model_segs:
+        return None
+    reference: list[Any] = next((w for w in detection_windows.values() if w), [])
+    mask: list[bool] = []
+    for w in reference:
+        s, e = float(w.start_s), float(w.end_s)
+        overlap = False
+        for segs in model_segs:
+            speakers: set[str] = set()
+            for seg in segs:
+                ls, le, spk = _seg_attr(seg, "start"), _seg_attr(seg, "end"), _seg_attr(seg, "speaker")
+                if ls is None or le is None or spk is None:
+                    continue
+                if float(ls) < e and float(le) > s:  # segment overlaps the window
+                    speakers.add(str(spk))
+                    if len(speakers) >= 2:
+                        break
+            if len(speakers) >= 2:
+                overlap = True
+                break
+        mask.append(overlap)
+    return mask
+
+
+def _p_voice_for_windows(
+    detection_windows: dict[str, Any],
+    presence_result: Any,  # noqa: ANN401 — AxisResult | None
+) -> list[float | None] | None:
+    """Map the presence axis's per-bucket ``p_voice`` onto the embedding-window grid."""
+    if presence_result is None or not getattr(presence_result, "rows", None):
+        return None
+    from senselab.audio.workflows.audio_analysis.aggregate import presence_p_voice
+
+    buckets = [(r.start, r.end, presence_p_voice(r.model_votes)) for r in presence_result.rows]
+    reference: list[Any] = next((w for w in detection_windows.values() if w), [])
+    out: list[float | None] = []
+    for w in reference:
+        center = 0.5 * (float(w.start_s) + float(w.end_s))
+        pv: float | None = None
+        for start, end, p in buckets:
+            if p is not None and start <= center < end:
+                pv = float(p)
+                break
+        out.append(pv)
+    return out
+
+
+def _squim_by_window(
+    pass_summary: dict[str, Any],
+    detection_windows: dict[str, Any],
+) -> list[dict[str, float] | None] | None:
+    """Align this pass's SQUIM (STOI/PESQ/SI-SDR) onto the embedding-window grid.
+
+    Returns one ``{"stoi","pesq","si_sdr"}`` (subset) per detection window, or
+    ``None`` when SQUIM is unavailable. When the SQUIM rows carry ``start``/``end``
+    they are time-aligned per window; otherwise the (whole-file) mean is
+    broadcast to every window — `torchaudio_squim` is typically a single
+    whole-audio score, in which case "matched-window SQUIM" degrades to the
+    whole-file value, which is the best granularity available.
+    """
+    feat = pass_summary.get("features") or {}
+    feat_result = feat.get("result") if isinstance(feat, dict) else None
+    rows = feat_result.get("torchaudio_squim", []) if isinstance(feat_result, dict) else []
+    if isinstance(rows, dict):
+        rows = [rows]
+    metric_rows: list[dict[str, Any]] = [r for r in rows if isinstance(r, dict)]
+    if not metric_rows:
+        return None
+
+    metrics = ("stoi", "pesq", "si_sdr")
+
+    def _row_metrics(r: dict[str, Any]) -> dict[str, float]:
+        out: dict[str, float] = {}
+        for m in metrics:
+            v = r.get(m)
+            if v is not None:
+                try:
+                    out[m] = float(v)
+                except (TypeError, ValueError):
+                    continue
+        return out
+
+    reference: list[Any] = next((w for w in detection_windows.values() if w), [])
+    if not reference:
+        return None
+
+    timed = [r for r in metric_rows if r.get("start") is not None and r.get("end") is not None]
+    if timed:
+        aligned: list[dict[str, float] | None] = []
+        for w in reference:
+            acc: dict[str, list[float]] = {m: [] for m in metrics}
+            for r in timed:
+                if float(r["start"]) < float(w.end_s) and float(r["end"]) > float(w.start_s):
+                    for m, v in _row_metrics(r).items():
+                        acc[m].append(v)
+            means = {m: float(sum(v) / len(v)) for m, v in acc.items() if v}
+            aligned.append(means or None)
+        return aligned
+
+    # No timestamps → broadcast the whole-file mean to every window.
+    whole: dict[str, list[float]] = {m: [] for m in metrics}
+    for r in metric_rows:
+        for m, v in _row_metrics(r).items():
+            whole[m].append(v)
+    broadcast = {m: float(sum(v) / len(v)) for m, v in whole.items() if v}
+    if not broadcast:
+        return None
+    return [dict(broadcast) for _ in reference]
 
 
 def prepare_audio(path: Path) -> Audio:
@@ -1932,12 +2183,108 @@ def main(argv: list[str] | None = None) -> int:
                 diff_speaker_floor=args.identity_diff_speaker_floor,
                 cluster_cosine_threshold=args.identity_cluster_cosine_threshold,
                 clustering_algorithm=args.clustering_algorithm,
+                cache_dir=cache_dir,
             )
         except Exception as exc:  # noqa: BLE001
             print(f"ERROR: comparator workflow failed: {exc!r}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
             axis_results, incomparable_reasons = ({}, {"workflow": f"failed: {exc!r}"})
             per_window_embeddings_by_pass = {}
+
+        # ── Speaker-profile other-voice scoring (optional, additive) ────────
+        # Scores each pass's embedding windows against the supplied profile,
+        # merges per-bucket votes into the identity axis (before the parquet is
+        # written), and stashes the per-window results + recording-level rollup
+        # for the sidecar and the single_speaker claim. The whole block is gated
+        # on --speaker-profile, so the no-profile path is byte-identical.
+        profile_results_by_pass: dict[str, list[Any]] = {}
+        profile_rollup_by_pass: dict[str, dict[str, Any]] = {}
+        profile_quality_by_pass: dict[str, dict[str, Any]] = {}
+        loo_applied = False
+        loo_note: str | None = None
+        _profile = _load_speaker_profile(args.speaker_profile) if args.speaker_profile else None
+        if _profile is not None and any(per_window_embeddings_by_pass.values()):
+            from dataclasses import asdict as _asdict
+
+            from senselab.audio.workflows.speaker_profile.compare import (
+                compare_recording_to_profile,
+                compute_target_quality,
+                profile_votes_by_bucket,
+                summarize_other_voice,
+            )
+
+            prof_centroids, prof_band, loo_applied, loo_note = _resolve_scoring_profile(
+                _profile,
+                pass_audio["raw_16k"],
+                embedding_models=speaker_embedding_models,
+                device=device,
+                cache_dir=cache_dir,
+            )
+            if not (set(prof_centroids) & set(speaker_embedding_models)):
+                print(
+                    f"warn: speaker-profile models {sorted(prof_centroids)} do not overlap this run's "
+                    f"--embeddings-models {speaker_embedding_models}; the profile cannot score this run "
+                    f"(every window will be 'unavailable' and target-quality will be reported as unavailable)",
+                    file=sys.stderr,
+                )
+            for pl, by_model in per_window_embeddings_by_pass.items():
+                if not by_model:
+                    continue
+                p_voice_by_window = _p_voice_for_windows(by_model, axis_results.get((pl, "presence")))
+                # Scene-derived voice-presence gate (recall): score windows where a
+                # voice is present — foreground OR background — so a non-subject
+                # background voice in an otherwise quiet stretch is caught, while
+                # cough/breath/silence stay excluded. Falls back to p_voice when
+                # scene classification is unavailable (mask is None).
+                _, voice_present_by_window = reference_grid_and_speech_mask(
+                    by_model,
+                    pass_summary=passes_for_compute.get(pl, {}),
+                    speech_presence_labels=_speech_presence_labels(args),
+                )
+                # Diarization-overlap corroborator: raise other-voice where 2+
+                # speakers are active (the profile is unreliable on mixed windows).
+                diar_overlap_by_window = _diar_overlap_for_windows(passes_for_compute.get(pl, {}), by_model)
+                results = compare_recording_to_profile(
+                    by_model,
+                    prof_centroids,
+                    prof_band,
+                    p_voice_by_window=p_voice_by_window,
+                    voice_present_by_window=voice_present_by_window,
+                    diar_overlap_by_window=diar_overlap_by_window,
+                    other_voice_threshold=args.profile_other_voice_threshold,
+                )
+                profile_results_by_pass[pl] = results
+                profile_rollup_by_pass[pl] = _asdict(summarize_other_voice(results, _profile.confidence))
+                squim_by_window = _squim_by_window(passes_for_compute.get(pl, {}), by_model)
+                profile_quality_by_pass[pl] = _asdict(
+                    compute_target_quality(results, _profile.confidence, squim_by_window=squim_by_window)
+                )
+                # Fold the profile into the identity axis as a real reference-based
+                # voter (option C): inject the per-bucket speaker_profile/* votes,
+                # then RE-AGGREGATE each bucket's identity uncertainty so the
+                # parquet + disagreements ranking reflect "is this the enrolled
+                # subject?" — not just the reference-free who-talks signal. The
+                # re-aggregation mirrors compute.py's call (raw_vs_enh=None, same
+                # aggregator); intensity_weight is loudness-derived and unchanged.
+                from senselab.audio.workflows.audio_analysis.aggregate import aggregate_identity
+
+                id_res = axis_results.get((pl, "identity"))
+                if id_res is not None and id_res.rows:
+                    bounds = [(r.start, r.end) for r in id_res.rows]
+                    for row, bucket_vote in zip(id_res.rows, profile_votes_by_bucket(results, bounds)):
+                        if bucket_vote:
+                            row.model_votes.update(bucket_vote)
+                            u = aggregate_identity(
+                                row.model_votes, raw_vs_enh=None, aggregator=args.uncertainty_aggregator
+                            )
+                            row.aggregated_uncertainty = u
+                            row.raw_aggregated_uncertainty = u
+                            row.comparison_status = "ok" if u is not None else "incomparable"
+                            row.contributing_models = sorted(row.model_votes.keys())
+            print(
+                f"speaker-profile: scored subject {_profile.subject_id} "
+                f"(confidence={_profile.confidence}, leave_one_file_out={loo_applied})"
+            )
 
         # Persist 9 parquets (3 axes × 2 passes + 3 raw_vs_enhanced deltas).
         for (pass_label, axis), result in axis_results.items():
@@ -1993,6 +2340,8 @@ def main(argv: list[str] | None = None) -> int:
                 asr_resolved=asr_resolved_g,
                 pii_report=pii_reports.get(pl),
                 expects_speech=True,
+                profile_other_voice=profile_rollup_by_pass.get(pl),
+                profile_target_quality=profile_quality_by_pass.get(pl),
             )
         # Top-level: pick the lower-uncertainty pass (best of raw vs enhanced)
         # so the bottom-line score reflects the cleaner interpretation.
@@ -2037,6 +2386,32 @@ def main(argv: list[str] | None = None) -> int:
                     ],
                 }
                 write_json(run_dir / pass_label / "embeddings" / f"{_safe(model_id)}.json", payload)
+
+        # Per-pass speaker-profile sidecar — per-window flags + the recording
+        # rollup, alongside the embeddings sidecars (only when a profile ran).
+        if _profile is not None and profile_results_by_pass:
+            for pass_label, results in profile_results_by_pass.items():
+                sidecar = {
+                    "subject_id": _profile.subject_id,
+                    "profile_confidence": _profile.confidence,
+                    "leave_one_file_out_applied": loo_applied,
+                    "leave_one_file_out_note": loo_note,
+                    "windows": [
+                        {
+                            "start": r.start,
+                            "end": r.end,
+                            "similarity": r.similarity,
+                            "other_voice_uncertainty": r.other_voice_uncertainty,
+                            "flag": r.flag,
+                            "p_voice": r.p_voice,
+                            "per_model": r.per_model,
+                        }
+                        for r in results
+                    ],
+                    "other_voice": profile_rollup_by_pass.get(pass_label, {}),
+                    "quality": profile_quality_by_pass.get(pass_label, {}),
+                }
+                write_json(run_dir / pass_label / "speaker_profile.json", sidecar)
 
         # Attach per-axis Labels + utterance TextArea tracks to the LS bundle.
         if axis_results:
