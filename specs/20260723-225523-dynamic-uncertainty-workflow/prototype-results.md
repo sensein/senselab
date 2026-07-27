@@ -234,3 +234,54 @@ doc should name both so the fitting script can optionally emit a fused-confidenc
 - Stream election weights favored the enhanced stream (presence+quality over utterance agreement) —
   a policy knob to revisit; fusion still scored best-in-ensemble on it.
 - Triage round (US1) not exercised — inputs were pre-computed artifacts by design.
+
+## T043 — gated end-to-end runs executed (2026-07-27, macOS ARM64)
+
+Both env-gated harnesses (T038, T039) were executed against real full-pipeline runs
+for the first time. Runs used `openai/whisper-tiny`, `--no-scene-quality
+--no-sound-sources --skip features`, and the in-process adaptive path (T040).
+
+### T039 — degradation suite, SC-001: **5/5 (100%)**, threshold 70%
+
+All five variants were analyzed into `artifacts/degradation_suite/<variant>_run/`.
+Injected span `[1.969, 4.921]` in every variant; 4 regions proposed per run, all 4
+overlapping the span in every case.
+
+| variant | overlapping regions | improved | explained | hit |
+|---|---|---|---|---|
+| noise | 4 | no | yes | ✅ |
+| clip | 4 | no | yes | ✅ |
+| lowpass | 4 | no | yes | ✅ |
+| silence | 4 | **yes** | yes | ✅ |
+| music | 4 | no | yes | ✅ |
+
+**The interesting result is *how* it passes.** Only `silence` was *improved*
+(an intervention moved a bucket by > 0.05); the other four satisfy SC-001 via the
+"or explained" branch — the loop marks the span irreducible rather than reducing its
+uncertainty. That is legitimate under the criterion as written, but it means SC-001
+is currently evidence that the loop **recognizes** degradation, not that it
+**repairs** it. Worth deciding whether the criterion should separate those.
+
+Region proposal required lowering `thresholds.theta_high` to 0.30 via `--policy`.
+At the packaged default (0.66) **no presence region is seeded on any variant**:
+presence `aggregated_uncertainty` is a decisiveness measure (`1 − |2p−1|`) that
+peaks at 0.554 even on the noise variant. See the T041 note in tasks.md.
+
+### T038 — golden vs candidate, SC-005: **pass**
+
+Golden = `--max-rounds 1 --no-adaptive-outputs` (legacy behavior);
+candidate = `--max-rounds 3 --budget-heavy 0` (full adaptive). Both two-pass
+(`--enhancement always`) so all 9 uncertainty parquets exist.
+
+All **9** parquets compare value-equal at `atol=1e-12` (`rtol=0`), and the ASR +
+diarization `result` payloads are identical. The adaptive run adds `rounds/` and
+`final/` and an additive `summary.json` `adaptive` block; nothing pre-existing moves.
+
+**The harness had a latent bug that only executing it could reveal.** It enumerated
+parquets with `rglob("uncertainty/*.parquet")`, which matches
+`<pass>/uncertainty/<axis>.parquet` (6) but *cannot* match the cross-pass deltas at
+`uncertainty/raw_vs_enhanced/<axis>.parquet` (3) — so its own
+`assert checked >= 9` was unreachable and the test would have failed for any input.
+Fixed to filter `rglob("*.parquet")` on paths containing an `uncertainty` component.
+This is the second time in this spec that a task marked complete turned out never to
+have been run.

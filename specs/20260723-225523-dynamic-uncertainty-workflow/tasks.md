@@ -148,9 +148,18 @@ in Phase 8.
 - [ ] T042 Final-output schema completion vs contracts/final-outputs.md: `final/diarization.rttm`,
   `diarization.json` `member_labels`/`overlap`, `transcript.json.language`, presence.parquet contract
   columns (`presence_confidence`, `elected_stream`, `overlap_posterior`).
-- [ ] T043 Execute T038 (golden vs candidate full-pipeline runs) and T039 (degradation-suite pipeline
+- [x] T043 Execute T038 (golden vs candidate full-pipeline runs) and T039 (degradation-suite pipeline
   runs) on a GPU/Mac environment; record results in prototype-results.md.
-- [ ] T044 Exercise `VoteStore.from_harvests` (unit test + first in-process caller, with T040).
+  - **Executed 2026-07-27 on macOS ARM64** — see prototype-results.md "T043" for the tables.
+    T039: SC-001 **5/5 (100%)**, but 4 of 5 pass via *explained* (irreducible) rather than *improved*;
+    only `silence` reduced uncertainty. Region proposal needed `theta_high: 0.30` via `--policy`
+    because presence uncertainty peaks at 0.554 (see the T041 note). T038: all **9** parquets
+    value-equal at `atol=1e-12` plus identical ASR/diarization result payloads.
+  - **The T038 harness itself was broken and could never have passed**: it globbed
+    `rglob("uncertainty/*.parquet")`, which cannot match the cross-pass deltas at
+    `uncertainty/raw_vs_enhanced/<axis>.parquet`, so its own `assert checked >= 9` was unreachable.
+    Fixed. Second task in this spec marked complete that had never actually been run.
+- [x] T044 Exercise `VoteStore.from_harvests` (unit test + first in-process caller, with T040).
 - [ ] T045 Align contracts/interventions.md with implementation: U2 cost class (medium in code vs
   heavy in contract) + family-majority guard; document `I2_recluster` as a catalog addition; U3 as a
   fusion-stage step rather than a RULES entry; `max_region_rounds` enforced via convergence marks.
