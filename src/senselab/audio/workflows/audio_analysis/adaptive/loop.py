@@ -8,6 +8,7 @@ budget + convergence semantics from the spec; the final round fuses.
 from __future__ import annotations
 
 import json
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -386,9 +387,22 @@ def run_adaptive_loop(
     (final / "iterations.json").write_text(
         json.dumps({"policy_hash": policy.get("policy_hash"), "entries": iterations}, indent=2, default=str)
     )
+    # Summary figure. This lived only in scripts/adaptive_loop.py, so the
+    # in-process path (T040) produced every artifact except the one a human
+    # actually looks at. Best-effort: a plotting failure must not fail the loop.
+    timeline_path: str | None = None
+    try:
+        from senselab.audio.workflows.audio_analysis.adaptive.plot import build_adaptive_timeline
+
+        fig = build_adaptive_timeline(out_dir, title=run_dir.name)
+        timeline_path = str(fig) if fig is not None else None
+    except Exception as exc:  # noqa: BLE001 — sidecar
+        print(f"warn: adaptive timeline plot failed: {exc!r}", file=sys.stderr)
+
     return {
         "run_state": run_state,
         "policy_hash": policy.get("policy_hash"),
+        "timeline": timeline_path,
         "parity_check": parity,
         "rounds": len(round_summaries) + 1,
         "n_interventions_fired": sum(1 for e in iterations if e["status"] == "fired"),

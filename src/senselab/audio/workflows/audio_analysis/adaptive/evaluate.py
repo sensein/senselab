@@ -3,7 +3,7 @@
 Consumes the LS JSON export format (list of tasks, ``annotations[].result``
 with paired ``labels``/``textarea`` items sharing region ids) and scores:
 
-- **presence**: bucket-level accuracy/precision/recall of ``p_voice ≥ 0.5``
+- **presence**: bucket-level accuracy/precision/recall of ``presence_confidence ≥ 0.5``
   against labeled speech spans; mean uncertainty inside vs outside speech.
 - **transcript**: WER of the fused consensus (and each contributing model)
   against the concatenated GT texts, computed only over words whose midpoint
@@ -82,7 +82,7 @@ def evaluate_against_ground_truth(
     unc_sil: list[float] = []
     for _, row in presence.iterrows():
         mid = (float(row["start"]) + float(row["end"])) / 2.0
-        pv = row.get("p_voice")
+        pv = row.get("presence_confidence")
         if pv is None or pv != pv:
             continue
         gt_speech = _in_any(mid, speech_spans)

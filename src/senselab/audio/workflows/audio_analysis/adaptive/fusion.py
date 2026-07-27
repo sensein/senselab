@@ -287,18 +287,17 @@ def build_final_outputs(
         {
             "start": r["start"],
             "end": r["end"],
-            "p_voice": r.get("p_voice"),
             "aggregated_uncertainty": r.get("aggregated_uncertainty"),
             "epistemic": r.get("epistemic"),
             "aleatoric_floor": r.get("aleatoric_floor"),
             "status": r.get("status"),
             "irreducible_reason": r.get("irreducible_reason"),
             "round": r.get("round"),
-            # contracts/final-outputs.md columns (T042).
-            # `presence_confidence` is the calibrated P(speech) — the same quantity
-            # the workflow's presence parquet publishes under that name, kept
-            # alongside `p_voice` rather than renaming it so existing readers of
-            # this file don't break.
+            # contracts/final-outputs.md columns (T042). `presence_confidence` is
+            # the calibrated P(speech); it *replaces* the old `p_voice` column
+            # rather than sitting beside it — nothing on the way to alpha needs
+            # backwards compatibility, and two names for one quantity is how
+            # schemas rot.
             "presence_confidence": r.get("presence_confidence", r.get("p_voice")),
             # Which pass S1 elected for this span; falls back to the fusion stream
             # when no per-region election ran.

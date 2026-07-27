@@ -1468,8 +1468,11 @@ def main(argv: list[str] | None = None) -> int:
                     "n_words_fused": adaptive_log.get("n_words_fused"),
                     "parity_check": (adaptive_log.get("parity_check") or {}).get("status", "checked"),
                     "ingest": "in_process_harvests",
+                    "timeline": adaptive_log.get("timeline"),
                 }
                 print(f"Adaptive: {run_dir / 'final'} ({summaries['adaptive'].get('run_state')})")
+                if summaries["adaptive"].get("timeline"):
+                    print(f"Adaptive timeline: {summaries['adaptive']['timeline']}")
             except Exception as exc:  # noqa: BLE001 — additive artifacts must not fail the run
                 print(f"warn: adaptive loop failed: {exc!r}", file=sys.stderr)
                 summaries["adaptive"] = {"enabled": True, "status": "failed", "error": repr(exc)}
