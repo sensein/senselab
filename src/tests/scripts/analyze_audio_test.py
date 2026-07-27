@@ -261,3 +261,58 @@ def test_utterance_grid_validation(aa: types.ModuleType) -> None:
         aa.parse_args(["/tmp/dummy.wav", "--utterance-win-length", "-1"])
     with pytest.raises(SystemExit):
         aa.parse_args(["/tmp/dummy.wav", "--utterance-hop-length", "1.5", "--utterance-win-length", "1.0"])
+
+
+# ── CLI → library adapters (T051 step 5) ──────────────────────────────
+#     These exist because the adapters are the one place argparse attribute
+#     names are read by hand — a typo there is invisible to the library tests
+#     and only shows up at runtime (it did: `args.align_asr` vs `no_align_asr`).
+
+
+def test_pass_plan_reads_every_arg_it_needs(aa: types.ModuleType) -> None:
+    """_pass_plan must not reference an argparse attribute that doesn't exist."""
+    plan = aa._pass_plan(aa.parse_args(["x.wav"]))
+    assert plan.asr_models, "defaults should populate ASR models"
+    assert plan.align_asr is True, "alignment is on unless --no-align-asr"
+
+
+def test_pass_plan_honors_no_align_asr(aa: types.ModuleType) -> None:
+    """--no-align-asr is a store_true flag, so the plan must invert it."""
+    assert aa._pass_plan(aa.parse_args(["x.wav", "--no-align-asr"])).align_asr is False
+
+
+def test_pass_plan_translates_skip_into_absence(aa: types.ModuleType) -> None:
+    """The library has no skip set — skipping is empty tuples and None ids."""
+    plan = aa._pass_plan(aa.parse_args(["x.wav", "--skip", "diarization", "asr", "ast", "features"]))
+    assert plan.diarization_models == ()
+    assert plan.asr_models == ()
+    assert plan.ast_model is None
+    assert plan.features is False
+
+
+def test_pass_plan_reflects_post_triage_mutation(aa: types.ModuleType) -> None:
+    """Built AFTER triage: a no-speech clip must not run diarization or ASR.
+
+    `main` mutates args.skip / args.ppg on the no-speech path, so a plan
+    constructed before that would run the full suite on silence.
+    """
+    args = aa.parse_args(["x.wav"])
+    args.skip = ["diarization", "asr", "features"]  # what triage does
+    args.ppg = False
+    plan = aa._pass_plan(args)
+    assert plan.diarization_models == () and plan.asr_models == () and plan.ppg is False
+
+
+def test_stage_context_carries_provenance_fields(aa: types.ModuleType, tmp_path: types.ModuleType) -> None:
+    """The context must record the resolved source path and pass label."""
+    import torch
+
+    from senselab.audio.data_structures import Audio
+
+    args = aa.parse_args(["x.wav"])
+    audio = Audio(waveform=torch.zeros(1, 16000), sampling_rate=16000)
+    ctx = aa._stage_context("raw_16k", audio, args, device=None, out_dir=tmp_path, cache_dir=None, senselab_ver="v")
+    assert ctx.pass_label == "raw_16k"
+    assert ctx.device_label == "auto"
+    assert ctx.audio_source.endswith("x.wav")
+    assert len(ctx.audio_signature) == 64

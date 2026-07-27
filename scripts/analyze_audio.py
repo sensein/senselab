@@ -1175,7 +1175,7 @@ def _pass_plan(args: argparse.Namespace) -> PassPlan:
         features="features" not in skip,
         features_win_length=args.features_win_length,
         features_hop_length=args.features_hop_length,
-        align_asr=args.align_asr,
+        align_asr=not args.no_align_asr,
         aligner=args.aligner,
         qwen_aligner_model=args.qwen_aligner_model,
         mms_aligner_model=args.aligner_model,
