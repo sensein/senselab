@@ -81,7 +81,12 @@ def test_t038_golden_compat_preexisting_artifacts() -> None:
 
     golden, candidate = Path(_GOLDEN or ""), Path(_CANDIDATE or "")
     checked = 0
-    for pq in sorted(golden.rglob("uncertainty/*.parquet")):
+    # Both layouts: per-pass ``<pass>/uncertainty/<axis>.parquet`` (6) and the
+    # cross-pass deltas at ``uncertainty/raw_vs_enhanced/<axis>.parquet`` (3).
+    # A single ``rglob("uncertainty/*.parquet")`` only matches the former, which
+    # made the ``>= 9`` assertion below unreachable.
+    parquets = sorted(q for q in golden.rglob("*.parquet") if "uncertainty" in q.parts)
+    for pq in parquets:
         rel = pq.relative_to(golden)
         cand = candidate / rel
         assert cand.exists(), f"candidate missing {rel}"

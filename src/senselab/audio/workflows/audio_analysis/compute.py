@@ -362,6 +362,7 @@ def compute_uncertainty_axes(
     cluster_cosine_threshold: float = 0.5,
     clustering_algorithm: str = "spectral",
     mutate_passes: bool = True,
+    harvests_out: dict[str, Any] | None = None,
     calibration: dict[str, Any] | None = None,
 ) -> tuple[dict[tuple[str, UncertaintyAxis], AxisResult], dict[str, str], dict[str, dict[str, list[WindowEmbedding]]]]:
     """Compute per-pass and raw-vs-enhanced uncertainty rows for all three axes.
@@ -423,6 +424,10 @@ def compute_uncertainty_axes(
             synthetic ``embedding_silhouette/...`` diar source into the caller's
             ``passes`` dict so downstream consumers (timeline plot) see it. When
             False the caller's dict is left untouched.
+        harvests_out: Optional dict populated with ``{pass_label: PassHarvest}`` as
+            each pass is harvested. An out-parameter rather than a fourth return
+            value so no existing caller's tuple arity changes; the adaptive loop's
+            in-process path (T040) needs the harvests the parquets were built from.
         calibration: Optional flat runtime calibration dict (US5 — see
             ``calibration.profile_to_runtime``): dB→[0,1] anchors consumed by the
             quality harvest. Aggregator-side temperatures travel separately via
@@ -476,6 +481,8 @@ def compute_uncertainty_axes(
             by_model.update(harvest.synthetic_diarization)
             pass_summary["diarization"] = {**diar_block, "by_model": by_model}
 
+        if harvests_out is not None:
+            harvests_out[pass_label] = harvest
         for axis, result in aggregate_pass(harvest, aggregator=aggregator, params=params).items():
             axis_results[(pass_label, axis)] = result  # type: ignore[index]
 

@@ -61,6 +61,8 @@ u1_backend: auto               # T047: "auto" = senselab task API first, HF-pipe
                                # (recorded in iterations.json); "senselab" / "pipeline" pin one path
 language:                      # optional ASR language pin for U1 (e.g. "en")
 enhancement_model: speechbrain/sepformer-wham16k-enhancement    # on-demand enhanced stream
+presence:                      # P2 fine-grid presence re-analysis
+  coarse_share_threshold: 0.5  # fire P2 when >= this share of active votes are coarse
 identity:                      # I1/I2 identity repair (stored or live embeddings)
   cp_k: 1.0                    # change-point threshold = mean + k·std of the cosine trajectory
   cp_floor: 0.15               # absolute minimum adjacent-cosine distance for a change-point
@@ -78,4 +80,5 @@ rules:
   U1_region_reasr: {enabled: true}
   I1_boundary_refinement: {enabled: true}
   I2_recluster: {enabled: true}
+  P2_fine_posteriors: {enabled: true}
   I4_overlap_detection: {enabled: true}

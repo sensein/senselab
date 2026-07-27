@@ -816,6 +816,165 @@ def _i2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
 # ── I4: overlap posteriors (gated live backend) ─────────────────────────
 
 
+# ── P2: fine-grid presence re-analysis ───────────────────────────────────
+
+
+def _p2_trigger(region: dict[str, Any], ctx: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+    """Fire when a presence region's evidence is dominated by coarse voters.
+
+    Two independent reasons, per contracts/interventions.md:
+
+    1. **Coarse dominance** — at least half the active votes carry ``coarse=True``
+       (sentence-level ASR, per-30 s Whisper no_speech, AST's 10.24 s window,
+       YAMNet's 0.96 s window, ~1 s embedding silhouette). Those voters cast one
+       identical vote across every bucket they span, so agreement among them is an
+       artifact of their window size rather than evidence about this bucket.
+    2. **Frame instability** — the presence rows already report
+       ``frame_instability`` from the round-1 posteriors; a high value means the
+       bucket straddles an onset, which a finer grid can localize.
+    """
+    if region is None or region["axis"] != "presence":
+        return False, {}
+    stream = region.get("stream")
+    rows = _rows_in_span(ctx["state"].axis_rows(stream, "presence"), region["core_start"], region["core_end"])
+    if not rows:
+        return False, {}
+
+    # Vote payloads live in the store, not on the belief row — the row only
+    # carries `contributing_sources` (names). Reading the row here would silently
+    # see zero votes and never fire.
+    store = ctx["store"]
+    coarse = active = 0
+    instability: list[float] = []
+    for row in rows:
+        bk = bucket_key(row["start"], row["end"])
+        for source, payload in (store.active_votes(stream, "presence", bk) or {}).items():
+            if source.startswith("__") or not isinstance(payload, dict):
+                continue
+            if payload.get("speaks") is None:
+                continue
+            active += 1
+            if payload.get("coarse"):
+                coarse += 1
+        fi = (row.get("meta") or {}).get("frame_instability")
+        if fi is not None:
+            instability.append(float(fi))
+
+    coarse_share = (coarse / active) if active else 0.0
+    mean_instability = (sum(instability) / len(instability)) if instability else 0.0
+    threshold = float(((ctx["policy"].get("presence") or {}).get("coarse_share_threshold", 0.5)))
+    fires = coarse_share >= threshold or mean_instability > 0.0
+    return fires, {
+        "stream": stream,
+        "coarse_share": round(coarse_share, 4),
+        "n_active_votes": active,
+        "mean_frame_instability": round(mean_instability, 4),
+        "reason": "coarse_dominance" if coarse_share >= threshold else "frame_instability",
+    }
+
+
+def _p2_guard(region: dict[str, Any], ctx: dict[str, Any]) -> str | None:
+    """Same prerequisites as any posterior re-analysis: the model, a token, audio."""
+    import os  # noqa: PLC0415
+
+    if _spec_missing("pyannote"):
+        return "posteriors_unavailable (pyannote.audio not installed)"
+    if not (os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")):
+        return "posteriors_unavailable (HF token required for pyannote/segmentation-3.0)"
+    if not ctx.get("input_audio"):
+        return "input_audio_missing"
+    return None
+
+
+def _p2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+    """Re-run segmentation-3.0 on the crop and replace the region's presence evidence.
+
+    The replacement vote is scoped ``region:<id>`` so it supersedes the coarse
+    round-1 voters over this span without deleting them — the store keeps both and
+    the later scope wins, which is what makes the decision log auditable.
+
+    Emits ``overlap_posterior`` on covered rows as a side effect, which is why the
+    contract lets I4 run "light (reuses P2 output)" afterwards.
+    """
+    from senselab.audio.workflows.audio_analysis.adaptive.audio_io import get_stream_wav  # noqa: PLC0415
+    from senselab.audio.workflows.audio_analysis.adaptive.backends import overlap_posteriors  # noqa: PLC0415
+
+    region = cand["region"]
+    stream = cand["trigger"]["stream"]
+    wav, reason = get_stream_wav(ctx, stream)
+    if wav is None:
+        raise RuntimeError(f"audio_unavailable: {reason}")
+    post, err = overlap_posteriors(wav, span=(region["crop_start"], region["crop_end"]))
+    if post is None:
+        raise RuntimeError(err or "posteriors_failed")
+
+    hop = float(post["frame_hop"])
+    speech, overlap = post["speech"], post["overlap"]
+    crop_start = float(region["crop_start"])
+
+    def _mean_over(track: list[float], s: float, e: float) -> float | None:
+        lo = max(0, int((s - crop_start) / hop))
+        hi = min(len(track), int((e - crop_start) / hop) + 1)
+        vals = track[lo:hi]
+        return float(sum(vals) / len(vals)) if vals else None
+
+    def _instability(s: float, e: float) -> float | None:
+        lo = max(0, int((s - crop_start) / hop))
+        hi = min(len(speech), int((e - crop_start) / hop) + 1)
+        vals = speech[lo:hi]
+        if len(vals) < 2:
+            return None
+        mean = sum(vals) / len(vals)
+        var = sum((v - mean) ** 2 for v in vals) / len(vals)
+        return float(min(1.0, 2.0 * (var**0.5)))
+
+    rows = ctx["state"].axis_rows(stream, "presence")
+    covered = region_buckets(region, rows)
+    touched: dict[tuple[str, str], set[tuple[float, float]]] = {}
+    n_votes = 0
+    for row in _rows_in_span(rows, region["core_start"], region["core_end"]):
+        bk = bucket_key(row["start"], row["end"])
+        if bk not in covered:
+            continue  # merge-back midpoint rule (D2)
+        p_speech = _mean_over(speech, row["start"], row["end"])
+        if p_speech is None:
+            continue
+        ctx["store"].add_vote(
+            Vote(
+                axis="presence",
+                bucket=bk,
+                source="frame_posterior_fine",
+                stream=stream,
+                scope=f"region:{region['region_id']}",
+                round=ctx["round_idx"],
+                payload={
+                    "speaks": p_speech >= 0.5,
+                    "native_confidence": round(p_speech, 6),
+                    "frame_instability": _instability(row["start"], row["end"]),
+                    "coarse": False,
+                },
+                provenance={"rule": "P2_fine_posteriors", "frame_hop_s": hop},
+            )
+        )
+        n_votes += 1
+        ov = _mean_over(overlap, row["start"], row["end"])
+        if ov is not None:
+            row.setdefault("meta", {})["overlap_posterior"] = round(ov, 4)
+            row["overlap_posterior"] = round(ov, 4)
+        touched.setdefault((stream, "presence"), set()).add(bk)
+
+    return {
+        "frame_hop_s": hop,
+        "frames": len(speech),
+        "votes_added": n_votes,
+        "mean_p_speech_in_core": (
+            round(v, 4) if (v := _mean_over(speech, region["core_start"], region["core_end"])) is not None else None
+        ),
+        "n_classes": post.get("n_classes"),
+        "touched": touched,
+    }
+
+
 def _i4_trigger(region: dict[str, Any], ctx: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     if region is None or region["axis"] != "identity":
         return False, {}
@@ -968,6 +1127,15 @@ RULES: list[dict[str, Any]] = [
         "guard": _i1_guard,  # same requirement: stored embeddings or live backend
         "gain": _mass_gain,
         "execute": _i2_execute,
+    },
+    {
+        "id": "P2_fine_posteriors",
+        "axes": ["presence"],
+        "cost": "medium",
+        "trigger": _p2_trigger,
+        "guard": _p2_guard,
+        "gain": _mass_gain,
+        "execute": _p2_execute,
     },
     {
         "id": "I4_overlap_detection",

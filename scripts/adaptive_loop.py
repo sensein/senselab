@@ -81,7 +81,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(f"final/: {out_dir / 'final'}")
 
-    # Visual timeline — best-effort sidecar (mirrors analyze_audio's timeline.png).
+    # Visual timeline. run_adaptive_loop now emits this itself, so re-running it
+    # here only adds the ground-truth overlay this script uniquely supports.
     try:
         from senselab.audio.workflows.audio_analysis.adaptive.plot import build_adaptive_timeline
 

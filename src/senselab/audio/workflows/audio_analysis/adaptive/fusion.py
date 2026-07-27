@@ -287,13 +287,25 @@ def build_final_outputs(
         {
             "start": r["start"],
             "end": r["end"],
-            "p_voice": r.get("p_voice"),
             "aggregated_uncertainty": r.get("aggregated_uncertainty"),
             "epistemic": r.get("epistemic"),
             "aleatoric_floor": r.get("aleatoric_floor"),
             "status": r.get("status"),
             "irreducible_reason": r.get("irreducible_reason"),
             "round": r.get("round"),
+            # contracts/final-outputs.md columns (T042). `presence_confidence` is
+            # the calibrated P(speech); it *replaces* the old `p_voice` column
+            # rather than sitting beside it — nothing on the way to alpha needs
+            # backwards compatibility, and two names for one quantity is how
+            # schemas rot.
+            "presence_confidence": r.get("presence_confidence", r.get("p_voice")),
+            # Which pass S1 elected for this span; falls back to the fusion stream
+            # when no per-region election ran.
+            "elected_stream": (r.get("meta") or {}).get("elected_stream", stream),
+            # Written by I4 / P2 when per-class segmentation posteriors were
+            # available; None elsewhere (the column exists either way so the
+            # schema is stable).
+            "overlap_posterior": r.get("overlap_posterior", (r.get("meta") or {}).get("overlap_posterior")),
         }
         for r in state.axis_rows(stream, "presence")
     ]

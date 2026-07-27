@@ -4,16 +4,18 @@ from __future__ import annotations
 
 from typing import Any
 
+from senselab.audio.workflows.audio_analysis.adaptive.types import AxisName, Region
+
 
 def propose_regions(
     rows: list[dict[str, Any]],
     *,
-    axis: str,
+    axis: AxisName,
     stream: str,
     policy: dict[str, Any],
     round_idx: int,
     duration_s: float,
-) -> list[dict[str, Any]]:
+) -> list[Region]:
     """Seed at ≥ θ_high, expand while ≥ θ_low, merge small gaps, pad, rank by mass.
 
     Rows must be time-ordered on one (stream, axis). Only ``status == "open"``
@@ -61,7 +63,7 @@ def propose_regions(
             merged.append((start, end, idxs))
 
     # 3. build regions: mass, pad, quantized core (rows are already on-grid).
-    regions: list[dict[str, Any]] = []
+    regions: list[Region] = []
     pad = float(rg["pad_s"])
     for start, end, idxs in merged:
         mass = 0.0
@@ -80,6 +82,7 @@ def propose_regions(
                 "uncertainty_mass": round(mass, 9),
                 "n_buckets": len(idxs),
                 "status": "open",
+                "region_id": "",  # assigned in start order below, after ranking
             }
         )
 
@@ -93,7 +96,7 @@ def propose_regions(
     return regions
 
 
-def region_buckets(region: dict[str, Any], rows: list[dict[str, Any]]) -> set[tuple[float, float]]:
+def region_buckets(region: Region, rows: list[dict[str, Any]]) -> set[tuple[float, float]]:
     """Bucket keys of ``rows`` whose midpoint lies in the region core (merge-back rule)."""
     out: set[tuple[float, float]] = set()
     for row in rows:

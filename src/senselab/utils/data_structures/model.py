@@ -1,6 +1,7 @@
 """This module implements some utilities for the model class."""
 
 import os
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import ClassVar, Dict, Generic, Optional, Tuple, TypeVar, Union
@@ -280,3 +281,70 @@ SentenceTransformersModel.model_rebuild()
 CoquiTTSModel.model_rebuild()
 TorchModel.model_rebuild()
 TorchAudioModel.model_rebuild()
+
+
+def model_for_task(model_id: str, *, task: str) -> SenselabModel:
+    """Wrap a model id in the right `SenselabModel` subclass for a given task.
+
+    Lives here rather than in a workflow module because it is pure model-id →
+    provider-class routing, and it has consumers in the analysis stages, the CLI
+    script, and the enhancement path.
+
+    Args:
+        model_id: HuggingFace-style model identifier.
+        task: One of ``"diarization"``, ``"asr"``, ``"embeddings"``, ``"enhancement"``.
+
+    Returns:
+        The provider-specific `SenselabModel` subclass instance.
+
+    Raises:
+        ValueError: If ``task`` is not recognized.
+
+    Note:
+        The diarization branch duplicates ``diarize_audios``'s internal dispatch
+        (Sortformer ids are HF, everything else is pyannote). That duplication is
+        pre-existing and worth collapsing into one source of truth eventually.
+
+    Example:
+        >>> model_for_task("openai/whisper-tiny", task="asr").path_or_uri
+        'openai/whisper-tiny'
+    """
+    if task == "diarization":
+        if model_id.startswith("nvidia/diar_sortformer"):
+            return HFModel(path_or_uri=model_id)
+        return PyannoteAudioModel(path_or_uri=model_id)
+    if task == "asr":
+        return HFModel(path_or_uri=model_id)
+    if task in ("embeddings", "enhancement"):
+        return SpeechBrainModel(path_or_uri=model_id)
+    raise ValueError(f"unknown task: {task}")
+
+
+def safe_model_id(model_id: str) -> str:
+    """Sanitize a model id for use in filenames and Label Studio ``from_name`` values.
+
+    Collapses every run of non-alphanumeric/underscore characters to a single
+    ``_``, strips leading/trailing separators, and never returns an empty string.
+
+    This consolidates two implementations that had silently diverged — a
+    character-wise variant in the CLI script and this collapsing variant in
+    ``labelstudio.py``. They agreed on every model id in the current defaults
+    (none contains adjacent non-alphanumerics), so unifying on the more robust
+    collapsing form is behavior-neutral today and prevents a filename-vs-track
+    name divergence later.
+
+    Args:
+        model_id: Raw model identifier.
+
+    Returns:
+        A filesystem- and Label-Studio-safe token.
+
+    Example:
+        >>> safe_model_id("openai/whisper-large-v3-turbo")
+        'openai_whisper_large_v3_turbo'
+        >>> safe_model_id("a--b")
+        'a_b'
+        >>> safe_model_id("///")
+        'model'
+    """
+    return re.sub(r"[^A-Za-z0-9_]+", "_", model_id).strip("_") or "model"

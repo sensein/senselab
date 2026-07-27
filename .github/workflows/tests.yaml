@@ -2,7 +2,12 @@ name: tests
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
+    # `ready_for_review` matters because every job below is gated on
+    # `pull_request.draft == false`. Without it, a PR opened as a draft and later
+    # marked ready never re-triggers this workflow, so its tests stay "skipping"
+    # until someone happens to push again — and a reviewer sees a green
+    # build-and-deploy next to skipped tests, which reads as "tests passed".
+    types: [opened, synchronize, reopened, labeled, ready_for_review]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number }}

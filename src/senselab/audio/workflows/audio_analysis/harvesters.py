@@ -79,7 +79,16 @@ def diar_speaker_label_in_window(result: Any, win_start: float, win_end: float) 
 
 
 def asr_has_timestamps(result: Any) -> bool:  # noqa: ANN401
-    """True if any ScriptLine has a non-null start or non-empty chunks."""
+    """True if any ScriptLine actually carries a timestamp.
+
+    Requires a non-null ``start`` on a chunk or on the line itself. The mere
+    *presence* of chunks is not evidence of timing: a chunked-but-untimed
+    transcript has no usable times, and treating it as timestamped would make the
+    alignment stage skip exactly the input it exists to fix. ``analyze_audio.py``
+    carried a looser duplicate that returned True whenever ``chunks`` was
+    non-empty — it disagreed with ``resolve_asr_result`` below, which has always
+    used these strict semantics. Consolidated here (T051b).
+    """
     if not result:
         return False
     items = result if isinstance(result, list) else [result]

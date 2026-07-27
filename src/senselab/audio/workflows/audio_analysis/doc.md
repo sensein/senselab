@@ -67,3 +67,56 @@ when absent). Fit one from synthetic sweeps with
 `scripts/analyze_audio.py --calibration-profile <profile.json>`. Temperatures
 default to 1.0 — fitting them requires labeled correctness (see the adaptive
 loop's ground-truth evaluation harness).
+
+## Importable pipeline: stages, cache, adaptive loop (T051 / T040)
+
+The per-task pipeline used to live only inside `scripts/analyze_audio.py`. It is
+now library code, so the adaptive loop (and any other caller) can run it
+in-process instead of shelling out to the CLI:
+
+```python
+from senselab.audio.workflows.audio_analysis import PassPlan, StageContext, run_pass
+
+summary = run_pass(audio, StageContext(pass_label="raw_16k", audio_signature=sig), PassPlan(
+    diarization_models=("pyannote/speaker-diarization-3.1",),
+    asr_models=("openai/whisper-large-v3-turbo",),
+))
+```
+
+- **`stages.py`** — six `stage_*` functions plus `run_pass`. Each takes
+  `(audio, ctx, *, knobs)` and *returns* the fragment it contributes to the pass
+  summary; none mutates a shared dict. `stage_alignment` takes `asr_by_model`
+  explicitly, so a caller can align a cached ASR block it did not produce.
+- **`stage_context.py`** (light — no torch import) — `StageContext` carries the run
+  environment and derives cache keys and provenance; `PassPlan` says what to run,
+  with absence meaning skip (empty tuples, `None` model ids) rather than a
+  CLI-shaped skip set. `out_dir=None` gives a headless mode that writes no
+  sidecars.
+- **`senselab.utils.tasks.cached_inference`** — the content-addressable cache:
+  `audio_signature`, `cache_key`, `align_cache_key`, `cache_lookup`/`cache_store`,
+  the `run_task_cached` / `run_alignment_cached` runners, and
+  `sync_cache_with_schema_version`.
+
+Cache invalidation is coarse and deliberate. `STAGE_VERSIONS` in
+`stage_context.py` holds a per-stage integer surfaced in keys and provenance as
+`"asr@1"`; **bump a stage's number when the stored shape of its outcome changes.**
+This replaced a sha256 of the CLI script's source, which rotated on every comment
+edit or reformat and invalidated every cached model result for nothing.
+`CACHE_SCHEMA_VERSION` remains the global lever — bumping it makes
+`sync_cache_with_schema_version` wipe stale entries automatically on every host.
+
+The adaptive loop accepts either ingest path: `run_adaptive_loop(run_dir)` reads a
+finished run's parquets, while `run_adaptive_loop(run_dir, harvests=..., summary=...)`
+consumes in-memory `PassHarvest` objects (what `analyze_audio.py` now does via
+`compute_uncertainty_axes(harvests_out=...)`). The in-process path reports
+`parity_check.status == "skipped"` rather than a passing check, because parity
+compares against stored parquet values that don't exist yet — a vacuous
+"0 mismatches" would look like proof and be none.
+
+Adaptive CLI surface: `--max-rounds`, `--policy`, `--budget-medium/-heavy`,
+`--max-region-rounds`, `--region-top-n`, `--reserve-asr-models`,
+`--enable-overlap-separation`, `--no-adaptive-outputs`. Precedence is packaged
+default < `--policy` file < CLI flags, and `policy_hash` is recomputed after
+merging so two runs differing only by a flag don't claim the same provenance.
+`--max-rounds 1` is the golden-compat mode: verified to leave the uncertainty
+parquets, Label Studio bundle and pre-existing `summary.json` keys byte-identical.

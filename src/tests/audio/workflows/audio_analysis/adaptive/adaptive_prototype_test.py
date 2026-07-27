@@ -5,6 +5,7 @@ planning + budget, and fusion voting on synthetic inputs.
 """
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -17,6 +18,7 @@ from senselab.audio.workflows.audio_analysis.adaptive.policy import (
     plan_round,
 )
 from senselab.audio.workflows.audio_analysis.adaptive.regions import propose_regions
+from senselab.audio.workflows.audio_analysis.adaptive.types import Region
 
 BK = bucket_key(0.0, 0.5)
 
@@ -91,7 +93,7 @@ def test_planner_is_deterministic_and_budget_bounded() -> None:
             "execute": lambda cand, c: {"touched": {}},
         }
     ]
-    regions = [
+    regions: list[Region] = [
         {
             "region_id": "rA",
             "axis": "utterance",
@@ -101,6 +103,7 @@ def test_planner_is_deterministic_and_budget_bounded() -> None:
             "crop_start": 0.0,
             "crop_end": 2.0,
             "uncertainty_mass": 0.2,
+            "n_buckets": 2,
             "status": "open",
         },
         {
@@ -112,6 +115,7 @@ def test_planner_is_deterministic_and_budget_bounded() -> None:
             "crop_start": 1.0,
             "crop_end": 4.0,
             "uncertainty_mass": 0.9,
+            "n_buckets": 2,
             "status": "open",
         },
     ]
@@ -313,3 +317,418 @@ def test_from_harvests_in_process_integration() -> None:
     assert store.row_meta[("raw_16k", "presence", (0.0, 0.5))]["quality_snr"] == 0.3
     ident = store.reaggregate_bucket("raw_16k", "identity", (0.0, 1.0), aggregator="min")
     assert ident["aggregated_uncertainty"] == pytest.approx(0.5)
+
+
+# ── In-process ingest path (T040) ─────────────────────────────────────
+
+
+def test_run_adaptive_loop_accepts_in_process_harvests(tmp_path: Path) -> None:
+    """The loop can ingest PassHarvest objects directly, with no parquet round-trip.
+
+    This is T040's integration point: analyze_audio hands over what it just
+    computed instead of writing nine parquets and reading them back.
+    """
+    from senselab.audio.workflows.audio_analysis.adaptive.loop import run_adaptive_loop
+    from senselab.audio.workflows.audio_analysis.votes import PassHarvest
+
+    harvest = PassHarvest(
+        pass_label="raw_16k",
+        presence_votes=[
+            {"start": 0.0, "end": 0.5, "votes": {"m1": {"speaks": True}}},
+            {"start": 0.5, "end": 1.0, "votes": {"m1": {"speaks": False}}},
+        ],
+        identity_votes=[{"start": 0.0, "end": 1.0, "votes": {}}],
+        utterance_votes=[{"start": 0.0, "end": 1.0, "votes": {"a": {"text": "hi"}}}],
+        grids={"utterance": {"win_length": 1.0, "hop_length": 1.0}},
+    )
+    summary = {"passes": {"raw_16k": {"duration_s": 1.0, "audio_signature": "a" * 64}}}
+
+    log = run_adaptive_loop(
+        tmp_path,
+        harvests={"raw_16k": harvest},
+        summary=summary,
+        max_rounds=1,
+        aggregator="min",
+    )
+    assert (tmp_path / "rounds" / "1").is_dir(), "round 1 artifacts must still be emitted"
+    assert isinstance(log, dict)
+
+
+def test_in_process_path_reports_parity_as_skipped_not_passing(tmp_path: Path) -> None:
+    """A vacuous parity check would be a misleading proof — it must say "skipped".
+
+    parity_check compares re-aggregation against the *stored* parquet values. On
+    the in-process path those don't exist yet, so every bucket would be "compared:
+    0, mismatches: 0" — which reads as a pass while proving nothing.
+    """
+    import json as _json
+
+    from senselab.audio.workflows.audio_analysis.adaptive.loop import run_adaptive_loop
+    from senselab.audio.workflows.audio_analysis.votes import PassHarvest
+
+    harvest = PassHarvest(
+        pass_label="raw_16k",
+        presence_votes=[{"start": 0.0, "end": 0.5, "votes": {"m1": {"speaks": True}}}],
+        grids={"utterance": {"win_length": 1.0, "hop_length": 1.0}},
+    )
+    run_adaptive_loop(
+        tmp_path,
+        harvests={"raw_16k": harvest},
+        summary={"passes": {"raw_16k": {"duration_s": 1.0, "audio_signature": "b" * 64}}},
+        max_rounds=1,
+        aggregator="min",
+    )
+    round1 = _json.loads((tmp_path / "rounds" / "1" / "summary.json").read_text())
+    assert round1["parity_check"]["status"] == "skipped"
+    assert "stored parquet" in round1["parity_check"]["reason"]
+
+
+def test_in_process_ingest_ignores_passes_absent_from_the_summary(tmp_path: Path) -> None:
+    """Only passes the summary reports as completed may contribute votes."""
+    from senselab.audio.workflows.audio_analysis.adaptive.loop import run_adaptive_loop
+    from senselab.audio.workflows.audio_analysis.votes import PassHarvest
+
+    def _h(label: str) -> PassHarvest:
+        return PassHarvest(
+            pass_label=label,
+            presence_votes=[{"start": 0.0, "end": 0.5, "votes": {"m1": {"speaks": True}}}],
+            grids={"utterance": {"win_length": 1.0, "hop_length": 1.0}},
+        )
+
+    log = run_adaptive_loop(
+        tmp_path,
+        harvests={"raw_16k": _h("raw_16k"), "enhanced_16k": _h("enhanced_16k")},
+        # enhancement failed, so the summary has no duration_s for it
+        summary={
+            "passes": {
+                "raw_16k": {"duration_s": 1.0, "audio_signature": "c" * 64},
+                "enhanced_16k": {"status": "failed"},
+            }
+        },
+        max_rounds=1,
+        aggregator="min",
+    )
+    assert isinstance(log, dict)
+    belief = (tmp_path / "rounds" / "1").glob("belief*")
+    assert any(belief), "round-1 belief artifacts should exist for the surviving pass"
+
+
+# ── Policy override precedence (T040) ─────────────────────────────────
+
+
+def test_cli_overrides_win_over_a_policy_file(tmp_path: Path) -> None:
+    """Precedence is packaged default < --policy file < CLI flags."""
+    import json as _json
+
+    from senselab.audio.workflows.audio_analysis.adaptive.policy import load_policy
+
+    policy_file = tmp_path / "p.yaml"
+    policy_file.write_text(_json.dumps({"budget": {"heavy_per_run": 9}}))  # YAML accepts JSON
+    merged = load_policy(policy_file, {"budget": {"heavy_per_run": 0}})
+    assert merged["budget"]["heavy_per_run"] == 0, "CLI must beat the file"
+
+
+def test_none_overrides_leave_the_policy_untouched() -> None:
+    """An unset flag must not clobber the policy's value with None."""
+    from senselab.audio.workflows.audio_analysis.adaptive.policy import load_policy
+
+    default = load_policy()
+    merged = load_policy(None, {"budget": {"medium_per_run": None, "heavy_per_run": 2}})
+    assert merged["budget"]["medium_per_run"] == default["budget"]["medium_per_run"]
+    assert merged["budget"]["heavy_per_run"] == 2
+
+
+def test_policy_hash_reflects_the_overrides() -> None:
+    """Two runs differing only by --budget-heavy must not claim the same policy hash.
+
+    The hash is provenance: it has to identify the policy that actually ran, not
+    the file on disk.
+    """
+    from senselab.audio.workflows.audio_analysis.adaptive.policy import load_policy
+
+    a = load_policy(None, {"budget": {"heavy_per_run": 1}})
+    b = load_policy(None, {"budget": {"heavy_per_run": 2}})
+    assert a["policy_hash"] != b["policy_hash"]
+
+
+def test_empty_overrides_match_the_unmodified_policy() -> None:
+    """No flags set → byte-identical policy (and hash) to loading with none."""
+    from senselab.audio.workflows.audio_analysis.adaptive.policy import load_policy
+
+    assert load_policy(None, {}) == load_policy()
+    assert load_policy(None, {"budget": {"medium_per_run": None}})["policy_hash"] == load_policy()["policy_hash"]
+
+
+# ── P2_fine_posteriors (T041) ─────────────────────────────────────────
+
+
+def _p2_ctx(
+    buckets: list[tuple[tuple[float, float], dict[str, dict[str, Any]], float | None]],
+    *,
+    policy: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Ctx backed by a real VoteStore.
+
+    Vote payloads must come from the store — the belief row only carries
+    ``contributing_sources`` (names). An earlier version of this fixture handed the
+    trigger fabricated rows with a ``model_votes`` key, which does not exist on a
+    real row; the trigger read nothing, never fired, and the unit tests still
+    passed. Building the store for real is what stops that recurring.
+
+    Each entry is ``(bucket, {source: payload}, frame_instability)``.
+    """
+    from senselab.audio.workflows.audio_analysis.adaptive.belief import Vote, VoteStore
+    from senselab.audio.workflows.audio_analysis.adaptive.policy import load_policy
+
+    store = VoteStore()
+    rows: list[dict[str, Any]] = []
+    for bk, votes, instability in buckets:
+        for source, payload in votes.items():
+            store.add_vote(
+                Vote(
+                    axis="presence", bucket=bk, source=source, stream="raw_16k", scope="file", round=1, payload=payload
+                )
+            )
+        meta: dict[str, Any] = {}
+        if instability is not None:
+            meta["frame_instability"] = instability
+        rows.append({"start": bk[0], "end": bk[1], "meta": meta})
+
+    class _State:
+        def axis_rows(self, stream: str, axis: str) -> list[dict[str, Any]]:
+            return rows if axis == "presence" else []
+
+    return {"state": _State(), "store": store, "policy": policy or load_policy(), "passes": ["raw_16k"], "_rows": rows}
+
+
+def _p2_region() -> dict[str, Any]:
+    return {
+        "axis": "presence",
+        "stream": "raw_16k",
+        "region_id": "r2_raw_presence_0",
+        "core_start": 0.0,
+        "core_end": 1.0,
+        "crop_start": 0.0,
+        "crop_end": 2.0,
+        "uncertainty_mass": 0.4,
+    }
+
+
+def test_p2_is_registered_before_i4() -> None:
+    """I4's contract says it "else fires P2 first", so P2 must be plannable."""
+    from senselab.audio.workflows.audio_analysis.adaptive.interventions import RULES
+
+    ids = [r["id"] for r in RULES]
+    assert "P2_fine_posteriors" in ids
+    assert ids.index("P2_fine_posteriors") < ids.index("I4_overlap_detection")
+
+
+def test_p2_declares_presence_axis_and_medium_cost() -> None:
+    """contracts/interventions.md: presence axis, medium cost."""
+    from senselab.audio.workflows.audio_analysis.adaptive.interventions import RULES
+
+    rule = next(r for r in RULES if r["id"] == "P2_fine_posteriors")
+    assert rule["axes"] == ["presence"]
+    assert rule["cost"] == "medium"
+
+
+def test_p2_fires_when_coarse_voters_dominate() -> None:
+    """Coarse voters cast one identical vote across every bucket they span.
+
+    Their agreement is an artifact of window size, not evidence about this bucket,
+    so a majority-coarse region is exactly what a finer grid should re-decide.
+    """
+    from senselab.audio.workflows.audio_analysis.adaptive.interventions import _p2_trigger
+
+    ctx = _p2_ctx(
+        [
+            (
+                (0.0, 0.5),
+                {
+                    "ast": {"speaks": True, "coarse": True},
+                    "yamnet": {"speaks": True, "coarse": True},
+                    "opensmile": {"speaks": True},
+                },
+                None,
+            )
+        ]
+    )
+    fires, info = _p2_trigger(_p2_region(), ctx)
+    assert fires is True
+    assert info["coarse_share"] == pytest.approx(2 / 3, abs=1e-4)
+    assert info["reason"] == "coarse_dominance"
+
+
+def test_p2_does_not_fire_on_fine_evidence() -> None:
+    """All-fine voters with a stable posterior need no re-analysis."""
+    from senselab.audio.workflows.audio_analysis.adaptive.interventions import _p2_trigger
+
+    ctx = _p2_ctx([((0.0, 0.5), {"opensmile": {"speaks": True}, "ppg": {"speaks": True}}, 0.0)])
+    fires, _ = _p2_trigger(_p2_region(), ctx)
+    assert fires is False
+
+
+def test_p2_fires_on_frame_instability_even_without_coarse_votes() -> None:
+    """The second independent trigger: a bucket straddling an onset."""
+    from senselab.audio.workflows.audio_analysis.adaptive.interventions import _p2_trigger
+
+    ctx = _p2_ctx([((0.0, 0.5), {"opensmile": {"speaks": True}}, 0.6)])
+    fires, info = _p2_trigger(_p2_region(), ctx)
+    assert fires is True
+    assert info["reason"] == "frame_instability"
+
+
+def test_p2_ignores_non_presence_regions() -> None:
+    """A presence-only rule must not claim identity or utterance regions."""
+    from senselab.audio.workflows.audio_analysis.adaptive.interventions import _p2_trigger
+
+    for axis in ("identity", "utterance"):
+        fires, _ = _p2_trigger({**_p2_region(), "axis": axis}, _p2_ctx([]))
+        assert fires is False
+
+
+def test_p2_skips_inactive_votes_when_measuring_coarse_share() -> None:
+    """Only votes that actually decided (`speaks` not None) count toward the share."""
+    from senselab.audio.workflows.audio_analysis.adaptive.interventions import _p2_trigger
+
+    ctx = _p2_ctx(
+        [
+            (
+                (0.0, 0.5),
+                {
+                    "ast": {"speaks": True, "coarse": True},
+                    "abstained": {"speaks": None, "coarse": True},
+                    "opensmile": {"speaks": True},
+                },
+                None,
+            )
+        ]
+    )
+    _, info = _p2_trigger(_p2_region(), ctx)
+    assert info["n_active_votes"] == 2
+    assert info["coarse_share"] == pytest.approx(0.5)
+
+
+def test_p2_execute_replaces_votes_at_region_scope(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The fine posterior enters as a region-scoped vote, superseding coarse ones.
+
+    Scoped rather than deleting the round-1 voters: the store keeps both and the
+    later scope wins, which is what keeps the decision log auditable.
+    """
+    from senselab.audio.workflows.audio_analysis.adaptive import interventions as iv
+    from senselab.audio.workflows.audio_analysis.adaptive.belief import VoteStore
+
+    ctx = _p2_ctx(
+        [
+            ((0.0, 0.5), {"ast": {"speaks": True, "coarse": True}}, None),
+            ((0.5, 1.0), {"ast": {"speaks": True, "coarse": True}}, None),
+        ]
+    )
+    ctx.update({"round_idx": 2, "input_audio": "x.wav"})
+
+    monkeypatch.setattr(iv, "region_buckets", lambda region, rws: {(0.0, 0.5), (0.5, 1.0)})
+    monkeypatch.setattr(
+        "senselab.audio.workflows.audio_analysis.adaptive.audio_io.get_stream_wav",
+        lambda c, s: (object(), None),
+    )
+    # 0.1 s hop over a 2 s crop: speech for the first 0.5 s, silence after —
+    # so bucket (0.0, 0.5) reads as speech and (0.5, 1.0) as silence.
+    monkeypatch.setattr(
+        "senselab.audio.workflows.audio_analysis.adaptive.backends.overlap_posteriors",
+        lambda wav, span: (
+            {"frame_hop": 0.1, "speech": [0.9] * 5 + [0.05] * 15, "overlap": [0.2] * 20, "n_classes": 7},
+            None,
+        ),
+    )
+
+    result = iv._p2_execute({"region": _p2_region(), "trigger": {"stream": "raw_16k"}}, ctx)
+    assert result["votes_added"] == 2
+    votes = [v for v in ctx["store"]._votes.values() if v.source == "frame_posterior_fine"]
+    assert len(votes) == 2
+    assert all(v.scope == "region:r2_raw_presence_0" for v in votes)
+    assert all(v.payload["coarse"] is False for v in votes)
+    # first bucket sits in the speech half, second in the silence half
+    by_bucket = {v.bucket: v for v in votes}
+    assert by_bucket[(0.0, 0.5)].payload["speaks"] is True
+    assert by_bucket[(0.5, 1.0)].payload["speaks"] is False
+
+
+def test_p2_execute_emits_overlap_posterior_for_i4_to_reuse(monkeypatch: pytest.MonkeyPatch) -> None:
+    """contracts/interventions.md lets I4 run "light (reuses P2 output)"."""
+    from senselab.audio.workflows.audio_analysis.adaptive import interventions as iv
+    from senselab.audio.workflows.audio_analysis.adaptive.belief import VoteStore
+
+    ctx = _p2_ctx([((0.0, 0.5), {"ast": {"speaks": True, "coarse": True}}, None)])
+    rows = ctx["_rows"]
+    ctx.update({"round_idx": 2, "input_audio": "x.wav"})
+    monkeypatch.setattr(iv, "region_buckets", lambda region, rws: {(0.0, 0.5)})
+    monkeypatch.setattr(
+        "senselab.audio.workflows.audio_analysis.adaptive.audio_io.get_stream_wav",
+        lambda c, s: (object(), None),
+    )
+    monkeypatch.setattr(
+        "senselab.audio.workflows.audio_analysis.adaptive.backends.overlap_posteriors",
+        lambda wav, span: ({"frame_hop": 0.1, "speech": [0.8] * 20, "overlap": [0.42] * 20, "n_classes": 7}, None),
+    )
+    iv._p2_execute({"region": _p2_region(), "trigger": {"stream": "raw_16k"}}, ctx)
+    assert rows[0]["overlap_posterior"] == pytest.approx(0.42, abs=1e-3)
+
+
+def test_p2_execute_raises_when_posteriors_fail(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed posterior must surface as a rule failure, not silent success."""
+    from senselab.audio.workflows.audio_analysis.adaptive import interventions as iv
+    from senselab.audio.workflows.audio_analysis.adaptive.belief import VoteStore
+
+    ctx = _p2_ctx([])
+    ctx.update({"round_idx": 2, "input_audio": "x.wav"})
+    monkeypatch.setattr(
+        "senselab.audio.workflows.audio_analysis.adaptive.audio_io.get_stream_wav",
+        lambda c, s: (object(), None),
+    )
+    monkeypatch.setattr(
+        "senselab.audio.workflows.audio_analysis.adaptive.backends.overlap_posteriors",
+        lambda wav, span: (None, "posteriors_failed (boom)"),
+    )
+    with pytest.raises(RuntimeError, match="posteriors_failed"):
+        iv._p2_execute({"region": _p2_region(), "trigger": {"stream": "raw_16k"}}, ctx)
+
+
+def test_final_presence_parquet_has_contract_columns(tmp_path: Path) -> None:
+    """T042: final/presence.parquet must carry the contracts/final-outputs.md columns.
+
+    `presence_confidence`, `elected_stream` and `overlap_posterior` were absent —
+    verified against a real full run before this was added. The columns must exist
+    even when their values are None, so the schema is stable for readers.
+    """
+    pytest.importorskip("pandas")
+    import pandas as pd
+
+    from senselab.audio.workflows.audio_analysis.adaptive.belief import BeliefState, Vote, VoteStore
+    from senselab.audio.workflows.audio_analysis.adaptive.fusion import build_final_outputs
+    from senselab.audio.workflows.audio_analysis.adaptive.policy import load_policy
+
+    store = VoteStore()
+    store.add_vote(
+        Vote(
+            axis="presence",
+            bucket=(0.0, 0.5),
+            source="m1",
+            stream="raw_16k",
+            scope="file",
+            round=1,
+            payload={"speaks": True},
+        )
+    )
+    state = BeliefState.from_store(store, ["raw_16k"], aggregator="min")
+    build_final_outputs(
+        out_dir=tmp_path,
+        words=[],
+        store=store,
+        state=state,
+        stream="raw_16k",
+        policy=load_policy(),
+        generated_from_round=1,
+    )
+    cols = list(pd.read_parquet(tmp_path / "final" / "presence.parquet").columns)
+    for col in ("presence_confidence", "elected_stream", "overlap_posterior"):
+        assert col in cols, f"contract column {col!r} missing from final/presence.parquet"

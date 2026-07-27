@@ -8,6 +8,7 @@ budget + convergence semantics from the spec; the final round fuses.
 from __future__ import annotations
 
 import json
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,7 @@ from senselab.audio.workflows.audio_analysis.adaptive.interventions import (
 )
 from senselab.audio.workflows.audio_analysis.adaptive.policy import BudgetLedger, load_policy, plan_round
 from senselab.audio.workflows.audio_analysis.adaptive.regions import propose_regions
+from senselab.audio.workflows.audio_analysis.adaptive.types import AxisName, PlannedIntervention, Region
 
 
 def run_adaptive_loop(
@@ -44,13 +46,51 @@ def run_adaptive_loop(
     out_dir: Path | None = None,
     max_rounds: int = 3,
     aggregator: str | None = None,
+    harvests: dict[str, Any] | None = None,
+    summary: dict[str, Any] | None = None,
+    policy_overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Run the adaptive loop over a completed analyze_audio run directory."""
+    """Run the adaptive loop over an analyze_audio run.
+
+    Two ingest paths, same loop:
+
+    - **artifact-driven** (default): reads ``summary.json`` and the nine
+      uncertainty parquets from ``run_dir``. This is what ``scripts/adaptive_loop.py``
+      does over a finished run.
+    - **in-process** (T040): the caller passes the ``PassHarvest`` objects it just
+      produced via ``harvests`` (and usually ``summary``), skipping the parquet
+      round-trip entirely.
+
+    The in-process path cannot run the parity check, and says so rather than
+    reporting a passing one: :meth:`VoteStore.parity_check` compares
+    re-aggregation against the *stored* parquet values, which don't exist yet when
+    the harvests are still in memory. A vacuous "0 mismatches" would be a
+    misleading proof, so ``parity_check.status`` is ``"skipped"`` instead.
+
+    Args:
+        run_dir: The run directory. Still required for reading policy-adjacent
+            artifacts and for output pathing, even on the in-process path.
+        cache_dir: Cache directory for intervention re-runs.
+        policy_path: Policy YAML; ``None`` uses the packaged default.
+        out_dir: Where ``rounds/`` and ``final/`` are written; defaults to ``run_dir``.
+        max_rounds: Total rounds including baseline. ``1`` = baseline only.
+        aggregator: Sub-signal aggregator; inferred from the run when ``None``.
+        harvests: Pass label → ``PassHarvest`` for the in-process path.
+        policy_overrides: In-memory policy overrides (CLI flags), merged last.
+        summary: Pre-loaded ``summary.json`` content; read from disk when ``None``.
+
+    Returns:
+        The loop's decision log.
+
+    Raises:
+        ValueError: If no completed passes can be determined.
+    """
     run_dir = Path(run_dir)
     out_dir = Path(out_dir) if out_dir else run_dir
-    policy = load_policy(policy_path)
+    policy = load_policy(policy_path, policy_overrides)
 
-    summary = json.loads((run_dir / "summary.json").read_text())
+    if summary is None:
+        summary = json.loads((run_dir / "summary.json").read_text())
     passes = [pl for pl, ps in (summary.get("passes") or {}).items() if isinstance(ps, dict) and "duration_s" in ps]
     if not passes:
         raise ValueError(f"no completed passes in {run_dir}/summary.json")
@@ -61,8 +101,16 @@ def run_adaptive_loop(
 
     # ── round 1: ingest + parity (harvest/aggregate split proof) ────────
     t0 = time.time()
-    store = VoteStore.from_run_dir(run_dir, passes)
-    parity = store.parity_check(passes, aggregator=aggregator)
+    parity: dict[str, Any]
+    if harvests is not None:
+        store = VoteStore.from_harvests({pl: h for pl, h in harvests.items() if pl in passes})
+        parity = {
+            "status": "skipped",
+            "reason": "in-process harvests carry no stored parquet values to compare against",
+        }
+    else:
+        store = VoteStore.from_run_dir(run_dir, passes)
+        parity = store.parity_check(passes, aggregator=aggregator)
     state = BeliefState.from_store(store, passes, aggregator=aggregator)
     utterance_grid = _grid_from_rows(state.axis_rows(passes[0], "utterance"))
     theta_low = float(policy["thresholds"]["theta_low"])
@@ -110,7 +158,7 @@ def run_adaptive_loop(
     for round_idx in range(2, max_rounds + 1):
         ctx["round_idx"] = round_idx
         mass_before = {f"{s}/{a}": round(state.uncertainty_mass(s, a, theta_low), 6) for s in passes for a in AXES}
-        regions: list[dict[str, Any]] = []
+        regions: list[Region] = []
         for stream in passes:
             for axis in AXES:
                 regions.extend(
@@ -128,14 +176,14 @@ def run_adaptive_loop(
             rules=RULES, regions=regions, ctx=ctx, ledger=ledger, policy=policy, round_idx=round_idx
         )
 
-        fired: list[dict[str, Any]] = []
+        fired: list[PlannedIntervention] = []
         for cand in admitted:
             rule = next(r for r in RULES if r["id"] == cand["rule"])
             entry = _iteration_entry(cand, round_idx)
             try:
                 before_vals = _bucket_values(state)
                 result = rule["execute"](cand, ctx)
-                touched: dict[tuple[str, str], set] = result.pop("touched", {})
+                touched: dict[tuple[str, AxisName], set] = result.pop("touched", {})
                 delta = {}
                 for (stream, axis), buckets in touched.items():
                     state.update_buckets(store, stream, axis, buckets, round_idx)
@@ -339,8 +387,22 @@ def run_adaptive_loop(
     (final / "iterations.json").write_text(
         json.dumps({"policy_hash": policy.get("policy_hash"), "entries": iterations}, indent=2, default=str)
     )
+    # Summary figure. This lived only in scripts/adaptive_loop.py, so the
+    # in-process path (T040) produced every artifact except the one a human
+    # actually looks at. Best-effort: a plotting failure must not fail the loop.
+    timeline_path: str | None = None
+    try:
+        from senselab.audio.workflows.audio_analysis.adaptive.plot import build_adaptive_timeline
+
+        fig = build_adaptive_timeline(out_dir, title=run_dir.name)
+        timeline_path = str(fig) if fig is not None else None
+    except Exception as exc:  # noqa: BLE001 — sidecar
+        print(f"warn: adaptive timeline plot failed: {exc!r}", file=sys.stderr)
+
     return {
         "run_state": run_state,
+        "policy_hash": policy.get("policy_hash"),
+        "timeline": timeline_path,
         "parity_check": parity,
         "rounds": len(round_summaries) + 1,
         "n_interventions_fired": sum(1 for e in iterations if e["status"] == "fired"),
@@ -414,7 +476,7 @@ def _mean_over(state: BeliefState, stream: str, axis: str, buckets: set | None) 
     return sum(vals) / len(vals) if vals else None
 
 
-def _iteration_entry(cand: dict[str, Any], round_idx: int) -> dict[str, Any]:
+def _iteration_entry(cand: PlannedIntervention, round_idx: int) -> dict[str, Any]:
     return {
         "intervention_id": cand.get("intervention_id")
         or f"{round_idx}_{cand['rule']}_{cand.get('region_id') or 'global'}",

@@ -8,14 +8,34 @@ import json
 from pathlib import Path
 from typing import Any
 
+from senselab.audio.workflows.audio_analysis.adaptive.types import PlannedIntervention, Region
+
 _AXIS_PRIORITY = {"utterance": 0, "identity": 1, "presence": 2}
 _COST_WEIGHT = {"light": 1.0, "medium": 4.0, "heavy": 16.0}
 
 _DEFAULT_POLICY_PATH = Path(__file__).parent / "policy" / "default.yaml"
 
 
-def load_policy(path: Path | None = None) -> dict[str, Any]:
-    """Load the default policy, deep-merge an optional override file, attach ``policy_hash``."""
+def load_policy(path: Path | None = None, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Load the default policy, deep-merge an optional override file, attach ``policy_hash``.
+
+    Precedence is packaged default < ``path`` file < ``overrides`` — the CLI wins
+    over a policy file, per contracts/cli.md ("Overrides below win over the file").
+
+    ``policy_hash`` is computed *after* all merging, so it identifies the policy
+    that actually ran rather than the file on disk. That matters for
+    reproducibility: two runs with the same ``--policy`` but different
+    ``--budget-heavy`` must not claim the same hash.
+
+    Args:
+        path: Optional policy YAML to deep-merge over the packaged default.
+        overrides: Optional in-memory overrides (e.g. built from CLI flags),
+            deep-merged last. ``None`` values are dropped so an unset flag does
+            not clobber a file's value.
+
+    Returns:
+        The merged policy dict with ``policy_hash`` attached.
+    """
     import yaml  # type: ignore[import-untyped]
 
     with open(_DEFAULT_POLICY_PATH, encoding="utf-8") as f:
@@ -24,9 +44,24 @@ def load_policy(path: Path | None = None) -> dict[str, Any]:
         with open(path, encoding="utf-8") as f:
             override = yaml.safe_load(f) or {}
         policy = _deep_merge(policy, override)
+    if overrides:
+        policy = _deep_merge(policy, _drop_none(overrides))
     canonical = json.dumps(policy, sort_keys=True, separators=(",", ":"))
     policy["policy_hash"] = hashlib.sha256(canonical.encode()).hexdigest()
     return policy
+
+
+def _drop_none(d: dict[str, Any]) -> dict[str, Any]:
+    """Recursively strip ``None`` values so an unset CLI flag overrides nothing."""
+    out: dict[str, Any] = {}
+    for k, v in d.items():
+        if isinstance(v, dict):
+            nested = _drop_none(v)
+            if nested:
+                out[k] = nested
+        elif v is not None:
+            out[k] = v
+    return out
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -84,12 +119,12 @@ class BudgetLedger:
 def plan_round(
     *,
     rules: list[dict[str, Any]],
-    regions: list[dict[str, Any]],
+    regions: list[Region],
     ctx: dict[str, Any],
     ledger: BudgetLedger,
     policy: dict[str, Any],
     round_idx: int,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[list[PlannedIntervention], list[PlannedIntervention]]:
     """Match rules against regions, rank deterministically, admit within budget.
 
     Returns ``(admitted, not_admitted)`` where every element carries the full
@@ -98,10 +133,10 @@ def plan_round(
     inputs: stable total order (priority desc → axis priority → region start →
     rule id), floats rounded before comparison (FR-025).
     """
-    candidates: list[dict[str, Any]] = []
+    candidates: list[PlannedIntervention] = []
     for rule in rules:
         enabled = ((policy.get("rules") or {}).get(rule["id"]) or {}).get("enabled", True)
-        rule_regions: list[dict[str, Any] | None] = (
+        rule_regions: list[Region | None] = (
             [r for r in regions if r["axis"] in rule["axes"] and r.get("status") == "open"]
             if rule["axes"]
             else [None]  # stream-global rules (adjudication) run once per round
@@ -113,7 +148,7 @@ def plan_round(
             guard_reason = rule["guard"](region, ctx) if rule.get("guard") else None
             gain = float(rule["gain"](region, ctx, trigger))
             priority = round(gain / _COST_WEIGHT[rule["cost"]], 9)
-            cand = {
+            cand: PlannedIntervention = {
                 "rule": rule["id"],
                 "cost_class": rule["cost"],
                 "region_id": region["region_id"] if region else None,
@@ -129,8 +164,8 @@ def plan_round(
 
     candidates.sort(key=lambda c: (-c["priority"], _AXIS_PRIORITY.get(c["axis"], 3), c["start"], c["rule"]))
 
-    admitted: list[dict[str, Any]] = []
-    not_admitted: list[dict[str, Any]] = []
+    admitted: list[PlannedIntervention] = []
+    not_admitted: list[PlannedIntervention] = []
     for cand in candidates:
         if not cand["enabled"]:
             cand["status"] = "blocked_guard"

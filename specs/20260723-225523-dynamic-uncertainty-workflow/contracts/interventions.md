@@ -24,6 +24,17 @@ Rule ids are stable API (they appear in iterations.json and tests).
   `fine_hop_s: 0.01`); per-class posteriors retained (FR-016).
 - **Evidence**: replacement frame-posterior votes (scope region), overlap_posterior on covered rows.
 - **Cost**: medium. **Gain**: `presence epistemic × mass`.
+- **As implemented (T041)**: reuses `backends.overlap_posteriors`, which already runs
+  segmentation-3.0 on the crop and returns the `speech` track beside `overlap` — so the model's
+  native ~16.9 ms hop *is* the fine grid; there is no separate `fine_hop_s: 0.01` knob. The
+  coarse-dominance trigger threshold is `presence.coarse_share_threshold` (default 0.5). Replacement
+  votes enter at `scope=region:<id>`, superseding the coarse round-1 voters without deleting them.
+- ⚠️ **Currently unreachable at default policy.** Region seeding needs
+  `aggregated_uncertainty ≥ thresholds.theta_high` (0.66), but presence uncertainty is a
+  *decisiveness* measure (`1 − |2p−1|`) that peaked at 0.554 across 242 buckets even on the noise
+  degradation fixture — so no presence region is seeded and P2 never fires. Lower `theta_high` via
+  `--policy` to exercise it. Tuning deferred pending a benchmark set; see prototype-results.md
+  "Decision on `theta_high`".
 
 ## P3_hallucination_adjudication — ASR text where VAD says silence (C10)
 
@@ -52,12 +63,14 @@ Rule ids are stable API (they appear in iterations.json and tests).
 ## U2_reserve_escalation — add a dissenting model
 
 - **Trigger**: utterance region still open after a U1 firing (delta < ε or disagreement persists).
-- **Guards**: reserve pool non-empty; heavy budget available; reserve model's family not already
-  majority in region.
+- **Guards**: reserve pool non-empty; medium budget available. *(The drafted "reserve model's family
+  not already majority in region" guard is **not implemented** — family-weight aggregation already
+  discounts intra-family agreement, making it redundant. `guard` is `None` in code.)*
 - **Action**: run one reserve ASR model (policy `reserve_asr_models`, in order) on the elected-stream
   crop; align if text-only.
 - **Evidence**: new-model region-scoped votes (coexist).
-- **Cost**: heavy. **Gain**: `epistemic × mass × (1 − family_overlap)`.
+- **Cost**: **medium** as implemented (cache replay / one forward per crop), not heavy as originally
+  drafted. **Gain**: `epistemic × mass × (1 − family_overlap)`.
 
 ## U3_consensus_realignment — authoritative word timestamps (C8)
 
@@ -96,8 +109,12 @@ Rule ids are stable API (they appear in iterations.json and tests).
 - **Action**: SepFormer separation on crop → per-source embedding match to unified clusters →
   per-source ASR (C11) → speaker-attributed region votes.
 - **Cost**: heavy.
+- ⚠️ **Not implemented.** No `U4` rule exists in `RULES`. The `--enable-overlap-separation` flag
+  added in T040 therefore maps to the *shipped* overlap rule, `I4_overlap_detection`, forcing it on;
+  since the packaged policy already enables I4, the flag only bites against a policy file that
+  disabled it. It does **not** enable separation.
 
-## Implementation notes (contract aligned with code, 2026-07-24 — spec T045)
+## Implementation notes (contract aligned with code, 2026-07-24; extended 2026-07-27 — spec T045)
 
 - **U2 cost class is `medium`** (cache replay / one forward per crop), not heavy as originally
   drafted; the "reserve family not already majority" guard was not implemented (the family-weight
@@ -111,6 +128,8 @@ Rule ids are stable API (they appear in iterations.json and tests).
 - **`max_region_rounds` is enforced via convergence marks** (per-bucket touch counts, FR-017)
   rather than as a plan-time admission cap; the observable behavior (a region stops being
   re-touched after N interventions without ε improvement) matches the contract's intent.
+- **P2 and U4**: see the ⚠️ notes on those sections — P2 is implemented but unreachable at the default
+  `theta_high`, and U4 has no implementation (the `--enable-overlap-separation` flag maps to I4).
 - **Backend pins**: `u1_backend` (`auto|senselab|pipeline`) and `audio_io_backend`
   (`auto|senselab|dsp`) select the primary/fallback paths explicitly; the backend used is recorded
   in `iterations.json` / `convergence.json → audio_backend` (never silent).
