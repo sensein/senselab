@@ -124,8 +124,27 @@ in Phase 8.
     tuple arity changes). **Golden-compat verified**: `--max-rounds 1` vs `--no-adaptive-outputs`
     produced byte-identical uncertainty parquets (3/3), an identical LS bundle, and identical
     `summary.json` keys and values; `disagreements.json` differed only in `generated_at`.
-- [ ] T041 `P2_fine_posteriors` rule (fine-hop posterior re-analysis on crops) — also unblocks I4's
+- [x] T041 `P2_fine_posteriors` rule (fine-hop posterior re-analysis on crops) — also unblocks I4's
   contract dependency ("else fires P2 first").
+  - **Implemented 2026-07-27.** Registered ahead of I4 so the planner can satisfy I4's
+    "else fires P2 first" dependency; reuses `backends.overlap_posteriors`, which already returns the
+    `speech` track alongside `overlap` and runs on the crop. Replacement presence votes enter at
+    `scope=region:<id>` (superseding, not deleting, the coarse round-1 voters) and `overlap_posterior`
+    is written on covered rows, which is what lets I4 then run "light (reuses P2 output)".
+  - **Two bugs the live run caught that unit tests did not.** (1) The trigger read vote payloads off
+    the belief row, but rows only carry `contributing_sources` (names) — payloads live in the store,
+    so `coarse` was invisible and the trigger never fired. Now reads `store.active_votes(...)`; the
+    test fixture was rewritten to build a real `VoteStore` so a fabricated row shape cannot hide this
+    again. (2) `frame_instability` never reached `row_meta`, making the second trigger branch dead; it
+    is now plumbed through `VoteStore.from_harvests` (the artifact path still lacks it — parquet has
+    no such column).
+  - **NOT observed firing end-to-end**, and the reason is a threshold boundary rather than a defect:
+    presence `aggregated_uncertainty` is a decisiveness measure (`1 − |2p−1|`) that maxes at 0.554
+    even on the noise degradation fixture, so no presence region is seeded at the default
+    `theta_high: 0.66` (verified: 0 regions at 0.66, 1 at 0.30). With the threshold lowered the region
+    appears and the trigger evaluates, but `coarse_share` lands at **0.4967** — a hair under the
+    contract's `≥ 0.5`. Retuning either `theta_high` for the presence axis or the coarse-share
+    threshold is a policy call, deliberately left to a human.
 - [ ] T042 Final-output schema completion vs contracts/final-outputs.md: `final/diarization.rttm`,
   `diarization.json` `member_labels`/`overlap`, `transcript.json.language`, presence.parquet contract
   columns (`presence_confidence`, `elected_stream`, `overlap_posterior`).

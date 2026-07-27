@@ -5,6 +5,7 @@ planning + budget, and fusion voting on synthetic inputs.
 """
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -453,3 +454,237 @@ def test_empty_overrides_match_the_unmodified_policy() -> None:
 
     assert load_policy(None, {}) == load_policy()
     assert load_policy(None, {"budget": {"medium_per_run": None}})["policy_hash"] == load_policy()["policy_hash"]
+
+
+# ── P2_fine_posteriors (T041) ─────────────────────────────────────────
+
+
+def _p2_ctx(
+    buckets: list[tuple[tuple[float, float], dict[str, dict[str, Any]], float | None]],
+    *,
+    policy: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Ctx backed by a real VoteStore.
+
+    Vote payloads must come from the store — the belief row only carries
+    ``contributing_sources`` (names). An earlier version of this fixture handed the
+    trigger fabricated rows with a ``model_votes`` key, which does not exist on a
+    real row; the trigger read nothing, never fired, and the unit tests still
+    passed. Building the store for real is what stops that recurring.
+
+    Each entry is ``(bucket, {source: payload}, frame_instability)``.
+    """
+    from senselab.audio.workflows.audio_analysis.adaptive.belief import Vote, VoteStore
+    from senselab.audio.workflows.audio_analysis.adaptive.policy import load_policy
+
+    store = VoteStore()
+    rows: list[dict[str, Any]] = []
+    for bk, votes, instability in buckets:
+        for source, payload in votes.items():
+            store.add_vote(
+                Vote(
+                    axis="presence", bucket=bk, source=source, stream="raw_16k", scope="file", round=1, payload=payload
+                )
+            )
+        meta: dict[str, Any] = {}
+        if instability is not None:
+            meta["frame_instability"] = instability
+        rows.append({"start": bk[0], "end": bk[1], "meta": meta})
+
+    class _State:
+        def axis_rows(self, stream: str, axis: str) -> list[dict[str, Any]]:
+            return rows if axis == "presence" else []
+
+    return {"state": _State(), "store": store, "policy": policy or load_policy(), "passes": ["raw_16k"], "_rows": rows}
+
+
+def _p2_region() -> dict[str, Any]:
+    return {
+        "axis": "presence",
+        "stream": "raw_16k",
+        "region_id": "r2_raw_presence_0",
+        "core_start": 0.0,
+        "core_end": 1.0,
+        "crop_start": 0.0,
+        "crop_end": 2.0,
+        "uncertainty_mass": 0.4,
+    }
+
+
+def test_p2_is_registered_before_i4() -> None:
+    """I4's contract says it "else fires P2 first", so P2 must be plannable."""
+    from senselab.audio.workflows.audio_analysis.adaptive.interventions import RULES
+
+    ids = [r["id"] for r in RULES]
+    assert "P2_fine_posteriors" in ids
+    assert ids.index("P2_fine_posteriors") < ids.index("I4_overlap_detection")
+
+
+def test_p2_declares_presence_axis_and_medium_cost() -> None:
+    """contracts/interventions.md: presence axis, medium cost."""
+    from senselab.audio.workflows.audio_analysis.adaptive.interventions import RULES
+
+    rule = next(r for r in RULES if r["id"] == "P2_fine_posteriors")
+    assert rule["axes"] == ["presence"]
+    assert rule["cost"] == "medium"
+
+
+def test_p2_fires_when_coarse_voters_dominate() -> None:
+    """Coarse voters cast one identical vote across every bucket they span.
+
+    Their agreement is an artifact of window size, not evidence about this bucket,
+    so a majority-coarse region is exactly what a finer grid should re-decide.
+    """
+    from senselab.audio.workflows.audio_analysis.adaptive.interventions import _p2_trigger
+
+    ctx = _p2_ctx(
+        [
+            (
+                (0.0, 0.5),
+                {
+                    "ast": {"speaks": True, "coarse": True},
+                    "yamnet": {"speaks": True, "coarse": True},
+                    "opensmile": {"speaks": True},
+                },
+                None,
+            )
+        ]
+    )
+    fires, info = _p2_trigger(_p2_region(), ctx)
+    assert fires is True
+    assert info["coarse_share"] == pytest.approx(2 / 3, abs=1e-4)
+    assert info["reason"] == "coarse_dominance"
+
+
+def test_p2_does_not_fire_on_fine_evidence() -> None:
+    """All-fine voters with a stable posterior need no re-analysis."""
+    from senselab.audio.workflows.audio_analysis.adaptive.interventions import _p2_trigger
+
+    ctx = _p2_ctx([((0.0, 0.5), {"opensmile": {"speaks": True}, "ppg": {"speaks": True}}, 0.0)])
+    fires, _ = _p2_trigger(_p2_region(), ctx)
+    assert fires is False
+
+
+def test_p2_fires_on_frame_instability_even_without_coarse_votes() -> None:
+    """The second independent trigger: a bucket straddling an onset."""
+    from senselab.audio.workflows.audio_analysis.adaptive.interventions import _p2_trigger
+
+    ctx = _p2_ctx([((0.0, 0.5), {"opensmile": {"speaks": True}}, 0.6)])
+    fires, info = _p2_trigger(_p2_region(), ctx)
+    assert fires is True
+    assert info["reason"] == "frame_instability"
+
+
+def test_p2_ignores_non_presence_regions() -> None:
+    """A presence-only rule must not claim identity or utterance regions."""
+    from senselab.audio.workflows.audio_analysis.adaptive.interventions import _p2_trigger
+
+    for axis in ("identity", "utterance"):
+        fires, _ = _p2_trigger({**_p2_region(), "axis": axis}, _p2_ctx([]))
+        assert fires is False
+
+
+def test_p2_skips_inactive_votes_when_measuring_coarse_share() -> None:
+    """Only votes that actually decided (`speaks` not None) count toward the share."""
+    from senselab.audio.workflows.audio_analysis.adaptive.interventions import _p2_trigger
+
+    ctx = _p2_ctx(
+        [
+            (
+                (0.0, 0.5),
+                {
+                    "ast": {"speaks": True, "coarse": True},
+                    "abstained": {"speaks": None, "coarse": True},
+                    "opensmile": {"speaks": True},
+                },
+                None,
+            )
+        ]
+    )
+    _, info = _p2_trigger(_p2_region(), ctx)
+    assert info["n_active_votes"] == 2
+    assert info["coarse_share"] == pytest.approx(0.5)
+
+
+def test_p2_execute_replaces_votes_at_region_scope(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The fine posterior enters as a region-scoped vote, superseding coarse ones.
+
+    Scoped rather than deleting the round-1 voters: the store keeps both and the
+    later scope wins, which is what keeps the decision log auditable.
+    """
+    from senselab.audio.workflows.audio_analysis.adaptive import interventions as iv
+    from senselab.audio.workflows.audio_analysis.adaptive.belief import VoteStore
+
+    ctx = _p2_ctx(
+        [
+            ((0.0, 0.5), {"ast": {"speaks": True, "coarse": True}}, None),
+            ((0.5, 1.0), {"ast": {"speaks": True, "coarse": True}}, None),
+        ]
+    )
+    ctx.update({"round_idx": 2, "input_audio": "x.wav"})
+
+    monkeypatch.setattr(iv, "region_buckets", lambda region, rws: {(0.0, 0.5), (0.5, 1.0)})
+    monkeypatch.setattr(
+        "senselab.audio.workflows.audio_analysis.adaptive.audio_io.get_stream_wav",
+        lambda c, s: (object(), None),
+    )
+    # 0.1 s hop over a 2 s crop: speech for the first 0.5 s, silence after —
+    # so bucket (0.0, 0.5) reads as speech and (0.5, 1.0) as silence.
+    monkeypatch.setattr(
+        "senselab.audio.workflows.audio_analysis.adaptive.backends.overlap_posteriors",
+        lambda wav, span: (
+            {"frame_hop": 0.1, "speech": [0.9] * 5 + [0.05] * 15, "overlap": [0.2] * 20, "n_classes": 7},
+            None,
+        ),
+    )
+
+    result = iv._p2_execute({"region": _p2_region(), "trigger": {"stream": "raw_16k"}}, ctx)
+    assert result["votes_added"] == 2
+    votes = [v for v in ctx["store"]._votes.values() if v.source == "frame_posterior_fine"]
+    assert len(votes) == 2
+    assert all(v.scope == "region:r2_raw_presence_0" for v in votes)
+    assert all(v.payload["coarse"] is False for v in votes)
+    # first bucket sits in the speech half, second in the silence half
+    by_bucket = {v.bucket: v for v in votes}
+    assert by_bucket[(0.0, 0.5)].payload["speaks"] is True
+    assert by_bucket[(0.5, 1.0)].payload["speaks"] is False
+
+
+def test_p2_execute_emits_overlap_posterior_for_i4_to_reuse(monkeypatch: pytest.MonkeyPatch) -> None:
+    """contracts/interventions.md lets I4 run "light (reuses P2 output)"."""
+    from senselab.audio.workflows.audio_analysis.adaptive import interventions as iv
+    from senselab.audio.workflows.audio_analysis.adaptive.belief import VoteStore
+
+    ctx = _p2_ctx([((0.0, 0.5), {"ast": {"speaks": True, "coarse": True}}, None)])
+    rows = ctx["_rows"]
+    ctx.update({"round_idx": 2, "input_audio": "x.wav"})
+    monkeypatch.setattr(iv, "region_buckets", lambda region, rws: {(0.0, 0.5)})
+    monkeypatch.setattr(
+        "senselab.audio.workflows.audio_analysis.adaptive.audio_io.get_stream_wav",
+        lambda c, s: (object(), None),
+    )
+    monkeypatch.setattr(
+        "senselab.audio.workflows.audio_analysis.adaptive.backends.overlap_posteriors",
+        lambda wav, span: ({"frame_hop": 0.1, "speech": [0.8] * 20, "overlap": [0.42] * 20, "n_classes": 7}, None),
+    )
+    iv._p2_execute({"region": _p2_region(), "trigger": {"stream": "raw_16k"}}, ctx)
+    assert rows[0]["overlap_posterior"] == pytest.approx(0.42, abs=1e-3)
+
+
+def test_p2_execute_raises_when_posteriors_fail(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed posterior must surface as a rule failure, not silent success."""
+    from senselab.audio.workflows.audio_analysis.adaptive import interventions as iv
+    from senselab.audio.workflows.audio_analysis.adaptive.belief import VoteStore
+
+    ctx = _p2_ctx([])
+    ctx.update({"round_idx": 2, "input_audio": "x.wav"})
+    monkeypatch.setattr(
+        "senselab.audio.workflows.audio_analysis.adaptive.audio_io.get_stream_wav",
+        lambda c, s: (object(), None),
+    )
+    monkeypatch.setattr(
+        "senselab.audio.workflows.audio_analysis.adaptive.backends.overlap_posteriors",
+        lambda wav, span: (None, "posteriors_failed (boom)"),
+    )
+    with pytest.raises(RuntimeError, match="posteriors_failed"):
+        iv._p2_execute({"region": _p2_region(), "trigger": {"stream": "raw_16k"}}, ctx)
