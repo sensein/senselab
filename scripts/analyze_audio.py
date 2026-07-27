@@ -159,6 +159,7 @@ from senselab.utils.tasks.cached_inference import (
 )
 from senselab.utils.tasks.cached_inference import (
     align_cache_key,
+    audio_signature,
     cache_key,
     cache_lookup,
     cache_store,
@@ -168,6 +169,7 @@ from senselab.utils.tasks.cached_inference import (
     senselab_version,
     serialize,
     transcript_signature,
+    write_json,
 )
 from senselab.utils.tasks.cached_inference import (
     canonical_params as _canonical_params,
@@ -753,24 +755,6 @@ def prepare_audio(path: Path) -> Audio:
 # else, otherwise the constant and the stamped value will drift.
 
 
-def audio_signature(audio: Audio) -> str:
-    """Return a deterministic sha256 of the audio waveform PCM + sampling rate.
-
-    Two identical-sounding files produce the same signature regardless of
-    their on-disk format (e.g., WAV vs FLAC) — what matters is the post-
-    resample, post-downmix waveform that each task actually sees. Extra
-    metadata (file path, mtime, encoding) is intentionally excluded.
-    """
-    arr = audio.waveform.detach().cpu().contiguous().numpy()
-    h = hashlib.sha256()
-    h.update(str(audio.sampling_rate).encode())
-    h.update(b"|")
-    h.update(str(arr.shape).encode())
-    h.update(b"|")
-    h.update(arr.tobytes())
-    return h.hexdigest()
-
-
 def wrapper_version_hash() -> str:
     """sha256 of this script's source. Captures wrapper-side behavior changes.
 
@@ -1296,13 +1280,6 @@ def _collect_classification_labels(result: Any) -> set[str]:  # noqa: ANN401
     return labels
 
 
-def write_json(path: Path, payload: Any) -> None:  # noqa: ANN401
-    """Write a JSON file with senselab-aware serialization."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(serialize(payload), fh, indent=2, default=str)
-
-
 def _speech_presence_labels(args: argparse.Namespace) -> list[str]:
     """Resolve --speech-presence-labels into a clean list of AudioSet labels.
 
@@ -1549,7 +1526,7 @@ def _stage_alignment(audio: Audio, args: argparse.Namespace, ctx: dict[str, Any]
             language=align_language.language_code,
             aligner_model_id=aligner_model_id,
             aligner_params=aligner_params,
-            wrapper_hash=wrapper_hash,
+            code_version=wrapper_hash,
             senselab_ver=senselab_ver,
         )
         outcome = run_alignment_cached(
@@ -1679,7 +1656,7 @@ def run_pass(
             task=task,
             model_id=model_id,
             params=params,
-            wrapper_hash=wrapper_hash,
+            code_version=wrapper_hash,
             senselab_ver=senselab_ver,
         )
 
@@ -1876,7 +1853,7 @@ def main(argv: list[str] | None = None) -> int:
         device,
         run_dir,
         cache_dir=cache_dir,
-        wrapper_hash=wrapper_hash,
+        code_version=wrapper_hash,
         senselab_ver=senselab_ver,
     )
 
@@ -1896,7 +1873,7 @@ def main(argv: list[str] | None = None) -> int:
                 device,
                 run_dir,
                 cache_dir=cache_dir,
-                wrapper_hash=wrapper_hash,
+                code_version=wrapper_hash,
                 senselab_ver=senselab_ver,
             )
         except Exception as exc:  # noqa: BLE001

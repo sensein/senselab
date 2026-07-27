@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -18,6 +19,7 @@ import torch
 from senselab.utils.tasks.cached_inference import (
     CACHE_SCHEMA_VERSION,
     align_cache_key,
+    audio_signature,
     cache_key,
     cache_lookup,
     cache_store,
@@ -29,26 +31,31 @@ from senselab.utils.tasks.cached_inference import (
     serialize,
     sync_cache_with_schema_version,
     transcript_signature,
+    write_json,
 )
 
-# Captured from the pre-refactor script (analyze_audio.py @ 88e812fc).
-GOLDEN_CACHE_KEY = "2ad59bc61873cac6b9f5438012742dda370abab5733c8166f3a69a83463eae82"
+# sha256("hello world") — a genuine external constant, not a self-pin.
 GOLDEN_TRANSCRIPT_SIG = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
 
 
-def test_cache_key_matches_pre_refactor_digest() -> None:
-    """Key derivation is byte-identical to the script's — no cache invalidation."""
-    assert (
-        cache_key(
-            audio_sig="sig123",
-            task="diarization",
-            model_id="pyannote/x",
-            params={"b": 2, "a": 1},
-            wrapper_hash="WH",
-            senselab_ver="1.2.3",
-        )
-        == GOLDEN_CACHE_KEY
-    )
+def test_cache_key_is_deterministic() -> None:
+    """Same inputs → same key, across calls and process state.
+
+    Deliberately NOT pinned to a hard-coded digest: cross-version key stability
+    is explicitly not a goal (CACHE_SCHEMA_VERSION is the invalidation lever), and
+    a pinned digest would only ossify the payload shape.
+    """
+    kwargs = {
+        "audio_sig": "sig123",
+        "task": "diarization",
+        "model_id": "pyannote/x",
+        "params": {"b": 2, "a": 1},
+        "code_version": "diarization@1",
+        "senselab_ver": "1.2.3",
+    }
+    first = cache_key(**kwargs)  # type: ignore[arg-type]
+    assert first == cache_key(**kwargs)  # type: ignore[arg-type]
+    assert len(first) == 64
 
 
 def test_transcript_signature_matches_pre_refactor_digest() -> None:
@@ -56,30 +63,33 @@ def test_transcript_signature_matches_pre_refactor_digest() -> None:
     assert transcript_signature("hello world") == GOLDEN_TRANSCRIPT_SIG
 
 
-def test_schema_version_unchanged() -> None:
-    """Bumping this wipes every user's cache — it must be a deliberate act."""
-    assert CACHE_SCHEMA_VERSION == 1
+def test_schema_version_is_pinned() -> None:
+    """Bumping this wipes every user's cache — it must be a deliberate, reviewed act."""
+    assert CACHE_SCHEMA_VERSION == 2
 
 
 def test_param_order_does_not_change_the_key() -> None:
     """Params are canonicalized, so dict ordering can't fragment the cache."""
-    a = cache_key(audio_sig="s", task="t", model_id="m", params={"a": 1, "b": 2}, wrapper_hash="w", senselab_ver="v")
-    b = cache_key(audio_sig="s", task="t", model_id="m", params={"b": 2, "a": 1}, wrapper_hash="w", senselab_ver="v")
+    a = cache_key(audio_sig="s", task="t", model_id="m", params={"a": 1, "b": 2}, code_version="t@1", senselab_ver="v")
+    b = cache_key(audio_sig="s", task="t", model_id="m", params={"b": 2, "a": 1}, code_version="t@1", senselab_ver="v")
     assert a == b
 
 
 @pytest.mark.parametrize(
     "field",
-    ["audio_sig", "task", "model_id", "params", "wrapper_hash", "senselab_ver"],
+    ["audio_sig", "task", "model_id", "params", "code_version", "senselab_ver"],
 )
 def test_every_keyed_field_changes_the_key(field: str) -> None:
-    """Each component genuinely participates — none is silently ignored."""
+    """Each component genuinely participates — none is silently ignored (FR-010).
+
+    Moved here from analyze_audio_test.py with the code it covers.
+    """
     base = {
         "audio_sig": "s",
         "task": "t",
         "model_id": "m",
         "params": {"a": 1},
-        "wrapper_hash": "w",
+        "code_version": "t@1",
         "senselab_ver": "v",
     }
     altered = dict(base)
@@ -88,18 +98,21 @@ def test_every_keyed_field_changes_the_key(field: str) -> None:
 
 
 def test_alignment_key_is_independent_of_the_task_key() -> None:
-    """ASR and alignment caches must not collide (separable per the design)."""
+    """ASR and alignment cache keys diverge by construction (FR-024).
+
+    Moved here from analyze_audio_test.py with the code it covers.
+    """
     align = align_cache_key(
         audio_sig="s",
         transcript_sha="ts",
         language="en",
         aligner_model_id="mms",
         aligner_params={"x": 1},
-        wrapper_hash="w",
+        code_version="t@1",
         senselab_ver="v",
     )
     task = cache_key(
-        audio_sig="s", task="alignment", model_id="mms", params={"x": 1}, wrapper_hash="w", senselab_ver="v"
+        audio_sig="s", task="alignment", model_id="mms", params={"x": 1}, code_version="t@1", senselab_ver="v"
     )
     assert align != task
     assert len(align) == 64
@@ -112,7 +125,7 @@ def test_alignment_key_tracks_the_transcript() -> None:
         "language": "en",
         "aligner_model_id": "mms",
         "aligner_params": {},
-        "wrapper_hash": "w",
+        "code_version": "t@1",
         "senselab_ver": "v",
     }
     assert align_cache_key(transcript_sha="a", **kwargs) != align_cache_key(transcript_sha="b", **kwargs)  # type: ignore[arg-type]
@@ -318,3 +331,67 @@ def test_failed_alignment_is_not_cached(tmp_path: Path) -> None:
     out = run_alignment_cached("a", boom, cache_dir=tmp_path, cache_key_str="ak", provenance={})
     assert out["status"] == "failed"
     assert cache_lookup(tmp_path, "ak") is None
+
+
+# ── audio_signature (the cache↔summary join key) ──────────────────────
+
+
+def _fake_audio(values: list[float], sr: int = 16000) -> SimpleNamespace:
+    """Duck-typed stand-in — audio_signature is structurally typed on purpose."""
+    return SimpleNamespace(waveform=torch.tensor([values]), sampling_rate=sr)
+
+
+def test_audio_signature_is_stable_for_identical_content() -> None:
+    """Same PCM + rate → same signature, regardless of object identity."""
+    a = _fake_audio([0.1, 0.2, 0.3])
+    b = _fake_audio([0.1, 0.2, 0.3])
+    assert audio_signature(a) == audio_signature(b)
+    assert len(audio_signature(a)) == 64
+
+
+def test_audio_signature_changes_with_content() -> None:
+    """Different samples must not collide."""
+    assert audio_signature(_fake_audio([0.1, 0.2])) != audio_signature(_fake_audio([0.1, 0.3]))
+
+
+def test_audio_signature_changes_with_sampling_rate() -> None:
+    """Same samples at a different rate are different audio."""
+    assert audio_signature(_fake_audio([0.1], sr=16000)) != audio_signature(_fake_audio([0.1], sr=8000))
+
+
+def test_audio_signature_changes_with_shape() -> None:
+    """Mono vs stereo of the same flat buffer must differ (shape is hashed)."""
+    mono = SimpleNamespace(waveform=torch.tensor([[0.1, 0.2, 0.3, 0.4]]), sampling_rate=16000)
+    stereo = SimpleNamespace(waveform=torch.tensor([[0.1, 0.2], [0.3, 0.4]]), sampling_rate=16000)
+    assert audio_signature(mono) != audio_signature(stereo)
+
+
+def test_audio_signature_joins_summary_to_cache_provenance(tmp_path: Path) -> None:
+    """The adaptive loop indexes cached entries on this — pin the round-trip.
+
+    `adaptive/loop.py` reads `summary["passes"][label]["audio_signature"]` and
+    `adaptive/interventions.py::build_cache_index` reads each entry's
+    `provenance.audio_signature`. Both must come from this one function or the
+    index silently misses and cache-replay escalation never fires.
+    """
+    audio = _fake_audio([0.1, 0.2, 0.3])
+    sig = audio_signature(audio)
+    provenance = {"audio_signature": sig, "task": "asr", "model_id": "whisper"}
+    key = cache_key(audio_sig=sig, task="asr", model_id="whisper", params={}, code_version="asr@1", senselab_ver="v")
+    cache_store(tmp_path, key, {"status": "ok", "result": [], "provenance": provenance})
+
+    entry = cache_lookup(tmp_path, key)
+    assert entry is not None
+    assert entry["provenance"]["audio_signature"] == audio_signature(audio), "join key must round-trip"
+
+
+# ── write_json ────────────────────────────────────────────────────────
+
+
+def test_write_json_creates_parents_and_serializes(tmp_path: Path) -> None:
+    """Nested sidecar paths work, and senselab objects go through `serialize`."""
+    target = tmp_path / "pass" / "diarization" / "m.json"
+    write_json(target, {"emb": torch.ones(2), "n": 1})
+    payload = json.loads(target.read_text())
+    assert payload["n"] == 1
+    assert payload["emb"]["_tensor_shape"] == [2]

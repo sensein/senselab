@@ -1,23 +1,32 @@
 """Content-addressable caching for expensive model inference (T051).
 
-Lifted verbatim out of ``scripts/analyze_audio.py`` so the cache contract is
-importable, unit-testable, and reusable by the adaptive loop rather than living
-in a 2500-line CLI script. The key derivation is unchanged — see
-``cached_inference_test.py``, which pins the exact digests the script produced
-before the move, so existing ``artifacts/analyze_audio_cache/`` entries stay
-valid.
+Lifted out of ``scripts/analyze_audio.py`` so the cache contract is importable,
+unit-testable, and reusable by the adaptive loop rather than living in a 2500-line
+CLI script.
 
 A cache entry is keyed on everything that can change the result:
 
     (schema version, audio signature, task, model id, params,
-     wrapper hash, senselab version)
+     code version, senselab version)
 
-``wrapper_hash`` deliberately stays a caller-supplied string. The script hashes
-its own source today; once the per-task stage logic moves to
-``workflows/audio_analysis/stages.py`` the caller will hash *those* modules
-instead, which narrows invalidation to the code that actually shapes a stage's
-output. Keeping it a parameter here means this module never needs to know which
-file is "the wrapper".
+``code_version`` is a caller-supplied string identifying the *behavior* that
+produced an entry. It deliberately replaced an earlier ``wrapper_hash`` that was
+a sha256 of the CLI script's own source. Source hashing was the wrong tool:
+editing a comment, a docstring, or letting ``ruff-format`` rotate a line
+invalidated every cached model result, while the blast radius grew as more stages
+shared one file. Callers now pass a coarse, hand-managed identifier (see
+``STAGE_VERSIONS`` in ``workflows/audio_analysis/stage_context.py``) whose
+counterpart obligation is explicit: bump a stage's version when the stored shape
+of its outcome changes.
+
+``senselab_version`` still participates, and covers the larger surface — most
+stages are thin pass-throughs to a ``tasks/`` API, so library-side changes are
+what usually matter.
+
+Cache keys are NOT stable across senselab versions and are not intended to be:
+:data:`CACHE_SCHEMA_VERSION` is the deliberate global invalidation lever, and
+:func:`sync_cache_with_schema_version` wipes stale entries automatically on every
+host rather than requiring anyone to delete a directory by hand.
 """
 
 from __future__ import annotations
@@ -30,13 +39,14 @@ import sys
 import time
 import traceback
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 import torch
 
 __all__ = [
     "CACHE_SCHEMA_VERSION",
     "align_cache_key",
+    "audio_signature",
     "cache_key",
     "cache_lookup",
     "cache_store",
@@ -49,10 +59,16 @@ __all__ = [
     "serialize",
     "sync_cache_with_schema_version",
     "transcript_signature",
+    "write_json",
 ]
 
-CACHE_SCHEMA_VERSION = 1
-"""Bump to invalidate every on-disk entry (see :func:`sync_cache_with_schema_version`)."""
+CACHE_SCHEMA_VERSION = 2
+"""Bump to invalidate every on-disk entry (see :func:`sync_cache_with_schema_version`).
+
+Bumped 1 → 2 when ``wrapper_hash`` became ``code_version``: the key payload
+changed shape, so every pre-existing entry is unreadable by construction. The
+wipe is automatic on every host, not a manual ``rm -rf``.
+"""
 
 
 def senselab_version() -> str:
@@ -89,13 +105,64 @@ def canonical_params(params: dict[str, Any]) -> str:
     return json.dumps(params, sort_keys=True, separators=(",", ":"), default=str)
 
 
+@runtime_checkable
+class _HasWaveform(Protocol):
+    """Structural type for :func:`audio_signature`.
+
+    Typed structurally rather than as ``senselab.audio.data_structures.Audio``
+    on purpose: ``utils/`` must not import from ``audio/`` (that would invert the
+    dependency direction and risk an import cycle), and it lets callers pass any
+    waveform-carrying object — which the tests do.
+    """
+
+    @property
+    def waveform(self) -> Any: ...  # noqa: ANN401 — a torch.Tensor in practice
+
+    @property
+    def sampling_rate(self) -> int: ...
+
+
+def audio_signature(audio: _HasWaveform) -> str:
+    """Return a deterministic sha256 of the audio waveform PCM + sampling rate.
+
+    Two identical-sounding files produce the same signature regardless of
+    their on-disk format (e.g., WAV vs FLAC) — what matters is the post-
+    resample, post-downmix waveform that each task actually sees. Extra
+    metadata (file path, mtime, encoding) is intentionally excluded.
+
+    This is the join key between a run's ``summary.json``
+    (``passes[label].audio_signature``) and each cache entry's
+    ``provenance.audio_signature``; the adaptive loop indexes cached results on
+    it, so the two must be produced by this one function.
+    """
+    arr = audio.waveform.detach().cpu().contiguous().numpy()
+    h = hashlib.sha256()
+    h.update(str(audio.sampling_rate).encode())
+    h.update(b"|")
+    h.update(str(arr.shape).encode())
+    h.update(b"|")
+    h.update(arr.tobytes())
+    return h.hexdigest()
+
+
+def write_json(path: Path, payload: Any) -> None:  # noqa: ANN401 — heterogeneous senselab outputs
+    """Write a JSON file with senselab-aware serialization.
+
+    Same operation as :func:`cache_store` minus the key→filename convention;
+    lives here because it shares :func:`serialize`.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(serialize(payload), fh, indent=2, default=str)
+
+
 def cache_key(
     *,
     audio_sig: str,
     task: str,
     model_id: str | None,
     params: dict[str, Any],
-    wrapper_hash: str,
+    code_version: str,
     senselab_ver: str,
 ) -> str:
     """Compute the deterministic cache key for one (audio, task, model, params) combo."""
@@ -105,7 +172,7 @@ def cache_key(
         "task": task,
         "model": model_id,
         "params": params,
-        "wrapper_hash": wrapper_hash,
+        "code_version": code_version,
         "senselab_version": senselab_ver,
     }
     return hashlib.sha256(canonical_params(payload).encode()).hexdigest()
@@ -118,7 +185,7 @@ def align_cache_key(
     language: str | None,
     aligner_model_id: str,
     aligner_params: dict[str, Any],
-    wrapper_hash: str,
+    code_version: str,
     senselab_ver: str,
 ) -> str:
     """Cache key for one (audio, transcript, language, aligner) alignment call.
@@ -135,7 +202,7 @@ def align_cache_key(
         "language": language,
         "aligner_model": aligner_model_id,
         "aligner_params": aligner_params,
-        "wrapper_hash": wrapper_hash,
+        "code_version": code_version,
         "senselab_version": senselab_ver,
     }
     return hashlib.sha256(canonical_params(payload).encode()).hexdigest()

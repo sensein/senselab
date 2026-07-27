@@ -108,65 +108,6 @@ def test_audio_signature_changes_with_sampling_rate(aa: types.ModuleType) -> Non
     assert aa.audio_signature(audio_16k) != aa.audio_signature(audio_8k)
 
 
-def test_cache_key_changes_when_any_input_changes(aa: types.ModuleType) -> None:
-    """Per FR-010: every component of the cache key matters."""
-    base = dict(
-        audio_sig="a" * 64,
-        task="asr",
-        model_id="openai/whisper-tiny",
-        params={"device": "auto"},
-        wrapper_hash="b" * 64,
-        senselab_ver="1.3.1-alpha.27",
-    )
-    base_key = aa.cache_key(**base)
-
-    # Each tweak must produce a different key
-    for field, override in [
-        ("audio_sig", "z" * 64),
-        ("task", "embeddings"),
-        ("model_id", "openai/whisper-base"),
-        ("params", {"device": "cuda"}),
-        ("wrapper_hash", "c" * 64),
-        ("senselab_ver", "1.3.1-alpha.28"),
-    ]:
-        modified = base | {field: override}
-        assert aa.cache_key(**modified) != base_key, f"changing {field} did not invalidate cache key"
-
-
-def test_align_cache_key_is_independent_from_asr_cache_key(aa: types.ModuleType) -> None:
-    """Per FR-024: ASR and alignment cache keys must diverge by construction."""
-    asr_k = aa.cache_key(
-        audio_sig="a" * 64,
-        task="asr",
-        model_id="ibm-granite/granite-speech-3.3-8b",
-        params={"device": "auto"},
-        wrapper_hash="b" * 64,
-        senselab_ver="1.3.1-alpha.27",
-    )
-    align_k = aa.align_cache_key(
-        audio_sig="a" * 64,
-        transcript_sha="c" * 64,
-        language="en",
-        aligner_model_id="facebook/mms-1b-all",
-        aligner_params={"romanize": False},
-        wrapper_hash="b" * 64,
-        senselab_ver="1.3.1-alpha.27",
-    )
-    assert asr_k != align_k
-
-    # Re-running alignment with a different transcript on the same audio invalidates only the alignment key
-    align_k2 = aa.align_cache_key(
-        audio_sig="a" * 64,
-        transcript_sha="d" * 64,
-        language="en",
-        aligner_model_id="facebook/mms-1b-all",
-        aligner_params={"romanize": False},
-        wrapper_hash="b" * 64,
-        senselab_ver="1.3.1-alpha.27",
-    )
-    assert align_k != align_k2
-
-
 def test_transcript_signature_stable_and_unique(aa: types.ModuleType) -> None:
     """sha256(text) is deterministic and content-sensitive."""
     assert aa.transcript_signature("hello world") == aa.transcript_signature("hello world")
