@@ -34,6 +34,7 @@ _LAZY_EXPORTS = {
     "STAGE_VERSIONS": "stage_context",
     "PassPlan": "stage_context",
     "StageContext": "stage_context",
+    "run_pass": "stages",
     "stage_code_version": "stage_context",
     "write_axis_parquet": "io",
     "attach_uncertainty_tracks_to_ls": "labelstudio",

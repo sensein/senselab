@@ -83,7 +83,7 @@ Cache + provenance: every per-task outcome is stored under
 ``--cache-dir`` (default ``artifacts/analyze_audio_cache/``) keyed by
 
     sha256(audio_signature || task || model_id || params ||
-           wrapper_version_hash || senselab_version || cache_schema_version)
+           stage_version || senselab_version || cache_schema_version)
 
 The audio signature is the sha256 of the post-resample, post-downmix
 PCM samples + sampling rate, so two files with identical waveforms
@@ -146,6 +146,11 @@ from senselab.audio.workflows.audio_analysis.harvesters import (
 )
 from senselab.audio.workflows.audio_analysis.harvesters import (
     classification_windows as _classification_windows,
+)
+from senselab.audio.workflows.audio_analysis.stage_context import STAGE_VERSIONS, PassPlan, StageContext
+from senselab.audio.workflows.audio_analysis.stages import (
+    _asr_has_timestamps,
+    run_pass,
 )
 from senselab.utils.data_structures import (
     DeviceType,
@@ -380,7 +385,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=Path("artifacts/analyze_audio_cache"),
         help=(
             "Directory for the content-addressable result cache. Cache keys are "
-            "sha256(audio_signature, task, model_id, params, wrapper_hash, "
+            "sha256(audio_signature, task, model_id, params, code_version, "
             "senselab_version). Identical inputs replay prior outputs without "
             "re-running models. Default: artifacts/analyze_audio_cache/."
         ),
@@ -737,20 +742,6 @@ def prepare_audio(path: Path) -> Audio:
 # else, otherwise the constant and the stamped value will drift.
 
 
-def wrapper_version_hash() -> str:
-    """sha256 of this script's source. Captures wrapper-side behavior changes.
-
-    When the cache hits, we replay outputs from a prior wrapper version. If
-    the wrapper logic changed (e.g., we now post-process results differently)
-    we want a cache miss. Hashing the script's bytes keys the cache to the
-    exact wrapper that produced each entry.
-    """
-    try:
-        return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
-    except OSError:
-        return "unknown"
-
-
 def _new_region_id(prefix: str, idx: int) -> str:
     """Stable per-region ID for Label Studio result entries."""
     return f"{prefix}_{idx:04d}"
@@ -867,95 +858,6 @@ def _classification_to_ls(
             )
         )
     return out
-
-
-def _scene_agreement(
-    ast_result: Any,  # noqa: ANN401
-    yamnet_result: Any,  # noqa: ANN401
-    win_length: float,
-    hop_length: float,
-) -> dict[str, Any]:
-    """Pair AST and YAMNet top-1 predictions per shared window for direct comparison.
-
-    Both models share an AudioSet 521-class label space, so when they run on
-    the same ``(win_length, hop_length)`` grid the per-window top-1 labels are
-    directly comparable. Produces a list of ``{start, end, ast, yamnet,
-    agree}`` dicts plus aggregate agreement statistics.
-    """
-    ast_windows = _classification_windows(ast_result)
-    yamnet_windows = _classification_windows(yamnet_result)
-    pairs: list[dict[str, Any]] = []
-    n = min(len(ast_windows), len(yamnet_windows))
-    agree_count = 0
-    for i in range(n):
-        a = _top1(ast_windows[i])
-        y = _top1(yamnet_windows[i])
-        same = bool(a and y and a["label"] == y["label"])
-        agree_count += int(same)
-        start = i * hop_length
-        pairs.append(
-            {
-                "start": start,
-                "end": start + win_length,
-                "ast": a,
-                "yamnet": y,
-                "agree": same,
-            }
-        )
-    return {
-        "win_length": win_length,
-        "hop_length": hop_length,
-        "windows_compared": n,
-        "ast_only_windows": max(0, len(ast_windows) - n),
-        "yamnet_only_windows": max(0, len(yamnet_windows) - n),
-        "agreement_rate": (agree_count / n) if n else 0.0,
-        "agree_count": agree_count,
-        "pairs": pairs,
-    }
-
-
-def _top1(window: Any) -> dict[str, Any] | None:  # noqa: ANN401
-    """Return the highest-scoring entry of a classify_audios window, or None."""
-    label, score, _entropy = _classification_window_top1(window)
-    if label is None:
-        return None
-    return {"label": label, "score": score if score is not None else 0.0}
-
-
-def _asr_has_timestamps(result: Any) -> bool:  # noqa: ANN401
-    """Return True if any ScriptLine in ``result`` has a non-null start or non-empty chunks.
-
-    Used by the LS export and by the auto-align stage to decide whether to skip
-    forced alignment for an ASR result that already includes time information.
-    Handles both ScriptLine objects (post-run, in-memory) and the dict shape that
-    the JSON cache deserializes into (post-cache-hit).
-    """
-    if not result:
-        return False
-    items = result if isinstance(result, list) else [result]
-    for line in items:
-        if isinstance(line, dict):
-            start = line.get("start")
-            chunks = line.get("chunks") or []
-        else:
-            start = getattr(line, "start", None)
-            chunks = getattr(line, "chunks", None) or []
-        if start is not None or len(chunks) > 0:
-            return True
-    return False
-
-
-def _extract_transcript_text(result: Any) -> str:  # noqa: ANN401
-    """Concatenate the ``text`` field of every ScriptLine / dict in an ASR result."""
-    if not result:
-        return ""
-    items = result if isinstance(result, list) else [result]
-    parts: list[str] = []
-    for line in items:
-        text = line.get("text") if isinstance(line, dict) else getattr(line, "text", None)
-        if text:
-            parts.append(str(text))
-    return " ".join(p.strip() for p in parts if p.strip())
 
 
 def _asr_to_ls(result: Any, prefix: str, full_duration: float) -> list[dict[str, Any]]:  # noqa: ANN401
@@ -1186,387 +1088,6 @@ def _models_without_native_signal(summaries: dict[str, Any]) -> list[str]:
     return sorted(seen)
 
 
-def _stage_diarization(audio: Audio, args: argparse.Namespace, ctx: dict[str, Any]) -> None:
-    """Diarization models → ``summary["diarization"]["by_model"]`` (T012 stage)."""
-    summary, pass_dir, device = ctx["summary"], ctx["pass_dir"], ctx["device"]
-    summary["diarization"] = {"by_model": {}}
-    for model_id in args.diarization_models:
-        params = {"device": ctx["device_label"]}
-        outcome = run_task_cached(
-            f"diarization[{model_id}]",
-            diarize_audios,
-            [audio],
-            model=model_for_task(model_id, task="diarization"),
-            device=device,
-            cache_dir=ctx["cache_dir"],
-            cache_key_str=ctx["key"]("diarization", model_id, params),
-            provenance=ctx["prov"]("diarization", model_id, params),
-        )
-        summary["diarization"]["by_model"][model_id] = outcome
-        write_json(pass_dir / "diarization" / f"{safe_model_id(model_id)}.json", outcome)
-
-
-def _stage_scene(audio: Audio, args: argparse.Namespace, ctx: dict[str, Any]) -> None:
-    """AST + YAMNet classification (+ same-grid agreement sidecar) (T012 stage)."""
-    summary, pass_dir, device = ctx["summary"], ctx["pass_dir"], ctx["device"]
-    ast_win, ast_hop = args.ast_win_length, args.ast_hop_length
-    yam_win, yam_hop = args.yamnet_win_length, args.yamnet_hop_length
-
-    if "ast" not in args.skip:
-        params = {
-            "win_length": ast_win,
-            "hop_length": ast_hop,
-            "top_k": args.scene_top_k,
-            "device": ctx["device_label"],
-        }
-        summary["ast"] = run_task_cached(
-            "ast",
-            classify_audios,
-            [audio],
-            model=HFModel(path_or_uri=args.ast_model),
-            device=device,
-            win_length=ast_win,
-            hop_length=ast_hop,
-            top_k=args.scene_top_k,
-            cache_dir=ctx["cache_dir"],
-            cache_key_str=ctx["key"]("ast", args.ast_model, params),
-            provenance=ctx["prov"]("ast", args.ast_model, params),
-        )
-        summary["ast"]["window"] = {"win_length": ast_win, "hop_length": ast_hop}
-        write_json(pass_dir / "ast.json", summary["ast"])
-
-    if "yamnet" not in args.skip:
-        # YAMNet runs in senselab's TF subprocess venv (same pattern as NeMo
-        # Sortformer). senselab.classify_audios's `_is_yamnet()` dispatcher
-        # matches on the raw model-id *string*, not on a SenselabModel wrapper —
-        # passing HFModel here would fail validation (yamnet isn't on HF).
-        params = {"win_length": yam_win, "hop_length": yam_hop, "top_k": args.scene_top_k}
-        summary["yamnet"] = run_task_cached(
-            "yamnet",
-            classify_audios,
-            [audio],
-            model=args.yamnet_model,
-            win_length=yam_win,
-            hop_length=yam_hop,
-            top_k=args.scene_top_k,
-            cache_dir=ctx["cache_dir"],
-            cache_key_str=ctx["key"]("yamnet", args.yamnet_model, params),
-            provenance=ctx["prov"]("yamnet", args.yamnet_model, params),
-        )
-        summary["yamnet"]["window"] = {"win_length": yam_win, "hop_length": yam_hop}
-        write_json(pass_dir / "yamnet.json", summary["yamnet"])
-
-    # If both ran on the same grid, emit a side-by-side comparison.
-    if (
-        "ast" not in args.skip
-        and "yamnet" not in args.skip
-        and summary.get("ast", {}).get("status") == "ok"
-        and summary.get("yamnet", {}).get("status") == "ok"
-        and ast_win == yam_win
-        and ast_hop == yam_hop
-    ):
-        agreement = _scene_agreement(
-            ast_result=summary["ast"]["result"],
-            yamnet_result=summary["yamnet"]["result"],
-            win_length=ast_win,
-            hop_length=ast_hop,
-        )
-        summary["scene_agreement"] = agreement
-        write_json(pass_dir / "scene_agreement.json", agreement)
-
-
-def _stage_features(audio: Audio, args: argparse.Namespace, ctx: dict[str, Any]) -> None:
-    """Temporal features (openSMILE / parselmouth / squim) + parquet sidecars (T012 stage)."""
-    summary, pass_dir, device = ctx["summary"], ctx["pass_dir"], ctx["device"]
-    feat_params: dict[str, Any] = {
-        "opensmile": "LowLevelDescriptors@native",
-        "parselmouth": "windowed",
-        "torchaudio_squim": "windowed",
-        "device": ctx["device_label"],
-        "win_length": args.features_win_length,
-        "hop_length": args.features_hop_length,
-    }
-    summary["features"] = run_task_cached(
-        "features",
-        extract_temporal_features,
-        audio,
-        win_length=args.features_win_length,
-        hop_length=args.features_hop_length,
-        device=device,
-        cache_dir=ctx["cache_dir"],
-        cache_key_str=ctx["key"]("features", None, feat_params),
-        provenance=ctx["prov"]("features", None, feat_params),
-    )
-    # Each backend writes its own parquet sidecar — they have
-    # different columns and different time grids (opensmile LLD is
-    # native ~10 ms; parselmouth/torchaudio_squim follow the
-    # ``--features-*-length`` window). Cache outcome metadata stays
-    # in JSON for inspection parity with the other tasks.
-    result = summary["features"].get("result") or {}
-    if isinstance(result, dict):
-        try:
-            import pandas as pd
-
-            feat_dir = pass_dir / "features"
-            feat_dir.mkdir(parents=True, exist_ok=True)
-            for backend, rows in result.items():
-                if not rows:
-                    continue
-                pd.DataFrame(rows).to_parquet(feat_dir / f"{backend}.parquet", index=False)
-        except Exception as exc:  # noqa: BLE001 — best-effort sidecar
-            print(f"  [features] warn: parquet write failed: {exc!r}", file=sys.stderr)
-    write_json(pass_dir / "features.json", {**summary["features"], "result": "see features/*.parquet"})
-
-
-def _stage_asr(audio: Audio, args: argparse.Namespace, ctx: dict[str, Any]) -> None:
-    """ASR models → ``summary["asr"]["by_model"]`` (T012 stage)."""
-    summary, pass_dir, device = ctx["summary"], ctx["pass_dir"], ctx["device"]
-    summary["asr"] = {"by_model": {}}
-    for model_id in args.asr_models:
-        asr_params: dict[str, Any] = {"device": ctx["device_label"]}
-        extra_kwargs: dict[str, Any] = {}
-        # Qwen3-ASR ships its own forced-aligner companion model; allow
-        # opt-out so the script's MMS auto-align stage can take over.
-        if model_id.startswith("Qwen/Qwen3-ASR") and args.qwen_asr_no_timestamps:
-            extra_kwargs["return_timestamps"] = False
-            asr_params["return_timestamps"] = False
-        outcome = run_task_cached(
-            f"asr[{model_id}]",
-            transcribe_audios,
-            [audio],
-            model=model_for_task(model_id, task="asr"),
-            device=device,
-            cache_dir=ctx["cache_dir"],
-            cache_key_str=ctx["key"]("asr", model_id, asr_params),
-            provenance=ctx["prov"]("asr", model_id, asr_params),
-            **extra_kwargs,
-        )
-        summary["asr"]["by_model"][model_id] = outcome
-        write_json(pass_dir / "asr" / f"{safe_model_id(model_id)}.json", outcome)
-
-
-def _stage_alignment(audio: Audio, args: argparse.Namespace, ctx: dict[str, Any]) -> None:
-    """Auto-align text-only ASR outputs (Qwen aligner default, MMS fallback) (T012 stage).
-
-    The alignment cache is independent from the ASR cache (FR-024); failed
-    alignments preserve the ASR text but fall back to a single full-audio
-    TextArea region in the LS export (FR-025).
-    """
-    summary, pass_dir = ctx["summary"], ctx["pass_dir"]
-    audio_sig, wrapper_hash, senselab_ver = ctx["audio_sig"], ctx["wrapper_hash"], ctx["senselab_ver"]
-    summary["alignment"] = {"by_model": {}}
-    align_language = Language(language_code=args.asr_language) if args.asr_language else Language(language_code="en")
-    # Aligner backend for text-only ASR: Qwen3-ForcedAligner (default) or MMS.
-    if args.aligner == "qwen":
-        aligner_fn: Any = QwenASR.align_with_qwen
-        aligner_model_id = args.qwen_aligner_model
-    else:
-        aligner_fn = align_transcriptions
-        aligner_model_id = args.aligner_model
-    for model_id, asr_outcome in summary["asr"]["by_model"].items():
-        if asr_outcome.get("status") != "ok":
-            continue
-        asr_result = asr_outcome.get("result")
-        if _asr_has_timestamps(asr_result):
-            # Already has native timestamps — alignment would be a no-op.
-            continue
-        transcript_text = _extract_transcript_text(asr_result)
-        if not transcript_text:
-            continue
-        transcript_sha = transcript_signature(transcript_text)
-        aligner_params = {
-            "language": align_language.language_code,
-            "romanize": align_language.language_code in ("ja", "zh"),
-            # Levels-to-keep is part of the cache key — bumping its value
-            # invalidates earlier entries that were stored with the all-False
-            # default (which produced empty chunks).
-            "levels_to_keep": "utterance+word",
-        }
-        align_provenance = {
-            **ctx["prov"]("alignment", aligner_model_id, aligner_params),
-            "transcript_sha": transcript_sha,
-            "language": align_language.language_code,
-            "aligner_backend": args.aligner,
-            "parent_asr_cache_key": asr_outcome.get("cache_key"),
-        }
-        align_key = align_cache_key(
-            audio_sig=audio_sig,
-            transcript_sha=transcript_sha,
-            language=align_language.language_code,
-            aligner_model_id=aligner_model_id,
-            aligner_params=aligner_params,
-            code_version=wrapper_hash,
-            senselab_ver=senselab_ver,
-        )
-        outcome = run_alignment_cached(
-            f"alignment[{model_id}]",
-            aligner_fn,
-            [(audio, ScriptLine(text=transcript_text), align_language)],
-            # Keep word-level chunks (and the utterance wrapper) so the comparator
-            # can read per-token timestamps. Default is all-False which filters
-            # everything out and leaves a meaningless punctuation-only ScriptLine.
-            levels_to_keep={"utterance": True, "word": True, "char": False},
-            aligner_model=aligner_model_id,
-            cache_dir=ctx["cache_dir"],
-            cache_key_str=align_key,
-            provenance=align_provenance,
-        )
-        summary["alignment"]["by_model"][model_id] = outcome
-        write_json(pass_dir / "alignment" / f"{safe_model_id(model_id)}.json", outcome)
-
-
-def _stage_ppg(audio: Audio, args: argparse.Namespace, ctx: dict[str, Any]) -> None:
-    """PPG extraction + argmax sidecar (T012 stage)."""
-    summary, pass_dir, device = ctx["summary"], ctx["pass_dir"], ctx["device"]
-    from senselab.audio.tasks.features_extraction.ppg import (
-        _PHONEME_LABELS as _PPG_PHONEME_LABELS,
-    )
-    from senselab.audio.tasks.features_extraction.ppg import (
-        extract_ppgs_from_audios,
-    )
-
-    params = {"device": ctx["device_label"]}
-    outcome = run_task_cached(
-        "ppgs",
-        extract_ppgs_from_audios,
-        [audio],
-        device=device,
-        cache_dir=ctx["cache_dir"],
-        cache_key_str=ctx["key"]("ppgs", "ppgs/0.0.9", params),
-        provenance=ctx["prov"]("ppgs", "ppgs/0.0.9", params),
-    )
-    # Attach the phoneme inventory so the workflow's harvester can decode
-    # argmax indices without re-importing the ppgs library.
-    outcome["phoneme_labels"] = list(_PPG_PHONEME_LABELS)
-    summary["ppgs"] = outcome
-    # Emit a small sidecar JSON: the full (40 × N_frames) tensor is too
-    # large to dump, but the argmax-per-frame sequence + frame_hop is what
-    # the comparator actually consumes. Write it so reviewers can inspect
-    # the phoneme timeline without rerunning the PPG model.
-    from senselab.audio.workflows.audio_analysis.harvesters import ppg_argmax_per_frame
-
-    argmax_payload: dict[str, Any] = {
-        "phoneme_labels": list(_PPG_PHONEME_LABELS),
-        "per_frame_phonemes": [],
-        "frame_hop_s": 0.0,
-    }
-    if outcome.get("status") == "ok":
-        try:
-            pf, fh = ppg_argmax_per_frame(
-                outcome.get("result"),
-                list(_PPG_PHONEME_LABELS),
-                audio.waveform.shape[-1] / audio.sampling_rate,
-            )
-            argmax_payload["per_frame_phonemes"] = pf
-            argmax_payload["frame_hop_s"] = float(fh)
-        except Exception as exc:  # noqa: BLE001
-            argmax_payload["argmax_error"] = repr(exc)
-    write_json(
-        pass_dir / "ppgs.json",
-        {
-            **{k: v for k, v in outcome.items() if k != "result"},
-            "result_summary": "argmax-per-frame sequence in 'argmax' field; full tensor in process memory only",
-            "argmax": argmax_payload,
-        },
-    )
-
-
-def run_pass(
-    label: str,
-    audio: Audio,
-    args: argparse.Namespace,
-    device: DeviceType | None,
-    out_dir: Path,
-    *,
-    cache_dir: Path | None,
-    wrapper_hash: str,
-    senselab_ver: str,
-) -> dict[str, Any]:
-    """Run all six tasks against one audio variant and persist their outputs.
-
-    Decomposed into per-stage functions (spec T012) — task names, params, and
-    therefore cache keys are byte-identical to the pre-decomposition inline
-    blocks. Each task call is gated through the content-addressable cache: the
-    cache key is ``sha256(audio_signature, task, model_id, params, wrapper_hash,
-    senselab_ver)``. On cache hit the prior outcome is replayed verbatim and
-    no model is loaded. On miss the task runs and the outcome is stored under
-    the cache dir for future replay.
-    """
-    duration_s = audio.waveform.shape[1] / audio.sampling_rate
-    audio_sig = audio_signature(audio)
-    print(f"\n=== Pass: {label} ({duration_s:.2f}s @ {audio.sampling_rate}Hz, sig={audio_sig[:12]}...) ===")
-    pass_dir = out_dir / label
-    pass_dir.mkdir(parents=True, exist_ok=True)
-    summary: dict[str, Any] = {
-        "label": label,
-        "duration_s": duration_s,
-        "audio_signature": audio_sig,
-    }
-    device_label_for_provenance = device.value if device is not None else "auto"
-
-    def _provenance_for(task: str, model_id: str | None, params: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "task": task,
-            "model_id": model_id,
-            "params": params,
-            "audio_signature": audio_sig,
-            "audio_source": str(args.audio.resolve()),
-            "pass": label,
-            "device": device_label_for_provenance,
-            "wrapper_version_hash": wrapper_hash,
-            "senselab_version": senselab_ver,
-            "cache_schema_version": _CACHE_SCHEMA_VERSION,
-            "timestamp_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        }
-
-    def _key(task: str, model_id: str | None, params: dict[str, Any]) -> str:
-        return cache_key(
-            audio_sig=audio_sig,
-            task=task,
-            model_id=model_id,
-            params=params,
-            code_version=wrapper_hash,
-            senselab_ver=senselab_ver,
-        )
-
-    ctx: dict[str, Any] = {
-        "summary": summary,
-        "pass_dir": pass_dir,
-        "device": device,
-        "device_label": device_label_for_provenance,
-        "cache_dir": cache_dir,
-        "key": _key,
-        "prov": _provenance_for,
-        "audio_sig": audio_sig,
-        "wrapper_hash": wrapper_hash,
-        "senselab_ver": senselab_ver,
-    }
-
-    if "diarization" not in args.skip:
-        _stage_diarization(audio, args, ctx)
-
-    # AST + YAMNet + same-grid agreement (handles per-classifier skips internally).
-    _stage_scene(audio, args, ctx)
-
-    if "features" not in args.skip:
-        _stage_features(audio, args, ctx)
-
-    if "asr" not in args.skip:
-        _stage_asr(audio, args, ctx)
-
-    # Auto-align stage. Iterate every successful ASR ModelRun; when the ASR
-    # result lacks native timestamps (Granite Speech, Canary-Qwen, etc.) and
-    # the user hasn't disabled alignment, post-process the text through
-    # senselab's forced_alignment to produce per-segment timestamps.
-    if "asr" not in args.skip and "alignment" not in args.skip and not args.no_align_asr and "asr" in summary:
-        _stage_alignment(audio, args, ctx)
-
-    if args.ppg:
-        _stage_ppg(audio, args, ctx)
-
-    return summary
-
-
 def run_triage(audio: Audio, args: argparse.Namespace, device: DeviceType | None) -> dict[str, Any]:
     """Round 0 (spec US1): frame-posterior speech gate + SNR enhancement gate.
 
@@ -1632,6 +1153,60 @@ def run_triage(audio: Audio, args: argparse.Namespace, device: DeviceType | None
     return decision
 
 
+def _pass_plan(args: argparse.Namespace) -> PassPlan:
+    """Translate parsed CLI args into a library `PassPlan`.
+
+    Called *after* triage, because `main` mutates `args.skip` / `args.ppg` on the
+    no-speech path — a plan built before that would run diarization and ASR on
+    silence. Absence-means-skip is expressed here so the library never sees a
+    CLI-shaped skip set.
+    """
+    skip = set(args.skip)
+    return PassPlan(
+        diarization_models=() if "diarization" in skip else tuple(args.diarization_models),
+        asr_models=() if "asr" in skip else tuple(args.asr_models),
+        ast_model=None if "ast" in skip else args.ast_model,
+        yamnet_model=None if "yamnet" in skip else args.yamnet_model,
+        ast_win_length=args.ast_win_length,
+        ast_hop_length=args.ast_hop_length,
+        yamnet_win_length=args.yamnet_win_length,
+        yamnet_hop_length=args.yamnet_hop_length,
+        scene_top_k=args.scene_top_k,
+        features="features" not in skip,
+        features_win_length=args.features_win_length,
+        features_hop_length=args.features_hop_length,
+        align_asr=args.align_asr,
+        aligner=args.aligner,
+        qwen_aligner_model=args.qwen_aligner_model,
+        mms_aligner_model=args.aligner_model,
+        asr_language=args.asr_language,
+        qwen_native_timestamps=not args.qwen_asr_no_timestamps,
+        ppg=bool(args.ppg),
+    )
+
+
+def _stage_context(
+    label: str,
+    audio: Audio,
+    args: argparse.Namespace,
+    *,
+    device: DeviceType | None,
+    out_dir: Path,
+    cache_dir: Path | None,
+    senselab_ver: str,
+) -> StageContext:
+    """Build the per-pass `StageContext` from CLI args."""
+    return StageContext(
+        pass_label=label,
+        audio_signature=audio_signature(audio),
+        device=device,
+        cache_dir=cache_dir,
+        out_dir=out_dir / label,
+        audio_source=str(args.audio.resolve()),
+        senselab_ver=senselab_ver,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the full analysis with and without enhancement."""
     args = parse_args(argv)
@@ -1645,16 +1220,12 @@ def main(argv: list[str] | None = None) -> int:
     cache_dir: Path | None = None if args.no_cache else args.cache_dir.resolve()
     if cache_dir is not None:
         _sync_cache_with_schema_version(cache_dir)
-    wrapper_hash = wrapper_version_hash()
     senselab_ver = senselab_version()
     print(f"Device: {device_label}")
     print(f"Input:  {args.audio}")
     if cache_dir is not None:
         print(f"Cache:  {cache_dir}")
-        print(
-            f"        key = sha256(audio | task | model | params | "
-            f"wrapper={wrapper_hash[:8]} | senselab={senselab_ver})"
-        )
+        print(f"        key = sha256(audio | task | model | params | stage_version | senselab={senselab_ver})")
     else:
         print("Cache:  disabled (--no-cache)")
 
@@ -1673,7 +1244,7 @@ def main(argv: list[str] | None = None) -> int:
             "dir": str(cache_dir) if cache_dir is not None else None,
             "schema_version": _CACHE_SCHEMA_VERSION,
         },
-        "wrapper_version_hash": wrapper_hash,
+        "stage_versions": dict(STAGE_VERSIONS),
         "senselab_version": senselab_ver,
         "target_sampling_rate": TARGET_SR,
         "scene_window": {
@@ -1715,15 +1286,19 @@ def main(argv: list[str] | None = None) -> int:
 
     pass_audio: dict[str, Audio] = {"raw_16k": audio_16k}
 
+    pass_plan = _pass_plan(args)
     summaries["passes"]["raw_16k"] = run_pass(
-        "raw_16k",
         audio_16k,
-        args,
-        device,
-        run_dir,
-        cache_dir=cache_dir,
-        code_version=wrapper_hash,
-        senselab_ver=senselab_ver,
+        _stage_context(
+            "raw_16k",
+            audio_16k,
+            args,
+            device=device,
+            out_dir=run_dir,
+            cache_dir=cache_dir,
+            senselab_ver=senselab_ver,
+        ),
+        pass_plan,
     )
 
     if run_enhanced_pass:
@@ -1736,14 +1311,17 @@ def main(argv: list[str] | None = None) -> int:
             )[0]
             pass_audio["enhanced_16k"] = enhanced
             summaries["passes"]["enhanced_16k"] = run_pass(
-                "enhanced_16k",
                 enhanced,
-                args,
-                device,
-                run_dir,
-                cache_dir=cache_dir,
-                code_version=wrapper_hash,
-                senselab_ver=senselab_ver,
+                _stage_context(
+                    "enhanced_16k",
+                    enhanced,
+                    args,
+                    device=device,
+                    out_dir=run_dir,
+                    cache_dir=cache_dir,
+                    senselab_ver=senselab_ver,
+                ),
+                pass_plan,
             )
         except Exception as exc:  # noqa: BLE001
             print(f"Enhancement failed: {exc!r}", file=sys.stderr)
@@ -1894,7 +1472,7 @@ def main(argv: list[str] | None = None) -> int:
                 dest,
                 provenance={
                     "schema_version": _CACHE_SCHEMA_VERSION,
-                    "wrapper_hash": wrapper_hash,
+                    "stage_versions": dict(STAGE_VERSIONS),
                     "senselab_version": senselab_ver,
                 },
             )
@@ -2005,7 +1583,7 @@ def main(argv: list[str] | None = None) -> int:
                         "hop_length": grid.hop_length,
                     },
                     "speech_presence_labels": _speech_presence_labels(args),
-                    "wrapper_hash": wrapper_hash,
+                    "stage_versions": dict(STAGE_VERSIONS),
                     "senselab_version": senselab_ver,
                 },
                 incomparable_reasons=incomparable_reasons,
