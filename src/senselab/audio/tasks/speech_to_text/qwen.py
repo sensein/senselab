@@ -23,6 +23,7 @@ from typing import Any, List, Optional, Sequence, Tuple
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, HFModel, ScriptLine, _select_device_and_dtype
+from senselab.utils.dependencies import hf_subprocess_env
 from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
 
 _QWEN_VENV = "qwen-asr"
@@ -235,7 +236,13 @@ class QwenASR:
                 }
             )
 
-            env = _clean_subprocess_env()
+            # Stage the ASR model (and, when timestamps are requested, its forced-aligner
+            # companion) once — cross-process — and flip the child to offline so its
+            # from_pretrained loads from cache with no per-call Hub version check (the 429
+            # source under many parallel jobs). The child imports fresh, so the offline
+            # flag is honored (unlike an in-process toggle).
+            also = [(aligner_name, "main")] if return_timestamps else None
+            env = hf_subprocess_env(str(model_name), "main", also=also, base_env=_clean_subprocess_env())
             result = subprocess.run(
                 [python, "-c", _QWEN_WORKER_SCRIPT],
                 input=input_json,

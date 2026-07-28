@@ -4,11 +4,12 @@ import contextlib
 import json
 import logging
 import os
+import re
 import threading
 import time
 from functools import lru_cache
 from pathlib import Path
-from typing import Callable, Iterator, Optional, TypeVar
+from typing import Callable, Iterable, Iterator, Optional, Tuple, TypeVar
 
 logger = logging.getLogger("senselab")
 
@@ -205,18 +206,45 @@ def is_hf_model_cached(repo_id: str, revision: str = "main", repo_type: str = "m
         return False
 
 
-def _get_cached_commit_hash(repo_id: str, revision: str = "main") -> str:
-    """Read the resolved commit hash from the local HF cache directory structure."""
-    from huggingface_hub import try_to_load_from_cache
+_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
-    result = try_to_load_from_cache(
-        repo_id=repo_id,
-        filename="config.json",
-        revision=revision,
-    )
-    if isinstance(result, str):
-        # Path looks like: .../snapshots/<commit_hash>/config.json
-        return Path(result).parent.name
+
+def _get_cached_commit_hash(repo_id: str, revision: str = "main") -> str:
+    """Resolve the immutable commit SHA of a locally cached model — no network.
+
+    Resolution order (all filesystem-only):
+      1. ``revision`` is already a full 40-hex commit SHA -> return it unchanged;
+      2. the authoritative ``refs/<revision>`` pointer file -> its SHA (works
+         regardless of which files the repo ships, e.g. SpeechBrain/pyannote/NeMo
+         repos with no ``config.json``);
+      3. a cached file's ``snapshots/<sha>/`` parent directory.
+
+    Returns ``revision`` unchanged only as a last resort; callers needing an
+    immutable identity should treat a non-40-hex return as "unresolved" (the
+    snapshot could not be located locally).
+    """
+    if _SHA_RE.match(revision):
+        return revision
+
+    from huggingface_hub import constants, try_to_load_from_cache
+
+    ref_file = Path(constants.HF_HUB_CACHE) / f"models--{repo_id.replace('/', '--')}" / "refs" / revision
+    try:
+        if ref_file.is_file():
+            sha = ref_file.read_text().strip()
+            if _SHA_RE.match(sha):
+                return sha
+    except Exception:
+        pass
+
+    for filename in ("config.json", "hyperparams.yaml", "preprocessor_config.json", "model.safetensors"):
+        try:
+            result = try_to_load_from_cache(repo_id=repo_id, filename=filename, revision=revision)
+            if isinstance(result, str):
+                # Path looks like: .../snapshots/<commit_hash>/<filename>
+                return Path(result).parent.name
+        except Exception:
+            continue
     return revision
 
 
@@ -445,3 +473,103 @@ def ensure_hf_model(repo_id: str, revision: str = "main", token: Optional[str] =
             raise
     # Should never reach here, but satisfy mypy
     raise RuntimeError("Unreachable")  # pragma: no cover
+
+
+def resolve_model(repo_id: str, revision: str = "main", *, token: Optional[str] = None) -> Tuple[str, Path]:
+    """Resolve ``(repo_id, revision)`` to its immutable commit SHA + local snapshot dir.
+
+    Ensures the model is present locally (download-once, cross-process, via
+    :func:`ensure_hf_model`), then returns the resolved 40-hex commit SHA and the
+    path to its ``snapshots/<sha>/`` directory. The SHA is derived from the cache
+    (``refs/<ref>`` / snapshot dir), never a mutable ref, so callers can pin loads
+    to it and skip the Hub version check that rate-limits (429) under parallelism.
+
+    Loaders with a ``revision`` parameter should pass ``revision=sha,
+    local_files_only=True``; loaders without one (SpeechBrain/pyannote/NeMo) should
+    be pointed at the returned snapshot path.
+    """
+    from huggingface_hub import constants
+
+    sha = ensure_hf_model(repo_id, revision, token=token)
+    snapshot_path = Path(constants.HF_HUB_CACHE) / f"models--{repo_id.replace('/', '--')}" / "snapshots" / sha
+    return sha, snapshot_path
+
+
+def load_hf_resilient(
+    loader: Callable[..., _T],
+    *args: object,
+    repo_id: str,
+    revision: str = "main",
+    pass_revision: bool = True,
+    token: Optional[str] = None,
+    **kwargs: object,
+) -> _T:
+    """Resolve+pin then load, so a cached model makes no Hub version-check call.
+
+    Resolves ``(repo_id, revision)`` to an immutable SHA (download-once), then calls
+    ``loader(*args, **kwargs)``. When ``pass_revision`` (the default, for loaders that
+    accept a ``revision`` — ``transformers`` ``from_pretrained``/``pipeline``,
+    ``sentence-transformers``), injects only ``revision=<sha>``: a full commit SHA
+    triggers huggingface_hub's commit-hash shortcut, which returns cached files with
+    **zero** network (no HEAD) without needing ``local_files_only``. We deliberately do
+    NOT inject ``local_files_only`` — ``transformers.pipeline`` routes unknown kwargs
+    into the model's ``generate`` params and raises ``ValueError: model_kwargs are not
+    used by the model: ['local_files_only']`` at inference.
+    Set ``pass_revision=False`` for loaders without a ``revision`` argument and point
+    them at :func:`resolve_model`'s snapshot path instead. Transient errors are retried.
+
+    ``repo_id``/``revision``/``token`` identify the model for resolution and are not
+    forwarded to ``loader`` unless injected as above.
+    """
+
+    def _call() -> _T:
+        sha, _ = resolve_model(repo_id, revision, token=token)
+        if pass_revision:
+            kwargs.setdefault("revision", sha)
+        # Forward the token to the loader too (not only to resolve_model): gated
+        # repos / first-download paths need it at load time. setdefault so an
+        # explicit token already in kwargs wins.
+        if token is not None:
+            kwargs.setdefault("token", token)
+        return loader(*args, **kwargs)
+
+    return retry_on_transient_error(_call)
+
+
+_HF_OFFLINE_ENV_VARS = ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")
+
+
+def hf_subprocess_env(
+    repo_id: str,
+    revision: str = "main",
+    *,
+    also: Optional[Iterable[Tuple[str, str]]] = None,
+    base_env: Optional[dict] = None,
+    token: Optional[str] = None,
+) -> dict:
+    """Build an environment for a subprocess-venv worker that loads HF model(s) offline.
+
+    Ensures every referenced model is present locally (download-once, cross-process,
+    via :func:`resolve_model`), then returns a copy of ``base_env`` (default
+    ``os.environ``) with ``HF_HUB_OFFLINE`` / ``TRANSFORMERS_OFFLINE`` = ``"1"`` so the
+    child's ``from_pretrained`` loads from the local cache with **no** Hub version
+    check — the source of 429 storms under many parallel jobs. Use ``also`` for
+    workers that load more than one model (e.g. Qwen3-ASR + its forced-aligner
+    companion).
+
+    The offline flag is set only when **all** referenced models are cacheable; if any
+    cannot be staged, the env is returned unchanged so the child can still download it
+    online. This is the subprocess analogue of :func:`load_hf_resilient`: unlike an
+    in-process env toggle (a no-op, since huggingface_hub freezes offline mode at
+    import), the child imports fresh with the flag already set, so it is honored.
+    """
+    env = dict(os.environ if base_env is None else base_env)
+    repos: list[Tuple[str, str]] = [(str(repo_id), revision), *(also or [])]
+    try:
+        for rid, rev in repos:
+            resolve_model(rid, rev, token=token)
+    except Exception:
+        return env  # a model is missing/undownloadable -> let the child try online
+    for var in _HF_OFFLINE_ENV_VARS:
+        env[var] = "1"
+    return env

@@ -39,8 +39,13 @@ from senselab.utils.data_structures import (
     _select_device_and_dtype,
     logger,
 )
-from senselab.utils.dependencies import speechbrain_loading_cwd, speechbrain_savedir
-from senselab.utils.subprocess_venv import ensure_venv, parse_subprocess_result, venv_python
+from senselab.utils.dependencies import hf_subprocess_env, resolve_model, speechbrain_loading_cwd, speechbrain_savedir
+from senselab.utils.subprocess_venv import (
+    _clean_subprocess_env,
+    ensure_venv,
+    parse_subprocess_result,
+    venv_python,
+)
 
 # Exceptions for which falling back to a raw config.json read is sensible. Tests against
 # audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim show ``StrictDataclassError`` is
@@ -615,12 +620,17 @@ def _classify_continuous_ser_venv(
             }
         )
 
+        # Stage the model once (cross-process, via the heartbeat lock) + run the
+        # worker offline so its pipeline() makes no per-call Hub version check — the
+        # 429 source under parallel batch.
+        env = hf_subprocess_env(str(model.path_or_uri), model.revision or "main", base_env=_clean_subprocess_env())
         result = subprocess.run(
             [python, "-c", _CONT_SER_WORKER],
             input=input_json,
             capture_output=True,
             text=True,
             timeout=600,
+            env=env,
         )
 
         output = parse_subprocess_result(result, "Continuous SER")
@@ -668,6 +678,12 @@ def _classify_wav2vec2_speech_cls_ser(
 
     key = f"{model.path_or_uri}-{model.revision or 'main'}-{device_type.value}-{model_type}-{head.final_layer}"
     if key not in _wav2vec2_emotion_models:
+        # Resolve the ref to an immutable SHA once (download-once via the
+        # cross-process heartbeat lock); pin the weight + feature-extractor loads
+        # to it so a cached model makes no per-call Hub HEAD — the 429 source under
+        # parallel batch. (The config load is separately memoized + per-(path,rev)
+        # locked, so its burst is already mitigated.)
+        sha, _ = resolve_model(str(model.path_or_uri), model.revision or "main")
         EmotionModel = _make_emotion_model_class(model_type, head)
         typed, raw = _load_config_cached(model)
         if typed is not None:
@@ -688,7 +704,7 @@ def _classify_wav2vec2_speech_cls_ser(
 
         loaded, loading_info = EmotionModel.from_pretrained(  # type: ignore[attr-defined]
             str(model.path_or_uri),
-            revision=model.revision,
+            revision=sha,
             config=config,
             output_loading_info=True,
         )
@@ -750,7 +766,7 @@ def _classify_wav2vec2_speech_cls_ser(
         # AutoConfig.from_pretrained internally (to pick a tokenizer), which would re-trip
         # the vocab_size: null strict-validator on these checkpoints. Regression inference
         # doesn't need a tokenizer.
-        feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(str(model.path_or_uri), revision=model.revision)
+        feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(str(model.path_or_uri), revision=sha)
         # Resolve labels once: HF stores id2label keys as strings in JSON; AutoConfig usually
         # coerces them to int but the raw-dict fallback above does not. Tolerate either.
         raw_id2label = getattr(config, "id2label", None) or {}
@@ -903,11 +919,13 @@ def _load_speechbrain_ser_model(model: SpeechBrainModel, device_type: DeviceType
         Tuple of (recognizer, label_list).
     """
     import yaml  # type: ignore[import-untyped]
-    from huggingface_hub import hf_hub_download
     from speechbrain.inference import Pretrained
 
-    # Download hyperparams to discover MODULES_NEEDED
-    hp_path = hf_hub_download(str(model.path_or_uri), "hyperparams.yaml", revision=model.revision)
+    # Stage once (download-once via the heartbeat lock); read hyperparams + load
+    # from the local snapshot dir so SpeechBrain makes no per-file Hub HEAD — the
+    # 429 source under batch. SpeechBrain has no revision arg -> pin via snapshot.
+    _, snapshot_path = resolve_model(str(model.path_or_uri), model.revision or "main")
+    hp_path = str(snapshot_path / "hyperparams.yaml")
 
     # SpeechBrain YAML uses custom tags (!new:, !ref, etc.) that yaml.safe_load
     # cannot handle. Use a permissive loader subclass that ignores unknown tags.
@@ -937,7 +955,7 @@ def _load_speechbrain_ser_model(model: SpeechBrainModel, device_type: DeviceType
     savedir = speechbrain_savedir(str(model.path_or_uri), model.revision)
     with speechbrain_loading_cwd(savedir):
         recognizer = recognizer_cls.from_hparams(  # type: ignore[attr-defined]
-            source=str(model.path_or_uri),
+            source=str(snapshot_path),
             savedir=str(savedir),
             run_opts=run_opts,
         )
