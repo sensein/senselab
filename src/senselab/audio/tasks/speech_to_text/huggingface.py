@@ -118,8 +118,10 @@ class HuggingFaceASR:
             # pipeline class default to its no-timestamps mode.
             # NOTE: ``revision`` is deliberately NOT passed here. ``load_hf_resilient``
             # resolves the requested ref to an immutable commit SHA once and injects
-            # ``revision=<sha>, local_files_only=True``, so huggingface_hub's commit-hash
-            # shortcut loads from cache with no per-call Hub version check (the 429 source).
+            # ``revision=<sha>`` (no ``local_files_only`` — it would leak into
+            # ``pipeline``'s generate kwargs), so huggingface_hub's commit-hash
+            # shortcut loads from cache with no per-call Hub version check (the 429
+            # source). ``token`` here is used for resolution and forwarded to ``pipeline``.
             pipeline_kwargs: Dict[str, Any] = {
                 "task": "automatic-speech-recognition",
                 "model": model.path_or_uri,
