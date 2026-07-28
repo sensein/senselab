@@ -45,7 +45,16 @@ def apply_convergence_marks(
                 hist = row.get("history") or []
                 improvement = None
                 if len(hist) >= 2:
-                    improvement = hist[-2]["aggregated_uncertainty"] - hist[-1]["aggregated_uncertainty"]
+                    # aggregated_uncertainty is float | None: a bucket is None when the axis
+                    # couldn't score that round (e.g. utterance comparison_status="incomparable"
+                    # — no comparable ASR words in the window, common on sparse/gappy speech).
+                    # A bucket can flip None<->float across rounds, so guard both history
+                    # entries; if either is None we can't measure improvement across it, so
+                    # leave it unmeasured (not "stalled") rather than crashing None - float.
+                    prev_u = hist[-2].get("aggregated_uncertainty")
+                    last_u = hist[-1].get("aggregated_uncertainty")
+                    if prev_u is not None and last_u is not None:
+                        improvement = prev_u - last_u
                 stalled = improvement is not None and improvement < epsilon
                 if touches >= max_touch and stalled:
                     floor = float(row.get("aleatoric_floor") or 0.0)
