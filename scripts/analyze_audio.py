@@ -26,22 +26,25 @@ task where the registry offers more than one).
     **google/yamnet**                              (TF subprocess venv)
 
   speech_to_text (in defaults; mix of native-timestamp and post-aligned):
-    **openai/whisper-large-v3-turbo**              (HFModel, 809M, multilingual; native timestamps)
-    **ibm-granite/granite-speech-3.3-8b**          (~9B, EN + 7 translations; text-only, post-aligned by this script)
+    **nyralabs/CrisperWhisper2.0_turbo**           (crisperwhisper CT2 subprocess venv; verbatim, native word
+                                                    timestamps + per-word confidence)
     **nvidia/canary-qwen-2.5b**                    (NeMo SALM subprocess venv, 2.5B; text-only, post-aligned)
     **Qwen/Qwen3-ASR-1.7B**                        (qwen-asr subprocess venv, 1.7B; native word timestamps via
                                                     Qwen3-ForcedAligner-0.6B companion)
 
   speech_to_text (additional, available via --asr-models):
-    openai/whisper-large-v3                        (HFModel, 1.55B, multilingual; native timestamps)
+    openai/whisper-large-v3-turbo                  (HFModel, 809M, multilingual; native timestamps)
+    ibm-granite/granite-speech-3.3-8b              (~9B, EN + 7 translations; text-only, post-aligned)
     openai/whisper-small                           (HFModel, 244M; native timestamps)
     nvidia/stt_en_conformer_ctc_large              (NeMo subprocess venv, English-only; native CTC timestamps)
 
 Auto-align stage: every ASR model in --asr-models that returns text-only
-ScriptLines (no native timestamps and no chunks) is automatically passed
-through the multilingual MMS forced-aligner (--aligner-model, default
-facebook/mms-1b-all, 1100+ languages via per-language adapters) to add
-per-segment timestamps. Pass --no-align-asr to skip this and emit a
+ScriptLines (no native timestamps and no chunks) is automatically force-aligned
+to add per-word timestamps. The aligner is selectable via --aligner: 'qwen'
+(default) uses Qwen3-ForcedAligner-0.6B in the qwen-asr subprocess venv; 'mms'
+uses the multilingual facebook/mms-1b-all path (--aligner-model, 1100+ languages
+via per-language adapters). ASR models with native timestamps (CrisperWhisper,
+Qwen3-ASR) are never re-aligned. Pass --no-align-asr to skip this and emit a
 single full-audio TextArea region for those models in the LS export.
 The alignment cache is independent of the ASR cache (FR-024); changing
 the aligner re-runs only alignment, not ASR.
@@ -80,7 +83,7 @@ Cache + provenance: every per-task outcome is stored under
 ``--cache-dir`` (default ``artifacts/analyze_audio_cache/``) keyed by
 
     sha256(audio_signature || task || model_id || params ||
-           wrapper_version_hash || senselab_version || cache_schema_version)
+           stage_version || senselab_version || cache_schema_version)
 
 The audio signature is the sha256 of the post-resample, post-downmix
 PCM samples + sampling rate, so two files with identical waveforms
@@ -130,25 +133,59 @@ import torch
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.classification import classify_audios
 from senselab.audio.tasks.features_extraction import extract_features_from_audios
+from senselab.audio.tasks.features_extraction.temporal import extract_temporal_features
 from senselab.audio.tasks.forced_alignment import align_transcriptions
 from senselab.audio.tasks.input_output import read_audios
 from senselab.audio.tasks.preprocessing import downmix_audios_to_mono, extract_segments, resample_audios
 from senselab.audio.tasks.speaker_diarization import diarize_audios
 from senselab.audio.tasks.speech_enhancement import enhance_audios
 from senselab.audio.tasks.speech_to_text import transcribe_audios
+from senselab.audio.tasks.speech_to_text.qwen import QwenASR
 from senselab.audio.workflows.audio_analysis.harvesters import (
     classification_window_top1 as _classification_window_top1,
 )
 from senselab.audio.workflows.audio_analysis.harvesters import (
     classification_windows as _classification_windows,
 )
+from senselab.audio.workflows.audio_analysis.labelstudio import (
+    build_labelstudio_config,
+    build_labelstudio_task,
+)
+from senselab.audio.workflows.audio_analysis.stage_context import STAGE_VERSIONS, PassPlan, StageContext
+from senselab.audio.workflows.audio_analysis.stages import (
+    _asr_has_timestamps,
+    run_pass,
+)
 from senselab.utils.data_structures import (
     DeviceType,
     HFModel,
     Language,
-    PyannoteAudioModel,
     ScriptLine,
-    SpeechBrainModel,
+    model_for_task,
+    safe_model_id,
+)
+from senselab.utils.tasks.cached_inference import (
+    CACHE_SCHEMA_VERSION as _CACHE_SCHEMA_VERSION,
+)
+from senselab.utils.tasks.cached_inference import (
+    align_cache_key,
+    audio_signature,
+    cache_key,
+    cache_lookup,
+    cache_store,
+    run_alignment_cached,
+    run_task,
+    run_task_cached,
+    senselab_version,
+    serialize,
+    transcript_signature,
+    write_json,
+)
+from senselab.utils.tasks.cached_inference import (
+    canonical_params as _canonical_params,
+)
+from senselab.utils.tasks.cached_inference import (
+    sync_cache_with_schema_version as _sync_cache_with_schema_version,
 )
 
 TARGET_SR = 16000
@@ -195,7 +232,106 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--no-enhancement",
         action="store_true",
-        help="Skip the enhanced-audio pass; only run on the resampled original.",
+        help="Skip the enhanced-audio pass; only run on the resampled original. Alias for --enhancement never.",
+    )
+    # ── Adaptive loop (T040; contracts/cli.md) ────────────────────────
+    parser.add_argument(
+        "--max-rounds",
+        type=int,
+        default=3,
+        help=(
+            "Total adaptive rounds including the baseline. 1 = baseline only: no interventions and no "
+            "rounds/>=2, though final/ is still emitted from the round-1 belief. Use 1 for "
+            "golden-compat runs."
+        ),
+    )
+    parser.add_argument(
+        "--policy",
+        type=Path,
+        default=None,
+        help="Adaptive policy YAML, deep-merged over the packaged default. CLI overrides below win over it.",
+    )
+    parser.add_argument(
+        "--budget-medium",
+        type=int,
+        default=None,
+        help="Per-run budget for medium-cost interventions (default from the policy file).",
+    )
+    parser.add_argument(
+        "--budget-heavy",
+        type=int,
+        default=None,
+        help="Per-run budget for heavy-cost interventions (default from the policy file). 0 disables them.",
+    )
+    parser.add_argument(
+        "--max-region-rounds",
+        type=int,
+        default=None,
+        help="Cap on how many rounds may touch the same region (default from the policy file).",
+    )
+    parser.add_argument(
+        "--region-top-n",
+        type=int,
+        default=None,
+        help="How many high-uncertainty regions to admit per round (default from the policy file).",
+    )
+    parser.add_argument(
+        "--reserve-asr-models",
+        nargs="+",
+        default=None,
+        metavar="MODEL",
+        help="Reserve ASR pool for U2 escalation, in order (default from the policy file).",
+    )
+    parser.add_argument(
+        "--enable-overlap-separation",
+        action="store_true",
+        help=(
+            "Force the overlap-detection rule on, overriding a policy file that disabled it. NOTE: "
+            "contracts/cli.md calls this a 'v2 U4 rule (off by default)'; the shipped rule is "
+            "I4_overlap_detection and the packaged policy already enables it, so this flag only "
+            "matters against a policy that turns it off."
+        ),
+    )
+    parser.add_argument(
+        "--no-adaptive-outputs",
+        action="store_true",
+        help="Suppress the adaptive rounds/ and final/ artifacts (debug / regression aid).",
+    )
+    parser.add_argument(
+        "--enhancement",
+        choices=("auto", "always", "never"),
+        default="always",
+        help=(
+            "Enhanced-pass policy (spec 20260723-225523 FR-003). 'always' preserves the historical "
+            "unconditional two-pass behavior; 'auto' runs a triage round 0 (segmentation-3.0 frame "
+            "posteriors + Brouhaha/DSP SNR) and runs the enhanced pass only when degraded speech is "
+            "found — and skips diarization/ASR/alignment/PPG entirely when no speech is found (FR-004); "
+            "'never' ≡ --no-enhancement."
+        ),
+    )
+    parser.add_argument(
+        "--triage-speech-threshold",
+        type=float,
+        default=0.5,
+        help="Triage: per-window P(speech) at/above which a ~100 ms window counts as speech.",
+    )
+    parser.add_argument(
+        "--triage-min-speech-s",
+        type=float,
+        default=0.3,
+        help="Triage: minimum total speech seconds for the run to proceed past round 0 (FR-004).",
+    )
+    parser.add_argument(
+        "--triage-snr-floor-db",
+        type=float,
+        default=10.0,
+        help="Triage: SNR (dB) below which a speech window counts as degraded.",
+    )
+    parser.add_argument(
+        "--triage-low-snr-fraction",
+        type=float,
+        default=0.4,
+        help="Triage: fraction of degraded speech windows at/above which the enhanced pass runs (FR-003).",
     )
     parser.add_argument(
         "--diarization-models",
@@ -215,24 +351,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--asr-models",
         nargs="+",
         default=[
-            # Confirmed working through senselab today:
-            "openai/whisper-large-v3-turbo",
-            # Routes through the existing HF pipeline path with
-            # return_timestamps=False (timestamp-less HF model known-list);
-            # the script's auto-align stage adds per-segment timestamps via MMS:
-            "ibm-granite/granite-speech-3.3-8b",
-            # Both routed through dedicated subprocess venvs. Per-model
-            # failures are captured in JSON without aborting the run.
+            # CrisperWhisper 2.0 turbo — verbatim, word-level timestamps + native
+            # per-word confidence, via the crisperwhisper CT2 subprocess venv.
+            "nyralabs/CrisperWhisper2.0_turbo",
+            # Text-only NeMo SALM (subprocess venv); auto-aligned downstream.
             "nvidia/canary-qwen-2.5b",
+            # Native word timestamps via the bundled Qwen3-ForcedAligner companion
+            # (subprocess venv). Per-model failures are captured in JSON, non-fatal.
             "Qwen/Qwen3-ASR-1.7B",
         ],
         help=(
-            "ASR models. Defaults: Whisper Large v3 Turbo (native timestamps), "
-            "IBM Granite Speech 3.3 8B (text-only via HF pipeline; auto-aligned "
-            "by this script), NVIDIA Canary-Qwen 2.5B (text-only, auto-aligned), "
-            "and Qwen3-ASR 1.7B (native word-level timestamps via the bundled "
-            "forced-aligner companion). The script auto-aligns timestamp-less "
-            "ASR output via the multilingual aligner; pass --no-align-asr to skip."
+            "ASR models. Defaults: CrisperWhisper 2.0 turbo (verbatim, native word "
+            "timestamps + confidence), NVIDIA Canary-Qwen 2.5B (text-only, "
+            "auto-aligned), and Qwen3-ASR 1.7B (native word timestamps via the "
+            "bundled Qwen3-ForcedAligner companion). Timestamp-less ASR output is "
+            "auto-aligned by the script; pass --no-align-asr to skip."
         ),
     )
     parser.add_argument(
@@ -285,6 +418,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="YAMNet sliding-window hop, seconds (default: 0.48, matches YAMNet's native 50%% overlap hop).",
     )
     parser.add_argument(
+        "--scene-top-k",
+        type=int,
+        default=50,
+        help=(
+            "Number of AudioSet classes to persist per AST/YAMNet window (default: 50). "
+            "Feeds the presence-axis sound-source category masses (speech/people/machine/"
+            "environment); 50 captures essentially all of the softmax mass. Raise toward the "
+            "full label count (527 AST / 521 YAMNet) for the complete distribution at ~10x the "
+            "cache size; the top-1 label (speech-presence / YAMNet-veto) is unaffected either way."
+        ),
+    )
+    parser.add_argument(
         "--features-win-length",
         type=float,
         default=1.0,
@@ -307,7 +452,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=Path("artifacts/analyze_audio_cache"),
         help=(
             "Directory for the content-addressable result cache. Cache keys are "
-            "sha256(audio_signature, task, model_id, params, wrapper_hash, "
+            "sha256(audio_signature, task, model_id, params, code_version, "
             "senselab_version). Identical inputs replay prior outputs without "
             "re-running models. Default: artifacts/analyze_audio_cache/."
         ),
@@ -341,13 +486,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--aligner",
+        choices=("qwen", "mms"),
+        default="qwen",
+        help=(
+            "Forced-aligner backend for text-only ASR output (no native timestamps). "
+            "'qwen' (default) uses Qwen3-ForcedAligner-0.6B in the qwen-asr subprocess "
+            "venv; 'mms' uses the multilingual facebook/mms-1b-all path. ASR models "
+            "with native timestamps (CrisperWhisper, Qwen3-ASR) are never re-aligned."
+        ),
+    )
+    parser.add_argument(
         "--aligner-model",
         default="facebook/mms-1b-all",
         help=(
-            "Multilingual forced-alignment model used by the auto-align stage "
-            "(default: facebook/mms-1b-all, covers 1100+ languages via per-language "
-            "adapters). Override to swap MMS for another senselab-supported aligner."
+            "MMS forced-alignment model used when --aligner mms (default: "
+            "facebook/mms-1b-all, 1100+ languages via per-language adapters)."
         ),
+    )
+    parser.add_argument(
+        "--qwen-aligner-model",
+        default="Qwen/Qwen3-ForcedAligner-0.6B",
+        help="Qwen forced-aligner model id used when --aligner qwen (default: Qwen/Qwen3-ForcedAligner-0.6B).",
     )
     parser.add_argument(
         "--asr-language",
@@ -378,20 +538,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--cross-stream-win-length",
         type=float,
-        default=0.5,
+        default=0.25,
         help=(
-            "Window length (seconds) for cross-stream / within-stream comparisons "
-            "(presence + identity axes). Default 0.5 s non-overlapping; finer grids "
-            "over-resolve the underlying signals (Whisper word-level ≈ 20 ms but "
-            "pyannote frames ≈ 62.5 ms, AST window 10.24 s). Utterance has its own grid — "
-            "see ``--utterance-win-length``."
+            "Window length (seconds) for the identity axis / cross-stream / within-stream "
+            "comparisons. Default 0.25 s overlapping — fine enough to localize sub-second "
+            "speaker turns (multi-speaker clips routinely have 0.3-1 s turns). Presence has "
+            "its own finer grid (``--presence-grid-*``) and utterance its own wider one "
+            "(``--utterance-win-length``)."
         ),
     )
     parser.add_argument(
         "--cross-stream-hop-length",
         type=float,
-        default=0.5,
-        help="Hop between cross-stream comparison windows (default 0.5 s, non-overlapping; must be <= win-length).",
+        default=0.25,
+        help="Hop between identity/cross-stream windows (default 0.25 s; must be <= win-length).",
     )
     parser.add_argument(
         "--utterance-win-length",
@@ -415,20 +575,78 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--no-scene-quality",
+        action="store_true",
+        help=(
+            "Disable the scene-quality signals (Brouhaha SNR/C50 + DSP clipping/bandwidth). "
+            "By default scene quality is REQUIRED: if Brouhaha cannot be loaded (e.g. gated "
+            "access not granted) the run fails loudly rather than silently emitting null "
+            "quality columns. Pass this flag to intentionally run without it."
+        ),
+    )
+    parser.add_argument(
+        "--no-sound-sources",
+        action="store_true",
+        help="Disable the background sound-source category masses (speech/people/machine/environment).",
+    )
+    parser.add_argument(
+        "--utterance-scene-coupling-weights",
+        type=float,
+        nargs=2,
+        metavar=("W_Q", "W_S"),
+        default=(0.5, 0.25),
+        help=(
+            "Scene-to-utterance coupling weights (FR-019): reported utterance uncertainty is "
+            "multiplied by 1 + W_Q * quality_snr + W_S * (src_machine + src_environment) over the "
+            "bucket's span, clipped to 1.0. The multiplier is recorded in the "
+            "scene_quality_coupling column and the pre-coupling value stays in "
+            "raw_aggregated_uncertainty. Defaults to 0.5 0.25; pass '0 0' to disable coupling."
+        ),
+    )
+    parser.add_argument(
+        "--presence-grid-win-length",
+        type=float,
+        default=0.1,
+        help=(
+            "Window length (seconds) for the presence axis (default 0.1 s ≈ one phone). "
+            "Presence uses continuous frame posteriors, so a fine grid localizes brief "
+            "events (cough onset, inter-word breath) that a 0.5 s grid smears. Quality and "
+            "source columns are broadcast onto this grid."
+        ),
+    )
+    parser.add_argument(
+        "--presence-grid-hop-length",
+        type=float,
+        default=0.02,
+        help="Hop between presence windows (default 0.02 s ≈ frame hop). Must be <= --presence-grid-win-length.",
+    )
+    parser.add_argument(
         "--embedding-window-s",
         type=float,
-        default=1.0,
+        default=0.5,
         help=(
             "Window length (seconds) for fixed-grid speaker-embedding extraction. "
-            "Defaults to 1.0 s — the smallest window that pairs reliably with the "
-            "0.5 s comparator bucket grid (one embedding per bucket center)."
+            "Defaults to 0.5 s: on conversational multi-speaker audio with short "
+            "turns, a 0.5 s window recovers the correct speaker count and roughly "
+            "doubles cluster-vs-truth agreement (ARI 0.70 vs 0.48 at 1.0 s on the "
+            "4-speaker validation clip) because 1.0 s windows straddle turn "
+            "boundaries and smear adjacent speakers together. The trade-off is that "
+            "turns shorter than the window (< 0.5 s) may not resolve as their own "
+            "cluster; raise toward 1.0 s for clean, long-form single/dual-speaker "
+            "audio where per-embedding robustness matters more than turn resolution."
         ),
     )
     parser.add_argument(
         "--embedding-hop-s",
         type=float,
-        default=0.5,
-        help="Hop between embedding windows. Defaults to 0.5 s. Must be <= --embedding-window-s.",
+        default=0.25,
+        help=(
+            "Hop between embedding windows (default 0.25 s). A 0.25 s hop samples the "
+            "0.5 s window densely so speaker-change boundaries localize to ~0.25 s; on "
+            "the 4-speaker validation clip this flips the identity axis from inverted "
+            "(uncertainty dipping at speaker changes) to correct (peaking within ~15 ms "
+            "of the two clearest turn boundaries). Must be <= --embedding-window-s."
+        ),
     )
     parser.add_argument(
         "--identity-same-speaker-floor",
@@ -471,6 +689,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "cosine-similarity affinity, which handles non-convex speaker clusters "
             "better than k-means; 'kmeans' is the legacy choice. Spectral falls back "
             "to k-means automatically if a k fails."
+        ),
+    )
+    parser.add_argument(
+        "--calibration-profile",
+        type=Path,
+        default=None,
+        help=(
+            "Scene-quality calibration profile JSON (US5, data-model §5): dB→[0,1] anchors for "
+            "SNR/C50 plus per-axis aggregator temperatures. Default: the bundled profile "
+            "(workflows/audio_analysis/data/scene_quality_calibration.json) when present, else the "
+            "documented uncalibrated defaults. Fit one with scripts/calibrate_scene_quality.py."
         ),
     )
     parser.add_argument(
@@ -528,6 +757,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--utterance-win-length must be positive")
     if args.utterance_hop_length <= 0 or args.utterance_hop_length > args.utterance_win_length:
         parser.error("--utterance-hop-length must be positive and ≤ --utterance-win-length")
+    if args.presence_grid_win_length <= 0:
+        parser.error("--presence-grid-win-length must be positive")
+    if args.presence_grid_hop_length <= 0 or args.presence_grid_hop_length > args.presence_grid_win_length:
+        parser.error("--presence-grid-hop-length must be positive and ≤ --presence-grid-win-length")
     if not (0.0 <= args.phoneme_disagreement_threshold <= 1.0):
         parser.error("--phoneme-disagreement-threshold must be in [0, 1]")
     if args.diarization_boundary_shift_ms < 0:
@@ -535,25 +768,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.disagreements_top_n < 0:
         parser.error("--disagreements-top-n must be non-negative")
     return args
-
-
-def pick_dispatch_model(model_id: str, *, task: str) -> Any:  # noqa: ANN401
-    """Wrap a model id in the right SenselabModel subclass for the given task.
-
-    Routes diarization model ids to PyannoteAudioModel or HFModel based on the
-    well-known prefix, matching ``diarize_audios``'s internal dispatch logic.
-    """
-    if task == "diarization":
-        if model_id.startswith("nvidia/diar_sortformer"):
-            return HFModel(path_or_uri=model_id)
-        return PyannoteAudioModel(path_or_uri=model_id)
-    if task == "asr":
-        return HFModel(path_or_uri=model_id)
-    if task == "embeddings":
-        return SpeechBrainModel(path_or_uri=model_id)
-    if task == "enhancement":
-        return SpeechBrainModel(path_or_uri=model_id)
-    raise ValueError(f"unknown task: {task}")
 
 
 def pick_device(arg: str) -> DeviceType | None:
@@ -593,826 +807,6 @@ def prepare_audio(path: Path) -> Audio:
 # (see ``cache_key``) and stamped into parquet provenance via
 # ``_CACHE_SCHEMA_VERSION`` references — never hardcode the literal anywhere
 # else, otherwise the constant and the stamped value will drift.
-_CACHE_SCHEMA_VERSION = 1
-
-
-def _sync_cache_with_schema_version(cache_dir: Path) -> None:
-    """Keep the on-disk cache state and ``_CACHE_SCHEMA_VERSION`` in sync.
-
-    The cache directory carries a ``.schema_version`` marker file. On each run:
-
-    - If the directory is empty / missing the marker → the cache was just
-      created (or manually cleared). Write the current schema version. No
-      data wipe is needed because there's nothing to wipe.
-    - If the marker exists and matches the current code version → keep cache.
-    - If the marker exists but doesn't match → the code has bumped the
-      schema since the cache was populated. Wipe all cache entries and
-      rewrite the marker with the current version.
-
-    Bidirectional invariant: clearing the cache resets the version to current
-    automatically (since the marker is recreated); bumping the version in
-    code wipes the cache automatically (since the marker mismatch triggers
-    the wipe). The user never has to manually delete cache files when they
-    edit the schema number.
-    """
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    marker = cache_dir / ".schema_version"
-    on_disk_version: int | None = None
-    if marker.exists():
-        try:
-            on_disk_version = int(marker.read_text().strip())
-        except (ValueError, OSError):
-            on_disk_version = None
-
-    # Has the cache been populated with non-marker entries?
-    has_entries = any(p.name != ".schema_version" for p in cache_dir.iterdir())
-
-    if on_disk_version == _CACHE_SCHEMA_VERSION:
-        return
-
-    if on_disk_version is None and not has_entries:
-        # Fresh / cleared cache. Write current version, no wipe needed.
-        marker.write_text(str(_CACHE_SCHEMA_VERSION))
-        print(
-            f"Cache: initialized {cache_dir} at schema_version={_CACHE_SCHEMA_VERSION}",
-            file=sys.stderr,
-        )
-        return
-
-    # Mismatch — wipe and rewrite the marker.
-    n_removed = 0
-    for p in cache_dir.iterdir():
-        if p.name == ".schema_version":
-            continue
-        try:
-            if p.is_dir():
-                import shutil
-
-                shutil.rmtree(p)
-            else:
-                p.unlink()
-            n_removed += 1
-        except OSError as exc:
-            print(f"warn: cache wipe failed to remove {p}: {exc!r}", file=sys.stderr)
-    marker.write_text(str(_CACHE_SCHEMA_VERSION))
-    print(
-        f"Cache: schema bumped from {on_disk_version!r} → {_CACHE_SCHEMA_VERSION}; "
-        f"wiped {n_removed} stale entries from {cache_dir}",
-        file=sys.stderr,
-    )
-
-
-def audio_signature(audio: Audio) -> str:
-    """Return a deterministic sha256 of the audio waveform PCM + sampling rate.
-
-    Two identical-sounding files produce the same signature regardless of
-    their on-disk format (e.g., WAV vs FLAC) — what matters is the post-
-    resample, post-downmix waveform that each task actually sees. Extra
-    metadata (file path, mtime, encoding) is intentionally excluded.
-    """
-    arr = audio.waveform.detach().cpu().contiguous().numpy()
-    h = hashlib.sha256()
-    h.update(str(audio.sampling_rate).encode())
-    h.update(b"|")
-    h.update(str(arr.shape).encode())
-    h.update(b"|")
-    h.update(arr.tobytes())
-    return h.hexdigest()
-
-
-def wrapper_version_hash() -> str:
-    """sha256 of this script's source. Captures wrapper-side behavior changes.
-
-    When the cache hits, we replay outputs from a prior wrapper version. If
-    the wrapper logic changed (e.g., we now post-process results differently)
-    we want a cache miss. Hashing the script's bytes keys the cache to the
-    exact wrapper that produced each entry.
-    """
-    try:
-        return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
-    except OSError:
-        return "unknown"
-
-
-def senselab_version() -> str:
-    """Return the installed senselab version, or 'unknown' if metadata is missing."""
-    try:
-        return importlib.metadata.version("senselab")
-    except importlib.metadata.PackageNotFoundError:
-        return "unknown"
-
-
-def _canonical_params(params: dict[str, Any]) -> str:
-    """Stable JSON encoding of params for cache keying. Sorted, no whitespace."""
-    return json.dumps(params, sort_keys=True, separators=(",", ":"), default=str)
-
-
-def cache_key(
-    *,
-    audio_sig: str,
-    task: str,
-    model_id: str | None,
-    params: dict[str, Any],
-    wrapper_hash: str,
-    senselab_ver: str,
-) -> str:
-    """Compute the deterministic cache key for one (audio, task, model, params) combo."""
-    payload = {
-        "schema": _CACHE_SCHEMA_VERSION,
-        "audio_signature": audio_sig,
-        "task": task,
-        "model": model_id,
-        "params": params,
-        "wrapper_hash": wrapper_hash,
-        "senselab_version": senselab_ver,
-    }
-    return hashlib.sha256(_canonical_params(payload).encode()).hexdigest()
-
-
-def cache_lookup(cache_dir: Path, key: str) -> dict[str, Any] | None:
-    """Return the cached result dict for ``key``, or None on miss."""
-    path = cache_dir / f"{key}.json"
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return None
-
-
-def cache_store(cache_dir: Path, key: str, payload: dict[str, Any]) -> None:
-    """Persist ``payload`` for ``key`` under the cache dir."""
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    (cache_dir / f"{key}.json").write_text(json.dumps(serialize(payload), indent=2, default=str), encoding="utf-8")
-
-
-def transcript_signature(text: str) -> str:
-    """sha256 of an ASR transcript text — anchors an alignment outcome to its exact input.
-
-    The alignment cache uses this as one of its keys: re-aligning the same
-    transcript on the same audio with the same params returns the cached
-    timestamps without re-loading the aligner model.
-    """
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def _flatten_feature_dict(d: dict[str, Any], prefix: str = "") -> dict[str, Any]:
-    """Flatten a nested feature dict into a single-row dict suitable for a parquet column.
-
-    Keys are joined with ``.``; tensors are coerced to floats (mean of
-    last axis when 1-D) or skipped when high-dimensional (we don't want
-    per-window MFCC tensors as parquet cells — caller can opt back in
-    via the JSON sibling). Lists of scalars are kept as-is so pyarrow
-    can store them as a list column.
-    """
-    out: dict[str, Any] = {}
-    for k, v in d.items():
-        key = f"{prefix}{k}" if prefix else k
-        if isinstance(v, dict):
-            out.update(_flatten_feature_dict(v, prefix=f"{key}."))
-            continue
-        if hasattr(v, "ndim") and hasattr(v, "tolist"):  # torch.Tensor / np.ndarray
-            try:
-                if v.ndim == 0:
-                    out[key] = float(v.item())
-                elif v.ndim == 1 and v.shape[0] <= 64:
-                    out[key] = [float(x) for x in v.tolist()]
-                else:
-                    # multi-dim tensor (spectrogram, mfcc) — store mean as a scalar
-                    # summary; full tensor stays in the JSON sibling for callers
-                    # that want it.
-                    out[f"{key}.mean"] = float(v.mean().item())
-            except Exception:  # noqa: BLE001 — best effort
-                pass
-            continue
-        if isinstance(v, (int, float, bool)) or v is None:
-            out[key] = v
-        elif isinstance(v, str):
-            out[key] = v
-        # silently drop anything else (callable, opaque object) to keep the row clean
-    return out
-
-
-def extract_temporal_features(
-    audio: Audio,
-    *,
-    win_length: float,
-    hop_length: float,
-    device: DeviceType | None,
-) -> dict[str, list[dict[str, Any]]]:
-    """Extract per-backend temporal features, preferring each backend's native time grid.
-
-    - **opensmile**: uses ``LowLevelDescriptors`` (native ~10 ms frame
-      grid). One row per opensmile frame.
-    - **parselmouth**: aggregates over a sliding window since the
-      senselab wrapper currently only exposes the summary form.
-    - **torchaudio_squim**: STOI/PESQ/SI-SDR are inherently global
-      quality scores — windowed externally so the resulting time series
-      is comparable to the rest.
-
-    Returns a dict ``{backend: [rows...]}`` so each backend can be
-    written to its own parquet sidecar (different columns + time grids
-    don't share a schema).
-    """
-    duration_s = float(audio.waveform.shape[1]) / float(audio.sampling_rate)
-    out: dict[str, list[dict[str, Any]]] = {"opensmile": [], "parselmouth": [], "torchaudio_squim": []}
-
-    # opensmile LLD — native windowing (DataFrame indexed by [start, end]).
-    try:
-        import opensmile as _os
-
-        smile = _os.Smile(
-            feature_set=_os.FeatureSet.eGeMAPSv02,
-            feature_level=_os.FeatureLevel.LowLevelDescriptors,
-        )
-        df = smile.process_signal(audio.waveform.squeeze().numpy(), audio.sampling_rate)
-        df = df.reset_index()
-        df["start"] = df["start"].dt.total_seconds()
-        df["end"] = df["end"].dt.total_seconds()
-        out["opensmile"] = df.to_dict(orient="records")
-    except Exception as exc:  # noqa: BLE001
-        print(f"  [features.opensmile] warn: {exc!r}", file=sys.stderr)
-
-    # External 1 s / 0.5 s loop for the summary-style backends.
-    t = 0.0
-    idx = 0
-    while t + win_length <= duration_s + 1e-6:
-        start = round(t, 4)
-        end = round(min(t + win_length, duration_s), 4)
-        clip = extract_segments([(audio, [(start, end)])])[0][0]
-        try:
-            pm = extract_features_from_audios(
-                [clip], opensmile=False, parselmouth=True, torchaudio=False, torchaudio_squim=False, device=device
-            )[0]
-            row = _flatten_feature_dict(pm.get("praat_parselmouth", {}))
-            row.update({"start": start, "end": end, "win_index": idx})
-            out["parselmouth"].append(row)
-        except Exception as exc:  # noqa: BLE001
-            print(f"  [features.parselmouth win {idx}] warn: {exc!r}", file=sys.stderr)
-        try:
-            sq = extract_features_from_audios(
-                [clip], opensmile=False, parselmouth=False, torchaudio=False, torchaudio_squim=True, device=device
-            )[0]
-            row = _flatten_feature_dict(sq.get("torchaudio_squim", {}))
-            row.update({"start": start, "end": end, "win_index": idx})
-            out["torchaudio_squim"].append(row)
-        except Exception as exc:  # noqa: BLE001
-            print(f"  [features.torchaudio_squim win {idx}] warn: {exc!r}", file=sys.stderr)
-        t += hop_length
-        idx += 1
-
-    return out
-
-
-def align_cache_key(
-    *,
-    audio_sig: str,
-    transcript_sha: str,
-    language: str | None,
-    aligner_model_id: str,
-    aligner_params: dict[str, Any],
-    wrapper_hash: str,
-    senselab_ver: str,
-) -> str:
-    """Cache key for one (audio, transcript, language, aligner) alignment call.
-
-    Independent from the ASR cache: an alignment cache hit replays prior
-    timestamps without invoking the aligner; an ASR-cache miss + alignment-cache
-    hit (or vice versa) is supported by construction.
-    """
-    payload = {
-        "schema": _CACHE_SCHEMA_VERSION,
-        "audio_signature": audio_sig,
-        "task": "alignment",
-        "transcript_sha": transcript_sha,
-        "language": language,
-        "aligner_model": aligner_model_id,
-        "aligner_params": aligner_params,
-        "wrapper_hash": wrapper_hash,
-        "senselab_version": senselab_ver,
-    }
-    return hashlib.sha256(_canonical_params(payload).encode()).hexdigest()
-
-
-def run_alignment_cached(
-    name: str,
-    fn: Any,  # noqa: ANN401
-    *args: Any,  # noqa: ANN401
-    cache_dir: Path | None,
-    cache_key_str: str,
-    provenance: dict[str, Any],
-    **kwargs: Any,  # noqa: ANN401
-) -> dict[str, Any]:
-    """Run an alignment step with cache lookup → run → store, mirroring run_task_cached.
-
-    Identical control flow to run_task_cached; the distinction is semantic — the
-    provenance includes alignment-specific fields (transcript_sha, language,
-    parent_asr_cache_key) and the cache key was built via align_cache_key.
-    Failed alignments are NOT stored, so a future fix to the aligner / a
-    senselab upgrade triggers a fresh attempt; the parent ASR cache is
-    independent and unaffected.
-    """
-    if cache_dir is not None:
-        hit = cache_lookup(cache_dir, cache_key_str)
-        if hit is not None:
-            print(f"  [{name}] alignment cache HIT ({cache_key_str[:12]}...)", flush=True)
-            hit["cache"] = "hit"
-            hit["cache_key"] = cache_key_str
-            return hit
-    outcome = run_task(name, fn, *args, **kwargs)
-    outcome["provenance"] = provenance
-    outcome["cache"] = "miss" if cache_dir is not None else "disabled"
-    outcome["cache_key"] = cache_key_str
-    if cache_dir is not None and outcome.get("status") == "ok":
-        cache_store(cache_dir, cache_key_str, outcome)
-    return outcome
-
-
-def run_task_cached(
-    name: str,
-    fn: Any,  # noqa: ANN401
-    *args: Any,  # noqa: ANN401
-    cache_dir: Path | None,
-    cache_key_str: str,
-    provenance: dict[str, Any],
-    **kwargs: Any,  # noqa: ANN401
-) -> dict[str, Any]:
-    """Run a task with cache lookup → run → cache store, attaching provenance.
-
-    On cache hit, the stored outcome is returned with ``cache="hit"`` (and
-    elapsed_s set to 0). On cache miss, the task runs, the outcome is stored,
-    and ``cache="miss"`` is reported.
-    """
-    if cache_dir is not None:
-        hit = cache_lookup(cache_dir, cache_key_str)
-        if hit is not None:
-            print(f"  [{name}] cache HIT ({cache_key_str[:12]}...)", flush=True)
-            hit["cache"] = "hit"
-            hit["cache_key"] = cache_key_str
-            return hit
-    outcome = run_task(name, fn, *args, **kwargs)
-    outcome["provenance"] = provenance
-    outcome["cache"] = "miss" if cache_dir is not None else "disabled"
-    outcome["cache_key"] = cache_key_str
-    if cache_dir is not None and outcome.get("status") == "ok":
-        cache_store(cache_dir, cache_key_str, outcome)
-    return outcome
-
-
-def run_task(
-    name: str,
-    fn: Any,  # noqa: ANN401 — generic dispatcher
-    *args: Any,  # noqa: ANN401
-    **kwargs: Any,  # noqa: ANN401
-) -> dict[str, Any]:
-    """Run a task with timing + structured error capture."""
-    print(f"  [{name}] running...", flush=True)
-    started = time.perf_counter()
-    try:
-        result = fn(*args, **kwargs)
-    except Exception as exc:  # noqa: BLE001 — diagnostic capture by design
-        elapsed = time.perf_counter() - started
-        print(f"  [{name}] FAILED in {elapsed:.1f}s: {exc}", flush=True)
-        return {
-            "status": "failed",
-            "elapsed_s": round(elapsed, 3),
-            "error": repr(exc),
-            "traceback": traceback.format_exc(limit=5),
-        }
-    elapsed = time.perf_counter() - started
-    print(f"  [{name}] ok in {elapsed:.1f}s", flush=True)
-    return {"status": "ok", "elapsed_s": round(elapsed, 3), "result": result}
-
-
-def _new_region_id(prefix: str, idx: int) -> str:
-    """Stable per-region ID for Label Studio result entries."""
-    return f"{prefix}_{idx:04d}"
-
-
-def _ls_label_region(
-    *,
-    region_id: str,
-    from_name: str,
-    start: float,
-    end: float,
-    label: str,
-    score: float | None = None,
-) -> dict[str, Any]:
-    """Build one Label Studio ``labels`` result entry on the audio timeline."""
-    value: dict[str, Any] = {"start": float(start), "end": float(end), "labels": [label]}
-    entry: dict[str, Any] = {
-        "id": region_id,
-        "from_name": from_name,
-        "to_name": "audio",
-        "type": "labels",
-        "value": value,
-    }
-    if score is not None:
-        entry["score"] = float(score)
-    return entry
-
-
-def _ls_textarea_region(
-    *,
-    region_id: str,
-    from_name: str,
-    start: float,
-    end: float,
-    text: str,
-) -> dict[str, Any]:
-    """Build one Label Studio ``textarea`` per-region transcription entry."""
-    return {
-        "id": region_id,
-        "from_name": from_name,
-        "to_name": "audio",
-        "type": "textarea",
-        "value": {"start": float(start), "end": float(end), "text": [text]},
-    }
-
-
-def _seg_attr(seg: Any, name: str) -> Any:  # noqa: ANN401
-    """Return ``seg.name`` whether ``seg`` is a Pydantic model or a JSON dict.
-
-    Cache reads deserialize ScriptLine into plain dicts; in-memory results are
-    Pydantic objects. Both shapes flow through the LS helpers.
-    """
-    if isinstance(seg, dict):
-        return seg.get(name)
-    return getattr(seg, name, None)
-
-
-def _diarization_to_ls(result: Any, prefix: str) -> list[dict[str, Any]]:  # noqa: ANN401
-    """Convert diarize_audios output (List[List[ScriptLine]]) into LS regions."""
-    out: list[dict[str, Any]] = []
-    if not result:
-        return out
-    segments = result[0] if isinstance(result, list) and result else []
-    for i, seg in enumerate(segments):
-        start = _seg_attr(seg, "start")
-        end = _seg_attr(seg, "end")
-        speaker = _seg_attr(seg, "speaker") or "SPEAKER_UNKNOWN"
-        if start is None or end is None:
-            continue
-        out.append(
-            _ls_label_region(
-                region_id=_new_region_id(f"{prefix}_dia", i),
-                from_name=prefix,
-                start=start,
-                end=end,
-                label=str(speaker),
-            )
-        )
-    return out
-
-
-def _classification_to_ls(
-    result: Any,  # noqa: ANN401
-    prefix: str,
-    win_length: float,
-    hop_length: float,
-) -> list[dict[str, Any]]:
-    """Convert classify_audios windowed output into LS regions (top-1 per window).
-
-    Window centers advance by ``hop_length`` and span ``win_length`` seconds, so
-    the LS regions reflect each model's own native frame stride.
-    """
-    out: list[dict[str, Any]] = []
-    windows = _classification_windows(result)
-    for i, window in enumerate(windows):
-        label, score, _entropy = _classification_window_top1(window)
-        if label is None:
-            continue
-        # Prefer per-window start/end when the canonical shape carries them.
-        if isinstance(window, dict) and window.get("start") is not None and window.get("end") is not None:
-            start = float(window["start"])
-            end = float(window["end"])
-        else:
-            start = i * hop_length
-            end = start + win_length
-        out.append(
-            _ls_label_region(
-                region_id=_new_region_id(f"{prefix}_cls", i),
-                from_name=prefix,
-                start=start,
-                end=end,
-                label=label,
-                score=score if score is not None else 0.0,
-            )
-        )
-    return out
-
-
-def _scene_agreement(
-    ast_result: Any,  # noqa: ANN401
-    yamnet_result: Any,  # noqa: ANN401
-    win_length: float,
-    hop_length: float,
-) -> dict[str, Any]:
-    """Pair AST and YAMNet top-1 predictions per shared window for direct comparison.
-
-    Both models share an AudioSet 521-class label space, so when they run on
-    the same ``(win_length, hop_length)`` grid the per-window top-1 labels are
-    directly comparable. Produces a list of ``{start, end, ast, yamnet,
-    agree}`` dicts plus aggregate agreement statistics.
-    """
-    ast_windows = _classification_windows(ast_result)
-    yamnet_windows = _classification_windows(yamnet_result)
-    pairs: list[dict[str, Any]] = []
-    n = min(len(ast_windows), len(yamnet_windows))
-    agree_count = 0
-    for i in range(n):
-        a = _top1(ast_windows[i])
-        y = _top1(yamnet_windows[i])
-        same = bool(a and y and a["label"] == y["label"])
-        agree_count += int(same)
-        start = i * hop_length
-        pairs.append(
-            {
-                "start": start,
-                "end": start + win_length,
-                "ast": a,
-                "yamnet": y,
-                "agree": same,
-            }
-        )
-    return {
-        "win_length": win_length,
-        "hop_length": hop_length,
-        "windows_compared": n,
-        "ast_only_windows": max(0, len(ast_windows) - n),
-        "yamnet_only_windows": max(0, len(yamnet_windows) - n),
-        "agreement_rate": (agree_count / n) if n else 0.0,
-        "agree_count": agree_count,
-        "pairs": pairs,
-    }
-
-
-def _top1(window: Any) -> dict[str, Any] | None:  # noqa: ANN401
-    """Return the highest-scoring entry of a classify_audios window, or None."""
-    label, score, _entropy = _classification_window_top1(window)
-    if label is None:
-        return None
-    return {"label": label, "score": score if score is not None else 0.0}
-
-
-def _asr_has_timestamps(result: Any) -> bool:  # noqa: ANN401
-    """Return True if any ScriptLine in ``result`` has a non-null start or non-empty chunks.
-
-    Used by the LS export and by the auto-align stage to decide whether to skip
-    forced alignment for an ASR result that already includes time information.
-    Handles both ScriptLine objects (post-run, in-memory) and the dict shape that
-    the JSON cache deserializes into (post-cache-hit).
-    """
-    if not result:
-        return False
-    items = result if isinstance(result, list) else [result]
-    for line in items:
-        if isinstance(line, dict):
-            start = line.get("start")
-            chunks = line.get("chunks") or []
-        else:
-            start = getattr(line, "start", None)
-            chunks = getattr(line, "chunks", None) or []
-        if start is not None or len(chunks) > 0:
-            return True
-    return False
-
-
-def _extract_transcript_text(result: Any) -> str:  # noqa: ANN401
-    """Concatenate the ``text`` field of every ScriptLine / dict in an ASR result."""
-    if not result:
-        return ""
-    items = result if isinstance(result, list) else [result]
-    parts: list[str] = []
-    for line in items:
-        text = line.get("text") if isinstance(line, dict) else getattr(line, "text", None)
-        if text:
-            parts.append(str(text))
-    return " ".join(p.strip() for p in parts if p.strip())
-
-
-def _asr_to_ls(result: Any, prefix: str, full_duration: float) -> list[dict[str, Any]]:  # noqa: ANN401
-    """Convert transcribe_audios output into LS textarea regions, one per ScriptLine.
-
-    Whisper sometimes returns one ScriptLine without timing for a short clip; in
-    that case we pin the textarea to the full audio span.
-    """
-    out: list[dict[str, Any]] = []
-    if not result:
-        return out
-    lines = result if isinstance(result, list) else [result]
-    for i, line in enumerate(lines):
-        text = _seg_attr(line, "text") or ""
-        start = _seg_attr(line, "start")
-        end = _seg_attr(line, "end")
-        if start is None or end is None:
-            start, end = 0.0, full_duration
-        if not text:
-            continue
-        out.append(
-            _ls_textarea_region(
-                region_id=_new_region_id(f"{prefix}_asr", i),
-                from_name=prefix,
-                start=start,
-                end=end,
-                text=text,
-            )
-        )
-    return out
-
-
-def build_labelstudio_task(
-    audio_uri: str,
-    pass_label: str,
-    duration_s: float,
-    pass_summary: dict[str, Any],
-    ast_win_length: float,
-    ast_hop_length: float,
-    yamnet_win_length: float,
-    yamnet_hop_length: float,
-) -> dict[str, Any]:
-    """Build one Label Studio task with predictions for all analyzers in this pass.
-
-    Each analyzer (diarization, ast, yamnet, asr) becomes its own
-    ``from_name`` track on the audio timeline, so the importer sees parallel
-    annotation rows. When a senselab task was run with multiple models, every
-    model's output is exported as its own track (e.g., ``asr_whisper_turbo``,
-    ``asr_whisper_small``) so they can be visually compared.
-    """
-    regions: list[dict[str, Any]] = []
-
-    dia = pass_summary.get("diarization", {})
-    for model_id, model_block in (dia.get("by_model") or {}).items():
-        if model_block.get("status") == "ok":
-            from_name = f"{pass_label}__diarization__{_safe(model_id)}"
-            regions.extend(_diarization_to_ls(model_block.get("result"), from_name))
-
-    ast_block = pass_summary.get("ast", {})
-    if ast_block.get("status") == "ok":
-        regions.extend(
-            _classification_to_ls(
-                ast_block.get("result"),
-                f"{pass_label}__ast",
-                win_length=ast_win_length,
-                hop_length=ast_hop_length,
-            )
-        )
-
-    yam_block = pass_summary.get("yamnet", {})
-    if yam_block.get("status") == "ok":
-        regions.extend(
-            _classification_to_ls(
-                yam_block.get("result"),
-                f"{pass_label}__yamnet",
-                win_length=yamnet_win_length,
-                hop_length=yamnet_hop_length,
-            )
-        )
-
-    asr = pass_summary.get("asr", {})
-    alignment = pass_summary.get("alignment") or {}
-    align_by_model = alignment.get("by_model") or {}
-    for model_id, model_block in (asr.get("by_model") or {}).items():
-        if model_block.get("status") != "ok":
-            continue
-        from_name = f"{pass_label}__asr__{_safe(model_id)}"
-        # Three-case branch:
-        # (a) ASR with native timestamps  -> use the ASR result for per-segment regions.
-        # (b) ASR text-only + successful alignment -> use the alignment result.
-        # (c) ASR text-only + alignment skipped or failed -> single full-audio TextArea.
-        align_block = align_by_model.get(model_id) or {}
-        asr_result = model_block.get("result")
-        if _asr_has_timestamps(asr_result):
-            regions.extend(_asr_to_ls(asr_result, from_name, duration_s))
-        elif align_block.get("status") == "ok":
-            # align_transcriptions returns List[List[ScriptLine | None]] —
-            # one inner list per input audio. We always pass a single audio,
-            # so unwrap to the inner segment list.
-            ar = align_block.get("result")
-            inner = ar[0] if isinstance(ar, list) and ar and isinstance(ar[0], list) else ar
-            regions.extend(_asr_to_ls(inner, from_name, duration_s))
-        else:
-            regions.extend(_asr_to_ls(asr_result, from_name, duration_s))
-
-    return {
-        "data": {
-            "audio": audio_uri,
-            "pass": pass_label,
-            "duration_s": duration_s,
-        },
-        "predictions": [
-            {
-                "model_version": f"senselab-analyze:{pass_label}",
-                "score": 1.0,
-                "result": regions,
-            }
-        ],
-    }
-
-
-def _safe(model_id: str) -> str:
-    """Sanitize a model id for use inside an LS from_name (LS allows letters, digits, underscore)."""
-    return "".join(c if c.isalnum() else "_" for c in model_id)
-
-
-def build_labelstudio_config(summary: dict[str, Any]) -> str:
-    """Build a Label Studio labeling-config XML matching this run's per-task tracks.
-
-    Generates one ``<Labels>`` control per (pass, analyzer, model) and one
-    ``<TextArea>`` control per (pass, asr_model). Speakers, scene labels,
-    and transcripts each become a stacked timeline annotation row.
-
-    The three-axis uncertainty tracks are appended downstream by
-    ``senselab.audio.workflows.audio_analysis.attach_uncertainty_tracks_to_ls``.
-    """
-    parts: list[str] = ["<View>", '  <Audio name="audio" value="$audio"/>']
-    seen_label_sets: dict[str, list[str]] = {}
-
-    for pass_label, pass_summary in summary.get("passes", {}).items():
-        # Diarization tracks: one per model, with that model's discovered speaker labels
-        dia_by_model = (pass_summary.get("diarization") or {}).get("by_model") or {}
-        for model_id, model_block in dia_by_model.items():
-            if model_block.get("status") != "ok":
-                continue
-            speakers = sorted({str(getattr(seg, "speaker", "?")) for seg in (model_block.get("result", [[]])[0] or [])})
-            if not speakers:
-                speakers = ["SPEAKER_00", "SPEAKER_01"]
-            seen_label_sets[f"{pass_label}__diarization__{_safe(model_id)}"] = speakers
-
-        # AST scene labels
-        ast = pass_summary.get("ast") or {}
-        if ast.get("status") == "ok":
-            labels = _collect_classification_labels(ast.get("result"))
-            if labels:
-                seen_label_sets[f"{pass_label}__ast"] = sorted(labels)
-
-        # YAMNet scene labels
-        yam = pass_summary.get("yamnet") or {}
-        if yam.get("status") == "ok":
-            labels = _collect_classification_labels(yam.get("result"))
-            if labels:
-                seen_label_sets[f"{pass_label}__yamnet"] = sorted(labels)
-
-        # ASR: each model gets its own TextArea
-        asr_by_model = (pass_summary.get("asr") or {}).get("by_model") or {}
-        for model_id, model_block in asr_by_model.items():
-            if model_block.get("status") != "ok":
-                continue
-            from_name = f"{pass_label}__asr__{_safe(model_id)}"
-            parts.append(
-                f'  <TextArea name="{from_name}" toName="audio" perRegion="true" '
-                f'editable="true" placeholder="ASR transcript ({model_id})"/>'
-            )
-
-    for from_name, label_values in sorted(seen_label_sets.items()):
-        parts.append(f'  <Labels name="{from_name}" toName="audio">')
-        for v in label_values:
-            v_escaped = v.replace('"', "&quot;")
-            parts.append(f'    <Label value="{v_escaped}"/>')
-        parts.append("  </Labels>")
-
-    parts.append("</View>")
-    return "\n".join(parts) + "\n"
-
-
-def _collect_classification_labels(result: Any) -> set[str]:  # noqa: ANN401
-    """Extract the union of label strings observed in a classify_audios output."""
-    labels: set[str] = set()
-    for window in _classification_windows(result):
-        if not isinstance(window, dict):
-            continue
-        for label in window.get("labels") or []:
-            if label:
-                labels.add(str(label))
-    return labels
-
-
-def serialize(obj: Any) -> Any:  # noqa: ANN401 — recursive heterogeneous serializer
-    """Convert senselab outputs (ScriptLine, tensor, etc.) to JSON-friendly types."""
-    if isinstance(obj, dict):
-        return {k: serialize(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [serialize(x) for x in obj]
-    if isinstance(obj, torch.Tensor):
-        return {
-            "_tensor_shape": list(obj.shape),
-            "_dtype": str(obj.dtype),
-            "values": obj.detach().cpu().tolist(),
-        }
-    if hasattr(obj, "model_dump"):
-        return serialize(obj.model_dump())
-    if hasattr(obj, "__dict__") and not isinstance(obj, type):
-        return {k: serialize(v) for k, v in vars(obj).items() if not k.startswith("_")}
-    if isinstance(obj, (str, int, float, bool)) or obj is None:
-        return obj
-    return repr(obj)
-
-
-def write_json(path: Path, payload: Any) -> None:  # noqa: ANN401
-    """Write a JSON file with senselab-aware serialization."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(serialize(payload), fh, indent=2, default=str)
 
 
 def _speech_presence_labels(args: argparse.Namespace) -> list[str]:
@@ -1452,319 +846,140 @@ def _models_without_native_signal(summaries: dict[str, Any]) -> list[str]:
     return sorted(seen)
 
 
-def run_pass(
+def run_triage(audio: Audio, args: argparse.Namespace, device: DeviceType | None) -> dict[str, Any]:
+    """Round 0 (spec US1): frame-posterior speech gate + SNR enhancement gate.
+
+    Uses continuous segmentation-3.0 frame posteriors (never segmentized VAD —
+    see SPEECH_PRESENCE_CERTAINTY_ANALYSIS.md) and Brouhaha SNR with an ungated
+    percentile-DSP fallback. Degrades conservatively: missing posteriors ⇒
+    ``speech_present=True``; missing SNR ⇒ ``needs_enhancement=None`` (the
+    caller treats unknown as "run the enhanced pass").
+    """
+    from senselab.audio.tasks.voice_activity_detection.frame_posteriors import (
+        extract_speech_frame_posteriors,
+    )
+    from senselab.audio.workflows.audio_analysis.adaptive.triage import dsp_snr_series, triage_decision
+
+    t0 = time.time()
+    posterior = extract_speech_frame_posteriors([audio], device=device)[0]
+
+    snr_db: list[float] | None = None
+    snr_hop_s: float | None = None
+    snr_estimator: str | None = None
+    try:
+        from senselab.audio.tasks.scene_quality.brouhaha import extract_brouhaha_frames
+
+        brouhaha = extract_brouhaha_frames([audio], device=device)[0]
+        if brouhaha is not None:
+            snr_db = [float(v) for v in brouhaha.snr_db]
+            snr_hop_s = float(brouhaha.frame_hop_s)
+            snr_estimator = "brouhaha"
+    except Exception as exc:  # noqa: BLE001 — SNR is optional; DSP fallback below
+        print(f"  [triage] brouhaha unavailable ({exc!r}); falling back to DSP SNR", file=sys.stderr)
+    if snr_db is None:
+        waveform = audio.waveform.squeeze().detach().cpu().numpy()
+        snr_db, snr_hop_s = dsp_snr_series(
+            waveform,
+            audio.sampling_rate,
+            p_speech=[float(p) for p in posterior.probs] if posterior is not None else None,
+            p_hop_s=float(posterior.frame_hop_s) if posterior is not None else None,
+        )
+        snr_estimator = "dsp_posterior_masked" if posterior is not None else "dsp_percentile"
+
+    if posterior is None:
+        decision: dict[str, Any] = {
+            "speech_present": True,
+            "needs_enhancement": None,
+            "inconclusive": True,
+            "reason": "frame_posteriors_unavailable",
+            "stats": {},
+            "thresholds": {},
+        }
+    else:
+        decision = triage_decision(
+            p_speech=[float(p) for p in posterior.probs],
+            frame_hop_s=float(posterior.frame_hop_s),
+            snr_db=snr_db,
+            snr_hop_s=snr_hop_s,
+            speech_threshold=args.triage_speech_threshold,
+            min_speech_s=args.triage_min_speech_s,
+            snr_floor_db=args.triage_snr_floor_db,
+            low_snr_fraction_threshold=args.triage_low_snr_fraction,
+        )
+    decision["snr_estimator"] = snr_estimator
+    decision["elapsed_s"] = round(time.time() - t0, 3)
+    return decision
+
+
+def _pass_plan(args: argparse.Namespace) -> PassPlan:
+    """Translate parsed CLI args into a library `PassPlan`.
+
+    Called *after* triage, because `main` mutates `args.skip` / `args.ppg` on the
+    no-speech path — a plan built before that would run diarization and ASR on
+    silence. Absence-means-skip is expressed here so the library never sees a
+    CLI-shaped skip set.
+    """
+    skip = set(args.skip)
+    return PassPlan(
+        diarization_models=() if "diarization" in skip else tuple(args.diarization_models),
+        asr_models=() if "asr" in skip else tuple(args.asr_models),
+        ast_model=None if "ast" in skip else args.ast_model,
+        yamnet_model=None if "yamnet" in skip else args.yamnet_model,
+        ast_win_length=args.ast_win_length,
+        ast_hop_length=args.ast_hop_length,
+        yamnet_win_length=args.yamnet_win_length,
+        yamnet_hop_length=args.yamnet_hop_length,
+        scene_top_k=args.scene_top_k,
+        features="features" not in skip,
+        features_win_length=args.features_win_length,
+        features_hop_length=args.features_hop_length,
+        align_asr=not args.no_align_asr,
+        aligner=args.aligner,
+        qwen_aligner_model=args.qwen_aligner_model,
+        mms_aligner_model=args.aligner_model,
+        asr_language=args.asr_language,
+        qwen_native_timestamps=not args.qwen_asr_no_timestamps,
+        ppg=bool(args.ppg),
+    )
+
+
+def _policy_overrides(args: argparse.Namespace) -> dict[str, Any]:
+    """Build in-memory policy overrides from the adaptive CLI flags.
+
+    `None` values are dropped by `load_policy`, so an unset flag leaves the policy
+    file's value alone — the flags override, they don't reset to a CLI default.
+    """
+    overrides: dict[str, Any] = {
+        "budget": {"medium_per_run": args.budget_medium, "heavy_per_run": args.budget_heavy},
+        "regions": {"top_n_per_round": args.region_top_n, "max_region_rounds": args.max_region_rounds},
+    }
+    if args.reserve_asr_models is not None:
+        overrides["reserve_asr_models"] = list(args.reserve_asr_models)
+    if args.enable_overlap_separation:
+        overrides["rules"] = {"I4_overlap_detection": {"enabled": True}}
+    return overrides
+
+
+def _stage_context(
     label: str,
     audio: Audio,
     args: argparse.Namespace,
+    *,
     device: DeviceType | None,
     out_dir: Path,
-    *,
     cache_dir: Path | None,
-    wrapper_hash: str,
     senselab_ver: str,
-) -> dict[str, Any]:
-    """Run all six tasks against one audio variant and persist their outputs.
-
-    Each task call is gated through the content-addressable cache: the cache
-    key is ``sha256(audio_signature, task, model_id, params, wrapper_hash,
-    senselab_ver)``. On cache hit the prior outcome is replayed verbatim and
-    no model is loaded. On miss the task runs and the outcome is stored under
-    the cache dir for future replay.
-    """
-    duration_s = audio.waveform.shape[1] / audio.sampling_rate
-    audio_sig = audio_signature(audio)
-    print(f"\n=== Pass: {label} ({duration_s:.2f}s @ {audio.sampling_rate}Hz, sig={audio_sig[:12]}...) ===")
-    pass_dir = out_dir / label
-    pass_dir.mkdir(parents=True, exist_ok=True)
-    summary: dict[str, Any] = {
-        "label": label,
-        "duration_s": duration_s,
-        "audio_signature": audio_sig,
-    }
-    device_label_for_provenance = device.value if device is not None else "auto"
-
-    def _provenance_for(task: str, model_id: str | None, params: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "task": task,
-            "model_id": model_id,
-            "params": params,
-            "audio_signature": audio_sig,
-            "audio_source": str(args.audio.resolve()),
-            "pass": label,
-            "device": device_label_for_provenance,
-            "wrapper_version_hash": wrapper_hash,
-            "senselab_version": senselab_ver,
-            "cache_schema_version": _CACHE_SCHEMA_VERSION,
-            "timestamp_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        }
-
-    def _key(task: str, model_id: str | None, params: dict[str, Any]) -> str:
-        return cache_key(
-            audio_sig=audio_sig,
-            task=task,
-            model_id=model_id,
-            params=params,
-            wrapper_hash=wrapper_hash,
-            senselab_ver=senselab_ver,
-        )
-
-    if "diarization" not in args.skip:
-        summary["diarization"] = {"by_model": {}}
-        for model_id in args.diarization_models:
-            params = {"device": device_label_for_provenance}
-            outcome = run_task_cached(
-                f"diarization[{model_id}]",
-                diarize_audios,
-                [audio],
-                model=pick_dispatch_model(model_id, task="diarization"),
-                device=device,
-                cache_dir=cache_dir,
-                cache_key_str=_key("diarization", model_id, params),
-                provenance=_provenance_for("diarization", model_id, params),
-            )
-            summary["diarization"]["by_model"][model_id] = outcome
-            write_json(pass_dir / "diarization" / f"{_safe(model_id)}.json", outcome)
-
-    ast_win = args.ast_win_length
-    ast_hop = args.ast_hop_length
-    yam_win = args.yamnet_win_length
-    yam_hop = args.yamnet_hop_length
-
-    if "ast" not in args.skip:
-        params = {"win_length": ast_win, "hop_length": ast_hop, "device": device_label_for_provenance}
-        summary["ast"] = run_task_cached(
-            "ast",
-            classify_audios,
-            [audio],
-            model=HFModel(path_or_uri=args.ast_model),
-            device=device,
-            win_length=ast_win,
-            hop_length=ast_hop,
-            cache_dir=cache_dir,
-            cache_key_str=_key("ast", args.ast_model, params),
-            provenance=_provenance_for("ast", args.ast_model, params),
-        )
-        summary["ast"]["window"] = {"win_length": ast_win, "hop_length": ast_hop}
-        write_json(pass_dir / "ast.json", summary["ast"])
-
-    if "yamnet" not in args.skip:
-        # YAMNet runs in senselab's TF subprocess venv (same pattern as NeMo
-        # Sortformer). senselab.classify_audios's `_is_yamnet()` dispatcher
-        # matches on the raw model-id *string*, not on a SenselabModel wrapper —
-        # passing HFModel here would fail validation (yamnet isn't on HF).
-        params = {"win_length": yam_win, "hop_length": yam_hop}
-        summary["yamnet"] = run_task_cached(
-            "yamnet",
-            classify_audios,
-            [audio],
-            model=args.yamnet_model,
-            win_length=yam_win,
-            hop_length=yam_hop,
-            cache_dir=cache_dir,
-            cache_key_str=_key("yamnet", args.yamnet_model, params),
-            provenance=_provenance_for("yamnet", args.yamnet_model, params),
-        )
-        summary["yamnet"]["window"] = {"win_length": yam_win, "hop_length": yam_hop}
-        write_json(pass_dir / "yamnet.json", summary["yamnet"])
-
-    # If both ran on the same grid, emit a side-by-side comparison.
-    if (
-        "ast" not in args.skip
-        and "yamnet" not in args.skip
-        and summary.get("ast", {}).get("status") == "ok"
-        and summary.get("yamnet", {}).get("status") == "ok"
-        and ast_win == yam_win
-        and ast_hop == yam_hop
-    ):
-        agreement = _scene_agreement(
-            ast_result=summary["ast"]["result"],
-            yamnet_result=summary["yamnet"]["result"],
-            win_length=ast_win,
-            hop_length=ast_hop,
-        )
-        summary["scene_agreement"] = agreement
-        write_json(pass_dir / "scene_agreement.json", agreement)
-
-    if "features" not in args.skip:
-        feat_params: dict[str, Any] = {
-            "opensmile": "LowLevelDescriptors@native",
-            "parselmouth": "windowed",
-            "torchaudio_squim": "windowed",
-            "device": device_label_for_provenance,
-            "win_length": args.features_win_length,
-            "hop_length": args.features_hop_length,
-        }
-        summary["features"] = run_task_cached(
-            "features",
-            extract_temporal_features,
-            audio,
-            win_length=args.features_win_length,
-            hop_length=args.features_hop_length,
-            device=device,
-            cache_dir=cache_dir,
-            cache_key_str=_key("features", None, feat_params),
-            provenance=_provenance_for("features", None, feat_params),
-        )
-        # Each backend writes its own parquet sidecar — they have
-        # different columns and different time grids (opensmile LLD is
-        # native ~10 ms; parselmouth/torchaudio_squim follow the
-        # ``--features-*-length`` window). Cache outcome metadata stays
-        # in JSON for inspection parity with the other tasks.
-        result = summary["features"].get("result") or {}
-        if isinstance(result, dict):
-            try:
-                import pandas as pd
-
-                feat_dir = pass_dir / "features"
-                feat_dir.mkdir(parents=True, exist_ok=True)
-                for backend, rows in result.items():
-                    if not rows:
-                        continue
-                    pd.DataFrame(rows).to_parquet(feat_dir / f"{backend}.parquet", index=False)
-            except Exception as exc:  # noqa: BLE001 — best-effort sidecar
-                print(f"  [features] warn: parquet write failed: {exc!r}", file=sys.stderr)
-        write_json(pass_dir / "features.json", {**summary["features"], "result": "see features/*.parquet"})
-
-    if "asr" not in args.skip:
-        summary["asr"] = {"by_model": {}}
-        for model_id in args.asr_models:
-            asr_params: dict[str, Any] = {"device": device_label_for_provenance}
-            extra_kwargs: dict[str, Any] = {}
-            # Qwen3-ASR ships its own forced-aligner companion model; allow
-            # opt-out so the script's MMS auto-align stage can take over.
-            if model_id.startswith("Qwen/Qwen3-ASR") and args.qwen_asr_no_timestamps:
-                extra_kwargs["return_timestamps"] = False
-                asr_params["return_timestamps"] = False
-            outcome = run_task_cached(
-                f"asr[{model_id}]",
-                transcribe_audios,
-                [audio],
-                model=pick_dispatch_model(model_id, task="asr"),
-                device=device,
-                cache_dir=cache_dir,
-                cache_key_str=_key("asr", model_id, asr_params),
-                provenance=_provenance_for("asr", model_id, asr_params),
-                **extra_kwargs,
-            )
-            summary["asr"]["by_model"][model_id] = outcome
-            write_json(pass_dir / "asr" / f"{_safe(model_id)}.json", outcome)
-
-    # Auto-align stage. Iterate every successful ASR ModelRun; when the ASR
-    # result lacks native timestamps (Granite Speech, Canary-Qwen, etc.) and
-    # the user hasn't disabled alignment, post-process the text through
-    # senselab's forced_alignment to produce per-segment timestamps. The
-    # alignment cache is independent from the ASR cache (FR-024); failed
-    # alignments preserve the ASR text but fall back to a single full-audio
-    # TextArea region in the LS export (FR-025).
-    if "asr" not in args.skip and "alignment" not in args.skip and not args.no_align_asr and "asr" in summary:
-        summary["alignment"] = {"by_model": {}}
-        align_language = (
-            Language(language_code=args.asr_language) if args.asr_language else Language(language_code="en")
-        )
-        for model_id, asr_outcome in summary["asr"]["by_model"].items():
-            if asr_outcome.get("status") != "ok":
-                continue
-            asr_result = asr_outcome.get("result")
-            if _asr_has_timestamps(asr_result):
-                # Already has native timestamps — alignment would be a no-op.
-                continue
-            transcript_text = _extract_transcript_text(asr_result)
-            if not transcript_text:
-                continue
-            transcript_sha = transcript_signature(transcript_text)
-            aligner_params = {
-                "language": align_language.language_code,
-                "romanize": align_language.language_code in ("ja", "zh"),
-                # Levels-to-keep is part of the cache key — bumping its value
-                # invalidates earlier entries that were stored with the all-False
-                # default (which produced empty chunks).
-                "levels_to_keep": "utterance+word",
-            }
-            align_provenance = {
-                **_provenance_for("alignment", args.aligner_model, aligner_params),
-                "transcript_sha": transcript_sha,
-                "language": align_language.language_code,
-                "parent_asr_cache_key": asr_outcome.get("cache_key"),
-            }
-            align_key = align_cache_key(
-                audio_sig=audio_sig,
-                transcript_sha=transcript_sha,
-                language=align_language.language_code,
-                aligner_model_id=args.aligner_model,
-                aligner_params=aligner_params,
-                wrapper_hash=wrapper_hash,
-                senselab_ver=senselab_ver,
-            )
-            outcome = run_alignment_cached(
-                f"alignment[{model_id}]",
-                align_transcriptions,
-                [(audio, ScriptLine(text=transcript_text), align_language)],
-                # Keep word-level chunks (and the utterance wrapper) so the comparator
-                # can read per-token timestamps. Default is all-False which filters
-                # everything out and leaves a meaningless punctuation-only ScriptLine.
-                levels_to_keep={"utterance": True, "word": True, "char": False},
-                aligner_model=args.aligner_model,
-                cache_dir=cache_dir,
-                cache_key_str=align_key,
-                provenance=align_provenance,
-            )
-            summary["alignment"]["by_model"][model_id] = outcome
-            write_json(pass_dir / "alignment" / f"{_safe(model_id)}.json", outcome)
-
-    if args.ppg:
-        from senselab.audio.tasks.features_extraction.ppg import (
-            _PHONEME_LABELS as _PPG_PHONEME_LABELS,
-        )
-        from senselab.audio.tasks.features_extraction.ppg import (
-            extract_ppgs_from_audios,
-        )
-
-        params = {"device": device_label_for_provenance}
-        outcome = run_task_cached(
-            "ppgs",
-            extract_ppgs_from_audios,
-            [audio],
-            device=device,
-            cache_dir=cache_dir,
-            cache_key_str=_key("ppgs", "ppgs/0.0.9", params),
-            provenance=_provenance_for("ppgs", "ppgs/0.0.9", params),
-        )
-        # Attach the phoneme inventory so the workflow's harvester can decode
-        # argmax indices without re-importing the ppgs library.
-        outcome["phoneme_labels"] = list(_PPG_PHONEME_LABELS)
-        summary["ppgs"] = outcome
-        # Emit a small sidecar JSON: the full (40 × N_frames) tensor is too
-        # large to dump, but the argmax-per-frame sequence + frame_hop is what
-        # the comparator actually consumes. Write it so reviewers can inspect
-        # the phoneme timeline without rerunning the PPG model.
-        from senselab.audio.workflows.audio_analysis.harvesters import ppg_argmax_per_frame
-
-        argmax_payload: dict[str, Any] = {
-            "phoneme_labels": list(_PPG_PHONEME_LABELS),
-            "per_frame_phonemes": [],
-            "frame_hop_s": 0.0,
-        }
-        if outcome.get("status") == "ok":
-            try:
-                pf, fh = ppg_argmax_per_frame(
-                    outcome.get("result"),
-                    list(_PPG_PHONEME_LABELS),
-                    audio.waveform.shape[-1] / audio.sampling_rate,
-                )
-                argmax_payload["per_frame_phonemes"] = pf
-                argmax_payload["frame_hop_s"] = float(fh)
-            except Exception as exc:  # noqa: BLE001
-                argmax_payload["argmax_error"] = repr(exc)
-        write_json(
-            pass_dir / "ppgs.json",
-            {
-                **{k: v for k, v in outcome.items() if k != "result"},
-                "result_summary": "argmax-per-frame sequence in 'argmax' field; full tensor in process memory only",
-                "argmax": argmax_payload,
-            },
-        )
-
-    return summary
+) -> StageContext:
+    """Build the per-pass `StageContext` from CLI args."""
+    return StageContext(
+        pass_label=label,
+        audio_signature=audio_signature(audio),
+        device=device,
+        cache_dir=cache_dir,
+        out_dir=out_dir / label,
+        audio_source=str(args.audio.resolve()),
+        senselab_ver=senselab_ver,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1780,16 +995,12 @@ def main(argv: list[str] | None = None) -> int:
     cache_dir: Path | None = None if args.no_cache else args.cache_dir.resolve()
     if cache_dir is not None:
         _sync_cache_with_schema_version(cache_dir)
-    wrapper_hash = wrapper_version_hash()
     senselab_ver = senselab_version()
     print(f"Device: {device_label}")
     print(f"Input:  {args.audio}")
     if cache_dir is not None:
         print(f"Cache:  {cache_dir}")
-        print(
-            f"        key = sha256(audio | task | model | params | "
-            f"wrapper={wrapper_hash[:8]} | senselab={senselab_ver})"
-        )
+        print(f"        key = sha256(audio | task | model | params | stage_version | senselab={senselab_ver})")
     else:
         print("Cache:  disabled (--no-cache)")
 
@@ -1808,7 +1019,7 @@ def main(argv: list[str] | None = None) -> int:
             "dir": str(cache_dir) if cache_dir is not None else None,
             "schema_version": _CACHE_SCHEMA_VERSION,
         },
-        "wrapper_version_hash": wrapper_hash,
+        "stage_versions": dict(STAGE_VERSIONS),
         "senselab_version": senselab_ver,
         "target_sampling_rate": TARGET_SR,
         "scene_window": {
@@ -1821,37 +1032,71 @@ def main(argv: list[str] | None = None) -> int:
         "passes": {},
     }
 
-    pass_audio: dict[str, Audio] = {"raw_16k": audio_16k}
-
-    summaries["passes"]["raw_16k"] = run_pass(
-        "raw_16k",
-        audio_16k,
-        args,
-        device,
-        run_dir,
-        cache_dir=cache_dir,
-        wrapper_hash=wrapper_hash,
-        senselab_ver=senselab_ver,
+    # ── Round 0: triage (spec US1; FR-002/003/004) ──────────────────────
+    enhancement_mode = "never" if args.no_enhancement else args.enhancement
+    triage: dict[str, Any] | None = None
+    if enhancement_mode == "auto":
+        print("\n=== Triage (round 0): frame posteriors + SNR ===")
+        triage = run_triage(audio_16k, args, device)
+        write_json(run_dir / "triage.json", triage)
+        summaries["triage"] = triage
+        stats = triage.get("stats") or {}
+        print(
+            f"  speech_present={triage['speech_present']} "
+            f"(speech_s={stats.get('speech_s')}, fraction={stats.get('speech_fraction')})  "
+            f"needs_enhancement={triage['needs_enhancement']} "
+            f"(snr={triage.get('snr_estimator')}, median_snr={stats.get('median_snr_db_in_speech')} dB)"
+        )
+        if not triage["speech_present"]:
+            summaries["run_state"] = "no_speech"
+            args.skip = tuple(sorted(set(args.skip) | {"diarization", "asr", "alignment"}))
+            args.ppg = False
+            print("  no speech found — skipping diarization/ASR/alignment/PPG; presence outputs still emitted (FR-004)")
+    run_enhanced_pass = enhancement_mode == "always" or (
+        enhancement_mode == "auto"
+        and triage is not None
+        and triage["speech_present"]
+        and triage["needs_enhancement"] is not False  # unknown SNR ⇒ conservative: run it
     )
 
-    if not args.no_enhancement:
+    pass_audio: dict[str, Audio] = {"raw_16k": audio_16k}
+
+    pass_plan = _pass_plan(args)
+    summaries["passes"]["raw_16k"] = run_pass(
+        audio_16k,
+        _stage_context(
+            "raw_16k",
+            audio_16k,
+            args,
+            device=device,
+            out_dir=run_dir,
+            cache_dir=cache_dir,
+            senselab_ver=senselab_ver,
+        ),
+        pass_plan,
+    )
+
+    if run_enhanced_pass:
         print("\n=== Enhancing audio (this loads the enhancement model)... ===")
         try:
             enhanced = enhance_audios(
                 [audio_16k],
-                model=pick_dispatch_model(args.enhancement_model, task="enhancement"),
+                model=model_for_task(args.enhancement_model, task="enhancement"),
                 device=device,
             )[0]
             pass_audio["enhanced_16k"] = enhanced
             summaries["passes"]["enhanced_16k"] = run_pass(
-                "enhanced_16k",
                 enhanced,
-                args,
-                device,
-                run_dir,
-                cache_dir=cache_dir,
-                wrapper_hash=wrapper_hash,
-                senselab_ver=senselab_ver,
+                _stage_context(
+                    "enhanced_16k",
+                    enhanced,
+                    args,
+                    device=device,
+                    out_dir=run_dir,
+                    cache_dir=cache_dir,
+                    senselab_ver=senselab_ver,
+                ),
+                pass_plan,
             )
         except Exception as exc:  # noqa: BLE001
             print(f"Enhancement failed: {exc!r}", file=sys.stderr)
@@ -1880,6 +1125,13 @@ def main(argv: list[str] | None = None) -> int:
     config_xml = build_labelstudio_config(summaries)
 
     # ── Comparator: three-axis uncertainty workflow ─────────────────────
+    if "comparisons" in args.skip and args.max_rounds > 1:
+        print(
+            "warn: --skip comparisons disables the belief store, so no adaptive rounds >= 2 and no "
+            "final/ will be produced (contracts/cli.md). Drop --skip comparisons to enable them.",
+            file=sys.stderr,
+        )
+
     if "comparisons" not in args.skip:
         from senselab.audio.workflows.audio_analysis import (
             BucketGrid,
@@ -1898,18 +1150,43 @@ def main(argv: list[str] | None = None) -> int:
             win_length=args.utterance_win_length,
             hop_length=args.utterance_hop_length,
         )
+        presence_grid = BucketGrid(
+            win_length=args.presence_grid_win_length,
+            hop_length=args.presence_grid_hop_length,
+        )
         comparator_params = {
             "win_length": grid.win_length,
             "hop_length": grid.hop_length,
             "utterance_win_length": utterance_grid.win_length,
             "utterance_hop_length": utterance_grid.hop_length,
+            "presence_win_length": presence_grid.win_length,
+            "presence_hop_length": presence_grid.hop_length,
             "aggregator": args.uncertainty_aggregator,
             "phoneme_disagreement_threshold": args.phoneme_disagreement_threshold,
             "speech_presence_labels": _speech_presence_labels(args),
             "asr_reference_model": args.asr_reference_model,
             "diarization_boundary_shift_ms": args.diarization_boundary_shift_ms,
             "clustering_algorithm": args.clustering_algorithm,
+            "utterance_scene_coupling": {
+                "w_q": float(args.utterance_scene_coupling_weights[0]),
+                "w_s": float(args.utterance_scene_coupling_weights[1]),
+            },
         }
+        # US5 (T039): load + validate the calibration profile and thread its flat
+        # runtime form into BOTH consumers — the harvest (quality dB→[0,1] anchors,
+        # via the calibration kwarg below) and the aggregators (temperatures /
+        # token-entropy reference, via comparator_params["calibration"]).
+        from senselab.audio.workflows.audio_analysis.calibration import (
+            load_calibration_profile,
+            profile_to_runtime,
+        )
+
+        try:
+            calibration_runtime = profile_to_runtime(load_calibration_profile(args.calibration_profile))
+        except (OSError, ValueError, KeyError) as exc:
+            print(f"ERROR: invalid calibration profile {args.calibration_profile}: {exc}", file=sys.stderr)
+            sys.exit(2)
+        comparator_params["calibration"] = calibration_runtime
 
         passes_for_compute = {
             pl: ps for pl, ps in summaries.get("passes", {}).items() if isinstance(ps, dict) and "duration_s" in ps
@@ -1917,7 +1194,9 @@ def main(argv: list[str] | None = None) -> int:
         speaker_embedding_models = list(args.embeddings_models)
         per_window_embeddings_by_pass: dict[str, dict[str, Any]] = {}
         try:
+            harvests_by_pass: dict[str, Any] = {}
             axis_results, incomparable_reasons, per_window_embeddings_by_pass = compute_uncertainty_axes(
+                harvests_out=harvests_by_pass,
                 passes=passes_for_compute,
                 grid=grid,
                 params=comparator_params,
@@ -1926,6 +1205,10 @@ def main(argv: list[str] | None = None) -> int:
                 aggregator=args.uncertainty_aggregator,
                 speech_presence_labels=_speech_presence_labels(args),
                 utterance_grid=utterance_grid,
+                presence_grid=presence_grid,
+                scene_quality=not args.no_scene_quality,
+                sound_sources=not args.no_sound_sources,
+                calibration=calibration_runtime,
                 embedding_window_s=args.embedding_window_s,
                 embedding_hop_s=args.embedding_hop_s,
                 same_speaker_floor=args.identity_same_speaker_floor,
@@ -1939,6 +1222,29 @@ def main(argv: list[str] | None = None) -> int:
             axis_results, incomparable_reasons = ({}, {"workflow": f"failed: {exc!r}"})
             per_window_embeddings_by_pass = {}
 
+        # Scene quality is a REQUIRED signal here unless explicitly disabled: the
+        # library degrades gracefully to null (FR-023) for reuse, but this script
+        # must not silently ship a run missing its quality columns. If the model
+        # was requested but unavailable on any pass, fail loudly with guidance.
+        if not args.no_scene_quality:
+            unavailable_passes = [
+                pl
+                for (pl, axis), result in axis_results.items()
+                if axis == "presence"
+                and pl != "raw_vs_enhanced"
+                and (result.provenance.get("scene_quality") or {}).get("model", {}).get("available") is False
+            ]
+            if unavailable_passes:
+                print(
+                    "ERROR: scene-quality model (pyannote/brouhaha) could not be loaded for "
+                    f"pass(es) {sorted(unavailable_passes)}, so SNR/reverb quality columns would be null. "
+                    "Ensure the model is accessible (request access at https://hf.co/pyannote/brouhaha, "
+                    "set HF_TOKEN) and its backend is installed, or pass --no-scene-quality to run "
+                    "without scene quality intentionally.",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+
         # Persist 9 parquets (3 axes × 2 passes + 3 raw_vs_enhanced deltas).
         for (pass_label, axis), result in axis_results.items():
             if pass_label == "raw_vs_enhanced":
@@ -1950,7 +1256,7 @@ def main(argv: list[str] | None = None) -> int:
                 dest,
                 provenance={
                     "schema_version": _CACHE_SCHEMA_VERSION,
-                    "wrapper_hash": wrapper_hash,
+                    "stage_versions": dict(STAGE_VERSIONS),
                     "senselab_version": senselab_ver,
                 },
             )
@@ -2036,7 +1342,7 @@ def main(argv: list[str] | None = None) -> int:
                         for w in windows
                     ],
                 }
-                write_json(run_dir / pass_label / "embeddings" / f"{_safe(model_id)}.json", payload)
+                write_json(run_dir / pass_label / "embeddings" / f"{safe_model_id(model_id)}.json", payload)
 
         # Attach per-axis Labels + utterance TextArea tracks to the LS bundle.
         if axis_results:
@@ -2061,7 +1367,7 @@ def main(argv: list[str] | None = None) -> int:
                         "hop_length": grid.hop_length,
                     },
                     "speech_presence_labels": _speech_presence_labels(args),
-                    "wrapper_hash": wrapper_hash,
+                    "stage_versions": dict(STAGE_VERSIONS),
                     "senselab_version": senselab_ver,
                 },
                 incomparable_reasons=incomparable_reasons,
@@ -2131,6 +1437,49 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"Timeline plot: {timeline_path}")
             except Exception as exc:  # noqa: BLE001 — best-effort sidecar
                 print(f"warn: timeline plot failed: {exc!r}", file=sys.stderr)
+
+        # ── Adaptive loop, in-process (T040) ──────────────────────────
+        # Runs on the harvests the parquets were just built from, so the belief
+        # store needs no parquet round-trip. Gated on --no-adaptive-outputs; a
+        # --max-rounds 1 run still emits final/ from the round-1 belief.
+        if not args.no_adaptive_outputs and harvests_by_pass:
+            from senselab.audio.workflows.audio_analysis.adaptive.loop import run_adaptive_loop
+
+            try:
+                adaptive_log = run_adaptive_loop(
+                    run_dir,
+                    cache_dir=cache_dir,
+                    policy_path=args.policy,
+                    out_dir=run_dir,
+                    max_rounds=args.max_rounds,
+                    aggregator=args.uncertainty_aggregator,
+                    harvests=harvests_by_pass,
+                    summary=summaries,
+                    policy_overrides=_policy_overrides(args),
+                )
+                summaries["adaptive"] = {
+                    "enabled": True,
+                    "max_rounds": args.max_rounds,
+                    "policy": str(args.policy) if args.policy else "packaged default",
+                    "policy_hash": adaptive_log.get("policy_hash"),
+                    "rounds": adaptive_log.get("rounds"),
+                    "run_state": adaptive_log.get("run_state"),
+                    "n_interventions_fired": adaptive_log.get("n_interventions_fired"),
+                    "n_words_fused": adaptive_log.get("n_words_fused"),
+                    "parity_check": (adaptive_log.get("parity_check") or {}).get("status", "checked"),
+                    "ingest": "in_process_harvests",
+                    "timeline": adaptive_log.get("timeline"),
+                }
+                print(f"Adaptive: {run_dir / 'final'} ({summaries['adaptive'].get('run_state')})")
+                if summaries["adaptive"].get("timeline"):
+                    print(f"Adaptive timeline: {summaries['adaptive']['timeline']}")
+            except Exception as exc:  # noqa: BLE001 — additive artifacts must not fail the run
+                print(f"warn: adaptive loop failed: {exc!r}", file=sys.stderr)
+                summaries["adaptive"] = {"enabled": True, "status": "failed", "error": repr(exc)}
+            write_json(run_dir / "summary.json", summaries)
+        elif args.no_adaptive_outputs:
+            summaries["adaptive"] = {"enabled": False, "reason": "--no-adaptive-outputs"}
+            write_json(run_dir / "summary.json", summaries)
 
     write_json(run_dir / "labelstudio_tasks.json", ls_tasks)
     (run_dir / "labelstudio_config.xml").write_text(config_xml, encoding="utf-8")

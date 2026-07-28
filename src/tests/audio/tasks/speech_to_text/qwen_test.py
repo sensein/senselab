@@ -18,11 +18,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import torch
 
+import senselab.audio.tasks.speech_to_text.qwen as qwen_mod
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.preprocessing import downmix_audios_to_mono, resample_audios
 from senselab.audio.tasks.speech_to_text.qwen import QwenASR
-from senselab.utils.data_structures import HFModel
+from senselab.utils.data_structures import HFModel, Language, ScriptLine
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 FIXTURE_WAV = REPO_ROOT / "src" / "tests" / "data_for_testing" / "audio_48khz_mono_16bits.wav"
@@ -84,3 +86,35 @@ def test_qwen_asr_without_timestamps_returns_text_only() -> None:
     assert chunks == [] or chunks is None
     assert getattr(line, "start", None) is None
     assert getattr(line, "end", None) is None
+
+
+def test_align_with_qwen_maps_worker_output_to_scriptlines(monkeypatch: pytest.MonkeyPatch) -> None:
+    """align_with_qwen assembles worker word spans into the align_transcriptions shape."""
+    monkeypatch.setattr(qwen_mod, "ensure_venv", lambda *a, **k: "/fake/venv")
+    monkeypatch.setattr(qwen_mod, "venv_python", lambda *a, **k: "/fake/venv/bin/python")
+    monkeypatch.setattr(qwen_mod.subprocess, "run", lambda *a, **k: None)
+    monkeypatch.setattr(
+        qwen_mod,
+        "parse_subprocess_result",
+        lambda *a, **k: {
+            "results": [
+                {
+                    "chunks": [
+                        {"text": "This", "start": 0.0, "end": 0.3},
+                        {"text": "is", "start": 0.3, "end": 0.5},
+                        {"text": "Peter", "start": 0.5, "end": 0.9},
+                    ]
+                }
+            ]
+        },
+    )
+    audio = Audio(waveform=torch.zeros(1, 16000, dtype=torch.float32), sampling_rate=16000)
+    out = QwenASR.align_with_qwen([(audio, ScriptLine(text="This is Peter"), Language(language_code="en"))])
+
+    assert isinstance(out, list) and len(out) == 1
+    inner = out[0]
+    assert isinstance(inner, list) and len(inner) == 1
+    utt = inner[0]
+    assert utt.text == "This is Peter"
+    assert utt.start == 0.0 and utt.end == 0.9
+    assert utt.chunks is not None and [c.text for c in utt.chunks] == ["This", "is", "Peter"]

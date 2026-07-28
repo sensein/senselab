@@ -43,19 +43,42 @@ def write_axis_parquet(
     votes_json = [json.dumps(r.model_votes, default=str, separators=(",", ":")) for r in axis_result.rows]
     statuses = [r.comparison_status for r in axis_result.rows]
 
-    table = pa.table(
-        {
-            "start": pa.array(starts, type=pa.float64()),
-            "end": pa.array(ends, type=pa.float64()),
-            "axis": pa.array(axes, type=pa.string()),
-            "aggregated_uncertainty": pa.array(uncertainties, type=pa.float64()),
-            "raw_aggregated_uncertainty": pa.array(raw_uncertainties, type=pa.float64()),
-            "intensity_weight": pa.array(intensity_weights, type=pa.float64()),
-            "contributing_models": pa.array(contributing, type=pa.list_(pa.string())),
-            "model_votes": pa.array(votes_json, type=pa.string()),
-            "comparison_status": pa.array(statuses, type=pa.string()),
-        }
+    # Scene-aware presence + utterance extension columns (feature 20260722-175022).
+    # Additive and all-nullable: rows on axes that don't populate a given column
+    # write null, keeping one uniform schema across the three parquets. Existing
+    # column-projecting readers ignore these.
+    float_extension_columns = (
+        "presence_confidence",
+        "presence_uncertainty",
+        "quality_snr",
+        "quality_clip",
+        "quality_reverb",
+        "quality_bandwidth",
+        "quality_uncertainty",
+        "src_speech",
+        "src_people",
+        "src_machine",
+        "src_environment",
+        "token_entropy",
+        "scene_quality_coupling",
     )
+
+    columns: dict[str, pa.Array] = {
+        "start": pa.array(starts, type=pa.float64()),
+        "end": pa.array(ends, type=pa.float64()),
+        "axis": pa.array(axes, type=pa.string()),
+        "aggregated_uncertainty": pa.array(uncertainties, type=pa.float64()),
+        "raw_aggregated_uncertainty": pa.array(raw_uncertainties, type=pa.float64()),
+        "intensity_weight": pa.array(intensity_weights, type=pa.float64()),
+        "contributing_models": pa.array(contributing, type=pa.list_(pa.string())),
+        "model_votes": pa.array(votes_json, type=pa.string()),
+        "comparison_status": pa.array(statuses, type=pa.string()),
+    }
+    for col in float_extension_columns:
+        columns[col] = pa.array([getattr(r, col) for r in axis_result.rows], type=pa.float64())
+    columns["src_dominant"] = pa.array([r.src_dominant for r in axis_result.rows], type=pa.string())
+
+    table = pa.table(columns)
 
     metadata: dict[bytes, bytes] = {}
     if axis_result.provenance or provenance:

@@ -5,11 +5,22 @@ the in-memory ``passes`` summary produced by analyze_audio's per-task pipeline a
 the nine ``AxisResult`` objects (3 axes × 2 passes + 3 raw_vs_enhanced deltas) plus an
 ``incomparable_reasons`` dict for the disagreements index.
 
-**Note**: this function MUTATES the caller's ``passes`` dict to inject the synthetic
-``embedding_silhouette/...`` diar source into each pass's ``diarization.by_model`` block.
-That source is consumed by the identity-axis harvester and the timeline plot. Callers
-that retain a reference to ``passes`` will see the synthetic source after this call.
-Pass a deep-copy if you need the input unchanged.
+**Harvest / aggregate split** (spec ``20260723-225523-dynamic-uncertainty-workflow``
+research.md D8, FR-006): the expensive, model-touching phase lives in ``harvest_pass``
+(embedding extraction + clustering, frame posteriors, Brouhaha quality, sound sources,
+per-axis vote harvesting) and returns a :class:`~..votes.PassHarvest`; the cheap, pure
+fold into ``AxisResult`` rows lives in :func:`senselab.audio.workflows.audio_analysis.votes.aggregate_pass`.
+Re-scoring with a different aggregator therefore requires no model inference:
+
+    harvests = {pl: harvest_pass(...)[0] for pl in passes}
+    axis_results = {(pl, ax): r for pl, h in harvests.items()
+                    for ax, r in aggregate_pass(h, aggregator="mean", params=params).items()}
+
+**Legacy mutation note**: with the default ``mutate_passes=True`` this function still
+injects the synthetic ``embedding_silhouette/...`` diar source into each pass's
+``diarization.by_model`` block (consumed by the timeline plot and by callers that re-read
+``passes``). Pass ``mutate_passes=False`` for a side-effect-free call — the synthetic
+source is then only visible via ``PassHarvest.synthetic_diarization``.
 """
 
 from __future__ import annotations
@@ -20,12 +31,6 @@ from typing import Any
 import numpy as np
 
 from senselab.audio.data_structures import Audio
-from senselab.audio.workflows.audio_analysis.aggregate import (
-    aggregate_identity,
-    aggregate_presence,
-    aggregate_utterance,
-    presence_p_voice,
-)
 from senselab.audio.workflows.audio_analysis.embeddings import (
     WindowEmbedding,
     extract_per_window_embeddings,
@@ -43,6 +48,298 @@ from senselab.audio.workflows.audio_analysis.types import (
     UncertaintyRow,
 )
 from senselab.audio.workflows.audio_analysis.utterance import harvest_utterance_votes
+from senselab.audio.workflows.audio_analysis.votes import (
+    PassHarvest,
+    aggregate_pass,
+    compute_pass_deltas,
+)
+
+
+def harvest_pass(
+    *,
+    pass_label: str,
+    pass_summary: dict[str, Any],
+    per_pass_audio: Audio | None,
+    grid: BucketGrid,
+    speaker_embedding_models: list[str],
+    speech_presence_labels: list[str],
+    utterance_grid: BucketGrid | None = None,
+    presence_grid: BucketGrid | None = None,
+    scene_quality: bool = True,
+    sound_sources: bool = True,
+    embedding_window_s: float = 2.0,
+    embedding_hop_s: float = 1.0,
+    same_speaker_floor: float = 0.30,
+    diff_speaker_floor: float = 0.70,
+    cluster_cosine_threshold: float = 0.5,
+    clustering_algorithm: str = "spectral",
+    calibration: dict[str, Any] | None = None,
+) -> tuple[PassHarvest, dict[str, list[WindowEmbedding]], dict[str, str]]:
+    """Run every model-touching step for one pass and return its harvested votes.
+
+    Does NOT mutate ``pass_summary``: the synthetic embedding-silhouette diar source is
+    harvested from an augmented local copy and reported via
+    ``PassHarvest.synthetic_diarization`` for callers that want to persist / plot it.
+
+    Returns:
+        ``(harvest, per_window_embeddings, incomparable_reasons)`` where
+        incomparable_reasons keys are already ``"<pass>/..."``-prefixed.
+    """
+    incomparable_reasons: dict[str, str] = {}
+
+    # Windowed speaker embeddings — independent check on diar segmentation.
+    per_window_embeddings: dict[str, list[WindowEmbedding]] = {}
+    emb_failures: dict[str, str] = {}
+    if per_pass_audio is not None and speaker_embedding_models:
+        try:
+            per_window_embeddings = extract_per_window_embeddings(
+                audio=per_pass_audio,
+                models=speaker_embedding_models,
+                window_s=embedding_window_s,
+                hop_s=embedding_hop_s,
+                failures=emb_failures,
+            )
+        except Exception as exc:  # noqa: BLE001
+            incomparable_reasons[f"{pass_label}/identity/across_time"] = f"speaker-embedding extraction failed: {exc!r}"
+            per_window_embeddings = {}
+    else:
+        if not speaker_embedding_models:
+            incomparable_reasons[f"{pass_label}/identity/embeddings"] = (
+                "no embedding models configured — silhouette / cosine validation disabled"
+            )
+        elif per_pass_audio is None:
+            incomparable_reasons[f"{pass_label}/identity/embeddings"] = (
+                "no Audio object available for this pass — embedding extraction skipped"
+            )
+    for emb_model_id, emb_msg in emb_failures.items():
+        incomparable_reasons[f"{pass_label}/identity/embeddings/{emb_model_id}"] = emb_msg
+
+    # Cluster windowed embeddings to estimate the pass's speaker count and
+    # synthesize an embedding-derived diarization source. The result feeds
+    # both the presence axis (per-window silhouette voter) and the
+    # diarization stack (the synthetic source becomes another diar voter
+    # for the identity axis and another stripe in the timeline plot).
+    emb_cluster: dict[str, Any] | None = None
+    if per_window_embeddings:
+        from senselab.audio.workflows.audio_analysis.embeddings import (
+            cluster_pass_speakers as _cluster_pass_speakers,
+        )
+
+        cluster_failures: dict[str, str] = {}
+        for emb_model_id in sorted(per_window_embeddings):
+            entries = per_window_embeddings[emb_model_id]
+            if not entries:
+                continue
+            speech_mask = _speech_window_mask(
+                entries=entries,
+                pass_summary=pass_summary,
+                speech_presence_labels=speech_presence_labels,
+            )
+            emb_cluster = _cluster_pass_speakers(
+                entries,
+                failures=cluster_failures,
+                failure_key=f"clustering/{emb_model_id}",
+                is_speech_per_window=speech_mask,
+                algorithm=clustering_algorithm,
+            )
+            if emb_cluster is not None:
+                emb_cluster["embedding_model"] = emb_model_id
+                emb_cluster["windows"] = entries
+                break
+        for k, msg in cluster_failures.items():
+            incomparable_reasons[f"{pass_label}/identity/{k}"] = msg
+        if emb_cluster is None and per_window_embeddings:
+            incomparable_reasons[f"{pass_label}/identity/embedding_clustering"] = (
+                "all embedding models too sparse / failed clustering — no n_speakers estimate"
+            )
+
+    # Build the synthetic embedding-derived diar source, harvested from an
+    # augmented LOCAL copy of the pass summary (no caller mutation here).
+    synthetic_diarization: dict[str, Any] | None = None
+    harvest_summary = pass_summary
+    if emb_cluster is not None:
+        synthetic_segments: list[Any] = []
+        entries = emb_cluster["windows"]
+        labels = emb_cluster["labels"]
+        for i, w in enumerate(entries):
+            cluster_id = labels.get(i, "NOISE")
+            if cluster_id == "NOISE":
+                continue
+            synthetic_segments.append(
+                {
+                    "start": float(w.start_s),
+                    "end": float(w.end_s),
+                    "speaker": cluster_id,
+                }
+            )
+        synthetic_diar_id = f"embedding_silhouette/{emb_cluster['embedding_model']}"
+        synthetic_block = {
+            "status": "ok",
+            "result": [synthetic_segments],
+            "n_speakers": emb_cluster["n_speakers"],
+            "best_silhouette": emb_cluster.get("best_silhouette"),
+            "is_synthetic": True,
+        }
+        synthetic_diarization = {synthetic_diar_id: synthetic_block}
+        diar_block = pass_summary.get("diarization") or {}
+        by_model = dict(diar_block.get("by_model") or {})
+        by_model[synthetic_diar_id] = synthetic_block
+        harvest_summary = {**pass_summary, "diarization": {**diar_block, "by_model": by_model}}
+
+    align_by_model = ((harvest_summary.get("alignment") or {}).get("by_model")) or {}
+    ppg_block_raw = harvest_summary.get("ppgs") or harvest_summary.get("ppg")
+    if ppg_block_raw is None:
+        # PPG was opted out (e.g. ``--ppg`` not passed). The user explicitly
+        # chose not to compute it; treat as a known-missing sub-signal.
+        incomparable_reasons[f"{pass_label}/utterance/ppg"] = "PPG opt-in not provided"
+        ppg_block: dict[str, Any] = {}
+    elif not (isinstance(ppg_block_raw, dict) and ppg_block_raw.get("status") == "ok"):
+        # PPG ran but failed (model crash, OOM, missing dependency). Surface
+        # the actual status so the disagreements report distinguishes
+        # "user opted out" from "we tried and it broke".
+        status = ppg_block_raw.get("status", "unknown") if isinstance(ppg_block_raw, dict) else "non_dict_payload"
+        error_msg = ppg_block_raw.get("error") if isinstance(ppg_block_raw, dict) else None
+        reason = f"PPG extraction status={status!r}"
+        if error_msg:
+            reason += f" error={str(error_msg)[:160]!r}"
+        incomparable_reasons[f"{pass_label}/utterance/ppg"] = reason
+        ppg_block = {}
+    else:
+        ppg_block = ppg_block_raw
+
+    # ── presence harvest inputs ──
+    pres_grid = presence_grid if presence_grid is not None else grid
+
+    # Frame-level speech posteriors (US3): segmentation-3.0 raw scores + the
+    # Brouhaha VAD head, as continuous fine-resolution presence voters.
+    frame_voters: dict[str, Any] = {}
+    frame_posteriors_provenance: dict[str, Any] = {}
+    brouhaha_frames = None
+    if per_pass_audio is not None:
+        from senselab.audio.tasks.voice_activity_detection.frame_posteriors import (
+            SEGMENTATION_MODEL_ID,
+            SEGMENTATION_REVISION,
+            extract_speech_frame_posteriors,
+        )
+
+        seg_fp = extract_speech_frame_posteriors([per_pass_audio])[0]
+        if seg_fp is not None:
+            frame_voters["frame_segmentation"] = seg_fp
+        frame_posteriors_provenance["segmentation"] = {
+            "id": SEGMENTATION_MODEL_ID,
+            "revision": SEGMENTATION_REVISION,
+            "available": seg_fp is not None,
+        }
+
+    # Scene quality (US1): per-bucket SNR / clipping / reverb / bandwidth
+    # degradation + estimator-spread uncertainty; additive on presence rows.
+    quality_by_bucket: dict[tuple[float, float], dict[str, Any]] = {}
+    scene_quality_provenance: dict[str, Any] = {"enabled": bool(scene_quality)}
+    if scene_quality and per_pass_audio is not None:
+        from senselab.audio.tasks.scene_quality import extract_brouhaha_frames
+        from senselab.audio.tasks.scene_quality.brouhaha import BROUHAHA_MODEL_ID, BROUHAHA_REVISION
+        from senselab.audio.tasks.voice_activity_detection.frame_posteriors import FramePosterior
+        from senselab.audio.workflows.audio_analysis.quality import (
+            QUALITY_ANALYSIS_HOP_S,
+            QUALITY_ANALYSIS_WIN_S,
+            harvest_quality_scores,
+        )
+
+        brouhaha_frames = extract_brouhaha_frames([per_pass_audio])[0]
+        for q in harvest_quality_scores(
+            audio=per_pass_audio, brouhaha=brouhaha_frames, grid=pres_grid, calibration=calibration
+        ):
+            quality_by_bucket[(round(q["start"], 6), round(q["end"], 6))] = q
+        # Reuse the Brouhaha VAD head as a second frame-posterior presence voter.
+        if brouhaha_frames is not None:
+            frame_voters["frame_brouhaha_vad"] = FramePosterior(
+                probs=brouhaha_frames.vad, frame_hop_s=brouhaha_frames.frame_hop_s
+            )
+        scene_quality_provenance.update(
+            {
+                "analysis_win_length": QUALITY_ANALYSIS_WIN_S,
+                "analysis_hop_length": QUALITY_ANALYSIS_HOP_S,
+                "calibration_version": (calibration or {}).get("calibration_version"),
+                "model": {
+                    "id": BROUHAHA_MODEL_ID,
+                    "revision": BROUHAHA_REVISION,
+                    "available": brouhaha_frames is not None,
+                },
+            }
+        )
+
+    presence_votes = harvest_presence_votes(
+        pass_summary=harvest_summary,
+        grid=pres_grid,
+        speech_presence_labels=speech_presence_labels,
+        alignment_by_model=align_by_model,
+        per_window_embeddings=per_window_embeddings,
+        frame_posteriors=frame_voters or None,
+    )
+
+    # Sound sources (US2): per-bucket AudioSet→category masses from AST/YAMNet.
+    source_by_bucket: dict[tuple[float, float], dict[str, Any]] = {}
+    sound_sources_provenance: dict[str, Any] = {"enabled": bool(sound_sources)}
+    if sound_sources:
+        from senselab.audio.workflows.audio_analysis.sound_sources import (
+            harvest_source_categories,
+            load_source_category_map,
+        )
+
+        for s in harvest_source_categories(pass_summary=harvest_summary, grid=pres_grid):
+            source_by_bucket[(round(s["start"], 6), round(s["end"], 6))] = s
+        sound_sources_provenance["category_map_version"] = load_source_category_map().get("version")
+
+    # ── identity harvest ──
+    # Prefer per-pass empirical calibration learned from this pass's embedding
+    # clusters; fall back to the CLI defaults when clustering didn't produce
+    # useful per-pass anchors.
+    same_floor_eff = same_speaker_floor
+    diff_floor_eff = diff_speaker_floor
+    if isinstance(emb_cluster, dict):
+        sf = emb_cluster.get("empirical_same_speaker_floor")
+        df = emb_cluster.get("empirical_diff_speaker_floor")
+        if isinstance(sf, (int, float)) and isinstance(df, (int, float)) and df > sf:
+            same_floor_eff = float(sf)
+            diff_floor_eff = float(df)
+    identity_votes = harvest_identity_votes(
+        pass_summary=harvest_summary,
+        grid=grid,
+        per_window_embeddings=per_window_embeddings,
+        same_speaker_floor=same_floor_eff,
+        diff_speaker_floor=diff_floor_eff,
+        cluster_cosine_threshold=cluster_cosine_threshold,
+    )
+
+    # ── utterance harvest ──
+    utt_grid = utterance_grid if utterance_grid is not None else grid
+    utterance_votes = harvest_utterance_votes(
+        pass_summary=harvest_summary,
+        grid=utt_grid,
+        ppg_block=ppg_block,
+        alignment_by_model=align_by_model,
+    )
+
+    harvest = PassHarvest(
+        pass_label=pass_label,
+        presence_votes=presence_votes,
+        identity_votes=identity_votes,
+        utterance_votes=utterance_votes,
+        quality_by_bucket=quality_by_bucket,
+        source_by_bucket=source_by_bucket,
+        grids={
+            "presence": {"win_length": pres_grid.win_length, "hop_length": pres_grid.hop_length},
+            "identity": {"win_length": grid.win_length, "hop_length": grid.hop_length},
+            "utterance": {"win_length": utt_grid.win_length, "hop_length": utt_grid.hop_length},
+        },
+        provenance_extras={
+            "scene_quality": scene_quality_provenance,
+            "sound_sources": sound_sources_provenance,
+            "frame_posteriors": frame_posteriors_provenance,
+        },
+        synthetic_diarization=synthetic_diarization,
+    )
+    return harvest, per_window_embeddings, incomparable_reasons
 
 
 def compute_uncertainty_axes(
@@ -55,14 +352,25 @@ def compute_uncertainty_axes(
     aggregator: str,
     speech_presence_labels: list[str],
     utterance_grid: BucketGrid | None = None,
+    presence_grid: BucketGrid | None = None,
+    scene_quality: bool = True,
+    sound_sources: bool = True,
     embedding_window_s: float = 2.0,
     embedding_hop_s: float = 1.0,
     same_speaker_floor: float = 0.30,
     diff_speaker_floor: float = 0.70,
     cluster_cosine_threshold: float = 0.5,
     clustering_algorithm: str = "spectral",
+    mutate_passes: bool = True,
+    harvests_out: dict[str, Any] | None = None,
+    calibration: dict[str, Any] | None = None,
 ) -> tuple[dict[tuple[str, UncertaintyAxis], AxisResult], dict[str, str], dict[str, dict[str, list[WindowEmbedding]]]]:
     """Compute per-pass and raw-vs-enhanced uncertainty rows for all three axes.
+
+    Thin wrapper over :func:`harvest_pass` (expensive, model-touching) +
+    :func:`~..votes.aggregate_pass` (pure). Behavior, outputs, and — with the default
+    ``mutate_passes=True`` — the legacy synthetic-diar-source injection into the
+    caller's ``passes`` dict are unchanged from the pre-split implementation.
 
     Args:
         passes: Mapping ``{pass_label → pass_summary}`` where each pass_summary is the
@@ -83,6 +391,19 @@ def compute_uncertainty_axes(
         utterance_grid: Optional separate bucket grid for the utterance axis (typically
             wider + overlapping than the shared grid so most words land fully inside at
             least one bucket). When ``None``, the shared ``grid`` is reused for utterance.
+        presence_grid: Optional separate (typically finer) bucket grid for the presence
+            axis, so brief events can be localized from continuous frame posteriors. When
+            ``None``, the shared ``grid`` is reused (preserving legacy behavior); the CLI
+            defaults it to 0.1 s / 0.02 s. Quality and source columns are computed on this
+            same presence grid so they align with the presence rows.
+        scene_quality: When True (default), compute per-bucket audio-quality degradation
+            scores (SNR / clipping / reverb / bandwidth + estimator-spread uncertainty)
+            via Brouhaha + existing DSP metrics and attach them as additive columns on
+            the presence rows. Null-safe when the model / audio is unavailable (FR-023).
+        sound_sources: When True (default), map the AST / YAMNet AudioSet scores into
+            per-bucket source-category masses (speech / people / machine / environment)
+            + dominant category, attached as additive columns on the presence rows.
+            Null when neither classifier ran (FR-023).
         embedding_window_s: Window length (seconds) for fixed-grid speaker-embedding
             extraction. Defaults to 2.0 s (ECAPA's recommended minimum).
         embedding_hop_s: Window hop (seconds) for fixed-grid speaker-embedding
@@ -99,6 +420,18 @@ def compute_uncertainty_axes(
             precomputed cosine-similarity affinity handles non-convex speaker
             clusters better than k-means; falls back automatically to k-means
             on per-k failure.
+        mutate_passes: When True (default, legacy behavior) inject each pass's
+            synthetic ``embedding_silhouette/...`` diar source into the caller's
+            ``passes`` dict so downstream consumers (timeline plot) see it. When
+            False the caller's dict is left untouched.
+        harvests_out: Optional dict populated with ``{pass_label: PassHarvest}`` as
+            each pass is harvested. An out-parameter rather than a fourth return
+            value so no existing caller's tuple arity changes; the adaptive loop's
+            in-process path (T040) needs the harvests the parquets were built from.
+        calibration: Optional flat runtime calibration dict (US5 — see
+            ``calibration.profile_to_runtime``): dB→[0,1] anchors consumed by the
+            quality harvest. Aggregator-side temperatures travel separately via
+            ``params["calibration"]``; pass the same dict in both places.
 
     Returns:
         ``(axis_results, incomparable_reasons, per_window_embeddings_by_pass)`` where:
@@ -114,307 +447,44 @@ def compute_uncertainty_axes(
     """
     axis_results: dict[tuple[str, UncertaintyAxis], AxisResult] = {}
     incomparable_reasons: dict[str, str] = {}
-
-    # Per-pass windowed embeddings — uniform fixed grid, no diarization dependency.
     per_window_embeddings_by_pass: dict[str, dict[str, list[WindowEmbedding]]] = {}
 
-    pass_labels = sorted(passes.keys())
-    for pass_label in pass_labels:
+    for pass_label in sorted(passes.keys()):
         pass_summary = passes.get(pass_label) or {}
-        per_pass_audio = audio.get(pass_label)
-        # Windowed speaker embeddings — independent check on diar segmentation.
-        emb_failures: dict[str, str] = {}
-        if per_pass_audio is not None and speaker_embedding_models:
-            try:
-                per_window_embeddings_by_pass[pass_label] = extract_per_window_embeddings(
-                    audio=per_pass_audio,
-                    models=speaker_embedding_models,
-                    window_s=embedding_window_s,
-                    hop_s=embedding_hop_s,
-                    failures=emb_failures,
-                )
-            except Exception as exc:  # noqa: BLE001
-                incomparable_reasons[f"{pass_label}/identity/across_time"] = (
-                    f"speaker-embedding extraction failed: {exc!r}"
-                )
-                per_window_embeddings_by_pass[pass_label] = {}
-        else:
-            per_window_embeddings_by_pass[pass_label] = {}
-            if not speaker_embedding_models:
-                incomparable_reasons[f"{pass_label}/identity/embeddings"] = (
-                    "no embedding models configured — silhouette / cosine validation disabled"
-                )
-            elif per_pass_audio is None:
-                incomparable_reasons[f"{pass_label}/identity/embeddings"] = (
-                    "no Audio object available for this pass — embedding extraction skipped"
-                )
-        for emb_model_id, emb_msg in emb_failures.items():
-            incomparable_reasons[f"{pass_label}/identity/embeddings/{emb_model_id}"] = emb_msg
+        harvest, per_window_embeddings, pass_reasons = harvest_pass(
+            pass_label=pass_label,
+            pass_summary=pass_summary,
+            per_pass_audio=audio.get(pass_label),
+            grid=grid,
+            speaker_embedding_models=speaker_embedding_models,
+            speech_presence_labels=speech_presence_labels,
+            utterance_grid=utterance_grid,
+            presence_grid=presence_grid,
+            scene_quality=scene_quality,
+            sound_sources=sound_sources,
+            embedding_window_s=embedding_window_s,
+            embedding_hop_s=embedding_hop_s,
+            same_speaker_floor=same_speaker_floor,
+            diff_speaker_floor=diff_speaker_floor,
+            cluster_cosine_threshold=cluster_cosine_threshold,
+            clustering_algorithm=clustering_algorithm,
+            calibration=calibration,
+        )
+        per_window_embeddings_by_pass[pass_label] = per_window_embeddings
+        incomparable_reasons.update(pass_reasons)
 
-        # Cluster windowed embeddings to estimate the pass's speaker count and
-        # synthesize an embedding-derived diarization source. The result feeds
-        # both the presence axis (per-window silhouette voter) and the
-        # diarization stack (the synthetic source becomes another diar voter
-        # for the identity axis and another stripe in the timeline plot).
-        emb_cluster: dict[str, Any] | None = None
-        if per_window_embeddings_by_pass[pass_label]:
-            from senselab.audio.workflows.audio_analysis.embeddings import (
-                cluster_pass_speakers as _cluster_pass_speakers,
-            )
-
-            cluster_failures: dict[str, str] = {}
-            for emb_model_id in sorted(per_window_embeddings_by_pass[pass_label]):
-                entries = per_window_embeddings_by_pass[pass_label][emb_model_id]
-                if not entries:
-                    continue
-                speech_mask = _speech_window_mask(
-                    entries=entries,
-                    pass_summary=pass_summary,
-                    speech_presence_labels=speech_presence_labels,
-                )
-                emb_cluster = _cluster_pass_speakers(
-                    entries,
-                    failures=cluster_failures,
-                    failure_key=f"clustering/{emb_model_id}",
-                    is_speech_per_window=speech_mask,
-                    algorithm=clustering_algorithm,
-                )
-                if emb_cluster is not None:
-                    emb_cluster["embedding_model"] = emb_model_id
-                    emb_cluster["windows"] = entries
-                    break
-            for k, msg in cluster_failures.items():
-                incomparable_reasons[f"{pass_label}/identity/{k}"] = msg
-            if emb_cluster is None and per_window_embeddings_by_pass[pass_label]:
-                incomparable_reasons[f"{pass_label}/identity/embedding_clustering"] = (
-                    "all embedding models too sparse / failed clustering — no n_speakers estimate"
-                )
-
-        # Inject the embedding-derived diar source into the pass summary so
-        # downstream harvesters see it as just another diar voter.
-        if emb_cluster is not None:
+        # Legacy side effect (opt-out via mutate_passes=False): make the synthetic
+        # diar source visible to callers that re-read ``passes`` (timeline plot).
+        if mutate_passes and harvest.synthetic_diarization:
             diar_block = pass_summary.get("diarization") or {}
             by_model = diar_block.get("by_model") or {}
-            synthetic_segments: list[Any] = []
-            entries = emb_cluster["windows"]
-            labels = emb_cluster["labels"]
-            for i, w in enumerate(entries):
-                cluster_id = labels.get(i, "NOISE")
-                if cluster_id == "NOISE":
-                    continue
-                synthetic_segments.append(
-                    {
-                        "start": float(w.start_s),
-                        "end": float(w.end_s),
-                        "speaker": cluster_id,
-                    }
-                )
-            synthetic_diar_id = f"embedding_silhouette/{emb_cluster['embedding_model']}"
-            by_model[synthetic_diar_id] = {
-                "status": "ok",
-                "result": [synthetic_segments],
-                "n_speakers": emb_cluster["n_speakers"],
-                "best_silhouette": emb_cluster.get("best_silhouette"),
-                "is_synthetic": True,
-            }
+            by_model.update(harvest.synthetic_diarization)
             pass_summary["diarization"] = {**diar_block, "by_model": by_model}
 
-        align_by_model = ((pass_summary.get("alignment") or {}).get("by_model")) or {}
-        ppg_block_raw = pass_summary.get("ppgs") or pass_summary.get("ppg")
-        if ppg_block_raw is None:
-            # PPG was opted out (e.g. ``--ppg`` not passed). The user explicitly
-            # chose not to compute it; treat as a known-missing sub-signal.
-            incomparable_reasons[f"{pass_label}/utterance/ppg"] = "PPG opt-in not provided"
-            ppg_block: dict[str, Any] = {}
-        elif not (isinstance(ppg_block_raw, dict) and ppg_block_raw.get("status") == "ok"):
-            # PPG ran but failed (model crash, OOM, missing dependency). Surface
-            # the actual status so the disagreements report distinguishes
-            # "user opted out" from "we tried and it broke".
-            status = ppg_block_raw.get("status", "unknown") if isinstance(ppg_block_raw, dict) else "non_dict_payload"
-            error_msg = ppg_block_raw.get("error") if isinstance(ppg_block_raw, dict) else None
-            reason = f"PPG extraction status={status!r}"
-            if error_msg:
-                reason += f" error={str(error_msg)[:160]!r}"
-            incomparable_reasons[f"{pass_label}/utterance/ppg"] = reason
-            ppg_block = {}
-        else:
-            ppg_block = ppg_block_raw
-
-        # ── presence ──
-        presence_votes = harvest_presence_votes(
-            pass_summary=pass_summary,
-            grid=grid,
-            speech_presence_labels=speech_presence_labels,
-            alignment_by_model=align_by_model,
-            per_window_embeddings=per_window_embeddings_by_pass.get(pass_label),
-        )
-        presence_rows: list[UncertaintyRow] = []
-        # Map bucket-start → presence p_voice so identity / utterance can
-        # mask their per-bucket uncertainty by "we are confident there's
-        # speech here" (low p_voice → confident silence → don't trust the
-        # axis-specific signals → mask down).
-        presence_p_voice_by_bucket: dict[tuple[float, float], float] = {}
-        for bucket in presence_votes:
-            u = aggregate_presence(bucket["votes"])
-            p_v = presence_p_voice(bucket["votes"])
-            if u is None and not bucket["votes"]:
-                continue
-            # Presence axis itself isn't masked — it IS the mask source.
-            presence_rows.append(
-                UncertaintyRow(
-                    start=bucket["start"],
-                    end=bucket["end"],
-                    axis="presence",
-                    aggregated_uncertainty=u,
-                    contributing_models=sorted(bucket["votes"].keys()),
-                    model_votes=bucket["votes"],
-                    comparison_status="ok" if u is not None else "incomparable",
-                    raw_aggregated_uncertainty=u,
-                    intensity_weight=1.0,
-                )
-            )
-            if p_v is not None:
-                presence_p_voice_by_bucket[(round(bucket["start"], 6), round(bucket["end"], 6))] = float(p_v)
-
-        def _intensity_mask(start: float, end: float) -> float:
-            """Map presence p_voice → mask weight in [0, 1].
-
-            ``p_voice >= 0.5`` (likely voice or uncertain) → mask = 1.0 (full
-            weight, don't downweight). ``p_voice < 0.5`` → linear ramp down to
-            0.0 at ``p_voice == 0`` (confident silence → mask out the bucket).
-            Falls back to 1.0 (no masking) when presence didn't run.
-            """
-            p = presence_p_voice_by_bucket.get((round(start, 6), round(end, 6)))
-            if p is None:
-                return 1.0
-            if p >= 0.5:
-                return 1.0
-            return max(0.0, min(1.0, p / 0.5))
-
-        axis_results[(pass_label, "presence")] = AxisResult(
-            pass_label=pass_label,  # type: ignore[arg-type]
-            axis="presence",
-            rows=presence_rows,
-            provenance={
-                "axis": "presence",
-                "pass": pass_label,
-                "grid": {"win_length": grid.win_length, "hop_length": grid.hop_length},
-                "comparator_params": params,
-                "contributing_model_set": sorted({m for b in presence_votes for m in b["votes"]}),
-            },
-        )
-
-        # ── identity ──
-        # Prefer per-pass empirical calibration learned from this pass's
-        # embedding clusters (within-cluster vs between-cluster cosine
-        # distance distributions). Falls back to the CLI defaults when
-        # clustering didn't produce useful per-pass anchors.
-        same_floor_eff = same_speaker_floor
-        diff_floor_eff = diff_speaker_floor
-        if isinstance(emb_cluster, dict):
-            sf = emb_cluster.get("empirical_same_speaker_floor")
-            df = emb_cluster.get("empirical_diff_speaker_floor")
-            if isinstance(sf, (int, float)) and isinstance(df, (int, float)) and df > sf:
-                same_floor_eff = float(sf)
-                diff_floor_eff = float(df)
-        identity_votes = harvest_identity_votes(
-            pass_summary=pass_summary,
-            grid=grid,
-            per_window_embeddings=per_window_embeddings_by_pass[pass_label],
-            same_speaker_floor=same_floor_eff,
-            diff_speaker_floor=diff_floor_eff,
-            cluster_cosine_threshold=cluster_cosine_threshold,
-        )
-        identity_rows: list[UncertaintyRow] = []
-        for bucket in identity_votes:
-            u_raw = aggregate_identity(bucket["votes"], raw_vs_enh=None, aggregator=aggregator)
-            if u_raw is None and not bucket["votes"]:
-                continue
-            mask = _intensity_mask(bucket["start"], bucket["end"])
-            # Don't multiply mask into ``aggregated_uncertainty`` — that would
-            # corrupt the parquet's primary column (a real high-disagreement
-            # bucket in a low-loudness region would be silently demoted, and
-            # ``disagreements.json`` ranks on this column). Instead keep the
-            # raw value here and expose ``intensity_weight`` so downstream
-            # consumers (global_summary, disagreements ranking tiebreaker) can
-            # apply the mask in their own aggregation step.
-            identity_rows.append(
-                UncertaintyRow(
-                    start=bucket["start"],
-                    end=bucket["end"],
-                    axis="identity",
-                    aggregated_uncertainty=u_raw,
-                    contributing_models=sorted(bucket["votes"].keys()),
-                    model_votes=bucket["votes"],
-                    comparison_status="ok" if u_raw is not None else "incomparable",
-                    raw_aggregated_uncertainty=u_raw,
-                    intensity_weight=mask,
-                )
-            )
-        axis_results[(pass_label, "identity")] = AxisResult(
-            pass_label=pass_label,  # type: ignore[arg-type]
-            axis="identity",
-            rows=identity_rows,
-            provenance={
-                "axis": "identity",
-                "pass": pass_label,
-                "grid": {"win_length": grid.win_length, "hop_length": grid.hop_length},
-                "comparator_params": params,
-                "contributing_model_set": sorted({m for b in identity_votes for m in b["votes"]}),
-            },
-        )
-
-        # ── utterance ──
-        # Utterance gets its own (typically wider, overlapping) grid so most words
-        # land fully inside at least one bucket. Defaults to the shared grid when
-        # the caller doesn't supply one.
-        utt_grid = utterance_grid if utterance_grid is not None else grid
-        utterance_votes = harvest_utterance_votes(
-            pass_summary=pass_summary,
-            grid=utt_grid,
-            ppg_block=ppg_block,
-            alignment_by_model=align_by_model,
-        )
-        utterance_rows: list[UncertaintyRow] = []
-        for bucket in utterance_votes:
-            u_raw = aggregate_utterance(bucket["votes"], aggregator=aggregator)
-            if u_raw is None and not bucket["votes"]:
-                continue
-            # Utterance buckets may use a different (typically wider) grid
-            # than presence; average the mask across presence buckets that
-            # OVERLAP this utterance bucket (rather than picking the closest
-            # single one — the closest-only rule would ignore a half-voice
-            # half-silence bucket).
-            mask_values = []
-            for (s_p, e_p), p_v in presence_p_voice_by_bucket.items():
-                if s_p < bucket["end"] and e_p > bucket["start"]:
-                    mask_values.append(1.0 if p_v >= 0.5 else max(0.0, min(1.0, p_v / 0.5)))
-            mask = sum(mask_values) / len(mask_values) if mask_values else 1.0
-            utterance_rows.append(
-                UncertaintyRow(
-                    start=bucket["start"],
-                    end=bucket["end"],
-                    axis="utterance",
-                    aggregated_uncertainty=u_raw,
-                    contributing_models=sorted(bucket["votes"].keys()),
-                    model_votes=bucket["votes"],
-                    comparison_status="ok" if u_raw is not None else "incomparable",
-                    raw_aggregated_uncertainty=u_raw,
-                    intensity_weight=mask,
-                )
-            )
-        axis_results[(pass_label, "utterance")] = AxisResult(
-            pass_label=pass_label,  # type: ignore[arg-type]
-            axis="utterance",
-            rows=utterance_rows,
-            provenance={
-                "axis": "utterance",
-                "pass": pass_label,
-                "grid": {"win_length": utt_grid.win_length, "hop_length": utt_grid.hop_length},
-                "comparator_params": params,
-                "contributing_model_set": sorted({m for b in utterance_votes for m in b["votes"]}),
-            },
-        )
+        if harvests_out is not None:
+            harvests_out[pass_label] = harvest
+        for axis, result in aggregate_pass(harvest, aggregator=aggregator, params=params).items():
+            axis_results[(pass_label, axis)] = result  # type: ignore[index]
 
     # ── raw_vs_enhanced deltas ──
     # The current public delta is "raw_16k vs enhanced_16k". A 3rd pass (e.g. a
@@ -424,8 +494,8 @@ def compute_uncertainty_axes(
         for axis in ("presence", "identity", "utterance"):
             raw_rows = axis_results[("raw_16k", axis)].rows  # type: ignore[index]
             enh_rows = axis_results[("enhanced_16k", axis)].rows  # type: ignore[index]
-            delta_rows = _compute_raw_vs_enhanced_delta(raw_rows, enh_rows, axis, aggregator)
-            axis_results[("raw_vs_enhanced", axis)] = AxisResult(
+            delta_rows = compute_pass_deltas(raw_rows, enh_rows, axis, aggregator)
+            axis_results[("raw_vs_enhanced", axis)] = AxisResult(  # type: ignore[index]
                 pass_label="raw_vs_enhanced",
                 axis=axis,  # type: ignore[arg-type]
                 rows=delta_rows,
@@ -441,88 +511,15 @@ def compute_uncertainty_axes(
     return axis_results, incomparable_reasons, per_window_embeddings_by_pass
 
 
+# Backward-compatible alias — the delta math moved (verbatim) to votes.compute_pass_deltas.
 def _compute_raw_vs_enhanced_delta(
     raw_rows: list[UncertaintyRow],
     enh_rows: list[UncertaintyRow],
     axis: str,
     aggregator: str,
 ) -> list[UncertaintyRow]:
-    """Pair raw and enhanced rows by (start, end) and emit a delta row per shared bucket.
-
-    The delta row's ``aggregated_uncertainty`` is the absolute difference between the
-    two passes' aggregated uncertainties on the same bucket, clipped to [0, 1]. Buckets
-    present in only one pass produce ``comparison_status="one_sided"`` with
-    ``aggregated_uncertainty=None``.
-    """
-    raw_by_bucket = {(r.start, r.end): r for r in raw_rows}
-    enh_by_bucket = {(r.start, r.end): r for r in enh_rows}
-    bucket_keys = sorted(set(raw_by_bucket) | set(enh_by_bucket))
-    out: list[UncertaintyRow] = []
-    for key in bucket_keys:
-        raw_row = raw_by_bucket.get(key)
-        enh_row = enh_by_bucket.get(key)
-        # Build a combined model_votes dict tagged by pass.
-        votes: dict[str, dict[str, Any]] = {}
-        if raw_row is not None:
-            for m, v in raw_row.model_votes.items():
-                votes[f"raw_16k::{m}"] = v
-        if enh_row is not None:
-            for m, v in enh_row.model_votes.items():
-                votes[f"enhanced_16k::{m}"] = v
-
-        if raw_row is None or enh_row is None:
-            # One-sided delta: carry forward whatever raw/enh values are
-            # available so downstream consumers can still tell which pass had
-            # the data. Mask the delta row's intensity_weight by the maximum
-            # of the available side(s) — if either pass thinks there's voice,
-            # the delta is worth attending to.
-            present = raw_row if raw_row is not None else enh_row
-            iw = present.intensity_weight if present and present.intensity_weight is not None else None
-            ra_raw = raw_row.raw_aggregated_uncertainty if raw_row else None
-            enh_raw = enh_row.raw_aggregated_uncertainty if enh_row else None
-            out.append(
-                UncertaintyRow(
-                    start=key[0],
-                    end=key[1],
-                    axis=axis,  # type: ignore[arg-type]
-                    aggregated_uncertainty=None,
-                    contributing_models=sorted(votes.keys()),
-                    model_votes=votes,
-                    comparison_status="one_sided",
-                    raw_aggregated_uncertainty=ra_raw if ra_raw is not None else enh_raw,
-                    intensity_weight=iw,
-                )
-            )
-            continue
-        ra = raw_row.aggregated_uncertainty
-        ea = enh_row.aggregated_uncertainty
-        if ra is None or ea is None:
-            delta = None
-            status = "incomparable"
-        else:
-            delta = max(0.0, min(1.0, abs(ra - ea)))
-            status = "ok"
-        # Delta uses the MAXIMUM of the two passes' intensity weights — if
-        # either pass thought voice was present in the bucket, the delta is
-        # worth attending to (don't downweight just because one pass thought
-        # the bucket was silent).
-        raw_iw = raw_row.intensity_weight if raw_row.intensity_weight is not None else 1.0
-        enh_iw = enh_row.intensity_weight if enh_row.intensity_weight is not None else 1.0
-        delta_iw = max(raw_iw, enh_iw)
-        out.append(
-            UncertaintyRow(
-                start=key[0],
-                end=key[1],
-                axis=axis,  # type: ignore[arg-type]
-                aggregated_uncertainty=delta,
-                contributing_models=sorted(votes.keys()),
-                model_votes=votes,
-                comparison_status=status,  # type: ignore[arg-type]
-                raw_aggregated_uncertainty=delta,
-                intensity_weight=delta_iw,
-            )
-        )
-    return out
+    """Deprecated alias for :func:`~..votes.compute_pass_deltas` (kept for importers)."""
+    return compute_pass_deltas(raw_rows, enh_rows, axis, aggregator)
 
 
 def _speech_window_mask(

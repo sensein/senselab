@@ -164,3 +164,54 @@ def test_negative_timestamp_still_rejected_independent_of_text() -> None:
     """Timestamp validator is independent of the text/speaker rule."""
     with pytest.raises(ValidationError):
         ScriptLine(text="", start=-1.0)
+
+
+# ── ASR token-confidence fields (T028, feature 20260722-175022) ──────
+#     Optional and default None so every non-Whisper backend degrades
+#     gracefully (FR-017); populated by the Whisper HF path only.
+
+
+def test_token_confidence_fields_default_to_none() -> None:
+    """A line built without ASR confidence info leaves all three fields None."""
+    line = ScriptLine(text="hello", start=0.0, end=1.0)
+    assert line.avg_logprob is None
+    assert line.no_speech_prob is None
+    assert line.token_entropy is None
+
+
+def test_token_confidence_fields_accept_scalars() -> None:
+    """avg_logprob / no_speech_prob / token_entropy round-trip as scalars."""
+    line = ScriptLine(text="hi", avg_logprob=-0.25, no_speech_prob=0.02, token_entropy=0.8)
+    assert line.avg_logprob == pytest.approx(-0.25)
+    assert line.no_speech_prob == pytest.approx(0.02)
+    assert line.token_entropy == pytest.approx(0.8)
+
+
+def test_token_entropy_accepts_per_token_list() -> None:
+    """token_entropy may carry the per-token sequence (data-model §6)."""
+    line = ScriptLine(text="a b", token_entropy=[0.1, 0.9])
+    assert line.token_entropy == [pytest.approx(0.1), pytest.approx(0.9)]
+
+
+def test_from_dict_maps_token_confidence_fields() -> None:
+    """from_dict propagates the three optional ASR confidence keys."""
+    line = ScriptLine.from_dict(
+        {
+            "text": "hello world",
+            "timestamps": [0.0, 1.0],
+            "avg_logprob": -0.4,
+            "no_speech_prob": 0.1,
+            "token_entropy": [0.2, 0.3],
+        }
+    )
+    assert line.avg_logprob == pytest.approx(-0.4)
+    assert line.no_speech_prob == pytest.approx(0.1)
+    assert line.token_entropy == [pytest.approx(0.2), pytest.approx(0.3)]
+
+
+def test_from_dict_leaves_token_confidence_none_when_absent() -> None:
+    """Existing construction paths are unaffected — keys absent → None."""
+    line = ScriptLine.from_dict({"text": "hello", "timestamps": [0.0, 1.0]})
+    assert line.avg_logprob is None
+    assert line.no_speech_prob is None
+    assert line.token_entropy is None

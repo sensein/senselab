@@ -167,6 +167,10 @@ cython_debug/
 
 # data folder
 data/
+# ...but the audio_analysis workflow ships checked-in package data (AudioSet
+# category map, YAMNet class names) that must be tracked and wheel-included.
+!src/senselab/audio/workflows/audio_analysis/data/
+!src/senselab/audio/workflows/audio_analysis/data/**
 # pdoc documentation
 docs/
 

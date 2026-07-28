@@ -195,6 +195,7 @@ def ensure_venv(
     name: str,
     requirements: list[str],
     python_version: Optional[str] = None,
+    max_cuda_version: Optional[tuple[int, int]] = None,
 ) -> Path:
     """Create or reuse an isolated virtual environment.
 
@@ -214,6 +215,11 @@ def ensure_venv(
         name: Unique identifier for this venv (e.g., "coqui", "ppgs").
         requirements: List of pip install specs (e.g., ["coqui-tts~=0.27"]).
         python_version: Python version (e.g., "3.11"). Defaults to current.
+        max_cuda_version: Optional ceiling on the CUDA wheel index for this
+            venv, forwarded to ``pick_torch_index``. Declare it when the venv
+            pins a ``torch`` version that has no wheel on the newest index the
+            host would otherwise select (e.g. brouhaha's ``torch<2.3`` needs
+            ``(12, 1)`` → ``cu121``). ``None`` applies no cap.
 
     Returns:
         Path to the venv directory.
@@ -239,7 +245,7 @@ def ensure_venv(
             env_override = os.getenv("SENSELAB_TORCH_INDEX_URL") or None
             probed = detect_host_cuda()
             host_cuda = probed
-            torch_index = pick_torch_index(probed, env_override=env_override)
+            torch_index = pick_torch_index(probed, env_override=env_override, max_cuda_version=max_cuda_version)
 
         expected_index_url = torch_index.url if torch_index is not None else None
         if marker.is_file():

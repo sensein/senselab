@@ -1,6 +1,6 @@
 """This module contains functions for extracting features from pre-trained self-supervised models."""
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, cast
 
 import torch
 from transformers import AutoModel, AutoTokenizer, PreTrainedModel, PreTrainedTokenizer
@@ -32,11 +32,16 @@ class HFFactory:
         if key not in cls._tokenizers:
             # Resolve once (download-once via the heartbeat lock) + pin the SHA so a
             # cached model makes no per-call Hub HEAD (the 429 source under batch).
+            # AutoTokenizer.from_pretrained is typed as a union over backend classes;
+            # the cache holds the PreTrainedTokenizer interface we use.
             sha, _ = resolve_model(str(model.path_or_uri), model.revision or "main")
-            cls._tokenizers[key] = AutoTokenizer.from_pretrained(
-                pretrained_model_name_or_path=model.path_or_uri,
-                revision=sha,
-                use_fast=True,
+            cls._tokenizers[key] = cast(
+                PreTrainedTokenizer,
+                AutoTokenizer.from_pretrained(
+                    pretrained_model_name_or_path=model.path_or_uri,
+                    revision=sha,
+                    use_fast=True,
+                ),
             )
         return cls._tokenizers[key]
 

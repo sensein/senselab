@@ -6,6 +6,8 @@ import pytest
 
 from senselab.audio.workflows.audio_analysis.labelstudio import (
     LABEL_VALUES,
+    _classification_to_ls,
+    _collect_classification_labels,
     attach_uncertainty_tracks_to_ls,
     uncertainty_to_label_bin,
 )
@@ -107,3 +109,157 @@ def test_attach_uncertainty_tracks_adds_xml_blocks_and_regions() -> None:
     # Bin label is "high" because aggregated_uncertainty=0.7 ≥ 0.66.
     label_regions = [r for r in raw_regions if r["type"] == "labels"]
     assert all(r["value"]["labels"] == ["high"] for r in label_regions)
+
+
+# ── FR-024 (T040): scene tracks on per-pass presence results ────────────
+
+
+def _presence_row_with_scene(start: float, *, quality_snr: float | None, src_dominant: str | None) -> UncertaintyRow:
+    return UncertaintyRow(
+        start=start,
+        end=start + 0.5,
+        axis="presence",
+        aggregated_uncertainty=0.4,
+        contributing_models=["m"],
+        model_votes={"m": {"speaks": True}},
+        comparison_status="ok",
+        quality_snr=quality_snr,
+        src_dominant=src_dominant,
+    )
+
+
+def test_scene_tracks_added_when_columns_present() -> None:
+    """Quality + sources tracks appear (additive) only for passes carrying the columns."""
+    from senselab.audio.workflows.audio_analysis.labelstudio import attach_uncertainty_tracks_to_ls
+
+    axis_results = {
+        ("raw_16k", "presence"): AxisResult(
+            pass_label="raw_16k",
+            axis="presence",
+            rows=[
+                _presence_row_with_scene(0.0, quality_snr=0.8, src_dominant="machine"),
+                _presence_row_with_scene(0.5, quality_snr=None, src_dominant=None),
+            ],
+        ),
+    }
+    tasks = [{"data": {"pass": "raw_16k"}, "predictions": [{"result": []}]}]
+    tasks_out, config = attach_uncertainty_tracks_to_ls(
+        ls_tasks=tasks, ls_config="<View></View>", axis_results=axis_results
+    )
+    assert '<Labels name="raw_16k__presence__quality"' in config
+    assert '<Labels name="raw_16k__presence__sources"' in config
+    assert '<Label value="machine"/>' in config
+    regions = tasks_out[0]["predictions"][0]["result"]
+    q_regions = [r for r in regions if r["from_name"] == "raw_16k__presence__quality"]
+    s_regions = [r for r in regions if r["from_name"] == "raw_16k__presence__sources"]
+    # Only the row with non-null columns emits scene regions (no all-"unavailable" noise).
+    assert len(q_regions) == 1 and q_regions[0]["value"]["labels"] == ["high"]  # 0.8 ≥ HIGH
+    assert len(s_regions) == 1 and s_regions[0]["value"]["labels"] == ["machine"]
+    # Existing presence track unchanged (still one region per row).
+    base = [r for r in regions if r["from_name"] == "raw_16k__uncertainty__presence"]
+    assert len(base) == 2
+
+
+def test_scene_tracks_absent_without_columns_and_for_deltas() -> None:
+    """Legacy bundles stay byte-identical: no scene tracks when columns are null / delta pass."""
+    from senselab.audio.workflows.audio_analysis.labelstudio import attach_uncertainty_tracks_to_ls
+
+    axis_results = {
+        ("raw_16k", "presence"): AxisResult(
+            pass_label="raw_16k",
+            axis="presence",
+            rows=[_presence_row_with_scene(0.0, quality_snr=None, src_dominant=None)],
+        ),
+        ("raw_vs_enhanced", "presence"): AxisResult(
+            pass_label="raw_vs_enhanced",
+            axis="presence",
+            rows=[_presence_row_with_scene(0.0, quality_snr=0.9, src_dominant="speech")],
+        ),
+    }
+    tasks = [{"data": {"pass": "raw_16k"}, "predictions": [{"result": []}]}]
+    _, config = attach_uncertainty_tracks_to_ls(ls_tasks=tasks, ls_config="<View></View>", axis_results=axis_results)
+    assert "__presence__quality" not in config
+    assert "__presence__sources" not in config
+
+
+# ── asr_has_timestamps consolidation (T051b) ──────────────────────────
+
+
+def test_chunked_but_untimed_transcript_has_no_timestamps() -> None:
+    """Chunks alone are not evidence of timing.
+
+    analyze_audio.py carried a looser duplicate that returned True whenever
+    ``chunks`` was non-empty. That made the alignment stage *skip* a
+    chunked-but-untimed transcript — precisely the input alignment exists to fix —
+    and it disagreed with ``resolve_asr_result``, which has always required a real
+    timestamp. The strict semantics is the surviving one.
+    """
+    from senselab.audio.workflows.audio_analysis.harvesters import asr_has_timestamps
+    from senselab.utils.data_structures import ScriptLine
+
+    untimed = ScriptLine(text="hello world", chunks=[ScriptLine(text="hello"), ScriptLine(text="world")])
+    assert asr_has_timestamps([untimed]) is False, "chunks without start times are not timestamps"
+
+
+def test_timestamped_chunk_is_detected() -> None:
+    """A chunk carrying a start time does count."""
+    from senselab.audio.workflows.audio_analysis.harvesters import asr_has_timestamps
+    from senselab.utils.data_structures import ScriptLine
+
+    timed = ScriptLine(text="hi", chunks=[ScriptLine(text="hi", start=0.0, end=0.5)])
+    assert asr_has_timestamps([timed]) is True
+
+
+def test_line_level_timestamp_is_detected() -> None:
+    """A line-level start counts even with no chunks."""
+    from senselab.audio.workflows.audio_analysis.harvesters import asr_has_timestamps
+    from senselab.utils.data_structures import ScriptLine
+
+    assert asr_has_timestamps([ScriptLine(text="hi", start=0.0, end=1.0)]) is True
+
+
+def test_empty_result_has_no_timestamps() -> None:
+    """Nothing in, False out."""
+    from senselab.audio.workflows.audio_analysis.harvesters import asr_has_timestamps
+
+    assert asr_has_timestamps([]) is False
+    assert asr_has_timestamps(None) is False
+
+
+def test_ls_builders_are_importable_from_the_library() -> None:
+    """T051b: the export builders now live here, not in the CLI script."""
+    from senselab.audio.workflows.audio_analysis.labelstudio import (
+        build_labelstudio_config,
+        build_labelstudio_task,
+    )
+
+    assert callable(build_labelstudio_task) and callable(build_labelstudio_config)
+
+
+# ── Moved from analyze_audio_test.py with the code they cover (T051b) ──
+
+
+def test_collect_classification_labels_pulls_unique_labels() -> None:
+    """The LS-config XML builder collects every distinct AudioSet label observed."""
+    classify_result = [
+        [
+            {"start": 0.0, "end": 0.5, "labels": ["Speech", "Music"], "scores": [0.9, 0.1]},
+            {"start": 0.5, "end": 1.0, "labels": ["Speech", "Silence"], "scores": [0.8, 0.2]},
+        ]
+    ]
+    labels = _collect_classification_labels(classify_result)
+    assert labels == {"Speech", "Music", "Silence"}
+
+
+def test_classification_to_ls_emits_regions_for_dict_shape() -> None:
+    """The LS conversion must skip empty entries but emit one region per dict window."""
+    result = [
+        [
+            {"start": 0.0, "end": 0.5, "labels": ["Speech"], "scores": [0.95]},
+            {"start": 0.5, "end": 1.0, "labels": ["Music"], "scores": [0.62]},
+        ]
+    ]
+    regions = _classification_to_ls(result, prefix="raw__ast", win_length=0.5, hop_length=0.5)
+    assert len(regions) == 2
+    labels = [r["value"]["labels"][0] for r in regions]
+    assert labels == ["Speech", "Music"]

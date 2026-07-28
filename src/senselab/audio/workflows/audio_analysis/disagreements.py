@@ -18,7 +18,16 @@ def _row_summary(row: Any, axis: str) -> str:  # noqa: ANN401
     if axis == "presence":
         speaks = [m for m, v in row.model_votes.items() if v.get("speaks")]
         silent = [m for m, v in row.model_votes.items() if v.get("speaks") is False]
-        return f"speaks={speaks!r} silent={silent!r}"
+        summary = f"speaks={speaks!r} silent={silent!r}"
+        # FR-024 (T042): surface the scene sub-signals when present.
+        extras = []
+        if getattr(row, "presence_uncertainty", None) is not None:
+            extras.append(f"presence_unc={round(float(row.presence_uncertainty), 3)}")
+        if getattr(row, "quality_uncertainty", None) is not None:
+            extras.append(f"quality_unc={round(float(row.quality_uncertainty), 3)}")
+        if getattr(row, "src_dominant", None) is not None:
+            extras.append(f"src={row.src_dominant}")
+        return summary + (" " + " ".join(extras) if extras else "")
     if axis == "identity":
         labels = {
             m: v.get("speaker_label")
@@ -82,26 +91,39 @@ def build_disagreements_index(
             au = row.aggregated_uncertainty
             if au is not None and not math.isnan(au) and au >= HIGH_THRESHOLD:
                 high_count += 1
-            candidates.append(
-                {
-                    "axis": axis,
-                    "pass": pass_label,
-                    "start": float(row.start),
-                    "end": float(row.end),
-                    "aggregated_uncertainty": au,
-                    "contributing_models": list(row.contributing_models),
-                    "parquet": _parquet_path_for(pass_label, axis),
-                    "row_idx": row_idx,
-                    "ls_region_id": f"{_track_name(pass_label, axis)}__{row_idx}",
-                    "summary": _row_summary(row, axis),
-                }
-            )
+            entry = {
+                "axis": axis,
+                "pass": pass_label,
+                "start": float(row.start),
+                "end": float(row.end),
+                "aggregated_uncertainty": au,
+                "contributing_models": list(row.contributing_models),
+                "parquet": _parquet_path_for(pass_label, axis),
+                "row_idx": row_idx,
+                "ls_region_id": f"{_track_name(pass_label, axis)}__{row_idx}",
+                "summary": _row_summary(row, axis),
+            }
+            # FR-024 (T042): presence entries carry the scene sub-signals so the
+            # index is filterable/rankable on them (null-safe: omitted when absent).
+            if axis == "presence":
+                for field in ("presence_uncertainty", "quality_uncertainty", "src_dominant"):
+                    value = getattr(row, field, None)
+                    if value is not None and not (isinstance(value, float) and math.isnan(value)):
+                        entry[field] = value
+            candidates.append(entry)
 
-    # Sort: NaN / None last. Otherwise primary descending by aggregated_uncertainty.
+    # Sort: NaN / None last. Primary descending by aggregated_uncertainty; axis
+    # priority tiebreak; then (FR-024/T042) the enriched presence sub-signal —
+    # among equal-aggregated presence rows, higher presence_uncertainty (the
+    # decisiveness + temporal-instability composite) ranks first. Rows where
+    # aggregated differs are ordered exactly as before (SC-008: baseline
+    # aggregated_uncertainty values and their relative order are unchanged).
     def _sort_key(e: dict[str, Any]) -> tuple[Any, ...]:
         au = e["aggregated_uncertainty"]
         primary = -float(au) if au is not None and not (isinstance(au, float) and math.isnan(au)) else float("inf")
-        return (primary, _AXIS_PRIORITY.get(e["axis"], 99), e["start"])
+        pu = e.get("presence_uncertainty")
+        sub_signal = -float(pu) if isinstance(pu, (int, float)) and not math.isnan(float(pu)) else 0.0
+        return (primary, _AXIS_PRIORITY.get(e["axis"], 99), sub_signal, e["start"])
 
     candidates.sort(key=_sort_key)
     selected = candidates[: max(0, top_n)] if top_n > 0 else []
