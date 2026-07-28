@@ -81,6 +81,10 @@ REVIEWED_INPROCESS = {
     "audio/tasks/voice_activity_detection/pyannote_vad.py",
     "text/tasks/embeddings_extraction/huggingface.py",
     "text/tasks/embeddings_extraction/sentence_transformers.py",
+    # scene-quality / adaptive workflow (branch-only, #536)
+    "audio/tasks/voice_activity_detection/frame_posteriors.py",
+    "audio/workflows/audio_analysis/adaptive/audio_io.py",
+    "audio/workflows/audio_analysis/adaptive/backends.py",
 }
 
 # Subprocess-venv backends whose worker loads a model; the parent stages it via
@@ -92,6 +96,9 @@ REVIEWED_SUBPROCESS = {
     "audio/tasks/speech_to_text/nemo.py",
     "audio/tasks/speech_to_text/qwen.py",
     "audio/workflows/audio_analysis/pii_subprocess.py",
+    # scene-quality / ASR (branch-only, #536)
+    "audio/tasks/scene_quality/brouhaha.py",
+    "audio/tasks/speech_to_text/crisperwhisper.py",
 }
 
 # Files that intentionally do a RAW load and are exempt from the helper check.
