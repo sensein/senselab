@@ -526,6 +526,11 @@ def load_hf_resilient(
         sha, _ = resolve_model(repo_id, revision, token=token)
         if pass_revision:
             kwargs.setdefault("revision", sha)
+        # Forward the token to the loader too (not only to resolve_model): gated
+        # repos / first-download paths need it at load time. setdefault so an
+        # explicit token already in kwargs wins.
+        if token is not None:
+            kwargs.setdefault("token", token)
         return loader(*args, **kwargs)
 
     return retry_on_transient_error(_call)

@@ -10,6 +10,7 @@ from pathlib import Path
 import huggingface_hub
 import pytest
 
+import senselab.utils.dependencies as dep
 from senselab.utils.dependencies import (
     _get_cached_commit_hash,
     hf_subprocess_env,
@@ -50,7 +51,7 @@ def test_resolve_model_returns_sha_and_snapshot_path(tmp_path: Path, monkeypatch
     sha = "b" * 40
     snap = _fake_cache(monkeypatch, tmp_path, "org/model", "main", sha)
     (snap / "config.json").write_text("{}")
-    monkeypatch.setattr("senselab.utils.dependencies.is_hf_model_cached", lambda *a, **k: True)
+    monkeypatch.setattr(dep, "is_hf_model_cached", lambda *a, **k: True)
     got_sha, got_path = resolve_model("org/model", "main")
     assert got_sha == sha
     assert Path(got_path) == snap
@@ -60,7 +61,8 @@ def test_load_hf_resilient_pins_sha_without_local_files_only(monkeypatch: pytest
     """load_hf_resilient injects revision=<sha> ONLY (never local_files_only, which breaks pipeline)."""
     sha = "c" * 40
     monkeypatch.setattr(
-        "senselab.utils.dependencies.resolve_model",
+        dep,
+        "resolve_model",
         lambda repo_id, revision="main", **k: (sha, "/tmp/snap"),
     )
     captured: dict = {}
@@ -81,8 +83,8 @@ def test_load_hf_resilient_pins_sha_without_local_files_only(monkeypatch: pytest
 def test_load_hf_resilient_no_hub_call_when_cached(monkeypatch: pytest.MonkeyPatch) -> None:
     """A cached model loads with zero HfApi.model_info (Hub version-check) calls."""
     sha = "d" * 40
-    monkeypatch.setattr("senselab.utils.dependencies.is_hf_model_cached", lambda *a, **k: True)
-    monkeypatch.setattr("senselab.utils.dependencies._get_cached_commit_hash", lambda *a, **k: sha)
+    monkeypatch.setattr(dep, "is_hf_model_cached", lambda *a, **k: True)
+    monkeypatch.setattr(dep, "_get_cached_commit_hash", lambda *a, **k: sha)
 
     def boom(*a: object, **k: object) -> None:
         raise AssertionError("HfApi.model_info was called for a cached model")
@@ -99,7 +101,8 @@ def test_load_hf_resilient_no_hub_call_when_cached(monkeypatch: pytest.MonkeyPat
 def test_hf_subprocess_env_sets_offline_when_all_cached(monkeypatch: pytest.MonkeyPatch) -> None:
     """When every referenced model is cacheable, the child env gets HF_HUB_OFFLINE / TRANSFORMERS_OFFLINE = '1'."""
     monkeypatch.setattr(
-        "senselab.utils.dependencies.resolve_model",
+        dep,
+        "resolve_model",
         lambda repo_id, revision="main", **k: ("0" * 40, "/tmp/snap"),
     )
     env = hf_subprocess_env("Qwen/Qwen3-ASR-1.7B", "main", base_env={})
@@ -113,7 +116,7 @@ def test_hf_subprocess_env_left_unchanged_when_uncacheable(monkeypatch: pytest.M
     def boom(*a: object, **k: object) -> None:
         raise RuntimeError("cannot download")
 
-    monkeypatch.setattr("senselab.utils.dependencies.resolve_model", boom)
+    monkeypatch.setattr(dep, "resolve_model", boom)
     env = hf_subprocess_env("org/model", "main", base_env={})
     assert "HF_HUB_OFFLINE" not in env
     assert "TRANSFORMERS_OFFLINE" not in env
@@ -127,7 +130,7 @@ def test_hf_subprocess_env_stages_companion_models(monkeypatch: pytest.MonkeyPat
         staged.append(repo_id)
         return ("0" * 40, "/tmp/snap")
 
-    monkeypatch.setattr("senselab.utils.dependencies.resolve_model", _stub_resolve)
+    monkeypatch.setattr(dep, "resolve_model", _stub_resolve)
     env = hf_subprocess_env(
         "Qwen/Qwen3-ASR-1.7B", "main", also=[("Qwen/Qwen3-ForcedAligner-0.6B", "main")], base_env={}
     )
