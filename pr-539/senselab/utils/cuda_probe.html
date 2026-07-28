@@ -287,45 +287,67 @@ or unusual hosts can override the chosen index via the
 </span><span id="L-153"><a href="#L-153"><span class="linenos">153</span></a><span class="k">def</span><span class="w"> </span><span class="nf">pick_torch_index</span><span class="p">(</span>
 </span><span id="L-154"><a href="#L-154"><span class="linenos">154</span></a>    <span class="n">host_cuda</span><span class="p">:</span> <span class="n">HostCuda</span><span class="p">,</span>
 </span><span id="L-155"><a href="#L-155"><span class="linenos">155</span></a>    <span class="n">env_override</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="L-156"><a href="#L-156"><span class="linenos">156</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">TorchIndex</span><span class="p">:</span>
-</span><span id="L-157"><a href="#L-157"><span class="linenos">157</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Choose the PyTorch wheel index URL for this host.</span>
-</span><span id="L-158"><a href="#L-158"><span class="linenos">158</span></a>
-</span><span id="L-159"><a href="#L-159"><span class="linenos">159</span></a><span class="sd">    Order:</span>
-</span><span id="L-160"><a href="#L-160"><span class="linenos">160</span></a>
-</span><span id="L-161"><a href="#L-161"><span class="linenos">161</span></a><span class="sd">    1. If ``env_override`` is set + non-empty → return that URL verbatim with</span>
-</span><span id="L-162"><a href="#L-162"><span class="linenos">162</span></a><span class="sd">       ``tag=&quot;override&quot;``, ``source=&quot;env-override&quot;``. Highest priority.</span>
-</span><span id="L-163"><a href="#L-163"><span class="linenos">163</span></a><span class="sd">    2. If host has no CUDA → CPU index.</span>
-</span><span id="L-164"><a href="#L-164"><span class="linenos">164</span></a><span class="sd">    3. Pick the highest entry in the static map whose CUDA version is ``&lt;=``</span>
-</span><span id="L-165"><a href="#L-165"><span class="linenos">165</span></a><span class="sd">       the host&#39;s. No match → CPU index.</span>
-</span><span id="L-166"><a href="#L-166"><span class="linenos">166</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="L-167"><a href="#L-167"><span class="linenos">167</span></a>    <span class="k">if</span> <span class="n">env_override</span><span class="p">:</span>
-</span><span id="L-168"><a href="#L-168"><span class="linenos">168</span></a>        <span class="k">return</span> <span class="n">TorchIndex</span><span class="p">(</span>
-</span><span id="L-169"><a href="#L-169"><span class="linenos">169</span></a>            <span class="n">url</span><span class="o">=</span><span class="n">env_override</span><span class="p">,</span>
-</span><span id="L-170"><a href="#L-170"><span class="linenos">170</span></a>            <span class="n">tag</span><span class="o">=</span><span class="s2">&quot;override&quot;</span><span class="p">,</span>
-</span><span id="L-171"><a href="#L-171"><span class="linenos">171</span></a>            <span class="n">cuda_version</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-</span><span id="L-172"><a href="#L-172"><span class="linenos">172</span></a>            <span class="n">source</span><span class="o">=</span><span class="s2">&quot;env-override&quot;</span><span class="p">,</span>
-</span><span id="L-173"><a href="#L-173"><span class="linenos">173</span></a>        <span class="p">)</span>
-</span><span id="L-174"><a href="#L-174"><span class="linenos">174</span></a>    <span class="k">if</span> <span class="n">host_cuda</span><span class="o">.</span><span class="n">version</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="L-175"><a href="#L-175"><span class="linenos">175</span></a>        <span class="k">return</span> <span class="n">TorchIndex</span><span class="p">(</span>
-</span><span id="L-176"><a href="#L-176"><span class="linenos">176</span></a>            <span class="n">url</span><span class="o">=</span><span class="n">_CPU_INDEX_URL</span><span class="p">,</span>
-</span><span id="L-177"><a href="#L-177"><span class="linenos">177</span></a>            <span class="n">tag</span><span class="o">=</span><span class="s2">&quot;cpu&quot;</span><span class="p">,</span>
-</span><span id="L-178"><a href="#L-178"><span class="linenos">178</span></a>            <span class="n">cuda_version</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-</span><span id="L-179"><a href="#L-179"><span class="linenos">179</span></a>            <span class="n">source</span><span class="o">=</span><span class="s2">&quot;static-map&quot;</span><span class="p">,</span>
-</span><span id="L-180"><a href="#L-180"><span class="linenos">180</span></a>        <span class="p">)</span>
-</span><span id="L-181"><a href="#L-181"><span class="linenos">181</span></a>    <span class="k">for</span> <span class="n">tag</span><span class="p">,</span> <span class="n">idx_version</span> <span class="ow">in</span> <span class="n">_PYTORCH_INDEX_MAP</span><span class="p">:</span>
-</span><span id="L-182"><a href="#L-182"><span class="linenos">182</span></a>        <span class="k">if</span> <span class="n">idx_version</span> <span class="o">&lt;=</span> <span class="n">host_cuda</span><span class="o">.</span><span class="n">version</span><span class="p">:</span>
-</span><span id="L-183"><a href="#L-183"><span class="linenos">183</span></a>            <span class="k">return</span> <span class="n">TorchIndex</span><span class="p">(</span>
-</span><span id="L-184"><a href="#L-184"><span class="linenos">184</span></a>                <span class="n">url</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">_PYTORCH_INDEX_BASE</span><span class="si">}</span><span class="s2">/</span><span class="si">{</span><span class="n">tag</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
-</span><span id="L-185"><a href="#L-185"><span class="linenos">185</span></a>                <span class="n">tag</span><span class="o">=</span><span class="n">tag</span><span class="p">,</span>
-</span><span id="L-186"><a href="#L-186"><span class="linenos">186</span></a>                <span class="n">cuda_version</span><span class="o">=</span><span class="n">idx_version</span><span class="p">,</span>
-</span><span id="L-187"><a href="#L-187"><span class="linenos">187</span></a>                <span class="n">source</span><span class="o">=</span><span class="s2">&quot;static-map&quot;</span><span class="p">,</span>
-</span><span id="L-188"><a href="#L-188"><span class="linenos">188</span></a>            <span class="p">)</span>
-</span><span id="L-189"><a href="#L-189"><span class="linenos">189</span></a>    <span class="k">return</span> <span class="n">TorchIndex</span><span class="p">(</span>
-</span><span id="L-190"><a href="#L-190"><span class="linenos">190</span></a>        <span class="n">url</span><span class="o">=</span><span class="n">_CPU_INDEX_URL</span><span class="p">,</span>
-</span><span id="L-191"><a href="#L-191"><span class="linenos">191</span></a>        <span class="n">tag</span><span class="o">=</span><span class="s2">&quot;cpu&quot;</span><span class="p">,</span>
-</span><span id="L-192"><a href="#L-192"><span class="linenos">192</span></a>        <span class="n">cuda_version</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-</span><span id="L-193"><a href="#L-193"><span class="linenos">193</span></a>        <span class="n">source</span><span class="o">=</span><span class="s2">&quot;static-map&quot;</span><span class="p">,</span>
-</span><span id="L-194"><a href="#L-194"><span class="linenos">194</span></a>    <span class="p">)</span>
+</span><span id="L-156"><a href="#L-156"><span class="linenos">156</span></a>    <span class="n">max_cuda_version</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="L-157"><a href="#L-157"><span class="linenos">157</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">TorchIndex</span><span class="p">:</span>
+</span><span id="L-158"><a href="#L-158"><span class="linenos">158</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Choose the PyTorch wheel index URL for this host.</span>
+</span><span id="L-159"><a href="#L-159"><span class="linenos">159</span></a>
+</span><span id="L-160"><a href="#L-160"><span class="linenos">160</span></a><span class="sd">    Order:</span>
+</span><span id="L-161"><a href="#L-161"><span class="linenos">161</span></a>
+</span><span id="L-162"><a href="#L-162"><span class="linenos">162</span></a><span class="sd">    1. If ``env_override`` is set + non-empty → return that URL verbatim with</span>
+</span><span id="L-163"><a href="#L-163"><span class="linenos">163</span></a><span class="sd">       ``tag=&quot;override&quot;``, ``source=&quot;env-override&quot;``. Highest priority.</span>
+</span><span id="L-164"><a href="#L-164"><span class="linenos">164</span></a><span class="sd">    2. If host has no CUDA → CPU index.</span>
+</span><span id="L-165"><a href="#L-165"><span class="linenos">165</span></a><span class="sd">    3. Pick the highest entry in the static map whose CUDA version is ``&lt;=``</span>
+</span><span id="L-166"><a href="#L-166"><span class="linenos">166</span></a><span class="sd">       the *effective* CUDA version, where the effective version is the host&#39;s</span>
+</span><span id="L-167"><a href="#L-167"><span class="linenos">167</span></a><span class="sd">       capped by ``max_cuda_version`` (see below). No match → CPU index.</span>
+</span><span id="L-168"><a href="#L-168"><span class="linenos">168</span></a>
+</span><span id="L-169"><a href="#L-169"><span class="linenos">169</span></a><span class="sd">    Args:</span>
+</span><span id="L-170"><a href="#L-170"><span class="linenos">170</span></a><span class="sd">        host_cuda: Probed host CUDA capability.</span>
+</span><span id="L-171"><a href="#L-171"><span class="linenos">171</span></a><span class="sd">        env_override: Operator override (``SENSELAB_TORCH_INDEX_URL``); wins outright.</span>
+</span><span id="L-172"><a href="#L-172"><span class="linenos">172</span></a><span class="sd">        max_cuda_version: Per-venv ceiling on the CUDA index. A backend whose</span>
+</span><span id="L-173"><a href="#L-173"><span class="linenos">173</span></a><span class="sd">            ``torch`` pin has no wheel on the newest index the host would</span>
+</span><span id="L-174"><a href="#L-174"><span class="linenos">174</span></a><span class="sd">            otherwise select must declare the newest index that *does* carry</span>
+</span><span id="L-175"><a href="#L-175"><span class="linenos">175</span></a><span class="sd">            its wheels. Example: brouhaha pins ``torch&gt;=2.0,&lt;2.3``; the</span>
+</span><span id="L-176"><a href="#L-176"><span class="linenos">176</span></a><span class="sd">            ``cu128`` index (selected on a CUDA-12.8 host) publishes no</span>
+</span><span id="L-177"><a href="#L-177"><span class="linenos">177</span></a><span class="sd">            ``torch&lt;2.3`` linux-x86_64 wheel, so the Stage-1 install is</span>
+</span><span id="L-178"><a href="#L-178"><span class="linenos">178</span></a><span class="sd">            unsatisfiable. Declaring ``(12, 1)`` caps the selection to</span>
+</span><span id="L-179"><a href="#L-179"><span class="linenos">179</span></a><span class="sd">            ``cu121`` (which carries ``torch==2.2.2+cu121`` + matching</span>
+</span><span id="L-180"><a href="#L-180"><span class="linenos">180</span></a><span class="sd">            ``torchaudio``), forward-compatible with 12.x/13.x drivers for</span>
+</span><span id="L-181"><a href="#L-181"><span class="linenos">181</span></a><span class="sd">            inference. ``None`` (default) applies no cap — backends pinning</span>
+</span><span id="L-182"><a href="#L-182"><span class="linenos">182</span></a><span class="sd">            modern torch (e.g. ``&gt;=2.8``) correctly keep ``cu128``.</span>
+</span><span id="L-183"><a href="#L-183"><span class="linenos">183</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="L-184"><a href="#L-184"><span class="linenos">184</span></a>    <span class="k">if</span> <span class="n">env_override</span><span class="p">:</span>
+</span><span id="L-185"><a href="#L-185"><span class="linenos">185</span></a>        <span class="k">return</span> <span class="n">TorchIndex</span><span class="p">(</span>
+</span><span id="L-186"><a href="#L-186"><span class="linenos">186</span></a>            <span class="n">url</span><span class="o">=</span><span class="n">env_override</span><span class="p">,</span>
+</span><span id="L-187"><a href="#L-187"><span class="linenos">187</span></a>            <span class="n">tag</span><span class="o">=</span><span class="s2">&quot;override&quot;</span><span class="p">,</span>
+</span><span id="L-188"><a href="#L-188"><span class="linenos">188</span></a>            <span class="n">cuda_version</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+</span><span id="L-189"><a href="#L-189"><span class="linenos">189</span></a>            <span class="n">source</span><span class="o">=</span><span class="s2">&quot;env-override&quot;</span><span class="p">,</span>
+</span><span id="L-190"><a href="#L-190"><span class="linenos">190</span></a>        <span class="p">)</span>
+</span><span id="L-191"><a href="#L-191"><span class="linenos">191</span></a>    <span class="k">if</span> <span class="n">host_cuda</span><span class="o">.</span><span class="n">version</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="L-192"><a href="#L-192"><span class="linenos">192</span></a>        <span class="k">return</span> <span class="n">TorchIndex</span><span class="p">(</span>
+</span><span id="L-193"><a href="#L-193"><span class="linenos">193</span></a>            <span class="n">url</span><span class="o">=</span><span class="n">_CPU_INDEX_URL</span><span class="p">,</span>
+</span><span id="L-194"><a href="#L-194"><span class="linenos">194</span></a>            <span class="n">tag</span><span class="o">=</span><span class="s2">&quot;cpu&quot;</span><span class="p">,</span>
+</span><span id="L-195"><a href="#L-195"><span class="linenos">195</span></a>            <span class="n">cuda_version</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+</span><span id="L-196"><a href="#L-196"><span class="linenos">196</span></a>            <span class="n">source</span><span class="o">=</span><span class="s2">&quot;static-map&quot;</span><span class="p">,</span>
+</span><span id="L-197"><a href="#L-197"><span class="linenos">197</span></a>        <span class="p">)</span>
+</span><span id="L-198"><a href="#L-198"><span class="linenos">198</span></a>    <span class="c1"># Cap the host CUDA version to the venv&#39;s ceiling so a backend pinning an</span>
+</span><span id="L-199"><a href="#L-199"><span class="linenos">199</span></a>    <span class="c1"># older torch is not routed through an index with no compatible wheel.</span>
+</span><span id="L-200"><a href="#L-200"><span class="linenos">200</span></a>    <span class="n">effective</span> <span class="o">=</span> <span class="n">host_cuda</span><span class="o">.</span><span class="n">version</span>
+</span><span id="L-201"><a href="#L-201"><span class="linenos">201</span></a>    <span class="k">if</span> <span class="n">max_cuda_version</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">max_cuda_version</span> <span class="o">&lt;</span> <span class="n">effective</span><span class="p">:</span>
+</span><span id="L-202"><a href="#L-202"><span class="linenos">202</span></a>        <span class="n">effective</span> <span class="o">=</span> <span class="n">max_cuda_version</span>
+</span><span id="L-203"><a href="#L-203"><span class="linenos">203</span></a>    <span class="k">for</span> <span class="n">tag</span><span class="p">,</span> <span class="n">idx_version</span> <span class="ow">in</span> <span class="n">_PYTORCH_INDEX_MAP</span><span class="p">:</span>
+</span><span id="L-204"><a href="#L-204"><span class="linenos">204</span></a>        <span class="k">if</span> <span class="n">idx_version</span> <span class="o">&lt;=</span> <span class="n">effective</span><span class="p">:</span>
+</span><span id="L-205"><a href="#L-205"><span class="linenos">205</span></a>            <span class="k">return</span> <span class="n">TorchIndex</span><span class="p">(</span>
+</span><span id="L-206"><a href="#L-206"><span class="linenos">206</span></a>                <span class="n">url</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">_PYTORCH_INDEX_BASE</span><span class="si">}</span><span class="s2">/</span><span class="si">{</span><span class="n">tag</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+</span><span id="L-207"><a href="#L-207"><span class="linenos">207</span></a>                <span class="n">tag</span><span class="o">=</span><span class="n">tag</span><span class="p">,</span>
+</span><span id="L-208"><a href="#L-208"><span class="linenos">208</span></a>                <span class="n">cuda_version</span><span class="o">=</span><span class="n">idx_version</span><span class="p">,</span>
+</span><span id="L-209"><a href="#L-209"><span class="linenos">209</span></a>                <span class="n">source</span><span class="o">=</span><span class="s2">&quot;static-map&quot;</span><span class="p">,</span>
+</span><span id="L-210"><a href="#L-210"><span class="linenos">210</span></a>            <span class="p">)</span>
+</span><span id="L-211"><a href="#L-211"><span class="linenos">211</span></a>    <span class="k">return</span> <span class="n">TorchIndex</span><span class="p">(</span>
+</span><span id="L-212"><a href="#L-212"><span class="linenos">212</span></a>        <span class="n">url</span><span class="o">=</span><span class="n">_CPU_INDEX_URL</span><span class="p">,</span>
+</span><span id="L-213"><a href="#L-213"><span class="linenos">213</span></a>        <span class="n">tag</span><span class="o">=</span><span class="s2">&quot;cpu&quot;</span><span class="p">,</span>
+</span><span id="L-214"><a href="#L-214"><span class="linenos">214</span></a>        <span class="n">cuda_version</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+</span><span id="L-215"><a href="#L-215"><span class="linenos">215</span></a>        <span class="n">source</span><span class="o">=</span><span class="s2">&quot;static-map&quot;</span><span class="p">,</span>
+</span><span id="L-216"><a href="#L-216"><span class="linenos">216</span></a>    <span class="p">)</span>
 </span></pre></div>
 
 
@@ -689,7 +711,7 @@ driver-to-CUDA mapping is required.</p>
 <div class="attr function">
             
         <span class="def">def</span>
-        <span class="name">pick_torch_index</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">host_cuda</span><span class="p">:</span> <span class="n"><a href="#HostCuda">HostCuda</a></span>,</span><span class="param">	<span class="n">env_override</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span></span><span class="return-annotation">) -> <span class="n"><a href="#TorchIndex">TorchIndex</a></span>:</span></span>
+        <span class="name">pick_torch_index</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">host_cuda</span><span class="p">:</span> <span class="n"><a href="#HostCuda">HostCuda</a></span>,</span><span class="param">	<span class="n">env_override</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">max_cuda_version</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span></span><span class="return-annotation">) -> <span class="n"><a href="#TorchIndex">TorchIndex</a></span>:</span></span>
 
                 <label class="view-source-button" for="pick_torch_index-view-source"><span>View Source</span></label>
 
@@ -698,45 +720,67 @@ driver-to-CUDA mapping is required.</p>
             <div class="pdoc-code codehilite"><pre><span></span><span id="pick_torch_index-154"><a href="#pick_torch_index-154"><span class="linenos">154</span></a><span class="k">def</span><span class="w"> </span><span class="nf">pick_torch_index</span><span class="p">(</span>
 </span><span id="pick_torch_index-155"><a href="#pick_torch_index-155"><span class="linenos">155</span></a>    <span class="n">host_cuda</span><span class="p">:</span> <span class="n">HostCuda</span><span class="p">,</span>
 </span><span id="pick_torch_index-156"><a href="#pick_torch_index-156"><span class="linenos">156</span></a>    <span class="n">env_override</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="pick_torch_index-157"><a href="#pick_torch_index-157"><span class="linenos">157</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">TorchIndex</span><span class="p">:</span>
-</span><span id="pick_torch_index-158"><a href="#pick_torch_index-158"><span class="linenos">158</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Choose the PyTorch wheel index URL for this host.</span>
-</span><span id="pick_torch_index-159"><a href="#pick_torch_index-159"><span class="linenos">159</span></a>
-</span><span id="pick_torch_index-160"><a href="#pick_torch_index-160"><span class="linenos">160</span></a><span class="sd">    Order:</span>
-</span><span id="pick_torch_index-161"><a href="#pick_torch_index-161"><span class="linenos">161</span></a>
-</span><span id="pick_torch_index-162"><a href="#pick_torch_index-162"><span class="linenos">162</span></a><span class="sd">    1. If ``env_override`` is set + non-empty → return that URL verbatim with</span>
-</span><span id="pick_torch_index-163"><a href="#pick_torch_index-163"><span class="linenos">163</span></a><span class="sd">       ``tag=&quot;override&quot;``, ``source=&quot;env-override&quot;``. Highest priority.</span>
-</span><span id="pick_torch_index-164"><a href="#pick_torch_index-164"><span class="linenos">164</span></a><span class="sd">    2. If host has no CUDA → CPU index.</span>
-</span><span id="pick_torch_index-165"><a href="#pick_torch_index-165"><span class="linenos">165</span></a><span class="sd">    3. Pick the highest entry in the static map whose CUDA version is ``&lt;=``</span>
-</span><span id="pick_torch_index-166"><a href="#pick_torch_index-166"><span class="linenos">166</span></a><span class="sd">       the host&#39;s. No match → CPU index.</span>
-</span><span id="pick_torch_index-167"><a href="#pick_torch_index-167"><span class="linenos">167</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="pick_torch_index-168"><a href="#pick_torch_index-168"><span class="linenos">168</span></a>    <span class="k">if</span> <span class="n">env_override</span><span class="p">:</span>
-</span><span id="pick_torch_index-169"><a href="#pick_torch_index-169"><span class="linenos">169</span></a>        <span class="k">return</span> <span class="n">TorchIndex</span><span class="p">(</span>
-</span><span id="pick_torch_index-170"><a href="#pick_torch_index-170"><span class="linenos">170</span></a>            <span class="n">url</span><span class="o">=</span><span class="n">env_override</span><span class="p">,</span>
-</span><span id="pick_torch_index-171"><a href="#pick_torch_index-171"><span class="linenos">171</span></a>            <span class="n">tag</span><span class="o">=</span><span class="s2">&quot;override&quot;</span><span class="p">,</span>
-</span><span id="pick_torch_index-172"><a href="#pick_torch_index-172"><span class="linenos">172</span></a>            <span class="n">cuda_version</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-</span><span id="pick_torch_index-173"><a href="#pick_torch_index-173"><span class="linenos">173</span></a>            <span class="n">source</span><span class="o">=</span><span class="s2">&quot;env-override&quot;</span><span class="p">,</span>
-</span><span id="pick_torch_index-174"><a href="#pick_torch_index-174"><span class="linenos">174</span></a>        <span class="p">)</span>
-</span><span id="pick_torch_index-175"><a href="#pick_torch_index-175"><span class="linenos">175</span></a>    <span class="k">if</span> <span class="n">host_cuda</span><span class="o">.</span><span class="n">version</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="pick_torch_index-176"><a href="#pick_torch_index-176"><span class="linenos">176</span></a>        <span class="k">return</span> <span class="n">TorchIndex</span><span class="p">(</span>
-</span><span id="pick_torch_index-177"><a href="#pick_torch_index-177"><span class="linenos">177</span></a>            <span class="n">url</span><span class="o">=</span><span class="n">_CPU_INDEX_URL</span><span class="p">,</span>
-</span><span id="pick_torch_index-178"><a href="#pick_torch_index-178"><span class="linenos">178</span></a>            <span class="n">tag</span><span class="o">=</span><span class="s2">&quot;cpu&quot;</span><span class="p">,</span>
-</span><span id="pick_torch_index-179"><a href="#pick_torch_index-179"><span class="linenos">179</span></a>            <span class="n">cuda_version</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-</span><span id="pick_torch_index-180"><a href="#pick_torch_index-180"><span class="linenos">180</span></a>            <span class="n">source</span><span class="o">=</span><span class="s2">&quot;static-map&quot;</span><span class="p">,</span>
-</span><span id="pick_torch_index-181"><a href="#pick_torch_index-181"><span class="linenos">181</span></a>        <span class="p">)</span>
-</span><span id="pick_torch_index-182"><a href="#pick_torch_index-182"><span class="linenos">182</span></a>    <span class="k">for</span> <span class="n">tag</span><span class="p">,</span> <span class="n">idx_version</span> <span class="ow">in</span> <span class="n">_PYTORCH_INDEX_MAP</span><span class="p">:</span>
-</span><span id="pick_torch_index-183"><a href="#pick_torch_index-183"><span class="linenos">183</span></a>        <span class="k">if</span> <span class="n">idx_version</span> <span class="o">&lt;=</span> <span class="n">host_cuda</span><span class="o">.</span><span class="n">version</span><span class="p">:</span>
-</span><span id="pick_torch_index-184"><a href="#pick_torch_index-184"><span class="linenos">184</span></a>            <span class="k">return</span> <span class="n">TorchIndex</span><span class="p">(</span>
-</span><span id="pick_torch_index-185"><a href="#pick_torch_index-185"><span class="linenos">185</span></a>                <span class="n">url</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">_PYTORCH_INDEX_BASE</span><span class="si">}</span><span class="s2">/</span><span class="si">{</span><span class="n">tag</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
-</span><span id="pick_torch_index-186"><a href="#pick_torch_index-186"><span class="linenos">186</span></a>                <span class="n">tag</span><span class="o">=</span><span class="n">tag</span><span class="p">,</span>
-</span><span id="pick_torch_index-187"><a href="#pick_torch_index-187"><span class="linenos">187</span></a>                <span class="n">cuda_version</span><span class="o">=</span><span class="n">idx_version</span><span class="p">,</span>
-</span><span id="pick_torch_index-188"><a href="#pick_torch_index-188"><span class="linenos">188</span></a>                <span class="n">source</span><span class="o">=</span><span class="s2">&quot;static-map&quot;</span><span class="p">,</span>
-</span><span id="pick_torch_index-189"><a href="#pick_torch_index-189"><span class="linenos">189</span></a>            <span class="p">)</span>
-</span><span id="pick_torch_index-190"><a href="#pick_torch_index-190"><span class="linenos">190</span></a>    <span class="k">return</span> <span class="n">TorchIndex</span><span class="p">(</span>
-</span><span id="pick_torch_index-191"><a href="#pick_torch_index-191"><span class="linenos">191</span></a>        <span class="n">url</span><span class="o">=</span><span class="n">_CPU_INDEX_URL</span><span class="p">,</span>
-</span><span id="pick_torch_index-192"><a href="#pick_torch_index-192"><span class="linenos">192</span></a>        <span class="n">tag</span><span class="o">=</span><span class="s2">&quot;cpu&quot;</span><span class="p">,</span>
-</span><span id="pick_torch_index-193"><a href="#pick_torch_index-193"><span class="linenos">193</span></a>        <span class="n">cuda_version</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-</span><span id="pick_torch_index-194"><a href="#pick_torch_index-194"><span class="linenos">194</span></a>        <span class="n">source</span><span class="o">=</span><span class="s2">&quot;static-map&quot;</span><span class="p">,</span>
-</span><span id="pick_torch_index-195"><a href="#pick_torch_index-195"><span class="linenos">195</span></a>    <span class="p">)</span>
+</span><span id="pick_torch_index-157"><a href="#pick_torch_index-157"><span class="linenos">157</span></a>    <span class="n">max_cuda_version</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="pick_torch_index-158"><a href="#pick_torch_index-158"><span class="linenos">158</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">TorchIndex</span><span class="p">:</span>
+</span><span id="pick_torch_index-159"><a href="#pick_torch_index-159"><span class="linenos">159</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Choose the PyTorch wheel index URL for this host.</span>
+</span><span id="pick_torch_index-160"><a href="#pick_torch_index-160"><span class="linenos">160</span></a>
+</span><span id="pick_torch_index-161"><a href="#pick_torch_index-161"><span class="linenos">161</span></a><span class="sd">    Order:</span>
+</span><span id="pick_torch_index-162"><a href="#pick_torch_index-162"><span class="linenos">162</span></a>
+</span><span id="pick_torch_index-163"><a href="#pick_torch_index-163"><span class="linenos">163</span></a><span class="sd">    1. If ``env_override`` is set + non-empty → return that URL verbatim with</span>
+</span><span id="pick_torch_index-164"><a href="#pick_torch_index-164"><span class="linenos">164</span></a><span class="sd">       ``tag=&quot;override&quot;``, ``source=&quot;env-override&quot;``. Highest priority.</span>
+</span><span id="pick_torch_index-165"><a href="#pick_torch_index-165"><span class="linenos">165</span></a><span class="sd">    2. If host has no CUDA → CPU index.</span>
+</span><span id="pick_torch_index-166"><a href="#pick_torch_index-166"><span class="linenos">166</span></a><span class="sd">    3. Pick the highest entry in the static map whose CUDA version is ``&lt;=``</span>
+</span><span id="pick_torch_index-167"><a href="#pick_torch_index-167"><span class="linenos">167</span></a><span class="sd">       the *effective* CUDA version, where the effective version is the host&#39;s</span>
+</span><span id="pick_torch_index-168"><a href="#pick_torch_index-168"><span class="linenos">168</span></a><span class="sd">       capped by ``max_cuda_version`` (see below). No match → CPU index.</span>
+</span><span id="pick_torch_index-169"><a href="#pick_torch_index-169"><span class="linenos">169</span></a>
+</span><span id="pick_torch_index-170"><a href="#pick_torch_index-170"><span class="linenos">170</span></a><span class="sd">    Args:</span>
+</span><span id="pick_torch_index-171"><a href="#pick_torch_index-171"><span class="linenos">171</span></a><span class="sd">        host_cuda: Probed host CUDA capability.</span>
+</span><span id="pick_torch_index-172"><a href="#pick_torch_index-172"><span class="linenos">172</span></a><span class="sd">        env_override: Operator override (``SENSELAB_TORCH_INDEX_URL``); wins outright.</span>
+</span><span id="pick_torch_index-173"><a href="#pick_torch_index-173"><span class="linenos">173</span></a><span class="sd">        max_cuda_version: Per-venv ceiling on the CUDA index. A backend whose</span>
+</span><span id="pick_torch_index-174"><a href="#pick_torch_index-174"><span class="linenos">174</span></a><span class="sd">            ``torch`` pin has no wheel on the newest index the host would</span>
+</span><span id="pick_torch_index-175"><a href="#pick_torch_index-175"><span class="linenos">175</span></a><span class="sd">            otherwise select must declare the newest index that *does* carry</span>
+</span><span id="pick_torch_index-176"><a href="#pick_torch_index-176"><span class="linenos">176</span></a><span class="sd">            its wheels. Example: brouhaha pins ``torch&gt;=2.0,&lt;2.3``; the</span>
+</span><span id="pick_torch_index-177"><a href="#pick_torch_index-177"><span class="linenos">177</span></a><span class="sd">            ``cu128`` index (selected on a CUDA-12.8 host) publishes no</span>
+</span><span id="pick_torch_index-178"><a href="#pick_torch_index-178"><span class="linenos">178</span></a><span class="sd">            ``torch&lt;2.3`` linux-x86_64 wheel, so the Stage-1 install is</span>
+</span><span id="pick_torch_index-179"><a href="#pick_torch_index-179"><span class="linenos">179</span></a><span class="sd">            unsatisfiable. Declaring ``(12, 1)`` caps the selection to</span>
+</span><span id="pick_torch_index-180"><a href="#pick_torch_index-180"><span class="linenos">180</span></a><span class="sd">            ``cu121`` (which carries ``torch==2.2.2+cu121`` + matching</span>
+</span><span id="pick_torch_index-181"><a href="#pick_torch_index-181"><span class="linenos">181</span></a><span class="sd">            ``torchaudio``), forward-compatible with 12.x/13.x drivers for</span>
+</span><span id="pick_torch_index-182"><a href="#pick_torch_index-182"><span class="linenos">182</span></a><span class="sd">            inference. ``None`` (default) applies no cap — backends pinning</span>
+</span><span id="pick_torch_index-183"><a href="#pick_torch_index-183"><span class="linenos">183</span></a><span class="sd">            modern torch (e.g. ``&gt;=2.8``) correctly keep ``cu128``.</span>
+</span><span id="pick_torch_index-184"><a href="#pick_torch_index-184"><span class="linenos">184</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="pick_torch_index-185"><a href="#pick_torch_index-185"><span class="linenos">185</span></a>    <span class="k">if</span> <span class="n">env_override</span><span class="p">:</span>
+</span><span id="pick_torch_index-186"><a href="#pick_torch_index-186"><span class="linenos">186</span></a>        <span class="k">return</span> <span class="n">TorchIndex</span><span class="p">(</span>
+</span><span id="pick_torch_index-187"><a href="#pick_torch_index-187"><span class="linenos">187</span></a>            <span class="n">url</span><span class="o">=</span><span class="n">env_override</span><span class="p">,</span>
+</span><span id="pick_torch_index-188"><a href="#pick_torch_index-188"><span class="linenos">188</span></a>            <span class="n">tag</span><span class="o">=</span><span class="s2">&quot;override&quot;</span><span class="p">,</span>
+</span><span id="pick_torch_index-189"><a href="#pick_torch_index-189"><span class="linenos">189</span></a>            <span class="n">cuda_version</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+</span><span id="pick_torch_index-190"><a href="#pick_torch_index-190"><span class="linenos">190</span></a>            <span class="n">source</span><span class="o">=</span><span class="s2">&quot;env-override&quot;</span><span class="p">,</span>
+</span><span id="pick_torch_index-191"><a href="#pick_torch_index-191"><span class="linenos">191</span></a>        <span class="p">)</span>
+</span><span id="pick_torch_index-192"><a href="#pick_torch_index-192"><span class="linenos">192</span></a>    <span class="k">if</span> <span class="n">host_cuda</span><span class="o">.</span><span class="n">version</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="pick_torch_index-193"><a href="#pick_torch_index-193"><span class="linenos">193</span></a>        <span class="k">return</span> <span class="n">TorchIndex</span><span class="p">(</span>
+</span><span id="pick_torch_index-194"><a href="#pick_torch_index-194"><span class="linenos">194</span></a>            <span class="n">url</span><span class="o">=</span><span class="n">_CPU_INDEX_URL</span><span class="p">,</span>
+</span><span id="pick_torch_index-195"><a href="#pick_torch_index-195"><span class="linenos">195</span></a>            <span class="n">tag</span><span class="o">=</span><span class="s2">&quot;cpu&quot;</span><span class="p">,</span>
+</span><span id="pick_torch_index-196"><a href="#pick_torch_index-196"><span class="linenos">196</span></a>            <span class="n">cuda_version</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+</span><span id="pick_torch_index-197"><a href="#pick_torch_index-197"><span class="linenos">197</span></a>            <span class="n">source</span><span class="o">=</span><span class="s2">&quot;static-map&quot;</span><span class="p">,</span>
+</span><span id="pick_torch_index-198"><a href="#pick_torch_index-198"><span class="linenos">198</span></a>        <span class="p">)</span>
+</span><span id="pick_torch_index-199"><a href="#pick_torch_index-199"><span class="linenos">199</span></a>    <span class="c1"># Cap the host CUDA version to the venv&#39;s ceiling so a backend pinning an</span>
+</span><span id="pick_torch_index-200"><a href="#pick_torch_index-200"><span class="linenos">200</span></a>    <span class="c1"># older torch is not routed through an index with no compatible wheel.</span>
+</span><span id="pick_torch_index-201"><a href="#pick_torch_index-201"><span class="linenos">201</span></a>    <span class="n">effective</span> <span class="o">=</span> <span class="n">host_cuda</span><span class="o">.</span><span class="n">version</span>
+</span><span id="pick_torch_index-202"><a href="#pick_torch_index-202"><span class="linenos">202</span></a>    <span class="k">if</span> <span class="n">max_cuda_version</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">max_cuda_version</span> <span class="o">&lt;</span> <span class="n">effective</span><span class="p">:</span>
+</span><span id="pick_torch_index-203"><a href="#pick_torch_index-203"><span class="linenos">203</span></a>        <span class="n">effective</span> <span class="o">=</span> <span class="n">max_cuda_version</span>
+</span><span id="pick_torch_index-204"><a href="#pick_torch_index-204"><span class="linenos">204</span></a>    <span class="k">for</span> <span class="n">tag</span><span class="p">,</span> <span class="n">idx_version</span> <span class="ow">in</span> <span class="n">_PYTORCH_INDEX_MAP</span><span class="p">:</span>
+</span><span id="pick_torch_index-205"><a href="#pick_torch_index-205"><span class="linenos">205</span></a>        <span class="k">if</span> <span class="n">idx_version</span> <span class="o">&lt;=</span> <span class="n">effective</span><span class="p">:</span>
+</span><span id="pick_torch_index-206"><a href="#pick_torch_index-206"><span class="linenos">206</span></a>            <span class="k">return</span> <span class="n">TorchIndex</span><span class="p">(</span>
+</span><span id="pick_torch_index-207"><a href="#pick_torch_index-207"><span class="linenos">207</span></a>                <span class="n">url</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">_PYTORCH_INDEX_BASE</span><span class="si">}</span><span class="s2">/</span><span class="si">{</span><span class="n">tag</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+</span><span id="pick_torch_index-208"><a href="#pick_torch_index-208"><span class="linenos">208</span></a>                <span class="n">tag</span><span class="o">=</span><span class="n">tag</span><span class="p">,</span>
+</span><span id="pick_torch_index-209"><a href="#pick_torch_index-209"><span class="linenos">209</span></a>                <span class="n">cuda_version</span><span class="o">=</span><span class="n">idx_version</span><span class="p">,</span>
+</span><span id="pick_torch_index-210"><a href="#pick_torch_index-210"><span class="linenos">210</span></a>                <span class="n">source</span><span class="o">=</span><span class="s2">&quot;static-map&quot;</span><span class="p">,</span>
+</span><span id="pick_torch_index-211"><a href="#pick_torch_index-211"><span class="linenos">211</span></a>            <span class="p">)</span>
+</span><span id="pick_torch_index-212"><a href="#pick_torch_index-212"><span class="linenos">212</span></a>    <span class="k">return</span> <span class="n">TorchIndex</span><span class="p">(</span>
+</span><span id="pick_torch_index-213"><a href="#pick_torch_index-213"><span class="linenos">213</span></a>        <span class="n">url</span><span class="o">=</span><span class="n">_CPU_INDEX_URL</span><span class="p">,</span>
+</span><span id="pick_torch_index-214"><a href="#pick_torch_index-214"><span class="linenos">214</span></a>        <span class="n">tag</span><span class="o">=</span><span class="s2">&quot;cpu&quot;</span><span class="p">,</span>
+</span><span id="pick_torch_index-215"><a href="#pick_torch_index-215"><span class="linenos">215</span></a>        <span class="n">cuda_version</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+</span><span id="pick_torch_index-216"><a href="#pick_torch_index-216"><span class="linenos">216</span></a>        <span class="n">source</span><span class="o">=</span><span class="s2">&quot;static-map&quot;</span><span class="p">,</span>
+</span><span id="pick_torch_index-217"><a href="#pick_torch_index-217"><span class="linenos">217</span></a>    <span class="p">)</span>
 </span></pre></div>
 
 
@@ -749,8 +793,27 @@ driver-to-CUDA mapping is required.</p>
 <code>tag="override"</code>, <code>source="env-override"</code>. Highest priority.</li>
 <li>If host has no CUDA → CPU index.</li>
 <li>Pick the highest entry in the static map whose CUDA version is <code>&lt;=</code>
-the host's. No match → CPU index.</li>
+the <em>effective</em> CUDA version, where the effective version is the host's
+capped by <code>max_cuda_version</code> (see below). No match → CPU index.</li>
 </ol>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>host_cuda:</strong>  Probed host CUDA capability.</li>
+<li><strong>env_override:</strong>  Operator override (<code>SENSELAB_TORCH_INDEX_URL</code>); wins outright.</li>
+<li><strong>max_cuda_version:</strong>  Per-venv ceiling on the CUDA index. A backend whose
+<code>torch</code> pin has no wheel on the newest index the host would
+otherwise select must declare the newest index that <em>does</em> carry
+its wheels. Example: brouhaha pins <code>torch&gt;=2.0,&lt;2.3</code>; the
+<code>cu128</code> index (selected on a CUDA-12.8 host) publishes no
+<code>torch&lt;2.3</code> linux-x86_64 wheel, so the Stage-1 install is
+unsatisfiable. Declaring <code>(12, 1)</code> caps the selection to
+<code>cu121</code> (which carries <code>torch==2.2.2+cu121</code> + matching
+<code>torchaudio</code>), forward-compatible with 12.x/13.x drivers for
+inference. <code>None</code> (default) applies no cap — backends pinning
+modern torch (e.g. <code>&gt;=2.8</code>) correctly keep <code>cu128</code>.</li>
+</ul>
 </div>
 
 

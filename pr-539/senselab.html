@@ -27,6 +27,7 @@
   <li><a href="#senselab"><code>senselab</code></a>
   <ul>
     <li><a href="#quick-start">Quick start</a></li>
+    <li><a href="#adaptive-audio-analysis-uncertainty-driven">Adaptive audio analysis (uncertainty-driven)</a></li>
     <li><a href="#system-requirements">⚠️ System Requirements</a></li>
     <li><a href="#installation">Installation</a></li>
     <li><a href="#senselab-ai-our-ai-based-chatbot">senselab AI (our AI-based chatbot)</a></li>
@@ -125,6 +126,60 @@ senselab    </h1>
 <li><strong>Interactive examples</strong>: Jupyter notebooks provide practical examples for deriving insights from real-world datasets.</li>
 <li><strong>senselab AI</strong>: Interact with your data through an AI-based chatbot. The AI agent generates and runs senselab-based code for you, making exploration easier and giving you both the results and the code used to produce them (perfect for quick experiments or for users who prefer not to code).</li>
 </ul>
+
+<hr />
+
+<h2 id="adaptive-audio-analysis-uncertainty-driven">Adaptive audio analysis (uncertainty-driven)</h2>
+
+<p>senselab can analyze a recording with its full task suite (diarization, scene/event tagging, quality
+metrics, multi-model ASR + forced alignment, speaker embeddings), quantify <strong>where</strong> the models are
+uncertain along three temporal axes — <em>presence</em> (is someone speaking?), <em>identity</em> (who?), and
+<em>utterance</em> (what was said?) — and then <strong>act on that uncertainty</strong>: a deterministic, budgeted loop
+re-processes only the uncertain regions (extra ASR models, embedding re-clustering, overlap
+detection), fuses a consensus transcript/diarization, and explains any residual uncertainty instead
+of hiding it. Design + results: <code>specs/20260723-225523-dynamic-uncertainty-workflow/</code>.</p>
+
+<p>It runs in two steps:</p>
+
+<div class="pdoc-code codehilite">
+<pre><span></span><code><span class="c1"># Step 1 — analyze: run every model on the recording (results are content-addressably</span>
+<span class="c1"># cached, so re-runs are cheap). `--enhancement auto` adds a triage round 0 that skips</span>
+<span class="c1"># the speech-enhancement pass on clean audio and stops early on silent recordings.</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/analyze_audio.py<span class="w"> </span>path/to/recording.wav<span class="w"> </span>--enhancement<span class="w"> </span>auto
+<span class="c1"># → artifacts/analyze_audio/&lt;name&gt;_&lt;timestamp&gt;/  (per-task JSONs, 9 uncertainty</span>
+<span class="c1">#   parquets, Label Studio bundle, disagreements.json, timeline.png)</span>
+
+<span class="c1"># Step 2 — adapt: run the uncertainty-driven loop over that run directory.</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/adaptive_loop.py<span class="w"> </span>artifacts/analyze_audio/&lt;run_dir&gt;<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--cache-dir<span class="w"> </span>artifacts/analyze_audio_cache<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--ground-truth<span class="w"> </span>path/to/labelstudio_export.json<span class="w">   </span><span class="c1"># optional: scores vs human labels</span>
+</code></pre>
+</div>
+
+<p>The loop writes, under the run directory (or <code>--out</code>):</p>
+
+<ul>
+<li><code>final/transcript.json</code> — consensus word-level transcript (family-weighted voting across all ASR
+models) with speaker attribution, per-word confidence, and alternates where models disagree;</li>
+<li><code>final/diarization.json</code> + <code>final/presence.parquet</code> — refined speaker segments (embedding
+change-point + re-clustering repair) and the fused speech-presence track;</li>
+<li><code>final/convergence.json</code> + <code>final/iterations.json</code> — what the loop did and why: every intervention
+(fired / deferred / blocked) with trigger values and measured uncertainty deltas, budget
+accounting, and regions marked <code>converged</code> / <code>irreducible</code> (with a machine-readable reason);</li>
+<li><code>final/timeline.png</code> — ground truth (if given) vs presence / identity / utterance uncertainty per
+round, interventions, and the confidence-colored fused words;</li>
+<li><code>final/labelstudio_{tasks,config}.{json,xml}</code> + <code>disagreements_resolved.json</code> — the original Label
+Studio bundle with <code>final__*</code> consensus tracks added, and the round-1 disagreements annotated with
+their resolutions.</li>
+</ul>
+
+<p>Useful knobs (all thresholds/budgets/models live in a versioned policy file —
+<code>src/senselab/audio/workflows/audio_analysis/adaptive/policy/default.yaml</code> — overridable via
+<code>--policy my_policy.yaml</code>): <code>--max-rounds</code>, <code>--aggregator</code>, per-run intervention budgets, ASR
+reserve/escalation pools, and identity-repair parameters. Runs are <strong>deterministic</strong>: identical
+inputs + policy produce byte-identical decision logs. <code>HF_TOKEN</code> enables the gated
+<code>pyannote/segmentation-3.0</code> overlap detector; without it the loop degrades gracefully and records
+the skipped intervention in <code>convergence.json → next_actions</code>.</p>
 
 <hr />
 
