@@ -26,6 +26,9 @@ _NEMO_REQUIREMENTS = [
     "pyarrow<18",  # pyarrow 24+ removed PyExtensionType
     "matplotlib",
     "soundfile",
+    # NeMo pulls librosa without a floor; pin numba so uv doesn't backtrack
+    # librosa -> numba -> llvmlite 0.36.0 (no Python 3.12 support). See qwen.py.
+    "numba>=0.60",
 ]
 # NOTE: The `lightning` package was removed from PyPI (April 2026).
 # NeMo requires it but pytorch-lightning is not a drop-in replacement.

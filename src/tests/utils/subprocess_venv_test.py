@@ -47,7 +47,9 @@ def force_cu128(monkeypatch: pytest.MonkeyPatch) -> TorchIndex:
         source="static-map",
     )
     monkeypatch.setattr(subprocess_venv, "detect_host_cuda", lambda: host)
-    monkeypatch.setattr(subprocess_venv, "pick_torch_index", lambda host_cuda, env_override=None: idx)
+    monkeypatch.setattr(
+        subprocess_venv, "pick_torch_index", lambda host_cuda, env_override=None, max_cuda_version=None: idx
+    )
     return idx
 
 

@@ -55,6 +55,35 @@ def _series_for(rows: list, duration_s: float, hop_s: float) -> tuple[np.ndarray
     return centers[order], values[order]
 
 
+def _attr_series(rows: list, attr: str) -> tuple[np.ndarray, np.ndarray]:
+    """Return sorted ``(centers, values)`` for an arbitrary numeric row attribute.
+
+    Used for the scene-quality / sound-source rows, whose values live on the
+    presence rows' additive columns (``quality_*`` / ``src_*``). ``None`` values
+    become ``nan`` so gaps don't draw as zeros.
+    """
+    if not rows:
+        return np.array([]), np.array([])
+    centers = np.array([0.5 * (r.start + r.end) for r in rows], dtype=np.float64)
+    values = np.array(
+        [float(v) if (v := getattr(r, attr, None)) is not None else np.nan for r in rows],
+        dtype=np.float64,
+    )
+    order = np.argsort(centers)
+    return centers[order], values[order]
+
+
+def _presence_has_attr(axis_results: dict, attrs: tuple[str, ...]) -> bool:
+    """True if any presence row across passes carries a non-null value for any of ``attrs``."""
+    for (_pl, axis), result in axis_results.items():
+        if axis != "presence":
+            continue
+        for r in result.rows:
+            if any(getattr(r, a, None) is not None for a in attrs):
+                return True
+    return False
+
+
 def _seg_attr(seg: Any, name: str) -> Any:  # noqa: ANN401
     """Tolerant getter for ScriptLine vs dict shapes."""
     if isinstance(seg, dict):
@@ -290,32 +319,52 @@ def build_aligned_timeline_plot(
             ppg = (detail_by_pass.get(pl) or {}).get("ppg")
             if ppg and ppg.get("per_frame_phonemes"):
                 n_ppg_stripes += 1
+    # Optional scene rows (feature 20260722-175022) — only when the presence
+    # axis actually carries the additive columns.
+    has_quality = _presence_has_attr(
+        axis_results, ("quality_snr", "quality_clip", "quality_reverb", "quality_bandwidth")
+    )
+    has_sources = _presence_has_attr(axis_results, ("src_speech", "src_people", "src_machine", "src_environment"))
+
+    # Build the row-index map with a running counter so inserting rows never
+    # requires re-deriving fragile offsets.
     height_ratios: list[float] = []
+    row_idx: dict[str, int] = {}
+
+    def _add_row(name: str, height: float) -> None:
+        row_idx[name] = len(height_ratios)
+        height_ratios.append(height)
+
     if has_spec:
-        height_ratios.append(1.6)  # broadband spectrogram
-    height_ratios.extend([1.4, 1.4, 1.4])  # presence / identity / utterance
+        _add_row("spec", 1.6)  # broadband spectrogram
+    _add_row("presence", 1.4)
+    _add_row("identity", 1.4)
+    _add_row("utterance", 1.4)
+    if has_quality:
+        _add_row("quality", 1.2)
+    if has_sources:
+        _add_row("sources", 1.2)
     if has_detail:
         diar_h = max(0.9, 0.3 * max(1, n_diar_stripes))
         asr_h = max(0.9, 0.3 * max(1, n_asr_stripes))
-        height_ratios.append(diar_h)
-        height_ratios.append(1.2)  # embedding row
+        _add_row("diar", diar_h)
+        _add_row("emb", 1.2)
         if n_ppg_stripes > 0:
-            ppg_h = max(0.9, 0.3 * n_ppg_stripes)
-            height_ratios.append(ppg_h)
-        height_ratios.append(asr_h)
+            _add_row("ppg", max(0.9, 0.3 * n_ppg_stripes))
+        _add_row("asr", asr_h)
     n_rows = len(height_ratios)
     fig_height = sum(height_ratios) + 1.0
 
-    # Row index map (axes are indexed top-to-bottom).
-    base = 1 if has_spec else 0
-    spec_row = 0 if has_spec else None
-    presence_row = base
-    identity_row = base + 1
-    utterance_row = base + 2
-    diar_row = base + 3 if has_detail else None
-    emb_row = base + 4 if has_detail else None
-    ppg_row = (base + 5) if (has_detail and n_ppg_stripes > 0) else None
-    asr_row = (base + 6) if (has_detail and n_ppg_stripes > 0) else (base + 5 if has_detail else None)
+    spec_row = row_idx.get("spec")
+    presence_row = row_idx["presence"]
+    identity_row = row_idx["identity"]
+    utterance_row = row_idx["utterance"]
+    quality_row = row_idx.get("quality")
+    sources_row = row_idx.get("sources")
+    diar_row = row_idx.get("diar")
+    emb_row = row_idx.get("emb")
+    ppg_row = row_idx.get("ppg")
+    asr_row = row_idx.get("asr")
 
     will_chunk = duration_s > chunk_duration_s + 0.5
     # When chunking, fix the figure width per-chunk; otherwise scale with duration.
@@ -393,6 +442,70 @@ def build_aligned_timeline_plot(
         ax.grid(axis="x", alpha=0.2)
         if any(line.get_label() and not line.get_label().startswith("_") for line in ax.lines):
             ax.legend(loc="upper right", fontsize=7, ncol=2, framealpha=0.85)
+
+    # Scene quality: the four [0,1] degradation scores over time (0 = clean).
+    if quality_row is not None:
+        ax = axes[quality_row]
+        q_colors = {
+            "quality_snr": "#d62728",
+            "quality_clip": "#9467bd",
+            "quality_reverb": "#8c564b",
+            "quality_bandwidth": "#e377c2",
+        }
+        for pass_label in pass_order:
+            result = axis_results.get((pass_label, "presence"))
+            if result is None:
+                continue
+            alpha, style = _pass_color_alpha(pass_label)
+            for attr, color in q_colors.items():
+                centers, values = _attr_series(result.rows, attr)
+                if centers.size == 0 or np.all(np.isnan(values)):
+                    continue
+                suffix = "" if pass_label == "raw_16k" else " (enh)"
+                label = attr.removeprefix("quality_") + suffix
+                ax.plot(centers, values, linestyle=style, color=color, linewidth=1.0, alpha=alpha, label=label)
+        ax.set_ylim(0, 1)
+        ax.set_ylabel("scene quality\n(0=clean)", fontsize=8)
+        ax.grid(axis="x", alpha=0.2)
+        if any(line.get_label() and not line.get_label().startswith("_") for line in ax.lines):
+            ax.legend(loc="upper right", fontsize=6, ncol=4, framealpha=0.85)
+
+    # Sound sources: stacked category masses (raw pass) — speech/people/machine/environment.
+    if sources_row is not None:
+        ax = axes[sources_row]
+        src_cats = ("src_speech", "src_people", "src_machine", "src_environment")
+        src_colors = {
+            "src_speech": "#2ca02c",
+            "src_people": "#1f77b4",
+            "src_machine": "#7f7f7f",
+            "src_environment": "#bcbd22",
+        }
+        # Prefer the raw pass; fall back to the first presence pass available.
+        result = axis_results.get(("raw_16k", "presence"))
+        if result is None:
+            for pass_label in pass_order:
+                if (pass_label, "presence") in axis_results:
+                    result = axis_results[(pass_label, "presence")]
+                    break
+        if result is not None:
+            rows = sorted(
+                (r for r in result.rows if getattr(r, "src_speech", None) is not None),
+                key=lambda r: r.start,
+            )
+            if rows:
+                centers = np.array([0.5 * (r.start + r.end) for r in rows], dtype=np.float64)
+                stacks = [np.array([float(getattr(r, c) or 0.0) for r in rows], dtype=np.float64) for c in src_cats]
+                ax.stackplot(
+                    centers,
+                    *stacks,
+                    labels=[c.removeprefix("src_") for c in src_cats],
+                    colors=[src_colors[c] for c in src_cats],
+                    alpha=0.85,
+                )
+                ax.legend(loc="upper right", fontsize=6, ncol=4, framealpha=0.85)
+        ax.set_ylim(0, 1)
+        ax.set_ylabel("sound\nsources", fontsize=8)
+        ax.grid(axis="x", alpha=0.2)
 
     if has_detail:
         assert detail_by_pass is not None  # narrow for type checker

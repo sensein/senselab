@@ -53,9 +53,9 @@ def test_parse_args_default_invocation(aa: types.ModuleType) -> None:
     assert args.no_align_asr is False
     assert args.aligner_model == "facebook/mms-1b-all"
     assert args.asr_language is None
-    # Default model lists per spec FR-005 and contracts/cli.md
-    assert "openai/whisper-large-v3-turbo" in args.asr_models
-    assert "ibm-granite/granite-speech-3.3-8b" in args.asr_models
+    # Default model lists per spec FR-005 and contracts/cli.md (ASR overhaul:
+    # CrisperWhisper 2.0 turbo replaces Whisper, Granite removed).
+    assert "nyralabs/CrisperWhisper2.0_turbo" in args.asr_models
     assert "nvidia/canary-qwen-2.5b" in args.asr_models
     assert "Qwen/Qwen3-ASR-1.7B" in args.asr_models
     # Native temporal precision per scene-classification model (FR-008)
@@ -108,65 +108,6 @@ def test_audio_signature_changes_with_sampling_rate(aa: types.ModuleType) -> Non
     assert aa.audio_signature(audio_16k) != aa.audio_signature(audio_8k)
 
 
-def test_cache_key_changes_when_any_input_changes(aa: types.ModuleType) -> None:
-    """Per FR-010: every component of the cache key matters."""
-    base = dict(
-        audio_sig="a" * 64,
-        task="asr",
-        model_id="openai/whisper-tiny",
-        params={"device": "auto"},
-        wrapper_hash="b" * 64,
-        senselab_ver="1.3.1-alpha.27",
-    )
-    base_key = aa.cache_key(**base)
-
-    # Each tweak must produce a different key
-    for field, override in [
-        ("audio_sig", "z" * 64),
-        ("task", "embeddings"),
-        ("model_id", "openai/whisper-base"),
-        ("params", {"device": "cuda"}),
-        ("wrapper_hash", "c" * 64),
-        ("senselab_ver", "1.3.1-alpha.28"),
-    ]:
-        modified = base | {field: override}
-        assert aa.cache_key(**modified) != base_key, f"changing {field} did not invalidate cache key"
-
-
-def test_align_cache_key_is_independent_from_asr_cache_key(aa: types.ModuleType) -> None:
-    """Per FR-024: ASR and alignment cache keys must diverge by construction."""
-    asr_k = aa.cache_key(
-        audio_sig="a" * 64,
-        task="asr",
-        model_id="ibm-granite/granite-speech-3.3-8b",
-        params={"device": "auto"},
-        wrapper_hash="b" * 64,
-        senselab_ver="1.3.1-alpha.27",
-    )
-    align_k = aa.align_cache_key(
-        audio_sig="a" * 64,
-        transcript_sha="c" * 64,
-        language="en",
-        aligner_model_id="facebook/mms-1b-all",
-        aligner_params={"romanize": False},
-        wrapper_hash="b" * 64,
-        senselab_ver="1.3.1-alpha.27",
-    )
-    assert asr_k != align_k
-
-    # Re-running alignment with a different transcript on the same audio invalidates only the alignment key
-    align_k2 = aa.align_cache_key(
-        audio_sig="a" * 64,
-        transcript_sha="d" * 64,
-        language="en",
-        aligner_model_id="facebook/mms-1b-all",
-        aligner_params={"romanize": False},
-        wrapper_hash="b" * 64,
-        senselab_ver="1.3.1-alpha.27",
-    )
-    assert align_k != align_k2
-
-
 def test_transcript_signature_stable_and_unique(aa: types.ModuleType) -> None:
     """sha256(text) is deterministic and content-sensitive."""
     assert aa.transcript_signature("hello world") == aa.transcript_signature("hello world")
@@ -185,26 +126,6 @@ def test_asr_has_timestamps_detects_native_timestamps(aa: types.ModuleType) -> N
     assert aa._asr_has_timestamps(text_with_chunks) is True
     assert aa._asr_has_timestamps([]) is False
     assert aa._asr_has_timestamps(None) is False
-
-
-def test_safe_sanitizes_model_ids_for_filenames(aa: types.ModuleType) -> None:
-    """Forward slashes and dots in model ids must become underscore-safe stems."""
-    assert "/" not in aa._safe("openai/whisper-large-v3-turbo")
-    assert "/" not in aa._safe("speechbrain/spkrec-ecapa-voxceleb")
-    # idempotent on already-safe input
-    assert aa._safe("plain_name") == "plain_name"
-
-
-def test_collect_classification_labels_pulls_unique_labels(aa: types.ModuleType) -> None:
-    """The LS-config XML builder collects every distinct AudioSet label observed."""
-    classify_result = [
-        [
-            {"start": 0.0, "end": 0.5, "labels": ["Speech", "Music"], "scores": [0.9, 0.1]},
-            {"start": 0.5, "end": 1.0, "labels": ["Speech", "Silence"], "scores": [0.8, 0.2]},
-        ]
-    ]
-    labels = aa._collect_classification_labels(classify_result)
-    assert labels == {"Speech", "Music", "Silence"}
 
 
 def test_serialize_handles_tensors_dicts_and_lists(aa: types.ModuleType) -> None:
@@ -227,14 +148,14 @@ def test_serialize_handles_tensors_dicts_and_lists(aa: types.ModuleType) -> None
 def test_comparator_cli_flags_parse(aa: types.ModuleType) -> None:
     """parse_args accepts the new comparator flags with documented defaults.
 
-    Defaults reflect the 2026-05-09 clarifications: cross-stream grid is now
-    0.5 s non-overlapping (the 0.1 / 0.2 grid over-resolved every signal in
-    the system), and ``--speech-presence-labels`` is ``nargs="+"`` since
-    AudioSet labels themselves contain commas (e.g. ``"Narration, monologue"``).
+    Defaults reflect the finer-identity-windows retuning: the cross-stream grid
+    is 0.25 s non-overlapping (the 0.5 s grid under-resolved speaker changes),
+    and ``--speech-presence-labels`` is ``nargs="+"`` since AudioSet labels
+    themselves contain commas (e.g. ``"Narration, monologue"``).
     """
     args = aa.parse_args(["/tmp/dummy.wav"])
-    assert args.cross_stream_win_length == 0.5
-    assert args.cross_stream_hop_length == 0.5
+    assert args.cross_stream_win_length == 0.25
+    assert args.cross_stream_hop_length == 0.25
     assert args.uncertainty_aggregator == "min"
     assert args.phoneme_disagreement_threshold == 0.50
     assert args.diarization_boundary_shift_ms == 50.0
@@ -258,20 +179,6 @@ def test_comparator_cli_flag_validation(aa: types.ModuleType) -> None:
         aa.parse_args(["/tmp/dummy.wav", "--disagreements-top-n", "-3"])
     with pytest.raises(SystemExit):
         aa.parse_args(["/tmp/dummy.wav", "--diarization-boundary-shift-ms", "-1"])
-
-
-def test_classification_to_ls_emits_regions_for_dict_shape(aa: types.ModuleType) -> None:
-    """The LS conversion must skip empty entries but emit one region per dict window."""
-    result = [
-        [
-            {"start": 0.0, "end": 0.5, "labels": ["Speech"], "scores": [0.95]},
-            {"start": 0.5, "end": 1.0, "labels": ["Music"], "scores": [0.62]},
-        ]
-    ]
-    regions = aa._classification_to_ls(result, prefix="raw__ast", win_length=0.5, hop_length=0.5)
-    assert len(regions) == 2
-    labels = [r["value"]["labels"][0] for r in regions]
-    assert labels == ["Speech", "Music"]
 
 
 def test_speech_presence_labels_preserves_multi_word_audioset_labels(aa: types.ModuleType) -> None:
@@ -328,3 +235,94 @@ def test_utterance_grid_validation(aa: types.ModuleType) -> None:
         aa.parse_args(["/tmp/dummy.wav", "--utterance-win-length", "-1"])
     with pytest.raises(SystemExit):
         aa.parse_args(["/tmp/dummy.wav", "--utterance-hop-length", "1.5", "--utterance-win-length", "1.0"])
+
+
+# ── CLI → library adapters (T051 step 5) ──────────────────────────────
+#     These exist because the adapters are the one place argparse attribute
+#     names are read by hand — a typo there is invisible to the library tests
+#     and only shows up at runtime (it did: `args.align_asr` vs `no_align_asr`).
+
+
+def test_pass_plan_reads_every_arg_it_needs(aa: types.ModuleType) -> None:
+    """_pass_plan must not reference an argparse attribute that doesn't exist."""
+    plan = aa._pass_plan(aa.parse_args(["x.wav"]))
+    assert plan.asr_models, "defaults should populate ASR models"
+    assert plan.align_asr is True, "alignment is on unless --no-align-asr"
+
+
+def test_pass_plan_honors_no_align_asr(aa: types.ModuleType) -> None:
+    """--no-align-asr is a store_true flag, so the plan must invert it."""
+    assert aa._pass_plan(aa.parse_args(["x.wav", "--no-align-asr"])).align_asr is False
+
+
+def test_pass_plan_translates_skip_into_absence(aa: types.ModuleType) -> None:
+    """The library has no skip set — skipping is empty tuples and None ids."""
+    plan = aa._pass_plan(aa.parse_args(["x.wav", "--skip", "diarization", "asr", "ast", "features"]))
+    assert plan.diarization_models == ()
+    assert plan.asr_models == ()
+    assert plan.ast_model is None
+    assert plan.features is False
+
+
+def test_pass_plan_reflects_post_triage_mutation(aa: types.ModuleType) -> None:
+    """Built AFTER triage: a no-speech clip must not run diarization or ASR.
+
+    `main` mutates args.skip / args.ppg on the no-speech path, so a plan
+    constructed before that would run the full suite on silence.
+    """
+    args = aa.parse_args(["x.wav"])
+    args.skip = ["diarization", "asr", "features"]  # what triage does
+    args.ppg = False
+    plan = aa._pass_plan(args)
+    assert plan.diarization_models == () and plan.asr_models == () and plan.ppg is False
+
+
+def test_stage_context_carries_provenance_fields(aa: types.ModuleType, tmp_path: types.ModuleType) -> None:
+    """The context must record the resolved source path and pass label."""
+    import torch
+
+    from senselab.audio.data_structures import Audio
+
+    args = aa.parse_args(["x.wav"])
+    audio = Audio(waveform=torch.zeros(1, 16000), sampling_rate=16000)
+    ctx = aa._stage_context("raw_16k", audio, args, device=None, out_dir=tmp_path, cache_dir=None, senselab_ver="v")
+    assert ctx.pass_label == "raw_16k"
+    assert ctx.device_label == "auto"
+    assert ctx.audio_source.endswith("x.wav")
+    assert len(ctx.audio_signature) == 64
+
+
+def test_policy_overrides_are_absent_when_no_flags_given(aa: types.ModuleType) -> None:
+    """Unset adaptive flags must produce all-None overrides, which load_policy drops."""
+    from senselab.audio.workflows.audio_analysis.adaptive.policy import load_policy
+
+    overrides = aa._policy_overrides(aa.parse_args(["x.wav"]))
+    assert load_policy(None, overrides)["policy_hash"] == load_policy()["policy_hash"]
+
+
+def test_policy_overrides_map_budget_and_region_flags(aa: types.ModuleType) -> None:
+    """--budget-* and --region-* land on the policy keys the loop reads."""
+    args = aa.parse_args(
+        ["x.wav", "--budget-medium", "8", "--budget-heavy", "0", "--region-top-n", "16", "--max-region-rounds", "3"]
+    )
+    o = aa._policy_overrides(args)
+    assert o["budget"] == {"medium_per_run": 8, "heavy_per_run": 0}
+    assert o["regions"] == {"top_n_per_round": 16, "max_region_rounds": 3}
+
+
+def test_policy_overrides_pass_the_reserve_pool_in_order(aa: types.ModuleType) -> None:
+    """U2 escalation tries the reserve models in the order given."""
+    args = aa.parse_args(["x.wav", "--reserve-asr-models", "a/one", "b/two"])
+    assert aa._policy_overrides(args)["reserve_asr_models"] == ["a/one", "b/two"]
+
+
+def test_overlap_flag_only_appears_when_passed(aa: types.ModuleType) -> None:
+    """Without the flag the rules block is untouched, so the policy default stands."""
+    assert "rules" not in aa._policy_overrides(aa.parse_args(["x.wav"]))
+    on = aa._policy_overrides(aa.parse_args(["x.wav", "--enable-overlap-separation"]))
+    assert on["rules"]["I4_overlap_detection"]["enabled"] is True
+
+
+def test_max_rounds_defaults_to_three(aa: types.ModuleType) -> None:
+    """contracts/cli.md: default 3 rounds including baseline."""
+    assert aa.parse_args(["x.wav"]).max_rounds == 3

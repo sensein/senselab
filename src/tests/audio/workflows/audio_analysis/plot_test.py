@@ -160,3 +160,34 @@ def test_build_aligned_timeline_plot_chunks_long_audio(tmp_path: Path) -> None:
     assert first.name == "timeline_001.png"
     chunks = sorted(tmp_path.glob("timeline_*.png"))
     assert [p.name for p in chunks] == ["timeline_001.png", "timeline_002.png", "timeline_003.png"]
+
+
+def test_scene_quality_and_source_rows_render(tmp_path: Path) -> None:
+    """Presence rows carrying quality_* / src_* add the scene-quality and sound-source rows."""
+    rows = []
+    for i in range(8):
+        r = _row(i * 0.5, "presence", 0.3)
+        r.quality_snr = 0.2
+        r.quality_clip = 0.05
+        r.quality_reverb = 0.15
+        r.quality_bandwidth = 0.1
+        r.quality_uncertainty = 0.1
+        r.src_speech = 0.6
+        r.src_people = 0.15
+        r.src_machine = 0.15
+        r.src_environment = 0.10
+        r.src_dominant = "speech"
+        rows.append(r)
+    axis_results = {
+        ("raw_16k", "presence"): AxisResult(pass_label="raw_16k", axis="presence", rows=rows),  # type: ignore[arg-type]
+        ("raw_16k", "identity"): AxisResult(
+            pass_label="raw_16k", axis="identity", rows=[_row(i * 0.5, "identity", 0.3) for i in range(8)]
+        ),  # type: ignore[arg-type]
+        ("raw_16k", "utterance"): AxisResult(
+            pass_label="raw_16k", axis="utterance", rows=[_row(i * 0.5, "utterance", 0.3) for i in range(8)]
+        ),  # type: ignore[arg-type]
+    }
+    out = build_aligned_timeline_plot(
+        run_dir=tmp_path, axis_results=axis_results, duration_s=4.0, grid_hop=0.5, detail_by_pass=None
+    )
+    assert out is not None and out.exists() and out.stat().st_size > 0

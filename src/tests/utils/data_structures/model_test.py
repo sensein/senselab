@@ -88,3 +88,63 @@ def test_hfmodel_caches_hf_repo_check(mock_ensure: MagicMock) -> None:
 
     _ = HFModel(path_or_uri="unique_repo_name_2")
     assert mock_ensure.call_count == 2
+
+
+# ── model_for_task / safe_model_id (T051 consolidation) ───────────────
+
+
+def test_model_for_task_routes_diarization_by_prefix() -> None:
+    """Sortformer ids are HF-hosted; every other diarizer is pyannote."""
+    from senselab.utils.data_structures import model_for_task
+    from senselab.utils.data_structures.model import HFModel, PyannoteAudioModel
+
+    assert isinstance(model_for_task("nvidia/diar_sortformer_4spk-v1", task="diarization"), HFModel)
+    assert isinstance(model_for_task("pyannote/speaker-diarization-3.1", task="diarization"), PyannoteAudioModel)
+
+
+def test_model_for_task_routes_remaining_tasks() -> None:
+    """ASR → HF; embeddings and enhancement → SpeechBrain."""
+    from senselab.utils.data_structures import model_for_task
+    from senselab.utils.data_structures.model import HFModel, SpeechBrainModel
+
+    assert isinstance(model_for_task("openai/whisper-tiny", task="asr"), HFModel)
+    assert isinstance(model_for_task("speechbrain/spkrec-ecapa-voxceleb", task="embeddings"), SpeechBrainModel)
+    assert isinstance(model_for_task("speechbrain/sepformer-wham16k-enhancement", task="enhancement"), SpeechBrainModel)
+
+
+def test_model_for_task_rejects_unknown_task() -> None:
+    """An unrecognized task must fail loudly, not default to a provider."""
+    import pytest as _pytest
+
+    from senselab.utils.data_structures import model_for_task
+
+    with _pytest.raises(ValueError, match="unknown task"):
+        model_for_task("some/model", task="not-a-task")
+
+
+def test_safe_model_id_on_real_default_model_ids() -> None:
+    """The two pre-consolidation implementations agreed on every shipped default.
+
+    Pinned so the merge of the char-wise (script) and collapsing (labelstudio)
+    variants is demonstrably behavior-neutral for real inputs.
+    """
+    from senselab.utils.data_structures import safe_model_id
+
+    assert safe_model_id("openai/whisper-large-v3-turbo") == "openai_whisper_large_v3_turbo"
+    assert safe_model_id("nvidia/diar_sortformer_4spk-v1") == "nvidia_diar_sortformer_4spk_v1"
+    assert safe_model_id("MIT/ast-finetuned-audioset-10-10-0.4593") == "MIT_ast_finetuned_audioset_10_10_0_4593"
+    assert safe_model_id("speechbrain/spkrec-ecapa-voxceleb") == "speechbrain_spkrec_ecapa_voxceleb"
+
+
+def test_safe_model_id_collapses_runs_and_strips_edges() -> None:
+    """Where the two old variants DIVERGED: runs collapse to one underscore.
+
+    The char-wise variant produced "a__b" for "a--b"; this documents that the
+    collapsing form won, so filenames and LS track names can never disagree.
+    """
+    from senselab.utils.data_structures import safe_model_id
+
+    assert safe_model_id("a--b") == "a_b"
+    assert safe_model_id("/leading/and/trailing/") == "leading_and_trailing"
+    assert safe_model_id("plain_name") == "plain_name"  # idempotent on safe input
+    assert safe_model_id("///") == "model"  # never empty — LS from_name must be valid

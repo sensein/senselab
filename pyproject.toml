@@ -208,4 +208,4 @@ skip = [
   "*.cha",
   "*.ipynb"
 ]
-ignore-words-list = ["senselab", "nd", "astroid", "wil", "SER", "te", "EXPRESSO", "VAI", "vie", "g2p"]
+ignore-words-list = ["senselab", "nd", "astroid", "wil", "SER", "te", "EXPRESSO", "VAI", "vie", "g2p", "pres", "befores", "trough", "bellow", "coo", "patter", "AER"]
