@@ -42,6 +42,8 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.voice_activity_detection.frame_posteriors import stitch_frames
 from senselab.utils.data_structures import DeviceType, _select_device_and_dtype
 from senselab.utils.data_structures.logging import logger
+from senselab.utils.data_structures.model import get_huggingface_token
+from senselab.utils.dependencies import hf_subprocess_env
 from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
 
 BROUHAHA_MODEL_ID = "pyannote/brouhaha"
@@ -235,6 +237,14 @@ def extract_brouhaha_frames(
             }
         )
 
+        # Stage the (gated) model once (cross-process heartbeat lock) + run the
+        # worker offline so its Model.from_pretrained makes no per-call Hub version
+        # check — the 429 source under parallel batch. If staging fails (no access),
+        # hf_subprocess_env leaves the env online so the worker's current path still
+        # runs.
+        env = hf_subprocess_env(
+            str(model_id), revision, base_env=_clean_subprocess_env(), token=get_huggingface_token()
+        )
         try:
             result = subprocess.run(
                 [python, "-c", _BROUHAHA_WORKER_SCRIPT],
@@ -242,7 +252,7 @@ def extract_brouhaha_frames(
                 capture_output=True,
                 text=True,
                 timeout=1800,
-                env=_clean_subprocess_env(),
+                env=env,
             )
             output = parse_subprocess_result(result, "Brouhaha")
         except Exception as exc:  # noqa: BLE001 — worker failure degrades to null (FR-023)
