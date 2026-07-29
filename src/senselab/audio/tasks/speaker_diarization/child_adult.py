@@ -77,6 +77,7 @@ try:
     audio_paths = args["audio_paths"]
     repo_url = args["repo_url"]
     hf_repo = args["hf_repo"]
+    hf_revision = args["hf_revision"]
     weights_filename = args["weights_filename"]
     repo_dir = Path(args["repo_dir"])
 
@@ -122,7 +123,7 @@ try:
     from models.whisper import WhisperWrapper
     from scripts.infer_wav_file import process_wav_file
 
-    weights_path = hf_hub_download(repo_id=hf_repo, filename=weights_filename)
+    weights_path = hf_hub_download(repo_id=hf_repo, filename=weights_filename, revision=hf_revision)
 
     model = WhisperWrapper()
     model.backbone_model.encoder.embed_positions = (
@@ -176,8 +177,13 @@ def diarize_audios_with_child_adult(
     Audio is chunked into fixed 10-second windows (the model's positional embeddings
     were resized for exactly this length) with frame-level (20ms) predictions
     majority-filtered and merged into segments, reusing upstream's own
-    ``process_wav_file`` rather than reimplementing that logic. A trailing partial
-    window shorter than 10s is dropped by upstream's own chunking loop.
+    ``process_wav_file`` rather than reimplementing that logic.
+
+    **More audio is dropped than just a trailing partial window.** Upstream's own
+    loop advances in 10s steps only while ``start + 10 < length`` (strict ``<``),
+    so: a clip <= 10s analyzes **zero** windows (empty result, indistinguishable
+    from "no adult present" — see ``Returns``); and even longer clips always drop
+    their final 10s block, e.g. a 20.0s clip only analyzes 0-10s, not 0-20s.
 
     Args:
         audios (list[Audio]):
@@ -189,7 +195,10 @@ def diarize_audios_with_child_adult(
 
     Returns:
         list[list[ScriptLine]]: One list per input audio; each `ScriptLine` carries
-        `speaker` (`"CHILD"` / `"ADULT"` / `"OVERLAP"`), `start`, and `end`.
+        `speaker` (`"CHILD"` / `"ADULT"` / `"OVERLAP"`), `start`, and `end`. An empty
+        list means either no adult/child speech was detected *or* the clip was too
+        short to produce any analyzed window (<= 10s) — the two are indistinguishable
+        from the result alone; see the chunking caveat above.
 
     Raises:
         RuntimeError: If CUDA is not available/compatible.
@@ -233,11 +242,15 @@ def diarize_audios_with_child_adult(
             audio.save_to_file(path)
             audio_paths.append(path)
 
+        hf_repo = str(model.path_or_uri)
+        hf_revision = model.revision
+
         input_json = json.dumps(
             {
                 "audio_paths": audio_paths,
                 "repo_url": _CHILD_ADULT_REPO_URL,
-                "hf_repo": _CHILD_ADULT_HF_REPO,
+                "hf_repo": hf_repo,
+                "hf_revision": hf_revision,
                 "weights_filename": _CHILD_ADULT_WEIGHTS_FILENAME,
                 "repo_dir": str(repo_dir),
             }
@@ -248,8 +261,8 @@ def diarize_audios_with_child_adult(
         # once (cross-process, via the heartbeat lock) + run the worker offline so
         # from_pretrained/hf_hub_download calls make no per-call Hub version check.
         env = hf_subprocess_env(
-            _CHILD_ADULT_HF_REPO,
-            "main",
+            hf_repo,
+            hf_revision,
             also=[(repo, "main") for repo in _CHILD_ADULT_BACKBONE_REPOS],
             base_env=_clean_subprocess_env(),
         )

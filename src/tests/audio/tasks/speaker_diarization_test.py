@@ -1,12 +1,12 @@
 """Tests for speaker diarization."""
 
-from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
 import torch
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.preprocessing import concatenate_audios
 from senselab.audio.tasks.speaker_diarization import api as diarization_api
 from senselab.audio.tasks.speaker_diarization import diarize_audios
 from senselab.audio.tasks.speaker_diarization import pyannote as pyannote_module
@@ -14,13 +14,17 @@ from senselab.audio.tasks.speaker_diarization.pyannote import PyannoteDiarizatio
 from senselab.utils.data_structures import DeviceType, PyannoteAudioModel, ScriptLine
 from senselab.utils.data_structures.docker import docker_is_running
 from senselab.utils.data_structures.model import HFModel
+from senselab.utils.subprocess_venv import _cache_dir
 
 if docker_is_running():
     DOCKER_AVAILABLE = True
 else:
     DOCKER_AVAILABLE = False
 
-_CHILD_ADULT_VENV_ROOT = Path.home() / ".cache" / "senselab" / "venvs" / "child-adult-diarization"
+# Honor SENSELAB_VENV_CACHE the same way ensure_venv() does — hardcoding
+# Path.home()/".cache"/... here would silently disagree with a cache dir
+# override, so the gate below would never match where the venv actually lives.
+_CHILD_ADULT_VENV_ROOT = _cache_dir() / "child-adult-diarization"
 child_adult_venv_present = _CHILD_ADULT_VENV_ROOT.exists()
 
 
@@ -210,16 +214,26 @@ def test_diarize_audios_with_diarizen(resampled_mono_audio_sample: Audio) -> Non
 
 
 @pytest.mark.skipif(
-    not child_adult_venv_present,
-    reason=f"child-adult-diarization venv not provisioned at {_CHILD_ADULT_VENV_ROOT}",
+    not child_adult_venv_present or not torch.cuda.is_available(),
+    reason=(
+        f"child-adult-diarization venv not provisioned at {_CHILD_ADULT_VENV_ROOT}, or no "
+        "CUDA available (the backend raises without CUDA rather than falling back to CPU)"
+    ),
 )
 def test_diarize_audios_with_child_adult(resampled_mono_audio_sample: Audio) -> None:
     """Test diarizing audios with the USC-SAIL child-adult classifier (requires CUDA)."""
     from senselab.audio.tasks.speaker_diarization.child_adult import diarize_audios_with_child_adult
 
+    # Upstream's own chunking loop only analyzes whole 10s windows (strict
+    # `start + 10 < length`), so anything <= 10s produces zero windows and an
+    # empty result — indistinguishable from "no adult/child speech detected."
+    # Concatenate the ~4.9s fixture 3x (~14.8s) so this test can actually tell
+    # a broken backend from a too-short clip.
+    long_audio = concatenate_audios([resampled_mono_audio_sample] * 3)
     model: HFModel = HFModel(path_or_uri="AlexXu811/whisper-child-adult")
-    results = diarize_audios_with_child_adult(audios=[resampled_mono_audio_sample], model=model, device=DeviceType.CUDA)
+    results = diarize_audios_with_child_adult(audios=[long_audio], model=model, device=DeviceType.CUDA)
     assert len(results) == 1
+    assert results[0], "expected at least one analyzed window for a ~14.8s clip"
     assert all(isinstance(line, ScriptLine) for line in results[0])
     assert all(line.speaker in ("CHILD", "ADULT", "OVERLAP") for line in results[0])
 
