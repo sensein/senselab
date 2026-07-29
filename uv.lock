@@ -5343,6 +5343,19 @@ wheels = [
 ]
 
 [[package]]
+name = "pyloudnorm"
+version = "0.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "scipy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/23/00/f915eaa75326f4209941179c2b93ac477f2040e4aeff5bb21d16eb8058f9/pyloudnorm-0.2.0.tar.gz", hash = "sha256:8bf597658ea4e1975c275adf490f6deb5369ea409f2901f939915efa4b681b16", size = 14037, upload-time = "2026-01-04T11:43:35.265Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/aa/b6/65a49a05614b2548edbba3aab118f2ebe7441dfd778accdcdce9f6567f20/pyloudnorm-0.2.0-py3-none-any.whl", hash = "sha256:9bb69afb904f59d007a7f9ba3d75d16fb8aeef35c44d6df822a9f192d69cf13f", size = 10879, upload-time = "2026-01-04T11:43:34.534Z" },
+]
+
+[[package]]
 name = "pynndescent"
 version = "0.6.0"
 source = { registry = "https://pypi.org/simple" }
@@ -6399,6 +6412,7 @@ dependencies = [
     { name = "datasets" },
     { name = "huggingface-hub" },
     { name = "iso639" },
+    { name = "librosa" },
     { name = "nest-asyncio" },
     { name = "opensmile" },
     { name = "peft" },
@@ -6406,6 +6420,7 @@ dependencies = [
     { name = "pyannote-audio" },
     { name = "pycountry" },
     { name = "pydantic" },
+    { name = "pyloudnorm" },
     { name = "python-dotenv" },
     { name = "scikit-learn" },
     { name = "speechbrain" },
@@ -6487,6 +6502,7 @@ requires-dist = [
     { name = "iso639", specifier = ">=0.1" },
     { name = "jiwer", marker = "extra == 'nlp'", specifier = ">=3.0" },
     { name = "jupyterlab", marker = "extra == 'senselab-ai'", specifier = "~=4.4" },
+    { name = "librosa", specifier = ">=0.11" },
     { name = "nbformat", marker = "extra == 'senselab-ai'", specifier = "~=5.10" },
     { name = "nbss-upload", marker = "extra == 'senselab-ai'", specifier = "~=0.1" },
     { name = "nest-asyncio", specifier = ">=1.6" },
@@ -6501,6 +6517,7 @@ requires-dist = [
     { name = "pycountry", specifier = ">=24.6" },
     { name = "pydantic", specifier = ">=2.11" },
     { name = "pylangacq", marker = "extra == 'text'", specifier = ">=0.20" },
+    { name = "pyloudnorm", specifier = ">=0.1.1" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "scikit-learn", specifier = ">=1.7" },
     { name = "sentence-transformers", marker = "extra == 'text'", specifier = ">=5.1" },
