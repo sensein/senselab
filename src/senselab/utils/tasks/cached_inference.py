@@ -61,12 +61,19 @@ __all__ = [
     "write_json",
 ]
 
-CACHE_SCHEMA_VERSION = 2
+CACHE_SCHEMA_VERSION = 3
 """Bump to invalidate every on-disk entry (see :func:`sync_cache_with_schema_version`).
 
 Bumped 1 → 2 when ``wrapper_hash`` became ``code_version``: the key payload
 changed shape, so every pre-existing entry is unreadable by construction. The
 wipe is automatic on every host, not a manual ``rm -rf``.
+
+Bumped 2 → 3 for the scene-quality level work: AST classification scores are no
+longer softmaxed across all 527 AudioSet classes (the head is multi-label, and
+the competition was structurally suppressing secondary background categories),
+and the YAMNet path now applies gain before serializing its temp WAV. Both change
+stored classification output, so every pre-existing entry is stale rather than
+merely re-derivable.
 """
 
 
