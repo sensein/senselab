@@ -26,6 +26,7 @@ def diarize_audios(
     min_speakers: Optional[int] = None,
     max_speakers: Optional[int] = None,
     device: Optional[DeviceType] = None,
+    max_new_tokens: Optional[int] = None,
 ) -> List[List[ScriptLine]]:
     """Diarize a batch of `Audio` objects, returning per-speaker time segments.
 
@@ -73,6 +74,11 @@ def diarize_audios(
             NVIDIA Sortformer is limited to 4 speakers.
         device (DeviceType | None):
             Preferred device (e.g., ``DeviceType.CPU``, ``DeviceType.CUDA``).
+        max_new_tokens (int | None):
+            Generation budget for the joint ASR+diarization backends
+            (VibeVoice-ASR-HF, MOSS-Transcribe-Diarize only — ignored otherwise).
+            ``None`` uses each backend's own default (4096). Raise this for
+            recordings long enough to risk truncated generation.
 
     Returns:
         list[list[ScriptLine]]: One list per input audio; each `ScriptLine` carries
@@ -120,10 +126,12 @@ def diarize_audios(
             device=device,
         )
     elif isinstance(model, HFModel) and str(model.path_or_uri).startswith(_VIBEVOICE_PREFIXES):
+        vibevoice_kwargs = {} if max_new_tokens is None else {"max_new_tokens": max_new_tokens}
         return diarize_audios_with_vibevoice(
             audios=audios,
             model=model,
             device=device,
+            **vibevoice_kwargs,
         )
     elif isinstance(model, HFModel) and str(model.path_or_uri).startswith(_CHILD_ADULT_PREFIXES):
         return diarize_audios_with_child_adult(
@@ -132,10 +140,12 @@ def diarize_audios(
             device=device,
         )
     elif isinstance(model, HFModel) and str(model.path_or_uri).startswith(_MOSS_PREFIXES):
+        moss_kwargs = {} if max_new_tokens is None else {"max_new_tokens": max_new_tokens}
         return diarize_audios_with_moss(
             audios=audios,
             model=model,
             device=device,
+            **moss_kwargs,
         )
     elif isinstance(model, HFModel) and str(model.path_or_uri).startswith(_DIARIZEN_PREFIXES):
         return diarize_audios_with_diarizen(

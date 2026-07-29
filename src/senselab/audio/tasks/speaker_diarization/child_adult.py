@@ -54,6 +54,9 @@ _CHILD_ADULT_REQUIREMENTS = [
 # deliberately NOT the "3.12" used by every other subprocess-venv backend in this
 # package. Revisit if 3.12 turns out to work fine once this is actually exercised.
 _CHILD_ADULT_PYTHON = "3.10"
+# torch==2.3.0 only ships wheels on cu121/cu118 — cap the Stage-1 index so a
+# CUDA >= 12.4 host doesn't select an index this pin has no wheel on.
+_CHILD_ADULT_MAX_CUDA_VERSION = (12, 1)
 _CHILD_ADULT_REPO_URL = "https://github.com/usc-sail/child-adult-diarization.git"
 _CHILD_ADULT_HF_REPO = "AlexXu811/whisper-child-adult"
 _CHILD_ADULT_WEIGHTS_FILENAME = "whisper-base_rank8_pretrained_50k.pt"
@@ -86,8 +89,32 @@ try:
             "forward pass with no clean CPU path)."
         )
 
-    if not (repo_dir / "whisper-modeling").is_dir():
-        sp.run(["git", "clone", "--depth", "1", repo_url, str(repo_dir)], check=True)
+    repo_marker = repo_dir / "whisper-modeling"
+    if not repo_marker.is_dir():
+        import fcntl
+        import os
+        import shutil
+        import tempfile as _tempfile
+
+        repo_dir.parent.mkdir(parents=True, exist_ok=True)
+        # Clone under an exclusive flock so concurrent jobs sharing the same
+        # venv/HOME don't race into the same repo_dir, and clone to a sibling
+        # temp dir + atomic os.replace so a clone interrupted mid-way (SIGKILL,
+        # the parent's subprocess timeout) never leaves repo_dir non-empty but
+        # without whisper-modeling/ — which would wedge the guard above forever.
+        with open(str(repo_dir) + ".lock", "w") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                if not repo_marker.is_dir():
+                    if repo_dir.exists():
+                        shutil.rmtree(repo_dir, ignore_errors=True)
+                    tmp_clone_dir = Path(_tempfile.mkdtemp(prefix=".child-adult-clone-", dir=str(repo_dir.parent)))
+                    sp.run(["git", "clone", "--depth", "1", repo_url, str(tmp_clone_dir)], check=True)
+                    if repo_dir.exists():
+                        shutil.rmtree(repo_dir, ignore_errors=True)
+                    os.replace(tmp_clone_dir, repo_dir)
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
     sys.path.insert(0, str(repo_dir / "whisper-modeling"))
 
@@ -189,7 +216,12 @@ def diarize_audios_with_child_adult(
             f"Original error: {exc}"
         ) from exc
 
-    venv_dir = ensure_venv(_CHILD_ADULT_VENV, _CHILD_ADULT_REQUIREMENTS, python_version=_CHILD_ADULT_PYTHON)
+    venv_dir = ensure_venv(
+        _CHILD_ADULT_VENV,
+        _CHILD_ADULT_REQUIREMENTS,
+        python_version=_CHILD_ADULT_PYTHON,
+        max_cuda_version=_CHILD_ADULT_MAX_CUDA_VERSION,
+    )
     python = venv_python(venv_dir)
     repo_dir = Path(venv_dir) / "child-adult-diarization-src"
 
