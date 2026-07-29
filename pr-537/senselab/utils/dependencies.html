@@ -657,11 +657,19 @@
 </span><span id="L-568"><a href="#L-568"><span class="linenos">568</span></a>    <span class="k">try</span><span class="p">:</span>
 </span><span id="L-569"><a href="#L-569"><span class="linenos">569</span></a>        <span class="k">for</span> <span class="n">rid</span><span class="p">,</span> <span class="n">rev</span> <span class="ow">in</span> <span class="n">repos</span><span class="p">:</span>
 </span><span id="L-570"><a href="#L-570"><span class="linenos">570</span></a>            <span class="n">resolve_model</span><span class="p">(</span><span class="n">rid</span><span class="p">,</span> <span class="n">rev</span><span class="p">,</span> <span class="n">token</span><span class="o">=</span><span class="n">token</span><span class="p">)</span>
-</span><span id="L-571"><a href="#L-571"><span class="linenos">571</span></a>    <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
-</span><span id="L-572"><a href="#L-572"><span class="linenos">572</span></a>        <span class="k">return</span> <span class="n">env</span>  <span class="c1"># a model is missing/undownloadable -&gt; let the child try online</span>
-</span><span id="L-573"><a href="#L-573"><span class="linenos">573</span></a>    <span class="k">for</span> <span class="n">var</span> <span class="ow">in</span> <span class="n">_HF_OFFLINE_ENV_VARS</span><span class="p">:</span>
-</span><span id="L-574"><a href="#L-574"><span class="linenos">574</span></a>        <span class="n">env</span><span class="p">[</span><span class="n">var</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;1&quot;</span>
-</span><span id="L-575"><a href="#L-575"><span class="linenos">575</span></a>    <span class="k">return</span> <span class="n">env</span>
+</span><span id="L-571"><a href="#L-571"><span class="linenos">571</span></a>    <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>
+</span><span id="L-572"><a href="#L-572"><span class="linenos">572</span></a>        <span class="c1"># A model is missing/undownloadable -&gt; let the child try online instead</span>
+</span><span id="L-573"><a href="#L-573"><span class="linenos">573</span></a>        <span class="c1"># of failing outright, but say so: silently dropping the offline flag</span>
+</span><span id="L-574"><a href="#L-574"><span class="linenos">574</span></a>        <span class="c1"># here means the child reverts to the exact per-call Hub version-check</span>
+</span><span id="L-575"><a href="#L-575"><span class="linenos">575</span></a>        <span class="c1"># path (the 429 source) this function exists to remove.</span>
+</span><span id="L-576"><a href="#L-576"><span class="linenos">576</span></a>        <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
+</span><span id="L-577"><a href="#L-577"><span class="linenos">577</span></a>            <span class="sa">f</span><span class="s2">&quot;hf_subprocess_env: failed to stage </span><span class="si">{</span><span class="n">rid</span><span class="si">!r}</span><span class="s2">@</span><span class="si">{</span><span class="n">rev</span><span class="si">!r}</span><span class="s2"> for offline use (</span><span class="si">{</span><span class="n">exc</span><span class="si">}</span><span class="s2">); &quot;</span>
+</span><span id="L-578"><a href="#L-578"><span class="linenos">578</span></a>            <span class="s2">&quot;the worker will fall back to online Hub loading for all referenced repos.&quot;</span>
+</span><span id="L-579"><a href="#L-579"><span class="linenos">579</span></a>        <span class="p">)</span>
+</span><span id="L-580"><a href="#L-580"><span class="linenos">580</span></a>        <span class="k">return</span> <span class="n">env</span>
+</span><span id="L-581"><a href="#L-581"><span class="linenos">581</span></a>    <span class="k">for</span> <span class="n">var</span> <span class="ow">in</span> <span class="n">_HF_OFFLINE_ENV_VARS</span><span class="p">:</span>
+</span><span id="L-582"><a href="#L-582"><span class="linenos">582</span></a>        <span class="n">env</span><span class="p">[</span><span class="n">var</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;1&quot;</span>
+</span><span id="L-583"><a href="#L-583"><span class="linenos">583</span></a>    <span class="k">return</span> <span class="n">env</span>
 </span></pre></div>
 
 
@@ -1247,11 +1255,19 @@ forwarded to <code>loader</code> unless injected as above.</p>
 </span><span id="hf_subprocess_env-569"><a href="#hf_subprocess_env-569"><span class="linenos">569</span></a>    <span class="k">try</span><span class="p">:</span>
 </span><span id="hf_subprocess_env-570"><a href="#hf_subprocess_env-570"><span class="linenos">570</span></a>        <span class="k">for</span> <span class="n">rid</span><span class="p">,</span> <span class="n">rev</span> <span class="ow">in</span> <span class="n">repos</span><span class="p">:</span>
 </span><span id="hf_subprocess_env-571"><a href="#hf_subprocess_env-571"><span class="linenos">571</span></a>            <span class="n">resolve_model</span><span class="p">(</span><span class="n">rid</span><span class="p">,</span> <span class="n">rev</span><span class="p">,</span> <span class="n">token</span><span class="o">=</span><span class="n">token</span><span class="p">)</span>
-</span><span id="hf_subprocess_env-572"><a href="#hf_subprocess_env-572"><span class="linenos">572</span></a>    <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
-</span><span id="hf_subprocess_env-573"><a href="#hf_subprocess_env-573"><span class="linenos">573</span></a>        <span class="k">return</span> <span class="n">env</span>  <span class="c1"># a model is missing/undownloadable -&gt; let the child try online</span>
-</span><span id="hf_subprocess_env-574"><a href="#hf_subprocess_env-574"><span class="linenos">574</span></a>    <span class="k">for</span> <span class="n">var</span> <span class="ow">in</span> <span class="n">_HF_OFFLINE_ENV_VARS</span><span class="p">:</span>
-</span><span id="hf_subprocess_env-575"><a href="#hf_subprocess_env-575"><span class="linenos">575</span></a>        <span class="n">env</span><span class="p">[</span><span class="n">var</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;1&quot;</span>
-</span><span id="hf_subprocess_env-576"><a href="#hf_subprocess_env-576"><span class="linenos">576</span></a>    <span class="k">return</span> <span class="n">env</span>
+</span><span id="hf_subprocess_env-572"><a href="#hf_subprocess_env-572"><span class="linenos">572</span></a>    <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>
+</span><span id="hf_subprocess_env-573"><a href="#hf_subprocess_env-573"><span class="linenos">573</span></a>        <span class="c1"># A model is missing/undownloadable -&gt; let the child try online instead</span>
+</span><span id="hf_subprocess_env-574"><a href="#hf_subprocess_env-574"><span class="linenos">574</span></a>        <span class="c1"># of failing outright, but say so: silently dropping the offline flag</span>
+</span><span id="hf_subprocess_env-575"><a href="#hf_subprocess_env-575"><span class="linenos">575</span></a>        <span class="c1"># here means the child reverts to the exact per-call Hub version-check</span>
+</span><span id="hf_subprocess_env-576"><a href="#hf_subprocess_env-576"><span class="linenos">576</span></a>        <span class="c1"># path (the 429 source) this function exists to remove.</span>
+</span><span id="hf_subprocess_env-577"><a href="#hf_subprocess_env-577"><span class="linenos">577</span></a>        <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
+</span><span id="hf_subprocess_env-578"><a href="#hf_subprocess_env-578"><span class="linenos">578</span></a>            <span class="sa">f</span><span class="s2">&quot;hf_subprocess_env: failed to stage </span><span class="si">{</span><span class="n">rid</span><span class="si">!r}</span><span class="s2">@</span><span class="si">{</span><span class="n">rev</span><span class="si">!r}</span><span class="s2"> for offline use (</span><span class="si">{</span><span class="n">exc</span><span class="si">}</span><span class="s2">); &quot;</span>
+</span><span id="hf_subprocess_env-579"><a href="#hf_subprocess_env-579"><span class="linenos">579</span></a>            <span class="s2">&quot;the worker will fall back to online Hub loading for all referenced repos.&quot;</span>
+</span><span id="hf_subprocess_env-580"><a href="#hf_subprocess_env-580"><span class="linenos">580</span></a>        <span class="p">)</span>
+</span><span id="hf_subprocess_env-581"><a href="#hf_subprocess_env-581"><span class="linenos">581</span></a>        <span class="k">return</span> <span class="n">env</span>
+</span><span id="hf_subprocess_env-582"><a href="#hf_subprocess_env-582"><span class="linenos">582</span></a>    <span class="k">for</span> <span class="n">var</span> <span class="ow">in</span> <span class="n">_HF_OFFLINE_ENV_VARS</span><span class="p">:</span>
+</span><span id="hf_subprocess_env-583"><a href="#hf_subprocess_env-583"><span class="linenos">583</span></a>        <span class="n">env</span><span class="p">[</span><span class="n">var</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;1&quot;</span>
+</span><span id="hf_subprocess_env-584"><a href="#hf_subprocess_env-584"><span class="linenos">584</span></a>    <span class="k">return</span> <span class="n">env</span>
 </span></pre></div>
 
 
