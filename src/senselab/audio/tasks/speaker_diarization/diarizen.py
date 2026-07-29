@@ -43,7 +43,13 @@ from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, HFModel, ScriptLine, _select_device_and_dtype
+from senselab.utils.dependencies import hf_subprocess_env
 from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
+
+# Embedding model DiariZenPipeline.from_pretrained downloads internally (see
+# module docstring) — staged alongside the main checkpoint so both are cached
+# before the worker runs offline.
+_DIARIZEN_EMBEDDING_MODEL = "pyannote/wespeaker-voxceleb-resnet34-LM"
 
 _DIARIZEN_VENV = "diarizen"
 _DIARIZEN_REQUIREMENTS = [
@@ -204,7 +210,13 @@ def diarize_audios_with_diarizen(
             }
         )
 
-        env = _clean_subprocess_env()
+        # Stage both the main checkpoint and its internal embedding-model
+        # dependency once (cross-process, via the heartbeat lock) + run the
+        # worker offline so from_pretrained/snapshot_download calls make no
+        # per-call Hub version check — the 429 source under parallel batch load.
+        env = hf_subprocess_env(
+            str(model.path_or_uri), "main", also=[(_DIARIZEN_EMBEDDING_MODEL, "main")], base_env=_clean_subprocess_env()
+        )
         result = subprocess.run(
             [python, "-c", _WORKER_SCRIPT],
             input=input_json,
