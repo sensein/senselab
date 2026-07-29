@@ -139,19 +139,41 @@ def diarize_audios_with_vibevoice(
             audio.save_to_file(wav_path)
 
             inputs = processor.apply_transcription_request(audio=wav_path)  # type: ignore[attr-defined]
-            inputs = {k: v.to(vv_model.device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
+            model_dtype = next(vv_model.parameters()).dtype
+            inputs = {
+                k: (
+                    v.to(device=vv_model.device, dtype=model_dtype)
+                    if v.is_floating_point()
+                    else v.to(device=vv_model.device)
+                )
+                if isinstance(v, torch.Tensor)
+                else v
+                for k, v in inputs.items()
+            }
 
             with torch.no_grad():
                 output_ids = vv_model.generate(**inputs, max_new_tokens=max_new_tokens)  # type: ignore[misc]
 
             generated_ids = output_ids[0, inputs["input_ids"].shape[1] :]
 
+            if generated_ids.shape[-1] >= max_new_tokens:
+                # generate() only stops before max_new_tokens if it hit an EOS token;
+                # reaching the budget means the output is very likely cut off mid-JSON,
+                # which is a different failure mode than "no speech in this audio" —
+                # without this, a caller can't tell the two apart from an empty result.
+                logger.warning(
+                    f"VibeVoice-ASR-HF hit max_new_tokens={max_new_tokens} without generating "
+                    "an end token; output is likely truncated. Pass a higher max_new_tokens "
+                    "for longer recordings."
+                )
+
             try:
                 segments = processor.decode(generated_ids, return_format="parsed")  # type: ignore[attr-defined]
-            except json.JSONDecodeError as exc:
+            except (json.JSONDecodeError, KeyError, IndexError, TypeError, ValueError) as exc:
                 # extract_speaker_dict() doesn't always catch malformed JSON itself
                 # (it only guards a handful of shape checks) — surface this the same
-                # way as its documented "return original text on failure" contract.
+                # way as its documented "return original text on failure" contract,
+                # without letting a shape error abort the whole batch.
                 logger.warning(f"VibeVoice-ASR-HF produced unparsable output: {exc}")
                 segments = []
 

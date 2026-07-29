@@ -30,6 +30,7 @@ from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, HFModel, ScriptLine, _select_device_and_dtype
+from senselab.utils.data_structures.logging import logger
 from senselab.utils.dependencies import hf_subprocess_env
 from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
 
@@ -79,10 +80,17 @@ try:
             device=device, dtype=dtype,
         )
         segments = parse_transcript(result["text"])
-        all_results.append([
-            {"speaker": seg.speaker, "start": seg.start, "end": seg.end, "text": seg.text}
-            for seg in segments
-        ])
+        all_results.append({
+            "segments": [
+                {"speaker": seg.speaker, "start": seg.start, "end": seg.end, "text": seg.text}
+                for seg in segments
+            ],
+            # generate() only stops before max_new_tokens on EOS; hitting the
+            # budget means result["text"] is very likely cut off mid-transcript,
+            # a different failure mode than "no speech" that parse_transcript()
+            # alone can't signal since it just returns whatever prefix parsed.
+            "truncated": result["generated_tokens"] >= max_new_tokens,
+        })
 
     print(json.dumps({"results": all_results}))
 except Exception as exc:
@@ -174,7 +182,13 @@ def diarize_audios_with_moss(
         output = parse_subprocess_result(result, "MOSS-Transcribe-Diarize")
 
         results: List[List[ScriptLine]] = []
-        for segments in output.get("results", []):
+        for i, audio_result in enumerate(output.get("results", [])):
+            if audio_result.get("truncated"):
+                logger.warning(
+                    f"MOSS-Transcribe-Diarize hit max_new_tokens={max_new_tokens} on "
+                    f"{audio_paths[i]!r} without generating an end token; the transcript "
+                    "is likely truncated. Pass a higher max_new_tokens for longer recordings."
+                )
             script_lines = [
                 ScriptLine(
                     speaker=str(seg.get("speaker", "")),
@@ -182,7 +196,7 @@ def diarize_audios_with_moss(
                     end=float(seg.get("end", 0.0)),
                     text=seg.get("text"),
                 )
-                for seg in segments
+                for seg in audio_result.get("segments", [])
             ]
             results.append(sorted(script_lines, key=lambda x: x.start or 0.0))
 
