@@ -51,7 +51,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from senselab.audio.workflows.audio_analysis.clustering import cluster_speaker_labels_by_embedding
+from senselab.audio.workflows.audio_analysis.clustering import (
+    ROLE_LABEL_ONLY_PREFIXES,
+    cluster_speaker_labels_by_embedding,
+)
 from senselab.audio.workflows.audio_analysis.embeddings import (
     WindowEmbedding,
     calibrate_cosine_uncertainty,
@@ -149,7 +152,18 @@ def harvest_identity_votes(
     """
     duration_s = float(pass_summary.get("duration_s", 0.0) or 0.0)
     diar_blocks = (pass_summary.get("diarization") or {}).get("by_model") or {}
-    diar_ok = {m: b for m, b in diar_blocks.items() if isinstance(b, dict) and b.get("status") == "ok"}
+    # Role-label backends (e.g. child-adult's CHILD/ADULT/OVERLAP) don't vote on
+    # speaker *identity* — cluster_speaker_labels_by_embedding already excludes
+    # them from the embedding-clustering step, but without excluding them here
+    # too, cluster_map.get((m, raw_label), raw_label) below would fall back to
+    # the raw role label as a "cluster_id", which would then read as spurious
+    # cross-model disagreement against every other diar model's real identity
+    # clusters in __cross_diar_label_disagreement__.
+    diar_ok = {
+        m: b
+        for m, b in diar_blocks.items()
+        if isinstance(b, dict) and b.get("status") == "ok" and not m.startswith(ROLE_LABEL_ONLY_PREFIXES)
+    }
     if duration_s <= 0:
         for block in diar_ok.values():
             res = block.get("result")

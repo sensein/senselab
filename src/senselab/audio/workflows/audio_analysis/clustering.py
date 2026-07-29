@@ -28,6 +28,14 @@ from senselab.audio.workflows.audio_analysis.embeddings import WindowEmbedding
 
 K = TypeVar("K")
 
+# Diarization backends whose "speaker" label is a role (e.g. CHILD/ADULT/OVERLAP),
+# not a speaker identity. Clustering these by embedding is actively wrong: with
+# two children the CHILD centroid blends two distinct speakers, and OVERLAP is a
+# mixture that snaps to whichever centroid is nearest — silently corrupting the
+# identity axis rather than just being uninformative. Excluded from both the
+# embedding-clustering path and the no-embedding raw-label fallback below.
+ROLE_LABEL_ONLY_PREFIXES = ("AlexXu811/whisper-child-adult",)
+
 
 def _seg_attr(seg: Any, name: str) -> Any:  # noqa: ANN401
     """Tolerant getter for ScriptLine vs dict shapes."""
@@ -232,6 +240,8 @@ def cluster_speaker_labels_by_embedding(
         if failures is not None:
             failures[failure_key] = msg
         for m, block in diar_blocks.items():
+            if m.startswith(ROLE_LABEL_ONLY_PREFIXES):
+                continue
             for seg in _diar_segments(block):
                 spk = str(_seg_attr(seg, "speaker") or "?")
                 out.setdefault((m, spk), spk)
@@ -248,6 +258,8 @@ def cluster_speaker_labels_by_embedding(
     seed_groups: dict[str, list[tuple[tuple[str, str], np.ndarray]]] = {}
     other_items: list[tuple[tuple[str, str], np.ndarray]] = []
     for m, block in diar_blocks.items():
+        if m.startswith(ROLE_LABEL_ONLY_PREFIXES):
+            continue
         segs_by_label: dict[str, list[Any]] = {}
         for seg in _diar_segments(block):
             spk = str(_seg_attr(seg, "speaker") or "?")
