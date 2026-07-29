@@ -72,6 +72,7 @@ REVIEWED_INPROCESS = {
     "audio/tasks/classification/speech_emotion_recognition/api.py",
     "audio/tasks/forced_alignment/forced_alignment.py",
     "audio/tasks/speaker_diarization/pyannote.py",
+    "audio/tasks/speaker_diarization/vibevoice.py",
     "audio/tasks/speaker_embeddings/speechbrain.py",
     "audio/tasks/speech_enhancement/speechbrain.py",
     "audio/tasks/speech_to_text/granite.py",
@@ -91,6 +92,9 @@ REVIEWED_INPROCESS = {
 # hf_subprocess_env and runs the worker offline.
 REVIEWED_SUBPROCESS = {
     "audio/tasks/classification/speech_emotion_recognition/api.py",
+    "audio/tasks/speaker_diarization/child_adult.py",
+    "audio/tasks/speaker_diarization/diarizen.py",
+    "audio/tasks/speaker_diarization/moss.py",
     "audio/tasks/speaker_diarization/nvidia.py",
     "audio/tasks/speech_to_text/canary_qwen.py",
     "audio/tasks/speech_to_text/nemo.py",

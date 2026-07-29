@@ -30,7 +30,14 @@ from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, HFModel, ScriptLine, _select_device_and_dtype
+from senselab.utils.dependencies import hf_subprocess_env
 from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
+
+# Upstream's WhisperWrapper() (default args) always loads the feature extractor
+# from "openai/whisper-tiny" and the backbone from "openai/whisper-base" (the
+# LoRA weights filename here is the "whisper-base" checkpoint) — staged
+# alongside the LoRA weights repo so the worker can run fully offline.
+_CHILD_ADULT_BACKBONE_REPOS = ("openai/whisper-tiny", "openai/whisper-base")
 
 _CHILD_ADULT_VENV = "child-adult-diarization"
 _CHILD_ADULT_REQUIREMENTS = [
@@ -204,7 +211,16 @@ def diarize_audios_with_child_adult(
             }
         )
 
-        env = _clean_subprocess_env()
+        # Stage the LoRA weights repo + the base Whisper feature-extractor/backbone
+        # repos WhisperWrapper() loads internally (see _CHILD_ADULT_BACKBONE_REPOS)
+        # once (cross-process, via the heartbeat lock) + run the worker offline so
+        # from_pretrained/hf_hub_download calls make no per-call Hub version check.
+        env = hf_subprocess_env(
+            _CHILD_ADULT_HF_REPO,
+            "main",
+            also=[(repo, "main") for repo in _CHILD_ADULT_BACKBONE_REPOS],
+            base_env=_clean_subprocess_env(),
+        )
         result = subprocess.run(
             [python, "-c", _WORKER_SCRIPT],
             input=input_json,

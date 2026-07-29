@@ -11,6 +11,7 @@ from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, HFModel, ScriptLine, _select_device_and_dtype
 from senselab.utils.data_structures.logging import logger
 from senselab.utils.data_structures.model import get_huggingface_token
+from senselab.utils.dependencies import load_hf_resilient
 
 try:
     from transformers import AutoProcessor, VibeVoiceAsrForConditionalGeneration
@@ -60,10 +61,23 @@ class VibeVoiceDiarization:
         )
         key = f"{model.path_or_uri}-{model.revision}-{resolved_device}"
         if key not in cls._models:
+            # load_hf_resilient resolves (repo_id, revision) to an immutable commit
+            # SHA once (download-once via the cross-process heartbeat lock) and
+            # injects revision=<sha>, so a cached model makes no per-call Hub
+            # version check — the 429 source under parallel batch load.
             token = get_huggingface_token()
-            processor = AutoProcessor.from_pretrained(model.path_or_uri, revision=model.revision, token=token)
-            vv_model = VibeVoiceAsrForConditionalGeneration.from_pretrained(
-                model.path_or_uri, revision=model.revision, token=token, dtype=dtype
+            repo_id = str(model.path_or_uri)
+            revision = model.revision or "main"
+            processor = load_hf_resilient(
+                AutoProcessor.from_pretrained, repo_id, repo_id=repo_id, revision=revision, token=token
+            )
+            vv_model = load_hf_resilient(
+                VibeVoiceAsrForConditionalGeneration.from_pretrained,
+                repo_id,
+                repo_id=repo_id,
+                revision=revision,
+                token=token,
+                dtype=dtype,
             )
             vv_model = vv_model.to(torch.device(resolved_device.value))  # type: ignore[arg-type]
             vv_model.eval()
