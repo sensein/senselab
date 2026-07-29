@@ -11,11 +11,26 @@ from senselab.audio.tasks.speaker_diarization.pyannote import diarize_audios_wit
 from senselab.audio.tasks.speaker_diarization.vibevoice import diarize_audios_with_vibevoice
 from senselab.utils.compatibility import requires_compatibility
 from senselab.utils.data_structures import DeviceType, HFModel, PyannoteAudioModel, ScriptLine, SenselabModel
+from senselab.utils.data_structures.logging import logger
 
-_VIBEVOICE_PREFIXES = ("microsoft/VibeVoice",)
+_VIBEVOICE_PREFIXES = ("microsoft/VibeVoice-ASR",)
 _CHILD_ADULT_PREFIXES = ("AlexXu811/whisper-child-adult",)
 _MOSS_PREFIXES = ("OpenMOSS-Team/MOSS-Transcribe-Diarize",)
 _DIARIZEN_PREFIXES = ("BUT-FIT/diarizen",)
+
+
+def _warn_if_speaker_hints_ignored(
+    backend_name: str,
+    num_speakers: Optional[int],
+    min_speakers: Optional[int],
+    max_speakers: Optional[int],
+) -> None:
+    """Warn when num_speakers/min_speakers/max_speakers were passed to a backend that ignores them."""
+    if num_speakers is not None or min_speakers is not None or max_speakers is not None:
+        logger.warning(
+            f"num_speakers/min_speakers/max_speakers are ignored by {backend_name} "
+            "(Pyannote-only hints) and will have no effect on this call."
+        )
 
 
 @requires_compatibility("audio.tasks.speaker_diarization.diarize_audios")
@@ -37,9 +52,10 @@ def diarize_audios(
     - If `model` is an `HFModel` and `model.path_or_uri` starts with `"nvidia/diar_sortformer"`,
       uses NVIDIA Sortformer via an isolated subprocess venv (nvidia/diar_sortformer_4spk-v1
       detects max **4 speakers**).
-    - If `model` is an `HFModel` and `model.path_or_uri` starts with `"microsoft/VibeVoice"`,
+    - If `model` is an `HFModel` and `model.path_or_uri` starts with `"microsoft/VibeVoice-ASR"`,
       uses VibeVoice-ASR-HF in-process (``transformers>=5.3``'s
-      ``VibeVoiceAsrForConditionalGeneration``).
+      ``VibeVoiceAsrForConditionalGeneration``). Narrower than the bare `"microsoft/VibeVoice"`
+      prefix on purpose — `microsoft/VibeVoice-1.5B`/`-Large` are TTS checkpoints, not ASR.
     - If `model` is an `HFModel` and `model.path_or_uri` starts with
       `"AlexXu811/whisper-child-adult"`, uses the USC-SAIL child-adult classifier via an
       isolated subprocess venv (speaker labels are `"CHILD"`/`"ADULT"`/`"OVERLAP"`/`"SILENCE"`
@@ -61,7 +77,7 @@ def diarize_audios(
             Diarization backend:
               * ``PyannoteAudioModel(...)`` → Pyannote (default if ``None``).
               * ``HFModel(path_or_uri="nvidia/diar_sortformer...")`` → NVIDIA Sortformer.
-              * ``HFModel(path_or_uri="microsoft/VibeVoice...")`` → VibeVoice-ASR-HF.
+              * ``HFModel(path_or_uri="microsoft/VibeVoice-ASR...")`` → VibeVoice-ASR-HF.
               * ``HFModel(path_or_uri="AlexXu811/whisper-child-adult")`` → USC-SAIL child-adult.
               * ``HFModel(path_or_uri="OpenMOSS-Team/MOSS-Transcribe-Diarize")`` → MOSS-Transcribe-Diarize.
               * ``HFModel(path_or_uri="BUT-FIT/diarizen-wavlm-large-s80-md")`` → DiariZen.
@@ -126,6 +142,7 @@ def diarize_audios(
             device=device,
         )
     elif isinstance(model, HFModel) and str(model.path_or_uri).startswith(_VIBEVOICE_PREFIXES):
+        _warn_if_speaker_hints_ignored("VibeVoice-ASR-HF", num_speakers, min_speakers, max_speakers)
         vibevoice_kwargs = {} if max_new_tokens is None else {"max_new_tokens": max_new_tokens}
         return diarize_audios_with_vibevoice(
             audios=audios,
@@ -134,12 +151,14 @@ def diarize_audios(
             **vibevoice_kwargs,
         )
     elif isinstance(model, HFModel) and str(model.path_or_uri).startswith(_CHILD_ADULT_PREFIXES):
+        _warn_if_speaker_hints_ignored("the USC-SAIL child-adult classifier", num_speakers, min_speakers, max_speakers)
         return diarize_audios_with_child_adult(
             audios=audios,
             model=model,
             device=device,
         )
     elif isinstance(model, HFModel) and str(model.path_or_uri).startswith(_MOSS_PREFIXES):
+        _warn_if_speaker_hints_ignored("MOSS-Transcribe-Diarize", num_speakers, min_speakers, max_speakers)
         moss_kwargs = {} if max_new_tokens is None else {"max_new_tokens": max_new_tokens}
         return diarize_audios_with_moss(
             audios=audios,
@@ -148,6 +167,7 @@ def diarize_audios(
             **moss_kwargs,
         )
     elif isinstance(model, HFModel) and str(model.path_or_uri).startswith(_DIARIZEN_PREFIXES):
+        _warn_if_speaker_hints_ignored("DiariZen", num_speakers, min_speakers, max_speakers)
         return diarize_audios_with_diarizen(
             audios=audios,
             model=model,

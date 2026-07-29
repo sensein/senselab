@@ -43,6 +43,7 @@ from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, HFModel, ScriptLine, _select_device_and_dtype
+from senselab.utils.data_structures.logging import logger
 from senselab.utils.dependencies import hf_subprocess_env
 from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
 
@@ -189,6 +190,16 @@ def diarize_audios_with_diarizen(
     """
     if model is None:
         model = HFModel(path_or_uri=_DIARIZEN_DEFAULT_MODEL)
+    elif model.revision != "main":
+        # DiariZenPipeline.from_pretrained() takes no revision argument at all —
+        # it always resolves via a plain snapshot_download() with none pinned —
+        # so a non-default revision here would otherwise be silently ignored
+        # rather than actually loading the requested snapshot.
+        logger.warning(
+            f"DiariZen ignores model.revision (got {model.revision!r}): the upstream "
+            "DiariZenPipeline.from_pretrained() has no revision parameter and always "
+            "resolves the latest snapshot."
+        )
 
     _select_device_and_dtype(user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU])
 

@@ -51,6 +51,7 @@ try:
     args = json.loads(sys.stdin.read())
     audio_paths = args["audio_paths"]
     model_name = args["model_name"]
+    model_revision = args["model_revision"]
     device_arg = args["device"]
     max_new_tokens = args["max_new_tokens"]
 
@@ -67,9 +68,9 @@ try:
     dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
 
     model = AutoModelForCausalLM.from_pretrained(
-        model_name, trust_remote_code=True, dtype="auto"
+        model_name, revision=model_revision, trust_remote_code=True, dtype="auto"
     ).to(dtype=dtype).to(device).eval()
-    processor = AutoProcessor.from_pretrained(model_name, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(model_name, revision=model_revision, trust_remote_code=True)
 
     all_results = []
     for audio_path in audio_paths:
@@ -161,6 +162,7 @@ def diarize_audios_with_moss(
             {
                 "audio_paths": audio_paths,
                 "model_name": str(model.path_or_uri),
+                "model_revision": model.revision,
                 "device": resolved_device.value,
                 "max_new_tokens": max_new_tokens,
             }
@@ -169,7 +171,7 @@ def diarize_audios_with_moss(
         # Stage the model once (cross-process, via the heartbeat lock) + run the
         # worker offline so its from_pretrained calls make no per-call Hub version
         # check — the 429 source under parallel batch load.
-        env = hf_subprocess_env(str(model.path_or_uri), "main", base_env=_clean_subprocess_env())
+        env = hf_subprocess_env(str(model.path_or_uri), model.revision, base_env=_clean_subprocess_env())
         result = subprocess.run(
             [python, "-c", _WORKER_SCRIPT],
             input=input_json,
