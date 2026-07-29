@@ -57,6 +57,17 @@ CLI script rotated on every comment edit and reformat, invalidating every cached
 model result for no reason, and it would have gotten worse once six stages shared
 one module. Coarse and deliberate beats automatic and wrong.
 
+**"diarization"'s blast radius grew with VibeVoice-ASR-HF/MOSS-Transcribe-Diarize/
+DiariZen/child-adult**: cache keys are per-model_id so entries don't collide, but
+this one counter is shared across every diar model — bumping it because one of
+these newer backends' outcome shape changed invalidates every other diar model's
+cached results too, including expensive Pyannote/Sortformer runs. Six independent
+backends now share this fate where two did before. If that shared-invalidation
+cost becomes a real problem in practice, the fix is splitting this into
+per-backend-family keys (e.g. a distinct entry per backend rather than one
+"diarization" for all of them) — not something to do preemptively without a
+concrete case forcing a bump.
+
 Library-side changes are already covered by ``senselab_version`` in the key, so
 these numbers only need to move for *wrapper-shaped* output changes — mainly
 ``features`` (composes three backends into a row dict) and ``ppgs`` (attaches

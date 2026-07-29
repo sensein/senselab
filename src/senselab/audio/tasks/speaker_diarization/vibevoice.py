@@ -56,7 +56,7 @@ class VibeVoiceDiarization:
                 "Please install/upgrade senselab audio dependencies using `pip install senselab`."
             )
 
-        resolved_device, dtype = _select_device_and_dtype(
+        resolved_device, _ = _select_device_and_dtype(
             user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
         )
         key = f"{model.path_or_uri}-{model.revision}-{resolved_device}"
@@ -71,18 +71,39 @@ class VibeVoiceDiarization:
             processor = load_hf_resilient(
                 AutoProcessor.from_pretrained, repo_id, repo_id=repo_id, revision=revision, token=token
             )
+            # dtype="auto" (not the shared device-selector's fp16 default): this
+            # checkpoint's config declares bfloat16, and every upstream example
+            # loads it with dtype="auto" — forcing fp16 on a bf16-trained model
+            # loses exponent range (overflow -> NaN), matching the model's own
+            # trained precision instead. diarize_audios_with_vibevoice casts
+            # inputs to whatever dtype actually loads, so this isn't tied to fp16.
             vv_model = load_hf_resilient(
                 VibeVoiceAsrForConditionalGeneration.from_pretrained,
                 repo_id,
                 repo_id=repo_id,
                 revision=revision,
                 token=token,
-                dtype=dtype,
+                dtype="auto",
             )
             vv_model = vv_model.to(torch.device(resolved_device.value))  # type: ignore[arg-type]
             vv_model.eval()
             cls._models[key] = (processor, vv_model)
         return cls._models[key]
+
+    @classmethod
+    def release_all(cls) -> None:
+        """Drop all cached processor/model pairs and free GPU memory.
+
+        VibeVoice-ASR-HF is a 7B-parameter model held in a class-level cache with
+        no natural eviction point — unlike the other three new diarization
+        backends, which are subprocess-hosted and free their memory automatically
+        on process exit. Call this once a caller is done running VibeVoice for a
+        pass so its ~14GB+ footprint doesn't stay resident alongside another large
+        in-process model for the rest of the run.
+        """
+        cls._models.clear()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
 
 def diarize_audios_with_vibevoice(
@@ -182,16 +203,22 @@ def diarize_audios_with_vibevoice(
                     logger.warning("VibeVoice-ASR-HF output did not parse into structured segments.")
                 segments = []
 
-            script_lines = [
-                ScriptLine(
-                    speaker=str(seg.get("Speaker")),
-                    start=float(seg["Start"]),
-                    end=float(seg["End"]),
-                    text=seg.get("Content"),
+            script_lines = []
+            for seg in segments:
+                if not isinstance(seg, dict) or seg.get("Start") is None or seg.get("End") is None:
+                    continue
+                try:
+                    start = float(seg["Start"])
+                    end = float(seg["End"])
+                except (TypeError, ValueError) as exc:
+                    # A single malformed segment shouldn't abort the whole batch
+                    # the same way a decode()-level parse failure wouldn't (see
+                    # the except clause above) — skip just this segment.
+                    logger.warning(f"VibeVoice-ASR-HF produced a segment with unparsable Start/End ({exc}); skipping.")
+                    continue
+                script_lines.append(
+                    ScriptLine(speaker=str(seg.get("Speaker")), start=start, end=end, text=seg.get("Content"))
                 )
-                for seg in segments
-                if isinstance(seg, dict) and seg.get("Start") is not None and seg.get("End") is not None
-            ]
             results.append(sorted(script_lines, key=lambda x: x.start or 0.0))
 
     return results

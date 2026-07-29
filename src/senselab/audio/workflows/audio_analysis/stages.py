@@ -34,6 +34,7 @@ from senselab.audio.tasks.classification import classify_audios
 from senselab.audio.tasks.features_extraction.temporal import extract_temporal_features
 from senselab.audio.tasks.forced_alignment import align_transcriptions
 from senselab.audio.tasks.speaker_diarization import diarize_audios
+from senselab.audio.tasks.speaker_diarization.vibevoice import VibeVoiceDiarization
 from senselab.audio.tasks.speech_to_text import transcribe_audios
 from senselab.audio.tasks.speech_to_text.qwen import QwenASR
 from senselab.audio.workflows.audio_analysis.harvesters import (
@@ -143,6 +144,18 @@ def stage_diarization(audio: Audio, ctx: StageContext, *, models: Sequence[str])
 
     Returns:
         ``{"diarization": {"by_model": {model_id: outcome}}}``.
+
+    Note:
+        VibeVoice-ASR-HF and MOSS-Transcribe-Diarize are joint ASR+diarization
+        models — each ``ScriptLine`` here also carries ``.text`` — but this
+        function is single-task like every other stage, so that transcript only
+        reaches this stage's sidecar JSON; no diar consumer (``identity.py``,
+        ``presence.py``, ...) reads it, and registering the same model_id under
+        both ``models`` here and ``stage_asr``'s model list runs two separate
+        full inferences (``cache_key_for`` includes ``task``, so "diarization"
+        and "asr" never share a cache entry) instead of one shared computation.
+        Sharing one inference across both stages needs a genuine joint-stage
+        contract change, not a fix here.
     """
     by_model: dict[str, Any] = {}
     for model_id in models:
@@ -159,6 +172,14 @@ def stage_diarization(audio: Audio, ctx: StageContext, *, models: Sequence[str])
         )
         by_model[model_id] = outcome
         ctx.write_sidecar(f"diarization/{safe_model_id(model_id)}.json", outcome)
+        if model_id.startswith("microsoft/VibeVoice-ASR"):
+            # VibeVoice-ASR-HF is a 7B-parameter model in a class-level cache with
+            # no natural eviction point (unlike the other diarization backends,
+            # which are subprocess-hosted and free their memory on process exit).
+            # Release it as soon as its outcome is recorded so it doesn't stay
+            # resident for the rest of this stage or pass alongside another
+            # large in-process model (e.g. an ASR model in stage_asr).
+            VibeVoiceDiarization.release_all()
     return {"diarization": {"by_model": by_model}}
 
 
