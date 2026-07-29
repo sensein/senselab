@@ -35,7 +35,16 @@ _CRISPER_VENV = "crisperwhisper"
 # ``CrisperWhisperModel`` API, so the worker is backend-agnostic.
 _IS_LINUX_X86 = sys.platform.startswith("linux") and platform.machine().lower() in ("x86_64", "amd64")
 if _IS_LINUX_X86:
-    _CRISPER_REQUIREMENTS = ["crisperwhisper[ct2]==2.0.1"]
+    # CT2 *inference* is torch-free, but the first-run HF->CT2 *conversion* goes through
+    # ``ctranslate2.converters.transformers``, whose ``try: import huggingface_hub, torch,
+    # transformers`` block leaves those names unbound when absent; ``_load()`` then calls
+    # ``torch.no_grad()`` + the transformers loader -> ``NameError: name 'torch' /
+    # 'transformers' is not defined``. The venv "builds" but transcription fails on every
+    # clip. So the ct2 venv also needs the conversion stack: use the ``[transformers]``
+    # extra (== [all] with ct2: transformers + torch + accelerate) and pin torch/torchaudio
+    # explicitly so ensure_venv routes them through the CUDA index. None of this is loaded
+    # at CT2 inference time — only for the one-time, cached HF->CT2 conversion.
+    _CRISPER_REQUIREMENTS = ["crisperwhisper[ct2,transformers]==2.0.1", "torch>=2.4", "torchaudio>=2.4"]
 else:
     _CRISPER_REQUIREMENTS = [
         "crisperwhisper[transformers]==2.0.1",
