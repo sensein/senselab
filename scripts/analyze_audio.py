@@ -1542,8 +1542,18 @@ def main(argv: list[str] | None = None) -> int:
                     ),
                     None,
                 )
+                # The policy carries the source-kind declarations. Without it every source
+                # resolves to the default "independent", so the derived gate — the guard
+                # against a clustering-derived voter counting as a peer observation —
+                # silently does nothing on real runs, which is exactly where it matters.
+                from senselab.audio.workflows.audio_analysis.adaptive.policy import load_policy
+
+                identity_policy = load_policy(args.policy)
                 posterior, hypotheses, correspondence = build_speaker_identity(
-                    summaries["passes"], identity_votes=identity_harvest
+                    summaries["passes"],
+                    identity_votes=identity_harvest,
+                    policy=identity_policy,
+                    gates=(identity_policy.get("influence") or {}).get("derivation_gate"),
                 )
                 tracks = build_presence_tracks(identity_harvest or [])
                 write_speaker_outputs(

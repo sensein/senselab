@@ -23,6 +23,7 @@ _SPEC.loader.exec_module(cal)
 
 
 def _verdicts(*floors: tuple[str, float | None]) -> dict[str, Any]:
+    """A level-probe document with one verdict per named classifier."""
     return {
         "host": "test-host",
         "verdicts": [{"classifier": name, "reliable_floor_snr_db": f} for name, f in floors],
@@ -30,6 +31,7 @@ def _verdicts(*floors: tuple[str, float | None]) -> dict[str, Any]:
 
 
 def _base() -> dict[str, Any]:
+    """The bundled profile the script takes its non-measured fields from."""
     from senselab.audio.workflows.audio_analysis.calibration import load_detection_margin_profile
 
     return load_detection_margin_profile()
@@ -56,9 +58,12 @@ def test_a_profile_with_no_measurements_is_refused() -> None:
 
 
 def test_a_confident_tier_no_classifier_can_reach_is_refused() -> None:
-    """SC-017: the ladder is only defensible if the human criterion and the measured machine
-    floor are satisfied at once. A confident tier above every measured floor is a threshold
-    already known not to work on the probed host, and shipping it would hide that."""
+    """SC-017: an unreachable tier is a threshold known not to work.
+
+    The ladder is only defensible if the human criterion and the measured machine floor are
+    satisfied at once. A confident tier above every measured floor cannot be, and shipping
+    it would hide that.
+    """
     with pytest.raises(ValueError, match="no classifier reaches this tier"):
         cal.build_profile(_base(), _verdicts(("ast", 25.0)), calibrated_as="test")
 
