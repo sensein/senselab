@@ -372,3 +372,55 @@ def test_uninformative_absent_label_bound_yields_cannot_tell() -> None:
     rows = target_confidence_by_bucket(summary, [(0.0, 0.5)], ["breath"], active_threshold=0.6)
     assert rows[0]["uncertainty"] == pytest.approx(1.0)
     assert build_mask(rows, "breath", profile=PROFILE).regions[0].state == "indeterminate"
+
+
+# ── segment shapes, found only by a real run ────────────────────────────
+
+
+def test_nested_diarization_result_is_flattened() -> None:
+    """``diarize_audios`` returns one entry per input audio, so a single call nests.
+
+    Every fixture here had used the flat shape, so this failed only on real audio: the
+    inner lists were handed to the segment reader where segments were expected.
+    """
+    from types import SimpleNamespace
+
+    from senselab.audio.workflows.audio_analysis.background_mask import _flatten_segments
+
+    nested = [[SimpleNamespace(start=0.0, end=1.0), SimpleNamespace(start=2.0, end=3.0)]]
+    assert len(_flatten_segments(nested)) == 2
+
+
+def test_segment_bounds_read_from_object_and_dict() -> None:
+    """In-memory segments are objects; cache-deserialized ones are dicts."""
+    from types import SimpleNamespace
+
+    from senselab.audio.workflows.audio_analysis.background_mask import _seg_bounds
+
+    assert _seg_bounds(SimpleNamespace(start=1.0, end=2.0)) == (1.0, 2.0)
+    assert _seg_bounds({"start": 1.0, "end": 2.0}) == (1.0, 2.0)
+
+
+def test_segment_bounds_of_an_unreadable_value_is_none() -> None:
+    """An unreadable segment degrades to None rather than raising.
+
+    The eager-default trap: ``getattr(x, "start", x.get("start"))`` evaluates the fallback
+    even when the attribute exists, and raises on anything that is neither an object with
+    the attribute nor a mapping. Returning None keeps one odd segment from failing a run.
+    """
+    from senselab.audio.workflows.audio_analysis.background_mask import _seg_bounds
+
+    assert _seg_bounds([1, 2]) is None
+    assert _seg_bounds(None) is None
+    assert _seg_bounds({"start": "not-a-number", "end": 2.0}) is None
+
+
+def test_speech_activity_from_the_real_nested_shape() -> None:
+    """End-to-end on the shape a real diarizer produces."""
+    from types import SimpleNamespace
+
+    from senselab.audio.workflows.audio_analysis.background_mask import _speech_activity_by_bucket
+
+    nested = [[SimpleNamespace(start=0.0, end=1.0), SimpleNamespace(start=2.0, end=3.0)]]
+    summary = {"diarization": {"by_model": {"m": {"status": "ok", "result": nested}}}}
+    assert _speech_activity_by_bucket(summary, [(0.0, 0.5), (1.5, 1.9), (2.5, 2.9)]) == [1.0, 0.0, 1.0]
