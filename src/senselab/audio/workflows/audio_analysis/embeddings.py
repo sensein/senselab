@@ -345,7 +345,8 @@ def cluster_pass_speakers(
         for idx in valid_indices:
             cluster_labels[idx] = "spk0"
             p_voice[idx] = 1.0
-        same_floor, diff_floor = _within_cluster_band(np.stack(vectors, axis=0)) if vectors else (0.30, 0.70)
+        band = _within_cluster_band(np.stack(vectors, axis=0)) if vectors else None
+        same_floor, diff_floor = band if band is not None else (None, None)
         return {
             "n_speakers": 1,
             "best_silhouette": None,
@@ -487,7 +488,11 @@ def cluster_pass_speakers(
         # ``diff_floor`` = 25th percentile of between-cluster pairwise cos_dist
         # (most different-speaker pairs are above this). Falls back to the
         # default fixed band when too few pairs.
-        same_floor, diff_floor = _empirical_calibration_band(X, best_labels)
+        # Sequential first: it measures the statistic the harvester computes. All-pairs is
+        # kept as a fallback for passes whose turn structure gives too few sequential
+        # comparisons to anchor on.
+        band = _sequential_calibration_band(X, best_labels) or _empirical_calibration_band(X, best_labels)
+        same_floor, diff_floor = band if band is not None else (None, None)
         return {
             "n_speakers": n_speakers_final,
             "best_silhouette": float(best_overall),
@@ -524,7 +529,8 @@ def cluster_pass_speakers(
             cluster_labels[idx] = "spk0"
             # cos sim → [0,1] via (s+1)/2.
             p_voice[idx] = max(0.0, min(1.0, 0.5 * (float(sims[vi]) + 1.0)))
-        same_floor, diff_floor = _within_cluster_band(X)
+        band = _within_cluster_band(X)
+        same_floor, diff_floor = band if band is not None else (None, None)
         return {
             "n_speakers": 1,
             "best_silhouette": float(best_overall) if best_overall > -1.0 else None,
@@ -604,10 +610,8 @@ def _empirical_calibration_band(
     X: np.ndarray,
     labels: np.ndarray,
     *,
-    fallback_same_floor: float = 0.30,
-    fallback_diff_floor: float = 0.70,
     min_pairs: int = 5,
-) -> tuple[float, float]:
+) -> tuple[float, float] | None:
     """Estimate ``(same_speaker_floor, diff_speaker_floor)`` from clustered embeddings.
 
     Walks all within-cluster pairs and all between-cluster pairs, computes
@@ -618,15 +622,21 @@ def _empirical_calibration_band(
     - ``diff_floor = quantile(between, 0.25)``: most different-speaker pairs
       sit above; cos_dist at this anchor → uncertainty 1.
 
-    When the cluster sizes are too small for stable percentiles (< ``min_pairs``
-    pairs), falls back to the literature defaults [0.30, 0.70].
+    Returns ``None`` when the pass cannot support a band — too few pairs, or within- and
+    between-cluster distances that overlap. Substituting the literature defaults there was
+    the defect this replaces: on a real recording ECAPA's within-speaker distances had
+    median 0.874 against 0.966 between, overlapping almost entirely, and the [0.30, 0.70]
+    fallback sat below *every* distance the embedding produced — so every same-speaker
+    comparison scored as maximally doubtful and the axis reported high uncertainty on
+    buckets where every diarizer agreed. A sub-signal that cannot be calibrated must drop
+    out (FR-007), not vote with fabricated confidence.
 
     Vectors in ``X`` are assumed L2-normalized (unit-norm), which matches
     ``cluster_pass_speakers``'s preprocessing — cosine distance reduces to
     ``1 − x · y`` directly.
     """
     if X.shape[0] < 2:
-        return fallback_same_floor, fallback_diff_floor
+        return None
     sim_matrix = X @ X.T  # shape (N, N), values in [-1, 1] for unit vectors
     n = X.shape[0]
     within_dists: list[float] = []
@@ -639,13 +649,13 @@ def _empirical_calibration_band(
             else:
                 between_dists.append(d)
     if len(within_dists) < min_pairs or len(between_dists) < min_pairs:
-        return fallback_same_floor, fallback_diff_floor
+        return None
     same_floor = float(np.quantile(within_dists, 0.75))
     diff_floor = float(np.quantile(between_dists, 0.25))
     # Ensure ordering (same < diff). Pathological clusters can give within > between
     # — fall back to defaults rather than report nonsense.
     if same_floor >= diff_floor:
-        return fallback_same_floor, fallback_diff_floor
+        return None
     # Clamp only enough to keep the band ordered and inside [0.05, 0.95]. An earlier
     # version pinned same_floor to at most 0.50 and diff_floor to at least 0.50, which
     # presumes the two distributions straddle 0.5. Measured on a real two-speaker
@@ -655,17 +665,72 @@ def _empirical_calibration_band(
     same_floor = max(0.05, min(0.95, same_floor))
     diff_floor = max(0.05, min(0.95, diff_floor))
     if diff_floor - same_floor < 0.05:
-        return fallback_same_floor, fallback_diff_floor
+        return None
+    return same_floor, diff_floor
+
+
+def _sequential_calibration_band(
+    X: np.ndarray,
+    labels: np.ndarray,
+    *,
+    min_pairs: int = 5,
+) -> tuple[float, float] | None:
+    """Calibration anchors measured on the comparison the identity harvester actually makes.
+
+    The harvester never compares all window pairs. It compares each bucket to the *most
+    recent prior* bucket carrying the same speaker label, and — for change claims — to the
+    immediately preceding bucket. Anchors must describe that statistic, because it is a
+    different distribution from the all-pairs one.
+
+    How different, measured on a two-speaker recording with the diarizer's turns as ground
+    truth: over all pairs, ECAPA's within- and between-speaker distances overlap (within q75
+    0.919 against between q25 0.916) and no ordered band exists at all. Over the sequential
+    comparison, the same embeddings separate cleanly (within q75 0.646, between q25 0.915).
+    Nearest-centroid classification recovers the diarizer's labels at 98.5%, so the embedding
+    discriminates perfectly well — calibrating on all-pairs merely measured the wrong thing,
+    discarded the usable band, and fell back to a fixed one sitting below every distance the
+    embedding produces. The axis then reported high uncertainty on buckets where every
+    diarizer agreed.
+
+    Args:
+        X: Unit-norm embedding vectors in time order.
+        labels: Cluster label per row, aligned with ``X``.
+        min_pairs: Minimum comparisons of each kind before anchors are trusted.
+
+    Returns:
+        ``(same_speaker_floor, diff_speaker_floor)``, or ``None`` when the pass supports no
+        ordered band — too few comparisons, or distributions that genuinely overlap.
+    """
+    if X.shape[0] < 2:
+        return None
+    within: list[float] = []
+    between: list[float] = []
+    last_seen: dict[Any, int] = {}
+    for i in range(X.shape[0]):
+        label = labels[i]
+        for other, idx in last_seen.items():
+            d = float(max(0.0, min(1.0, 1.0 - float(X[i] @ X[idx]))))
+            (within if other == label else between).append(d)
+        last_seen[label] = i
+    if len(within) < min_pairs or len(between) < min_pairs:
+        return None
+    same_floor = float(np.quantile(within, 0.75))
+    diff_floor = float(np.quantile(between, 0.25))
+    if same_floor >= diff_floor:
+        return None
+    same_floor = max(0.05, min(0.95, same_floor))
+    diff_floor = max(0.05, min(0.95, diff_floor))
+    if diff_floor - same_floor < 0.05:
+        return None
     return same_floor, diff_floor
 
 
 def _within_cluster_band(
     X: np.ndarray,
     *,
-    fallback_same_floor: float = 0.30,
     fallback_diff_floor: float = 0.70,
     min_pairs: int = 5,
-) -> tuple[float, float]:
+) -> tuple[float, float] | None:
     """Calibration band for a pass whose windows all belong to one speaker.
 
     With a single cluster there are no between-speaker pairs, so only the same-speaker
@@ -675,12 +740,12 @@ def _within_cluster_band(
     every diarizer agrees on an unchanging speaker.
     """
     if X.shape[0] < 2:
-        return fallback_same_floor, fallback_diff_floor
+        return None
     sim = X @ X.T
     n = X.shape[0]
     dists = [float(max(0.0, min(1.0, 1.0 - sim[i, j]))) for i in range(n) for j in range(i + 1, n)]
     if len(dists) < min_pairs:
-        return fallback_same_floor, fallback_diff_floor
+        return None
     same_floor = max(0.05, min(0.95, float(np.quantile(dists, 0.75))))
     diff_floor = fallback_diff_floor
     if diff_floor - same_floor < 0.05:

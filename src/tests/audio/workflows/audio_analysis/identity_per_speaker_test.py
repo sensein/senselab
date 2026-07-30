@@ -237,3 +237,131 @@ def test_the_measured_band_actually_admits_the_speaker_it_was_measured_on() -> N
     stacked = np.stack(vecs)
     dists = [1.0 - float(stacked[i] @ stacked[j]) for i in range(len(vecs)) for j in range(i + 1, len(vecs))]
     assert float(np.median(dists)) <= same
+
+
+def test_overlapping_distance_distributions_report_no_usable_band() -> None:
+    """When same- and different-speaker distances overlap, there is no band to report.
+
+    Measured on the higgs conversation with ECAPA over the standard window grid: the
+    within-speaker distances have median 0.874 and the between-speaker distances 0.966, and
+    the two distributions overlap almost entirely. The embedding simply does not separate
+    identity at this scale on this recording.
+
+    The old behaviour substituted the fixed [0.30, 0.70] band whenever the measured one came
+    out inverted. That band is not merely imprecise here — it sits below every distance the
+    embedding produces, so *every* same-speaker comparison scored as maximally doubtful, and
+    the axis reported 0.65 uncertainty on buckets where every diarizer agreed. Returning
+    nothing lets the sub-signal drop out instead of fabricating confident dissent.
+    """
+    import numpy as np
+
+    from senselab.audio.workflows.audio_analysis.embeddings import _empirical_calibration_band
+
+    rng = np.random.default_rng(3)
+    # Two "clusters" drawn from the same distribution: labels differ, geometry does not.
+    X = rng.normal(size=(24, 64))
+    X /= np.linalg.norm(X, axis=1, keepdims=True)
+    labels = np.array([0] * 12 + [1] * 12)
+    assert _empirical_calibration_band(X, labels) is None
+
+
+def test_a_genuinely_separable_pass_still_gets_its_band() -> None:
+    """The guard must not refuse a calibration when the embeddings do discriminate."""
+    import numpy as np
+
+    from senselab.audio.workflows.audio_analysis.embeddings import _empirical_calibration_band
+
+    rng = np.random.default_rng(4)
+    a, b = rng.normal(size=64), rng.normal(size=64)
+    a, b = a / np.linalg.norm(a), b / np.linalg.norm(b)
+    rows = [c + 0.15 * rng.normal(size=64) for c in ([a] * 12 + [b] * 12)]
+    X = np.stack([r / np.linalg.norm(r) for r in rows])
+    band = _empirical_calibration_band(X, np.array([0] * 12 + [1] * 12))
+    assert band is not None and band[0] < band[1]
+
+
+def test_an_uncalibratable_embedding_emits_no_identity_claim() -> None:
+    """FR-007: a sub-signal that cannot be calibrated drops out rather than voting.
+
+    Without this the axis cannot fall back on the evidence that *is* available — unanimous
+    diarizer agreement — because a saturated derived signal outvotes it.
+    """
+    import numpy as np
+
+    from senselab.audio.workflows.audio_analysis.embeddings import WindowEmbedding
+    from senselab.audio.workflows.audio_analysis.grid import BucketGrid
+    from senselab.audio.workflows.audio_analysis.identity import harvest_identity_votes
+
+    segs = [{"start": 0.0, "end": 3.0, "speaker": "SPEAKER_00"}]
+    pass_summary = {
+        "duration_s": 3.0,
+        "diarization": {"by_model": {"pyannote": {"status": "ok", "result": [segs]}}},
+    }
+    rng = np.random.default_rng(5)
+    windows = []
+    for i in range(6):
+        v = rng.normal(size=64)
+        windows.append(WindowEmbedding(start_s=i * 0.5, end_s=i * 0.5 + 1.0, vector=v / np.linalg.norm(v)))
+
+    votes = harvest_identity_votes(
+        pass_summary=pass_summary,
+        grid=BucketGrid(win_length=0.5, hop_length=0.5),
+        per_window_embeddings={"ecapa": windows},
+        same_speaker_floor=None,
+        diff_speaker_floor=None,
+    )
+    emitted = [
+        v["same_label_uncertainty"]
+        for bucket in votes
+        for k, v in bucket["votes"].items()
+        if "::" in k and isinstance(v, dict)
+    ]
+    assert emitted and all(u is None for u in emitted)
+    # The raw distance is still recorded — dropping the claim must not destroy the evidence.
+    cosines = [
+        v["embedding_cosine_within_track"]
+        for bucket in votes
+        for k, v in bucket["votes"].items()
+        if "::" in k and isinstance(v, dict)
+    ]
+    assert any(c is not None for c in cosines)
+
+
+def test_the_band_is_measured_on_the_comparison_it_calibrates() -> None:
+    """The anchors must describe the same statistic the harvester computes.
+
+    Measured on the higgs conversation with pyannote's turns as ground truth: taken over
+    *all* window pairs, ECAPA's within- and between-speaker distances overlap (within q75
+    0.919 vs between q25 0.916, separation -0.003) and no ordered band exists. But the
+    harvester never compares all pairs — it compares each bucket to the most recent prior
+    bucket of the same speaker, and on that statistic the same embeddings separate cleanly
+    (within q75 0.646, between q25 0.915, separation +0.269). Nearest-centroid classification
+    recovers pyannote's labels at 98.5%, so the embeddings discriminate perfectly well.
+
+    Calibrating on all-pairs therefore discarded a usable band and fell back to a fixed one
+    that sat below every distance the embedding produces, which is why the axis reported high
+    uncertainty on buckets where every diarizer agreed.
+    """
+    import numpy as np
+
+    from senselab.audio.workflows.audio_analysis.embeddings import _sequential_calibration_band
+
+    rng = np.random.default_rng(7)
+    a, b = rng.normal(size=64), rng.normal(size=64)
+    a, b = a / np.linalg.norm(a), b / np.linalg.norm(b)
+    # Turn-structured like a conversation, with per-window noise tuned to reproduce the
+    # measured statistics: same-speaker distance median ~0.55, different-speaker ~0.82.
+    order = ["A"] * 8 + ["B"] * 8 + ["A"] * 8 + ["B"] * 8
+    vecs, labels = [], []
+    for lab in order:
+        base = a if lab == "A" else b
+        v = base + 0.15 * rng.normal(size=64)
+        vecs.append(v / np.linalg.norm(v))
+        labels.append(lab)
+    band = _sequential_calibration_band(np.stack(vecs), np.array(labels))
+    assert band is not None, "a separable pass produced no band"
+    same_floor, diff_floor = band
+    assert same_floor < diff_floor
+    # A typical same-speaker comparison must reach the "confidently same" anchor.
+    consecutive = [1.0 - float(vecs[i] @ vecs[i - 1]) for i in range(1, len(vecs)) if labels[i] == labels[i - 1]]
+    assert float(np.median(consecutive)) <= same_floor

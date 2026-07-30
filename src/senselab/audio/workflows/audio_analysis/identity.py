@@ -105,8 +105,8 @@ def harvest_identity_votes(
     pass_summary: dict[str, Any],
     grid: BucketGrid,
     per_window_embeddings: dict[str, list[WindowEmbedding]],
-    same_speaker_floor: float = 0.30,
-    diff_speaker_floor: float = 0.70,
+    same_speaker_floor: float | None = 0.30,
+    diff_speaker_floor: float | None = 0.70,
     cluster_cosine_threshold: float = 0.5,
 ) -> list[dict[str, Any]]:
     """Yield ``{"start", "end", "votes"}`` per bucket for the identity axis.
@@ -115,7 +115,9 @@ def harvest_identity_votes(
         pass_summary: Per-task summary for one pass (diarization, alignment, etc.).
         grid: Bucket grid.
         per_window_embeddings: ``{embedding_model_id → [WindowEmbedding, ...]}``.
-        same_speaker_floor: Cosine distance ≤ this is treated as confidently
+        same_speaker_floor: ``None`` when the pass admits no usable calibration band, in
+            which case the embedding sub-signals are omitted entirely. Otherwise, cosine
+            distance ≤ this is treated as confidently
             same-speaker (uncertainty 0 for same-claim, 1 for change-claim).
         diff_speaker_floor: Cosine distance ≥ this is treated as confidently
             different-speaker (uncertainty 1 for same-claim, 0 for change-claim).
@@ -180,6 +182,13 @@ def harvest_identity_votes(
         per_window_embeddings,
         cosine_threshold=cluster_cosine_threshold,
     )
+
+    # An embedding whose same- and between-speaker distances overlap cannot validate an
+    # identity claim at this window scale. Its sub-signals then drop out (FR-007) rather
+    # than voting: substituting a fixed band that sits below every distance the embedding
+    # produces turns "cannot tell" into "confidently different", and one such saturated
+    # derived signal outvotes unanimous diarizer agreement.
+    calibrated = same_speaker_floor is not None and diff_speaker_floor is not None
 
     bucket_starts_ends = [(start, end) for start, end, _ in grid.iter_buckets(duration_s)]
 
@@ -246,7 +255,7 @@ def harvest_identity_votes(
                 same_unc: float | None = None
                 if prev_same is not None and prev_same[0] != window_idx:
                     same_cos = _cos_dist(vec, prev_same[1])
-                    if same_cos is not None:
+                    if same_cos is not None and calibrated:
                         same_unc = calibrate_cosine_uncertainty(
                             same_cos,
                             same_speaker_floor=same_speaker_floor,
@@ -261,7 +270,7 @@ def harvest_identity_votes(
                     prev_imm = prev_emb_immediate.get(imm_key)
                     if prev_imm is not None and prev_imm[0] != window_idx:
                         change_cos = _cos_dist(vec, prev_imm[1])
-                        if change_cos is not None:
+                        if change_cos is not None and calibrated:
                             change_unc = calibrate_cosine_uncertainty(
                                 change_cos,
                                 same_speaker_floor=same_speaker_floor,
