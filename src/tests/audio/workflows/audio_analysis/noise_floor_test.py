@@ -31,6 +31,18 @@ from senselab.audio.workflows.audio_analysis.noise_floor import (
 SR = 16000
 
 
+def _measured_floor(frames: np.ndarray, **kwargs: float | bool | int) -> float:
+    """Unwrap a measured band floor, failing loudly if the estimator declined to measure.
+
+    The estimator returns ``None`` when there is no energy to measure, which is a different
+    outcome from a low floor. Comparing that ``None`` directly would raise a TypeError deep
+    in an assertion rather than saying what actually happened.
+    """
+    value, _iterations = estimate_band_floor_db(frames, **kwargs)
+    assert value is not None, "expected a measurable floor; the estimator found no energy"
+    return value
+
+
 # ── the derivation, validated on synthetic noise (T039, research risk 2) ──
 
 
@@ -113,7 +125,7 @@ def _noise_frames(n: int, level_db: float = -60.0, seed: int = 0) -> np.ndarray:
 
 def test_floor_of_pure_noise_recovers_its_level() -> None:
     """The whole point: on noise-only input the estimate is the noise level."""
-    floor_db, _iters = estimate_band_floor_db(_noise_frames(4000, -60.0), quantile=0.10)
+    floor_db = _measured_floor(_noise_frames(4000, -60.0), quantile=0.10)
     assert floor_db == pytest.approx(-60.0, abs=1.0)
 
 
@@ -124,7 +136,7 @@ def test_sustained_source_is_not_absorbed_into_the_floor() -> None:
     """
     frames = _noise_frames(4000, -60.0)
     frames[:2000] += 10.0 ** (-30.0 / 10.0)  # 30 dB louder source, 50% occupancy
-    floor_db, _ = estimate_band_floor_db(frames, quantile=0.10)
+    floor_db = _measured_floor(frames, quantile=0.10)
     assert floor_db == pytest.approx(-60.0, abs=2.0)
 
 
@@ -144,15 +156,15 @@ def test_high_occupancy_source_defeats_a_tenth_percentile_floor() -> None:
     a surprising result upstream is diagnosable.
     """
     frames = _noise_frames(2000, -60.0) + 10.0 ** (-30.0 / 10.0)  # 100% occupancy
-    floor_db, _ = estimate_band_floor_db(frames, quantile=0.10)
+    floor_db = _measured_floor(frames, quantile=0.10)
     assert floor_db > -45.0
 
 
 def test_bias_correction_is_applied_to_the_estimate() -> None:
     """Without it the estimate sits ~9.8 dB below the true level (FR-021d)."""
     frames = _noise_frames(4000, -60.0)
-    corrected, _ = estimate_band_floor_db(frames, quantile=0.10)
-    uncorrected, _ = estimate_band_floor_db(frames, quantile=0.10, apply_bias_correction=False)
+    corrected = _measured_floor(frames, quantile=0.10)
+    uncorrected = _measured_floor(frames, quantile=0.10, apply_bias_correction=False)
     assert corrected - uncorrected == pytest.approx(quantile_bias_correction_db(0.10), abs=0.2)
 
 
@@ -199,9 +211,9 @@ def test_conditioned_floors_differ_when_the_residual_tracks_activity() -> None:
     frames = np.concatenate([quiet, busy])
     active = np.concatenate([np.zeros(n, dtype=bool), np.ones(n, dtype=bool)])
 
-    q_floor, _ = estimate_band_floor_db(frames[~active], quantile=0.10)
-    b_floor, _ = estimate_band_floor_db(frames[active], quantile=0.10)
-    pooled, _ = estimate_band_floor_db(frames, quantile=0.10)
+    q_floor = _measured_floor(frames[~active], quantile=0.10)
+    b_floor = _measured_floor(frames[active], quantile=0.10)
+    pooled = _measured_floor(frames, quantile=0.10)
     assert b_floor - q_floor == pytest.approx(12.0, abs=2.0)
     assert q_floor < pooled < b_floor, "a pooled floor sits between, mis-gating both strata"
 
@@ -293,7 +305,7 @@ def test_a_source_running_throughout_reads_below_its_own_floor() -> None:
     This is why the stationary pass compares against neighbouring bands instead.
     """
     frames = _noise_frames(2000, -60.0) + 10.0 ** (-30.0 / 10.0)  # 100% occupancy
-    floor_db, _ = estimate_band_floor_db(frames, quantile=0.10)
+    floor_db = _measured_floor(frames, quantile=0.10)
     mean_db = 10.0 * math.log10(float(frames.mean()))
     assert floor_db > mean_db, "expected the floor to overshoot a near-constant source"
     assert floor_db - mean_db == pytest.approx(quantile_bias_correction_db(0.10), abs=0.5)

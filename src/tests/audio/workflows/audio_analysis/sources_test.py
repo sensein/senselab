@@ -334,7 +334,8 @@ def test_a_recording_with_no_long_enough_region_yields_no_excision() -> None:
 # ── recovery delta, discounting, cross-level guard ────────────────────
 
 
-def _finding(**kw: object) -> "SourceFinding":  # noqa: F821 — imported below
+def _finding(**kw: object) -> "SourceFinding":  # noqa: F821 — imported in-body
+    """A confident machine-category finding; keyword arguments override any field."""
     from senselab.audio.workflows.audio_analysis.sources import SourceFinding
 
     base = dict(
@@ -465,6 +466,19 @@ def test_a_target_free_finding_outranks_the_same_finding_under_target_activity()
 # ── presence vs extent, and modulation depth (T061 / T063) ────────────
 
 
+def _depth(waveform: np.ndarray, sampling_rate: int, **kwargs: bool | float) -> float:
+    """Unwrap a measured modulation depth, failing loudly when nothing was measured.
+
+    ``None`` means the signal carried no energy — a different outcome from "stationary",
+    and one these tests never intend to exercise.
+    """
+    from senselab.audio.workflows.audio_analysis.sources import modulation_depth
+
+    value = modulation_depth(waveform, sampling_rate, **kwargs)
+    assert value is not None, "expected a measurable modulation depth; the signal was empty"
+    return value
+
+
 def test_a_confidently_present_source_still_gets_its_own_boundaries() -> None:
     """FR-021k: one threshold cannot get both presence and extent right.
 
@@ -511,7 +525,7 @@ def test_a_steady_hum_has_almost_no_modulation_depth() -> None:
     sr = 1000
     t = np.arange(0, 2.0, 1 / sr)
     steady = np.sin(2 * np.pi * 200 * t)
-    assert modulation_depth(steady, sr) < 0.15
+    assert _depth(steady, sr) < 0.15
 
 
 def test_an_amplitude_modulated_source_registers_its_modulation() -> None:
@@ -523,7 +537,7 @@ def test_an_amplitude_modulated_source_registers_its_modulation() -> None:
     sr = 1000
     t = np.arange(0, 2.0, 1 / sr)
     modulated = (1.0 + 0.9 * np.sin(2 * np.pi * 8.0 * t)) * np.sin(2 * np.pi * 200 * t)
-    assert modulation_depth(modulated, sr) > 0.4
+    assert _depth(modulated, sr) > 0.4
 
 
 def test_speech_rate_modulation_is_discounted_in_a_suppressed_variant() -> None:
@@ -540,8 +554,8 @@ def test_speech_rate_modulation_is_discounted_in_a_suppressed_variant() -> None:
     sr = 1000
     t = np.arange(0, 2.0, 1 / sr)
     speech_rate = (1.0 + 0.9 * np.sin(2 * np.pi * 4.5 * t)) * np.sin(2 * np.pi * 200 * t)
-    full = modulation_depth(speech_rate, sr)
-    discounted = modulation_depth(speech_rate, sr, discount_speech_band=True)
+    full = _depth(speech_rate, sr)
+    discounted = _depth(speech_rate, sr, discount_speech_band=True)
     assert discounted < full
 
 
@@ -554,9 +568,7 @@ def test_modulation_outside_the_speech_band_survives_the_discount() -> None:
     sr = 1000
     t = np.arange(0, 2.0, 1 / sr)
     flutter = (1.0 + 0.9 * np.sin(2 * np.pi * 12.0 * t)) * np.sin(2 * np.pi * 200 * t)
-    assert modulation_depth(flutter, sr, discount_speech_band=True) == pytest.approx(
-        modulation_depth(flutter, sr), rel=0.15
-    )
+    assert _depth(flutter, sr, discount_speech_band=True) == pytest.approx(_depth(flutter, sr), rel=0.15)
 
 
 def test_modulation_depth_of_nothing_is_not_a_number_pretending_to_be_zero() -> None:

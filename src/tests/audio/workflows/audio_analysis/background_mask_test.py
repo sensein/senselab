@@ -443,7 +443,8 @@ def test_mask_is_skipped_on_a_non_unmodified_variant() -> None:
 
     ctx = StageContext(pass_label="enhanced_16k", audio_signature="e" * 64, variant="speech_enhanced")
     audio = SimpleNamespace(waveform=torch.zeros((1, 16000)), sampling_rate=16000)
-    summary = stages_mod.run_pass(audio, ctx, PassPlan(background_mask=True))
+    # A waveform/sampling_rate stand-in: this path skips before touching anything else.
+    summary = stages_mod.run_pass(audio, ctx, PassPlan(background_mask=True))  # type: ignore[arg-type]
     assert summary["background_mask"]["status"] == "skipped"
     assert "unmodified" in summary["background_mask"]["reason"]
 

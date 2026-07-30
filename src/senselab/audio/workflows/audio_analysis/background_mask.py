@@ -505,16 +505,19 @@ def target_confidence_by_bucket(
 
     rows: list[dict[str, Any]] = []
     for i, (start, end) in enumerate(buckets):
-        values = [s[i] for s in sources if s[i] is not None]
+        values: list[float] = [v for s in sources if (v := s[i]) is not None]
         if not values:
             rows.append({"start": start, "end": end, "target_confidence": 0.0, "uncertainty": 1.0})
             continue
+        high, low = max(values), min(values)
         rows.append(
             {
                 "start": start,
                 "end": end,
-                "target_confidence": max(values),
-                "uncertainty": (max(values) - min(values)) if len(values) > 1 else 0.0,
+                "target_confidence": high,
+                # Spread between the sources, not a variance: with two sources their gap *is*
+                # the disagreement, and a single source disagrees with nothing.
+                "uncertainty": (high - low) if len(values) > 1 else 0.0,
             }
         )
     return rows

@@ -68,7 +68,8 @@ def test_reordered_top_k_is_unstable() -> None:
     """Label identity migrating with level is the failure this measures."""
     ref = [_win(["Speech", "Music"], [0.9, 0.1])]
     cand = [_win(["Music", "Speech"], [0.9, 0.1])]
-    assert label_stability(ref, cand, k=2) < 1.0
+    stability = label_stability(ref, cand, k=2)
+    assert stability is not None and stability < 1.0
 
 
 def test_disjoint_top_k_is_zero_stability() -> None:
