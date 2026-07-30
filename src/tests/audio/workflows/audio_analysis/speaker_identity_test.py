@@ -656,9 +656,11 @@ def test_a_speaker_seen_only_by_a_derived_source_says_so() -> None:
 
 
 def test_a_speaker_that_might_not_exist_is_not_reported_as_converged() -> None:
-    """Convergence is per speaker. A run can settle on "one speaker" while a surplus
-    hypothesis remains maximally doubtful, and reporting that one as converged tells a
-    consumer the question is closed when it is the single most open thing in the output.
+    """Convergence is per speaker, not per run.
+
+    A run can settle on "one speaker" while a surplus hypothesis stays maximally doubtful.
+    Reporting that one as converged tells a consumer the question is closed when it is the
+    single most open thing in the output.
     """
     from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
 
