@@ -164,6 +164,7 @@ from senselab.utils.data_structures import (
     model_for_task,
     safe_model_id,
 )
+from senselab.utils.data_structures.logging import logger
 from senselab.utils.tasks.cached_inference import (
     CACHE_SCHEMA_VERSION as _CACHE_SCHEMA_VERSION,
 )
@@ -250,6 +251,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=None,
         help="Adaptive policy YAML, deep-merged over the packaged default. CLI overrides below win over it.",
+    )
+    parser.add_argument(
+        "--no-per-speaker-identity",
+        dest="per_speaker_identity",
+        action="store_false",
+        help=(
+            "Skip the per-speaker identity outputs. On by default: it derives a "
+            "speaker-count posterior from the passes already computed, so it costs no "
+            "additional inference."
+        ),
+    )
+    parser.add_argument(
+        "--detection-margin-profile",
+        default=None,
+        help="Detection-margin profile name or path. Defaults to the bundled profile.",
     )
     parser.add_argument(
         "--influence-profile",
@@ -1496,6 +1512,37 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"Timeline plot: {timeline_path}")
             except Exception as exc:  # noqa: BLE001 — best-effort sidecar
                 print(f"warn: timeline plot failed: {exc!r}", file=sys.stderr)
+
+        # ── Per-speaker identity (US1) ────────────────────────────────
+        # Derived from the completed passes rather than from a fresh inference: the raw
+        # and enhanced passes are the same recording under a transform, so each diarizer's
+        # two answers are already a stability sample. A diarizer whose speaker count
+        # changes under enhancement is telling us its answer is not robust here, and that
+        # governs how far it moves the posterior.
+        if args.per_speaker_identity:
+            try:
+                from senselab.audio.workflows.audio_analysis.adaptive.fusion import write_speaker_outputs
+                from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
+
+                posterior, hypotheses, correspondence = build_speaker_identity(summaries["passes"])
+                write_speaker_outputs(
+                    run_dir,
+                    posterior=posterior,
+                    hypotheses=hypotheses,
+                    correspondence=correspondence,
+                    tracks=[],
+                    profile_version=str(args.detection_margin_profile or "detection-margin/default"),
+                    influence_profile=str(args.influence_profile or "influence/default"),
+                )
+                summaries["speaker_identity"] = posterior.to_json()
+                print(
+                    f"  [speaker identity] count posterior "
+                    f"{ {k: round(v, 2) for k, v in posterior.to_json()['probabilities'].items()} }"
+                    f"{'  MULTI-MODAL' if posterior.is_multimodal else ''}"
+                )
+            except Exception as exc:  # noqa: BLE001 — never fail a run over a derived summary
+                logger.warning("per-speaker identity could not be derived: %s", exc)
+                summaries["speaker_identity"] = {"status": "failed", "error": repr(exc)}
 
         # ── Adaptive loop, in-process (T040) ──────────────────────────
         # Runs on the harvests the parquets were just built from, so the belief

@@ -34,6 +34,8 @@ from senselab.audio.workflows.audio_analysis.adaptive.influence import SOURCE_KI
 __all__ = [
     "PerSpeakerPresenceTrack",
     "PerturbationEvidence",
+    "build_speaker_identity",
+    "evidence_from_passes",
     "claims_from_perturbations",
     "perturbation_uncertainty",
     "SourceCountClaim",
@@ -406,3 +408,102 @@ def claims_from_perturbations(
             )
         )
     return claims
+
+
+# ── deriving the posterior from a run's passes ──────────────────────────
+
+
+def _distinct_speakers(outcome: Mapping[str, Any]) -> int | None:
+    """Count distinct speaker labels in one diarization outcome."""
+    if not isinstance(outcome, Mapping) or outcome.get("status") != "ok":
+        return None
+    result = outcome.get("result")
+    if not isinstance(result, list):
+        return None
+    labels: set[str] = set()
+    for item in result:
+        for seg in item if isinstance(item, list) else [item]:
+            spk = getattr(seg, "speaker", None)
+            if spk is None and isinstance(seg, Mapping):
+                spk = seg.get("speaker")
+            if spk is not None:
+                labels.add(str(spk))
+    return len(labels)
+
+
+def evidence_from_passes(passes: Mapping[str, Any]) -> list[PerturbationEvidence]:
+    """Turn a run's per-pass diarization into per-source perturbation evidence.
+
+    The raw and enhanced passes are the same recording under a transform, so each
+    diarizer's two answers are already a stability sample — no extra inference needed. A
+    diarizer that reports a different speaker count before and after enhancement is telling
+    us its answer is not robust on this recording, and that is exactly the signal that
+    should govern how far it moves the posterior.
+
+    Args:
+        passes: ``summary["passes"]`` — pass label → pass summary.
+
+    Returns:
+        One :class:`PerturbationEvidence` per diarization source, keyed by pass label.
+    """
+    by_source: dict[str, dict[str, Any]] = {}
+    for label, summary in sorted(passes.items()):
+        if not isinstance(summary, Mapping):
+            continue
+        for model, outcome in ((summary.get("diarization") or {}).get("by_model") or {}).items():
+            count = _distinct_speakers(outcome)
+            if count is not None:
+                by_source.setdefault(str(model), {})[str(label)] = count
+    return [PerturbationEvidence(source=src, answers=answers) for src, answers in sorted(by_source.items())]
+
+
+def build_speaker_identity(
+    passes: Mapping[str, Any],
+    *,
+    policy: Mapping[str, Any] | None = None,
+    gates: Mapping[str, float] | None = None,
+) -> tuple[SpeakerCountPosterior, list[SpeakerHypothesis], list[SourceLabelCorrespondence]]:
+    """Derive the count posterior and speaker hypotheses from a completed run.
+
+    Args:
+        passes: ``summary["passes"]``.
+        policy: Adaptive policy, for source-kind resolution.
+        gates: Derivation gates.
+
+    Returns:
+        ``(posterior, hypotheses, correspondence)``. With no diarization at all the
+        posterior places its mass on zero speakers rather than inventing one.
+    """
+    evidence = evidence_from_passes(passes)
+    claims = claims_from_perturbations(evidence, policy=policy)
+    posterior = speaker_count_posterior(claims, gates=gates)
+
+    # One hypothesis per speaker in the modal count. Existence uncertainty is the mass NOT
+    # on that count: if the sources are split, every hypothesis inherits that doubt rather
+    # than the split being hidden behind a confident-looking list.
+    modal = posterior.modal_count
+    off_modal = 1.0 - posterior.probabilities.get(modal, 0.0)
+    supporters = posterior.support.get(modal, [])
+    kinds = {s: source_kind_for(s, policy) for s in supporters}
+    hypotheses = [
+        SpeakerHypothesis(
+            speaker_id=f"S{i}",
+            existence_uncertainty=off_modal,
+            supporting_sources=list(supporters),
+            source_kinds=dict(kinds),
+            converged=not posterior.is_multimodal,
+        )
+        for i in range(modal)
+    ]
+
+    correspondence = [
+        SourceLabelCorrespondence(
+            source=src,
+            source_label=f"<{src}:count={c}>",
+            speaker_id=f"S{min(i, max(modal - 1, 0))}",
+            kind=kinds.get(src, source_kind_for(src, policy)),
+        )
+        for i, (c, srcs) in enumerate(sorted(posterior.support.items()))
+        for src in srcs
+    ]
+    return posterior, hypotheses, correspondence

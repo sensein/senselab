@@ -536,6 +536,15 @@ def g2p_phonemes(text: str) -> list[str]:
     import nltk
     from g2p_en import G2p  # type: ignore[import-untyped]
 
+    from senselab.audio.tasks.speech_to_text_evaluation.utils import strip_nonlexical_tokens
+
+    # A bracketed marker is an annotation, not a word. Running G2P on "[cough]" yields
+    # phonemes for something nobody said, which then get aligned against real acoustics
+    # and compared as if they were a transcription disagreement.
+    text = strip_nonlexical_tokens(text)
+    if not text.strip():
+        return []
+
     g = getattr(g2p_phonemes, "_cached_g2p", None)
     if g is None:
         try:

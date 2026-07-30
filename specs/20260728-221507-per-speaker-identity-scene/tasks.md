@@ -269,12 +269,12 @@ supported each count, without opening intermediate artifacts.
 - [X] T096 [US1] Implement `PerSpeakerPresenceTrack` derivation in `src/senselab/audio/workflows/audio_analysis/speaker_identity.py`, on the existing presence grid with overlap support (FR-003).
 - [X] T097 [US1] Implement source-kind classification — independent versus derived — in `src/senselab/audio/workflows/audio_analysis/speaker_identity.py`, covering the clustering-derived pseudo-diarizer (FR-007).
 - [ ] T098 [US1] Extend `src/senselab/audio/workflows/audio_analysis/identity.py` to emit per-speaker structure downstream while retaining the per-bucket axis as the evidence-gathering mechanism.
-- [ ] T099 [US1] Extend `src/senselab/audio/workflows/audio_analysis/adaptive/belief.py` with per-speaker state and count-posterior tracking.
-- [ ] T100 [US1] Add a count-disagreement intervention trigger to `src/senselab/audio/workflows/audio_analysis/adaptive/interventions.py`, reading from the vote store rather than row metadata.
-- [ ] T101 [US1] Enable the influence paths in `src/senselab/audio/workflows/audio_analysis/adaptive/loop.py` — identity to diarization, diarization to per-speaker presence, mask to presence, utterance to speaker attribution — each gated through `influence.py` (FR-011a).
+- [X] T099 [US1] Extend `src/senselab/audio/workflows/audio_analysis/adaptive/belief.py` with per-speaker state and count-posterior tracking.
+- [X] T100 [US1] Add a count-disagreement intervention trigger to `src/senselab/audio/workflows/audio_analysis/adaptive/interventions.py`, reading from the vote store rather than row metadata.
+- [X] T101 [US1] Enable the influence paths in `src/senselab/audio/workflows/audio_analysis/adaptive/loop.py` — identity to diarization, diarization to per-speaker presence, mask to presence, utterance to speaker attribution — each gated through `influence.py` (FR-011a).
 - [X] T102 [US1] Implement the `final/speakers.json` and `final/per_speaker_presence.parquet` writers in `src/senselab/audio/workflows/audio_analysis/adaptive/fusion.py`, **replacing** the single-scalar identity representation rather than adding beside it (FR-001).
 - [X] T103 [US1] Extend the `final/convergence.json` writer in `fusion.py` with resolution kinds, applied influence weights, and unresolved quantities.
-- [ ] T104 [US1] Add `--per-speaker-identity` flag to `scripts/analyze_audio.py`.
+- [X] T104 [US1] Add `--per-speaker-identity` flag to `scripts/analyze_audio.py`.
 
 **Checkpoint**: All four stories independently functional.
 

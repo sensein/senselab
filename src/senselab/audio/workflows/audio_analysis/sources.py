@@ -143,7 +143,7 @@ def is_noise_like(flatness: float, *, flatness_max: float) -> bool:
 
     Compared against a configured limit rather than a hardcoded one: the descriptor is
     standardized but no standard fixes a decision threshold for it, so the value is a
-    policy entry that can be retuned on evidence.
+    policy entry that can be re-tuned on evidence.
     """
     return float(flatness) > float(flatness_max)
 

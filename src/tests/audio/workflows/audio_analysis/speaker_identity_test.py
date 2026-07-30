@@ -441,3 +441,96 @@ def test_a_stable_independent_source_still_wins_against_a_stable_derived_one() -
     )
     posterior = speaker_count_posterior(claims, gates=GATES)
     assert posterior.probabilities[1] > posterior.probabilities[5]
+
+
+# ── deriving identity from a run's passes ─────────────────────────────
+
+
+def _diar(count: int) -> dict:
+    from types import SimpleNamespace
+
+    segs = [SimpleNamespace(start=float(i), end=float(i + 1), speaker=f"SPEAKER_{i:02d}") for i in range(count)]
+    return {"status": "ok", "result": [segs]}
+
+
+def _passes(**per_pass: dict) -> dict:
+    return {label: {"diarization": {"by_model": models}} for label, models in per_pass.items()}
+
+
+def test_evidence_uses_the_two_passes_as_perturbation_points() -> None:
+    """The raw and enhanced passes are the same recording under a transform.
+
+    No extra inference is needed to measure stability — the pipeline already ran the
+    diarizers twice on transformed versions of the same audio.
+    """
+    from senselab.audio.workflows.audio_analysis.speaker_identity import evidence_from_passes
+
+    ev = evidence_from_passes(_passes(raw_16k={"pyannote": _diar(1)}, enhanced_16k={"pyannote": _diar(3)}))
+    assert len(ev) == 1
+    assert ev[0].answers == {"raw_16k": 1, "enhanced_16k": 3}
+
+
+def test_a_diarizer_stable_across_enhancement_gets_full_weight() -> None:
+    """A stable diarizer's count is taken at full weight."""
+    from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
+
+    posterior, _h, _c = build_speaker_identity(
+        _passes(raw_16k={"pyannote": _diar(2)}, enhanced_16k={"pyannote": _diar(2)})
+    )
+    assert posterior.modal_count == 2
+    assert posterior.probabilities[2] == pytest.approx(1.0)
+
+
+def test_a_diarizer_that_flips_under_enhancement_is_attenuated() -> None:
+    """Its answer is not robust on this recording, and the posterior should say so."""
+    from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
+
+    posterior, _h, _c = build_speaker_identity(
+        _passes(
+            raw_16k={"stable": _diar(1), "flipper": _diar(4)},
+            enhanced_16k={"stable": _diar(1), "flipper": _diar(2)},
+        )
+    )
+    assert posterior.weights["stable"] > posterior.weights["flipper"]
+    assert posterior.modal_count == 1
+
+
+def test_hypotheses_inherit_the_doubt_when_sources_are_split() -> None:
+    """A split posterior must not produce a confident-looking speaker list.
+
+    Existence uncertainty is the mass *not* on the modal count, so the disagreement stays
+    visible on every hypothesis rather than being hidden behind the list.
+    """
+    from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
+
+    posterior, hyps, _c = build_speaker_identity(
+        _passes(raw_16k={"a": _diar(1), "b": _diar(3)}, enhanced_16k={"a": _diar(1), "b": _diar(3)})
+    )
+    assert posterior.is_multimodal is True
+    assert all(h.existence_uncertainty > 0.0 for h in hyps)
+    assert all(h.converged is False for h in hyps)
+
+
+def test_one_hypothesis_per_speaker_in_the_modal_count() -> None:
+    """The modal count determines how many hypotheses exist."""
+    from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
+
+    _p, hyps, _c = build_speaker_identity(_passes(raw_16k={"a": _diar(3)}, enhanced_16k={"a": _diar(3)}))
+    assert [h.speaker_id for h in hyps] == ["S0", "S1", "S2"]
+
+
+def test_no_diarization_yields_zero_speakers_not_an_invented_one() -> None:
+    """No source reported anybody, so nobody is reported."""
+    from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
+
+    posterior, hyps, _c = build_speaker_identity({"raw_16k": {"diarization": {"by_model": {}}}})
+    assert posterior.modal_count == 0
+    assert hyps == []
+
+
+def test_a_failed_diarizer_contributes_nothing() -> None:
+    """A failed outcome must not be read as a speaker count of zero."""
+    from senselab.audio.workflows.audio_analysis.speaker_identity import evidence_from_passes
+
+    passes = {"raw_16k": {"diarization": {"by_model": {"broken": {"status": "failed"}}}}}
+    assert evidence_from_passes(passes) == [], "a failed outcome must not be read as a count"
