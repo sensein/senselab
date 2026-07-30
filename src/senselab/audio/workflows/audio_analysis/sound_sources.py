@@ -27,6 +27,25 @@ from senselab.utils.data_structures.logging import logger
 SOURCE_CATEGORIES = ("speech", "people", "machine", "environment")
 _MAP_RESOURCE = "audioset_source_map.json"
 
+AUDIOSET_SCORE_FUNCTION = "sigmoid"
+"""Output transform for AudioSet classification heads (FR-017c).
+
+AudioSet is a **multi-label** task: many classes can be simultaneously present, and a
+527-class head trained on it emits per-class evidence, not a choice among alternatives.
+Reading it through a softmax makes the classes compete, which suppresses secondary classes
+multiplicatively — so a background source at fixed underlying evidence gets a
+systematically smaller share of :func:`_window_category_masses` than it should, and the
+suppression is worst exactly when a dominant source is present. That is the case this
+feature exists to handle, so the competition is not an acceptable approximation.
+
+Per-window normalization below cancels the *scale* difference between a softmax and a
+sigmoid, but not the competition structure — hence fixing the transform rather than
+post-hoc rescaling.
+
+Ranking is unaffected: both transforms are monotone in the logit, so ``top_k`` selects the
+same labels either way. Only the mass proportions change.
+"""
+
 # Classes seen at runtime that are missing from the map — warn once each.
 _warned_unmapped: set[str] = set()
 
