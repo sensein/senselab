@@ -289,10 +289,28 @@ Key pieces, and the reasoning that shaped each:
   not a confidence gain.
 
 Thresholds live in `data/detection_margin/<version>.json` with a written derivation, never
-as code literals. Outputs: `<pass>/background_mask.{parquet,json}`,
-`<pass>/noise_floor.parquet`, `<pass>/background_sources.parquet`, `<pass>/suppression.json`,
-`final/speakers.json`, `final/per_speaker_presence.parquet`. Design and evidence:
+as code literals. Regenerate one from measured verdicts rather than editing it by hand:
+
+```bash
+uv run python scripts/calibrate_detection_margin.py \
+    --level-verdicts artifacts/level_probe/level-verdicts.json \
+    --out src/senselab/audio/workflows/audio_analysis/data/detection_margin/<name>.json
+```
+
+It refuses to emit a profile with no measured floor, one whose confident tier sits above
+every measured classifier floor (a threshold already known unreachable on that host), or one
+carrying an unmarked provisional figure. `profile_version` is the *schema* version and is
+never restamped; the profile's identity is `calibrated_as` plus its filename.
+
+Outputs: `<pass>/background_mask.{parquet,json}`, `<pass>/noise_floor.parquet`,
+`<pass>/background_sources.parquet`, `<pass>/suppression.json`, `final/speakers.json`,
+`final/per_speaker_presence.parquet`, plus `<pass>__background__mask` and
+`<pass>__speaker__presence` tracks in the Label Studio bundle. Design and evidence:
 `specs/20260728-221507-per-speaker-identity-scene/`.
+
+Three id namespaces stay distinct because all three once rendered as `S0`: a model's own
+speaker labels (`SPEAKER_00`, `spk0`), the pass-wide cluster that harmonises labels across
+diar models (`C0`), and the fused speaker id in `final/speakers.json` (`S0`).
 
 ## Active Technologies
 - N/A (CI/CD configuration only — YAML, JSON) + Intuit Auto (v11.2.1), hatch-vcs, GitHub Actions (20260418-104204-alpha-prerelease-process)
