@@ -648,7 +648,11 @@ def attach_scene_context_tracks_to_ls(
     )
     if target is None or not target.get("predictions"):
         return ls_tasks, ls_config
-    result_list = target["predictions"][0].setdefault("result", [])
+
+    # Built in full before anything is mutated. A half-applied attachment leaves regions
+    # pointing at tracks the config never declared, and Label Studio drops those silently —
+    # so the bundle would read as successfully annotated with data quietly missing.
+    result_list: list[dict[str, Any]] = []
 
     for i, row in enumerate(mask_rows):
         state = str(row.get("state") or "indeterminate")
@@ -681,7 +685,11 @@ def attach_scene_context_tracks_to_ls(
         # The speaker's own doubt travels with the region: without it a reviewer sees who
         # was claimed but not how doubtful the claim was, which is the actionable part.
         conf, unc = row.get("presence_confidence"), row.get("presence_uncertainty")
-        sources = ", ".join(str(s) for s in (row.get("contributing_sources") or [])) or "(none recorded)"
+        # Parquet list columns read back as numpy arrays, whose truthiness raises rather
+        # than falling through to a default.
+        raw_sources = row.get("contributing_sources")
+        listed = [] if raw_sources is None else list(raw_sources)
+        sources = ", ".join(str(s) for s in listed) or "(none recorded)"
         result_list.append(
             {
                 "id": f"{region_id}__text",
@@ -700,4 +708,5 @@ def attach_scene_context_tracks_to_ls(
             }
         )
 
+    target["predictions"][0].setdefault("result", []).extend(result_list)
     return ls_tasks, ls_config
