@@ -16,7 +16,6 @@ from senselab.audio.workflows.audio_analysis.reliability import (
     signal_stability,
 )
 
-
 # ── weighting inside the aggregator ───────────────────────────────────
 
 
@@ -70,8 +69,11 @@ def test_mismatched_weights_are_refused() -> None:
 
 
 def test_a_dropped_signal_drops_its_weight_with_it() -> None:
-    """``None`` sub-signals are removed before aggregation; their weights must go too,
-    or every later weight is applied to the wrong signal."""
+    """Weights follow their sub-signals out.
+
+    ``None`` sub-signals are removed before aggregation; their weights must go too,
+    or every later weight is applied to the wrong signal.
+    """
     assert apply_aggregator([None, 1.0], "min", weights=[1.0, 0.05]) == apply_aggregator([1.0], "min", weights=[0.05])
 
 
@@ -92,8 +94,11 @@ def _harvest(pass_label: str, values: dict[str, float]) -> object:
 
 
 def test_a_signal_that_answers_the_same_under_perturbation_is_reliable() -> None:
-    """Raw and enhanced are the same recording under a transform, so a signal's two answers
-    are already a stability sample — the same argument the speaker-count posterior uses."""
+    """Agreement with itself under perturbation is what earns weight.
+
+    Raw and enhanced are the same recording under a transform, so a signal's two answers
+    are already a stability sample — the same argument the speaker-count posterior uses.
+    """
     stab = signal_stability(
         {"raw_16k": _harvest("raw_16k", {"a": 0.2}), "enhanced_16k": _harvest("enhanced_16k", {"a": 0.2})},
         axis="identity",
@@ -111,8 +116,11 @@ def test_a_signal_that_flips_under_perturbation_is_not() -> None:
 
 
 def test_reliability_never_reaches_zero() -> None:
-    """Mirrors the influence gate's floor: with few perturbation points the measure is
-    coarse, and a hard zero would erase a claim rather than down-weight it."""
+    """Mirrors the influence gate's floor.
+
+    With few perturbation points the measure is
+    coarse, and a hard zero would erase a claim rather than down-weight it.
+    """
     stab = signal_stability(
         {"raw_16k": _harvest("raw_16k", {"a": 0.0}), "enhanced_16k": _harvest("enhanced_16k", {"a": 1.0})},
         axis="identity",
@@ -121,13 +129,17 @@ def test_reliability_never_reaches_zero() -> None:
 
 
 def test_a_single_pass_yields_no_reliability_claim() -> None:
-    """One observation is not a stability sample. Reporting 1.0 would assert reliability
-    that was never measured; the signal keeps full weight by default instead."""
+    """One observation is not a stability sample.
+
+    Reporting 1.0 would assert reliability
+    that was never measured; the signal keeps full weight by default instead.
+    """
     stab = signal_stability({"raw_16k": _harvest("raw_16k", {"a": 0.3})}, axis="identity")
     assert stab == {}
 
 
 def test_signals_are_scored_independently() -> None:
+    """One unstable signal must not drag down a steady one measured alongside it."""
     stab = signal_stability(
         {
             "raw_16k": _harvest("raw_16k", {"steady": 0.2, "flipper": 0.0}),
