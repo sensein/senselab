@@ -154,6 +154,7 @@ def write_noise_floor(rows: Any, dest_dir: Path) -> Path:  # noqa: ANN401 — No
         "frames",
         "recorder_floor_db",
         "binding",
+        "status",
     ]
     records = [r.to_row() for r in rows]
     frame = pd.DataFrame(records, columns=columns) if records else pd.DataFrame({c: [] for c in columns})

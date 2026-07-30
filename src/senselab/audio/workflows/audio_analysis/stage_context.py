@@ -243,6 +243,7 @@ class PassPlan:
     yamnet_hop_length: float = 0.48
     scene_top_k: int = 50
     background_mask: bool = True
+    background_sources: bool = True
     task_type: str | None = None
     mask_guard_interval_s: float | None = None
     features: bool = False

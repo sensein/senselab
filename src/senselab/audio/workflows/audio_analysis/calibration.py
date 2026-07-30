@@ -160,6 +160,10 @@ DEFAULT_DETECTION_MARGIN: dict[str, Any] = {
     },
     "noise_floor": {
         "quantile": 0.10,
+        # Long frame: the floor is a long-term percentile and needs frequency
+        # resolution, not time resolution. A 25 ms frame cannot resolve third-octave
+        # bands below ~140 Hz, which is where mains hum and ventilation live.
+        "floor_frame_s": 0.100,
         "window_s": 20.0,
         "max_iterations": 3,
         "event_exclusion_db": 6.0,

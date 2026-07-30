@@ -569,3 +569,60 @@ def test_a_single_recording_cannot_separate_common_from_particular() -> None:
     out = cross_recording_baseline({"only": _floors({100.0: -60.0})})
     assert out["bands"] == []
     assert "two recordings" in out["note"]
+
+
+# ── band resolvability and absent-floor reasons ────────────────────────
+
+
+def test_bands_narrower_than_the_bin_spacing_are_dropped() -> None:
+    """Third-octave bands narrow with frequency; FFT spacing does not.
+
+    At 16 kHz with a 25 ms frame the spacing is 31.25 Hz while the 22-28 Hz band spans
+    5.7 Hz, so it contains no bins at all. Emitting it produces a NaN that looks like a
+    measurement which happened to be missing rather than one that could never exist.
+    """
+    from senselab.audio.workflows.audio_analysis.noise_floor import resolvable_bands
+
+    bands = third_octave_bands(SR)
+    assert len(resolvable_bands(bands, SR, frame_s=0.025)) < len(bands)
+
+
+def test_a_longer_frame_resolves_more_low_bands() -> None:
+    """The floor is a long-term percentile, so it can buy frequency resolution with time.
+
+    This matters concretely: a 25 ms frame cannot resolve below ~140 Hz, which is where
+    mains hum and ventilation fundamentals live — the stationary sources most worth finding.
+    """
+    from senselab.audio.workflows.audio_analysis.noise_floor import resolvable_bands
+
+    bands = third_octave_bands(SR)
+    short = resolvable_bands(bands, SR, frame_s=0.025)
+    long = resolvable_bands(bands, SR, frame_s=0.100)
+    assert len(long) > len(short)
+    assert long[0][0] < short[0][0], "the longer frame reaches lower"
+
+
+def test_resolvability_counts_actual_bins_not_band_width() -> None:
+    """Width is only a proxy: a wide-enough band can fall between two bin centres.
+
+    Three NaN floors survived a width-based test for exactly that reason.
+    """
+    from senselab.audio.workflows.audio_analysis.noise_floor import resolvable_bands
+
+    for lo, hi in resolvable_bands(third_octave_bands(SR), SR, frame_s=0.100):
+        freqs = np.fft.rfftfreq(2048, d=1.0 / SR)
+        assert int(((freqs >= lo) & (freqs < hi)).sum()) >= 1
+
+
+def test_a_band_with_no_energy_is_reported_as_such_not_as_unmeasurable() -> None:
+    """An unmeasurable band and an empty band are different facts.
+
+    A high-passed recording genuinely has no energy at the bottom of the range. Collapsing
+    that into the same NaN as an unresolvable band makes both unreadable.
+    """
+    rng = np.random.default_rng(20)
+    # high-passed: no low-frequency content at all
+    wav = np.asarray(np.convolve(rng.standard_normal(SR * 2), [1.0, -0.98], mode="same"), dtype=np.float64)
+    rows = estimate_noise_floor(wav, SR)
+    assert all(r.status in ("ok", "no_energy") for r in rows)
+    assert all((r.floor_db is None) == (r.status == "no_energy") for r in rows)

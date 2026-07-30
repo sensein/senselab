@@ -18,6 +18,7 @@
   },
   "noise_floor": {
     "quantile": 0.1,
+    "floor_frame_s": 0.1,
     "window_s": 20.0,
     "max_iterations": 3,
     "event_exclusion_db": 6.0,

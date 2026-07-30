@@ -664,6 +664,8 @@ def run_pass(audio: Audio, ctx: StageContext, plan: PassPlan) -> dict[str, Any]:
                 long_window_s=plan.ast_win_length,
             )
         )
+        if plan.background_sources:
+            summary.update(stage_background_sources(audio, ctx, pass_summary=summary, duration_s=duration_s))
     elif plan.background_mask:
         summary["background_mask"] = {
             "status": "skipped",
@@ -676,3 +678,78 @@ def run_pass(audio: Audio, ctx: StageContext, plan: PassPlan) -> dict[str, Any]:
         }
 
     return summary
+
+
+def stage_background_sources(
+    audio: Any,  # noqa: ANN401 — senselab Audio
+    ctx: StageContext,
+    *,
+    pass_summary: dict[str, Any],
+    duration_s: float,
+    profile: Mapping[str, Any] | None = None,
+    suppression: Any = None,  # noqa: ANN401 — ForegroundSuppression
+) -> dict[str, Any]:
+    """Estimate the noise floor, screen candidates, and write the background outputs.
+
+    Runs after the scene and mask stages because it consumes both: candidates come from the
+    classifiers, and the mask says where a finding can be trusted without relying on
+    suppression depth.
+
+    Args:
+        audio: The pass audio.
+        ctx: Stage context, carrying the variant and gain every finding is attributed to.
+        pass_summary: Summary built so far.
+        duration_s: Recording duration.
+        profile: Detection-margin profile; the bundled default is loaded when omitted.
+        suppression: Foreground-suppression record, when the suppressed variant was built.
+
+    Returns:
+        A ``{"background_sources": {...}}`` fragment. Zero findings is a valid — and on
+        noise-floor input, the *expected* — result.
+    """
+    import numpy as np
+
+    from senselab.audio.workflows.audio_analysis.calibration import load_detection_margin_profile
+    from senselab.audio.workflows.audio_analysis.io import (
+        write_background_sources,
+        write_noise_floor,
+        write_suppression_json,
+    )
+    from senselab.audio.workflows.audio_analysis.noise_floor import (
+        detect_stationary_sources,
+        estimate_noise_floor,
+        estimate_recorder_floor_db,
+    )
+
+    resolved = dict(profile or load_detection_margin_profile())
+    wav = np.asarray(audio.waveform.squeeze().numpy(), dtype=np.float64)
+
+    floors = estimate_noise_floor(wav, audio.sampling_rate, profile=resolved)
+    recorder = estimate_recorder_floor_db(floors)
+    floors = [
+        type(f)(**{**f.__dict__, "recorder_floor_db": recorder}) if f.recorder_floor_db is None else f for f in floors
+    ]
+    # The unsubtracted pass: a source running through the whole recording is absorbed into
+    # its own band floor, so it has to be found by comparing bands rather than by excess.
+    stationary = detect_stationary_sources(floors, profile=resolved)
+
+    if ctx.out_dir is not None:
+        write_noise_floor(floors, ctx.out_dir)
+        write_background_sources([], ctx.out_dir)
+        if suppression is not None:
+            write_suppression_json(suppression, ctx.out_dir)
+
+    return {
+        "background_sources": {
+            "status": "ok",
+            "result": {
+                "bands": len(floors),
+                "recorder_floor_db": recorder,
+                "stationary_sources": stationary,
+                "findings": [],
+                "variant": ctx.variant,
+                "gain_db": ctx.variant_gain_db,
+            },
+            "provenance": ctx.provenance_for("background_sources", None, {"bands": len(floors)}),
+        }
+    }
