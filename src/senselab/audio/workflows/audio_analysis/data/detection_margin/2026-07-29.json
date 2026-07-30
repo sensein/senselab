@@ -74,9 +74,11 @@
         "mouth_noise"
       ],
       "breath": [
+        "speech",
         "breath"
       ],
       "cough": [
+        "speech",
         "cough",
         "throat_clear"
       ]

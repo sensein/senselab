@@ -465,3 +465,25 @@ def test_enhanced_pass_label_maps_to_the_enhanced_variant() -> None:
     body = ast.get_source_segment(src, fn) or ""
     assert "speech_enhanced" in body, "_stage_context must derive the variant from the pass label"
     assert "variant=" in body, "_stage_context must pass the variant to StageContext"
+
+
+def test_participant_speech_is_target_activity_in_every_task() -> None:
+    """The near-field participant talking is target activity whatever they were asked to do.
+
+    Found on a real cough recording: with ``cough`` mapping to cough events only, the
+    spoken tail was target-FREE and would have been reported as a background ``speech``
+    source. That is the same misattribution the task mapping exists to prevent, arriving
+    from the other direction.
+    """
+    for task in ("speech", "breath", "cough"):
+        types, provenance = target_event_types_for(task, PROFILE)
+        assert provenance == "recognized"
+        assert "speech" in types, f"{task} task omits participant speech from its targets"
+
+
+def test_task_specific_events_are_still_task_specific() -> None:
+    """Adding speech everywhere must not blur the tasks into one another."""
+    cough, _ = target_event_types_for("cough", PROFILE)
+    breath, _ = target_event_types_for("breath", PROFILE)
+    assert "cough" in cough and "cough" not in breath
+    assert "breath" in breath and "breath" not in cough

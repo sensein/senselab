@@ -50,9 +50,29 @@ def test_uncertain_signal_is_attenuated() -> None:
     assert effective_weight(1.0, uncertainty=0.75, derivation_gate=1.0) == pytest.approx(0.25)
 
 
-def test_fully_uncertain_signal_has_no_influence() -> None:
-    """Uncertainty 1.0 is silence, not a vote."""
-    assert effective_weight(1.0, uncertainty=1.0, derivation_gate=1.0) == pytest.approx(0.0)
+def test_fully_uncertain_signal_is_floored_not_erased() -> None:
+    """A dissenting claim stays visible while being unable to win.
+
+    A hard zero looked right until a real run produced it: with two perturbation points
+    normalised entropy is binary, so a source that disagreed with itself across raw and
+    enhanced audio carried *exactly* zero weight and vanished from the posterior. The
+    floor keeps the claim readable — its support is still recorded — without letting it
+    influence the outcome.
+    """
+    weight = effective_weight(1.0, uncertainty=1.0, derivation_gate=1.0)
+    assert 0.0 < weight <= 0.05
+
+
+def test_the_floor_can_be_disabled_for_a_hard_zero() -> None:
+    """Callers with many perturbation points can opt into full silencing."""
+    assert effective_weight(1.0, uncertainty=1.0, derivation_gate=1.0, min_gate=0.0) == pytest.approx(0.0)
+
+
+def test_a_floored_source_still_loses_to_a_confident_one() -> None:
+    """The floor must not resurrect a claim into contention."""
+    floored = effective_weight(1.0, uncertainty=1.0, derivation_gate=1.0)
+    confident = effective_weight(1.0, uncertainty=0.1, derivation_gate=1.0)
+    assert confident > 10 * floored
 
 
 def test_weight_is_monotone_in_uncertainty() -> None:

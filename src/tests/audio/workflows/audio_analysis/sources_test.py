@@ -238,3 +238,94 @@ def test_a_real_but_marginal_source_is_a_candidate_with_no_rejection() -> None:
     )
     assert tier == "candidate"
     assert reason is None
+
+
+# ── excision routing (T054, FR-041 to FR-045) ─────────────────────────
+
+
+def _mask_row(region_id: str, start: float, end: float, state: str = "target_free") -> dict:
+    return {"region_id": region_id, "start": start, "end": end, "state": state}
+
+
+def test_only_target_free_regions_are_excised() -> None:
+    """An excised segment exists to give the classifier audio free of target activity."""
+    from senselab.audio.workflows.audio_analysis.sources import plan_excision
+
+    rows = [
+        _mask_row("m0", 0.0, 12.0, "target_free"),
+        _mask_row("m1", 12.0, 24.0, "target_active"),
+        _mask_row("m2", 24.0, 36.0, "indeterminate"),
+    ]
+    segs = plan_excision(rows, long_window_s=10.24, max_padding_fraction=0.5)
+    assert [s.region_id for s in segs] == ["m0"]
+
+
+def test_a_region_longer_than_the_window_needs_no_padding() -> None:
+    """A region at least as long as the window is classified unpadded."""
+    from senselab.audio.workflows.audio_analysis.sources import plan_excision
+
+    seg = plan_excision([_mask_row("m0", 0.0, 20.0)], long_window_s=10.24, max_padding_fraction=0.5)[0]
+    assert seg.padding_fraction == pytest.approx(0.0)
+    assert seg.supports_long_window is True
+
+
+def test_a_short_region_is_returned_but_flagged() -> None:
+    """Flagged rather than dropped, so a consumer sees what was skipped.
+
+    Padding maps to a fixed value while the signal region drifts with gain, so the
+    pad-to-signal contrast is itself gain-dependent — a heavily padded decision is not
+    comparable to a full-window one.
+    """
+    from senselab.audio.workflows.audio_analysis.sources import plan_excision
+
+    seg = plan_excision([_mask_row("m0", 0.0, 1.0)], long_window_s=10.24, max_padding_fraction=0.5)[0]
+    assert seg.padding_fraction > 0.5
+    assert seg.supports_long_window is False
+
+
+def test_regions_are_never_concatenated_to_reach_a_usable_length() -> None:
+    """Joining spans would create a seam an onset-sensitive feature reads as an event.
+
+    That would manufacture exactly the kind of finding the other guards exist to prevent,
+    so two short regions stay two short regions.
+    """
+    from senselab.audio.workflows.audio_analysis.sources import plan_excision
+
+    rows = [_mask_row("m0", 0.0, 3.0), _mask_row("m1", 20.0, 23.0)]
+    segs = plan_excision(rows, long_window_s=10.24, max_padding_fraction=0.5)
+    assert len(segs) == 2
+    assert all(s.duration_s == pytest.approx(3.0) for s in segs)
+
+
+def test_short_window_classifier_stays_on_the_grid() -> None:
+    """Its windows already fit inside a mask region; excision would cost continuity."""
+    from senselab.audio.workflows.audio_analysis.sources import ExcisedSegment, route_classifier
+
+    seg = ExcisedSegment("m0", 0.0, 20.0, 0.0, True)
+    assert route_classifier(seg, classifier_window_s=0.96, long_window_s=10.24) == "grid"
+
+
+def test_long_window_classifier_uses_an_excised_segment_when_it_can() -> None:
+    """Measured: excising the quiet segment beat every mixed-window variant."""
+    from senselab.audio.workflows.audio_analysis.sources import ExcisedSegment, route_classifier
+
+    seg = ExcisedSegment("m0", 0.0, 20.0, 0.0, True)
+    assert route_classifier(seg, classifier_window_s=10.24, long_window_s=10.24) == "excised"
+
+
+def test_long_window_classifier_falls_back_to_the_grid_when_it_cannot() -> None:
+    """A heavily padded excision is worse than the grid, so it is not used."""
+    from senselab.audio.workflows.audio_analysis.sources import ExcisedSegment, route_classifier
+
+    seg = ExcisedSegment("m0", 0.0, 1.0, 0.9, False)
+    assert route_classifier(seg, classifier_window_s=10.24, long_window_s=10.24) == "grid"
+    assert route_classifier(None, classifier_window_s=10.24, long_window_s=10.24) == "grid"
+
+
+def test_a_recording_with_no_long_enough_region_yields_no_excision() -> None:
+    """SC-032's scenario, which occurred naturally on a 14 s validation recording."""
+    from senselab.audio.workflows.audio_analysis.sources import plan_excision
+
+    rows = [_mask_row(f"m{i}", i * 3.0, i * 3.0 + 1.5) for i in range(4)]
+    segs = plan_excision(rows, long_window_s=10.24, max_padding_fraction=0.5)
+    assert segs and not any(s.supports_long_window for s in segs)
