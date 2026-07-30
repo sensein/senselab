@@ -124,9 +124,14 @@ def test_align_key_tracks_the_transcript() -> None:
 
 def test_provenance_records_the_stage_code_version() -> None:
     """The whole point of STAGE_VERSIONS is that a stale replay is diagnosable."""
+    from senselab.utils.tasks.cached_inference import CACHE_SCHEMA_VERSION
+
     prov = _ctx().provenance_for("asr", "whisper", {"device": "auto"})
     assert prov["code_version"] == "asr@1"
-    assert prov["cache_schema_version"] == 4
+    # Compared against the constant, not a literal: the point of the assertion is that the
+    # recorded version tracks the real one, and a literal turns every legitimate bump into a
+    # test edit that says nothing.
+    assert prov["cache_schema_version"] == CACHE_SCHEMA_VERSION
     assert prov["pass"] == "raw_16k"
     assert prov["device"] == "auto"
 

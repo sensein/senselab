@@ -481,8 +481,10 @@ def test_a_confidently_present_source_still_gets_its_own_boundaries() -> None:
 
 
 def test_a_source_that_never_clears_the_presence_gate_has_no_extent() -> None:
-    """Extent is only meaningful once presence is established; otherwise a run would report
-    boundaries for something it never claimed was there."""
+    """Extent is meaningless without presence.
+
+    Otherwise a run would report boundaries for something it never claimed was there.
+    """
     from senselab.audio.workflows.audio_analysis.sources import resolve_extent
 
     frames = [(0.0, 0.5, 4.0), (0.5, 1.0, 5.0)]
@@ -498,8 +500,10 @@ def test_extent_does_not_bridge_across_a_genuine_gap() -> None:
 
 
 def test_a_steady_hum_has_almost_no_modulation_depth() -> None:
-    """Stationary noise is near-unmodulated at every rate, which is what separates a real
-    event from a stretch of noise floor at the same level."""
+    """Stationary noise is near-unmodulated at every rate.
+
+    That is what separates a real event from a stretch of noise floor at the same level.
+    """
     import numpy as np
 
     from senselab.audio.workflows.audio_analysis.sources import modulation_depth
@@ -511,6 +515,7 @@ def test_a_steady_hum_has_almost_no_modulation_depth() -> None:
 
 
 def test_an_amplitude_modulated_source_registers_its_modulation() -> None:
+    """The other half of the discrimination: a genuinely modulated source reads as one."""
     import numpy as np
 
     from senselab.audio.workflows.audio_analysis.sources import modulation_depth
@@ -522,9 +527,11 @@ def test_an_amplitude_modulated_source_registers_its_modulation() -> None:
 
 
 def test_speech_rate_modulation_is_discounted_in_a_suppressed_variant() -> None:
-    """Research D11: suppression operates on the 3-6 Hz modulation band, so the residual can
-    carry *inherited* talker modulation. Counting it as evidence of a background event would
-    credit the suppressor's own artifact as a discovery.
+    """Research D11: the residual can carry inherited talker modulation.
+
+    Suppression operates on the 3-6 Hz band, so modulation at talker rate in a residual is as
+    likely to be the suppressor's own artifact as a background event — and counting it would
+    credit that artifact as a discovery.
     """
     import numpy as np
 
