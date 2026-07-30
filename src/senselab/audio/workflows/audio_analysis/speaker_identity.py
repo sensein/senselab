@@ -33,6 +33,9 @@ from senselab.audio.workflows.audio_analysis.adaptive.influence import SOURCE_KI
 
 __all__ = [
     "PerSpeakerPresenceTrack",
+    "PerturbationEvidence",
+    "claims_from_perturbations",
+    "perturbation_uncertainty",
     "SourceCountClaim",
     "SourceLabelCorrespondence",
     "SpeakerCountPosterior",
@@ -285,3 +288,121 @@ def source_kind_for(source: str, policy: Mapping[str, Any] | None = None) -> Sou
     if kind not in SOURCE_KINDS:
         raise ValueError(f"policy declares unknown source kind {kind!r} for {source!r}")
     return kind  # type: ignore[return-value]
+
+
+# ── perturbation-derived reliability ───────────────────────────────────
+#
+# Preferred over declaring a source independent or derived by hand. A hand-set gate
+# encodes a judgement about pipeline wiring; a perturbation measures what the source
+# actually does. A source that returns the same answer when the input is perturbed has
+# earned confidence in that answer; one that flips under mild preprocessing has not,
+# whatever we would call its provenance.
+#
+# The pipeline already generates this evidence and was not using it that way:
+#
+#   - **preprocessing** -- the raw and enhanced passes are the same recording under a
+#     transform, so any per-pass answer is a two-point perturbation sample already;
+#   - **gain** -- the amplitude probe sweeps level, and level demonstrably moves
+#     classifier output;
+#   - **band limiting, cropping, additive noise at known SNR** -- further points on the
+#     same axis, cheap to add because they need no new model.
+#
+# This matters most exactly where hand-assignment is least trustworthy. A recording
+# that is genuinely hard for diarizers is one where off-the-shelf models disagree
+# *with themselves* across preprocessing -- and that instability is the evidence, not
+# a nuisance to be smoothed over by a constant.
+
+
+@dataclass(frozen=True)
+class PerturbationEvidence:
+    """One source's answers to the same question under several perturbations.
+
+    Attributes:
+        source: Source identifier.
+        answers: perturbation id → the answer that source gave under it. Perturbation ids
+            are free-form (``"raw"``, ``"enhanced"``, ``"gain+6dB"``, ...) so any transform
+            the pipeline already performs can contribute a point.
+    """
+
+    source: str
+    answers: dict[str, Any]
+
+    @property
+    def n(self) -> int:
+        """Number of perturbation points observed."""
+        return len(self.answers)
+
+
+def perturbation_uncertainty(evidence: PerturbationEvidence) -> float | None:
+    """Uncertainty in ``[0, 1]`` from how much a source's answer moves under perturbation.
+
+    Normalized Shannon entropy over the distribution of answers — the same collapse the
+    presence axis already uses — so unanimity is 0 and a maximally split source is 1.
+    Entropy rather than a modal fraction because *how* the disagreement is spread matters:
+    two answers split evenly is a different state from one answer plus scattered outliers.
+
+    Args:
+        evidence: The source's answers across perturbations.
+
+    Returns:
+        Uncertainty in ``[0, 1]``, or ``None`` with fewer than two perturbation points —
+        a single observation carries no evidence about stability, and reporting 0 there
+        would award full confidence for having been asked once.
+    """
+    import math as _math
+
+    if evidence.n < 2:
+        return None
+    counts: dict[str, int] = {}
+    for answer in evidence.answers.values():
+        counts[repr(answer)] = counts.get(repr(answer), 0) + 1
+    if len(counts) == 1:
+        return 0.0
+    total = sum(counts.values())
+    entropy = -sum((c / total) * _math.log(c / total) for c in counts.values())
+    return min(1.0, entropy / _math.log(len(counts)))
+
+
+def claims_from_perturbations(
+    evidence: Sequence[PerturbationEvidence],
+    *,
+    policy: Mapping[str, Any] | None = None,
+    fallback_uncertainty: float = 0.5,
+) -> list[SourceCountClaim]:
+    """Build count claims whose uncertainty is *measured* rather than assigned.
+
+    Each source contributes its modal answer, weighted by how stable that answer was under
+    perturbation. This replaces a hand-set reliability judgement with evidence the pipeline
+    already produces.
+
+    The source kind is still resolved from policy and still gates the claim, but it becomes
+    the secondary term: a source that is demonstrably stable is not held down by a label,
+    and a source that flips under preprocessing is attenuated whatever its label says.
+
+    Args:
+        evidence: Per-source answers across perturbations.
+        policy: Adaptive policy, for :func:`source_kind_for`.
+        fallback_uncertainty: Used when a source offers fewer than two perturbation points,
+            so a single-observation source is neither trusted nor discarded outright.
+
+    Returns:
+        One claim per source, ready for :func:`speaker_count_posterior`.
+    """
+    claims: list[SourceCountClaim] = []
+    for item in sorted(evidence, key=lambda e: e.source):
+        if not item.answers:
+            continue
+        counts: dict[int, int] = {}
+        for answer in item.answers.values():
+            counts[int(answer)] = counts.get(int(answer), 0) + 1
+        modal = max(counts, key=lambda c: (counts[c], -c))
+        measured = perturbation_uncertainty(item)
+        claims.append(
+            SourceCountClaim(
+                source=item.source,
+                count=modal,
+                uncertainty=fallback_uncertainty if measured is None else measured,
+                kind=source_kind_for(item.source, policy),
+            )
+        )
+    return claims
