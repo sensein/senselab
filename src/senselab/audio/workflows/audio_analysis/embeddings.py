@@ -345,12 +345,15 @@ def cluster_pass_speakers(
         for idx in valid_indices:
             cluster_labels[idx] = "spk0"
             p_voice[idx] = 1.0
+        same_floor, diff_floor = _within_cluster_band(np.stack(vectors, axis=0)) if vectors else (0.30, 0.70)
         return {
             "n_speakers": 1,
             "best_silhouette": None,
             "labels": cluster_labels,
             "p_voice": p_voice,
             "valid_indices": list(valid_indices),
+            "empirical_same_speaker_floor": same_floor,
+            "empirical_diff_speaker_floor": diff_floor,
             "single_window_mode": True,
         }
     X = np.stack(vectors, axis=0)
@@ -521,12 +524,15 @@ def cluster_pass_speakers(
             cluster_labels[idx] = "spk0"
             # cos sim → [0,1] via (s+1)/2.
             p_voice[idx] = max(0.0, min(1.0, 0.5 * (float(sims[vi]) + 1.0)))
+        same_floor, diff_floor = _within_cluster_band(X)
         return {
             "n_speakers": 1,
             "best_silhouette": float(best_overall) if best_overall > -1.0 else None,
             "labels": cluster_labels,
             "p_voice": p_voice,
             "valid_indices": list(valid_indices),
+            "empirical_same_speaker_floor": same_floor,
+            "empirical_diff_speaker_floor": diff_floor,
         }
     # No coherent cluster — likely noise / silence dominated.
     for vi, idx in enumerate(valid_indices):
@@ -640,10 +646,47 @@ def _empirical_calibration_band(
     # — fall back to defaults rather than report nonsense.
     if same_floor >= diff_floor:
         return fallback_same_floor, fallback_diff_floor
-    # Clamp to plausible bounds so a degenerate cluster doesn't pull the band
-    # outside [0.1, 0.9].
-    same_floor = max(0.10, min(0.50, same_floor))
-    diff_floor = max(0.50, min(0.90, diff_floor))
+    # Clamp only enough to keep the band ordered and inside [0.05, 0.95]. An earlier
+    # version pinned same_floor to at most 0.50 and diff_floor to at least 0.50, which
+    # presumes the two distributions straddle 0.5. Measured on a real two-speaker
+    # recording, ECAPA's *within*-speaker distance over 0.5 s buckets has a median of
+    # 0.543 — above that cap — so the presumption fails at this time scale and the cap
+    # would drag the anchor back below anything the embeddings actually produce.
+    same_floor = max(0.05, min(0.95, same_floor))
+    diff_floor = max(0.05, min(0.95, diff_floor))
+    if diff_floor - same_floor < 0.05:
+        return fallback_same_floor, fallback_diff_floor
+    return same_floor, diff_floor
+
+
+def _within_cluster_band(
+    X: np.ndarray,
+    *,
+    fallback_same_floor: float = 0.30,
+    fallback_diff_floor: float = 0.70,
+    min_pairs: int = 5,
+) -> tuple[float, float]:
+    """Calibration band for a pass whose windows all belong to one speaker.
+
+    With a single cluster there are no between-speaker pairs, so only the same-speaker
+    anchor can be measured and the different-speaker floor keeps its default. Measuring the
+    one is what matters: a fixed same-speaker floor of 0.30 is unreachable for short-bucket
+    embeddings, which leaves the identity axis unable to report low uncertainty even when
+    every diarizer agrees on an unchanging speaker.
+    """
+    if X.shape[0] < 2:
+        return fallback_same_floor, fallback_diff_floor
+    sim = X @ X.T
+    n = X.shape[0]
+    dists = [float(max(0.0, min(1.0, 1.0 - sim[i, j]))) for i in range(n) for j in range(i + 1, n)]
+    if len(dists) < min_pairs:
+        return fallback_same_floor, fallback_diff_floor
+    same_floor = max(0.05, min(0.95, float(np.quantile(dists, 0.75))))
+    diff_floor = fallback_diff_floor
+    if diff_floor - same_floor < 0.05:
+        # The speaker's own spread reaches the different-speaker anchor. Push the anchor
+        # out rather than returning an inverted band that would score every comparison.
+        diff_floor = min(0.95, same_floor + 0.20)
     return same_floor, diff_floor
 
 
