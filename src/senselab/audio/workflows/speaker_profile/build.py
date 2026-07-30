@@ -21,11 +21,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.data_structures.audio_plus import AudioPlus
 from senselab.audio.workflows.audio_analysis.embeddings import (
     WindowEmbedding,
     _empirical_calibration_band,
@@ -785,3 +786,102 @@ def build_speaker_profile(
         save_profile(profile, Path(output))
 
     return profile
+
+
+def profile_from_related_audios(
+    audio_plus: AudioPlus,
+    *,
+    audio_loader: Callable[[str], Audio],
+    subject_id: str | None = None,
+    embedding_models: Sequence[str] = C.DEFAULT_EMBEDDING_MODELS,
+    profile_window_s: float = C.PROFILE_WINDOW_S,
+    profile_hop_s: float = C.PROFILE_HOP_S,
+    device: DeviceType | None = None,
+    output: Path | None = None,
+    cache_dir: Path | None = None,
+    load_failures: dict[str, str] | None = None,
+    min_confident_speech_s: float = C.MIN_CONFIDENT_SPEECH_S,
+    target_confident_speech_s: float = C.TARGET_CONFIDENT_SPEECH_S,
+    ambiguity_share_ratio: float = C.AMBIGUITY_SHARE_RATIO,
+    prefer_session: str | None = None,
+) -> SpeakerProfile | None:
+    """Enroll a subject from the *other* recordings an Audio+ bundle points at.
+
+    The bridge between the metadata layer and enrollment: given the bundle derived for
+    one recording, build that speaker's profile from their **sibling** recordings.
+
+    This is **leave-one-out by construction** — ``related_audio_refs`` excludes the
+    bundle's own ``ref`` (see
+    :class:`~senselab.audio.data_structures.audio_plus.MetadataProvider`), so the
+    recording about to be scored cannot contribute to the reference it is scored
+    against. Without that, the analyzed file pulls the centroid toward itself and
+    contamination *in that file* is the thing most likely to be hidden.
+
+    Siblings are loaded one at a time through ``audio_loader``, never eagerly: a subject
+    may have dozens of recordings.
+
+    Args:
+        audio_plus: The bundle for the recording being analyzed.
+        audio_loader: Resolves a related reference to an :class:`Audio`.
+        subject_id: Override for the profile's subject id. Defaults to
+            ``audio_plus.speaker.speaker_id``.
+        embedding_models: Embedding consensus set.
+        profile_window_s: Enrollment window length. Recorded on the artifact so a
+            consumer can check its detection grid matches (see
+            :func:`~senselab.audio.workflows.speaker_profile.compare.check_grid_compatibility`)
+            — a 2.0 s-built centroid scored against 0.5 s windows misapplies the
+            calibration band.
+        profile_hop_s: Enrollment hop.
+        device: Optional compute device override.
+        output: Optional path to persist the artifact to.
+        cache_dir: Optional embedding cache directory.
+        load_failures: Optional dict populated with ``{ref: reason}`` for each sibling
+            that could not be loaded. Those siblings are skipped, not fatal — one
+            unreadable file should not deny a subject a profile.
+        min_confident_speech_s: Speech floor below which confidence is ``low``.
+        target_confident_speech_s: Speech target for a fully confident profile.
+        ambiguity_share_ratio: Runner-up / dominant share above which the profile is
+            ``ambiguous`` — the subject's identity is in doubt.
+        prefer_session: Optional session id to weight more heavily.
+
+    Returns:
+        The profile, or ``None`` when the bundle lists no related recordings (or none
+        could be loaded) — there is nothing to enroll from, which is different from a
+        profile that came out weak.
+
+    Raises:
+        ValueError: If no subject id is available from either argument.
+    """
+    resolved_subject = subject_id or audio_plus.speaker.speaker_id
+    if not resolved_subject:
+        raise ValueError(
+            "no subject_id: pass one explicitly, or use a metadata provider that populates "
+            "AudioPlus.speaker.speaker_id — a profile has to be keyed to a subject."
+        )
+    if not audio_plus.related_audio_refs:
+        return None
+
+    inputs: list[ProfileInput] = []
+    for ref in audio_plus.related_audio_refs:
+        try:
+            inputs.append(ProfileInput(audio=audio_loader(ref), file_id=ref))
+        except Exception as exc:  # noqa: BLE001 — a bad sibling is skipped, not fatal
+            if load_failures is not None:
+                load_failures[ref] = f"could not load related audio: {exc!r}"
+    if not inputs:
+        return None
+
+    return build_speaker_profile(
+        resolved_subject,
+        inputs,
+        embedding_models=embedding_models,
+        profile_window_s=profile_window_s,
+        profile_hop_s=profile_hop_s,
+        device=device,
+        output=output,
+        cache_dir=cache_dir,
+        min_confident_speech_s=min_confident_speech_s,
+        target_confident_speech_s=target_confident_speech_s,
+        ambiguity_share_ratio=ambiguity_share_ratio,
+        prefer_session=prefer_session,
+    )

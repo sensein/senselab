@@ -24,10 +24,14 @@ from senselab.audio.workflows.speaker_profile.build import (
     build_speaker_profile,
     decide_confidence,
     extract_speech_windows_for_file,
+    profile_from_related_audios,
 )
 from senselab.audio.workflows.speaker_profile.compare import (
+    GridMismatchError,
+    check_grid_compatibility,
     compare_recording_to_profile,
     compute_target_quality,
+    derive_window_grid,
     leave_one_file_out_profile,
     profile_votes_by_bucket,
     score_voice_groups,
@@ -57,6 +61,7 @@ from senselab.audio.workflows.speaker_profile.types import (
 
 __all__ = [
     "AggregationResult",
+    "GridMismatchError",
     "ClusterStats",
     "ComparisonFlag",
     "ProfileComparisonResult",
@@ -75,12 +80,15 @@ __all__ = [
     "aggregate_dominant_cluster",
     "build_source_records",
     "build_speaker_profile",
+    "check_grid_compatibility",
     "compare_recording_to_profile",
     "compute_target_quality",
     "decide_confidence",
+    "derive_window_grid",
     "extract_speech_windows_for_file",
     "leave_one_file_out_profile",
     "load_profile",
+    "profile_from_related_audios",
     "profile_votes_by_bucket",
     "save_profile",
     "score_voice_groups",

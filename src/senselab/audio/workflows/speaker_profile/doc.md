@@ -89,9 +89,46 @@ from senselab.audio.workflows.speaker_profile import (
     compute_target_quality,           # recording target-quality rollup
     leave_one_file_out_profile, within_file_holdout_profile,
     score_voice_groups,               # name pooled voice groups (preferred)
+    profile_from_related_audios,      # enroll from an Audio+ bundle's siblings
+    check_grid_compatibility,         # guard: detection grid must match enrollment grid
     profile_votes_by_bucket,          # map per-window results onto a bucket grid
 )
 ```
+
+## Enrolling from an Audio+ bundle
+
+`profile_from_related_audios` is the bridge from the metadata layer
+(`senselab.audio.data_structures.audio_plus`) to enrollment: hand it the bundle derived
+for the recording you are about to analyze and it enrolls from that speaker's *other*
+recordings.
+
+```python
+ap = build_audio_plus(ref, audio_loader=load, metadata_provider=B2AIMetadataProvider(root))
+profile = profile_from_related_audios(ap, audio_loader=load, cache_dir=cache)
+```
+
+This is **leave-one-out by construction** — a provider's `related_audio_refs` excludes the
+queried recording, so the file being scored cannot contribute to the reference it is scored
+against. Siblings load one at a time; a subject may have dozens. A sibling that fails to
+load is skipped and reported via `load_failures`, not fatal.
+
+## Window grid
+
+A profile records the grid it was enrolled at (`params.profile_window_s` / `profile_hop_s`),
+and `check_grid_compatibility` raises if detection windows were extracted at a different
+*length*. Comparing across lengths adds a duration domain gap on top of any speaker
+difference, and nothing downstream would catch it: measured, `calibration_band` does not
+adapt to the grid — it came out as the fixed fallback values at both 2.0 s and 0.5 s.
+
+The hop is deliberately not checked; `_window_step_seconds` derives coverage from the
+results' own timestamps, so duration rollups are already hop-agnostic.
+
+Measured on the synthetic fixtures, coarse windows separate speakers better
+(cross-subject centroid similarity 0.27 at 2.0 s vs 0.41 at 0.5 s; zero false alarms vs
+11%), while fine windows localize better (0.85 vs 0.50 detection inside a 3 s intrusion).
+Enrollment wants the coarse grid; frame-level localization wants the fine one. Since
+`DIFF_SPEAKER_FLOOR` is fixed at 0.70 regardless, choosing a grid also means choosing a
+band.
 
 CLI: `scripts/build_speaker_profile.py` (see `contracts/build-profile-cli.md`).
 

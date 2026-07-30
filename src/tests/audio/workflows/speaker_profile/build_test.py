@@ -24,6 +24,7 @@ import numpy as np
 import pytest
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.data_structures.audio_plus import AudioPlus, SpeakerInfo
 from senselab.audio.workflows.audio_analysis.embeddings import WindowEmbedding
 from senselab.audio.workflows.speaker_profile import constants as C
 from senselab.audio.workflows.speaker_profile.build import (
@@ -33,6 +34,7 @@ from senselab.audio.workflows.speaker_profile.build import (
     build_source_records,
     build_speaker_profile,
     decide_confidence,
+    profile_from_related_audios,
 )
 
 # Single low-dim model keeps the synthetic clustering fast and deterministic.
@@ -349,3 +351,90 @@ def test_build_speaker_profile_insufficient_subject(monkeypatch: pytest.MonkeyPa
     assert profile.centroids == {}
     assert len(profile.sources) == 1
     assert profile.sources[0].kept is False
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Enrollment from an Audio+ bundle's related recordings
+
+
+def _audio_plus_with_related(refs: list[str], speaker_id: str | None = "sub-001") -> AudioPlus:
+    """An Audio+ whose related refs are ``refs`` (never including its own ref)."""
+    return AudioPlus(
+        ref="sub-001/ses-1/analyzed.wav",
+        audio=_audio_of_length(160000),
+        speaker=SpeakerInfo(speaker_id=speaker_id),
+        related_audio_refs=refs,
+    )
+
+
+def test_profile_from_related_audios_enrolls_on_siblings_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Enrollment uses the related refs, and the analyzed recording is never a source.
+
+    This is the leave-one-out property: the provider excludes the queried recording, so a
+    profile built from what it returns cannot include the file it will be scored against.
+    """
+    target = _basis(0)
+    _stub_extractor(monkeypatch, {"160000": target, "176000": target, "192000": target})
+    lengths = {"sib-a.wav": 176000, "sib-b.wav": 192000}
+    loaded: list[str] = []
+
+    def loader(ref: str) -> Audio:
+        loaded.append(ref)
+        return _audio_of_length(lengths[ref])
+
+    ap = _audio_plus_with_related(["sib-a.wav", "sib-b.wav"])
+    profile = profile_from_related_audios(ap, audio_loader=loader, embedding_models=[_MODEL])
+
+    assert profile is not None
+    assert profile.subject_id == "sub-001"
+    assert loaded == ["sib-a.wav", "sib-b.wav"]  # one load per sibling, lazily
+    source_ids = {s.file_id for s in profile.sources}
+    assert source_ids == {"sib-a.wav", "sib-b.wav"}
+    assert ap.ref not in source_ids
+
+
+def test_profile_from_related_audios_returns_none_without_siblings() -> None:
+    """No related recordings → no profile, rather than a profile of one file."""
+    ap = _audio_plus_with_related([])
+    assert profile_from_related_audios(ap, audio_loader=lambda _r: _audio_of_length(160000)) is None
+
+
+def test_profile_from_related_audios_skips_unloadable_siblings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A sibling that fails to load is skipped and recorded, not fatal."""
+    _stub_extractor(monkeypatch, {"176000": _basis(0)})
+    failures: dict[str, str] = {}
+
+    def loader(ref: str) -> Audio:
+        if ref == "broken.wav":
+            raise OSError("unreadable")
+        return _audio_of_length(176000)
+
+    ap = _audio_plus_with_related(["broken.wav", "ok.wav"])
+    profile = profile_from_related_audios(ap, audio_loader=loader, embedding_models=[_MODEL], load_failures=failures)
+
+    assert profile is not None
+    assert {s.file_id for s in profile.sources} == {"ok.wav"}
+    assert "broken.wav" in failures
+
+
+def test_profile_from_related_audios_requires_a_subject_id() -> None:
+    """With no speaker id and no override there is nothing to key the profile on."""
+    ap = _audio_plus_with_related(["sib-a.wav"], speaker_id=None)
+    with pytest.raises(ValueError, match="subject_id"):
+        profile_from_related_audios(ap, audio_loader=lambda _r: _audio_of_length(176000))
+
+
+def test_profile_from_related_audios_records_the_build_grid(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The profile stamps the grid it was built at, so a consumer can check compatibility."""
+    _stub_extractor(monkeypatch, {"176000": _basis(0)})
+    ap = _audio_plus_with_related(["sib-a.wav"])
+    profile = profile_from_related_audios(
+        ap,
+        audio_loader=lambda _r: _audio_of_length(176000),
+        embedding_models=[_MODEL],
+        profile_window_s=2.0,
+        profile_hop_s=1.0,
+    )
+    assert profile is not None
+    assert profile.params.profile_window_s == 2.0
+    assert profile.params.profile_hop_s == 1.0

@@ -15,13 +15,17 @@ downloads):
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from senselab.audio.workflows.audio_analysis.embeddings import WindowEmbedding
 from senselab.audio.workflows.speaker_profile import constants as C
 from senselab.audio.workflows.speaker_profile.build import TaggedWindowEmbedding, aggregate_dominant_cluster
 from senselab.audio.workflows.speaker_profile.compare import (
+    GridMismatchError,
+    check_grid_compatibility,
     compare_recording_to_profile,
     compute_target_quality,
+    derive_window_grid,
     leave_one_file_out_profile,
     profile_votes_by_bucket,
     score_voice_groups,
@@ -420,3 +424,51 @@ def test_voice_group_scoring_handles_no_groups() -> None:
     assignment = score_voice_groups({}, {_MODEL: _basis(0).tolist()}, {_MODEL: _BAND})
     assert assignment.matches == [] and assignment.subject_group_id is None
     assert assignment.basis == "unavailable"
+
+
+# ── grid-match guard ──────────────────────────────────────────────────
+#     The calibration band maps cosine distance to a calibrated uncertainty, and that
+#     mapping is grid-specific. Measurement showed the band does NOT adapt (it falls back
+#     to fixed literature values), so a cross-grid comparison silently misapplies it.
+
+
+def _win(start: float, win: float) -> WindowEmbedding:
+    return WindowEmbedding(start_s=start, end_s=start + win, vector=_basis(0).astype(np.float32))
+
+
+def test_derive_window_grid_reads_length_and_hop() -> None:
+    """Grid is inferred from the timestamps, not passed alongside them."""
+    ws = [_win(0.0, 2.0), _win(1.0, 2.0), _win(2.0, 2.0)]
+    assert derive_window_grid(ws) == (2.0, 1.0)
+
+
+def test_derive_window_grid_hop_unobservable_with_one_window() -> None:
+    """A single window cannot reveal a hop; say so rather than guessing."""
+    assert derive_window_grid([_win(0.0, 0.5)]) == (0.5, None)
+    assert derive_window_grid([]) == (0.0, None)
+
+
+def test_check_grid_compatibility_accepts_a_matching_grid() -> None:
+    """The exact grid the profile was built at passes."""
+    check_grid_compatibility([_win(0.0, 2.0), _win(1.0, 2.0)], 2.0)
+
+
+def test_check_grid_compatibility_rejects_a_different_window_length() -> None:
+    """0.5 s windows against a 2.0 s profile is the miscalibration this exists to stop."""
+    with pytest.raises(GridMismatchError, match="0.5s but the profile was enrolled at 2s"):
+        check_grid_compatibility([_win(0.0, 0.5), _win(0.25, 0.5)], 2.0)
+
+
+def test_check_grid_compatibility_ignores_hop_differences() -> None:
+    """Hop is deliberately not checked: duration rollups derive coverage from timestamps.
+
+    ``_window_step_seconds`` computes each window's step from the results themselves, so a
+    different hop does not skew the reported seconds — only the window length affects how
+    the calibration band applies.
+    """
+    check_grid_compatibility([_win(0.0, 2.0), _win(0.5, 2.0)], 2.0)
+
+
+def test_check_grid_compatibility_is_a_no_op_on_empty_windows() -> None:
+    """Nothing extracted is a separate condition from a mismatched grid."""
+    check_grid_compatibility([], 2.0)
