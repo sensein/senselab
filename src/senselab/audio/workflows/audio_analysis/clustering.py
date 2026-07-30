@@ -128,7 +128,7 @@ def assign_unified_clusters_with_seed_phase(
     """
     out: dict[K, str] = {}
     centroids: list[np.ndarray] = []
-    # Map cluster_id (S0..) → list of centroid indices that belong to it.
+    # Map cluster_id (C0..) → list of centroid indices that belong to it.
     # We append to ``centroids`` strictly per (key) but the cluster_id may be
     # reused when a cross-group match fires.
     centroid_to_cluster: list[int] = []  # parallel to centroids — cluster id of each centroid
@@ -164,13 +164,13 @@ def assign_unified_clusters_with_seed_phase(
                 centroids.append(mean_emb)
                 centroid_to_cluster.append(centroid_to_cluster[best_idx])
                 added_this_group.append(len(centroids) - 1)
-                out[key] = f"S{centroid_to_cluster[best_idx]}"
+                out[key] = f"C{centroid_to_cluster[best_idx]}"
             else:
                 cid = _add_centroid_as_new()
                 centroids.append(mean_emb)
                 centroid_to_cluster.append(cid)
                 added_this_group.append(len(centroids) - 1)
-                out[key] = f"S{cid}"
+                out[key] = f"C{cid}"
 
     seed_phase_done = bool(centroids)
     for key, mean_emb in other_items:
@@ -193,9 +193,9 @@ def assign_unified_clusters_with_seed_phase(
                 cid = _add_centroid_as_new()
                 centroids.append(mean_emb)
                 centroid_to_cluster.append(cid)
-                out[key] = f"S{cid}"
+                out[key] = f"C{cid}"
         else:
-            out[key] = f"S{centroid_to_cluster[best_idx]}"
+            out[key] = f"C{centroid_to_cluster[best_idx]}"
     return out
 
 

@@ -281,7 +281,11 @@ def cluster_pass_speakers(
     5. **Else** → single-cluster regime (1 if the speech windows cluster
        tightly around the mean, 0 if even that fails).
 
-    The output ``labels`` use ``"S0"``, ``"S1"``, … as cluster IDs. Non-speech
+    The output ``labels`` use ``"spk0"``, ``"spk1"``, … — this component's own speaker
+    labels, in the same role as pyannote's ``SPEAKER_00``. They are distinct from the
+    pass-wide cluster ids (``C0``…) that harmonise labels across diar models, and from the
+    fused speaker ids (``S0``…) in ``final/speakers.json``; three namespaces that all read
+    as "S0" made the label-correspondence table unreadable on a real run. Non-speech
     or zero-norm windows are tagged ``"NOISE"``. ``p_voice`` is keyed by the
     window index in ``entries``.
 
@@ -339,7 +343,7 @@ def cluster_pass_speakers(
     # is the "single word in an otherwise quiet recording" case.
     if len(vectors) < min_windows_for_clustering:
         for idx in valid_indices:
-            cluster_labels[idx] = "S0"
+            cluster_labels[idx] = "spk0"
             p_voice[idx] = 1.0
         return {
             "n_speakers": 1,
@@ -461,7 +465,7 @@ def cluster_pass_speakers(
         best_labels = _merge_close_clusters(X, best_labels, merge_threshold=merge_threshold)
         unique_after_merge = sorted(set(int(x) for x in best_labels))
         n_speakers_final = len(unique_after_merge)
-        # Renumber to S0..S(n-1) so downstream label sets are dense.
+        # Renumber to spk0..spk(n-1) so downstream label sets are dense.
         relabel = {old: new for new, old in enumerate(unique_after_merge)}
         best_labels = np.array([relabel[int(x)] for x in best_labels], dtype=int)
         try:
@@ -469,7 +473,7 @@ def cluster_pass_speakers(
         except ValueError:
             per_sample = None
         for vi, idx in enumerate(valid_indices):
-            cluster_labels[idx] = f"S{int(best_labels[vi])}"
+            cluster_labels[idx] = f"spk{int(best_labels[vi])}"
             if per_sample is None:
                 p_voice[idx] = 1.0 if n_speakers_final == 1 else 0.5
             else:
@@ -514,7 +518,7 @@ def cluster_pass_speakers(
     if mean_sim >= coherent_silhouette_threshold:
         # Single coherent speaker.
         for vi, idx in enumerate(valid_indices):
-            cluster_labels[idx] = "S0"
+            cluster_labels[idx] = "spk0"
             # cos sim → [0,1] via (s+1)/2.
             p_voice[idx] = max(0.0, min(1.0, 0.5 * (float(sims[vi]) + 1.0)))
         return {
