@@ -146,13 +146,13 @@ report nothing.
 
 ### Tests for User Story 3 — noise floor
 
-- [ ] T039 [P] [US3] Write failing tests for percentile bias correction in `src/tests/audio/workflows/audio_analysis/noise_floor_test.py`: the correction equals `1/(−ln(1−q))`, is applied, and the corrected floor recovers the true mean noise power on synthetic exponential noise (FR-021d, research risk 2).
-- [ ] T040 [P] [US3] Write failing tests for patch aggregation in `src/tests/audio/workflows/audio_analysis/noise_floor_test.py`: the gate is evaluated on patch-aggregated energy and a frame-level evaluation is rejected (FR-021e).
-- [ ] T041 [P] [US3] Write failing tests for iterative event exclusion in `src/tests/audio/workflows/audio_analysis/noise_floor_test.py`: a sustained synthetic source is not absorbed into the floor, and iteration reaches stability (FR-021f).
-- [ ] T042 [P] [US3] Write failing tests for floor freezing inside detected events in `src/tests/audio/workflows/audio_analysis/noise_floor_test.py` (FR-021g).
-- [ ] T043 [US3] Write failing tests for activity-conditioned floors in `src/tests/audio/workflows/audio_analysis/noise_floor_test.py`: separate `active` and `quiet` strata, and the conditioned floor does not systematically over-gate quiet stretches relative to an unconditioned one (FR-021h). Mark the test docstring as validating unpublished synthesis (research risk 1).
-- [ ] T044 [P] [US3] Write failing tests for the stationary parallel pass in `src/tests/audio/workflows/audio_analysis/noise_floor_test.py`: a continuous narrowband hum survives rather than being erased by floor subtraction (FR-021i).
-- [ ] T045 [P] [US3] Write failing tests for recorder-floor detection in `src/tests/audio/workflows/audio_analysis/noise_floor_test.py`: when a band's floor is within a few dB of the estimated capture-chain self-noise, findings there carry `binding_floor: "recorder"` and no perceptual claim is made (FR-021b).
+- [X] T039 [P] [US3] Write failing tests for percentile bias correction in `src/tests/audio/workflows/audio_analysis/noise_floor_test.py`: the correction equals `1/(−ln(1−q))`, is applied, and the corrected floor recovers the true mean noise power on synthetic exponential noise (FR-021d, research risk 2).
+- [X] T040 [P] [US3] Write failing tests for patch aggregation in `src/tests/audio/workflows/audio_analysis/noise_floor_test.py`: the gate is evaluated on patch-aggregated energy and a frame-level evaluation is rejected (FR-021e).
+- [X] T041 [P] [US3] Write failing tests for iterative event exclusion in `src/tests/audio/workflows/audio_analysis/noise_floor_test.py`: a sustained synthetic source is not absorbed into the floor, and iteration reaches stability (FR-021f).
+- [X] T042 [P] [US3] Write failing tests for floor freezing inside detected events in `src/tests/audio/workflows/audio_analysis/noise_floor_test.py` (FR-021g).
+- [X] T043 [US3] Write failing tests for activity-conditioned floors in `src/tests/audio/workflows/audio_analysis/noise_floor_test.py`: separate `active` and `quiet` strata, and the conditioned floor does not systematically over-gate quiet stretches relative to an unconditioned one (FR-021h). Mark the test docstring as validating unpublished synthesis (research risk 1).
+- [X] T044 [P] [US3] Write failing tests for the stationary parallel pass in `src/tests/audio/workflows/audio_analysis/noise_floor_test.py`: a continuous narrowband hum survives rather than being erased by floor subtraction (FR-021i).
+- [X] T045 [P] [US3] Write failing tests for recorder-floor detection in `src/tests/audio/workflows/audio_analysis/noise_floor_test.py`: when a band's floor is within a few dB of the estimated capture-chain self-noise, findings there carry `binding_floor: "recorder"` and no perceptual claim is made (FR-021b).
 
 ### Tests for User Story 3 — margins, guards, suppression
 
@@ -169,9 +169,9 @@ report nothing.
 
 ### Implementation for User Story 3
 
-- [ ] T056 [US3] Implement the two-pass per-band noise-floor estimator in `src/senselab/audio/workflows/audio_analysis/noise_floor.py`: third-octave bands, bias-corrected percentile, iterative event exclusion, per `research.md` D4 (FR-018b, FR-021a). Leave `quality_control/metrics.py` untouched and note its bias in its docstring.
-- [ ] T057 [US3] Add floor freezing inside detected events and activity-conditioned strata to `noise_floor.py` (FR-021g, FR-021h).
-- [ ] T058 [US3] Implement recorder-floor estimation and `binding_floor` resolution in `noise_floor.py` (FR-021b, FR-022a).
+- [X] T056 [US3] Implement the two-pass per-band noise-floor estimator in `src/senselab/audio/workflows/audio_analysis/noise_floor.py`: third-octave bands, bias-corrected percentile, iterative event exclusion, per `research.md` D4 (FR-018b, FR-021a). Leave `quality_control/metrics.py` untouched and note its bias in its docstring.
+- [X] T057 [US3] Add floor freezing inside detected events and activity-conditioned strata to `noise_floor.py` (FR-021g, FR-021h).
+- [X] T058 [US3] Implement recorder-floor estimation and `binding_floor` resolution in `noise_floor.py` (FR-021b, FR-022a).
 - [ ] T059 [US3] Implement the `noise_floor.parquet` writer per `contracts/background-sources.md` in `src/senselab/audio/workflows/audio_analysis/io.py`.
 - [ ] T060 [US3] Implement the margin ladder, tier assignment, occupancy, minimum duration, and hysteresis in `src/senselab/audio/workflows/audio_analysis/sources.py` (FR-020, FR-021, FR-021j, FR-027, SC-014).
 - [ ] T061 [US3] Implement presence/extent separation in `sources.py` so the margin gate decides presence while boundaries are determined independently (FR-021k, research D12).
@@ -288,7 +288,7 @@ supported each count, without opening intermediate artifacts.
 - [ ] T108 [P] Update the "Audio analysis script" and "Three-axis uncertainty workflow" sections of `CLAUDE.md` to describe the new outputs and the level findings.
 - [ ] T109 Run the full `quickstart.md` validation sequence for every phase and record results under `artifacts/`.
 - [ ] T110 Run a full end-to-end pass on both local validation recordings via `scripts/analyze_audio.py`, writing to `artifacts/e2e_runs/`, confirming SC-015 and SC-018 hold on real audio rather than only on fixtures.
-- [ ] T111 Validate the derived χ²₂ statistics on synthetic noise — bias correction, per-bin σ, patch-variance collapse — in `src/tests/audio/workflows/audio_analysis/noise_floor_test.py`, then update `derived_statistics_status` in `src/senselab/audio/workflows/audio_analysis/data/detection_margin/2026-07-29.json` from `provisional` to `verified` only if they hold (research risk 2).
+- [X] T111 Validate the derived χ²₂ statistics on synthetic noise — bias correction, per-bin σ, patch-variance collapse — in `src/tests/audio/workflows/audio_analysis/noise_floor_test.py`, then update `derived_statistics_status` in `src/senselab/audio/workflows/audio_analysis/data/detection_margin/2026-07-29.json` from `provisional` to `verified` only if they hold (research risk 2).
 - [ ] T112 Measure whether an alternative AudioSet classifier with more log-floor headroom performs better on faint content using `scripts/probe_classifier_levels.py`, recording results to `artifacts/level_probe/alternatives.json`. Do **not** switch on the headroom argument alone — it already mispredicted the current pair's ordering (research risk 4).
 - [ ] T112a Measure default-run wall-clock against the pre-feature baseline using `scripts/analyze_audio.py` with foreground suppression not requested, recording both timings to `artifacts/timing/default_run.json`, and confirm the increase stays within 10% (SC-009).
 - [ ] T113 Run `uv run ruff format && uv run ruff check && uv run mypy . && uv run codespell` and fix all findings.

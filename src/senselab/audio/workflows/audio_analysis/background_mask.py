@@ -345,6 +345,42 @@ def _overlaps(a_start: float, a_end: float, b_start: float, b_end: float) -> boo
     return a_start < b_end and b_start < a_end
 
 
+def _seg_bounds(seg: Any) -> tuple[float, float] | None:  # noqa: ANN401 — ScriptLine or dict
+    """Return ``(start, end)`` for one diarization segment, or ``None`` if unreadable.
+
+    Segments arrive as either Pydantic-like objects (in memory) or plain dicts (after a
+    cache round-trip), so both shapes are handled. The attribute lookup deliberately does
+    *not* use ``getattr(seg, "start", seg.get("start"))``: Python evaluates that default
+    eagerly, so the dict access runs even for objects that already have the attribute — and
+    raises on anything that is neither.
+    """
+    start = getattr(seg, "start", None)
+    end = getattr(seg, "end", None)
+    if start is None and isinstance(seg, Mapping):
+        start, end = seg.get("start"), seg.get("end")
+    if start is None or end is None:
+        return None
+    try:
+        return float(start), float(end)
+    except (TypeError, ValueError):
+        return None
+
+
+def _flatten_segments(result: Any) -> list[Any]:  # noqa: ANN401 — senselab outputs
+    """Flatten a diarization result to a flat list of segments.
+
+    ``diarize_audios`` returns one entry per input audio, so a single-audio call yields
+    ``[[seg, seg, ...]]``. Iterating that without flattening hands *lists* where segments
+    are expected. This only surfaced on a real run — every fixture had used the flat shape.
+    """
+    if not isinstance(result, list):
+        return []
+    flat: list[Any] = []
+    for item in result:
+        flat.extend(item) if isinstance(item, list) else flat.append(item)
+    return flat
+
+
 def _speech_activity_by_bucket(
     pass_summary: Mapping[str, Any],
     buckets: Sequence[tuple[float, float]],
@@ -356,25 +392,16 @@ def _speech_activity_by_bucket(
     reported as clean background.
     """
     diar = (pass_summary.get("diarization") or {}).get("by_model") or {}
-    tracks = [outcome.get("result") or [] for outcome in diar.values() if outcome.get("status") == "ok"]
+    tracks: list[list[tuple[float, float]]] = []
+    for outcome in diar.values():
+        if not isinstance(outcome, Mapping) or outcome.get("status") != "ok":
+            continue
+        tracks.append([b for b in (_seg_bounds(seg) for seg in _flatten_segments(outcome.get("result"))) if b])
     if not tracks:
         return [None] * len(buckets)
     out: list[float | None] = []
     for b_start, b_end in buckets:
-        votes = [
-            1.0
-            if any(
-                _overlaps(
-                    float(getattr(seg, "start", (seg or {}).get("start", 0.0)) or 0.0),
-                    float(getattr(seg, "end", (seg or {}).get("end", 0.0)) or 0.0),
-                    b_start,
-                    b_end,
-                )
-                for seg in track
-            )
-            else 0.0
-            for track in tracks
-        ]
+        votes = [1.0 if any(_overlaps(s, e, b_start, b_end) for s, e in track) else 0.0 for track in tracks]
         out.append(sum(votes) / len(votes) if votes else None)
     return out
 
