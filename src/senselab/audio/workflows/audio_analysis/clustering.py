@@ -24,17 +24,18 @@ from typing import Any, TypeVar
 
 import numpy as np
 
+from senselab.audio.tasks.speaker_diarization.api import ROLE_LABEL_ONLY_PREFIXES
 from senselab.audio.workflows.audio_analysis.embeddings import WindowEmbedding
 
 K = TypeVar("K")
 
-# Diarization backends whose "speaker" label is a role (e.g. CHILD/ADULT/OVERLAP),
+# ROLE_LABEL_ONLY_PREFIXES (imported above, re-exported for identity.py/presence.py):
+# diarization backends whose "speaker" label is a role (e.g. CHILD/ADULT/OVERLAP),
 # not a speaker identity. Clustering these by embedding is actively wrong: with
 # two children the CHILD centroid blends two distinct speakers, and OVERLAP is a
 # mixture that snaps to whichever centroid is nearest — silently corrupting the
 # identity axis rather than just being uninformative. Excluded from both the
 # embedding-clustering path and the no-embedding raw-label fallback below.
-ROLE_LABEL_ONLY_PREFIXES = ("AlexXu811/whisper-child-adult",)
 
 
 def _seg_attr(seg: Any, name: str) -> Any:  # noqa: ANN401
