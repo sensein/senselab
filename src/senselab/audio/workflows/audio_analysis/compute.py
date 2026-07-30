@@ -41,11 +41,11 @@ from senselab.audio.workflows.audio_analysis.harvesters import (
     classification_windows,
 )
 from senselab.audio.workflows.audio_analysis.identity import harvest_identity_votes
+from senselab.audio.workflows.audio_analysis.presence import harvest_presence_votes
 from senselab.audio.workflows.audio_analysis.reliability import (
     reliability_from_stability,
     signal_stability,
 )
-from senselab.audio.workflows.audio_analysis.presence import harvest_presence_votes
 from senselab.audio.workflows.audio_analysis.types import (
     AxisResult,
     UncertaintyAxis,
