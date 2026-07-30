@@ -171,8 +171,10 @@ def test_a_derived_signal_is_gated_below_an_independent_one() -> None:
 
 
 def test_the_gate_reads_the_signal_name_through_its_embedding_suffix() -> None:
-    """Identity sub-signals are keyed ``<diar>::<embedding>``; the kind belongs to the diar
-    model that made the claim.
+    """The kind belongs to the claimant.
+
+    Identity sub-signals are keyed ``<diar>::<embedding>``, and it is the diar model that
+    made the claim.
     """
     from senselab.audio.workflows.audio_analysis.reliability import derivation_weights
 
@@ -181,8 +183,10 @@ def test_the_gate_reads_the_signal_name_through_its_embedding_suffix() -> None:
 
 
 def test_reliability_and_derivation_compound() -> None:
-    """A derived signal that is also unstable is attenuated by both, as in the influence
-    gates — the two say different things and neither subsumes the other.
+    """Both gates apply, as in the influence gates.
+
+    A derived signal that is also unstable is attenuated by each; the two say different
+    things and neither subsumes the other.
     """
     from senselab.audio.workflows.audio_analysis.reliability import combined_weights
 
