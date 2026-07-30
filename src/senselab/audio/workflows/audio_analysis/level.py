@@ -47,6 +47,7 @@ __all__ = [
     "loudness_range_lu",
     "measure_variant",
     "normalization_gain_db",
+    "peak_limited_gain_db",
     "true_peak_dbtp",
     "write_level_json",
 ]
@@ -232,6 +233,60 @@ def normalization_gain_db(waveform: np.ndarray, sampling_rate: int, *, target_lu
         logger.debug("normalization_gain_db: non-finite loudness (silence?); returning 0 dB")
         return 0.0
     return float(target_lufs) - measured
+
+
+def peak_limited_gain_db(
+    waveform: np.ndarray,
+    sampling_rate: int,
+    *,
+    target_lufs: float,
+    true_peak_ceiling_dbtp: float,
+    gain_cap_db: float,
+) -> tuple[float, str]:
+    """Gain toward ``target_lufs``, reduced so the true peak stays under the ceiling.
+
+    Three limits bind, and the smallest wins:
+
+    1. the loudness target,
+    2. the headroom between the current true peak and the ceiling,
+    3. the policy gain cap.
+
+    The headroom limit is not hypothetical. A recording with a high crest factor — loud
+    transients over a quiet median, which is the normal shape for close-microphone
+    capture — can sit far below a loudness target while its peak is already at full scale.
+    Normalizing on loudness alone then clips, and the classifiers respond to the resulting
+    distortion rather than to content. Reducing the gain is the honest fix: a limiter would
+    keep the target at the cost of distorting exactly the transients under analysis.
+
+    Args:
+        waveform: Samples.
+        sampling_rate: Sample rate in Hz.
+        target_lufs: Loudness target.
+        true_peak_ceiling_dbtp: Maximum permitted true peak.
+        gain_cap_db: Policy cap.
+
+    Returns:
+        ``(gain_db, binding_limit)`` where ``binding_limit`` is ``"target"``,
+        ``"true_peak"``, ``"gain_cap"``, or ``"unmeasurable"`` (loudness below BS.1770's
+        absolute gate) — recorded so a variant that never reached its target is not
+        mistaken for one that did.
+    """
+    measured = integrated_lufs(waveform, sampling_rate)
+    peak = true_peak_dbtp(waveform, sampling_rate)
+    headroom = (float(true_peak_ceiling_dbtp) - peak) if math.isfinite(peak) else float("inf")
+    if not math.isfinite(measured):
+        # Below BS.1770's absolute gate the loudness is not measurable, so there is no
+        # target to normalize toward. Reporting "target" here would claim the material
+        # was already at the target when in fact nothing could be measured — a variant
+        # that was never normalized must not look like one that was.
+        return min(0.0, headroom), "unmeasurable"
+    limits = {
+        "target": float(target_lufs) - measured,
+        "true_peak": headroom,
+        "gain_cap": float(gain_cap_db),
+    }
+    binding = min(limits, key=lambda k: limits[k])
+    return limits[binding], binding
 
 
 def measure_variant(
