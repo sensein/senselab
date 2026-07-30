@@ -284,8 +284,8 @@ supported each count, without opening intermediate artifacts.
 
 - [ ] T105 [P] Add the spectrogram-bearing per-speaker row to the final timeline in `src/senselab/audio/workflows/audio_analysis/adaptive/plot.py`, reading the belief parquet rather than `final/presence.parquet`.
 - [ ] T106 [P] Add Label Studio tracks for the background mask and per-speaker presence in `src/senselab/audio/workflows/audio_analysis/labelstudio.py`.
-- [ ] T107 [P] Update `README.md` with a runbook covering the mask, suppression, and per-speaker identity flags.
-- [ ] T108 [P] Update the "Audio analysis script" and "Three-axis uncertainty workflow" sections of `CLAUDE.md` to describe the new outputs and the level findings.
+- [X] T107 [P] Update `README.md` with a runbook covering the mask, suppression, and per-speaker identity flags.
+- [X] T108 [P] Update the "Audio analysis script" and "Three-axis uncertainty workflow" sections of `CLAUDE.md` to describe the new outputs and the level findings.
 - [ ] T109 Run the full `quickstart.md` validation sequence for every phase and record results under `artifacts/`.
 - [ ] T110 Run a full end-to-end pass on both local validation recordings via `scripts/analyze_audio.py`, writing to `artifacts/e2e_runs/`, confirming SC-015 and SC-018 hold on real audio rather than only on fixtures.
 - [X] T111 Validate the derived χ²₂ statistics on synthetic noise — bias correction, per-bin σ, patch-variance collapse — in `src/tests/audio/workflows/audio_analysis/noise_floor_test.py`, then update `derived_statistics_status` in `src/senselab/audio/workflows/audio_analysis/data/detection_margin/2026-07-29.json` from `provisional` to `verified` only if they hold (research risk 2).
