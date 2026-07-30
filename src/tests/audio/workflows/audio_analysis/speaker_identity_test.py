@@ -332,3 +332,112 @@ def test_unknown_declared_kind_is_rejected() -> None:
 
     with pytest.raises(ValueError, match="unknown source kind"):
         source_kind_for("x", {"influence": {"source_kinds": {"x": "peer"}}})
+
+
+# ── perturbation-derived reliability ──────────────────────────────────
+#
+# Preferred over hand-assigning a gate. A hand-set constant encodes a judgement about
+# pipeline wiring; a perturbation measures what the source actually does. The pipeline
+# already generates the evidence -- the raw and enhanced passes are the same recording
+# under a transform, and the gain sweep is another axis -- it simply was not being used
+# to weight anything.
+
+
+def _ev(source: str, **answers: object):  # noqa: ANN202 — test helper
+    from senselab.audio.workflows.audio_analysis.speaker_identity import PerturbationEvidence
+
+    return PerturbationEvidence(source=source, answers=dict(answers))
+
+
+def test_a_stable_source_has_zero_measured_uncertainty() -> None:
+    """Same answer under every perturbation is the definition of having earned confidence."""
+    from senselab.audio.workflows.audio_analysis.speaker_identity import perturbation_uncertainty
+
+    assert perturbation_uncertainty(_ev("s", raw=4, enhanced=4, gain_up=4)) == pytest.approx(0.0)
+
+
+def test_a_source_that_flips_under_preprocessing_is_maximally_uncertain() -> None:
+    """Preprocessing is a perturbation; disagreeing with yourself across it is evidence.
+
+    A recording that is genuinely hard for diarizers is one where off-the-shelf models
+    disagree with *themselves* between raw and enhanced audio — that instability is the
+    finding, not noise to be smoothed away by a constant.
+    """
+    from senselab.audio.workflows.audio_analysis.speaker_identity import perturbation_uncertainty
+
+    assert perturbation_uncertainty(_ev("s", raw=1, enhanced=3)) == pytest.approx(1.0)
+
+
+def test_partial_instability_lands_between() -> None:
+    """Entropy rather than a modal fraction: how the disagreement spreads matters."""
+    from senselab.audio.workflows.audio_analysis.speaker_identity import perturbation_uncertainty
+
+    value = perturbation_uncertainty(_ev("s", raw=4, enhanced=4, gain_up=4, band_limited=1))
+    assert value is not None and 0.0 < value < 1.0
+
+
+def test_a_single_observation_yields_no_stability_evidence() -> None:
+    """Reporting 0 there would award full confidence for having been asked once."""
+    from senselab.audio.workflows.audio_analysis.speaker_identity import perturbation_uncertainty
+
+    assert perturbation_uncertainty(_ev("s", raw=4)) is None
+
+
+def test_claims_take_the_modal_answer_with_measured_uncertainty() -> None:
+    """The claim is the modal answer; the weight is how stable that answer was."""
+    from senselab.audio.workflows.audio_analysis.speaker_identity import claims_from_perturbations
+
+    claims = claims_from_perturbations([_ev("d", raw=4, enhanced=4, gain_up=1)])
+    assert claims[0].count == 4
+    assert 0.0 < claims[0].uncertainty < 1.0
+
+
+def test_a_single_observation_source_is_neither_trusted_nor_discarded() -> None:
+    """One perturbation point is no evidence either way."""
+    from senselab.audio.workflows.audio_analysis.speaker_identity import claims_from_perturbations
+
+    claims = claims_from_perturbations([_ev("d", raw=4)], fallback_uncertainty=0.5)
+    assert claims[0].uncertainty == pytest.approx(0.5)
+
+
+def test_measured_stability_can_outweigh_the_derivation_label() -> None:
+    """The point of the change, on the case that motivated it.
+
+    A clusterer that answers identically on raw and enhanced audio, against diarizers that
+    each flip between the two, ends up carrying more weight than its ``derived`` label
+    alone would give it. Evidence decides, not the label — which matters because the
+    recording that provoked this is exactly the kind where off-the-shelf models disagree
+    with themselves across preprocessing.
+    """
+    from senselab.audio.workflows.audio_analysis.speaker_identity import claims_from_perturbations
+
+    policy = {"influence": {"source_kinds": {"embedding_silhouette": "derived"}}}
+    claims = claims_from_perturbations(
+        [
+            _ev("pyannote", raw=1, enhanced=3),  # flips under preprocessing
+            _ev("sortformer", raw=1, enhanced=2),  # also flips
+            _ev("embedding_silhouette", raw=5, enhanced=5),  # stable
+        ],
+        policy=policy,
+    )
+    posterior = speaker_count_posterior(claims, gates=GATES)
+    by_source = {c.source: c for c in claims}
+    assert by_source["embedding_silhouette"].uncertainty == pytest.approx(0.0)
+    assert by_source["pyannote"].uncertainty == pytest.approx(1.0)
+    assert posterior.weights["embedding_silhouette"] > posterior.weights["pyannote"], (
+        "a stable derived source must be able to outweigh an unstable independent one"
+    )
+    assert posterior.modal_count == 5
+
+
+def test_a_stable_independent_source_still_wins_against_a_stable_derived_one() -> None:
+    """The derivation gate is secondary, not discarded: with equal stability it still bites."""
+    from senselab.audio.workflows.audio_analysis.speaker_identity import claims_from_perturbations
+
+    policy = {"influence": {"source_kinds": {"embedding_silhouette": "derived"}}}
+    claims = claims_from_perturbations(
+        [_ev("pyannote", raw=1, enhanced=1), _ev("embedding_silhouette", raw=5, enhanced=5)],
+        policy=policy,
+    )
+    posterior = speaker_count_posterior(claims, gates=GATES)
+    assert posterior.probabilities[1] > posterior.probabilities[5]

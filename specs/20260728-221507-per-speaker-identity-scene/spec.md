@@ -899,6 +899,17 @@ reportable on their own.
 
 ## Assumptions
 
+- **Source reliability is derived from generated evidence, not assigned by hand.** Where a
+  source's trustworthiness affects a result, it is measured by perturbing the input and
+  observing whether that source's answer moves — not set as a constant reflecting a judgement
+  about pipeline wiring. Preprocessing is itself a perturbation, so the existing raw and
+  enhanced passes already constitute a two-point sample, and the gain sweep is a second axis;
+  band limiting, cropping, and additive noise at known SNR extend it without new models. This
+  matters most exactly where hand-assignment is least reliable: a recording that is genuinely
+  hard for diarizers is one where off-the-shelf models disagree *with themselves* across
+  preprocessing, and that instability is the evidence rather than a nuisance. A declared
+  independent/derived kind remains as a secondary term, so it still separates equally stable
+  sources, but it cannot hold down a source that demonstrably does not move.
 - **No backwards compatibility is required.** Per the project's pre-alpha position,
   the per-speaker identity records may replace the current single-scalar identity
   representation in the final convergence rather than sitting alongside it. Two
