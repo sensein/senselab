@@ -274,8 +274,10 @@ def _bundle() -> tuple[list[dict], str]:
 
 
 def test_the_background_mask_reaches_the_annotation_bundle() -> None:
-    """FR-033: the mask decides which findings are trustworthy, so a human checking those
-    findings needs to see the same intervals the machine used.
+    """FR-033: a reviewer needs the intervals the machine actually trusted.
+
+    The mask decides which findings are trustworthy, so a human checking those findings must
+    see the same regions rather than inferring them.
     """
     from senselab.audio.workflows.audio_analysis.labelstudio import attach_scene_context_tracks_to_ls
 
@@ -307,8 +309,10 @@ def test_every_mask_state_is_declared_in_the_config() -> None:
 
 
 def test_per_speaker_presence_reaches_the_bundle_labelled_by_speaker() -> None:
-    """The point of the per-speaker axis is knowing *who* is contested; a single merged
-    track would put the same unreadable scalar in front of the annotator again.
+    """Regions are labelled by speaker, not merged.
+
+    The point of the per-speaker axis is knowing *who* is contested; a single merged track
+    would put the same unreadable scalar in front of the annotator again.
     """
     from senselab.audio.workflows.audio_analysis.labelstudio import attach_scene_context_tracks_to_ls
 
