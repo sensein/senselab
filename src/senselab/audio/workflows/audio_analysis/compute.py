@@ -45,6 +45,8 @@ from senselab.audio.workflows.audio_analysis.presence import harvest_presence_vo
 from senselab.audio.workflows.audio_analysis.reliability import (
     combined_weights,
     signal_stability,
+)
+from senselab.audio.workflows.audio_analysis.reliability import (
     signal_names as _signal_names,
 )
 from senselab.audio.workflows.audio_analysis.types import (
