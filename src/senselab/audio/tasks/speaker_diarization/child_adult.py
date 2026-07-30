@@ -110,7 +110,11 @@ try:
                     if repo_dir.exists():
                         shutil.rmtree(repo_dir, ignore_errors=True)
                     tmp_clone_dir = Path(_tempfile.mkdtemp(prefix=".child-adult-clone-", dir=str(repo_dir.parent)))
-                    sp.run(["git", "clone", "--depth", "1", repo_url, str(tmp_clone_dir)], check=True)
+                    try:
+                        sp.run(["git", "clone", "--depth", "1", repo_url, str(tmp_clone_dir)], check=True)
+                    except Exception:
+                        shutil.rmtree(tmp_clone_dir, ignore_errors=True)
+                        raise
                     if repo_dir.exists():
                         shutil.rmtree(repo_dir, ignore_errors=True)
                     os.replace(tmp_clone_dir, repo_dir)

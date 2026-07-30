@@ -1,5 +1,6 @@
 """Tests for speaker diarization."""
 
+from collections.abc import Iterator
 from unittest.mock import Mock
 
 import pytest
@@ -14,7 +15,7 @@ from senselab.audio.tasks.speaker_diarization.pyannote import PyannoteDiarizatio
 from senselab.utils.data_structures import DeviceType, PyannoteAudioModel, ScriptLine
 from senselab.utils.data_structures.docker import docker_is_running
 from senselab.utils.data_structures.model import HFModel
-from senselab.utils.subprocess_venv import _cache_dir
+from senselab.utils.subprocess_venv import _cache_dir_path
 
 if docker_is_running():
     DOCKER_AVAILABLE = True
@@ -24,7 +25,7 @@ else:
 # Honor SENSELAB_VENV_CACHE the same way ensure_venv() does — hardcoding
 # Path.home()/".cache"/... here would silently disagree with a cache dir
 # override, so the gate below would never match where the venv actually lives.
-_CHILD_ADULT_VENV_ROOT = _cache_dir() / "child-adult-diarization"
+_CHILD_ADULT_VENV_ROOT = _cache_dir_path() / "child-adult-diarization"
 child_adult_venv_present = _CHILD_ADULT_VENV_ROOT.exists()
 
 
@@ -178,6 +179,46 @@ def test_diarize_audios_dispatches_to_diarizen(monkeypatch: pytest.MonkeyPatch) 
 
     assert result is sentinel
     mock_fn.assert_called_once()
+
+
+def test_diarize_audios_with_vibevoice_raises_when_all_segments_unparsable(
+    monkeypatch: pytest.MonkeyPatch, resampled_mono_audio_sample: Audio
+) -> None:
+    """Every audio in the batch failing to parse raises, rather than returning an all-empty result.
+
+    Guards against a future decode()/return_format="parsed" contract break (e.g. an upstream
+    transformers revision bump) presenting as silent "no speech detected" that would then get
+    cached as a status-ok outcome and persist across runs.
+    """
+    from senselab.audio.tasks.speaker_diarization import vibevoice as vibevoice_module
+    from senselab.audio.tasks.speaker_diarization.vibevoice import diarize_audios_with_vibevoice
+
+    class _FakeModel:
+        device = torch.device("cpu")
+
+        def parameters(self) -> Iterator[torch.Tensor]:
+            return iter([torch.zeros(1, dtype=torch.float32)])
+
+        def generate(self, **kwargs: torch.Tensor) -> torch.Tensor:
+            input_ids = kwargs["input_ids"]
+            return torch.zeros((1, input_ids.shape[1] + 1), dtype=torch.long)
+
+    class _FakeProcessor:
+        def apply_transcription_request(self, audio: str) -> dict[str, torch.Tensor]:
+            return {"input_ids": torch.zeros((1, 1), dtype=torch.long)}
+
+        def decode(self, generated_ids: torch.Tensor, return_format: str) -> None:
+            raise ValueError("simulated decode()/return_format contract break")
+
+    monkeypatch.setattr(
+        vibevoice_module.VibeVoiceDiarization,
+        "_get_vibevoice_model",
+        Mock(return_value=(_FakeProcessor(), _FakeModel())),
+    )
+
+    model: HFModel = HFModel(path_or_uri="microsoft/VibeVoice-ASR-HF")
+    with pytest.raises(RuntimeError, match="failed to parse output for all"):
+        diarize_audios_with_vibevoice(audios=[resampled_mono_audio_sample], model=model)
 
 
 @pytest.mark.skip(reason="Downloads a 7B model; run manually on a GPU machine")

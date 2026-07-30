@@ -138,6 +138,7 @@ from senselab.audio.tasks.forced_alignment import align_transcriptions
 from senselab.audio.tasks.input_output import read_audios
 from senselab.audio.tasks.preprocessing import downmix_audios_to_mono, extract_segments, resample_audios
 from senselab.audio.tasks.speaker_diarization import diarize_audios
+from senselab.audio.tasks.speaker_diarization.vibevoice import VibeVoiceDiarization
 from senselab.audio.tasks.speech_enhancement import enhance_audios
 from senselab.audio.tasks.speech_to_text import transcribe_audios
 from senselab.audio.tasks.speech_to_text.qwen import QwenASR
@@ -1062,45 +1063,55 @@ def main(argv: list[str] | None = None) -> int:
     pass_audio: dict[str, Audio] = {"raw_16k": audio_16k}
 
     pass_plan = _pass_plan(args)
-    summaries["passes"]["raw_16k"] = run_pass(
-        audio_16k,
-        _stage_context(
-            "raw_16k",
+    try:
+        summaries["passes"]["raw_16k"] = run_pass(
             audio_16k,
-            args,
-            device=device,
-            out_dir=run_dir,
-            cache_dir=cache_dir,
-            senselab_ver=senselab_ver,
-        ),
-        pass_plan,
-    )
-
-    if run_enhanced_pass:
-        print("\n=== Enhancing audio (this loads the enhancement model)... ===")
-        try:
-            enhanced = enhance_audios(
-                [audio_16k],
-                model=model_for_task(args.enhancement_model, task="enhancement"),
+            _stage_context(
+                "raw_16k",
+                audio_16k,
+                args,
                 device=device,
-            )[0]
-            pass_audio["enhanced_16k"] = enhanced
-            summaries["passes"]["enhanced_16k"] = run_pass(
-                enhanced,
-                _stage_context(
-                    "enhanced_16k",
-                    enhanced,
-                    args,
+                out_dir=run_dir,
+                cache_dir=cache_dir,
+                senselab_ver=senselab_ver,
+            ),
+            pass_plan,
+        )
+
+        if run_enhanced_pass:
+            print("\n=== Enhancing audio (this loads the enhancement model)... ===")
+            try:
+                enhanced = enhance_audios(
+                    [audio_16k],
+                    model=model_for_task(args.enhancement_model, task="enhancement"),
                     device=device,
-                    out_dir=run_dir,
-                    cache_dir=cache_dir,
-                    senselab_ver=senselab_ver,
-                ),
-                pass_plan,
-            )
-        except Exception as exc:  # noqa: BLE001
-            print(f"Enhancement failed: {exc!r}", file=sys.stderr)
-            summaries["passes"]["enhanced_16k"] = {"status": "failed", "error": repr(exc)}
+                )[0]
+                pass_audio["enhanced_16k"] = enhanced
+                summaries["passes"]["enhanced_16k"] = run_pass(
+                    enhanced,
+                    _stage_context(
+                        "enhanced_16k",
+                        enhanced,
+                        args,
+                        device=device,
+                        out_dir=run_dir,
+                        cache_dir=cache_dir,
+                        senselab_ver=senselab_ver,
+                    ),
+                    pass_plan,
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"Enhancement failed: {exc!r}", file=sys.stderr)
+                summaries["passes"]["enhanced_16k"] = {"status": "failed", "error": repr(exc)}
+    finally:
+        # VibeVoice-ASR-HF's 7B-parameter cache has no natural eviction point
+        # (see VibeVoiceDiarization.release_all's docstring). Release once here,
+        # after both passes have had a chance to run, rather than per-model-id
+        # inside stage_diarization: that let raw_16k evict the model before
+        # enhanced_16k's diarization call could reuse it, forcing a second
+        # ~14GB reload for every file instead of one load shared across both
+        # passes. A no-op if VibeVoice was never dispatched (empty cache).
+        VibeVoiceDiarization.release_all()
 
     write_json(run_dir / "summary.json", summaries)
 

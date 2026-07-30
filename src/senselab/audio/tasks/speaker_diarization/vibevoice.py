@@ -134,10 +134,13 @@ def diarize_audios_with_vibevoice(
     Returns:
         list[list[ScriptLine]]: One list per input audio; each `ScriptLine` carries
         `speaker`, `start`, `end`, and `text`. Empty for an audio whose output didn't
-        parse into structured segments (logged as a warning, not raised).
+        parse into structured segments (logged as a warning, not raised) — unless
+        *every* audio in the batch failed to parse, which raises instead (see Raises).
 
     Raises:
         ModuleNotFoundError: If `transformers>=5.3` is not installed.
+        RuntimeError: If every audio in the batch failed to parse into structured
+            segments — treated as a broken decode contract, not silent no-speech.
 
     Example:
         >>> from pathlib import Path
@@ -154,6 +157,7 @@ def diarize_audios_with_vibevoice(
     processor, vv_model = VibeVoiceDiarization._get_vibevoice_model(model, device)
 
     results: List[List[ScriptLine]] = []
+    decode_failures = 0
     for audio in audios:
         with tempfile.TemporaryDirectory(prefix="senselab-vibevoice-") as tmpdir:
             wav_path = str(Path(tmpdir) / "audio.wav")
@@ -197,6 +201,7 @@ def diarize_audios_with_vibevoice(
                 # without letting a shape error abort the whole batch.
                 logger.warning(f"VibeVoice-ASR-HF produced unparsable output: {exc}")
                 segments = []
+                decode_failures += 1
 
             if isinstance(segments, str) or not segments:
                 if isinstance(segments, str):
@@ -220,5 +225,18 @@ def diarize_audios_with_vibevoice(
                     ScriptLine(speaker=str(seg.get("Speaker")), start=start, end=end, text=seg.get("Content"))
                 )
             results.append(sorted(script_lines, key=lambda x: x.start or 0.0))
+
+    if audios and decode_failures == len(audios):
+        # Every audio in the batch failed to parse — far more likely a broken
+        # decode()/return_format="parsed" contract (e.g. an upstream transformers
+        # revision bump) than every clip happening to contain no speech. Raising
+        # here keeps that distinguishable from a legitimate empty-segments result,
+        # which would otherwise get recorded as a "status-ok" cached outcome and
+        # silently persist across future runs.
+        raise RuntimeError(
+            f"VibeVoice-ASR-HF failed to parse output for all {len(audios)} audio(s) in this "
+            "batch; this looks like a broken decode()/return_format='parsed' contract rather "
+            "than an absence of speech. See the preceding warning(s) for the underlying errors."
+        )
 
     return results

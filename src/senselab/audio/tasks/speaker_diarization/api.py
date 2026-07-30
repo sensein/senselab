@@ -18,6 +18,13 @@ _CHILD_ADULT_PREFIXES = ("AlexXu811/whisper-child-adult",)
 _MOSS_PREFIXES = ("OpenMOSS-Team/MOSS-Transcribe-Diarize",)
 _DIARIZEN_PREFIXES = ("BUT-FIT/diarizen",)
 
+# Backends dispatched above whose "speaker" label is a role (e.g. CHILD/ADULT/
+# OVERLAP), not a speaker identity. Single source of truth for this distinction:
+# clustering.py/identity.py/presence.py import it from here (rather than each
+# restating the literal) so adding a second role-only backend here can't
+# silently miss excluding it from identity clustering / presence voting too.
+ROLE_LABEL_ONLY_PREFIXES = _CHILD_ADULT_PREFIXES
+
 
 def _warn_if_speaker_hints_ignored(
     backend_name: str,
@@ -58,8 +65,9 @@ def diarize_audios(
       prefix on purpose — `microsoft/VibeVoice-1.5B`/`-Large` are TTS checkpoints, not ASR.
     - If `model` is an `HFModel` and `model.path_or_uri` starts with
       `"AlexXu811/whisper-child-adult"`, uses the USC-SAIL child-adult classifier via an
-      isolated subprocess venv (speaker labels are `"CHILD"`/`"ADULT"`/`"OVERLAP"`/`"SILENCE"`
-      rather than speaker identities; **CUDA only**, see ``child_adult.py``).
+      isolated subprocess venv (speaker labels are `"CHILD"`/`"ADULT"`/`"OVERLAP"` — frames
+      classified as silence produce no segment — rather than speaker identities;
+      **CUDA only**, see ``child_adult.py``).
     - If `model` is an `HFModel` and `model.path_or_uri` starts with
       `"OpenMOSS-Team/MOSS-Transcribe-Diarize"`, uses MOSS-Transcribe-Diarize (0.9B, Apache 2.0)
       via an isolated subprocess venv (needs ``transformers>=5.6``, kept out of the core
@@ -86,8 +94,10 @@ def diarize_audios(
         min_speakers (int | None):
             Lower bound when estimating number of speakers (Pyannote only).
         max_speakers (int | None):
-            Upper bound when estimating number of speakers (Pyannote only).
-            NVIDIA Sortformer is limited to 4 speakers.
+            Upper bound when estimating number of speakers (Pyannote only; ignored,
+            with a warning, by every other backend). NVIDIA Sortformer detects at
+            most 4 speakers regardless of this argument — that's a fixed model
+            limit, not something `max_speakers` raises or lowers.
         device (DeviceType | None):
             Preferred device (e.g., ``DeviceType.CPU``, ``DeviceType.CUDA``).
         max_new_tokens (int | None):
@@ -136,6 +146,7 @@ def diarize_audios(
             max_speakers=max_speakers,
         )
     elif isinstance(model, HFModel) and str(model.path_or_uri).startswith("nvidia/diar"):
+        _warn_if_speaker_hints_ignored("NVIDIA Sortformer", num_speakers, min_speakers, max_speakers)
         return diarize_audios_with_nvidia_sortformer(
             audios=audios,
             model=model,

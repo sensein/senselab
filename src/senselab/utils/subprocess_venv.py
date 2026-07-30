@@ -149,9 +149,19 @@ class _FileLockWithHeartbeat:
         self._lock.release()
 
 
+def _cache_dir_path() -> Path:
+    """Return the cache directory path for cached subprocess venvs, without creating it.
+
+    Side-effect-free so callers that only need to *check* a venv's location
+    (e.g. a test's existence-based skip gate) don't risk failing at import time
+    on a read-only/sandboxed HOME — creating the directory is ``_cache_dir()``'s job.
+    """
+    return Path(os.environ.get("SENSELAB_VENV_CACHE", str(_DEFAULT_CACHE_DIR)))
+
+
 def _cache_dir() -> Path:
-    """Return the directory for cached subprocess venvs."""
-    cache = Path(os.environ.get("SENSELAB_VENV_CACHE", str(_DEFAULT_CACHE_DIR)))
+    """Return the directory for cached subprocess venvs, creating it if missing."""
+    cache = _cache_dir_path()
     cache.mkdir(parents=True, exist_ok=True)
     return cache
 
