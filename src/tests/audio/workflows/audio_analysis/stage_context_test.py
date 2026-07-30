@@ -126,7 +126,7 @@ def test_provenance_records_the_stage_code_version() -> None:
     """The whole point of STAGE_VERSIONS is that a stale replay is diagnosable."""
     prov = _ctx().provenance_for("asr", "whisper", {"device": "auto"})
     assert prov["code_version"] == "asr@1"
-    assert prov["cache_schema_version"] == 3
+    assert prov["cache_schema_version"] == 4
     assert prov["pass"] == "raw_16k"
     assert prov["device"] == "auto"
 

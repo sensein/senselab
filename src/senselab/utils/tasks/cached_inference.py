@@ -61,7 +61,7 @@ __all__ = [
     "write_json",
 ]
 
-CACHE_SCHEMA_VERSION = 3
+CACHE_SCHEMA_VERSION = 4
 """Bump to invalidate every on-disk entry (see :func:`sync_cache_with_schema_version`).
 
 Bumped 1 → 2 when ``wrapper_hash`` became ``code_version``: the key payload
@@ -74,6 +74,13 @@ the competition was structurally suppressing secondary background categories),
 and the YAMNet path now applies gain before serializing its temp WAV. Both change
 stored classification output, so every pre-existing entry is stale rather than
 merely re-derivable.
+
+Bumped 3 → 4 as that work continued: every stage outcome now carries the audio
+variant and gain it was computed from, the noise-floor estimate gained a ``status``
+field and moved to a 100 ms analysis frame (changing which bands exist at all), and
+the background mask and source stages emit new shapes. Rather than reason about which
+subset of entries survives, wipe — cache invalidation is free, and a stale entry that
+*looks* readable is far more expensive than recomputing one.
 """
 
 

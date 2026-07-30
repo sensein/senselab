@@ -65,7 +65,7 @@ def test_transcript_signature_matches_pre_refactor_digest() -> None:
 
 def test_schema_version_is_pinned() -> None:
     """Bumping this wipes every user's cache — it must be a deliberate, reviewed act."""
-    assert CACHE_SCHEMA_VERSION == 3
+    assert CACHE_SCHEMA_VERSION == 4
 
 
 def test_param_order_does_not_change_the_key() -> None:

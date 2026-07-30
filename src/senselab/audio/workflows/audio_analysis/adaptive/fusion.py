@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from senselab.audio.tasks.speech_to_text_ensemble import (  # noqa: F401 — re-exported for loop callers
     fuse_word_streams,
@@ -311,3 +311,67 @@ def build_final_outputs(
     ]
     pd.DataFrame(pres_rows).to_parquet(final / "presence.parquet", index=False)
     return transcript
+
+
+def write_speaker_outputs(
+    out_dir: Path,
+    *,
+    posterior: Any,  # noqa: ANN401 — SpeakerCountPosterior
+    hypotheses: Sequence[Any],
+    correspondence: Sequence[Any] = (),
+    tracks: Sequence[Any] = (),
+    profile_version: str = "",
+    influence_profile: str = "",
+    generated_from_round: int = 0,
+) -> tuple[Path, Path]:
+    """Write ``final/speakers.json`` and ``final/per_speaker_presence.parquet`` (T102).
+
+    Replaces the single per-bucket identity scalar rather than sitting beside it: two names
+    for one quantity is how schemas rot, and nothing on the way to alpha needs backwards
+    compatibility.
+
+    Args:
+        out_dir: Run directory.
+        posterior: The speaker-count posterior.
+        hypotheses: One entry per hypothesized speaker.
+        correspondence: Source-label to hypothesis mappings.
+        tracks: Per-speaker presence rows.
+        profile_version: Detection-margin profile in force.
+        influence_profile: Influence profile in force.
+        generated_from_round: Round the outputs were fused from.
+
+    Returns:
+        ``(speakers_json_path, presence_parquet_path)``.
+    """
+    import pandas as pd
+
+    final = Path(out_dir) / "final"
+    final.mkdir(parents=True, exist_ok=True)
+
+    doc = {
+        "profile_version": profile_version,
+        "influence_profile": influence_profile,
+        "generated_from_round": generated_from_round,
+        "count_posterior": posterior.to_json(),
+        "speakers": [h.to_json() for h in hypotheses],
+        "label_correspondence": [c.to_json() for c in correspondence],
+    }
+    speakers_path = final / "speakers.json"
+    speakers_path.write_text(json.dumps(doc, indent=2) + "\n")
+
+    columns = [
+        "speaker_id",
+        "start",
+        "end",
+        "presence_confidence",
+        "presence_uncertainty",
+        "overlap_with",
+        "contributing_sources",
+        "round",
+        "resolution_kind",
+    ]
+    rows = [t.to_row() for t in tracks]
+    frame = pd.DataFrame(rows, columns=columns) if rows else pd.DataFrame({c: [] for c in columns})
+    presence_path = final / "per_speaker_presence.parquet"
+    frame.to_parquet(presence_path, index=False)
+    return speakers_path, presence_path

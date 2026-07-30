@@ -258,7 +258,7 @@ supported each count, without opening intermediate artifacts.
 - [X] T091 [P] [US1] Write failing tests for source-label correspondence in `src/tests/audio/workflows/audio_analysis/speaker_identity_test.py`: each source's own labels map auditably to fused hypotheses across unrelated naming conventions (FR-005).
 - [X] T092 [P] [US1] Write failing tests for independent-versus-derived source classification in `src/tests/audio/workflows/audio_analysis/speaker_identity_test.py` (FR-007).
 - [X] T093 [US1] Write the motivating-case test in `src/tests/audio/workflows/audio_analysis/speaker_identity_test.py` using `audio_48khz_mono_16bits`: two diarizers reporting one speaker while embedding clustering reports five must yield `is_multimodal: true` with per-count support — **not** a collapse to either answer. Assert representation, not accuracy; the spec deliberately does not require resolving it in a particular direction (SC-002).
-- [ ] T094 [P] [US1] Write failing contract tests for `final/speakers.json`, `final/per_speaker_presence.parquet`, and the extended `final/convergence.json` in `src/tests/audio/workflows/audio_analysis/adaptive/final_outputs_test.py` per `contracts/speaker-identity.md`.
+- [X] T094 [P] [US1] Write failing contract tests for `final/speakers.json`, `final/per_speaker_presence.parquet`, and the extended `final/convergence.json` in `src/tests/audio/workflows/audio_analysis/adaptive/final_outputs_test.py` per `contracts/speaker-identity.md`.
 
 - [ ] T094a [P] [US1] Write a failing regression test in `src/tests/audio/workflows/audio_analysis/uncertainty_axes_test.py` asserting the three existing uncertainty axes remain loadable and aggregate unchanged after the identity representation is replaced, and that no presence or utterance consumer requires modification (SC-010).
 - [ ] T094b [P] [US1] Write a failing reproducibility test in `src/tests/audio/workflows/audio_analysis/adaptive/final_outputs_test.py` asserting `final/speakers.json` and `final/per_speaker_presence.parquet` are byte-identical across two runs with identical inputs and settings, using the `cmp` recipe from `quickstart.md` (FR-010, SC-004).
@@ -272,8 +272,8 @@ supported each count, without opening intermediate artifacts.
 - [ ] T099 [US1] Extend `src/senselab/audio/workflows/audio_analysis/adaptive/belief.py` with per-speaker state and count-posterior tracking.
 - [ ] T100 [US1] Add a count-disagreement intervention trigger to `src/senselab/audio/workflows/audio_analysis/adaptive/interventions.py`, reading from the vote store rather than row metadata.
 - [ ] T101 [US1] Enable the influence paths in `src/senselab/audio/workflows/audio_analysis/adaptive/loop.py` — identity to diarization, diarization to per-speaker presence, mask to presence, utterance to speaker attribution — each gated through `influence.py` (FR-011a).
-- [ ] T102 [US1] Implement the `final/speakers.json` and `final/per_speaker_presence.parquet` writers in `src/senselab/audio/workflows/audio_analysis/adaptive/fusion.py`, **replacing** the single-scalar identity representation rather than adding beside it (FR-001).
-- [ ] T103 [US1] Extend the `final/convergence.json` writer in `fusion.py` with resolution kinds, applied influence weights, and unresolved quantities.
+- [X] T102 [US1] Implement the `final/speakers.json` and `final/per_speaker_presence.parquet` writers in `src/senselab/audio/workflows/audio_analysis/adaptive/fusion.py`, **replacing** the single-scalar identity representation rather than adding beside it (FR-001).
+- [X] T103 [US1] Extend the `final/convergence.json` writer in `fusion.py` with resolution kinds, applied influence weights, and unresolved quantities.
 - [ ] T104 [US1] Add `--per-speaker-identity` flag to `scripts/analyze_audio.py`.
 
 **Checkpoint**: All four stories independently functional.
