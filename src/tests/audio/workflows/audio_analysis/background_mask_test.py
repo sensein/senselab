@@ -424,3 +424,25 @@ def test_speech_activity_from_the_real_nested_shape() -> None:
     nested = [[SimpleNamespace(start=0.0, end=1.0), SimpleNamespace(start=2.0, end=3.0)]]
     summary = {"diarization": {"by_model": {"m": {"status": "ok", "result": nested}}}}
     assert _speech_activity_by_bucket(summary, [(0.0, 0.5), (1.5, 1.9), (2.5, 2.9)]) == [1.0, 0.0, 1.0]
+
+
+def test_mask_is_skipped_on_a_non_unmodified_variant() -> None:
+    """The mask is only meaningful on unmodified audio (found on a real run).
+
+    Measured: the enhanced pass masked 50% of a recording against the unmodified pass's
+    17.9%, because enhancement removes the non-speech evidence target activity is read
+    from. That inflates the mask exactly where the background was destroyed, so the pass
+    is skipped with the reason recorded rather than producing a generous-looking mask.
+    """
+    from types import SimpleNamespace
+
+    import torch
+
+    import senselab.audio.workflows.audio_analysis.stages as stages_mod
+    from senselab.audio.workflows.audio_analysis.stage_context import PassPlan, StageContext
+
+    ctx = StageContext(pass_label="enhanced_16k", audio_signature="e" * 64, variant="speech_enhanced")
+    audio = SimpleNamespace(waveform=torch.zeros((1, 16000)), sampling_rate=16000)
+    summary = stages_mod.run_pass(audio, ctx, PassPlan(background_mask=True))
+    assert summary["background_mask"]["status"] == "skipped"
+    assert "unmodified" in summary["background_mask"]["reason"]
