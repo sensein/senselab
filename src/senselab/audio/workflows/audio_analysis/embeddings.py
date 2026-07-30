@@ -125,7 +125,7 @@ def extract_per_window_embeddings(
     hop_s: float = 0.5,
     device: DeviceType | None = None,
     failures: dict[str, str] | None = None,
-    cache_dir: Path | None = None,
+    cache_dir: Path | str | None = None,
 ) -> dict[str, list[WindowEmbedding]]:
     """Run each embedding model on every fixed window of ``audio``.
 
@@ -139,7 +139,8 @@ def extract_per_window_embeddings(
             ``{model_id → reason}`` for any model that produced an empty result.
             The caller can fold these into ``incomparable_reasons`` so silent
             empty-vote behavior is auditable.
-        cache_dir: Optional content-addressable cache directory, using the shared
+        cache_dir: Optional content-addressable cache directory (``Path`` or ``str``),
+            using the shared
             :mod:`senselab.utils.tasks.cached_inference` store. Each model's window
             list is cached per ``(audio signature, model, window/hop)``. The key
             carries no caller identity, so a profile build and an analysis run over
@@ -179,6 +180,11 @@ def extract_per_window_embeddings(
         audio_slices.append(_slice_audio(audio, s, e))
         spans.append((s, e))
 
+    # Coerce before use: this arrives from CLI args and env vars, and a str would only fail
+    # deep inside cache_lookup (``cache_dir / key``). build.py wraps per-file extraction in
+    # try/except, so that TypeError surfaced as an "insufficient" profile with no hint of
+    # the real cause.
+    cache_dir = Path(cache_dir) if cache_dir is not None else None
     audio_sig: str | None = None
     if cache_dir is not None:
         audio_sig = _cached_inference.audio_signature(audio)

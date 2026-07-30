@@ -559,3 +559,68 @@ def score_voice_groups(
     best, runner_up = scorable[0], scorable[1]
     margin = float((best.similarity or 0.0) - (runner_up.similarity or 0.0))
     return VoiceGroupAssignment(matches=matches, subject_group_id=best.group_id, margin=margin, basis="relative")
+
+
+class GridMismatchError(ValueError):
+    """Raised when detection windows were extracted at a different grid than the profile."""
+
+
+def derive_window_grid(windows: Sequence[WindowEmbedding]) -> tuple[float, float | None]:
+    """Infer ``(window_s, hop_s)`` from a window list's timestamps.
+
+    Args:
+        windows: A model's per-window embeddings, in time order.
+
+    Returns:
+        ``(window_s, hop_s)``; ``hop_s`` is ``None`` when fewer than two windows make the
+        hop unobservable. ``(0.0, None)`` for an empty list.
+    """
+    if not windows:
+        return 0.0, None
+    window_s = float(windows[0].end_s - windows[0].start_s)
+    hop_s = float(windows[1].start_s - windows[0].start_s) if len(windows) > 1 else None
+    return window_s, hop_s
+
+
+def check_grid_compatibility(
+    windows: Sequence[WindowEmbedding],
+    profile_window_s: float,
+    *,
+    tolerance_s: float = 0.01,
+) -> None:
+    """Verify detection windows match the grid a profile was enrolled at.
+
+    **Why this raises rather than warns.** Comparing a window against a centroid built at
+    a different length adds a duration domain gap on top of whatever speaker difference is
+    present, inflating target and non-target distances alike. Nothing downstream would
+    notice: ``calibration_band`` does **not** adapt to the grid — measured, it came out as
+    the fixed ``SAME/DIFF_SPEAKER_FLOOR_FALLBACK`` values at both 2.0 s and 0.5 s. So a
+    cross-grid comparison quietly scores against thresholds chosen for another grid, and
+    silent miscalibration on an identity decision is worse than a failed run.
+
+    Note this guard covers *mixing* grids. It does not fix the related calibration problem
+    that the fixed band is implicitly tuned for the coarse grid: cross-subject centroid
+    similarity measures 0.27 at 2.0 s but 0.41 at 0.5 s, while ``DIFF_SPEAKER_FLOOR``
+    stays 0.70 — so at 0.5 s genuinely different speakers never reach "confidently
+    different". Choosing a grid still requires choosing a band.
+
+    Args:
+        windows: Detection windows for one model.
+        profile_window_s: The profile's enrollment window length.
+        tolerance_s: Absolute tolerance, to absorb float noise and end-of-audio clipping.
+
+    Raises:
+        GridMismatchError: If the window length differs beyond ``tolerance_s``. The *hop*
+            is deliberately not checked: ``_window_step_seconds`` derives coverage from the
+            results' own timestamps, so duration rollups are already hop-agnostic.
+    """
+    window_s, _ = derive_window_grid(windows)
+    if not windows:
+        return
+    if abs(window_s - profile_window_s) > tolerance_s:
+        raise GridMismatchError(
+            f"detection windows are {window_s:g}s but the profile was enrolled at "
+            f"{profile_window_s:g}s. The calibration band is grid-specific, so scoring "
+            f"across grids misapplies it. Re-extract at {profile_window_s:g}s, or enroll "
+            f"at {window_s:g}s."
+        )

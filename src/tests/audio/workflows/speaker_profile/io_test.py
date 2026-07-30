@@ -37,7 +37,7 @@ def _example_profile() -> SpeakerProfile:
         subject_id="sub-test-001",
         centroids={
             C.ECAPA_MODEL_ID: [0.1, 0.2, 0.3],
-            C.WAVLM_DEFAULT_CHECKPOINT: [0.4, 0.5, 0.6, 0.7],
+            C.RESNET_MODEL_ID: [0.4, 0.5, 0.6, 0.7],
         },
         confidence="ok",
         aggregate_speech_seconds=33.0,
@@ -45,7 +45,7 @@ def _example_profile() -> SpeakerProfile:
         runner_up_cluster=None,
         calibration_band={
             C.ECAPA_MODEL_ID: (0.31, 0.68),
-            C.WAVLM_DEFAULT_CHECKPOINT: (0.28, 0.71),
+            C.RESNET_MODEL_ID: (0.28, 0.71),
         },
         sources=[
             ProfileSourceFile(
