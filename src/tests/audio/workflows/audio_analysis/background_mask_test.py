@@ -446,3 +446,22 @@ def test_mask_is_skipped_on_a_non_unmodified_variant() -> None:
     summary = stages_mod.run_pass(audio, ctx, PassPlan(background_mask=True))
     assert summary["background_mask"]["status"] == "skipped"
     assert "unmodified" in summary["background_mask"]["reason"]
+
+
+def test_enhanced_pass_label_maps_to_the_enhanced_variant() -> None:
+    """The gate is only as good as the variant the pass actually declares.
+
+    An end-to-end run showed the mask still being written on the enhanced pass: the skip
+    logic was correct, but the CLI never set the variant, so every pass reported
+    ``unmodified``. The unit test had passed because it constructed the context with the
+    variant set by hand — the wiring was the untested part.
+    """
+    import ast
+    import pathlib
+
+    src = pathlib.Path("scripts/analyze_audio.py").read_text()
+    tree = ast.parse(src)
+    fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_stage_context")
+    body = ast.get_source_segment(src, fn) or ""
+    assert "speech_enhanced" in body, "_stage_context must derive the variant from the pass label"
+    assert "variant=" in body, "_stage_context must pass the variant to StageContext"
