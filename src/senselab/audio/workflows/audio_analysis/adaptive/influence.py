@@ -6,8 +6,11 @@ independent gates bound how far any one signal may move another:
     effective_weight = base_weight × uncertainty_gate × derivation_gate
 
 **The uncertainty gate** shrinks a signal's influence as its own uncertainty rises, so a
-signal that does not trust itself cannot propagate its error into signals that do. At
-uncertainty 1.0 the gate is zero — full uncertainty is silence, not a vote.
+signal that does not trust itself cannot propagate its error into signals that do. It is
+floored rather than taken to zero: when stability is measured over few perturbation points
+the measure is coarse — with two points, normalised entropy can only be 0 or 1 — and a hard
+zero would erase a dissenting claim from the posterior entirely rather than down-weighting
+it. A maximally-uncertain source is left visible and unable to win.
 
 **The derivation gate** shrinks it further for signals whose labels are a by-product of
 another signal already in the system. This is the subtler of the two. A clustering-derived
@@ -75,6 +78,7 @@ def effective_weight(
     uncertainty: float,
     derivation_gate: float,
     exponent: float = 1.0,
+    min_gate: float = 0.05,
 ) -> float:
     """Apply both gates to a base weight.
 
@@ -84,6 +88,13 @@ def effective_weight(
         derivation_gate: Multiplier for the signal's source kind.
         exponent: Sharpness of the uncertainty gate. Higher punishes uncertainty harder
             without moving the endpoints.
+        min_gate: Floor on the uncertainty gate, so a maximally-uncertain source is heavily
+            attenuated rather than erased. This matters when stability is measured over few
+            perturbation points: with two, normalised entropy can only be 0 or 1, so any
+            source that disagrees with itself would otherwise carry exactly zero weight and
+            its claim would vanish from the posterior entirely. Observed on a real run,
+            where a clusterer's count was silenced rather than down-weighted. The floor
+            keeps a dissenting claim visible while leaving it unable to win.
 
     Returns:
         The weight actually applied.
@@ -95,7 +106,7 @@ def effective_weight(
     u = float(uncertainty)
     if not 0.0 <= u <= 1.0:
         raise ValueError(f"signal uncertainty must be in [0, 1]; got {u}")
-    gate = (1.0 - u) ** float(exponent)
+    gate = max(float(min_gate), (1.0 - u) ** float(exponent))
     return float(base_weight) * gate * float(derivation_gate)
 
 
@@ -107,6 +118,7 @@ def resolve_influence(
     kind: str,
     gates: Mapping[str, float],
     exponent: float = 1.0,
+    min_gate: float = 0.05,
 ) -> InfluenceWeight:
     """Resolve one signal's influence, validating the gate configuration.
 
@@ -117,6 +129,7 @@ def resolve_influence(
         kind: ``"independent"`` or ``"derived"`` (FR-007).
         gates: Per-kind gate values; ``derived`` must sit strictly below ``independent``.
         exponent: Uncertainty-gate sharpness.
+        min_gate: Floor on the uncertainty gate; see :func:`effective_weight`.
 
     Returns:
         The resolved :class:`InfluenceWeight`.
@@ -140,10 +153,10 @@ def resolve_influence(
     return InfluenceWeight(
         signal=signal,
         base_weight=float(base_weight),
-        uncertainty_gate=(1.0 - float(uncertainty)) ** float(exponent),
+        uncertainty_gate=max(min_gate, (1.0 - float(uncertainty)) ** float(exponent)),
         derivation_gate=gate,
         effective_weight=effective_weight(
-            base_weight, uncertainty=uncertainty, derivation_gate=gate, exponent=exponent
+            base_weight, uncertainty=uncertainty, derivation_gate=gate, exponent=exponent, min_gate=min_gate
         ),
         kind=kind,  # type: ignore[arg-type]
     )

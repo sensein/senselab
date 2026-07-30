@@ -213,10 +213,16 @@ DEFAULT_DETECTION_MARGIN: dict[str, Any] = {
         "target_active_confidence": 0.60,
         "target_free_confidence": 0.20,
         "max_free_uncertainty": 0.50,
+        # Every task includes `speech`: the near-field participant talking is target
+        # activity whatever they were asked to do. Omitting it from the cough and breath
+        # tasks made their speech target-FREE, so it would have been reported as a
+        # background `speech` source -- the same misattribution the task mapping exists to
+        # prevent, arriving from the other direction. Seen on a real cough recording where
+        # the spoken tail landed in the mask.
         "target_event_types_by_task": {
             "speech": ["speech", "breath", "mouth_noise"],
-            "breath": ["breath"],
-            "cough": ["cough", "throat_clear"],
+            "breath": ["speech", "breath"],
+            "cough": ["speech", "cough", "throat_clear"],
         },
         "fallback_target_event_types": ["speech", "breath", "cough", "mouth_noise"],
     },

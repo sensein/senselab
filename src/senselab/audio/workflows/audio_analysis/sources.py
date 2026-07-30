@@ -36,6 +36,9 @@ import numpy as np
 
 __all__ = [
     "TIERS",
+    "ExcisedSegment",
+    "plan_excision",
+    "route_classifier",
     "SourceFinding",
     "assign_tier",
     "is_noise_like",
@@ -231,3 +234,94 @@ def screen_candidate(
     if tier == "rejected":
         return tier, "below the reject margin above the band noise floor"
     return tier, None
+
+
+# ── excision routing (T067, FR-041 to FR-045) ──────────────────────────
+#
+# The long-window classifier runs on *excised* mask segments rather than on the full
+# timeline. Measurement drove it: with a loud-then-quiet test signal, excising the
+# quiet segment and classifying it alone beat every mixed-window variant (0.705 vs a
+# best of 0.548), because one 10.24 s window spanning both halves couples them and the
+# loud half dominates the decision. The short-window classifier needs no excision --
+# its ~1 s windows already sit entirely inside one half or the other.
+#
+# The cost is real and is reported rather than absorbed: a mask region shorter than the
+# classifier's window is zero-padded, and padding maps to a fixed value while the signal
+# region drifts with gain, so the pad-to-signal contrast is itself gain-dependent.
+
+
+@dataclass(frozen=True)
+class ExcisedSegment:
+    """One mask region prepared for the long-window classifier."""
+
+    region_id: str
+    start: float
+    end: float
+    padding_fraction: float
+    supports_long_window: bool
+
+    @property
+    def duration_s(self) -> float:
+        """Segment length in seconds."""
+        return max(0.0, self.end - self.start)
+
+
+def plan_excision(
+    mask_rows: Sequence[Mapping[str, Any]],
+    *,
+    long_window_s: float,
+    max_padding_fraction: float,
+    min_region_s: float = 0.0,
+) -> list[ExcisedSegment]:
+    """Choose which target-free regions to excise for the long-window classifier.
+
+    Only ``target_free`` regions are candidates: an excised segment exists to give the
+    classifier audio uncontaminated by target activity, which is the whole point of cutting
+    it out.
+
+    Regions are **not** concatenated to reach a usable length. Joining two spans would
+    create a discontinuity at the seam that an onset-sensitive feature reads as an event —
+    manufacturing exactly the kind of finding the guards elsewhere work to prevent.
+
+    Args:
+        mask_rows: Rows from the background mask.
+        long_window_s: The long-window classifier's analysis window.
+        max_padding_fraction: Padding share above which a decision is not trustworthy.
+        min_region_s: Shortest region worth excising at all.
+
+    Returns:
+        One :class:`ExcisedSegment` per target-free region, each carrying whether it can
+        host an unpadded decision. Regions that cannot are still returned, flagged, so a
+        consumer sees what was skipped instead of inferring it from absence.
+    """
+    out: list[ExcisedSegment] = []
+    for row in mask_rows:
+        if str(row.get("state")) != "target_free":
+            continue
+        start, end = float(row["start"]), float(row["end"])
+        duration = max(0.0, end - start)
+        if duration < min_region_s:
+            continue
+        padding = max(0.0, (long_window_s - duration) / long_window_s) if long_window_s > 0 else 0.0
+        out.append(
+            ExcisedSegment(
+                region_id=str(row.get("region_id", "")),
+                start=start,
+                end=end,
+                padding_fraction=padding,
+                supports_long_window=padding <= max_padding_fraction,
+            )
+        )
+    return out
+
+
+def route_classifier(segment: ExcisedSegment | None, *, classifier_window_s: float, long_window_s: float) -> str:
+    """Return ``"grid"`` or ``"excised"`` for one classifier on one segment.
+
+    The short-window classifier always stays on the regular grid: its windows already fit
+    inside a single mask region, so excision would buy nothing and would cost the
+    continuity its overlapping hop provides.
+    """
+    if classifier_window_s < long_window_s / 2.0:
+        return "grid"
+    return "excised" if segment is not None and segment.supports_long_window else "grid"
