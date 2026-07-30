@@ -446,3 +446,126 @@ def test_broadband_stationary_source_is_not_detected_by_prominence() -> None:
         for lo in (100.0, 126.0, 159.0, 200.0, 252.0)
     ]
     assert detect_stationary_sources(rows) == [], "prominence cannot see a uniform lift"
+
+
+# ── foreground-referenced SNR ──────────────────────────────────────────
+#
+# The operative quantity for near-field capture, and available regardless of what the
+# background contains: structure and content do not obstruct measuring a level. Only the
+# *attribution* of a smooth broadband floor to equipment versus room needs an external
+# reference — which is a narrower claim than "structured background is unmeasurable".
+
+
+def _fg_bg(sr: int = SR, fg_db: float = -20.0, bg_db: float = -55.0, seconds: float = 4.0) -> tuple:
+    """Half background-only, half background plus a louder structured foreground."""
+    rng = np.random.default_rng(11)
+    n = int(sr * seconds)
+    bg = rng.standard_normal(n) * (10.0 ** (bg_db / 20.0))
+    t = np.arange(n) / sr
+    fg = np.sin(2 * math.pi * 440 * t) * (10.0 ** (fg_db / 20.0))
+    active = np.zeros(n, dtype=bool)
+    active[n // 2 :] = True
+    return bg + fg * active, active
+
+
+def test_foreground_ratio_recovers_a_known_separation() -> None:
+    """A 35 dB foreground-to-background separation reads back as a large positive ratio."""
+    from senselab.audio.workflows.audio_analysis.noise_floor import foreground_background_ratio_db
+
+    wav, active = _fg_bg(fg_db=-20.0, bg_db=-55.0)
+    rows = foreground_background_ratio_db(wav, SR, target_active=active)
+    assert rows
+    in_band = [r for r in rows if r["band_low_hz"] <= 440 <= r["band_high_hz"]]
+    assert in_band and in_band[0]["ratio_db"] > 20.0
+
+
+def test_foreground_reference_is_a_high_percentile_not_the_floor() -> None:
+    """Using the active stratum's floor measures the quiet part *within* active frames.
+
+    On a real recording that understated the ratio to a median of +5.6 dB where the true
+    broadband separation was 15-35 dB. The reference has to be a high percentile.
+    """
+    from senselab.audio.workflows.audio_analysis.noise_floor import foreground_background_ratio_db
+
+    wav, active = _fg_bg()
+    high = foreground_background_ratio_db(wav, SR, target_active=active, foreground_percentile=90.0)
+    low = foreground_background_ratio_db(wav, SR, target_active=active, foreground_percentile=10.0)
+    band = lambda rows: next(r for r in rows if r["band_low_hz"] <= 440 <= r["band_high_hz"])  # noqa: E731
+    assert band(high)["ratio_db"] > band(low)["ratio_db"]
+
+
+def test_ratio_is_measurable_when_the_background_has_structure() -> None:
+    """The point of the correction: a structured background does not prevent an SNR.
+
+    Background here is a tonal complex rather than white noise — content and structure —
+    and the foreground ratio is still recovered.
+    """
+    from senselab.audio.workflows.audio_analysis.noise_floor import foreground_background_ratio_db
+
+    rng = np.random.default_rng(12)
+    n = SR * 4
+    t = np.arange(n) / SR
+    structured_bg = sum(np.sin(2 * math.pi * f * t) for f in (120.0, 240.0, 360.0)) * (10.0 ** (-55.0 / 20.0))
+    structured_bg = structured_bg + rng.standard_normal(n) * 1e-5
+    fg = np.sin(2 * math.pi * 1000 * t) * (10.0 ** (-20.0 / 20.0))
+    active = np.zeros(n, dtype=bool)
+    active[n // 2 :] = True
+    rows = foreground_background_ratio_db(structured_bg + fg * active, SR, target_active=active)
+    in_band = [r for r in rows if r["band_low_hz"] <= 1000 <= r["band_high_hz"]]
+    assert in_band and in_band[0]["ratio_db"] > 20.0
+
+
+def test_blank_recording_yields_no_ratio() -> None:
+    """No foreground means no reference; inventing one would be worse than abstaining."""
+    from senselab.audio.workflows.audio_analysis.noise_floor import foreground_background_ratio_db
+
+    rng = np.random.default_rng(13)
+    wav = rng.standard_normal(SR * 2) * 1e-3
+    assert foreground_background_ratio_db(wav, SR, target_active=np.zeros(SR * 2, dtype=bool)) == []
+
+
+# ── cross-recording baseline ───────────────────────────────────────────
+
+
+def _floors(levels: dict[float, float]) -> list[NoiseFloorEstimate]:
+    return [
+        NoiseFloorEstimate(
+            band_hz=(lo, lo * 1.26),
+            floor_db=db,
+            quantile=0.10,
+            bias_correction_db=9.77,
+            window_s=20.0,
+            iterations=1,
+            target_activity="all",
+            frames=100,
+        )
+        for lo, db in levels.items()
+    ]
+
+
+def test_cohort_separates_common_equipment_floor_from_room_excess() -> None:
+    """The reference a single recording lacks, supplied by more than one recording.
+
+    Across recordings from one rig the equipment contribution is common while the room
+    contribution varies — which is what makes a broadband stationary source nameable.
+    """
+    from senselab.audio.workflows.audio_analysis.noise_floor import cross_recording_baseline
+
+    quiet_room = _floors({100.0: -60.0, 200.0: -58.0})
+    noisy_room = _floors({100.0: -48.0, 200.0: -58.0})
+    out = cross_recording_baseline({"a": quiet_room, "b": noisy_room})
+    band100 = next(b for b in out["bands"] if b["band_low_hz"] == 100.0)
+    assert band100["common_floor_db"] == pytest.approx(-60.0)
+    assert band100["spread_db"] == pytest.approx(12.0)
+    excess = {e["band_low_hz"]: e["room_excess_db"] for e in out["recordings"]["b"]}
+    assert excess[100.0] == pytest.approx(12.0)
+    assert excess[200.0] == pytest.approx(0.0)
+
+
+def test_a_single_recording_cannot_separate_common_from_particular() -> None:
+    """Reported as a stated requirement rather than a silently degenerate answer."""
+    from senselab.audio.workflows.audio_analysis.noise_floor import cross_recording_baseline
+
+    out = cross_recording_baseline({"only": _floors({100.0: -60.0})})
+    assert out["bands"] == []
+    assert "two recordings" in out["note"]
