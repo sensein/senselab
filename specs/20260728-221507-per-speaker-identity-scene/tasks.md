@@ -260,15 +260,15 @@ supported each count, without opening intermediate artifacts.
 - [X] T093 [US1] Write the motivating-case test in `src/tests/audio/workflows/audio_analysis/speaker_identity_test.py` using `audio_48khz_mono_16bits`: two diarizers reporting one speaker while embedding clustering reports five must yield `is_multimodal: true` with per-count support — **not** a collapse to either answer. Assert representation, not accuracy; the spec deliberately does not require resolving it in a particular direction (SC-002).
 - [X] T094 [P] [US1] Write failing contract tests for `final/speakers.json`, `final/per_speaker_presence.parquet`, and the extended `final/convergence.json` in `src/tests/audio/workflows/audio_analysis/adaptive/final_outputs_test.py` per `contracts/speaker-identity.md`.
 
-- [ ] T094a [P] [US1] Write a failing regression test in `src/tests/audio/workflows/audio_analysis/uncertainty_axes_test.py` asserting the three existing uncertainty axes remain loadable and aggregate unchanged after the identity representation is replaced, and that no presence or utterance consumer requires modification (SC-010).
-- [ ] T094b [P] [US1] Write a failing reproducibility test in `src/tests/audio/workflows/audio_analysis/adaptive/final_outputs_test.py` asserting `final/speakers.json` and `final/per_speaker_presence.parquet` are byte-identical across two runs with identical inputs and settings, using the `cmp` recipe from `quickstart.md` (FR-010, SC-004).
+- [X] T094a [P] [US1] Write a failing regression test in `src/tests/audio/workflows/audio_analysis/uncertainty_axes_test.py` asserting the three existing uncertainty axes remain loadable and aggregate unchanged after the identity representation is replaced, and that no presence or utterance consumer requires modification (SC-010).
+- [X] T094b [P] [US1] Write a failing reproducibility test in `src/tests/audio/workflows/audio_analysis/adaptive/final_outputs_test.py` asserting `final/speakers.json` and `final/per_speaker_presence.parquet` are byte-identical across two runs with identical inputs and settings, using the `cmp` recipe from `quickstart.md` (FR-010, SC-004).
 
 ### Implementation for User Story 1
 
 - [X] T095 [US1] Implement `SpeakerHypothesis`, `SpeakerCountPosterior`, and `SourceLabelCorrespondence` in `src/senselab/audio/workflows/audio_analysis/speaker_identity.py` per `data-model.md` §1.
 - [X] T096 [US1] Implement `PerSpeakerPresenceTrack` derivation in `src/senselab/audio/workflows/audio_analysis/speaker_identity.py`, on the existing presence grid with overlap support (FR-003).
 - [X] T097 [US1] Implement source-kind classification — independent versus derived — in `src/senselab/audio/workflows/audio_analysis/speaker_identity.py`, covering the clustering-derived pseudo-diarizer (FR-007).
-- [ ] T098 [US1] Extend `src/senselab/audio/workflows/audio_analysis/identity.py` to emit per-speaker structure downstream while retaining the per-bucket axis as the evidence-gathering mechanism.
+- [X] T098 [US1] Extend `src/senselab/audio/workflows/audio_analysis/identity.py` to emit per-speaker structure downstream while retaining the per-bucket axis as the evidence-gathering mechanism.
 - [X] T099 [US1] Extend `src/senselab/audio/workflows/audio_analysis/adaptive/belief.py` with per-speaker state and count-posterior tracking.
 - [X] T100 [US1] Add a count-disagreement intervention trigger to `src/senselab/audio/workflows/audio_analysis/adaptive/interventions.py`, reading from the vote store rather than row metadata.
 - [X] T101 [US1] Enable the influence paths in `src/senselab/audio/workflows/audio_analysis/adaptive/loop.py` — identity to diarization, diarization to per-speaker presence, mask to presence, utterance to speaker attribution — each gated through `influence.py` (FR-011a).
@@ -282,7 +282,7 @@ supported each count, without opening intermediate artifacts.
 
 ## Phase 8: Polish & Cross-Cutting Concerns
 
-- [ ] T105 [P] Add the spectrogram-bearing per-speaker row to the final timeline in `src/senselab/audio/workflows/audio_analysis/adaptive/plot.py`, reading the belief parquet rather than `final/presence.parquet`.
+- [X] T105 [P] Add the spectrogram-bearing per-speaker row to the final timeline in `src/senselab/audio/workflows/audio_analysis/adaptive/plot.py`, reading the belief parquet rather than `final/presence.parquet`.
 - [ ] T106 [P] Add Label Studio tracks for the background mask and per-speaker presence in `src/senselab/audio/workflows/audio_analysis/labelstudio.py`.
 - [X] T107 [P] Update `README.md` with a runbook covering the mask, suppression, and per-speaker identity flags.
 - [X] T108 [P] Update the "Audio analysis script" and "Three-axis uncertainty workflow" sections of `CLAUDE.md` to describe the new outputs and the level findings.

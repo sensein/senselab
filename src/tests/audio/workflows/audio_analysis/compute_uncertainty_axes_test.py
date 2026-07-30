@@ -598,3 +598,61 @@ def test_presence_quality_null_when_scene_quality_disabled() -> None:
     assert presence.rows
     assert all(r.quality_snr is None for r in presence.rows)
     assert presence.provenance["scene_quality"]["enabled"] is False
+
+
+# ── T094a: the three axes survive the per-speaker change (SC-010) ─────
+
+
+def test_the_three_axes_are_unchanged_by_the_per_speaker_derivation() -> None:
+    """SC-010: per-speaker identity is additive, not a replacement of the axis outputs.
+
+    The per-bucket axes stay the evidence-gathering mechanism and every existing consumer
+    reads them unchanged. The risk this guards is a silent one: the per-speaker derivation
+    reads the same harvest, and if it mutated what it read — sorting vote dicts, promoting
+    silence, renaming clusters — presence and utterance would shift for reasons that have
+    nothing to do with either axis, and no per-speaker test would notice.
+    """
+    from senselab.audio.workflows.audio_analysis.speaker_identity import (
+        build_presence_tracks,
+        build_speaker_identity,
+    )
+
+    diar_segs = [(0.0, 1.0, "SPEAKER_00"), (1.0, 4.0, "SPEAKER_01")]
+    pass_summary = {
+        "duration_s": 4.0,
+        "diarization": {"by_model": {"pyannote": _diar_block(diar_segs), "sortformer": _diar_block(diar_segs)}},
+        "asr": {
+            "by_model": {
+                "whisper": _asr_block_with_chunks([(0.0, 1.0, "hello"), (1.0, 4.0, "world")]),
+                "granite": _asr_block_with_chunks([(0.0, 1.0, "hello"), (1.0, 4.0, "world!!")]),
+            }
+        },
+    }
+    passes = {"raw_16k": pass_summary, "enhanced_16k": pass_summary}
+    kwargs: dict[str, Any] = {
+        "grid": BucketGrid(win_length=0.5, hop_length=0.5),
+        "params": {"win_length": 0.5, "hop_length": 0.5},
+        "audio": {"raw_16k": _silent_audio(4.0), "enhanced_16k": _silent_audio(4.0)},
+        "speaker_embedding_models": [],
+        "aggregator": "min",
+        "speech_presence_labels": ["Speech"],
+    }
+
+    harvests: dict[str, Any] = {}
+    before, _inc, _emb = compute_uncertainty_axes(passes=passes, harvests_out=harvests, **kwargs)
+    votes = harvests["raw_16k"].identity_votes
+
+    posterior, hypotheses, correspondence = build_speaker_identity(passes, identity_votes=votes)
+    tracks = build_presence_tracks(votes)
+    assert hypotheses and tracks and correspondence  # the derivation did run
+
+    after, _inc2, _emb2 = compute_uncertainty_axes(passes=passes, **kwargs)
+    for key in before:
+        rows_before = [(r.start, r.end, r.aggregated_uncertainty) for r in before[key].rows]
+        rows_after = [(r.start, r.end, r.aggregated_uncertainty) for r in after[key].rows]
+        assert rows_before == rows_after, f"{key} changed after the per-speaker derivation ran"
+
+    # And the identity axis itself still reports per bucket, in range, as before.
+    identity = before[("raw_16k", "identity")]
+    assert identity.rows
+    assert all(r.aggregated_uncertainty is None or 0.0 <= r.aggregated_uncertainty <= 1.0 for r in identity.rows)
