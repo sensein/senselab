@@ -129,7 +129,7 @@ def harvest_identity_votes(
             {
                 "<diar_model>": {
                     "speaker_label": "<raw label or '<silent>'>",
-                    "cluster_id": "S0" | "S1" | ... | "SIL",
+                    "cluster_id": "C0" | "C1" | ... | "SIL",
                     "speaker_changed_from_prev": bool | None,
                 },
                 "<diar_model>::<embedding_model>": {

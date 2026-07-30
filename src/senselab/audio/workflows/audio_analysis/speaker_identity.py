@@ -520,19 +520,39 @@ def build_speaker_identity(
         at_least = sum(p for c, p in posterior.probabilities.items() if c >= index + 1)
         return max(0.0, min(1.0, 1.0 - at_least))
 
-    hypotheses = [
-        SpeakerHypothesis(
-            speaker_id=f"S{i}",
-            existence_uncertainty=_doubt(i),
-            supporting_sources=list(supporters),
-            source_kinds=dict(kinds),
-            first_seen=spans[f"S{i}"][0] if f"S{i}" in spans else None,
-            last_seen=spans[f"S{i}"][1] if f"S{i}" in spans else None,
-            total_active_s=spans.get(f"S{i}", (0.0, 0.0, 0.0))[2],
-            converged=not posterior.is_multimodal,
+    # Attribution is per speaker: which sources placed a label in *this* cluster. Copying the
+    # modal-count supporters onto every hypothesis credits each of them with speakers they
+    # never reported — on a real recording two diarizers contributed one label each while a
+    # derived clusterer over-split into five, and the flat list credited all three with all
+    # five. Falls back to the modal supporters only when there is no cluster evidence at all.
+    backers: dict[str, list[str]] = {}
+    for row in label_correspondence_rows(identity_votes or [], speaker_ids=speaker_ids):
+        sid = str(row["speaker_id"])
+        src = str(row["source"])
+        if src not in backers.setdefault(sid, []):
+            backers[sid].append(src)
+
+    hypotheses = []
+    for i in range(max(modal, len(ranked))):
+        sid = f"S{i}"
+        sources = sorted(backers.get(sid, [])) or list(supporters)
+        doubt = _doubt(i)
+        hypotheses.append(
+            SpeakerHypothesis(
+                speaker_id=sid,
+                existence_uncertainty=doubt,
+                supporting_sources=sources,
+                source_kinds={s: source_kind_for(s, policy) for s in sources},
+                first_seen=spans[sid][0] if sid in spans else None,
+                last_seen=spans[sid][1] if sid in spans else None,
+                total_active_s=spans.get(sid, (0.0, 0.0, 0.0))[2],
+                # Convergence is per speaker. A run can settle on "one speaker" while a
+                # surplus hypothesis stays maximally doubtful; marking that one converged
+                # tells a consumer the question is closed when it is the most open thing in
+                # the output.
+                converged=not posterior.is_multimodal and doubt < 0.5,
+            )
         )
-        for i in range(max(modal, len(ranked)))
-    ]
 
     if identity_votes:
         correspondence = [

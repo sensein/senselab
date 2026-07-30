@@ -29,7 +29,7 @@ label at 0.35 — so keying on the silence label alone would let the second one 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal, Mapping, Sequence
 
 import numpy as np
@@ -40,7 +40,10 @@ __all__ = [
     "plan_excision",
     "route_classifier",
     "SourceFinding",
+    "assert_comparable_levels",
     "assign_tier",
+    "discount_for_mask_uncertainty",
+    "recovery_delta",
     "is_noise_like",
     "passes_pregain_gate",
     "spectral_flatness",
@@ -325,3 +328,85 @@ def route_classifier(segment: ExcisedSegment | None, *, classifier_window_s: flo
     if classifier_window_s < long_window_s / 2.0:
         return "grid"
     return "excised" if segment is not None and segment.supports_long_window else "grid"
+
+
+# ── what suppression buys, and what weakens a finding ──────────────────
+
+
+def recovery_delta(
+    suppressed: Sequence[Mapping[str, Any]],
+    unmodified: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Which categories the suppressed variant recovers that the unmodified one does not.
+
+    This is the report that answers "what did suppression buy" (FR-025, SC-007). Without
+    it, a run that produced findings gives no way to tell whether suppression contributed
+    anything or whether the same categories were already visible without it — and that
+    difference decides whether the suppression path is worth its cost at all.
+
+    Args:
+        suppressed: Findings from the foreground-suppressed variant.
+        unmodified: Findings from the unmodified recording.
+
+    Returns:
+        ``recovered`` (only under suppression), ``lost`` (only without it, which would
+        indicate suppression destroyed evidence), and ``shared``.
+    """
+
+    def _cats(rows: Sequence[Mapping[str, Any]]) -> set[str]:
+        return {str(r.get("category")) for r in rows if r.get("category")}
+
+    sup, unm = _cats(suppressed), _cats(unmodified)
+    return {
+        "recovered": sorted(sup - unm),
+        "lost": sorted(unm - sup),
+        "shared": sorted(sup & unm),
+        "suppression_contributed": bool(sup - unm),
+    }
+
+
+def discount_for_mask_uncertainty(
+    finding: SourceFinding,
+    *,
+    mask_confidence: float | None,
+    max_confident_uncertainty: float = 0.3,
+) -> SourceFinding:
+    """Downgrade a finding drawn from an uncertain mask region, stating the reason (FR-036).
+
+    A weak finding and a finding weakened by *not knowing whether the participant was
+    active* are different results. Without the reason a consumer cannot tell which, and
+    would read an uncertain-region finding as merely marginal evidence.
+    """
+    if mask_confidence is None:
+        return finding
+    uncertainty = 1.0 - float(mask_confidence)
+    if uncertainty <= max_confident_uncertainty:
+        return finding
+    order = list(TIERS)
+    lowered = order[max(0, order.index(finding.tier) - 1)]
+    return replace(
+        finding,
+        tier=lowered,  # type: ignore[arg-type]
+        mask_confidence=mask_confidence,
+        discounted_reason=(
+            f"mask uncertainty {uncertainty:.2f} exceeds {max_confident_uncertainty:.2f}: "
+            "the region may contain target activity, so foreground leakage cannot be excluded"
+        ),
+    )
+
+
+def assert_comparable_levels(findings: Sequence[SourceFinding]) -> None:
+    """Raise if findings computed at different gains are about to be compared (FR-020e).
+
+    Classifier score varies with level on unchanged audio, and non-monotonically in at
+    least one classifier, so ranking across segments gained differently compares artifacts
+    of level rather than of content. Callers rank by ``above_floor_db``, which is
+    level-referenced and safe; this guard exists to make a raw-score comparison fail loudly
+    if one is ever introduced.
+    """
+    gains = {round(float(f.gain_db), 6) for f in findings}
+    if len(gains) > 1:
+        raise ValueError(
+            f"refusing to compare findings computed at different gains {sorted(gains)}: classifier scores "
+            "are not level-comparable. Rank by above_floor_db, which is referenced to each band's own floor."
+        )

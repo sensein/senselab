@@ -617,3 +617,54 @@ def test_the_builder_still_works_with_no_identity_evidence() -> None:
 
     posterior, hyps, _c = build_speaker_identity(_passes(raw_16k={"a": _diar(2)}, enhanced_16k={"a": _diar(2)}))
     assert posterior.modal_count == 2 and len(hyps) == 2
+
+
+# ── attribution and convergence per hypothesis (found on a real run) ──
+
+
+def test_a_hypothesis_names_the_sources_whose_labels_landed_in_it() -> None:
+    """Attribution must be per speaker, not the modal-count supporters copied everywhere.
+
+    On a real recording the two real diarizers each contributed one label while a derived
+    clusterer over-split into five. Copying the modal supporters onto every hypothesis
+    credited pyannote and sortformer with four speakers neither of them ever reported.
+    """
+    from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
+
+    _p, hyps, _c = build_speaker_identity(
+        _passes(raw_16k={"real": _diar(1), "derived": _diar(2)}, enhanced_16k={"real": _diar(1), "derived": _diar(2)}),
+        identity_votes=_votes({"real": "Cx", "derived": "Cx"}, {"derived": "Cy"}),
+    )
+    assert hyps[0].supporting_sources == ["derived", "real"]
+    assert hyps[1].supporting_sources == ["derived"]
+
+
+def test_a_speaker_seen_only_by_a_derived_source_says_so() -> None:
+    """FR-007: a derived signal is one computation, not an independent observation.
+
+    Without the kind recorded per hypothesis, a speaker invented by a clusterer reads
+    identically to one two diarizers both heard.
+    """
+    from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
+
+    _p, hyps, _c = build_speaker_identity(
+        _passes(raw_16k={"real": _diar(1)}, enhanced_16k={"real": _diar(1)}),
+        identity_votes=_votes({"real": "Cx"}, {"embedding_silhouette/ecapa": "Cy"}),
+        policy={"influence": {"source_kinds": {"embedding_silhouette": "derived"}}},
+    )
+    assert hyps[1].source_kinds == {"embedding_silhouette/ecapa": "derived"}
+
+
+def test_a_speaker_that_might_not_exist_is_not_reported_as_converged() -> None:
+    """Convergence is per speaker. A run can settle on "one speaker" while a surplus
+    hypothesis remains maximally doubtful, and reporting that one as converged tells a
+    consumer the question is closed when it is the single most open thing in the output.
+    """
+    from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
+
+    _p, hyps, _c = build_speaker_identity(
+        _passes(raw_16k={"a": _diar(1)}, enhanced_16k={"a": _diar(1)}),
+        identity_votes=_votes({"a": "Cx"}, {"a": "Cy"}),
+    )
+    assert hyps[0].converged is True
+    assert hyps[1].converged is False
