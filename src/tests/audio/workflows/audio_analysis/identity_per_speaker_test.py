@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 
+from senselab.audio.workflows.audio_analysis.embeddings import WindowEmbedding
 from senselab.audio.workflows.audio_analysis.identity import (
     SILENT_CLUSTER_ID,
     cluster_active_time,
@@ -174,3 +175,65 @@ def test_an_unmapped_cluster_keeps_its_own_id_rather_than_being_dropped() -> Non
     """
     rows = per_speaker_tracks([_bucket(0.0, 0.5, {"a": "Sx"})], speaker_ids={"Sy": "S0"})
     assert rows[0]["speaker_id"] == "Sx"
+
+
+# ── empirical same-speaker calibration on every path (real-run defect) ──
+
+
+def test_a_single_speaker_pass_still_reports_its_calibration_band() -> None:
+    """The identity axis cannot report low uncertainty without a reachable same-speaker floor.
+
+    Measured on a two-speaker recording: across 446 buckets where every diarizer agreed the
+    speaker was unchanged, ECAPA's within-speaker cosine distance had a median of 0.543 and
+    *never once* fell below the 0.30 literature default — so "confidently the same speaker"
+    was unreachable and the axis averaged 0.66 during unambiguous single-speaker speech.
+
+    The per-pass empirical band exists to fix exactly this, but it was returned from only one
+    of the clusterer's exit paths. A pass that settles on one speaker took a path without it
+    and silently reverted to the unreachable default — which is the common case, since a
+    single dominant talker is what most of these recordings contain.
+    """
+    import numpy as np
+
+    from senselab.audio.workflows.audio_analysis.embeddings import cluster_pass_speakers
+
+    rng = np.random.default_rng(0)
+    centre = rng.normal(size=192)
+    centre /= np.linalg.norm(centre)
+    entries = []
+    for i in range(24):
+        v = centre + 0.25 * rng.normal(size=192)
+        v /= np.linalg.norm(v)
+        entries.append(WindowEmbedding(start_s=i * 0.5, end_s=i * 0.5 + 2.0, vector=v))
+
+    out = cluster_pass_speakers(entries)
+    assert out is not None
+    assert out["n_speakers"] == 1, "this fixture is deliberately one speaker"
+    same = out.get("empirical_same_speaker_floor")
+    assert same is not None, "a single-speaker pass reported no same-speaker calibration"
+    assert 0.0 < same < 1.0
+
+
+def test_the_measured_band_actually_admits_the_speaker_it_was_measured_on() -> None:
+    """A floor no same-speaker comparison can reach is not a calibration.
+
+    This is the property the fixed default lacked: with the band measured from the pass's own
+    within-cluster distances, a typical same-speaker pair must land at or below it.
+    """
+    import numpy as np
+
+    from senselab.audio.workflows.audio_analysis.embeddings import cluster_pass_speakers
+
+    rng = np.random.default_rng(1)
+    centre = rng.normal(size=192)
+    centre /= np.linalg.norm(centre)
+    vecs = []
+    for _ in range(24):
+        v = centre + 0.25 * rng.normal(size=192)
+        vecs.append(v / np.linalg.norm(v))
+    entries = [WindowEmbedding(start_s=i * 0.5, end_s=i * 0.5 + 2.0, vector=v) for i, v in enumerate(vecs)]
+
+    same = cluster_pass_speakers(entries)["empirical_same_speaker_floor"]
+    stacked = np.stack(vecs)
+    dists = [1.0 - float(stacked[i] @ stacked[j]) for i in range(len(vecs)) for j in range(i + 1, len(vecs))]
+    assert float(np.median(dists)) <= same
