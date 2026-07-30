@@ -45,6 +45,7 @@ from senselab.audio.workflows.audio_analysis.harvesters import (
 from senselab.audio.workflows.audio_analysis.harvesters import (
     classification_windows as _classification_windows,
 )
+from senselab.audio.workflows.audio_analysis.sound_sources import AUDIOSET_SCORE_FUNCTION
 from senselab.audio.workflows.audio_analysis.stage_context import PassPlan, StageContext
 from senselab.utils.data_structures import HFModel, Language, ScriptLine, model_for_task, safe_model_id
 from senselab.utils.tasks.cached_inference import (
@@ -194,11 +195,14 @@ def stage_scene(
     fragment: dict[str, Any] = {}
 
     if ast_model is not None:
+        # `function_to_apply` participates in the cache key: it changes the stored
+        # scores, so a cached softmax result must not be replayed for a sigmoid request.
         params = {
             "win_length": ast_win_length,
             "hop_length": ast_hop_length,
             "top_k": top_k,
             "device": ctx.device_label,
+            "function_to_apply": AUDIOSET_SCORE_FUNCTION,
         }
         ast_outcome = run_task_cached(
             "ast",
@@ -209,6 +213,7 @@ def stage_scene(
             win_length=ast_win_length,
             hop_length=ast_hop_length,
             top_k=top_k,
+            function_to_apply=AUDIOSET_SCORE_FUNCTION,
             cache_dir=ctx.cache_dir,
             cache_key_str=ctx.cache_key_for("ast", ast_model, params),
             provenance=ctx.provenance_for("ast", ast_model, params),
