@@ -4448,7 +4448,7 @@
         "prompts": []
     },
     "prolonged-Vowel": {
-        "instructions": "This task helps us analyze features in your voice. Please press the play button to listen to the demonstration on how to complete the task. Then, tap the record button and imitate the speaker by repeating the sentence “1, 2, 3 aah” in your normal voice. Please hold the sound “aah” until the timer runs out.",
+        "instructions": "This task helps us analyze features in your voice. Please press the play button to listen to the demonstration on how to complete the task. Then, tap the record button and imitate the speaker by repeating the sentence \u201c1, 2, 3 aah\u201d in your normal voice. Please hold the sound \u201caah\u201d until the timer runs out.",
         "prompts": []
     },
     "productive-Vocabulary": {
@@ -4456,23 +4456,23 @@
         "prompts": []
     },
     "maximum-phonation-time": {
-        "instructions": "This task helps us analyze the way your breathing is connected to your voice. Take a very deep breath, tap on the record button, and hold out “ah” for as long as possible until you completely run out of air. Try to hold it until the progress bar reaches the end of the screen.",
+        "instructions": "This task helps us analyze the way your breathing is connected to your voice. Take a very deep breath, tap on the record button, and hold out \u201cah\u201d for as long as possible until you completely run out of air. Try to hold it until the progress bar reaches the end of the screen.",
         "prompts": []
     },
     "loudness": {
-        "instructions": "This helps us to determine the loudness of the voice. When you're ready, press the record button and say “hey” in your normal voice. Then, shout “hey” as loud as you can. Try to reach the target line on the screen. Follow the prompts on the screen to continue.",
+        "instructions": "This helps us to determine the loudness of the voice. When you're ready, press the record button and say \u201chey\u201d in your normal voice. Then, shout \u201chey\u201d as loud as you can. Try to reach the target line on the screen. Follow the prompts on the screen to continue.",
         "prompts": []
     },
     "glides-low-to-high": {
-        "instructions": "Please watch the video to help you understand the next task and imitate what the speaker does. When you're ready, press the record button and use the sound “ee” to gradually move from your lowest note to your highest.",
+        "instructions": "Please watch the video to help you understand the next task and imitate what the speaker does. When you're ready, press the record button and use the sound \u201cee\u201d to gradually move from your lowest note to your highest.",
         "prompts": []
     },
     "glides-high-to-low": {
-        "instructions": "Next, please watch this video for the following task and imitate what the speaker does. When you're ready, press the record button again and use the sound “ee” to gradually move from your highest note to your lowest note.",
+        "instructions": "Next, please watch this video for the following task and imitate what the speaker does. When you're ready, press the record button again and use the sound \u201cee\u201d to gradually move from your highest note to your lowest note.",
         "prompts": []
     },
     "high-to-low": {
-        "instructions": "Next, please watch this video for the following task and imitate what the speaker does. When you're ready, press the record button again and use the sound “ee” to gradually move from your highest note to your lowest note.",
+        "instructions": "Next, please watch this video for the following task and imitate what the speaker does. When you're ready, press the record button again and use the sound \u201cee\u201d to gradually move from your highest note to your lowest note.",
         "prompts": []
     },
     "respiration-and-cough-cough": {
@@ -4556,7 +4556,7 @@
         "prompts": []
     },
     "long-sounds": {
-        "instructions": "First, let's start by saying 'ahhhhh' for around 5 seconds. We're going to repeat this three times during one recording. Try to have the child produce the sound at a habitual pitch – some tend to use a higher \"note\" or create vibrato if they have any singing background The sound produced should be as steady/consistent as possible Re-record if you perceive the child is using a higher pitch when sustaining the vowel (in comparison to speaking) When you are ready, press \"record\". Next, say the 'eeeeee' sound as steady as you can for about 5 seconds. We'll do this three times as well. When you are ready, press \"record\".",
+        "instructions": "First, let's start by saying 'ahhhhh' for around 5 seconds. We're going to repeat this three times during one recording. Try to have the child produce the sound at a habitual pitch \u2013 some tend to use a higher \"note\" or create vibrato if they have any singing background The sound produced should be as steady/consistent as possible Re-record if you perceive the child is using a higher pitch when sustaining the vowel (in comparison to speaking) When you are ready, press \"record\". Next, say the 'eeeeee' sound as steady as you can for about 5 seconds. We'll do this three times as well. When you are ready, press \"record\".",
         "prompts": []
     },
     "repeat-words": {
@@ -4572,7 +4572,7 @@
         "prompts": []
     },
     "pictures-and-doors": {
-        "instructions": "There are lots of pictures inside – let's talk about some of the things you see. When you are ready, press \"record\".",
+        "instructions": "There are lots of pictures inside \u2013 let's talk about some of the things you see. When you are ready, press \"record\".",
         "prompts": []
     },
     "role-naming": {
@@ -4580,37 +4580,37 @@
         "prompts": []
     },
     "sentence": {
-        "instructions": "Next we have some silly sentences to look at. They don’t exactly make sense – but that’s what makes them silly! If you can read them on your own go right ahead! Or you can have someone else say the sentence first and you just repeat it after them (just be sure to only record when you are talking) You are doing a great job! We have only two more tasks to complete before we’re all finished!",
+        "instructions": "Next we have some silly sentences to look at. They don\u2019t exactly make sense \u2013 but that\u2019s what makes them silly! If you can read them on your own go right ahead! Or you can have someone else say the sentence first and you just repeat it after them (just be sure to only record when you are talking) You are doing a great job! We have only two more tasks to complete before we\u2019re all finished!",
         "prompts": [
-            "The blue spot is on the key again. When you are ready, press “record.",
-            "How hard did he hug him. When you are ready, press “record.”",
-            "We were away a year ago. When you are ready, press “record.”",
-            "We eat eggs every eve. When you are ready, press “record.”",
-            "My momma makes lemon muffins. When you are ready, press “record.”",
-            "Peter will keep at the park. When you are ready, press “record.”"
+            "The blue spot is on the key again. When you are ready, press \u201crecord.",
+            "How hard did he hug him. When you are ready, press \u201crecord.\u201d",
+            "We were away a year ago. When you are ready, press \u201crecord.\u201d",
+            "We eat eggs every eve. When you are ready, press \u201crecord.\u201d",
+            "My momma makes lemon muffins. When you are ready, press \u201crecord.\u201d",
+            "Peter will keep at the park. When you are ready, press \u201crecord.\u201d"
         ]
     },
     "noisy-sounds": {
         "instructions": "What a great job! Do you like making silly sounds? Do you know what sound a ghost or a mouse makes? Let's see if we can figure out what sound each of these pictures make.",
         "prompts": [
-            "Here's a picture of an airplane – it makes an 'ah' sound – we're going to say that three times – 'ah ah ah' When you are ready, press \"record\".",
-            "Next is a little mouse – it makes an 'ee ee ee' sound - your turn! When you are ready, press \"record\".",
-            "Here's a little ghost – he says 'oo oo oo' – your turn! When you are ready, press \"record\".",
-            "Looks like this baby is sleeping, so we have to remind everyone to be quiet by saying ‘sh sh sh’ Now you try! When you are ready, press “record.”",
-            "Do you know what sound a snake makes? It says ‘ss ss ss’. Can I hear you make that snake sound? When you are ready, press “record.”",
-            "Oh ice cream is so delicious! I like to eat it really fast – “muh muh muh” – your turn! When you are ready, press “record.”",
-            "Uh oh! Looks like the baby has been colouring on the walls. We should tell him to stop – “nuh nuh nuh”. You tell him too! When you are ready, press “record.”",
-            "Here’s a little bumble bee buzzing around the garden – ‘zz zz zz’. Let’s hear your bee noise When you are ready, press “record.”",
-            "Sometimes I see bunnies hopping in my garden too – ‘hh hh hh’. Can you make a bunny hopping noise too? When you are ready, press “record.”"
+            "Here's a picture of an airplane \u2013 it makes an 'ah' sound \u2013 we're going to say that three times \u2013 'ah ah ah' When you are ready, press \"record\".",
+            "Next is a little mouse \u2013 it makes an 'ee ee ee' sound - your turn! When you are ready, press \"record\".",
+            "Here's a little ghost \u2013 he says 'oo oo oo' \u2013 your turn! When you are ready, press \"record\".",
+            "Looks like this baby is sleeping, so we have to remind everyone to be quiet by saying \u2018sh sh sh\u2019 Now you try! When you are ready, press \u201crecord.\u201d",
+            "Do you know what sound a snake makes? It says \u2018ss ss ss\u2019. Can I hear you make that snake sound? When you are ready, press \u201crecord.\u201d",
+            "Oh ice cream is so delicious! I like to eat it really fast \u2013 \u201cmuh muh muh\u201d \u2013 your turn! When you are ready, press \u201crecord.\u201d",
+            "Uh oh! Looks like the baby has been colouring on the walls. We should tell him to stop \u2013 \u201cnuh nuh nuh\u201d. You tell him too! When you are ready, press \u201crecord.\u201d",
+            "Here\u2019s a little bumble bee buzzing around the garden \u2013 \u2018zz zz zz\u2019. Let\u2019s hear your bee noise When you are ready, press \u201crecord.\u201d",
+            "Sometimes I see bunnies hopping in my garden too \u2013 \u2018hh hh hh\u2019. Can you make a bunny hopping noise too? When you are ready, press \u201crecord.\u201d"
         ]
     },
     "silly-sounds": {
-        "instructions": "That was great! Let’s try some more sounds",
+        "instructions": "That was great! Let\u2019s try some more sounds",
         "prompts": [
-            "First, we’re going to say PUH PUH PUH over and over for about 5 seconds. Remember to take a breath if you need one! When you are ready, press “record.”",
-            "Next let’s do the same thing, but this time say TUH TUH TUH. When you are ready, press “record.",
-            "Amazing! We’ve got one more to try. Tell me KUH KUH KUH... When you are ready, press “record.",
-            "Fantastic! You did so well with those sounds, let’s try to put them together and say PUH TUH KUH over and over until the timer stops. If that word seems a little too tricky, you can say PAT-A-CAKE over and over instead When you are ready, press “record.”"
+            "First, we\u2019re going to say PUH PUH PUH over and over for about 5 seconds. Remember to take a breath if you need one! When you are ready, press \u201crecord.\u201d",
+            "Next let\u2019s do the same thing, but this time say TUH TUH TUH. When you are ready, press \u201crecord.",
+            "Amazing! We\u2019ve got one more to try. Tell me KUH KUH KUH... When you are ready, press \u201crecord.",
+            "Fantastic! You did so well with those sounds, let\u2019s try to put them together and say PUH TUH KUH over and over until the timer stops. If that word seems a little too tricky, you can say PAT-A-CAKE over and over instead When you are ready, press \u201crecord.\u201d"
         ]
     },
     "caterpillar-passage": {
@@ -4622,7 +4622,7 @@
     "story-recall": {
         "instructions": "Below you will be presented with a story about a boy and a frog. You may click forward to see the next image in the series. Feel free to move back and forth as much as you like until you are comfortable with the story. You will have up to 5 minutes to view the story, but you are not required to use the full 5 minutes. Once the time is up, please retell the story in as much detail as possible. When you are ready, please click the record button below. Once you click the record button, the story will disappear.",
         "prompts": [
-            "There was once a boy who had a dog and a pet frog. He kept the frog in a large jar in his bedroom. One night while he and his dog were sleeping, the frog climbed out of the jar. He jumped out of an open window. When the boy and the dog woke up the next morning, they saw that the jar was empty. The boy looked everywhere for the frog. The dog looked for the frog too. When the dog tried to look in the jar, he got his head stuck. he boy and the dog looked outside for the frog. The boy called out, “Frog, where are you? ”The boy climbed up on a rock and called again for his frog. He held onto some branches so he wouldn't fall. But the branches weren't really branches! They were deer antlers. The deer picked the boy up on his head and started running. The deer stopped suddenly and the boy and the dog fell over the edge of a cliff. There was a pond below the cliff. They landed with a splash right on top of one another. They heard a familiar sound. They crept up and looked behind a big log. There they found the boy's pet frog, with a mother frog and other baby frogs. The end."
+            "There was once a boy who had a dog and a pet frog. He kept the frog in a large jar in his bedroom. One night while he and his dog were sleeping, the frog climbed out of the jar. He jumped out of an open window. When the boy and the dog woke up the next morning, they saw that the jar was empty. The boy looked everywhere for the frog. The dog looked for the frog too. When the dog tried to look in the jar, he got his head stuck. he boy and the dog looked outside for the frog. The boy called out, \u201cFrog, where are you? \u201dThe boy climbed up on a rock and called again for his frog. He held onto some branches so he wouldn't fall. But the branches weren't really branches! They were deer antlers. The deer picked the boy up on his head and started running. The deer stopped suddenly and the boy and the dog fell over the edge of a cliff. There was a pond below the cliff. They landed with a splash right on top of one another. They heard a familiar sound. They crept up and looked behind a big log. There they found the boy's pet frog, with a mother frog and other baby frogs. The end."
         ]
     },
     "word-color-stroop": {
@@ -4693,7 +4693,7 @@
         "prompts": []
     },
     "naming-food": {
-        "instructions": "Next I want you to name as many food items you can think of. When you are ready, press “record.”",
+        "instructions": "Next I want you to name as many food items you can think of. When you are ready, press \u201crecord.\u201d",
         "prompts": []
     },
     "abcs": {
@@ -4701,7 +4701,7 @@
         "prompts": []
     },
     "choose-book": {
-        "instructions": "To start, we have a few books for you to choose from – you can choose which book you want to look at.",
+        "instructions": "To start, we have a few books for you to choose from \u2013 you can choose which book you want to look at.",
         "prompts": []
     },
     "months": {
@@ -4713,13 +4713,13 @@
         "prompts": []
     },
     "picture": {
-        "instructions": "If the child makes a sound effect vs naming the picture that’s ok! We’re not actually using this task as an evaluation of articulation. Pictures presented one at a time on the screen – option to swipe/click to “next” once the child has named the item or if it is an unknown for the child it may be skipped.",
+        "instructions": "If the child makes a sound effect vs naming the picture that\u2019s ok! We\u2019re not actually using this task as an evaluation of articulation. Pictures presented one at a time on the screen \u2013 option to swipe/click to \u201cnext\u201d once the child has named the item or if it is an unknown for the child it may be skipped.",
         "prompts": []
     },
     "passage": {
-        "instructions": "Fantastic Job! We only have one more thing to do today. Since you did so well reading the sentences earlier, let's try a few more. We're going to read a short story about a roller coaster ride called \"The Caterpillar\". A sentence or two will appear on the screen – read it aloud as if you were reading any regular story book. If you're not sure about a word, just skip it and keep going. When you are ready, press \"record\".",
+        "instructions": "Fantastic Job! We only have one more thing to do today. Since you did so well reading the sentences earlier, let's try a few more. We're going to read a short story about a roller coaster ride called \"The Caterpillar\". A sentence or two will appear on the screen \u2013 read it aloud as if you were reading any regular story book. If you're not sure about a word, just skip it and keep going. When you are ready, press \"record\".",
         "prompts": [
-            "Do you like amusement parks? Well, I sure do. To amuse myself, I went twice last spring. My most MEMORABLE moment was riding on the Caterpillar, which is a gigantic rollercoaster high above the ground. When I saw how high the Caterpillar rose into the bright blue sky I knew it was for me. After waiting in line for thirty minutes, I made it to the front where the man measured my height to see if I was tall enough. I gave the man my coins, asked for change, and jumped on the cart. Tick, tick, tick, the Caterpillar climbed slowly up the tracks. It went SO high I could see the parking lot. Boy was I SCARED! I thought to myself, “There’s no turning back now.” People were so scared they screamed as we swiftly zoomed fast, fast, and faster along the tracks. As quickly as it started, the Caterpillar came to a stop. Unfortunately, it was time to pack the car and drive home. That night I dreamt of the wild ride on the Caterpillar. Taking a trip to the amusement park and riding on the Caterpillar was my MOST memorable moment ever!"
+            "Do you like amusement parks? Well, I sure do. To amuse myself, I went twice last spring. My most MEMORABLE moment was riding on the Caterpillar, which is a gigantic rollercoaster high above the ground. When I saw how high the Caterpillar rose into the bright blue sky I knew it was for me. After waiting in line for thirty minutes, I made it to the front where the man measured my height to see if I was tall enough. I gave the man my coins, asked for change, and jumped on the cart. Tick, tick, tick, the Caterpillar climbed slowly up the tracks. It went SO high I could see the parking lot. Boy was I SCARED! I thought to myself, \u201cThere\u2019s no turning back now.\u201d People were so scared they screamed as we swiftly zoomed fast, fast, and faster along the tracks. As quickly as it started, the Caterpillar came to a stop. Unfortunately, it was time to pack the car and drive home. That night I dreamt of the wild ride on the Caterpillar. Taking a trip to the amusement park and riding on the Caterpillar was my MOST memorable moment ever!"
         ]
     }
 }

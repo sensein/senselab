@@ -1213,7 +1213,7 @@ class LocalLLM:
         try:
             confidence = min(1.0, max(0.0, float(d.get("confidence", 0.5))))
         except (TypeError, ValueError):
-            confidence = 0.5      # unparseable confidence -> maximally undecided
+            confidence = 0.5      # unparsable confidence -> maximally undecided
         completed = bool(d.get("completed"))
         out = {"model": self.model, "completed": completed,
                "confidence": round(confidence, 3),
@@ -2485,7 +2485,7 @@ def load_task_reference(path):
     field of a filename is looked up here to learn the task's modality and, for a
     scripted task, the reference text the participant was supposed to read.
 
-    A configured path that is missing or unparseable STOPS the run. It is not treated
+    A configured path that is missing or unparsable STOPS the run. It is not treated
     as "no reference": without this table every scripted task silently loses its Tier A
     word-error-rate check, so reading the WRONG script stops being detectable and the
     files sail through as clean passes. That failure is invisible in the output, so it
@@ -2862,7 +2862,7 @@ def run_selftest(args):
         Q_FAIL_CUTOFF <= j_meh["score"] < Q_PASS_CUTOFF and j_meh["uncertain"] is True
         and composite_score([], dict(j_meh, tier="C"), None, None)["decision"] == "review"
         and composite_score([], dict(j_meh, tier="C"), None, None)["compliance_fail"] is False)
-    checks["H: unparseable confidence -> undecided, review band, no crash"] = (
+    checks["H: unparsable confidence -> undecided, review band, no crash"] = (
         j_bad["confidence"] == 0.5
         and Q_FAIL_CUTOFF <= j_bad["score"] <= 1.0)
     checks["H: judgement bands land on the composite cutoffs"] = (
@@ -3110,7 +3110,7 @@ def run_selftest(args):
             "rainbow": {"instructions": "Read ours.", "prompts": ["a different passage"]},
             "my-new-task": {"instructions": "Do the new thing.", "prompts": []}}))
         alt_ref = load_task_reference(str(alt))
-    checks["I: an unparseable task reference STOPS the run"] = bad_stops
+    checks["I: an unparsable task reference STOPS the run"] = bad_stops
     checks["I: --task-reference points at another study's file"] = (
         len(alt_ref) == 2 and alt_ref["rainbow"]["prompts"] == ["a different passage"])
     checks["I: --no-task-reference runs without filename-based compliance"] = (

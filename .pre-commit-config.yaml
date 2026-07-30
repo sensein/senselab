@@ -55,6 +55,12 @@ repos:
   hooks:
   - id: codespell
     args: [--skip=*.ipynb, --ignore-words-list, AER]
+    # scripts/task_reference.json holds the exact sentences participants are asked to
+    # read aloud (Harvard/IEEE lists). Its wording must match what they were given --
+    # "correcting" it would give every recording of that task a permanent word-error-rate
+    # mismatch. It trips codespell on the corpus's own "busses" and on "wit" (cleverness,
+    # not a typo for "with"), so the data file is excluded rather than spell-corrected.
+    exclude: ^scripts/task_reference\.json$
     additional_dependencies:
     - tomli
 - repo: local
