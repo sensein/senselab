@@ -180,7 +180,7 @@ report nothing.
 - [X] T064 [US3] Implement the foreground-suppressed variant and suppression-depth measurement in `src/senselab/audio/workflows/audio_analysis/foreground.py`, reusing `speech_enhancement` for the residual, with the graceful fallback of FR-029 (FR-018).
 - [X] T064a [P] [US3] Write a failing invariant test in `src/tests/audio/workflows/audio_analysis/foreground_test.py` asserting `stage_asr`, `stage_alignment`, and `stage_diarization` never receive the foreground-suppressed variant — assert on the variant name reaching each stage, not on output quality, since a quality-based test would pass while quietly transcribing suppressed audio (FR-028).
 - [X] T065 [US3] Implement leakage-margin measurement in `foreground.py` (FR-026).
-- [ ] T066 [US3] Implement per-segment gain toward the level target with the hard cap, and the `−23 LUFS` normalization applied identically to both variants, in `src/senselab/audio/workflows/audio_analysis/level.py` (FR-019, FR-019a, FR-019c).
+- [X] T066 [US3] Implement per-segment gain toward the level target with the hard cap, and the `−23 LUFS` normalization applied identically to both variants, in `src/senselab/audio/workflows/audio_analysis/level.py` (FR-019, FR-019a, FR-019c).
 - [ ] T066a [US3] Implement the recovery-delta report in `src/senselab/audio/workflows/audio_analysis/sources.py`: per category, which sources the foreground-suppressed variant recovers that the unmodified recording does not, written to `<run_dir>/<pass>/recovery_delta.json` (FR-025, SC-007).
 - [ ] T066b [P] [US3] Write failing tests for the recovery-delta report in `src/tests/audio/workflows/audio_analysis/foreground_test.py`: a source audible only under suppression appears in the delta; a source recovered by both does not. Distinct from T050, which varies whether a source exists rather than which variant sees it (FR-025, SC-007).
 - [ ] T066c [US3] Implement mask-uncertainty discounting in `src/senselab/audio/workflows/audio_analysis/sources.py`, populating `discounted_reason` when a finding is weakened by mask uncertainty rather than by weak evidence (FR-036).
@@ -190,8 +190,8 @@ report nothing.
 - [X] T068 [US3] Implement the stationary parallel unsubtracted analysis in `sources.py` (FR-021i).
 - [X] T069 [US3] Implement the `background_sources.parquet` and `suppression.json` writers per `contracts/background-sources.md` in `io.py`.
 - [ ] T070 [US3] Implement `scripts/calibrate_detection_margin.py` per `contracts/cli.md`, consuming `level-verdicts.json` as the machine basis and hard-erroring on an unmarked provisional figure (FR-022, SC-017).
-- [ ] T071 [US3] Add `--foreground-suppression`, `--suppression-model`, `--detection-margin-profile`, `--level-target-lufs`, `--gain-cap-db`, `--scene-variant`, and `--stationary-pass` flags to `scripts/analyze_audio.py` (FR-030).
-- [ ] T072 [US3] Wire background characterization into `run_pass` in `stages.py`, consuming the mask from US4 and preferring mask regions (FR-035, FR-039). **Coordinate with #537.**
+- [X] T071 [US3] Add `--foreground-suppression`, `--suppression-model`, `--detection-margin-profile`, `--level-target-lufs`, `--gain-cap-db`, `--scene-variant`, and `--stationary-pass` flags to `scripts/analyze_audio.py` (FR-030).
+- [X] T072 [US3] Wire background characterization into `run_pass` in `stages.py`, consuming the mask from US4 and preferring mask regions (FR-035, FR-039). **Coordinate with #537.**
 
 **Checkpoint**: Background sources detected by floor subtraction with corroborated
 margins, guarded against fabrication, with mask-region confidence differentiation.

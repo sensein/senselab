@@ -40,6 +40,7 @@ from typing import Any, Literal, Mapping, Sequence
 import numpy as np
 
 from senselab.audio.workflows.audio_analysis.calibration import quantile_bias_correction_db
+from senselab.utils.data_structures.logging import logger
 
 __all__ = [
     "NoiseFloorEstimate",
@@ -49,6 +50,7 @@ __all__ = [
     "detect_stationary_sources",
     "estimate_recorder_floor_db",
     "prominence_ratio_db",
+    "resolvable_bands",
     "binding_floor",
     "estimate_band_floor_db",
     "estimate_noise_floor",
@@ -102,6 +104,14 @@ class NoiseFloorEstimate:
     frames: int
     recorder_floor_db: float | None = None
     binding: str = "perceptual"
+    status: str = "ok"
+    """Why a floor is absent, when it is.
+
+    ``ok`` -- measured. ``no_energy`` -- the band resolves but carries no measurable energy,
+    which a high-passed recording produces at the bottom of the range. A bare ``NaN`` would
+    collapse those two into one unreadable fact, and "we could not measure here" reads very
+    differently from "there is nothing here".
+    """
 
     def to_row(self) -> dict[str, Any]:
         """Row for ``noise_floor.parquet`` per ``contracts/background-sources.md``."""
@@ -117,6 +127,7 @@ class NoiseFloorEstimate:
             "frames": self.frames,
             "recorder_floor_db": self.recorder_floor_db,
             "binding": self.binding,
+            "status": self.status,
         }
 
 
@@ -217,6 +228,32 @@ def _band_frame_power(
     return out, starts
 
 
+def resolvable_bands(
+    bands: Sequence[tuple[float, float]],
+    sampling_rate: int,
+    *,
+    frame_s: float = 0.025,
+    min_bins: int = 1,
+) -> list[tuple[float, float]]:
+    """Drop bands the analysis FFT cannot resolve.
+
+    Third-octave bands narrow with frequency while FFT bin spacing is constant, so the
+    lowest bands can be narrower than a single bin: at 16 kHz with a 25 ms frame the spacing
+    is 31.25 Hz while the 22-28 Hz band spans 5.7 Hz. Those bands contain no bins at all.
+
+    Emitting them anyway produces a ``NaN`` floor, which is the worst outcome available — it
+    looks like a measurement that happened to be missing rather than a band that could never
+    have been measured, and it propagates silently into any comparison. Dropping them with
+    the count recorded keeps the distinction visible.
+    """
+    n_fft = 1 << int(math.ceil(math.log2(max(32, int(frame_s * sampling_rate)))))
+    freqs = np.fft.rfftfreq(n_fft, d=1.0 / sampling_rate)
+    # Count the bins that actually land in the band rather than comparing its width to the
+    # spacing. Width is only a proxy: a band wide enough in principle can still fall between
+    # two bin centres and contain none, which is how three NaN floors survived a width test.
+    return [(lo, hi) for lo, hi in bands if int(((freqs >= lo) & (freqs < hi)).sum()) >= min_bins]
+
+
 def estimate_noise_floor(
     waveform: np.ndarray,
     sampling_rate: int,
@@ -244,13 +281,28 @@ def estimate_noise_floor(
 
     cfg = dict((profile or load_detection_margin_profile()).get("noise_floor") or {})
     quantile = float(cfg.get("quantile", 0.10))
+    # A long analysis frame, deliberately. The floor is a long-term percentile, so it gains
+    # nothing from fine time resolution -- but frequency resolution decides which bands
+    # exist at all. Third-octave bands narrow with frequency while FFT spacing is constant,
+    # so a 25 ms frame (31 Hz spacing at 16 kHz) cannot resolve anything below ~140 Hz,
+    # which is where mains hum and ventilation fundamentals live: precisely the stationary
+    # sources this estimator most needs to see.
+    frame_s = float(cfg.get("floor_frame_s", 0.100))
     max_iterations = int(cfg.get("max_iterations", 3))
     exclusion = float(cfg.get("event_exclusion_db", 6.0))
     window_s = float(cfg.get("window_s", 20.0))
     margin = float(cfg.get("recorder_margin_db", 3.0))
 
     wav = np.asarray(waveform, dtype=np.float64).squeeze()
-    bands = third_octave_bands(sampling_rate)
+    all_bands = third_octave_bands(sampling_rate)
+    bands = resolvable_bands(all_bands, sampling_rate, frame_s=frame_s)
+    if len(bands) < len(all_bands):
+        logger.debug(
+            "noise floor: %d of %d third-octave bands are narrower than the FFT bin spacing "
+            "and were dropped rather than reported as NaN",
+            len(all_bands) - len(bands),
+            len(all_bands),
+        )
     power, starts = _band_frame_power(wav, sampling_rate, bands, frame_s=0.025, hop_s=0.010)
 
     if target_active is None:
@@ -274,6 +326,7 @@ def estimate_noise_floor(
             )
             rows.append(
                 NoiseFloorEstimate(
+                    status="ok" if floor_db is not None else "no_energy",
                     band_hz=band,
                     floor_db=floor_db,
                     quantile=quantile,
