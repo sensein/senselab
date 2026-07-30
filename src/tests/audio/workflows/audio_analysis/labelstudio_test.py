@@ -263,3 +263,98 @@ def test_classification_to_ls_emits_regions_for_dict_shape() -> None:
     assert len(regions) == 2
     labels = [r["value"]["labels"][0] for r in regions]
     assert labels == ["Speech", "Music"]
+
+
+# ── background mask + per-speaker presence tracks (T106) ──────────────
+
+
+def _bundle() -> tuple[list[dict], str]:
+    task = {"data": {"pass": "raw_16k"}, "predictions": [{"result": []}]}
+    return [task], "<View>\n<Audio name='audio' value='$audio'/>\n</View>"
+
+
+def test_the_background_mask_reaches_the_annotation_bundle() -> None:
+    """FR-033: the mask decides which findings are trustworthy, so a human checking those
+    findings needs to see the same intervals the machine used.
+    """
+    from senselab.audio.workflows.audio_analysis.labelstudio import attach_scene_context_tracks_to_ls
+
+    tasks, config = _bundle()
+    tasks, config = attach_scene_context_tracks_to_ls(
+        ls_tasks=tasks,
+        ls_config=config,
+        mask_rows=[
+            {"start": 0.0, "end": 1.0, "state": "target_free"},
+            {"start": 1.0, "end": 2.0, "state": "target_active"},
+        ],
+    )
+    assert "raw_16k__background__mask" in config
+    regions = tasks[0]["predictions"][0]["result"]
+    assert [r["value"]["labels"] for r in regions] == [["target_free"], ["target_active"]]
+    assert regions[0]["value"]["start"] == 0.0 and regions[0]["value"]["end"] == 1.0
+
+
+def test_every_mask_state_is_declared_in_the_config() -> None:
+    """An undeclared label value is rejected on import, losing the region silently."""
+    from senselab.audio.workflows.audio_analysis.labelstudio import attach_scene_context_tracks_to_ls
+
+    tasks, config = _bundle()
+    _t, config = attach_scene_context_tracks_to_ls(
+        ls_tasks=tasks, ls_config=config, mask_rows=[{"start": 0.0, "end": 1.0, "state": "indeterminate"}]
+    )
+    for state in ("target_free", "target_active", "indeterminate"):
+        assert f'value="{state}"' in config
+
+
+def test_per_speaker_presence_reaches_the_bundle_labelled_by_speaker() -> None:
+    """The point of the per-speaker axis is knowing *who* is contested; a single merged
+    track would put the same unreadable scalar in front of the annotator again.
+    """
+    from senselab.audio.workflows.audio_analysis.labelstudio import attach_scene_context_tracks_to_ls
+
+    tasks, config = _bundle()
+    tasks, config = attach_scene_context_tracks_to_ls(
+        ls_tasks=tasks,
+        ls_config=config,
+        speaker_rows=[
+            {"speaker_id": "S0", "start": 0.0, "end": 0.5, "presence_confidence": 1.0, "presence_uncertainty": 0.0},
+            {"speaker_id": "S1", "start": 0.0, "end": 0.5, "presence_confidence": 0.5, "presence_uncertainty": 1.0},
+        ],
+    )
+    assert "raw_16k__speaker__presence" in config
+    regions = [r for r in tasks[0]["predictions"][0]["result"] if r["from_name"] == "raw_16k__speaker__presence"]
+    assert {r["value"]["labels"][0] for r in regions} == {"S0", "S1"}
+
+
+def test_a_speakers_own_uncertainty_travels_with_its_region() -> None:
+    """Without it the annotator sees who was claimed but not how doubtful the claim was."""
+    from senselab.audio.workflows.audio_analysis.labelstudio import attach_scene_context_tracks_to_ls
+
+    tasks, config = _bundle()
+    tasks, _c = attach_scene_context_tracks_to_ls(
+        ls_tasks=tasks,
+        ls_config=config,
+        speaker_rows=[
+            {
+                "speaker_id": "S0",
+                "start": 0.0,
+                "end": 0.5,
+                "presence_confidence": 0.33,
+                "presence_uncertainty": 0.92,
+                "contributing_sources": ["pyannote"],
+            }
+        ],
+    )
+    texts = [r for r in tasks[0]["predictions"][0]["result"] if r["type"] == "textarea"]
+    assert texts and "0.92" in texts[0]["value"]["text"][0]
+    assert "pyannote" in texts[0]["value"]["text"][0]
+
+
+def test_nothing_is_added_when_there_is_nothing_to_show() -> None:
+    """A run without a mask or per-speaker output must produce an unchanged bundle."""
+    from senselab.audio.workflows.audio_analysis.labelstudio import attach_scene_context_tracks_to_ls
+
+    tasks, config = _bundle()
+    out_tasks, out_config = attach_scene_context_tracks_to_ls(ls_tasks=tasks, ls_config=config)
+    assert out_config == config
+    assert out_tasks[0]["predictions"][0]["result"] == []
