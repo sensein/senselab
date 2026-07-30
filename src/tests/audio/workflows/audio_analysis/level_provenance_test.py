@@ -225,3 +225,47 @@ def test_apply_gain_db_is_exact_roundtrip() -> None:
     wav = _noise(seconds=1.0)
     back = apply_gain_db(apply_gain_db(wav, -40.0), 40.0)
     assert np.max(np.abs(back - wav)) < 1e-12
+
+
+# ── StageContext variant provenance (T009, FR-012 / SC-006) ────────────
+
+
+def test_stage_context_defaults_to_unmodified_variant() -> None:
+    """A context that never mentions a variant still attributes its results."""
+    from senselab.audio.workflows.audio_analysis.stage_context import StageContext
+
+    ctx = StageContext(pass_label="raw_16k", audio_signature="deadbeef")
+    assert ctx.variant == "unmodified"
+    assert ctx.variant_gain_db == pytest.approx(0.0)
+
+
+def test_stage_context_records_variant_and_gain_in_provenance() -> None:
+    """Every stage outcome carries the variant and gain it was computed from."""
+    from senselab.audio.workflows.audio_analysis.stage_context import StageContext
+
+    ctx = StageContext(
+        pass_label="suppressed_16k",
+        audio_signature="cafe",
+        variant="foreground_suppressed",
+        variant_gain_db=8.0,
+    )
+    prov = ctx.provenance_for("ast", "MIT/ast-finetuned-audioset-10-10-0.4593", {"win_length": 10.24})
+    assert prov["variant"] == "foreground_suppressed"
+    assert prov["variant_gain_db"] == pytest.approx(8.0)
+
+
+def test_stage_context_rejects_unknown_variant() -> None:
+    """A typo'd variant name would make provenance unjoinable, so it fails at construction."""
+    from senselab.audio.workflows.audio_analysis.stage_context import StageContext
+
+    with pytest.raises(ValueError, match="variant"):
+        StageContext(pass_label="p", audio_signature="s", variant="enhanced")
+
+
+def test_stage_versions_declare_the_new_stages() -> None:
+    """A new stage must declare its own invalidation counter rather than borrow one."""
+    from senselab.audio.workflows.audio_analysis.stage_context import STAGE_VERSIONS, stage_code_version
+
+    for stage in ("background_mask", "noise_floor", "background_sources", "level_probe"):
+        assert stage in STAGE_VERSIONS, f"{stage} missing from STAGE_VERSIONS"
+        assert stage_code_version(stage).startswith(f"{stage}@")
