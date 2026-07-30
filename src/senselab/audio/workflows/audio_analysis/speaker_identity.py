@@ -30,10 +30,16 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Mapping, Sequence
 
 from senselab.audio.workflows.audio_analysis.adaptive.influence import SOURCE_KINDS, resolve_influence
+from senselab.audio.workflows.audio_analysis.identity import (
+    cluster_active_time,
+    label_correspondence_rows,
+    per_speaker_tracks,
+)
 
 __all__ = [
     "PerSpeakerPresenceTrack",
     "PerturbationEvidence",
+    "build_presence_tracks",
     "build_speaker_identity",
     "evidence_from_passes",
     "claims_from_perturbations",
@@ -460,13 +466,20 @@ def evidence_from_passes(passes: Mapping[str, Any]) -> list[PerturbationEvidence
 def build_speaker_identity(
     passes: Mapping[str, Any],
     *,
+    identity_votes: Sequence[Mapping[str, Any]] | None = None,
     policy: Mapping[str, Any] | None = None,
     gates: Mapping[str, float] | None = None,
 ) -> tuple[SpeakerCountPosterior, list[SpeakerHypothesis], list[SourceLabelCorrespondence]]:
     """Derive the count posterior and speaker hypotheses from a completed run.
 
+    The count comes from the passes; the harvested per-bucket identity evidence, when
+    supplied, says *which* speaker each claim is about — when they were active, whose label
+    each diarizer's own naming maps to, and how confident their existence individually is.
+
     Args:
         passes: ``summary["passes"]``.
+        identity_votes: Bucket dicts from ``harvest_identity_votes``. Optional: the
+            posterior stands on the passes alone, and votes only add per-speaker detail.
         policy: Adaptive policy, for source-kind resolution.
         gates: Derivation gates.
 
@@ -478,32 +491,99 @@ def build_speaker_identity(
     claims = claims_from_perturbations(evidence, policy=policy)
     posterior = speaker_count_posterior(claims, gates=gates)
 
-    # One hypothesis per speaker in the modal count. Existence uncertainty is the mass NOT
-    # on that count: if the sources are split, every hypothesis inherits that doubt rather
-    # than the split being hidden behind a confident-looking list.
     modal = posterior.modal_count
-    off_modal = 1.0 - posterior.probabilities.get(modal, 0.0)
     supporters = posterior.support.get(modal, [])
     kinds = {s: source_kind_for(s, policy) for s in supporters}
+
+    # Rank the observed clusters by how long each was active, so which cluster becomes S0 is
+    # a property of the evidence rather than of iteration order. A cluster the posterior
+    # does not back still gets a hypothesis: it is contested evidence, and truncating to the
+    # modal count would delete the record that some source separated more speakers than the
+    # posterior believes.
+    ranked = list(cluster_active_time(identity_votes or []))
+    speaker_ids = {cluster: f"S{i}" for i, cluster in enumerate(ranked)}
+    tracks = per_speaker_tracks(identity_votes or [], speaker_ids=speaker_ids)
+    spans: dict[str, tuple[float, float, float]] = {}
+    for row in tracks:
+        sid = str(row["speaker_id"])
+        start, end = float(row["start"]), float(row["end"])
+        first, last, total = spans.get(sid, (start, end, 0.0))
+        spans[sid] = (min(first, start), max(last, end), total + (end - start))
+
+    # Existence uncertainty is per speaker, not shared: the i-th speaker exists only if the
+    # count is at least i+1, so its doubt is the mass on counts below that. The first
+    # speaker in a run where every source heard someone is near-certain even when the
+    # sources disagree about how many there are in total; the last one carries that whole
+    # disagreement. A single off-modal scalar would report identical doubt for both and
+    # leave a consumer no way to know which speaker to go looking for (FR-004).
+    def _doubt(index: int) -> float:
+        at_least = sum(p for c, p in posterior.probabilities.items() if c >= index + 1)
+        return max(0.0, min(1.0, 1.0 - at_least))
+
     hypotheses = [
         SpeakerHypothesis(
             speaker_id=f"S{i}",
-            existence_uncertainty=off_modal,
+            existence_uncertainty=_doubt(i),
             supporting_sources=list(supporters),
             source_kinds=dict(kinds),
+            first_seen=spans[f"S{i}"][0] if f"S{i}" in spans else None,
+            last_seen=spans[f"S{i}"][1] if f"S{i}" in spans else None,
+            total_active_s=spans.get(f"S{i}", (0.0, 0.0, 0.0))[2],
             converged=not posterior.is_multimodal,
         )
-        for i in range(modal)
+        for i in range(max(modal, len(ranked)))
     ]
 
-    correspondence = [
-        SourceLabelCorrespondence(
-            source=src,
-            source_label=f"<{src}:count={c}>",
-            speaker_id=f"S{min(i, max(modal - 1, 0))}",
-            kind=kinds.get(src, source_kind_for(src, policy)),
-        )
-        for i, (c, srcs) in enumerate(sorted(posterior.support.items()))
-        for src in srcs
-    ]
+    if identity_votes:
+        correspondence = [
+            SourceLabelCorrespondence(
+                source=str(row["source"]),
+                source_label=str(row["source_label"]),
+                speaker_id=str(row["speaker_id"]),
+                kind=kinds.get(str(row["source"]), source_kind_for(str(row["source"]), policy)),
+                cluster_id=str(row["cluster_id"]),
+            )
+            for row in label_correspondence_rows(identity_votes, speaker_ids=speaker_ids)
+        ]
+    else:
+        # No harvested labels to point at. The placeholder records which count each source
+        # claimed, which is the only correspondence the passes alone can support.
+        correspondence = [
+            SourceLabelCorrespondence(
+                source=src,
+                source_label=f"<{src}:count={c}>",
+                speaker_id=f"S{min(i, max(modal - 1, 0))}",
+                kind=kinds.get(src, source_kind_for(src, policy)),
+            )
+            for i, (c, srcs) in enumerate(sorted(posterior.support.items()))
+            for src in srcs
+        ]
     return posterior, hypotheses, correspondence
+
+
+def build_presence_tracks(
+    identity_votes: Sequence[Mapping[str, Any]],
+    *,
+    round_index: int = 0,
+    resolution_kind: str = "unresolved",
+) -> list[PerSpeakerPresenceTrack]:
+    """Per-speaker presence rows for ``final/per_speaker_presence.parquet``.
+
+    Speaker ids match :func:`build_speaker_identity` — both rank clusters by active time —
+    so a hypothesis and its track refer to the same person.
+    """
+    speaker_ids = {cluster: f"S{i}" for i, cluster in enumerate(cluster_active_time(identity_votes))}
+    return [
+        PerSpeakerPresenceTrack(
+            speaker_id=str(row["speaker_id"]),
+            start=float(row["start"]),
+            end=float(row["end"]),
+            presence_confidence=float(row["presence_confidence"]),
+            presence_uncertainty=float(row["presence_uncertainty"]),
+            overlap_with=[speaker_ids.get(c, c) for c in row["overlap_with"]],
+            contributing_sources=list(row["contributing_sources"]),
+            round=round_index,
+            resolution_kind=resolution_kind,
+        )
+        for row in per_speaker_tracks(identity_votes, speaker_ids=speaker_ids)
+    ]

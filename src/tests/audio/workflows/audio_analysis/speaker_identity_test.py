@@ -498,8 +498,11 @@ def test_a_diarizer_that_flips_under_enhancement_is_attenuated() -> None:
 def test_hypotheses_inherit_the_doubt_when_sources_are_split() -> None:
     """A split posterior must not produce a confident-looking speaker list.
 
-    Existence uncertainty is the mass *not* on the modal count, so the disagreement stays
-    visible on every hypothesis rather than being hidden behind the list.
+    The doubt lands on the speakers it is actually about. With sources split between 1 and 3
+    speakers, nobody disputes that *someone* is there, so the first hypothesis is certain —
+    but the second and third exist only under the 3-speaker reading and carry the whole
+    disagreement. Spreading a flat off-modal value over every hypothesis would both
+    overstate the doubt about the first speaker and understate which speaker to check.
     """
     from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
 
@@ -507,7 +510,8 @@ def test_hypotheses_inherit_the_doubt_when_sources_are_split() -> None:
         _passes(raw_16k={"a": _diar(1), "b": _diar(3)}, enhanced_16k={"a": _diar(1), "b": _diar(3)})
     )
     assert posterior.is_multimodal is True
-    assert all(h.existence_uncertainty > 0.0 for h in hyps)
+    assert hyps[0].existence_uncertainty == 0.0
+    assert all(h.existence_uncertainty > 0.0 for h in hyps[1:])
     assert all(h.converged is False for h in hyps)
 
 
@@ -534,3 +538,82 @@ def test_a_failed_diarizer_contributes_nothing() -> None:
 
     passes = {"raw_16k": {"diarization": {"by_model": {"broken": {"status": "failed"}}}}}
     assert evidence_from_passes(passes) == [], "a failed outcome must not be read as a count"
+
+
+# ── per-speaker structure fed by the harvested identity evidence (T098) ──
+
+
+def _votes(*per_bucket: dict[str, str]) -> list[dict]:
+    """Harvested identity buckets: one dict of ``{diar_model: cluster_id}`` per 0.5 s."""
+    out = []
+    for i, clusters in enumerate(per_bucket):
+        votes: dict[str, object] = {
+            m: {"speaker_label": f"{m}-{c}", "cluster_id": c, "speaker_changed_from_prev": None}
+            for m, c in clusters.items()
+        }
+        votes["__cross_diar_label_disagreement__"] = {"cluster_ids": dict(clusters)}
+        out.append({"start": i * 0.5, "end": (i + 1) * 0.5, "votes": votes})
+    return out
+
+
+def test_the_nth_speaker_inherits_the_doubt_about_there_being_n_speakers() -> None:
+    """FR-004: existence uncertainty must differ *between* speakers, not be a shared scalar.
+
+    With mass split between 1 and 3 speakers, the first speaker is near-certain — every
+    source agrees someone is there — while the third exists only under the 3-speaker
+    reading. A flat off-modal value would report the same doubt for both and give a
+    consumer no way to know which speaker to go looking for.
+    """
+    from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
+
+    _p, hyps, _c = build_speaker_identity(
+        _passes(raw_16k={"a": _diar(1), "b": _diar(3)}, enhanced_16k={"a": _diar(1), "b": _diar(3)}),
+        identity_votes=_votes({"a": "Sx"}, {"a": "Sx", "b": "Sy"}, {"b": "Sz"}),
+    )
+    assert hyps[0].existence_uncertainty < hyps[-1].existence_uncertainty
+
+
+def test_clusters_the_count_posterior_does_not_back_still_get_a_hypothesis() -> None:
+    """Observed-but-unbacked speakers are contested, not deleted.
+
+    Truncating to the modal count would drop evidence the run actually gathered, leaving
+    no record that a source separated more speakers than the posterior believes.
+    """
+    from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
+
+    _p, hyps, _c = build_speaker_identity(
+        _passes(raw_16k={"a": _diar(1)}, enhanced_16k={"a": _diar(1)}),
+        identity_votes=_votes({"a": "Sx"}, {"a": "Sy"}, {"a": "Sz"}),
+    )
+    assert len(hyps) == 3
+    assert hyps[0].existence_uncertainty < hyps[2].existence_uncertainty
+
+
+def test_a_speaker_carries_when_it_was_active() -> None:
+    """Without spans, a hypothesis cannot be checked against the audio it came from."""
+    from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
+
+    _p, hyps, _c = build_speaker_identity(
+        _passes(raw_16k={"a": _diar(1)}, enhanced_16k={"a": _diar(1)}),
+        identity_votes=_votes({"a": "Sx"}, {"a": "Sx"}, {"a": "Sx"}),
+    )
+    assert (hyps[0].first_seen, hyps[0].last_seen, hyps[0].total_active_s) == (0.0, 1.5, 1.5)
+
+
+def test_correspondence_names_the_real_diarizer_labels_when_evidence_is_available() -> None:
+    """FR-005: a placeholder like ``<a:count=1>`` cannot be traced back to any output."""
+    from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
+
+    _p, _h, corr = build_speaker_identity(
+        _passes(raw_16k={"a": _diar(1)}, enhanced_16k={"a": _diar(1)}),
+        identity_votes=_votes({"a": "Sx"}),
+    )
+    assert [(c.source, c.source_label, c.speaker_id, c.cluster_id) for c in corr] == [("a", "a-Sx", "S0", "Sx")]
+
+
+def test_the_builder_still_works_with_no_identity_evidence() -> None:
+    """The count posterior comes from the passes alone; harvested votes only add detail."""
+    from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
+
+    posterior, hyps, _c = build_speaker_identity(_passes(raw_16k={"a": _diar(2)}, enhanced_16k={"a": _diar(2)}))
+    assert posterior.modal_count == 2 and len(hyps) == 2
