@@ -185,7 +185,10 @@ def run_adaptive_loop(
                 result = rule["execute"](cand, ctx)
                 touched: dict[tuple[str, AxisName], set] = result.pop("touched", {})
                 delta = {}
-                for (stream, axis), buckets in touched.items():
+                # Sorted: these iterations accumulate into output, so a fixed order makes
+                # byte-reproducibility structural rather than a property of dict insertion
+                # order that a refactor could quietly break (FR-011f).
+                for (stream, axis), buckets in sorted(touched.items()):
                     state.update_buckets(store, stream, axis, buckets, round_idx)
                     for bk in buckets:
                         key = (stream, axis, bk)
@@ -459,7 +462,7 @@ def _grid_from_rows(rows: list[dict[str, Any]]) -> tuple[float, float]:
 def _bucket_values(state: BeliefState) -> dict[tuple[str, str, tuple[float, float]], float | None]:
     """Per-bucket aggregated uncertainty snapshot (delta baselines use the touched set)."""
     out: dict[tuple[str, str, tuple[float, float]], float | None] = {}
-    for (stream, axis), rows in state.rows.items():
+    for (stream, axis), rows in sorted(state.rows.items()):
         for row in rows:
             out[(stream, axis, (round(row["start"], 6), round(row["end"], 6)))] = row.get("aggregated_uncertainty")
     return out

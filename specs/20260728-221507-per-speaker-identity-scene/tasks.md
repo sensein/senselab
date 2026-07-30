@@ -212,21 +212,21 @@ synthetic signals and assert weighting, attribution, and termination behavior.
 
 ### Tests for the guards
 
-- [ ] T073 [P] [US1] Write failing tests for uncertainty gating in `src/tests/audio/workflows/audio_analysis/adaptive/influence_test.py`: a high-uncertainty signal has proportionally reduced effective weight (FR-011b).
-- [ ] T074 [P] [US1] Write failing tests for derivation gating in `src/tests/audio/workflows/audio_analysis/adaptive/influence_test.py`: a `derived` signal's gate is strictly below an `independent` one, and a derived signal alone cannot drive a revision an independent signal contradicts (FR-011c, SC-030).
-- [ ] T075 [US1] Write failing tests for the self-confirmation guard in `src/tests/audio/workflows/audio_analysis/adaptive/influence_test.py`: a value revised by influence records `resolution_kind: "revision"`, and its subsequent uncertainty drop is **not** reported as improved confidence (FR-011d, SC-027).
-- [ ] T076 [P] [US1] Write failing tests for oscillation detection in `src/tests/audio/workflows/audio_analysis/adaptive/convergence_test.py`: a constructed alternation terminates with `termination_reason: "oscillation"` and `converged: false` (FR-011e, SC-028).
-- [ ] T077 [P] [US1] Write failing tests for revision attribution in `influence_test.py`: every revision carries round, cause, weight, and evidence (FR-011g, SC-026).
-- [ ] T078 [P] [US1] Write failing determinism tests in `src/tests/audio/workflows/audio_analysis/adaptive/influence_test.py`: fixed evaluation order and tie-breaking produce byte-identical results across runs (FR-011f, SC-029).
-- [ ] T079 [P] [US1] Write failing tests for unresolved-quantity reporting in `convergence_test.py`: a quantity that never converged is not presented as settled (FR-011h).
+- [X] T073 [P] [US1] Write failing tests for uncertainty gating in `src/tests/audio/workflows/audio_analysis/adaptive/influence_test.py`: a high-uncertainty signal has proportionally reduced effective weight (FR-011b).
+- [X] T074 [P] [US1] Write failing tests for derivation gating in `src/tests/audio/workflows/audio_analysis/adaptive/influence_test.py`: a `derived` signal's gate is strictly below an `independent` one, and a derived signal alone cannot drive a revision an independent signal contradicts (FR-011c, SC-030).
+- [X] T075 [US1] Write failing tests for the self-confirmation guard in `src/tests/audio/workflows/audio_analysis/adaptive/influence_test.py`: a value revised by influence records `resolution_kind: "revision"`, and its subsequent uncertainty drop is **not** reported as improved confidence (FR-011d, SC-027).
+- [X] T076 [P] [US1] Write failing tests for oscillation detection in `src/tests/audio/workflows/audio_analysis/adaptive/convergence_test.py`: a constructed alternation terminates with `termination_reason: "oscillation"` and `converged: false` (FR-011e, SC-028).
+- [X] T077 [P] [US1] Write failing tests for revision attribution in `influence_test.py`: every revision carries round, cause, weight, and evidence (FR-011g, SC-026).
+- [X] T078 [P] [US1] Write failing determinism tests in `src/tests/audio/workflows/audio_analysis/adaptive/influence_test.py`: fixed evaluation order and tie-breaking produce byte-identical results across runs (FR-011f, SC-029).
+- [X] T079 [P] [US1] Write failing tests for unresolved-quantity reporting in `convergence_test.py`: a quantity that never converged is not presented as settled (FR-011h).
 
 ### Implementation for the guards
 
-- [ ] T080 [US1] Implement `InfluenceWeight` with uncertainty and derivation gates in `src/senselab/audio/workflows/audio_analysis/adaptive/influence.py` per `data-model.md` §2.
-- [ ] T081 [US1] Implement `RevisionRecord` and `ResolutionKind` in `src/senselab/audio/workflows/audio_analysis/adaptive/provenance.py`, generalizing the loop's existing explained-versus-improved distinction (research D13).
-- [ ] T082 [US1] Implement oscillation and no-improvement detection in `src/senselab/audio/workflows/audio_analysis/adaptive/convergence.py`, extending `ConvergenceReport` with `termination_reason`, `oscillation_states`, and `unresolved_quantities`.
-- [ ] T083 [US1] Enforce deterministic iteration order and stable serialized key ordering in `src/senselab/audio/workflows/audio_analysis/adaptive/loop.py` (FR-011f).
-- [ ] T084 [US1] Add `--influence-profile` and `--max-influence-rounds` flags to `scripts/analyze_audio.py`.
+- [X] T080 [US1] Implement `InfluenceWeight` with uncertainty and derivation gates in `src/senselab/audio/workflows/audio_analysis/adaptive/influence.py` per `data-model.md` §2.
+- [X] T081 [US1] Implement `RevisionRecord` and `ResolutionKind` in `src/senselab/audio/workflows/audio_analysis/adaptive/provenance.py`, generalizing the loop's existing explained-versus-improved distinction (research D13).
+- [X] T082 [US1] Implement oscillation and no-improvement detection in `src/senselab/audio/workflows/audio_analysis/adaptive/convergence.py`, extending `ConvergenceReport` with `termination_reason`, `oscillation_states`, and `unresolved_quantities`.
+- [X] T083 [US1] Enforce deterministic iteration order and stable serialized key ordering in `src/senselab/audio/workflows/audio_analysis/adaptive/loop.py` (FR-011f).
+- [X] T084 [US1] Add `--influence-profile` and `--max-influence-rounds` flags to `scripts/analyze_audio.py`.
 
 **Checkpoint**: Guards in place and independently tested. Influence paths may now be
 enabled.
