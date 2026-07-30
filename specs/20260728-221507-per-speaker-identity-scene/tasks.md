@@ -189,7 +189,7 @@ report nothing.
 - [X] T067 [US3] Implement excision routing in `sources.py`: long-window classifier on excised mask segments, short-window on the grid, with padding fraction recorded and short regions flagged (FR-024, FR-041, FR-042, FR-043, FR-045, SC-032).
 - [X] T068 [US3] Implement the stationary parallel unsubtracted analysis in `sources.py` (FR-021i).
 - [X] T069 [US3] Implement the `background_sources.parquet` and `suppression.json` writers per `contracts/background-sources.md` in `io.py`.
-- [ ] T070 [US3] Implement `scripts/calibrate_detection_margin.py` per `contracts/cli.md`, consuming `level-verdicts.json` as the machine basis and hard-erroring on an unmarked provisional figure (FR-022, SC-017).
+- [X] T070 [US3] Implement `scripts/calibrate_detection_margin.py` per `contracts/cli.md`, consuming `level-verdicts.json` as the machine basis and hard-erroring on an unmarked provisional figure (FR-022, SC-017).
 - [X] T071 [US3] Add `--foreground-suppression`, `--suppression-model`, `--detection-margin-profile`, `--level-target-lufs`, `--gain-cap-db`, `--scene-variant`, and `--stationary-pass` flags to `scripts/analyze_audio.py` (FR-030).
 - [X] T072 [US3] Wire background characterization into `run_pass` in `stages.py`, consuming the mask from US4 and preferring mask regions (FR-035, FR-039). **Coordinate with #537.**
 
