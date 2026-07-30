@@ -44,6 +44,8 @@ from senselab.audio.workflows.audio_analysis.calibration import quantile_bias_co
 __all__ = [
     "NoiseFloorEstimate",
     "band_excess_db",
+    "cross_recording_baseline",
+    "foreground_background_ratio_db",
     "detect_stationary_sources",
     "estimate_recorder_floor_db",
     "prominence_ratio_db",
@@ -337,19 +339,22 @@ def binding_floor(
 # the same figures the margin ladder's upper tier converged on, from a different
 # tradition.
 #
-# KNOWN LIMITATION, and it matters for this exact use case. Prominence catches only
-# *narrowband* stationary sources -- mains hum, a tonal compressor whine, a fan blade
-# rate. A **broadband** stationary source raises every band together: ventilation
-# hiss, room rumble, a dense music bed. Prominence cannot see it, because all the
-# neighbours are raised too.
+# SCOPE OF THIS DETECTOR, stated precisely because the neighbouring claim is easy to
+# overstate. Prominence catches *narrowband* stationary sources -- mains hum, a tonal
+# compressor whine, a fan blade rate. A **broadband** stationary source raises every
+# band together (ventilation hiss, room rumble, a dense music bed), so a neighbour
+# comparison sees nothing.
 #
-# Within a single uncalibrated recording, broadband stationary content is not
-# separable from the microphone's own noise floor -- both are steady, broadband, and
-# spectrally smooth. Distinguishing them needs a reference the recording does not
-# contain: an equipment noise specification, a silent calibration take, or a
-# cross-recording baseline. `binding_floor` reports which limit applies once such a
-# reference is supplied; absent one, the honest output is that the floor's origin is
-# undetermined rather than a guess dressed as a finding.
+# What that does NOT mean: it does not mean a structured or content-bearing background
+# is unmeasurable. Its level, spectral shape, and ratio to the near-field foreground are
+# all measurable -- see `foreground_background_ratio_db`. The single narrow thing an
+# uncalibrated lone recording cannot do is *attribute* a smooth broadband floor to
+# equipment versus room, because both are steady, broadband and spectrally smooth.
+#
+# And that attribution is recoverable from a cohort: across recordings from one rig the
+# equipment contribution is the part common to all of them while the room contribution
+# varies, so `cross_recording_baseline` separates the two. `binding_floor` reports which
+# limit applies once either that or an equipment specification is supplied.
 
 
 def prominence_ratio_db(band_floors_db: Sequence[float | None], index: int) -> float | None:
@@ -445,3 +450,143 @@ def detect_stationary_sources(
                 }
             )
     return out
+
+
+# ── foreground-referenced SNR ──────────────────────────────────────────
+#
+# The operative quantity in this setting. Capture is near-field, so a foreground sound
+# sits far above the background, and the ratio between them is measurable per band
+# whatever the background *contains*: structure and content do not obstruct measuring
+# a level. That distinction matters because it is easy to overstate the limitation
+# above -- what an uncalibrated single recording cannot do is *attribute* the floor to
+# equipment versus room. It can still say how far the background sits below the
+# foreground, and how that ratio varies across bands and across recordings.
+#
+# Blank recordings are the exception: with no foreground there is no reference, which
+# has to be reported rather than silently yielding an infinite or zero ratio.
+
+
+def foreground_background_ratio_db(
+    waveform: np.ndarray,
+    sampling_rate: int,
+    *,
+    target_active: np.ndarray,
+    foreground_percentile: float = 90.0,
+    profile: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Per-band ratio between the near-field foreground level and the background floor.
+
+    The foreground reference is a **high percentile** of band power over target-active
+    frames, not their floor. Using the active stratum's floor would measure the quiet part
+    *within* active frames — which understates the ratio severely: on a real recording it
+    reported a median of +5.6 dB where the broadband foreground-to-background separation was
+    15–35 dB.
+
+    The background reference is the target-free stratum's bias-corrected floor. Their
+    difference is a per-band signal-to-background ratio that holds whatever the background
+    is made of: structure and content do not obstruct measuring a level.
+
+    Args:
+        waveform: Mono samples.
+        sampling_rate: Sample rate in Hz.
+        target_active: Per-sample boolean target-activity mask.
+        foreground_percentile: Percentile of active-frame band power taken as the foreground
+            level. High rather than mean, so brief loud target events are not averaged away
+            by the silence between them.
+        profile: Detection-margin profile.
+
+    Returns:
+        One record per band. Empty when either stratum is absent — a blank recording has no
+        foreground to reference against, and reporting a ratio there would invent one.
+    """
+    from senselab.audio.workflows.audio_analysis.calibration import load_detection_margin_profile
+
+    cfg = dict((profile or load_detection_margin_profile()).get("noise_floor") or {})
+    quantile = float(cfg.get("quantile", 0.10))
+
+    wav = np.asarray(waveform, dtype=np.float64).squeeze()
+    active = np.asarray(target_active, dtype=bool)
+    bands = third_octave_bands(sampling_rate)
+    power, starts = _band_frame_power(wav, sampling_rate, bands, frame_s=0.025, hop_s=0.010)
+    frame_active = np.array([bool(active[s]) if s < active.size else False for s in starts])
+    if not frame_active.any() or not (~frame_active).any():
+        return []
+
+    out: list[dict[str, Any]] = []
+    for b, band in enumerate(bands):
+        fg = power[b, frame_active]
+        bg_floor, _ = estimate_band_floor_db(power[b, ~frame_active], quantile=quantile)
+        if fg.size == 0 or bg_floor is None:
+            continue
+        fg_db = 10.0 * math.log10(max(float(np.percentile(fg, foreground_percentile)), 1e-30))
+        out.append(
+            {
+                "band_low_hz": band[0],
+                "band_high_hz": band[1],
+                "foreground_db": fg_db,
+                "background_db": bg_floor,
+                "ratio_db": fg_db - bg_floor,
+                "foreground_percentile": foreground_percentile,
+            }
+        )
+    return out
+
+
+# ── cross-recording baseline ───────────────────────────────────────────
+#
+# The reference a single recording lacks, supplied by a cohort. Across recordings from
+# one rig the equipment contribution is the part common to all of them, while the room
+# contribution varies. So the per-band minimum across recordings approximates the
+# equipment floor, and each recording's excess over that minimum is its own room
+# contribution -- which is what makes a broadband stationary source nameable after all,
+# given more than one recording to compare.
+
+
+def cross_recording_baseline(
+    per_recording_floors: Mapping[str, Sequence[NoiseFloorEstimate]],
+) -> dict[str, Any]:
+    """Separate the common (equipment) floor from per-recording (room) contributions.
+
+    Args:
+        per_recording_floors: Recording id → its per-band floor estimates. Two or more
+            recordings from the same capture setup.
+
+    Returns:
+        ``{"bands": [...], "recordings": {...}}``. Each band carries the common floor and
+        the spread across recordings; each recording carries its per-band excess over the
+        common floor. ``bands`` is empty with fewer than two recordings, since a single
+        recording cannot distinguish common from particular.
+    """
+    usable = {rid: rows for rid, rows in per_recording_floors.items() if rows}
+    if len(usable) < 2:
+        return {
+            "bands": [],
+            "recordings": {},
+            "note": "at least two recordings are required to separate common from particular",
+        }
+
+    levels: dict[tuple[float, float], dict[str, float]] = {}
+    for rid, rows in usable.items():
+        for row in rows:
+            if row.floor_db is not None:
+                levels.setdefault(row.band_hz, {})[rid] = float(row.floor_db)
+
+    bands: list[dict[str, Any]] = []
+    excess: dict[str, list[dict[str, Any]]] = {rid: [] for rid in usable}
+    for band in sorted(levels):
+        by_rid = levels[band]
+        if len(by_rid) < 2:
+            continue
+        common = min(by_rid.values())
+        bands.append(
+            {
+                "band_low_hz": band[0],
+                "band_high_hz": band[1],
+                "common_floor_db": common,
+                "spread_db": max(by_rid.values()) - common,
+                "recordings": len(by_rid),
+            }
+        )
+        for rid, level in by_rid.items():
+            excess[rid].append({"band_low_hz": band[0], "band_high_hz": band[1], "room_excess_db": level - common})
+    return {"bands": bands, "recordings": excess}

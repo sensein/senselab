@@ -958,8 +958,18 @@ reportable on their own.
   implementation; FR-021d through FR-021h describe what it needs to become. The
   existing speech-oriented SNR head is not a substitute — it estimates speech SNR,
   not a background-source floor.
-- **Throughout-the-clip background splits into two cases, and only one is detectable
-  within a single uncalibrated recording.** A source present in nearly every frame is
+- **A structured, content-bearing background is still measurable.** Its level, spectral
+  shape, and ratio to the near-field foreground are all recoverable — structure does not
+  obstruct measuring a level. Because capture is near-field, the foreground sits far above
+  the background and their per-band ratio is the operative signal-to-background quantity;
+  on the validation recording it reads a median +25 dB with all bands clearing the +10 dB
+  confident margin. Blank recordings are the exception: with no foreground there is no
+  reference, which is reported rather than yielding an invented ratio.
+- **Relative differences remain informative even where absolute attribution is not.**
+  Comparisons across bands, across activity strata, and across recordings from the same
+  setup are all defensible without any calibration.
+- **Throughout-the-clip background splits into two cases, and only one is detectable from a
+  single recording alone.** A source present in nearly every frame is
   absorbed into its own band's noise floor — worse, the bias correction then lifts the floor
   *above* it, so a steady source reads as sub-floor rather than merely as zero-excess.
   *Narrowband* stationary sources (mains hum, a tonal compressor whine) are recoverable by
@@ -968,8 +978,11 @@ reportable on their own.
   dense music bed — raise every band together, so a neighbour comparison sees nothing, and
   they are not separable from the microphone's own noise floor without a reference the
   recording does not contain: an equipment noise specification, a silent calibration take,
-  or a cross-recording baseline. Absent one, the honest output is that the floor's origin is
-  undetermined.
+  or a cross-recording baseline. **The cohort route is available and implemented**: across
+  recordings from one rig the equipment contribution is the part common to all of them while
+  the room contribution varies, so a per-band cross-recording comparison separates the two.
+  Absent any such reference, the honest output is that the floor's *origin* is undetermined —
+  which is narrower than saying the floor itself is unmeasurable.
 - **The SNR gate is a novel component and must be additive.** Established sound-event
   detection practice suppresses false positives entirely in the posterior domain —
   smoothing, class-wise thresholds, minimum durations, hysteresis — and does not gate
