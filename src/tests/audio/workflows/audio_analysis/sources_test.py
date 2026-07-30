@@ -11,8 +11,13 @@ a source and the residual foreground together and changes no signal-to-noise rat
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 import pytest
+
+if TYPE_CHECKING:
+    from senselab.audio.workflows.audio_analysis.sources import SourceFinding
 
 from senselab.audio.workflows.audio_analysis.calibration import DEFAULT_DETECTION_MARGIN
 from senselab.audio.workflows.audio_analysis.sources import (
@@ -334,7 +339,7 @@ def test_a_recording_with_no_long_enough_region_yields_no_excision() -> None:
 # ── recovery delta, discounting, cross-level guard ────────────────────
 
 
-def _finding(**kw: object) -> "SourceFinding":  # noqa: F821 — imported in-body
+def _finding(**kw: object) -> SourceFinding:
     """A confident machine-category finding; keyword arguments override any field."""
     from senselab.audio.workflows.audio_analysis.sources import SourceFinding
 
@@ -466,7 +471,7 @@ def test_a_target_free_finding_outranks_the_same_finding_under_target_activity()
 # ── presence vs extent, and modulation depth (T061 / T063) ────────────
 
 
-def _depth(waveform: np.ndarray, sampling_rate: int, **kwargs: bool | float) -> float:
+def _depth(waveform: np.ndarray, sampling_rate: int, *, discount_speech_band: bool = False) -> float:
     """Unwrap a measured modulation depth, failing loudly when nothing was measured.
 
     ``None`` means the signal carried no energy — a different outcome from "stationary",
@@ -474,7 +479,7 @@ def _depth(waveform: np.ndarray, sampling_rate: int, **kwargs: bool | float) -> 
     """
     from senselab.audio.workflows.audio_analysis.sources import modulation_depth
 
-    value = modulation_depth(waveform, sampling_rate, **kwargs)
+    value = modulation_depth(waveform, sampling_rate, discount_speech_band=discount_speech_band)
     assert value is not None, "expected a measurable modulation depth; the signal was empty"
     return value
 
