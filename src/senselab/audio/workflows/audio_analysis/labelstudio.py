@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 from senselab.audio.workflows.audio_analysis.harvesters import (
     asr_has_timestamps,
@@ -573,3 +573,131 @@ def _collect_classification_labels(result: Any) -> set[str]:  # noqa: ANN401
             if label:
                 labels.add(str(label))
     return labels
+
+
+# ── background mask + per-speaker presence tracks (T106) ──────────────
+
+MASK_STATE_VALUES = ("target_free", "target_active", "indeterminate")
+
+
+def _mask_track_name(pass_label: str) -> str:
+    return f"{pass_label}__background__mask"
+
+
+def _speaker_track_name(pass_label: str) -> str:
+    return f"{pass_label}__speaker__presence"
+
+
+def attach_scene_context_tracks_to_ls(
+    *,
+    ls_tasks: Any,  # noqa: ANN401 — list[dict] or dict, matching attach_uncertainty_tracks_to_ls
+    ls_config: str,
+    mask_rows: Sequence[Mapping[str, Any]] = (),
+    speaker_rows: Sequence[Mapping[str, Any]] = (),
+    pass_label: str = "raw_16k",
+) -> tuple[Any, str]:
+    """Append the background-mask and per-speaker presence tracks to the LS bundle.
+
+    Both answer questions a human reviewer cannot answer from the uncertainty tracks alone.
+    The mask decides which background findings are trustworthy, so a reviewer checking those
+    findings needs to see the same intervals the machine used (FR-033). Per-speaker presence
+    is labelled by speaker rather than merged, because knowing *who* is contested is the
+    entire reason the identity axis moved off a single scalar — a merged track would put the
+    same unreadable number back in front of the annotator.
+
+    Args:
+        ls_tasks: Existing LS tasks payload.
+        ls_config: Existing LS config XML.
+        mask_rows: Background-mask rows with ``start``, ``end``, ``state``.
+        speaker_rows: Per-speaker presence rows.
+        pass_label: Pass the tracks describe. Both are properties of the recording as
+            captured, so they ride on the unmodified pass.
+
+    Returns:
+        Updated ``(ls_tasks, ls_config)``. With neither input the bundle is returned
+        unchanged rather than gaining empty tracks.
+    """
+    if not mask_rows and not speaker_rows:
+        return ls_tasks, ls_config
+
+    mask_track, speaker_track = _mask_track_name(pass_label), _speaker_track_name(pass_label)
+    blocks: list[str] = []
+    if mask_rows:
+        inner = "\n".join(f'  <Label value="{v}"/>' for v in MASK_STATE_VALUES)
+        blocks.append(f'<Labels name="{mask_track}" toName="audio">\n{inner}\n</Labels>')
+    if speaker_rows:
+        # Label values are the speaker ids actually present, so the config declares exactly
+        # the speakers this run hypothesized. An undeclared value is dropped on import.
+        ids = sorted({str(r.get("speaker_id")) for r in speaker_rows if r.get("speaker_id")})
+        inner = "\n".join(f'  <Label value="{sid}"/>' for sid in ids)
+        blocks.append(f'<Labels name="{speaker_track}" toName="audio">\n{inner}\n</Labels>')
+        blocks.append(
+            f'<TextArea name="{speaker_track}__text" toName="audio" perRegion="true" '
+            f'editable="false" placeholder="Per-speaker presence confidence and backing sources"/>'
+        )
+
+    if "</View>" in ls_config:
+        ls_config = ls_config.replace("</View>", "\n".join(blocks) + "\n</View>", 1)
+    else:
+        ls_config = ls_config + "\n" + "\n".join(blocks)
+
+    tasks_list = ls_tasks if isinstance(ls_tasks, list) else [ls_tasks]
+    target = next(
+        (t for t in tasks_list if ((t.get("data") or {}).get("pass") or "raw_16k") == pass_label),
+        tasks_list[0] if tasks_list else None,
+    )
+    if target is None or not target.get("predictions"):
+        return ls_tasks, ls_config
+    result_list = target["predictions"][0].setdefault("result", [])
+
+    for i, row in enumerate(mask_rows):
+        state = str(row.get("state") or "indeterminate")
+        result_list.append(
+            {
+                "id": f"{mask_track}__{i}",
+                "from_name": mask_track,
+                "to_name": "audio",
+                "type": "labels",
+                "value": {
+                    "start": float(row.get("start", 0.0)),
+                    "end": float(row.get("end", 0.0)),
+                    "labels": [state if state in MASK_STATE_VALUES else "indeterminate"],
+                },
+            }
+        )
+
+    for i, row in enumerate(speaker_rows):
+        region_id = f"{speaker_track}__{i}"
+        start, end = float(row.get("start", 0.0)), float(row.get("end", 0.0))
+        result_list.append(
+            {
+                "id": region_id,
+                "from_name": speaker_track,
+                "to_name": "audio",
+                "type": "labels",
+                "value": {"start": start, "end": end, "labels": [str(row.get("speaker_id"))]},
+            }
+        )
+        # The speaker's own doubt travels with the region: without it a reviewer sees who
+        # was claimed but not how doubtful the claim was, which is the actionable part.
+        conf, unc = row.get("presence_confidence"), row.get("presence_uncertainty")
+        sources = ", ".join(str(s) for s in (row.get("contributing_sources") or [])) or "(none recorded)"
+        result_list.append(
+            {
+                "id": f"{region_id}__text",
+                "from_name": f"{speaker_track}__text",
+                "to_name": "audio",
+                "type": "textarea",
+                "value": {
+                    "start": start,
+                    "end": end,
+                    "text": [
+                        f"confidence: {conf if conf is None else round(float(conf), 2)}\n"
+                        f"uncertainty: {unc if unc is None else round(float(unc), 2)}\n"
+                        f"backed by: {sources}"
+                    ],
+                },
+            }
+        )
+
+    return ls_tasks, ls_config

@@ -283,7 +283,7 @@ supported each count, without opening intermediate artifacts.
 ## Phase 8: Polish & Cross-Cutting Concerns
 
 - [X] T105 [P] Add the spectrogram-bearing per-speaker row to the final timeline in `src/senselab/audio/workflows/audio_analysis/adaptive/plot.py`, reading the belief parquet rather than `final/presence.parquet`.
-- [ ] T106 [P] Add Label Studio tracks for the background mask and per-speaker presence in `src/senselab/audio/workflows/audio_analysis/labelstudio.py`.
+- [X] T106 [P] Add Label Studio tracks for the background mask and per-speaker presence in `src/senselab/audio/workflows/audio_analysis/labelstudio.py`.
 - [X] T107 [P] Update `README.md` with a runbook covering the mask, suppression, and per-speaker identity flags.
 - [X] T108 [P] Update the "Audio analysis script" and "Three-axis uncertainty workflow" sections of `CLAUDE.md` to describe the new outputs and the level findings.
 - [ ] T109 Run the full `quickstart.md` validation sequence for every phase and record results under `artifacts/`.

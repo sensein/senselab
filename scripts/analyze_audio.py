@@ -1609,6 +1609,35 @@ def main(argv: list[str] | None = None) -> int:
             summaries["adaptive"] = {"enabled": False, "reason": "--no-adaptive-outputs"}
             write_json(run_dir / "summary.json", summaries)
 
+    # Scene-context tracks attach last: they read artifacts written by the per-speaker and
+    # mask stages above, and both are questions a reviewer cannot answer from the
+    # uncertainty tracks alone — which intervals the machine trusted, and which speaker each
+    # contested claim was about.
+    try:
+        from senselab.audio.workflows.audio_analysis.labelstudio import attach_scene_context_tracks_to_ls
+
+        mask_rows: list[dict[str, Any]] = []
+        mask_parquet = run_dir / "raw_16k" / "background_mask.parquet"
+        if mask_parquet.exists():
+            import pandas as _pd
+
+            mask_rows = _pd.read_parquet(mask_parquet).to_dict("records")
+        speaker_rows: list[dict[str, Any]] = []
+        presence_parquet = run_dir / "final" / "per_speaker_presence.parquet"
+        if presence_parquet.exists():
+            import pandas as _pd
+
+            speaker_rows = _pd.read_parquet(presence_parquet).to_dict("records")
+        if mask_rows or speaker_rows:
+            ls_tasks, config_xml = attach_scene_context_tracks_to_ls(
+                ls_tasks=ls_tasks,
+                ls_config=config_xml,
+                mask_rows=mask_rows,
+                speaker_rows=speaker_rows,
+            )
+    except Exception as exc:  # noqa: BLE001 — an annotation sidecar must not fail the run
+        logger.warning("scene-context LS tracks could not be attached: %s", exc)
+
     write_json(run_dir / "labelstudio_tasks.json", ls_tasks)
     (run_dir / "labelstudio_config.xml").write_text(config_xml, encoding="utf-8")
 
