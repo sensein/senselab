@@ -196,7 +196,8 @@ def test_stage_scene_requests_the_independent_score_function(monkeypatch: "pytes
     audio = SimpleNamespace(waveform=torch.zeros((1, 16000)), sampling_rate=16000)
     ctx = StageContext(pass_label="raw_16k", audio_signature="s" * 64)
     stages_mod.stage_scene(
-        audio,  # type: ignore[arg-type] — a waveform/sampling_rate stand-in; the stage reads no more
+        # A waveform/sampling_rate stand-in: the stage reads nothing else off it.
+        audio,  # type: ignore[arg-type]
         ctx,
         ast_model="MIT/ast-finetuned-audioset-10-10-0.4593",
         yamnet_model=None,

@@ -291,7 +291,7 @@ supported each count, without opening intermediate artifacts.
 - [X] T111 Validate the derived χ²₂ statistics on synthetic noise — bias correction, per-bin σ, patch-variance collapse — in `src/tests/audio/workflows/audio_analysis/noise_floor_test.py`, then update `derived_statistics_status` in `src/senselab/audio/workflows/audio_analysis/data/detection_margin/2026-07-29.json` from `provisional` to `verified` only if they hold (research risk 2).
 - [ ] T112 Measure whether an alternative AudioSet classifier with more log-floor headroom performs better on faint content using `scripts/probe_classifier_levels.py`, recording results to `artifacts/level_probe/alternatives.json`. Do **not** switch on the headroom argument alone — it already mispredicted the current pair's ordering (research risk 4).
 - [ ] T112a Measure default-run wall-clock against the pre-feature baseline using `scripts/analyze_audio.py` with foreground suppression not requested, recording both timings to `artifacts/timing/default_run.json`, and confirm the increase stays within 10% (SC-009).
-- [ ] T113 Run `uv run ruff format && uv run ruff check && uv run mypy . && uv run codespell` and fix all findings.
+- [X] T113 Run `uv run ruff format && uv run ruff check && uv run mypy . && uv run codespell` and fix all findings.
 - [ ] T114 Run `uv run pytest -n auto` and confirm green before opening the PR.
 
 ---

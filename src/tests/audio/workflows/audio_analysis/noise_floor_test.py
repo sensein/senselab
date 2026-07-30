@@ -31,14 +31,25 @@ from senselab.audio.workflows.audio_analysis.noise_floor import (
 SR = 16000
 
 
-def _measured_floor(frames: np.ndarray, **kwargs: float | bool | int) -> float:
+def _measured_floor(
+    frames: np.ndarray,
+    *,
+    quantile: float = 0.10,
+    max_iterations: int = 3,
+    apply_bias_correction: bool = True,
+) -> float:
     """Unwrap a measured band floor, failing loudly if the estimator declined to measure.
 
     The estimator returns ``None`` when there is no energy to measure, which is a different
     outcome from a low floor. Comparing that ``None`` directly would raise a TypeError deep
     in an assertion rather than saying what actually happened.
     """
-    value, _iterations = estimate_band_floor_db(frames, **kwargs)
+    value, _iterations = estimate_band_floor_db(
+        frames,
+        quantile=quantile,
+        max_iterations=max_iterations,
+        apply_bias_correction=apply_bias_correction,
+    )
     assert value is not None, "expected a measurable floor; the estimator found no energy"
     return value
 
