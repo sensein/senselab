@@ -362,3 +362,51 @@ def test_nothing_is_added_when_there_is_nothing_to_show() -> None:
     out_tasks, out_config = attach_scene_context_tracks_to_ls(ls_tasks=tasks, ls_config=config)
     assert out_config == config
     assert out_tasks[0]["predictions"][0]["result"] == []
+
+
+def test_list_columns_read_back_from_parquet_do_not_break_attachment() -> None:
+    """Parquet list columns come back as numpy arrays, not lists.
+
+    ``value or []`` on an array raises rather than returning a default, which took down
+    attachment mid-run on a real recording — after regions had been appended but before the
+    config gained their track declarations.
+    """
+    import numpy as np
+
+    from senselab.audio.workflows.audio_analysis.labelstudio import attach_scene_context_tracks_to_ls
+
+    tasks, config = _bundle()
+    tasks, config = attach_scene_context_tracks_to_ls(
+        ls_tasks=tasks,
+        ls_config=config,
+        speaker_rows=[
+            {
+                "speaker_id": "S0",
+                "start": 0.0,
+                "end": 0.5,
+                "presence_confidence": 0.5,
+                "presence_uncertainty": 0.9,
+                "contributing_sources": np.array(["pyannote", "sortformer"], dtype=object),
+            }
+        ],
+    )
+    texts = [r for r in tasks[0]["predictions"][0]["result"] if r["type"] == "textarea"]
+    assert "pyannote, sortformer" in texts[0]["value"]["text"][0]
+
+
+def test_a_failure_partway_through_leaves_the_bundle_untouched() -> None:
+    """Regions referencing a track the config never declared are worse than no tracks.
+
+    Label Studio drops such regions silently, so a half-applied attachment reads as a
+    successful one with missing data. The rows are built before anything is mutated.
+    """
+    from senselab.audio.workflows.audio_analysis.labelstudio import attach_scene_context_tracks_to_ls
+
+    tasks, config = _bundle()
+    bad = [
+        {"speaker_id": "S0", "start": 0.0, "end": 0.5, "presence_confidence": 1.0, "presence_uncertainty": 0.0},
+        {"speaker_id": "S1", "start": "not-a-time", "end": 1.0},
+    ]
+    with pytest.raises((ValueError, TypeError)):
+        attach_scene_context_tracks_to_ls(ls_tasks=tasks, ls_config=config, speaker_rows=bad)
+    assert tasks[0]["predictions"][0]["result"] == []
