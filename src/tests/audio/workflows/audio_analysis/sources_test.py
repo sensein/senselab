@@ -329,3 +329,134 @@ def test_a_recording_with_no_long_enough_region_yields_no_excision() -> None:
     rows = [_mask_row(f"m{i}", i * 3.0, i * 3.0 + 1.5) for i in range(4)]
     segs = plan_excision(rows, long_window_s=10.24, max_padding_fraction=0.5)
     assert segs and not any(s.supports_long_window for s in segs)
+
+
+# ── recovery delta, discounting, cross-level guard ────────────────────
+
+
+def _finding(**kw: object) -> "SourceFinding":  # noqa: F821 — imported below
+    from senselab.audio.workflows.audio_analysis.sources import SourceFinding
+
+    base = dict(
+        start=0.0,
+        end=1.0,
+        category="machine",
+        label="Vehicle",
+        classifier="yamnet",
+        above_floor_db=12.0,
+        tier="confident",
+        binding_floor="perceptual",
+        variant="foreground_suppressed",
+        gain_db=0.0,
+        computed_on="grid",
+        flatness=0.01,
+        occupancy=0.8,
+    )
+    base.update(kw)
+    return SourceFinding(**base)  # type: ignore[arg-type]
+
+
+def test_recovery_delta_names_what_suppression_bought() -> None:
+    """SC-007: without this, a run gives no way to tell whether suppression contributed."""
+    from senselab.audio.workflows.audio_analysis.sources import recovery_delta
+
+    d = recovery_delta(
+        suppressed=[{"category": "machine"}, {"category": "environment"}],
+        unmodified=[{"category": "environment"}],
+    )
+    assert d["recovered"] == ["machine"]
+    assert d["shared"] == ["environment"]
+    assert d["suppression_contributed"] is True
+
+
+def test_recovery_delta_reports_when_suppression_bought_nothing() -> None:
+    """An honest null: the same categories were already visible without it."""
+    from senselab.audio.workflows.audio_analysis.sources import recovery_delta
+
+    d = recovery_delta(suppressed=[{"category": "people"}], unmodified=[{"category": "people"}])
+    assert d["recovered"] == []
+    assert d["suppression_contributed"] is False
+
+
+def test_recovery_delta_flags_evidence_suppression_destroyed() -> None:
+    """A category present only without suppression means suppression removed it."""
+    from senselab.audio.workflows.audio_analysis.sources import recovery_delta
+
+    d = recovery_delta(suppressed=[], unmodified=[{"category": "environment"}])
+    assert d["lost"] == ["environment"]
+
+
+def test_uncertain_mask_region_downgrades_a_finding_with_its_reason() -> None:
+    """FR-036: weak evidence and evidence weakened by an uncertain mask differ.
+
+    Without the reason a consumer reads an uncertain-region finding as merely marginal.
+    """
+    from senselab.audio.workflows.audio_analysis.sources import discount_for_mask_uncertainty
+
+    out = discount_for_mask_uncertainty(_finding(), mask_confidence=0.2)
+    assert out.tier == "probable"
+    assert out.discounted_reason is not None and "mask uncertainty" in out.discounted_reason
+
+
+def test_a_confident_mask_region_leaves_the_finding_alone() -> None:
+    """A trustworthy region does not weaken what was found in it."""
+    from senselab.audio.workflows.audio_analysis.sources import discount_for_mask_uncertainty
+
+    out = discount_for_mask_uncertainty(_finding(), mask_confidence=0.95)
+    assert out.tier == "confident"
+    assert out.discounted_reason is None
+
+
+def test_absent_mask_confidence_is_not_treated_as_uncertainty() -> None:
+    """No mask information is not the same as an uncertain mask."""
+    from senselab.audio.workflows.audio_analysis.sources import discount_for_mask_uncertainty
+
+    assert discount_for_mask_uncertainty(_finding(), mask_confidence=None).tier == "confident"
+
+
+def test_comparing_findings_across_gains_is_refused() -> None:
+    """FR-020e: classifier score varies with level on unchanged audio.
+
+    Ranking across differently-gained segments compares artifacts of level, not content.
+    """
+    from senselab.audio.workflows.audio_analysis.sources import assert_comparable_levels
+
+    with pytest.raises(ValueError, match="not level-comparable"):
+        assert_comparable_levels([_finding(gain_db=0.0), _finding(gain_db=6.0)])
+
+
+def test_findings_at_one_gain_compare_fine() -> None:
+    """The guard only fires on a genuine mismatch."""
+    from senselab.audio.workflows.audio_analysis.sources import assert_comparable_levels
+
+    assert_comparable_levels([_finding(gain_db=3.0), _finding(gain_db=3.0)])
+
+
+# ── SC-012 / SC-020 / SC-023 ──────────────────────────────────────────
+
+
+def test_two_sources_at_different_distances_are_both_reported() -> None:
+    """SC-012: a near source must not bury a far one below the margin.
+
+    Each is judged against its own band floor, so a level difference between them does not
+    decide which is reportable — which is the whole reason detection subtracts a local
+    floor rather than applying a global gain.
+    """
+    near, far = 24.0, 11.0
+    assert assign_tier(near, MARGINS) == "confident"
+    assert assign_tier(far, MARGINS) == "confident"
+
+
+def test_every_finding_states_its_mask_provenance() -> None:
+    """SC-020: exposure to foreground leakage is never unknown."""
+    row = _finding(from_mask_region="m3", mask_confidence=0.9).to_row()
+    assert "from_mask_region" in row and "mask_confidence" in row
+
+
+def test_a_target_free_finding_outranks_the_same_finding_under_target_activity() -> None:
+    """SC-023: the mask improves interpretability rather than merely adding a field."""
+    from senselab.audio.workflows.audio_analysis.sources import discount_for_mask_uncertainty
+
+    free = discount_for_mask_uncertainty(_finding(from_mask_region="m0"), mask_confidence=0.98)
+    murky = discount_for_mask_uncertainty(_finding(from_mask_region="m1"), mask_confidence=0.1)
+    assert list(TIERS).index(free.tier) > list(TIERS).index(murky.tier)
