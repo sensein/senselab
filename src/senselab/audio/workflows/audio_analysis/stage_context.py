@@ -37,6 +37,15 @@ if TYPE_CHECKING:  # pragma: no cover — avoids a runtime torch+transformers im
 __all__ = ["STAGE_VERSIONS", "PassPlan", "StageContext", "stage_code_version"]
 
 
+_VARIANT_NAMES: Final[tuple[str, ...]] = ("unmodified", "speech_enhanced", "foreground_suppressed")
+"""Recognized audio variants.
+
+Duplicated from ``level.py`` rather than imported: ``level`` pulls numpy, and this module
+is deliberately importable without it (see the module docstring on the ``DeviceType``
+TYPE_CHECKING guard). Three strings are cheaper than the coupling.
+"""
+
+
 STAGE_VERSIONS: Final[Mapping[str, int]] = MappingProxyType(
     {
         "diarization": 1,
@@ -46,6 +55,10 @@ STAGE_VERSIONS: Final[Mapping[str, int]] = MappingProxyType(
         "asr": 1,
         "alignment": 1,
         "ppgs": 1,
+        "background_mask": 1,
+        "noise_floor": 1,
+        "background_sources": 1,
+        "level_probe": 1,
     }
 )
 """Per-stage cache-invalidation counters, keyed by the task string used in cache keys.
@@ -105,6 +118,20 @@ class StageContext:
             no sidecar files (what the adaptive loop wants).
         audio_source: Absolute source path, recorded in provenance only.
         senselab_ver: Installed senselab version; participates in cache keys.
+        variant: Which audio variant this pass consumes — ``"unmodified"``,
+            ``"speech_enhanced"``, or ``"foreground_suppressed"``. Recorded on every
+            stage outcome so no result is unattributed (FR-012, SC-006).
+        variant_gain_db: Gain applied to that variant, in dB. Recorded for the same
+            reason: the classifiers are amplitude-sensitive, so a result is only
+            interpretable alongside the level it was computed at.
+
+    Note:
+        ``variant`` and ``variant_gain_db`` are deliberately **not** part of the cache
+        key. Cache correctness comes from :attr:`audio_signature`, which must be computed
+        on the *post-gain* waveform — amplifying changes the samples, so the signature
+        changes with them. Adding the variant to the key would be redundant, and computing
+        the signature *pre*-gain would break that guarantee, so keep signature computation
+        downstream of the gain.
     """
 
     pass_label: str
@@ -114,6 +141,17 @@ class StageContext:
     out_dir: Path | None = None
     audio_source: str = ""
     senselab_ver: str = field(default_factory=senselab_version)
+    variant: str = "unmodified"
+    variant_gain_db: float = 0.0
+
+    def __post_init__(self) -> None:
+        """Reject an unknown variant name at construction.
+
+        A typo would propagate into provenance and silently break the joins that
+        ``level.json`` and the disagreements index rely on, so it fails here instead.
+        """
+        if self.variant not in _VARIANT_NAMES:
+            raise ValueError(f"unknown audio variant {self.variant!r}; expected one of {_VARIANT_NAMES}")
 
     @property
     def device_label(self) -> str:
@@ -169,6 +207,8 @@ class StageContext:
             "audio_signature": self.audio_signature,
             "audio_source": self.audio_source,
             "pass": self.pass_label,
+            "variant": self.variant,
+            "variant_gain_db": self.variant_gain_db,
             "device": self.device_label,
             "code_version": stage_code_version(task),
             "senselab_version": self.senselab_ver,

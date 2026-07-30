@@ -44,6 +44,12 @@ def test_stage_versions_are_pinned() -> None:
         "asr": 1,
         "alignment": 1,
         "ppgs": 1,
+        # Scene-quality level work. Each declares its own counter rather than
+        # borrowing another stage's invalidation fate.
+        "background_mask": 1,
+        "noise_floor": 1,
+        "background_sources": 1,
+        "level_probe": 1,
     }
 
 
@@ -120,7 +126,7 @@ def test_provenance_records_the_stage_code_version() -> None:
     """The whole point of STAGE_VERSIONS is that a stale replay is diagnosable."""
     prov = _ctx().provenance_for("asr", "whisper", {"device": "auto"})
     assert prov["code_version"] == "asr@1"
-    assert prov["cache_schema_version"] == 2
+    assert prov["cache_schema_version"] == 3
     assert prov["pass"] == "raw_16k"
     assert prov["device"] == "auto"
 
