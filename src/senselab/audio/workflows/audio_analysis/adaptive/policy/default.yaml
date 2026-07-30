@@ -105,6 +105,23 @@ influence:
   derivation_gate:
     independent: 1.0
     derived: 0.4                   # MUST stay below `independent`
+  # Which sources count as derived, and WHY -- declared rather than hardcoded, because
+  # this is a judgement about pipeline wiring, not an intrinsic property of a model.
+  #
+  # embedding_silhouette is marked derived because it is the *seed* of the cross-model
+  # label harmonisation (clustering.py: pyannote and sortformer labels snap to its
+  # centroids). The same embeddings also drive same-label and change-point validation,
+  # so embedding evidence enters the identity axis three ways; letting it also vote as
+  # a peer counts it a fourth time.
+  #
+  # The counter-argument is real and unresolved: it runs an embedding model on the
+  # audio and clusters the result, which is no less direct an observation than a
+  # segmentation model. On one validation recording it reported 5 speakers where two
+  # "independent" diarizers reported 1, and re-examination suggested IT was closer to
+  # right -- so this gate may suppress correct answers. Revisit against ground truth.
+  source_kinds:
+    embedding_silhouette: derived
+  default_source_kind: independent
   weights:
     identity_to_diarization: 1.0
     diarization_to_per_speaker_presence: 1.0

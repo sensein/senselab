@@ -261,3 +261,74 @@ def test_correspondence_records_the_source_kind() -> None:
     """So a consumer can weight a mapping by whether its source observes independently."""
     doc = SourceLabelCorrespondence("emb", "k3", "S1", "derived").to_json()
     assert doc["source_kind"] == "derived"
+
+
+# ── source-kind classification is a policy decision, not a constant ────
+
+
+def _policy(**influence: object) -> dict:
+    return {"influence": {"source_kinds": {"embedding_silhouette": "derived"}, **influence}}
+
+
+def test_source_kind_is_read_from_policy_not_hardcoded() -> None:
+    """The classification is a judgement about pipeline wiring, so it must be arguable.
+
+    The same clustering component would be independent in a pipeline that did not also use
+    its embeddings to harmonise other sources' labels.
+    """
+    from senselab.audio.workflows.audio_analysis.speaker_identity import source_kind_for
+
+    assert source_kind_for("embedding_silhouette", _policy()) == "derived"
+    assert source_kind_for("embedding_silhouette", {"influence": {"source_kinds": {}}}) == "independent"
+
+
+def test_versioned_source_ids_resolve_to_the_same_kind() -> None:
+    """Sources are emitted as ``embedding_silhouette/<model>``, so the prefix must match."""
+    from senselab.audio.workflows.audio_analysis.speaker_identity import source_kind_for
+
+    assert source_kind_for("embedding_silhouette/speechbrain-ecapa", _policy()) == "derived"
+
+
+def test_undeclared_sources_default_to_independent() -> None:
+    """A new diarizer is an independent observer unless something says otherwise."""
+    from senselab.audio.workflows.audio_analysis.speaker_identity import source_kind_for
+
+    assert source_kind_for("pyannote/speaker-diarization-3.1", _policy()) == "independent"
+
+
+def test_policy_can_reclassify_the_clusterer_as_independent() -> None:
+    """The escape hatch that matters.
+
+    On one validation recording the clusterer reported five speakers where two
+    "independent" diarizers reported one, and re-examination suggested it was the closer
+    answer — so the gate may suppress correct results. An operator must be able to say so
+    without editing code.
+    """
+    from senselab.audio.workflows.audio_analysis.speaker_identity import source_kind_for
+
+    pol = {"influence": {"source_kinds": {"embedding_silhouette": "independent"}}}
+    assert source_kind_for("embedding_silhouette", pol) == "independent"
+
+
+def test_reclassifying_changes_the_posterior() -> None:
+    """The classification is load-bearing, so its effect is asserted rather than assumed."""
+    claims_derived = [
+        SourceCountClaim("pyannote", 1, kind="independent"),
+        SourceCountClaim("embedding_silhouette", 5, kind="derived"),
+    ]
+    claims_independent = [
+        SourceCountClaim("pyannote", 1, kind="independent"),
+        SourceCountClaim("embedding_silhouette", 5, kind="independent"),
+    ]
+    gated = speaker_count_posterior(claims_derived, gates=GATES)
+    equal = speaker_count_posterior(claims_independent, gates=GATES)
+    assert gated.probabilities[5] < equal.probabilities[5]
+    assert equal.probabilities[5] == pytest.approx(0.5), "as peers the two counts tie"
+
+
+def test_unknown_declared_kind_is_rejected() -> None:
+    """A typo in policy must fail loudly rather than silently defaulting."""
+    from senselab.audio.workflows.audio_analysis.speaker_identity import source_kind_for
+
+    with pytest.raises(ValueError, match="unknown source kind"):
+        source_kind_for("x", {"influence": {"source_kinds": {"x": "peer"}}})

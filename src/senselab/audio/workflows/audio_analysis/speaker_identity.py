@@ -37,6 +37,7 @@ __all__ = [
     "SourceLabelCorrespondence",
     "SpeakerCountPosterior",
     "SpeakerHypothesis",
+    "source_kind_for",
     "speaker_count_posterior",
 ]
 
@@ -248,3 +249,39 @@ class SpeakerHypothesis:
             "converged": self.converged,
             "revisions": list(self.revisions),
         }
+
+
+def source_kind_for(source: str, policy: Mapping[str, Any] | None = None) -> SourceKind:
+    """Resolve whether a source is an independent observer or derived (FR-007).
+
+    Read from policy rather than hardcoded, because the classification is a judgement about
+    **pipeline wiring**, not an intrinsic property of a model. The same clustering component
+    would be independent in a pipeline that did not also use its embeddings to harmonise
+    other sources' labels.
+
+    The live example, recorded so the decision stays arguable: ``embedding_silhouette`` is
+    marked derived because it seeds the cross-model label harmonisation — other diarizers'
+    labels snap to its centroids — and the same embeddings drive same-label and change-point
+    validation, so that evidence already enters the identity axis three ways. Against that:
+    it runs an embedding model on the audio and clusters the result, which is a direct
+    observation; and on one validation recording it reported five speakers where two
+    "independent" diarizers reported one, with re-examination suggesting it was the closer
+    answer. Down-weighting it may therefore suppress correct results. The gate is
+    configurable precisely because that tension is unresolved and needs ground truth.
+
+    Args:
+        source: Source identifier. Matched on the prefix before ``/`` so versioned ids like
+            ``embedding_silhouette/<model>`` resolve to the same kind.
+        policy: Adaptive policy; the ``influence.source_kinds`` mapping is consulted.
+
+    Returns:
+        ``"independent"`` or ``"derived"``.
+    """
+    influence = dict((policy or {}).get("influence") or {})
+    declared = dict(influence.get("source_kinds") or {})
+    default: SourceKind = influence.get("default_source_kind", "independent")  # type: ignore[assignment]
+    base = source.split("/", 1)[0]
+    kind = declared.get(source, declared.get(base, default))
+    if kind not in SOURCE_KINDS:
+        raise ValueError(f"policy declares unknown source kind {kind!r} for {source!r}")
+    return kind  # type: ignore[return-value]
