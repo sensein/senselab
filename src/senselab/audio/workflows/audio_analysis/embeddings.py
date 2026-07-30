@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -40,6 +41,16 @@ import torch
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speaker_embeddings import extract_speaker_embeddings_from_audios
 from senselab.utils.data_structures import DeviceType, SpeechBrainModel
+from senselab.utils.tasks import cached_inference as _cached_inference
+
+_EMBEDDING_CACHE_CODE_VERSION = "1"
+"""Bump when a change here would alter the vectors for an unchanged (audio, model, grid).
+
+Part of the ``cache_dir`` key, so bumping it invalidates cached per-window embeddings
+without touching any other task's entries. Deliberately a hand-managed constant rather
+than a source hash: a comment or docstring edit in this module must not throw away
+hours of GPU work.
+"""
 
 
 @dataclass(frozen=True)
@@ -49,6 +60,24 @@ class WindowEmbedding:
     start_s: float
     end_s: float
     vector: np.ndarray
+
+
+def _serialize_windows(entries: list[WindowEmbedding]) -> dict[str, Any]:
+    """JSON-able payload for one model's window list (for the content cache).
+
+    Vectors are float32; ``tolist()`` emits the exact float64 representation of each
+    float32, which round-trips back to the identical float32 — so a cached result
+    equals a freshly computed one bit-for-bit.
+    """
+    return {"windows": [[w.start_s, w.end_s, w.vector.tolist()] for w in entries]}
+
+
+def _deserialize_windows(payload: dict[str, Any]) -> list[WindowEmbedding]:
+    """Rebuild a model's window list from :func:`_serialize_windows` output."""
+    return [
+        WindowEmbedding(start_s=float(start_s), end_s=float(end_s), vector=np.asarray(vec, dtype=np.float32))
+        for start_s, end_s, vec in payload.get("windows", [])
+    ]
 
 
 def _slice_audio(audio: Audio, start_s: float, end_s: float) -> Audio:
@@ -96,6 +125,7 @@ def extract_per_window_embeddings(
     hop_s: float = 0.5,
     device: DeviceType | None = None,
     failures: dict[str, str] | None = None,
+    cache_dir: Path | None = None,
 ) -> dict[str, list[WindowEmbedding]]:
     """Run each embedding model on every fixed window of ``audio``.
 
@@ -109,6 +139,12 @@ def extract_per_window_embeddings(
             ``{model_id → reason}`` for any model that produced an empty result.
             The caller can fold these into ``incomparable_reasons`` so silent
             empty-vote behavior is auditable.
+        cache_dir: Optional content-addressable cache directory, using the shared
+            :mod:`senselab.utils.tasks.cached_inference` store. Each model's window
+            list is cached per ``(audio signature, model, window/hop)``. The key
+            carries no caller identity, so a profile build and an analysis run over
+            the same audio reuse each other's embeddings instead of re-running the
+            GPU models. ``None`` disables both lookup and store.
 
     Returns:
         ``{model_id → [WindowEmbedding, ...]}``. Each list shares the same window
@@ -143,8 +179,27 @@ def extract_per_window_embeddings(
         audio_slices.append(_slice_audio(audio, s, e))
         spans.append((s, e))
 
+    audio_sig: str | None = None
+    if cache_dir is not None:
+        audio_sig = _cached_inference.audio_signature(audio)
+
+    def _key(model_id: str) -> str:
+        return _cached_inference.cache_key(
+            audio_sig=audio_sig or "",
+            task="speaker_embeddings",
+            model_id=model_id,
+            params={"window_s": window_s, "hop_s": hop_s},
+            code_version=_EMBEDDING_CACHE_CODE_VERSION,
+            senselab_ver=_cached_inference.senselab_version(),
+        )
+
     out: dict[str, list[WindowEmbedding]] = {}
     for model_id in models:
+        if cache_dir is not None:
+            hit = _cached_inference.cache_lookup(cache_dir, _key(model_id))
+            if hit is not None:
+                out[model_id] = _deserialize_windows(hit)
+                continue
         try:
             sb_model: SpeechBrainModel = SpeechBrainModel(path_or_uri=model_id, revision="main")
             tensors = extract_speaker_embeddings_from_audios(audios=audio_slices, model=sb_model, device=device)
@@ -153,6 +208,10 @@ def extract_per_window_embeddings(
                 vec = _flatten_to_1d(t)
                 entries.append(WindowEmbedding(start_s=start_s, end_s=end_s, vector=vec))
             out[model_id] = entries
+            # Cache only successful extractions, so a transient model-load failure is
+            # retried on the next run rather than replayed as an empty result.
+            if cache_dir is not None:
+                _cached_inference.cache_store(cache_dir, _key(model_id), _serialize_windows(entries))
         except Exception as exc:  # noqa: BLE001
             # Surface per-model failure to the caller via stderr so the user can
             # tell "model crashed" from "audio too short" — both produce an empty
@@ -230,6 +289,42 @@ def window_index_at(
             best_dist = d
             best_idx = i
     return best_idx
+
+
+def cos_sim(a: Any, b: Any) -> float | None:  # noqa: ANN401 — accepts any array-like / list
+    """Cosine similarity between two 1-D vectors. ``None`` on degenerate input.
+
+    Canonical cosine helper shared across the audio-analysis workflows
+    (clustering, identity axis, speaker-profile comparison) so the
+    empty / length-mismatch / zero-norm contract lives in one place. Accepts
+    numpy arrays or plain ``list[float]`` (coerced via ``np.asarray``).
+    Returns ``None`` when either vector is empty, the lengths differ, or either
+    has zero norm.
+    """
+    av = np.asarray(a, dtype=np.float64).reshape(-1)
+    bv = np.asarray(b, dtype=np.float64).reshape(-1)
+    if av.size == 0 or bv.size == 0 or av.size != bv.size:
+        return None
+    na = float(np.linalg.norm(av))
+    nb = float(np.linalg.norm(bv))
+    if na == 0.0 or nb == 0.0:
+        return None
+    return float(np.dot(av, bv) / (na * nb))
+
+
+def cos_dist(a: Any, b: Any, *, clip: bool = False) -> float | None:  # noqa: ANN401
+    """Cosine distance ``1 - cos_sim``. ``None`` on degenerate input.
+
+    ``clip=True`` bounds the result to ``[0, 1]`` (matching the identity axis,
+    which treats anti-aligned vectors as max distance); ``clip=False`` returns
+    the raw ``1 - cos`` in ``[0, 2]`` (matching the profile comparator, which
+    feeds the value to ``calibrate_cosine_uncertainty``).
+    """
+    sim = cos_sim(a, b)
+    if sim is None:
+        return None
+    dist = 1.0 - sim
+    return max(0.0, min(1.0, dist)) if clip else dist
 
 
 def cluster_pass_speakers(
