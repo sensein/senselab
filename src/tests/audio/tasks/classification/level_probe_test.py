@@ -12,6 +12,8 @@ should fail CI rather than silently altering background categorization (FR-017b)
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -279,23 +281,62 @@ def test_mechanism_source_is_required_for_a_published_verdict() -> None:
 # classifier starts reporting `self_normalizing`, the probe is wrong or the model
 # changed — both warrant investigation rather than a quiet threshold edit.
 
-EXPECTED_VERDICTS = {
-    "ast": "level_sensitive",
-    "yamnet": "level_sensitive",
-}
+BASELINE_PATH = Path(__file__).parent / "data" / "level_verdicts_baseline.json"
 
 
-def test_recorded_verdicts_are_both_level_sensitive() -> None:
-    """Neither classifier self-normalizes. The expected asymmetry did not hold.
+def _baseline() -> dict[str, Any]:
+    return json.loads(BASELINE_PATH.read_text())
+
+
+def test_baseline_exists_and_covers_both_classifiers() -> None:
+    """The guard is only as good as the recording it defends."""
+    classifiers = _baseline()["classifiers"]
+    assert len(classifiers) == 2
+    assert any("ast" in name for name in classifiers)
+    assert "yamnet" in classifiers
+
+
+def test_both_classifiers_measured_level_sensitive() -> None:
+    """Neither self-normalizes. The expected asymmetry did not hold.
 
     Both were expected to differ — the long-window model was thought unlikely to
-    self-amplify and the short-window one a plausible candidate. Neither does, and the
-    long-window model is the more gain-brittle of the two by label stability.
+    self-amplify and the short-window one a plausible candidate. Measurement says both are
+    level-sensitive, and they fail *differently*: the short-window model collapses to a
+    silence verdict at reduced gain, while the long-window one holds its top label further
+    down but churns its whole top-k list at every non-unity gain.
     """
-    assert set(EXPECTED_VERDICTS.values()) == {"level_sensitive"}
+    verdicts = {name: c["verdict"] for name, c in _baseline()["classifiers"].items()}
+    assert set(verdicts.values()) == {"level_sensitive"}, verdicts
 
 
-@pytest.mark.parametrize("classifier", sorted(EXPECTED_VERDICTS))
-def test_expected_verdict_is_declared_for_each_classifier(classifier: str) -> None:
-    """Both classifiers in the scene stage carry a pinned expectation."""
-    assert EXPECTED_VERDICTS[classifier] in ("level_sensitive", "self_normalizing")
+def test_unity_gain_is_perfectly_stable_against_itself() -> None:
+    """Sanity check on the measurement, not on the model."""
+    for name, c in _baseline()["classifiers"].items():
+        assert c["unity_stability"] == pytest.approx(1.0), name
+
+
+def test_short_window_classifier_has_a_collapse_floor() -> None:
+    """Its floor is the most reliable level diagnostic either classifier exposes.
+
+    Monotone and source-independent, so it doubles as a tripwire (FR-042).
+    """
+    yamnet = _baseline()["classifiers"]["yamnet"]
+    assert yamnet["low_level_floor_db"] is not None
+    assert yamnet["has_floor_signature"] is True
+
+
+def test_long_window_classifier_moves_substantially_with_gain() -> None:
+    """Even without a collapse floor, its scores are not level-comparable (FR-020e)."""
+    ast = next(c for name, c in _baseline()["classifiers"].items() if "ast" in name)
+    assert ast["max_delta_at_min_gain"] > 0.3
+
+
+def test_baseline_records_the_score_function_it_was_measured_under() -> None:
+    """A floor response measured under one output transform does not describe another.
+
+    The transform changed with the FR-017c fix, and the long-window model's silence
+    response changed with it — so a baseline without this field would be uninterpretable.
+    """
+    from senselab.audio.workflows.audio_analysis.sound_sources import AUDIOSET_SCORE_FUNCTION
+
+    assert _baseline()["score_function"] == AUDIOSET_SCORE_FUNCTION
