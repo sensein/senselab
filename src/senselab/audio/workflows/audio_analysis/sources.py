@@ -35,6 +35,9 @@ from typing import Any, Literal, Mapping, Sequence
 import numpy as np
 
 __all__ = [
+    "SPEECH_MODULATION_BAND_HZ",
+    "resolve_extent",
+    "modulation_depth",
     "TIERS",
     "ExcisedSegment",
     "plan_excision",
@@ -410,3 +413,114 @@ def assert_comparable_levels(findings: Sequence[SourceFinding]) -> None:
             f"refusing to compare findings computed at different gains {sorted(gains)}: classifier scores "
             "are not level-comparable. Rank by above_floor_db, which is referenced to each band's own floor."
         )
+
+
+# ── presence vs extent (T061, FR-021k, research D12) ──────────────────
+
+
+def resolve_extent(
+    frames: Sequence[tuple[float, float, float]],
+    *,
+    presence_margin_db: float,
+    extent_margin_db: float,
+) -> tuple[float, float] | None:
+    """Decide whether a source is present, then where it starts and stops — separately.
+
+    Frame-level thresholding entangles detection confidence with temporal extent: raise the
+    threshold and a real event's edges erode, lower it and neighbouring noise joins on. No
+    single threshold gets both right, so the strict margin decides *presence* and a looser
+    one grows the boundaries outward from the frames that cleared it.
+
+    Boundaries grow only through contiguous frames that clear ``extent_margin_db``. Two
+    events of the same category separated by a genuine gap stay two events; bridging them
+    would report one long event that never happened.
+
+    Args:
+        frames: ``(start, end, above_floor_db)`` in time order.
+        presence_margin_db: Margin a frame must clear for the source to count as present.
+        extent_margin_db: Looser margin for boundary growth.
+
+    Returns:
+        ``(start, end)``, or ``None`` when no frame establishes presence. Extent without
+        presence would report boundaries for something never claimed to be there.
+    """
+    rows = list(frames)
+    peak = None
+    best = -math.inf
+    for i, (_s, _e, margin) in enumerate(rows):
+        if margin >= float(presence_margin_db) and margin > best:
+            peak, best = i, margin
+    if peak is None:
+        return None
+
+    lo = hi = peak
+    while lo - 1 >= 0 and rows[lo - 1][2] >= float(extent_margin_db):
+        lo -= 1
+    while hi + 1 < len(rows) and rows[hi + 1][2] >= float(extent_margin_db):
+        hi += 1
+    return float(rows[lo][0]), float(rows[hi][1])
+
+
+# ── modulation depth (T063, research D11) ─────────────────────────────
+
+SPEECH_MODULATION_BAND_HZ = (3.0, 6.0)
+"""Syllable-rate band. Speech suppression operates here, so a suppressed variant's residual
+can carry *inherited* talker modulation rather than a background event's own."""
+
+
+def modulation_depth(
+    waveform: np.ndarray,
+    sampling_rate: int,
+    *,
+    discount_speech_band: bool = False,
+    max_rate_hz: float = 32.0,
+) -> float | None:
+    """Depth of amplitude modulation in the envelope, in ``[0, 1]``.
+
+    Orthogonal to level, which is what makes it useful here: stationary noise is
+    near-unmodulated at every rate whatever its loudness, so this separates a real event from
+    a stretch of noise floor at the same level — the discrimination that a margin alone
+    cannot make.
+
+    Args:
+        waveform: Mono samples.
+        sampling_rate: Sample rate in Hz.
+        discount_speech_band: Suppress the 3-6 Hz syllable band before measuring. Set for
+            foreground-suppressed variants: modulation at talker rate there is as likely to
+            be the suppressor's own residue as a background source's, and counting it would
+            credit an artifact as a discovery.
+        max_rate_hz: Highest modulation rate considered.
+
+    Returns:
+        The depth, or ``None`` when the signal carries no energy — zero would read as
+        "measured, and stationary" when nothing was measured at all.
+    """
+    arr = np.asarray(waveform, dtype=np.float64).squeeze()
+    if arr.size < 8 or not np.any(arr):
+        return None
+
+    # Envelope via rectify + decimate to an envelope rate that resolves max_rate_hz.
+    env_rate = max(4.0 * float(max_rate_hz), 64.0)
+    step = max(1, int(round(float(sampling_rate) / env_rate)))
+    envelope = np.abs(arr)
+    trimmed = envelope[: (envelope.size // step) * step].reshape(-1, step).mean(axis=1)
+    if trimmed.size < 8:
+        return None
+    mean = float(np.mean(trimmed))
+    if mean <= 0.0:
+        return None
+
+    centered = trimmed - mean
+    spectrum = np.abs(np.fft.rfft(centered * np.hanning(centered.size)))
+    rates = np.fft.rfftfreq(centered.size, d=step / float(sampling_rate))
+    band = (rates > 0.5) & (rates <= float(max_rate_hz))
+    if discount_speech_band:
+        lo, hi = SPEECH_MODULATION_BAND_HZ
+        band &= ~((rates >= lo) & (rates <= hi))
+    if not np.any(band):
+        return None
+
+    # Peak modulation amplitude relative to the carrier's mean level. The window halves
+    # coherent amplitude and the one-sided transform halves it again, so scale by 4/N.
+    depth = 4.0 * float(np.max(spectrum[band])) / (centered.size * mean)
+    return float(min(1.0, max(0.0, depth)))

@@ -460,3 +460,102 @@ def test_a_target_free_finding_outranks_the_same_finding_under_target_activity()
     free = discount_for_mask_uncertainty(_finding(from_mask_region="m0"), mask_confidence=0.98)
     murky = discount_for_mask_uncertainty(_finding(from_mask_region="m1"), mask_confidence=0.1)
     assert list(TIERS).index(free.tier) > list(TIERS).index(murky.tier)
+
+
+# ── presence vs extent, and modulation depth (T061 / T063) ────────────
+
+
+def test_a_confidently_present_source_still_gets_its_own_boundaries() -> None:
+    """FR-021k: one threshold cannot get both presence and extent right.
+
+    Frame-level thresholding entangles detection confidence with temporal extent — raise the
+    threshold and a real event's edges erode; lower it and neighbouring noise joins on. So
+    the margin gate decides *whether* the source is there and a separate, looser rule decides
+    *where* it starts and stops.
+    """
+    from senselab.audio.workflows.audio_analysis.sources import resolve_extent
+
+    frames = [(0.0, 0.5, 4.0), (0.5, 1.0, 12.0), (1.0, 1.5, 5.0), (1.5, 2.0, 0.5)]
+    extent = resolve_extent(frames, presence_margin_db=10.0, extent_margin_db=3.0)
+    assert extent == (0.0, 1.5)
+
+
+def test_a_source_that_never_clears_the_presence_gate_has_no_extent() -> None:
+    """Extent is only meaningful once presence is established; otherwise a run would report
+    boundaries for something it never claimed was there."""
+    from senselab.audio.workflows.audio_analysis.sources import resolve_extent
+
+    frames = [(0.0, 0.5, 4.0), (0.5, 1.0, 5.0)]
+    assert resolve_extent(frames, presence_margin_db=10.0, extent_margin_db=3.0) is None
+
+
+def test_extent_does_not_bridge_across_a_genuine_gap() -> None:
+    """Two events of the same category are not one long event."""
+    from senselab.audio.workflows.audio_analysis.sources import resolve_extent
+
+    frames = [(0.0, 0.5, 12.0), (0.5, 1.0, 0.0), (1.0, 1.5, 0.0), (1.5, 2.0, 12.0)]
+    assert resolve_extent(frames, presence_margin_db=10.0, extent_margin_db=3.0) == (0.0, 0.5)
+
+
+def test_a_steady_hum_has_almost_no_modulation_depth() -> None:
+    """Stationary noise is near-unmodulated at every rate, which is what separates a real
+    event from a stretch of noise floor at the same level."""
+    import numpy as np
+
+    from senselab.audio.workflows.audio_analysis.sources import modulation_depth
+
+    sr = 1000
+    t = np.arange(0, 2.0, 1 / sr)
+    steady = np.sin(2 * np.pi * 200 * t)
+    assert modulation_depth(steady, sr) < 0.15
+
+
+def test_an_amplitude_modulated_source_registers_its_modulation() -> None:
+    import numpy as np
+
+    from senselab.audio.workflows.audio_analysis.sources import modulation_depth
+
+    sr = 1000
+    t = np.arange(0, 2.0, 1 / sr)
+    modulated = (1.0 + 0.9 * np.sin(2 * np.pi * 8.0 * t)) * np.sin(2 * np.pi * 200 * t)
+    assert modulation_depth(modulated, sr) > 0.4
+
+
+def test_speech_rate_modulation_is_discounted_in_a_suppressed_variant() -> None:
+    """Research D11: suppression operates on the 3-6 Hz modulation band, so the residual can
+    carry *inherited* talker modulation. Counting it as evidence of a background event would
+    credit the suppressor's own artifact as a discovery.
+    """
+    import numpy as np
+
+    from senselab.audio.workflows.audio_analysis.sources import modulation_depth
+
+    sr = 1000
+    t = np.arange(0, 2.0, 1 / sr)
+    speech_rate = (1.0 + 0.9 * np.sin(2 * np.pi * 4.5 * t)) * np.sin(2 * np.pi * 200 * t)
+    full = modulation_depth(speech_rate, sr)
+    discounted = modulation_depth(speech_rate, sr, discount_speech_band=True)
+    assert discounted < full
+
+
+def test_modulation_outside_the_speech_band_survives_the_discount() -> None:
+    """The discount must be a band, not a blanket: a 12 Hz flutter is not talker rate."""
+    import numpy as np
+
+    from senselab.audio.workflows.audio_analysis.sources import modulation_depth
+
+    sr = 1000
+    t = np.arange(0, 2.0, 1 / sr)
+    flutter = (1.0 + 0.9 * np.sin(2 * np.pi * 12.0 * t)) * np.sin(2 * np.pi * 200 * t)
+    assert modulation_depth(flutter, sr, discount_speech_band=True) == pytest.approx(
+        modulation_depth(flutter, sr), rel=0.15
+    )
+
+
+def test_modulation_depth_of_nothing_is_not_a_number_pretending_to_be_zero() -> None:
+    """Zero would read as "measured, and stationary"; silence was not measured at all."""
+    import numpy as np
+
+    from senselab.audio.workflows.audio_analysis.sources import modulation_depth
+
+    assert modulation_depth(np.zeros(1000), 1000) is None
