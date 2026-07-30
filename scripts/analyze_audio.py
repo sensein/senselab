@@ -1207,6 +1207,10 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
 
+    # Defined before the guard: the per-speaker and adaptive blocks below both read it,
+    # and with --skip comparisons there is simply nothing harvested to read.
+    harvests_by_pass: dict[str, Any] = {}
+
     if "comparisons" not in args.skip:
         from senselab.audio.workflows.audio_analysis import (
             BucketGrid,
@@ -1269,7 +1273,6 @@ def main(argv: list[str] | None = None) -> int:
         speaker_embedding_models = list(args.embeddings_models)
         per_window_embeddings_by_pass: dict[str, dict[str, Any]] = {}
         try:
-            harvests_by_pass: dict[str, Any] = {}
             axis_results, incomparable_reasons, per_window_embeddings_by_pass = compute_uncertainty_axes(
                 harvests_out=harvests_by_pass,
                 passes=passes_for_compute,
@@ -1522,15 +1525,33 @@ def main(argv: list[str] | None = None) -> int:
         if args.per_speaker_identity:
             try:
                 from senselab.audio.workflows.audio_analysis.adaptive.fusion import write_speaker_outputs
-                from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
+                from senselab.audio.workflows.audio_analysis.speaker_identity import (
+                    build_presence_tracks,
+                    build_speaker_identity,
+                )
 
-                posterior, hypotheses, correspondence = build_speaker_identity(summaries["passes"])
+                # Per-speaker structure reads the identity harvest of the unmodified pass.
+                # Enhancement is a perturbation used to test how stable each diarizer's
+                # answer is; where a speaker was active is a fact about the recording, so
+                # the tracks come from the audio as recorded.
+                identity_harvest = next(
+                    (
+                        getattr(harvests_by_pass.get(label), "identity_votes", None)
+                        for label in ("raw_16k", *sorted(harvests_by_pass))
+                        if getattr(harvests_by_pass.get(label), "identity_votes", None)
+                    ),
+                    None,
+                )
+                posterior, hypotheses, correspondence = build_speaker_identity(
+                    summaries["passes"], identity_votes=identity_harvest
+                )
+                tracks = build_presence_tracks(identity_harvest or [])
                 write_speaker_outputs(
                     run_dir,
                     posterior=posterior,
                     hypotheses=hypotheses,
                     correspondence=correspondence,
-                    tracks=[],
+                    tracks=tracks,
                     profile_version=str(args.detection_margin_profile or "detection-margin/default"),
                     influence_profile=str(args.influence_profile or "influence/default"),
                 )
@@ -1539,6 +1560,7 @@ def main(argv: list[str] | None = None) -> int:
                     f"  [speaker identity] count posterior "
                     f"{ {k: round(v, 2) for k, v in posterior.to_json()['probabilities'].items()} }"
                     f"{'  MULTI-MODAL' if posterior.is_multimodal else ''}"
+                    f"  |  {len(hypotheses)} speaker(s), {len(tracks)} presence row(s)"
                 )
             except Exception as exc:  # noqa: BLE001 — never fail a run over a derived summary
                 logger.warning("per-speaker identity could not be derived: %s", exc)
