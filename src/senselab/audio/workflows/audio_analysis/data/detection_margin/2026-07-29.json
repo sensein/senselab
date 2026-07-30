@@ -62,6 +62,9 @@
     "negligible_fraction": 0.05,
     "min_region_s": 1.0,
     "max_padding_fraction": 0.5,
+    "target_active_confidence": 0.6,
+    "target_free_confidence": 0.2,
+    "max_free_uncertainty": 0.5,
     "target_event_types_by_task": {
       "speech": [
         "speech",

@@ -55,14 +55,24 @@ def build_adaptive_timeline(out_dir: Path, *, gt_path: Path | None = None, title
 
         gt = load_ls_ground_truth(gt_path)
 
-    fig, axes = plt.subplots(6, 1, figsize=(14, 13), sharex=True, height_ratios=[1.3, 0.8, 1.2, 1.2, 1.4, 1.0])
-    ax_spec, ax_gt, ax_p, ax_i, ax_u, ax_w = axes
+    fig, axes = plt.subplots(
+        7, 1, figsize=(14, 14.5), sharex=True, height_ratios=[1.3, 0.8, 0.6, 1.2, 1.2, 1.4, 1.0]
+    )
+    ax_spec, ax_gt, ax_mask, ax_p, ax_i, ax_u, ax_w = axes
 
     # ── row 0: spectrogram ──────────────────────────────────────────────
     # The acoustic evidence every row below is derived from. Put first so a
     # reviewer can see *why* a span is uncertain (noise, silence, overlap)
     # rather than only that it is.
     _draw_spectrogram(ax_spec, out_dir, duration)
+
+    # ── row 2: background mask ──────────────────────────────────────────
+    # Sits directly under the ground truth and above the axes, because it says
+    # *where the background findings below can be trusted at all*: a target-free
+    # span has no foreground to leak, so a claim there does not depend on
+    # suppression depth. Reading an uncertainty row without knowing which spans
+    # were target-free invites treating a leakage artifact as a finding.
+    _draw_background_mask(ax_mask, out_dir, duration)
 
     # ── row 1: ground truth ─────────────────────────────────────────────
     ax_gt.set_ylabel("ground\ntruth", rotation=0, ha="right", va="center")
@@ -211,6 +221,78 @@ def build_adaptive_timeline(out_dir: Path, *, gt_path: Path | None = None, title
     fig.savefig(dest, dpi=150)
     plt.close(fig)
     return dest
+
+
+_MASK_STATE_STYLE = {
+    # Green reads as "usable" and grey as "unknown" without needing the legend;
+    # target-active is deliberately muted so the eye lands on the usable spans.
+    "target_free": ("#2e7d32", "target-free"),
+    "indeterminate": ("#9e9e9e", "cannot tell"),
+    "target_active": ("#c8c8c8", "target active"),
+}
+
+
+def _draw_background_mask(ax: Any, out_dir: Path, duration: float) -> None:  # noqa: ANN401 — matplotlib Axes
+    """Draw the background mask as a three-state strip, with uncertainty as alpha.
+
+    Absent mask parquet leaves an explicitly labelled empty row rather than a silently
+    blank one — "no mask was produced" and "the mask was empty" are different facts, and a
+    blank strip would conflate them.
+    """
+    from matplotlib.patches import Rectangle
+
+    from senselab.utils.data_structures.logging import logger
+
+    ax.set_ylabel("background\nmask", rotation=0, ha="right", va="center", fontsize=9)
+    ax.set_ylim(0, 1)
+    ax.set_yticks([])
+    ax.set_xlim(0, duration)
+
+    rows: list[dict[str, Any]] = []
+    for candidate in sorted(out_dir.glob("*/background_mask.parquet")):
+        try:
+            import pandas as pd
+
+            rows = pd.read_parquet(candidate).to_dict("records")
+            break
+        except Exception as exc:  # noqa: BLE001 — a plot must not fail a run
+            logger.debug("background mask unreadable at %s: %s", candidate, exc)
+
+    if not rows:
+        ax.text(
+            0.5, 0.5, "no background mask", transform=ax.transAxes,
+            ha="center", va="center", fontsize=8, color="#888888",
+        )
+        return
+
+    seen: set[str] = set()
+    for row in rows:
+        state = str(row.get("state", "indeterminate"))
+        color, label = _MASK_STATE_STYLE.get(state, _MASK_STATE_STYLE["indeterminate"])
+        start, end = float(row["start"]), float(row["end"])
+        # Confident spans read solid; uncertain ones fade. A washed-out green is a
+        # region whose "usable" claim is itself shaky.
+        unc = float(row.get("uncertainty") or 0.0)
+        alpha = 0.85 if state == "target_active" else max(0.15, 0.85 * (1.0 - unc))
+        ax.add_patch(
+            Rectangle(
+                (start, 0.2), max(end - start, 1e-6), 0.6,
+                facecolor=color, edgecolor="none", alpha=alpha,
+                label=label if label not in seen else None,
+            )
+        )
+        seen.add(label)
+        if float(row.get("guard_trimmed_s") or 0.0) > 0.0:
+            # Hatch what the guard interval removed, so a shrunken mask is visibly
+            # the guard's doing rather than an absence of quiet audio.
+            ax.add_patch(
+                Rectangle(
+                    (start, 0.2), max(end - start, 1e-6), 0.6,
+                    facecolor="none", edgecolor="#555555", hatch="///", linewidth=0.0, alpha=0.5,
+                )
+            )
+    if seen:
+        ax.legend(loc="upper right", fontsize=6, ncol=3, framealpha=0.6)
 
 
 def _draw_spectrogram(ax: Any, out_dir: Path, duration: float) -> None:  # noqa: ANN401

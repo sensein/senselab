@@ -199,6 +199,12 @@ DEFAULT_DETECTION_MARGIN: dict[str, Any] = {
         "negligible_fraction": 0.05,
         "min_region_s": 1.0,
         "max_padding_fraction": 0.50,
+        # State thresholds. `target_free` needs BOTH low target confidence and low
+        # uncertainty: "probably nothing there, but I cannot tell" is not a region a
+        # background claim can rest on.
+        "target_active_confidence": 0.60,
+        "target_free_confidence": 0.20,
+        "max_free_uncertainty": 0.50,
         "target_event_types_by_task": {
             "speech": ["speech", "breath", "mouth_noise"],
             "breath": ["breath"],
