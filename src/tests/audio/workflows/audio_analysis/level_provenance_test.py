@@ -269,3 +269,71 @@ def test_stage_versions_declare_the_new_stages() -> None:
     for stage in ("background_mask", "noise_floor", "background_sources", "level_probe"):
         assert stage in STAGE_VERSIONS, f"{stage} missing from STAGE_VERSIONS"
         assert stage_code_version(stage).startswith(f"{stage}@")
+
+
+# ── peak-limited gain (FR-019, found on real audio) ───────────────────
+
+
+def test_high_crest_factor_gain_is_limited_by_true_peak() -> None:
+    """A quiet-median recording with peaks at full scale cannot reach a loudness target.
+
+    Found on a real 14 s recording: integrated -30.5 LUFS with true peak already at
+    -0.31 dBTP. The +7.5 dB needed to reach -23 LUFS passes the gain cap but would drive
+    the peak to +7.2 dBTP. Loudness alone is not a sufficient gain policy.
+    """
+    from senselab.audio.workflows.audio_analysis.level import peak_limited_gain_db
+
+    # transient at full scale over a quiet bed — the crest-factor shape
+    wav = _noise(seconds=4.0, amp=0.004)
+    wav[1000:1050] = 0.999
+    gain, binding = peak_limited_gain_db(wav, SR, target_lufs=-23.0, true_peak_ceiling_dbtp=-1.0, gain_cap_db=10.0)
+    assert binding == "true_peak"
+    assert gain < 0.0, "a peak already at full scale leaves no headroom to add"
+
+
+def test_gain_cap_binds_when_headroom_is_ample() -> None:
+    """Very quiet audio with clean headroom is limited by policy, not by peak."""
+    from senselab.audio.workflows.audio_analysis.level import peak_limited_gain_db
+
+    # amp chosen to stay above BS.1770's -70 LUFS absolute gate: below it loudness is
+    # unmeasurable and a different branch applies (see the test below).
+    gain, binding = peak_limited_gain_db(
+        _noise(seconds=4.0, amp=0.001), SR, target_lufs=-23.0, true_peak_ceiling_dbtp=-1.0, gain_cap_db=10.0
+    )
+    assert binding == "gain_cap"
+    assert gain == pytest.approx(10.0)
+
+
+def test_unmeasurable_loudness_is_reported_as_such() -> None:
+    """Below BS.1770's absolute gate there is no target to normalize toward.
+
+    Reporting "target" would claim the material was already at the target when nothing
+    could be measured, making an unnormalized variant look like a normalized one.
+    """
+    from senselab.audio.workflows.audio_analysis.level import peak_limited_gain_db
+
+    _gain, binding = peak_limited_gain_db(
+        _noise(seconds=4.0, amp=1e-6), SR, target_lufs=-23.0, true_peak_ceiling_dbtp=-1.0, gain_cap_db=10.0
+    )
+    assert binding == "unmeasurable"
+
+
+def test_target_binds_for_ordinary_material() -> None:
+    """The common case: the loudness target is reachable within both other limits."""
+    from senselab.audio.workflows.audio_analysis.level import peak_limited_gain_db
+
+    gain, binding = peak_limited_gain_db(
+        _noise(seconds=4.0, amp=0.05), SR, target_lufs=-23.0, true_peak_ceiling_dbtp=-1.0, gain_cap_db=20.0
+    )
+    assert binding == "target"
+
+
+def test_applying_the_limited_gain_never_exceeds_the_ceiling() -> None:
+    """The property that matters: no variant reaches a classifier clipped."""
+    from senselab.audio.workflows.audio_analysis.level import apply_gain_db, peak_limited_gain_db
+
+    for amp in (1e-4, 0.004, 0.05, 0.5):
+        wav = _noise(seconds=3.0, amp=amp)
+        wav[500:520] = min(0.999, amp * 200)
+        gain, _ = peak_limited_gain_db(wav, SR, target_lufs=-23.0, true_peak_ceiling_dbtp=-1.0, gain_cap_db=10.0)
+        assert true_peak_dbtp(apply_gain_db(wav, gain), SR) <= -1.0 + 1e-6, f"ceiling breached at amp={amp}"
