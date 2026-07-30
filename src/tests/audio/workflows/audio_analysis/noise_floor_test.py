@@ -270,3 +270,179 @@ def test_margin_widens_the_recorder_verdict() -> None:
     """The margin is what decides how close counts as close."""
     assert binding_floor(band_floor_db=-70.0, recorder_floor_db=-78.0, margin_db=3.0) == "perceptual"
     assert binding_floor(band_floor_db=-70.0, recorder_floor_db=-78.0, margin_db=10.0) == "recorder"
+
+
+# ── stationary sources present throughout (T068, FR-021i) ──────────────
+#
+# The case the per-band floor actively breaks on. A source in ~100% of frames *is* the
+# tenth percentile of its own band, so it is absorbed into the floor and its excess over
+# that floor reads ~0 dB. Air conditioning, ventilation, mains hum, a music bed running
+# under the whole recording -- and those are among the sources a background characterizer
+# most wants to name, so failing silently on them is not acceptable.
+
+
+def test_a_source_running_throughout_reads_below_its_own_floor() -> None:
+    """States the failure plainly, and it is worse than "invisible".
+
+    At 100% occupancy the band is dominated by a near-constant level rather than by
+    exponentially distributed noise. The quantile lands on the source, and then the bias
+    correction — which is calibrated for noise, where a low quantile genuinely sits below
+    the mean — adds its full offset on top. So the floor ends up *above* the source: excess
+    goes negative and a real steady source reads as sub-floor, not merely as zero-excess.
+
+    This is why the stationary pass compares against neighbouring bands instead.
+    """
+    frames = _noise_frames(2000, -60.0) + 10.0 ** (-30.0 / 10.0)  # 100% occupancy
+    floor_db, _ = estimate_band_floor_db(frames, quantile=0.10)
+    mean_db = 10.0 * math.log10(float(frames.mean()))
+    assert floor_db > mean_db, "expected the floor to overshoot a near-constant source"
+    assert floor_db - mean_db == pytest.approx(quantile_bias_correction_db(0.10), abs=0.5)
+    assert band_excess_db(float(frames.mean()), floor_db=floor_db) < 0.0
+
+
+def test_prominence_finds_a_narrowband_source_the_same_band_floor_cannot() -> None:
+    """Comparing against neighbours instead of against the band's own history.
+
+    A steady tone is prominent relative to adjacent third-octave bands however many frames
+    it occupies, which is exactly the property a same-band comparison lacks.
+    """
+    from senselab.audio.workflows.audio_analysis.noise_floor import prominence_ratio_db
+
+    levels = [-60.0, -60.0, -45.0, -60.0, -60.0]  # 15 dB bump in band 2
+    assert prominence_ratio_db(levels, 2) == pytest.approx(15.0, abs=0.1)
+
+
+def test_a_flat_floor_has_no_prominence() -> None:
+    """A genuinely flat noise floor contains no stationary source to report."""
+    from senselab.audio.workflows.audio_analysis.noise_floor import prominence_ratio_db
+
+    assert prominence_ratio_db([-60.0] * 5, 2) == pytest.approx(0.0, abs=0.1)
+
+
+def test_prominence_needs_two_neighbours() -> None:
+    """Edge bands have no two-sided reference, so no prominence is claimed for them."""
+    from senselab.audio.workflows.audio_analysis.noise_floor import prominence_ratio_db
+
+    assert prominence_ratio_db([-60.0, -45.0, -60.0], 0) is None
+    assert prominence_ratio_db([-60.0, -45.0, -60.0], 2) is None
+
+
+def test_neighbour_reference_is_computed_in_the_power_domain() -> None:
+    """Averaging neighbours in dB would overstate prominence beside one loud neighbour."""
+    from senselab.audio.workflows.audio_analysis.noise_floor import prominence_ratio_db
+
+    # neighbours 20 dB apart: the power mean sits near the louder one, the dB mean midway
+    value = prominence_ratio_db([-40.0, -30.0, -60.0], 1)
+    assert value is not None
+    assert value < -30.0 - (-50.0), "a dB-domain average would have reported more prominence"
+
+
+def test_stationary_detection_reports_a_hum_like_band() -> None:
+    """End-to-end: a prominent band is reported with its prominence and threshold."""
+    from senselab.audio.workflows.audio_analysis.noise_floor import detect_stationary_sources
+
+    rows = [
+        NoiseFloorEstimate(
+            band_hz=(lo, lo * 1.26),
+            floor_db=level,
+            quantile=0.10,
+            bias_correction_db=9.77,
+            window_s=20.0,
+            iterations=1,
+            target_activity="all",
+            frames=100,
+        )
+        for lo, level in ((100.0, -60.0), (126.0, -60.0), (159.0, -40.0), (200.0, -60.0), (252.0, -60.0))
+    ]
+    found = detect_stationary_sources(rows)
+    assert len(found) == 1
+    assert found[0]["band_low_hz"] == pytest.approx(159.0)
+    assert found[0]["prominence_db"] > 9.0
+    assert found[0]["stationary_pass"] is True
+
+
+def test_stationary_detection_reports_nothing_on_a_flat_floor() -> None:
+    """No fabrication: a flat floor yields no stationary source."""
+    from senselab.audio.workflows.audio_analysis.noise_floor import detect_stationary_sources
+
+    rows = [
+        NoiseFloorEstimate(
+            band_hz=(lo, lo * 1.26),
+            floor_db=-60.0,
+            quantile=0.10,
+            bias_correction_db=9.77,
+            window_s=20.0,
+            iterations=1,
+            target_activity="all",
+            frames=100,
+        )
+        for lo in (100.0, 126.0, 159.0, 200.0, 252.0)
+    ]
+    assert detect_stationary_sources(rows) == []
+
+
+def test_stationary_threshold_matches_the_published_tone_criterion() -> None:
+    """9 dB is ECMA-74 / ISO 7779's prominent-discrete-tone figure, not a fitted value."""
+    from senselab.audio.workflows.audio_analysis.calibration import DEFAULT_DETECTION_MARGIN
+
+    assert DEFAULT_DETECTION_MARGIN["guards"]["prominence_ratio_db"] == pytest.approx(9.0)
+
+
+def test_recorder_floor_proxy_is_the_quietest_band() -> None:
+    """A lower bound on the equipment floor, not a measurement of it.
+
+    If the room contributes across the whole spectrum -- which is what ventilation does --
+    the quietest band is still room plus microphone, so this over-estimates how quiet the
+    equipment is. It exists so ``binding_floor`` has something to work with absent an
+    operator-supplied value.
+    """
+    from senselab.audio.workflows.audio_analysis.noise_floor import estimate_recorder_floor_db
+
+    rows = [
+        NoiseFloorEstimate(
+            band_hz=(lo, lo * 1.26),
+            floor_db=level,
+            quantile=0.10,
+            bias_correction_db=9.77,
+            window_s=20.0,
+            iterations=1,
+            target_activity="all",
+            frames=100,
+        )
+        for lo, level in ((100.0, -20.0), (200.0, -35.0), (400.0, -53.0), (800.0, -48.0))
+    ]
+    assert estimate_recorder_floor_db(rows) == pytest.approx(-53.0)
+
+
+def test_recorder_floor_proxy_is_none_without_estimates() -> None:
+    """No bands, no proxy — not a fabricated default."""
+    from senselab.audio.workflows.audio_analysis.noise_floor import estimate_recorder_floor_db
+
+    assert estimate_recorder_floor_db([]) is None
+
+
+def test_broadband_stationary_source_is_not_detected_by_prominence() -> None:
+    """The documented limitation, asserted so nobody assumes coverage it does not have.
+
+    A broadband stationary source — ventilation hiss, room rumble, a dense music bed —
+    raises every band together, so prominence sees nothing: all the neighbours are raised
+    too. Separating it from the microphone's own floor needs a reference the recording does
+    not contain.
+    """
+    from senselab.audio.workflows.audio_analysis.noise_floor import detect_stationary_sources
+
+    # every band lifted 20 dB: a broadband source, invisible to a neighbour comparison
+    rows = [
+        NoiseFloorEstimate(
+            band_hz=(lo, lo * 1.26),
+            floor_db=-40.0,
+            quantile=0.10,
+            bias_correction_db=9.77,
+            window_s=20.0,
+            iterations=1,
+            target_activity="all",
+            frames=100,
+        )
+        for lo in (100.0, 126.0, 159.0, 200.0, 252.0)
+    ]
+    assert detect_stationary_sources(rows) == [], "prominence cannot see a uniform lift"

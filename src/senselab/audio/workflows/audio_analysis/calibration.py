@@ -175,6 +175,10 @@ DEFAULT_DETECTION_MARGIN: dict[str, Any] = {
         "min_duration_s": {"default": 0.20},
         "hysteresis": {"trigger_tier": "confident", "extend_tier": "probable"},
         "min_distance_separation_db": 6.0,
+        # ECMA-74 / ISO 7779 prominent-discrete-tone criterion. Detects a source that
+        # runs through the whole recording -- air conditioning, hum, a music bed -- which
+        # is absorbed into its own band floor and so has no excess to measure.
+        "prominence_ratio_db": 9.0,
         "quarantined_labels": [
             "White noise",
             "Pink noise",

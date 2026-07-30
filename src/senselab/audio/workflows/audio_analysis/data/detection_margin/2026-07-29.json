@@ -38,6 +38,7 @@
       "extend_tier": "probable"
     },
     "min_distance_separation_db": 6.0,
+    "prominence_ratio_db": 9.0,
     "quarantined_labels": [
       "White noise",
       "Pink noise",

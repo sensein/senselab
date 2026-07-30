@@ -44,6 +44,9 @@ from senselab.audio.workflows.audio_analysis.calibration import quantile_bias_co
 __all__ = [
     "NoiseFloorEstimate",
     "band_excess_db",
+    "detect_stationary_sources",
+    "estimate_recorder_floor_db",
+    "prominence_ratio_db",
     "binding_floor",
     "estimate_band_floor_db",
     "estimate_noise_floor",
@@ -313,3 +316,132 @@ def binding_floor(
     if band_floor_db is None or recorder_floor_db is None:
         return "perceptual"
     return "recorder" if (band_floor_db - float(recorder_floor_db)) < float(margin_db) else "perceptual"
+
+
+# ── stationary sources (T068, FR-021i) ─────────────────────────────────
+#
+# A source present throughout a recording defeats the estimator above, and not by
+# accident: it *is* the tenth percentile of its own band, so it is absorbed into the
+# floor and its excess over that floor reads ~0 dB. Air conditioning, ventilation,
+# mains hum, a music bed -- exactly the "background that exists throughout the clip"
+# case, and exactly the sources a background characterizer most wants to name.
+#
+# The escape is to stop comparing a band against its own history and compare it
+# against its NEIGHBOURS instead. A steady narrowband source is prominent relative to
+# adjacent third-octave bands even when it is perfectly steady in time, and that
+# comparison is unaffected by how much of the recording it occupies.
+#
+# Standards-grounded rather than invented: ECMA-74 / ISO 7779 define a discrete tone
+# as prominent at a Prominence Ratio of about 9 dB (the critical band containing the
+# tone against its two neighbours) or a Tone-to-Noise Ratio of about 8 dB. Those are
+# the same figures the margin ladder's upper tier converged on, from a different
+# tradition.
+#
+# KNOWN LIMITATION, and it matters for this exact use case. Prominence catches only
+# *narrowband* stationary sources -- mains hum, a tonal compressor whine, a fan blade
+# rate. A **broadband** stationary source raises every band together: ventilation
+# hiss, room rumble, a dense music bed. Prominence cannot see it, because all the
+# neighbours are raised too.
+#
+# Within a single uncalibrated recording, broadband stationary content is not
+# separable from the microphone's own noise floor -- both are steady, broadband, and
+# spectrally smooth. Distinguishing them needs a reference the recording does not
+# contain: an equipment noise specification, a silent calibration take, or a
+# cross-recording baseline. `binding_floor` reports which limit applies once such a
+# reference is supplied; absent one, the honest output is that the floor's origin is
+# undetermined rather than a guess dressed as a finding.
+
+
+def prominence_ratio_db(band_floors_db: Sequence[float | None], index: int) -> float | None:
+    """Prominence of one band's level against its immediate neighbours, in dB.
+
+    This is what detects a source the same-band floor cannot see: a steady tone or hum is
+    prominent against adjacent bands regardless of how many frames it occupies, whereas a
+    broadband noise floor is not prominent against anything.
+
+    Args:
+        band_floors_db: Per-band levels, ascending in frequency. ``None`` entries are skipped.
+        index: Band to test.
+
+    Returns:
+        Prominence in dB, or ``None`` when there are not two usable neighbours.
+    """
+    if not 0 < index < len(band_floors_db) - 1:
+        return None
+    here = band_floors_db[index]
+    lo, hi = band_floors_db[index - 1], band_floors_db[index + 1]
+    if here is None or lo is None or hi is None:
+        return None
+    # Neighbour reference in the power domain: averaging dB would understate a single loud
+    # neighbour and overstate prominence.
+    neighbour = 10.0 * math.log10(0.5 * (10.0 ** (float(lo) / 10.0) + 10.0 ** (float(hi) / 10.0)))
+    return float(here) - neighbour
+
+
+def estimate_recorder_floor_db(floors: Sequence[NoiseFloorEstimate]) -> float | None:
+    """Crude in-recording proxy for the capture chain's own noise floor.
+
+    Takes the quietest band floor, on the reasoning that the band where the room
+    contributes least is the band closest to what the microphone itself contributes.
+
+    **This is a lower bound on the recorder floor, not a measurement of it.** If the room
+    contributes across the whole spectrum — which is what ventilation does — the quietest
+    band is still room plus microphone, and this over-estimates how quiet the equipment is.
+    Prefer an operator-supplied value from the equipment specification or a silent
+    calibration recording; this exists so that ``binding_floor`` has something to work with
+    when none was supplied.
+    """
+    levels = [r.floor_db for r in floors if r.floor_db is not None]
+    return min(levels) if levels else None
+
+
+def detect_stationary_sources(
+    floors: Sequence[NoiseFloorEstimate],
+    *,
+    profile: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Find sources present throughout the recording, from the *unsubtracted* floors.
+
+    Runs on the floor estimates themselves rather than on residual excess, because a
+    throughout-the-clip source has no excess over its own floor to find — it is the floor.
+
+    Args:
+        floors: Per-band estimates from :func:`estimate_noise_floor`.
+        profile: Detection-margin profile supplying ``guards.prominence_ratio_db``.
+
+    Returns:
+        One record per prominent band, each carrying its prominence and the tier it earns.
+        Empty when nothing stands out — a genuinely flat floor has no stationary source in
+        it, and reporting one would be the fabrication this feature guards against.
+    """
+    from senselab.audio.workflows.audio_analysis.calibration import load_detection_margin_profile
+
+    resolved = profile or load_detection_margin_profile()
+    guards = dict(resolved.get("guards") or {})
+    threshold = float(guards.get("prominence_ratio_db", 9.0))
+
+    by_stratum: dict[str, list[NoiseFloorEstimate]] = {}
+    for row in floors:
+        by_stratum.setdefault(row.target_activity, []).append(row)
+
+    out: list[dict[str, Any]] = []
+    for stratum, rows in sorted(by_stratum.items()):
+        ordered = sorted(rows, key=lambda r: r.band_hz[0])
+        levels = [r.floor_db for r in ordered]
+        for i, row in enumerate(ordered):
+            prominence = prominence_ratio_db(levels, i)
+            if prominence is None or prominence < threshold:
+                continue
+            out.append(
+                {
+                    "band_low_hz": row.band_hz[0],
+                    "band_high_hz": row.band_hz[1],
+                    "target_activity": stratum,
+                    "level_db": row.floor_db,
+                    "prominence_db": prominence,
+                    "threshold_db": threshold,
+                    "stationary_pass": True,
+                    "binding_floor": row.binding,
+                }
+            )
+    return out
