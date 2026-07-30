@@ -43,8 +43,9 @@ from senselab.audio.workflows.audio_analysis.harvesters import (
 from senselab.audio.workflows.audio_analysis.identity import harvest_identity_votes
 from senselab.audio.workflows.audio_analysis.presence import harvest_presence_votes
 from senselab.audio.workflows.audio_analysis.reliability import (
-    reliability_from_stability,
+    combined_weights,
     signal_stability,
+    signal_names as _signal_names,
 )
 from senselab.audio.workflows.audio_analysis.types import (
     AxisResult,
@@ -495,8 +496,14 @@ def compute_uncertainty_axes(
     # signal's two answers are already a stability sample — a signal that contradicts
     # itself between them has not earned an equal vote. Aggregation is pure, so deferring
     # it changes nothing else.
+    # Both gates, as in adaptive/influence: perturbation stability asks whether a signal
+    # agrees with itself, the derivation gate whether its agreement with another signal is
+    # independent evidence at all.
     reliability_by_axis = {
-        axis: reliability_from_stability(signal_stability(harvests_by_label, axis=axis))
+        axis: combined_weights(
+            signal_stability(harvests_by_label, axis=axis),
+            _signal_names(harvests_by_label, axis=axis),
+        )
         for axis in ("presence", "identity", "utterance")
     }
     for pass_label, harvest in sorted(harvests_by_label.items()):
