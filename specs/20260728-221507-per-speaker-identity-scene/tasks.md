@@ -174,9 +174,9 @@ report nothing.
 - [X] T058 [US3] Implement recorder-floor estimation and `binding_floor` resolution in `noise_floor.py` (FR-021b, FR-022a).
 - [X] T059 [US3] Implement the `noise_floor.parquet` writer per `contracts/background-sources.md` in `src/senselab/audio/workflows/audio_analysis/io.py`.
 - [X] T060 [US3] Implement the margin ladder, tier assignment, occupancy, minimum duration, and hysteresis in `src/senselab/audio/workflows/audio_analysis/sources.py` (FR-020, FR-021, FR-021j, FR-027, SC-014).
-- [ ] T061 [US3] Implement presence/extent separation in `sources.py` so the margin gate decides presence while boundaries are determined independently (FR-021k, research D12).
+- [X] T061 [US3] Implement presence/extent separation in `sources.py` so the margin gate decides presence while boundaries are determined independently (FR-021k, research D12).
 - [X] T062 [US3] Implement the noise-character guard, label quarantine, and floor-response signature rejection in `sources.py` (FR-020b, FR-020c, FR-020d).
-- [ ] T063 [US3] Implement modulation-depth computation as an orthogonal event feature in `sources.py`, down-weighting the 3–6 Hz band because the residual may carry inherited talker modulation (research D11).
+- [X] T063 [US3] Implement modulation-depth computation as an orthogonal event feature in `sources.py`, down-weighting the 3–6 Hz band because the residual may carry inherited talker modulation (research D11).
 - [X] T064 [US3] Implement the foreground-suppressed variant and suppression-depth measurement in `src/senselab/audio/workflows/audio_analysis/foreground.py`, reusing `speech_enhancement` for the residual, with the graceful fallback of FR-029 (FR-018).
 - [X] T064a [P] [US3] Write a failing invariant test in `src/tests/audio/workflows/audio_analysis/foreground_test.py` asserting `stage_asr`, `stage_alignment`, and `stage_diarization` never receive the foreground-suppressed variant — assert on the variant name reaching each stage, not on output quality, since a quality-based test would pass while quietly transcribing suppressed audio (FR-028).
 - [X] T065 [US3] Implement leakage-margin measurement in `foreground.py` (FR-026).
