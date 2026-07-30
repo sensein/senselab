@@ -41,6 +41,10 @@ from senselab.audio.workflows.audio_analysis.harvesters import (
     classification_windows,
 )
 from senselab.audio.workflows.audio_analysis.identity import harvest_identity_votes
+from senselab.audio.workflows.audio_analysis.reliability import (
+    reliability_from_stability,
+    signal_stability,
+)
 from senselab.audio.workflows.audio_analysis.presence import harvest_presence_votes
 from senselab.audio.workflows.audio_analysis.types import (
     AxisResult,
@@ -448,6 +452,7 @@ def compute_uncertainty_axes(
     axis_results: dict[tuple[str, UncertaintyAxis], AxisResult] = {}
     incomparable_reasons: dict[str, str] = {}
     per_window_embeddings_by_pass: dict[str, dict[str, list[WindowEmbedding]]] = {}
+    harvests_by_label: dict[str, PassHarvest] = {}
 
     for pass_label in sorted(passes.keys()):
         pass_summary = passes.get(pass_label) or {}
@@ -483,7 +488,21 @@ def compute_uncertainty_axes(
 
         if harvests_out is not None:
             harvests_out[pass_label] = harvest
-        for axis, result in aggregate_pass(harvest, aggregator=aggregator, params=params).items():
+        harvests_by_label[pass_label] = harvest
+
+    # Reliability is measured across passes, so aggregation waits until every pass is
+    # harvested. Raw and enhanced are the same recording under a transform, so each
+    # signal's two answers are already a stability sample — a signal that contradicts
+    # itself between them has not earned an equal vote. Aggregation is pure, so deferring
+    # it changes nothing else.
+    reliability_by_axis = {
+        axis: reliability_from_stability(signal_stability(harvests_by_label, axis=axis))
+        for axis in ("presence", "identity", "utterance")
+    }
+    for pass_label, harvest in sorted(harvests_by_label.items()):
+        for axis, result in aggregate_pass(
+            harvest, aggregator=aggregator, params=params, signal_reliability=reliability_by_axis
+        ).items():
             axis_results[(pass_label, axis)] = result  # type: ignore[index]
 
     # ── raw_vs_enhanced deltas ──

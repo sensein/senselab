@@ -15,7 +15,7 @@ No imports beyond stdlib + the sibling pure modules (``aggregate``, ``types``).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Mapping
 
 from senselab.audio.workflows.audio_analysis.aggregate import (
     aggregate_identity,
@@ -148,10 +148,25 @@ def _coupling_weights(params: dict[str, Any]) -> dict[str, float]:
     return weights
 
 
-def aggregate_pass(harvest: PassHarvest, *, aggregator: str, params: dict[str, Any]) -> dict[str, AxisResult]:
+def aggregate_pass(
+    harvest: PassHarvest,
+    *,
+    aggregator: str,
+    params: dict[str, Any],
+    signal_reliability: Mapping[str, Mapping[str, float]] | None = None,
+) -> dict[str, AxisResult]:
     """Fold one pass's harvested votes into the three per-axis ``AxisResult``s.
 
-    Pure: same harvest + same aggregator ⇒ identical rows (bit-for-bit). The math is
+    Args:
+        harvest: One pass's harvested votes.
+        aggregator: ``--uncertainty-aggregator`` value.
+        params: Run parameters (calibration, grids, thresholds).
+        signal_reliability: ``{axis → {signal → reliability}}``, measured across passes by
+            ``reliability.py``. A signal's doubt is scaled by its own reliability, so one
+            that contradicts itself under perturbation cannot decide the axis alone. Omit
+            for unweighted aggregation.
+
+    Pure: same harvest + same aggregator + same reliability ⇒ identical rows (bit-for-bit). The math is
     the historical compute.py aggregation, moved verbatim: presence keeps
     ``aggregated_uncertainty = aggregate_presence(votes)`` with the temporal-
     instability OR only on the additive ``presence_uncertainty`` column; identity /
@@ -242,7 +257,12 @@ def aggregate_pass(harvest: PassHarvest, *, aggregator: str, params: dict[str, A
     # ── identity ──
     identity_rows: list[UncertaintyRow] = []
     for bucket in harvest.identity_votes:
-        u_raw = aggregate_identity(bucket["votes"], raw_vs_enh=None, aggregator=aggregator)
+        u_raw = aggregate_identity(
+            bucket["votes"],
+            raw_vs_enh=None,
+            aggregator=aggregator,
+            reliability=(signal_reliability or {}).get("identity"),
+        )
         if u_raw is None and not bucket["votes"]:
             continue
         mask = intensity_mask(bucket["start"], bucket["end"], presence_pv_intervals)
