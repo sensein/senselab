@@ -252,6 +252,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Adaptive policy YAML, deep-merged over the packaged default. CLI overrides below win over it.",
     )
     parser.add_argument(
+        "--influence-profile",
+        type=Path,
+        default=None,
+        help=(
+            "Mutual-influence profile: per-signal weights plus the uncertainty and derivation "
+            "gates. The derived gate must sit strictly below the independent one -- a derived "
+            "signal agreeing with its parent is one computation counted twice, not corroboration."
+        ),
+    )
+    parser.add_argument(
+        "--max-influence-rounds",
+        type=int,
+        default=None,
+        help=(
+            "Bound on mutual-influence iteration. Reaching it terminates with the condition "
+            "reported rather than emitting the last round's state as settled."
+        ),
+    )
+    parser.add_argument(
         "--budget-medium",
         type=int,
         default=None,

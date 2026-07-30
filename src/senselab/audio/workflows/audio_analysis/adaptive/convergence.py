@@ -156,3 +156,60 @@ def build_convergence_report(
         "next_actions": next_actions,
         **provenance,
     }
+
+
+# ── non-convergence detection (T082, FR-011e / FR-011h) ────────────────
+
+
+def detect_non_convergence(
+    round_states: list[dict[str, Any]],
+    *,
+    window: int = 3,
+) -> tuple[str | None, list[dict[str, Any]]]:
+    """Detect oscillation or stagnation across recent rounds.
+
+    Mutual influence makes both failures reachable: two interpretations that each imply the
+    other is wrong will trade places indefinitely, and a loop can also grind without
+    improving. Emitting the last round's state in either case would present an unsettled
+    value as settled.
+
+    Oscillation and stagnation are reported separately because the remedies differ — a
+    flip-flop means two signals disagree irreconcilably, while standing still means no
+    signal has anything left to contribute.
+
+    Args:
+        round_states: Per-round state snapshots, oldest first.
+        window: How many recent rounds to inspect. Must be at least 2, since alternation
+            cannot be observed in a single round.
+
+    Returns:
+        ``(reason, states)`` where reason is ``"oscillation"``, ``"no_improvement"``, or
+        ``None``. ``states`` holds the distinct repeating states when oscillating.
+
+    Raises:
+        ValueError: If ``window`` is below 2.
+    """
+    if window < 2:
+        raise ValueError(f"oscillation window must be at least 2 to observe alternation; got {window}")
+    recent = round_states[-window:]
+    if len(recent) < 2:
+        return None, []
+
+    keys = [tuple(sorted(state.items(), key=lambda kv: str(kv[0]))) for state in recent]
+    distinct = list(dict.fromkeys(keys))
+    if len(distinct) == 1:
+        # Same state every round: nothing is moving.
+        return "no_improvement", []
+    if len(distinct) < len(keys):
+        # At least one state recurred after being left — a cycle, of any period.
+        return "oscillation", [dict(k) for k in distinct]
+    return None, []
+
+
+def unresolved_quantities(per_quantity: dict[str, str]) -> list[str]:
+    """Names of quantities that never converged, sorted (FR-011h).
+
+    ``revision`` is deliberately *not* counted: it is resolved-but-not-improved, which is a
+    separate report from unresolved.
+    """
+    return sorted(name for name, kind in per_quantity.items() if kind == "unresolved")
