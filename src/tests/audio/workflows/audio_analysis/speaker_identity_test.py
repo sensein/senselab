@@ -668,3 +668,38 @@ def test_a_speaker_that_might_not_exist_is_not_reported_as_converged() -> None:
     )
     assert hyps[0].converged is True
     assert hyps[1].converged is False
+
+
+def test_the_packaged_policy_resolves_the_clusterer_as_derived() -> None:
+    """The derived gate is inert unless a policy actually reaches the builder.
+
+    On a real run every source resolved to the default "independent" because the CLI passed
+    no policy — so the guard against a clustering-derived voter counting as a peer did
+    nothing precisely where it matters. Pinning the packaged declaration here means a
+    renamed key or a dropped block fails a test rather than quietly disabling the gate.
+    """
+    from senselab.audio.workflows.audio_analysis.adaptive.policy import load_policy
+    from senselab.audio.workflows.audio_analysis.speaker_identity import source_kind_for
+
+    policy = load_policy(None)
+    influence = policy.get("influence") or {}
+    assert source_kind_for("embedding_silhouette/speechbrain/spkrec-ecapa-voxceleb", policy) == "derived"
+    gate = influence.get("derivation_gate") or {}
+    assert gate["derived"] < gate["independent"]
+
+
+def test_a_derived_clusterer_moves_the_count_less_than_a_real_diarizer() -> None:
+    """The end-to-end consequence of the wiring above, on the builder's own path."""
+    from senselab.audio.workflows.audio_analysis.adaptive.policy import load_policy
+    from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
+
+    policy = load_policy(None)
+    passes = _passes(
+        raw_16k={"pyannote": _diar(1), "embedding_silhouette/ecapa": _diar(5)},
+        enhanced_16k={"pyannote": _diar(1), "embedding_silhouette/ecapa": _diar(5)},
+    )
+    ungated, _h, _c = build_speaker_identity(passes)
+    gated, _h2, _c2 = build_speaker_identity(
+        passes, policy=policy, gates=(policy.get("influence") or {}).get("derivation_gate")
+    )
+    assert gated.probabilities[5] < ungated.probabilities[5]

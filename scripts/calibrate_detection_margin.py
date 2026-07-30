@@ -1,4 +1,4 @@
-"""Emit a versioned detection-margin profile from measured classifier verdicts (T070, FR-022).
+r"""Emit a versioned detection-margin profile from measured classifier verdicts (T070, FR-022).
 
 The margin ladder decides which background sources a run is willing to report, so it must
 be auditable rather than tuned by hand. This script rebuilds a profile's ``machine_basis``
