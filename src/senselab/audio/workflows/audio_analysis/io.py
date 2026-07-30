@@ -134,3 +134,84 @@ def write_background_mask(
     json_path = dest_dir / "background_mask.json"
     json_path.write_text(json.dumps(mask.to_json(), indent=2) + "\n")
     return parquet_path, json_path
+
+
+def write_noise_floor(rows: Any, dest_dir: Path) -> Path:  # noqa: ANN401 — NoiseFloorEstimate sequence
+    """Write ``noise_floor.parquet`` for one pass (T059)."""
+    import pandas as pd
+
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    columns = [
+        "band_low_hz",
+        "band_high_hz",
+        "target_activity",
+        "floor_db",
+        "quantile",
+        "bias_correction_db",
+        "window_s",
+        "iterations",
+        "frames",
+        "recorder_floor_db",
+        "binding",
+    ]
+    records = [r.to_row() for r in rows]
+    frame = pd.DataFrame(records, columns=columns) if records else pd.DataFrame({c: [] for c in columns})
+    out = dest_dir / "noise_floor.parquet"
+    frame.to_parquet(out, index=False)
+    return out
+
+
+def write_background_sources(findings: Any, dest_dir: Path) -> Path:  # noqa: ANN401 — SourceFinding sequence
+    """Write ``background_sources.parquet`` for one pass (T069).
+
+    Written even when empty. Zero rows on amplified noise floor is the *expected* result
+    (SC-018), and an absent file would make "nothing was found" indistinguishable from
+    "the stage never ran".
+    """
+    import pandas as pd
+
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    columns = [
+        "start",
+        "end",
+        "category",
+        "label",
+        "classifier",
+        "above_floor_db",
+        "tier",
+        "binding_floor",
+        "variant",
+        "gain_db",
+        "computed_on",
+        "padding_fraction",
+        "from_mask_region",
+        "mask_confidence",
+        "leakage_margin_db",
+        "suppression_depth_db",
+        "flatness",
+        "modulation_depth",
+        "occupancy",
+        "stationary_pass",
+        "discounted_reason",
+    ]
+    records = [f.to_row() for f in findings]
+    frame = pd.DataFrame(records, columns=columns) if records else pd.DataFrame({c: [] for c in columns})
+    out = dest_dir / "background_sources.parquet"
+    frame.to_parquet(out, index=False)
+    return out
+
+
+def write_suppression_json(suppression: Any, dest_dir: Path) -> Path:  # noqa: ANN401 — ForegroundSuppression
+    """Write ``suppression.json`` for one pass.
+
+    Always carries the achieved depth when suppression was requested (SC-016), so a null
+    background result is attributable to insufficient suppression rather than to absence of
+    background content.
+    """
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    out = dest_dir / "suppression.json"
+    out.write_text(json.dumps(suppression.to_json(), indent=2) + "\n")
+    return out
