@@ -156,16 +156,16 @@ report nothing.
 
 ### Tests for User Story 3 — margins, guards, suppression
 
-- [ ] T046 [P] [US3] Write failing tests for the margin ladder in `src/tests/audio/workflows/audio_analysis/sources_test.py`: tier assignment at 3/6/10 dB, rejection below 3 dB, and that a finding never advances tier on gain alone (FR-021, research D1).
-- [ ] T047 [P] [US3] Write failing tests for the noise-character guard in `src/tests/audio/workflows/audio_analysis/sources_test.py`: broadband noise floors are separated from structured sources by spectral flatness, evaluated relatively against the band's own baseline (FR-020b).
-- [ ] T048 [P] [US3] Write failing tests for label quarantine in `src/tests/audio/workflows/audio_analysis/sources_test.py`: water-like and broadband environmental labels are suppressed unless the noise-character test passes (FR-020c).
-- [ ] T049 [US3] Write the false-positive test in `src/tests/audio/workflows/audio_analysis/sources_test.py`: **amplified pure noise floor yields zero findings** (SC-018), using the synthetic clip recipe from `quickstart.md`.
+- [X] T046 [P] [US3] Write failing tests for the margin ladder in `src/tests/audio/workflows/audio_analysis/sources_test.py`: tier assignment at 3/6/10 dB, rejection below 3 dB, and that a finding never advances tier on gain alone (FR-021, research D1).
+- [X] T047 [P] [US3] Write failing tests for the noise-character guard in `src/tests/audio/workflows/audio_analysis/sources_test.py`: broadband noise floors are separated from structured sources by spectral flatness, evaluated relatively against the band's own baseline (FR-020b).
+- [X] T048 [P] [US3] Write failing tests for label quarantine in `src/tests/audio/workflows/audio_analysis/sources_test.py`: water-like and broadband environmental labels are suppressed unless the noise-character test passes (FR-020c).
+- [X] T049 [US3] Write the false-positive test in `src/tests/audio/workflows/audio_analysis/sources_test.py`: **amplified pure noise floor yields zero findings** (SC-018), using the synthetic clip recipe from `quickstart.md`.
 - [ ] T050 [US3] Write the decisive differential test in `src/tests/audio/workflows/audio_analysis/foreground_test.py`: two clips identical except one contains a faint background source must produce **different** reported categories (SC-015). Document that a 30 dB-suppression baseline fails this by construction (research D6).
 - [ ] T051 [P] [US3] Write failing tests for suppression-depth reporting in `src/tests/audio/workflows/audio_analysis/foreground_test.py`: depth always reported when requested, and no detectability claim when residual foreground exceeds the candidate (FR-018a, SC-016).
 - [ ] T052 [P] [US3] Write failing tests for leakage margins in `src/tests/audio/workflows/audio_analysis/foreground_test.py`: a `speech` or `people` category from a suppressed variant always carries `leakage_margin_db` (FR-026, SC-008).
-- [ ] T053 [P] [US3] Write failing tests for pre-gain rejection and the gain cap in `src/tests/audio/workflows/audio_analysis/level_test.py`: segments below the trust floor are rejected rather than amplified, gain is per-segment, and exceeding the cap is an error not a clamp (FR-019, FR-019a, FR-020a).
+- [X] T053 [P] [US3] Write failing tests for pre-gain rejection and the gain cap in `src/tests/audio/workflows/audio_analysis/level_test.py`: segments below the trust floor are rejected rather than amplified, gain is per-segment, and exceeding the cap is an error not a clamp (FR-019, FR-019a, FR-020a).
 - [ ] T054 [P] [US3] Write failing tests for excision routing in `src/tests/audio/workflows/audio_analysis/sources_test.py`: long-window results come from excised mask segments, carry `padding_fraction`, and are never merged with grid results (FR-041, FR-043, FR-044, SC-031, SC-033).
-- [ ] T055 [P] [US3] Write failing tests asserting no absolute perceptual quantities are emitted for uncalibrated input (FR-021c) in `src/tests/audio/workflows/audio_analysis/sources_test.py`.
+- [X] T055 [P] [US3] Write failing tests asserting no absolute perceptual quantities are emitted for uncalibrated input (FR-021c) in `src/tests/audio/workflows/audio_analysis/sources_test.py`.
 
 ### Implementation for User Story 3
 
@@ -173,9 +173,9 @@ report nothing.
 - [X] T057 [US3] Add floor freezing inside detected events and activity-conditioned strata to `noise_floor.py` (FR-021g, FR-021h).
 - [X] T058 [US3] Implement recorder-floor estimation and `binding_floor` resolution in `noise_floor.py` (FR-021b, FR-022a).
 - [ ] T059 [US3] Implement the `noise_floor.parquet` writer per `contracts/background-sources.md` in `src/senselab/audio/workflows/audio_analysis/io.py`.
-- [ ] T060 [US3] Implement the margin ladder, tier assignment, occupancy, minimum duration, and hysteresis in `src/senselab/audio/workflows/audio_analysis/sources.py` (FR-020, FR-021, FR-021j, FR-027, SC-014).
+- [X] T060 [US3] Implement the margin ladder, tier assignment, occupancy, minimum duration, and hysteresis in `src/senselab/audio/workflows/audio_analysis/sources.py` (FR-020, FR-021, FR-021j, FR-027, SC-014).
 - [ ] T061 [US3] Implement presence/extent separation in `sources.py` so the margin gate decides presence while boundaries are determined independently (FR-021k, research D12).
-- [ ] T062 [US3] Implement the noise-character guard, label quarantine, and floor-response signature rejection in `sources.py` (FR-020b, FR-020c, FR-020d).
+- [X] T062 [US3] Implement the noise-character guard, label quarantine, and floor-response signature rejection in `sources.py` (FR-020b, FR-020c, FR-020d).
 - [ ] T063 [US3] Implement modulation-depth computation as an orthogonal event feature in `sources.py`, down-weighting the 3–6 Hz band because the residual may carry inherited talker modulation (research D11).
 - [ ] T064 [US3] Implement the foreground-suppressed variant and suppression-depth measurement in `src/senselab/audio/workflows/audio_analysis/foreground.py`, reusing `speech_enhancement` for the residual, with the graceful fallback of FR-029 (FR-018).
 - [ ] T064a [P] [US3] Write a failing invariant test in `src/tests/audio/workflows/audio_analysis/foreground_test.py` asserting `stage_asr`, `stage_alignment`, and `stage_diarization` never receive the foreground-suppressed variant — assert on the variant name reaching each stage, not on output quality, since a quality-based test would pass while quietly transcribing suppressed audio (FR-028).

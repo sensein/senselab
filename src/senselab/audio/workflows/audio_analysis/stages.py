@@ -648,7 +648,12 @@ def run_pass(audio: Audio, ctx: StageContext, plan: PassPlan) -> dict[str, Any]:
     if plan.ppg:
         summary.update(stage_ppg(audio, ctx))
 
-    if plan.background_mask:
+    # Only on the unmodified variant. Measured on a real recording: the enhanced pass
+    # masked 50% of the file against the unmodified pass's 17.9%, because speech
+    # enhancement removes the non-speech evidence the mask reads target activity from.
+    # A mask built there is misleadingly generous -- it reports "safe for background
+    # claims" precisely where the background was destroyed.
+    if plan.background_mask and ctx.variant == "unmodified":
         summary.update(
             stage_background_mask(
                 ctx,
@@ -659,5 +664,15 @@ def run_pass(audio: Audio, ctx: StageContext, plan: PassPlan) -> dict[str, Any]:
                 long_window_s=plan.ast_win_length,
             )
         )
+    elif plan.background_mask:
+        summary["background_mask"] = {
+            "status": "skipped",
+            "reason": (
+                f"variant={ctx.variant!r}: the mask is only meaningful on unmodified audio. "
+                "Enhancement removes the non-speech evidence target activity is read from, so a "
+                "mask built here would report more of the recording as safe for background claims "
+                "exactly where the background was removed."
+            ),
+        }
 
     return summary
