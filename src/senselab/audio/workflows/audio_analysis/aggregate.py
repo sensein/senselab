@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import sys
 from itertools import combinations  # used by aggregate_utterance for pairwise WER
-from typing import Any
+from typing import Any, Mapping
 
 # Surface-level differences (case + punctuation + repeated whitespace) are
 # stripped before pairwise WER so the utterance axis reflects *semantic*
@@ -119,6 +119,7 @@ def aggregate_identity(
     *,
     raw_vs_enh: bool | None,
     aggregator: str,
+    reliability: Mapping[str, float] | None = None,
 ) -> float | None:
     """Combine identity sub-signals into a single uncertainty in ``[0, 1]``.
 
@@ -140,27 +141,35 @@ def aggregate_identity(
     zero-imputed.
     """
     sub_signals: list[float | None] = []
+    weights: list[float] = []
+    rel = dict(reliability or {})
 
-    for v in votes.values():
+    def _add(value: float, signal: str) -> None:
+        sub_signals.append(float(value))
+        weights.append(float(rel.get(signal, 1.0)))
+
+    for name, v in votes.items():
         if not isinstance(v, dict):
             continue
         same = v.get("same_label_uncertainty")
         if same is not None:
-            sub_signals.append(float(same))
+            _add(same, str(name))
         chg = v.get("change_inconsistency_uncertainty")
         if chg is not None:
-            sub_signals.append(float(chg))
+            _add(chg, str(name))
 
     cross = votes.get("__cross_diar_label_disagreement__")
     if isinstance(cross, dict):
         cross_val = cross.get("value")
         if cross_val is not None:
-            sub_signals.append(float(cross_val))
+            _add(cross_val, "__cross_diar_label_disagreement__")
 
     if raw_vs_enh is not None:
-        sub_signals.append(1.0 if raw_vs_enh else 0.0)
+        # A cross-pass label flip is the perturbation result itself, not a signal whose
+        # stability could be measured — it carries full weight by construction.
+        _add(1.0 if raw_vs_enh else 0.0, "__raw_vs_enhanced__")
 
-    return apply_aggregator(sub_signals, aggregator)
+    return apply_aggregator(sub_signals, aggregator, weights=weights if rel else None)
 
 
 # ── utterance ─────────────────────────────────────────────────────────
@@ -233,6 +242,14 @@ def aggregate_utterance(
     calibration: dict[str, Any] | None = None,
 ) -> float | None:
     """Combine utterance sub-signals into a single uncertainty.
+
+    Per-signal reliability weighting is deliberately *not* applied here. The utterance
+    sub-signals are already model-fused before they reach this point — a pairwise mean over
+    ASR sources, a mean log-probability across backends — so there is no per-model signal
+    left to weight. Weighting them would require harvesting the pairwise terms unfused,
+    which is a larger change than the defect it would address. The identity axis, where
+    sub-signals stay per-model and where a single saturated signal was demonstrably
+    overriding unanimous agreement, is weighted (see ``aggregate_identity``).
 
     Three sub-signal families (the third added by FR-017):
 
