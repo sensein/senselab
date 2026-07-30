@@ -150,3 +150,96 @@ def test_outputs_are_byte_identical_across_repeated_writes(tmp_path: Path) -> No
     a, _ = _write(tmp_path / "a")
     b, _ = _write(tmp_path / "b")
     assert a.read_bytes() == b.read_bytes()
+
+
+# ── reproducibility across whole derivations (T094b, FR-010 / SC-004) ──
+
+
+def _identity_votes() -> list[dict]:
+    """Two diar models, agreeing for two buckets and splitting on the third."""
+    per_bucket = [{"a": "Sx", "b": "Sx"}, {"a": "Sx", "b": "Sx"}, {"a": "Sx", "b": "Sy"}]
+    out = []
+    for i, clusters in enumerate(per_bucket):
+        votes: dict[str, object] = {
+            m: {"speaker_label": f"{m}-{c}", "cluster_id": c, "speaker_changed_from_prev": None}
+            for m, c in clusters.items()
+        }
+        votes["__cross_diar_label_disagreement__"] = {"cluster_ids": dict(clusters)}
+        out.append({"start": i * 0.5, "end": (i + 1) * 0.5, "votes": votes})
+    return out
+
+
+def _passes_for_two_speakers() -> dict:
+    return {
+        label: {
+            "duration_s": 1.5,
+            "diarization": {
+                "by_model": {
+                    "a": {"status": "ok", "result": [[{"start": 0.0, "end": 1.5, "speaker": "SPEAKER_00"}]]},
+                    "b": {
+                        "status": "ok",
+                        "result": [
+                            [
+                                {"start": 0.0, "end": 1.0, "speaker": "SPEAKER_00"},
+                                {"start": 1.0, "end": 1.5, "speaker": "SPEAKER_01"},
+                            ]
+                        ],
+                    },
+                }
+            },
+        }
+        for label in ("raw_16k", "enhanced_16k")
+    }
+
+
+def test_the_whole_derivation_reproduces_byte_for_byte(tmp_path: Path) -> None:
+    """FR-010 / SC-004: identical inputs must give identical files, not merely equal values.
+
+    The existing repeated-write test fixes the objects and varies only serialization. This
+    one re-derives them from the passes and the harvested votes, which is where run-to-run
+    drift would actually come from — dict iteration order in the clustering, ranking ties,
+    or set ordering in the correspondence rows.
+    """
+    from senselab.audio.workflows.audio_analysis.speaker_identity import (
+        build_presence_tracks,
+        build_speaker_identity,
+    )
+
+    passes, votes = _passes_for_two_speakers(), _identity_votes()
+    written = []
+    for run in ("first", "second"):
+        out = tmp_path / run
+        posterior, hypotheses, correspondence = build_speaker_identity(passes, identity_votes=votes)
+        speakers, presence = write_speaker_outputs(
+            out,
+            posterior=posterior,
+            hypotheses=hypotheses,
+            correspondence=correspondence,
+            tracks=build_presence_tracks(votes),
+        )
+        written.append((speakers.read_bytes(), presence.read_bytes()))
+
+    assert written[0][0] == written[1][0]
+    assert written[0][1] == written[1][1]
+
+
+def test_the_derivation_actually_produced_something_to_compare(tmp_path: Path) -> None:
+    """Guards the test above: two identical empty files would also compare equal."""
+    from senselab.audio.workflows.audio_analysis.speaker_identity import (
+        build_presence_tracks,
+        build_speaker_identity,
+    )
+
+    votes = _identity_votes()
+    posterior, hypotheses, correspondence = build_speaker_identity(_passes_for_two_speakers(), identity_votes=votes)
+    _s, presence = write_speaker_outputs(
+        tmp_path,
+        posterior=posterior,
+        hypotheses=hypotheses,
+        correspondence=correspondence,
+        tracks=build_presence_tracks(votes),
+    )
+    frame = pd.read_parquet(presence)
+    assert not frame.empty
+    assert set(frame["speaker_id"]) == {"S0", "S1"}
+    assert correspondence and all(c.cluster_id for c in correspondence)
