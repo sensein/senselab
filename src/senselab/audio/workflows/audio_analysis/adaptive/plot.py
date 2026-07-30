@@ -56,9 +56,9 @@ def build_adaptive_timeline(out_dir: Path, *, gt_path: Path | None = None, title
         gt = load_ls_ground_truth(gt_path)
 
     fig, axes = plt.subplots(
-        7, 1, figsize=(14, 14.5), sharex=True, height_ratios=[1.3, 0.8, 0.6, 1.2, 1.2, 1.4, 1.0]
+        8, 1, figsize=(14, 15.5), sharex=True, height_ratios=[1.3, 0.8, 0.6, 1.2, 1.2, 0.9, 1.4, 1.0]
     )
-    ax_spec, ax_gt, ax_mask, ax_p, ax_i, ax_u, ax_w = axes
+    ax_spec, ax_gt, ax_mask, ax_p, ax_i, ax_spk, ax_u, ax_w = axes
 
     # ── row 0: spectrogram ──────────────────────────────────────────────
     # The acoustic evidence every row below is derived from. Put first so a
@@ -73,6 +73,13 @@ def build_adaptive_timeline(out_dir: Path, *, gt_path: Path | None = None, title
     # suppression depth. Reading an uncertainty row without knowing which spans
     # were target-free invites treating a leakage artifact as a finding.
     _draw_background_mask(ax_mask, out_dir, duration)
+
+    # ── per-speaker presence ────────────────────────────────────────────
+    # Directly under the identity axis, because it is what that axis's number could not
+    # say: whether a high value means "we disagree about who spoke" or "we disagree about
+    # how many people are here". One lane per hypothesised speaker makes the count visible
+    # at a glance, and the header carries the posterior when it is multi-modal.
+    _draw_per_speaker(ax_spk, out_dir, duration)
 
     # ── row 1: ground truth ─────────────────────────────────────────────
     ax_gt.set_ylabel("ground\ntruth", rotation=0, ha="right", va="center")
@@ -232,6 +239,111 @@ _MASK_STATE_STYLE = {
 }
 
 
+def _draw_per_speaker(ax: Any, out_dir: Path, duration: float) -> None:  # noqa: ANN401 — matplotlib Axes
+    """Draw one presence lane per hypothesised speaker, with the count posterior in view.
+
+    This is the row the single identity scalar could not provide. A high identity
+    uncertainty is ambiguous between disagreement about *who* spoke and disagreement about
+    *how many* people are present; lanes plus the posterior separate the two.
+    """
+    import json as _json
+
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Rectangle
+
+    from senselab.utils.data_structures.logging import logger
+
+    ax.set_ylabel("per-speaker\npresence", rotation=0, ha="right", va="center", fontsize=9)
+    ax.set_xlim(0, duration)
+    ax.set_yticks([])
+
+    final = Path(out_dir) / "final"
+    speakers_path, presence_path = final / "speakers.json", final / "per_speaker_presence.parquet"
+    if not speakers_path.exists() or not presence_path.exists():
+        ax.text(
+            0.5,
+            0.5,
+            "no per-speaker identity output",
+            transform=ax.transAxes,
+            ha="center",
+            va="center",
+            fontsize=8,
+            color="#888888",
+        )
+        ax.set_ylim(0, 1)
+        return
+
+    try:
+        import pandas as pd
+
+        doc = _json.loads(speakers_path.read_text())
+        rows = pd.read_parquet(presence_path).to_dict("records")
+    except Exception as exc:  # noqa: BLE001 — a plot must never fail a run
+        logger.debug("per-speaker outputs unreadable: %s", exc)
+        ax.set_ylim(0, 1)
+        return
+
+    speaker_ids = sorted({str(r["speaker_id"]) for r in rows}) or [
+        str(s["speaker_id"]) for s in doc.get("speakers", [])
+    ]
+    if not speaker_ids:
+        ax.text(
+            0.5,
+            0.5,
+            "no speaker hypotheses",
+            transform=ax.transAxes,
+            ha="center",
+            va="center",
+            fontsize=8,
+            color="#888888",
+        )
+        ax.set_ylim(0, 1)
+        return
+
+    lanes = {sid: i for i, sid in enumerate(speaker_ids)}
+    ax.set_ylim(-0.5, len(speaker_ids) - 0.5)
+    ax.set_yticks(list(lanes.values()))
+    ax.set_yticklabels(speaker_ids, fontsize=7)
+    cmap = plt.get_cmap("tab10")
+
+    for row in rows:
+        conf = row.get("presence_confidence")
+        if conf is None:
+            continue
+        lane = lanes.get(str(row["speaker_id"]))
+        if lane is None:
+            continue
+        unc = float(row.get("presence_uncertainty") or 0.0)
+        ax.add_patch(
+            Rectangle(
+                (float(row["start"]), lane - 0.35),
+                max(float(row["end"]) - float(row["start"]), 1e-6),
+                0.7,
+                facecolor=cmap(lane % 10),
+                edgecolor="none",
+                # Height encodes confidence, transparency encodes uncertainty about it --
+                # a faint short bar is a speaker the analysis is unsure about twice over.
+                alpha=max(0.12, float(conf) * (1.0 - 0.6 * unc)),
+            )
+        )
+
+    cp = doc.get("count_posterior") or {}
+    probs = cp.get("probabilities") or {}
+    if probs:
+        summary = "  ".join(f"{k}:{float(v):.2f}" for k, v in sorted(probs.items()))
+        flag = "  MULTI-MODAL" if cp.get("is_multimodal") else ""
+        ax.text(
+            0.005,
+            0.97,
+            f"speaker-count posterior  {summary}{flag}",
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=6.5,
+            color="#b00020" if cp.get("is_multimodal") else "#444444",
+        )
+
+
 def _draw_background_mask(ax: Any, out_dir: Path, duration: float) -> None:  # noqa: ANN401 — matplotlib Axes
     """Draw the background mask as a three-state strip, with uncertainty as alpha.
 
@@ -260,8 +372,14 @@ def _draw_background_mask(ax: Any, out_dir: Path, duration: float) -> None:  # n
 
     if not rows:
         ax.text(
-            0.5, 0.5, "no background mask", transform=ax.transAxes,
-            ha="center", va="center", fontsize=8, color="#888888",
+            0.5,
+            0.5,
+            "no background mask",
+            transform=ax.transAxes,
+            ha="center",
+            va="center",
+            fontsize=8,
+            color="#888888",
         )
         return
 
@@ -276,8 +394,12 @@ def _draw_background_mask(ax: Any, out_dir: Path, duration: float) -> None:  # n
         alpha = 0.85 if state == "target_active" else max(0.15, 0.85 * (1.0 - unc))
         ax.add_patch(
             Rectangle(
-                (start, 0.2), max(end - start, 1e-6), 0.6,
-                facecolor=color, edgecolor="none", alpha=alpha,
+                (start, 0.2),
+                max(end - start, 1e-6),
+                0.6,
+                facecolor=color,
+                edgecolor="none",
+                alpha=alpha,
                 label=label if label not in seen else None,
             )
         )
@@ -287,8 +409,14 @@ def _draw_background_mask(ax: Any, out_dir: Path, duration: float) -> None:  # n
             # the guard's doing rather than an absence of quiet audio.
             ax.add_patch(
                 Rectangle(
-                    (start, 0.2), max(end - start, 1e-6), 0.6,
-                    facecolor="none", edgecolor="#555555", hatch="///", linewidth=0.0, alpha=0.5,
+                    (start, 0.2),
+                    max(end - start, 1e-6),
+                    0.6,
+                    facecolor="none",
+                    edgecolor="#555555",
+                    hatch="///",
+                    linewidth=0.0,
+                    alpha=0.5,
                 )
             )
     if seen:

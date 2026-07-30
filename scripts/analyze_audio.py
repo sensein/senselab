@@ -1020,10 +1020,19 @@ def _stage_context(
     cache_dir: Path | None,
     senselab_ver: str,
 ) -> StageContext:
-    """Build the per-pass `StageContext` from CLI args."""
+    """Build the per-pass `StageContext` from CLI args.
+
+    The audio variant is derived from the pass label rather than passed separately, so a
+    new pass cannot forget to declare what it is looking at. Stages that are only
+    meaningful on unmodified audio -- the background mask, most importantly -- gate on it,
+    and a context that silently claimed ``unmodified`` for the enhanced pass would defeat
+    that gate while every unit test still passed.
+    """
+    variant = "speech_enhanced" if label.startswith("enhanced") else "unmodified"
     return StageContext(
         pass_label=label,
         audio_signature=audio_signature(audio),
+        variant=variant,
         device=device,
         cache_dir=cache_dir,
         out_dir=out_dir / label,

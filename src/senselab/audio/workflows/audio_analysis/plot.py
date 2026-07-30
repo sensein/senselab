@@ -32,6 +32,7 @@ from typing import Any
 import numpy as np
 
 from senselab.audio.workflows.audio_analysis.types import AxisResult
+from senselab.utils.data_structures.logging import logger
 
 
 def _series_for(rows: list, duration_s: float, hop_s: float) -> tuple[np.ndarray, np.ndarray]:
@@ -237,6 +238,79 @@ def _pass_color_alpha(pass_label: str) -> tuple[float, str]:
     return 0.55, "--"
 
 
+_MASK_STATE_STYLE = {
+    "target_free": ("#2e7d32", "target-free"),
+    "indeterminate": ("#9e9e9e", "cannot tell"),
+    "target_active": ("#c8c8c8", "target active"),
+}
+
+
+def _load_background_mask_rows(run_dir: Path) -> list[dict[str, Any]]:
+    """Read the unmodified pass's background mask, if one was written.
+
+    Only the unmodified pass is consulted: enhancement removes the non-speech evidence
+    target activity is read from, so an enhanced-pass mask reports more of the recording as
+    safe for background claims exactly where the background was destroyed.
+    """
+    for candidate in sorted(Path(run_dir).glob("*/background_mask.parquet")):
+        if "enhanced" in candidate.parent.name:
+            continue
+        try:
+            import pandas as pd
+
+            return list(pd.read_parquet(candidate).to_dict("records"))
+        except Exception as exc:  # noqa: BLE001 — a plot must never fail a run
+            logger.debug("background mask unreadable at %s: %s", candidate, exc)
+    return []
+
+
+def _draw_background_mask_row(ax: Any, rows: list[dict[str, Any]], duration_s: float) -> None:  # noqa: ANN401
+    """Draw the mask as a three-state strip, with uncertainty as alpha."""
+    from matplotlib.patches import Rectangle
+
+    ax.set_ylabel("background\nmask", rotation=0, ha="right", va="center", fontsize=8)
+    ax.set_ylim(0, 1)
+    ax.set_yticks([])
+    ax.set_xlim(0, duration_s)
+    seen: set[str] = set()
+    for row in rows:
+        state = str(row.get("state", "indeterminate"))
+        color, label = _MASK_STATE_STYLE.get(state, _MASK_STATE_STYLE["indeterminate"])
+        start, end = float(row["start"]), float(row["end"])
+        unc = float(row.get("uncertainty") or 0.0)
+        # A washed-out green marks a region whose own "usable" claim is shaky.
+        alpha = 0.85 if state == "target_active" else max(0.15, 0.85 * (1.0 - unc))
+        ax.add_patch(
+            Rectangle(
+                (start, 0.2),
+                max(end - start, 1e-6),
+                0.6,
+                facecolor=color,
+                edgecolor="none",
+                alpha=alpha,
+                label=label if label not in seen else None,
+            )
+        )
+        seen.add(label)
+        if float(row.get("guard_trimmed_s") or 0.0) > 0.0:
+            # Hatch what the guard removed, so a shrunken mask is visibly the guard's
+            # doing rather than an absence of quiet audio.
+            ax.add_patch(
+                Rectangle(
+                    (start, 0.2),
+                    max(end - start, 1e-6),
+                    0.6,
+                    facecolor="none",
+                    edgecolor="#555555",
+                    hatch="///",
+                    linewidth=0.0,
+                    alpha=0.5,
+                )
+            )
+    if seen:
+        ax.legend(loc="upper right", fontsize=6, ncol=3, framealpha=0.6)
+
+
 def build_aligned_timeline_plot(
     *,
     run_dir: Path,
@@ -337,6 +411,13 @@ def build_aligned_timeline_plot(
 
     if has_spec:
         _add_row("spec", 1.6)  # broadband spectrogram
+    mask_rows = _load_background_mask_rows(run_dir)
+    if mask_rows:
+        # Above the axis rows on purpose: it says *where the rows below can be trusted*.
+        # A target-free span has no foreground to leak, so a background claim there does
+        # not depend on suppression depth. Reading an axis without knowing which spans
+        # were target-free invites treating a leakage artifact as a finding.
+        _add_row("mask", 0.55)
     _add_row("presence", 1.4)
     _add_row("identity", 1.4)
     _add_row("utterance", 1.4)
@@ -356,6 +437,7 @@ def build_aligned_timeline_plot(
     fig_height = sum(height_ratios) + 1.0
 
     spec_row = row_idx.get("spec")
+    mask_row = row_idx.get("mask")
     presence_row = row_idx["presence"]
     identity_row = row_idx["identity"]
     utterance_row = row_idx["utterance"]
@@ -383,6 +465,9 @@ def build_aligned_timeline_plot(
 
     axis_color = {"presence": "#1f77b4", "identity": "#ff7f0e", "utterance": "#2ca02c"}
     utt_hop = utterance_grid_hop if utterance_grid_hop is not None else grid_hop
+
+    if mask_row is not None and mask_rows:
+        _draw_background_mask_row(axes[mask_row], mask_rows, duration_s)
 
     if has_spec and spec_row is not None:
         from scipy.signal import spectrogram
