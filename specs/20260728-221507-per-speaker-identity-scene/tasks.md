@@ -46,13 +46,13 @@ literal in any later task.
 
 **⚠️ CRITICAL**: No user story work begins until this phase completes.
 
-- [ ] T005 Write failing tests for the detection-margin profile loader in `src/tests/audio/workflows/audio_analysis/detection_margin_profile_test.py`: monotone margin ordering, quantile range, bias correction computed from `q` rather than stored, and a hard error when a `provisional` derivation claim lacks a `note`.
-- [ ] T006 Implement `DetectionMarginProfile` and `DerivationRecord` loading and validation in `src/senselab/audio/workflows/audio_analysis/calibration.py`, per `contracts/policy-profile.md`. Reject a profile whose only support for a margin value is `provisional`.
-- [ ] T007 [P] Write failing tests for audio-variant provenance in `src/tests/audio/workflows/audio_analysis/level_provenance_test.py`: every result carries a variant name and gain, gain never exceeds the cap, and clipping or requantization is surfaced rather than silent.
-- [ ] T008 Implement the `AudioVariant` record and the `<run_dir>/level.json` writer in `src/senselab/audio/workflows/audio_analysis/level.py`, per `contracts/level-verdicts.md`. Include LUFS measurement via `pyloudnorm`, true-peak, and per-segment gain fields.
+- [X] T005 Write failing tests for the detection-margin profile loader in `src/tests/audio/workflows/audio_analysis/detection_margin_profile_test.py`: monotone margin ordering, quantile range, bias correction computed from `q` rather than stored, and a hard error when a `provisional` derivation claim lacks a `note`.
+- [X] T006 Implement `DetectionMarginProfile` and `DerivationRecord` loading and validation in `src/senselab/audio/workflows/audio_analysis/calibration.py`, per `contracts/policy-profile.md`. Reject a profile whose only support for a margin value is `provisional`.
+- [X] T007 [P] Write failing tests for audio-variant provenance in `src/tests/audio/workflows/audio_analysis/level_provenance_test.py`: every result carries a variant name and gain, gain never exceeds the cap, and clipping or requantization is surfaced rather than silent.
+- [X] T008 Implement the `AudioVariant` record and the `<run_dir>/level.json` writer in `src/senselab/audio/workflows/audio_analysis/level.py`, per `contracts/level-verdicts.md`. Include LUFS measurement via `pyloudnorm`, true-peak, and per-segment gain fields.
 - [ ] T009 Extend `src/senselab/audio/workflows/audio_analysis/stage_context.py` so `StageContext` carries the active variant name and gain, and add a `STAGE_VERSIONS` entry for each new stage. **Coordinate with #537, which also edits this file.**
-- [ ] T010 [P] Add the `influence` and `speaker_count` key groups to `src/senselab/audio/workflows/audio_analysis/adaptive/policy/default.yaml` per `contracts/policy-profile.md`, with `derivation_gate.derived` strictly below `derivation_gate.independent` (FR-011).
-- [ ] T011 Write the initial bundled profile `src/senselab/audio/workflows/audio_analysis/data/detection_margin/2026-07-29.json` with the 3/6/10 dB ladder and the derivation record, marking the partial-loudness figure and the derived statistics as `provisional` per research.md open risks 2 and 3 (FR-023).
+- [X] T010 [P] Add the `influence` and `speaker_count` key groups to `src/senselab/audio/workflows/audio_analysis/adaptive/policy/default.yaml` per `contracts/policy-profile.md`, with `derivation_gate.derived` strictly below `derivation_gate.independent` (FR-011).
+- [X] T011 Write the initial bundled profile `src/senselab/audio/workflows/audio_analysis/data/detection_margin/2026-07-29.json` with the 3/6/10 dB ladder and the derivation record, marking the partial-loudness figure and the derived statistics as `provisional` per research.md open risks 2 and 3 (FR-023).
 
 **Checkpoint**: Policy and provenance layers ready — story phases can begin.
 
