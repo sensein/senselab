@@ -418,6 +418,34 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="YAMNet sliding-window hop, seconds (default: 0.48, matches YAMNet's native 50%% overlap hop).",
     )
     parser.add_argument(
+        "--no-background-mask",
+        action="store_true",
+        help=(
+            "Skip the background mask. The mask marks regions free of TARGET activity, "
+            "which is where background findings are trustworthy without any suppression."
+        ),
+    )
+    parser.add_argument(
+        "--task-type",
+        default=None,
+        help=(
+            "Target event type for the background mask: speech, breath, cough. Determines "
+            "what counts as the participant's own activity. Omitting it triggers a "
+            "conservative fallback that treats any vocal activity as target and is recorded "
+            "as such -- for a breathing or cough task, getting this right is what stops the "
+            "collected signal being reported as a background 'people' source."
+        ),
+    )
+    parser.add_argument(
+        "--mask-guard-interval",
+        type=float,
+        default=None,
+        help=(
+            "Seconds after target activity excluded from the mask (reverberant tail). "
+            "Defaults to the detection-margin profile's value."
+        ),
+    )
+    parser.add_argument(
         "--scene-top-k",
         type=int,
         default=50,
@@ -930,6 +958,9 @@ def _pass_plan(args: argparse.Namespace) -> PassPlan:
         yamnet_win_length=args.yamnet_win_length,
         yamnet_hop_length=args.yamnet_hop_length,
         scene_top_k=args.scene_top_k,
+        background_mask=not args.no_background_mask,
+        task_type=args.task_type,
+        mask_guard_interval_s=args.mask_guard_interval,
         features="features" not in skip,
         features_win_length=args.features_win_length,
         features_hop_length=args.features_hop_length,

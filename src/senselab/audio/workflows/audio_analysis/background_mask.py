@@ -335,3 +335,159 @@ class MaskedRegionIntrospection:
             "summary_a_weighted_db": self.summary_a_weighted_db,
             "findings": list(self.findings),
         }
+
+
+# ── target-activity evidence (T033, FR-033a) ───────────────────────────
+
+
+def _overlaps(a_start: float, a_end: float, b_start: float, b_end: float) -> bool:
+    """True when two half-open intervals intersect."""
+    return a_start < b_end and b_start < a_end
+
+
+def _speech_activity_by_bucket(
+    pass_summary: Mapping[str, Any],
+    buckets: Sequence[tuple[float, float]],
+) -> list[float | None]:
+    """Per-bucket speech-activity confidence from diarization segments.
+
+    ``None`` where no diarizer contributed, so "nobody looked" stays distinguishable from
+    "everybody said no" — collapsing the two is what would let an unexamined bucket be
+    reported as clean background.
+    """
+    diar = (pass_summary.get("diarization") or {}).get("by_model") or {}
+    tracks = [outcome.get("result") or [] for outcome in diar.values() if outcome.get("status") == "ok"]
+    if not tracks:
+        return [None] * len(buckets)
+    out: list[float | None] = []
+    for b_start, b_end in buckets:
+        votes = [
+            1.0
+            if any(
+                _overlaps(
+                    float(getattr(seg, "start", (seg or {}).get("start", 0.0)) or 0.0),
+                    float(getattr(seg, "end", (seg or {}).get("end", 0.0)) or 0.0),
+                    b_start,
+                    b_end,
+                )
+                for seg in track
+            )
+            else 0.0
+            for track in tracks
+        ]
+        out.append(sum(votes) / len(votes) if votes else None)
+    return out
+
+
+def _label_score_by_bucket(
+    pass_summary: Mapping[str, Any],
+    buckets: Sequence[tuple[float, float]],
+    labels: Sequence[str],
+    *,
+    absent_bound_below: float = 0.6,
+) -> list[float | None]:
+    """Per-bucket maximum score across ``labels``, from the scene classifiers.
+
+    This is the mechanism FR-033a requires: for a breath or cough target, voice activity
+    reports nothing while the target event is happening, so the evidence has to come from
+    classifier labels instead.
+    """
+    from senselab.audio.workflows.audio_analysis.harvesters import classification_windows
+
+    wanted = set(labels)
+    if not wanted:
+        return [None] * len(buckets)
+
+    windows: list[Any] = []
+    for key in ("ast", "yamnet"):
+        block = pass_summary.get(key) or {}
+        if block.get("status") == "ok":
+            windows.extend(classification_windows(block.get("result")))
+    if not windows:
+        return [None] * len(buckets)
+
+    out: list[float | None] = []
+    for b_start, b_end in buckets:
+        best: float | None = None
+        for win in windows:
+            if not isinstance(win, dict):
+                continue
+            if not _overlaps(float(win.get("start", 0.0)), float(win.get("end", 0.0)), b_start, b_end):
+                continue
+            scores = [float(x) for x in (win.get("scores") or [])]
+            hit = next(
+                (float(sc) for lb, sc in zip(win.get("labels") or [], scores) if str(lb) in wanted),
+                None,
+            )
+            # A target label absent from a top-k window is bounded above by the smallest
+            # score the window *did* report — it must rank below all of them. That bound is
+            # usable evidence only when it lands below the active threshold: then the target
+            # is definitely not active. When the bound sits above the threshold (a short
+            # window reporting one confident label, say) it is true but uninformative, and
+            # reporting it as the confidence would read a quiet bucket as target-active. In
+            # that case there is genuinely nothing to say, so contribute nothing and let the
+            # bucket fall to `indeterminate`.
+            if hit is not None:
+                value: float | None = hit
+            elif scores and min(scores) < absent_bound_below:
+                value = min(scores)
+            else:
+                value = None
+            if value is not None:
+                best = value if best is None else max(best, value)
+        out.append(best)
+    return out
+
+
+def target_confidence_by_bucket(
+    pass_summary: Mapping[str, Any],
+    buckets: Sequence[tuple[float, float]],
+    event_types: Sequence[str],
+    *,
+    active_threshold: float = 0.6,
+) -> list[dict[str, Any]]:
+    """Assemble per-bucket target-activity evidence for :func:`build_mask`.
+
+    Combines two evidence sources, taking the **maximum** because either is sufficient to
+    establish that the participant was active:
+
+    - speech activity from diarization, when ``speech`` is a target type;
+    - classifier label scores for every non-speech target type (FR-033a).
+
+    Uncertainty is the *spread* between contributing sources — zero when they agree, wide
+    when they disagree — and ``1.0`` when nothing contributed at all. That last case is the
+    important one: a bucket no source examined must not read as confidently target-free.
+
+    Args:
+        pass_summary: The per-pass summary from ``run_pass``.
+        buckets: ``(start, end)`` pairs on the analysis grid.
+        event_types: Target event types from :func:`target_event_types_for`.
+        active_threshold: The mask's target-active threshold. An absent target label's
+            upper bound counts as evidence only when it falls below this; above it the
+            bound is true but uninformative.
+
+    Returns:
+        Bucket rows ready for :func:`build_mask`.
+    """
+    sources: list[list[float | None]] = []
+    if _SPEECH_TARGET in event_types:
+        sources.append(_speech_activity_by_bucket(pass_summary, buckets))
+    labels = target_labels_for(event_types)
+    if labels:
+        sources.append(_label_score_by_bucket(pass_summary, buckets, labels, absent_bound_below=active_threshold))
+
+    rows: list[dict[str, Any]] = []
+    for i, (start, end) in enumerate(buckets):
+        values = [s[i] for s in sources if s[i] is not None]
+        if not values:
+            rows.append({"start": start, "end": end, "target_confidence": 0.0, "uncertainty": 1.0})
+            continue
+        rows.append(
+            {
+                "start": start,
+                "end": end,
+                "target_confidence": max(values),
+                "uncertainty": (max(values) - min(values)) if len(values) > 1 else 0.0,
+            }
+        )
+    return rows

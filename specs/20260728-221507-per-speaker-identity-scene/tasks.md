@@ -119,13 +119,13 @@ and reported total masked duration and fraction.
 
 - [X] T031 [US4] Implement `BackgroundMaskRegion` and `BackgroundMask` in `src/senselab/audio/workflows/audio_analysis/background_mask.py` per `data-model.md` §5, deriving the three states from the existing presence axis plus diarization and voice-activity outputs.
 - [X] T032 [US4] Implement task-metadata-driven target-event selection in `src/senselab/audio/workflows/audio_analysis/background_mask.py`, reading `mask.target_event_types_by_task` from the profile with the conservative fallback (FR-033, FR-033b).
-- [ ] T033 [US4] Implement non-speech target detection for breathing and cough tasks in `src/senselab/audio/workflows/audio_analysis/background_mask.py`, so the mask is not built from speech activity alone when the target is a non-speech vocal event (FR-033a).
+- [X] T033 [US4] Implement non-speech target detection for breathing and cough tasks in `src/senselab/audio/workflows/audio_analysis/background_mask.py`, so the mask is not built from speech activity alone when the target is a non-speech vocal event (FR-033a).
 - [X] T034 [US4] Implement guard-interval trimming in `src/senselab/audio/workflows/audio_analysis/background_mask.py`, recording `guard_trimmed_s` per region (FR-034).
 - [X] T034a [US4] Add a background-mask row to the final timeline in `src/senselab/audio/workflows/audio_analysis/adaptive/plot.py`: three-state strip with uncertainty as alpha and the guard-trimmed span hatched, placed above the axis rows so a reviewer sees which spans the findings below can be trusted in (user request; FR-031/FR-034).
-- [ ] T035 [US4] Implement the mask writers — `background_mask.parquet` and `background_mask.json` — in `src/senselab/audio/workflows/audio_analysis/io.py` per `contracts/background-mask.md` (FR-038, SC-021).
+- [X] T035 [US4] Implement the mask writers — `background_mask.parquet` and `background_mask.json` — in `src/senselab/audio/workflows/audio_analysis/io.py` per `contracts/background-mask.md` (FR-038, SC-021).
 - [X] T036 [US4] Implement `MaskedRegionIntrospection` and the `mask_introspection.json` writer in `background_mask.py`, including `is_noise_floor_only` and the A-weighted summary that is never used as the gate (FR-037).
-- [ ] T037 [US4] Add `--background-mask`, `--task-type`, `--mask-guard-interval`, and `--mask-introspect` flags to `scripts/analyze_audio.py` per `contracts/cli.md`. **Minor collision with #523.**
-- [ ] T038 [US4] Wire the mask into `run_pass` in `src/senselab/audio/workflows/audio_analysis/stages.py`, emitting on the same grid as the presence output (FR-031). **Coordinate with #537.**
+- [X] T037 [US4] Add `--background-mask`, `--task-type`, `--mask-guard-interval`, and `--mask-introspect` flags to `scripts/analyze_audio.py` per `contracts/cli.md`. **Minor collision with #523.**
+- [X] T038 [US4] Wire the mask into `run_pass` in `src/senselab/audio/workflows/audio_analysis/stages.py`, emitting on the same grid as the presence output (FR-031). **Coordinate with #537.**
 
 **Checkpoint**: Mask available with uncertainty and provenance. Regions where background
 claims are trustworthy without suppression are now identifiable.

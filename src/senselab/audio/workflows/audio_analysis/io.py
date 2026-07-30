@@ -90,3 +90,47 @@ def write_axis_parquet(
 
     pq.write_table(table, dest)
     return dest
+
+
+def write_background_mask(
+    mask: Any,  # noqa: ANN401 — BackgroundMask; typed loosely to keep io import-light
+    dest_dir: Path,
+) -> tuple[Path, Path]:
+    """Write ``background_mask.parquet`` + ``background_mask.json`` for one pass.
+
+    Both files are written even when the mask is empty. "No mask was produced" and "the
+    mask was empty" are different facts about a recording, and omitting the files would
+    make them indistinguishable — which matters because an empty mask means every
+    background finding depends on suppression depth alone (FR-040).
+
+    Args:
+        mask: A ``BackgroundMask``.
+        dest_dir: Pass output directory.
+
+    Returns:
+        ``(parquet_path, json_path)``.
+    """
+    import pandas as pd
+
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    rows = mask.to_rows()
+    columns = [
+        "region_id",
+        "start",
+        "end",
+        "state",
+        "uncertainty",
+        "guard_trimmed_s",
+        "contains_nontarget_speech",
+        "supports_long_window",
+        "target_event_types",
+    ]
+    frame = pd.DataFrame(rows, columns=columns) if rows else pd.DataFrame({c: [] for c in columns})
+    parquet_path = dest_dir / "background_mask.parquet"
+    frame.to_parquet(parquet_path, index=False)
+
+    json_path = dest_dir / "background_mask.json"
+    json_path.write_text(json.dumps(mask.to_json(), indent=2) + "\n")
+    return parquet_path, json_path

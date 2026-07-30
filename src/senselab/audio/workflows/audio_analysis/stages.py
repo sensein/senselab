@@ -27,7 +27,7 @@ Two contracts worth stating because breaking them fails *silently*:
 from __future__ import annotations
 
 import sys
-from typing import Any, Literal, Sequence
+from typing import Any, Literal, Mapping, Sequence
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.classification import classify_audios
@@ -511,6 +511,73 @@ def stage_ppg(audio: Audio, ctx: StageContext) -> dict[str, Any]:
     return {"ppgs": outcome}
 
 
+def stage_background_mask(
+    ctx: StageContext,
+    *,
+    pass_summary: dict[str, Any],
+    duration_s: float,
+    task_type: str | None,
+    grid: Any = None,  # noqa: ANN401 — BucketGrid; defaulted to avoid an import at call sites
+    profile: Mapping[str, Any] | None = None,
+    guard_interval_s: float | None = None,
+    long_window_s: float = 10.24,
+) -> dict[str, Any]:
+    """Build the background mask for this pass and write its sidecars (T038, FR-031).
+
+    Runs *after* diarization and scene classification because it consumes both: speech
+    targets are evidenced by diarization, non-speech targets (breath, cough) by classifier
+    labels. Ordering it earlier would leave a breath task with no evidence source and a
+    mask that silently reported "never active" (FR-033a).
+
+    Args:
+        ctx: Stage context.
+        pass_summary: The summary built so far — diarization and scene blocks must be in it.
+        duration_s: Recording duration.
+        task_type: Task name from metadata, or ``None`` for the conservative fallback.
+        grid: Bucket grid; a default 0.5 s grid is used when omitted.
+        profile: Detection-margin profile; the bundled default is loaded when omitted.
+        guard_interval_s: Override for the profile's guard interval.
+        long_window_s: Long-window classifier window, for the FR-045 support flag.
+
+    Returns:
+        A ``{"background_mask": {...}}`` fragment carrying the mask document.
+    """
+    from senselab.audio.workflows.audio_analysis.background_mask import (
+        build_mask,
+        target_confidence_by_bucket,
+        target_event_types_for,
+    )
+    from senselab.audio.workflows.audio_analysis.calibration import load_detection_margin_profile
+    from senselab.audio.workflows.audio_analysis.grid import BucketGrid
+    from senselab.audio.workflows.audio_analysis.io import write_background_mask
+
+    resolved = dict(profile or load_detection_margin_profile())
+    if guard_interval_s is not None:
+        mask_cfg = dict(resolved.get("mask") or {})
+        mask_cfg["guard_interval_s"] = float(guard_interval_s)
+        resolved["mask"] = mask_cfg
+
+    bucket_grid = grid or BucketGrid()
+    buckets = [(b_start, b_end) for b_start, b_end, _idx in bucket_grid.iter_buckets(duration_s)]
+    event_types, _provenance = target_event_types_for(task_type, resolved)
+    active_threshold = float((resolved.get("mask") or {}).get("target_active_confidence", 0.6))
+    rows = target_confidence_by_bucket(pass_summary, buckets, event_types, active_threshold=active_threshold)
+    mask = build_mask(rows, task_type, profile=resolved, long_window_s=long_window_s)
+
+    doc = mask.to_json()
+    if ctx.out_dir is not None:
+        write_background_mask(mask, ctx.out_dir)
+    return {
+        "background_mask": {
+            "status": "ok",
+            "result": doc,
+            "provenance": ctx.provenance_for(
+                "background_mask", None, {"task_type": task_type, "guard_interval_s": mask.guard_interval_s}
+            ),
+        }
+    }
+
+
 def run_pass(audio: Audio, ctx: StageContext, plan: PassPlan) -> dict[str, Any]:
     """Run the planned stages for one pass and return its summary.
 
@@ -580,5 +647,17 @@ def run_pass(audio: Audio, ctx: StageContext, plan: PassPlan) -> dict[str, Any]:
 
     if plan.ppg:
         summary.update(stage_ppg(audio, ctx))
+
+    if plan.background_mask:
+        summary.update(
+            stage_background_mask(
+                ctx,
+                pass_summary=summary,
+                duration_s=duration_s,
+                task_type=plan.task_type,
+                guard_interval_s=plan.mask_guard_interval_s,
+                long_window_s=plan.ast_win_length,
+            )
+        )
 
     return summary
