@@ -107,6 +107,34 @@ the skipped intervention in `convergence.json → next_actions`.
 
 ---
 
+## Background scene characterization
+
+Detects background sound sources — people, machines, environment — beneath a
+near-microphone foreground speaker, and reports **how far above the noise floor** each one
+sits so a marginal finding is never mistaken for a confident one.
+
+```bash
+uv run python scripts/analyze_audio.py recording.wav --task-type speech --foreground-suppression
+```
+
+Three things worth knowing before reading the output:
+
+**Detection is floor subtraction, not amplification.** Amplification moves a source and the
+leaked foreground together, so it changes no signal-to-noise ratio. It is capped at 10 dB
+and used only to keep a classifier's absolute floor from destroying quiet content.
+
+**Every finding carries its margin above the band noise floor**, on a 3 / 6 / 10 dB ladder
+corroborated independently by human masked-threshold criteria, a dozen bioacoustics and
+noise-standard traditions, and the classifiers' own measured detection floors.
+
+**A null result is attributable.** Suppression depth is reported alongside, so "no
+background found" is distinguishable from "suppression was too shallow to look".
+
+The background mask marks where claims are trustworthy without relying on suppression at
+all. `--task-type` matters: in a breathing or cough task the target event *is* a non-speech
+vocal sound, and a mask built from voice activity alone would report the collected signal as
+a background source.
+
 ## ⚠️ System Requirements
 1. **If on macOS, this package requires an ARM64 architecture** due to PyTorch 2.2.2+ dropping support for x86-64 on macOS.
 
