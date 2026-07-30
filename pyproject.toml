@@ -71,7 +71,12 @@ pii = [
   # spaCy model itself is not pulled by pip — install it separately:
   # uv run python -m spacy download en_core_web_lg
   "presidio-analyzer>=2.2",
-  "spacy>=3.7"
+  "spacy>=3.7",
+  # Additional engines used by scripts/pii_compliance_pipeline.py. All optional at
+  # run time — the pipeline skips any that are missing and says so — but installing
+  # the extra should give the full detector set.
+  "gliner>=0.2.28",  # HIPAA-identifier detector
+  "wordfreq>=3.1.1"  # word frequencies behind the rare-word / rare-role guards
 ]
 text = [
   "sentence-transformers>=5.1",

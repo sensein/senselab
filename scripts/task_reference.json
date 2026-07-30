@@ -1,0 +1,4725 @@
+{
+    "harvard-sentences-list-1-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The birch canoe slid on the smooth planks."
+        ]
+    },
+    "harvard-sentences-list-1-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Glue the sheet to the dark blue background."
+        ]
+    },
+    "harvard-sentences-list-1-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "It's easy to tell the depth of a well."
+        ]
+    },
+    "harvard-sentences-list-1-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "These days a chicken leg is a rare dish."
+        ]
+    },
+    "harvard-sentences-list-1-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Rice is often served in round bowls."
+        ]
+    },
+    "harvard-sentences-list-1-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The juice of lemons makes fine punch."
+        ]
+    },
+    "harvard-sentences-list-1-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The box was thrown beside the parked truck."
+        ]
+    },
+    "harvard-sentences-list-1-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The hogs were fed chopped corn and garbage."
+        ]
+    },
+    "harvard-sentences-list-1-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Four hours of steady work faced us."
+        ]
+    },
+    "harvard-sentences-list-1-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A large size in stockings is hard to sell."
+        ]
+    },
+    "harvard-sentences-list-2-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The boy was there when the sun rose."
+        ]
+    },
+    "harvard-sentences-list-2-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A rod is used to catch pink salmon."
+        ]
+    },
+    "harvard-sentences-list-2-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The source of the huge river is the clear spring."
+        ]
+    },
+    "harvard-sentences-list-2-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Kick the ball straight and follow through."
+        ]
+    },
+    "harvard-sentences-list-2-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Help the woman get back to her feet."
+        ]
+    },
+    "harvard-sentences-list-2-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A pot of tea helps to pass the evening."
+        ]
+    },
+    "harvard-sentences-list-2-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Smoky fires lack flame and heat."
+        ]
+    },
+    "harvard-sentences-list-2-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The soft cushion broke the man's fall."
+        ]
+    },
+    "harvard-sentences-list-2-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The salt breeze came across from the sea."
+        ]
+    },
+    "harvard-sentences-list-2-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The girl at the booth sold fifty bonds."
+        ]
+    },
+    "harvard-sentences-list-3-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The small pup gnawed a hole in the sock."
+        ]
+    },
+    "harvard-sentences-list-3-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The fish twisted and turned on the bent hook."
+        ]
+    },
+    "harvard-sentences-list-3-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Press the pants and sew a button on the vest."
+        ]
+    },
+    "harvard-sentences-list-3-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The swan dive was far short of perfect."
+        ]
+    },
+    "harvard-sentences-list-3-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The beauty of the view stunned the young boy."
+        ]
+    },
+    "harvard-sentences-list-3-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Two blue fish swam in the tank."
+        ]
+    },
+    "harvard-sentences-list-3-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Her purse was full of useless trash."
+        ]
+    },
+    "harvard-sentences-list-3-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The colt reared and threw the tall rider."
+        ]
+    },
+    "harvard-sentences-list-3-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "It snowed, rained, and hailed the same morning."
+        ]
+    },
+    "harvard-sentences-list-3-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Read verse out loud for pleasure."
+        ]
+    },
+    "harvard-sentences-list-4-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Hoist the load to your left shoulder."
+        ]
+    },
+    "harvard-sentences-list-4-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Take the winding path to reach the lake."
+        ]
+    },
+    "harvard-sentences-list-4-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Note closely the size of the gas tank."
+        ]
+    },
+    "harvard-sentences-list-4-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Wipe the grease off his dirty face."
+        ]
+    },
+    "harvard-sentences-list-4-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Mend the coat before you go out."
+        ]
+    },
+    "harvard-sentences-list-4-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The wrist was badly strained and hung limp."
+        ]
+    },
+    "harvard-sentences-list-4-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The stray cat gave birth to kittens."
+        ]
+    },
+    "harvard-sentences-list-4-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The young girl gave no clear response."
+        ]
+    },
+    "harvard-sentences-list-4-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The meal was cooked before the bell rang."
+        ]
+    },
+    "harvard-sentences-list-4-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "What joy there is in living."
+        ]
+    },
+    "harvard-sentences-list-5-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A king ruled the state in the early days."
+        ]
+    },
+    "harvard-sentences-list-5-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The ship was torn apart on the sharp reef."
+        ]
+    },
+    "harvard-sentences-list-5-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Sickness kept him home the third week."
+        ]
+    },
+    "harvard-sentences-list-5-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The wide road shimmered in the hot sun."
+        ]
+    },
+    "harvard-sentences-list-5-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The lazy cow lay in the cool grass."
+        ]
+    },
+    "harvard-sentences-list-5-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Lift the square stone over the fence."
+        ]
+    },
+    "harvard-sentences-list-5-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The rope will bind the seven books at once."
+        ]
+    },
+    "harvard-sentences-list-5-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Hop over the fence and plunge in."
+        ]
+    },
+    "harvard-sentences-list-5-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The friendly gang left the drug store."
+        ]
+    },
+    "harvard-sentences-list-5-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Mesh wire keeps chicks inside."
+        ]
+    },
+    "harvard-sentences-list-6-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The frosty air passed through the coat."
+        ]
+    },
+    "harvard-sentences-list-6-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The crooked maze failed to fool the mouse."
+        ]
+    },
+    "harvard-sentences-list-6-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Adding fast leads to wrong sums."
+        ]
+    },
+    "harvard-sentences-list-6-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The show was a flop from the very start."
+        ]
+    },
+    "harvard-sentences-list-6-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A saw is a tool used for making boards."
+        ]
+    },
+    "harvard-sentences-list-6-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The wagon moved on well oiled wheels."
+        ]
+    },
+    "harvard-sentences-list-6-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "March the soldiers past the next hill."
+        ]
+    },
+    "harvard-sentences-list-6-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A cup of sugar makes sweet fudge."
+        ]
+    },
+    "harvard-sentences-list-6-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Place a rosebush near the porch steps."
+        ]
+    },
+    "harvard-sentences-list-6-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Both lost their lives in the raging storm."
+        ]
+    },
+    "harvard-sentences-list-7-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "We talked of the side show in the circus."
+        ]
+    },
+    "harvard-sentences-list-7-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Use a pencil to write the first draft."
+        ]
+    },
+    "harvard-sentences-list-7-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "He ran half way to the hardware store."
+        ]
+    },
+    "harvard-sentences-list-7-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The clock struck to mark the third period."
+        ]
+    },
+    "harvard-sentences-list-7-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A small creek cut across the field."
+        ]
+    },
+    "harvard-sentences-list-7-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Cars and busses stalled in snow drifts."
+        ]
+    },
+    "harvard-sentences-list-7-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The set of china hit the floor with a crash."
+        ]
+    },
+    "harvard-sentences-list-7-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "This is a grand season for hikes on the road."
+        ]
+    },
+    "harvard-sentences-list-7-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The dune rose from the edge of the water."
+        ]
+    },
+    "harvard-sentences-list-7-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Those words were the cue for the actor to leave."
+        ]
+    },
+    "harvard-sentences-list-8-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A yacht slid around the point into the bay."
+        ]
+    },
+    "harvard-sentences-list-8-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The two met while playing on the sand."
+        ]
+    },
+    "harvard-sentences-list-8-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The ink stain dried on the finished page."
+        ]
+    },
+    "harvard-sentences-list-8-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The walled town was seized without a fight."
+        ]
+    },
+    "harvard-sentences-list-8-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The lease ran out in sixteen weeks."
+        ]
+    },
+    "harvard-sentences-list-8-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A tame squirrel makes a nice pet."
+        ]
+    },
+    "harvard-sentences-list-8-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The horn of the car woke the sleeping cop."
+        ]
+    },
+    "harvard-sentences-list-8-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The heart beat strongly and with firm strokes."
+        ]
+    },
+    "harvard-sentences-list-8-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The pearl was worn in a thin silver ring."
+        ]
+    },
+    "harvard-sentences-list-8-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The fruit peel was cut in thick slices."
+        ]
+    },
+    "harvard-sentences-list-9-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The Navy attacked the big task force."
+        ]
+    },
+    "harvard-sentences-list-9-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "See the cat glaring at the scared mouse."
+        ]
+    },
+    "harvard-sentences-list-9-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "There are more than two factors here."
+        ]
+    },
+    "harvard-sentences-list-9-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The hat brim was wide and too droopy."
+        ]
+    },
+    "harvard-sentences-list-9-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The lawyer tried to lose his case."
+        ]
+    },
+    "harvard-sentences-list-9-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The grass curled around the fence post."
+        ]
+    },
+    "harvard-sentences-list-9-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Cut the pie into large parts."
+        ]
+    },
+    "harvard-sentences-list-9-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Men strive but seldom get rich."
+        ]
+    },
+    "harvard-sentences-list-9-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Always close the barn door tight."
+        ]
+    },
+    "harvard-sentences-list-9-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "He lay prone and hardly moved a limb."
+        ]
+    },
+    "harvard-sentences-list-10-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The slush lay deep along the street."
+        ]
+    },
+    "harvard-sentences-list-10-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A wisp of cloud hung in the blue air."
+        ]
+    },
+    "harvard-sentences-list-10-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A pound of sugar costs more than eggs."
+        ]
+    },
+    "harvard-sentences-list-10-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The fin was sharp and cut the clear water."
+        ]
+    },
+    "harvard-sentences-list-10-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The play seems dull and quite stupid."
+        ]
+    },
+    "harvard-sentences-list-10-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Bail the boat to stop it from sinking."
+        ]
+    },
+    "harvard-sentences-list-10-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The term ended in late June that year."
+        ]
+    },
+    "harvard-sentences-list-10-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A tusk is used to make costly gifts."
+        ]
+    },
+    "harvard-sentences-list-10-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Ten pins were set in order."
+        ]
+    },
+    "harvard-sentences-list-10-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The bill was paid every third week."
+        ]
+    },
+    "harvard-sentences-list-11-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Oak is strong and also gives shade."
+        ]
+    },
+    "harvard-sentences-list-11-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Cats and dogs each hate the other."
+        ]
+    },
+    "harvard-sentences-list-11-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The pipe began to rust while new."
+        ]
+    },
+    "harvard-sentences-list-11-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Open the crate but don't break the glass."
+        ]
+    },
+    "harvard-sentences-list-11-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Add the sum to the product of these three."
+        ]
+    },
+    "harvard-sentences-list-11-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Thieves who rob friends deserve jail."
+        ]
+    },
+    "harvard-sentences-list-11-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The ripe taste of cheese improves with age."
+        ]
+    },
+    "harvard-sentences-list-11-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Act on these orders with great speed."
+        ]
+    },
+    "harvard-sentences-list-11-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The hog crawled under the high fence."
+        ]
+    },
+    "harvard-sentences-list-11-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Move the vat over the hot fire."
+        ]
+    },
+    "harvard-sentences-list-12-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The bark of the pine tree was shiny and dark."
+        ]
+    },
+    "harvard-sentences-list-12-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Leaves turn brown and yellow in the fall."
+        ]
+    },
+    "harvard-sentences-list-12-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The pennant waved when the wind blew."
+        ]
+    },
+    "harvard-sentences-list-12-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Split the log with a quick, sharp blow."
+        ]
+    },
+    "harvard-sentences-list-12-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Burn peat after the logs give out."
+        ]
+    },
+    "harvard-sentences-list-12-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "He ordered peach pie with ice cream."
+        ]
+    },
+    "harvard-sentences-list-12-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Weave the carpet on the right hand side."
+        ]
+    },
+    "harvard-sentences-list-12-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Hemp is a weed found in parts of the tropics."
+        ]
+    },
+    "harvard-sentences-list-12-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A lame back kept his score low."
+        ]
+    },
+    "harvard-sentences-list-12-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "We find joy in the simplest things."
+        ]
+    },
+    "harvard-sentences-list-13-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Type out three lists of orders."
+        ]
+    },
+    "harvard-sentences-list-13-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The harder he tried the less he got done."
+        ]
+    },
+    "harvard-sentences-list-13-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The boss ran the show with a watchful eye."
+        ]
+    },
+    "harvard-sentences-list-13-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The cup cracked and spilled its contents."
+        ]
+    },
+    "harvard-sentences-list-13-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Paste can cleanse the most dirty brass."
+        ]
+    },
+    "harvard-sentences-list-13-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The slang word for raw whiskey is booze."
+        ]
+    },
+    "harvard-sentences-list-13-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "It caught its hind paw in a rusty trap."
+        ]
+    },
+    "harvard-sentences-list-13-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The wharf could be seen at the farther shore."
+        ]
+    },
+    "harvard-sentences-list-13-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Feel the heat of the weak dying flame."
+        ]
+    },
+    "harvard-sentences-list-13-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The tiny girl took off her hat."
+        ]
+    },
+    "harvard-sentences-list-14-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A cramp is no small danger on a swim."
+        ]
+    },
+    "harvard-sentences-list-14-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "He said the same phrase thirty times."
+        ]
+    },
+    "harvard-sentences-list-14-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Pluck the bright rose without leaves."
+        ]
+    },
+    "harvard-sentences-list-14-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Two plus seven is less than ten."
+        ]
+    },
+    "harvard-sentences-list-14-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The glow deepened in the eyes of the sweet girl."
+        ]
+    },
+    "harvard-sentences-list-14-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Bring your problems to the wise chief."
+        ]
+    },
+    "harvard-sentences-list-14-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Write a fond note to the friend you cherish."
+        ]
+    },
+    "harvard-sentences-list-14-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Clothes and lodging are free to new men."
+        ]
+    },
+    "harvard-sentences-list-14-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "We frown when events take a bad turn."
+        ]
+    },
+    "harvard-sentences-list-14-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Port is a strong wine with a smoky taste."
+        ]
+    },
+    "harvard-sentences-list-15-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The young kid jumped the rusty gate."
+        ]
+    },
+    "harvard-sentences-list-15-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Guess the results from the first scores."
+        ]
+    },
+    "harvard-sentences-list-15-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A salt pickle tastes fine with ham."
+        ]
+    },
+    "harvard-sentences-list-15-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The just claim got the right verdict."
+        ]
+    },
+    "harvard-sentences-list-15-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "These thistles bend in a high wind."
+        ]
+    },
+    "harvard-sentences-list-15-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Pure bred poodles have curls."
+        ]
+    },
+    "harvard-sentences-list-15-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The tree top waved in a graceful way."
+        ]
+    },
+    "harvard-sentences-list-15-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The spot on the blotter was made by green ink."
+        ]
+    },
+    "harvard-sentences-list-15-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Mud was spattered on the front of his white shirt."
+        ]
+    },
+    "harvard-sentences-list-15-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The cigar burned a hole in the desk top."
+        ]
+    },
+    "harvard-sentences-list-16-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The empty flask stood on the tin tray."
+        ]
+    },
+    "harvard-sentences-list-16-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A speedy man can beat this track mark."
+        ]
+    },
+    "harvard-sentences-list-16-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "He broke a new shoelace that day."
+        ]
+    },
+    "harvard-sentences-list-16-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The coffee stand is too high for the couch."
+        ]
+    },
+    "harvard-sentences-list-16-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The urge to write short stories is rare."
+        ]
+    },
+    "harvard-sentences-list-16-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The pencils have all been used."
+        ]
+    },
+    "harvard-sentences-list-16-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The pirates seized the crew of the lost ship."
+        ]
+    },
+    "harvard-sentences-list-16-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "We tried to replace the coin but failed."
+        ]
+    },
+    "harvard-sentences-list-16-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "She sewed the torn coat quite neatly."
+        ]
+    },
+    "harvard-sentences-list-16-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The sofa cushion is red and of light weight."
+        ]
+    },
+    "harvard-sentences-list-17-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The jacket hung on the back of the wide chair."
+        ]
+    },
+    "harvard-sentences-list-17-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "At that high level the air is pure."
+        ]
+    },
+    "harvard-sentences-list-17-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Drop the two when you add the figures."
+        ]
+    },
+    "harvard-sentences-list-17-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A filing case is now hard to buy."
+        ]
+    },
+    "harvard-sentences-list-17-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "An abrupt start does not win the prize."
+        ]
+    },
+    "harvard-sentences-list-17-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Wood is best for making toys and blocks."
+        ]
+    },
+    "harvard-sentences-list-17-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The office paint was a dull, sad tan."
+        ]
+    },
+    "harvard-sentences-list-17-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "He knew the skill of the great young actress."
+        ]
+    },
+    "harvard-sentences-list-17-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A rag will soak up spilled water."
+        ]
+    },
+    "harvard-sentences-list-17-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A shower of dirt fell from the hot pipes."
+        ]
+    },
+    "harvard-sentences-list-18-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Steam hissed from the broken valve."
+        ]
+    },
+    "harvard-sentences-list-18-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The child almost hurt the small dog."
+        ]
+    },
+    "harvard-sentences-list-18-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "There was a sound of dry leaves outside."
+        ]
+    },
+    "harvard-sentences-list-18-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The sky that morning was clear and bright blue."
+        ]
+    },
+    "harvard-sentences-list-18-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Torn scraps littered the stone floor."
+        ]
+    },
+    "harvard-sentences-list-18-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Sunday is the best part of the week."
+        ]
+    },
+    "harvard-sentences-list-18-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The doctor cured him with these pills."
+        ]
+    },
+    "harvard-sentences-list-18-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The new girl was fired today at noon."
+        ]
+    },
+    "harvard-sentences-list-18-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "They felt gay when the ship arrived in port."
+        ]
+    },
+    "harvard-sentences-list-18-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Add the store's account to the last cent."
+        ]
+    },
+    "harvard-sentences-list-19-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Acid burns holes in wool cloth."
+        ]
+    },
+    "harvard-sentences-list-19-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Fairy tales should be fun to write."
+        ]
+    },
+    "harvard-sentences-list-19-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Eight miles of woodland burned to waste."
+        ]
+    },
+    "harvard-sentences-list-19-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The third act was dull and tired the players."
+        ]
+    },
+    "harvard-sentences-list-19-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A young child should not suffer fright."
+        ]
+    },
+    "harvard-sentences-list-19-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Add the column and put the sum here."
+        ]
+    },
+    "harvard-sentences-list-19-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "We admire and love a good cook."
+        ]
+    },
+    "harvard-sentences-list-19-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "There the flood mark is ten inches."
+        ]
+    },
+    "harvard-sentences-list-19-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "He carved a head from the round block of marble."
+        ]
+    },
+    "harvard-sentences-list-19-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "She has a smart way of wearing clothes."
+        ]
+    },
+    "harvard-sentences-list-20-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The fruit of a fig tree is apple-shaped."
+        ]
+    },
+    "harvard-sentences-list-20-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Corn cobs can be used to kindle a fire."
+        ]
+    },
+    "harvard-sentences-list-20-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Where were they when the noise started."
+        ]
+    },
+    "harvard-sentences-list-20-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The paper box is full of thumb tacks."
+        ]
+    },
+    "harvard-sentences-list-20-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Sell your gift to a buyer at a good gain."
+        ]
+    },
+    "harvard-sentences-list-20-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The tongs lay beside the ice pail."
+        ]
+    },
+    "harvard-sentences-list-20-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The petals fall with the next puff of wind."
+        ]
+    },
+    "harvard-sentences-list-20-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Bring your best compass to the third class."
+        ]
+    },
+    "harvard-sentences-list-20-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "They could laugh although they were sad."
+        ]
+    },
+    "harvard-sentences-list-20-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Farmers came in to thresh the oat crop."
+        ]
+    },
+    "harvard-sentences-list-21-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The brown house was on fire to the attic."
+        ]
+    },
+    "harvard-sentences-list-21-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The lure is used to catch trout and flounder."
+        ]
+    },
+    "harvard-sentences-list-21-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Float the soap on top of the bath water."
+        ]
+    },
+    "harvard-sentences-list-21-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A blue crane is a tall wading bird."
+        ]
+    },
+    "harvard-sentences-list-21-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A fresh start will work such wonders."
+        ]
+    },
+    "harvard-sentences-list-21-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The club rented the rink for the fifth night."
+        ]
+    },
+    "harvard-sentences-list-21-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "After the dance, they went straight home."
+        ]
+    },
+    "harvard-sentences-list-21-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The hostess taught the new maid to serve."
+        ]
+    },
+    "harvard-sentences-list-21-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "He wrote his last novel there at the inn."
+        ]
+    },
+    "harvard-sentences-list-21-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Even the worst will beat his low score."
+        ]
+    },
+    "harvard-sentences-list-22-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The cement had dried when he moved it."
+        ]
+    },
+    "harvard-sentences-list-22-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The loss of the second ship was hard to take."
+        ]
+    },
+    "harvard-sentences-list-22-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The fly made its way along the wall."
+        ]
+    },
+    "harvard-sentences-list-22-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Do that with a wooden stick."
+        ]
+    },
+    "harvard-sentences-list-22-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Live wires should be kept covered."
+        ]
+    },
+    "harvard-sentences-list-22-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The large house had hot water taps."
+        ]
+    },
+    "harvard-sentences-list-22-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "It is hard to erase blue or red ink."
+        ]
+    },
+    "harvard-sentences-list-22-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Write at once or you may forget it."
+        ]
+    },
+    "harvard-sentences-list-22-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The doorknob was made of bright clean brass."
+        ]
+    },
+    "harvard-sentences-list-22-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The wreck occurred by the bank on Main Street."
+        ]
+    },
+    "harvard-sentences-list-23-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A pencil with black lead writes best."
+        ]
+    },
+    "harvard-sentences-list-23-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Coax a young calf to drink from a bucket."
+        ]
+    },
+    "harvard-sentences-list-23-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Schools for ladies teach charm and grace."
+        ]
+    },
+    "harvard-sentences-list-23-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The lamp shone with a steady green flame."
+        ]
+    },
+    "harvard-sentences-list-23-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "They took the axe and the saw to the forest."
+        ]
+    },
+    "harvard-sentences-list-23-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The ancient coin was quite dull and worn."
+        ]
+    },
+    "harvard-sentences-list-23-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The shaky barn fell with a loud crash."
+        ]
+    },
+    "harvard-sentences-list-23-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Jazz and swing fans like fast music."
+        ]
+    },
+    "harvard-sentences-list-23-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Rake the rubbish up and then burn it."
+        ]
+    },
+    "harvard-sentences-list-23-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Slash the gold cloth into fine ribbons."
+        ]
+    },
+    "harvard-sentences-list-24-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Try to have the court decide the case."
+        ]
+    },
+    "harvard-sentences-list-24-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "They are pushed back each time they attack."
+        ]
+    },
+    "harvard-sentences-list-24-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "He broke his ties with groups of former friends."
+        ]
+    },
+    "harvard-sentences-list-24-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "They floated on the raft to sun their white backs."
+        ]
+    },
+    "harvard-sentences-list-24-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The map had an X that meant nothing."
+        ]
+    },
+    "harvard-sentences-list-24-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Whitings are small fish caught in nets."
+        ]
+    },
+    "harvard-sentences-list-24-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Some ads serve to cheat buyers."
+        ]
+    },
+    "harvard-sentences-list-24-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Jerk the rope and the bell rings weakly."
+        ]
+    },
+    "harvard-sentences-list-24-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A waxed floor makes us lose balance."
+        ]
+    },
+    "harvard-sentences-list-24-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Madam, this is the best brand of corn."
+        ]
+    },
+    "harvard-sentences-list-25-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "On the islands the sea breeze is soft and mild."
+        ]
+    },
+    "harvard-sentences-list-25-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The play began as soon as we sat down."
+        ]
+    },
+    "harvard-sentences-list-25-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "This will lead the world to more sound and fury."
+        ]
+    },
+    "harvard-sentences-list-25-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Add salt before you fry the egg."
+        ]
+    },
+    "harvard-sentences-list-25-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The rush for funds reached its peak Tuesday."
+        ]
+    },
+    "harvard-sentences-list-25-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The birch looked stark white and lonesome."
+        ]
+    },
+    "harvard-sentences-list-25-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The box is held by a bright red snapper."
+        ]
+    },
+    "harvard-sentences-list-25-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "To make pure ice, you freeze water."
+        ]
+    },
+    "harvard-sentences-list-25-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The first worm gets snapped early."
+        ]
+    },
+    "harvard-sentences-list-25-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Jump the fence and hurry up the bank."
+        ]
+    },
+    "harvard-sentences-list-26-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Yell and clap as the curtain slides back."
+        ]
+    },
+    "harvard-sentences-list-26-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "They are men who walk the middle of the road."
+        ]
+    },
+    "harvard-sentences-list-26-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Both brothers wear the same size."
+        ]
+    },
+    "harvard-sentences-list-26-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "In some form or other we need fun."
+        ]
+    },
+    "harvard-sentences-list-26-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The prince ordered his head chopped off."
+        ]
+    },
+    "harvard-sentences-list-26-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The houses are built of red clay bricks."
+        ]
+    },
+    "harvard-sentences-list-26-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Ducks fly north but lack a compass."
+        ]
+    },
+    "harvard-sentences-list-26-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Fruit flavors are used in fizz drinks."
+        ]
+    },
+    "harvard-sentences-list-26-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "These pills do less good than others."
+        ]
+    },
+    "harvard-sentences-list-26-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Canned pears lack full flavor."
+        ]
+    },
+    "harvard-sentences-list-27-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The dark pot hung in the front closet."
+        ]
+    },
+    "harvard-sentences-list-27-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Carry the pail to the wall and spill it there."
+        ]
+    },
+    "harvard-sentences-list-27-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The train brought our hero to the big town."
+        ]
+    },
+    "harvard-sentences-list-27-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "We are sure that one war is enough."
+        ]
+    },
+    "harvard-sentences-list-27-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Gray paint stretched for miles around."
+        ]
+    },
+    "harvard-sentences-list-27-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The rude laugh filled the empty room."
+        ]
+    },
+    "harvard-sentences-list-27-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "High seats are best for football fans."
+        ]
+    },
+    "harvard-sentences-list-27-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Tea served from the brown jug is tasty."
+        ]
+    },
+    "harvard-sentences-list-27-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A dash of pepper spoils beef stew."
+        ]
+    },
+    "harvard-sentences-list-27-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A zestful food is the hot-cross bun."
+        ]
+    },
+    "harvard-sentences-list-28-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The horse trotted around the field at a brisk pace."
+        ]
+    },
+    "harvard-sentences-list-28-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Find the twin who stole the pearl necklace."
+        ]
+    },
+    "harvard-sentences-list-28-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Cut the cord that binds the box tightly."
+        ]
+    },
+    "harvard-sentences-list-28-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The red tape bound the smuggled food."
+        ]
+    },
+    "harvard-sentences-list-28-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Look in the corner to find the tan shirt."
+        ]
+    },
+    "harvard-sentences-list-28-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The cold drizzle will halt the bond drive."
+        ]
+    },
+    "harvard-sentences-list-28-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Nine men were hired to dig the ruins."
+        ]
+    },
+    "harvard-sentences-list-28-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The junk yard had a mouldy smell."
+        ]
+    },
+    "harvard-sentences-list-28-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The flint sputtered and lit a pine torch."
+        ]
+    },
+    "harvard-sentences-list-28-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Soak the cloth and drown the sharp odor."
+        ]
+    },
+    "harvard-sentences-list-29-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The shelves were bare of both jam or crackers."
+        ]
+    },
+    "harvard-sentences-list-29-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A joy to every child is the swan boat."
+        ]
+    },
+    "harvard-sentences-list-29-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "All sat frozen and watched the screen."
+        ]
+    },
+    "harvard-sentences-list-29-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A cloud of dust stung his tender eyes."
+        ]
+    },
+    "harvard-sentences-list-29-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "To reach the end he needs much courage."
+        ]
+    },
+    "harvard-sentences-list-29-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Shape the clay gently into block form."
+        ]
+    },
+    "harvard-sentences-list-29-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A ridge on a smooth surface is a bump or flaw."
+        ]
+    },
+    "harvard-sentences-list-29-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Hedge apples may stain your hands green."
+        ]
+    },
+    "harvard-sentences-list-29-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Quench your thirst, then eat the crackers."
+        ]
+    },
+    "harvard-sentences-list-29-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Tight curls get limp on rainy days."
+        ]
+    },
+    "harvard-sentences-list-30-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The mute muffled the high tones of the horn."
+        ]
+    },
+    "harvard-sentences-list-30-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The gold ring fits only a pierced ear."
+        ]
+    },
+    "harvard-sentences-list-30-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The old pan was covered with hard fudge."
+        ]
+    },
+    "harvard-sentences-list-30-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Watch the log float in the wide river."
+        ]
+    },
+    "harvard-sentences-list-30-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The node on the stalk of wheat grew daily."
+        ]
+    },
+    "harvard-sentences-list-30-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The heap of fallen leaves was set on fire."
+        ]
+    },
+    "harvard-sentences-list-30-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Write fast if you want to finish early."
+        ]
+    },
+    "harvard-sentences-list-30-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "His shirt was clean but one button was gone."
+        ]
+    },
+    "harvard-sentences-list-30-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The barrel of beer was a brew of malt and hops."
+        ]
+    },
+    "harvard-sentences-list-30-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Tin cans are absent from store shelves."
+        ]
+    },
+    "harvard-sentences-list-31-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Slide the box into that empty space."
+        ]
+    },
+    "harvard-sentences-list-31-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The plant grew large and green in the window."
+        ]
+    },
+    "harvard-sentences-list-31-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The beam dropped down on the workmen's head."
+        ]
+    },
+    "harvard-sentences-list-31-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Pink clouds floated with the breeze."
+        ]
+    },
+    "harvard-sentences-list-31-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "She danced like a swan, tall and graceful."
+        ]
+    },
+    "harvard-sentences-list-31-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The tube was blown and the tire flat and useless."
+        ]
+    },
+    "harvard-sentences-list-31-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "It is late morning on the old wall clock."
+        ]
+    },
+    "harvard-sentences-list-31-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Let's all join as we sing the last chorus."
+        ]
+    },
+    "harvard-sentences-list-31-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The last switch cannot be turned off."
+        ]
+    },
+    "harvard-sentences-list-31-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The fight will end in just six minutes."
+        ]
+    },
+    "harvard-sentences-list-32-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The store walls were lined with colored frocks."
+        ]
+    },
+    "harvard-sentences-list-32-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The peace league met to discuss their plans."
+        ]
+    },
+    "harvard-sentences-list-32-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The rise to fame of a person takes luck."
+        ]
+    },
+    "harvard-sentences-list-32-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Paper is scarce, so write with much care."
+        ]
+    },
+    "harvard-sentences-list-32-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The quick fox jumped on the sleeping cat."
+        ]
+    },
+    "harvard-sentences-list-32-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The nozzle of the fire hose was bright brass."
+        ]
+    },
+    "harvard-sentences-list-32-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Screw the round cap on as tight as needed."
+        ]
+    },
+    "harvard-sentences-list-32-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Time brings us many changes."
+        ]
+    },
+    "harvard-sentences-list-32-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The purple tie was ten years old."
+        ]
+    },
+    "harvard-sentences-list-32-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Men think and plan and sometimes act."
+        ]
+    },
+    "harvard-sentences-list-33-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Fill the ink jar with sticky glue."
+        ]
+    },
+    "harvard-sentences-list-33-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "He smoke a big pipe with strong contents."
+        ]
+    },
+    "harvard-sentences-list-33-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "We need grain to keep our mules healthy."
+        ]
+    },
+    "harvard-sentences-list-33-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Pack the records in a neat thin case."
+        ]
+    },
+    "harvard-sentences-list-33-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The crunch of feet in the snow was the only sound."
+        ]
+    },
+    "harvard-sentences-list-33-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The copper bowl shone in the sun's rays."
+        ]
+    },
+    "harvard-sentences-list-33-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Boards will warp unless kept dry."
+        ]
+    },
+    "harvard-sentences-list-33-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The plush chair leaned against the wall."
+        ]
+    },
+    "harvard-sentences-list-33-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Glass will clink when struck by metal."
+        ]
+    },
+    "harvard-sentences-list-33-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Bathe and relax in the cool green grass."
+        ]
+    },
+    "harvard-sentences-list-34-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Nine rows of soldiers stood in line."
+        ]
+    },
+    "harvard-sentences-list-34-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The beach is dry and shallow at low tide."
+        ]
+    },
+    "harvard-sentences-list-34-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The idea is to sew both edges straight."
+        ]
+    },
+    "harvard-sentences-list-34-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The kitten chased the dog down the street."
+        ]
+    },
+    "harvard-sentences-list-34-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Pages bound in cloth make a book."
+        ]
+    },
+    "harvard-sentences-list-34-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Try to trace the fine lines of the painting."
+        ]
+    },
+    "harvard-sentences-list-34-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Women form less than half of the group."
+        ]
+    },
+    "harvard-sentences-list-34-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The zones merge in the central part of town."
+        ]
+    },
+    "harvard-sentences-list-34-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A gem in the rough needs work to polish."
+        ]
+    },
+    "harvard-sentences-list-34-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Code is used when secrets are sent."
+        ]
+    },
+    "harvard-sentences-list-35-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Most of the news is easy for us to hear."
+        ]
+    },
+    "harvard-sentences-list-35-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "He used the lathe to make brass objects."
+        ]
+    },
+    "harvard-sentences-list-35-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The vane on top of the pole revolved in the wind."
+        ]
+    },
+    "harvard-sentences-list-35-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Mince pie is a dish served to children."
+        ]
+    },
+    "harvard-sentences-list-35-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The clan gathered on each dull night."
+        ]
+    },
+    "harvard-sentences-list-35-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Let it burn, it gives us warmth and comfort."
+        ]
+    },
+    "harvard-sentences-list-35-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A castle built from sand fails to endure."
+        ]
+    },
+    "harvard-sentences-list-35-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A child's wit saved the day for us."
+        ]
+    },
+    "harvard-sentences-list-35-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Tack the strip of carpet to the worn floor."
+        ]
+    },
+    "harvard-sentences-list-35-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Next Tuesday we must vote."
+        ]
+    },
+    "harvard-sentences-list-36-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Pour the stew from the pot into the plate."
+        ]
+    },
+    "harvard-sentences-list-36-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Each penny shone like new."
+        ]
+    },
+    "harvard-sentences-list-36-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The man went to the woods to gather sticks."
+        ]
+    },
+    "harvard-sentences-list-36-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The dirt piles were lines along the road."
+        ]
+    },
+    "harvard-sentences-list-36-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The logs fell and tumbled into the clear stream."
+        ]
+    },
+    "harvard-sentences-list-36-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Just hoist it up and take it away."
+        ]
+    },
+    "harvard-sentences-list-36-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A ripe plum is fit for a king's palate."
+        ]
+    },
+    "harvard-sentences-list-36-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Our plans right now are hazy."
+        ]
+    },
+    "harvard-sentences-list-36-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Brass rings are sold by these natives."
+        ]
+    },
+    "harvard-sentences-list-36-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "It takes a good trap to capture a bear."
+        ]
+    },
+    "harvard-sentences-list-37-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Feed the white mouse some flower seeds."
+        ]
+    },
+    "harvard-sentences-list-37-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The thaw came early and freed the stream."
+        ]
+    },
+    "harvard-sentences-list-37-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "He took the lead and kept it the whole distance."
+        ]
+    },
+    "harvard-sentences-list-37-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The key you designed will fit the lock."
+        ]
+    },
+    "harvard-sentences-list-37-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Plead to the council to free the poor thief."
+        ]
+    },
+    "harvard-sentences-list-37-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Better hash is made of rare beef."
+        ]
+    },
+    "harvard-sentences-list-37-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "This plank was made for walking on."
+        ]
+    },
+    "harvard-sentences-list-37-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The lake sparkled in the red hot sun."
+        ]
+    },
+    "harvard-sentences-list-37-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "He crawled with care along the ledge."
+        ]
+    },
+    "harvard-sentences-list-37-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Tend the sheep while the dog wanders."
+        ]
+    },
+    "harvard-sentences-list-38-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "It takes a lot of help to finish these."
+        ]
+    },
+    "harvard-sentences-list-38-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Mark the spot with a sign painted red."
+        ]
+    },
+    "harvard-sentences-list-38-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Take two shares as a fair profit."
+        ]
+    },
+    "harvard-sentences-list-38-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The fur of cats goes by many names."
+        ]
+    },
+    "harvard-sentences-list-38-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "North winds bring colds and fevers."
+        ]
+    },
+    "harvard-sentences-list-38-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "He asks no person to vouch for him."
+        ]
+    },
+    "harvard-sentences-list-38-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Go now and come here later."
+        ]
+    },
+    "harvard-sentences-list-38-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A sash of gold silk will trim her dress."
+        ]
+    },
+    "harvard-sentences-list-38-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Soap can wash most dirt away."
+        ]
+    },
+    "harvard-sentences-list-38-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "That move means the game is over."
+        ]
+    },
+    "harvard-sentences-list-39-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "He wrote down a long list of items."
+        ]
+    },
+    "harvard-sentences-list-39-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A siege will crack the strong defense."
+        ]
+    },
+    "harvard-sentences-list-39-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Grape juice and water mix well."
+        ]
+    },
+    "harvard-sentences-list-39-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Roads are paved with sticky tar."
+        ]
+    },
+    "harvard-sentences-list-39-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Fake stones shine but cost little."
+        ]
+    },
+    "harvard-sentences-list-39-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The drip of the rain made a pleasant sound."
+        ]
+    },
+    "harvard-sentences-list-39-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Smoke poured out of every crack."
+        ]
+    },
+    "harvard-sentences-list-39-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Serve the hot rum to the tired heroes."
+        ]
+    },
+    "harvard-sentences-list-39-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Much of the story makes good sense."
+        ]
+    },
+    "harvard-sentences-list-39-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The sun came up to light the eastern sky."
+        ]
+    },
+    "harvard-sentences-list-40-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Heave the line over the port side."
+        ]
+    },
+    "harvard-sentences-list-40-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A lathe cuts and trims any wood."
+        ]
+    },
+    "harvard-sentences-list-40-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "It's a dense crowd in two distinct ways."
+        ]
+    },
+    "harvard-sentences-list-40-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "His hip struck the knee of the next player."
+        ]
+    },
+    "harvard-sentences-list-40-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The stale smell of old beer lingers."
+        ]
+    },
+    "harvard-sentences-list-40-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The desk was firm on the shaky floor."
+        ]
+    },
+    "harvard-sentences-list-40-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "It takes heat to bring out the odor."
+        ]
+    },
+    "harvard-sentences-list-40-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Beef is scarcer than some lamb."
+        ]
+    },
+    "harvard-sentences-list-40-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Raise the sail and steer the ship northward."
+        ]
+    },
+    "harvard-sentences-list-40-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A cone costs five cents on Mondays."
+        ]
+    },
+    "harvard-sentences-list-41-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A pod is what peas always grow in."
+        ]
+    },
+    "harvard-sentences-list-41-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Jerk the dart from the cork target."
+        ]
+    },
+    "harvard-sentences-list-41-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "No cement will hold hard wood."
+        ]
+    },
+    "harvard-sentences-list-41-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "We now have a new base for shipping."
+        ]
+    },
+    "harvard-sentences-list-41-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A list of names is carved around the base."
+        ]
+    },
+    "harvard-sentences-list-41-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The sheep were led home by a dog."
+        ]
+    },
+    "harvard-sentences-list-41-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Three for a dime, the young peddler cried."
+        ]
+    },
+    "harvard-sentences-list-41-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The sense of smell is better than that of touch."
+        ]
+    },
+    "harvard-sentences-list-41-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "No hardship seemed to keep him sad."
+        ]
+    },
+    "harvard-sentences-list-41-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Grace makes up for lack of beauty."
+        ]
+    },
+    "harvard-sentences-list-42-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Nudge gently but wake her now."
+        ]
+    },
+    "harvard-sentences-list-42-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The news struck doubt into restless minds."
+        ]
+    },
+    "harvard-sentences-list-42-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Once we stood beside the shore."
+        ]
+    },
+    "harvard-sentences-list-42-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A chink in the wall allowed a draft to blow."
+        ]
+    },
+    "harvard-sentences-list-42-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Fasten two pins on each side."
+        ]
+    },
+    "harvard-sentences-list-42-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A cold dip restores health and zest."
+        ]
+    },
+    "harvard-sentences-list-42-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "He takes the oath of office each March."
+        ]
+    },
+    "harvard-sentences-list-42-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The sand drifts over the sill of the old house."
+        ]
+    },
+    "harvard-sentences-list-42-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The point of the steel pen was bent and twisted."
+        ]
+    },
+    "harvard-sentences-list-42-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "There is a lag between thought and act."
+        ]
+    },
+    "harvard-sentences-list-43-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Seed is needed to plant the spring corn."
+        ]
+    },
+    "harvard-sentences-list-43-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Draw the chart with heavy black lines."
+        ]
+    },
+    "harvard-sentences-list-43-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The boy owed his pal thirty cents."
+        ]
+    },
+    "harvard-sentences-list-43-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The chap slipped into the crowd and was lost."
+        ]
+    },
+    "harvard-sentences-list-43-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Hats are worn to tea and not to dinner."
+        ]
+    },
+    "harvard-sentences-list-43-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The ramp led up to the wide highway."
+        ]
+    },
+    "harvard-sentences-list-43-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Beat the dust from the rug onto the lawn."
+        ]
+    },
+    "harvard-sentences-list-43-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Say it slowly but make it ring clear."
+        ]
+    },
+    "harvard-sentences-list-43-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The straw nest housed five robins."
+        ]
+    },
+    "harvard-sentences-list-43-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Screen the porch with woven straw mats."
+        ]
+    },
+    "harvard-sentences-list-44-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "This horse will nose his way to the finish."
+        ]
+    },
+    "harvard-sentences-list-44-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The dry wax protects the deep scratch."
+        ]
+    },
+    "harvard-sentences-list-44-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "He picked up the dice for a second roll."
+        ]
+    },
+    "harvard-sentences-list-44-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "These coins will be needed to pay his debt."
+        ]
+    },
+    "harvard-sentences-list-44-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The nag pulled the frail cart along."
+        ]
+    },
+    "harvard-sentences-list-44-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Twist the valve and release hot steam."
+        ]
+    },
+    "harvard-sentences-list-44-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The vamp of the shoe had a gold buckle."
+        ]
+    },
+    "harvard-sentences-list-44-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The smell of burned rags itches my nose."
+        ]
+    },
+    "harvard-sentences-list-44-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "New pants lack cuffs and pockets."
+        ]
+    },
+    "harvard-sentences-list-44-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The marsh will freeze when cold enough."
+        ]
+    },
+    "harvard-sentences-list-45-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "They slice the sausage thin with a knife."
+        ]
+    },
+    "harvard-sentences-list-45-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The bloom of the rose lasts a few days."
+        ]
+    },
+    "harvard-sentences-list-45-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A gray mare walked before the colt."
+        ]
+    },
+    "harvard-sentences-list-45-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Breakfast buns are fine with a hot drink."
+        ]
+    },
+    "harvard-sentences-list-45-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Bottles hold four kinds of rum."
+        ]
+    },
+    "harvard-sentences-list-45-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The man wore a feather in his felt hat."
+        ]
+    },
+    "harvard-sentences-list-45-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "He wheeled the bike past the winding road."
+        ]
+    },
+    "harvard-sentences-list-45-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Drop the ashes on the worn old rug."
+        ]
+    },
+    "harvard-sentences-list-45-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The desk and both chairs were painted tan."
+        ]
+    },
+    "harvard-sentences-list-45-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Throw out the used paper cup and plate."
+        ]
+    },
+    "harvard-sentences-list-46-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A clean neck means a neat collar."
+        ]
+    },
+    "harvard-sentences-list-46-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The couch cover and hall drapes were blue."
+        ]
+    },
+    "harvard-sentences-list-46-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The stems of the tall glasses cracked and broke."
+        ]
+    },
+    "harvard-sentences-list-46-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The wall phone rang loud and often."
+        ]
+    },
+    "harvard-sentences-list-46-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The clothes dried on a thin wooden rack."
+        ]
+    },
+    "harvard-sentences-list-46-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Turn on the lantern which gives us light."
+        ]
+    },
+    "harvard-sentences-list-46-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The cleat sank deeply into the soft turf."
+        ]
+    },
+    "harvard-sentences-list-46-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The bills were mailed promptly on the tenth of the month."
+        ]
+    },
+    "harvard-sentences-list-46-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "To have is better than to wait and hope."
+        ]
+    },
+    "harvard-sentences-list-46-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The price is fair for a good antique clock."
+        ]
+    },
+    "harvard-sentences-list-47-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The music played on while they talked."
+        ]
+    },
+    "harvard-sentences-list-47-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Dispense with a vest on a day like this."
+        ]
+    },
+    "harvard-sentences-list-47-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The bunch of grapes was pressed into wine."
+        ]
+    },
+    "harvard-sentences-list-47-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "He sent the figs, but kept the ripe cherries."
+        ]
+    },
+    "harvard-sentences-list-47-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The hinge on the door creaked with old age."
+        ]
+    },
+    "harvard-sentences-list-47-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The screen before the fire kept in the sparks."
+        ]
+    },
+    "harvard-sentences-list-47-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Fly by night, and you waste little time."
+        ]
+    },
+    "harvard-sentences-list-47-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Thick glasses helped him read the print."
+        ]
+    },
+    "harvard-sentences-list-47-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Birth and death mark the limits of life."
+        ]
+    },
+    "harvard-sentences-list-47-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The chair looked strong but had no bottom."
+        ]
+    },
+    "harvard-sentences-list-48-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The kite flew wildly in the high wind."
+        ]
+    },
+    "harvard-sentences-list-48-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A fur muff is stylish once more."
+        ]
+    },
+    "harvard-sentences-list-48-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The tin box held priceless stones."
+        ]
+    },
+    "harvard-sentences-list-48-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "We need an end of all such matter."
+        ]
+    },
+    "harvard-sentences-list-48-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The case was puzzling to the old and wise."
+        ]
+    },
+    "harvard-sentences-list-48-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The bright lanterns were gay on the dark lawn."
+        ]
+    },
+    "harvard-sentences-list-48-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "We don't get much money but we have fun."
+        ]
+    },
+    "harvard-sentences-list-48-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The youth drove with zest, but little skill."
+        ]
+    },
+    "harvard-sentences-list-48-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Five years he lived with a shaggy dog."
+        ]
+    },
+    "harvard-sentences-list-48-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A fence cuts through the corner lot."
+        ]
+    },
+    "harvard-sentences-list-49-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The way to save money is not to spend much."
+        ]
+    },
+    "harvard-sentences-list-49-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Shut the hatch before the waves push it in."
+        ]
+    },
+    "harvard-sentences-list-49-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The odor of spring makes young hearts jump."
+        ]
+    },
+    "harvard-sentences-list-49-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Crack the walnut with your sharp side teeth."
+        ]
+    },
+    "harvard-sentences-list-49-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "He offered proof in the form of a large chart."
+        ]
+    },
+    "harvard-sentences-list-49-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Send the stuff in a thick paper bag."
+        ]
+    },
+    "harvard-sentences-list-49-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A quart of milk is water for the most part."
+        ]
+    },
+    "harvard-sentences-list-49-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "They told wild tales to frighten him."
+        ]
+    },
+    "harvard-sentences-list-49-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The three story house was built of stone."
+        ]
+    },
+    "harvard-sentences-list-49-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "In the rear of the ground floor was a large passage."
+        ]
+    },
+    "harvard-sentences-list-50-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A man in a blue sweater sat at the desk."
+        ]
+    },
+    "harvard-sentences-list-50-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Oats are a food eaten by horse and man."
+        ]
+    },
+    "harvard-sentences-list-50-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Their eyelids droop for want of sleep."
+        ]
+    },
+    "harvard-sentences-list-50-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A sip of tea revives his tired friend."
+        ]
+    },
+    "harvard-sentences-list-50-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "There are many ways to do these things."
+        ]
+    },
+    "harvard-sentences-list-50-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Tuck the sheet under the edge of the mat."
+        ]
+    },
+    "harvard-sentences-list-50-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A force equal to that would move the earth."
+        ]
+    },
+    "harvard-sentences-list-50-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "We like to see clear weather."
+        ]
+    },
+    "harvard-sentences-list-50-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The work of the tailor is seen on each side."
+        ]
+    },
+    "harvard-sentences-list-50-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Take a chance and win a china doll."
+        ]
+    },
+    "harvard-sentences-list-51-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Shake the dust from your shoes, stranger."
+        ]
+    },
+    "harvard-sentences-list-51-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "She was kind to sick old people."
+        ]
+    },
+    "harvard-sentences-list-51-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The square wooden crate was packed to be shipped."
+        ]
+    },
+    "harvard-sentences-list-51-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The dusty bench stood by the stone wall."
+        ]
+    },
+    "harvard-sentences-list-51-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "We dress to suit the weather of most days."
+        ]
+    },
+    "harvard-sentences-list-51-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Smile when you say nasty words."
+        ]
+    },
+    "harvard-sentences-list-51-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A bowl of rice is free with chicken stew."
+        ]
+    },
+    "harvard-sentences-list-51-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The water in this well is a source of good health."
+        ]
+    },
+    "harvard-sentences-list-51-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Take shelter in this tent, but keep still."
+        ]
+    },
+    "harvard-sentences-list-51-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "That guy is the writer of a few banned books."
+        ]
+    },
+    "harvard-sentences-list-52-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The little tales they tell are false."
+        ]
+    },
+    "harvard-sentences-list-52-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The door was barred, locked, and bolted as well."
+        ]
+    },
+    "harvard-sentences-list-52-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Ripe pears are fit for a queen's table."
+        ]
+    },
+    "harvard-sentences-list-52-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A big wet stain was on the round carpet."
+        ]
+    },
+    "harvard-sentences-list-52-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The kite dipped and swayed, but stayed aloft."
+        ]
+    },
+    "harvard-sentences-list-52-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The pleasant hours fly by much too soon."
+        ]
+    },
+    "harvard-sentences-list-52-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The room was crowded with a wild mob."
+        ]
+    },
+    "harvard-sentences-list-52-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "This strong arm shall shield your honor."
+        ]
+    },
+    "harvard-sentences-list-52-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "She blushed when he gave her a white orchid."
+        ]
+    },
+    "harvard-sentences-list-52-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The beetle droned in the hot June sun."
+        ]
+    },
+    "harvard-sentences-list-53-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Press the pedal with your left foot."
+        ]
+    },
+    "harvard-sentences-list-53-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Neat plans fail without luck."
+        ]
+    },
+    "harvard-sentences-list-53-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The black trunk fell from the landing."
+        ]
+    },
+    "harvard-sentences-list-53-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The bank pressed for payment of the debt."
+        ]
+    },
+    "harvard-sentences-list-53-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The theft of the pearl pin was kept secret."
+        ]
+    },
+    "harvard-sentences-list-53-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Shake hands with this friendly child."
+        ]
+    },
+    "harvard-sentences-list-53-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The vast space stretched into the far distance."
+        ]
+    },
+    "harvard-sentences-list-53-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A rich farm is rare in this sandy waste."
+        ]
+    },
+    "harvard-sentences-list-53-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "His wide grin earned many friends."
+        ]
+    },
+    "harvard-sentences-list-53-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Flax makes a fine brand of paper."
+        ]
+    },
+    "harvard-sentences-list-54-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Hurdle the pit with the aid of a long pole."
+        ]
+    },
+    "harvard-sentences-list-54-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A strong bid may scare your partner stiff."
+        ]
+    },
+    "harvard-sentences-list-54-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Even a just cause needs power to win."
+        ]
+    },
+    "harvard-sentences-list-54-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Peep under the tent and see the clowns."
+        ]
+    },
+    "harvard-sentences-list-54-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The leaf drifts along with a slow spin."
+        ]
+    },
+    "harvard-sentences-list-54-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Cheap clothes are flashy but don't last."
+        ]
+    },
+    "harvard-sentences-list-54-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A thing of small note can cause despair."
+        ]
+    },
+    "harvard-sentences-list-54-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Flood the mails with requests for this book."
+        ]
+    },
+    "harvard-sentences-list-54-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A thick coat of black paint covered all."
+        ]
+    },
+    "harvard-sentences-list-54-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The pencil was cut to be sharp at both ends."
+        ]
+    },
+    "harvard-sentences-list-55-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Those last words were a strong statement."
+        ]
+    },
+    "harvard-sentences-list-55-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "He wrote his name boldly at the top of the sheet."
+        ]
+    },
+    "harvard-sentences-list-55-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Dill pickles are sour but taste fine."
+        ]
+    },
+    "harvard-sentences-list-55-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Down that road is the way to the grain farmer."
+        ]
+    },
+    "harvard-sentences-list-55-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Either mud or dust are found at all times."
+        ]
+    },
+    "harvard-sentences-list-55-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The best method is to fix it in place with clips."
+        ]
+    },
+    "harvard-sentences-list-55-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "If you mumble your speech will be lost."
+        ]
+    },
+    "harvard-sentences-list-55-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "At night the alarm roused him from a deep sleep."
+        ]
+    },
+    "harvard-sentences-list-55-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Read just what the meter says."
+        ]
+    },
+    "harvard-sentences-list-55-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Fill your pack with bright trinkets for the poor."
+        ]
+    },
+    "harvard-sentences-list-56-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The small red neon lamp went out."
+        ]
+    },
+    "harvard-sentences-list-56-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Clams are small, round, soft, and tasty."
+        ]
+    },
+    "harvard-sentences-list-56-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The fan whirled its round blades softly."
+        ]
+    },
+    "harvard-sentences-list-56-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The line where the edges join was clean."
+        ]
+    },
+    "harvard-sentences-list-56-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Breathe deep and smell the piny air."
+        ]
+    },
+    "harvard-sentences-list-56-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "It matters not if he reads these words or those."
+        ]
+    },
+    "harvard-sentences-list-56-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A brown leather bag hung from its strap."
+        ]
+    },
+    "harvard-sentences-list-56-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A toad and a frog are hard to tell apart."
+        ]
+    },
+    "harvard-sentences-list-56-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A white silk jacket goes with any shoes."
+        ]
+    },
+    "harvard-sentences-list-56-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A break in the dam almost caused a flood."
+        ]
+    },
+    "harvard-sentences-list-57-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Paint the sockets in the wall dull green."
+        ]
+    },
+    "harvard-sentences-list-57-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The child crawled into the dense grass."
+        ]
+    },
+    "harvard-sentences-list-57-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Bribes fail where honest men work."
+        ]
+    },
+    "harvard-sentences-list-57-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Trample the spark, else the flames will spread."
+        ]
+    },
+    "harvard-sentences-list-57-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The hilt of the sword was carved with fine designs."
+        ]
+    },
+    "harvard-sentences-list-57-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A round hole was drilled through the thin board."
+        ]
+    },
+    "harvard-sentences-list-57-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Footprints showed the path he took up the beach."
+        ]
+    },
+    "harvard-sentences-list-57-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "She was waiting at my front lawn."
+        ]
+    },
+    "harvard-sentences-list-57-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A vent near the edge brought in fresh air."
+        ]
+    },
+    "harvard-sentences-list-57-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Prod the old mule with a crooked stick."
+        ]
+    },
+    "harvard-sentences-list-58-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "It is a band of steel three inches wide."
+        ]
+    },
+    "harvard-sentences-list-58-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The pipe ran almost the length of the ditch."
+        ]
+    },
+    "harvard-sentences-list-58-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "It was hidden from sight by a mass of leaves and shrubs."
+        ]
+    },
+    "harvard-sentences-list-58-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The weight of the package was seen on the high scale."
+        ]
+    },
+    "harvard-sentences-list-58-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Wake and rise, and step into the green outdoors."
+        ]
+    },
+    "harvard-sentences-list-58-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The green light in the brown box flickered."
+        ]
+    },
+    "harvard-sentences-list-58-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The brass tube circled the high wall."
+        ]
+    },
+    "harvard-sentences-list-58-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The lobes of her ears were pierced to hold rings."
+        ]
+    },
+    "harvard-sentences-list-58-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Hold the hammer near the end to drive the nail."
+        ]
+    },
+    "harvard-sentences-list-58-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Next Sunday is the twelfth of the month."
+        ]
+    },
+    "harvard-sentences-list-59-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Every word and phrase he speaks is true."
+        ]
+    },
+    "harvard-sentences-list-59-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "He put his last cartridge into the gun and fired."
+        ]
+    },
+    "harvard-sentences-list-59-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "They took their kids from the public school."
+        ]
+    },
+    "harvard-sentences-list-59-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Drive the screw straight into the wood."
+        ]
+    },
+    "harvard-sentences-list-59-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Keep the hatch tight and the watch constant."
+        ]
+    },
+    "harvard-sentences-list-59-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Sever the twine with a quick snip of the knife."
+        ]
+    },
+    "harvard-sentences-list-59-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Paper will dry out when wet."
+        ]
+    },
+    "harvard-sentences-list-59-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Slide the catch back and open the desk."
+        ]
+    },
+    "harvard-sentences-list-59-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Help the weak to preserve their strength."
+        ]
+    },
+    "harvard-sentences-list-59-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A sullen smile gets few friends."
+        ]
+    },
+    "harvard-sentences-list-60-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Stop whistling and watch the boys march."
+        ]
+    },
+    "harvard-sentences-list-60-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Jerk the cord, and out tumbles the gold."
+        ]
+    },
+    "harvard-sentences-list-60-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Slide the tray across the glass top."
+        ]
+    },
+    "harvard-sentences-list-60-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The cloud moved in a stately way and was gone."
+        ]
+    },
+    "harvard-sentences-list-60-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Light maple makes for a swell room."
+        ]
+    },
+    "harvard-sentences-list-60-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Set the piece here and say nothing."
+        ]
+    },
+    "harvard-sentences-list-60-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Dull stories make her laugh."
+        ]
+    },
+    "harvard-sentences-list-60-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A stiff cord will do to fasten your shoe."
+        ]
+    },
+    "harvard-sentences-list-60-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Get the trust fund to the bank early."
+        ]
+    },
+    "harvard-sentences-list-60-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Choose between the high road and the low."
+        ]
+    },
+    "harvard-sentences-list-61-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A plea for funds seems to come again."
+        ]
+    },
+    "harvard-sentences-list-61-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "He lent his coat to the tall gaunt stranger."
+        ]
+    },
+    "harvard-sentences-list-61-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "There is a strong chance it will happen once more."
+        ]
+    },
+    "harvard-sentences-list-61-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The duke left the park in a silver coach."
+        ]
+    },
+    "harvard-sentences-list-61-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Greet the new guests and leave quickly."
+        ]
+    },
+    "harvard-sentences-list-61-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "When the frost has come it is time for turkey."
+        ]
+    },
+    "harvard-sentences-list-61-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Sweet words work better than fierce."
+        ]
+    },
+    "harvard-sentences-list-61-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A thin stripe runs down the middle."
+        ]
+    },
+    "harvard-sentences-list-61-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A six comes up more often than a ten."
+        ]
+    },
+    "harvard-sentences-list-61-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Lush fern grow on the lofty rocks."
+        ]
+    },
+    "harvard-sentences-list-62-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The ram scared the school children off."
+        ]
+    },
+    "harvard-sentences-list-62-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The team with the best timing looks good."
+        ]
+    },
+    "harvard-sentences-list-62-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The farmer swapped his horse for a brown ox."
+        ]
+    },
+    "harvard-sentences-list-62-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Sit on the perch and tell the others what to do."
+        ]
+    },
+    "harvard-sentences-list-62-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A steep trail is painful for our feet."
+        ]
+    },
+    "harvard-sentences-list-62-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The early phase of life moves fast."
+        ]
+    },
+    "harvard-sentences-list-62-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Green moss grows on the northern side."
+        ]
+    },
+    "harvard-sentences-list-62-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Tea in thin china has a sweet taste."
+        ]
+    },
+    "harvard-sentences-list-62-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Pitch the straw through the door of the stable."
+        ]
+    },
+    "harvard-sentences-list-62-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The latch on the back gate needed a nail."
+        ]
+    },
+    "harvard-sentences-list-63-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The goose was brought straight from the old market."
+        ]
+    },
+    "harvard-sentences-list-63-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The sink is the thing in which we pile dishes."
+        ]
+    },
+    "harvard-sentences-list-63-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A whiff of it will cure the most stubborn cold."
+        ]
+    },
+    "harvard-sentences-list-63-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The facts don't always show who is right."
+        ]
+    },
+    "harvard-sentences-list-63-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "She flaps her cape as she parades the street."
+        ]
+    },
+    "harvard-sentences-list-63-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The loss of the cruiser was a blow to the fleet."
+        ]
+    },
+    "harvard-sentences-list-63-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Loop the braid to the left and then over."
+        ]
+    },
+    "harvard-sentences-list-63-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Plead with the lawyer to drop the lost cause."
+        ]
+    },
+    "harvard-sentences-list-63-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Calves thrive on tender spring grass."
+        ]
+    },
+    "harvard-sentences-list-63-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Post no bills on this office wall."
+        ]
+    },
+    "harvard-sentences-list-64-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Tear a thin sheet from the yellow pad."
+        ]
+    },
+    "harvard-sentences-list-64-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A cruise in warm waters in a sleek yacht is fun."
+        ]
+    },
+    "harvard-sentences-list-64-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A streak of color ran down the left edge."
+        ]
+    },
+    "harvard-sentences-list-64-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "It was done before the boy could see it."
+        ]
+    },
+    "harvard-sentences-list-64-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Crouch before you jump or miss the mark."
+        ]
+    },
+    "harvard-sentences-list-64-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Pack the kits and don't forget the salt."
+        ]
+    },
+    "harvard-sentences-list-64-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The square peg will settle in the round hole."
+        ]
+    },
+    "harvard-sentences-list-64-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Fine soap saves tender skin."
+        ]
+    },
+    "harvard-sentences-list-64-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Poached eggs and tea must suffice."
+        ]
+    },
+    "harvard-sentences-list-64-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Bad nerves are jangled by a door slam."
+        ]
+    },
+    "harvard-sentences-list-65-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Ship maps are different from those for planes."
+        ]
+    },
+    "harvard-sentences-list-65-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Dimes showered down from all sides."
+        ]
+    },
+    "harvard-sentences-list-65-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "They sang the same tunes at each party."
+        ]
+    },
+    "harvard-sentences-list-65-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The sky in the west is tinged with orange red."
+        ]
+    },
+    "harvard-sentences-list-65-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The pods of peas ferment in bare fields."
+        ]
+    },
+    "harvard-sentences-list-65-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The horse balked and threw the tall rider."
+        ]
+    },
+    "harvard-sentences-list-65-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The hitch between the horse and cart broke."
+        ]
+    },
+    "harvard-sentences-list-65-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Pile the coal high in the shed corner."
+        ]
+    },
+    "harvard-sentences-list-65-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A gold vase is both rare and costly."
+        ]
+    },
+    "harvard-sentences-list-65-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The knife was hung inside its bright sheath."
+        ]
+    },
+    "harvard-sentences-list-66-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The rarest spice comes from the far East."
+        ]
+    },
+    "harvard-sentences-list-66-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The roof should be tilted at a sharp slant."
+        ]
+    },
+    "harvard-sentences-list-66-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A smatter of French is worse than none."
+        ]
+    },
+    "harvard-sentences-list-66-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The mule trod the treadmill day and night."
+        ]
+    },
+    "harvard-sentences-list-66-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The aim of the contest is to raise a great fund."
+        ]
+    },
+    "harvard-sentences-list-66-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "To send it now in large amounts is bad."
+        ]
+    },
+    "harvard-sentences-list-66-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "There is a fine hard tang in salty air."
+        ]
+    },
+    "harvard-sentences-list-66-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Cod is the main business of the north shore."
+        ]
+    },
+    "harvard-sentences-list-66-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The slab was hewn from heavy blocks of slate."
+        ]
+    },
+    "harvard-sentences-list-66-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Dunk the stale biscuits into strong drink."
+        ]
+    },
+    "harvard-sentences-list-67-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Hang tinsel from both branches."
+        ]
+    },
+    "harvard-sentences-list-67-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Cap the jar with a tight brass cover."
+        ]
+    },
+    "harvard-sentences-list-67-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The poor boy missed the boat again."
+        ]
+    },
+    "harvard-sentences-list-67-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Be sure to set the lamp firmly in the hole."
+        ]
+    },
+    "harvard-sentences-list-67-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Pick a card and slip it under the pack."
+        ]
+    },
+    "harvard-sentences-list-67-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A round mat will cover the dull spot."
+        ]
+    },
+    "harvard-sentences-list-67-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The first part of the plan needs changing."
+        ]
+    },
+    "harvard-sentences-list-67-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A good book informs of what we ought to know."
+        ]
+    },
+    "harvard-sentences-list-67-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The mail comes in three batches per day."
+        ]
+    },
+    "harvard-sentences-list-67-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "You cannot brew tea in a cold pot."
+        ]
+    },
+    "harvard-sentences-list-68-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Dots of light betrayed the black cat."
+        ]
+    },
+    "harvard-sentences-list-68-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Put the chart on the mantel and tack it down."
+        ]
+    },
+    "harvard-sentences-list-68-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The night shift men rate extra pay."
+        ]
+    },
+    "harvard-sentences-list-68-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The red paper brightened the dim stage."
+        ]
+    },
+    "harvard-sentences-list-68-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "See the player scoot to third base."
+        ]
+    },
+    "harvard-sentences-list-68-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Slide the bill between the two leaves."
+        ]
+    },
+    "harvard-sentences-list-68-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Many hands help get the job done."
+        ]
+    },
+    "harvard-sentences-list-68-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "We don't like to admit our small faults."
+        ]
+    },
+    "harvard-sentences-list-68-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "No doubt about the way the wind blows."
+        ]
+    },
+    "harvard-sentences-list-68-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Dig deep in the earth for pirate's gold."
+        ]
+    },
+    "harvard-sentences-list-69-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The steady drip is worse than a drenching rain."
+        ]
+    },
+    "harvard-sentences-list-69-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A flat pack takes less luggage space."
+        ]
+    },
+    "harvard-sentences-list-69-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Green ice frosted the punch bowl."
+        ]
+    },
+    "harvard-sentences-list-69-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A stuffed chair slipped from the moving van."
+        ]
+    },
+    "harvard-sentences-list-69-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The stitch will serve but needs to be shortened."
+        ]
+    },
+    "harvard-sentences-list-69-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A thin book fits in the side pocket."
+        ]
+    },
+    "harvard-sentences-list-69-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The gloss on top made it unfit to read."
+        ]
+    },
+    "harvard-sentences-list-69-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The hail pattered on the burnt brown grass."
+        ]
+    },
+    "harvard-sentences-list-69-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Seven seals were stamped on great sheets."
+        ]
+    },
+    "harvard-sentences-list-69-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Our troops are set to strike heavy blows."
+        ]
+    },
+    "harvard-sentences-list-70-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The store was jammed before the sale could start."
+        ]
+    },
+    "harvard-sentences-list-70-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "It was a bad error on the part of the new judge."
+        ]
+    },
+    "harvard-sentences-list-70-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "One step more and the board will collapse."
+        ]
+    },
+    "harvard-sentences-list-70-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Take the match and strike it against your shoe."
+        ]
+    },
+    "harvard-sentences-list-70-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The pot boiled, but the contents failed to jell."
+        ]
+    },
+    "harvard-sentences-list-70-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The baby puts his right foot in his mouth."
+        ]
+    },
+    "harvard-sentences-list-70-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The bombs left most of the town in ruins."
+        ]
+    },
+    "harvard-sentences-list-70-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Stop and stare at the hard working man."
+        ]
+    },
+    "harvard-sentences-list-70-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The streets are narrow and full of sharp turns."
+        ]
+    },
+    "harvard-sentences-list-70-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The pup jerked the leash as he saw a feline shape."
+        ]
+    },
+    "harvard-sentences-list-71-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Open your book to the first page."
+        ]
+    },
+    "harvard-sentences-list-71-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Fish evade the net and swim off."
+        ]
+    },
+    "harvard-sentences-list-71-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Dip the pail once and let it settle."
+        ]
+    },
+    "harvard-sentences-list-71-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Will you please answer that phone."
+        ]
+    },
+    "harvard-sentences-list-71-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The big red apple fell to the ground."
+        ]
+    },
+    "harvard-sentences-list-71-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The curtain rose and the show was on."
+        ]
+    },
+    "harvard-sentences-list-71-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The young prince became heir to the throne."
+        ]
+    },
+    "harvard-sentences-list-71-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "He sent the boy on a short errand."
+        ]
+    },
+    "harvard-sentences-list-71-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Leave now and you will arrive on time."
+        ]
+    },
+    "harvard-sentences-list-71-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The corner store was robbed last night."
+        ]
+    },
+    "harvard-sentences-list-72-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A gold ring will please most any girl."
+        ]
+    },
+    "harvard-sentences-list-72-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The long journey home took a year."
+        ]
+    },
+    "harvard-sentences-list-72-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "She saw a cat in the neighbor's house."
+        ]
+    },
+    "harvard-sentences-list-72-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A pink shell was found on the sandy beach."
+        ]
+    },
+    "harvard-sentences-list-72-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Small children came to see him."
+        ]
+    },
+    "harvard-sentences-list-72-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The grass and bushes were wet with dew."
+        ]
+    },
+    "harvard-sentences-list-72-7": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The blind man counted his old coins."
+        ]
+    },
+    "harvard-sentences-list-72-8": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "A severe storm tore down the barn."
+        ]
+    },
+    "harvard-sentences-list-72-9": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "She called his name many times."
+        ]
+    },
+    "harvard-sentences-list-72-10": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "When you hear the bell, come quickly."
+        ]
+    },
+    "cape-V-sentences-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The blue spot is on the key again."
+        ]
+    },
+    "cape-V-sentences-(v2)-1": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "The blue spot is on the key again."
+        ]
+    },
+    "cape-V-sentences-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "How hard did he hit him?"
+        ]
+    },
+    "cape-V-sentences-(v2)-2": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "He helped her hurry home."
+        ]
+    },
+    "cape-V-sentences-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "We were away a year ago."
+        ]
+    },
+    "cape-V-sentences-(v2)-3": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "We were away a year ago."
+        ]
+    },
+    "cape-V-sentences-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "We eat eggs every Easter."
+        ]
+    },
+    "cape-V-sentences-(v2)-4": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "I eat eggs every morning."
+        ]
+    },
+    "cape-V-sentences-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "My mama makes lemon muffins."
+        ]
+    },
+    "cape-V-sentences-(v2)-5": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "My mama makes lemon muffins."
+        ]
+    },
+    "cape-V-sentences-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Peter will keep at the peak."
+        ]
+    },
+    "cape-V-sentences-(v2)-6": {
+        "instructions": "Please read the following sentences out loud in your typical voice.",
+        "prompts": [
+            "Papa took a piece of cake."
+        ]
+    },
+    "animal-Fluency": {
+        "instructions": "For this task, you say as many animals as you can, while avoiding repeating the same ones. There is a 1 minute timer on this, and we will ask that you continue trying until the time is up. ",
+        "prompts": []
+    },
+    "random-item-generation": {
+        "instructions": "Say as many letters or numbers (0-9) as you can. You are allowed to repeat items. Your goal is to list as many as possible in a random order. Time limit 2 minutes. The selection will appear when you start recording. The recording will automatically stop at the end.",
+        "prompts": []
+    },
+    "breath-sounds": {
+        "instructions": "Breathing: Click on the Record button below and breathe deeply through your mouth. Continue to do this until the recording automatically stops after 5 seconds. Click Play to hear your recording. If you hear background noise, please go to a quieter place and try again by selecting Redo Recording. If it sounds good, continue.",
+        "prompts": []
+    },
+    "cinderella-story": {
+        "instructions": "You'll receive a hard copy of the Cinderella storybook from our study team to refresh your memory of the story. When ready, click the 'Record' button below to begin narrating the story. Once you've finished, tap on 'Stop Recording'.",
+        "prompts": []
+    },
+    "diadochokinesis-(v2)-puhtuhkuh": {
+        "instructions": "This task helps us analyze the ease and precision of speech sound productions. Please press the play button to listen to the demonstration on how to complete the task. Then, tap the record button and imitate the speaker by repeating the syllables 'puhtuhkuh' as quickly and consistently as possible until the timer runs out - 'puhtuhkuhpuhtuhkuh'",
+        "prompts": []
+    },
+    "diadochokinesis-(v2)-buttercup": {
+        "instructions": "This task helps us analyze the ease and precision of speech sound productions. Please press the play button to listen to the demonstration on how to complete the task. Then, tap the record button and imitate the speaker by repeating the word 'buttercup' as quickly and consistently as possible until the timer runs out.",
+        "prompts": []
+    },
+    "diadochokinesis-buttercup": {
+        "instructions": "This task helps us analyze the ease and precision of speech sound productions. Please press the play button to listen to the demonstration on how to complete the task. Then, tap the record button and imitate the speaker by repeating the word 'buttercup' as quickly and consistently as possible until the timer runs out.",
+        "prompts": []
+    },
+    "diadochokinesis-(v2)-kuh": {
+        "instructions": "This task helps us analyze the ease and precision of speech sound productions. Please press the play button to listen to the demonstration on how to complete the task. Then, tap the record button and imitate the speaker by repeating the syllable 'kuh' as quickly and consistently as possible until the timer runs out - 'kuhkuhkuhkuhkuhkuh'",
+        "prompts": []
+    },
+    "diadochokinesis-KA": {
+        "instructions": "This task helps us analyze the ease and precision of speech sound productions. Please press the play button to listen to the demonstration on how to complete the task. Then, tap the record button and imitate the speaker by repeating the syllable 'ka' as quickly and consistently as possible until the timer runs out - 'kakakakakaka'",
+        "prompts": []
+    },
+    "diadochokinesis-(v2)-puh": {
+        "instructions": "This task helps us analyze the ease and precision of speech sound productions. Please press the play button to listen to the demonstration on how to complete the task. Then, tap the record button and imitate the speaker by repeating the syllable 'puh' as quickly and consistently as possible until the timer runs out - 'puhpuhpuhpuhpuhpuh'",
+        "prompts": []
+    },
+    "diadochokinesis-Pataka": {
+        "instructions": "This task helps us analyze the ease and precision of speech sound productions. Please press the play button to listen to the demonstration on how to complete the task. Then, tap the record button and imitate the speaker by repeating the syllables 'pataka' as quickly and consistently as possible until the timer runs out - 'patakapataka'",
+        "prompts": []
+    },
+    "diadochokinesis-PA": {
+        "instructions": "This task helps us analyze the ease and precision of speech sound productions. Please press the play button to listen to the demonstration on how to complete the task. Then, tap the record button and imitate the speaker by repeating the syllable 'pa' as quickly and consistently as possible until the timer runs out - 'papapapapapa'",
+        "prompts": []
+    },
+    "diadochokinesis-(v2)-tuh": {
+        "instructions": "This task helps us analyze the ease and precision of speech sound productions. Please press the play button to listen to the demonstration on how to complete the task. Then, tap the record button and imitate the speaker by repeating the syllable 'tuh' as quickly and consistently as possible until the timer runs out - 'tuhtuhtuhtuhtuhtuh'",
+        "prompts": []
+    },
+    "diadochokinesis-TA": {
+        "instructions": "This task helps us analyze the ease and precision of speech sound productions. Please press the play button to listen to the demonstration on how to complete the task. Then, tap the record button and imitate the speaker by repeating the syllable 'ta' as quickly and consistently as possible until the timer runs out - 'tatatatatata'",
+        "prompts": []
+    },
+    "prolonged-Vowel": {
+        "instructions": "This task helps us analyze features in your voice. Please press the play button to listen to the demonstration on how to complete the task. Then, tap the record button and imitate the speaker by repeating the sentence “1, 2, 3 aah” in your normal voice. Please hold the sound “aah” until the timer runs out.",
+        "prompts": []
+    },
+    "productive-Vocabulary": {
+        "instructions": "Below you will be provided with a series of words. You may or may not know the word. If you know the word, please provide a definition of the word. After you have defined the word, press 'Next Word'. If you do NOT know the word, press 'I don't know this word, next', and you will be provided a new word. Once 6 words are defined, the 'Done' button appears.",
+        "prompts": []
+    },
+    "maximum-phonation-time": {
+        "instructions": "This task helps us analyze the way your breathing is connected to your voice. Take a very deep breath, tap on the record button, and hold out “ah” for as long as possible until you completely run out of air. Try to hold it until the progress bar reaches the end of the screen.",
+        "prompts": []
+    },
+    "loudness": {
+        "instructions": "This helps us to determine the loudness of the voice. When you're ready, press the record button and say “hey” in your normal voice. Then, shout “hey” as loud as you can. Try to reach the target line on the screen. Follow the prompts on the screen to continue.",
+        "prompts": []
+    },
+    "glides-low-to-high": {
+        "instructions": "Please watch the video to help you understand the next task and imitate what the speaker does. When you're ready, press the record button and use the sound “ee” to gradually move from your lowest note to your highest.",
+        "prompts": []
+    },
+    "glides-high-to-low": {
+        "instructions": "Next, please watch this video for the following task and imitate what the speaker does. When you're ready, press the record button again and use the sound “ee” to gradually move from your highest note to your lowest note.",
+        "prompts": []
+    },
+    "high-to-low": {
+        "instructions": "Next, please watch this video for the following task and imitate what the speaker does. When you're ready, press the record button again and use the sound “ee” to gradually move from your highest note to your lowest note.",
+        "prompts": []
+    },
+    "respiration-and-cough-cough": {
+        "instructions": "Breathing sounds can also provide information on your health. Let's record them.",
+        "prompts": [
+            "Please do not cover your mouth or place your hand between your mouth and the microphone during recording. Breathe normally, then when you are ready, tap the record button below and cough HARD as if something were stuck in your throat. Tap stop when finished."
+        ]
+    },
+    "respiration-and-cough-(v2)-hardcough": {
+        "instructions": "Breathing sounds can also provide information on your health. Let's record them.",
+        "prompts": [
+            "Please do not cover your mouth or place your hand between your mouth and the microphone during recording. Breathe normally, then when you are ready, tap the record button below and cough HARD as if something were stuck in your throat. Tap stop when finished."
+        ]
+    },
+    "respiration-and-cough-(v2)-threebreathsmouth": {
+        "instructions": "Breathing sounds can also provide information on your health. Let's record them.",
+        "prompts": [
+            "After pressing on record, take 3 deep breaths in and out through your mouth. Tap stop when finished."
+        ]
+    },
+    "respiration-and-cough-(v2)-threebreathsnose": {
+        "instructions": "Breathing sounds can also provide information on your health. Let's record them.",
+        "prompts": [
+            "After pressing on record, take 3 deep breaths in and out through your nose with your mouth closed. Tap stop when finished."
+        ]
+    },
+    "respiration-and-cough-(v2)-threebreaths": {
+        "instructions": "Breathing sounds can also provide information on your health. Let's record them.",
+        "prompts": [
+            "After pressing on record, exhale normally, then inhale quickly through your mouth, as if you are trying to catch your breath. Record 3 of these breaths in a single recording. Tap stop when finished."
+        ]
+    },
+    "respiration-and-cough-threequickbreaths": {
+        "instructions": "Breathing sounds can also provide information on your health. Let's record them.",
+        "prompts": [
+            "After pressing on record, exhale normally, then inhale quickly through your mouth, as if you are trying to catch your breath. Record 3 of these breaths in a single recording. Tap stop when finished."
+        ]
+    },
+    "respiration-and-cough-breath": {
+        "instructions": "Breathing sounds can also provide information on your health. Let's record them.",
+        "prompts": [
+            "After pressing on record, breathe comfortably through your mouth for 20 seconds, until the timer runs out."
+        ]
+    },
+    "respiration-and-cough-(v2)-breath": {
+        "instructions": "Breathing sounds can also provide information on your health. Let's record them.",
+        "prompts": [
+            "After pressing on record, breathe comfortably through your mouth for 20 seconds, until the timer runs out."
+        ]
+    },
+    "respiration-and-Cough-fivebreaths": {
+        "instructions": "Breathing sounds can also provide information on your health. Let's record them.",
+        "prompts": [
+            "After pressing on record, exhale normally, then inhale quickly through your mouth, as if you are trying to catch your breath. Record 5 of these breaths in a single recording. Tap stop when finished."
+        ]
+    },
+    "rainbow": {
+        "instructions": "This task helps us evaluate how you use breathing to support your voice. Please read the following passage out loud in your typical voice.",
+        "prompts": [
+            "When the sunlight strikes raindrops in the air, they act as a prism and form a rainbow. The rainbow is a division of white light into many beautiful colors. These take the shape of a long round arch, with its path high above, and its two ends apparently beyond the horizon. There is, according to legend, a boiling pot of gold at one end."
+        ]
+    },
+    "123s": {
+        "instructions": "Wow that was great! I wonder how high you can count? Let's start at 1, 2... When you are ready, press \"record\".",
+        "prompts": []
+    },
+    "picture-description-option2": {
+        "instructions": "Describe everything that is happening in the picture (as though describing it for the blind), trying to use complete sentences.",
+        "prompts": []
+    },
+    "picture-description": {
+        "instructions": "Tell me everything you see going on in this picture.",
+        "prompts": []
+    },
+    "favorite-food": {
+        "instructions": "Do you have a favourite food? Or a food you really don't like? When you're ready to share, press \"record\".",
+        "prompts": []
+    },
+    "favorite-show-movie-game": {
+        "instructions": "Do you have a favourite movie? Video game? Show? I'd love to hear about it! When you're ready to share, press \"record\".",
+        "prompts": []
+    },
+    "long-sounds": {
+        "instructions": "First, let's start by saying 'ahhhhh' for around 5 seconds. We're going to repeat this three times during one recording. Try to have the child produce the sound at a habitual pitch – some tend to use a higher \"note\" or create vibrato if they have any singing background The sound produced should be as steady/consistent as possible Re-record if you perceive the child is using a higher pitch when sustaining the vowel (in comparison to speaking) When you are ready, press \"record\". Next, say the 'eeeeee' sound as steady as you can for about 5 seconds. We'll do this three times as well. When you are ready, press \"record\".",
+        "prompts": []
+    },
+    "repeat-words": {
+        "instructions": "Say the following word 3 times",
+        "prompts": []
+    },
+    "ready-for-school": {
+        "instructions": "To start, let's learn a little more about you! Tell me about how you get ready for school in the morning.",
+        "prompts": []
+    },
+    "outside-of-school": {
+        "instructions": "What do you like to do when you're not at school? Tell me about any activities you do like sports, dance, karate, art, etc. When you're ready to share, press \"record\".",
+        "prompts": []
+    },
+    "pictures-and-doors": {
+        "instructions": "There are lots of pictures inside – let's talk about some of the things you see. When you are ready, press \"record\".",
+        "prompts": []
+    },
+    "role-naming": {
+        "instructions": "Thank you for sharing all of that information with me! It was super interesting Let's try some different questions - if you're not sure what the answer is, you can just move on to the next question. I bet you know the months of the year too. Let's start with January... When you are ready, press \"record\". That was great Next can you count from 60 to 70? When you are ready, press \"record\".",
+        "prompts": []
+    },
+    "sentence": {
+        "instructions": "Next we have some silly sentences to look at. They don’t exactly make sense – but that’s what makes them silly! If you can read them on your own go right ahead! Or you can have someone else say the sentence first and you just repeat it after them (just be sure to only record when you are talking) You are doing a great job! We have only two more tasks to complete before we’re all finished!",
+        "prompts": [
+            "The blue spot is on the key again. When you are ready, press “record.",
+            "How hard did he hug him. When you are ready, press “record.”",
+            "We were away a year ago. When you are ready, press “record.”",
+            "We eat eggs every eve. When you are ready, press “record.”",
+            "My momma makes lemon muffins. When you are ready, press “record.”",
+            "Peter will keep at the park. When you are ready, press “record.”"
+        ]
+    },
+    "noisy-sounds": {
+        "instructions": "What a great job! Do you like making silly sounds? Do you know what sound a ghost or a mouse makes? Let's see if we can figure out what sound each of these pictures make.",
+        "prompts": [
+            "Here's a picture of an airplane – it makes an 'ah' sound – we're going to say that three times – 'ah ah ah' When you are ready, press \"record\".",
+            "Next is a little mouse – it makes an 'ee ee ee' sound - your turn! When you are ready, press \"record\".",
+            "Here's a little ghost – he says 'oo oo oo' – your turn! When you are ready, press \"record\".",
+            "Looks like this baby is sleeping, so we have to remind everyone to be quiet by saying ‘sh sh sh’ Now you try! When you are ready, press “record.”",
+            "Do you know what sound a snake makes? It says ‘ss ss ss’. Can I hear you make that snake sound? When you are ready, press “record.”",
+            "Oh ice cream is so delicious! I like to eat it really fast – “muh muh muh” – your turn! When you are ready, press “record.”",
+            "Uh oh! Looks like the baby has been colouring on the walls. We should tell him to stop – “nuh nuh nuh”. You tell him too! When you are ready, press “record.”",
+            "Here’s a little bumble bee buzzing around the garden – ‘zz zz zz’. Let’s hear your bee noise When you are ready, press “record.”",
+            "Sometimes I see bunnies hopping in my garden too – ‘hh hh hh’. Can you make a bunny hopping noise too? When you are ready, press “record.”"
+        ]
+    },
+    "silly-sounds": {
+        "instructions": "That was great! Let’s try some more sounds",
+        "prompts": [
+            "First, we’re going to say PUH PUH PUH over and over for about 5 seconds. Remember to take a breath if you need one! When you are ready, press “record.”",
+            "Next let’s do the same thing, but this time say TUH TUH TUH. When you are ready, press “record.",
+            "Amazing! We’ve got one more to try. Tell me KUH KUH KUH... When you are ready, press “record.",
+            "Fantastic! You did so well with those sounds, let’s try to put them together and say PUH TUH KUH over and over until the timer stops. If that word seems a little too tricky, you can say PAT-A-CAKE over and over instead When you are ready, press “record.”"
+        ]
+    },
+    "caterpillar-passage": {
+        "instructions": "This is a passage that contains speech sounds in English by sound frequency to test your ability to produce speech sounds. Please read the following passage out loud in your typical voice.",
+        "prompts": [
+            "Do you like amusement parks? Well, I sure do. To amuse myself, I went twice last spring. My most MEMORABLE moment was riding on the Caterpillar, which is a gigantic rollercoaster high above the ground. When I saw how high the Caterpillar rose into the bright blue sky I knew it was for me. After waiting in line for thirty minutes, I made it to the front where the man measured my height to see if I was tall enough. I gave the man my coins, asked for change, and jumped on the cart. Tick, tick, tick, the Caterpillar climbed slowly up the tracks. It went SO high I could see the parking lot. Boy was I SCARED! I thought to myself, 'There's no turning back now.' People were so scared they screamed as we swiftly zoomed fast, fast, and faster along the tracks. As quickly as it started, the Caterpillar came to a stop. Unfortunately, it was time to pack the car and drive home. That night I dreamt of the wild ride on the Caterpillar. Taking a trip to the amusement park and riding on the Caterpillar was my MOST memorable moment ever!"
+        ]
+    },
+    "story-recall": {
+        "instructions": "Below you will be presented with a story about a boy and a frog. You may click forward to see the next image in the series. Feel free to move back and forth as much as you like until you are comfortable with the story. You will have up to 5 minutes to view the story, but you are not required to use the full 5 minutes. Once the time is up, please retell the story in as much detail as possible. When you are ready, please click the record button below. Once you click the record button, the story will disappear.",
+        "prompts": [
+            "There was once a boy who had a dog and a pet frog. He kept the frog in a large jar in his bedroom. One night while he and his dog were sleeping, the frog climbed out of the jar. He jumped out of an open window. When the boy and the dog woke up the next morning, they saw that the jar was empty. The boy looked everywhere for the frog. The dog looked for the frog too. When the dog tried to look in the jar, he got his head stuck. he boy and the dog looked outside for the frog. The boy called out, “Frog, where are you? ”The boy climbed up on a rock and called again for his frog. He held onto some branches so he wouldn't fall. But the branches weren't really branches! They were deer antlers. The deer picked the boy up on his head and started running. The deer stopped suddenly and the boy and the dog fell over the edge of a cliff. There was a pond below the cliff. They landed with a splash right on top of one another. They heard a familiar sound. They crept up and looked behind a big log. There they found the boy's pet frog, with a mother frog and other baby frogs. The end."
+        ]
+    },
+    "word-color-stroop": {
+        "instructions": "This exercise asks you to name out loud the color in which a word is displayed. Sometimes the word will be a color word: do not read the word aloud, just state the color in which it's displayed. For example, if you see the word \"brown\", and its letters are displayed in blue, you will say the word \"blue\". Please answer as quickly as possible. Time limit = 5 seconds/item, 15 random words. Total time 75s. Tap on the red circle below to start recording. The recording will continue through all tasks and automatically stop at the end.",
+        "prompts": [
+            "red",
+            "green",
+            "blue",
+            "brown",
+            "purple",
+            "oooo"
+        ]
+    },
+    "free-speech-(v2)-1": {
+        "instructions": "This section is meant to hear you speak freely by answering an open-ended question. We'd like to get a recording of your natural speech. Please answer the following questions as though you were having a conversation. We'll record about 30 seconds of your response.",
+        "prompts": [
+            "What is your favorite season (winter, fall, summer, or spring) and why? Talk about the food, clothing, and activities you enjoy at that time."
+        ]
+    },
+    "free-speech-(v2)-2": {
+        "instructions": "This section is meant to hear you speak freely by answering an open-ended question. We'd like to get a recording of your natural speech. Please answer the following questions as though you were having a conversation. We'll record about 30 seconds of your response.",
+        "prompts": [
+            "Thinking back over the past 2 weeks, describe your general mood, either positive or negative. What things have contributed to you feeling this way?"
+        ]
+    },
+    "free-speech-(v2)-3": {
+        "instructions": "This section is meant to hear you speak freely by answering an open-ended question. We'd like to get a recording of your natural speech. Please answer the following questions as though you were having a conversation. We'll record about 30 seconds of your response.",
+        "prompts": [
+            "Tell us about your favorite book or movie. Why do you like it?"
+        ]
+    },
+    "free-speech-1": {
+        "instructions": "This section is meant to hear you speak freely by answering an open-ended question. Please answer the following questions and record your answer. Keep talking until the time stops.",
+        "prompts": [
+            "Can you talk to us about why you are interested by this study? Who told you about it? Why is it meaningful or valuable to you? How do you think it will help patients in the future?"
+        ]
+    },
+    "free-speech-2": {
+        "instructions": "This section is meant to hear you speak freely by answering an open-ended question. Please answer the following questions and record your answer. Keep talking until the time stops.",
+        "prompts": [
+            "If you are enrolled due to a health condition, can you tell us about it? When did it start, what kind of symptoms have you had and for how long? Tell us how you are managing it and how you are doing? If you are healthy and don't have any health conditions, please tell us about how you stay healthy."
+        ]
+    },
+    "free-speech-3": {
+        "instructions": "This section is meant to hear you speak freely by answering an open-ended question. Please answer the following questions and record your answer. Keep talking until the time stops.",
+        "prompts": [
+            "Can you tell us about your mood in the past couple of weeks? What makes you feel happiness and what makes you feel sadness or stress?"
+        ]
+    },
+    "free-speech": {
+        "instructions": "Please answer the following question. You can read the question, then click on the recording button when you are ready to answer. You can keep talking until the timer is up.",
+        "prompts": [
+            "Can you explain your voice/speech problems and why you consulted a physician for them?"
+        ]
+    },
+    "voluntary-cough": {
+        "instructions": "You are being asked to record coughing sounds. Breathe normally, then when you are ready, push record and cough HARD as if something were stuck in your throat. Then breathe normally again. Complete this task 3 times in a single recording.",
+        "prompts": []
+    },
+    "open-response-questions": {
+        "instructions": "Please answer the following questions and record your answer.",
+        "prompts": [
+            "Think of a single issue, feeling, emotion or symptom you have been experiencing lately. For example, sadness, fatigue, anxiety, loneliness, sleep issues, concentration issues, agitation, motivation, numbness, guilt, shame. If you are not experiencing anything negative, think of a positive one such as calmness or gratitude. Then describe how it shows up for you mentally and physically, what you see as its causes, and what situations trigger it."
+        ]
+    },
+    "naming-animals": {
+        "instructions": "First, I want you to name as many animals you can think of. When you are ready, press record.",
+        "prompts": []
+    },
+    "naming-food": {
+        "instructions": "Next I want you to name as many food items you can think of. When you are ready, press “record.”",
+        "prompts": []
+    },
+    "abcs": {
+        "instructions": "Let's sing our ABCs together! A,B... When you are ready, press \"record\".",
+        "prompts": []
+    },
+    "choose-book": {
+        "instructions": "To start, we have a few books for you to choose from – you can choose which book you want to look at.",
+        "prompts": []
+    },
+    "months": {
+        "instructions": "That was great! How about months of the year? Can you name some for me? Start with January... When you are ready, press \"record\".",
+        "prompts": []
+    },
+    "days": {
+        "instructions": "Fantastic! I bet you know the days of the week too. Let's start with Monday... When you are ready, press \"record\".",
+        "prompts": []
+    },
+    "picture": {
+        "instructions": "If the child makes a sound effect vs naming the picture that’s ok! We’re not actually using this task as an evaluation of articulation. Pictures presented one at a time on the screen – option to swipe/click to “next” once the child has named the item or if it is an unknown for the child it may be skipped.",
+        "prompts": []
+    },
+    "passage": {
+        "instructions": "Fantastic Job! We only have one more thing to do today. Since you did so well reading the sentences earlier, let's try a few more. We're going to read a short story about a roller coaster ride called \"The Caterpillar\". A sentence or two will appear on the screen – read it aloud as if you were reading any regular story book. If you're not sure about a word, just skip it and keep going. When you are ready, press \"record\".",
+        "prompts": [
+            "Do you like amusement parks? Well, I sure do. To amuse myself, I went twice last spring. My most MEMORABLE moment was riding on the Caterpillar, which is a gigantic rollercoaster high above the ground. When I saw how high the Caterpillar rose into the bright blue sky I knew it was for me. After waiting in line for thirty minutes, I made it to the front where the man measured my height to see if I was tall enough. I gave the man my coins, asked for change, and jumped on the cart. Tick, tick, tick, the Caterpillar climbed slowly up the tracks. It went SO high I could see the parking lot. Boy was I SCARED! I thought to myself, “There’s no turning back now.” People were so scared they screamed as we swiftly zoomed fast, fast, and faster along the tracks. As quickly as it started, the Caterpillar came to a stop. Unfortunately, it was time to pack the car and drive home. That night I dreamt of the wild ride on the Caterpillar. Taking a trip to the amusement park and riding on the Caterpillar was my MOST memorable moment ever!"
+        ]
+    }
+}
