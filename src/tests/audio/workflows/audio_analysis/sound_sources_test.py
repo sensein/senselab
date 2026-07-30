@@ -187,7 +187,7 @@ def test_stage_scene_requests_the_independent_score_function(monkeypatch: "pytes
 
     seen: list[dict[str, object]] = []
 
-    def _spy(*_args: object, **kwargs: object) -> list[list[dict[str, float]]]:
+    def _spy(*_args: object, **kwargs: object) -> list[list[dict[str, object]]]:
         seen.append(dict(kwargs))
         return [[{"start": 0.0, "end": 1.0, "labels": ["Speech"], "scores": [0.9]}]]
 
@@ -196,7 +196,7 @@ def test_stage_scene_requests_the_independent_score_function(monkeypatch: "pytes
     audio = SimpleNamespace(waveform=torch.zeros((1, 16000)), sampling_rate=16000)
     ctx = StageContext(pass_label="raw_16k", audio_signature="s" * 64)
     stages_mod.stage_scene(
-        audio,
+        audio,  # type: ignore[arg-type] — a waveform/sampling_rate stand-in; the stage reads no more
         ctx,
         ast_model="MIT/ast-finetuned-audioset-10-10-0.4593",
         yamnet_model=None,
