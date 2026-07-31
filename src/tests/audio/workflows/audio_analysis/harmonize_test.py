@@ -145,3 +145,88 @@ def test_no_segments_yields_an_empty_harmonization() -> None:
     h = harmonize_speaker_labels({}, centroids=None)
     assert h.mapping == {}
     assert h.uncertainty == {}
+
+
+# ── wiring into the identity harvest ─────────────────────────────────────────
+
+
+def test_cross_model_agreement_is_recoverable_without_embeddings() -> None:
+    """Two diarizers on the same timeline agree, even with no embeddings available.
+
+    The superseded clusterer fell back to using the *raw label string* as the cluster id when no
+    embeddings were present. Cross-model agreement then reduced to comparing ``SPEAKER_00`` against
+    ``spk1`` -- a comparison of naming conventions, which can only ever report disagreement. The
+    overlap matcher answers this case from timing evidence instead.
+    """
+    from senselab.audio.workflows.audio_analysis.grid import BucketGrid
+    from senselab.audio.workflows.audio_analysis.identity import harvest_identity_votes
+
+    pass_summary = {
+        "duration_s": 4.0,
+        "diarization": {
+            "by_model": {
+                "pyannote": {
+                    "status": "ok",
+                    "result": [_segs((0.0, 2.0, "SPEAKER_00"), (2.0, 4.0, "SPEAKER_01"))],
+                },
+                "sortformer": {
+                    "status": "ok",
+                    "result": [_segs((0.0, 2.0, "spk1"), (2.0, 4.0, "spk0"))],
+                },
+            }
+        },
+    }
+    buckets = harvest_identity_votes(
+        pass_summary=pass_summary,
+        grid=BucketGrid(win_length=0.5, hop_length=0.5),
+        per_window_embeddings={},
+    )
+    assert buckets
+    for b in buckets:
+        cross = b["votes"].get("__cross_diar_label_disagreement__")
+        assert cross is not None
+        # Same timeline, different naming: the models agree, so disagreement must be 0 (or be
+        # suppressed as unmeasurable) -- never a confident 1.0 driven by string mismatch.
+        assert cross["value"] in (0.0, None), f"string-comparison disagreement resurfaced: {cross}"
+
+
+def test_contested_assignment_reaches_the_identity_vote() -> None:
+    """Assignment uncertainty is carried onto the vote, not discarded at the harmonization step."""
+    import numpy as np
+
+    from senselab.audio.workflows.audio_analysis.embeddings import WindowEmbedding
+    from senselab.audio.workflows.audio_analysis.grid import BucketGrid
+    from senselab.audio.workflows.audio_analysis.identity import harvest_identity_votes
+
+    # Embeddings that assert the opposite pairing to the timelines, as in the disagreement test.
+    windows = [
+        WindowEmbedding(start_s=0.0, end_s=2.0, vector=np.array([1.0, 0.0, 0.0])),
+        WindowEmbedding(start_s=2.0, end_s=4.0, vector=np.array([0.0, 1.0, 0.0])),
+    ]
+    pass_summary = {
+        "duration_s": 4.0,
+        "diarization": {
+            "by_model": {
+                "pyannote": {
+                    "status": "ok",
+                    "result": [_segs((0.0, 2.0, "SPEAKER_00"), (2.0, 4.0, "SPEAKER_01"))],
+                },
+                "sortformer": {
+                    "status": "ok",
+                    "result": [_segs((0.0, 2.0, "spk0"), (2.0, 4.0, "spk1"))],
+                },
+            }
+        },
+    }
+    buckets = harvest_identity_votes(
+        pass_summary=pass_summary,
+        grid=BucketGrid(win_length=1.0, hop_length=1.0),
+        per_window_embeddings={"ecapa": windows},
+    )
+    # Somewhere in the run, a non-reference model's assignment must be reported as measured.
+    reported = [
+        v for b in buckets for name, v in b["votes"].items() if isinstance(v, dict) and "assignment_uncertainty" in v
+    ]
+    assert reported, "assignment uncertainty never reached a vote"
+    for v in reported:
+        assert 0.0 <= v["assignment_uncertainty"] <= 1.0

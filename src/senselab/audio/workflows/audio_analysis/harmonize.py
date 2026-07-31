@@ -34,6 +34,7 @@ from senselab.audio.workflows.audio_analysis.statistics import confidence, entro
 __all__ = [
     "SpeakerHarmonization",
     "centroid_assignment",
+    "harmonize_from_diarization",
     "harmonize_speaker_labels",
     "overlap_assignment",
 ]
@@ -298,3 +299,61 @@ def harmonize_speaker_labels(
                 result.uncertainty[key] = None
 
     return result
+
+
+def harmonize_from_diarization(
+    diar_blocks: Mapping[str, Any],
+    per_window_embeddings: Optional[Mapping[str, Sequence[Any]]] = None,
+    *,
+    min_similarity: float = MIN_CENTROID_SIMILARITY,
+) -> SpeakerHarmonization:
+    """Adapter: harmonize labels straight from the pipeline's diarization blocks.
+
+    Args:
+        diar_blocks: ``{model → diar block}`` as carried on a pass summary.
+        per_window_embeddings: ``{embedding model → windows}``; the alphabetically first model is
+            used to build per-label centroids. One metric is enough to define a matcher, and using
+            both at once would need multi-modal centroid logic that adds little for 2-4 speakers.
+        min_similarity: Floor for the centroid matcher.
+
+    Returns:
+        A :class:`SpeakerHarmonization`. Without embeddings only the overlap matcher runs, and the
+        assignment uncertainties are ``None`` throughout.
+
+    Replaces ``clustering.cluster_speaker_labels_by_embedding``, which matched on embedding
+    centroids alone and so produced a point assignment with no way to express doubt about itself.
+    Its no-embeddings fallback used the raw label string as the cluster id, which makes cross-model
+    "agreement" a comparison of naming conventions — the overlap matcher answers that case with
+    actual evidence instead.
+    """
+    from senselab.audio.workflows.audio_analysis.clustering import (
+        _diar_segments,
+        _mean_window_embedding_over_segments,
+        _seg_attr,
+    )
+
+    segments_by_model: dict[str, list[Any]] = {}
+    segs_by_key: dict[tuple[str, str], list[Any]] = {}
+    for model, block in diar_blocks.items():
+        segs = _diar_segments(block)
+        segments_by_model[str(model)] = list(segs)
+        for seg in segs:
+            label = str(_seg_attr(seg, "speaker") or "?")
+            segs_by_key.setdefault((str(model), label), []).append(seg)
+
+    centroids: Optional[dict[tuple[str, str], np.ndarray]] = None
+    if per_window_embeddings and any(bool(v) for v in per_window_embeddings.values()):
+        emb_model = sorted(per_window_embeddings)[0]
+        windows = list(per_window_embeddings[emb_model])
+        built: dict[tuple[str, str], np.ndarray] = {}
+        for key, segs in segs_by_key.items():
+            mean_emb = _mean_window_embedding_over_segments(segs, windows)
+            if mean_emb is not None and np.asarray(mean_emb).size:
+                built[key] = np.asarray(mean_emb, dtype=np.float64)
+        # Only offer centroids when *every* label has one. A partial set would let the centroid
+        # matcher assign some labels and abstain on others, and the abstentions would then read as
+        # "one matcher ran" rather than "this label had no embedding support".
+        if built and len(built) == len(segs_by_key):
+            centroids = built
+
+    return harmonize_speaker_labels(segments_by_model, centroids=centroids, min_similarity=min_similarity)
