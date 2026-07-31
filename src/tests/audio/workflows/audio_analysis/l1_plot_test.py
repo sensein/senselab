@@ -147,7 +147,7 @@ def test_the_plot_accepts_words_a_spectrogram_and_scene_rows(tmp_path) -> None: 
         duration_s=2.0,
         waveform=np.zeros(SR * 2),
         sampling_rate=SR,
-        words=[{"start": 0.1, "end": 0.4, "text": "hello"}],
+        words_by_model={"whisper": [{"start": 0.1, "end": 0.4, "text": "hello"}]},
         scene_by_classifier={
             "yamnet": [{"start": 0.0, "end": 1.0, "labels": ["Speech"], "scores": [0.9]}],
             "ast": [{"start": 0.0, "end": 2.0, "labels": ["Music"], "scores": [0.5]}],
@@ -163,3 +163,68 @@ def test_the_figure_still_carries_no_uncertainty(tmp_path) -> None:  # noqa: ANN
     source = __import__("inspect").getsource(l1_plot)
     for term in ("within_pass_uncertainty", "epistemic", "triage_score"):
         assert term not in source
+
+
+# ── grouping, display type, and honest absence ─────────────────────────
+
+
+def test_signals_are_grouped_by_the_kind_of_evidence_they_are() -> None:
+    """Alphabetical order interleaved a frame VAD, an acoustic proxy and a diarizer.
+
+    Every row then looked identical, so a reader could not tell what kind of claim any of them
+    was making. Grouping is what lets the eye compare like with like.
+    """
+    from senselab.audio.workflows.audio_analysis.l1_plot import classify_signal
+
+    assert classify_signal("frame_brouhaha_vad") == "frame"
+    assert classify_signal("acoustic_hnr") == "acoustic"
+    assert classify_signal("yamnet") == "scene"
+    assert classify_signal("pyannote/speaker-diarization-community-1") == "diarization"
+    assert classify_signal("nvidia/diar_sortformer_4spk-v1") == "diarization"
+    assert classify_signal("nyralabs/CrisperWhisper2.0_turbo") == "asr"
+    assert classify_signal("nvidia/canary-qwen-2.5b") == "asr"
+
+
+def test_a_continuous_signal_is_drawn_as_a_trace_not_a_bar(tmp_path) -> None:  # noqa: ANN001
+    """Rendering a frame posterior as on/off discards everything it measured.
+
+    Both VAD rows previously drew as solid full-width blocks — they fire in every bucket — which
+    is exactly the information a trace preserves and a bar destroys.
+    """
+    path = build_l1_signal_plot(
+        tmp_path,
+        signals={},
+        duration_s=1.0,
+        series={"frame_brouhaha_vad": ([0.0, 0.5, 1.0], [0.1, 0.9, 0.2])},
+        waveform=None,
+    )
+    assert path.exists()
+
+
+def test_a_failed_signal_keeps_a_row(tmp_path) -> None:  # noqa: ANN001
+    """YAMNet failed on a real run and vanished from the figure.
+
+    Omitting it makes a failure indistinguishable from a signal that was never configured, and
+    those call for different responses.
+    """
+    path = build_l1_signal_plot(
+        tmp_path, signals={"ast": [(0.0, 1.0)]}, duration_s=1.0, failed=["yamnet"], waveform=None
+    )
+    assert path.exists()
+
+
+def test_asr_words_are_drawn_in_their_own_model_row(tmp_path) -> None:  # noqa: ANN001
+    """A shared words row collided every token into an unreadable smear, and attributed the
+    transcript to no model in particular.
+    """
+    path = build_l1_signal_plot(
+        tmp_path,
+        signals={"whisper": [(0.0, 1.0)], "canary": [(0.0, 1.0)]},
+        duration_s=1.0,
+        words_by_model={
+            "whisper": [{"start": 0.1, "end": 0.4, "text": "hello"}],
+            "canary": [{"start": 0.1, "end": 0.4, "text": "hallo"}],
+        },
+        waveform=None,
+    )
+    assert path.exists()

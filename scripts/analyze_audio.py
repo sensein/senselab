@@ -1825,21 +1825,36 @@ def main(argv: list[str] | None = None) -> int:
     # reading a conclusion as another observation.
     if harvests_by_pass:
         try:
-            from senselab.audio.workflows.audio_analysis.l1_plot import build_l1_signal_plot
+            from senselab.audio.workflows.audio_analysis.l1_plot import build_l1_signal_plot, classify_signal
 
-            l1_signals: dict[str, list[tuple[float, float]]] = {}
             reference = harvests_by_pass.get("raw_16k") or next(iter(harvests_by_pass.values()))
+            raw_summary = summaries["passes"].get("raw_16k", {}) or {}
+
+            # Continuous voters get a trace of their own confidence; binary ones get spans.
+            # Rendering a frame posterior as on/off discards everything it measured.
+            l1_signals: dict[str, list[tuple[float, float]]] = {}
+            l1_series: dict[str, tuple[list[float], list[float]]] = {}
             for bucket in getattr(reference, "presence_votes", []) or []:
+                centre = (float(bucket["start"]) + float(bucket["end"])) / 2.0
                 for name, entry in (bucket.get("votes") or {}).items():
                     if str(name).startswith("__") or not isinstance(entry, dict):
+                        continue
+                    confidence = entry.get("native_confidence")
+                    if isinstance(confidence, (int, float)) and classify_signal(str(name)) in (
+                        "frame",
+                        "acoustic",
+                    ):
+                        times, values = l1_series.setdefault(str(name), ([], []))
+                        times.append(centre)
+                        values.append(float(confidence))
                         continue
                     l1_signals.setdefault(str(name), [])
                     if entry.get("speaks"):
                         l1_signals[str(name)].append((float(bucket["start"]), float(bucket["end"])))
-            raw_audio = pass_audio.get("raw_16k")
-            raw_summary = summaries["passes"].get("raw_16k", {}) or {}
-            l1_words: list[dict[str, Any]] = []
-            for outcome in ((raw_summary.get("alignment") or {}).get("by_model") or {}).values():
+
+            # Words attributed to the model that produced them.
+            l1_words: dict[str, list[dict[str, Any]]] = {}
+            for model, outcome in ((raw_summary.get("alignment") or {}).get("by_model") or {}).items():
                 result = outcome.get("result") if isinstance(outcome, dict) else None
                 while isinstance(result, list) and result and isinstance(result[0], list):
                     result = result[0]
@@ -1848,28 +1863,38 @@ def main(argv: list[str] | None = None) -> int:
                         continue
                     for word in segment.get("words") or segment.get("chunks") or []:
                         if isinstance(word, dict) and word.get("start") is not None:
-                            l1_words.append(
+                            l1_words.setdefault(str(model), []).append(
                                 {
                                     "start": float(word["start"]),
                                     "end": float(word.get("end") or word["start"]),
                                     "text": str(word.get("word") or word.get("text") or ""),
                                 }
                             )
-                if l1_words:
-                    break
+
+            # A signal that ran and failed keeps its row, marked: omitting it makes a failure
+            # indistinguishable from a signal that was never configured.
             l1_scene: dict[str, list[dict[str, Any]]] = {}
+            l1_failed: list[str] = []
             for classifier in ("ast", "yamnet"):
                 block = raw_summary.get(classifier)
-                if isinstance(block, dict) and block.get("status") == "ok":
+                if not isinstance(block, dict):
+                    continue
+                if block.get("status") == "ok":
                     l1_scene[classifier] = list(_classification_windows(block.get("result")) or [])
+                else:
+                    l1_failed.append(classifier)
+
+            raw_audio = pass_audio.get("raw_16k")
             l1_path = build_l1_signal_plot(
                 run_dir,
                 signals=l1_signals,
                 duration_s=float(summaries["passes"].get("raw_16k", {}).get("duration_s") or 0.0),
                 waveform=None if raw_audio is None else raw_audio.waveform.squeeze().numpy(),
                 sampling_rate=int(getattr(raw_audio, "sampling_rate", 16000) or 16000),
-                words=l1_words,
+                series=l1_series,
+                words_by_model=l1_words,
                 scene_by_classifier=l1_scene,
+                failed=l1_failed,
                 title=f"L1 signals — {args.audio.name}",
             )
             print(f"L1 signals plot: {l1_path}")
