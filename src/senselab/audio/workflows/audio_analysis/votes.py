@@ -24,6 +24,7 @@ from senselab.audio.workflows.audio_analysis.aggregate import (
     mean_token_entropy,
     presence_p_voice,
 )
+from senselab.audio.workflows.audio_analysis.fuse import per_signal_uncertainty
 from senselab.audio.workflows.audio_analysis.types import AxisResult, UncertaintyRow
 
 
@@ -168,9 +169,9 @@ def aggregate_pass(
 
     Pure: same harvest + same aggregator + same reliability ⇒ identical rows (bit-for-bit). The math is
     the historical compute.py aggregation, moved verbatim: presence keeps
-    ``aggregated_uncertainty = aggregate_presence(votes)`` with the temporal-
+    ``within_pass_uncertainty = aggregate_presence(votes)`` with the temporal-
     instability OR only on the additive ``presence_uncertainty`` column; identity /
-    utterance keep the intensity mask OUT of ``aggregated_uncertainty`` and expose it
+    utterance keep the intensity mask OUT of ``within_pass_uncertainty`` and expose it
     as ``intensity_weight``.
     """
     pass_label = harvest.pass_label
@@ -208,11 +209,12 @@ def aggregate_pass(
                 start=bucket["start"],
                 end=bucket["end"],
                 axis="presence",
-                aggregated_uncertainty=u,
+                within_pass_uncertainty=u,
+                signal_uncertainty=per_signal_uncertainty(bucket),
                 contributing_models=sorted(k for k in votes if not k.startswith("__")),
                 model_votes=votes,
                 comparison_status="ok" if u is not None else "incomparable",
-                raw_aggregated_uncertainty=u,
+                raw_within_pass_uncertainty=u,
                 intensity_weight=1.0,
                 presence_confidence=float(p_v) if p_v is not None else None,
                 presence_uncertainty=presence_uncertainty,
@@ -271,11 +273,12 @@ def aggregate_pass(
                 start=bucket["start"],
                 end=bucket["end"],
                 axis="identity",
-                aggregated_uncertainty=u_raw,
+                within_pass_uncertainty=u_raw,
                 contributing_models=sorted(bucket["votes"].keys()),
                 model_votes=bucket["votes"],
                 comparison_status="ok" if u_raw is not None else "incomparable",
-                raw_aggregated_uncertainty=u_raw,
+                signal_uncertainty=per_signal_uncertainty(bucket),
+                raw_within_pass_uncertainty=u_raw,
                 intensity_weight=mask,
             )
         )
@@ -308,7 +311,7 @@ def aggregate_pass(
             weights=coupling_weights,
         )
         # Reported value carries the coupling (FR-019); the pre-coupling number stays
-        # visible on raw_aggregated_uncertainty and in model_votes so the adjustment is
+        # visible on raw_within_pass_uncertainty and in model_votes so the adjustment is
         # auditable rather than invisible.
         votes = bucket["votes"]
         u_reported = u_raw
@@ -321,11 +324,12 @@ def aggregate_pass(
                 start=bucket["start"],
                 end=bucket["end"],
                 axis="utterance",
-                aggregated_uncertainty=u_reported,
+                within_pass_uncertainty=u_reported,
                 contributing_models=sorted(bucket["votes"].keys()),
                 model_votes=votes,
                 comparison_status="ok" if u_reported is not None else "incomparable",
-                raw_aggregated_uncertainty=u_raw,
+                signal_uncertainty=per_signal_uncertainty(bucket),
+                raw_within_pass_uncertainty=u_raw,
                 intensity_weight=mask,
                 token_entropy=mean_token_entropy(bucket["votes"]),
                 scene_quality_coupling=coupling,
@@ -355,7 +359,7 @@ def compute_pass_deltas(
     """Pair raw and enhanced rows by (start, end) and emit a delta row per shared bucket.
 
     Moved verbatim from ``compute._compute_raw_vs_enhanced_delta`` (pure). The delta
-    row's ``aggregated_uncertainty`` is |raw − enhanced| clipped to [0, 1]; buckets in
+    row's ``within_pass_uncertainty`` is |raw − enhanced| clipped to [0, 1]; buckets in
     one pass only → ``comparison_status="one_sided"`` with ``None`` uncertainty.
     """
     raw_by_bucket = {(r.start, r.end): r for r in raw_rows}
@@ -376,24 +380,24 @@ def compute_pass_deltas(
         if raw_row is None or enh_row is None:
             present = raw_row if raw_row is not None else enh_row
             iw = present.intensity_weight if present and present.intensity_weight is not None else None
-            ra_raw = raw_row.raw_aggregated_uncertainty if raw_row else None
-            enh_raw = enh_row.raw_aggregated_uncertainty if enh_row else None
+            ra_raw = raw_row.raw_within_pass_uncertainty if raw_row else None
+            enh_raw = enh_row.raw_within_pass_uncertainty if enh_row else None
             out.append(
                 UncertaintyRow(
                     start=key[0],
                     end=key[1],
                     axis=axis,  # type: ignore[arg-type]
-                    aggregated_uncertainty=None,
+                    within_pass_uncertainty=None,
                     contributing_models=sorted(votes.keys()),
                     model_votes=votes,
                     comparison_status="one_sided",
-                    raw_aggregated_uncertainty=ra_raw if ra_raw is not None else enh_raw,
+                    raw_within_pass_uncertainty=ra_raw if ra_raw is not None else enh_raw,
                     intensity_weight=iw,
                 )
             )
             continue
-        ra = raw_row.aggregated_uncertainty
-        ea = enh_row.aggregated_uncertainty
+        ra = raw_row.within_pass_uncertainty
+        ea = enh_row.within_pass_uncertainty
         if ra is None or ea is None:
             delta = None
             status = "incomparable"
@@ -407,11 +411,11 @@ def compute_pass_deltas(
                 start=key[0],
                 end=key[1],
                 axis=axis,  # type: ignore[arg-type]
-                aggregated_uncertainty=delta,
+                within_pass_uncertainty=delta,
                 contributing_models=sorted(votes.keys()),
                 model_votes=votes,
                 comparison_status=status,  # type: ignore[arg-type]
-                raw_aggregated_uncertainty=delta,
+                raw_within_pass_uncertainty=delta,
                 intensity_weight=max(raw_iw, enh_iw),
             )
         )

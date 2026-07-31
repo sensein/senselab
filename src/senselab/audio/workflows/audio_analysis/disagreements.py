@@ -71,7 +71,7 @@ def build_disagreements_index(
 ) -> dict[str, Any]:
     """Build the ``disagreements.json`` payload per ``contracts/disagreements.json.md``.
 
-    Ranks by ``aggregated_uncertainty`` desc, with axis-priority tiebreak (utterance >
+    Ranks by ``within_pass_uncertainty`` desc, with axis-priority tiebreak (utterance >
     identity > presence) and start-time secondary tiebreak. Truncated to ``top_n``;
     ``top_n=0`` returns an empty entries list (caller should skip writing the file).
     """
@@ -88,7 +88,7 @@ def build_disagreements_index(
         rows_by_pass[pass_label] = rows_by_pass.get(pass_label, 0) + len(result.rows)
         total_rows += len(result.rows)
         for row_idx, row in enumerate(result.rows):
-            au = row.aggregated_uncertainty
+            au = row.within_pass_uncertainty
             if au is not None and not math.isnan(au) and au >= HIGH_THRESHOLD:
                 high_count += 1
             entry = {
@@ -96,7 +96,7 @@ def build_disagreements_index(
                 "pass": pass_label,
                 "start": float(row.start),
                 "end": float(row.end),
-                "aggregated_uncertainty": au,
+                "within_pass_uncertainty": au,
                 "contributing_models": list(row.contributing_models),
                 "parquet": _parquet_path_for(pass_label, axis),
                 "row_idx": row_idx,
@@ -112,14 +112,14 @@ def build_disagreements_index(
                         entry[field] = value
             candidates.append(entry)
 
-    # Sort: NaN / None last. Primary descending by aggregated_uncertainty; axis
+    # Sort: NaN / None last. Primary descending by within_pass_uncertainty; axis
     # priority tiebreak; then (FR-024/T042) the enriched presence sub-signal —
     # among equal-aggregated presence rows, higher presence_uncertainty (the
     # decisiveness + temporal-instability composite) ranks first. Rows where
     # aggregated differs are ordered exactly as before (SC-008: baseline
-    # aggregated_uncertainty values and their relative order are unchanged).
+    # within_pass_uncertainty values and their relative order are unchanged).
     def _sort_key(e: dict[str, Any]) -> tuple[Any, ...]:
-        au = e["aggregated_uncertainty"]
+        au = e["within_pass_uncertainty"]
         primary = -float(au) if au is not None and not (isinstance(au, float) and math.isnan(au)) else float("inf")
         pu = e.get("presence_uncertainty")
         sub_signal = -float(pu) if isinstance(pu, (int, float)) and not math.isnan(float(pu)) else 0.0

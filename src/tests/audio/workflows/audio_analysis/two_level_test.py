@@ -58,7 +58,7 @@ def test_level_two_folds_every_pass_not_just_one() -> None:
         aggregator="mean",
     )
     assert len(fused) == 1
-    assert fused[0]["uncertainty"] == pytest.approx(0.5)
+    assert fused[0]["triage_score"] == pytest.approx(0.5)
     assert sorted(fused[0]["contributing_passes"]) == ["enhanced_16k", "raw_16k"]
 
 
@@ -67,8 +67,9 @@ def test_level_two_weights_signals_by_what_was_measured() -> None:
     buckets = {"raw_16k": [_bucket(0.0, {"trusted": 0.0, "doubtful": 1.0})]}
     unweighted = fuse_axis(buckets, weights={}, aggregator="min")
     weighted = fuse_axis(buckets, weights={"doubtful": 0.05, "trusted": 1.0}, aggregator="min")
-    assert unweighted[0]["uncertainty"] == pytest.approx(1.0)
-    assert weighted[0]["uncertainty"] < 0.2
+    # The weights act on the policy fold, which is what the adaptive loop ranks on.
+    assert unweighted[0]["triage_score"] == pytest.approx(1.0)
+    assert weighted[0]["triage_score"] < 0.2
 
 
 def test_level_two_records_which_signals_it_used() -> None:
@@ -172,3 +173,80 @@ def test_the_final_map_is_byte_identical_across_runs(tmp_path) -> None:  # noqa:
         second / "final" / "uncertainty" / "identity.parquet"
     ).read_bytes()
     assert set(a) == set(b)
+
+
+# ── L2 reports three distinct quantities ───────────────────────────────
+
+
+def test_level_two_reports_confidence_uncertainty_and_variability() -> None:
+    """Three questions, three numbers, each with its own estimator.
+
+    Confidence is a probability, variability a dispersion in the units of the quantity, and
+    uncertainty a normalised entropy. Collapsing them into one column is what let a max-doubt
+    fold, an entropy and a max-minus-min spread all be called "uncertainty".
+    """
+    fused = fuse_axis(
+        {"raw_16k": [_bucket(0.0, {"a": 0.1, "b": 0.9})]},
+        weights={},
+        aggregator="mean",
+    )
+    row = fused[0]
+    assert 0.0 <= row["uncertainty"] <= 1.0
+    assert 0.0 <= row["confidence"] <= 1.0
+    assert row["variability"] is not None and row["variability"] > 0.0
+
+
+def test_signals_that_agree_have_no_variability_and_low_uncertainty() -> None:
+    """Agreement collapses the dispersion and the entropy together."""
+    fused = fuse_axis({"raw_16k": [_bucket(0.0, {"a": 0.0, "b": 0.0})]}, weights={}, aggregator="mean")
+    assert fused[0]["variability"] == pytest.approx(0.0)
+    assert fused[0]["uncertainty"] == pytest.approx(0.0)
+
+
+def test_a_lone_signal_has_no_variability_but_can_still_be_uncertain() -> None:
+    """The distinction the two statistics exist to draw.
+
+    One signal cannot disagree with anyone, so dispersion is undefined — but a signal reporting
+    0.5 is still maximally undetermined about its own answer.
+    """
+    fused = fuse_axis({"raw_16k": [_bucket(0.0, {"a": 0.5})]}, weights={}, aggregator="mean")
+    assert fused[0]["variability"] is None
+    assert fused[0]["uncertainty"] > 0.5
+
+
+def test_epistemic_uncertainty_is_reported_separately() -> None:
+    """The reducible part is what tells the loop another measurement could help.
+
+    Two signals each internally certain but disagreeing: all of the doubt is reducible.
+    """
+    fused = fuse_axis({"raw_16k": [_bucket(0.0, {"a": 0.0, "b": 1.0})]}, weights={}, aggregator="mean")
+    assert fused[0]["uncertainty"] == pytest.approx(1.0, abs=0.05)
+    assert fused[0]["epistemic_uncertainty"] == pytest.approx(fused[0]["uncertainty"], abs=0.05)
+
+
+def test_shared_doubt_is_not_reported_as_reducible() -> None:
+    """Shared doubt is irreducible.
+
+    Signals agreeing at 0.5 face noise, not disagreement; sending the loop after it would
+    waste budget on evidence that cannot resolve anything.
+    """
+    fused = fuse_axis({"raw_16k": [_bucket(0.0, {"a": 0.5, "b": 0.5})]}, weights={}, aggregator="mean")
+    assert fused[0]["epistemic_uncertainty"] == pytest.approx(0.0, abs=0.05)
+    assert fused[0]["uncertainty"] > 0.5
+
+
+def test_the_weight_basis_names_which_factor_discounted_a_signal() -> None:
+    """A weight of 0.05 must say whether the signal was unstable, unsupported, or both."""
+    fused = fuse_axis(
+        {"raw_16k": [_bucket(0.0, {"a": 0.3})]},
+        weights={"a": 0.2},
+        aggregator="mean",
+        weight_basis={"a": {"stability": 1.0, "support": 0.2}},
+    )
+    assert fused[0]["weight_basis"]["a"] == {"stability": 1.0, "support": 0.2}
+
+
+def test_the_round_is_recorded() -> None:
+    """Later rounds refine earlier ones, so a value without its round is not comparable."""
+    fused = fuse_axis({"raw_16k": [_bucket(0.0, {"a": 0.3})]}, weights={}, aggregator="mean", round_index=2)
+    assert fused[0]["round"] == 2

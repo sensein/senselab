@@ -54,7 +54,7 @@ def _mean_over_voice_buckets(
     rows: list[Any],
     presence_rows: list[Any] | None = None,
 ) -> float | None:
-    """Intensity-weighted mean of ``aggregated_uncertainty`` over voice buckets.
+    """Intensity-weighted mean of ``within_pass_uncertainty`` over voice buckets.
 
     Uses the per-row ``intensity_weight`` (which already encodes "how much
     confident-voice content is in this bucket" — derived from the presence
@@ -72,14 +72,14 @@ def _mean_over_voice_buckets(
     weighted_sum = 0.0
     weight_total = 0.0
     for r in rows:
-        if r.aggregated_uncertainty is None:
+        if r.within_pass_uncertainty is None:
             continue
         # Default to weight 1.0 when a row pre-dates the intensity_weight
         # field (older parquets) — avoids retroactively zeroing those.
         w = 1.0 if r.intensity_weight is None else float(r.intensity_weight)
         if w <= 0:
             continue
-        weighted_sum += w * float(r.aggregated_uncertainty)
+        weighted_sum += w * float(r.within_pass_uncertainty)
         weight_total += w
     if weight_total <= 0:
         return None

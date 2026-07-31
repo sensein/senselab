@@ -31,25 +31,40 @@ class UncertaintyRow:
     start: float
     end: float
     axis: UncertaintyAxis
-    aggregated_uncertainty: float | None
+    within_pass_uncertainty: float | None
+    """What this pass alone would conclude, before anything is measured about the signals.
+
+    A **level-1 diagnostic**, not the answer. The answer is level 2's
+    ``final/uncertainty/<axis>.parquet``, which fuses across signals and passes with measured
+    weights. Named so it cannot be mistaken for a verdict — under its previous name,
+    ``within_pass_uncertainty``, every consumer read it as one, which is how a fold computed
+    before any weighting came to be reported as the run's belief."""
+
     contributing_models: list[str]
     model_votes: dict[str, dict[str, Any]]
     comparison_status: ComparisonStatus = "ok"
+    signal_uncertainty: dict[str, float] = field(default_factory=dict)
+    """Each signal's *own* uncertainty in this bucket — the level-1 emission.
+
+    First-class rather than recoverable only by re-parsing ``model_votes``: level 2 has to
+    weight the signals, and a value already folded cannot be re-weighted. A signal that said
+    nothing is absent rather than zero-filled, since zero is a confident claim."""
+
     # Audio-intensity weight in [0, 1]. Derived from per-bucket loudness
     # (per-pass percentile-normalized openSMILE Loudness_sma3). Used to
     # downweight uncertainty contributions from silent / background buckets
     # so they don't artificially inflate the time-aggregated mean. The raw
     # uncertainty is also stored multiplied by this weight in
-    # ``aggregated_uncertainty`` (see compute.py); ``intensity_weight`` here
+    # ``within_pass_uncertainty`` (see compute.py); ``intensity_weight`` here
     # carries the unmasked weight for downstream re-weighting if desired.
     intensity_weight: float | None = None
-    raw_aggregated_uncertainty: float | None = None  # pre-mask value
+    raw_within_pass_uncertainty: float | None = None  # pre-mask value
 
     # ── Scene-aware presence extensions (feature 20260722-175022) ────────────
     # All default None and are populated only on the axis they belong to
     # (presence for the confidence/quality/source columns; utterance for the
     # token-entropy/coupling columns). They are additive: existing readers that
-    # project a fixed column set are unaffected, and ``aggregated_uncertainty``
+    # project a fixed column set are unaffected, and ``within_pass_uncertainty``
     # keeps its original meaning. See
     # ``specs/20260722-175022-scene-quality-utterance/data-model.md``.
     #

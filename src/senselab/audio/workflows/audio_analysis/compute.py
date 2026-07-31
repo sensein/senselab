@@ -44,6 +44,7 @@ from senselab.audio.workflows.audio_analysis.identity import harvest_identity_vo
 from senselab.audio.workflows.audio_analysis.presence import harvest_presence_votes
 from senselab.audio.workflows.audio_analysis.reliability import (
     measured_weights,
+    reliability_from_stability,
     signal_stability,
 )
 from senselab.audio.workflows.audio_analysis.reliability import (
@@ -531,8 +532,23 @@ def compute_uncertainty_axes(
     }
     if weights_out is not None:
         # Exposed so level 2 can fuse with the same weights the diagnostics used; recomputing
-        # them there would let the two drift apart silently.
+        # them there would let the two drift apart silently. The per-factor basis rides
+        # alongside under a reserved key so a discounted signal records *why*.
         weights_out.update(reliability_by_axis)
+        stability = {
+            axis: reliability_from_stability(signal_stability(harvests_by_label, axis=axis))
+            for axis in ("presence", "identity", "utterance")
+        }
+        weights_out["__basis__"] = {
+            axis: {
+                signal: {
+                    "stability": round(float(stability[axis].get(signal, 1.0)), 6),
+                    "support": round(float(support.get(signal.split("::", 1)[0], 1.0)), 6),
+                }
+                for signal in reliability_by_axis[axis]
+            }
+            for axis in reliability_by_axis
+        }
     for pass_label, harvest in sorted(harvests_by_label.items()):
         for axis, result in aggregate_pass(
             harvest, aggregator=aggregator, params=params, signal_reliability=reliability_by_axis

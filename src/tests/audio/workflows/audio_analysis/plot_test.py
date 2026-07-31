@@ -15,7 +15,7 @@ def _row(start: float, axis: str, u: float) -> UncertaintyRow:
         start=start,
         end=start + 0.5,
         axis=axis,  # type: ignore[arg-type]
-        aggregated_uncertainty=u,
+        within_pass_uncertainty=u,
         contributing_models=["m"],
         model_votes={"m": {"speaks": True}},
         comparison_status="ok",

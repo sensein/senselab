@@ -28,7 +28,7 @@ def propose_regions(
     theta_high, theta_low = float(th["theta_high"]), float(th["theta_low"])
 
     def _u(row: dict[str, Any]) -> float:
-        v = row.get("aggregated_uncertainty")
+        v = row.get("within_pass_uncertainty")
         return -1.0 if v is None else float(v)
 
     # 1. seed + bidirectional expansion over contiguous indices.

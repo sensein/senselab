@@ -34,7 +34,7 @@ def apply_convergence_marks(
             for row in state.axis_rows(stream, axis):
                 if row.get("status") != "open":
                     continue
-                u = row.get("aggregated_uncertainty")
+                u = row.get("within_pass_uncertainty")
                 if u is None:
                     continue
                 if u <= theta_low:
@@ -45,7 +45,7 @@ def apply_convergence_marks(
                 hist = row.get("history") or []
                 improvement = None
                 if len(hist) >= 2:
-                    improvement = hist[-2]["aggregated_uncertainty"] - hist[-1]["aggregated_uncertainty"]
+                    improvement = hist[-2]["within_pass_uncertainty"] - hist[-1]["within_pass_uncertainty"]
                 stalled = improvement is not None and improvement < epsilon
                 if touches >= max_touch and stalled:
                     floor = float(row.get("aleatoric_floor") or 0.0)
@@ -125,7 +125,7 @@ def build_convergence_report(
                             "start": row["start"],
                             "end": row["end"],
                             "reason": row.get("irreducible_reason"),
-                            "residual": row.get("aggregated_uncertainty"),
+                            "residual": row.get("within_pass_uncertainty"),
                             "floor": row.get("aleatoric_floor"),
                         }
                     )

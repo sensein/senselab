@@ -23,6 +23,7 @@ import json
 from typing import Any, Mapping, Sequence
 
 from senselab.audio.workflows.audio_analysis.aggregators import apply_aggregator
+from senselab.audio.workflows.audio_analysis.statistics import epistemic_uncertainty, variability
 
 __all__ = [
     "write_final_uncertainty",
@@ -69,6 +70,8 @@ def fuse_axis(
     *,
     weights: Mapping[str, float],
     aggregator: str = "mean",
+    weight_basis: Mapping[str, Mapping[str, float]] | None = None,
+    round_index: int = 0,
 ) -> list[dict[str, Any]]:
     """Fuse one axis's per-signal uncertainties across signals and passes.
 
@@ -76,14 +79,24 @@ def fuse_axis(
         buckets_by_pass: ``{pass_label → per-bucket harvested votes}``.
         weights: ``{signal → measured weight}``. A signal absent from the mapping carries
             full weight: a factor never measured must not act as a discount.
-        aggregator: How to combine the weighted per-signal uncertainties.
+        aggregator: How to combine the weighted per-signal uncertainties into
+            ``triage_score``. It does not affect ``uncertainty``, which is the entropy
+            measure and has no policy choice in it.
+        weight_basis: ``{signal → {factor → value}}``, so a weight of 0.05 says whether the
+            signal was unstable, unsupported, or both. Without it a discounted signal is
+            indistinguishable from a differently discounted one.
+        round_index: Which iteration produced these values. Later rounds refine earlier ones,
+            so a value without its round cannot be compared against another.
 
     Returns:
-        One row per bucket, in time order, each carrying the fused ``uncertainty``, the
-        signals and passes that contributed, and the weight each signal actually carried.
+        One row per bucket, in time order. Each carries four distinct quantities —
+        ``uncertainty`` (normalised entropy), ``epistemic_uncertainty`` (its reducible part),
+        ``confidence`` (a probability), ``variability`` (a dispersion) — plus ``triage_score``
+        (the policy fold), the signals and passes that contributed, and the weight each signal
+        carried with the factors behind it.
         Ordering is by time then pass so the maps stay byte-identical across runs (SC-004).
 
-        ``uncertainty`` is ``None`` where no signal spoke. That is not the same as ``0.0``,
+        Every quantity is ``None`` where no signal spoke. That is not the same as ``0.0``,
         which would assert confidence nobody expressed.
     """
     # (start, end) → signal → [uncertainty, ...]; a signal appearing in both passes
@@ -112,14 +125,39 @@ def fuse_axis(
         applied = [float(weights.get(s, 1.0)) for s in signals]
         candidates: list[float | None] = list(values)
         fused = apply_aggregator(candidates, aggregator, weights=applied) if signals else None
+        # Three quantities with three estimators, deliberately not collapsed:
+        #   confidence  — P(the axis is settled here), the weighted mean of per-signal
+        #                 certainties; a probability, so it is calibratable.
+        #   variability — dispersion across signals, in the units of the quantity. ``None``
+        #                 for a lone signal, which cannot disagree with anyone.
+        #   uncertainty — normalised entropy over the {settled, unsettled} outcome space,
+        #                 which decomposes into a reducible part.
+        certainties = [1.0 - v for v in values]
+        weighted_confidence = (
+            sum(c * w for c, w in zip(certainties, applied)) / sum(applied) if sum(applied) > 0 else None
+        )
+        spread = variability(values)
+        total, epistemic = epistemic_uncertainty([{"unsettled": v, "settled": 1.0 - v} for v in values])
         rows.append(
             {
                 "start": start,
                 "end": end,
-                "uncertainty": fused,
+                # ``uncertainty`` is the entropy measure, not the aggregator fold. Having two
+                # columns whose names both say "uncertainty" but whose maths differ is the
+                # conflation this module exists to remove.
+                "uncertainty": total,
+                "epistemic_uncertainty": epistemic,
+                "confidence": weighted_confidence,
+                "variability": spread,
+                # The policy-driven fold, kept under a name that says what it is for: ranking
+                # where to spend the adaptive loop's budget. Max-doubt is the right operator
+                # for "is any signal unsure", and the wrong one for "what do we believe".
+                "triage_score": fused,
                 "contributing_signals": signals,
                 "contributing_passes": sorted(passes_seen[(start, end)]),
                 "signal_weights": {s: w for s, w in zip(signals, applied)},
+                "weight_basis": {s: dict((weight_basis or {}).get(s, {})) for s in signals},
+                "round": int(round_index),
             }
         )
     return rows
@@ -131,6 +169,8 @@ def write_final_uncertainty(
     harvests: Mapping[str, Any],
     weights_by_axis: Mapping[str, Mapping[str, float]],
     aggregator: str = "mean",
+    weight_basis_by_axis: Mapping[str, Mapping[str, Mapping[str, float]]] | None = None,
+    round_index: int = 0,
 ) -> dict[str, Any]:
     """Write ``final/uncertainty/{presence,identity,utterance}.parquet`` — the level-2 answer.
 
@@ -143,7 +183,10 @@ def write_final_uncertainty(
         out_dir: Run directory.
         harvests: ``{pass_label → PassHarvest}``.
         weights_by_axis: ``{axis → {signal → measured weight}}``.
-        aggregator: Aggregator for the cross-signal fold.
+        aggregator: Aggregator for the ``triage_score`` fold.
+        weight_basis_by_axis: ``{axis → {signal → {factor → value}}}``, so a discounted signal
+            records which factor discounted it.
+        round_index: Which iteration produced these maps.
 
     Returns:
         ``{axis → written path}`` as strings, for the run summary.
@@ -159,7 +202,13 @@ def write_final_uncertainty(
     written: dict[str, Any] = {}
     for axis, field in axis_field.items():
         by_pass = {label: getattr(h, field, []) or [] for label, h in harvests.items()}
-        rows = fuse_axis(by_pass, weights=weights_by_axis.get(axis, {}), aggregator=aggregator)
+        rows = fuse_axis(
+            by_pass,
+            weights=weights_by_axis.get(axis, {}),
+            aggregator=aggregator,
+            weight_basis=(weight_basis_by_axis or {}).get(axis),
+            round_index=round_index,
+        )
         frame = pd.DataFrame(
             [
                 {
@@ -167,9 +216,15 @@ def write_final_uncertainty(
                     "end": r["end"],
                     "axis": axis,
                     "uncertainty": r["uncertainty"],
+                    "epistemic_uncertainty": r["epistemic_uncertainty"],
+                    "confidence": r["confidence"],
+                    "variability": r["variability"],
+                    "triage_score": r["triage_score"],
+                    "round": r["round"],
                     "contributing_signals": r["contributing_signals"],
                     "contributing_passes": r["contributing_passes"],
                     "signal_weights": json.dumps(r["signal_weights"], sort_keys=True),
+                    "weight_basis": json.dumps(r["weight_basis"], sort_keys=True),
                 }
                 for r in rows
             ],
@@ -178,9 +233,15 @@ def write_final_uncertainty(
                 "end",
                 "axis",
                 "uncertainty",
+                "epistemic_uncertainty",
+                "confidence",
+                "variability",
+                "triage_score",
+                "round",
                 "contributing_signals",
                 "contributing_passes",
                 "signal_weights",
+                "weight_basis",
             ],
         )
         path = final / f"{axis}.parquet"

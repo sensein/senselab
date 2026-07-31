@@ -60,7 +60,7 @@ def test_purge_excludes_from_aggregation_but_keeps_row() -> None:
 
 def _rows(uncertainties: list[float], win: float = 0.5) -> list[dict]:
     return [
-        {"start": i * win, "end": (i + 1) * win, "aggregated_uncertainty": u, "status": "open"}
+        {"start": i * win, "end": (i + 1) * win, "within_pass_uncertainty": u, "status": "open"}
         for i, u in enumerate(uncertainties)
     ]
 
@@ -313,10 +313,10 @@ def test_from_harvests_in_process_integration() -> None:
     votes = store.active_votes("raw_16k", "presence", (0.0, 0.5))
     assert set(votes) == {"m1", "m2"}
     row = store.reaggregate_bucket("raw_16k", "presence", (0.0, 0.5), aggregator="min")
-    assert row["aggregated_uncertainty"] == pytest.approx(aggregate_presence(votes))
+    assert row["within_pass_uncertainty"] == pytest.approx(aggregate_presence(votes))
     assert store.row_meta[("raw_16k", "presence", (0.0, 0.5))]["quality_snr"] == 0.3
     ident = store.reaggregate_bucket("raw_16k", "identity", (0.0, 1.0), aggregator="min")
-    assert ident["aggregated_uncertainty"] == pytest.approx(0.5)
+    assert ident["within_pass_uncertainty"] == pytest.approx(0.5)
 
 
 # ── In-process ingest path (T040) ─────────────────────────────────────

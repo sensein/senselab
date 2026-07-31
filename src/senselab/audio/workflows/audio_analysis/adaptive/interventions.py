@@ -161,7 +161,7 @@ def _election_scores(region: dict[str, Any], ctx: dict[str, Any]) -> dict[str, d
             ]
         )
         quality = 1.0 - (degr if degr is not None else 0.0)
-        agree = 1.0 - (_mean([r.get("aggregated_uncertainty") for r in utt]) or 0.0)
+        agree = 1.0 - (_mean([r.get("within_pass_uncertainty") for r in utt]) or 0.0)
         total = w["presence_conf"] * p_conf + w["quality"] * quality + w["utterance_agreement"] * agree
         scores[stream] = {
             "presence_conf": round(p_conf, 6),

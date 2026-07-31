@@ -114,7 +114,7 @@ def build_adaptive_timeline(out_dir: Path, *, gt_path: Path | None = None, title
     mids_p = (pres["start"] + pres["end"]) / 2
     ax_p.plot(mids_p, pres["p_voice"], color="tab:blue", lw=1.2, label="p_voice (final)")
     ax_p.fill_between(
-        mids_p, 0, pres["aggregated_uncertainty"].fillna(0), color="tab:red", alpha=0.18, label="uncertainty"
+        mids_p, 0, pres["within_pass_uncertainty"].fillna(0), color="tab:red", alpha=0.18, label="uncertainty"
     )
     ax_p.axhline(0.5, color="grey", lw=0.6, ls=":")
     ax_p.set_ylabel("presence", rotation=0, ha="right", va="center")
@@ -489,7 +489,7 @@ def _step(ax: Any, df: Any, *, color: str, label: str) -> None:  # noqa: ANN401
         return
     mids = (df["start"] + df["end"]) / 2
     ax.plot(
-        mids, df["aggregated_uncertainty"], drawstyle="steps-mid", color=color, lw=1.4, label=label, marker="o", ms=2.5
+        mids, df["within_pass_uncertainty"], drawstyle="steps-mid", color=color, lw=1.4, label=label, marker="o", ms=2.5
     )
 
 

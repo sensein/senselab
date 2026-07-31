@@ -91,7 +91,7 @@ def evaluate_against_ground_truth(
         fp += (not gt_speech) and pred
         fn += gt_speech and (not pred)
         tn += (not gt_speech) and (not pred)
-        u = row.get("aggregated_uncertainty")
+        u = row.get("within_pass_uncertainty")
         if u is not None and u == u:
             (unc_speech if gt_speech else unc_sil).append(float(u))
     presence_eval = {
@@ -192,7 +192,7 @@ def evaluate_against_ground_truth(
         at_b: list[float] = []
         inside: list[float] = []
         for _, row in ident.iterrows():
-            u = row.get("aggregated_uncertainty")
+            u = row.get("within_pass_uncertainty")
             if u is None or u != u:
                 continue
             if any(row["start"] <= b < row["end"] for b in boundaries):

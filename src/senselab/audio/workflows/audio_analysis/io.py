@@ -1,7 +1,7 @@
 """Parquet writer for ``UncertaintyRow``s.
 
 Writes one parquet per ``AxisResult`` with a stable schema: ``start``, ``end``, ``axis``,
-``aggregated_uncertainty``, ``contributing_models``, ``model_votes`` (JSON-encoded for
+``within_pass_uncertainty``, ``contributing_models``, ``model_votes`` (JSON-encoded for
 heterogeneous-shape robustness — Arrow's strict struct typing fights us when different
 axes have different vote shapes), ``comparison_status``. The provenance dict goes into
 ``schema.metadata`` under the ``comparator_provenance`` key per FR-014.
@@ -36,8 +36,8 @@ def write_axis_parquet(
     starts = [r.start for r in axis_result.rows]
     ends = [r.end for r in axis_result.rows]
     axes = [r.axis for r in axis_result.rows]
-    uncertainties = [r.aggregated_uncertainty for r in axis_result.rows]
-    raw_uncertainties = [r.raw_aggregated_uncertainty for r in axis_result.rows]
+    uncertainties = [r.within_pass_uncertainty for r in axis_result.rows]
+    raw_uncertainties = [r.raw_within_pass_uncertainty for r in axis_result.rows]
     intensity_weights = [r.intensity_weight for r in axis_result.rows]
     contributing = [list(r.contributing_models) for r in axis_result.rows]
     votes_json = [json.dumps(r.model_votes, default=str, separators=(",", ":")) for r in axis_result.rows]
@@ -67,8 +67,8 @@ def write_axis_parquet(
         "start": pa.array(starts, type=pa.float64()),
         "end": pa.array(ends, type=pa.float64()),
         "axis": pa.array(axes, type=pa.string()),
-        "aggregated_uncertainty": pa.array(uncertainties, type=pa.float64()),
-        "raw_aggregated_uncertainty": pa.array(raw_uncertainties, type=pa.float64()),
+        "within_pass_uncertainty": pa.array(uncertainties, type=pa.float64()),
+        "raw_within_pass_uncertainty": pa.array(raw_uncertainties, type=pa.float64()),
         "intensity_weight": pa.array(intensity_weights, type=pa.float64()),
         "contributing_models": pa.array(contributing, type=pa.list_(pa.string())),
         "model_votes": pa.array(votes_json, type=pa.string()),

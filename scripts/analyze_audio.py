@@ -664,7 +664,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "multiplied by 1 + W_Q * quality_snr + W_S * (src_machine + src_environment) over the "
             "bucket's span, clipped to 1.0. The multiplier is recorded in the "
             "scene_quality_coupling column and the pre-coupling value stays in "
-            "raw_aggregated_uncertainty. Defaults to 0.5 0.25; pass '0 0' to disable coupling."
+            "raw_within_pass_uncertainty. Defaults to 0.5 0.25; pass '0 0' to disable coupling."
         ),
     )
     parser.add_argument(
@@ -1588,11 +1588,16 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 from senselab.audio.workflows.audio_analysis.fuse import write_final_uncertainty
 
+                # The reserved __basis__ key carries the per-factor breakdown; it is not an
+                # axis, so it is split off rather than fused.
+                basis = reliability_by_axis.get("__basis__") or {}
+                axis_weights = {k: v for k, v in reliability_by_axis.items() if k != "__basis__"}
                 final_maps = write_final_uncertainty(
                     run_dir,
                     harvests=harvests_by_pass,
-                    weights_by_axis=reliability_by_axis,
+                    weights_by_axis=axis_weights,
                     aggregator=args.uncertainty_aggregator,
+                    weight_basis_by_axis=basis,
                 )
                 summaries["final_uncertainty"] = final_maps
                 print(f"  [final uncertainty] {len(final_maps)} axis map(s) under final/uncertainty/")
