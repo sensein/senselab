@@ -86,10 +86,14 @@ signals"*, this module has no L1 role: it should become an L2 stage reading L1 m
 | 15 | coarse-voter demotion | `weight = 0.25` when grid < 0.5 s | native window/hop in provenance | how should resolution mismatch be weighted? | open |
 | 16 | segmentation-3.0 reduction | noisy-or over per-speaker channels (was `max`) | per-speaker activation matrix, channels intact | how do per-speaker activations combine? | open |
 
-Item 16 is the sharpest case. The model reports one activation per speaker; both `max` and
-noisy-or collapse that to a single number and return **exactly 1.0000 in all 1070 buckets** on the
-Higgs conversation. The per-speaker structure it discards is precisely what the identity axis
-needs, and the collapse is why presence carried no information.
+Item 16 is the sharpest case, and its diagnosis changed once measured. The model reports one
+activation per speaker, and the collapse returned **exactly 1.0000 in all 1070 buckets** on the
+Higgs conversation — but the cause was the output format being *misidentified*, not the choice of
+reduction. `segmentation-3.0` declares `powerset=True` while pyannote 4.x returns per-speaker
+columns; a single active speaker makes those rows sum to 1.0, so the row-sum heuristic took the
+powerset branch and computed `1 − data[:, 0]`, treating speaker#1 as the no-speaker class. Reading
+the declaration against the output width instead took discrimination from 0.0000 to **+0.9364** on
+a speech-then-silence probe. Closed; see D-5 in `layered-architecture.md` for the measurements.
 
 Items 1 and 12 together are why diarization rows render one colour: L1 never emits the labels, so
 nothing downstream can distinguish speakers.

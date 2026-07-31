@@ -13,7 +13,7 @@ an explicit degraded-environment fallback where one is justified.
 - I1/I2 fine-hop embeddings → the workflow's own
   ``audio_analysis.embeddings.extract_per_window_embeddings``.
 - I4 overlap posteriors → ``voice_activity_detection.frame_posteriors``
-  (``include_per_class=True`` + ``FramePosterior.overlap_probs`` — FR-016).
+  (``FramePosterior.overlap_probs`` — FR-016).
 
 Nothing here is file- or model-id-specific: models, windows, and hops come from
 the policy.
@@ -203,19 +203,20 @@ def overlap_posteriors(
         return None, f"posteriors_unavailable ({getattr(exc, 'name', exc)})"
     try:
         lo, hi = int(round(span[0] * TARGET_SR)), int(round(span[1] * TARGET_SR))
-        fp = extract_speech_frame_posteriors([_to_audio(wav[lo:hi])], include_per_class=True)[0]
+        fp = extract_speech_frame_posteriors([_to_audio(wav[lo:hi])])[0]
     except Exception as exc:  # noqa: BLE001
         return None, f"posteriors_failed ({exc!r})"
     if fp is None:
         return None, "posteriors_unavailable (model load/access failed — see logs)"
     overlap = fp.overlap_probs()
     if overlap is None:
-        return None, "posteriors_unexpected_shape (per-class posteriors missing)"
+        return None, "posteriors_unexpected_shape (single-channel output cannot report overlap)"
     return {
         "frame_hop": float(fp.frame_hop_s),
         "overlap": [float(x) for x in overlap],
-        "speech": [float(x) for x in fp.probs],
-        "n_classes": int(fp.per_class.shape[1]) if fp.per_class is not None else None,
+        "speech": [float(x) for x in fp.speech_prob()],
+        "n_classes": int(fp.activations.shape[1]),
+        "channel_format": fp.channel_format,
     }, None
 
 

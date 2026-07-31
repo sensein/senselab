@@ -1011,7 +1011,7 @@ def run_triage(audio: Audio, args: argparse.Namespace, device: DeviceType | None
         snr_db, snr_hop_s = dsp_snr_series(
             waveform,
             audio.sampling_rate,
-            p_speech=[float(p) for p in posterior.probs] if posterior is not None else None,
+            p_speech=[float(p) for p in posterior.speech_prob()] if posterior is not None else None,
             p_hop_s=float(posterior.frame_hop_s) if posterior is not None else None,
         )
         snr_estimator = "dsp_posterior_masked" if posterior is not None else "dsp_percentile"
@@ -1027,7 +1027,7 @@ def run_triage(audio: Audio, args: argparse.Namespace, device: DeviceType | None
         }
     else:
         decision = triage_decision(
-            p_speech=[float(p) for p in posterior.probs],
+            p_speech=[float(p) for p in posterior.speech_prob()],
             frame_hop_s=float(posterior.frame_hop_s),
             snr_db=snr_db,
             snr_hop_s=snr_hop_s,

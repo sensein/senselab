@@ -79,8 +79,32 @@ PR #537 adds diarizers.
 
 **D-5. Emit `segmentation_activations` with channels intact.** *Why:* it is the only signal that
 can distinguish "two speakers talking simultaneously" from "uncertain which of two speakers", and
-collapsing it (`max`, later noisy-or) returned exactly `1.0000` in all 1070 buckets of the Higgs
-conversation while discarding the per-speaker structure the speaker category needs.
+the collapse discarded the per-speaker structure the speaker category needs.
+
+*Measured mechanism, which corrects an earlier account in this document.* The saturation was not
+caused by the choice of reduction (`max` vs noisy-or) but by **misidentifying the output format**.
+Probing the model directly:
+
+```
+problem: MONO_LABEL_CLASSIFICATION   powerset: True
+classes: ['speaker#1', 'speaker#2', 'speaker#3']     output: (471, 3)
+```
+
+pyannote 4.x converts powerset → per-speaker activations *before returning*, so the columns are
+speakers. With one speaker fully active those rows sum to exactly 1.0, so the row-sum heuristic
+concluded "powerset" and computed `1 − data[:, 0]` — treating **speaker#1** as the no-speaker
+class. On 4 s of speech followed by 4 s of digital silence that read `1.0000` in **100% of
+frames**. The fix is to read the declaration against the output width (powerset over 3 speakers is
+7 columns, per-speaker is 3), never row sums. After it, on the same input:
+
+```
+pooled P(speech): speech half 1.0000   silence half 0.0636   discrimination +0.9364
+exactly-1.0000 frames: 53% (i.e. the speech half)   per-channel: [0, 1, 0]
+```
+
+*Consequence for the layering:* the pooled value is no longer a stored field. Keeping a collapse
+next to the matrix it came from lets the two disagree, and consumers read the stored one — which
+is how a reduction returning 1.0000 everywhere survived unnoticed.
 
 Deferred at L1: a dedicated non-target measurement (for speech tasks, non-target reduces to
 non-speech, making the mask a layer-2 derived quantity), and sampling/dropout uncertainty (tracked

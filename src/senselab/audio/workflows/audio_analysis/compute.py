@@ -265,8 +265,11 @@ def harvest_pass(
             quality_by_bucket[(round(q["start"], 6), round(q["end"], 6))] = q
         # Reuse the Brouhaha VAD head as a second frame-posterior presence voter.
         if brouhaha_frames is not None:
+            # A VAD head is genuinely one channel, so ``single`` is a declaration, not a collapse.
             frame_voters["frame_brouhaha_vad"] = FramePosterior(
-                probs=brouhaha_frames.vad, frame_hop_s=brouhaha_frames.frame_hop_s
+                activations=np.asarray(brouhaha_frames.vad, dtype=np.float64)[:, None],
+                frame_hop_s=brouhaha_frames.frame_hop_s,
+                channel_format="single",
             )
         scene_quality_provenance.update(
             {
