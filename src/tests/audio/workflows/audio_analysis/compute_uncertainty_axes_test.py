@@ -550,7 +550,9 @@ def test_presence_confidence_uncertainty_split_and_instability(monkeypatch: pyte
     monkeypatch.setattr(
         fp,
         "extract_speech_frame_posteriors",
-        lambda audios, *a, **k: [FramePosterior(probs=probs, frame_hop_s=0.01)] * len(audios),
+        lambda audios, *a, **k: (
+            [FramePosterior(activations=probs[:, None], frame_hop_s=0.01, channel_format="single")] * len(audios)
+        ),
     )
     raw_pass = {
         "duration_s": 2.0,

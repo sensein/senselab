@@ -96,20 +96,35 @@ def test_multilabel_activations_reduce_by_noisy_or_not_max() -> None:
     """
     import numpy as np
 
-    from senselab.audio.tasks.voice_activity_detection.frame_posteriors import _speech_prob_from_output
+    from senselab.audio.tasks.voice_activity_detection.frame_posteriors import collapse_to_speech_prob
 
-    # Rows do not sum to 1, so this takes the multilabel path.
     quiet = np.array([[0.02, 0.01, 0.03]])
     loud = np.array([[0.95, 0.10, 0.05]])
-    assert _speech_prob_from_output(quiet)[0] < 0.1
-    assert _speech_prob_from_output(loud)[0] > 0.9
+    assert collapse_to_speech_prob(quiet, channel_format="per_speaker")[0] < 0.1
+    assert collapse_to_speech_prob(loud, channel_format="per_speaker")[0] > 0.9
 
 
-def test_the_powerset_path_is_unchanged() -> None:
-    """Softmax rows still use 1 - P(no speaker), which was never the saturating case."""
+def test_the_powerset_path_requires_a_declaration_not_a_row_sum() -> None:
+    """Rows summing to 1 are no longer taken as evidence of powerset output.
+
+    This test previously asserted the opposite — that a softmax-looking row selects the
+    ``1 - P(no speaker)`` path. Measured against the real model, that inference is what produced
+    the saturation: segmentation-3.0 returns per-speaker activations, and a single fully-active
+    speaker makes those rows sum to exactly 1.0, so the row-sum test misread column 0 as the
+    no-speaker class and reported P(speech) = 1.0000 in 100% of frames including silence.
+    """
     import numpy as np
 
-    from senselab.audio.tasks.voice_activity_detection.frame_posteriors import _speech_prob_from_output
+    from senselab.audio.tasks.voice_activity_detection.frame_posteriors import (
+        channel_format_for,
+        collapse_to_speech_prob,
+    )
 
-    powerset = np.array([[0.7, 0.1, 0.1, 0.1]])  # sums to 1
-    assert _speech_prob_from_output(powerset)[0] == pytest.approx(0.3)
+    rows_sum_to_one = np.array([[0.7, 0.1, 0.1, 0.1]])
+    # Three declared speakers, four columns: neither 3 (per-speaker) nor 7 (powerset), so the
+    # safe reading is per-speaker rather than assuming a no-speaker column exists.
+    fmt = channel_format_for(n_columns=4, declared_classes=["speaker#1", "speaker#2", "speaker#3"])
+    assert fmt == "per_speaker"
+    assert collapse_to_speech_prob(rows_sum_to_one, channel_format=fmt)[0] == pytest.approx(1.0 - 0.3 * 0.9 * 0.9 * 0.9)
+    # A model that genuinely declares powerset width gets the powerset reduction.
+    assert collapse_to_speech_prob(rows_sum_to_one, channel_format="powerset")[0] == pytest.approx(0.3)
