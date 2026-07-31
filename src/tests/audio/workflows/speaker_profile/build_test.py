@@ -438,3 +438,68 @@ def test_profile_from_related_audios_records_the_build_grid(monkeypatch: pytest.
     assert profile is not None
     assert profile.params.profile_window_s == 2.0
     assert profile.params.profile_hop_s == 1.0
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Minority-share advisory (surfaced, NOT enforced)
+#     decide_confidence checks that a dominant cluster exists, that no single runner-up is
+#     within AMBIGUITY_SHARE_RATIO of it, and that there is enough speech — never the
+#     dominant cluster's *absolute* share. A subject whose remaining audio is fragmented
+#     across several mid-size clusters passes the runner-up test and reports "ok" while the
+#     reference represents a minority of their speech. Observed on real data at share 0.459,
+#     where the profile scored that subject's own held-out recording at 0.0.
+
+
+def test_minority_dominant_share_is_flagged_in_provenance(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A below-advisory share sets a provenance flag and records the share."""
+    # Two files whose windows land in distinct clusters → dominant share well under 1.0.
+    a = _audio_of_length(160000)
+    b = _audio_of_length(176000)
+    _stub_extractor(monkeypatch, {"160000": _basis(0), "176000": _basis(5)})
+
+    profile = build_speaker_profile(
+        "sub-split",
+        [ProfileInput(audio=a, file_id="a.wav"), ProfileInput(audio=b, file_id="b.wav")],
+        embedding_models=[_MODEL],
+    )
+
+    assert "dominant_share" in profile.provenance
+    assert profile.provenance["dominant_share"] == pytest.approx(profile.dominant_cluster.share)
+    below = profile.dominant_cluster.share < C.ADVISORY_MIN_DOMINANT_SHARE
+    assert profile.provenance["dominant_share_below_advisory"] is below
+
+
+def test_minority_share_does_not_change_confidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The advisory must not silently downgrade a profile — semantics are unchanged.
+
+    Enforcement is a separate decision: a low share can be legitimate for a subject whose
+    every recording contains a second speaker. This asserts the flag is informational only.
+    """
+    a = _audio_of_length(160000)
+    b = _audio_of_length(176000)
+    _stub_extractor(monkeypatch, {"160000": _basis(0), "176000": _basis(5)})
+    profile = build_speaker_profile(
+        "sub-split",
+        [ProfileInput(audio=a, file_id="a.wav"), ProfileInput(audio=b, file_id="b.wav")],
+        embedding_models=[_MODEL],
+    )
+    expected = decide_confidence(
+        has_dominant=True,
+        dominant_speech_seconds=profile.dominant_cluster.speech_seconds,
+        runner_up_speech_seconds=(profile.runner_up_cluster.speech_seconds if profile.runner_up_cluster else None),
+    )
+    assert profile.confidence == expected
+
+
+def test_majority_share_is_not_flagged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A single coherent speaker keeps the flag clear."""
+    a = _audio_of_length(160000)
+    b = _audio_of_length(176000)
+    _stub_extractor(monkeypatch, {"160000": _basis(0), "176000": _basis(0)})
+    profile = build_speaker_profile(
+        "sub-clean",
+        [ProfileInput(audio=a, file_id="a.wav"), ProfileInput(audio=b, file_id="b.wav")],
+        embedding_models=[_MODEL],
+    )
+    assert profile.dominant_cluster.share >= C.ADVISORY_MIN_DOMINANT_SHARE
+    assert profile.provenance["dominant_share_below_advisory"] is False

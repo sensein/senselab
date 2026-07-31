@@ -213,3 +213,24 @@ empirical sweep."""
 # the headline ``profile_target_quality`` is profile-relative only
 # (target_match_fraction + mean_target_consistency, both natively [0,1]); SQUIM
 # is reported as raw means alongside (see ``compare.compute_target_quality``).
+
+
+ADVISORY_MIN_DOMINANT_SHARE: float = 0.5
+"""[new] Dominant-cluster share below which a profile is *advisory-flagged*, not downgraded.
+
+**Not enforced.** :func:`~senselab.audio.workflows.speaker_profile.build.decide_confidence`
+is unchanged; this only drives a provenance flag and a CLI warning so a minority-share
+reference is visible instead of silent.
+
+Why it exists: the confidence policy checks that *a* dominant cluster exists, that no single
+runner-up is within :data:`AMBIGUITY_SHARE_RATIO` of it, and that there is enough speech —
+but never the dominant cluster's *absolute* share. A subject whose remaining audio is
+fragmented across several mid-size clusters therefore passes the runner-up test and reports
+``ok`` even though the reference represents a minority of their enrolled speech.
+
+Observed on real data: a profile reported ``ok`` with a 0.459 share and scored that same
+subject's held-out recording at 0.0 — a confidently wrong reference. 0.5 is the natural
+reading ("the reference should represent a majority of the subject's speech"), but a low
+share can also be legitimate for a subject whose every recording contains a second speaker,
+which is why this advises rather than decides.
+"""

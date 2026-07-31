@@ -765,6 +765,19 @@ def build_speaker_profile(
         "cache_key_basis": f"module:{__name__}",
         "built_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "reference_model": next(iter(aggregation.centroids), None) if aggregation else None,
+        # Surfaced, NOT enforced. ``decide_confidence`` never looks at the dominant
+        # cluster's absolute share — only that a dominant cluster exists, that no single
+        # runner-up rivals it, and that there is enough speech. A subject whose remaining
+        # audio is fragmented across several mid-size clusters therefore reports ``ok``
+        # while the reference covers a minority of their enrolled speech (observed at 0.459
+        # on real data, where the profile scored that subject's own held-out recording at
+        # 0.0). Recording the share and a flag on it makes that visible to a consumer
+        # without changing confidence semantics. See ``ADVISORY_MIN_DOMINANT_SHARE``.
+        "dominant_share": dominant_cluster.share if dominant_cluster else None,
+        "dominant_share_below_advisory": (
+            bool(dominant_cluster.share < C.ADVISORY_MIN_DOMINANT_SHARE) if dominant_cluster else None
+        ),
+        "advisory_min_dominant_share": C.ADVISORY_MIN_DOMINANT_SHARE,
     }
     if failures:
         provenance["failures"] = dict(failures)
