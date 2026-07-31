@@ -9,7 +9,10 @@ without touching any model, waveform, or file. Consequences (spec
 - the adaptive loop can merge new votes and re-fold only covered buckets;
 - everything here is unit-testable with synthetic vote dicts.
 
-No imports beyond stdlib + the sibling pure modules (``aggregate``, ``types``).
+Imports stay within the sibling analysis modules. "Pure" here means *deterministic and
+model-free*, not dependency-free: the speech-presence link clusters L1 embedding vectors, which
+brings numpy and scikit-learn into this path. That is a computation over data already in hand — it
+touches no model, no waveform and no file, so re-aggregation is still cheap and repeatable.
 """
 
 from __future__ import annotations
@@ -55,6 +58,9 @@ class PassHarvest:
         sampling_rate: The pass audio's sample rate, needed to compare a measured spectral
             roll-off against Nyquist. Carried on the harvest rather than re-derived, so the
             aggregate phase stays pure and model-free.
+        per_window_embeddings: ``{embedding_model → [WindowEmbedding]}`` — L1 vectors. Clustering
+            them is an L2 derivation (``speech_presence_link.derive_window_clusters``), so the
+            vectors travel and the conclusion is drawn where it can be re-drawn.
         provenance_extras: scene_quality / sound_sources / frame_posteriors blocks.
         synthetic_diarization: optional ``{source_id: diar_block}`` synthesized from
             embedding clustering (kept explicit so callers can opt into the legacy
@@ -69,6 +75,7 @@ class PassHarvest:
     source_by_bucket: dict[tuple[float, float], dict[str, Any]] = field(default_factory=dict)
     grids: dict[str, dict[str, float]] = field(default_factory=dict)
     sampling_rate: int = 16000
+    per_window_embeddings: dict[str, list[Any]] = field(default_factory=dict)
     provenance_extras: dict[str, Any] = field(default_factory=dict)
     synthetic_diarization: dict[str, Any] | None = None
 

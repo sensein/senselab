@@ -84,7 +84,7 @@ a named `SpeechPresencePolicy`). `PassHarvest.speech_presence_votes` became
 | 9 | `acoustic_spectral_activity` | per-pass percentile band on `spectralFlux_sma3` | replaced by `level_above_floor_db` (D-3) | what excess above the measured floor counts as activity? | **closed** |
 | 10 | `acoustic_hnr` | fixed 2→10 dB ramp; low maps to `p = 0.5` (abstain) | `hnr_db`, units dB | what HNR indicates voicing, and when is it uninformative? | **closed** |
 | 11 | `ppg_voice_fraction` | per-frame argmax, count `!= "<silent>"`, ÷ n, then `>= 0.5` | `mean_silence_posterior` + dispersion + frame count | what silence posterior means speech? | **closed** |
-| 12 | `embedding_silhouette` | cluster all windows, silhouette coefficient, `>= 0.5` | embedding vectors per window | does clustering support a coherent speaker here? | open |
+| 12 | `embedding_silhouette` | cluster all windows, silhouette coefficient, `>= 0.5` | embedding vectors per window on `PassHarvest` | does clustering support a coherent speaker here, and which cluster? | **closed** |
 | 13 | frame posteriors | bucket-mean over frames, then `>= 0.5` | `frame_mean`, `frame_std`, `channel_means`, `resolution_s` | how do frames aggregate to a bucket, and where is the cut? | **closed** |
 | 14 | `frame_dispersion` | `clip(2 × mean(std), 0, 1)` — ×2 rescale + clip | dispersion in probability units, unrescaled | how does dispersion enter a belief? | **closed** |
 | 15 | coarse-voter demotion | hand-set `coarse: True`, `weight = 0.25` when grid < 0.5 s | measured `native_window_s` / `resolution_s` per signal | how should resolution mismatch be weighted? | **closed** |
@@ -292,10 +292,27 @@ and `_link_hnr`, and L1 emits `hnr_db` alone. The asymmetry is preserved verbati
 distorted voice both read low, so a low HNR cannot be distinguished from silence and must not be
 voted as absence.
 
-**Two of the three remaining open items are now the same item.** Item 12
-(`embedding_silhouette`) and item 24 (quality grid broadcast) are both blocked on carrying more
-through `PassHarvest`: the per-window embedding vectors in one case, the native-resolution analysis
-series in the other. Item 12 additionally needs a decision the others did not — clustering at L2
-would pull scikit-learn into the aggregation path that is currently pure and model-free, so where
-the silhouette is computed is a question about what "pure" is allowed to mean, not only about
-layering.
+**Item 24 is the last one open**, blocked on carrying the native-resolution analysis series
+through `PassHarvest` and wiring `resolution.py` in.
+
+## Findings from closing item 12
+
+**"Pure" meant model-free, not dependency-free.** Clustering at L2 brings numpy and scikit-learn
+into the aggregation path, which was the reason to hesitate. But the property `aggregate_pass`
+actually needs is that re-aggregating is deterministic and touches no model, waveform or file — and
+a computation over vectors already in hand satisfies that. `votes.py` now says so explicitly, since
+the old wording ("no imports beyond stdlib") would have made this look like a violation rather than
+a clarification.
+
+**The derivation answers two questions, and only one was surviving.** `cluster_pass_speakers`
+returns both a per-window voice score *and* a per-window cluster assignment; the harvester used the
+`silhouette_voice_score` wrapper, which discards the labels, and then thresholded what was left. So
+the layer violation was also a lost signal: the cluster id is what a later stage needs to assign and
+re-assign speaker labels, and re-deriving it there would risk two stages disagreeing about the
+clustering they are each reasoning over. `derive_window_clusters` now returns the whole result, and
+the vote carries `cluster_id` alongside `silhouette`.
+
+**Nearest-centre matching, with the window width carried.** An embedding window (2 s by default) is
+usually wider than a reporting bucket, so several buckets legitimately share one window's answer.
+The width rides along as `native_window_s`, which means the coarse-voter demotion sees it — under
+the old hand-set `coarse: True` the same fact was asserted rather than measured.
