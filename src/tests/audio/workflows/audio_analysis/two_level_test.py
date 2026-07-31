@@ -269,8 +269,10 @@ def test_every_axis_vote_shape_yields_a_per_signal_uncertainty() -> None:
 
 
 def test_a_declared_uncertainty_wins_over_a_derived_one() -> None:
-    """A signal reporting its own uncertainty is authoritative about it; deriving one from a
-    confidence in the same entry would silently override what the signal said.
+    """A signal is authoritative about its own uncertainty.
+
+    Deriving one from a confidence in the same entry would silently override what the signal
+    said.
     """
     bucket = {"votes": {"a": {"same_label_uncertainty": 0.9, "native_confidence": 0.95}}}
     assert per_signal_uncertainty(bucket)["a"] == pytest.approx(0.9)

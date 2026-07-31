@@ -76,7 +76,7 @@ def test_an_uncertain_mask_region_withdraws_less_trust() -> None:
 
 
 def test_an_indeterminate_region_withdraws_no_trust() -> None:
-    """ "I cannot tell" is not grounds to disbelieve anyone."""
+    """An unresolved region is not grounds to disbelieve anyone."""
     weights = regional_weights(
         base_weights={"diar": 1.0},
         regions=[_region(0.0, 1.0, "indeterminate")],
@@ -115,6 +115,7 @@ def test_a_round_that_changes_nothing_has_converged() -> None:
 
 
 def test_a_round_that_moves_the_answer_has_not_converged() -> None:
+    """A change above tolerance means another round may still help."""
     assert (
         round_converged(
             [{"start": 0.0, "end": 0.5, "uncertainty": 0.4}],
