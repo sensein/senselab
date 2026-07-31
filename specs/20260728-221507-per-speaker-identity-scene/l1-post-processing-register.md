@@ -82,8 +82,8 @@ a named `SpeechPresencePolicy`). `PassHarvest.speech_presence_votes` became
 | 7 | YAMNet | top-1 argmax over 521 labels, then `label in speech_labels` | full label→score map per 0.48 s hop | same as #6 | **closed** |
 | 8 | `acoustic_loudness` | per-pass **percentile band** p10→p75 → `[0,1]` → direction flip | replaced by absolute `lufs` (D-3) | what loudness counts as audible here? | **closed** |
 | 9 | `acoustic_spectral_activity` | per-pass percentile band on `spectralFlux_sma3` | replaced by `level_above_floor_db` (D-3) | what excess above the measured floor counts as activity? | **closed** |
-| 10 | `acoustic_hnr` | fixed 2→10 dB ramp; low maps to `p = 0.5` (abstain) | `HNRdBACF_sma3nz` in dB per 10 ms frame | what HNR indicates voicing, and when is it uninformative? | open |
-| 11 | `ppg_voice_fraction` | per-frame argmax, count `!= "<silent>"`, ÷ n, then `>= 0.5` | PPG posterior frames (or argmax label + its probability) | what fraction of non-silent frames means speech? | open |
+| 10 | `acoustic_hnr` | fixed 2→10 dB ramp; low maps to `p = 0.5` (abstain) | `hnr_db`, units dB | what HNR indicates voicing, and when is it uninformative? | **closed** |
+| 11 | `ppg_voice_fraction` | per-frame argmax, count `!= "<silent>"`, ÷ n, then `>= 0.5` | `mean_silence_posterior` + dispersion + frame count | what silence posterior means speech? | **closed** |
 | 12 | `embedding_silhouette` | cluster all windows, silhouette coefficient, `>= 0.5` | embedding vectors per window | does clustering support a coherent speaker here? | open |
 | 13 | frame posteriors | bucket-mean over frames, then `>= 0.5` | `frame_mean`, `frame_std`, `channel_means`, `resolution_s` | how do frames aggregate to a bucket, and where is the cut? | **closed** |
 | 14 | `frame_dispersion` | `clip(2 × mean(std), 0, 1)` — ×2 rescale + clip | dispersion in probability units, unrescaled | how does dispersion enter a belief? | **closed** |
@@ -112,13 +112,13 @@ confident *no speech*, discarding 0.38 of speech evidence.
 
 | # | site | current post-processing | L1 should emit | L2 question | status |
 |---|---|---|---|---|---|
-| 17 | `quality_snr` | `clip((25 − snr_db)/20, 0, 1)` → **0.0 in every bucket** | `brouhaha_snr_db`, units dB | what SNR counts as clean for this task? | open |
-| 18 | `quality_reverb` | `clip((30 − c50_db)/35, 0, 1)` → **0.0 in every bucket** | `brouhaha_c50_db`, units dB | what C50 counts as dry? | open |
-| 19 | `quality_bandwidth` | `clip(1 − rolloff/nyquist, 0, 1)` — inversion | `rolloff_95_hz`, units hertz | is this band-limited for the sample rate? | open |
-| 20 | `quality_clip` | `clip(proportion_clipped, 0, 1)`, renamed as degradation | `proportion_clipped`, units proportion | how much clipping matters? | open |
-| 21 | `quality_uncertainty` | `clip(std(snr_estimates)/15, 0, 1)` | each estimator separately, own name and units | **does not survive review — see below** | open |
-| 22 | `primary_snr_db` | brouhaha, else mean of DSP estimators | all estimators, unreduced | which estimator to trust where? | open |
-| 23 | silence gate | `rms < 1e-4` → nulls all quality columns | `rms`, units dBFS or linear | where is quality undefined? | open |
+| 17 | `quality_snr` | `clip((25 − snr_db)/20, 0, 1)` → **0.0 in every bucket** | `snr_brouhaha_db`, units dB | what SNR counts as clean for this task? | **closed** |
+| 18 | `quality_reverb` | `clip((30 − c50_db)/35, 0, 1)` → **0.0 in every bucket** | `c50_brouhaha_db`, units dB | what C50 counts as dry? | **closed** |
+| 19 | `quality_bandwidth` | `clip(1 − rolloff/nyquist, 0, 1)` — inversion | `rolloff_95_hz`, units hertz | is this band-limited for the sample rate? | **closed** |
+| 20 | `quality_clip` | `clip(proportion_clipped, 0, 1)`, renamed as degradation | `proportion_clipped`, units proportion | how much clipping matters? | **closed** |
+| 21 | `quality_uncertainty` | `clip(std(snr_estimates)/15, 0, 1)` | **deleted, not moved** — see below | n/a | **closed** |
+| 22 | `primary_snr_db` | brouhaha, else mean of DSP estimators | all three estimators, unreduced | which estimator to trust where? | **closed** |
+| 23 | silence gate | `rms < 1e-4` → nulls all quality columns | `rms`, reported as its own signal | where is quality undefined? | **closed** |
 | 24 | grid broadcast | nearest-analysis-window value copied to each reporting bucket | values at native 0.5 s / 0.25 s analysis resolution | how to resample to the reporting grid? | open |
 
 **Item 21 fails on its own terms, not just on layering.** It takes the standard deviation of
@@ -132,8 +132,16 @@ is not a variability estimate and should not be re-derived at L2 under a new nam
 keeping is the underlying observation — that the estimators disagree — reported as the estimators
 themselves (item 22), letting L2 decide whether disagreement is informative.
 
-Item 24 interacts with the resolution work: `resolution.py` exists and is not yet wired in, so
-quality is currently broadcast rather than resampled.
+Item 24 is the one still open in this group, and it interacts with the resolution work:
+`resolution.py` exists and is not yet wired in, so each reporting bucket still copies its nearest
+analysis window's value rather than being resampled from the native 0.5 s / 0.25 s analysis grid.
+
+Items 17-23 closed together: `quality.harvest_quality_measurements` emits the seven signals in
+native units (dB, hertz, proportion, plus uncalibrated `rms`) with per-signal provenance and
+status, and `degradation.scene_degradation` applies the anchors at L2, where a fitted calibration
+profile can replace them. Item 22's selection among estimators survives as an explicit
+`SNR_PREFERENCE` order that also records `snr_source` — choosing an estimator is legitimately L2's
+job; doing it silently at L1 was the defect.
 
 ## Cross-cutting
 
@@ -263,3 +271,31 @@ the property the layering exists to make explicit.
 Items 11-12 (`ppg_voice_fraction`, `embedding_silhouette`) remain open: both are still reduced
 inside the harvester rather than recomputed at L2 from posteriors and embedding vectors. Per D-7
 they are derived signals, and they move once `PassHarvest` carries the underlying measurements.
+
+
+## Findings from closing items 10-11
+
+**The PPG signal had the scene classifiers' defect, one model over.** `ppg_voice_fraction` took the
+argmax phoneme per frame and counted the ones that were not `<silent>`. That is the same reduction
+as the AST / YAMNet top-1 (items 6-7): each frame's whole distribution collapses to a hard 0 or 1,
+so a frame the model called silent at 0.6 confidence votes exactly as strongly as one it called
+silent at 1.0. L1 now emits `mean_silence_posterior` — the model's own posterior mass on `<silent>`
+averaged over the bucket — with its dispersion and frame count; L2 takes the complement.
+
+`ppg_argmax_per_frame` stays, and is still correct where it is used: the ASR axis compares phoneme
+*sequences* (`ppg_sequence_per_in_window`), and there the argmax label is the quantity being
+compared rather than a reduction of one.
+
+**Item 10 closed as a side effect of the speech-presence split**, not as separate work: the 2→10 dB
+ramp and the abstain-at-low asymmetry now live in `SpeechPresencePolicy.hnr_low_db` / `hnr_high_db`
+and `_link_hnr`, and L1 emits `hnr_db` alone. The asymmetry is preserved verbatim — whispered and
+distorted voice both read low, so a low HNR cannot be distinguished from silence and must not be
+voted as absence.
+
+**Two of the three remaining open items are now the same item.** Item 12
+(`embedding_silhouette`) and item 24 (quality grid broadcast) are both blocked on carrying more
+through `PassHarvest`: the per-window embedding vectors in one case, the native-resolution analysis
+series in the other. Item 12 additionally needs a decision the others did not — clustering at L2
+would pull scikit-learn into the aggregation path that is currently pure and model-free, so where
+the silhouette is computed is a question about what "pure" is allowed to mean, not only about
+layering.

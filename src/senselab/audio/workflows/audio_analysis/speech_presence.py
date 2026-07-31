@@ -26,17 +26,19 @@ What each signal contributes, and what the measurement is:
   therefore gain-invariant: the question LUFS cannot answer. Together these two replace a single
   per-pass percentile band that answered neither (D-3), since a rank cannot be compared to a fixed
   threshold or across files.
-- **PPG** — ``nonsilent_frame_fraction`` and ``n_frames``.
+- **PPG** — ``mean_silence_posterior``, the model's own posterior mass on ``<silent>`` averaged
+  over the bucket's frames, plus its dispersion and frame count. Not a count of frames whose
+  argmax is not ``<silent>``: that collapses each frame's distribution to a hard verdict, the same
+  reduction the scene-classifier top-1 made.
 - **Windowed speaker embeddings** — ``silhouette``, how well a window sits inside a coherent
   speaker cluster.
 - **Frame posteriors** (``segmentation-3.0`` raw scores, Brouhaha's VAD head) — ``frame_mean``,
   ``frame_std``, ``n_frames``, and the per-speaker ``channel_means`` / ``channel_labels`` kept
   intact (D-5), plus the declared ``resolution_s`` and ``native_window_s``.
 
-Two reductions remain here and are open register items: ``ppg_voice_fraction`` (11) still counts
-non-silent argmax frames rather than handing over the posteriors, and ``embedding_silhouette`` (12)
-still clusters at L1 rather than emitting the embedding vectors. Both are derived signals per D-7
-and move once L2 carries the underlying measurements.
+One reduction remains here and is an open register item: ``embedding_silhouette`` (12) still
+clusters at L1 rather than emitting the embedding vectors. It is a derived signal per D-7 and moves
+once ``PassHarvest`` carries the per-window embeddings.
 """
 
 from __future__ import annotations
@@ -234,15 +236,15 @@ def harvest_speech_presence_evidence(
 
     # PPG argmax-per-frame for the voice-fraction signal.
     ppg_block = pass_summary.get("ppgs") or pass_summary.get("ppg") or {}
-    ppg_per_frame: list[str] = []
+    ppg_silence: np.ndarray = np.empty(0)
     ppg_frame_hop: float = 0.0
     if isinstance(ppg_block, dict) and ppg_block.get("status") == "ok":
         import sys as _sys
 
-        from senselab.audio.workflows.audio_analysis.harvesters import ppg_argmax_per_frame
+        from senselab.audio.workflows.audio_analysis.harvesters import ppg_silence_posterior_per_frame
 
         try:
-            ppg_per_frame, ppg_frame_hop = ppg_argmax_per_frame(
+            ppg_silence, ppg_frame_hop = ppg_silence_posterior_per_frame(
                 ppg_block.get("result"),
                 ppg_block.get("phoneme_labels"),
                 duration_s,
@@ -254,7 +256,7 @@ def harvest_speech_presence_evidence(
                 f"warn: PPG argmax decoding failed: {ppg_exc!r} — ppg_voice_fraction disabled for this pass",
                 file=_sys.stderr,
             )
-            ppg_per_frame, ppg_frame_hop = [], 0.0
+            ppg_silence, ppg_frame_hop = np.empty(0), 0.0
 
     # Embedding-cluster silhouette. Cluster the windowed embeddings; each window's silhouette
     # coefficient measures how well it fits inside one of the clusters. Voice from a coherent
@@ -369,17 +371,19 @@ def harvest_speech_presence_evidence(
                 continue
             evidence[name] = {value_key: value, "units": units, "resolution_s": ACOUSTIC_TRACK_HOP_S}
 
-        # ── PPG voice fraction (register item 11: still a reduction) ──────
-        if ppg_per_frame and ppg_frame_hop > 0:
+        # ── PPG silence posterior ────────────────────────────────────────
+        if ppg_silence.size and ppg_frame_hop > 0:
             first_frame = max(0, int(start / ppg_frame_hop))
-            last_frame = min(len(ppg_per_frame), max(first_frame + 1, int(round(end / ppg_frame_hop))))
-            n_frames = last_frame - first_frame
-            if n_frames > 0:
-                voiced = sum(1 for p in ppg_per_frame[first_frame:last_frame] if p != "<silent>")
+            last_frame = min(ppg_silence.size, max(first_frame + 1, int(round(end / ppg_frame_hop))))
+            if last_frame > first_frame:
+                window = ppg_silence[first_frame:last_frame]
                 evidence["ppg_voice_fraction"] = {
-                    "nonsilent_frame_fraction": voiced / n_frames,
-                    "n_frames": n_frames,
-                    "units": "proportion",
+                    "mean_silence_posterior": float(np.mean(window)),
+                    # The dispersion of the posterior across the bucket, in probability units and
+                    # unrescaled, for the same reason the frame signals report theirs.
+                    "silence_posterior_std": float(np.std(window)) if window.size > 1 else None,
+                    "n_frames": int(window.size),
+                    "units": "probability",
                     "resolution_s": ppg_frame_hop,
                 }
 
