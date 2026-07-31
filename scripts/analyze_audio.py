@@ -1210,6 +1210,7 @@ def main(argv: list[str] | None = None) -> int:
     # Defined before the guard: the per-speaker and adaptive blocks below both read it,
     # and with --skip comparisons there is simply nothing harvested to read.
     harvests_by_pass: dict[str, Any] = {}
+    reliability_by_axis: dict[str, Any] = {}
 
     if "comparisons" not in args.skip:
         from senselab.audio.workflows.audio_analysis import (
@@ -1275,6 +1276,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             axis_results, incomparable_reasons, per_window_embeddings_by_pass = compute_uncertainty_axes(
                 harvests_out=harvests_by_pass,
+                weights_out=reliability_by_axis,
                 passes=passes_for_compute,
                 grid=grid,
                 params=comparator_params,
@@ -1515,6 +1517,27 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"Timeline plot: {timeline_path}")
             except Exception as exc:  # noqa: BLE001 — best-effort sidecar
                 print(f"warn: timeline plot failed: {exc!r}", file=sys.stderr)
+
+        # ── Level 2: the final uncertainty maps ───────────────────────
+        # The per-pass parquets under <pass>/uncertainty/ are level-1 diagnostics: they
+        # record what each signal said, and what one pass would have concluded on its own
+        # before anything was measured about the signals. These are the answer — fused across
+        # every signal and pass, each weighted by its measured stability and support.
+        if harvests_by_pass:
+            try:
+                from senselab.audio.workflows.audio_analysis.fuse import write_final_uncertainty
+
+                final_maps = write_final_uncertainty(
+                    run_dir,
+                    harvests=harvests_by_pass,
+                    weights_by_axis=reliability_by_axis,
+                    aggregator=args.uncertainty_aggregator,
+                )
+                summaries["final_uncertainty"] = final_maps
+                print(f"  [final uncertainty] {len(final_maps)} axis map(s) under final/uncertainty/")
+            except Exception as exc:  # noqa: BLE001 — a derived artifact must not fail the run
+                logger.warning("final uncertainty maps could not be written: %s", exc)
+                summaries["final_uncertainty"] = {"status": "failed", "error": repr(exc)}
 
         # ── Per-speaker identity (US1) ────────────────────────────────
         # Derived from the completed passes rather than from a fresh inference: the raw
