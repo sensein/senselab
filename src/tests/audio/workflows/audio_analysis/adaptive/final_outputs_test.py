@@ -26,9 +26,9 @@ from senselab.audio.workflows.audio_analysis.speaker_identity import (
 def _posterior():  # noqa: ANN202 — test helper
     return speaker_count_posterior(
         [
-            SourceCountClaim("pyannote", 1, kind="independent"),
-            SourceCountClaim("sortformer", 1, kind="independent"),
-            SourceCountClaim("embedding_silhouette", 5, kind="derived"),
+            SourceCountClaim("pyannote", 1, support=1.0),
+            SourceCountClaim("sortformer", 1, support=1.0),
+            SourceCountClaim("embedding_silhouette", 5, support=0.5),
         ],
         gates={"independent": 1.0, "derived": 0.4},
     )
@@ -40,7 +40,7 @@ def _hypotheses():  # noqa: ANN202
             speaker_id="S0",
             existence_uncertainty=0.18,
             supporting_sources=["pyannote", "embedding_silhouette"],
-            source_kinds={"pyannote": "independent", "embedding_silhouette": "derived"},
+            source_support={"pyannote": 1.0, "embedding_silhouette": 0.3},
             first_seen=0.08,
             last_seen=4.84,
             total_active_s=2.31,
@@ -54,7 +54,7 @@ def _write(tmp_path: Path, **kw: object):  # noqa: ANN202
         tmp_path,
         posterior=_posterior(),
         hypotheses=_hypotheses(),
-        correspondence=[SourceLabelCorrespondence("pyannote", "SPEAKER_00", "S0", "independent", cluster_id="c0")],
+        correspondence=[SourceLabelCorrespondence("pyannote", "SPEAKER_00", "S0", 1.0, cluster_id="c0")],
         tracks=[PerSpeakerPresenceTrack("S0", 0.0, 0.5, 0.9, 0.1, contributing_sources=["pyannote"])],
         **kw,  # type: ignore[arg-type]
     )
@@ -94,12 +94,12 @@ def test_every_supported_count_appears_in_probabilities(tmp_path: Path) -> None:
     assert set(cp["support"]) <= set(cp["probabilities"])
 
 
-def test_source_kinds_are_recorded_per_hypothesis(tmp_path: Path) -> None:
+def test_source_support_is_recorded_per_hypothesis(tmp_path: Path) -> None:
     """FR-007: a consumer must be able to weight a hypothesis by what backs it."""
     speakers, _ = _write(tmp_path)
     spk = json.loads(speakers.read_text())["speakers"][0]
-    assert set(spk["source_kinds"].values()) <= {"independent", "derived"}
-    assert spk["has_independent_support"] is True
+    assert all(0.0 <= v <= 1.0 for v in spk["source_support"].values())
+    assert spk["has_supported_evidence"] is True
 
 
 def test_label_correspondence_is_auditable(tmp_path: Path) -> None:

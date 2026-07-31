@@ -64,7 +64,7 @@ def test_support_names_which_source_backed_each_count() -> None:
 # ── the motivating case (T093) ────────────────────────────────────────
 
 
-def test_two_diarizers_versus_a_derived_clusterer_stays_multimodal() -> None:
+def test_two_diarizers_versus_a_less_supported_clusterer_stays_multimodal() -> None:
     """The case that started this work, asserted as representation not accuracy.
 
     Two independent diarizers say one speaker; a clustering-derived source says five. The
@@ -74,9 +74,9 @@ def test_two_diarizers_versus_a_derived_clusterer_stays_multimodal() -> None:
     """
     p = speaker_count_posterior(
         [
-            SourceCountClaim("pyannote", 1, kind="independent"),
-            SourceCountClaim("sortformer", 1, kind="independent"),
-            SourceCountClaim("embedding_silhouette", 5, kind="derived"),
+            SourceCountClaim("pyannote", 1, support=1.0),
+            SourceCountClaim("sortformer", 1, support=1.0),
+            SourceCountClaim("embedding_silhouette", 5, support=0.5),
         ],
         gates=GATES,
     )
@@ -85,16 +85,17 @@ def test_two_diarizers_versus_a_derived_clusterer_stays_multimodal() -> None:
     assert p.support[5] == ["embedding_silhouette"]
 
 
-def test_a_derived_source_carries_less_weight_than_an_independent_one() -> None:
-    """One computation counted twice is not two votes.
+def test_a_less_supported_source_carries_less_weight() -> None:
+    """Authority follows measured support, not a declared kind.
 
-    The derived clusterer is attenuated by the same gate used everywhere else in the loop,
-    not by a special case here — so its claim survives in the posterior without dominating.
+    A source whose speakers sit where no voice detector reports speech is attenuated; one
+    whose claims the audio backs is not. Its claim survives in the posterior either way,
+    without dominating.
     """
     p = speaker_count_posterior(
         [
-            SourceCountClaim("pyannote", 1, kind="independent"),
-            SourceCountClaim("embedding_silhouette", 5, kind="derived"),
+            SourceCountClaim("pyannote", 1, support=1.0),
+            SourceCountClaim("embedding_silhouette", 5, support=0.3),
         ],
         gates=GATES,
     )
@@ -116,7 +117,7 @@ def test_an_uncertain_source_carries_less_weight() -> None:
 
 def test_unanimous_agreement_concentrates_the_mass() -> None:
     """SC-001: at least 90% on one count when every source agrees."""
-    p = speaker_count_posterior([SourceCountClaim(f"d{i}", 1, kind="independent") for i in range(3)], gates=GATES)
+    p = speaker_count_posterior([SourceCountClaim(f"d{i}", 1, support=1.0) for i in range(3)], gates=GATES)
     assert p.probabilities[1] == pytest.approx(1.0)
     assert p.is_multimodal is False
     assert p.modal_count == 1
@@ -150,10 +151,10 @@ def test_all_sources_fully_uncertain_yields_no_confidence() -> None:
     assert p.is_multimodal is True
 
 
-def test_unknown_source_kind_rejected() -> None:
-    """Every source declares whether it observes identity directly (FR-007)."""
-    with pytest.raises(ValueError, match="kind"):
-        speaker_count_posterior([SourceCountClaim("x", 1, kind="peer")], gates=GATES)  # type: ignore[arg-type]
+def test_out_of_range_support_rejected() -> None:
+    """A support outside [0, 1] would silently invert or inflate a weight."""
+    with pytest.raises(ValueError, match="support"):
+        speaker_count_posterior([SourceCountClaim("x", 1, support=-0.2)], gates=GATES)
 
 
 def test_posterior_serializes_with_string_keys() -> None:
@@ -171,7 +172,7 @@ def _hyp(**kw: object) -> SpeakerHypothesis:
         "speaker_id": "S0",
         "existence_uncertainty": 0.2,
         "supporting_sources": ["pyannote"],
-        "source_kinds": {"pyannote": "independent"},
+        "source_support": {"pyannote": 1.0},
     }
     base.update(kw)
     return SpeakerHypothesis(**base)  # type: ignore[arg-type]
@@ -192,9 +193,9 @@ def test_existence_uncertainty_is_separate_from_presence_uncertainty() -> None:
 
 def test_hypothesis_reports_whether_any_independent_source_backs_it() -> None:
     """A hypothesis resting only on derived sources is not wrong, but must be visible."""
-    assert _hyp().has_independent_support is True
-    derived_only = _hyp(supporting_sources=["emb"], source_kinds={"emb": "derived"})
-    assert derived_only.has_independent_support is False
+    assert _hyp().has_supported_evidence is True
+    derived_only = _hyp(supporting_sources=["emb"], source_support={"emb": 0.1})
+    assert derived_only.has_supported_evidence is False
 
 
 def test_hypothesis_serializes_every_contract_field() -> None:
@@ -204,8 +205,8 @@ def test_hypothesis_serializes_every_contract_field() -> None:
         "speaker_id",
         "existence_uncertainty",
         "supporting_sources",
-        "source_kinds",
-        "has_independent_support",
+        "source_support",
+        "has_supported_evidence",
         "converged",
         "revisions",
     ):
@@ -251,16 +252,16 @@ def test_presence_row_carries_every_contract_column() -> None:
 
 def test_correspondence_maps_unrelated_naming_conventions_to_one_hypothesis() -> None:
     """`SPEAKER_00` and `speaker_2` can be the same person; the mapping must be auditable."""
-    a = SourceLabelCorrespondence("pyannote", "SPEAKER_00", "S0", "independent", cluster_id="c0")
-    b = SourceLabelCorrespondence("sortformer", "speaker_2", "S0", "independent", cluster_id="c0")
+    a = SourceLabelCorrespondence("pyannote", "SPEAKER_00", "S0", 1.0, cluster_id="c0")
+    b = SourceLabelCorrespondence("sortformer", "speaker_2", "S0", 1.0, cluster_id="c0")
     assert a.speaker_id == b.speaker_id
     assert a.cluster_id == b.cluster_id
 
 
-def test_correspondence_records_the_source_kind() -> None:
-    """So a consumer can weight a mapping by whether its source observes independently."""
-    doc = SourceLabelCorrespondence("emb", "k3", "S1", "derived").to_json()
-    assert doc["source_kind"] == "derived"
+def test_correspondence_records_the_measured_support() -> None:
+    """So a consumer can weight a mapping by how far the audio backed its source."""
+    doc = SourceLabelCorrespondence("emb", "k3", "S1", 0.3).to_json()
+    assert doc["source_support"] == pytest.approx(0.3)
 
 
 # ── source-kind classification is a policy decision, not a constant ────
@@ -313,12 +314,12 @@ def test_policy_can_reclassify_the_clusterer_as_independent() -> None:
 def test_reclassifying_changes_the_posterior() -> None:
     """The classification is load-bearing, so its effect is asserted rather than assumed."""
     claims_derived = [
-        SourceCountClaim("pyannote", 1, kind="independent"),
-        SourceCountClaim("embedding_silhouette", 5, kind="derived"),
+        SourceCountClaim("pyannote", 1, support=1.0),
+        SourceCountClaim("embedding_silhouette", 5, support=0.3),
     ]
     claims_independent = [
-        SourceCountClaim("pyannote", 1, kind="independent"),
-        SourceCountClaim("embedding_silhouette", 5, kind="independent"),
+        SourceCountClaim("pyannote", 1, support=1.0),
+        SourceCountClaim("embedding_silhouette", 5, support=1.0),
     ]
     gated = speaker_count_posterior(claims_derived, gates=GATES)
     equal = speaker_count_posterior(claims_independent, gates=GATES)
@@ -400,7 +401,7 @@ def test_a_single_observation_source_is_neither_trusted_nor_discarded() -> None:
     assert claims[0].uncertainty == pytest.approx(0.5)
 
 
-def test_measured_stability_can_outweigh_the_derivation_label() -> None:
+def test_measured_stability_can_outweigh_weaker_support() -> None:
     """The point of the change, on the case that motivated it.
 
     A clusterer that answers identically on raw and enhanced audio, against diarizers that
@@ -411,33 +412,31 @@ def test_measured_stability_can_outweigh_the_derivation_label() -> None:
     """
     from senselab.audio.workflows.audio_analysis.speaker_identity import claims_from_perturbations
 
-    policy = {"influence": {"source_kinds": {"embedding_silhouette": "derived"}}}
     claims = claims_from_perturbations(
         [
             _ev("pyannote", raw=1, enhanced=3),  # flips under preprocessing
             _ev("sortformer", raw=1, enhanced=2),  # also flips
             _ev("embedding_silhouette", raw=5, enhanced=5),  # stable
         ],
-        policy=policy,
+        support={"pyannote": 1.0, "sortformer": 1.0, "embedding_silhouette": 0.4},
     )
     posterior = speaker_count_posterior(claims, gates=GATES)
     by_source = {c.source: c for c in claims}
     assert by_source["embedding_silhouette"].uncertainty == pytest.approx(0.0)
     assert by_source["pyannote"].uncertainty == pytest.approx(1.0)
     assert posterior.weights["embedding_silhouette"] > posterior.weights["pyannote"], (
-        "a stable derived source must be able to outweigh an unstable independent one"
+        "a stable but less-supported source must be able to outweigh an unstable well-supported one"
     )
     assert posterior.modal_count == 5
 
 
-def test_a_stable_independent_source_still_wins_against_a_stable_derived_one() -> None:
-    """The derivation gate is secondary, not discarded: with equal stability it still bites."""
+def test_a_better_supported_source_wins_when_stability_is_equal() -> None:
+    """Support is the secondary term, not a discarded one: with equal stability it decides."""
     from senselab.audio.workflows.audio_analysis.speaker_identity import claims_from_perturbations
 
-    policy = {"influence": {"source_kinds": {"embedding_silhouette": "derived"}}}
     claims = claims_from_perturbations(
         [_ev("pyannote", raw=1, enhanced=1), _ev("embedding_silhouette", raw=5, enhanced=5)],
-        policy=policy,
+        support={"pyannote": 1.0, "embedding_silhouette": 0.4},
     )
     posterior = speaker_count_posterior(claims, gates=GATES)
     assert posterior.probabilities[1] > posterior.probabilities[5]
@@ -639,20 +638,22 @@ def test_a_hypothesis_names_the_sources_whose_labels_landed_in_it() -> None:
     assert hyps[1].supporting_sources == ["derived"]
 
 
-def test_a_speaker_seen_only_by_a_derived_source_says_so() -> None:
-    """FR-007: a derived signal is one computation, not an independent observation.
+def test_a_speaker_resting_on_unsupported_claims_says_so() -> None:
+    """Unsupported backing is visible per speaker.
 
-    Without the kind recorded per hypothesis, a speaker invented by a clusterer reads
-    identically to one two diarizers both heard.
+    A speaker whose only backer made claims the audio does not carry must read differently
+    from one two well-supported diarizers both heard — and the number says so, not a label.
     """
     from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
 
     _p, hyps, _c = build_speaker_identity(
         _passes(raw_16k={"real": _diar(1)}, enhanced_16k={"real": _diar(1)}),
-        identity_votes=_votes({"real": "Cx"}, {"embedding_silhouette/ecapa": "Cy"}),
-        policy={"influence": {"source_kinds": {"embedding_silhouette": "derived"}}},
+        identity_votes=_votes({"real": "Cx"}, {"clusterer": "Cy"}),
+        support={"real": 1.0, "clusterer": 0.2},
     )
-    assert hyps[1].source_kinds == {"embedding_silhouette/ecapa": "derived"}
+    assert hyps[1].source_support == {"clusterer": 0.2}
+    assert hyps[1].has_supported_evidence is False
+    assert hyps[0].has_supported_evidence is True
 
 
 def test_a_speaker_that_might_not_exist_is_not_reported_as_converged() -> None:
@@ -672,36 +673,7 @@ def test_a_speaker_that_might_not_exist_is_not_reported_as_converged() -> None:
     assert hyps[1].converged is False
 
 
-def test_the_packaged_policy_resolves_the_clusterer_as_derived() -> None:
-    """The derived gate is inert unless a policy actually reaches the builder.
-
-    On a real run every source resolved to the default "independent" because the CLI passed
-    no policy — so the guard against a clustering-derived voter counting as a peer did
-    nothing precisely where it matters. Pinning the packaged declaration here means a
-    renamed key or a dropped block fails a test rather than quietly disabling the gate.
-    """
-    from senselab.audio.workflows.audio_analysis.adaptive.policy import load_policy
-    from senselab.audio.workflows.audio_analysis.speaker_identity import source_kind_for
-
-    policy = load_policy(None)
-    influence = policy.get("influence") or {}
-    assert source_kind_for("embedding_silhouette/speechbrain/spkrec-ecapa-voxceleb", policy) == "derived"
-    gate = influence.get("derivation_gate") or {}
-    assert gate["derived"] < gate["independent"]
-
-
-def test_a_derived_clusterer_moves_the_count_less_than_a_real_diarizer() -> None:
-    """The end-to-end consequence of the wiring above, on the builder's own path."""
-    from senselab.audio.workflows.audio_analysis.adaptive.policy import load_policy
-    from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
-
-    policy = load_policy(None)
-    passes = _passes(
-        raw_16k={"pyannote": _diar(1), "embedding_silhouette/ecapa": _diar(5)},
-        enhanced_16k={"pyannote": _diar(1), "embedding_silhouette/ecapa": _diar(5)},
-    )
-    ungated, _h, _c = build_speaker_identity(passes)
-    gated, _h2, _c2 = build_speaker_identity(
-        passes, policy=policy, gates=(policy.get("influence") or {}).get("derivation_gate")
-    )
-    assert gated.probabilities[5] < ungated.probabilities[5]
+# The packaged-policy gate test lived here. The posterior no longer resolves a source's
+# authority from policy: authority is stability x measured support, and no source is named.
+# ``source_kind_for`` survives for the adaptive loop's influence gates, which govern how far
+# one signal may *revise* another, and is tested above.

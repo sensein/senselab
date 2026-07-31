@@ -1542,18 +1542,34 @@ def main(argv: list[str] | None = None) -> int:
                     ),
                     None,
                 )
-                # The policy carries the source-kind declarations. Without it every source
-                # resolves to the default "independent", so the derived gate — the guard
-                # against a clustering-derived voter counting as a peer observation —
-                # silently does nothing on real runs, which is exactly where it matters.
-                from senselab.audio.workflows.audio_analysis.adaptive.policy import load_policy
+                # Measured support, not a declared source kind: a source is attenuated for
+                # claiming speakers where no voice detector reports speech, never for its
+                # name. Measured on the unmodified pass — whether the audio carries a claim
+                # is a fact about the recording, not about the transform.
+                from senselab.audio.workflows.audio_analysis.support import (
+                    evidence_signal_names,
+                    informative_evidence,
+                    signal_support,
+                )
 
-                identity_policy = load_policy(args.policy)
+                presence_harvest = getattr(harvests_by_pass.get("raw_16k"), "presence_votes", None) or next(
+                    (
+                        getattr(h, "presence_votes", None)
+                        for h in harvests_by_pass.values()
+                        if getattr(h, "presence_votes", None)
+                    ),
+                    [],
+                )
+                measured_support = signal_support(
+                    presence_harvest,
+                    evidence_signals=sorted(
+                        informative_evidence(presence_harvest, sorted(evidence_signal_names(presence_harvest)))
+                    ),
+                )
                 posterior, hypotheses, correspondence = build_speaker_identity(
                     summaries["passes"],
                     identity_votes=identity_harvest,
-                    policy=identity_policy,
-                    gates=(identity_policy.get("influence") or {}).get("derivation_gate"),
+                    support=measured_support,
                 )
                 tracks = build_presence_tracks(identity_harvest or [])
                 write_speaker_outputs(
