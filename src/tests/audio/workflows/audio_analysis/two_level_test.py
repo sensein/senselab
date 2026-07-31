@@ -250,3 +250,27 @@ def test_the_round_is_recorded() -> None:
     """Later rounds refine earlier ones, so a value without its round is not comparable."""
     fused = fuse_axis({"raw_16k": [_bucket(0.0, {"a": 0.3})]}, weights={}, aggregator="mean", round_index=2)
     assert fused[0]["round"] == 2
+
+
+def test_every_axis_vote_shape_yields_a_per_signal_uncertainty() -> None:
+    """The three axes name their fields differently, and all three must be readable.
+
+    On a real run identity fused 85 buckets while presence fused 0 of 1070 and utterance 0 of
+    41, because only identity happens to name its field like an uncertainty. A level that
+    silently covers one axis of three is worse than one covering none — the gap is invisible.
+    """
+    identity = {"votes": {"a": {"same_label_uncertainty": 0.4}}}
+    presence = {"votes": {"b": {"speaks": True, "native_confidence": 0.9}}}
+    utterance = {"votes": {"c": {"text": "hello", "avg_logprob": -0.2}}}
+
+    assert per_signal_uncertainty(identity)["a"] == pytest.approx(0.4)
+    assert per_signal_uncertainty(presence)["b"] == pytest.approx(0.1)
+    assert per_signal_uncertainty(utterance)["c"] == pytest.approx(1.0 - 0.8187, abs=0.01)
+
+
+def test_a_declared_uncertainty_wins_over_a_derived_one() -> None:
+    """A signal reporting its own uncertainty is authoritative about it; deriving one from a
+    confidence in the same entry would silently override what the signal said.
+    """
+    bucket = {"votes": {"a": {"same_label_uncertainty": 0.9, "native_confidence": 0.95}}}
+    assert per_signal_uncertainty(bucket)["a"] == pytest.approx(0.9)

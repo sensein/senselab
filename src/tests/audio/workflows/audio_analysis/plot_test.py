@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from senselab.audio.workflows.audio_analysis.layout import final_dir
 from senselab.audio.workflows.audio_analysis.plot import build_aligned_timeline_plot
 from senselab.audio.workflows.audio_analysis.types import AxisResult, UncertaintyRow
 
@@ -158,7 +159,8 @@ def test_build_aligned_timeline_plot_chunks_long_audio(tmp_path: Path) -> None:
     )
     assert first is not None
     assert first.name == "timeline_001.png"
-    chunks = sorted(tmp_path.glob("timeline_*.png"))
+    # Chunked timelines are deliverables, so they land in final/ with the rest of them.
+    chunks = sorted(final_dir(tmp_path).glob("timeline_*.png"))
     assert [p.name for p in chunks] == ["timeline_001.png", "timeline_002.png", "timeline_003.png"]
 
 
