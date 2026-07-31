@@ -18,12 +18,12 @@ runs casts a vote, each calibrated to what its signal can actually answer:
   Not ``top-1 ∈ labels``: the argmax discards the rest of several hundred
   scores, so a window topped by ``Music`` at 0.40 with ``Speech`` second at
   0.38 used to vote a confident *no speech*.
-- **Acoustic / loudness** (openSMILE ``Loudness_sma3``): votes ``True`` for
-  any audible sound — captures whisper and distorted voice that voicing-based
-  signals miss.
-- **Acoustic / spectral activity** (openSMILE ``spectralFlux_sma3``): votes
-  ``True`` for non-stationary spectrum — also catches whisper + distortion
-  even when loudness is low.
+- **Acoustic / LUFS** (BS.1770 gated loudness): absolute level, so the same
+  loudness always reads the same. Replaces the percentile-ranked
+  ``Loudness_sma3`` voter (D-3).
+- **Acoustic / level above floor**: dB above this recording's own measured
+  noise floor, and therefore gain-invariant — the question LUFS cannot answer.
+  Replaces the percentile-ranked ``spectralFlux_sma3`` voter.
 - **Acoustic / HNR** (openSMILE ``HNRdBACF_sma3nz``): votes ``True`` for
   clean voiced speech. Calibrated so a *low* HNR contributes ``p_voice ≈ 0.5``
   (uninformative — could be whisper or silence) rather than ``False``, so
@@ -43,6 +43,11 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from senselab.audio.workflows.audio_analysis.acoustic import (
+    level_above_floor_track,
+    loudness_confidence,
+    lufs_track,
+)
 from senselab.audio.workflows.audio_analysis.grid import BucketGrid
 from senselab.audio.workflows.audio_analysis.harvesters import (
     classification_windows,
@@ -134,6 +139,55 @@ def _calibrate_uninformative_low(value: float | None, low: float, high: float) -
     return p >= 0.5, max(0.0, min(1.0, p))
 
 
+SPEECH_EXCESS_DB = 12.0
+"""dB above the measured noise floor at which a frame reads as clearly active.
+
+Speech typically sits 12-20 dB above a room's floor. An absolute anchor in dB, so unlike the
+percentile band it replaces the same excess always gives the same answer."""
+
+
+def _excess_confidence(excess_db: float, *, speech_excess_db: float = SPEECH_EXCESS_DB) -> float:
+    """Map dB-above-floor to ``P(active)``, abstaining at ``0.5`` when the excess is low.
+
+    Asymmetric on purpose, and for the same reason HNR is: a **low** excess has two
+    indistinguishable causes. Either nothing is happening, or a source runs through the whole
+    recording and has been absorbed into its own floor estimate — the floor is a percentile of this
+    file's own frames, so a signal that never stops *is* the floor. Voting ``False`` there would
+    make this signal contradict correct models on any recording without pauses.
+
+    A **high** excess has only one cause, so the upper half of the range is asserted normally.
+    LUFS carries the ability to claim absence, since an absolute level of −90 LUFS is unambiguous.
+    """
+    if not np.isfinite(excess_db):
+        return 0.5
+    span = max(1e-9, float(speech_excess_db))
+    return float(0.5 + 0.5 * max(0.0, min(1.0, float(excess_db) / span)))
+
+
+def _track_mean_in_window(
+    track: tuple[np.ndarray, np.ndarray] | None,
+    start: float,
+    end: float,
+) -> float | None:
+    """Mean of a ``(times, values)`` track over samples inside ``[start, end)``.
+
+    ``None`` when the track is absent or no sample falls in the window, so a bucket with no
+    measurement drops the vote rather than contributing a fabricated one.
+    """
+    if track is None:
+        return None
+    times, values = track
+    if times.size == 0 or values.size == 0:
+        return None
+    sel = (times >= start) & (times < end)
+    if not sel.any():
+        # Fall back to the nearest sample: a bucket finer than the track's hop would otherwise
+        # never be covered, which would silently disable the voter on fine grids.
+        idx = int(np.argmin(np.abs(times - 0.5 * (start + end))))
+        return float(values[idx])
+    return float(np.nanmean(values[sel]))
+
+
 def _native_classification_grid(block: dict[str, Any]) -> tuple[float, float]:
     """Recover the (win_length, hop_length) the classifier ran with from its first window."""
     windows = classification_windows(block.get("result"))
@@ -157,6 +211,8 @@ def harvest_presence_votes(
     alignment_by_model: dict[str, Any],
     per_window_embeddings: dict[str, list[Any]] | None = None,
     frame_posteriors: dict[str, "FramePosterior"] | None = None,
+    waveform: "np.ndarray | None" = None,
+    sampling_rate: int | None = None,
 ) -> list[dict[str, Any]]:
     """Yield ``{"start", "end", "votes", "frame_instability"}`` per bucket for presence.
 
@@ -170,6 +226,12 @@ def harvest_presence_votes(
     is aggregated into ``frame_instability`` for the ``presence_uncertainty``
     column. On grids finer than ``_FINE_GRID_THRESHOLD_S`` the coarse voters are
     down-weighted to ``_COARSE_VOTER_WEIGHT`` (FR-014).
+
+    ``waveform`` / ``sampling_rate`` enable the two absolute-scale acoustic voters
+    (``acoustic_lufs``, ``acoustic_level_above_floor``). Both are computed from audio rather than
+    from the openSMILE feature table, because the table's ``Loudness_sma3`` has no absolute
+    reference and the percentile band that compensated for that is what broke it (D-3). Omit them
+    and those voters are simply absent.
     """
     duration_s = float(pass_summary.get("duration_s", 0.0) or 0.0)
     if duration_s <= 0:
@@ -221,39 +283,18 @@ def harvest_presence_votes(
     feat_result = feat_block.get("result") if isinstance(feat_block, dict) else None
     opensmile_rows: list[dict[str, Any]] = feat_result.get("opensmile", []) if isinstance(feat_result, dict) else []
 
-    # openSMILE Loudness_sma3 / spectralFlux_sma3 are not absolutely calibrated
-    # — they vary with input gain and recording conditions. Compute per-pass
-    # percentile anchors so the voter calibrates to "high vs low for this
-    # specific recording" rather than fixed-magnitude thresholds. Quiet floor
-    # ≈ 10th percentile (mostly silence); active speech anchor ≈ 75th
-    # percentile (most loud frames). Falls back to fixed defaults if the
-    # opensmile track is too short to estimate percentiles.
-    def _per_pass_band(
-        rows: list[dict[str, Any]],
-        col: str,
-        default_low: float,
-        default_high: float,
-    ) -> tuple[float, float]:
-        vals: list[float] = []
-        for r in rows:
-            v = r.get(col)
-            if v is None:
-                continue
-            try:
-                vf = float(v)
-            except (TypeError, ValueError):
-                continue
-            if np.isfinite(vf):
-                vals.append(vf)
-        if len(vals) < 100:  # ~1 s of opensmile frames
-            return default_low, default_high
-        return float(np.percentile(vals, 10)), float(np.percentile(vals, 75))
-
-    loudness_low, loudness_high = _per_pass_band(opensmile_rows, "Loudness_sma3", 0.05, 0.5)
-    flux_low, flux_high = _per_pass_band(opensmile_rows, "spectralFlux_sma3", 0.05, 0.30)
     # HNR uses fixed dB thresholds — those ARE absolutely calibrated (it's a
     # ratio in dB that doesn't depend on input gain). Lowered the high anchor
     # to 10 dB per agent review (#7) — typical conversational HNR is 8–14 dB.
+    #
+    # ``Loudness_sma3`` and ``spectralFlux_sma3`` are gone (D-3). Both had no absolute
+    # reference, which forced a per-pass percentile band: a 10th-percentile floor and a
+    # 75th-percentile ceiling. That makes the value a *rank*, not a level — ~10% of frames pin at
+    # 0 and ~25% at 1.0 by construction regardless of the audio, a uniformly quiet recording still
+    # spreads to fill [0, 1] so quiet frames read as loud, and the mapping differs per file so the
+    # value cannot be compared to dBFS or to a fixed threshold. They are replaced by
+    # ``acoustic_lufs`` (absolute level) and ``acoustic_level_above_floor`` (level above this
+    # recording's own noise floor, gain-invariant) — two questions the single rank conflated.
     hnr_low, hnr_high = 2.0, 10.0
 
     # PPG argmax-per-frame for the voice-fraction signal.
@@ -307,6 +348,18 @@ def harvest_presence_votes(
                 silhouette_by_emb_model[emb_model] = scores
                 silhouette_windows = entries
                 break
+
+    # One pass over the waveform for each absolute acoustic track, before the bucket loop: both
+    # are whole-recording measurements (the floor estimate needs the whole distribution).
+    lufs: tuple[np.ndarray, np.ndarray] | None = None
+    level_above_floor: tuple[np.ndarray, np.ndarray] | None = None
+    if waveform is not None and sampling_rate:
+        mono = np.asarray(waveform, dtype=np.float64).squeeze()
+        if mono.ndim > 1:
+            mono = mono.mean(axis=0)
+        if mono.size:
+            lufs = lufs_track(mono, int(sampling_rate), hop_s=0.05)
+            level_above_floor = level_above_floor_track(mono, int(sampling_rate), hop_s=0.05)
 
     allow = set(speech_presence_labels)
     out: list[dict[str, Any]] = []
@@ -397,21 +450,27 @@ def harvest_presence_votes(
 
         if opensmile_rows:
             bucket_rows = _row_window_overlap(opensmile_rows, start, end)
-            loud = _mean_col(bucket_rows, "Loudness_sma3")
-            flux = _mean_col(bucket_rows, "spectralFlux_sma3")
             hnr = _mean_col(bucket_rows, "HNRdBACF_sma3nz")
-            cal = _calibrate_high(loud, low=loudness_low, high=loudness_high)
-            if cal is not None:
-                speaks_v, p_v = cal
-                votes["acoustic_loudness"] = _vote_from_pvoice(p_v, speaks_v)
-            cal = _calibrate_high(flux, low=flux_low, high=flux_high)
-            if cal is not None:
-                speaks_v, p_v = cal
-                votes["acoustic_spectral_activity"] = _vote_from_pvoice(p_v, speaks_v)
             cal = _calibrate_uninformative_low(hnr, low=hnr_low, high=hnr_high)
             if cal is not None:
                 speaks_v, p_v = cal
                 votes["acoustic_hnr"] = _vote_from_pvoice(p_v, speaks_v)
+
+        # Absolute-scale acoustic voters (D-3). Both carry their measurement alongside the vote:
+        # LUFS and dB-above-floor mean something outside this recording, unlike the rank they
+        # replace, so recording them lets a consumer check the mapping rather than trust it.
+        for name, track, to_confidence, units_key in (
+            ("acoustic_lufs", lufs, loudness_confidence, "lufs"),
+            ("acoustic_level_above_floor", level_above_floor, _excess_confidence, "excess_db"),
+        ):
+            value = _track_mean_in_window(track, start, end)
+            if value is None:
+                continue
+            p_v = to_confidence(value)
+            speaks_v = p_v >= 0.5
+            vote = _vote_from_pvoice(p_v, speaks_v)
+            vote[units_key] = value
+            votes[name] = vote
 
         # Note: parselmouth ``phonation_ratio`` is computed once per utterance
         # (Praat ``Sound: To TextGrid (silences)`` then phonation_time /

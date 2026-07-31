@@ -291,6 +291,11 @@ def harvest_pass(
         alignment_by_model=align_by_model,
         per_window_embeddings=per_window_embeddings,
         frame_posteriors=frame_voters or None,
+        # Audio for the absolute acoustic voters (LUFS, level-above-floor). Both are
+        # whole-recording measurements, so they cannot be recovered from the per-frame openSMILE
+        # table the way the percentile-ranked voters they replace were (D-3).
+        waveform=(per_pass_audio.waveform.detach().cpu().numpy() if per_pass_audio is not None else None),
+        sampling_rate=(int(per_pass_audio.sampling_rate) if per_pass_audio is not None else None),
     )
 
     # Sound sources (US2): per-bucket AudioSet→category masses from AST/YAMNet.

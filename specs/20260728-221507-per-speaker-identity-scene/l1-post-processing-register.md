@@ -76,15 +76,15 @@ signals"*, this module has no L1 role: it should become an L2 stage reading L1 m
 | 5 | `::no_speech_prob` voter | `speaks = nsp < 0.5`, `nc = 1 − nsp` — threshold + inversion | same raw field as #3 (one measurement, not two voters) | same as #3 | open |
 | 6 | AST | top-1 argmax over 527 labels, then `label in speech_labels` | full label→score map per native window | which categories are present, and is any of them speech? | **closed** |
 | 7 | YAMNet | top-1 argmax over 521 labels, then `label in speech_labels` | full label→score map per 0.48 s hop | same as #6 | **closed** |
-| 8 | `acoustic_loudness` | per-pass **percentile band** p10→p75 → `[0,1]` → direction flip | `Loudness_sma3` per 10 ms frame + absolute `LUFS` | what loudness counts as audible here? | open |
-| 9 | `acoustic_spectral_activity` | per-pass percentile band on `spectralFlux_sma3` | raw flux per 10 ms frame | what flux counts as non-stationary, relative to the measured noise floor? | open |
+| 8 | `acoustic_loudness` | per-pass **percentile band** p10→p75 → `[0,1]` → direction flip | replaced by absolute `lufs` (D-3) | what loudness counts as audible here? | **closed** |
+| 9 | `acoustic_spectral_activity` | per-pass percentile band on `spectralFlux_sma3` | replaced by `level_above_floor_db` (D-3) | what excess above the measured floor counts as activity? | **closed** |
 | 10 | `acoustic_hnr` | fixed 2→10 dB ramp; low maps to `p = 0.5` (abstain) | `HNRdBACF_sma3nz` in dB per 10 ms frame | what HNR indicates voicing, and when is it uninformative? | open |
 | 11 | `ppg_voice_fraction` | per-frame argmax, count `!= "<silent>"`, ÷ n, then `>= 0.5` | PPG posterior frames (or argmax label + its probability) | what fraction of non-silent frames means speech? | open |
 | 12 | `embedding_silhouette` | cluster all windows, silhouette coefficient, `>= 0.5` | embedding vectors per window | does clustering support a coherent speaker here? | open |
 | 13 | frame posteriors | bucket-mean over frames, then `>= 0.5` | per-frame posterior at native 17 ms | how do frames aggregate to a bucket? | open |
 | 14 | `frame_instability` | `clip(2 × mean(per-bucket std), 0, 1)` — ×2 rescale + clip | per-frame values | how is temporal dispersion measured? | open |
 | 15 | coarse-voter demotion | `weight = 0.25` when grid < 0.5 s | native window/hop in provenance | how should resolution mismatch be weighted? | open |
-| 16 | segmentation-3.0 reduction | noisy-or over per-speaker channels (was `max`) | per-speaker activation matrix, channels intact | how do per-speaker activations combine? | open |
+| 16 | segmentation-3.0 reduction | noisy-or over per-speaker channels (was `max`) | per-speaker activation matrix, channels intact | how do per-speaker activations combine? | **closed** |
 
 Item 16 is the sharpest case, and its diagnosis changed once measured. The model reports one
 activation per speaker, and the collapse returned **exactly 1.0000 in all 1070 buckets** on the
@@ -163,3 +163,28 @@ Grouped so each group can be validated by one measurement rather than a full e2e
    noise floor from `noise_floor.py` for flux. HNR already has a defensible absolute anchor.
 5. **Items 1–5, 11–12, 15.** Largest surface: dissolves `presence.py` into an L2 stage. Do last,
    once the signals it consumes are emitting raw.
+
+## Findings from closing items 8-9
+
+**The two questions the percentile rank was conflating.** Gain scaling changes no signal-to-noise
+ratio — it lifts the source and the floor together — so a measure of "is something happening beyond
+the room's floor" must be gain-invariant, while a measure of "how loud is this recording" must not
+be. One within-file rank cannot answer both, and answered neither. The replacements are
+`lufs` (absolute, gain-sensitive) and `level_above_floor_db` (relative, gain-invariant), verified
+by a −12 dB probe: the excess measure moves < 1 dB, LUFS moves 12.0 dB.
+
+**The excess measure must abstain, not deny.** A low excess has two indistinguishable causes:
+nothing is happening, or a source runs through the whole recording and has been absorbed into its
+own floor estimate, since the floor is a percentile of this file's own frames. Voting `False` there
+would make the signal contradict correct models on any recording without pauses — measured on a
+wall-to-wall AM tone, where it read `speaks=False` against ground truth. It now maps low excess to
+`0.5` (uninformative) and only asserts on the upper half of the range, the same asymmetry `hnr_db`
+already uses. LUFS retains the ability to claim absence, because −90 LUFS is unambiguous.
+
+**A test fixture was self-contradictory and only these voters could reveal it.**
+`compute_uncertainty_axes_test.py` built its happy path from `torch.zeros(...)` — digital silence —
+paired with mocked diarization and ASR reporting speech. Every voter read the mocks, none read the
+audio, so the contradiction was invisible and the suite asserted low presence uncertainty. The
+absolute voters read the waveform, correctly dissented, and presence uncertainty rose to 0.62. The
+fixture now carries audible content, with a separate `_silence_audio` helper for tests where
+absence of signal is the point.
