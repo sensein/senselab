@@ -19,7 +19,7 @@ Consequences that shape the rest of the feature:
   destroying it. Detection lives in ``noise_floor``/``sources`` instead.
 - Each classifier has an absolute floor beneath which it reports nothing, and the more
   restrictive of the two binds the detection margin.
-- Label identity migrates with level on unchanged audio, so scores are not comparable
+- Label speaker migrates with level on unchanged audio, so scores are not comparable
   across segments recorded or gained differently.
 
 Everything in this module is pure and numpy-free: it derives verdicts from per-gain

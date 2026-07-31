@@ -52,7 +52,7 @@ def build_final_ls_bundle(
     run_dir: Path,
     transcript: dict[str, Any],
     diarization: dict[str, Any],
-    presence_rows: list[dict[str, Any]],
+    speech_presence_rows: list[dict[str, Any]],
     fusion_stream: str,
     iterations: list[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -105,7 +105,7 @@ def build_final_ls_bundle(
         run_status: str | None = None
         prev_end = 0.0
         status_regions: list[tuple[float, float, str]] = []
-        for row in presence_rows:
+        for row in speech_presence_rows:
             status = str(row.get("status") or "open")
             if run_status is None:
                 run_start, run_status = row["start"], status
@@ -116,7 +116,7 @@ def build_final_ls_bundle(
         if run_status is not None:
             status_regions.append((run_start, prev_end, run_status))
         for i, (s, e, status) in enumerate(status_regions):
-            regions.append(_region(f"final_presence_{i:04d}", "final__presence", s, e, labels=[status]))
+            regions.append(_region(f"final_speech_presence_{i:04d}", "final__speech_presence", s, e, labels=[status]))
 
         # Attach to the fusion stream's task (fallback: first task).
         target = next((t for t in tasks if _task_pass_label(t) == fusion_stream), tasks[0] if tasks else None)
@@ -135,14 +135,14 @@ def build_final_ls_bundle(
             '<Labels name="final__diarization" toName="audio">',
         ]
         blocks += [f'  <Label value="{v}"/>' for v in cluster_values]
-        blocks += ["</Labels>", '<Labels name="final__presence" toName="audio">']
+        blocks += ["</Labels>", '<Labels name="final__speech_presence" toName="audio">']
         blocks += [f'  <Label value="{v}"/>' for v in status_values]
         blocks += ["</Labels>"]
         config = config.replace("</View>", "\n".join(blocks) + "\n</View>")
 
         (final / "labelstudio_tasks.json").write_text(json.dumps(tasks, indent=2))
         (final / "labelstudio_config.xml").write_text(config)
-        report["ls_tracks_added"] = ["final__consensus_transcript", "final__diarization", "final__presence"]
+        report["ls_tracks_added"] = ["final__consensus_transcript", "final__diarization", "final__speech_presence"]
         report["n_final_regions"] = len(regions)
     else:
         report["ls_tracks_added"] = []
@@ -170,7 +170,7 @@ def build_final_ls_bundle(
             "source": str(dis_path),
             "scale_note": (
                 "final_uncertainty / delta_from_round1 are on the pre-coupling (per-vote) scale; "
-                "round-1 utterance entries from runs with FR-019 scene coupling may include the "
+                "round-1 asr entries from runs with FR-019 scene coupling may include the "
                 "scene multiplier in their within_pass_uncertainty (see scene_quality_coupling)."
             ),
             "entries": resolved,
@@ -210,7 +210,7 @@ def _final_belief_index(rounds_dir: Path) -> dict[tuple[str, str, float, float],
     except (OSError, ValueError):
         return {}
     out: dict[tuple[str, str, float, float], dict[str, Any]] = {}
-    for axis in ("presence", "identity", "utterance"):
+    for axis in ("speech_presence", "speaker", "asr"):
         f = rounds_dir / str(last) / "belief" / f"{axis}.parquet"
         if not f.exists():
             continue

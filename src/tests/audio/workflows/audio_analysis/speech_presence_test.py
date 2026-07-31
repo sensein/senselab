@@ -1,4 +1,4 @@
-"""Tests for the absolute-scale acoustic presence voters (D-3, register items 8-9).
+"""Tests for the absolute-scale acoustic speech_presence voters (D-3, register items 8-9).
 
 ``Loudness_sma3`` and ``spectralFlux_sma3`` were normalised against per-pass percentiles, which
 made them ranks rather than levels: ~10% of frames pinned at 0 and ~25% at 1.0 by construction,
@@ -28,7 +28,7 @@ def test_absolute_voters_dissent_from_models_claiming_speech_over_silence() -> N
     import numpy as np
 
     from senselab.audio.workflows.audio_analysis.grid import BucketGrid
-    from senselab.audio.workflows.audio_analysis.presence import harvest_presence_votes
+    from senselab.audio.workflows.audio_analysis.speech_presence import harvest_speech_presence_votes
 
     pass_summary = {
         "duration_s": 2.0,
@@ -41,7 +41,7 @@ def test_absolute_voters_dissent_from_models_claiming_speech_over_silence() -> N
             }
         },
     }
-    buckets = harvest_presence_votes(
+    buckets = harvest_speech_presence_votes(
         pass_summary=pass_summary,
         grid=BucketGrid(win_length=0.5, hop_length=0.5),
         speech_presence_labels=["Speech"],
@@ -66,12 +66,12 @@ def test_absolute_voters_agree_with_models_on_audible_speech() -> None:
     import numpy as np
 
     from senselab.audio.workflows.audio_analysis.grid import BucketGrid
-    from senselab.audio.workflows.audio_analysis.presence import harvest_presence_votes
+    from senselab.audio.workflows.audio_analysis.speech_presence import harvest_speech_presence_votes
 
     sr = 16000
     t = np.arange(sr * 2) / sr
     y = 0.15 * np.sin(2 * np.pi * 220 * t) * (0.6 + 0.4 * np.sin(2 * np.pi * 3 * t))
-    buckets = harvest_presence_votes(
+    buckets = harvest_speech_presence_votes(
         pass_summary={"duration_s": 2.0},
         grid=BucketGrid(win_length=0.5, hop_length=0.5),
         speech_presence_labels=["Speech"],
@@ -89,9 +89,9 @@ def test_absolute_voters_agree_with_models_on_audible_speech() -> None:
 def test_absolute_voters_absent_without_audio() -> None:
     """No waveform means no vote, rather than a vote from no measurement."""
     from senselab.audio.workflows.audio_analysis.grid import BucketGrid
-    from senselab.audio.workflows.audio_analysis.presence import harvest_presence_votes
+    from senselab.audio.workflows.audio_analysis.speech_presence import harvest_speech_presence_votes
 
-    buckets = harvest_presence_votes(
+    buckets = harvest_speech_presence_votes(
         pass_summary={"duration_s": 1.0},
         grid=BucketGrid(win_length=0.5, hop_length=0.5),
         speech_presence_labels=["Speech"],
@@ -102,7 +102,7 @@ def test_absolute_voters_absent_without_audio() -> None:
         assert "acoustic_level_above_floor" not in b["votes"]
 
 
-def test_level_above_floor_asserts_presence_when_the_recording_has_quiet_stretches() -> None:
+def test_level_above_floor_asserts_speech_presence_when_the_recording_has_quiet_stretches() -> None:
     """With a real floor to measure, the excess voter does assert -- which is when it can.
 
     The pairing with the previous test is the point: the same measure abstains on a continuous
@@ -112,13 +112,13 @@ def test_level_above_floor_asserts_presence_when_the_recording_has_quiet_stretch
     import numpy as np
 
     from senselab.audio.workflows.audio_analysis.grid import BucketGrid
-    from senselab.audio.workflows.audio_analysis.presence import harvest_presence_votes
+    from senselab.audio.workflows.audio_analysis.speech_presence import harvest_speech_presence_votes
 
     sr = 16000
     t = np.arange(sr * 4) / sr
     y = np.zeros_like(t)
     y[sr * 2 :] = 0.2 * np.sin(2 * np.pi * 220 * t[sr * 2 :])  # silent first half, tone second
-    buckets = harvest_presence_votes(
+    buckets = harvest_speech_presence_votes(
         pass_summary={"duration_s": 4.0},
         grid=BucketGrid(win_length=0.5, hop_length=0.5),
         speech_presence_labels=["Speech"],

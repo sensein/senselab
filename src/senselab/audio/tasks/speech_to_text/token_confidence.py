@@ -2,7 +2,7 @@
 
 Whisper's decoder knows more about its own uncertainty than the transcript text
 reveals: the per-step distribution over the vocabulary is peaked when the model is
-sure and flat when it is guessing. That signal is what the utterance axis needs —
+sure and flat when it is guessing. That signal is what the asr axis needs —
 pairwise transcript disagreement only fires when two backends actually differ,
 while token entropy registers a single model's private doubt.
 

@@ -19,9 +19,9 @@ budget:
   heavy_per_run: 4
 election:
   weights:
-    presence_conf: 0.4
+    speech_presence_conf: 0.4
     quality: 0.3
-    utterance_agreement: 0.3
+    asr_agreement: 0.3
 adjudication:
   p_voice_hallucination: 0.2   # below this, ASR text triggers P3
   p_voice_missed: 0.6          # below this, strong text agreement triggers C9
@@ -61,9 +61,9 @@ u1_backend: auto               # T047: "auto" = senselab task API first, HF-pipe
                                # (recorded in iterations.json); "senselab" / "pipeline" pin one path
 language:                      # optional ASR language pin for U1 (e.g. "en")
 enhancement_model: speechbrain/sepformer-wham16k-enhancement    # on-demand enhanced stream
-presence:                      # P2 fine-grid presence re-analysis
+speech_presence:                      # P2 fine-grid speech_presence re-analysis
   coarse_share_threshold: 0.5  # fire P2 when >= this share of active votes are coarse
-identity:                      # I1/I2 identity repair (stored or live embeddings)
+speaker:                      # I1/I2 speaker repair (stored or live embeddings)
   cp_k: 1.0                    # change-point threshold = mean + k·std of the cosine trajectory
   cp_floor: 0.15               # absolute minimum adjacent-cosine distance for a change-point
   min_segment_s: 0.25
@@ -111,7 +111,7 @@ influence:
   # embedding_silhouette is marked derived because it is the *seed* of the cross-model
   # label harmonisation (clustering.py: pyannote and sortformer labels snap to its
   # centroids). The same embeddings also drive same-label and change-point validation,
-  # so embedding evidence enters the identity axis three ways; letting it also vote as
+  # so embedding evidence enters the speaker axis three ways; letting it also vote as
   # a peer counts it a fourth time.
   #
   # The counter-argument is real and unresolved: it runs an embedding model on the
@@ -123,10 +123,10 @@ influence:
     embedding_silhouette: derived
   default_source_kind: independent
   weights:
-    identity_to_diarization: 1.0
+    speaker_to_diarization: 1.0
     diarization_to_per_speaker_presence: 1.0
-    background_mask_to_presence: 0.6
-    utterance_to_speaker_attribution: 0.5
+    background_mask_to_speech_presence: 0.6
+    asr_to_speaker_attribution: 0.5
 
 # ── speaker-count posterior (T010, FR-002/FR-008/FR-011) ────────────────
 speaker_count:

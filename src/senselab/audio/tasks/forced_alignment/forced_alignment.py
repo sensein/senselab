@@ -213,7 +213,7 @@ def _assign_timestamps(
             char_seg = char_segments[char_seg_index]
             # ``char_seg.score`` is the mean per-frame CTC posterior probability
             # for this character (from ``_merge_repeats``). Propagate it so
-            # downstream consumers (e.g. analyze_audio's utterance axis) can
+            # downstream consumers (e.g. analyze_audio's asr axis) can
             # surface it as a per-token / per-bucket confidence signal.
             char_dict = {
                 "text": char,
@@ -505,7 +505,7 @@ def remove_chunks_by_level(
     """Recursively removes chunks from a ScriptLine object at a given depth level.
 
     ScriptLine objects can contain nested chunks representing different levels of speech
-    (e.g. utterance -> sentence -> word -> character). This function traverses the chunk hierarchy
+    (e.g. asr -> sentence -> word -> character). This function traverses the chunk hierarchy
     and removes chunks at the specified level, optionally preserving or removing lower levels.
 
     For example, with level=1 and keep_lower=True, it will remove word-level chunks but keep
@@ -513,7 +513,7 @@ def remove_chunks_by_level(
 
     Args:
         scriptline (Optional[ScriptLine]): The root ScriptLine object to modify.
-        level (int): The depth level at which to remove chunks (0=utterance, 1=sentence, 2=word, 3=char).
+        level (int): The depth level at which to remove chunks (0=asr, 1=sentence, 2=word, 3=char).
         keep_lower (bool): Whether to keep chunks at levels below the target level.
 
     Returns:
@@ -579,7 +579,7 @@ def filter_aligned_script_lines(
             A list of lists containing `ScriptLine | None` elements.
         levels_to_keep (Dict[str, bool]):
             A dictionary specifying which levels to retain:
-            - "utterance" (bool): Whether to keep utterance-level chunks.
+            - "asr" (bool): Whether to keep asr-level chunks.
             - "word" (bool): Whether to keep word-level chunks.
             - "char" (bool): Whether to keep character-level chunks.
 
@@ -600,7 +600,7 @@ def filter_aligned_script_lines(
             elif levels_to_keep["word"] and not levels_to_keep["char"]:
                 updated_scriptline = remove_chunks_by_level(scriptline, level=3)
 
-            if not levels_to_keep["utterance"]:
+            if not levels_to_keep["asr"]:
                 updated_scriptline = remove_chunks_by_level(scriptline, level=0)
 
             if isinstance(updated_scriptline, list):
@@ -676,7 +676,7 @@ _ALIGNER_CACHE: Dict[Any, Any] = {}
 
 def align_transcriptions(
     audios_and_transcriptions_and_language: List[Tuple[Audio, ScriptLine, Language]],
-    levels_to_keep: Dict = {"utterance": False, "word": False, "char": False},
+    levels_to_keep: Dict = {"asr": False, "word": False, "char": False},
     aligner_model: Optional[str] = None,
 ) -> List[List[ScriptLine | None]]:
     """Align multiple transcriptions with their respective audios using a wav2vec2.0 model.

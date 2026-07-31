@@ -61,7 +61,7 @@ def build_run_summary(
 
     Args:
         axis_rows: ``{axis → fused rows}`` from the final round.
-        speakers: The ``speakers.json`` document, or empty when identity did not run.
+        speakers: The ``speakers.json`` document, or empty when speaker did not run.
         rounds: ``{axis → round log}``.
         top_n: How many worst regions to name per axis.
 

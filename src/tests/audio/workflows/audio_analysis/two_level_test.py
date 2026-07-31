@@ -120,7 +120,7 @@ def test_fusion_is_deterministic() -> None:
 def _harvest(label: str, buckets: list[dict]) -> object:
     from types import SimpleNamespace
 
-    return SimpleNamespace(pass_label=label, presence_votes=[], identity_votes=buckets, utterance_votes=[])
+    return SimpleNamespace(pass_label=label, speech_presence_votes=[], speaker_votes=buckets, asr_votes=[])
 
 
 def test_the_final_maps_are_written_for_every_axis(tmp_path) -> None:  # noqa: ANN001
@@ -134,8 +134,8 @@ def test_the_final_maps_are_written_for_every_axis(tmp_path) -> None:  # noqa: A
         harvests={"raw_16k": _harvest("raw_16k", [_bucket(0.0, {"a": 0.3})])},
         weights_by_axis={},
     )
-    assert {"presence", "identity", "utterance"} <= set(written)
-    for axis in ("presence", "identity", "utterance"):
+    assert {"speech_presence", "speaker", "asr"} <= set(written)
+    for axis in ("speech_presence", "speaker", "asr"):
         pd.read_parquet(written[axis])
 
 
@@ -153,9 +153,9 @@ def test_the_final_map_carries_its_attribution(tmp_path) -> None:  # noqa: ANN00
             "raw_16k": _harvest("raw_16k", [_bucket(0.0, {"a": 0.2, "b": 0.9})]),
             "enhanced_16k": _harvest("enhanced_16k", [_bucket(0.0, {"a": 0.2, "b": 0.9})]),
         },
-        weights_by_axis={"identity": {"b": 0.1}},
+        weights_by_axis={"speaker": {"b": 0.1}},
     )
-    frame = pd.read_parquet(written["identity"])
+    frame = pd.read_parquet(written["speaker"])
     row = frame.iloc[0]
     assert sorted(row["contributing_signals"]) == ["a", "b"]
     assert sorted(row["contributing_passes"]) == ["enhanced_16k", "raw_16k"]
@@ -171,7 +171,7 @@ def test_the_final_map_is_byte_identical_across_runs(tmp_path) -> None:  # noqa:
     second = tmp_path / "two"
     a = write_final_uncertainty(first, harvests=harvests, weights_by_axis={})
     b = write_final_uncertainty(second, harvests=harvests, weights_by_axis={})
-    assert pathlib.Path(a["identity"]).read_bytes() == pathlib.Path(b["identity"]).read_bytes()
+    assert pathlib.Path(a["speaker"]).read_bytes() == pathlib.Path(b["speaker"]).read_bytes()
     assert set(a) == set(b)
 
 
@@ -255,17 +255,17 @@ def test_the_round_is_recorded() -> None:
 def test_every_axis_vote_shape_yields_a_per_signal_uncertainty() -> None:
     """The three axes name their fields differently, and all three must be readable.
 
-    On a real run identity fused 85 buckets while presence fused 0 of 1070 and utterance 0 of
-    41, because only identity happens to name its field like an uncertainty. A level that
+    On a real run speaker fused 85 buckets while speech_presence fused 0 of 1070 and asr 0 of
+    41, because only speaker happens to name its field like an uncertainty. A level that
     silently covers one axis of three is worse than one covering none — the gap is invisible.
     """
-    identity = {"votes": {"a": {"same_label_uncertainty": 0.4}}}
-    presence = {"votes": {"b": {"speaks": True, "native_confidence": 0.9}}}
-    utterance = {"votes": {"c": {"text": "hello", "avg_logprob": -0.2}}}
+    speaker = {"votes": {"a": {"same_label_uncertainty": 0.4}}}
+    speech_presence = {"votes": {"b": {"speaks": True, "native_confidence": 0.9}}}
+    asr = {"votes": {"c": {"text": "hello", "avg_logprob": -0.2}}}
 
-    assert per_signal_uncertainty(identity)["a"] == pytest.approx(0.4)
-    assert per_signal_uncertainty(presence)["b"] == pytest.approx(0.1)
-    assert per_signal_uncertainty(utterance)["c"] == pytest.approx(1.0 - 0.8187, abs=0.01)
+    assert per_signal_uncertainty(speaker)["a"] == pytest.approx(0.4)
+    assert per_signal_uncertainty(speech_presence)["b"] == pytest.approx(0.1)
+    assert per_signal_uncertainty(asr)["c"] == pytest.approx(1.0 - 0.8187, abs=0.01)
 
 
 def test_a_declared_uncertainty_wins_over_a_derived_one() -> None:
@@ -278,8 +278,8 @@ def test_a_declared_uncertainty_wins_over_a_derived_one() -> None:
     assert per_signal_uncertainty(bucket)["a"] == pytest.approx(0.9)
 
 
-def test_utterance_uncertainty_is_recoverable_from_pairwise_distances() -> None:
-    """The utterance axis reports pairs, not per-model confidences.
+def test_asr_uncertainty_is_recoverable_from_pairwise_distances() -> None:
+    """The asr axis reports pairs, not per-model confidences.
 
     On a real recording all three ASR backends were text-only, so every avg_logprob was None
     and the axis had no per-signal quantity at all — L2 fused 0 of 41 buckets. A pairwise

@@ -10,11 +10,11 @@ Implemented for real on artifacts + the content-addressable cache:
   reserve model's whole-file result is read from ``analyze_audio``'s
   content-addressable cache (same audio signature ⇒ same waveform), windowed to
   the region's buckets with the *same* harvest math the comparator uses
-  (``harvest_utterance_votes``), and merged as region-scoped votes.
+  (``harvest_asr_votes``), and merged as region-scoped votes.
 
 - ``U1_region_reasr`` — live region re-ASR (HF whisper pipeline pool, enhanced stream
   regenerated on demand with recorded raw fallback).
-- ``I1_boundary_refinement`` / ``I2_recluster`` — identity repair from per-window
+- ``I1_boundary_refinement`` / ``I2_recluster`` — speaker repair from per-window
   embeddings (stored artifacts, or live fine-hop via ``backends.embed_windows``).
 - ``I4_overlap_detection`` — segmentation-3.0 per-class posteriors (gated model;
   guards to ``next_actions`` without a token).
@@ -147,8 +147,10 @@ def _election_scores(region: dict[str, Any], ctx: dict[str, Any]) -> dict[str, d
     scores: dict[str, dict[str, float]] = {}
     w = ctx["policy"]["election"]["weights"]
     for stream in ctx["passes"]:
-        pres = _rows_in_span(ctx["state"].axis_rows(stream, "presence"), region["core_start"], region["core_end"])
-        utt = _rows_in_span(ctx["state"].axis_rows(stream, "utterance"), region["core_start"], region["core_end"])
+        pres = _rows_in_span(
+            ctx["state"].axis_rows(stream, "speech_presence"), region["core_start"], region["core_end"]
+        )
+        utt = _rows_in_span(ctx["state"].axis_rows(stream, "asr"), region["core_start"], region["core_end"])
         p_conf = _mean([r.get("p_voice") for r in pres]) or 0.0
         degr = _mean(
             [
@@ -162,11 +164,11 @@ def _election_scores(region: dict[str, Any], ctx: dict[str, Any]) -> dict[str, d
         )
         quality = 1.0 - (degr if degr is not None else 0.0)
         agree = 1.0 - (_mean([r.get("within_pass_uncertainty") for r in utt]) or 0.0)
-        total = w["presence_conf"] * p_conf + w["quality"] * quality + w["utterance_agreement"] * agree
+        total = w["speech_presence_conf"] * p_conf + w["quality"] * quality + w["asr_agreement"] * agree
         scores[stream] = {
-            "presence_conf": round(p_conf, 6),
+            "speech_presence_conf": round(p_conf, 6),
             "quality": round(quality, 6),
-            "utterance_agreement": round(agree, 6),
+            "asr_agreement": round(agree, 6),
             "total": round(total, 9),
         }
     return scores
@@ -187,7 +189,7 @@ def _s1_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     guard_fired = False
     if elected != "raw_16k":
         # Enhancement-artifact guard (degraded): reject the enhanced stream when
-        # it claims speech text where the raw stream has none *and* raw presence
+        # it claims speech text where the raw stream has none *and* raw speech_presence
         # is confidently silent — SepFormer can synthesize speech-like energy.
         raw_text = _region_text(ctx, "raw_16k", region)
         enh_text = _region_text(ctx, elected, region)
@@ -195,7 +197,7 @@ def _s1_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
             [
                 r.get("p_voice")
                 for r in _rows_in_span(
-                    ctx["state"].axis_rows("raw_16k", "presence"), region["core_start"], region["core_end"]
+                    ctx["state"].axis_rows("raw_16k", "speech_presence"), region["core_start"], region["core_end"]
                 )
             ]
         )
@@ -215,9 +217,9 @@ def _s1_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
 
 def _region_text(ctx: dict[str, Any], stream: str, region: dict[str, Any]) -> str:
     texts = []
-    for row in _rows_in_span(ctx["state"].axis_rows(stream, "utterance"), region["core_start"], region["core_end"]):
+    for row in _rows_in_span(ctx["state"].axis_rows(stream, "asr"), region["core_start"], region["core_end"]):
         bk = bucket_key(row["start"], row["end"])
-        for source, payload in ctx["store"].active_votes(stream, "utterance", bk).items():
+        for source, payload in ctx["store"].active_votes(stream, "asr", bk).items():
             if not source.startswith("__") and payload.get("text"):
                 texts.append(str(payload["text"]))
     return " ".join(texts).strip()
@@ -229,12 +231,12 @@ def _region_text(ctx: dict[str, Any], stream: str, region: dict[str, Any]) -> st
 def _adjudication_candidates(ctx: dict[str, Any], stream: str) -> list[dict[str, Any]]:
     adj = ctx["policy"]["adjudication"]
     out = []
-    for row in ctx["state"].axis_rows(stream, "presence"):
+    for row in ctx["state"].axis_rows(stream, "speech_presence"):
         p_voice = row.get("p_voice")
         if p_voice is None or p_voice >= adj["p_voice_hallucination"]:
             continue
         bk = bucket_key(row["start"], row["end"])
-        votes = ctx["store"].active_votes(stream, "presence", bk)
+        votes = ctx["store"].active_votes(stream, "speech_presence", bk)
         for source, payload in votes.items():
             if source.startswith(("__", "acoustic_", "frame_", "embedding_", "ast", "yamnet")):
                 continue
@@ -269,14 +271,14 @@ def _p3_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
             n = ctx["store"].purge_source_in_bucket(
                 stream, c["bucket"], c["source"], reason="hallucination_adjudicated", round_idx=ctx["round_idx"]
             )
-            # Purge also hits utterance buckets overlapping this presence bucket.
-            for urow in _rows_in_span(ctx["state"].axis_rows(stream, "utterance"), c["bucket"][0], c["bucket"][1]):
+            # Purge also hits asr buckets overlapping this speech_presence bucket.
+            for urow in _rows_in_span(ctx["state"].axis_rows(stream, "asr"), c["bucket"][0], c["bucket"][1]):
                 ubk = bucket_key(urow["start"], urow["end"])
                 n += ctx["store"].purge_source_in_bucket(
                     stream, ubk, c["source"], reason="hallucination_adjudicated", round_idx=ctx["round_idx"]
                 )
-                touched.setdefault((stream, "utterance"), set()).add(ubk)
-            touched.setdefault((stream, "presence"), set()).add(c["bucket"])
+                touched.setdefault((stream, "asr"), set()).add(ubk)
+            touched.setdefault((stream, "speech_presence"), set()).add(c["bucket"])
             purged.append({**c, "stream": stream, "votes_purged": n})
     return {"purged": purged, "touched": touched}
 
@@ -289,17 +291,17 @@ def _c9_trigger(region: dict[str, Any], ctx: dict[str, Any]) -> tuple[bool, dict
 def _missed_speech_candidates(ctx: dict[str, Any], stream: str) -> list[dict[str, Any]]:
     adj = ctx["policy"]["adjudication"]
     out = []
-    for row in ctx["state"].axis_rows(stream, "presence"):
+    for row in ctx["state"].axis_rows(stream, "speech_presence"):
         p_voice = row.get("p_voice")
         if p_voice is None or not (adj["p_voice_hallucination"] <= p_voice < adj["p_voice_missed"]):
             continue
         bk = bucket_key(row["start"], row["end"])
-        if "adjudicator/missed_speech" in ctx["store"].active_votes(stream, "presence", bk):
+        if "adjudicator/missed_speech" in ctx["store"].active_votes(stream, "speech_presence", bk):
             continue
         families = set()
-        for urow in _rows_in_span(ctx["state"].axis_rows(stream, "utterance"), bk[0], bk[1]):
+        for urow in _rows_in_span(ctx["state"].axis_rows(stream, "asr"), bk[0], bk[1]):
             ubk = bucket_key(urow["start"], urow["end"])
-            for source, payload in ctx["store"].active_votes(stream, "utterance", ubk).items():
+            for source, payload in ctx["store"].active_votes(stream, "asr", ubk).items():
                 if not source.startswith("__") and payload.get("text"):
                     families.add(model_family(source, ctx["policy"]))
         if len(families) >= 2:
@@ -315,7 +317,7 @@ def _c9_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
         for c in _missed_speech_candidates(ctx, stream):
             ctx["store"].add_vote(
                 Vote(
-                    axis="presence",
+                    axis="speech_presence",
                     bucket=c["bucket"],
                     source="adjudicator/missed_speech",
                     stream=stream,
@@ -325,7 +327,7 @@ def _c9_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
                     provenance={"families_agreeing": c["families"], "rule": "C9_missed_speech"},
                 )
             )
-            touched.setdefault((stream, "presence"), set()).add(c["bucket"])
+            touched.setdefault((stream, "speech_presence"), set()).add(c["bucket"])
             added.append({**c, "stream": stream})
     return {"added": added, "touched": touched}
 
@@ -343,13 +345,13 @@ def _reserves_in_cache(ctx: dict[str, Any], stream: str) -> list[str]:
 
 
 def _u2_trigger(region: dict[str, Any], ctx: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
-    if region is None or region["axis"] != "utterance":
+    if region is None or region["axis"] != "asr":
         return False, {}
     stream = region.get("elected_stream") or region.get("stream") or "raw_16k"
     reserves = _reserves_in_cache(ctx, stream)
     if not reserves:
         return False, {"reason": "no_cached_reserves"}
-    rows = _rows_in_span(ctx["state"].axis_rows(stream, "utterance"), region["core_start"], region["core_end"])
+    rows = _rows_in_span(ctx["state"].axis_rows(stream, "asr"), region["core_start"], region["core_end"])
     epi = _mean([r.get("epistemic") for r in rows])
     if epi is None or epi < ctx["policy"]["thresholds"]["theta_low"]:
         return False, {"epistemic": epi}
@@ -395,20 +397,20 @@ def _u2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
         used_reserves.append({"model": model, "cache_file": entry.get("_cache_file")})
 
     pass_summary_ext = {"duration_s": ctx["duration_s"], "asr": {"by_model": asr_by_model}}
-    grid = BucketGrid(win_length=ctx["utterance_grid"][0], hop_length=ctx["utterance_grid"][1])
+    grid = BucketGrid(win_length=ctx["asr_grid"][0], hop_length=ctx["asr_grid"][1])
 
     pair_kind = "phoneme"
     if _has_g2p():
-        from senselab.audio.workflows.audio_analysis.utterance import harvest_utterance_votes
+        from senselab.audio.workflows.audio_analysis.asr import harvest_asr_votes
 
-        harvested = harvest_utterance_votes(
+        harvested = harvest_asr_votes(
             pass_summary=pass_summary_ext, grid=grid, ppg_block={}, alignment_by_model=align_by_model
         )
     else:
         pair_kind = "word"
         harvested = _harvest_word_level(pass_summary_ext, grid, align_by_model, ctx["duration_s"])
 
-    rows = ctx["state"].axis_rows(stream, "utterance")
+    rows = ctx["state"].axis_rows(stream, "asr")
     covered = region_buckets(region, rows)
     touched: dict[tuple[str, str], set[tuple[float, float]]] = {}
     n_votes = 0
@@ -421,7 +423,7 @@ def _u2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
                 payload = {**payload, "pair_distance_kind": pair_kind}
             ctx["store"].add_vote(
                 Vote(
-                    axis="utterance",
+                    axis="asr",
                     bucket=bk,
                     source=source,
                     stream=stream,
@@ -432,7 +434,7 @@ def _u2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
                 )
             )
             n_votes += 1
-        touched.setdefault((stream, "utterance"), set()).add(bk)
+        touched.setdefault((stream, "asr"), set()).add(bk)
     fam = family_weights(sorted([m for m in asr_by_model]), ctx["policy"])
     return {
         "reserves_used": used_reserves,
@@ -451,7 +453,7 @@ def _harvest_word_level(
 ) -> list[dict[str, Any]]:
     """g2p-free fallback: pairwise WORD-Levenshtein rate (the original FR-002 WER form).
 
-    Same vote schema as ``harvest_utterance_votes`` so ``aggregate_utterance``
+    Same vote schema as ``harvest_asr_votes`` so ``aggregate_asr``
     consumes it unchanged; ``pair_distance_kind: "word"`` is recorded on the
     pair block by the caller.
     """
@@ -500,13 +502,13 @@ def _harvest_word_level(
 
 
 def _u1_trigger(region: dict[str, Any], ctx: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
-    if region is None or region["axis"] != "utterance":
+    if region is None or region["axis"] != "asr":
         return False, {}
     models = [m for m in (ctx["policy"].get("u1_asr_models") or []) if m not in ctx.get("live_asr_done", set())]
     if not models:
         return False, {"reason": "no_u1_models"}
     stream = region.get("elected_stream") or region.get("stream") or "raw_16k"
-    rows = _rows_in_span(ctx["state"].axis_rows(stream, "utterance"), region["core_start"], region["core_end"])
+    rows = _rows_in_span(ctx["state"].axis_rows(stream, "asr"), region["core_start"], region["core_end"])
     epi = _mean([r.get("epistemic") for r in rows])
     if epi is None or epi < ctx["policy"]["thresholds"]["theta_low"]:
         return False, {"epistemic": epi}
@@ -585,18 +587,18 @@ def _u1_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     align_by_model = load_alignments_matched(ctx["run_dir"], stream, asr_by_model)
     asr_by_model.update(ext_blocks)
     pass_summary_ext = {"duration_s": ctx["duration_s"], "asr": {"by_model": asr_by_model}}
-    grid = BucketGrid(win_length=ctx["utterance_grid"][0], hop_length=ctx["utterance_grid"][1])
+    grid = BucketGrid(win_length=ctx["asr_grid"][0], hop_length=ctx["asr_grid"][1])
     pair_kind = "phoneme"
     if _has_g2p():
-        from senselab.audio.workflows.audio_analysis.utterance import harvest_utterance_votes
+        from senselab.audio.workflows.audio_analysis.asr import harvest_asr_votes
 
-        harvested = harvest_utterance_votes(
+        harvested = harvest_asr_votes(
             pass_summary=pass_summary_ext, grid=grid, ppg_block={}, alignment_by_model=align_by_model
         )
     else:
         pair_kind = "word"
         harvested = _harvest_word_level(pass_summary_ext, grid, align_by_model, ctx["duration_s"])
-    rows = ctx["state"].axis_rows(stream, "utterance")
+    rows = ctx["state"].axis_rows(stream, "asr")
     covered = region_buckets(region, rows)
     touched: dict[tuple[str, str], set[tuple[float, float]]] = {}
     n_votes = 0
@@ -609,7 +611,7 @@ def _u1_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
                 payload = {**payload, "pair_distance_kind": pair_kind}
             ctx["store"].add_vote(
                 Vote(
-                    axis="utterance",
+                    axis="asr",
                     bucket=bk,
                     source=source,
                     stream=stream,
@@ -620,7 +622,7 @@ def _u1_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
                 )
             )
             n_votes += 1
-        touched.setdefault((stream, "utterance"), set()).add(bk)
+        touched.setdefault((stream, "asr"), set()).add(bk)
     return {
         "models": ran,
         "stream": stream,
@@ -631,7 +633,7 @@ def _u1_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-# ── I1 + I2: identity repair from embeddings (stored artifacts or live) ─
+# ── I1 + I2: speaker repair from embeddings (stored artifacts or live) ─
 
 
 def _get_identity_repair(ctx: dict[str, Any], stream: str) -> dict[str, Any] | None:
@@ -678,7 +680,7 @@ def _get_identity_repair(ctx: dict[str, Any], stream: str) -> dict[str, Any] | N
 
 
 def _i1_trigger(region: dict[str, Any], ctx: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
-    if region is None or region["axis"] != "identity":
+    if region is None or region["axis"] != "speaker":
         return False, {}
     stream = region.get("stream") or "raw_16k"
     if (stream, region["core_start"], region["core_end"]) in ctx.get("_i1_done", set()):
@@ -704,14 +706,14 @@ def _i1_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     touched: dict[tuple[str, str], set[tuple[float, float]]] = {}
     n_votes = 0
     in_region = [c for c in repaired["change_points"] if region["crop_start"] <= c["time"] <= region["crop_end"]]
-    for row in _rows_in_span(ctx["state"].axis_rows(stream, "identity"), region["core_start"], region["core_end"]):
+    for row in _rows_in_span(ctx["state"].axis_rows(stream, "speaker"), region["core_start"], region["core_end"]):
         bk = bucket_key(row["start"], row["end"])
         cps_here = [c for c in in_region if row["start"] <= c["time"] < row["end"]]
         if not cps_here:
             continue
         ctx["store"].add_vote(
             Vote(
-                axis="identity",
+                axis="speaker",
                 bucket=bk,
                 source="embedding_changepoint/consensus",
                 stream=stream,
@@ -724,7 +726,7 @@ def _i1_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
                 provenance={"rule": "I1_boundary_refinement", "models": repaired["models_used"]},
             )
         )
-        touched.setdefault((stream, "identity"), set()).add(bk)
+        touched.setdefault((stream, "speaker"), set()).add(bk)
         n_votes += 1
     return {
         "change_points_in_region": in_region,
@@ -735,7 +737,7 @@ def _i1_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
 
 
 def _i2_trigger(region: dict[str, Any], ctx: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
-    if region is None or region["axis"] != "identity":
+    if region is None or region["axis"] != "speaker":
         return False, {}
     stream = region.get("stream") or "raw_16k"
     if ctx.get("refined_identity", {}).get(stream):
@@ -756,7 +758,7 @@ def _i2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     ctx.setdefault("refined_identity", {})[stream] = repaired
     touched: dict[tuple[str, str], set[tuple[float, float]]] = {}
     n_votes = 0
-    for row in ctx["state"].axis_rows(stream, "identity"):
+    for row in ctx["state"].axis_rows(stream, "speaker"):
         bk = bucket_key(row["start"], row["end"])
         mid = (row["start"] + row["end"]) / 2.0
         cid = cluster_at(repaired, mid)
@@ -764,7 +766,7 @@ def _i2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
         changed = cluster_at(repaired, prev_mid) != cid if prev_mid >= 0 else False
         ctx["store"].add_vote(
             Vote(
-                axis="identity",
+                axis="speaker",
                 bucket=bk,
                 source="embedding_recluster/consensus",
                 stream=stream,
@@ -781,7 +783,7 @@ def _i2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
         # Recompute cross-source label disagreement including the new voter
         # (overwrites the file-scope vote deterministically — same vote id).
         ids = []
-        for source, payload in ctx["store"].active_votes(stream, "identity", bk).items():
+        for source, payload in ctx["store"].active_votes(stream, "speaker", bk).items():
             if source.startswith("__") or "::" in source:
                 continue
             c = payload.get("cluster_id")
@@ -791,7 +793,7 @@ def _i2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
         if value is not None:
             ctx["store"].add_vote(
                 Vote(
-                    axis="identity",
+                    axis="speaker",
                     bucket=bk,
                     source="__cross_diar_label_disagreement__",
                     stream=stream,
@@ -801,7 +803,7 @@ def _i2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
                     provenance={"rule": "I2_recluster"},
                 )
             )
-        touched.setdefault((stream, "identity"), set()).add(bk)
+        touched.setdefault((stream, "speaker"), set()).add(bk)
         n_votes += 2
     return {
         "n_clusters": repaired["n_clusters"],
@@ -816,11 +818,11 @@ def _i2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
 # ── I4: overlap posteriors (gated live backend) ─────────────────────────
 
 
-# ── P2: fine-grid presence re-analysis ───────────────────────────────────
+# ── P2: fine-grid speech_presence re-analysis ───────────────────────────────────
 
 
 def _p2_trigger(region: dict[str, Any], ctx: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
-    """Fire when a presence region's evidence is dominated by coarse voters.
+    """Fire when a speech_presence region's evidence is dominated by coarse voters.
 
     Two independent reasons, per contracts/interventions.md:
 
@@ -829,14 +831,14 @@ def _p2_trigger(region: dict[str, Any], ctx: dict[str, Any]) -> tuple[bool, dict
        YAMNet's 0.96 s window, ~1 s embedding silhouette). Those voters cast one
        identical vote across every bucket they span, so agreement among them is an
        artifact of their window size rather than evidence about this bucket.
-    2. **Frame instability** — the presence rows already report
+    2. **Frame instability** — the speech_presence rows already report
        ``frame_instability`` from the round-1 posteriors; a high value means the
        bucket straddles an onset, which a finer grid can localize.
     """
-    if region is None or region["axis"] != "presence":
+    if region is None or region["axis"] != "speech_presence":
         return False, {}
     stream = region.get("stream")
-    rows = _rows_in_span(ctx["state"].axis_rows(stream, "presence"), region["core_start"], region["core_end"])
+    rows = _rows_in_span(ctx["state"].axis_rows(stream, "speech_presence"), region["core_start"], region["core_end"])
     if not rows:
         return False, {}
 
@@ -848,7 +850,7 @@ def _p2_trigger(region: dict[str, Any], ctx: dict[str, Any]) -> tuple[bool, dict
     instability: list[float] = []
     for row in rows:
         bk = bucket_key(row["start"], row["end"])
-        for source, payload in (store.active_votes(stream, "presence", bk) or {}).items():
+        for source, payload in (store.active_votes(stream, "speech_presence", bk) or {}).items():
             if source.startswith("__") or not isinstance(payload, dict):
                 continue
             if payload.get("speaks") is None:
@@ -862,7 +864,7 @@ def _p2_trigger(region: dict[str, Any], ctx: dict[str, Any]) -> tuple[bool, dict
 
     coarse_share = (coarse / active) if active else 0.0
     mean_instability = (sum(instability) / len(instability)) if instability else 0.0
-    threshold = float(((ctx["policy"].get("presence") or {}).get("coarse_share_threshold", 0.5)))
+    threshold = float(((ctx["policy"].get("speech_presence") or {}).get("coarse_share_threshold", 0.5)))
     fires = coarse_share >= threshold or mean_instability > 0.0
     return fires, {
         "stream": stream,
@@ -887,7 +889,7 @@ def _p2_guard(region: dict[str, Any], ctx: dict[str, Any]) -> str | None:
 
 
 def _p2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
-    """Re-run segmentation-3.0 on the crop and replace the region's presence evidence.
+    """Re-run segmentation-3.0 on the crop and replace the region's speech_presence evidence.
 
     The replacement vote is scoped ``region:<id>`` so it supersedes the coarse
     round-1 voters over this span without deleting them — the store keeps both and
@@ -928,7 +930,7 @@ def _p2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
         var = sum((v - mean) ** 2 for v in vals) / len(vals)
         return float(min(1.0, 2.0 * (var**0.5)))
 
-    rows = ctx["state"].axis_rows(stream, "presence")
+    rows = ctx["state"].axis_rows(stream, "speech_presence")
     covered = region_buckets(region, rows)
     touched: dict[tuple[str, str], set[tuple[float, float]]] = {}
     n_votes = 0
@@ -941,7 +943,7 @@ def _p2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
             continue
         ctx["store"].add_vote(
             Vote(
-                axis="presence",
+                axis="speech_presence",
                 bucket=bk,
                 source="frame_posterior_fine",
                 stream=stream,
@@ -961,7 +963,7 @@ def _p2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
         if ov is not None:
             row.setdefault("meta", {})["overlap_posterior"] = round(ov, 4)
             row["overlap_posterior"] = round(ov, 4)
-        touched.setdefault((stream, "presence"), set()).add(bk)
+        touched.setdefault((stream, "speech_presence"), set()).add(bk)
 
     return {
         "frame_hop_s": hop,
@@ -976,17 +978,17 @@ def _p2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
 
 
 def _i4_trigger(region: dict[str, Any], ctx: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
-    if region is None or region["axis"] != "identity":
+    if region is None or region["axis"] != "speaker":
         return False, {}
     co = [
         r
         for r in ctx.get("all_regions", [])
-        if r["axis"] == "utterance"
+        if r["axis"] == "asr"
         and r.get("stream") == region.get("stream")
         and min(r["core_end"], region["core_end"]) - max(r["core_start"], region["core_start"]) > 0
     ]
     return bool(co), {
-        "co_located_utterance_regions": [r["region_id"] for r in co],
+        "co_located_asr_regions": [r["region_id"] for r in co],
         "stream": region.get("stream") or "raw_16k",
     }
 
@@ -1034,7 +1036,7 @@ def _i4_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
 
     mean_over_core = _mean_overlap(region["core_start"], region["core_end"])
     for apply_stream in ctx["passes"]:
-        for axis in ("identity", "utterance"):
+        for axis in ("speaker", "asr"):
             for row in _rows_in_span(
                 ctx["state"].axis_rows(apply_stream, axis), region["core_start"], region["core_end"]
             ):
@@ -1065,7 +1067,7 @@ def _n_candidates_gain(region: dict[str, Any], ctx: dict[str, Any], trigger: dic
 RULES: list[dict[str, Any]] = [
     {
         "id": "S1_stream_election",
-        "axes": ["presence", "identity", "utterance"],
+        "axes": ["speech_presence", "speaker", "asr"],
         "cost": "light",
         "trigger": _s1_trigger,
         "guard": None,
@@ -1075,7 +1077,7 @@ RULES: list[dict[str, Any]] = [
     {
         "id": "P3_hallucination_adjudication",
         "axes": [],  # stream-global, runs at most once per round
-        "meta_axis": "presence",
+        "meta_axis": "speech_presence",
         "cost": "light",
         "trigger": _p3_trigger,
         "guard": None,
@@ -1085,7 +1087,7 @@ RULES: list[dict[str, Any]] = [
     {
         "id": "C9_missed_speech",
         "axes": [],
-        "meta_axis": "presence",
+        "meta_axis": "speech_presence",
         "cost": "light",
         "trigger": _c9_trigger,
         "guard": None,
@@ -1094,7 +1096,7 @@ RULES: list[dict[str, Any]] = [
     },
     {
         "id": "U2_reserve_escalation",
-        "axes": ["utterance"],
+        "axes": ["asr"],
         "cost": "medium",
         "trigger": _u2_trigger,
         "guard": None,
@@ -1103,7 +1105,7 @@ RULES: list[dict[str, Any]] = [
     },
     {
         "id": "U1_region_reasr",
-        "axes": ["utterance"],
+        "axes": ["asr"],
         "cost": "medium",
         "trigger": _u1_trigger,
         "guard": _u1_guard,
@@ -1112,7 +1114,7 @@ RULES: list[dict[str, Any]] = [
     },
     {
         "id": "I1_boundary_refinement",
-        "axes": ["identity"],
+        "axes": ["speaker"],
         "cost": "light",
         "trigger": _i1_trigger,
         "guard": _i1_guard,
@@ -1121,7 +1123,7 @@ RULES: list[dict[str, Any]] = [
     },
     {
         "id": "I2_recluster",
-        "axes": ["identity"],
+        "axes": ["speaker"],
         "cost": "light",
         "trigger": _i2_trigger,
         "guard": _i1_guard,  # same requirement: stored embeddings or live backend
@@ -1130,7 +1132,7 @@ RULES: list[dict[str, Any]] = [
     },
     {
         "id": "P2_fine_posteriors",
-        "axes": ["presence"],
+        "axes": ["speech_presence"],
         "cost": "medium",
         "trigger": _p2_trigger,
         "guard": _p2_guard,
@@ -1139,7 +1141,7 @@ RULES: list[dict[str, Any]] = [
     },
     {
         "id": "I4_overlap_detection",
-        "axes": ["identity"],
+        "axes": ["speaker"],
         "cost": "medium",
         "trigger": _i4_trigger,
         "guard": _i4_guard,

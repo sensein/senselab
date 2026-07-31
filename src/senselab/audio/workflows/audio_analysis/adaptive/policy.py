@@ -10,7 +10,7 @@ from typing import Any
 
 from senselab.audio.workflows.audio_analysis.adaptive.types import PlannedIntervention, Region
 
-_AXIS_PRIORITY = {"utterance": 0, "identity": 1, "presence": 2}
+_AXIS_PRIORITY = {"asr": 0, "speaker": 1, "speech_presence": 2}
 _COST_WEIGHT = {"light": 1.0, "medium": 4.0, "heavy": 16.0}
 
 _DEFAULT_POLICY_PATH = Path(__file__).parent / "policy" / "default.yaml"
@@ -153,7 +153,7 @@ def plan_round(
                 "cost_class": rule["cost"],
                 "region_id": region["region_id"] if region else None,
                 "region": region,
-                "axis": region["axis"] if region else rule.get("meta_axis", "presence"),
+                "axis": region["axis"] if region else rule.get("meta_axis", "speech_presence"),
                 "start": region["core_start"] if region else 0.0,
                 "trigger": trigger,
                 "priority": priority,

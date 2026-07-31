@@ -1,4 +1,4 @@
-"""Absolutely-calibrated acoustic presence signals.
+"""Absolutely-calibrated acoustic speech_presence signals.
 
 The acoustic voters were percentile-normalised per recording: a 10th-percentile floor and a
 75th-percentile ceiling, described as calibrating to "high vs low for this specific recording".
@@ -151,7 +151,7 @@ def level_above_floor_track(
     construction, whatever the audio contained.
 
     Unlike ``noise_floor.py``'s per-band estimate this is broadband, which is the right resolution
-    for a presence signal: a source confined to one band is that module's concern, while "is this
+    for a speech_presence signal: a source confined to one band is that module's concern, while "is this
     frame above the floor at all" is this one's.
     """
     arr = np.asarray(waveform, dtype=np.float64).squeeze()

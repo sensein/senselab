@@ -25,15 +25,15 @@ def _row(start: float, axis: str, u: float | None) -> UncertaintyRow:
 def test_disagreements_index_ranks_by_uncertainty_desc(tmp_path: Path) -> None:
     """Disagreements index ranks by uncertainty desc."""
     axis_results = {
-        ("raw_16k", "presence"): AxisResult(
+        ("raw_16k", "speech_presence"): AxisResult(
             pass_label="raw_16k",
-            axis="presence",
-            rows=[_row(0.0, "presence", 0.2), _row(1.0, "presence", 0.9)],
+            axis="speech_presence",
+            rows=[_row(0.0, "speech_presence", 0.2), _row(1.0, "speech_presence", 0.9)],
         ),
-        ("raw_16k", "utterance"): AxisResult(
+        ("raw_16k", "asr"): AxisResult(
             pass_label="raw_16k",
-            axis="utterance",
-            rows=[_row(0.5, "utterance", 0.5)],
+            axis="asr",
+            rows=[_row(0.5, "asr", 0.5)],
         ),
     }
     idx = build_disagreements_index(
@@ -49,13 +49,13 @@ def test_disagreements_index_ranks_by_uncertainty_desc(tmp_path: Path) -> None:
 
 
 def test_disagreements_axis_priority_tiebreak(tmp_path: Path) -> None:
-    """Same uncertainty → utterance > identity > presence."""
+    """Same uncertainty → asr > speaker > speech_presence."""
     axis_results = {
-        ("raw_16k", "presence"): AxisResult(pass_label="raw_16k", axis="presence", rows=[_row(0.0, "presence", 0.5)]),
-        ("raw_16k", "identity"): AxisResult(pass_label="raw_16k", axis="identity", rows=[_row(0.0, "identity", 0.5)]),
-        ("raw_16k", "utterance"): AxisResult(
-            pass_label="raw_16k", axis="utterance", rows=[_row(0.0, "utterance", 0.5)]
+        ("raw_16k", "speech_presence"): AxisResult(
+            pass_label="raw_16k", axis="speech_presence", rows=[_row(0.0, "speech_presence", 0.5)]
         ),
+        ("raw_16k", "speaker"): AxisResult(pass_label="raw_16k", axis="speaker", rows=[_row(0.0, "speaker", 0.5)]),
+        ("raw_16k", "asr"): AxisResult(pass_label="raw_16k", axis="asr", rows=[_row(0.0, "asr", 0.5)]),
     }
     idx = build_disagreements_index(
         axis_results=axis_results,
@@ -65,16 +65,16 @@ def test_disagreements_axis_priority_tiebreak(tmp_path: Path) -> None:
         incomparable_reasons={},
     )
     axes = [e["axis"] for e in idx["entries"]]
-    assert axes == ["utterance", "identity", "presence"]
+    assert axes == ["asr", "speaker", "speech_presence"]
 
 
 def test_disagreements_top_n_truncates(tmp_path: Path) -> None:
     """Disagreements top n truncates."""
     axis_results = {
-        ("raw_16k", "presence"): AxisResult(
+        ("raw_16k", "speech_presence"): AxisResult(
             pass_label="raw_16k",
-            axis="presence",
-            rows=[_row(float(i), "presence", 1.0 - i * 0.1) for i in range(5)],
+            axis="speech_presence",
+            rows=[_row(float(i), "speech_presence", 1.0 - i * 0.1) for i in range(5)],
         ),
     }
     idx = build_disagreements_index(
@@ -91,7 +91,9 @@ def test_disagreements_top_n_truncates(tmp_path: Path) -> None:
 def test_disagreements_top_n_zero_returns_empty_entries(tmp_path: Path) -> None:
     """top_n=0 → no entries listed; totals still populated."""
     axis_results = {
-        ("raw_16k", "presence"): AxisResult(pass_label="raw_16k", axis="presence", rows=[_row(0.0, "presence", 0.9)]),
+        ("raw_16k", "speech_presence"): AxisResult(
+            pass_label="raw_16k", axis="speech_presence", rows=[_row(0.0, "speech_presence", 0.9)]
+        ),
     }
     idx = build_disagreements_index(
         axis_results=axis_results,
@@ -107,10 +109,10 @@ def test_disagreements_top_n_zero_returns_empty_entries(tmp_path: Path) -> None:
 def test_disagreements_nan_uncertainty_sorts_last(tmp_path: Path) -> None:
     """Disagreements nan uncertainty sorts last."""
     axis_results = {
-        ("raw_16k", "presence"): AxisResult(
+        ("raw_16k", "speech_presence"): AxisResult(
             pass_label="raw_16k",
-            axis="presence",
-            rows=[_row(0.0, "presence", None), _row(1.0, "presence", 0.5)],
+            axis="speech_presence",
+            rows=[_row(0.0, "speech_presence", None), _row(1.0, "speech_presence", 0.5)],
         ),
     }
     idx = build_disagreements_index(
@@ -125,37 +127,37 @@ def test_disagreements_nan_uncertainty_sorts_last(tmp_path: Path) -> None:
     assert idx["entries"][1]["within_pass_uncertainty"] is None
 
 
-# ── FR-024 (T042): presence sub-signals in the index ─────────────────────
+# ── FR-024 (T042): speech_presence sub-signals in the index ─────────────────────
 
 
-def test_presence_entries_carry_and_tiebreak_on_sub_signals(tmp_path: Path) -> None:
-    """Presence entries expose scene sub-signals; equal-aggregated ties rank by presence_uncertainty."""
+def test_speech_presence_entries_carry_and_tiebreak_on_sub_signals(tmp_path: Path) -> None:
+    """Presence entries expose scene sub-signals; equal-aggregated ties rank by speech_presence_uncertainty."""
     low_instability = UncertaintyRow(
         start=0.0,
         end=0.5,
-        axis="presence",
+        axis="speech_presence",
         within_pass_uncertainty=0.7,
         contributing_models=["m"],
         model_votes={"m": {"speaks": True}},
         comparison_status="ok",
-        presence_uncertainty=0.7,
+        speech_presence_uncertainty=0.7,
         snr_brouhaha_db=12.0,
         src_dominant="speech",
     )
     high_instability = UncertaintyRow(
         start=1.0,
         end=1.5,
-        axis="presence",
-        within_pass_uncertainty=0.7,  # same primary — tiebreak must use presence_uncertainty
+        axis="speech_presence",
+        within_pass_uncertainty=0.7,  # same primary — tiebreak must use speech_presence_uncertainty
         contributing_models=["m"],
         model_votes={"m": {"speaks": True}},
         comparison_status="ok",
-        presence_uncertainty=0.95,
+        speech_presence_uncertainty=0.95,
     )
     index = build_disagreements_index(
         axis_results={
-            ("raw_16k", "presence"): AxisResult(
-                pass_label="raw_16k", axis="presence", rows=[low_instability, high_instability]
+            ("raw_16k", "speech_presence"): AxisResult(
+                pass_label="raw_16k", axis="speech_presence", rows=[low_instability, high_instability]
             )
         },
         top_n=10,
@@ -164,9 +166,9 @@ def test_presence_entries_carry_and_tiebreak_on_sub_signals(tmp_path: Path) -> N
         incomparable_reasons={},
     )
     entries = index["entries"]
-    assert entries[0]["start"] == 1.0 and entries[0]["presence_uncertainty"] == 0.95
-    assert entries[1]["presence_uncertainty"] == 0.7
+    assert entries[0]["start"] == 1.0 and entries[0]["speech_presence_uncertainty"] == 0.95
+    assert entries[1]["speech_presence_uncertainty"] == 0.7
     assert entries[1]["snr_brouhaha_db"] == 12.0 and entries[1]["src_dominant"] == "speech"
-    assert "presence_unc=" in entries[0]["summary"]
+    assert "speech_presence_unc=" in entries[0]["summary"]
     # Null-safe: absent sub-signals are omitted, not null-filled.
     assert "snr_brouhaha_db" not in entries[0]

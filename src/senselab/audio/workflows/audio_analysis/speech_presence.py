@@ -203,7 +203,7 @@ def _native_classification_grid(block: dict[str, Any]) -> tuple[float, float]:
     return win_length, hop_length
 
 
-def harvest_presence_votes(
+def harvest_speech_presence_votes(
     *,
     pass_summary: dict[str, Any],
     grid: BucketGrid,
@@ -214,7 +214,7 @@ def harvest_presence_votes(
     waveform: "np.ndarray | None" = None,
     sampling_rate: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Yield ``{"start", "end", "votes", "frame_instability"}`` per bucket for presence.
+    """Yield ``{"start", "end", "votes", "frame_instability"}`` per bucket for speech_presence.
 
     ``votes`` is a dict ``{model_id → {"speaks": bool, "native_confidence": float | None}}``
     spanning every contributing model. Buckets where no model contributed any vote are
@@ -223,7 +223,7 @@ def harvest_presence_votes(
     ``frame_posteriors`` maps a voter name → continuous per-frame P(speech)
     (``segmentation-3.0`` raw scores, Brouhaha VAD head). Each contributes a
     fine-resolution voter (bucket-mean P(speech)); the within-bucket frame std
-    is aggregated into ``frame_instability`` for the ``presence_uncertainty``
+    is aggregated into ``frame_instability`` for the ``speech_presence_uncertainty``
     column. On grids finer than ``_FINE_GRID_THRESHOLD_S`` the coarse voters are
     down-weighted to ``_COARSE_VOTER_WEIGHT`` (FR-014).
 
@@ -278,7 +278,7 @@ def harvest_presence_votes(
         yam_win, yam_hop = _native_classification_grid(yam_block)
 
     # Acoustic features — opensmile rows from the features task. (parselmouth
-    # rows are per-utterance not per-bucket; not used as a voter.)
+    # rows are per-asr not per-bucket; not used as a voter.)
     feat_block = pass_summary.get("features") or {}
     feat_result = feat_block.get("result") if isinstance(feat_block, dict) else None
     opensmile_rows: list[dict[str, Any]] = feat_result.get("opensmile", []) if isinstance(feat_result, dict) else []
@@ -322,7 +322,7 @@ def harvest_presence_votes(
             )
             ppg_per_frame, ppg_frame_hop = [], 0.0
 
-    # Embedding-cluster silhouette as a voice presence signal. Cluster the
+    # Embedding-cluster silhouette as a voice speech_presence signal. Cluster the
     # windowed embeddings; each window's silhouette coefficient measures how
     # well it fits inside one of the clusters. Voice from a coherent speaker
     # sits firmly inside a cluster (high silhouette → high p_voice); silence
@@ -472,7 +472,7 @@ def harvest_presence_votes(
             vote[units_key] = value
             votes[name] = vote
 
-        # Note: parselmouth ``phonation_ratio`` is computed once per utterance
+        # Note: parselmouth ``phonation_ratio`` is computed once per asr
         # (Praat ``Sound: To TextGrid (silences)`` then phonation_time /
         # original_dur over the whole audio), so it doesn't vary by bucket and
         # is not a valid per-bucket voter. Excluded.
@@ -491,7 +491,7 @@ def harvest_presence_votes(
         # ── Embedding silhouette ─────────────────────────────────────────
         # Per-bucket silhouette score from clustering windowed embeddings.
         # Find the window whose center is closest to the bucket center (same
-        # logic as the identity harvester's per-bucket lookup).
+        # logic as the speaker harvester's per-bucket lookup).
         if silhouette_by_emb_model and silhouette_windows:
             scores = next(iter(silhouette_by_emb_model.values()))
             best_idx: int | None = None
@@ -511,7 +511,7 @@ def harvest_presence_votes(
 
         # ── Frame-posterior voters (segmentation-3.0, Brouhaha VAD) ──────
         # Continuous per-frame P(speech): fine-resolution voters plus a
-        # within-bucket temporal-instability signal for presence_uncertainty.
+        # within-bucket temporal-instability signal for speech_presence_uncertainty.
         frame_stds: list[float] = []
         if frame_posteriors:
             for name, fp in frame_posteriors.items():

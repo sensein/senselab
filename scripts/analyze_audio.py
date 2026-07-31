@@ -264,7 +264,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         dest="per_speaker_identity",
         action="store_false",
         help=(
-            "Skip the per-speaker identity outputs. On by default: it derives a "
+            "Skip the per-speaker speaker outputs. On by default: it derives a "
             "speaker-count posterior from the passes already computed, so it costs no "
             "additional inference."
         ),
@@ -493,10 +493,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=50,
         help=(
             "Number of AudioSet classes to persist per AST/YAMNet window (default: 50). "
-            "Feeds the presence-axis sound-source category masses (speech/people/machine/"
+            "Feeds the speech_presence-axis sound-source category masses (speech/people/machine/"
             "environment); 50 captures essentially all of the softmax mass. Raise toward the "
             "full label count (527 AST / 521 YAMNet) for the complete distribution at ~10x the "
-            "cache size; the top-1 label (speech-presence / YAMNet-veto) is unaffected either way."
+            "cache size; the top-1 label (speech-speech_presence / YAMNet-veto) is unaffected either way."
         ),
     )
     parser.add_argument(
@@ -550,7 +550,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help=(
             "Run the PPG (phonetic posteriorgram) backend on each pass and feed it into "
-            "the comparator's utterance axis as a per-frame phoneme-disagreement signal "
+            "the comparator's asr axis as a per-frame phoneme-disagreement signal "
             "(`phoneme_per_to_ppg` per ASR vote). Off by default — enabling pulls the "
             "ppgs subprocess venv (~1.4 GB)."
         ),
@@ -610,38 +610,38 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=float,
         default=0.25,
         help=(
-            "Window length (seconds) for the identity axis / cross-stream / within-stream "
+            "Window length (seconds) for the speaker axis / cross-stream / within-stream "
             "comparisons. Default 0.25 s overlapping — fine enough to localize sub-second "
             "speaker turns (multi-speaker clips routinely have 0.3-1 s turns). Presence has "
-            "its own finer grid (``--presence-grid-*``) and utterance its own wider one "
-            "(``--utterance-win-length``)."
+            "its own finer grid (``--speech-presence-grid-*``) and asr its own wider one "
+            "(``--asr-win-length``)."
         ),
     )
     parser.add_argument(
         "--cross-stream-hop-length",
         type=float,
         default=0.25,
-        help="Hop between identity/cross-stream windows (default 0.25 s; must be <= win-length).",
+        help="Hop between speaker/cross-stream windows (default 0.25 s; must be <= win-length).",
     )
     parser.add_argument(
-        "--utterance-win-length",
+        "--asr-win-length",
         type=float,
         default=1.0,
         help=(
-            "Window length (seconds) for the utterance axis. Defaults to 1.0 s — wider "
-            "than the presence/identity grid because most words don't fit inside a 0.5 s "
+            "Window length (seconds) for the asr axis. Defaults to 1.0 s — wider "
+            "than the speech_presence/speaker grid because most words don't fit inside a 0.5 s "
             "window. Combined with the 0.5 s hop default, every word lands fully inside "
             "at least one bucket."
         ),
     )
     parser.add_argument(
-        "--utterance-hop-length",
+        "--asr-hop-length",
         type=float,
         default=0.5,
         help=(
-            "Hop between utterance windows (default 0.5 s, half the default win — "
+            "Hop between asr windows (default 0.5 s, half the default win — "
             "windows overlap so words straddling a 0.5 s boundary still land inside "
-            "at least one bucket). Must be <= --utterance-win-length."
+            "at least one bucket). Must be <= --asr-win-length."
         ),
     )
     parser.add_argument(
@@ -660,13 +660,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Disable the background sound-source category masses (speech/people/machine/environment).",
     )
     parser.add_argument(
-        "--utterance-scene-coupling-weights",
+        "--asr-scene-coupling-weights",
         type=float,
         nargs=2,
         metavar=("W_Q", "W_S"),
         default=(0.5, 0.25),
         help=(
-            "Scene-to-utterance coupling weights (FR-019): reported utterance uncertainty is "
+            "Scene-to-asr coupling weights (FR-019): reported asr uncertainty is "
             "multiplied by 1 + W_Q * quality_snr + W_S * (src_machine + src_environment) over the "
             "bucket's span, clipped to 1.0. The multiplier is recorded in the "
             "scene_quality_coupling column and the pre-coupling value stays in "
@@ -674,21 +674,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--presence-grid-win-length",
+        "--speech-presence-grid-win-length",
         type=float,
         default=0.1,
         help=(
-            "Window length (seconds) for the presence axis (default 0.1 s ≈ one phone). "
+            "Window length (seconds) for the speech_presence axis (default 0.1 s ≈ one phone). "
             "Presence uses continuous frame posteriors, so a fine grid localizes brief "
             "events (cough onset, inter-word breath) that a 0.5 s grid smears. Quality and "
             "source columns are broadcast onto this grid."
         ),
     )
     parser.add_argument(
-        "--presence-grid-hop-length",
+        "--speech-presence-grid-hop-length",
         type=float,
         default=0.02,
-        help="Hop between presence windows (default 0.02 s ≈ frame hop). Must be <= --presence-grid-win-length.",
+        help="Hop between speech_presence windows (default 0.02 s ≈ frame hop). Must be <= --speech-presence-grid-win-length.",
     )
     parser.add_argument(
         "--embedding-window-s",
@@ -713,33 +713,33 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Hop between embedding windows (default 0.25 s). A 0.25 s hop samples the "
             "0.5 s window densely so speaker-change boundaries localize to ~0.25 s; on "
-            "the 4-speaker validation clip this flips the identity axis from inverted "
+            "the 4-speaker validation clip this flips the speaker axis from inverted "
             "(uncertainty dipping at speaker changes) to correct (peaking within ~15 ms "
             "of the two clearest turn boundaries). Must be <= --embedding-window-s."
         ),
     )
     parser.add_argument(
-        "--identity-same-speaker-floor",
+        "--speaker-same-floor",
         type=float,
         default=0.30,
         help=(
             "Cosine distance ≤ this is treated as confidently same-speaker for the "
-            "identity axis (uncertainty 0 for same-claim, 1 for change-claim). "
+            "speaker axis (uncertainty 0 for same-claim, 1 for change-claim). "
             "Defaults to 0.30 — typical ECAPA same-speaker noise level on VoxCeleb."
         ),
     )
     parser.add_argument(
-        "--identity-diff-speaker-floor",
+        "--speaker-diff-floor",
         type=float,
         default=0.70,
         help=(
             "Cosine distance ≥ this is treated as confidently different-speaker for "
-            "the identity axis. Defaults to 0.70. Distances between the two floors "
-            "interpolate linearly. Must be > --identity-same-speaker-floor."
+            "the speaker axis. Defaults to 0.70. Distances between the two floors "
+            "interpolate linearly. Must be > --speaker-same-floor."
         ),
     )
     parser.add_argument(
-        "--identity-cluster-cosine-threshold",
+        "--speaker-cluster-cosine-threshold",
         type=float,
         default=0.5,
         help=(
@@ -833,14 +833,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--cross-stream-win-length must be positive")
     if args.cross_stream_hop_length <= 0 or args.cross_stream_hop_length > args.cross_stream_win_length:
         parser.error("--cross-stream-hop-length must be positive and ≤ --cross-stream-win-length")
-    if args.utterance_win_length <= 0:
-        parser.error("--utterance-win-length must be positive")
-    if args.utterance_hop_length <= 0 or args.utterance_hop_length > args.utterance_win_length:
-        parser.error("--utterance-hop-length must be positive and ≤ --utterance-win-length")
-    if args.presence_grid_win_length <= 0:
-        parser.error("--presence-grid-win-length must be positive")
-    if args.presence_grid_hop_length <= 0 or args.presence_grid_hop_length > args.presence_grid_win_length:
-        parser.error("--presence-grid-hop-length must be positive and ≤ --presence-grid-win-length")
+    if args.asr_win_length <= 0:
+        parser.error("--asr-win-length must be positive")
+    if args.asr_hop_length <= 0 or args.asr_hop_length > args.asr_win_length:
+        parser.error("--asr-hop-length must be positive and ≤ --asr-win-length")
+    if args.speech_presence_grid_win_length <= 0:
+        parser.error("--speech-presence-grid-win-length must be positive")
+    if args.speech_presence_grid_hop_length <= 0 or args.speech_presence_grid_hop_length > args.speech_presence_grid_win_length:
+        parser.error("--speech-presence-grid-hop-length must be positive and ≤ --speech-presence-grid-win-length")
     if not (0.0 <= args.phoneme_disagreement_threshold <= 1.0):
         parser.error("--phoneme-disagreement-threshold must be in [0, 1]")
     if args.diarization_boundary_shift_ms < 0:
@@ -1193,7 +1193,7 @@ def main(argv: list[str] | None = None) -> int:
             summaries["run_state"] = "no_speech"
             args.skip = tuple(sorted(set(args.skip) | {"diarization", "asr", "alignment"}))
             args.ppg = False
-            print("  no speech found — skipping diarization/ASR/alignment/PPG; presence outputs still emitted (FR-004)")
+            print("  no speech found — skipping diarization/ASR/alignment/PPG; speech_presence outputs still emitted (FR-004)")
     run_enhanced_pass = enhancement_mode == "always" or (
         enhancement_mode == "auto"
         and triage is not None
@@ -1293,30 +1293,30 @@ def main(argv: list[str] | None = None) -> int:
             win_length=args.cross_stream_win_length,
             hop_length=args.cross_stream_hop_length,
         )
-        utterance_grid = BucketGrid(
-            win_length=args.utterance_win_length,
-            hop_length=args.utterance_hop_length,
+        asr_grid = BucketGrid(
+            win_length=args.asr_win_length,
+            hop_length=args.asr_hop_length,
         )
-        presence_grid = BucketGrid(
-            win_length=args.presence_grid_win_length,
-            hop_length=args.presence_grid_hop_length,
+        speech_presence_grid = BucketGrid(
+            win_length=args.speech_presence_grid_win_length,
+            hop_length=args.speech_presence_grid_hop_length,
         )
         comparator_params = {
             "win_length": grid.win_length,
             "hop_length": grid.hop_length,
-            "utterance_win_length": utterance_grid.win_length,
-            "utterance_hop_length": utterance_grid.hop_length,
-            "presence_win_length": presence_grid.win_length,
-            "presence_hop_length": presence_grid.hop_length,
+            "asr_win_length": asr_grid.win_length,
+            "asr_hop_length": asr_grid.hop_length,
+            "speech_presence_win_length": speech_presence_grid.win_length,
+            "speech_presence_hop_length": speech_presence_grid.hop_length,
             "aggregator": args.uncertainty_aggregator,
             "phoneme_disagreement_threshold": args.phoneme_disagreement_threshold,
             "speech_presence_labels": _speech_presence_labels(args),
             "asr_reference_model": args.asr_reference_model,
             "diarization_boundary_shift_ms": args.diarization_boundary_shift_ms,
             "clustering_algorithm": args.clustering_algorithm,
-            "utterance_scene_coupling": {
-                "w_q": float(args.utterance_scene_coupling_weights[0]),
-                "w_s": float(args.utterance_scene_coupling_weights[1]),
+            "asr_scene_coupling": {
+                "w_q": float(args.asr_scene_coupling_weights[0]),
+                "w_s": float(args.asr_scene_coupling_weights[1]),
             },
         }
         # US5 (T039): load + validate the calibration profile and thread its flat
@@ -1351,16 +1351,16 @@ def main(argv: list[str] | None = None) -> int:
                 speaker_embedding_models=speaker_embedding_models,
                 aggregator=args.uncertainty_aggregator,
                 speech_presence_labels=_speech_presence_labels(args),
-                utterance_grid=utterance_grid,
-                presence_grid=presence_grid,
+                asr_grid=asr_grid,
+                speech_presence_grid=speech_presence_grid,
                 scene_quality=not args.no_scene_quality,
                 sound_sources=not args.no_sound_sources,
                 calibration=calibration_runtime,
                 embedding_window_s=args.embedding_window_s,
                 embedding_hop_s=args.embedding_hop_s,
-                same_speaker_floor=args.identity_same_speaker_floor,
-                diff_speaker_floor=args.identity_diff_speaker_floor,
-                cluster_cosine_threshold=args.identity_cluster_cosine_threshold,
+                same_speaker_floor=args.speaker_same_floor,
+                diff_speaker_floor=args.speaker_diff_floor,
+                cluster_cosine_threshold=args.speaker_cluster_cosine_threshold,
                 clustering_algorithm=args.clustering_algorithm,
             )
         except Exception as exc:  # noqa: BLE001
@@ -1377,7 +1377,7 @@ def main(argv: list[str] | None = None) -> int:
             unavailable_passes = [
                 pl
                 for (pl, axis), result in axis_results.items()
-                if axis == "presence"
+                if axis == "speech_presence"
                 and pl != "raw_vs_enhanced"
                 and (result.provenance.get("scene_quality") or {}).get("model", {}).get("available") is False
             ]
@@ -1491,7 +1491,7 @@ def main(argv: list[str] | None = None) -> int:
                 }
                 write_json(pass_dir(run_dir, pass_label) / "embeddings" / f"{safe_model_id(model_id)}.json", payload)
 
-        # Attach per-axis Labels + utterance TextArea tracks to the LS bundle.
+        # Attach per-axis Labels + asr TextArea tracks to the LS bundle.
         if axis_results:
             ls_tasks, config_xml = attach_uncertainty_tracks_to_ls(
                 ls_tasks=ls_tasks,
@@ -1574,7 +1574,7 @@ def main(argv: list[str] | None = None) -> int:
                     axis_results=axis_results,
                     duration_s=duration_s,
                     grid_hop=grid.hop_length,
-                    utterance_grid_hop=utterance_grid.hop_length,
+                    asr_grid_hop=asr_grid.hop_length,
                     detail_by_pass=detail_by_pass,
                     title=f"Aggregate uncertainty · {args.audio.name}",
                     audio_waveform=raw_waveform,
@@ -1632,7 +1632,7 @@ def main(argv: list[str] | None = None) -> int:
                 logger.warning("final uncertainty maps could not be written: %s", exc)
                 summaries["final_uncertainty"] = {"status": "failed", "error": repr(exc)}
 
-        # ── Per-speaker identity (US1) ────────────────────────────────
+        # ── Per-speaker speaker (US1) ────────────────────────────────
         # Derived from the completed passes rather than from a fresh inference: the raw
         # and enhanced passes are the same recording under a transform, so each diarizer's
         # two answers are already a stability sample. A diarizer whose speaker count
@@ -1642,19 +1642,19 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 from senselab.audio.workflows.audio_analysis.adaptive.fusion import write_speaker_outputs
                 from senselab.audio.workflows.audio_analysis.speaker_identity import (
-                    build_presence_tracks,
+                    build_speech_presence_tracks,
                     build_speaker_identity,
                 )
 
-                # Per-speaker structure reads the identity harvest of the unmodified pass.
+                # Per-speaker structure reads the speaker harvest of the unmodified pass.
                 # Enhancement is a perturbation used to test how stable each diarizer's
                 # answer is; where a speaker was active is a fact about the recording, so
                 # the tracks come from the audio as recorded.
-                identity_harvest = next(
+                speaker_harvest = next(
                     (
-                        getattr(harvests_by_pass.get(label), "identity_votes", None)
+                        getattr(harvests_by_pass.get(label), "speaker_votes", None)
                         for label in ("raw_16k", *sorted(harvests_by_pass))
-                        if getattr(harvests_by_pass.get(label), "identity_votes", None)
+                        if getattr(harvests_by_pass.get(label), "speaker_votes", None)
                     ),
                     None,
                 )
@@ -1668,11 +1668,11 @@ def main(argv: list[str] | None = None) -> int:
                     signal_support,
                 )
 
-                presence_harvest = getattr(harvests_by_pass.get("raw_16k"), "presence_votes", None) or next(
+                speech_presence_harvest = getattr(harvests_by_pass.get("raw_16k"), "speech_presence_votes", None) or next(
                     (
-                        getattr(h, "presence_votes", None)
+                        getattr(h, "speech_presence_votes", None)
                         for h in harvests_by_pass.values()
-                        if getattr(h, "presence_votes", None)
+                        if getattr(h, "speech_presence_votes", None)
                     ),
                     [],
                 )
@@ -1710,9 +1710,9 @@ def main(argv: list[str] | None = None) -> int:
                         logger.warning("invariance probe failed: %s", exc)
 
                 measured_support = signal_support(
-                    presence_harvest,
+                    speech_presence_harvest,
                     evidence_signals=sorted(
-                        informative_evidence(presence_harvest, sorted(evidence_signal_names(presence_harvest)))
+                        informative_evidence(speech_presence_harvest, sorted(evidence_signal_names(speech_presence_harvest)))
                     ),
                 )
                 # Support x invariance: a source is discounted for claiming speakers the
@@ -1724,10 +1724,10 @@ def main(argv: list[str] | None = None) -> int:
                 }
                 posterior, hypotheses, correspondence = build_speaker_identity(
                     summaries["passes"],
-                    identity_votes=identity_harvest,
+                    speaker_votes=speaker_harvest,
                     support=combined,
                 )
-                tracks = build_presence_tracks(identity_harvest or [])
+                tracks = build_speech_presence_tracks(speaker_harvest or [])
                 write_speaker_outputs(
                     run_dir,
                     posterior=posterior,
@@ -1739,13 +1739,13 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 summaries["speaker_identity"] = posterior.to_json()
                 print(
-                    f"  [speaker identity] count posterior "
+                    f"  [speaker speaker] count posterior "
                     f"{ {k: round(v, 2) for k, v in posterior.to_json()['probabilities'].items()} }"
                     f"{'  MULTI-MODAL' if posterior.is_multimodal else ''}"
-                    f"  |  {len(hypotheses)} speaker(s), {len(tracks)} presence row(s)"
+                    f"  |  {len(hypotheses)} speaker(s), {len(tracks)} speech_presence row(s)"
                 )
             except Exception as exc:  # noqa: BLE001 — never fail a run over a derived summary
-                logger.warning("per-speaker identity could not be derived: %s", exc)
+                logger.warning("per-speaker speaker could not be derived: %s", exc)
                 summaries["speaker_identity"] = {"status": "failed", "error": repr(exc)}
 
         # ── Adaptive loop, in-process (T040) ──────────────────────────
@@ -1805,11 +1805,11 @@ def main(argv: list[str] | None = None) -> int:
 
             mask_rows = _pd.read_parquet(mask_parquet).to_dict("records")
         speaker_rows: list[dict[str, Any]] = []
-        presence_parquet = belief_dir(run_dir) / "per_speaker_presence.parquet"
-        if presence_parquet.exists():
+        speech_presence_parquet = belief_dir(run_dir) / "per_speaker_presence.parquet"
+        if speech_presence_parquet.exists():
             import pandas as _pd
 
-            speaker_rows = _pd.read_parquet(presence_parquet).to_dict("records")
+            speaker_rows = _pd.read_parquet(speech_presence_parquet).to_dict("records")
         if mask_rows or speaker_rows:
             ls_tasks, config_xml = attach_scene_context_tracks_to_ls(
                 ls_tasks=ls_tasks,
@@ -1834,7 +1834,7 @@ def main(argv: list[str] | None = None) -> int:
             # Rendering a frame posterior as on/off discards everything it measured.
             l1_signals: dict[str, list[tuple[float, float]]] = {}
             l1_series: dict[str, tuple[list[float], list[float]]] = {}
-            for bucket in getattr(reference, "presence_votes", []) or []:
+            for bucket in getattr(reference, "speech_presence_votes", []) or []:
                 centre = (float(bucket["start"]) + float(bucket["end"])) / 2.0
                 for name, entry in (bucket.get("votes") or {}).items():
                     if str(name).startswith("__") or not isinstance(entry, dict):
@@ -1854,9 +1854,9 @@ def main(argv: list[str] | None = None) -> int:
 
             # Which cluster each diarizer placed per bucket, so its row can colour by speaker.
             # A flat row makes a two-speaker conversation look identical to a one-speaker one,
-            # which is precisely what the identity axis is arguing about.
+            # which is precisely what the speaker axis is arguing about.
             l1_speakers: dict[str, list[tuple[float, float, str]]] = {}
-            for bucket in getattr(reference, "identity_votes", []) or []:
+            for bucket in getattr(reference, "speaker_votes", []) or []:
                 for name, entry in (bucket.get("votes") or {}).items():
                     if "::" in str(name) or str(name).startswith("__") or not isinstance(entry, dict):
                         continue
@@ -1935,7 +1935,7 @@ def main(argv: list[str] | None = None) -> int:
         from senselab.audio.workflows.audio_analysis.summary import build_run_summary, render_run_summary
 
         axis_rows: dict[str, list[dict[str, Any]]] = {}
-        for axis in ("presence", "identity", "utterance"):
+        for axis in ("speech_presence", "speaker", "asr"):
             path = (summaries.get("final_uncertainty") or {}).get(axis)
             if path and Path(path).exists():
                 frame = _pd.read_parquet(path)

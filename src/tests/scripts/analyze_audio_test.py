@@ -148,7 +148,7 @@ def test_serialize_handles_tensors_dicts_and_lists(aa: types.ModuleType) -> None
 def test_comparator_cli_flags_parse(aa: types.ModuleType) -> None:
     """parse_args accepts the new comparator flags with documented defaults.
 
-    Defaults reflect the finer-identity-windows retuning: the cross-stream grid
+    Defaults reflect the finer-speaker-windows retuning: the cross-stream grid
     is 0.25 s non-overlapping (the 0.5 s grid under-resolved speaker changes),
     and ``--speech-presence-labels`` is ``nargs="+"`` since AudioSet labels
     themselves contain commas (e.g. ``"Narration, monologue"``).
@@ -218,23 +218,23 @@ def test_disagreements_top_n_zero_disables_index_only(aa: types.ModuleType) -> N
     assert "comparisons" not in args.skip
 
 
-def test_utterance_grid_defaults_to_1s_window_05s_hop(aa: types.ModuleType) -> None:
+def test_asr_grid_defaults_to_1s_window_05s_hop(aa: types.ModuleType) -> None:
     """Utterance has its own grid: 1.0 s window with 0.5 s hop (overlapping).
 
-    Wider than presence/identity (0.5/0.5) so most words land fully inside at least
-    one bucket — pairs with the fully-contained rule in harvest_utterance_votes.
+    Wider than speech_presence/speaker (0.5/0.5) so most words land fully inside at least
+    one bucket — pairs with the fully-contained rule in harvest_asr_votes.
     """
     args = aa.parse_args(["/tmp/dummy.wav"])
-    assert args.utterance_win_length == 1.0
-    assert args.utterance_hop_length == 0.5
+    assert args.asr_win_length == 1.0
+    assert args.asr_hop_length == 0.5
 
 
-def test_utterance_grid_validation(aa: types.ModuleType) -> None:
-    """Out-of-range utterance grid values are rejected."""
+def test_asr_grid_validation(aa: types.ModuleType) -> None:
+    """Out-of-range asr grid values are rejected."""
     with pytest.raises(SystemExit):
-        aa.parse_args(["/tmp/dummy.wav", "--utterance-win-length", "-1"])
+        aa.parse_args(["/tmp/dummy.wav", "--asr-win-length", "-1"])
     with pytest.raises(SystemExit):
-        aa.parse_args(["/tmp/dummy.wav", "--utterance-hop-length", "1.5", "--utterance-win-length", "1.0"])
+        aa.parse_args(["/tmp/dummy.wav", "--asr-hop-length", "1.5", "--asr-win-length", "1.0"])
 
 
 # ── CLI → library adapters (T051 step 5) ──────────────────────────────

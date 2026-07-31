@@ -7,7 +7,7 @@ models that stay silent in the same span.
 Stripping only the brackets is *worse than doing nothing*: ``[cough]`` then normalizes to
 the ordinary word ``cough``, which a WER comparison scores as a substitution against a model
 that transcribed nothing there. The disagreement is then about annotation convention rather
-than about what was said, and it inflates the utterance uncertainty axis with a difference
+than about what was said, and it inflates the asr uncertainty axis with a difference
 carrying no signal.
 """
 
@@ -56,7 +56,7 @@ def test_the_word_inside_the_marker_does_not_survive() -> None:
 
 
 def test_annotated_and_unannotated_transcripts_agree() -> None:
-    """The property that matters for the utterance axis.
+    """The property that matters for the asr axis.
 
     Two models that heard the same speech must not disagree because one annotates
     non-speech events and the other does not.

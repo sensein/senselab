@@ -7,7 +7,7 @@ uncertainty parquets into the belief store (with a re-aggregation parity
 check), rounds 2..K execute the policy-ranked intervention catalog (stream
 election, hallucination adjudication, missed-speech correction, cache-replay
 reserve-ASR escalation; live-backend rules defer with guard reasons), and the
-final round fuses a consensus transcript / diarization / presence track with a
+final round fuses a consensus transcript / diarization / speech_presence track with a
 full decision audit trail.
 
 Usage:
@@ -100,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         t = eval_doc["transcript"]
         print("\n── evaluation vs ground truth ──")
-        print(f"presence: {json.dumps(eval_doc['presence'])}")
+        print(f"speech_presence: {json.dumps(eval_doc['speech_presence'])}")
         print(f"fused WER: {t['fused']['wer']}  (normalized: {t['fused']['wer_normalized']})")
         for m, s in (t.get("per_model") or {}).items():
             print(f"  {m}: WER {s['wer']} (normalized {s['wer_normalized']})")

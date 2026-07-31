@@ -62,7 +62,7 @@ def test_profile_round_trip_and_validation(tmp_path: Path) -> None:
         "snr": {"type": "linear_db_to_unit", "clean_db": 22.0, "floor_db": 3.0},
         "reverb_c50": {"type": "linear_db_to_unit", "clean_db": 28.0, "floor_db": -4.0},
         "bandwidth": {"nyquist_ref_hz": 8000.0, "rolloff_pct": 0.95},
-        "temperature": {"presence": 1.2, "utterance": 0.8},
+        "temperature": {"speech_presence": 1.2, "asr": 0.8},
         "token_entropy_reference_nats": 2.5,
     }
     path = tmp_path / "profile.json"
@@ -73,20 +73,20 @@ def test_profile_round_trip_and_validation(tmp_path: Path) -> None:
     runtime = profile_to_runtime(loaded)
     assert runtime["snr_clean_db"] == 22.0 and runtime["snr_floor_db"] == 3.0
     assert runtime["c50_clean_db"] == 28.0 and runtime["c50_floor_db"] == -4.0
-    assert runtime["temperature"] == {"presence": 1.2, "utterance": 0.8}
+    assert runtime["temperature"] == {"speech_presence": 1.2, "asr": 0.8}
     assert runtime["token_entropy_reference_nats"] == 2.5  # passthrough reaches aggregate.py
 
     # The runtime dict speaks aggregate.py's temperature convention.
     from senselab.audio.workflows.audio_analysis.aggregate import _axis_temperature
 
-    assert _axis_temperature(runtime, "utterance") == pytest.approx(0.8)
+    assert _axis_temperature(runtime, "asr") == pytest.approx(0.8)
 
     with pytest.raises(ValueError, match="version"):
         validate_profile({**profile, "version": "0"})
     with pytest.raises(ValueError, match="clean_db must exceed"):
         validate_profile({**profile, "snr": {"type": "linear_db_to_unit", "clean_db": 3.0, "floor_db": 22.0}})
     with pytest.raises(ValueError, match="temperature"):
-        validate_profile({**profile, "temperature": {"presence": 0.0}})
+        validate_profile({**profile, "temperature": {"speech_presence": 0.0}})
 
 
 def test_linear_db_to_unit_anchors_and_monotonicity() -> None:

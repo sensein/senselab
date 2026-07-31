@@ -31,7 +31,7 @@ def strip_nonlexical_tokens(text: str) -> str:
     than doing nothing: ``[cough]`` then normalizes to the ordinary word ``cough``, which a
     WER comparison counts as a substitution error against a model that transcribed nothing
     there. The disagreement is then about annotation *convention*, not about what was said,
-    and it inflates the utterance uncertainty axis with a difference that carries no signal.
+    and it inflates the asr uncertainty axis with a difference that carries no signal.
 
     The same applies to grapheme-to-phoneme conversion: ``[cough]`` yields phonemes for a
     word nobody spoke, and those get aligned against real acoustics.

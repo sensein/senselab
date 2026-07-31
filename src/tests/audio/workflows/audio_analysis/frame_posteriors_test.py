@@ -83,7 +83,7 @@ def test_powerset_collapse_uses_the_empty_class() -> None:
     assert np.allclose(speech, [0.1, 0.8, 1.0], atol=1e-9)
 
 
-def test_single_channel_collapse_is_identity() -> None:
+def test_single_channel_collapse_is_speaker() -> None:
     """A one-channel posterior (Brouhaha VAD) passes through, only bounded."""
     data = np.array([[0.42], [1.3], [-0.1]])
     assert np.allclose(collapse_to_speech_prob(data, channel_format="single"), [0.42, 1.0, 0.0])

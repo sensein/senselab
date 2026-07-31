@@ -81,15 +81,15 @@ def test_a_dropped_signal_drops_its_weight_with_it() -> None:
 
 
 def _harvest(pass_label: str, values: dict[str, float]) -> object:
-    """A minimal harvest carrying one identity bucket with the given sub-signal values."""
+    """A minimal harvest carrying one speaker bucket with the given sub-signal values."""
     from types import SimpleNamespace
 
     votes = {k: {"same_label_uncertainty": v} for k, v in values.items()}
     return SimpleNamespace(
         pass_label=pass_label,
-        identity_votes=[{"start": 0.0, "end": 0.5, "votes": votes}],
-        presence_votes=[],
-        utterance_votes=[],
+        speaker_votes=[{"start": 0.0, "end": 0.5, "votes": votes}],
+        speech_presence_votes=[],
+        asr_votes=[],
     )
 
 
@@ -101,7 +101,7 @@ def test_a_signal_that_answers_the_same_under_perturbation_is_reliable() -> None
     """
     stab = signal_stability(
         {"raw_16k": _harvest("raw_16k", {"a": 0.2}), "enhanced_16k": _harvest("enhanced_16k", {"a": 0.2})},
-        axis="identity",
+        axis="speaker",
     )
     assert reliability_from_stability(stab)["a"] == pytest.approx(1.0)
 
@@ -110,7 +110,7 @@ def test_a_signal_that_flips_under_perturbation_is_not() -> None:
     """A signal that contradicts itself on the same audio has not earned its weight."""
     stab = signal_stability(
         {"raw_16k": _harvest("raw_16k", {"a": 0.0}), "enhanced_16k": _harvest("enhanced_16k", {"a": 1.0})},
-        axis="identity",
+        axis="speaker",
     )
     assert reliability_from_stability(stab)["a"] < 0.1
 
@@ -123,7 +123,7 @@ def test_reliability_never_reaches_zero() -> None:
     """
     stab = signal_stability(
         {"raw_16k": _harvest("raw_16k", {"a": 0.0}), "enhanced_16k": _harvest("enhanced_16k", {"a": 1.0})},
-        axis="identity",
+        axis="speaker",
     )
     assert reliability_from_stability(stab)["a"] > 0.0
 
@@ -134,7 +134,7 @@ def test_a_single_pass_yields_no_reliability_claim() -> None:
     Reporting 1.0 would assert reliability
     that was never measured; the signal keeps full weight by default instead.
     """
-    stab = signal_stability({"raw_16k": _harvest("raw_16k", {"a": 0.3})}, axis="identity")
+    stab = signal_stability({"raw_16k": _harvest("raw_16k", {"a": 0.3})}, axis="speaker")
     assert stab == {}
 
 
@@ -145,7 +145,7 @@ def test_signals_are_scored_independently() -> None:
             "raw_16k": _harvest("raw_16k", {"steady": 0.2, "flipper": 0.0}),
             "enhanced_16k": _harvest("enhanced_16k", {"steady": 0.2, "flipper": 1.0}),
         },
-        axis="identity",
+        axis="speaker",
     )
     rel = reliability_from_stability(stab)
     assert rel["steady"] > rel["flipper"]

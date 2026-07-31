@@ -114,7 +114,7 @@ def fuse_word_streams(
     where coverage penalizes slots that only a subset of systems witnessed
     (abstention is evidence). Alternates are recorded when the winner's share is
     below ``winner_margin``. Optional ``speaker_at``/``p_voice_at`` lookups
-    attribute speakers and flag low-presence words; ``calibrator`` maps raw
+    attribute speakers and flag low-speech_presence words; ``calibrator`` maps raw
     confidences through a calibration profile.
 
     Returns time-ordered ``[{text, start, end, confidence, coverage, sources,
@@ -195,6 +195,6 @@ def fuse_word_streams(
         if p_voice_at is not None:
             pv = p_voice_at(mid)
             if pv is not None and pv < 0.5:
-                word["flags"].append("low_presence")
+                word["flags"].append("low_speech_presence")
         fused.append(word)
     return fused

@@ -1,6 +1,6 @@
 """Utterance axis vote harvesters — "what was said?".
 
-Per FR-002, utterance uncertainty integrates three sub-signals per bucket:
+Per FR-002, asr uncertainty integrates three sub-signals per bucket:
 
 1. **ASR pairwise mean WER** — among contributing ASR transcripts on the bucket.
 2. **Whisper native** — ``1 − exp(avg_logprob)`` averaged over Whisper chunks.
@@ -32,26 +32,26 @@ from senselab.audio.workflows.audio_analysis.harvesters import (
 )
 
 
-def harvest_utterance_votes(
+def harvest_asr_votes(
     *,
     pass_summary: dict[str, Any],
     grid: BucketGrid,
     ppg_block: dict[str, Any],
     alignment_by_model: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Yield ``{"start", "end", "votes"}`` per bucket for the utterance axis.
+    """Yield ``{"start", "end", "votes"}`` per bucket for the asr axis.
 
     ``votes`` is a dict ``{asr_model_id → {"text": str, "avg_logprob": float | None,
     "phoneme_per_to_ppg": float | None}}``. ``avg_logprob`` is shipped as the raw
     scalar (negative); the aggregator converts it to ``1 − exp(...)`` for the
     uncertainty sub-signal so reviewers can read the original from the parquet.
 
-    Two utterance-specific rules:
+    Two asr-specific rules:
 
     - **ASR text per bucket uses fully-contained chunks only** (``fully_contained=True``).
       Words straddling a bucket boundary contribute to NEITHER side — partial words
       were inflating the WER on every boundary. Pair this with a wider+overlapping
-      utterance grid (recommended: 1.0 s window with 0.5 s hop) so most words still
+      asr grid (recommended: 1.0 s window with 0.5 s hop) so most words still
       land inside at least one bucket.
     - **PPG temporal-frame comparison** is unchanged — per-frame argmax disagreement
       against the ASR-implied phoneme timeline.
@@ -82,7 +82,7 @@ def harvest_utterance_votes(
         import sys as _sys
 
         print(
-            f"warn: utterance.PPG-vs-ASR PER skipped — transcript language(s) "
+            f"warn: asr.PPG-vs-ASR PER skipped — transcript language(s) "
             f"{sorted(transcript_languages)} are non-English and the PPG inventory "
             "is English-ARPAbet; the cross-check would produce meaningless edit "
             "distances",

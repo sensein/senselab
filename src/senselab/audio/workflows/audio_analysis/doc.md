@@ -4,14 +4,14 @@ Three-axis uncertainty for analyze_audio runs. Reads the per-task pipeline outpu
 (diarization, ASR, scene classification, alignment, PPG, speaker embeddings) and emits a
 single `[0, 1]` uncertainty scalar per bucket on each of three axes:
 
-- **presence_uncertainty** — was there a speaker?
-- **identity_uncertainty** — was it the same speaker?
-- **utterance_uncertainty** — what was said?
+- **speech_presence_uncertainty** — was there a speaker?
+- **speaker_uncertainty** — was it the same speaker?
+- **asr_uncertainty** — what was said?
 
 Every model whose output naturally encodes an axis votes (max-inclusive). The vote
-collapse is per-axis: Shannon entropy for presence (binary votes); cross-model label
-disagreement + cosine across-time for identity; pairwise mean WER + Whisper avg_logprob
-+ PPG-vs-ASR phoneme-error-rate for utterance. Sub-signals within each axis fold via the
+collapse is per-axis: Shannon entropy for speech_presence (binary votes); cross-model label
+disagreement + cosine across-time for speaker; pairwise mean WER + Whisper avg_logprob
++ PPG-vs-ASR phoneme-error-rate for asr. Sub-signals within each axis fold via the
 shared `--uncertainty-aggregator` flag (default `min` over confidences ≡ `max` over
 uncertainties).
 
@@ -21,7 +21,7 @@ Output:
   `contracts/uncertainty-row.parquet.md`.
 - `disagreements.json` — top-N ranked across all parquets — see
   `contracts/disagreements.json.md`.
-- `timeline.png` — 5-row figure (presence / identity / utterance overlaid raw-vs-enhanced
+- `timeline.png` — 5-row figure (speech_presence / speaker / asr overlaid raw-vs-enhanced
   + delta strip + reference) — see `contracts/ls-bundle.md` for the matching LS tracks.
 
 See `specs/20260508-173136-compare-uncertainty/spec.md` for the full design and
@@ -45,20 +45,20 @@ aggregator)` is the workflow entry point. It is a pure function: callers (such a
 `scripts/analyze_audio.py`) handle the surrounding I/O (cache lookup, parquet writing,
 disagreements.json + plot, LS bundle extension).
 
-## Scene-aware presence + calibration (spec 20260722-175022, US1–US5)
+## Scene-aware speech_presence + calibration (spec 20260722-175022, US1–US5)
 
-The presence axis carries additive scene columns beside `aggregated_uncertainty`
-(unchanged): `presence_confidence`/`presence_uncertainty` (decisiveness +
+The speech_presence axis carries additive scene columns beside `aggregated_uncertainty`
+(unchanged): `speech_presence_confidence`/`speech_presence_uncertainty` (decisiveness +
 within-bucket temporal instability from frame posteriors), four `quality_*`
 degradation scores in `[0, 1]` (SNR / clipping / reverb / bandwidth) plus
 `quality_uncertainty` (estimator spread), and the `src_*` source-category masses
-with `src_dominant`. The utterance axis couples to the scene per FR-019: the
+with `src_dominant`. The asr axis couples to the scene per FR-019: the
 reported `aggregated_uncertainty` is the per-vote value times a
 `scene_quality_coupling` multiplier (≥ 1; pre-coupling value preserved on
 `raw_aggregated_uncertainty`), and carries `token_entropy` when the Whisper
 token-confidence capture ran. The Label Studio bundle adds
-`<pass>__presence__quality` / `<pass>__presence__sources` tracks and the
-disagreements index exposes the presence sub-signals (FR-024).
+`<pass>__speech_presence__quality` / `<pass>__speech_presence__sources` tracks and the
+disagreements index exposes the speech_presence sub-signals (FR-024).
 
 Calibration (US5): dB→`[0, 1]` anchors and per-axis aggregator temperatures live
 in a versioned `CalibrationProfile` JSON (`calibration.py`; documented defaults

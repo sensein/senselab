@@ -3,13 +3,13 @@
 Brouhaha (Lavechin et al., 2022, arXiv:2210.13248) predicts, per frame and in a
 single forward pass:
 
-- **VAD** — speech-presence probability in ``[0, 1]``;
+- **VAD** — speech-speech_presence probability in ``[0, 1]``;
 - **SNR** — estimated signal-to-noise ratio in dB;
 - **C50** — room-acoustics clarity in dB (higher = less reverberant).
 
 The scene-quality workflow uses the SNR/C50 heads for the ``quality_snr`` /
 ``quality_reverb`` degradation scores and the VAD head as a second frame-level
-speech-presence voter.
+speech-speech_presence voter.
 
 **Why a subprocess venv.** The ``pyannote/brouhaha`` checkpoint is not loadable
 by our main environment: its custom multitask model class lives in the
@@ -150,7 +150,7 @@ class BrouhahaFrames:
     """Per-frame Brouhaha outputs for one audio.
 
     Attributes:
-        vad: ``(num_frames,)`` speech-presence probability in ``[0, 1]``.
+        vad: ``(num_frames,)`` speech-speech_presence probability in ``[0, 1]``.
         snr_db: ``(num_frames,)`` estimated SNR in dB.
         c50_db: ``(num_frames,)`` estimated C50 (clarity) in dB.
         frame_hop_s: seconds between consecutive frame starts.

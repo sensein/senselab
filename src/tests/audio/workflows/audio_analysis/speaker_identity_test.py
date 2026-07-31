@@ -1,8 +1,8 @@
-"""Per-speaker identity uncertainty (T086-T093, FR-001 to FR-011).
+"""Per-speaker speaker uncertainty (T086-T093, FR-001 to FR-011).
 
 The motivating case is concrete: two diarizers each reported one speaker for a whole clip
 while embedding clustering reported five regions aligned to name boundaries. A single
-identity scalar registered 0.67 — correct, but unreadable, because it cannot distinguish
+speaker scalar registered 0.67 — correct, but unreadable, because it cannot distinguish
 "we disagree about who spoke" from "we disagree about whether this is one person or four".
 
 These tests assert **representation, not accuracy**. The spec deliberately does not require
@@ -178,17 +178,17 @@ def _hyp(**kw: object) -> SpeakerHypothesis:
     return SpeakerHypothesis(**base)  # type: ignore[arg-type]
 
 
-def test_existence_uncertainty_is_separate_from_presence_uncertainty() -> None:
+def test_existence_uncertainty_is_separate_from_speech_presence_uncertainty() -> None:
     """FR-004: "might not exist" and "unsure where they spoke" call for different follow-up.
 
     One number cannot say which is meant, so they are distinct fields on distinct objects.
     """
     hyp = _hyp(existence_uncertainty=0.05)
     track = PerSpeakerPresenceTrack(
-        speaker_id="S0", start=0.0, end=0.5, presence_confidence=0.4, presence_uncertainty=0.9
+        speaker_id="S0", start=0.0, end=0.5, speech_presence_confidence=0.4, speech_presence_uncertainty=0.9
     )
     assert hyp.existence_uncertainty < 0.1
-    assert track.presence_uncertainty is not None and track.presence_uncertainty > 0.8
+    assert track.speech_presence_uncertainty is not None and track.speech_presence_uncertainty > 0.8
 
 
 def test_hypothesis_reports_whether_any_independent_source_backs_it() -> None:
@@ -199,7 +199,7 @@ def test_hypothesis_reports_whether_any_independent_source_backs_it() -> None:
 
 
 def test_hypothesis_serializes_every_contract_field() -> None:
-    """contracts/speaker-identity.md - every field a consumer reads."""
+    """contracts/speaker-speaker.md - every field a consumer reads."""
     doc = _hyp().to_json()
     for key in (
         "speaker_id",
@@ -213,7 +213,7 @@ def test_hypothesis_serializes_every_contract_field() -> None:
         assert key in doc, f"missing {key}"
 
 
-# ── presence tracks (T089, FR-003) ────────────────────────────────────
+# ── speech_presence tracks (T089, FR-003) ────────────────────────────────────
 
 
 def test_overlapping_speakers_are_both_present() -> None:
@@ -226,19 +226,19 @@ def test_overlapping_speakers_are_both_present() -> None:
 def test_a_gap_is_a_null_confidence_row_not_an_absent_row() -> None:
     """SC-003 requires full-duration coverage, so silence is represented explicitly."""
     row = PerSpeakerPresenceTrack("S0", 2.0, 2.5, None, None).to_row()
-    assert row["presence_confidence"] is None
+    assert row["speech_presence_confidence"] is None
     assert row["start"] == pytest.approx(2.0)
 
 
-def test_presence_row_carries_every_contract_column() -> None:
+def test_speech_presence_row_carries_every_contract_column() -> None:
     """final/per_speaker_presence.parquet columns."""
     row = PerSpeakerPresenceTrack("S0", 0.0, 0.5, 0.9, 0.1).to_row()
     for col in (
         "speaker_id",
         "start",
         "end",
-        "presence_confidence",
-        "presence_uncertainty",
+        "speech_presence_confidence",
+        "speech_presence_uncertainty",
         "overlap_with",
         "contributing_sources",
         "round",
@@ -442,7 +442,7 @@ def test_a_better_supported_source_wins_when_stability_is_equal() -> None:
     assert posterior.probabilities[1] > posterior.probabilities[5]
 
 
-# ── deriving identity from a run's passes ─────────────────────────────
+# ── deriving speaker from a run's passes ─────────────────────────────
 
 
 def _diar(count: int) -> dict:
@@ -539,11 +539,11 @@ def test_a_failed_diarizer_contributes_nothing() -> None:
     assert evidence_from_passes(passes) == [], "a failed outcome must not be read as a count"
 
 
-# ── per-speaker structure fed by the harvested identity evidence (T098) ──
+# ── per-speaker structure fed by the harvested speaker evidence (T098) ──
 
 
 def _votes(*per_bucket: dict[str, str]) -> list[dict]:
-    """Harvested identity buckets: one dict of ``{diar_model: cluster_id}`` per 0.5 s."""
+    """Harvested speaker buckets: one dict of ``{diar_model: cluster_id}`` per 0.5 s."""
     out = []
     for i, clusters in enumerate(per_bucket):
         votes: dict[str, object] = {
@@ -567,7 +567,7 @@ def test_the_nth_speaker_inherits_the_doubt_about_there_being_n_speakers() -> No
 
     _p, hyps, _c = build_speaker_identity(
         _passes(raw_16k={"a": _diar(1), "b": _diar(3)}, enhanced_16k={"a": _diar(1), "b": _diar(3)}),
-        identity_votes=_votes({"a": "Sx"}, {"a": "Sx", "b": "Sy"}, {"b": "Sz"}),
+        speaker_votes=_votes({"a": "Sx"}, {"a": "Sx", "b": "Sy"}, {"b": "Sz"}),
     )
     assert hyps[0].existence_uncertainty < hyps[-1].existence_uncertainty
 
@@ -582,7 +582,7 @@ def test_clusters_the_count_posterior_does_not_back_still_get_a_hypothesis() -> 
 
     _p, hyps, _c = build_speaker_identity(
         _passes(raw_16k={"a": _diar(1)}, enhanced_16k={"a": _diar(1)}),
-        identity_votes=_votes({"a": "Sx"}, {"a": "Sy"}, {"a": "Sz"}),
+        speaker_votes=_votes({"a": "Sx"}, {"a": "Sy"}, {"a": "Sz"}),
     )
     assert len(hyps) == 3
     assert hyps[0].existence_uncertainty < hyps[2].existence_uncertainty
@@ -594,7 +594,7 @@ def test_a_speaker_carries_when_it_was_active() -> None:
 
     _p, hyps, _c = build_speaker_identity(
         _passes(raw_16k={"a": _diar(1)}, enhanced_16k={"a": _diar(1)}),
-        identity_votes=_votes({"a": "Sx"}, {"a": "Sx"}, {"a": "Sx"}),
+        speaker_votes=_votes({"a": "Sx"}, {"a": "Sx"}, {"a": "Sx"}),
     )
     assert (hyps[0].first_seen, hyps[0].last_seen, hyps[0].total_active_s) == (0.0, 1.5, 1.5)
 
@@ -605,12 +605,12 @@ def test_correspondence_names_the_real_diarizer_labels_when_evidence_is_availabl
 
     _p, _h, corr = build_speaker_identity(
         _passes(raw_16k={"a": _diar(1)}, enhanced_16k={"a": _diar(1)}),
-        identity_votes=_votes({"a": "Sx"}),
+        speaker_votes=_votes({"a": "Sx"}),
     )
     assert [(c.source, c.source_label, c.speaker_id, c.cluster_id) for c in corr] == [("a", "a-Sx", "S0", "Sx")]
 
 
-def test_the_builder_still_works_with_no_identity_evidence() -> None:
+def test_the_builder_still_works_with_no_speaker_evidence() -> None:
     """The count posterior comes from the passes alone; harvested votes only add detail."""
     from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
 
@@ -632,7 +632,7 @@ def test_a_hypothesis_names_the_sources_whose_labels_landed_in_it() -> None:
 
     _p, hyps, _c = build_speaker_identity(
         _passes(raw_16k={"real": _diar(1), "derived": _diar(2)}, enhanced_16k={"real": _diar(1), "derived": _diar(2)}),
-        identity_votes=_votes({"real": "Cx", "derived": "Cx"}, {"derived": "Cy"}),
+        speaker_votes=_votes({"real": "Cx", "derived": "Cx"}, {"derived": "Cy"}),
     )
     assert hyps[0].supporting_sources == ["derived", "real"]
     assert hyps[1].supporting_sources == ["derived"]
@@ -648,7 +648,7 @@ def test_a_speaker_resting_on_unsupported_claims_says_so() -> None:
 
     _p, hyps, _c = build_speaker_identity(
         _passes(raw_16k={"real": _diar(1)}, enhanced_16k={"real": _diar(1)}),
-        identity_votes=_votes({"real": "Cx"}, {"clusterer": "Cy"}),
+        speaker_votes=_votes({"real": "Cx"}, {"clusterer": "Cy"}),
         support={"real": 1.0, "clusterer": 0.2},
     )
     assert hyps[1].source_support == {"clusterer": 0.2}
@@ -667,7 +667,7 @@ def test_a_speaker_that_might_not_exist_is_not_reported_as_converged() -> None:
 
     _p, hyps, _c = build_speaker_identity(
         _passes(raw_16k={"a": _diar(1)}, enhanced_16k={"a": _diar(1)}),
-        identity_votes=_votes({"a": "Cx"}, {"a": "Cy"}),
+        speaker_votes=_votes({"a": "Cx"}, {"a": "Cy"}),
     )
     assert hyps[0].converged is True
     assert hyps[1].converged is False

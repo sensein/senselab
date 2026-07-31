@@ -21,7 +21,7 @@ from senselab.audio.workflows.audio_analysis.support import (
 
 
 def _bucket(start: float, speaks: dict[str, bool], evidence: dict[str, float]) -> dict:
-    """One presence bucket: which signals claimed speech, plus independent evidence."""
+    """One speech_presence bucket: which signals claimed speech, plus independent evidence."""
     votes: dict[str, object] = {m: {"speaks": v, "native_confidence": None} for m, v in speaks.items()}
     votes.update({m: {"p_speech": p} for m, p in evidence.items()})
     return {"start": start, "end": start + 0.5, "votes": votes}
@@ -89,7 +89,7 @@ def test_evidence_signals_are_never_scored_against_themselves() -> None:
 def test_with_no_independent_evidence_no_signal_is_penalised() -> None:
     """Absent evidence is not evidence of absence.
 
-    A run where no independent presence signal was available must not silently down-weight
+    A run where no independent speech_presence signal was available must not silently down-weight
     every diarizer — that would make a missing model look like a wrong one.
     """
     buckets = [_bucket(0.0, {"diar": True}, {})]
@@ -125,7 +125,7 @@ def test_several_evidence_signals_are_pooled() -> None:
 def test_frame_posteriors_and_scene_classifiers_are_recognised_as_evidence() -> None:
     """A config list would drift the moment a voter is renamed or added.
 
-    Frame posteriors and scene classifiers observe speech presence directly; diarizers and
+    Frame posteriors and scene classifiers observe speech speech_presence directly; diarizers and
     ASR infer it from a decision that already presupposes a speaker.
     """
     from senselab.audio.workflows.audio_analysis.support import evidence_signal_names
@@ -161,7 +161,7 @@ def test_a_newly_added_classifier_is_picked_up_from_the_harvest() -> None:
 
 
 def test_bookkeeping_entries_are_not_evidence() -> None:
-    """``__quality__`` and ``__sources__`` carry metadata, not presence observations."""
+    """``__quality__`` and ``__sources__`` carry metadata, not speech_presence observations."""
     from senselab.audio.workflows.audio_analysis.support import evidence_signal_names
 
     votes = {"__quality__": {"snr_estimates_db": [12.0]}, "__sources__": {"classifiers": []}}
@@ -203,7 +203,7 @@ def test_an_unmeasured_signal_keeps_full_weight() -> None:
     assert measured_weights({}, {}, ["a"])["a"] == pytest.approx(1.0)
 
 
-def test_an_identity_signal_inherits_its_claimants_support() -> None:
+def test_an_speaker_signal_inherits_its_claimants_support() -> None:
     """Support resolves through the claimant.
 
     Identity sub-signals are keyed ``<diar>::<embedding>``, but the claim about where a
@@ -216,7 +216,7 @@ def test_an_identity_signal_inherits_its_claimants_support() -> None:
 
 
 def test_no_signal_is_named_in_the_weighting_logic() -> None:
-    """The regression guard for the whole change: weights must not depend on identity.
+    """The regression guard for the whole change: weights must not depend on speaker.
 
     A gate keyed on a model name encodes a judgement from one recording, and a judgement from
     one recording was wrong about this exact model on a second recording.

@@ -396,7 +396,7 @@ class SparcFeatureExtractor:
 
         Args:
             source_audio: Audio whose content to preserve.
-            target_audio: Audio whose speaker identity to adopt.
+            target_audio: Audio whose speaker speaker to adopt.
             lang: Language for the SPARC model. None means multi-language.
             device: Device to use (CUDA or CPU).
 

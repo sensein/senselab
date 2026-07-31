@@ -61,7 +61,7 @@ class InfluenceWeight:
     kind: SourceKind
 
     def to_json(self) -> dict[str, Any]:
-        """Serialize per ``contracts/speaker-identity.md``."""
+        """Serialize per ``contracts/speaker-speaker.md``."""
         return {
             "signal": self.signal,
             "kind": self.kind,

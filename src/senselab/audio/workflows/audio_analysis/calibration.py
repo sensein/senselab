@@ -10,7 +10,7 @@ temperatures for the uncertainty aggregators:
   "snr":        {"type": "linear_db_to_unit", "clean_db": 25.0, "floor_db": 5.0},
   "reverb_c50": {"type": "linear_db_to_unit", "clean_db": 30.0, "floor_db": -5.0},
   "bandwidth":  {"nyquist_ref_hz": 8000.0, "rolloff_pct": 0.95},
-  "temperature": {"presence": 1.0, "utterance": 1.0}
+  "temperature": {"speech_presence": 1.0, "asr": 1.0}
 }
 ```
 
@@ -43,7 +43,7 @@ DEFAULT_PROFILE: dict[str, Any] = {
     "snr": {"type": "linear_db_to_unit", "clean_db": 25.0, "floor_db": 5.0},
     "reverb_c50": {"type": "linear_db_to_unit", "clean_db": 30.0, "floor_db": -5.0},
     "bandwidth": {"nyquist_ref_hz": 8000.0, "rolloff_pct": 0.95},
-    "temperature": {"presence": 1.0, "utterance": 1.0},
+    "temperature": {"speech_presence": 1.0, "asr": 1.0},
 }
 
 
@@ -92,7 +92,7 @@ def validate_profile(profile: dict[str, Any], *, source: str = "<dict>") -> dict
         if clean <= floor:
             raise ValueError(f"{source}: {block_name}.clean_db must exceed floor_db ({clean} <= {floor})")
     temperature = profile.get("temperature") or {}
-    for axis in ("presence", "utterance"):
+    for axis in ("speech_presence", "asr"):
         t = float(temperature.get(axis, 1.0))
         if t <= 0:
             raise ValueError(f"{source}: temperature.{axis} must be > 0 (got {t})")
@@ -113,7 +113,7 @@ def profile_to_runtime(profile: dict[str, Any]) -> dict[str, Any]:
         "snr_floor_db": float(profile["snr"]["floor_db"]),
         "c50_clean_db": float(profile["reverb_c50"]["clean_db"]),
         "c50_floor_db": float(profile["reverb_c50"]["floor_db"]),
-        "temperature": dict(profile.get("temperature") or {"presence": 1.0, "utterance": 1.0}),
+        "temperature": dict(profile.get("temperature") or {"speech_presence": 1.0, "asr": 1.0}),
     }
     if isinstance(profile.get("bandwidth"), dict):
         runtime["bandwidth"] = dict(profile["bandwidth"])

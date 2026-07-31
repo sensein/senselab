@@ -1,4 +1,4 @@
-"""Acoustic presence voters must be absolutely calibrated, not ranked within the file."""
+"""Acoustic speech_presence voters must be absolutely calibrated, not ranked within the file."""
 
 from __future__ import annotations
 

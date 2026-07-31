@@ -425,7 +425,7 @@ def test_align_transcriptions_multilingual(
         (resampled_mono_audio_sample, transcription_fr, Language(language_code="fr")),
     ]
     aligned_transcriptions = align_transcriptions(
-        audios_and_transcriptions_and_language, levels_to_keep={"utterance": True, "word": True, "char": True}
+        audios_and_transcriptions_and_language, levels_to_keep={"asr": True, "word": True, "char": True}
     )
     assert len(aligned_transcriptions) == 2, (
         f"Expected 2 transcriptions, but got {len(aligned_transcriptions)}: {aligned_transcriptions}"

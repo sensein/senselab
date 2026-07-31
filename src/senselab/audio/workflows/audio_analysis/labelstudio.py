@@ -3,8 +3,8 @@
 Per FR-005 the bundle exposes:
     - 6 Labels tracks per pass (3 axes × 2 passes), named ``<pass>__uncertainty__<axis>``.
     - 3 raw_vs_enhanced delta tracks named ``pass_pair__uncertainty__<axis>``.
-    - 3 utterance TextArea sibling tracks (one per pass + one for pass_pair), named
-      ``<pass>__uncertainty__utterance__text``, carrying the per-bucket transcript
+    - 3 asr TextArea sibling tracks (one per pass + one for pass_pair), named
+      ``<pass>__uncertainty__asr__text``, carrying the per-bucket transcript
       consensus + dissenting model transcripts.
 """
 
@@ -106,9 +106,9 @@ def _build_source_labels_xml(track_name: str) -> str:
 
 
 def _scene_track_name(pass_label: str, kind: str) -> str:
-    """FR-024 scene tracks: ``<pass>__presence__quality`` / ``<pass>__presence__sources``."""
+    """FR-024 scene tracks: ``<pass>__speech_presence__quality`` / ``<pass>__speech_presence__sources``."""
     pass_token = "pass_pair" if pass_label == "raw_vs_enhanced" else pass_label
-    return f"{pass_token}__presence__{kind}"
+    return f"{pass_token}__speech_presence__{kind}"
 
 
 def _quality_degradation(row: Any) -> float | None:  # noqa: ANN401 — UncertaintyRow duck-typed
@@ -129,7 +129,7 @@ def _build_textarea_xml(track_name: str) -> str:
 
 
 def _utterance_text_payload(model_votes: dict[str, dict[str, Any]]) -> str:
-    """Build the consensus + dissenting-models string for the utterance TextArea."""
+    """Build the consensus + dissenting-models string for the asr TextArea."""
     transcripts = [
         (m, str(v.get("text") or "").strip()) for m, v in model_votes.items() if str(v.get("text") or "").strip()
     ]
@@ -168,12 +168,12 @@ def attach_uncertainty_tracks_to_ls(
     for (pass_label, axis), result in axis_results.items():
         track = _track_name(str(pass_label), str(axis))
         blocks.append(_build_labels_xml(track))
-        if axis == "utterance":
+        if axis == "asr":
             blocks.append(_build_textarea_xml(track))
-        # FR-024 (T040): additive scene tracks on per-pass presence results —
+        # FR-024 (T040): additive scene tracks on per-pass speech_presence results —
         # emitted only when the pass actually carries the corresponding columns
         # (delta rows never do), so legacy bundles are byte-identical.
-        if str(axis) == "presence" and str(pass_label) != "raw_vs_enhanced":
+        if str(axis) == "speech_presence" and str(pass_label) != "raw_vs_enhanced":
             if any(_quality_degradation(r) is not None for r in result.rows):
                 blocks.append(_build_labels_xml(_scene_track_name(str(pass_label), "quality")))
             if any(r.src_dominant is not None for r in result.rows):
@@ -219,7 +219,7 @@ def attach_uncertainty_tracks_to_ls(
                     },
                 }
             )
-            if axis == "utterance":
+            if axis == "asr":
                 result_list.append(
                     {
                         "id": f"{region_id}__text",
@@ -233,8 +233,8 @@ def attach_uncertainty_tracks_to_ls(
                         },
                     }
                 )
-            # FR-024 (T040): scene tracks ride the same presence rows.
-            if axis == "presence" and pass_label != "raw_vs_enhanced":
+            # FR-024 (T040): scene tracks ride the same speech_presence rows.
+            if axis == "speech_presence" and pass_label != "raw_vs_enhanced":
                 degradation = _quality_degradation(row)
                 if degradation is not None:
                     q_track = _scene_track_name(pass_label, "quality")
@@ -575,7 +575,7 @@ def _collect_classification_labels(result: Any) -> set[str]:  # noqa: ANN401
     return labels
 
 
-# ── background mask + per-speaker presence tracks (T106) ──────────────
+# ── background mask + per-speaker speech_presence tracks (T106) ──────────────
 
 MASK_STATE_VALUES = ("target_free", "target_active", "indeterminate")
 
@@ -585,7 +585,7 @@ def _mask_track_name(pass_label: str) -> str:
 
 
 def _speaker_track_name(pass_label: str) -> str:
-    return f"{pass_label}__speaker__presence"
+    return f"{pass_label}__speaker__speech_presence"
 
 
 def attach_scene_context_tracks_to_ls(
@@ -596,20 +596,20 @@ def attach_scene_context_tracks_to_ls(
     speaker_rows: Sequence[Mapping[str, Any]] = (),
     pass_label: str = "raw_16k",
 ) -> tuple[Any, str]:
-    """Append the background-mask and per-speaker presence tracks to the LS bundle.
+    """Append the background-mask and per-speaker speech_presence tracks to the LS bundle.
 
     Both answer questions a human reviewer cannot answer from the uncertainty tracks alone.
     The mask decides which background findings are trustworthy, so a reviewer checking those
-    findings needs to see the same intervals the machine used (FR-033). Per-speaker presence
+    findings needs to see the same intervals the machine used (FR-033). Per-speaker speech_presence
     is labelled by speaker rather than merged, because knowing *who* is contested is the
-    entire reason the identity axis moved off a single scalar — a merged track would put the
+    entire reason the speaker axis moved off a single scalar — a merged track would put the
     same unreadable number back in front of the annotator.
 
     Args:
         ls_tasks: Existing LS tasks payload.
         ls_config: Existing LS config XML.
         mask_rows: Background-mask rows with ``start``, ``end``, ``state``.
-        speaker_rows: Per-speaker presence rows.
+        speaker_rows: Per-speaker speech_presence rows.
         pass_label: Pass the tracks describe. Both are properties of the recording as
             captured, so they ride on the unmodified pass.
 
@@ -633,7 +633,7 @@ def attach_scene_context_tracks_to_ls(
         blocks.append(f'<Labels name="{speaker_track}" toName="audio">\n{inner}\n</Labels>')
         blocks.append(
             f'<TextArea name="{speaker_track}__text" toName="audio" perRegion="true" '
-            f'editable="false" placeholder="Per-speaker presence confidence and backing sources"/>'
+            f'editable="false" placeholder="Per-speaker speech_presence confidence and backing sources"/>'
         )
 
     if "</View>" in ls_config:
@@ -684,7 +684,7 @@ def attach_scene_context_tracks_to_ls(
         )
         # The speaker's own doubt travels with the region: without it a reviewer sees who
         # was claimed but not how doubtful the claim was, which is the actionable part.
-        conf, unc = row.get("presence_confidence"), row.get("presence_uncertainty")
+        conf, unc = row.get("speech_presence_confidence"), row.get("speech_presence_uncertainty")
         # Parquet list columns read back as numpy arrays, whose truthiness raises rather
         # than falling through to a default.
         raw_sources = row.get("contributing_sources")

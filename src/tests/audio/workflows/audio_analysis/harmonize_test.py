@@ -3,7 +3,7 @@
 Each diarizer names speakers arbitrarily -- ``SPEAKER_00``, ``spk0`` -- so any cross-model
 comparison first *guesses* that two labels denote the same person. Propagated as fact, that guess
 makes models which were never correctly compared read as disagreeing, which is how speaker
-uncertainty stayed high in regions where per-speaker presence was unambiguous.
+uncertainty stayed high in regions where per-speaker speech_presence was unambiguous.
 
 So harmonization is an estimation step with its own uncertainty. Two independent matchers run --
 temporal overlap and embedding centroid -- and where they disagree, that disagreement *is* the
@@ -147,7 +147,7 @@ def test_no_segments_yields_an_empty_harmonization() -> None:
     assert h.uncertainty == {}
 
 
-# ── wiring into the identity harvest ─────────────────────────────────────────
+# ── wiring into the speaker harvest ─────────────────────────────────────────
 
 
 def test_cross_model_agreement_is_recoverable_without_embeddings() -> None:
@@ -159,7 +159,7 @@ def test_cross_model_agreement_is_recoverable_without_embeddings() -> None:
     overlap matcher answers this case from timing evidence instead.
     """
     from senselab.audio.workflows.audio_analysis.grid import BucketGrid
-    from senselab.audio.workflows.audio_analysis.identity import harvest_identity_votes
+    from senselab.audio.workflows.audio_analysis.speaker import harvest_speaker_votes
 
     pass_summary = {
         "duration_s": 4.0,
@@ -176,7 +176,7 @@ def test_cross_model_agreement_is_recoverable_without_embeddings() -> None:
             }
         },
     }
-    buckets = harvest_identity_votes(
+    buckets = harvest_speaker_votes(
         pass_summary=pass_summary,
         grid=BucketGrid(win_length=0.5, hop_length=0.5),
         per_window_embeddings={},
@@ -190,13 +190,13 @@ def test_cross_model_agreement_is_recoverable_without_embeddings() -> None:
         assert cross["value"] in (0.0, None), f"string-comparison disagreement resurfaced: {cross}"
 
 
-def test_contested_assignment_reaches_the_identity_vote() -> None:
+def test_contested_assignment_reaches_the_speaker_vote() -> None:
     """Assignment uncertainty is carried onto the vote, not discarded at the harmonization step."""
     import numpy as np
 
     from senselab.audio.workflows.audio_analysis.embeddings import WindowEmbedding
     from senselab.audio.workflows.audio_analysis.grid import BucketGrid
-    from senselab.audio.workflows.audio_analysis.identity import harvest_identity_votes
+    from senselab.audio.workflows.audio_analysis.speaker import harvest_speaker_votes
 
     # Embeddings that assert the opposite pairing to the timelines, as in the disagreement test.
     windows = [
@@ -218,7 +218,7 @@ def test_contested_assignment_reaches_the_identity_vote() -> None:
             }
         },
     }
-    buckets = harvest_identity_votes(
+    buckets = harvest_speaker_votes(
         pass_summary=pass_summary,
         grid=BucketGrid(win_length=1.0, hop_length=1.0),
         per_window_embeddings={"ecapa": windows},

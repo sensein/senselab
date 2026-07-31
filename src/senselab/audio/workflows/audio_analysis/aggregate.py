@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import math
 import sys
-from itertools import combinations  # used by aggregate_utterance for pairwise WER
+from itertools import combinations  # used by aggregate_asr for pairwise WER
 from typing import Any, Mapping
 
 # Surface-level differences (case + punctuation + repeated whitespace) are
-# stripped before pairwise WER so the utterance axis reflects *semantic*
+# stripped before pairwise WER so the asr axis reflects *semantic*
 # disagreement rather than surface noise. The canonical normalizer moved to the
 # task layer (architecture-review T049) so task- and workflow-level WER share
 # one definition; re-exported under the historical name for existing importers.
@@ -19,15 +19,15 @@ from senselab.audio.workflows.audio_analysis.aggregators import apply_aggregator
 
 __all__ = [
     "_normalize_transcript_for_wer",
-    "aggregate_identity",
-    "aggregate_presence",
-    "aggregate_utterance",
+    "aggregate_speaker",
+    "aggregate_speech_presence",
+    "aggregate_asr",
     "mean_token_entropy",
-    "presence_p_voice",
+    "speech_presence_p_voice",
 ]
 
 
-# ── presence ──────────────────────────────────────────────────────────
+# ── speech_presence ──────────────────────────────────────────────────────────
 
 
 def _weighted_p_voice(votes: dict[str, dict[str, Any]]) -> float | None:
@@ -82,15 +82,15 @@ def _weighted_p_voice(votes: dict[str, dict[str, Any]]) -> float | None:
     return num / den
 
 
-def aggregate_presence(votes: dict[str, dict[str, Any]]) -> float | None:
+def aggregate_speech_presence(votes: dict[str, dict[str, Any]]) -> float | None:
     """Calibrated "is voice present?" uncertainty in ``[0, 1]``.
 
-    The presence question is binary, but the goal is *not* to measure
+    The speech_presence question is binary, but the goal is *not* to measure
     disagreement among voters — it's how decisively the evidence supports a
     conclusion. Uncertainty = ``1 − |2 · p_voice − 1|``: 0 when all evidence
     agrees (either way), 1 at a perfect 50/50 split. Whether voice is more
     likely present or absent is recoverable from ``p_voice`` itself
-    (``presence_p_voice``); this metric only grades decisiveness. See
+    (``speech_presence_p_voice``); this metric only grades decisiveness. See
     ``_weighted_p_voice`` for the per-voter math (weights default to 1.0, so
     this matches the historical unweighted behavior).
     """
@@ -100,28 +100,28 @@ def aggregate_presence(votes: dict[str, dict[str, Any]]) -> float | None:
     return max(0.0, min(1.0, 1.0 - abs(2.0 * p_voice - 1.0)))
 
 
-def presence_p_voice(votes: dict[str, dict[str, Any]]) -> float | None:
+def speech_presence_p_voice(votes: dict[str, dict[str, Any]]) -> float | None:
     """Return the calibrated probability of voice ``p_voice`` for one bucket.
 
-    Same per-voter math as ``aggregate_presence`` but returns the raw
+    Same per-voter math as ``aggregate_speech_presence`` but returns the raw
     probability rather than the symmetric uncertainty. Used both as the
-    presence-axis ``presence_confidence`` column and to MASK identity /
-    utterance buckets where we are confident there is no speech.
+    speech_presence-axis ``speech_presence_confidence`` column and to MASK speaker /
+    asr buckets where we are confident there is no speech.
     """
     return _weighted_p_voice(votes)
 
 
-# ── identity ──────────────────────────────────────────────────────────
+# ── speaker ──────────────────────────────────────────────────────────
 
 
-def aggregate_identity(
+def aggregate_speaker(
     votes: dict[str, dict[str, Any]],
     *,
     raw_vs_enh: bool | None,
     aggregator: str,
     reliability: Mapping[str, float] | None = None,
 ) -> float | None:
-    """Combine identity sub-signals into a single uncertainty in ``[0, 1]``.
+    """Combine speaker sub-signals into a single uncertainty in ``[0, 1]``.
 
     Three sub-signal families are folded via ``--uncertainty-aggregator``:
 
@@ -172,7 +172,7 @@ def aggregate_identity(
     return apply_aggregator(sub_signals, aggregator, weights=weights if rel else None)
 
 
-# ── utterance ─────────────────────────────────────────────────────────
+# ── asr ─────────────────────────────────────────────────────────
 
 
 _DEFAULT_TOKEN_ENTROPY_REFERENCE_NATS = 3.0
@@ -189,9 +189,9 @@ range, making the sub-signal invisible under ``mean`` aggregation. 3.0 nats puts
 
 
 def _axis_temperature(calibration: dict[str, Any] | None, axis: str) -> float:
-    """Temperature for ``axis`` from a calibration profile; 1.0 (identity) by default.
+    """Temperature for ``axis`` from a calibration profile; 1.0 (speaker) by default.
 
-    ``temperature`` may be a per-axis mapping (``{"utterance": 1.5}``) or a bare
+    ``temperature`` may be a per-axis mapping (``{"asr": 1.5}``) or a bare
     scalar applied to every axis. A non-positive or unparsable value falls back to
     1.0 rather than silently inverting the mapping.
     """
@@ -235,21 +235,21 @@ def mean_token_entropy(votes: dict[str, dict[str, Any]]) -> float | None:
     return sum(per_model) / len(per_model)
 
 
-def aggregate_utterance(
+def aggregate_asr(
     votes: dict[str, dict[str, Any]],
     *,
     aggregator: str,
     calibration: dict[str, Any] | None = None,
 ) -> float | None:
-    """Combine utterance sub-signals into a single uncertainty.
+    """Combine asr sub-signals into a single uncertainty.
 
-    Per-signal reliability weighting is deliberately *not* applied here. The utterance
+    Per-signal reliability weighting is deliberately *not* applied here. The asr
     sub-signals are already model-fused before they reach this point — a pairwise mean over
     ASR sources, a mean log-probability across backends — so there is no per-model signal
     left to weight. Weighting them would require harvesting the pairwise terms unfused,
-    which is a larger change than the defect it would address. The identity axis, where
+    which is a larger change than the defect it would address. The speaker axis, where
     sub-signals stay per-model and where a single saturated signal was demonstrably
-    overriding unanimous agreement, is weighted (see ``aggregate_identity``).
+    overriding unanimous agreement, is weighted (see ``aggregate_speaker``).
 
     Three sub-signal families (the third added by FR-017):
 
@@ -275,20 +275,20 @@ def aggregate_utterance(
        degrades to families 1 and 2 exactly.
 
     Args:
-        votes: The bucket's vote dict from ``harvest_utterance_votes``.
+        votes: The bucket's vote dict from ``harvest_asr_votes``.
         aggregator: One of ``AGGREGATORS`` — how the sub-signals are collapsed.
         calibration: Optional calibration profile supplying ``temperature`` and
             ``token_entropy_reference_nats``. ``None`` ⇒ documented defaults, which
             preserve the pre-calibration numbers bit-for-bit.
 
     Returns:
-        The bucket's utterance uncertainty in ``[0, 1]``, or ``None`` when no
+        The bucket's asr uncertainty in ``[0, 1]``, or ``None`` when no
         sub-signal was available.
     """
     sub_signals: list[float | None] = []
-    temperature = _axis_temperature(calibration, "utterance")
+    temperature = _axis_temperature(calibration, "asr")
 
-    # Pairwise phoneme distances (the dominant utterance signal). Each pair
+    # Pairwise phoneme distances (the dominant asr signal). Each pair
     # is weighted by the joint confidence of its two sources — high-confidence
     # ASR/PPG pairs dominate, while pairs involving an uncertain transcript
     # contribute proportionally less. The weighted mean is folded as a single
@@ -355,7 +355,7 @@ def aggregate_utterance(
     # aggregated as a sub-signal: the aligner's path posterior given a
     # (possibly hallucinated) transcript doesn't reflect transcript
     # correctness — it reflects path quality conditional on the transcript.
-    # Using it as utterance uncertainty would mask hallucinated transcripts
+    # Using it as asr uncertainty would mask hallucinated transcripts
     # rather than expose them.
 
     # PPG argmax confidence — per-bucket model confidence in its top-1

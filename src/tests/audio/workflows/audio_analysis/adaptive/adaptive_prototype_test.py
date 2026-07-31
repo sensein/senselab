@@ -26,7 +26,7 @@ BK = bucket_key(0.0, 0.5)
 
 def _vote(source: str, scope: str = "file", speaks: bool = True, round_idx: int = 1) -> Vote:
     return Vote(
-        axis="presence",
+        axis="speech_presence",
         bucket=BK,
         source=source,
         stream="raw_16k",
@@ -42,7 +42,7 @@ def test_region_scope_shadows_same_source_file_scope() -> None:
     store.add_vote(_vote("model_a"))
     store.add_vote(_vote("model_b"))
     store.add_vote(_vote("model_a", scope="region:r2_x", speaks=False, round_idx=2))
-    active = store.active_votes("raw_16k", "presence", BK)
+    active = store.active_votes("raw_16k", "speech_presence", BK)
     assert active["model_a"]["speaks"] is False  # region vote won
     assert active["model_b"]["speaks"] is True  # unrelated model untouched
     shadowed = [v for v in store._votes.values() if v.status == "shadowed"]
@@ -55,7 +55,7 @@ def test_purge_excludes_from_aggregation_but_keeps_row() -> None:
     store.add_vote(_vote("asr_x"))
     n = store.purge_source_in_bucket("raw_16k", BK, "asr_x", reason="hallucination", round_idx=2)
     assert n == 1
-    assert "asr_x" not in store.active_votes("raw_16k", "presence", BK)
+    assert "asr_x" not in store.active_votes("raw_16k", "speech_presence", BK)
     assert any(v.status == "purged_hallucination" for v in store._votes.values())
 
 
@@ -70,12 +70,12 @@ def test_region_proposal_seed_expand_pad() -> None:
     """FR-010: seed ≥ θ_high, expand ≥ θ_low, pad, mass ranking."""
     policy = load_policy()
     rows = _rows([0.1, 0.4, 0.9, 0.5, 0.1, 0.1, 0.7, 0.1])
-    regions = propose_regions(rows, axis="utterance", stream="raw_16k", policy=policy, round_idx=2, duration_s=4.0)
+    regions = propose_regions(rows, axis="asr", stream="raw_16k", policy=policy, round_idx=2, duration_s=4.0)
     assert len(regions) == 2
     r0 = regions[0]
     assert (r0["core_start"], r0["core_end"]) == (0.5, 2.0)  # expanded left+right over ≥0.33
     assert r0["crop_start"] == 0.0 and r0["crop_end"] == 3.0  # ±1.0 s pad, clipped
-    assert r0["region_id"] == "r2_raw_utterance_0"
+    assert r0["region_id"] == "r2_raw_asr_0"
     assert regions[1]["core_start"] == 3.0  # isolated 0.7 seed
 
 
@@ -86,7 +86,7 @@ def test_planner_is_deterministic_and_budget_bounded() -> None:
     rules = [
         {
             "id": "R_med",
-            "axes": ["utterance"],
+            "axes": ["asr"],
             "cost": "medium",
             "trigger": lambda r, c: (True, {}),
             "guard": None,
@@ -97,7 +97,7 @@ def test_planner_is_deterministic_and_budget_bounded() -> None:
     regions: list[Region] = [
         {
             "region_id": "rA",
-            "axis": "utterance",
+            "axis": "asr",
             "stream": "raw_16k",
             "core_start": 0.0,
             "core_end": 1.0,
@@ -109,7 +109,7 @@ def test_planner_is_deterministic_and_budget_bounded() -> None:
         },
         {
             "region_id": "rB",
-            "axis": "utterance",
+            "axis": "asr",
             "stream": "raw_16k",
             "core_start": 2.0,
             "core_end": 3.0,
@@ -181,7 +181,7 @@ def test_identity_repair_recovers_synthetic_speakers() -> None:
         p_voice_at=lambda t: 0.9,
         duration_s=6.0,
         policy={
-            "identity": {
+            "speaker": {
                 "cp_k": 1.0,
                 "cp_floor": 0.15,
                 "min_segment_s": 0.25,
@@ -202,7 +202,7 @@ def test_identity_repair_recovers_synthetic_speakers() -> None:
         p_voice_at=lambda t: 0.9,
         duration_s=6.0,
         policy={
-            "identity": {
+            "speaker": {
                 "cp_k": 1.0,
                 "cp_floor": 0.15,
                 "min_segment_s": 0.25,
@@ -268,7 +268,7 @@ def test_calibration_profiles() -> None:
 
     assert load_calibrator(None) is None
     logistic = load_calibrator({"type": "logistic", "a": 1.0, "b": 0.0})
-    assert logistic(0.7) == pytest.approx(0.7, abs=1e-3)  # identity logistic
+    assert logistic(0.7) == pytest.approx(0.7, abs=1e-3)  # speaker logistic
     piecewise = load_calibrator({"type": "piecewise", "x": [0.0, 1.0], "y": [0.0, 0.5]})
     assert piecewise(0.8) == pytest.approx(0.4)
     assert piecewise(-0.2) == 0.0 and piecewise(2.0) == 0.5  # clamped at knots
@@ -300,23 +300,23 @@ def test_policy_hash_stable_and_override(tmp_path: Path) -> None:
 def test_from_harvests_in_process_integration() -> None:
     """T044/T009: PassHarvest → VoteStore without a parquet round-trip; parity with aggregate_pass."""
     from senselab.audio.workflows.audio_analysis.adaptive.belief import VoteStore
-    from senselab.audio.workflows.audio_analysis.aggregate import aggregate_presence
+    from senselab.audio.workflows.audio_analysis.aggregate import aggregate_speech_presence
     from senselab.audio.workflows.audio_analysis.votes import PassHarvest
 
     harvest = PassHarvest(
         pass_label="raw_16k",
-        presence_votes=[{"start": 0.0, "end": 0.5, "votes": {"m1": {"speaks": True}, "m2": {"speaks": False}}}],
-        identity_votes=[{"start": 0.0, "end": 1.0, "votes": {"__cross_diar_label_disagreement__": {"value": 0.5}}}],
-        utterance_votes=[],
+        speech_presence_votes=[{"start": 0.0, "end": 0.5, "votes": {"m1": {"speaks": True}, "m2": {"speaks": False}}}],
+        speaker_votes=[{"start": 0.0, "end": 1.0, "votes": {"__cross_diar_label_disagreement__": {"value": 0.5}}}],
+        asr_votes=[],
         quality_by_bucket={(0.0, 0.5): {"quality_snr": 0.3, "_raw": {}}},
     )
     store = VoteStore.from_harvests({"raw_16k": harvest})
-    votes = store.active_votes("raw_16k", "presence", (0.0, 0.5))
+    votes = store.active_votes("raw_16k", "speech_presence", (0.0, 0.5))
     assert set(votes) == {"m1", "m2"}
-    row = store.reaggregate_bucket("raw_16k", "presence", (0.0, 0.5), aggregator="min")
-    assert row["within_pass_uncertainty"] == pytest.approx(aggregate_presence(votes))
-    assert store.row_meta[("raw_16k", "presence", (0.0, 0.5))]["quality_snr"] == 0.3
-    ident = store.reaggregate_bucket("raw_16k", "identity", (0.0, 1.0), aggregator="min")
+    row = store.reaggregate_bucket("raw_16k", "speech_presence", (0.0, 0.5), aggregator="min")
+    assert row["within_pass_uncertainty"] == pytest.approx(aggregate_speech_presence(votes))
+    assert store.row_meta[("raw_16k", "speech_presence", (0.0, 0.5))]["quality_snr"] == 0.3
+    ident = store.reaggregate_bucket("raw_16k", "speaker", (0.0, 1.0), aggregator="min")
     assert ident["within_pass_uncertainty"] == pytest.approx(0.5)
 
 
@@ -334,13 +334,13 @@ def test_run_adaptive_loop_accepts_in_process_harvests(tmp_path: Path) -> None:
 
     harvest = PassHarvest(
         pass_label="raw_16k",
-        presence_votes=[
+        speech_presence_votes=[
             {"start": 0.0, "end": 0.5, "votes": {"m1": {"speaks": True}}},
             {"start": 0.5, "end": 1.0, "votes": {"m1": {"speaks": False}}},
         ],
-        identity_votes=[{"start": 0.0, "end": 1.0, "votes": {}}],
-        utterance_votes=[{"start": 0.0, "end": 1.0, "votes": {"a": {"text": "hi"}}}],
-        grids={"utterance": {"win_length": 1.0, "hop_length": 1.0}},
+        speaker_votes=[{"start": 0.0, "end": 1.0, "votes": {}}],
+        asr_votes=[{"start": 0.0, "end": 1.0, "votes": {"a": {"text": "hi"}}}],
+        grids={"asr": {"win_length": 1.0, "hop_length": 1.0}},
     )
     summary = {"passes": {"raw_16k": {"duration_s": 1.0, "audio_signature": "a" * 64}}}
 
@@ -369,8 +369,8 @@ def test_in_process_path_reports_parity_as_skipped_not_passing(tmp_path: Path) -
 
     harvest = PassHarvest(
         pass_label="raw_16k",
-        presence_votes=[{"start": 0.0, "end": 0.5, "votes": {"m1": {"speaks": True}}}],
-        grids={"utterance": {"win_length": 1.0, "hop_length": 1.0}},
+        speech_presence_votes=[{"start": 0.0, "end": 0.5, "votes": {"m1": {"speaks": True}}}],
+        grids={"asr": {"win_length": 1.0, "hop_length": 1.0}},
     )
     run_adaptive_loop(
         tmp_path,
@@ -392,8 +392,8 @@ def test_in_process_ingest_ignores_passes_absent_from_the_summary(tmp_path: Path
     def _h(label: str) -> PassHarvest:
         return PassHarvest(
             pass_label=label,
-            presence_votes=[{"start": 0.0, "end": 0.5, "votes": {"m1": {"speaks": True}}}],
-            grids={"utterance": {"win_length": 1.0, "hop_length": 1.0}},
+            speech_presence_votes=[{"start": 0.0, "end": 0.5, "votes": {"m1": {"speaks": True}}}],
+            grids={"asr": {"win_length": 1.0, "hop_length": 1.0}},
         )
 
     log = run_adaptive_loop(
@@ -487,7 +487,13 @@ def _p2_ctx(
         for source, payload in votes.items():
             store.add_vote(
                 Vote(
-                    axis="presence", bucket=bk, source=source, stream="raw_16k", scope="file", round=1, payload=payload
+                    axis="speech_presence",
+                    bucket=bk,
+                    source=source,
+                    stream="raw_16k",
+                    scope="file",
+                    round=1,
+                    payload=payload,
                 )
             )
         meta: dict[str, Any] = {}
@@ -497,16 +503,16 @@ def _p2_ctx(
 
     class _State:
         def axis_rows(self, stream: str, axis: str) -> list[dict[str, Any]]:
-            return rows if axis == "presence" else []
+            return rows if axis == "speech_presence" else []
 
     return {"state": _State(), "store": store, "policy": policy or load_policy(), "passes": ["raw_16k"], "_rows": rows}
 
 
 def _p2_region() -> dict[str, Any]:
     return {
-        "axis": "presence",
+        "axis": "speech_presence",
         "stream": "raw_16k",
-        "region_id": "r2_raw_presence_0",
+        "region_id": "r2_raw_speech_presence_0",
         "core_start": 0.0,
         "core_end": 1.0,
         "crop_start": 0.0,
@@ -524,12 +530,12 @@ def test_p2_is_registered_before_i4() -> None:
     assert ids.index("P2_fine_posteriors") < ids.index("I4_overlap_detection")
 
 
-def test_p2_declares_presence_axis_and_medium_cost() -> None:
-    """contracts/interventions.md: presence axis, medium cost."""
+def test_p2_declares_speech_presence_axis_and_medium_cost() -> None:
+    """contracts/interventions.md: speech_presence axis, medium cost."""
     from senselab.audio.workflows.audio_analysis.adaptive.interventions import RULES
 
     rule = next(r for r in RULES if r["id"] == "P2_fine_posteriors")
-    assert rule["axes"] == ["presence"]
+    assert rule["axes"] == ["speech_presence"]
     assert rule["cost"] == "medium"
 
 
@@ -579,11 +585,11 @@ def test_p2_fires_on_frame_instability_even_without_coarse_votes() -> None:
     assert info["reason"] == "frame_instability"
 
 
-def test_p2_ignores_non_presence_regions() -> None:
-    """A presence-only rule must not claim identity or utterance regions."""
+def test_p2_ignores_non_speech_presence_regions() -> None:
+    """A speech_presence-only rule must not claim speaker or asr regions."""
     from senselab.audio.workflows.audio_analysis.adaptive.interventions import _p2_trigger
 
-    for axis in ("identity", "utterance"):
+    for axis in ("speaker", "asr"):
         fires, _ = _p2_trigger({**_p2_region(), "axis": axis}, _p2_ctx([]))
         assert fires is False
 
@@ -646,7 +652,7 @@ def test_p2_execute_replaces_votes_at_region_scope(monkeypatch: pytest.MonkeyPat
     assert result["votes_added"] == 2
     votes = [v for v in ctx["store"]._votes.values() if v.source == "frame_posterior_fine"]
     assert len(votes) == 2
-    assert all(v.scope == "region:r2_raw_presence_0" for v in votes)
+    assert all(v.scope == "region:r2_raw_speech_presence_0" for v in votes)
     assert all(v.payload["coarse"] is False for v in votes)
     # first bucket sits in the speech half, second in the silence half
     by_bucket = {v.bucket: v for v in votes}
@@ -694,10 +700,10 @@ def test_p2_execute_raises_when_posteriors_fail(monkeypatch: pytest.MonkeyPatch)
         iv._p2_execute({"region": _p2_region(), "trigger": {"stream": "raw_16k"}}, ctx)
 
 
-def test_final_presence_parquet_has_contract_columns(tmp_path: Path) -> None:
-    """T042: final/presence.parquet must carry the contracts/final-outputs.md columns.
+def test_final_speech_presence_parquet_has_contract_columns(tmp_path: Path) -> None:
+    """T042: final/speech_presence.parquet must carry the contracts/final-outputs.md columns.
 
-    `presence_confidence`, `elected_stream` and `overlap_posterior` were absent —
+    `speech_presence_confidence`, `elected_stream` and `overlap_posterior` were absent —
     verified against a real full run before this was added. The columns must exist
     even when their values are None, so the schema is stable for readers.
     """
@@ -711,7 +717,7 @@ def test_final_presence_parquet_has_contract_columns(tmp_path: Path) -> None:
     store = VoteStore()
     store.add_vote(
         Vote(
-            axis="presence",
+            axis="speech_presence",
             bucket=(0.0, 0.5),
             source="m1",
             stream="raw_16k",
@@ -730,6 +736,6 @@ def test_final_presence_parquet_has_contract_columns(tmp_path: Path) -> None:
         policy=load_policy(),
         generated_from_round=1,
     )
-    cols = list(pd.read_parquet(belief_dir(tmp_path) / "presence.parquet").columns)
-    for col in ("presence_confidence", "elected_stream", "overlap_posterior"):
-        assert col in cols, f"contract column {col!r} missing from final/presence.parquet"
+    cols = list(pd.read_parquet(belief_dir(tmp_path) / "speech_presence.parquet").columns)
+    for col in ("speech_presence_confidence", "elected_stream", "overlap_posterior"):
+        assert col in cols, f"contract column {col!r} missing from final/speech_presence.parquet"

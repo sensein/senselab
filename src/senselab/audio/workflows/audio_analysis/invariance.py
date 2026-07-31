@@ -12,7 +12,7 @@ to the signal:
 - **Gain scaling.** Changes no signal-to-noise ratio — it moves the source and everything
   around it together. This is the same measurement that reframed background detection away
   from amplification: gain cannot rescue a buried source because it lifts the masker too.
-  Speaker count, speaker identity and transcript are all level-independent facts.
+  Speaker count, speaker speaker and transcript are all level-independent facts.
 - **Whole-sample time shift.** Padding by an integer number of samples moves the timeline
   without resampling, so no sample value is altered and no interpolation error is introduced.
   A model whose speaker count depends on where its analysis windows happen to land is

@@ -113,7 +113,7 @@ def run_adaptive_loop(
         store = VoteStore.from_run_dir(run_dir, passes)
         parity = store.parity_check(passes, aggregator=aggregator)
     state = BeliefState.from_store(store, passes, aggregator=aggregator)
-    utterance_grid = _grid_from_rows(state.axis_rows(passes[0], "utterance"))
+    asr_grid = _grid_from_rows(state.axis_rows(passes[0], "asr"))
     theta_low = float(policy["thresholds"]["theta_low"])
 
     rounds_dir = belief_dir(out_dir) / "rounds"
@@ -143,7 +143,7 @@ def run_adaptive_loop(
         "passes": passes,
         "pass_sigs": pass_sigs,
         "duration_s": duration_s,
-        "utterance_grid": utterance_grid,
+        "asr_grid": asr_grid,
         "elections": {},
         "input_audio": input_audio,
         "asr_model_ids": {pl: set(load_outcomes_dir(run_dir, pl, "asr").keys()) for pl in passes},
@@ -241,16 +241,16 @@ def run_adaptive_loop(
         run_state = "max_rounds"
 
     # ── fusion round ─────────────────────────────────────────────────────
-    # The consensus transcript comes from the stream whose FINAL utterance
+    # The consensus transcript comes from the stream whose FINAL asr
     # evidence is most self-consistent (lowest residual uncertainty mass);
     # region elections break ties. Enhancement can degrade ASR even when it
-    # improves presence/quality signals, so transcript fusion must not
-    # inherit the presence/quality-weighted election blindly.
+    # improves speech_presence/quality signals, so transcript fusion must not
+    # inherit the speech_presence/quality-weighted election blindly.
     elected_streams = [e["elected"] for e in ctx["elections"].values()]
     fusion_stream = min(
         passes,
         key=lambda s: (
-            round(state.uncertainty_mass(s, "utterance", theta_low), 9),
+            round(state.uncertainty_mass(s, "asr", theta_low), 9),
             -elected_streams.count(s),
             s,
         ),
@@ -290,7 +290,7 @@ def run_adaptive_loop(
         if live_words and model not in word_streams:
             word_streams[model] = sorted(live_words, key=lambda w: (w["start"], w["end"]))
 
-    # Speaker attribution: refined identity clusters (I2) win where available;
+    # Speaker attribution: refined speaker clusters (I2) win where available;
     # the vote-majority lookup is the fallback.
     refined = (ctx.get("refined_identity") or {}).get(fusion_stream)
     base_speaker_at = make_speaker_lookup(store, state, fusion_stream)
@@ -361,7 +361,7 @@ def run_adaptive_loop(
             run_dir=run_dir,
             transcript=transcript_doc,
             diarization=diarization_doc,
-            presence_rows=state.axis_rows(fusion_stream, "presence"),
+            speech_presence_rows=state.axis_rows(fusion_stream, "speech_presence"),
             fusion_stream=fusion_stream,
             iterations=iterations,
         )
@@ -386,7 +386,7 @@ def run_adaptive_loop(
         provenance=provenance,
     )
     final = final_dir(out_dir)
-    # Belief artifacts (posterior, presence, convergence) are level 2; the deliverables
+    # Belief artifacts (posterior, speech_presence, convergence) are level 2; the deliverables
     # (transcript, diarization, timeline, summary) stay in final/. Different questions:
     # "what do we believe" is per bucket and per round, "what do we hand over" is one answer.
     belief = belief_dir(out_dir)

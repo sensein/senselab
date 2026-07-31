@@ -7,9 +7,9 @@ Reads the persisted round artifacts (no live state needed) and renders
    reviewer can see *why* a span is uncertain (noise, silence, overlap) rather
    than only that it is;
 2. ground-truth segments (when an LS export is provided) — untranscribed spans hatched;
-3. presence — final p_voice + uncertainty band;
-4. identity — round-1 vs final uncertainty, GT speaker boundaries dashed;
-5. utterance — round-1 vs final uncertainty, proposed regions, fired
+3. speech_presence — final p_voice + uncertainty band;
+4. speaker — round-1 vs final uncertainty, GT speaker boundaries dashed;
+5. asr — round-1 vs final uncertainty, proposed regions, fired
    interventions, irreducible buckets hatched;
 6. fused words — text colored by confidence (green→red), speaker ticks.
 """
@@ -34,7 +34,7 @@ def build_adaptive_timeline(out_dir: Path, *, gt_path: Path | None = None, title
 
     out_dir = Path(out_dir)
     final = final_dir(out_dir)
-    # Belief artifacts (posterior, presence, convergence) are level 2; the deliverables
+    # Belief artifacts (posterior, speech_presence, convergence) are level 2; the deliverables
     # (transcript, diarization, timeline, summary) stay in final/. Different questions:
     # "what do we believe" is per bucket and per round, "what do we hand over" is one answer.
     belief = belief_dir(out_dir)
@@ -53,8 +53,8 @@ def build_adaptive_timeline(out_dir: Path, *, gt_path: Path | None = None, title
         df = pd.read_parquet(rounds_dir / str(round_idx) / "belief" / f"{axis}.parquet")
         return df[df["stream"] == stream].sort_values("start")
 
-    pres, ident_0, ident_k = _belief(last_r, "presence"), _belief(first_r, "identity"), _belief(last_r, "identity")
-    utt_0, utt_k = _belief(first_r, "utterance"), _belief(last_r, "utterance")
+    pres, ident_0, ident_k = _belief(last_r, "speech_presence"), _belief(first_r, "speaker"), _belief(last_r, "speaker")
+    utt_0, utt_k = _belief(first_r, "asr"), _belief(last_r, "asr")
     duration = float(pres["end"].max()) if len(pres) else 5.0
 
     gt = None
@@ -82,8 +82,8 @@ def build_adaptive_timeline(out_dir: Path, *, gt_path: Path | None = None, title
     # were target-free invites treating a leakage artifact as a finding.
     _draw_background_mask(ax_mask, out_dir, duration)
 
-    # ── per-speaker presence ────────────────────────────────────────────
-    # Directly under the identity axis, because it is what that axis's number could not
+    # ── per-speaker speech_presence ────────────────────────────────────────────
+    # Directly under the speaker axis, because it is what that axis's number could not
     # say: whether a high value means "we disagree about who spoke" or "we disagree about
     # how many people are here". One lane per hypothesised speaker makes the count visible
     # at a glance, and the header carries the posterior when it is multi-modal.
@@ -118,28 +118,28 @@ def build_adaptive_timeline(out_dir: Path, *, gt_path: Path | None = None, title
     else:
         ax_gt.text(duration / 2, 0.5, "no ground truth provided", ha="center", va="center", fontsize=8, alpha=0.6)
 
-    # ── row 2: presence ─────────────────────────────────────────────────
+    # ── row 2: speech_presence ─────────────────────────────────────────────────
     mids_p = (pres["start"] + pres["end"]) / 2
     ax_p.plot(mids_p, pres["p_voice"], color="tab:blue", lw=1.2, label="p_voice (final)")
     ax_p.fill_between(
         mids_p, 0, pres["within_pass_uncertainty"].fillna(0), color="tab:red", alpha=0.18, label="uncertainty"
     )
     ax_p.axhline(0.5, color="grey", lw=0.6, ls=":")
-    ax_p.set_ylabel("presence", rotation=0, ha="right", va="center")
+    ax_p.set_ylabel("speech_presence", rotation=0, ha="right", va="center")
     ax_p.set_ylim(-0.02, 1.02)
     ax_p.legend(loc="upper right", fontsize=7, ncol=2)
 
-    # ── row 3: identity ─────────────────────────────────────────────────
+    # ── row 3: speaker ─────────────────────────────────────────────────
     _step(ax_i, ident_0, color="silver", label=f"round {first_r}")
     _step(ax_i, ident_k, color="tab:purple", label=f"round {last_r} (final)")
     if gt:
         for b in [s["start"] for s in gt["segments"][1:]]:
             ax_i.axvline(b, color="black", lw=0.8, ls="--", alpha=0.6)
-    ax_i.set_ylabel("identity\nuncertainty", rotation=0, ha="right", va="center")
+    ax_i.set_ylabel("speaker\nuncertainty", rotation=0, ha="right", va="center")
     ax_i.set_ylim(-0.02, 1.05)
     ax_i.legend(loc="lower right", fontsize=7, ncol=2, title="GT boundaries dashed", title_fontsize=6)
 
-    # ── row 4: utterance + regions + interventions ─────────────────────
+    # ── row 4: asr + regions + interventions ─────────────────────
     _step(ax_u, utt_0, color="silver", label=f"round {first_r}")
     _step(ax_u, utt_k, color="tab:red", label=f"round {last_r} (final)")
     for _, row in utt_k.iterrows():
@@ -162,7 +162,7 @@ def build_adaptive_timeline(out_dir: Path, *, gt_path: Path | None = None, title
         if not regions_file.exists():
             continue
         for reg in json.loads(regions_file.read_text()):
-            if reg["axis"] != "utterance" or reg["stream"] != stream:
+            if reg["axis"] != "asr" or reg["stream"] != stream:
                 continue
             span = (round(reg["core_start"], 3), round(reg["core_end"], 3))
             if span in seen_regions:
@@ -178,7 +178,7 @@ def build_adaptive_timeline(out_dir: Path, *, gt_path: Path | None = None, title
             continue
         reg_delta = next(iter((e.get("delta") or {}).values()), None)
         d_txt = f" Δ{reg_delta['delta']:+.2f}" if reg_delta else ""
-        x = _region_mid(e, rounds_dir, axis="utterance")
+        x = _region_mid(e, rounds_dir, axis="asr")
         if x is not None:
             ax_u.annotate(
                 f"{e['rule'].split('_')[0]} r{e['round']}{d_txt}",
@@ -189,7 +189,7 @@ def build_adaptive_timeline(out_dir: Path, *, gt_path: Path | None = None, title
                 bbox={"boxstyle": "round,pad=0.15", "fc": "white", "ec": "darkred", "lw": 0.5, "alpha": 0.85},
             )
             y_note -= 0.14
-    ax_u.set_ylabel("utterance\nuncertainty", rotation=0, ha="right", va="center")
+    ax_u.set_ylabel("asr\nuncertainty", rotation=0, ha="right", va="center")
     ax_u.set_ylim(-0.02, 1.08)
     ax_u.axhline(0.66, color="tab:red", lw=0.6, ls=":", alpha=0.7)
     ax_u.axhline(0.33, color="tab:green", lw=0.6, ls=":", alpha=0.7)
@@ -248,9 +248,9 @@ _MASK_STATE_STYLE = {
 
 
 def _draw_per_speaker(ax: Any, out_dir: Path, duration: float) -> None:  # noqa: ANN401 — matplotlib Axes
-    """Draw one presence lane per hypothesised speaker, with the count posterior in view.
+    """Draw one speech_presence lane per hypothesised speaker, with the count posterior in view.
 
-    This is the row the single identity scalar could not provide. A high identity
+    This is the row the single speaker scalar could not provide. A high speaker
     uncertainty is ambiguous between disagreement about *who* spoke and disagreement about
     *how many* people are present; lanes plus the posterior separate the two.
     """
@@ -269,12 +269,12 @@ def _draw_per_speaker(ax: Any, out_dir: Path, duration: float) -> None:  # noqa:
     belief = belief_dir(out_dir)
     final.mkdir(parents=True, exist_ok=True)
     belief.mkdir(parents=True, exist_ok=True)
-    speakers_path, presence_path = belief / "speakers.json", belief / "per_speaker_presence.parquet"
-    if not speakers_path.exists() or not presence_path.exists():
+    speakers_path, speech_presence_path = belief / "speakers.json", belief / "per_speaker_presence.parquet"
+    if not speakers_path.exists() or not speech_presence_path.exists():
         ax.text(
             0.5,
             0.5,
-            "no per-speaker identity output",
+            "no per-speaker speaker output",
             transform=ax.transAxes,
             ha="center",
             va="center",
@@ -288,7 +288,7 @@ def _draw_per_speaker(ax: Any, out_dir: Path, duration: float) -> None:  # noqa:
         import pandas as pd
 
         doc = _json.loads(speakers_path.read_text())
-        rows = pd.read_parquet(presence_path).to_dict("records")
+        rows = pd.read_parquet(speech_presence_path).to_dict("records")
     except Exception as exc:  # noqa: BLE001 — a plot must never fail a run
         logger.debug("per-speaker outputs unreadable: %s", exc)
         ax.set_ylim(0, 1)
@@ -318,13 +318,13 @@ def _draw_per_speaker(ax: Any, out_dir: Path, duration: float) -> None:  # noqa:
     cmap = plt.get_cmap("tab10")
 
     for row in rows:
-        conf = row.get("presence_confidence")
+        conf = row.get("speech_presence_confidence")
         if conf is None:
             continue
         lane = lanes.get(str(row["speaker_id"]))
         if lane is None:
             continue
-        unc = float(row.get("presence_uncertainty") or 0.0)
+        unc = float(row.get("speech_presence_uncertainty") or 0.0)
         ax.add_patch(
             Rectangle(
                 (float(row["start"]), lane - 0.35),

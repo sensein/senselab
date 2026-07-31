@@ -7,9 +7,9 @@ reviewer can drill in directly without opening the parquets.
 
 Rows top-to-bottom:
 
-1. **presence_uncertainty** — raw solid + enhanced dashed in [0, 1]
-2. **identity_uncertainty** — raw solid + enhanced dashed
-3. **utterance_uncertainty** — raw solid + enhanced dashed
+1. **speech_presence_uncertainty** — raw solid + enhanced dashed in [0, 1]
+2. **speaker_uncertainty** — raw solid + enhanced dashed
+3. **asr_uncertainty** — raw solid + enhanced dashed
 4. **Diarization detail** — per (pass, diar_model), speaker bars at native segment
    times, colored by speaker label. Lets the reviewer see where each diar model
    thinks each speaker is.
@@ -20,7 +20,7 @@ Rows top-to-bottom:
    transitions against what the audio itself says.
 6. **ASR output** — per (pass, asr_model), token-level spans at the actual
    timestamps from the resolved (post-MMS-aligned) ASR result. Lets the reviewer see
-   which models returned text where and confirm whether high utterance uncertainty
+   which models returned text where and confirm whether high asr uncertainty
    is real disagreement or punctuation/hesitation noise.
 """
 
@@ -61,7 +61,7 @@ def _attr_series(rows: list, attr: str) -> tuple[np.ndarray, np.ndarray]:
     """Return sorted ``(centers, values)`` for an arbitrary numeric row attribute.
 
     Used for the scene-quality / sound-source rows, whose values live on the
-    presence rows' additive columns (``quality_*`` / ``src_*``). ``None`` values
+    speech_presence rows' additive columns (``quality_*`` / ``src_*``). ``None`` values
     become ``nan`` so gaps don't draw as zeros.
     """
     if not rows:
@@ -75,10 +75,10 @@ def _attr_series(rows: list, attr: str) -> tuple[np.ndarray, np.ndarray]:
     return centers[order], values[order]
 
 
-def _presence_has_attr(axis_results: dict, attrs: tuple[str, ...]) -> bool:
-    """True if any presence row across passes carries a non-null value for any of ``attrs``."""
+def _speech_presence_has_attr(axis_results: dict, attrs: tuple[str, ...]) -> bool:
+    """True if any speech_presence row across passes carries a non-null value for any of ``attrs``."""
     for (_pl, axis), result in axis_results.items():
-        if axis != "presence":
+        if axis != "speech_presence":
             continue
         for r in result.rows:
             if any(getattr(r, a, None) is not None for a in attrs):
@@ -104,7 +104,7 @@ def _cluster_speakers_by_embedding(
     typically stay well within the same-speaker cosine band (≤0.3). Sharing
     the centroid accumulator across passes lets a speaker keep one cluster id
     (and one plot color) end-to-end, regardless of which pass / diar model is
-    asking. Falls back to label-string identity when no embeddings are
+    asking. Falls back to label-string speaker when no embeddings are
     available for a given (pass, diar_model).
     """
     from senselab.audio.workflows.audio_analysis.clustering import (
@@ -166,7 +166,7 @@ def _iter_leaf_tokens(asr_result: Any) -> Any:  # noqa: ANN401
     - **Whisper-style** (native per-token chunks on a single ScriptLine): the line's
       ``chunks`` field is already at word level.
     - **Post-MMS-aligned** (text-only ASR resolved through the alignment block): the
-      structure is nested — outer ScriptLine → utterance ScriptLine →
+      structure is nested — outer ScriptLine → asr ScriptLine →
       word ScriptLines. Recurse to the leaves to get the per-word text + timestamps.
 
     A "leaf" is a chunk with no further sub-chunks (or whose sub-chunks have no
@@ -318,7 +318,7 @@ def build_aligned_timeline_plot(
     axis_results: dict[tuple[Any, Any], AxisResult],
     duration_s: float,
     grid_hop: float,
-    utterance_grid_hop: float | None = None,
+    asr_grid_hop: float | None = None,
     detail_by_pass: dict[str, dict[str, Any]] | None = None,
     save_path: Path | None = None,
     title: str | None = None,
@@ -347,9 +347,9 @@ def build_aligned_timeline_plot(
         axis_results: ``{(pass_label, axis) → AxisResult}`` from ``compute_uncertainty_axes``.
         duration_s: Audio duration in seconds — drives the x-axis extent.
         grid_hop: Bucket hop length (seconds) — matches the comparator grid.
-        utterance_grid_hop: Hop length for the utterance grid (typically wider than
+        asr_grid_hop: Hop length for the asr grid (typically wider than
             ``grid_hop``, e.g. 0.5 s with a 1.0 s window). When ``None``, falls back
-            to ``grid_hop`` for the utterance row.
+            to ``grid_hop`` for the asr row.
         detail_by_pass: ``{pass_label → {"diar_by_model": {..}, "asr_by_model": {..},
             "per_window_embeddings": {emb_model → [WindowEmbedding, ...]},
             "ppg": {"per_frame_phonemes": [..], "frame_hop": float}}}``.
@@ -398,12 +398,14 @@ def build_aligned_timeline_plot(
             ppg = (detail_by_pass.get(pl) or {}).get("ppg")
             if ppg and ppg.get("per_frame_phonemes"):
                 n_ppg_stripes += 1
-    # Optional scene rows (feature 20260722-175022) — only when the presence
+    # Optional scene rows (feature 20260722-175022) — only when the speech_presence
     # axis actually carries the additive columns.
-    has_quality = _presence_has_attr(
+    has_quality = _speech_presence_has_attr(
         axis_results, ("quality_snr", "quality_clip", "quality_reverb", "quality_bandwidth")
     )
-    has_sources = _presence_has_attr(axis_results, ("src_speech", "src_people", "src_machine", "src_environment"))
+    has_sources = _speech_presence_has_attr(
+        axis_results, ("src_speech", "src_people", "src_machine", "src_environment")
+    )
 
     # Build the row-index map with a running counter so inserting rows never
     # requires re-deriving fragile offsets.
@@ -423,9 +425,9 @@ def build_aligned_timeline_plot(
         # not depend on suppression depth. Reading an axis without knowing which spans
         # were target-free invites treating a leakage artifact as a finding.
         _add_row("mask", 0.55)
-    _add_row("presence", 1.4)
-    _add_row("identity", 1.4)
-    _add_row("utterance", 1.4)
+    _add_row("speech_presence", 1.4)
+    _add_row("speaker", 1.4)
+    _add_row("asr", 1.4)
     if has_quality:
         _add_row("quality", 1.2)
     if has_sources:
@@ -443,9 +445,9 @@ def build_aligned_timeline_plot(
 
     spec_row = row_idx.get("spec")
     mask_row = row_idx.get("mask")
-    presence_row = row_idx["presence"]
-    identity_row = row_idx["identity"]
-    utterance_row = row_idx["utterance"]
+    speech_presence_row = row_idx["speech_presence"]
+    speaker_row = row_idx["speaker"]
+    asr_row = row_idx["asr"]
     quality_row = row_idx.get("quality")
     sources_row = row_idx.get("sources")
     diar_row = row_idx.get("diar")
@@ -469,8 +471,8 @@ def build_aligned_timeline_plot(
     if title:
         fig.suptitle(title, fontsize=11)
 
-    axis_color = {"presence": "#1f77b4", "identity": "#ff7f0e", "utterance": "#2ca02c"}
-    utt_hop = utterance_grid_hop if utterance_grid_hop is not None else grid_hop
+    axis_color = {"speech_presence": "#1f77b4", "speaker": "#ff7f0e", "asr": "#2ca02c"}
+    utt_hop = asr_grid_hop if asr_grid_hop is not None else grid_hop
 
     if mask_row is not None and mask_rows:
         _draw_background_mask_row(axes[mask_row], mask_rows, duration_s)
@@ -514,10 +516,10 @@ def build_aligned_timeline_plot(
         ax_spec.set_xlim(0, duration_s)
 
     # Rows 1–3: per-axis raw + enhanced overlay.
-    for axis, row_i in (("presence", presence_row), ("identity", identity_row), ("utterance", utterance_row)):
+    for axis, row_i in (("speech_presence", speech_presence_row), ("speaker", speaker_row), ("asr", asr_row)):
         ax = axes[row_i]
         # Utterance has its own (possibly wider+overlapping) grid.
-        axis_hop = utt_hop if axis == "utterance" else grid_hop
+        axis_hop = utt_hop if axis == "asr" else grid_hop
         for pass_label in pass_order:
             result = axis_results.get((pass_label, axis))
             if result is None:
@@ -544,7 +546,7 @@ def build_aligned_timeline_plot(
             "quality_bandwidth": "#e377c2",
         }
         for pass_label in pass_order:
-            result = axis_results.get((pass_label, "presence"))
+            result = axis_results.get((pass_label, "speech_presence"))
             if result is None:
                 continue
             alpha, style = _pass_color_alpha(pass_label)
@@ -571,12 +573,12 @@ def build_aligned_timeline_plot(
             "src_machine": "#7f7f7f",
             "src_environment": "#bcbd22",
         }
-        # Prefer the raw pass; fall back to the first presence pass available.
-        result = axis_results.get(("raw_16k", "presence"))
+        # Prefer the raw pass; fall back to the first speech_presence pass available.
+        result = axis_results.get(("raw_16k", "speech_presence"))
         if result is None:
             for pass_label in pass_order:
-                if (pass_label, "presence") in axis_results:
-                    result = axis_results[(pass_label, "presence")]
+                if (pass_label, "speech_presence") in axis_results:
+                    result = axis_results[(pass_label, "speech_presence")]
                     break
         if result is not None:
             rows = sorted(
@@ -622,7 +624,7 @@ def build_aligned_timeline_plot(
             for k, (pass_label, m, segs) in enumerate(diar_stripes):
                 y = k
                 # Distinguish pass via edge color (raw=solid black; enhanced=grey),
-                # not via fill — fill is reserved for speaker identity.
+                # not via fill — fill is reserved for speaker speaker.
                 edge = "black" if pass_label == "raw_16k" else "0.4"
                 for seg in segs:
                     s = _seg_attr(seg, "start")
@@ -754,7 +756,7 @@ def build_aligned_timeline_plot(
 
         # Row 6/7: ASR output — one stripe per (pass, asr_model), token spans at native
         # timestamps with the actual text rendered on each bar (small font) so the
-        # reviewer can see WHY utterance uncertainty is high (punctuation differences,
+        # reviewer can see WHY asr uncertainty is high (punctuation differences,
         # partial words, hesitation tokens).
         ax_asr = axes[asr_row]
         asr_stripes: list[tuple[str, str, Any]] = []

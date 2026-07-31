@@ -345,9 +345,9 @@ Dependency-ordered; each step verifiable before the next.
 3. **Joint estimation** J1–J9, with J4 as a joint space (D-7).
 4. **Link functions** and TTS-fitted calibration (D-8, D-9).
 5. **Rounds and convergence** (D-10 – D-12, both guards).
-6. **Rename** `presence`/`identity`/`utterance` → `speech_presence`/`speaker`/`asr`, last, as one
-   mechanical sweep. Pre-alpha: rename outright with no aliases, and bump `CACHE_SCHEMA_VERSION`
-   so existing runs and caches are discarded rather than migrated.
+6. **Rename** `presence`/`identity`/`utterance` → `speech_presence`/`speaker`/`asr`. **Done.**
+   Renamed outright with no aliases; `CACHE_SCHEMA_VERSION` bumped 5 → 6 so cached entries carrying
+   the old axis names are discarded rather than mixed with new ones.
 
 ## Open items
 
@@ -359,3 +359,28 @@ Dependency-ordered; each step verifiable before the next.
 - **Sampling/dropout uncertainty** is absent for every signal that does not expose internal doubt
   (`segmentation_activations`, embeddings, scene classifiers).
 - **Non-target measurement** for the task category, deferred with it.
+
+## Notes from executing the rename
+
+**A blind sweep would have been wrong.** These words appear as ordinary nouns as well as axis
+names: `words_in_utterance` is a spoken utterance, `speaker_identity` is a person's identity,
+`utterance_transcript` is the text of an utterance. Those were protected by placeholder before
+substitution, and substitution then ran at *identifier-component* level (underscore-delimited), so
+`presence_confidence` became `speech_presence_confidence` while `speech_presence_labels` — already
+correct — was left alone.
+
+**Hyphen-delimited names needed separate handling.** CLI flags are hyphenated, so the
+underscore-based protection did not see them and two classes of mangle appeared:
+`--speech-presence-labels` (already correct) became `--speech-speech_presence-labels`, and
+`--no-per-speaker-identity` became `--no-per-speaker-speaker`. Any hyphenated name that acquired an
+underscore is the diagnostic for this, and it is worth recording because it is invisible to a test
+suite that never parses those flags — one test did catch it, by luck rather than by design.
+
+**Two flags were renamed rather than mechanically substituted.**
+`--identity-same-speaker-floor` would have become `--speaker-same-speaker-floor`, which repeats
+the axis name; they are now `--speaker-same-floor` / `--speaker-diff-floor`.
+
+**A pre-existing failure surfaced.** `test_schema_version_is_pinned` asserted
+`CACHE_SCHEMA_VERSION == 4` while the constant was already 5, so it had been failing unnoticed in a
+suite area that was not being exercised. A pin that can drift silently cannot enforce what it
+exists to enforce; it now reads 6 and records why.

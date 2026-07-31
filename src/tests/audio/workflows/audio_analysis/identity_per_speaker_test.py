@@ -1,6 +1,6 @@
-"""Per-speaker structure derived from the per-bucket identity evidence (T098).
+"""Per-speaker structure derived from the per-bucket speaker evidence (T098).
 
-The per-bucket identity axis stays the evidence-gathering mechanism; these functions read
+The per-bucket speaker axis stays the evidence-gathering mechanism; these functions read
 what it already harvested rather than running any new inference. Everything here is
 therefore pure, and a track can never claim a speaker the harvest did not observe.
 """
@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from senselab.audio.workflows.audio_analysis.embeddings import WindowEmbedding
-from senselab.audio.workflows.audio_analysis.identity import (
+from senselab.audio.workflows.audio_analysis.speaker import (
     SILENT_CLUSTER_ID,
     cluster_active_time,
     label_correspondence_rows,
@@ -31,29 +31,29 @@ def _bucket(start: float, end: float, clusters: dict[str, str], labels: dict[str
     return {"start": start, "end": end, "votes": votes}
 
 
-# ── presence per speaker ──────────────────────────────────────────────
+# ── speech_presence per speaker ──────────────────────────────────────────────
 
 
 def test_a_speaker_all_models_agree_on_is_present_without_doubt() -> None:
     """Unanimity is the anchor: if this carried uncertainty, nothing else could be read."""
     rows = per_speaker_tracks([_bucket(0.0, 0.5, {"a": "S0", "b": "S0"})])
     assert len(rows) == 1
-    assert rows[0]["presence_confidence"] == 1.0
-    assert rows[0]["presence_uncertainty"] == 0.0
+    assert rows[0]["speech_presence_confidence"] == 1.0
+    assert rows[0]["speech_presence_uncertainty"] == 0.0
     assert rows[0]["contributing_sources"] == ["a", "b"]
 
 
 def test_a_speaker_only_one_of_two_models_places_here_is_maximally_uncertain() -> None:
     """A split vote is the case the per-speaker axis exists to expose.
 
-    Under the old single scalar this bucket read as "identity is uncertain" without saying
+    Under the old single scalar this bucket read as "speaker is uncertain" without saying
     *which* speaker was in doubt — so no follow-up could be targeted.
     """
     rows = per_speaker_tracks([_bucket(0.0, 0.5, {"a": "S0", "b": "S1"})])
     by_id = {r["cluster_id"]: r for r in rows}
-    assert by_id["S0"]["presence_confidence"] == 0.5
-    assert by_id["S0"]["presence_uncertainty"] == pytest.approx(1.0)
-    assert by_id["S1"]["presence_uncertainty"] == pytest.approx(1.0)
+    assert by_id["S0"]["speech_presence_confidence"] == 0.5
+    assert by_id["S0"]["speech_presence_uncertainty"] == pytest.approx(1.0)
+    assert by_id["S1"]["speech_presence_uncertainty"] == pytest.approx(1.0)
 
 
 def test_silence_is_not_a_speaker() -> None:
@@ -69,7 +69,7 @@ def test_a_model_calling_silence_still_counts_against_a_speaker_it_omits() -> No
     otherwise a lone detection among four silent models reads as certain.
     """
     rows = per_speaker_tracks([_bucket(0.0, 0.5, {"a": "S0", "b": SILENT_CLUSTER_ID, "c": SILENT_CLUSTER_ID})])
-    assert rows[0]["presence_confidence"] == pytest.approx(1 / 3)
+    assert rows[0]["speech_presence_confidence"] == pytest.approx(1 / 3)
 
 
 def test_speakers_active_in_the_same_bucket_are_recorded_as_overlapping() -> None:
@@ -96,7 +96,7 @@ def test_rows_come_out_in_a_fixed_order() -> None:
 
 
 def test_a_speaker_absent_from_a_bucket_gets_no_row_there() -> None:
-    """Rows are evidence of presence, not assertions about everyone everywhere.
+    """Rows are evidence of speech_presence, not assertions about everyone everywhere.
 
     A bucket with no claim for a speaker is not the same as claiming that speaker absent at
     confidence zero.
@@ -181,7 +181,7 @@ def test_an_unmapped_cluster_keeps_its_own_id_rather_than_being_dropped() -> Non
 
 
 def test_a_single_speaker_pass_still_reports_its_calibration_band() -> None:
-    """The identity axis cannot report low uncertainty without a reachable same-speaker floor.
+    """The speaker axis cannot report low uncertainty without a reachable same-speaker floor.
 
     Measured on a two-speaker recording: across 446 buckets where every diarizer agreed the
     speaker was unchanged, ECAPA's within-speaker cosine distance had a median of 0.543 and
@@ -245,7 +245,7 @@ def test_overlapping_distance_distributions_report_no_usable_band() -> None:
     Measured on the higgs conversation with ECAPA over the standard window grid: the
     within-speaker distances have median 0.874 and the between-speaker distances 0.966, and
     the two distributions overlap almost entirely. The embedding simply does not separate
-    identity at this scale on this recording.
+    speaker at this scale on this recording.
 
     The old behaviour substituted the fixed [0.30, 0.70] band whenever the measured one came
     out inverted. That band is not merely imprecise here — it sits below every distance the
@@ -280,7 +280,7 @@ def test_a_genuinely_separable_pass_still_gets_its_band() -> None:
     assert band is not None and band[0] < band[1]
 
 
-def test_an_uncalibratable_embedding_emits_no_identity_claim() -> None:
+def test_an_uncalibratable_embedding_emits_no_speaker_claim() -> None:
     """FR-007: a sub-signal that cannot be calibrated drops out rather than voting.
 
     Without this the axis cannot fall back on the evidence that *is* available — unanimous
@@ -290,7 +290,7 @@ def test_an_uncalibratable_embedding_emits_no_identity_claim() -> None:
 
     from senselab.audio.workflows.audio_analysis.embeddings import WindowEmbedding
     from senselab.audio.workflows.audio_analysis.grid import BucketGrid
-    from senselab.audio.workflows.audio_analysis.identity import harvest_identity_votes
+    from senselab.audio.workflows.audio_analysis.speaker import harvest_speaker_votes
 
     segs = [{"start": 0.0, "end": 3.0, "speaker": "SPEAKER_00"}]
     pass_summary = {
@@ -303,7 +303,7 @@ def test_an_uncalibratable_embedding_emits_no_identity_claim() -> None:
         v = rng.normal(size=64)
         windows.append(WindowEmbedding(start_s=i * 0.5, end_s=i * 0.5 + 1.0, vector=v / np.linalg.norm(v)))
 
-    votes = harvest_identity_votes(
+    votes = harvest_speaker_votes(
         pass_summary=pass_summary,
         grid=BucketGrid(win_length=0.5, hop_length=0.5),
         per_window_embeddings={"ecapa": windows},

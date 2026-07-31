@@ -3,7 +3,7 @@
 This module defines `ScriptLine`, a lightweight, validated container for
 transcripts and diarization segments. A `ScriptLine` may represent:
 
-- a top-level utterance (with optional `speaker`, `start`, `end`),
+- a top-level asr (with optional `speaker`, `start`, `end`),
 - a container with nested `chunks` (each a `ScriptLine`),
 - or both (text + timing + nested chunks).
 
@@ -203,7 +203,7 @@ class ScriptLine(BaseModel):
         """Return the deepest chunk nodes (typically words) in temporal order.
 
         A leaf is a node with no ``chunks``. For a word-aligned transcript
-        (utterance → words) this yields the word lines; for a flat line it
+        (asr → words) this yields the word lines; for a flat line it
         yields the line itself. Consolidates the recursive walks previously
         re-implemented across forced_alignment, plotting, and the audio
         analysis workflow (architecture-review T049); for *serialized* trees
