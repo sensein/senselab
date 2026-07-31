@@ -45,7 +45,7 @@ def build_adaptive_timeline(out_dir: Path, *, gt_path: Path | None = None, title
     iterations = json.loads((belief / "iterations.json").read_text())["entries"]
     convergence = json.loads((belief / "convergence.json").read_text())
 
-    rounds_dir = out_dir / "rounds"
+    rounds_dir = belief_dir(out_dir) / "rounds"
     round_ids = sorted(int(p.name) for p in rounds_dir.iterdir() if p.name.isdigit())
     first_r, last_r = round_ids[0], round_ids[-1]
 
@@ -448,7 +448,7 @@ def _draw_spectrogram(ax: Any, out_dir: Path, duration: float) -> None:  # noqa:
 
         from senselab.audio.workflows.audio_analysis.adaptive.loop import _resolve_input_audio
 
-        summary = json.loads((out_dir / "summary.json").read_text())
+        summary = json.loads((final_dir(out_dir) / "summary.json").read_text())
         path = _resolve_input_audio(summary.get("input_audio"), out_dir)
         if not path:
             raise FileNotFoundError("input_audio not recorded in summary.json")

@@ -91,7 +91,7 @@ def run_adaptive_loop(
     policy = load_policy(policy_path, policy_overrides)
 
     if summary is None:
-        summary = json.loads((run_dir / "summary.json").read_text())
+        summary = json.loads((final_dir(run_dir) / "summary.json").read_text())
     passes = [pl for pl, ps in (summary.get("passes") or {}).items() if isinstance(ps, dict) and "duration_s" in ps]
     if not passes:
         raise ValueError(f"no completed passes in {run_dir}/summary.json")
@@ -116,7 +116,7 @@ def run_adaptive_loop(
     utterance_grid = _grid_from_rows(state.axis_rows(passes[0], "utterance"))
     theta_low = float(policy["thresholds"]["theta_low"])
 
-    rounds_dir = out_dir / "rounds"
+    rounds_dir = belief_dir(out_dir) / "rounds"
     _write_round_belief(rounds_dir / "1", state, passes)
     (rounds_dir / "1" / "summary.json").write_text(
         json.dumps(
