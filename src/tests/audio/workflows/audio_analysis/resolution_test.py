@@ -51,8 +51,10 @@ def test_upsampling_a_coarse_signal_holds_its_value() -> None:
 
 
 def test_downsampling_a_fine_signal_integrates_rather_than_samples() -> None:
-    """Point-sampling a 17 ms posterior at 250 ms throws away 14 of every 15 measurements, and
-    which one survives is arbitrary. Averaging keeps what they collectively said.
+    """Going coarser must integrate, not sample.
+
+    Point-sampling a 17 ms posterior at 250 ms throws away 14 of every 15 measurements and
+    which survives is arbitrary; averaging keeps what they collectively said.
     """
     fine_times = [i * 0.05 for i in range(20)]
     fine_values = [1.0 if i < 10 else 0.0 for i in range(20)]
@@ -80,3 +82,34 @@ def test_a_bucket_with_no_source_samples_is_not_measured() -> None:
 def test_the_native_table_is_keyed_by_signal_family() -> None:
     """Resolutions belong with the extractor that produces them, not scattered at call sites."""
     assert "frame_" in " ".join(NATIVE_RESOLUTION_S)
+
+
+# ── a constant posterior is not evidence ───────────────────────────────
+
+
+def test_multilabel_activations_reduce_by_noisy_or_not_max() -> None:
+    """Measured: the max over three speaker channels gave *exactly* 1.0000 in all 1070 buckets.
+
+    A voice detector reporting speech everywhere across a conversation with four clear pauses
+    is not a measurement. The max saturates the moment any one channel is confident; the
+    noisy-or, P(at least one speaker), keeps quiet frames quiet.
+    """
+    import numpy as np
+
+    from senselab.audio.tasks.voice_activity_detection.frame_posteriors import _speech_prob_from_output
+
+    # Rows do not sum to 1, so this takes the multilabel path.
+    quiet = np.array([[0.02, 0.01, 0.03]])
+    loud = np.array([[0.95, 0.10, 0.05]])
+    assert _speech_prob_from_output(quiet)[0] < 0.1
+    assert _speech_prob_from_output(loud)[0] > 0.9
+
+
+def test_the_powerset_path_is_unchanged() -> None:
+    """Softmax rows still use 1 - P(no speaker), which was never the saturating case."""
+    import numpy as np
+
+    from senselab.audio.tasks.voice_activity_detection.frame_posteriors import _speech_prob_from_output
+
+    powerset = np.array([[0.7, 0.1, 0.1, 0.1]])  # sums to 1
+    assert _speech_prob_from_output(powerset)[0] == pytest.approx(0.3)

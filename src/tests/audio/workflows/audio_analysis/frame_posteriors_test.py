@@ -51,11 +51,19 @@ def test_powerset_reduction_to_speech_prob() -> None:
     assert np.allclose(speech, [0.1, 0.8, 1.0], atol=1e-9)
 
 
-def test_multilabel_reduction_falls_back_to_max() -> None:
-    """Non-normalized (multilabel) rows → max over the class axis."""
+def test_multilabel_reduction_uses_noisy_or_not_max() -> None:
+    """Non-normalized (multilabel) rows are per-speaker activations, so P(at least one).
+
+    This test previously asserted the max over the class axis. The max saturates as soon as
+    any one channel is confident, and measured on a real recording that produced a posterior
+    of *exactly* 1.0000 in all 1070 buckets — a voice detector reporting speech everywhere
+    across a conversation with four clear pauses. The noisy-or keeps quiet frames quiet while
+    still reaching ~1 when a speaker is clearly present.
+    """
     data = np.array([[0.3, 0.9], [0.8, 0.7]])  # rows sum to 1.2 / 1.5, clearly not softmax
     speech = _speech_prob_from_output(data)
-    assert np.allclose(speech, [0.9, 0.8], atol=1e-9)
+    assert np.allclose(speech, [1 - 0.7 * 0.1, 1 - 0.2 * 0.3], atol=1e-9)
+    assert (speech >= np.max(data, axis=1)).all(), "at least one speaker is at least as likely"
 
 
 class _FakeInference:
