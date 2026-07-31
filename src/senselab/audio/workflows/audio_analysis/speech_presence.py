@@ -51,9 +51,12 @@ from senselab.audio.workflows.audio_analysis.acoustic import (
 from senselab.audio.workflows.audio_analysis.grid import BucketGrid
 from senselab.audio.workflows.audio_analysis.harvesters import (
     classification_windows,
+    diar_covered_fraction,
+    diar_speaker_label_in_window,
     diar_speaks_in_window,
     resolve_asr_result,
     token_overlaps_window,
+    whisper_bucket_avg_logprob,
     whisper_bucket_confidence,
     whisper_bucket_no_speech_prob,
 )
@@ -138,6 +141,19 @@ def _calibrate_uninformative_low(value: float | None, low: float, high: float) -
     p = 0.5 + 0.5 * (value - low) / (high - low)
     return p >= 0.5, max(0.0, min(1.0, p))
 
+
+_FRAME_SPEECH_THRESHOLD = 0.5
+"""Bucket-mean frame posterior above which the frame voter says speech. Named rather than inlined
+so the threshold is findable, and the mean it is applied to is recorded next to the verdict."""
+
+_NO_SPEECH_THRESHOLD = 0.5
+"""Whisper ``no_speech_prob`` above which a transcript over this bucket is treated as
+hallucinated. A calibration choice, named here rather than inlined so it is findable and so the
+measurement it is applied to travels alongside the verdict (register items 3, 5)."""
+
+_WHISPER_SEGMENT_S = 30.0
+"""Whisper's segment length. Recorded on the vote so a consumer can see that one value spans many
+fine buckets, instead of inferring it from a hard-coded weight (register item 15)."""
 
 SPEECH_EXCESS_DB = 12.0
 """dB above the measured noise floor at which a frame reads as clearly active.
@@ -366,11 +382,17 @@ def harvest_speech_presence_votes(
     for start, end, _idx in grid.iter_buckets(duration_s):
         votes: dict[str, dict[str, Any]] = {}
 
-        # Diar — no native confidence today (Sortformer/pyannote post-process to labels).
+        # Diar — the model reports segments, and a segment boundary is a hard claim, so there is
+        # no native confidence to report. What the vote carries beyond the bool is *which* speaker
+        # was claimed and how much of the bucket the segment covers: a segment overlapping 5% of a
+        # bucket and one covering all of it are not the same evidence, and the bool erases that.
         for m, block in diar_ok.items():
+            covered = diar_covered_fraction(block.get("result"), start, end)
             votes[m] = {
                 "speaks": diar_speaks_in_window(block.get("result"), start, end),
                 "native_confidence": None,
+                "covered_fraction": covered,
+                "speaker_label": diar_speaker_label_in_window(block.get("result"), start, end),
             }
 
         # ASR — speaks iff any chunk overlaps; native confidence from Whisper avg_logprob.
@@ -383,25 +405,34 @@ def harvest_speech_presence_votes(
             speaks = token_overlaps_window(resolved, start, end)
             nc = whisper_bucket_confidence(resolved, start, end)
             nsp = whisper_bucket_no_speech_prob(resolved, start, end)
-            hallucinated = bool(speaks and nsp is not None and nsp >= 0.5)
+            avg_lp = whisper_bucket_avg_logprob(resolved, start, end)
+            # The hallucination override is a threshold (nsp >= 0.5) applied to a measurement,
+            # so the threshold's *verdict* is recorded but the measurement travels with it: L2 can
+            # re-decide where the boundary sits, which it cannot do from the bool alone.
+            hallucinated = bool(speaks and nsp is not None and nsp >= _NO_SPEECH_THRESHOLD)
             asr_vote: dict[str, Any] = {
                 "speaks": speaks and not hallucinated,
                 "native_confidence": nc,
                 "hallucinated": hallucinated,
                 "coarse": True,  # sentence-level: one word spans many fine buckets
+                "native_window_s": None,  # utterance-scoped; no fixed window
             }
             if nsp is not None:
                 asr_vote["no_speech_prob"] = float(nsp)
+            if avg_lp is not None:
+                # The raw log-probability as well as the exp()'d confidence. They are different
+                # scales, and only the raw value is the model's own output.
+                asr_vote["avg_logprob"] = float(avg_lp)
             votes[m] = asr_vote
-            # Whisper-only: dedicated VAD-like vote from the model's
-            # ``no_speech_prob`` head. Independent of token-overlap (which
-            # measures whether the transcript landed in this bucket); this is
-            # the model's own "is there silence here?" decision.
+            # Whisper-only: dedicated VAD-like vote from the model's own ``no_speech_prob`` head,
+            # independent of token overlap (which measures whether the transcript landed here).
             if nsp is not None:
                 votes[f"{m}::no_speech_prob"] = {
-                    "speaks": nsp < 0.5,
+                    "speaks": nsp < _NO_SPEECH_THRESHOLD,
                     "native_confidence": 1.0 - float(nsp),
+                    "no_speech_prob": float(nsp),
                     "coarse": True,  # per-~30 s Whisper segment
+                    "native_window_s": _WHISPER_SEGMENT_S,
                 }
 
         # AST / YAMNet — project the bucket's CENTER onto the nearest native
@@ -520,7 +551,25 @@ def harvest_speech_presence_votes(
                 mean, std = fp.mean_std_in_window(start, end)
                 if not np.isfinite(mean):
                     continue
-                votes[name] = {"speaks": mean >= 0.5, "native_confidence": float(mean)}
+                frame_vote: dict[str, Any] = {
+                    "speaks": mean >= _FRAME_SPEECH_THRESHOLD,
+                    "native_confidence": float(mean),
+                    # The bucket mean is a reduction over frames, so record what it reduced: the
+                    # frame count and the within-bucket dispersion in probability units. A mean of
+                    # 0.5 from two steady frames and one from an onset crossing the bucket are
+                    # different evidence, and the mean alone cannot distinguish them.
+                    "frame_mean": float(mean),
+                    "frame_std": float(std) if np.isfinite(std) else None,
+                    "native_window_s": float(fp.frame_win_s) or None,
+                    "resolution_s": float(fp.frame_hop_s) or None,
+                }
+                per_channel = fp.per_channel_mean_in_window(start, end)
+                if per_channel is not None and per_channel.size > 1:
+                    # Per-speaker activations kept intact (D-5): which channel was active is what
+                    # the pooled value discards, and it is what per-speaker presence needs.
+                    frame_vote["channel_means"] = [float(x) for x in per_channel]
+                    frame_vote["channel_labels"] = list(fp.channel_labels)
+                votes[name] = frame_vote
                 if np.isfinite(std):
                     frame_stds.append(float(std))
 
@@ -531,10 +580,16 @@ def harvest_speech_presence_votes(
                 if isinstance(v, dict) and v.get("coarse"):
                     v["weight"] = _COARSE_VOTER_WEIGHT
 
-        # Within-bucket instability: std of a probability is at most 0.5, so ×2
-        # maps to [0, 1]. None when no frame voter contributed.
-        frame_instability = float(np.clip(2.0 * float(np.mean(frame_stds)), 0.0, 1.0)) if frame_stds else None
+        # Within-bucket temporal dispersion, in probability units, NOT rescaled.
+        #
+        # This was ``clip(2 * mean(std), 0, 1)``. The ×2 exists because the std of a value bounded
+        # in [0, 1] is at most 0.5, so doubling maps it onto [0, 1] — but that turns a dispersion
+        # into something that reads like a probability, and the clip then hides the cases where the
+        # rescale was wrong. Per ``statistics.py``, variability is reported in the units of the
+        # quantity and deliberately not squeezed into [0, 1]; rescaling makes it a different
+        # statistic and invites reading it as a belief. L2 decides how dispersion enters a belief.
+        frame_dispersion = float(np.mean(frame_stds)) if frame_stds else None
 
-        out.append({"start": start, "end": end, "votes": votes, "frame_instability": frame_instability})
+        out.append({"start": start, "end": end, "votes": votes, "frame_dispersion": frame_dispersion})
 
     return out

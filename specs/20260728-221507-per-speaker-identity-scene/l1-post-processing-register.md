@@ -69,11 +69,11 @@ signals"*, this module has no L1 role: it should become an L2 stage reading L1 m
 
 | # | site | current post-processing | L1 should emit | L2 question | status |
 |---|---|---|---|---|---|
-| 1 | diarization voters | `diar_speaks_in_window` → `speaks` bool | segments `(start_s, end_s, speaker_label)` per model | does any segment cover this bucket, and whose? | open |
+| 1 | diarization voters | `diar_speaks_in_window` → `speaks` bool | + `covered_fraction`, `speaker_label` | does any segment cover this bucket, and whose? | **partial** |
 | 2 | ASR token overlap | `token_overlaps_window` → `speaks` bool | words `(start_s, end_s, text)` | does a word land here? | open |
-| 3 | ASR hallucination gate | `speaks and not (nsp >= 0.5)` — threshold + override | `no_speech_prob` per segment, raw | is a transcript over probable silence trustworthy? | open |
-| 4 | Whisper confidence | `avg_logprob` → bucket `native_confidence` | `avg_logprob` per segment, units log-probability | how does token logprob map to belief? | open |
-| 5 | `::no_speech_prob` voter | `speaks = nsp < 0.5`, `nc = 1 − nsp` — threshold + inversion | same raw field as #3 (one measurement, not two voters) | same as #3 | open |
+| 3 | ASR hallucination gate | `speaks and not (nsp >= 0.5)` — threshold + override | raw `no_speech_prob` now travels with the verdict | is a transcript over probable silence trustworthy? | **partial** |
+| 4 | Whisper confidence | `avg_logprob` → bucket `native_confidence` | raw `avg_logprob` now recorded alongside | how does token logprob map to belief? | **partial** |
+| 5 | `::no_speech_prob` voter | `speaks = nsp < 0.5`, `nc = 1 − nsp` — threshold + inversion | raw `no_speech_prob` + `native_window_s` recorded | same as #3 | **partial** |
 | 6 | AST | top-1 argmax over 527 labels, then `label in speech_labels` | full label→score map per native window | which categories are present, and is any of them speech? | **closed** |
 | 7 | YAMNet | top-1 argmax over 521 labels, then `label in speech_labels` | full label→score map per 0.48 s hop | same as #6 | **closed** |
 | 8 | `acoustic_loudness` | per-pass **percentile band** p10→p75 → `[0,1]` → direction flip | replaced by absolute `lufs` (D-3) | what loudness counts as audible here? | **closed** |
@@ -81,9 +81,9 @@ signals"*, this module has no L1 role: it should become an L2 stage reading L1 m
 | 10 | `acoustic_hnr` | fixed 2→10 dB ramp; low maps to `p = 0.5` (abstain) | `HNRdBACF_sma3nz` in dB per 10 ms frame | what HNR indicates voicing, and when is it uninformative? | open |
 | 11 | `ppg_voice_fraction` | per-frame argmax, count `!= "<silent>"`, ÷ n, then `>= 0.5` | PPG posterior frames (or argmax label + its probability) | what fraction of non-silent frames means speech? | open |
 | 12 | `embedding_silhouette` | cluster all windows, silhouette coefficient, `>= 0.5` | embedding vectors per window | does clustering support a coherent speaker here? | open |
-| 13 | frame posteriors | bucket-mean over frames, then `>= 0.5` | per-frame posterior at native 17 ms | how do frames aggregate to a bucket? | open |
-| 14 | `frame_instability` | `clip(2 × mean(per-bucket std), 0, 1)` — ×2 rescale + clip | per-frame values | how is temporal dispersion measured? | open |
-| 15 | coarse-voter demotion | `weight = 0.25` when grid < 0.5 s | native window/hop in provenance | how should resolution mismatch be weighted? | open |
+| 13 | frame posteriors | bucket-mean over frames, then `>= 0.5` | + `frame_mean`, `frame_std`, `channel_means`, `resolution_s` | how do frames aggregate to a bucket? | **partial** |
+| 14 | `frame_dispersion` | `clip(2 × mean(std), 0, 1)` — ×2 rescale + clip | dispersion in probability units, unrescaled | how does dispersion enter a belief? | **closed** |
+| 15 | coarse-voter demotion | `weight = 0.25` when grid < 0.5 s | `native_window_s` / `resolution_s` on each vote | how should resolution mismatch be weighted? | **partial** |
 | 16 | segmentation-3.0 reduction | noisy-or over per-speaker channels (was `max`) | per-speaker activation matrix, channels intact | how do per-speaker activations combine? | **closed** |
 
 Item 16 is the sharpest case, and its diagnosis changed once measured. The model reports one
@@ -188,3 +188,29 @@ audio, so the contradiction was invisible and the suite asserted low presence un
 absolute voters read the waveform, correctly dissented, and presence uncertainty rose to 0.62. The
 fixture now carries audible content, with a separate `_silence_audio` helper for tests where
 absence of signal is the point.
+
+## Findings from the partial dissolve
+
+**`speaks: bool` was not the only loss — the measurement behind it was.** Rather than restructure
+the vote contract in one step, every vote now carries the evidence it was derived from, so L2 can
+re-decide without re-running a model. `covered_fraction` is the clearest case: a segment overlapping
+5% of a bucket and one covering all of it both set `speaks=True`, and the difference matters most at
+segment boundaries — exactly where speaker uncertainty is highest. Coverage is a *union* over
+segments, not a sum, so two speakers talking at once cannot report more than a bucket's worth.
+
+**Item 14 closed outright.** `frame_instability = clip(2 * mean(std), 0, 1)` doubled a dispersion
+because the std of a value bounded in `[0, 1]` is at most 0.5. That turns a dispersion into
+something that reads like a probability, and the clip then hides where the rescale was wrong. L1 now
+reports dispersion in probability units and `votes.py` maps it once, explicitly, via
+`MAX_PROBABILITY_STD` — the rescale is a modelling claim about how temporal instability should
+contribute to doubt, which is L2's to make and to change.
+
+**Items 1-5, 13, 15 are `partial`, not closed.** The measurements now travel, but the thresholds
+still fire in L1 and `speaks` is still what the aggregator reads. Fully closing them means moving
+`harvest_speech_presence_votes` into an L2 stage, which changes the contract consumed by
+`aggregate.py`, `votes.py`, `fuse.py` and the adaptive loop. Recorded as partial rather than closed
+so the remaining half is not mistaken for done.
+
+Items 11 (`ppg_voice_fraction`) and 12 (`embedding_silhouette`) remain fully open: both are
+*derived* signals rather than tool outputs, and per D-7 they should be recomputed at L2 from L1
+embeddings and posteriors.

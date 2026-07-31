@@ -42,6 +42,52 @@ def diar_speaks_in_window(result: Any, win_start: float, win_end: float) -> bool
     return False
 
 
+def diar_covered_fraction(result: Any, win_start: float, win_end: float) -> float | None:  # noqa: ANN401
+    """Fraction of ``[win_start, win_end)`` covered by any diarization segment.
+
+    The measurement ``diar_speaks_in_window`` reduces to a bool. A segment overlapping 5% of a
+    bucket and one covering all of it are not the same evidence, and a bool cannot tell them apart —
+    which matters most at segment boundaries, exactly where speaker uncertainty is highest.
+
+    Returns:
+        Coverage in ``[0, 1]``, or ``None`` when the window is empty or the model produced no
+        segments — an absent model is not a model reporting zero coverage.
+    """
+    if not result:
+        return None
+    span = float(win_end) - float(win_start)
+    if span <= 0:
+        return None
+    segments = result[0] if isinstance(result, list) and result else []
+    if not segments:
+        return None
+    # Union of overlaps, not their sum: overlapping segments from two speakers must not report
+    # more than a bucket's worth of coverage.
+    spans: list[tuple[float, float]] = []
+    for seg in segments:
+        s_attr = seg_attr(seg, "start")
+        e_attr = seg_attr(seg, "end")
+        if s_attr is None or e_attr is None:
+            continue
+        lo = max(float(win_start), float(s_attr))
+        hi = min(float(win_end), float(e_attr))
+        if hi > lo:
+            spans.append((lo, hi))
+    if not spans:
+        return 0.0
+    spans.sort()
+    covered = 0.0
+    cur_lo, cur_hi = spans[0]
+    for lo, hi in spans[1:]:
+        if lo > cur_hi:
+            covered += cur_hi - cur_lo
+            cur_lo, cur_hi = lo, hi
+        else:
+            cur_hi = max(cur_hi, hi)
+    covered += cur_hi - cur_lo
+    return max(0.0, min(1.0, covered / span))
+
+
 def diar_speaker_label_in_window(result: Any, win_start: float, win_end: float) -> str | None:  # noqa: ANN401
     """Return the diarization speaker label whose segment overlaps the window most.
 

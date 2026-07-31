@@ -205,8 +205,8 @@ class VoteStore:
                         meta: dict[str, Any] = {"stored_within_pass_uncertainty": None}
                         # P2's second trigger reads this; it lives on the harvest
                         # bucket rather than in quality_by_bucket.
-                        if bucket.get("frame_instability") is not None:
-                            meta["frame_instability"] = float(bucket["frame_instability"])
+                        if bucket.get("frame_dispersion") is not None:
+                            meta["frame_dispersion"] = float(bucket["frame_dispersion"])
                         q = harvest.quality_by_bucket.get(bk)
                         s = harvest.source_by_bucket.get(bk)
                         if q:

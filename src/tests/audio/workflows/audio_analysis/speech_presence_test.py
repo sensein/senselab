@@ -133,3 +133,91 @@ def test_level_above_floor_asserts_speech_presence_when_the_recording_has_quiet_
     active_speaks = [b["votes"]["acoustic_level_above_floor"]["speaks"] for b in active]
     assert all(nc == pytest.approx(0.5) for nc in quiet_nc), "quiet stretches abstain"
     assert all(active_speaks), "the tone is well above the measured floor"
+
+
+# ── evidence carried alongside the vote (register items 1-5, 13-15) ──────────
+
+
+def test_diar_coverage_distinguishes_a_grazing_segment_from_a_full_one() -> None:
+    """``speaks`` is True for both, so the bool alone cannot tell them apart."""
+    from senselab.audio.workflows.audio_analysis.harvesters import diar_covered_fraction
+
+    full = [[{"start": 0.0, "end": 1.0, "speaker": "S"}]]
+    grazing = [[{"start": 0.95, "end": 3.0, "speaker": "S"}]]
+    assert diar_covered_fraction(full, 0.0, 1.0) == pytest.approx(1.0)
+    assert diar_covered_fraction(grazing, 0.0, 1.0) == pytest.approx(0.05)
+
+
+def test_diar_coverage_unions_overlapping_speakers() -> None:
+    """Two speakers talking at once must not report more than a bucket's worth of coverage."""
+    from senselab.audio.workflows.audio_analysis.harvesters import diar_covered_fraction
+
+    both = [[{"start": 0.0, "end": 1.0, "speaker": "A"}, {"start": 0.0, "end": 1.0, "speaker": "B"}]]
+    assert diar_covered_fraction(both, 0.0, 1.0) == pytest.approx(1.0)
+
+
+def test_diar_coverage_is_none_without_segments() -> None:
+    """An absent model is not a model reporting zero coverage."""
+    from senselab.audio.workflows.audio_analysis.harvesters import diar_covered_fraction
+
+    assert diar_covered_fraction(None, 0.0, 1.0) is None
+    assert diar_covered_fraction([[]], 0.0, 1.0) is None
+
+
+def test_frame_dispersion_is_reported_in_probability_units() -> None:
+    """L1 reports the dispersion unrescaled; the [0, 1] mapping is L2's modelling choice.
+
+    Previously L1 emitted ``clip(2 * std, 0, 1)``. Doubling turns a dispersion into something that
+    reads like a probability, and the clip then hides where the rescale was wrong.
+    """
+    import numpy as np
+
+    from senselab.audio.tasks.voice_activity_detection.frame_posteriors import FramePosterior
+    from senselab.audio.workflows.audio_analysis.grid import BucketGrid
+    from senselab.audio.workflows.audio_analysis.speech_presence import harvest_speech_presence_votes
+    from senselab.audio.workflows.audio_analysis.votes import MAX_PROBABILITY_STD, _dispersion_to_instability
+
+    # Half-0 / half-1 across the bucket: the maximal dispersion for a bounded value, std = 0.5.
+    probs = np.concatenate([np.zeros(50), np.ones(50)])
+    fp = FramePosterior(activations=probs[:, None], frame_hop_s=0.01, channel_format="single")
+    buckets = harvest_speech_presence_votes(
+        pass_summary={"duration_s": 1.0},
+        grid=BucketGrid(win_length=1.0, hop_length=1.0),
+        speech_presence_labels=["Speech"],
+        alignment_by_model={},
+        frame_posteriors={"frame_segmentation": fp},
+    )
+    dispersion = buckets[0]["frame_dispersion"]
+    assert dispersion == pytest.approx(MAX_PROBABILITY_STD, abs=0.02), "reported in probability units"
+    # L2 maps it, and only there does it become a [0, 1] quantity.
+    assert _dispersion_to_instability(dispersion) == pytest.approx(1.0, abs=0.05)
+    assert _dispersion_to_instability(0.0) == pytest.approx(0.0)
+    assert _dispersion_to_instability(None) is None
+
+
+def test_frame_vote_keeps_per_speaker_channels() -> None:
+    """D-5: which channel was active survives onto the vote, not just the pooled value."""
+    import numpy as np
+
+    from senselab.audio.tasks.voice_activity_detection.frame_posteriors import FramePosterior
+    from senselab.audio.workflows.audio_analysis.grid import BucketGrid
+    from senselab.audio.workflows.audio_analysis.speech_presence import harvest_speech_presence_votes
+
+    activations = np.tile(np.array([[0.0, 1.0, 0.0]]), (100, 1))
+    fp = FramePosterior(
+        activations=activations,
+        frame_hop_s=0.01,
+        channel_format="per_speaker",
+        channel_labels=("speaker#1", "speaker#2", "speaker#3"),
+    )
+    buckets = harvest_speech_presence_votes(
+        pass_summary={"duration_s": 1.0},
+        grid=BucketGrid(win_length=1.0, hop_length=1.0),
+        speech_presence_labels=["Speech"],
+        alignment_by_model={},
+        frame_posteriors={"frame_segmentation": fp},
+    )
+    vote = buckets[0]["votes"]["frame_segmentation"]
+    assert vote["channel_means"] == pytest.approx([0.0, 1.0, 0.0])
+    assert vote["channel_labels"] == ["speaker#1", "speaker#2", "speaker#3"]
+    assert vote["resolution_s"] == pytest.approx(0.01)

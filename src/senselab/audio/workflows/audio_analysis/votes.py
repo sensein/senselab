@@ -142,6 +142,27 @@ def scene_quality_coupling(
     return max(1.0, coupling)
 
 
+MAX_PROBABILITY_STD = 0.5
+"""Largest possible standard deviation of a value bounded in ``[0, 1]``.
+
+Reached by a half-0 / half-1 split, which is exactly the onset-crossing case the frame dispersion
+signal is meant to catch."""
+
+
+def _dispersion_to_instability(dispersion: float | None) -> float | None:
+    """Map within-bucket frame dispersion onto ``[0, 1]`` for folding into a belief.
+
+    L1 reports dispersion in probability units and does not rescale it, because rescaling makes it
+    a different statistic and invites reading a dispersion as a probability. The rescale is a
+    *modelling choice* about how temporal instability should contribute to doubt, so it happens
+    here, once, where it can be seen and changed — rather than being baked into the recorded
+    measurement as ``clip(2 * std, 0, 1)`` was.
+    """
+    if dispersion is None:
+        return None
+    return max(0.0, min(1.0, float(dispersion) / MAX_PROBABILITY_STD))
+
+
 def _quality_anchors(params: dict[str, Any]) -> dict[str, float] | None:
     """Extract fitted scene-quality anchors from run params, or ``None`` for the defaults.
 
@@ -237,7 +258,7 @@ def aggregate_pass(
             votes = {**votes, "__quality__": {k: v for k, v in quality.items() if k != "provenance"}}
         if source is not None:
             votes = {**votes, "__sources__": source.get("_raw", {})}
-        instability = bucket.get("frame_instability")
+        instability = _dispersion_to_instability(bucket.get("frame_dispersion"))
         if u is None:
             speech_presence_uncertainty: float | None = None
         elif instability is None:
