@@ -65,6 +65,100 @@ def rms_dbfs_track(
     return times, np.maximum(levels, DBFS_FLOOR)
 
 
+def spectrogram_db(
+    waveform: np.ndarray,
+    sampling_rate: int,
+    *,
+    n_fft: int = 1024,
+    hop_s: float = 0.01,
+    floor_db: float = -80.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Magnitude spectrogram in dB, normalised so the loudest bin is 0 dB.
+
+    dB rather than linear magnitude: on a linear scale everything below the loudest bin
+    collapses to black, which hides exactly the quiet background content the rest of this
+    pipeline is about. Normalised to the peak so the colour scale means the same thing across
+    recordings at different levels.
+
+    Returns:
+        ``(spec_db, times, freqs)``, floored at ``floor_db`` — digital silence would otherwise
+        be ``-inf``, which cannot be rendered.
+    """
+    arr = np.asarray(waveform, dtype=np.float64).squeeze()
+    hop = max(1, int(round(float(hop_s) * float(sampling_rate))))
+    if arr.size < n_fft:
+        arr = np.pad(arr, (0, n_fft - arr.size))
+    window = np.hanning(n_fft)
+    starts = range(0, max(1, arr.size - n_fft + 1), hop)
+    frames = np.stack([arr[i : i + n_fft] * window for i in starts], axis=1)
+    magnitude = np.abs(np.fft.rfft(frames, axis=0))
+    peak = float(magnitude.max()) or 1.0
+    with np.errstate(divide="ignore"):
+        spec = 20.0 * np.log10(np.maximum(magnitude / peak, 1e-12))
+    times = np.array([i / float(sampling_rate) for i in starts])
+    freqs = np.fft.rfftfreq(n_fft, 1.0 / float(sampling_rate))
+    return np.maximum(spec, floor_db), times, freqs
+
+
+def scene_composition(
+    windows: Sequence[Mapping[str, object]],
+    *,
+    duration_s: float,
+    hop_s: float = 0.1,
+    categories: Sequence[str] | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-category share of a classifier's output over time, for a composition plot.
+
+    Normalised per column so the rows read as *shares* — a composition plot whose columns do
+    not sum to one is a stack of unrelated magnitudes and cannot be compared across time.
+
+    Time the classifier never covered stays empty rather than becoming an even split: an even
+    split would look like "all categories equally present" where the truth is "nothing was
+    measured here", and those license opposite conclusions.
+
+    Returns:
+        ``(times, shares)`` with ``shares`` shaped ``(len(categories), len(times))``.
+    """
+    from senselab.audio.workflows.audio_analysis.sound_sources import (
+        SOURCE_CATEGORIES,
+        _category_for,
+        load_source_category_map,
+    )
+
+    names = list(categories or SOURCE_CATEGORIES)
+    try:
+        doc = load_source_category_map()
+        mapping, default = dict(doc.get("map") or {}), str(doc.get("default") or names[-1])
+    except (OSError, ValueError):
+        mapping, default = {}, names[-1]
+
+    n_cols = max(1, int(round(max(duration_s, hop_s) / hop_s)))
+    times = np.arange(n_cols) * hop_s
+    mass = np.zeros((len(names), n_cols), dtype=np.float64)
+    index = {name: i for i, name in enumerate(names)}
+
+    for window in windows or ():
+        if not isinstance(window, Mapping):
+            continue
+        w_start = float(window.get("start", 0.0) or 0.0)
+        w_end = float(window.get("end", 0.0) or 0.0)
+        cols = np.where((times + hop_s > w_start) & (times < w_end))[0]
+        if cols.size == 0:
+            continue
+        for label, score in zip(window.get("labels") or [], window.get("scores") or []):
+            category = _category_for(str(label), mapping, default)
+            row = index.get(category)
+            if row is None:
+                continue
+            mass[row, cols] += max(0.0, float(score))
+
+    totals = mass.sum(axis=0)
+    shares = np.zeros_like(mass)
+    covered = totals > 0
+    shares[:, covered] = mass[:, covered] / totals[covered]
+    return times, shares
+
+
 def build_l1_signal_plot(
     out_dir: Path | str,
     *,
@@ -72,6 +166,8 @@ def build_l1_signal_plot(
     duration_s: float,
     waveform: np.ndarray | None = None,
     sampling_rate: int = 16000,
+    words: Sequence[Mapping[str, object]] | None = None,
+    scene_by_classifier: Mapping[str, Sequence[Mapping[str, object]]] | None = None,
     title: str | None = None,
 ) -> Path:
     """Draw one row per L1 signal plus a dBFS level row, and save under ``L1/signals.png``.
@@ -80,8 +176,13 @@ def build_l1_signal_plot(
         out_dir: Run directory.
         signals: ``{signal → [(start, end), ...]}`` spans the signal reported.
         duration_s: Recording length, so empty rows still span the figure.
-        waveform: Mono samples for the level row, or ``None`` to omit it.
+        waveform: Mono samples for the spectrogram and level rows, or ``None`` to omit them.
         sampling_rate: Sample rate of ``waveform``.
+        words: Aligned words (``start``, ``end``, ``text``) drawn as a transcript row, so a
+            disagreement can be read against what was actually said there.
+        scene_by_classifier: ``{classifier → windows}`` drawn as stacked category shares, one
+            row per classifier — AST and YAMNet disagree often enough that a merged row would
+            hide which of them saw what.
         title: Figure title.
 
     Returns:
@@ -96,7 +197,10 @@ def build_l1_signal_plot(
     from senselab.audio.workflows.audio_analysis.layout import evidence_dir
 
     names = sorted(signals)
-    n_rows = len(names) + (1 if waveform is not None else 0)
+    scene_names = sorted(scene_by_classifier or {})
+    n_rows = (
+        len(names) + len(scene_names) + (1 if words else 0) + (2 if waveform is not None else 0)  # spectrogram + level
+    )
     height = max(2.0, 0.45 * max(1, n_rows) + 1.2)
     fig, axes = plt.subplots(max(1, n_rows), 1, figsize=(14, height), sharex=True, squeeze=False)
     flat = [ax for (ax,) in axes]
@@ -109,7 +213,55 @@ def build_l1_signal_plot(
         for start, end in signals[name] or ():
             ax.add_patch(Rectangle((float(start), 0.1), max(1e-3, float(end) - float(start)), 0.8, color="#3b6ea5"))
 
+    row = len(names)
+    for classifier in scene_names:
+        ax = flat[row]
+        row += 1
+        ax.set_ylabel(f"scene\n{classifier}", rotation=0, ha="right", va="center", fontsize=7)
+        ax.set_xlim(0, max(duration_s, 1e-6))
+        times, shares = scene_composition(scene_by_classifier[classifier], duration_s=duration_s)
+        if shares.size:
+            ax.stackplot(times, shares, linewidth=0)
+            ax.set_ylim(0, 1)
+        ax.set_yticks([])
+
+    if words:
+        ax = flat[row]
+        row += 1
+        ax.set_ylabel("words", rotation=0, ha="right", va="center", fontsize=7)
+        ax.set_xlim(0, max(duration_s, 1e-6))
+        ax.set_ylim(0, 1)
+        ax.set_yticks([])
+        for word in words:
+            start = float(word.get("start", 0.0) or 0.0)
+            end = float(word.get("end", start) or start)
+            ax.text(
+                (start + end) / 2.0,
+                0.5,
+                str(word.get("text") or ""),
+                ha="center",
+                va="center",
+                fontsize=6,
+                rotation=0,
+                clip_on=True,
+            )
+            ax.axvline(start, color="#bbbbbb", linewidth=0.3)
+
     if waveform is not None:
+        ax = flat[row]
+        row += 1
+        spec, s_times, s_freqs = spectrogram_db(waveform, sampling_rate)
+        ax.set_ylabel("spectrogram", rotation=0, ha="right", va="center", fontsize=7)
+        ax.imshow(
+            spec,
+            origin="lower",
+            aspect="auto",
+            extent=(0.0, float(s_times[-1] if s_times.size else duration_s), 0.0, float(s_freqs[-1])),
+            cmap="magma",
+        )
+        ax.set_xlim(0, max(duration_s, 1e-6))
+        ax.set_yticks([])
+
         ax = flat[-1]
         times, levels = rms_dbfs_track(waveform, sampling_rate)
         ax.set_ylabel("RMS\ndBFS", rotation=0, ha="right", va="center", fontsize=7)
