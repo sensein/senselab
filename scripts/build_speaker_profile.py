@@ -182,12 +182,26 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     kept = sum(1 for s in profile.sources if s.kept)
+    share = profile.dominant_cluster.share if profile.dominant_cluster else None
     print(
         f"profile {args.subject_id}: confidence={profile.confidence} "
         f"models={len(profile.centroids)} "
         f"speech={profile.aggregate_speech_seconds:.1f}s "
+        f"dominant_share={'n/a' if share is None else format(share, '.2f')} "
         f"kept={kept}/{len(profile.sources)} files → {args.output}"
     )
+    # The confidence policy does not consider the dominant cluster's absolute share, so a
+    # fragmented subject can report "ok" while the reference covers a minority of their
+    # speech. Warn rather than downgrade: a low share is legitimate for a subject whose every
+    # recording contains a second speaker, so the judgement belongs to the operator.
+    if profile.provenance.get("dominant_share_below_advisory") and share is not None:
+        print(
+            f"warn: dominant cluster holds only {share:.0%} of this subject's enrolled speech "
+            f"(advisory floor {C.ADVISORY_MIN_DOMINANT_SHARE:.0%}); confidence="
+            f"{profile.confidence!r} does not account for that. The reference may be anchored "
+            f"on the wrong voice — check the per-file records before relying on it.",
+            file=sys.stderr,
+        )
     return 0
 
 
