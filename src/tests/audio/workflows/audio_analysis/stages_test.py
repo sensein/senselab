@@ -2,7 +2,7 @@
 
 Model-free: each test monkeypatches the ``tasks/`` call the stage dispatches to, so
 this runs in CI without downloads or a GPU. What's pinned is the part that fails
-*silently* if it drifts — the fragment keys that ``presence.py`` / ``compute.py`` /
+*silently* if it drifts — the fragment keys that ``speech_presence.py`` / ``compute.py`` /
 ``global_summary.py`` / the adaptive interventions read, and the deliberate
 asymmetry between what ``stage_features`` returns and what it writes.
 """
@@ -149,7 +149,7 @@ def test_features_returns_live_rows_but_writes_a_placeholder(
 ) -> None:
     """The returned result must be the real dict; only the JSON gets a placeholder.
 
-    presence.py / compute.py / global_summary.py read
+    speech_presence.py / compute.py / global_summary.py read
     pass_summary["features"]["result"] as {backend: rows}. Returning the sidecar
     shape instead would leave every loudness/quality column None rather than
     raising — the exact failure this pins.

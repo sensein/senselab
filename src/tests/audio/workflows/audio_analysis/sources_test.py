@@ -468,7 +468,7 @@ def test_a_target_free_finding_outranks_the_same_finding_under_target_activity()
     assert list(TIERS).index(free.tier) > list(TIERS).index(murky.tier)
 
 
-# ── presence vs extent, and modulation depth (T061 / T063) ────────────
+# ── speech_presence vs extent, and modulation depth (T061 / T063) ────────────
 
 
 def _depth(waveform: np.ndarray, sampling_rate: int, *, discount_speech_band: bool = False) -> float:
@@ -485,7 +485,7 @@ def _depth(waveform: np.ndarray, sampling_rate: int, *, discount_speech_band: bo
 
 
 def test_a_confidently_present_source_still_gets_its_own_boundaries() -> None:
-    """FR-021k: one threshold cannot get both presence and extent right.
+    """FR-021k: one threshold cannot get both speech_presence and extent right.
 
     Frame-level thresholding entangles detection confidence with temporal extent — raise the
     threshold and a real event's edges erode; lower it and neighbouring noise joins on. So
@@ -495,19 +495,19 @@ def test_a_confidently_present_source_still_gets_its_own_boundaries() -> None:
     from senselab.audio.workflows.audio_analysis.sources import resolve_extent
 
     frames = [(0.0, 0.5, 4.0), (0.5, 1.0, 12.0), (1.0, 1.5, 5.0), (1.5, 2.0, 0.5)]
-    extent = resolve_extent(frames, presence_margin_db=10.0, extent_margin_db=3.0)
+    extent = resolve_extent(frames, speech_presence_margin_db=10.0, extent_margin_db=3.0)
     assert extent == (0.0, 1.5)
 
 
-def test_a_source_that_never_clears_the_presence_gate_has_no_extent() -> None:
-    """Extent is meaningless without presence.
+def test_a_source_that_never_clears_the_speech_presence_gate_has_no_extent() -> None:
+    """Extent is meaningless without speech_presence.
 
     Otherwise a run would report boundaries for something it never claimed was there.
     """
     from senselab.audio.workflows.audio_analysis.sources import resolve_extent
 
     frames = [(0.0, 0.5, 4.0), (0.5, 1.0, 5.0)]
-    assert resolve_extent(frames, presence_margin_db=10.0, extent_margin_db=3.0) is None
+    assert resolve_extent(frames, speech_presence_margin_db=10.0, extent_margin_db=3.0) is None
 
 
 def test_extent_does_not_bridge_across_a_genuine_gap() -> None:
@@ -515,7 +515,7 @@ def test_extent_does_not_bridge_across_a_genuine_gap() -> None:
     from senselab.audio.workflows.audio_analysis.sources import resolve_extent
 
     frames = [(0.0, 0.5, 12.0), (0.5, 1.0, 0.0), (1.0, 1.5, 0.0), (1.5, 2.0, 12.0)]
-    assert resolve_extent(frames, presence_margin_db=10.0, extent_margin_db=3.0) == (0.0, 0.5)
+    assert resolve_extent(frames, speech_presence_margin_db=10.0, extent_margin_db=3.0) == (0.0, 0.5)
 
 
 def test_a_steady_hum_has_almost_no_modulation_depth() -> None:

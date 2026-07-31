@@ -15,7 +15,7 @@ Three properties are deliberate:
 
 **Other diarizers are not evidence.** A bad diarizer can always say "one speaker", so
 agreement among diarizers is not physical support; three models claiming a speaker in silence
-are all wrong together, not mutually validated. Only signals that observe speech presence
+are all wrong together, not mutually validated. Only signals that observe speech speech_presence
 directly (frame posteriors, scene-classifier speech mass) count.
 
 **Support measures precision, not recall.** It can see a claim the audio does not support; it
@@ -23,7 +23,7 @@ cannot see a speaker a signal *failed* to claim. A diarizer that under-counts is
 this measure — that failure has to surface through the count posterior's disagreement instead.
 Support must therefore never be read as a quality score.
 
-**Absent evidence is not evidence of absence.** With no independent presence signal in the
+**Absent evidence is not evidence of absence.** With no independent speech_presence signal in the
 run, no signal is penalised. Otherwise a missing model would look like a wrong one.
 """
 
@@ -66,7 +66,7 @@ def _evidence_value(entry: Any) -> float | None:  # noqa: ANN401
 
 
 def signal_support(
-    presence_buckets: Sequence[Mapping[str, Any]],
+    speech_presence_buckets: Sequence[Mapping[str, Any]],
     *,
     evidence_signals: Sequence[str],
     floor: float = SUPPORT_FLOOR,
@@ -74,10 +74,10 @@ def signal_support(
     """How far each signal's speech claims are corroborated by independent evidence.
 
     Args:
-        presence_buckets: Per-bucket presence votes, as harvested. Each bucket's ``votes``
+        speech_presence_buckets: Per-bucket speech_presence votes, as harvested. Each bucket's ``votes``
             maps signal name to its entry; claim entries carry ``speaks``, evidence entries
             carry a continuous P(speech).
-        evidence_signals: Names treated as independent presence evidence. These are scored
+        evidence_signals: Names treated as independent speech_presence evidence. These are scored
             against nobody and score nobody but the claimants.
         floor: Minimum support, so an unsupported signal is attenuated not erased.
 
@@ -90,7 +90,7 @@ def signal_support(
     evidence_names = set(evidence_signals)
     claimed: dict[str, list[float]] = {}
 
-    for bucket in presence_buckets or []:
+    for bucket in speech_presence_buckets or []:
         if not isinstance(bucket, Mapping):
             continue
         votes = bucket.get("votes") or {}
@@ -116,15 +116,15 @@ def signal_support(
     return {name: max(float(floor), sum(values) / len(values)) for name, values in sorted(claimed.items()) if values}
 
 
-# Voters that observe speech presence *directly*. Diarizers and ASR are excluded on
-# principle rather than by name: both infer presence from a decision that already
+# Voters that observe speech speech_presence *directly*. Diarizers and ASR are excluded on
+# principle rather than by name: both infer speech_presence from a decision that already
 # presupposes a speaker, so using them as corroboration would let a wrong presupposition
 # validate itself.
 _FRAME_VOTER_PREFIX = "frame_"
 _ACOUSTIC_VOTER_PREFIX = "acoustic_"
 
 
-def evidence_signal_names(presence_buckets: Sequence[Mapping[str, Any]]) -> set[str]:
+def evidence_signal_names(speech_presence_buckets: Sequence[Mapping[str, Any]]) -> set[str]:
     """Derive the independent-evidence voter set from the harvest itself.
 
     Read structurally rather than from a configured list, which would drift the moment a
@@ -136,7 +136,7 @@ def evidence_signal_names(presence_buckets: Sequence[Mapping[str, Any]]) -> set[
     ``__sources__`` bookkeeping entry, which already lists exactly which classifiers ran.
     """
     names: set[str] = set()
-    for bucket in presence_buckets or []:
+    for bucket in speech_presence_buckets or []:
         if not isinstance(bucket, Mapping):
             continue
         votes = bucket.get("votes") or {}
@@ -182,7 +182,7 @@ is measurable on the run with no per-model judgement."""
 
 
 def informative_evidence(
-    presence_buckets: Sequence[Mapping[str, Any]],
+    speech_presence_buckets: Sequence[Mapping[str, Any]],
     candidates: Sequence[str],
     *,
     min_spread: float = MIN_EVIDENCE_SPREAD,
@@ -200,7 +200,7 @@ def informative_evidence(
     and no per-model judgement, which is the same standard the weights themselves are held to.
 
     Args:
-        presence_buckets: Per-bucket presence votes.
+        speech_presence_buckets: Per-bucket speech_presence votes.
         candidates: Evidence signal names to screen.
         min_spread: Required max − min range.
         low_threshold: Value below which the signal is reporting "no speech".
@@ -210,7 +210,7 @@ def informative_evidence(
         The subset that varies enough to locate speech in time.
     """
     series: dict[str, list[float]] = {}
-    for bucket in presence_buckets or []:
+    for bucket in speech_presence_buckets or []:
         if not isinstance(bucket, Mapping):
             continue
         votes = bucket.get("votes") or {}

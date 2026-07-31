@@ -5,9 +5,9 @@ sortformer ``speaker_2``, etc.). To compare across diar models — and to
 recognize that two models naming the same person differently are actually in
 agreement — we cluster ``(diar_model, raw_label)`` pairs by their mean speaker
 embedding. The output map ``{(diar_model, raw_label) → cluster_id}`` is the
-shared "speaker identity" used by:
+shared "speaker speaker" used by:
 
-- ``identity`` axis: cross-model agreement signal compares cluster_id, not raw
+- ``speaker`` axis: cross-model agreement signal compares cluster_id, not raw
   labels, so naming-convention differences don't fake disagreement.
 - timeline plot: speaker color is per cluster_id, not per raw label, so a
   speaker keeps the same color across diar models and across passes.

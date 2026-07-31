@@ -3,10 +3,10 @@
 Per the workflow's bottom-line goal: produce a single ``[0, 1]`` uncertainty
 score that grades whether the audio satisfies four claims simultaneously:
 
-1. **Accurate transcript** — utterance axis aggregated over time, plus ASR
+1. **Accurate transcript** — asr axis aggregated over time, plus ASR
    cross-model agreement, minus ASR hallucination penalties.
 2. **Single speaker** — ``n_speakers`` from the embedding-derived diar source
-   (0 = no speech, 1 = single speaker, ≥2 = multiple), plus identity-axis
+   (0 = no speech, 1 = single speaker, ≥2 = multiple), plus speaker-axis
    stability across speech buckets.
 3. **High quality** — torchaudio_squim PESQ / STOI / SI-SDR aggregate, plus
    acoustic-feature SNR proxies.
@@ -52,17 +52,17 @@ from senselab.audio.workflows.audio_analysis.types import AxisResult
 
 def _mean_over_voice_buckets(
     rows: list[Any],
-    presence_rows: list[Any] | None = None,
+    speech_presence_rows: list[Any] | None = None,
 ) -> float | None:
     """Intensity-weighted mean of ``within_pass_uncertainty`` over voice buckets.
 
     Uses the per-row ``intensity_weight`` (which already encodes "how much
-    confident-voice content is in this bucket" — derived from the presence
+    confident-voice content is in this bucket" — derived from the speech_presence
     p_voice during ``compute_uncertainty_axes``) as the weight. Buckets in
     confident-silence regions have ``intensity_weight ≈ 0`` and contribute
     nothing to the mean; voice buckets contribute fully.
 
-    The ``presence_rows`` argument is kept for backward compat / debugging
+    The ``speech_presence_rows`` argument is kept for backward compat / debugging
     but is no longer used — the intensity_weight is per-row and pre-computed.
 
     Returns ``None`` when total weight is 0 (e.g. all rows are confident silence).
@@ -230,12 +230,14 @@ def compute_pass_global_summary(
     duration_s = float(pass_summary.get("duration_s", 0.0) or 0.0)
 
     # ─── transcript_accuracy ───
-    utt = axis_results.get((pass_label, "utterance"))
-    presence = axis_results.get((pass_label, "presence"))
-    utt_mean = _mean_over_voice_buckets(utt.rows, presence.rows if presence else []) if utt is not None else None
+    utt = axis_results.get((pass_label, "asr"))
+    speech_presence = axis_results.get((pass_label, "speech_presence"))
+    utt_mean = (
+        _mean_over_voice_buckets(utt.rows, speech_presence.rows if speech_presence else []) if utt is not None else None
+    )
     hallu = _detect_hallucinations(asr_resolved, duration_s)
     hallu_rate = hallu.get("pass_hallucination_rate")
-    # Combine: utterance time-mean (already in [0,1]) + hallucination rate
+    # Combine: asr time-mean (already in [0,1]) + hallucination rate
     # (also [0,1]). max() is the right combiner — either one indicates a
     # transcript problem.
     transcript_components: list[float] = []
@@ -265,13 +267,15 @@ def compute_pass_global_summary(
         single_speaker_uncertainty = 1.0 if expects_speech else 0.0
     else:
         single_speaker_uncertainty = 1.0
-    identity = axis_results.get((pass_label, "identity"))
+    speaker = axis_results.get((pass_label, "speaker"))
     identity_mean = (
-        _mean_over_voice_buckets(identity.rows, presence.rows if presence else []) if identity is not None else None
+        _mean_over_voice_buckets(speaker.rows, speech_presence.rows if speech_presence else [])
+        if speaker is not None
+        else None
     )
     if single_speaker_uncertainty is not None and identity_mean is not None:
-        # Even when n_speakers == 1, identity uncertainty over time can flag
-        # within-track inconsistencies. Combine via max so identity drift on
+        # Even when n_speakers == 1, speaker uncertainty over time can flag
+        # within-track inconsistencies. Combine via max so speaker drift on
         # a "single-speaker" pass still surfaces.
         single_speaker_uncertainty = max(single_speaker_uncertainty, identity_mean)
 
@@ -360,14 +364,14 @@ def compute_pass_global_summary(
         "combined_uncertainty": combined,
         "transcript_accuracy": {
             "uncertainty": transcript_uncertainty,
-            "utterance_axis_mean": utt_mean,
+            "asr_axis_mean": utt_mean,
             "hallucination_rate": hallu_rate,
             "hallucination_per_model": hallu.get("per_model_rate"),
         },
         "single_speaker": {
             "uncertainty": single_speaker_uncertainty,
             "n_speakers": n_speakers,
-            "identity_axis_mean": identity_mean,
+            "speaker_axis_mean": identity_mean,
             "expects_speech": expects_speech,
         },
         "quality": {

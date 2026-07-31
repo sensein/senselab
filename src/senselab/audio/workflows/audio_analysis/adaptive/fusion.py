@@ -4,7 +4,7 @@ Post-T050 the fusion *math* lives in the reusable task package
 ``senselab.audio.tasks.speech_to_text_ensemble`` (``fuse_word_streams`` /
 ``load_calibrator`` / ``iter_word_leaves`` are re-exported here for the loop's
 callers); this module keeps the workflow-specific parts — artifact word-stream
-collection, policy → weights/params translation, speaker & presence lookups
+collection, policy → weights/params translation, speaker & speech_presence lookups
 from the belief state, and the ``final/`` artifact writers.
 """
 
@@ -95,14 +95,14 @@ def fuse_words(
 
 def make_speaker_lookup(store: Any, state: Any, stream: str) -> Any:  # noqa: ANN401
     """(t) → majority unified cluster_id across active diarization votes at t."""
-    rows = state.axis_rows(stream, "identity")
+    rows = state.axis_rows(stream, "speaker")
 
     def lookup(t: float) -> str | None:
         for row in rows:
             if row["start"] <= t < row["end"]:
                 bk = bucket_key(row["start"], row["end"])
                 counts: dict[str, int] = {}
-                for source, payload in store.active_votes(stream, "identity", bk).items():
+                for source, payload in store.active_votes(stream, "speaker", bk).items():
                     if source.startswith("__") or "::" in source:
                         continue
                     cid = payload.get("cluster_id")
@@ -117,8 +117,8 @@ def make_speaker_lookup(store: Any, state: Any, stream: str) -> Any:  # noqa: AN
 
 
 def make_p_voice_lookup(state: Any, stream: str) -> Any:  # noqa: ANN401
-    """(t) → presence p_voice at t from the presence belief rows."""
-    rows = state.axis_rows(stream, "presence")
+    """(t) → speech_presence p_voice at t from the speech_presence belief rows."""
+    rows = state.axis_rows(stream, "speech_presence")
 
     def lookup(t: float) -> float | None:
         best = None
@@ -149,9 +149,9 @@ def build_final_outputs(
     timestamps_meta: dict[str, Any] | None = None,
     language: str | None = None,
 ) -> dict[str, Any]:
-    """Write final/{transcript,diarization}.json (+.rttm) + final/presence.parquet; return transcript doc."""
+    """Write final/{transcript,diarization}.json (+.rttm) + final/speech_presence.parquet; return transcript doc."""
     final = final_dir(out_dir)
-    # Belief artifacts (posterior, presence, convergence) are level 2; the deliverables
+    # Belief artifacts (posterior, speech_presence, convergence) are level 2; the deliverables
     # (transcript, diarization, timeline, summary) stay in final/. Different questions:
     # "what do we believe" is per bucket and per round, "what do we hand over" is one answer.
     belief = belief_dir(out_dir)
@@ -200,7 +200,7 @@ def build_final_outputs(
     (final / "transcript.json").write_text(json.dumps(transcript, indent=2))
 
     # diarization.json — refined I2 segments when available (real boundary
-    # confidences from change-point prominence); else merge identity buckets
+    # confidences from change-point prominence); else merge speaker buckets
     # by majority cluster where voiced.
     diar_segments: list[dict[str, Any]] = []
     clusters: dict[str, dict[str, Any]] = {}
@@ -220,7 +220,7 @@ def build_final_outputs(
             c["total_speech_s"] = round(c["total_speech_s"] + (seg["end"] - seg["start"]), 6)
             c["n_segments"] += 1
     else:
-        for row in state.axis_rows(stream, "identity"):
+        for row in state.axis_rows(stream, "speaker"):
             mid = (row["start"] + row["end"]) / 2.0
             cid = speaker_lookup(mid)
             pv = p_voice_lookup(mid)
@@ -247,16 +247,16 @@ def build_final_outputs(
             clusters[seg["cluster_id"]]["n_segments"] += 1
     # contracts/final-outputs.md: member_labels (refined cluster ↔ diar-model raw
     # labels via vote co-occurrence) + per-segment overlap flag (I4 posterior).
-    identity_rows = state.axis_rows(stream, "identity")
+    speaker_rows = state.axis_rows(stream, "speaker")
     member_labels: dict[str, dict[str, set]] = {}
     for seg in diar_segments:
         labels_for_cluster = member_labels.setdefault(str(seg["cluster_id"]), {})
-        for row in identity_rows:
+        for row in speaker_rows:
             mid = (row["start"] + row["end"]) / 2.0
             if not (seg["start"] <= mid < seg["end"]):
                 continue
             bk = bucket_key(row["start"], row["end"])
-            for source, payload in store.active_votes(stream, "identity", bk).items():
+            for source, payload in store.active_votes(stream, "speaker", bk).items():
                 if source.startswith(("__", "embedding_")) or "::" in source:
                     continue
                 raw_label = payload.get("speaker_label")
@@ -264,7 +264,7 @@ def build_final_outputs(
                     labels_for_cluster.setdefault(source, set()).add(str(raw_label))
         seg["overlap"] = any(
             (row.get("overlap_posterior") or 0.0) >= 0.5
-            for row in identity_rows
+            for row in speaker_rows
             if seg["start"] <= (row["start"] + row["end"]) / 2.0 < seg["end"]
         )
     for cluster in clusters.values():
@@ -287,7 +287,7 @@ def build_final_outputs(
     ]
     (final / "diarization.rttm").write_text("\n".join(rttm_lines) + ("\n" if rttm_lines else ""))
 
-    # presence.parquet — final presence belief.
+    # speech_presence.parquet — final speech_presence belief.
     import pandas as pd
 
     pres_rows = [
@@ -300,12 +300,12 @@ def build_final_outputs(
             "status": r.get("status"),
             "irreducible_reason": r.get("irreducible_reason"),
             "round": r.get("round"),
-            # contracts/final-outputs.md columns (T042). `presence_confidence` is
+            # contracts/final-outputs.md columns (T042). `speech_presence_confidence` is
             # the calibrated P(speech); it *replaces* the old `p_voice` column
             # rather than sitting beside it — nothing on the way to alpha needs
             # backwards compatibility, and two names for one quantity is how
             # schemas rot.
-            "presence_confidence": r.get("presence_confidence", r.get("p_voice")),
+            "speech_presence_confidence": r.get("speech_presence_confidence", r.get("p_voice")),
             # Which pass S1 elected for this span; falls back to the fusion stream
             # when no per-region election ran.
             "elected_stream": (r.get("meta") or {}).get("elected_stream", stream),
@@ -314,9 +314,9 @@ def build_final_outputs(
             # schema is stable).
             "overlap_posterior": r.get("overlap_posterior", (r.get("meta") or {}).get("overlap_posterior")),
         }
-        for r in state.axis_rows(stream, "presence")
+        for r in state.axis_rows(stream, "speech_presence")
     ]
-    pd.DataFrame(pres_rows).to_parquet(belief / "presence.parquet", index=False)
+    pd.DataFrame(pres_rows).to_parquet(belief / "speech_presence.parquet", index=False)
     return transcript
 
 
@@ -333,7 +333,7 @@ def write_speaker_outputs(
 ) -> tuple[Path, Path]:
     """Write ``final/speakers.json`` and ``final/per_speaker_presence.parquet`` (T102).
 
-    Replaces the single per-bucket identity scalar rather than sitting beside it: two names
+    Replaces the single per-bucket speaker scalar rather than sitting beside it: two names
     for one quantity is how schemas rot, and nothing on the way to alpha needs backwards
     compatibility.
 
@@ -342,13 +342,13 @@ def write_speaker_outputs(
         posterior: The speaker-count posterior.
         hypotheses: One entry per hypothesized speaker.
         correspondence: Source-label to hypothesis mappings.
-        tracks: Per-speaker presence rows.
+        tracks: Per-speaker speech_presence rows.
         profile_version: Detection-margin profile in force.
         influence_profile: Influence profile in force.
         generated_from_round: Round the outputs were fused from.
 
     Returns:
-        ``(speakers_json_path, presence_parquet_path)``.
+        ``(speakers_json_path, speech_presence_parquet_path)``.
     """
     import pandas as pd
 
@@ -372,8 +372,8 @@ def write_speaker_outputs(
         "speaker_id",
         "start",
         "end",
-        "presence_confidence",
-        "presence_uncertainty",
+        "speech_presence_confidence",
+        "speech_presence_uncertainty",
         "overlap_with",
         "contributing_sources",
         "round",
@@ -381,6 +381,6 @@ def write_speaker_outputs(
     ]
     rows = [t.to_row() for t in tracks]
     frame = pd.DataFrame(rows, columns=columns) if rows else pd.DataFrame({c: [] for c in columns})
-    presence_path = belief / "per_speaker_presence.parquet"
-    frame.to_parquet(presence_path, index=False)
-    return speakers_path, presence_path
+    speech_presence_path = belief / "per_speaker_presence.parquet"
+    frame.to_parquet(speech_presence_path, index=False)
+    return speakers_path, speech_presence_path

@@ -3,7 +3,7 @@
 Consumes the LS JSON export format (list of tasks, ``annotations[].result``
 with paired ``labels``/``textarea`` items sharing region ids) and scores:
 
-- **presence**: bucket-level accuracy/precision/recall of ``presence_confidence ≥ 0.5``
+- **speech_presence**: bucket-level accuracy/precision/recall of ``speech_presence_confidence ≥ 0.5``
   against labeled speech spans; mean uncertainty inside vs outside speech.
 - **transcript**: WER of the fused consensus (and each contributing model)
   against the concatenated GT texts, computed only over words whose midpoint
@@ -11,8 +11,8 @@ with paired ``labels``/``textarea`` items sharing region ids) and scores:
   from both sides — the annotator's own uncertainty is not a reference).
 - **diarization**: greedy cluster↔GT-speaker mapping by time overlap +
   speaker-attribution accuracy over fused words; speaker-count comparison.
-- **boundary/uncertainty checks**: identity uncertainty at GT speaker
-  boundaries vs within segments; utterance uncertainty + fused word confidence
+- **boundary/uncertainty checks**: speaker uncertainty at GT speaker
+  boundaries vs within segments; asr uncertainty + fused word confidence
   inside the untranscribed GT span vs elsewhere (the region a human could not
   transcribe should be where the pipeline is least certain).
 """
@@ -70,19 +70,19 @@ def evaluate_against_ground_truth(
     diarization = json.loads((final / "diarization.json").read_text())
     import pandas as pd
 
-    presence = pd.read_parquet(final / "presence.parquet")
+    speech_presence = pd.read_parquet(final / "speech_presence.parquet")
 
     speech_spans = [(s["start"], s["end"]) for s in gt["segments"]]
     transcribed = [(s["start"], s["end"]) for s in gt["segments"] if s["text"]]
     untranscribed = [(s["start"], s["end"]) for s in gt["segments"] if not s["text"]]
 
-    # ── presence ─────────────────────────────────────────────────────────
+    # ── speech_presence ─────────────────────────────────────────────────────────
     tp = fp = fn = tn = 0
     unc_speech: list[float] = []
     unc_sil: list[float] = []
-    for _, row in presence.iterrows():
+    for _, row in speech_presence.iterrows():
         mid = (float(row["start"]) + float(row["end"])) / 2.0
-        pv = row.get("presence_confidence")
+        pv = row.get("speech_presence_confidence")
         if pv is None or pv != pv:
             continue
         gt_speech = _in_any(mid, speech_spans)
@@ -94,7 +94,7 @@ def evaluate_against_ground_truth(
         u = row.get("within_pass_uncertainty")
         if u is not None and u == u:
             (unc_speech if gt_speech else unc_sil).append(float(u))
-    presence_eval = {
+    speech_presence_eval = {
         "buckets": tp + fp + fn + tn,
         "accuracy": round((tp + tn) / max(1, tp + fp + fn + tn), 4),
         "precision": round(tp / max(1, tp + fp), 4),
@@ -186,7 +186,7 @@ def evaluate_against_ground_truth(
         import pandas as pd  # noqa: PLC0415
 
         last_round = max(int(p.name) for p in (Path(out_dir) / "rounds").iterdir() if p.name.isdigit())
-        ident = pd.read_parquet(Path(out_dir) / "rounds" / str(last_round) / "belief" / "identity.parquet")
+        ident = pd.read_parquet(Path(out_dir) / "rounds" / str(last_round) / "belief" / "speaker.parquet")
         ident = ident[ident["stream"] == transcript.get("stream", "raw_16k")]
         boundaries = [g["start"] for g in gt["segments"][1:]]
         at_b: list[float] = []
@@ -199,15 +199,15 @@ def evaluate_against_ground_truth(
                 at_b.append(float(u))
             elif _in_any((row["start"] + row["end"]) / 2.0, speech_spans):
                 inside.append(float(u))
-        localization["identity_uncertainty_at_gt_boundaries"] = round(sum(at_b) / len(at_b), 4) if at_b else None
-        localization["identity_uncertainty_within_segments"] = round(sum(inside) / len(inside), 4) if inside else None
+        localization["speaker_uncertainty_at_gt_boundaries"] = round(sum(at_b) / len(at_b), 4) if at_b else None
+        localization["speaker_uncertainty_within_segments"] = round(sum(inside) / len(inside), 4) if inside else None
     except (OSError, ValueError):
         pass
 
     eval_doc = {
         "ground_truth": str(gt_path),
         "gt_segments": gt["segments"],
-        "presence": presence_eval,
+        "speech_presence": speech_presence_eval,
         "transcript": transcript_eval,
         "diarization": diarization_eval,
         "localization": localization,

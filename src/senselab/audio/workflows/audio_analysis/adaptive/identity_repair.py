@@ -17,7 +17,7 @@ Implements I1 (boundary evidence) and I2 (re-cluster) generically:
    ``recluster_cosine_threshold``). Cross-model consensus: segments co-clustered
    by ≥ half the models merge (union-find on the co-association matrix).
 5. Output refined segments/clusters (ids ``R0, R1, …`` by first appearance),
-   boundary confidences, and per-bucket identity votes; the caller shadows the
+   boundary confidences, and per-bucket speaker votes; the caller shadows the
    per-bucket ``__cross_diar_label_disagreement__`` with a recomputed value that
    includes the new voter.
 
@@ -147,7 +147,7 @@ def repair_identity(
     """Full I1+I2 repair. Returns refined segments/clusters + change-point evidence, or None."""
     import numpy as np
 
-    cfg = policy.get("identity") or {}
+    cfg = policy.get("speaker") or {}
     times, dist = change_point_trajectory(window_embeddings)
     if not times:
         return None
@@ -240,7 +240,7 @@ def cluster_at(refined: dict[str, Any], t: float) -> str | None:
 
 
 def cross_source_disagreement(cluster_ids: list[str]) -> float | None:
-    """Fraction of source pairs disagreeing on the cluster — mirrors the identity axis sub-signal."""
+    """Fraction of source pairs disagreeing on the cluster — mirrors the speaker axis sub-signal."""
     ids = [c for c in cluster_ids if c]
     if len(ids) < 2:
         return None

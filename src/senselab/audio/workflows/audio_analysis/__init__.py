@@ -2,7 +2,7 @@
 
 Reads cached / in-memory results from senselab's per-task audio pipeline
 (diarization, ASR, scene classification, alignment, PPG) and emits three
-per-bucket uncertainty time series — `presence`, `identity`, and `utterance` —
+per-bucket uncertainty time series — `speech_presence`, `speaker`, and `asr` —
 plus a ranked `disagreements.json` index and a 5-row timeline plot.
 
 See ``specs/20260508-173136-compare-uncertainty/spec.md`` for the full design.

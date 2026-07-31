@@ -18,11 +18,11 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from senselab.audio.workflows.audio_analysis.aggregate import (
-    aggregate_identity,
-    aggregate_presence,
-    aggregate_utterance,
+    aggregate_asr,
+    aggregate_speaker,
+    aggregate_speech_presence,
     mean_token_entropy,
-    presence_p_voice,
+    speech_presence_p_voice,
 )
 from senselab.audio.workflows.audio_analysis.degradation import scene_degradation
 from senselab.audio.workflows.audio_analysis.fuse import per_signal_uncertainty
@@ -35,15 +35,15 @@ class PassHarvest:
 
     Attributes:
         pass_label: e.g. ``"raw_16k"``.
-        presence_votes: per-bucket ``{"start", "end", "votes", "frame_instability"?}``
-            dicts from ``harvest_presence_votes``.
-        identity_votes: per-bucket vote dicts from ``harvest_identity_votes``.
-        utterance_votes: per-bucket vote dicts from ``harvest_utterance_votes``.
-        quality_by_bucket: presence-grid bucket key → L1 scene-quality *measurements* in native
+        speech_presence_votes: per-bucket ``{"start", "end", "votes", "frame_instability"?}``
+            dicts from ``harvest_speech_presence_votes``.
+        speaker_votes: per-bucket vote dicts from ``harvest_speaker_votes``.
+        asr_votes: per-bucket vote dicts from ``harvest_asr_votes``.
+        quality_by_bucket: speech_presence-grid bucket key → L1 scene-quality *measurements* in native
             units (dB, hertz, proportion). Degradation scores are derived here at L2 via
             ``degradation.scene_degradation``, because the anchors that produce them are
             calibration — held at L1 they zeroed the columns on every real recording.
-        source_by_bucket: presence-grid bucket key → source-mass dict (US2 columns).
+        source_by_bucket: speech_presence-grid bucket key → source-mass dict (US2 columns).
         grids: axis → ``{"win_length", "hop_length"}`` actually used at harvest.
         sampling_rate: The pass audio's sample rate, needed to compare a measured spectral
             roll-off against Nyquist. Carried on the harvest rather than re-derived, so the
@@ -55,9 +55,9 @@ class PassHarvest:
     """
 
     pass_label: str
-    presence_votes: list[dict[str, Any]] = field(default_factory=list)
-    identity_votes: list[dict[str, Any]] = field(default_factory=list)
-    utterance_votes: list[dict[str, Any]] = field(default_factory=list)
+    speech_presence_votes: list[dict[str, Any]] = field(default_factory=list)
+    speaker_votes: list[dict[str, Any]] = field(default_factory=list)
+    asr_votes: list[dict[str, Any]] = field(default_factory=list)
     quality_by_bucket: dict[tuple[float, float], dict[str, Any]] = field(default_factory=dict)
     source_by_bucket: dict[tuple[float, float], dict[str, Any]] = field(default_factory=dict)
     grids: dict[str, dict[str, float]] = field(default_factory=dict)
@@ -71,19 +71,19 @@ def mask_from_pvoice(p: float) -> float:
     return 1.0 if p >= 0.5 else max(0.0, min(1.0, p / 0.5))
 
 
-def intensity_mask(start: float, end: float, presence_pv_intervals: list[tuple[float, float, float]]) -> float:
-    """Average presence-derived mask over presence buckets overlapping ``[start, end)``.
+def intensity_mask(start: float, end: float, speech_presence_pv_intervals: list[tuple[float, float, float]]) -> float:
+    """Average speech_presence-derived mask over speech_presence buckets overlapping ``[start, end)``.
 
     Overlap-averaging (not closest-only) so a query bucket spanning a half-voice /
-    half-silence region is masked proportionally; works when presence runs on a
-    finer grid. Falls back to 1.0 (no masking) when presence produced no p_voice.
+    half-silence region is masked proportionally; works when speech_presence runs on a
+    finer grid. Falls back to 1.0 (no masking) when speech_presence produced no p_voice.
     """
-    vals = [mask_from_pvoice(p) for s_p, e_p, p in presence_pv_intervals if s_p < end and e_p > start]
+    vals = [mask_from_pvoice(p) for s_p, e_p, p in speech_presence_pv_intervals if s_p < end and e_p > start]
     return sum(vals) / len(vals) if vals else 1.0
 
 
 DEFAULT_UTTERANCE_SCENE_COUPLING: dict[str, float] = {"w_q": 0.5, "w_s": 0.25}
-"""Default scene→utterance coupling weights (FR-019).
+"""Default scene→asr coupling weights (FR-019).
 
 ``w_q`` weights SNR-based quality degradation, ``w_s`` the mass of competing
 non-speech sources (machine + environment). Quality is weighted twice as heavily
@@ -95,10 +95,10 @@ Set both to 0.0 to disable coupling entirely.
 
 
 def _overlap_mean(start: float, end: float, values: list[tuple[float, float, float]]) -> float | None:
-    """Mean of scene values whose presence bucket overlaps ``[start, end)``.
+    """Mean of scene values whose speech_presence bucket overlaps ``[start, end)``.
 
-    Overlap-averaging (rather than nearest-bucket) so a wide utterance bucket
-    spanning several finer presence buckets sees their average, matching how
+    Overlap-averaging (rather than nearest-bucket) so a wide asr bucket
+    spanning several finer speech_presence buckets sees their average, matching how
     ``intensity_mask`` bridges the two grids.
     """
     hits = [v for s, e, v in values if s < end and e > start]
@@ -113,7 +113,7 @@ def scene_quality_coupling(
     competing_source_mass: list[tuple[float, float, float]],
     weights: dict[str, float],
 ) -> float:
-    """Multiplier (``>= 1.0``) by which poor scene conditions inflate utterance doubt.
+    """Multiplier (``>= 1.0``) by which poor scene conditions inflate asr doubt.
 
     ``1.0 + w_q · quality_degradation + w_s · competing_source_mass``, with each term
     dropped when the corresponding scene column is absent — so a run with
@@ -162,7 +162,7 @@ def _quality_anchors(params: dict[str, Any]) -> dict[str, float] | None:
 
 def _coupling_weights(params: dict[str, Any]) -> dict[str, float]:
     """Resolve coupling weights from ``params``, falling back to the documented defaults."""
-    raw = params.get("utterance_scene_coupling")
+    raw = params.get("asr_scene_coupling")
     if not isinstance(raw, dict):
         return dict(DEFAULT_UTTERANCE_SCENE_COUPLING)
     weights = dict(DEFAULT_UTTERANCE_SCENE_COUPLING)
@@ -194,25 +194,25 @@ def aggregate_pass(
             for unweighted aggregation.
 
     Pure: same harvest + same aggregator + same reliability ⇒ identical rows (bit-for-bit). The math is
-    the historical compute.py aggregation, moved verbatim: presence keeps
-    ``within_pass_uncertainty = aggregate_presence(votes)`` with the temporal-
-    instability OR only on the additive ``presence_uncertainty`` column; identity /
-    utterance keep the intensity mask OUT of ``within_pass_uncertainty`` and expose it
+    the historical compute.py aggregation, moved verbatim: speech_presence keeps
+    ``within_pass_uncertainty = aggregate_speech_presence(votes)`` with the temporal-
+    instability OR only on the additive ``speech_presence_uncertainty`` column; speaker /
+    asr keep the intensity mask OUT of ``within_pass_uncertainty`` and expose it
     as ``intensity_weight``.
     """
     pass_label = harvest.pass_label
     out: dict[str, AxisResult] = {}
 
-    # ── presence ──
-    presence_rows: list[UncertaintyRow] = []
-    presence_pv_intervals: list[tuple[float, float, float]] = []
-    # Scene columns live on the presence grid; the utterance axis reads them back by
+    # ── speech_presence ──
+    speech_presence_rows: list[UncertaintyRow] = []
+    speech_presence_pv_intervals: list[tuple[float, float, float]] = []
+    # Scene columns live on the speech_presence grid; the asr axis reads them back by
     # time overlap to build its coupling multiplier (FR-019).
     quality_intervals: list[tuple[float, float, float]] = []
     competing_intervals: list[tuple[float, float, float]] = []
-    for bucket in harvest.presence_votes:
-        u = aggregate_presence(bucket["votes"])
-        p_v = presence_p_voice(bucket["votes"])
+    for bucket in harvest.speech_presence_votes:
+        u = aggregate_speech_presence(bucket["votes"])
+        p_v = speech_presence_p_voice(bucket["votes"])
         if u is None and not bucket["votes"]:
             continue
         bkey = (round(bucket["start"], 6), round(bucket["end"], 6))
@@ -239,16 +239,16 @@ def aggregate_pass(
             votes = {**votes, "__sources__": source.get("_raw", {})}
         instability = bucket.get("frame_instability")
         if u is None:
-            presence_uncertainty: float | None = None
+            speech_presence_uncertainty: float | None = None
         elif instability is None:
-            presence_uncertainty = u
+            speech_presence_uncertainty = u
         else:
-            presence_uncertainty = max(0.0, min(1.0, 1.0 - (1.0 - u) * (1.0 - float(instability))))
-        presence_rows.append(
+            speech_presence_uncertainty = max(0.0, min(1.0, 1.0 - (1.0 - u) * (1.0 - float(instability))))
+        speech_presence_rows.append(
             UncertaintyRow(
                 start=bucket["start"],
                 end=bucket["end"],
-                axis="presence",
+                axis="speech_presence",
                 within_pass_uncertainty=u,
                 signal_uncertainty=per_signal_uncertainty(bucket),
                 contributing_models=sorted(k for k in votes if not k.startswith("__")),
@@ -256,8 +256,8 @@ def aggregate_pass(
                 comparison_status="ok" if u is not None else "incomparable",
                 raw_within_pass_uncertainty=u,
                 intensity_weight=1.0,
-                presence_confidence=float(p_v) if p_v is not None else None,
-                presence_uncertainty=presence_uncertainty,
+                speech_presence_confidence=float(p_v) if p_v is not None else None,
+                speech_presence_uncertainty=speech_presence_uncertainty,
                 quality_snr=scores.get("quality_snr"),
                 quality_clip=scores.get("quality_clip"),
                 quality_reverb=scores.get("quality_reverb"),
@@ -276,7 +276,7 @@ def aggregate_pass(
             )
         )
         if p_v is not None:
-            presence_pv_intervals.append((float(bucket["start"]), float(bucket["end"]), float(p_v)))
+            speech_presence_pv_intervals.append((float(bucket["start"]), float(bucket["end"]), float(p_v)))
         b_start, b_end = float(bucket["start"]), float(bucket["end"])
         if scores.get("quality_snr") is not None:
             quality_intervals.append((b_start, b_end, float(scores["quality_snr"])))
@@ -286,38 +286,38 @@ def aggregate_pass(
             if machine is not None or environment is not None:
                 competing_intervals.append((b_start, b_end, float(machine or 0.0) + float(environment or 0.0)))
 
-    pres_grid = harvest.grids.get("presence", {})
-    out["presence"] = AxisResult(
+    pres_grid = harvest.grids.get("speech_presence", {})
+    out["speech_presence"] = AxisResult(
         pass_label=pass_label,  # type: ignore[arg-type]
-        axis="presence",
-        rows=presence_rows,
+        axis="speech_presence",
+        rows=speech_presence_rows,
         provenance={
-            "axis": "presence",
+            "axis": "speech_presence",
             "pass": pass_label,
             "grid": dict(pres_grid),
             "comparator_params": params,
-            "contributing_model_set": sorted({m for b in harvest.presence_votes for m in b["votes"]}),
+            "contributing_model_set": sorted({m for b in harvest.speech_presence_votes for m in b["votes"]}),
             **{k: v for k, v in harvest.provenance_extras.items()},
         },
     )
 
-    # ── identity ──
-    identity_rows: list[UncertaintyRow] = []
-    for bucket in harvest.identity_votes:
-        u_raw = aggregate_identity(
+    # ── speaker ──
+    speaker_rows: list[UncertaintyRow] = []
+    for bucket in harvest.speaker_votes:
+        u_raw = aggregate_speaker(
             bucket["votes"],
             raw_vs_enh=None,
             aggregator=aggregator,
-            reliability=(signal_reliability or {}).get("identity"),
+            reliability=(signal_reliability or {}).get("speaker"),
         )
         if u_raw is None and not bucket["votes"]:
             continue
-        mask = intensity_mask(bucket["start"], bucket["end"], presence_pv_intervals)
-        identity_rows.append(
+        mask = intensity_mask(bucket["start"], bucket["end"], speech_presence_pv_intervals)
+        speaker_rows.append(
             UncertaintyRow(
                 start=bucket["start"],
                 end=bucket["end"],
-                axis="identity",
+                axis="speaker",
                 within_pass_uncertainty=u_raw,
                 contributing_models=sorted(bucket["votes"].keys()),
                 model_votes=bucket["votes"],
@@ -327,27 +327,27 @@ def aggregate_pass(
                 intensity_weight=mask,
             )
         )
-    out["identity"] = AxisResult(
+    out["speaker"] = AxisResult(
         pass_label=pass_label,  # type: ignore[arg-type]
-        axis="identity",
-        rows=identity_rows,
+        axis="speaker",
+        rows=speaker_rows,
         provenance={
-            "axis": "identity",
+            "axis": "speaker",
             "pass": pass_label,
-            "grid": dict(harvest.grids.get("identity", {})),
+            "grid": dict(harvest.grids.get("speaker", {})),
             "comparator_params": params,
-            "contributing_model_set": sorted({m for b in harvest.identity_votes for m in b["votes"]}),
+            "contributing_model_set": sorted({m for b in harvest.speaker_votes for m in b["votes"]}),
         },
     )
 
-    # ── utterance ──
-    utterance_rows: list[UncertaintyRow] = []
+    # ── asr ──
+    asr_rows: list[UncertaintyRow] = []
     coupling_weights = _coupling_weights(params)
-    for bucket in harvest.utterance_votes:
-        u_raw = aggregate_utterance(bucket["votes"], aggregator=aggregator, calibration=params.get("calibration"))
+    for bucket in harvest.asr_votes:
+        u_raw = aggregate_asr(bucket["votes"], aggregator=aggregator, calibration=params.get("calibration"))
         if u_raw is None and not bucket["votes"]:
             continue
-        mask = intensity_mask(bucket["start"], bucket["end"], presence_pv_intervals)
+        mask = intensity_mask(bucket["start"], bucket["end"], speech_presence_pv_intervals)
         coupling = scene_quality_coupling(
             float(bucket["start"]),
             float(bucket["end"]),
@@ -363,12 +363,12 @@ def aggregate_pass(
         if u_raw is not None:
             u_reported = max(0.0, min(1.0, u_raw * coupling))
             if coupling != 1.0:
-                votes = {**votes, "__utterance_pre_coupling__": {"value": u_raw}}
-        utterance_rows.append(
+                votes = {**votes, "__asr_pre_coupling__": {"value": u_raw}}
+        asr_rows.append(
             UncertaintyRow(
                 start=bucket["start"],
                 end=bucket["end"],
-                axis="utterance",
+                axis="asr",
                 within_pass_uncertainty=u_reported,
                 contributing_models=sorted(bucket["votes"].keys()),
                 model_votes=votes,
@@ -380,16 +380,16 @@ def aggregate_pass(
                 scene_quality_coupling=coupling,
             )
         )
-    out["utterance"] = AxisResult(
+    out["asr"] = AxisResult(
         pass_label=pass_label,  # type: ignore[arg-type]
-        axis="utterance",
-        rows=utterance_rows,
+        axis="asr",
+        rows=asr_rows,
         provenance={
-            "axis": "utterance",
+            "axis": "asr",
             "pass": pass_label,
-            "grid": dict(harvest.grids.get("utterance", {})),
+            "grid": dict(harvest.grids.get("asr", {})),
             "comparator_params": params,
-            "contributing_model_set": sorted({m for b in harvest.utterance_votes for m in b["votes"]}),
+            "contributing_model_set": sorted({m for b in harvest.asr_votes for m in b["votes"]}),
         },
     )
     return out

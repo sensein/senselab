@@ -1,6 +1,6 @@
-"""Per-speaker identity uncertainty (T095-T097, FR-001 to FR-011).
+"""Per-speaker speaker uncertainty (T095-T097, FR-001 to FR-011).
 
-The identity axis reports one uncertainty value per time bucket, answering "was it the same
+The speaker axis reports one uncertainty value per time bucket, answering "was it the same
 speaker?" That scalar cannot express *how many* people the analysis thinks are present, and
 the distinction matters: on a validation recording two diarizers each reported one speaker
 for the whole clip while embedding clustering reported five distinct regions aligned to name
@@ -8,8 +8,8 @@ boundaries. The axis correctly registered high uncertainty, but a consumer readi
 cannot tell "we disagree about who spoke" from "we disagree about whether this is one person
 or four" — different problems with different fixes.
 
-So identity becomes **per speaker**: a distribution over how many speakers are present, one
-hypothesis per speaker with its own existence uncertainty, and a presence track per
+So speaker becomes **per speaker**: a distribution over how many speakers are present, one
+hypothesis per speaker with its own existence uncertainty, and a speech_presence track per
 hypothesis.
 
 Two design commitments:
@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Mapping, Sequence
 
 from senselab.audio.workflows.audio_analysis.adaptive.influence import SOURCE_KINDS, effective_weight
-from senselab.audio.workflows.audio_analysis.identity import (
+from senselab.audio.workflows.audio_analysis.speaker import (
     cluster_active_time,
     label_correspondence_rows,
     per_speaker_tracks,
@@ -39,7 +39,7 @@ from senselab.audio.workflows.audio_analysis.identity import (
 __all__ = [
     "PerSpeakerPresenceTrack",
     "PerturbationEvidence",
-    "build_presence_tracks",
+    "build_speech_presence_tracks",
     "build_speaker_identity",
     "evidence_from_passes",
     "claims_from_perturbations",
@@ -99,7 +99,7 @@ class SpeakerCountPosterior:
     converged: bool = False
 
     def to_json(self) -> dict[str, Any]:
-        """Serialize per ``contracts/speaker-identity.md`` (JSON keys are strings)."""
+        """Serialize per ``contracts/speaker-speaker.md`` (JSON keys are strings)."""
         return {
             "probabilities": {str(k): round(v, 6) for k, v in sorted(self.probabilities.items())},
             "support": {str(k): sorted(v) for k, v in sorted(self.support.items())},
@@ -210,13 +210,13 @@ class SourceLabelCorrespondence:
 
 @dataclass(frozen=True)
 class PerSpeakerPresenceTrack:
-    """One bucket of one speaker's presence belief (FR-003)."""
+    """One bucket of one speaker's speech_presence belief (FR-003)."""
 
     speaker_id: str
     start: float
     end: float
-    presence_confidence: float | None
-    presence_uncertainty: float | None
+    speech_presence_confidence: float | None
+    speech_presence_uncertainty: float | None
     overlap_with: list[str] = field(default_factory=list)
     contributing_sources: list[str] = field(default_factory=list)
     round: int = 0
@@ -228,8 +228,8 @@ class PerSpeakerPresenceTrack:
             "speaker_id": self.speaker_id,
             "start": self.start,
             "end": self.end,
-            "presence_confidence": self.presence_confidence,
-            "presence_uncertainty": self.presence_uncertainty,
+            "speech_presence_confidence": self.speech_presence_confidence,
+            "speech_presence_uncertainty": self.speech_presence_uncertainty,
             "overlap_with": list(self.overlap_with),
             "contributing_sources": list(self.contributing_sources),
             "round": self.round,
@@ -241,7 +241,7 @@ class PerSpeakerPresenceTrack:
 class SpeakerHypothesis:
     """One person the analysis believes is present.
 
-    ``existence_uncertainty`` and per-bucket ``presence_uncertainty`` are deliberately
+    ``existence_uncertainty`` and per-bucket ``speech_presence_uncertainty`` are deliberately
     separate (FR-004): "this speaker might not exist" and "this speaker exists but we are
     unsure where they spoke" call for different follow-up, and one number cannot say which
     is meant.
@@ -268,7 +268,7 @@ class SpeakerHypothesis:
         return any(v >= _SUPPORTED_THRESHOLD for v in self.source_support.values())
 
     def to_json(self) -> dict[str, Any]:
-        """Serialize per ``contracts/speaker-identity.md``."""
+        """Serialize per ``contracts/speaker-speaker.md``."""
         return {
             "speaker_id": self.speaker_id,
             "existence_uncertainty": round(self.existence_uncertainty, 6),
@@ -294,7 +294,7 @@ def source_kind_for(source: str, policy: Mapping[str, Any] | None = None) -> Sou
     The live example, recorded so the decision stays arguable: ``embedding_silhouette`` is
     marked derived because it seeds the cross-model label harmonisation — other diarizers'
     labels snap to its centroids — and the same embeddings drive same-label and change-point
-    validation, so that evidence already enters the identity axis three ways. Against that:
+    validation, so that evidence already enters the speaker axis three ways. Against that:
     it runs an embedding model on the audio and clusters the result, which is a direct
     observation; and on one validation recording it reported five speakers where two
     "independent" diarizers reported one, with re-examination suggesting it was the closer
@@ -366,7 +366,7 @@ def perturbation_uncertainty(evidence: PerturbationEvidence) -> float | None:
     """Uncertainty in ``[0, 1]`` from how much a source's answer moves under perturbation.
 
     Normalized Shannon entropy over the distribution of answers — the same collapse the
-    presence axis already uses — so unanimity is 0 and a maximally split source is 1.
+    speech_presence axis already uses — so unanimity is 0 and a maximally split source is 1.
     Entropy rather than a modal fraction because *how* the disagreement is spread matters:
     two answers split evenly is a different state from one answer plus scattered outliers.
 
@@ -489,20 +489,20 @@ def evidence_from_passes(passes: Mapping[str, Any]) -> list[PerturbationEvidence
 def build_speaker_identity(
     passes: Mapping[str, Any],
     *,
-    identity_votes: Sequence[Mapping[str, Any]] | None = None,
+    speaker_votes: Sequence[Mapping[str, Any]] | None = None,
     support: Mapping[str, float] | None = None,
     policy: Mapping[str, Any] | None = None,
     gates: Mapping[str, float] | None = None,
 ) -> tuple[SpeakerCountPosterior, list[SpeakerHypothesis], list[SourceLabelCorrespondence]]:
     """Derive the count posterior and speaker hypotheses from a completed run.
 
-    The count comes from the passes; the harvested per-bucket identity evidence, when
+    The count comes from the passes; the harvested per-bucket speaker evidence, when
     supplied, says *which* speaker each claim is about — when they were active, whose label
     each diarizer's own naming maps to, and how confident their existence individually is.
 
     Args:
         passes: ``summary["passes"]``.
-        identity_votes: Bucket dicts from ``harvest_identity_votes``. Optional: the
+        speaker_votes: Bucket dicts from ``harvest_speaker_votes``. Optional: the
             posterior stands on the passes alone, and votes only add per-speaker detail.
         support: ``{source → measured physical support}``. A source absent from the mapping
             keeps full support — an unmeasured factor must not act as a discount.
@@ -526,9 +526,9 @@ def build_speaker_identity(
     # does not back still gets a hypothesis: it is contested evidence, and truncating to the
     # modal count would delete the record that some source separated more speakers than the
     # posterior believes.
-    ranked = list(cluster_active_time(identity_votes or []))
+    ranked = list(cluster_active_time(speaker_votes or []))
     speaker_ids = {cluster: f"S{i}" for i, cluster in enumerate(ranked)}
-    tracks = per_speaker_tracks(identity_votes or [], speaker_ids=speaker_ids)
+    tracks = per_speaker_tracks(speaker_votes or [], speaker_ids=speaker_ids)
     spans: dict[str, tuple[float, float, float]] = {}
     for row in tracks:
         sid = str(row["speaker_id"])
@@ -552,7 +552,7 @@ def build_speaker_identity(
     # derived clusterer over-split into five, and the flat list credited all three with all
     # five. Falls back to the modal supporters only when there is no cluster evidence at all.
     backers: dict[str, list[str]] = {}
-    for row in label_correspondence_rows(identity_votes or [], speaker_ids=speaker_ids):
+    for row in label_correspondence_rows(speaker_votes or [], speaker_ids=speaker_ids):
         sid = str(row["speaker_id"])
         src = str(row["source"])
         if src not in backers.setdefault(sid, []):
@@ -580,7 +580,7 @@ def build_speaker_identity(
             )
         )
 
-    if identity_votes:
+    if speaker_votes:
         correspondence = [
             SourceLabelCorrespondence(
                 source=str(row["source"]),
@@ -589,7 +589,7 @@ def build_speaker_identity(
                 support=float(backing.get(str(row["source"]), 1.0)),
                 cluster_id=str(row["cluster_id"]),
             )
-            for row in label_correspondence_rows(identity_votes, speaker_ids=speaker_ids)
+            for row in label_correspondence_rows(speaker_votes, speaker_ids=speaker_ids)
         ]
     else:
         # No harvested labels to point at. The placeholder records which count each source
@@ -607,29 +607,29 @@ def build_speaker_identity(
     return posterior, hypotheses, correspondence
 
 
-def build_presence_tracks(
-    identity_votes: Sequence[Mapping[str, Any]],
+def build_speech_presence_tracks(
+    speaker_votes: Sequence[Mapping[str, Any]],
     *,
     round_index: int = 0,
     resolution_kind: str = "unresolved",
 ) -> list[PerSpeakerPresenceTrack]:
-    """Per-speaker presence rows for ``final/per_speaker_presence.parquet``.
+    """Per-speaker speech_presence rows for ``final/per_speaker_presence.parquet``.
 
     Speaker ids match :func:`build_speaker_identity` — both rank clusters by active time —
     so a hypothesis and its track refer to the same person.
     """
-    speaker_ids = {cluster: f"S{i}" for i, cluster in enumerate(cluster_active_time(identity_votes))}
+    speaker_ids = {cluster: f"S{i}" for i, cluster in enumerate(cluster_active_time(speaker_votes))}
     return [
         PerSpeakerPresenceTrack(
             speaker_id=str(row["speaker_id"]),
             start=float(row["start"]),
             end=float(row["end"]),
-            presence_confidence=float(row["presence_confidence"]),
-            presence_uncertainty=float(row["presence_uncertainty"]),
+            speech_presence_confidence=float(row["speech_presence_confidence"]),
+            speech_presence_uncertainty=float(row["speech_presence_uncertainty"]),
             overlap_with=[speaker_ids.get(c, c) for c in row["overlap_with"]],
             contributing_sources=list(row["contributing_sources"]),
             round=round_index,
             resolution_kind=resolution_kind,
         )
-        for row in per_speaker_tracks(identity_votes, speaker_ids=speaker_ids)
+        for row in per_speaker_tracks(speaker_votes, speaker_ids=speaker_ids)
     ]

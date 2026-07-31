@@ -36,7 +36,7 @@ __all__ = [
 MIN_RELIABILITY = 0.05
 """Floor on a signal's weight, so a maximally-unstable signal is attenuated, not silenced."""
 
-_AXIS_VOTES = {"presence": "presence_votes", "identity": "identity_votes", "utterance": "utterance_votes"}
+_AXIS_VOTES = {"speech_presence": "speech_presence_votes", "speaker": "speaker_votes", "asr": "asr_votes"}
 
 # Sub-signal fields whose value is an uncertainty in [0, 1] and therefore comparable across
 # passes. Fields carrying raw measurements (cosine distances, transcripts) are excluded —
@@ -76,7 +76,7 @@ def signal_stability(harvests: Mapping[str, Any], *, axis: str) -> dict[str, flo
     Args:
         harvests: ``{pass_label → PassHarvest}``. At least two passes are required for any
             signal to be scored.
-        axis: ``"presence"``, ``"identity"``, or ``"utterance"``.
+        axis: ``"speech_presence"``, ``"speaker"``, or ``"asr"``.
 
     Returns:
         ``{signal → instability in [0, 1]}``, empty when fewer than two passes are present or
@@ -155,7 +155,7 @@ def measured_weights(
 
     The two factors answer different questions and neither subsumes the other. Stability asks
     whether a signal agrees with itself when the audio is transformed. Support asks whether
-    the audio carries what the signal claimed — a speaker asserted where independent presence
+    the audio carries what the signal claimed — a speaker asserted where independent speech_presence
     evidence reports silence is a claim the recording does not back.
 
     Identity sub-signals are keyed ``<diar_model>::<embedding_model>``; the claim about where a

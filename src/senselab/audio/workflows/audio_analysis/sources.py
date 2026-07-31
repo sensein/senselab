@@ -415,20 +415,20 @@ def assert_comparable_levels(findings: Sequence[SourceFinding]) -> None:
         )
 
 
-# ── presence vs extent (T061, FR-021k, research D12) ──────────────────
+# ── speech_presence vs extent (T061, FR-021k, research D12) ──────────────────
 
 
 def resolve_extent(
     frames: Sequence[tuple[float, float, float]],
     *,
-    presence_margin_db: float,
+    speech_presence_margin_db: float,
     extent_margin_db: float,
 ) -> tuple[float, float] | None:
     """Decide whether a source is present, then where it starts and stops — separately.
 
     Frame-level thresholding entangles detection confidence with temporal extent: raise the
     threshold and a real event's edges erode, lower it and neighbouring noise joins on. No
-    single threshold gets both right, so the strict margin decides *presence* and a looser
+    single threshold gets both right, so the strict margin decides *speech_presence* and a looser
     one grows the boundaries outward from the frames that cleared it.
 
     Boundaries grow only through contiguous frames that clear ``extent_margin_db``. Two
@@ -437,18 +437,18 @@ def resolve_extent(
 
     Args:
         frames: ``(start, end, above_floor_db)`` in time order.
-        presence_margin_db: Margin a frame must clear for the source to count as present.
+        speech_presence_margin_db: Margin a frame must clear for the source to count as present.
         extent_margin_db: Looser margin for boundary growth.
 
     Returns:
-        ``(start, end)``, or ``None`` when no frame establishes presence. Extent without
-        presence would report boundaries for something never claimed to be there.
+        ``(start, end)``, or ``None`` when no frame establishes speech_presence. Extent without
+        speech_presence would report boundaries for something never claimed to be there.
     """
     rows = list(frames)
     peak = None
     best = -math.inf
     for i, (_s, _e, margin) in enumerate(rows):
-        if margin >= float(presence_margin_db) and margin > best:
+        if margin >= float(speech_presence_margin_db) and margin > best:
             peak, best = i, margin
     if peak is None:
         return None

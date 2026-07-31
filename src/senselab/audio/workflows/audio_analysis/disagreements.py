@@ -10,19 +10,19 @@ from typing import Any
 from senselab.audio.workflows.audio_analysis.labelstudio import HIGH_THRESHOLD
 from senselab.audio.workflows.audio_analysis.types import AxisResult
 
-_AXIS_PRIORITY: dict[str, int] = {"utterance": 0, "identity": 1, "presence": 2}
+_AXIS_PRIORITY: dict[str, int] = {"asr": 0, "speaker": 1, "speech_presence": 2}
 
 
 def _row_summary(row: Any, axis: str) -> str:  # noqa: ANN401
     """One-line human-readable explanation of why a row scored high."""
-    if axis == "presence":
+    if axis == "speech_presence":
         speaks = [m for m, v in row.model_votes.items() if v.get("speaks")]
         silent = [m for m, v in row.model_votes.items() if v.get("speaks") is False]
         summary = f"speaks={speaks!r} silent={silent!r}"
         # FR-024 (T042): surface the scene sub-signals when present.
         extras = []
-        if getattr(row, "presence_uncertainty", None) is not None:
-            extras.append(f"presence_unc={round(float(row.presence_uncertainty), 3)}")
+        if getattr(row, "speech_presence_uncertainty", None) is not None:
+            extras.append(f"speech_presence_unc={round(float(row.speech_presence_uncertainty), 3)}")
         # The measured SNR rather than a "quality uncertainty": the latter was the standard
         # deviation of three estimators with different noise-floor definitions, so it reported
         # definitional disagreement and pinned at 1.0 regardless of the audio. A dB reading is
@@ -32,7 +32,7 @@ def _row_summary(row: Any, axis: str) -> str:  # noqa: ANN401
         if getattr(row, "src_dominant", None) is not None:
             extras.append(f"src={row.src_dominant}")
         return summary + (" " + " ".join(extras) if extras else "")
-    if axis == "identity":
+    if axis == "speaker":
         labels = {
             m: v.get("speaker_label")
             for m, v in row.model_votes.items()
@@ -58,7 +58,7 @@ def _row_summary(row: Any, axis: str) -> str:  # noqa: ANN401
         if change_unc:
             parts.append(f"change_unc={change_unc!r}")
         return " ".join(parts) + cross_str
-    if axis == "utterance":
+    if axis == "asr":
         texts = {m: (v.get("text") or "")[:40] for m, v in row.model_votes.items() if v.get("text")}
         return f"transcripts={texts!r}"
     return ""
@@ -75,11 +75,11 @@ def build_disagreements_index(
 ) -> dict[str, Any]:
     """Build the ``disagreements.json`` payload per ``contracts/disagreements.json.md``.
 
-    Ranks by ``within_pass_uncertainty`` desc, with axis-priority tiebreak (utterance >
-    identity > presence) and start-time secondary tiebreak. Truncated to ``top_n``;
+    Ranks by ``within_pass_uncertainty`` desc, with axis-priority tiebreak (asr >
+    speaker > speech_presence) and start-time secondary tiebreak. Truncated to ``top_n``;
     ``top_n=0`` returns an empty entries list (caller should skip writing the file).
     """
-    rows_by_axis: dict[str, int] = {"presence": 0, "identity": 0, "utterance": 0}
+    rows_by_axis: dict[str, int] = {"speech_presence": 0, "speaker": 0, "asr": 0}
     rows_by_pass: dict[str, int] = {"raw_16k": 0, "enhanced_16k": 0, "raw_vs_enhanced": 0}
     total_rows = 0
     high_count = 0
@@ -107,25 +107,25 @@ def build_disagreements_index(
                 "ls_region_id": f"{_track_name(pass_label, axis)}__{row_idx}",
                 "summary": _row_summary(row, axis),
             }
-            # FR-024 (T042): presence entries carry the scene sub-signals so the
+            # FR-024 (T042): speech_presence entries carry the scene sub-signals so the
             # index is filterable/rankable on them (null-safe: omitted when absent).
-            if axis == "presence":
-                for field in ("presence_uncertainty", "snr_brouhaha_db", "src_dominant"):
+            if axis == "speech_presence":
+                for field in ("speech_presence_uncertainty", "snr_brouhaha_db", "src_dominant"):
                     value = getattr(row, field, None)
                     if value is not None and not (isinstance(value, float) and math.isnan(value)):
                         entry[field] = value
             candidates.append(entry)
 
     # Sort: NaN / None last. Primary descending by within_pass_uncertainty; axis
-    # priority tiebreak; then (FR-024/T042) the enriched presence sub-signal —
-    # among equal-aggregated presence rows, higher presence_uncertainty (the
+    # priority tiebreak; then (FR-024/T042) the enriched speech_presence sub-signal —
+    # among equal-aggregated speech_presence rows, higher speech_presence_uncertainty (the
     # decisiveness + temporal-instability composite) ranks first. Rows where
     # aggregated differs are ordered exactly as before (SC-008: baseline
     # within_pass_uncertainty values and their relative order are unchanged).
     def _sort_key(e: dict[str, Any]) -> tuple[Any, ...]:
         au = e["within_pass_uncertainty"]
         primary = -float(au) if au is not None and not (isinstance(au, float) and math.isnan(au)) else float("inf")
-        pu = e.get("presence_uncertainty")
+        pu = e.get("speech_presence_uncertainty")
         sub_signal = -float(pu) if isinstance(pu, (int, float)) and not math.isnan(float(pu)) else 0.0
         return (primary, _AXIS_PRIORITY.get(e["axis"], 99), sub_signal, e["start"])
 

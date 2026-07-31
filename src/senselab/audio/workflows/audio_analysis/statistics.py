@@ -31,7 +31,7 @@ send the adaptive loop off to gather evidence that cannot help — the decomposi
 can tell the difference.
 
 This is the standard mutual-information decomposition used for ensemble and MC-dropout
-uncertainty; the identity ``0 <= epistemic <= total`` holds by Jensen's inequality, and a
+uncertainty; the speaker ``0 <= epistemic <= total`` holds by Jensen's inequality, and a
 violation means a sign error rather than an interesting finding.
 """
 
@@ -156,7 +156,7 @@ def epistemic_uncertainty(
     }
     total = _entropy_nats(mean_distribution.values()) / scale
     aleatoric = sum(_entropy_nats(d.values()) for d in distributions) / (len(distributions) * scale)
-    # Clamped at zero: the identity holds by Jensen's inequality, so a negative value is float
+    # Clamped at zero: the speaker holds by Jensen's inequality, so a negative value is float
     # error rather than a finding, and letting it through would report reducible doubt as
     # negative.
     return min(1.0, total), max(0.0, min(total, total - aleatoric))

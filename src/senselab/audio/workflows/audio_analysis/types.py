@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-UncertaintyAxis = Literal["presence", "identity", "utterance"]
+UncertaintyAxis = Literal["speech_presence", "speaker", "asr"]
 """Three uncertainty axes — see FR-001 / FR-002."""
 
 PassLabel = Literal["raw_16k", "enhanced_16k", "raw_vs_enhanced"]
@@ -60,17 +60,17 @@ class UncertaintyRow:
     intensity_weight: float | None = None
     raw_within_pass_uncertainty: float | None = None  # pre-mask value
 
-    # ── Scene-aware presence extensions (feature 20260722-175022) ────────────
+    # ── Scene-aware speech_presence extensions (feature 20260722-175022) ────────────
     # All default None and are populated only on the axis they belong to
-    # (presence for the confidence/quality/source columns; utterance for the
+    # (speech_presence for the confidence/quality/source columns; asr for the
     # token-entropy/coupling columns). They are additive: existing readers that
     # project a fixed column set are unaffected, and ``within_pass_uncertainty``
     # keeps its original meaning. See
-    # ``specs/20260722-175022-scene-quality-utterance/data-model.md``.
+    # ``specs/20260722-175022-scene-quality-asr/data-model.md``.
     #
     # Presence confidence/uncertainty split (FR-013):
-    presence_confidence: float | None = None  # calibrated mean P(speech) in [0,1]
-    presence_uncertainty: float | None = None  # decisiveness uncertainty 1-|2p-1| in [0,1]
+    speech_presence_confidence: float | None = None  # calibrated mean P(speech) in [0,1]
+    speech_presence_uncertainty: float | None = None  # decisiveness uncertainty 1-|2p-1| in [0,1]
     # L1 scene-quality measurements, in native units. Recorded alongside the derived scores so a
     # consumer can always see what was measured, not only how it was scored — the previous version
     # kept only the scores, which is why a column pinned at 0.0 by its anchor was
@@ -116,7 +116,7 @@ class AxisResult:
 class PerSegmentEmbedding:
     """One speaker-embedding vector for one diarization segment.
 
-    Used by the identity axis's across-time sub-signal: per-bucket cosine distance is
+    Used by the speaker axis's across-time sub-signal: per-bucket cosine distance is
     computed against the embedding of the most recent prior bucket on the same speaker
     track.
     """

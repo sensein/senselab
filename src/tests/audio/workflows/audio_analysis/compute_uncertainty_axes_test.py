@@ -6,7 +6,7 @@ no real model invocations, no audio loading. Covers:
 - T019: happy path with two diar models + two ASR models on a 4 s clip.
 - T026: text-only ASR resolves through the alignment block (FR-011).
 - T027: AST/YAMNet floor-based bucket→window indexing for cross-stream contributions.
-- T028: PPG present vs absent — utterance axis sub-signal drops out cleanly.
+- T028: PPG present vs absent — asr axis sub-signal drops out cleanly.
 - T028b: graceful degrade (FR-013) — failed pass / empty result / missing PPG.
 - T029: multi-word AudioSet labels survive the speech_presence_labels parser.
 """
@@ -99,7 +99,7 @@ def _silent_audio(duration_s: float, sr: int = 16000) -> Audio:
 
     Audible rather than digitally silent. The absolute acoustic voters (LUFS, level-above-floor)
     read the waveform directly, so a silent fixture paired with mocked models reporting *speech*
-    is self-contradictory: those voters correctly dissent and presence uncertainty rises. Use
+    is self-contradictory: those voters correctly dissent and speech_presence uncertainty rises. Use
     :func:`_silence_audio` where silence is the thing under test.
     """
     import numpy as np
@@ -171,36 +171,38 @@ def test_compute_uncertainty_axes_happy_path() -> None:
     )
 
     expected_keys = {
-        (p, a) for p in ("raw_16k", "enhanced_16k", "raw_vs_enhanced") for a in ("presence", "identity", "utterance")
+        (p, a) for p in ("raw_16k", "enhanced_16k", "raw_vs_enhanced") for a in ("speech_presence", "speaker", "asr")
     }
     assert set(axis_results.keys()) == expected_keys
 
     # Each per-pass parquet should have rows on the buckets where speech is present.
     for pass_label in ("raw_16k", "enhanced_16k"):
-        presence = axis_results[(pass_label, "presence")]
-        assert len(presence.rows) > 0
-        for r in presence.rows:
+        speech_presence = axis_results[(pass_label, "speech_presence")]
+        assert len(speech_presence.rows) > 0
+        for r in speech_presence.rows:
             assert r.within_pass_uncertainty is None or 0 <= r.within_pass_uncertainty <= 1
 
-    # Diar agrees across models → presence and identity uncertainty are low.
-    raw_presence = axis_results[("raw_16k", "presence")]
-    raw_identity = axis_results[("raw_16k", "identity")]
-    avg_presence = sum(r.within_pass_uncertainty or 0 for r in raw_presence.rows) / max(1, len(raw_presence.rows))
-    avg_identity = sum(r.within_pass_uncertainty or 0 for r in raw_identity.rows) / max(1, len(raw_identity.rows))
-    assert avg_presence < 0.5
-    assert avg_identity < 0.5
+    # Diar agrees across models → speech_presence and speaker uncertainty are low.
+    raw_speech_presence = axis_results[("raw_16k", "speech_presence")]
+    raw_speaker = axis_results[("raw_16k", "speaker")]
+    avg_speech_presence = sum(r.within_pass_uncertainty or 0 for r in raw_speech_presence.rows) / max(
+        1, len(raw_speech_presence.rows)
+    )
+    avg_speaker = sum(r.within_pass_uncertainty or 0 for r in raw_speaker.rows) / max(1, len(raw_speaker.rows))
+    assert avg_speech_presence < 0.5
+    assert avg_speaker < 0.5
 
     # Utterance: raw pass has one transcript edit (granite "world!!" vs whisper "world"),
     # so at least one bucket should have non-zero uncertainty.
-    raw_utterance = axis_results[("raw_16k", "utterance")]
-    assert any((r.within_pass_uncertainty or 0) > 0 for r in raw_utterance.rows)
+    raw_asr = axis_results[("raw_16k", "asr")]
+    assert any((r.within_pass_uncertainty or 0) > 0 for r in raw_asr.rows)
 
 
 # ── T026 text-only ASR via alignment block ───────────────────────────
 
 
 def test_text_only_asr_resolves_through_alignment() -> None:
-    """Granite-style text-only ASR contributes to presence only via alignment block."""
+    """Granite-style text-only ASR contributes to speech_presence only via alignment block."""
     diar_segs = [(0.0, 1.0, "SPEAKER_00")]
     pass_summary = {
         "duration_s": 2.0,
@@ -225,9 +227,9 @@ def test_text_only_asr_resolves_through_alignment() -> None:
         aggregator="min",
         speech_presence_labels=["Speech"],
     )
-    presence = axis_results[("raw_16k", "presence")]
+    speech_presence = axis_results[("raw_16k", "speech_presence")]
     # Bucket [0.0, 0.5) should have granite voting True (covers both aligned chunks).
-    matching = [r for r in presence.rows if abs(r.start - 0.0) < 1e-6]
+    matching = [r for r in speech_presence.rows if abs(r.start - 0.0) < 1e-6]
     assert matching, "expected a row at start=0.0"
     granite_vote = matching[0].model_votes.get("granite")
     assert granite_vote is not None and granite_vote["speaks"] is True
@@ -272,14 +274,14 @@ def test_ast_yamnet_uses_floor_window_indexing() -> None:
         aggregator="min",
         speech_presence_labels=["Speech"],
     )
-    presence = axis_results[("raw_16k", "presence")]
+    speech_presence = axis_results[("raw_16k", "speech_presence")]
     # Every bucket in [0, 4) should map to AST window 0 → Speech (in allowlist) → speaks=True.
-    for r in presence.rows:
+    for r in speech_presence.rows:
         ast_vote = r.model_votes.get("ast")
         assert ast_vote is not None and ast_vote["speaks"] is True
 
 
-# ── T028 PPG presence vs absence ──────────────────────────────────────
+# ── T028 PPG speech_presence vs absence ──────────────────────────────────────
 
 
 def test_ppg_absent_drops_pairwise_ppg_pairs() -> None:
@@ -301,14 +303,14 @@ def test_ppg_absent_drops_pairwise_ppg_pairs() -> None:
         aggregator="min",
         speech_presence_labels=["Speech"],
     )
-    utt = axis_results[("raw_16k", "utterance")]
+    utt = axis_results[("raw_16k", "asr")]
     for r in utt.rows:
         pair_block = r.model_votes.get("__pairwise_phoneme_distances__")
         if isinstance(pair_block, dict):
             pairs = pair_block.get("pairs") or {}
             for pair_key in pairs:
                 assert "__ppg__" not in pair_key, "no __ppg__ pairs expected when PPG opted out"
-    assert "raw_16k/utterance/ppg" in incomparable
+    assert "raw_16k/asr/ppg" in incomparable
 
 
 def test_ppg_present_populates_pairwise_ppg_pairs() -> None:
@@ -335,7 +337,7 @@ def test_ppg_present_populates_pairwise_ppg_pairs() -> None:
         aggregator="min",
         speech_presence_labels=["Speech"],
     )
-    utt = axis_results[("raw_16k", "utterance")]
+    utt = axis_results[("raw_16k", "asr")]
     found_ppg_pair = False
     for r in utt.rows:
         pair_block = r.model_votes.get("__pairwise_phoneme_distances__")
@@ -378,12 +380,12 @@ def test_graceful_degrade_failed_models_do_not_raise() -> None:
         aggregator="min",
         speech_presence_labels=["Speech"],
     )
-    # All three axes still emit; presence has at least one row.
-    assert ("raw_16k", "presence") in axis_results
-    assert ("raw_16k", "identity") in axis_results
-    assert ("raw_16k", "utterance") in axis_results
+    # All three axes still emit; speech_presence has at least one row.
+    assert ("raw_16k", "speech_presence") in axis_results
+    assert ("raw_16k", "speaker") in axis_results
+    assert ("raw_16k", "asr") in axis_results
     # PPG missing reason recorded.
-    assert "raw_16k/utterance/ppg" in incomparable
+    assert "raw_16k/asr/ppg" in incomparable
 
 
 # ── T029 Multi-word AudioSet labels survive ──────────────────────────
@@ -417,13 +419,13 @@ def test_multi_word_audioset_labels_match() -> None:
         aggregator="min",
         speech_presence_labels=["Speech", "Narration, monologue", "Conversation"],
     )
-    presence = axis_results[("raw_16k", "presence")]
-    assert presence.rows
-    ast_vote = presence.rows[0].model_votes.get("ast")
+    speech_presence = axis_results[("raw_16k", "speech_presence")]
+    assert speech_presence.rows
+    ast_vote = speech_presence.rows[0].model_votes.get("ast")
     assert ast_vote is not None and ast_vote["speaks"] is True
 
 
-def test_identity_robust_to_diar_label_naming_conventions() -> None:
+def test_speaker_robust_to_diar_label_naming_conventions() -> None:
     """Regression: pyannote ``SPEAKER_00``/``_01`` vs Sortformer ``speaker_0``/``_1``.
 
     Identity uncertainty no longer compares literal labels across models. Each diar
@@ -458,15 +460,15 @@ def test_identity_robust_to_diar_label_naming_conventions() -> None:
         aggregator="min",
         speech_presence_labels=["Speech"],
     )
-    identity = axis_results[("raw_16k", "identity")]
-    assert identity.rows, "expected identity rows on a 4 s clip with diar coverage"
+    speaker = axis_results[("raw_16k", "speaker")]
+    assert speaker.rows, "expected speaker rows on a 4 s clip with diar coverage"
 
     # No embedding models, so there are no within-track cosines to fold; the cross-model
     # agreement signal carries the row on its own and must report agreement, never a
     # string-mismatch disagreement.
-    for r in identity.rows:
+    for r in speaker.rows:
         assert r.within_pass_uncertainty == pytest.approx(0.0), (
-            f"models agree on the timeline, so identity uncertainty must be 0, got {r.within_pass_uncertainty}"
+            f"models agree on the timeline, so speaker uncertainty must be 0, got {r.within_pass_uncertainty}"
         )
         cross = r.model_votes.get("__cross_diar_label_disagreement__")
         assert cross is not None and cross["n_disagree"] == 0
@@ -479,7 +481,7 @@ def test_identity_robust_to_diar_label_naming_conventions() -> None:
         assert sf["speaker_label"].startswith("speaker_")
 
 
-# ── US1: scene-quality columns wired into presence rows ───────────────
+# ── US1: scene-quality columns wired into speech_presence rows ───────────────
 
 
 def _noise_audio(duration_s: float, sr: int = 16000) -> Audio:
@@ -490,8 +492,8 @@ def _noise_audio(duration_s: float, sr: int = 16000) -> Audio:
     return Audio(waveform=torch.tensor(y).reshape(1, -1), sampling_rate=sr)
 
 
-def test_presence_rows_carry_quality_columns_when_brouhaha_available(monkeypatch: pytest.MonkeyPatch) -> None:
-    """US1: with Brouhaha frames available, presence rows expose quality_* columns."""
+def test_speech_presence_rows_carry_quality_columns_when_brouhaha_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    """US1: with Brouhaha frames available, speech_presence rows expose quality_* columns."""
     import senselab.audio.tasks.scene_quality as sq
     from senselab.audio.tasks.scene_quality.brouhaha import BrouhahaFrames
 
@@ -512,19 +514,19 @@ def test_presence_rows_carry_quality_columns_when_brouhaha_available(monkeypatch
         aggregator="min",
         speech_presence_labels=["Speech"],
     )
-    presence = axis_results[("raw_16k", "presence")]
-    assert presence.rows
-    assert any(r.quality_snr is not None for r in presence.rows)
-    for r in presence.rows:
+    speech_presence = axis_results[("raw_16k", "speech_presence")]
+    assert speech_presence.rows
+    assert any(r.quality_snr is not None for r in speech_presence.rows)
+    for r in speech_presence.rows:
         for v in (r.quality_snr, r.quality_reverb, r.quality_bandwidth):
             assert v is None or 0.0 <= v <= 1.0
-    prov = presence.provenance["scene_quality"]
+    prov = speech_presence.provenance["scene_quality"]
     assert prov["enabled"] is True
     assert prov["model"]["available"] is True
 
 
-def test_presence_rows_carry_source_columns() -> None:
-    """US2: AST/YAMNet windows → per-bucket src_* category masses on presence rows."""
+def test_speech_presence_rows_carry_source_columns() -> None:
+    """US2: AST/YAMNet windows → per-bucket src_* category masses on speech_presence rows."""
     windows = [
         {
             "start": 0.0,
@@ -550,20 +552,20 @@ def test_presence_rows_carry_source_columns() -> None:
         speech_presence_labels=["Speech"],
         scene_quality=False,
     )
-    presence = axis_results[("raw_16k", "presence")]
-    assert presence.rows
-    assert any(r.src_speech is not None for r in presence.rows)
-    for r in presence.rows:
+    speech_presence = axis_results[("raw_16k", "speech_presence")]
+    assert speech_presence.rows
+    assert any(r.src_speech is not None for r in speech_presence.rows)
+    for r in speech_presence.rows:
         if r.src_speech is not None:
             assert r.src_people is not None and r.src_machine is not None and r.src_environment is not None
             total = r.src_speech + r.src_people + r.src_machine + r.src_environment
             assert abs(total - 1.0) < 1e-6
             assert r.src_dominant == "speech"
-    assert presence.provenance["sound_sources"]["enabled"] is True
+    assert speech_presence.provenance["sound_sources"]["enabled"] is True
 
 
-def test_presence_confidence_uncertainty_split_and_instability(monkeypatch: pytest.MonkeyPatch) -> None:
-    """US3: presence_confidence + presence_uncertainty columns; frame instability lifts uncertainty."""
+def test_speech_presence_confidence_uncertainty_split_and_instability(monkeypatch: pytest.MonkeyPatch) -> None:
+    """US3: speech_presence_confidence + speech_presence_uncertainty columns; frame instability lifts uncertainty."""
     import senselab.audio.tasks.voice_activity_detection.frame_posteriors as fp
     from senselab.audio.tasks.voice_activity_detection.frame_posteriors import FramePosterior
 
@@ -583,7 +585,7 @@ def test_presence_confidence_uncertainty_split_and_instability(monkeypatch: pyte
     axis_results, _, _ = compute_uncertainty_axes(
         passes={"raw_16k": raw_pass},
         grid=BucketGrid(win_length=0.5, hop_length=0.5),
-        presence_grid=BucketGrid(win_length=0.1, hop_length=0.1),
+        speech_presence_grid=BucketGrid(win_length=0.1, hop_length=0.1),
         params={},
         audio={"raw_16k": _silent_audio(2.0)},
         speaker_embedding_models=[],
@@ -591,18 +593,22 @@ def test_presence_confidence_uncertainty_split_and_instability(monkeypatch: pyte
         speech_presence_labels=["Speech"],
         scene_quality=False,
     )
-    presence = axis_results[("raw_16k", "presence")]
-    assert presence.rows
-    assert all(r.presence_confidence is not None for r in presence.rows)
-    assert all(r.presence_uncertainty is not None for r in presence.rows)
-    # Instability raises presence_uncertainty above the legacy decisiveness uncertainty.
-    assert any((r.presence_uncertainty or 0.0) > (r.within_pass_uncertainty or 0.0) + 1e-6 for r in presence.rows)
+    speech_presence = axis_results[("raw_16k", "speech_presence")]
+    assert speech_presence.rows
+    assert all(r.speech_presence_confidence is not None for r in speech_presence.rows)
+    assert all(r.speech_presence_uncertainty is not None for r in speech_presence.rows)
+    # Instability raises speech_presence_uncertainty above the legacy decisiveness uncertainty.
+    assert any(
+        (r.speech_presence_uncertainty or 0.0) > (r.within_pass_uncertainty or 0.0) + 1e-6 for r in speech_presence.rows
+    )
     # within_pass_uncertainty (legacy column) is untouched by the split.
-    assert all(r.within_pass_uncertainty is None or 0.0 <= r.within_pass_uncertainty <= 1.0 for r in presence.rows)
-    assert presence.provenance["frame_posteriors"]["segmentation"]["available"] is True
+    assert all(
+        r.within_pass_uncertainty is None or 0.0 <= r.within_pass_uncertainty <= 1.0 for r in speech_presence.rows
+    )
+    assert speech_presence.provenance["frame_posteriors"]["segmentation"]["available"] is True
 
 
-def test_presence_quality_null_when_scene_quality_disabled() -> None:
+def test_speech_presence_quality_null_when_scene_quality_disabled() -> None:
     """scene_quality=False → no quality columns, no model load."""
     raw_pass = {
         "duration_s": 2.0,
@@ -618,27 +624,27 @@ def test_presence_quality_null_when_scene_quality_disabled() -> None:
         speech_presence_labels=["Speech"],
         scene_quality=False,
     )
-    presence = axis_results[("raw_16k", "presence")]
-    assert presence.rows
-    assert all(r.quality_snr is None for r in presence.rows)
-    assert presence.provenance["scene_quality"]["enabled"] is False
+    speech_presence = axis_results[("raw_16k", "speech_presence")]
+    assert speech_presence.rows
+    assert all(r.quality_snr is None for r in speech_presence.rows)
+    assert speech_presence.provenance["scene_quality"]["enabled"] is False
 
 
 # ── T094a: the three axes survive the per-speaker change (SC-010) ─────
 
 
 def test_the_three_axes_are_unchanged_by_the_per_speaker_derivation() -> None:
-    """SC-010: per-speaker identity is additive, not a replacement of the axis outputs.
+    """SC-010: per-speaker speaker is additive, not a replacement of the axis outputs.
 
     The per-bucket axes stay the evidence-gathering mechanism and every existing consumer
     reads them unchanged. The risk this guards is a silent one: the per-speaker derivation
     reads the same harvest, and if it mutated what it read — sorting vote dicts, promoting
-    silence, renaming clusters — presence and utterance would shift for reasons that have
+    silence, renaming clusters — speech_presence and asr would shift for reasons that have
     nothing to do with either axis, and no per-speaker test would notice.
     """
     from senselab.audio.workflows.audio_analysis.speaker_identity import (
-        build_presence_tracks,
         build_speaker_identity,
+        build_speech_presence_tracks,
     )
 
     diar_segs = [(0.0, 1.0, "SPEAKER_00"), (1.0, 4.0, "SPEAKER_01")]
@@ -664,10 +670,10 @@ def test_the_three_axes_are_unchanged_by_the_per_speaker_derivation() -> None:
 
     harvests: dict[str, Any] = {}
     before, _inc, _emb = compute_uncertainty_axes(passes=passes, harvests_out=harvests, **kwargs)
-    votes = harvests["raw_16k"].identity_votes
+    votes = harvests["raw_16k"].speaker_votes
 
-    posterior, hypotheses, correspondence = build_speaker_identity(passes, identity_votes=votes)
-    tracks = build_presence_tracks(votes)
+    posterior, hypotheses, correspondence = build_speaker_identity(passes, speaker_votes=votes)
+    tracks = build_speech_presence_tracks(votes)
     assert hypotheses and tracks and correspondence  # the derivation did run
 
     after, _inc2, _emb2 = compute_uncertainty_axes(passes=passes, **kwargs)
@@ -676,7 +682,7 @@ def test_the_three_axes_are_unchanged_by_the_per_speaker_derivation() -> None:
         rows_after = [(r.start, r.end, r.within_pass_uncertainty) for r in after[key].rows]
         assert rows_before == rows_after, f"{key} changed after the per-speaker derivation ran"
 
-    # And the identity axis itself still reports per bucket, in range, as before.
-    identity = before[("raw_16k", "identity")]
-    assert identity.rows
-    assert all(r.within_pass_uncertainty is None or 0.0 <= r.within_pass_uncertainty <= 1.0 for r in identity.rows)
+    # And the speaker axis itself still reports per bucket, in range, as before.
+    speaker = before[("raw_16k", "speaker")]
+    assert speaker.rows
+    assert all(r.within_pass_uncertainty is None or 0.0 <= r.within_pass_uncertainty <= 1.0 for r in speaker.rows)

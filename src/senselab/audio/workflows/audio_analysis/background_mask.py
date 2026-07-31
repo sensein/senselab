@@ -658,7 +658,7 @@ def nontarget_confidence_by_bucket(
     Args:
         rows: Rows from :func:`target_confidence_by_bucket`.
         source_by_bucket: ``{(start, end) → {"src_machine": ..., "src_environment": ...}}``
-            as harvested on the presence grid.
+            as harvested on the speech_presence grid.
         excluded: Categories that do not count as non-target content.
 
     Returns:

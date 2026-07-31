@@ -29,7 +29,7 @@ from typing import Any, Literal, NotRequired, TypedDict
 
 __all__ = ["AxisName", "CostClass", "PlannedIntervention", "Region", "RegionStatus"]
 
-AxisName = Literal["presence", "identity", "utterance"]
+AxisName = Literal["speech_presence", "speaker", "asr"]
 """The three uncertainty axes."""
 
 CostClass = Literal["light", "medium", "heavy"]

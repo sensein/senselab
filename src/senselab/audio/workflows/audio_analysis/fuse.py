@@ -6,7 +6,7 @@ The pipeline has two levels and they answer different questions.
 decide the answer. The per-pass fold it used to perform is a within-pass diagnostic — "what
 did this pass think" — and folding early is precisely how one saturated sub-signal came to pin
 an axis at 1.0 while two independent diarizers, both embedding models and the per-speaker
-presence track all agreed nothing had changed: the fold ran before anything had been measured
+speech_presence track all agreed nothing had changed: the fold ran before anything had been measured
 about the signals, so there was no weight to apply.
 
 **Level 2** (this module) aggregates across every signal and every pass, weighting each signal
@@ -42,16 +42,16 @@ _UNCERTAINTY_FIELDS = (
     "value",
 )
 
-# Presence and utterance signals report a *confidence*, not an uncertainty. Converting rather
-# than ignoring them matters: on a real run the identity axis fused 85 buckets while presence
-# fused 0 of 1070 and utterance 0 of 41, because only identity happens to name its field
+# Presence and asr signals report a *confidence*, not an uncertainty. Converting rather
+# than ignoring them matters: on a real run the speaker axis fused 85 buckets while speech_presence
+# fused 0 of 1070 and asr 0 of 41, because only speaker happens to name its field
 # "uncertainty". A level that silently covers one axis of three is worse than one that covers
 # none, since the gap is invisible in the output.
 _CONFIDENCE_FIELDS = ("native_confidence", "p_speech", "p_voice", "argmax_confidence")
 
 # Utterance signals expose neither an uncertainty nor a [0, 1] confidence — they report
 # ``avg_logprob``, a mean token log-probability. exp() takes it back to a probability, which is
-# the model's own confidence in the transcript it produced. Left unhandled, the utterance axis
+# the model's own confidence in the transcript it produced. Left unhandled, the asr axis
 # fused 0 of 41 buckets while the other two fused fully.
 _LOGPROB_FIELDS = ("avg_logprob",)
 
@@ -94,7 +94,7 @@ def per_signal_uncertainty(bucket: Mapping[str, Any]) -> dict[str, float]:
                 if isinstance(value, (int, float)):
                     # A confidence of c leaves 1 - c of doubt. Distance from 0.5 would be the
                     # wrong transform: it maps a confident "no" to zero uncertainty about
-                    # *presence*, which is right, but this field is a confidence in the claim
+                    # *speech_presence*, which is right, but this field is a confidence in the claim
                     # the signal made, so its complement is the doubt in that claim.
                     out[str(name)] = max(0.0, min(1.0, 1.0 - float(value)))
                     break
@@ -104,7 +104,7 @@ def per_signal_uncertainty(bucket: Mapping[str, Any]) -> dict[str, float]:
 def _pairwise_per_signal(votes: Mapping[str, Any]) -> dict[str, float]:
     """Per-signal uncertainty from pairwise disagreement, for axes that only report pairs.
 
-    The utterance axis carries ``{model_a|model_b: phoneme_distance}`` rather than a per-model
+    The asr axis carries ``{model_a|model_b: phoneme_distance}`` rather than a per-model
     confidence, and on a real recording all three ASR backends were text-only so every
     ``avg_logprob`` was ``None`` — leaving the axis with no per-signal quantity at all and L2
     fusing 0 of 41 buckets.
@@ -321,7 +321,7 @@ def write_final_uncertainty(
     speaker_claims: Mapping[str, Sequence[tuple[float, float]]] | None = None,
     max_rounds: int = 1,
 ) -> dict[str, Any]:
-    """Write ``L2/round<N>/uncertainty/{presence,identity,utterance}.parquet``.
+    """Write ``L2/round<N>/uncertainty/{speech_presence,speaker,asr}.parquet``.
 
     One directory per round, because a reader needs to see what each iteration changed and not
     only where it ended up — a single map cannot distinguish "settled immediately" from
@@ -349,7 +349,7 @@ def write_final_uncertainty(
 
     import pandas as pd
 
-    axis_field = {"presence": "presence_votes", "identity": "identity_votes", "utterance": "utterance_votes"}
+    axis_field = {"speech_presence": "speech_presence_votes", "speaker": "speaker_votes", "asr": "asr_votes"}
     level2 = Path(out_dir) / "L2"
     level2.mkdir(parents=True, exist_ok=True)
 

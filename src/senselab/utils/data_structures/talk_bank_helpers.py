@@ -39,20 +39,20 @@ def chats_to_script_lines(
     for chat in reader:
         file_path = chat.file_paths[0]
         script_lines_by_file[file_path] = []
-        for utterance in chat.utterances():
-            if utterance.time_marks:
-                start = utterance.time_marks[0] / 1000
-                end = utterance.time_marks[1] / 1000
+        for asr in chat.utterances():
+            if asr.time_marks:
+                start = asr.time_marks[0] / 1000
+                end = asr.time_marks[1] / 1000
             else:
                 start = None
                 end = None
 
-            words_in_utterance = [token.word for token in (utterance.tokens or []) if token.word]
+            words_in_utterance = [token.word for token in (asr.tokens or []) if token.word]
             if len(words_in_utterance) > 0:
                 utterance_transcript = " ".join(words_in_utterance[:-1]) + words_in_utterance[-1]
             else:
                 utterance_transcript = ""
             script_lines_by_file[file_path].append(
-                ScriptLine(text=utterance_transcript, speaker=utterance.participant, start=start, end=end)
+                ScriptLine(text=utterance_transcript, speaker=asr.participant, start=start, end=end)
             )
     return script_lines_by_file

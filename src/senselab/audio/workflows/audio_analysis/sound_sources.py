@@ -1,4 +1,4 @@
-"""Background sound-source categorization for the presence axis.
+"""Background sound-source categorization for the speech_presence axis.
 
 Maps the AudioSet class scores emitted by AST and YAMNet into four coarse
 categories — ``speech``, ``people`` (non-speech human sounds), ``machine``
@@ -9,7 +9,7 @@ mass of each plus the dominant category.
 The mapping is a checked-in, versioned JSON (``data/audioset_source_map.json``)
 authored by walking each AudioSet class to its top-level ontology ancestor, so
 every class the classifiers can emit resolves to exactly one category (SC-003).
-This is additive to the presence rows and independent of the existing top-1
+This is additive to the speech_presence rows and independent of the existing top-1
 ``speech_presence_labels`` / YAMNet-veto uses, which are unaffected.
 """
 
@@ -170,7 +170,7 @@ def harvest_source_categories(
     pass_summary: dict[str, Any],
     grid: BucketGrid,
 ) -> list[dict[str, Any]]:
-    """Return one source-category dict per presence bucket on ``grid``.
+    """Return one source-category dict per speech_presence bucket on ``grid``.
 
     Combines AST + YAMNet (mean of whichever classifiers are available) into the
     four category masses, normalizes them to sum ~1, and reports the dominant

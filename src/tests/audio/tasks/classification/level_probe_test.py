@@ -65,7 +65,7 @@ def test_identical_results_are_perfectly_stable() -> None:
 
 
 def test_reordered_top_k_is_unstable() -> None:
-    """Label identity migrating with level is the failure this measures."""
+    """Label speaker migrating with level is the failure this measures."""
     ref = [_win(["Speech", "Music"], [0.9, 0.1])]
     cand = [_win(["Music", "Speech"], [0.9, 0.1])]
     stability = label_stability(ref, cand, k=2)

@@ -26,19 +26,19 @@ from typing import Any
 
 from senselab.audio.workflows.audio_analysis.adaptive.types import AxisName
 from senselab.audio.workflows.audio_analysis.aggregate import (
-    aggregate_identity,
-    aggregate_presence,
-    aggregate_utterance,
-    presence_p_voice,
+    aggregate_asr,
+    aggregate_speaker,
+    aggregate_speech_presence,
+    speech_presence_p_voice,
 )
 from senselab.audio.workflows.audio_analysis.layout import pass_dir
 
-AXES: tuple[AxisName, ...] = ("presence", "identity", "utterance")
+AXES: tuple[AxisName, ...] = ("speech_presence", "speaker", "asr")
 """The three uncertainty axes, typed so callers keep the narrowed literal."""
 
 _META_COLUMNS = (
-    "presence_confidence",
-    "presence_uncertainty",
+    "speech_presence_confidence",
+    "speech_presence_uncertainty",
     "snr_brouhaha_db",
     "c50_brouhaha_db",
     "snr_spectral_gating_db",
@@ -114,7 +114,7 @@ class VoteStore:
         self._votes: dict[str, Vote] = {}
         self._index: dict[tuple[str, str, tuple[float, float]], list[str]] = {}
         # Per-(stream, axis, bucket) row metadata from the ingested parquets
-        # (quality / source-mass / presence columns + the stored aggregate used
+        # (quality / source-mass / speech_presence columns + the stored aggregate used
         # as the round-1 parity oracle).
         self.row_meta: dict[tuple[str, str, tuple[float, float]], dict[str, Any]] = {}
         self._round_added: dict[int, list[str]] = {}
@@ -173,7 +173,7 @@ class VoteStore:
         """Populate round-1 votes directly from ``compute.harvest_pass`` outputs (T009).
 
         ``harvests`` maps pass label → ``PassHarvest`` (duck-typed:
-        ``presence_votes`` / ``identity_votes`` / ``utterance_votes`` bucket lists plus
+        ``speech_presence_votes`` / ``speaker_votes`` / ``asr_votes`` bucket lists plus
         ``quality_by_bucket`` / ``source_by_bucket``). This is the in-process
         integration point for analyze_audio — no parquet round-trip; the parquet
         ingest path (:meth:`from_run_dir`) remains for artifact-driven runs.
@@ -181,9 +181,9 @@ class VoteStore:
         store = cls()
         for stream, harvest in harvests.items():
             for axis, buckets in (
-                ("presence", harvest.presence_votes),
-                ("identity", harvest.identity_votes),
-                ("utterance", harvest.utterance_votes),
+                ("speech_presence", harvest.speech_presence_votes),
+                ("speaker", harvest.speaker_votes),
+                ("asr", harvest.asr_votes),
             ):
                 for bucket in buckets:
                     bk = bucket_key(bucket["start"], bucket["end"])
@@ -201,7 +201,7 @@ class VoteStore:
                                 payload=payload,
                             )
                         )
-                    if axis == "presence":
+                    if axis == "speech_presence":
                         meta: dict[str, Any] = {"stored_within_pass_uncertainty": None}
                         # P2's second trigger reads this; it lives on the harvest
                         # bucket rather than in quality_by_bucket.
@@ -240,9 +240,9 @@ class VoteStore:
     def purge_source_in_bucket(
         self, stream: str, bucket: tuple[float, float], source: str, *, reason: str, round_idx: int
     ) -> int:
-        """Mark ``source``'s votes in ``bucket`` purged on presence + utterance axes (C10)."""
+        """Mark ``source``'s votes in ``bucket`` purged on speech_presence + asr axes (C10)."""
         n = 0
-        for axis in ("presence", "utterance"):
+        for axis in ("speech_presence", "asr"):
             for vid in self._index.get((stream, axis, bucket), []):
                 v = self._votes[vid]
                 if v.source == source and v.status == "active":
@@ -281,13 +281,13 @@ class VoteStore:
         """Aggregate one bucket's active votes via the existing pure aggregators."""
         votes = self.active_votes(stream, axis, bucket)
         p_voice: float | None = None
-        if axis == "presence":
-            agg = aggregate_presence(votes)
-            p_voice = presence_p_voice(votes)
-        elif axis == "identity":
-            agg = aggregate_identity(votes, raw_vs_enh=None, aggregator=aggregator)
+        if axis == "speech_presence":
+            agg = aggregate_speech_presence(votes)
+            p_voice = speech_presence_p_voice(votes)
+        elif axis == "speaker":
+            agg = aggregate_speaker(votes, raw_vs_enh=None, aggregator=aggregator)
         else:
-            agg = aggregate_utterance(votes, aggregator=aggregator)
+            agg = aggregate_asr(votes, aggregator=aggregator)
         return {
             "start": bucket[0],
             "end": bucket[1],
@@ -304,7 +304,7 @@ class VoteStore:
         missed an input.
 
         The comparison anchors on the **pre-coupling** scale: since FR-019
-        (scene→utterance coupling, scene-quality-utterance US4) the parquet's
+        (scene→asr coupling, scene-quality-asr US4) the parquet's
         ``within_pass_uncertainty`` may carry a scene multiplier that is not a
         function of the votes alone — the pure per-vote value is preserved on
         ``raw_within_pass_uncertainty``, which is what the belief store computes
@@ -345,7 +345,7 @@ class BeliefState:
     """Aggregated per-bucket state per (stream, axis), updated each round."""
 
     def __init__(self, aggregator: str) -> None:
-        """Create an empty belief state using ``aggregator`` for identity/utterance."""
+        """Create an empty belief state using ``aggregator`` for speaker/asr."""
         self.aggregator = aggregator
         self.rows: dict[tuple[str, str], list[dict[str, Any]]] = {}
 

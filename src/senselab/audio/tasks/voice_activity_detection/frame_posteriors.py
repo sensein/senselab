@@ -4,7 +4,7 @@ Unlike ``detect_human_voice_activity_in_audios`` (which runs the high-level
 ``Pipeline`` and returns thresholded ``ScriptLine`` segments), this extractor
 uses the low-level ``Model`` + ``Inference`` path to obtain the **raw per-frame
 speech probability** (~16.9 ms/frame) without any segment thresholding or
-hangover smoothing — exactly what the presence axis needs to resolve brief
+hangover smoothing — exactly what the speech_presence axis needs to resolve brief
 events and to compute a within-bucket temporal-instability signal.
 
 ``segmentation-3.0`` is a powerset model (up to 3 speakers / chunk); P(speech)
@@ -168,7 +168,7 @@ class FramePosterior:
     def per_channel_mean_in_window(self, start_s: float, end_s: float) -> Optional[np.ndarray]:
         """Per-channel mean activation over frames overlapping ``[start, end)``.
 
-        The basis for per-speaker presence: it keeps *which* channel was active, which pooling
+        The basis for per-speaker speech_presence: it keeps *which* channel was active, which pooling
         discards. ``None`` when no frame overlaps.
         """
         span = self._frame_slice(start_s, end_s)
@@ -321,7 +321,7 @@ def _get_inference(model: PyannoteAudioModel, device: Optional[DeviceType]) -> "
             raise ValueError(f"segmentation model {model.path_or_uri} could not be loaded.")
         # window="whole" returns the model's NATIVE per-frame posterior (~17 ms/frame)
         # for the entire signal. The default (sliding) mode returns a coarse
-        # per-chunk aggregate (~1 s step) that would defeat the fine presence grid.
+        # per-chunk aggregate (~1 s step) that would defeat the fine speech_presence grid.
         # Trade-off: "whole" holds the whole signal in one forward pass — fine for
         # the short clinical clips this workflow targets; very long recordings would
         # need chunked stitching (future work).
@@ -352,7 +352,7 @@ def extract_speech_frame_posteriors(
     """Return per-frame activations for each audio, channels intact (``None`` on failure).
 
     If the model cannot be loaded (not installed, gated without a token, native-lib failure),
-    every entry is ``None`` and the presence axis simply omits this signal (FR-023) — the
+    every entry is ``None`` and the speech_presence axis simply omits this signal (FR-023) — the
     workflow does not abort.
 
     The full ``(frames, channels)`` matrix is always retained: it is the L1 measurement, and it

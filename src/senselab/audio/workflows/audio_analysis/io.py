@@ -48,13 +48,13 @@ def write_axis_parquet(
     ]
     statuses = [r.comparison_status for r in axis_result.rows]
 
-    # Scene-aware presence + utterance extension columns (feature 20260722-175022).
+    # Scene-aware speech_presence + asr extension columns (feature 20260722-175022).
     # Additive and all-nullable: rows on axes that don't populate a given column
     # write null, keeping one uniform schema across the three parquets. Existing
     # column-projecting readers ignore these.
     float_extension_columns = (
-        "presence_confidence",
-        "presence_uncertainty",
+        "speech_presence_confidence",
+        "speech_presence_uncertainty",
         # L1 measurements in native units, then the L2 scores derived from them. Both are written:
         # the score alone cannot distinguish "measured clean" from "clamped by its anchor".
         "snr_brouhaha_db",

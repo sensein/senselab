@@ -31,6 +31,7 @@ from typing import Any
 import numpy as np
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.workflows.audio_analysis.asr import harvest_asr_votes
 from senselab.audio.workflows.audio_analysis.embeddings import (
     WindowEmbedding,
     extract_per_window_embeddings,
@@ -40,8 +41,6 @@ from senselab.audio.workflows.audio_analysis.harvesters import (
     classification_top1_in_window,
     classification_windows,
 )
-from senselab.audio.workflows.audio_analysis.identity import harvest_identity_votes
-from senselab.audio.workflows.audio_analysis.presence import harvest_presence_votes
 from senselab.audio.workflows.audio_analysis.reliability import (
     measured_weights,
     reliability_from_stability,
@@ -50,6 +49,8 @@ from senselab.audio.workflows.audio_analysis.reliability import (
 from senselab.audio.workflows.audio_analysis.reliability import (
     signal_names as _signal_names,
 )
+from senselab.audio.workflows.audio_analysis.speaker import harvest_speaker_votes
+from senselab.audio.workflows.audio_analysis.speech_presence import harvest_speech_presence_votes
 from senselab.audio.workflows.audio_analysis.support import (
     evidence_signal_names,
     informative_evidence,
@@ -60,7 +61,6 @@ from senselab.audio.workflows.audio_analysis.types import (
     UncertaintyAxis,
     UncertaintyRow,
 )
-from senselab.audio.workflows.audio_analysis.utterance import harvest_utterance_votes
 from senselab.audio.workflows.audio_analysis.votes import (
     PassHarvest,
     aggregate_pass,
@@ -76,8 +76,8 @@ def harvest_pass(
     grid: BucketGrid,
     speaker_embedding_models: list[str],
     speech_presence_labels: list[str],
-    utterance_grid: BucketGrid | None = None,
-    presence_grid: BucketGrid | None = None,
+    asr_grid: BucketGrid | None = None,
+    speech_presence_grid: BucketGrid | None = None,
     scene_quality: bool = True,
     sound_sources: bool = True,
     embedding_window_s: float = 2.0,
@@ -113,25 +113,25 @@ def harvest_pass(
                 failures=emb_failures,
             )
         except Exception as exc:  # noqa: BLE001
-            incomparable_reasons[f"{pass_label}/identity/across_time"] = f"speaker-embedding extraction failed: {exc!r}"
+            incomparable_reasons[f"{pass_label}/speaker/across_time"] = f"speaker-embedding extraction failed: {exc!r}"
             per_window_embeddings = {}
     else:
         if not speaker_embedding_models:
-            incomparable_reasons[f"{pass_label}/identity/embeddings"] = (
+            incomparable_reasons[f"{pass_label}/speaker/embeddings"] = (
                 "no embedding models configured — silhouette / cosine validation disabled"
             )
         elif per_pass_audio is None:
-            incomparable_reasons[f"{pass_label}/identity/embeddings"] = (
+            incomparable_reasons[f"{pass_label}/speaker/embeddings"] = (
                 "no Audio object available for this pass — embedding extraction skipped"
             )
     for emb_model_id, emb_msg in emb_failures.items():
-        incomparable_reasons[f"{pass_label}/identity/embeddings/{emb_model_id}"] = emb_msg
+        incomparable_reasons[f"{pass_label}/speaker/embeddings/{emb_model_id}"] = emb_msg
 
     # Cluster windowed embeddings to estimate the pass's speaker count and
     # synthesize an embedding-derived diarization source. The result feeds
-    # both the presence axis (per-window silhouette voter) and the
+    # both the speech_presence axis (per-window silhouette voter) and the
     # diarization stack (the synthetic source becomes another diar voter
-    # for the identity axis and another stripe in the timeline plot).
+    # for the speaker axis and another stripe in the timeline plot).
     emb_cluster: dict[str, Any] | None = None
     if per_window_embeddings:
         from senselab.audio.workflows.audio_analysis.embeddings import (
@@ -160,9 +160,9 @@ def harvest_pass(
                 emb_cluster["windows"] = entries
                 break
         for k, msg in cluster_failures.items():
-            incomparable_reasons[f"{pass_label}/identity/{k}"] = msg
+            incomparable_reasons[f"{pass_label}/speaker/{k}"] = msg
         if emb_cluster is None and per_window_embeddings:
-            incomparable_reasons[f"{pass_label}/identity/embedding_clustering"] = (
+            incomparable_reasons[f"{pass_label}/speaker/embedding_clustering"] = (
                 "all embedding models too sparse / failed clustering — no n_speakers estimate"
             )
 
@@ -204,7 +204,7 @@ def harvest_pass(
     if ppg_block_raw is None:
         # PPG was opted out (e.g. ``--ppg`` not passed). The user explicitly
         # chose not to compute it; treat as a known-missing sub-signal.
-        incomparable_reasons[f"{pass_label}/utterance/ppg"] = "PPG opt-in not provided"
+        incomparable_reasons[f"{pass_label}/asr/ppg"] = "PPG opt-in not provided"
         ppg_block: dict[str, Any] = {}
     elif not (isinstance(ppg_block_raw, dict) and ppg_block_raw.get("status") == "ok"):
         # PPG ran but failed (model crash, OOM, missing dependency). Surface
@@ -215,16 +215,16 @@ def harvest_pass(
         reason = f"PPG extraction status={status!r}"
         if error_msg:
             reason += f" error={str(error_msg)[:160]!r}"
-        incomparable_reasons[f"{pass_label}/utterance/ppg"] = reason
+        incomparable_reasons[f"{pass_label}/asr/ppg"] = reason
         ppg_block = {}
     else:
         ppg_block = ppg_block_raw
 
-    # ── presence harvest inputs ──
-    pres_grid = presence_grid if presence_grid is not None else grid
+    # ── speech_presence harvest inputs ──
+    pres_grid = speech_presence_grid if speech_presence_grid is not None else grid
 
     # Frame-level speech posteriors (US3): segmentation-3.0 raw scores + the
-    # Brouhaha VAD head, as continuous fine-resolution presence voters.
+    # Brouhaha VAD head, as continuous fine-resolution speech_presence voters.
     frame_voters: dict[str, Any] = {}
     frame_posteriors_provenance: dict[str, Any] = {}
     brouhaha_frames = None
@@ -245,7 +245,7 @@ def harvest_pass(
         }
 
     # Scene quality (US1): per-bucket SNR / clipping / reverb / bandwidth
-    # degradation + estimator-spread uncertainty; additive on presence rows.
+    # degradation + estimator-spread uncertainty; additive on speech_presence rows.
     quality_by_bucket: dict[tuple[float, float], dict[str, Any]] = {}
     scene_quality_provenance: dict[str, Any] = {"enabled": bool(scene_quality)}
     if scene_quality and per_pass_audio is not None:
@@ -263,7 +263,7 @@ def harvest_pass(
         # turn those into degradation scores are applied by ``aggregate_pass`` at L2.
         for q in harvest_quality_measurements(audio=per_pass_audio, brouhaha=brouhaha_frames, grid=pres_grid):
             quality_by_bucket[(round(q["start"], 6), round(q["end"], 6))] = q
-        # Reuse the Brouhaha VAD head as a second frame-posterior presence voter.
+        # Reuse the Brouhaha VAD head as a second frame-posterior speech_presence voter.
         if brouhaha_frames is not None:
             # A VAD head is genuinely one channel, so ``single`` is a declaration, not a collapse.
             frame_voters["frame_brouhaha_vad"] = FramePosterior(
@@ -284,7 +284,7 @@ def harvest_pass(
             }
         )
 
-    presence_votes = harvest_presence_votes(
+    speech_presence_votes = harvest_speech_presence_votes(
         pass_summary=harvest_summary,
         grid=pres_grid,
         speech_presence_labels=speech_presence_labels,
@@ -311,7 +311,7 @@ def harvest_pass(
             source_by_bucket[(round(s["start"], 6), round(s["end"], 6))] = s
         sound_sources_provenance["category_map_version"] = load_source_category_map().get("version")
 
-    # ── identity harvest ──
+    # ── speaker harvest ──
     # Prefer per-pass empirical calibration learned from this pass's embedding
     # clusters; fall back to the CLI defaults when clustering didn't produce
     # useful per-pass anchors.
@@ -323,7 +323,7 @@ def harvest_pass(
         if isinstance(sf, (int, float)) and isinstance(df, (int, float)) and df > sf:
             same_floor_eff = float(sf)
             diff_floor_eff = float(df)
-    identity_votes = harvest_identity_votes(
+    speaker_votes = harvest_speaker_votes(
         pass_summary=harvest_summary,
         grid=grid,
         per_window_embeddings=per_window_embeddings,
@@ -332,9 +332,9 @@ def harvest_pass(
         cluster_cosine_threshold=cluster_cosine_threshold,
     )
 
-    # ── utterance harvest ──
-    utt_grid = utterance_grid if utterance_grid is not None else grid
-    utterance_votes = harvest_utterance_votes(
+    # ── asr harvest ──
+    utt_grid = asr_grid if asr_grid is not None else grid
+    asr_votes = harvest_asr_votes(
         pass_summary=harvest_summary,
         grid=utt_grid,
         ppg_block=ppg_block,
@@ -343,15 +343,15 @@ def harvest_pass(
 
     harvest = PassHarvest(
         pass_label=pass_label,
-        presence_votes=presence_votes,
-        identity_votes=identity_votes,
-        utterance_votes=utterance_votes,
+        speech_presence_votes=speech_presence_votes,
+        speaker_votes=speaker_votes,
+        asr_votes=asr_votes,
         quality_by_bucket=quality_by_bucket,
         source_by_bucket=source_by_bucket,
         grids={
-            "presence": {"win_length": pres_grid.win_length, "hop_length": pres_grid.hop_length},
-            "identity": {"win_length": grid.win_length, "hop_length": grid.hop_length},
-            "utterance": {"win_length": utt_grid.win_length, "hop_length": utt_grid.hop_length},
+            "speech_presence": {"win_length": pres_grid.win_length, "hop_length": pres_grid.hop_length},
+            "speaker": {"win_length": grid.win_length, "hop_length": grid.hop_length},
+            "asr": {"win_length": utt_grid.win_length, "hop_length": utt_grid.hop_length},
         },
         # Carried so the aggregate phase can compare a measured roll-off against Nyquist without
         # touching audio, which would break its purity guarantee.
@@ -375,8 +375,8 @@ def compute_uncertainty_axes(
     speaker_embedding_models: list[str],
     aggregator: str,
     speech_presence_labels: list[str],
-    utterance_grid: BucketGrid | None = None,
-    presence_grid: BucketGrid | None = None,
+    asr_grid: BucketGrid | None = None,
+    speech_presence_grid: BucketGrid | None = None,
     scene_quality: bool = True,
     sound_sources: bool = True,
     embedding_window_s: float = 2.0,
@@ -415,22 +415,22 @@ def compute_uncertainty_axes(
             weights the per-pass fold applied, so level 2 can fuse with the same numbers
             rather than recomputing them and drifting apart silently.
         speech_presence_labels: AudioSet labels that count as "speech-present" for AST /
-            YAMNet contributions to the presence axis.
-        utterance_grid: Optional separate bucket grid for the utterance axis (typically
+            YAMNet contributions to the speech_presence axis.
+        asr_grid: Optional separate bucket grid for the asr axis (typically
             wider + overlapping than the shared grid so most words land fully inside at
-            least one bucket). When ``None``, the shared ``grid`` is reused for utterance.
-        presence_grid: Optional separate (typically finer) bucket grid for the presence
+            least one bucket). When ``None``, the shared ``grid`` is reused for asr.
+        speech_presence_grid: Optional separate (typically finer) bucket grid for the speech_presence
             axis, so brief events can be localized from continuous frame posteriors. When
             ``None``, the shared ``grid`` is reused (preserving legacy behavior); the CLI
             defaults it to 0.1 s / 0.02 s. Quality and source columns are computed on this
-            same presence grid so they align with the presence rows.
+            same speech_presence grid so they align with the speech_presence rows.
         scene_quality: When True (default), compute per-bucket audio-quality degradation
             scores (SNR / clipping / reverb / bandwidth + estimator-spread uncertainty)
             via Brouhaha + existing DSP metrics and attach them as additive columns on
-            the presence rows. Null-safe when the model / audio is unavailable (FR-023).
+            the speech_presence rows. Null-safe when the model / audio is unavailable (FR-023).
         sound_sources: When True (default), map the AST / YAMNet AudioSet scores into
             per-bucket source-category masses (speech / people / machine / environment)
-            + dominant category, attached as additive columns on the presence rows.
+            + dominant category, attached as additive columns on the speech_presence rows.
             Null when neither classifier ran (FR-023).
         embedding_window_s: Window length (seconds) for fixed-grid speaker-embedding
             extraction. Defaults to 2.0 s (ECAPA's recommended minimum).
@@ -487,8 +487,8 @@ def compute_uncertainty_axes(
             grid=grid,
             speaker_embedding_models=speaker_embedding_models,
             speech_presence_labels=speech_presence_labels,
-            utterance_grid=utterance_grid,
-            presence_grid=presence_grid,
+            asr_grid=asr_grid,
+            speech_presence_grid=speech_presence_grid,
             scene_quality=scene_quality,
             sound_sources=sound_sources,
             embedding_window_s=embedding_window_s,
@@ -524,11 +524,11 @@ def compute_uncertainty_axes(
     # it claimed. Support is measured once on the unmodified pass — a speaker claimed where
     # there is no speech is a fact about the recording, not about the transform.
     support_source = harvests_by_label.get("raw_16k") or next(iter(harvests_by_label.values()), None)
-    presence_buckets = getattr(support_source, "presence_votes", []) if support_source else []
+    speech_presence_buckets = getattr(support_source, "speech_presence_votes", []) if support_source else []
     support = signal_support(
-        presence_buckets,
+        speech_presence_buckets,
         evidence_signals=sorted(
-            informative_evidence(presence_buckets, sorted(evidence_signal_names(presence_buckets)))
+            informative_evidence(speech_presence_buckets, sorted(evidence_signal_names(speech_presence_buckets)))
         ),
     )
     if weights_out is not None:
@@ -539,7 +539,7 @@ def compute_uncertainty_axes(
             support,
             _signal_names(harvests_by_label, axis=axis),
         )
-        for axis in ("presence", "identity", "utterance")
+        for axis in ("speech_presence", "speaker", "asr")
     }
     if weights_out is not None:
         # Exposed so level 2 can fuse with the same weights the diagnostics used; recomputing
@@ -548,7 +548,7 @@ def compute_uncertainty_axes(
         weights_out.update(reliability_by_axis)
         stability = {
             axis: reliability_from_stability(signal_stability(harvests_by_label, axis=axis))
-            for axis in ("presence", "identity", "utterance")
+            for axis in ("speech_presence", "speaker", "asr")
         }
         weights_out["__basis__"] = {
             axis: {
@@ -571,7 +571,7 @@ def compute_uncertainty_axes(
     # second enhancement variant) is computed alongside but not delta'd here —
     # extend by adding a generic pass-pair loop if multi-pass deltas are needed.
     if "raw_16k" in passes and "enhanced_16k" in passes:
-        for axis in ("presence", "identity", "utterance"):
+        for axis in ("speech_presence", "speaker", "asr"):
             raw_rows = axis_results[("raw_16k", axis)].rows  # type: ignore[index]
             enh_rows = axis_results[("enhanced_16k", axis)].rows  # type: ignore[index]
             delta_rows = compute_pass_deltas(raw_rows, enh_rows, axis, aggregator)
@@ -680,7 +680,7 @@ def _speech_window_mask(
     for w in entries:
         center = 0.5 * (w.start_s + w.end_s)
         # YAMNet is authoritative when available — it's the canonical
-        # AudioSet speech-presence detector.
+        # AudioSet speech-speech_presence detector.
         if yam_ok:
             idx = max(0, int(round(center / yam_hop))) if yam_hop > 0 else 0
             label, _, _ = classification_top1_in_window(yam_block.get("result"), idx)

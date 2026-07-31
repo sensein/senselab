@@ -1,4 +1,4 @@
-"""Final per-speaker outputs (T094, contracts/speaker-identity.md).
+"""Final per-speaker outputs (T094, contracts/speaker-speaker.md).
 
 These artifacts are what an analyst reads. SC-002 requires that the count disagreement be
 resolvable *from these files alone* — without opening intermediate per-bucket artifacts —
@@ -63,8 +63,8 @@ def _write(tmp_path: Path, **kw: object):  # noqa: ANN202
 
 def test_both_artifacts_are_written(tmp_path: Path) -> None:
     """The pair, not one or the other."""
-    speakers, presence = _write(tmp_path)
-    assert speakers.exists() and presence.exists()
+    speakers, speech_presence = _write(tmp_path)
+    assert speakers.exists() and speech_presence.exists()
 
 
 def test_count_disagreement_is_readable_from_the_file_alone(tmp_path: Path) -> None:
@@ -112,16 +112,16 @@ def test_label_correspondence_is_auditable(tmp_path: Path) -> None:
     assert entry["cluster_id"] == "c0"
 
 
-def test_presence_parquet_carries_every_contract_column(tmp_path: Path) -> None:
+def test_speech_presence_parquet_carries_every_contract_column(tmp_path: Path) -> None:
     """final/per_speaker_presence.parquet columns."""
-    _, presence = _write(tmp_path)
-    df = pd.read_parquet(presence)
+    _, speech_presence = _write(tmp_path)
+    df = pd.read_parquet(speech_presence)
     for col in (
         "speaker_id",
         "start",
         "end",
-        "presence_confidence",
-        "presence_uncertainty",
+        "speech_presence_confidence",
+        "speech_presence_uncertainty",
         "overlap_with",
         "contributing_sources",
         "round",
@@ -156,7 +156,7 @@ def test_outputs_are_byte_identical_across_repeated_writes(tmp_path: Path) -> No
 # ── reproducibility across whole derivations (T094b, FR-010 / SC-004) ──
 
 
-def _identity_votes() -> list[dict]:
+def _speaker_votes() -> list[dict]:
     """Two diar models, agreeing for two buckets and splitting on the third."""
     per_bucket = [{"a": "Sx", "b": "Sx"}, {"a": "Sx", "b": "Sx"}, {"a": "Sx", "b": "Sy"}]
     out = []
@@ -202,23 +202,23 @@ def test_the_whole_derivation_reproduces_byte_for_byte(tmp_path: Path) -> None:
     or set ordering in the correspondence rows.
     """
     from senselab.audio.workflows.audio_analysis.speaker_identity import (
-        build_presence_tracks,
         build_speaker_identity,
+        build_speech_presence_tracks,
     )
 
-    passes, votes = _passes_for_two_speakers(), _identity_votes()
+    passes, votes = _passes_for_two_speakers(), _speaker_votes()
     written = []
     for run in ("first", "second"):
         out = tmp_path / run
-        posterior, hypotheses, correspondence = build_speaker_identity(passes, identity_votes=votes)
-        speakers, presence = write_speaker_outputs(
+        posterior, hypotheses, correspondence = build_speaker_identity(passes, speaker_votes=votes)
+        speakers, speech_presence = write_speaker_outputs(
             out,
             posterior=posterior,
             hypotheses=hypotheses,
             correspondence=correspondence,
-            tracks=build_presence_tracks(votes),
+            tracks=build_speech_presence_tracks(votes),
         )
-        written.append((speakers.read_bytes(), presence.read_bytes()))
+        written.append((speakers.read_bytes(), speech_presence.read_bytes()))
 
     assert written[0][0] == written[1][0]
     assert written[0][1] == written[1][1]
@@ -227,20 +227,20 @@ def test_the_whole_derivation_reproduces_byte_for_byte(tmp_path: Path) -> None:
 def test_the_derivation_actually_produced_something_to_compare(tmp_path: Path) -> None:
     """Guards the test above: two identical empty files would also compare equal."""
     from senselab.audio.workflows.audio_analysis.speaker_identity import (
-        build_presence_tracks,
         build_speaker_identity,
+        build_speech_presence_tracks,
     )
 
-    votes = _identity_votes()
-    posterior, hypotheses, correspondence = build_speaker_identity(_passes_for_two_speakers(), identity_votes=votes)
-    _s, presence = write_speaker_outputs(
+    votes = _speaker_votes()
+    posterior, hypotheses, correspondence = build_speaker_identity(_passes_for_two_speakers(), speaker_votes=votes)
+    _s, speech_presence = write_speaker_outputs(
         tmp_path,
         posterior=posterior,
         hypotheses=hypotheses,
         correspondence=correspondence,
-        tracks=build_presence_tracks(votes),
+        tracks=build_speech_presence_tracks(votes),
     )
-    frame = pd.read_parquet(presence)
+    frame = pd.read_parquet(speech_presence)
     assert not frame.empty
     assert set(frame["speaker_id"]) == {"S0", "S1"}
     assert correspondence and all(c.cluster_id for c in correspondence)

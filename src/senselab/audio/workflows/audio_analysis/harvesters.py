@@ -82,7 +82,7 @@ def asr_has_timestamps(result: Any) -> bool:  # noqa: ANN401
     """True if any ScriptLine actually carries a timestamp.
 
     Requires a non-null ``start`` on a chunk or on the line itself. The mere
-    *presence* of chunks is not evidence of timing: a chunked-but-untimed
+    *speech_presence* of chunks is not evidence of timing: a chunked-but-untimed
     transcript has no usable times, and treating it as timestamped would make the
     alignment stage skip exactly the input it exists to fix. ``analyze_audio.py``
     carried a looser duplicate that returned True whenever ``chunks`` was
@@ -163,7 +163,7 @@ def asr_text_in_window(
         fully_contained: When ``True``, only include chunks whose ``[start, end]`` lies
             entirely within ``[win_start, win_end)``. The default ``False`` keeps the
             traditional overlap rule (chunk crosses into the window). Used by the
-            utterance axis (with True) so partial words straddling a window boundary
+            asr axis (with True) so partial words straddling a window boundary
             don't pollute the WER score on either side.
     """
     if not result:
@@ -179,7 +179,7 @@ def asr_text_in_window(
     def _walk(node: Any) -> None:  # noqa: ANN401
         # Recurse into ``.chunks`` until we hit a leaf (no inner chunks). Post-
         # MMS-aligned text-only ASR (Granite, Canary) emits a 3-level nesting:
-        # outer line → utterance ScriptLine → word ScriptLines. Whisper / Qwen
+        # outer line → asr ScriptLine → word ScriptLines. Whisper / Qwen
         # are 2-level (line → words). The leaf is what we want to bucket on.
         chunks = seg_attr(node, "chunks") or []
         if chunks:
@@ -282,7 +282,7 @@ def whisper_bucket_confidence(result: Any, win_start: float, win_end: float) -> 
     (FR-007 — drop, do not zero-impute).
 
     Note: this returns the arithmetic mean of per-chunk ``exp(avg_logprob)`` —
-    appropriate for the presence axis where each chunk is treated as an independent
+    appropriate for the speech_presence axis where each chunk is treated as an independent
     "is the model confident here?" vote. Do NOT take ``log()`` of this value to
     recover an avg_logprob — by Jensen's inequality
     ``log(mean(exp(x))) > mean(x)``. Use ``whisper_bucket_avg_logprob`` instead.
@@ -322,7 +322,7 @@ def whisper_bucket_no_speech_prob(result: Any, win_start: float, win_end: float)
     Whisper exports a per-segment ``no_speech_prob`` from its silence head —
     the cleanest single-scalar VAD signal Whisper itself produces. ``∈ [0, 1]``
     where higher means the model thinks this region is silence. Returned to
-    the presence harvester as a direct voice-presence voter.
+    the speech_presence harvester as a direct voice-speech_presence voter.
     """
     if not result:
         return None
@@ -358,7 +358,7 @@ def whisper_bucket_avg_logprob(result: Any, win_start: float, win_end: float) ->
 
     Returns the arithmetic mean of negative logprobs — equivalent to the geometric
     mean of per-chunk confidences when later exponentiated. This is the unbiased
-    way to aggregate Whisper's native logprob to a bucket scale; the utterance
+    way to aggregate Whisper's native logprob to a bucket scale; the asr
     aggregator computes ``1 − exp(avg_logprob)`` once on the bucket value.
     """
     if not result:
@@ -739,7 +739,7 @@ def ppg_argmax_runs_in_window(
     Walks the per-frame argmax sequence inside ``[win_start, win_end)``, collapses
     consecutive frames sharing the same phoneme into a single run, and reports the
     run's time span. ``<silent>`` runs are kept (they're a valid phoneme in the PPG
-    inventory). Used both by the utterance edit-distance metric (just the phoneme
+    inventory). Used both by the asr edit-distance metric (just the phoneme
     sequence) and by the plot's PPG row (which renders the time-spans as bars).
     """
     if not ppg_per_frame_phonemes or ppg_frame_hop <= 0 or win_end <= win_start:
@@ -796,7 +796,7 @@ def asr_phoneme_sequence_in_window(
 
     def _walk(node: Any) -> None:  # noqa: ANN401
         # Recurse into ``.chunks`` until we hit a leaf (post-MMS-aligned
-        # text-only ASR is line → utterance → words; Whisper / Qwen are
+        # text-only ASR is line → asr → words; Whisper / Qwen are
         # line → words). Apply the bucket containment rule at the leaf.
         chunks = seg_attr(node, "chunks") or []
         if chunks:
@@ -888,7 +888,7 @@ def ppg_sequence_per_in_window(
         # No fully-contained ASR words in this bucket. We CANNOT score
         # PPG-vs-ASR PER for this ASR model on this bucket — return None so
         # the aggregator drops the sub-signal rather than penalising the
-        # model with a spurious 1.0 (used to inflate utterance uncertainty
+        # model with a spurious 1.0 (used to inflate asr uncertainty
         # whenever a text-only ASR's transcript didn't quite land inside a
         # bucket boundary).
         return None

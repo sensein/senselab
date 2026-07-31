@@ -64,8 +64,17 @@ def test_transcript_signature_matches_pre_refactor_digest() -> None:
 
 
 def test_schema_version_is_pinned() -> None:
-    """Bumping this wipes every user's cache — it must be a deliberate, reviewed act."""
-    assert CACHE_SCHEMA_VERSION == 4
+    """Bumping this wipes every user's cache — it must be a deliberate, reviewed act.
+
+    Version 6 accompanies the axis rename (presence → speech_presence, identity → speaker,
+    utterance → asr): cached entries carry the old axis names in their keys and payloads, so
+    reusing them would mix two naming schemes in one run.
+
+    This pin had drifted — it read 4 while the constant was already 5, so it was failing silently
+    in a suite area that was not being exercised. A pin that can drift unnoticed cannot enforce
+    what it exists to enforce.
+    """
+    assert CACHE_SCHEMA_VERSION == 6
 
 
 def test_param_order_does_not_change_the_key() -> None:
@@ -342,7 +351,7 @@ def _fake_audio(values: list[float], sr: int = 16000) -> SimpleNamespace:
 
 
 def test_audio_signature_is_stable_for_identical_content() -> None:
-    """Same PCM + rate → same signature, regardless of object identity."""
+    """Same PCM + rate → same signature, regardless of object speaker."""
     a = _fake_audio([0.1, 0.2, 0.3])
     b = _fake_audio([0.1, 0.2, 0.3])
     assert audio_signature(a) == audio_signature(b)

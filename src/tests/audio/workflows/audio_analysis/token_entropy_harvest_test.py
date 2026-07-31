@@ -1,7 +1,7 @@
-"""Token-entropy harvesting into utterance buckets (T030, FR-017).
+"""Token-entropy harvesting into asr buckets (T030, FR-017).
 
 Covers ``mean_token_entropy_in_window`` and the ``token_entropy`` vote field that
-``harvest_utterance_votes`` attaches. Uses ``SimpleNamespace`` transcripts to
+``harvest_asr_votes`` attaches. Uses ``SimpleNamespace`` transcripts to
 exercise both shapes the harvesters see: in-memory Pydantic-like objects and
 cache-deserialized dicts.
 """
@@ -13,9 +13,9 @@ from typing import Any
 
 import pytest
 
+from senselab.audio.workflows.audio_analysis.asr import harvest_asr_votes
 from senselab.audio.workflows.audio_analysis.grid import BucketGrid
 from senselab.audio.workflows.audio_analysis.harvesters import mean_token_entropy_in_window
-from senselab.audio.workflows.audio_analysis.utterance import harvest_utterance_votes
 
 
 def _line(**kwargs: Any) -> SimpleNamespace:  # noqa: ANN401 — mirrors ScriptLine's heterogeneous fields
@@ -117,7 +117,7 @@ def test_non_numeric_entropy_ignored() -> None:
     assert mean_token_entropy_in_window([line], 0.0, 1.0) is None
 
 
-# ── harvest_utterance_votes wiring ────────────────────────────────────
+# ── harvest_asr_votes wiring ────────────────────────────────────
 
 
 def _pass_summary(lines: list[Any]) -> dict[str, Any]:
@@ -130,7 +130,7 @@ def _pass_summary(lines: list[Any]) -> dict[str, Any]:
 def test_harvest_attaches_token_entropy_vote() -> None:
     """The per-model vote carries token_entropy alongside the existing fields."""
     lines = [_line(text="hello", start=0.0, end=1.0, token_entropy=[1.0, 2.0])]
-    buckets = harvest_utterance_votes(
+    buckets = harvest_asr_votes(
         pass_summary=_pass_summary(lines),
         grid=BucketGrid(win_length=1.0, hop_length=1.0),
         ppg_block={},
@@ -144,7 +144,7 @@ def test_harvest_attaches_token_entropy_vote() -> None:
 def test_harvest_token_entropy_none_for_backend_without_logits() -> None:
     """Graceful degradation: the key exists but is None (FR-017)."""
     lines = [_line(text="hello", start=0.0, end=1.0)]
-    buckets = harvest_utterance_votes(
+    buckets = harvest_asr_votes(
         pass_summary=_pass_summary(lines),
         grid=BucketGrid(win_length=1.0, hop_length=1.0),
         ppg_block={},

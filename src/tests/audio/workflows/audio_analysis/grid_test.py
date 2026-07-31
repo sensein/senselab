@@ -1,7 +1,7 @@
 """Tests for per-axis bucket grids (feature 20260722-175022, US3).
 
-Verifies BucketGrid.iter_buckets counts and that a distinct (finer) presence
-grid coexists with the shared identity grid and the utterance grid, with each
+Verifies BucketGrid.iter_buckets counts and that a distinct (finer) speech_presence
+grid coexists with the shared speaker grid and the asr grid, with each
 axis recording its own grid in provenance.
 """
 
@@ -46,7 +46,7 @@ def test_bucketgrid_iter_counts() -> None:
 
 
 def test_per_axis_grids_coexist_and_are_recorded() -> None:
-    """Presence (fine), identity (shared), and utterance grids each apply independently."""
+    """Presence (fine), speaker (shared), and asr grids each apply independently."""
     raw_pass = {
         "duration_s": 2.0,
         "diarization": {"by_model": {"pyannote": _diar_block([(0.0, 2.0, "SPEAKER_00")])}},
@@ -54,25 +54,25 @@ def test_per_axis_grids_coexist_and_are_recorded() -> None:
     axis_results, _, _ = compute_uncertainty_axes(
         passes={"raw_16k": raw_pass},
         grid=BucketGrid(win_length=0.5, hop_length=0.5),
-        presence_grid=BucketGrid(win_length=0.1, hop_length=0.02),
-        utterance_grid=BucketGrid(win_length=1.0, hop_length=0.5),
+        speech_presence_grid=BucketGrid(win_length=0.1, hop_length=0.02),
+        asr_grid=BucketGrid(win_length=1.0, hop_length=0.5),
         params={},
         audio={"raw_16k": _silent_audio(2.0)},
         speaker_embedding_models=[],
         aggregator="min",
         speech_presence_labels=["Speech"],
     )
-    presence = axis_results[("raw_16k", "presence")]
-    identity = axis_results[("raw_16k", "identity")]
-    # Fine presence grid → many more presence rows than the 0.5 s identity grid.
-    assert len(presence.rows) > len(identity.rows)
-    assert presence.provenance["grid"]["win_length"] == 0.1
-    assert presence.provenance["grid"]["hop_length"] == 0.02
-    assert identity.provenance["grid"]["win_length"] == 0.5
+    speech_presence = axis_results[("raw_16k", "speech_presence")]
+    speaker = axis_results[("raw_16k", "speaker")]
+    # Fine speech_presence grid → many more speech_presence rows than the 0.5 s speaker grid.
+    assert len(speech_presence.rows) > len(speaker.rows)
+    assert speech_presence.provenance["grid"]["win_length"] == 0.1
+    assert speech_presence.provenance["grid"]["hop_length"] == 0.02
+    assert speaker.provenance["grid"]["win_length"] == 0.5
 
 
-def test_presence_grid_defaults_to_shared_when_absent() -> None:
-    """Without a presence_grid, presence uses the shared grid (legacy behavior)."""
+def test_speech_presence_grid_defaults_to_shared_when_absent() -> None:
+    """Without a speech_presence_grid, speech_presence uses the shared grid (legacy behavior)."""
     raw_pass = {
         "duration_s": 2.0,
         "diarization": {"by_model": {"pyannote": _diar_block([(0.0, 2.0, "SPEAKER_00")])}},
@@ -86,5 +86,5 @@ def test_presence_grid_defaults_to_shared_when_absent() -> None:
         aggregator="min",
         speech_presence_labels=["Speech"],
     )
-    presence = axis_results[("raw_16k", "presence")]
-    assert presence.provenance["grid"]["win_length"] == 0.5
+    speech_presence = axis_results[("raw_16k", "speech_presence")]
+    assert speech_presence.provenance["grid"]["win_length"] == 0.5

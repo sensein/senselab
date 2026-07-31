@@ -43,8 +43,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--noise", choices=("white", "pink"), default="white")
     parser.add_argument("--clean-anchor-db", type=float, default=25.0, help="True SNR mapped to degradation 0")
     parser.add_argument("--floor-anchor-db", type=float, default=5.0, help="True SNR mapped to degradation 1")
-    parser.add_argument("--temperature-presence", type=float, default=1.0)
-    parser.add_argument("--temperature-utterance", type=float, default=1.0)
+    parser.add_argument("--temperature-speech-presence", type=float, default=1.0)
+    parser.add_argument("--temperature-asr", type=float, default=1.0)
     parser.add_argument("--out", type=Path, default=Path("artifacts/scene_quality_calibration.json"))
     parser.add_argument("--plot", type=Path, default=Path("artifacts/scene_quality_calibration_validation.png"))
     parser.add_argument("--table", type=Path, default=Path("artifacts/scene_quality_calibration_validation.json"))
@@ -216,7 +216,7 @@ def main(argv: list[str] | None = None) -> int:
             else dict(DEFAULT_PROFILE["reverb_c50"])
         ),
         "bandwidth": dict(DEFAULT_PROFILE["bandwidth"]),
-        "temperature": {"presence": args.temperature_presence, "utterance": args.temperature_utterance},
+        "temperature": {"speech_presence": args.temperature_speech_presence, "asr": args.temperature_asr},
         "provenance": {
             "fitted_by": "scripts/calibrate_scene_quality.py",
             "audio": args.audio.name,

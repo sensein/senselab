@@ -240,7 +240,7 @@ def build_l1_signal_plot(
             attributed a transcript to no model in particular.
         speakers_by_model: ``{diar_model → [(start, end, cluster_id)]}``. Each cluster gets
             its own colour: a flat row makes a two-speaker conversation look identical to a
-            one-speaker one, which is exactly what the identity axis is arguing about.
+            one-speaker one, which is exactly what the speaker axis is arguing about.
         scene_by_classifier: ``{classifier → windows}`` as stacked category shares.
         failed: Signals that ran and errored. They keep a row, marked as failed: omitting them
             makes a failure indistinguishable from a signal that was never configured.

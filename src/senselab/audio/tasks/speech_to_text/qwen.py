@@ -306,7 +306,7 @@ class QwenASR:
 
         Returns:
             ``List[List[ScriptLine]]`` mirroring ``align_transcriptions``: one
-            inner list per input audio, holding a single utterance ``ScriptLine``
+            inner list per input audio, holding a single asr ``ScriptLine``
             whose ``chunks`` are the aligned word spans.
         """
         aligner_name = aligner_model or _DEFAULT_FORCED_ALIGNER
@@ -352,11 +352,11 @@ class QwenASR:
                     continue
                 starts = [c.start for c in chunks if c.start is not None]
                 ends = [c.end for c in chunks if c.end is not None]
-                utterance = ScriptLine(
+                asr = ScriptLine(
                     text=" ".join(c.text or "" for c in chunks).strip(),
                     start=min(starts) if starts else None,
                     end=max(ends) if ends else None,
                     chunks=chunks,
                 )
-                aligned.append([utterance])
+                aligned.append([asr])
             return aligned

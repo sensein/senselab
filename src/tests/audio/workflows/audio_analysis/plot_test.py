@@ -31,7 +31,7 @@ def test_build_aligned_timeline_plot_writes_png(tmp_path: Path) -> None:
 
     axis_results = {}
     for pass_label in ("raw_16k", "enhanced_16k", "raw_vs_enhanced"):
-        for axis in ("presence", "identity", "utterance"):
+        for axis in ("speech_presence", "speaker", "asr"):
             axis_results[(pass_label, axis)] = AxisResult(
                 pass_label=pass_label,  # type: ignore[arg-type]
                 axis=axis,  # type: ignore[arg-type]
@@ -87,7 +87,9 @@ def test_build_aligned_timeline_plot_writes_png(tmp_path: Path) -> None:
 def test_build_aligned_timeline_plot_minimal_no_detail(tmp_path: Path) -> None:
     """When detail_by_pass is None, the plot still renders the 3 uncertainty rows."""
     axis_results = {
-        ("raw_16k", "presence"): AxisResult(pass_label="raw_16k", axis="presence", rows=[_row(0.0, "presence", 0.5)]),
+        ("raw_16k", "speech_presence"): AxisResult(
+            pass_label="raw_16k", axis="speech_presence", rows=[_row(0.0, "speech_presence", 0.5)]
+        ),
     }
     out = build_aligned_timeline_plot(
         run_dir=tmp_path,
@@ -119,7 +121,9 @@ def test_build_aligned_timeline_plot_renders_spectrogram_top_row(tmp_path: Path)
     t = np.linspace(0, 4.0, sr * 4, endpoint=False)
     wf = (0.3 * np.sin(2 * np.pi * 200 * t)).astype(np.float32)
     axis_results = {
-        ("raw_16k", "presence"): AxisResult(pass_label="raw_16k", axis="presence", rows=[_row(0.0, "presence", 0.5)]),
+        ("raw_16k", "speech_presence"): AxisResult(
+            pass_label="raw_16k", axis="speech_presence", rows=[_row(0.0, "speech_presence", 0.5)]
+        ),
     }
     out = build_aligned_timeline_plot(
         run_dir=tmp_path,
@@ -143,10 +147,10 @@ def test_build_aligned_timeline_plot_chunks_long_audio(tmp_path: Path) -> None:
     duration_s = 50.0  # 50s @ default chunk_duration_s=20 → 3 chunks
     wf = (0.2 * np.random.RandomState(0).randn(int(sr * duration_s))).astype(np.float32)
     axis_results = {
-        ("raw_16k", "presence"): AxisResult(
+        ("raw_16k", "speech_presence"): AxisResult(
             pass_label="raw_16k",
-            axis="presence",
-            rows=[_row(i * 0.5, "presence", 0.5) for i in range(int(duration_s * 2))],
+            axis="speech_presence",
+            rows=[_row(i * 0.5, "speech_presence", 0.5) for i in range(int(duration_s * 2))],
         ),
     }
     first = build_aligned_timeline_plot(
@@ -171,7 +175,7 @@ def test_scene_quality_and_source_rows_render(tmp_path: Path) -> None:
     """Presence rows carrying quality_* / src_* add the scene-quality and sound-source rows."""
     rows = []
     for i in range(8):
-        r = _row(i * 0.5, "presence", 0.3)
+        r = _row(i * 0.5, "speech_presence", 0.3)
         r.quality_snr = 0.2
         r.quality_clip = 0.05
         r.quality_reverb = 0.15
@@ -184,12 +188,12 @@ def test_scene_quality_and_source_rows_render(tmp_path: Path) -> None:
         r.src_dominant = "speech"
         rows.append(r)
     axis_results = {
-        ("raw_16k", "presence"): AxisResult(pass_label="raw_16k", axis="presence", rows=rows),  # type: ignore[arg-type]
-        ("raw_16k", "identity"): AxisResult(
-            pass_label="raw_16k", axis="identity", rows=[_row(i * 0.5, "identity", 0.3) for i in range(8)]
+        ("raw_16k", "speech_presence"): AxisResult(pass_label="raw_16k", axis="speech_presence", rows=rows),  # type: ignore[arg-type]
+        ("raw_16k", "speaker"): AxisResult(
+            pass_label="raw_16k", axis="speaker", rows=[_row(i * 0.5, "speaker", 0.3) for i in range(8)]
         ),  # type: ignore[arg-type]
-        ("raw_16k", "utterance"): AxisResult(
-            pass_label="raw_16k", axis="utterance", rows=[_row(i * 0.5, "utterance", 0.3) for i in range(8)]
+        ("raw_16k", "asr"): AxisResult(
+            pass_label="raw_16k", axis="asr", rows=[_row(i * 0.5, "asr", 0.3) for i in range(8)]
         ),  # type: ignore[arg-type]
     }
     out = build_aligned_timeline_plot(

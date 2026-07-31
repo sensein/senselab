@@ -1,6 +1,6 @@
 """Identity axis vote harvesters — "was it the same speaker?".
 
-The identity question splits into three independent diagnostic checks per bucket:
+The speaker question splits into three independent diagnostic checks per bucket:
 
 1. **Same-speaker claim validation** — when a diar model labels this bucket the
    same speaker (after embedding-clustering across diar models) as some prior
@@ -100,7 +100,7 @@ def _embedding_for_bucket(
     return idx, [float(x) for x in w.vector.tolist()]
 
 
-def harvest_identity_votes(
+def harvest_speaker_votes(
     *,
     pass_summary: dict[str, Any],
     grid: BucketGrid,
@@ -109,7 +109,7 @@ def harvest_identity_votes(
     diff_speaker_floor: float | None = 0.70,
     cluster_cosine_threshold: float = 0.5,
 ) -> list[dict[str, Any]]:
-    """Yield ``{"start", "end", "votes"}`` per bucket for the identity axis.
+    """Yield ``{"start", "end", "votes"}`` per bucket for the speaker axis.
 
     Args:
         pass_summary: Per-task summary for one pass (diarization, alignment, etc.).
@@ -187,7 +187,7 @@ def harvest_identity_votes(
     harmonized = bool(cluster_map)
 
     # An embedding whose same- and between-speaker distances overlap cannot validate an
-    # identity claim at this window scale. Its sub-signals then drop out (FR-007) rather
+    # speaker claim at this window scale. Its sub-signals then drop out (FR-007) rather
     # than voting: substituting a fixed band that sits below every distance the embedding
     # produces turns "cannot tell" into "confidently different", and one such saturated
     # derived signal outvotes unanimous diarizer agreement.
@@ -342,7 +342,7 @@ def harvest_identity_votes(
 #
 # The per-bucket axis above stays the evidence-gathering mechanism. What follows only
 # *reads* what it harvested — no new inference, no model access, no I/O — and reshapes it
-# from "how uncertain was identity here?" into "which speaker was in doubt, and when?".
+# from "how uncertain was speaker here?" into "which speaker was in doubt, and when?".
 #
 # The reshape is what makes the uncertainty actionable. A single per-bucket scalar says a
 # region is contested but not who is contested in it, so no follow-up can be targeted at a
@@ -373,25 +373,25 @@ def _binary_entropy(p: float) -> float:
 
 
 def per_speaker_tracks(
-    identity_votes: Sequence[Mapping[str, Any]],
+    speaker_votes: Sequence[Mapping[str, Any]],
     *,
     speaker_ids: Mapping[str, str] | None = None,
     silent_cluster_id: str = SILENT_CLUSTER_ID,
 ) -> list[dict[str, Any]]:
-    """Per-speaker, per-bucket presence rows derived from the harvested identity votes.
+    """Per-speaker, per-bucket speech_presence rows derived from the harvested speaker votes.
 
-    ``presence_confidence`` is the share of diar models active in the bucket that placed
-    this speaker there, and ``presence_uncertainty`` the normalized entropy of that split —
+    ``speech_presence_confidence`` is the share of diar models active in the bucket that placed
+    this speaker there, and ``speech_presence_uncertainty`` the normalized entropy of that split —
     so a speaker every model agrees on carries no doubt, and one the models are evenly
     divided over carries all of it. Models reporting silence stay in the denominator: a lone
     detection among four silent models is exactly the case that must not read as certain.
 
-    A speaker absent from a bucket gets no row there. Rows are evidence of presence, and an
-    absent row is not the same claim as presence at confidence zero — the second would put
+    A speaker absent from a bucket gets no row there. Rows are evidence of speech_presence, and an
+    absent row is not the same claim as speech_presence at confidence zero — the second would put
     a positive assertion about every speaker in every bucket into the output.
 
     Args:
-        identity_votes: Bucket dicts from :func:`harvest_identity_votes`.
+        speaker_votes: Bucket dicts from :func:`harvest_speaker_votes`.
         speaker_ids: Optional ``{cluster_id → fused speaker id}``. A cluster with no mapping
             keeps its own id rather than being dropped: a cluster the count posterior does
             not back is still observed evidence, and dropping it would make the surplus
@@ -405,7 +405,7 @@ def per_speaker_tracks(
     """
     mapping = dict(speaker_ids or {})
     rows: list[dict[str, Any]] = []
-    for bucket in identity_votes:
+    for bucket in speaker_votes:
         clusters = _bucket_clusters(bucket)
         if not clusters:
             continue
@@ -420,8 +420,8 @@ def per_speaker_tracks(
                     "speaker_id": mapping.get(cluster, cluster),
                     "start": float(bucket.get("start", 0.0)),
                     "end": float(bucket.get("end", 0.0)),
-                    "presence_confidence": share,
-                    "presence_uncertainty": _binary_entropy(share),
+                    "speech_presence_confidence": share,
+                    "speech_presence_uncertainty": _binary_entropy(share),
                     "overlap_with": [c for c in active if c != cluster],
                     "contributing_sources": sources,
                 }
@@ -431,7 +431,7 @@ def per_speaker_tracks(
 
 
 def cluster_active_time(
-    identity_votes: Sequence[Mapping[str, Any]],
+    speaker_votes: Sequence[Mapping[str, Any]],
     *,
     silent_cluster_id: str = SILENT_CLUSTER_ID,
 ) -> dict[str, float]:
@@ -441,7 +441,7 @@ def cluster_active_time(
     iteration order, so ties break by cluster id.
     """
     totals: dict[str, float] = {}
-    for bucket in identity_votes:
+    for bucket in speaker_votes:
         span = float(bucket.get("end", 0.0)) - float(bucket.get("start", 0.0))
         for cluster in {c for c in _bucket_clusters(bucket).values() if c != silent_cluster_id}:
             totals[cluster] = totals.get(cluster, 0.0) + span
@@ -449,7 +449,7 @@ def cluster_active_time(
 
 
 def label_correspondence_rows(
-    identity_votes: Sequence[Mapping[str, Any]],
+    speaker_votes: Sequence[Mapping[str, Any]],
     *,
     speaker_ids: Mapping[str, str],
     silent_cluster_id: str = SILENT_CLUSTER_ID,
@@ -462,7 +462,7 @@ def label_correspondence_rows(
     a genuine instability in the clustering behind a tidy-looking table.
     """
     seen: set[tuple[str, str, str]] = set()
-    for bucket in identity_votes:
+    for bucket in speaker_votes:
         votes = bucket.get("votes") or {}
         if not isinstance(votes, Mapping):
             continue

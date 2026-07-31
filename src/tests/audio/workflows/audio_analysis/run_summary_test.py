@@ -26,33 +26,33 @@ def _axis_rows(values: list[float | None]) -> list[dict]:
 def test_the_summary_reports_a_per_axis_headline() -> None:
     """Mean and worst per axis, because a mean alone hides a single bad region."""
     doc = build_run_summary(
-        axis_rows={"identity": _axis_rows([0.1, 0.9, 0.2])},
+        axis_rows={"speaker": _axis_rows([0.1, 0.9, 0.2])},
         speakers={"count_posterior": {"probabilities": {"2": 1.0}, "modal_count": 2}},
-        rounds={"identity": [{"round": 0, "converged": True}]},
+        rounds={"speaker": [{"round": 0, "converged": True}]},
     )
-    axis = doc["axes"]["identity"]
+    axis = doc["axes"]["speaker"]
     assert axis["mean_uncertainty"] == pytest.approx(0.4)
     assert axis["max_uncertainty"] == pytest.approx(0.9)
 
 
 def test_unmeasured_buckets_are_counted_not_averaged_in() -> None:
     """Treating "not measured" as zero would report a run as more certain than it was."""
-    doc = build_run_summary(axis_rows={"identity": _axis_rows([0.8, None, None])}, speakers={}, rounds={})
-    axis = doc["axes"]["identity"]
+    doc = build_run_summary(axis_rows={"speaker": _axis_rows([0.8, None, None])}, speakers={}, rounds={})
+    axis = doc["axes"]["speaker"]
     assert axis["mean_uncertainty"] == pytest.approx(0.8)
     assert axis["unmeasured_buckets"] == 2
 
 
 def test_the_reducible_share_is_reported() -> None:
     """Whether more measurement could help is the actionable part of an uncertainty figure."""
-    doc = build_run_summary(axis_rows={"identity": _axis_rows([0.6, 0.6])}, speakers={}, rounds={})
-    assert doc["axes"]["identity"]["mean_epistemic_uncertainty"] == pytest.approx(0.6)
+    doc = build_run_summary(axis_rows={"speaker": _axis_rows([0.6, 0.6])}, speakers={}, rounds={})
+    assert doc["axes"]["speaker"]["mean_epistemic_uncertainty"] == pytest.approx(0.6)
 
 
 def test_the_worst_regions_are_named_with_their_times() -> None:
     """A bare mean is not actionable; a time-stamped worst region is."""
-    doc = build_run_summary(axis_rows={"identity": _axis_rows([0.1, 0.9, 0.2])}, speakers={}, rounds={}, top_n=1)
-    worst = doc["axes"]["identity"]["worst_regions"][0]
+    doc = build_run_summary(axis_rows={"speaker": _axis_rows([0.1, 0.9, 0.2])}, speakers={}, rounds={}, top_n=1)
+    worst = doc["axes"]["speaker"]["worst_regions"][0]
     assert worst["start"] == pytest.approx(0.5) and worst["uncertainty"] == pytest.approx(0.9)
 
 
@@ -70,10 +70,10 @@ def test_the_speaker_count_is_reported_with_its_competing_reading() -> None:
 
 def test_convergence_distinguishes_settling_from_running_out() -> None:
     """They call for different follow-up: one is done, the other needs more budget."""
-    settled = build_run_summary(axis_rows={}, speakers={}, rounds={"identity": [{"round": 1, "converged": True}]})
-    exhausted = build_run_summary(axis_rows={}, speakers={}, rounds={"identity": [{"round": 1, "converged": False}]})
-    assert settled["convergence"]["identity"] == "converged"
-    assert exhausted["convergence"]["identity"] == "rounds_exhausted"
+    settled = build_run_summary(axis_rows={}, speakers={}, rounds={"speaker": [{"round": 1, "converged": True}]})
+    exhausted = build_run_summary(axis_rows={}, speakers={}, rounds={"speaker": [{"round": 1, "converged": False}]})
+    assert settled["convergence"]["speaker"] == "converged"
+    assert exhausted["convergence"]["speaker"] == "rounds_exhausted"
 
 
 def test_the_summary_renders_as_markdown() -> None:
@@ -82,17 +82,17 @@ def test_the_summary_renders_as_markdown() -> None:
 
     text = render_run_summary(
         build_run_summary(
-            axis_rows={"identity": _axis_rows([0.1, 0.9])},
+            axis_rows={"speaker": _axis_rows([0.1, 0.9])},
             speakers={"count_posterior": {"probabilities": {"2": 1.0}, "modal_count": 2}},
-            rounds={"identity": [{"round": 0, "converged": True}]},
+            rounds={"speaker": [{"round": 0, "converged": True}]},
         )
     )
-    assert "identity" in text
+    assert "speaker" in text
     assert "0.9" in text
 
 
 def test_an_empty_run_summarises_without_inventing_numbers() -> None:
     """A run where nothing was measured must say so rather than report zeros."""
-    doc = build_run_summary(axis_rows={"identity": []}, speakers={}, rounds={})
-    assert doc["axes"]["identity"]["mean_uncertainty"] is None
+    doc = build_run_summary(axis_rows={"speaker": []}, speakers={}, rounds={})
+    assert doc["axes"]["speaker"]["mean_uncertainty"] is None
     json.dumps(doc)

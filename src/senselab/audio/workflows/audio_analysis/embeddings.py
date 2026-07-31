@@ -3,7 +3,7 @@
 Slices the pass audio into uniform fixed-duration windows (default 2.0 s with 1.0 s
 hop) and runs each requested embedding model on every window. Output is a list of
 ``(start_s, end_s, vector_np)`` per model, written to disk by the caller and consumed
-by the identity workflow.
+by the speaker workflow.
 
 Why windows, not diarization segments
 -------------------------------------
@@ -337,7 +337,7 @@ def cluster_pass_speakers(
             "valid_indices": [],
         }
 
-    # Single-utterance / quiet-environment path: when we have ≥1 valid speech
+    # Single-asr / quiet-environment path: when we have ≥1 valid speech
     # window but fewer than ``min_windows_for_clustering``, there's nothing to
     # partition — the system should report exactly one speaker, not skip. This
     # is the "single word in an otherwise quiet recording" case.
@@ -482,7 +482,7 @@ def cluster_pass_speakers(
                 p_voice[idx] = 1.0 if n_speakers_final == 1 else 0.5
             else:
                 p_voice[idx] = max(0.0, min(1.0, 0.5 * (float(per_sample[vi]) + 1.0)))
-        # Empirical per-pass calibration band for the identity-axis cosine
+        # Empirical per-pass calibration band for the speaker-axis cosine
         # validation: ``same_floor`` = 75th percentile of within-cluster
         # pairwise cos_dist (most same-speaker pairs are below this),
         # ``diff_floor`` = 25th percentile of between-cluster pairwise cos_dist
@@ -563,7 +563,7 @@ def _merge_close_clusters(
 
     Speaker embedding clusterings (k-means / spectral) sometimes split one
     speaker into prosodic sub-clusters — long continuous passage vs brief
-    utterance, near-mic vs far-mic, etc. This pass collapses those back into
+    asr, near-mic vs far-mic, etc. This pass collapses those back into
     one. Two cluster centroids with cosine similarity ≥ ``merge_threshold``
     are taken to be the same speaker; we merge them and re-evaluate. Stops
     when every remaining pair is below the threshold (i.e. genuinely
@@ -675,7 +675,7 @@ def _sequential_calibration_band(
     *,
     min_pairs: int = 5,
 ) -> tuple[float, float] | None:
-    """Calibration anchors measured on the comparison the identity harvester actually makes.
+    """Calibration anchors measured on the comparison the speaker harvester actually makes.
 
     The harvester never compares all window pairs. It compares each bucket to the *most
     recent prior* bucket carrying the same speaker label, and — for change claims — to the
@@ -736,7 +736,7 @@ def _within_cluster_band(
     With a single cluster there are no between-speaker pairs, so only the same-speaker
     anchor can be measured and the different-speaker floor keeps its default. Measuring the
     one is what matters: a fixed same-speaker floor of 0.30 is unreachable for short-bucket
-    embeddings, which leaves the identity axis unable to report low uncertainty even when
+    embeddings, which leaves the speaker axis unable to report low uncertainty even when
     every diarizer agrees on an unchanging speaker.
     """
     if X.shape[0] < 2:
@@ -784,9 +784,9 @@ def calibrate_cosine_uncertainty(
 ) -> float:
     """Map raw cosine distance to a calibrated uncertainty in ``[0, 1]``.
 
-    The raw cosine distance between two ECAPA / ResNet utterance embeddings sits
+    The raw cosine distance between two ECAPA / ResNet asr embeddings sits
     in a noise floor of roughly 0.1–0.3 even for the same speaker (phonetic
-    variation), so a small distance is **not** strong evidence of identity. The
+    variation), so a small distance is **not** strong evidence of speaker. The
     EER decision boundary on VoxCeleb is around 0.4–0.5; distances above ~0.7
     are confidently different speakers. This helper maps the raw distance onto
     the [same_speaker_floor, diff_speaker_floor] calibration band.

@@ -97,7 +97,7 @@ def build_profile(base: dict[str, Any], verdicts: dict[str, Any], *, calibrated_
 
     ``profile_version`` is the *schema* version and is carried over untouched — the loader
     pins it, and a profile stamped with its own name there would be rejected at read time.
-    The profile's identity lives in ``calibrated_as`` and in its filename.
+    The profile's speaker lives in ``calibrated_as`` and in its filename.
     """
     out = json.loads(json.dumps(base))  # deep copy without importing copy for one call
     out["calibrated_as"] = calibrated_as

@@ -7,7 +7,7 @@ than CLI-only — the precondition for running it in-process from the adaptive l
 Each ``stage_*`` function takes the audio, a frozen :class:`StageContext`, and its
 own explicit keyword knobs, and **returns** the fragment it contributes to the
 pass summary. It does not mutate a shared dict. The returned keys are a published
-contract: ``presence.py``, ``compute.py``, ``identity.py``, ``utterance.py``,
+contract: ``speech_presence.py``, ``compute.py``, ``speaker.py``, ``asr.py``,
 ``global_summary.py`` and the adaptive interventions all read
 ``pass_summary["asr"]["by_model"]``, ``["ast"]``, ``["yamnet"]``,
 ``["features"]["result"]`` and ``["ppgs"]`` — so the fragments stay plain dicts
@@ -417,7 +417,7 @@ def stage_alignment(
             # Levels-to-keep is part of the cache key — bumping its value
             # invalidates earlier entries that were stored with the all-False
             # default (which produced empty chunks).
-            "levels_to_keep": "utterance+word",
+            "levels_to_keep": "asr+word",
         }
         align_provenance = {
             **ctx.provenance_for("alignment", aligner_model_id, aligner_params),
@@ -430,10 +430,10 @@ def stage_alignment(
             f"alignment[{model_id}]",
             aligner_fn,
             [(audio, ScriptLine(text=transcript_text), align_language)],
-            # Keep word-level chunks (and the utterance wrapper) so the comparator
+            # Keep word-level chunks (and the asr wrapper) so the comparator
             # can read per-token timestamps. Default is all-False which filters
             # everything out and leaves a meaningless punctuation-only ScriptLine.
-            levels_to_keep={"utterance": True, "word": True, "char": False},
+            levels_to_keep={"asr": True, "word": True, "char": False},
             aligner_model=aligner_model_id,
             cache_dir=ctx.cache_dir,
             cache_key_str=ctx.align_key_for(

@@ -1,10 +1,10 @@
 """H2: the common speaker space, and the uncertainty of constructing it.
 
 Every diarizer names its speakers arbitrarily — ``SPEAKER_00``, ``spk0`` — and the names carry no
-meaning across models. So any cross-model statement about identity first *guesses* that two labels
+meaning across models. So any cross-model statement about speaker first *guesses* that two labels
 denote the same person. Treated as fact, that guess makes two models which were never correctly
 compared read as disagreeing, and speaker uncertainty then stays high in exactly the regions where
-per-speaker presence is unambiguous. That is the observation this module exists to address.
+per-speaker speech_presence is unambiguous. That is the observation this module exists to address.
 
 **Harmonization is therefore an estimation step and reports its own uncertainty.** Two independent
 matchers run over the same labels:
