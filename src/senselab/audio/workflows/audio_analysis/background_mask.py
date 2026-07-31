@@ -28,9 +28,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Literal, Mapping, Sequence
 
-MaskState = Literal["target_free", "target_active", "indeterminate"]
+MaskState = Literal["target_free", "target_active", "nontarget_active", "indeterminate"]
 
-MASK_STATES: tuple[MaskState, ...] = ("target_free", "target_active", "indeterminate")
+MASK_STATES: tuple[MaskState, ...] = ("target_free", "target_active", "nontarget_active", "indeterminate")
+"""``nontarget_active`` is the actionable state: the task target is absent *and* there is
+measurable other content. A pause with room tone and a pause with digital silence are both
+target-free, but only the first is worth introspecting — conflating them is what made the mask
+report a 21 s conversation as one uninformative region."""
 
 TARGET_EVENT_LABELS: Mapping[str, tuple[str, ...]] = {
     "breath": ("Breathing", "Wheeze", "Snoring", "Gasp"),
@@ -106,6 +110,21 @@ class BackgroundMask:
         return sum(1 for r in self.regions if r.state == "target_free")
 
     @property
+    def nontarget_interest_s(self) -> float:
+        """Total duration where the target is absent and other content is present.
+
+        Reported separately from ``total_masked_s`` because a consumer asks two different
+        questions: what is clean enough to rest a background claim on, and what is worth
+        looking at. A target-free silent stretch answers the first and not the second.
+        """
+        return sum(r.duration_s for r in self.regions if r.state == "nontarget_active")
+
+    @property
+    def regions_of_interest(self) -> int:
+        """Number of non-target-active regions."""
+        return sum(1 for r in self.regions if r.state == "nontarget_active")
+
+    @property
     def regions_supporting_long_window(self) -> int:
         """How many target-free regions can host an unpadded long-window decision."""
         return sum(1 for r in self.regions if r.state == "target_free" and r.supports_long_window)
@@ -123,6 +142,8 @@ class BackgroundMask:
             "negligible_fraction": self.negligible_fraction,
             "regions_supporting_long_window": self.regions_supporting_long_window,
             "regions_total": self.regions_total,
+            "nontarget_interest_s": round(self.nontarget_interest_s, 6),
+            "regions_of_interest": self.regions_of_interest,
             "requires_label_detection": requires_label_detection(self.target_event_types),
         }
 
@@ -194,15 +215,29 @@ def _classify_bucket(
     active_at: float,
     free_at: float,
     max_free_uncertainty: float,
+    nontarget_confidence: float | None = None,
+    nontarget_at: float = 0.5,
 ) -> MaskState:
     """Assign one bucket's mask state.
 
-    ``target_free`` demands *both* low target confidence and low uncertainty: "probably
-    nothing there, but I cannot tell" is not a region background claims can rest on.
+    Both committed verdicts demand low uncertainty. ``target_free`` always did — "probably
+    nothing there, but I cannot tell" is not a region background claims can rest on — while
+    ``target_active`` demanded none, so a bucket at confidence 0.99 *and* uncertainty 0.99
+    committed to "target active" on evidence that supported no verdict at all. Measured on a
+    21.5 s conversation, that asymmetry produced a single whole-file ``target_active`` region
+    at uncertainty 0.9997.
+
+    ``nontarget_active`` requires the target to be absent as well as other content to be
+    present: background content underneath active target speech is not a clean region to
+    introspect, which is the leakage problem suppression-depth measurement exists for.
     """
+    if uncertainty > max_free_uncertainty:
+        return "indeterminate"
     if confidence >= active_at:
         return "target_active"
-    if confidence <= free_at and uncertainty <= max_free_uncertainty:
+    if confidence <= free_at:
+        if nontarget_confidence is not None and float(nontarget_confidence) >= nontarget_at:
+            return "nontarget_active"
         return "target_free"
     return "indeterminate"
 
@@ -237,6 +272,7 @@ def build_mask(
     free_at = float(mask_cfg.get("target_free_confidence", 0.2))
     max_free_unc = float(mask_cfg.get("max_free_uncertainty", 0.5))
     negligible = float(mask_cfg.get("negligible_fraction", 0.05))
+    nontarget_at = float(mask_cfg.get("nontarget_active_confidence", 0.5))
 
     event_types, provenance = target_event_types_for(task_type, profile)
 
@@ -250,6 +286,10 @@ def build_mask(
             active_at=active_at,
             free_at=free_at,
             max_free_uncertainty=max_free_unc,
+            nontarget_confidence=(
+                float(b["nontarget_confidence"]) if b.get("nontarget_confidence") is not None else None
+            ),
+            nontarget_at=nontarget_at,
         )
         for b in ordered
     ]
@@ -521,3 +561,53 @@ def target_confidence_by_bucket(
             }
         )
     return rows
+
+
+NONTARGET_EXCLUDED_CATEGORIES = ("speech",)
+"""Scene categories that do not count as non-target content.
+
+``speech`` is excluded because a speech-category detection during a target-free stretch is
+most likely leaked or distant target speech, and the mask's job here is to point at content
+worth introspecting rather than at the thing already being excluded.
+"""
+
+
+def nontarget_confidence_by_bucket(
+    rows: Sequence[Mapping[str, Any]],
+    source_by_bucket: Mapping[tuple[float, float], Mapping[str, Any]],
+    *,
+    excluded: Sequence[str] = NONTARGET_EXCLUDED_CATEGORIES,
+) -> list[dict[str, Any]]:
+    """Attach ``nontarget_confidence`` to target-activity rows from scene source mass.
+
+    The mask needs a second quantity to distinguish "target absent, nothing there" from
+    "target absent, something else is" — the second being the region worth introspecting. The
+    scene classifiers already report per-category mass per bucket, so the evidence exists; it
+    was simply never reaching the mask.
+
+    Args:
+        rows: Rows from :func:`target_confidence_by_bucket`.
+        source_by_bucket: ``{(start, end) → {"src_machine": ..., "src_environment": ...}}``
+            as harvested on the presence grid.
+        excluded: Categories that do not count as non-target content.
+
+    Returns:
+        The same rows with ``nontarget_confidence`` added where scene mass was available. A
+        bucket with no scene evidence is left without the field, so the mask keeps its prior
+        verdict rather than being told there is nothing there.
+    """
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        enriched = dict(row)
+        key = (round(float(row.get("start", 0.0)), 6), round(float(row.get("end", 0.0)), 6))
+        mass = source_by_bucket.get(key)
+        if isinstance(mass, Mapping):
+            values = [
+                float(v)
+                for k, v in mass.items()
+                if str(k).startswith("src_") and str(k)[4:] not in excluded and isinstance(v, (int, float))
+            ]
+            if values:
+                enriched["nontarget_confidence"] = max(0.0, min(1.0, max(values)))
+        out.append(enriched)
+    return out

@@ -111,14 +111,21 @@ def test_breath_and_cough_labels_map_to_the_people_category() -> None:
 # ── three states (T024, FR-032) ───────────────────────────────────────
 
 
-def test_three_states_are_all_reachable() -> None:
-    """`target_free`, `target_active`, and `indeterminate` are distinct outcomes."""
+def test_every_state_is_reachable() -> None:
+    """Each state is a distinct outcome, including non-target interest.
+
+    ``nontarget_active`` needs non-target evidence to be reachable at all, which is why it
+    takes an extra field rather than falling out of the target confidence alone.
+    """
     buckets = _buckets(
         [
             (0.0, 0.5, 0.95, 0.05),  # clearly active
-            (10.0, 10.5, 0.02, 0.05),  # clearly free
+            (10.0, 10.5, 0.02, 0.05),  # clearly free, nothing else there
             (20.0, 20.5, 0.50, 0.90),  # cannot tell
         ]
+    )
+    buckets.append(
+        {"start": 30.0, "end": 30.5, "target_confidence": 0.02, "uncertainty": 0.05, "nontarget_confidence": 0.9}
     )
     mask = build_mask(buckets, task_type="speech", profile=PROFILE)
     assert {r.state for r in mask.regions} == set(MASK_STATES)
@@ -356,7 +363,9 @@ def test_breath_task_masks_the_quiet_stretch() -> None:
     mask = build_mask(target_confidence_by_bucket(summary, buckets, ["breath"]), "breath", profile=PROFILE)
     assert mask.is_empty is False
     assert mask.masked_fraction > 0.5
-    assert {r.state for r in mask.regions} == set(MASK_STATES)
+    # No non-target evidence is supplied here, so ``nontarget_active`` is unreachable by
+    # construction — the states this fixture can produce are the other three.
+    assert {r.state for r in mask.regions} == {"target_active", "target_free", "indeterminate"}
 
 
 def test_uninformative_absent_label_bound_yields_cannot_tell() -> None:
