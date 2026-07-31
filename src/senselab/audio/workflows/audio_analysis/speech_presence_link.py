@@ -88,8 +88,6 @@ class SpeechPresencePolicy:
             active. Speech usually sits 12–20 dB above a room's floor.
         lufs_silence: LUFS at or below which the loudness voter is confident of absence.
         lufs_speech: LUFS at or above which it is confident of presence.
-        ppg_voice_threshold: Fraction of non-silent PPG frames above which the bucket reads as
-            voiced.
         silhouette_threshold: Silhouette coefficient above which an embedding window is taken to
             sit inside a coherent speaker cluster.
         coarse_voter_weight: Weight given to a voter whose native window is much wider than the
@@ -110,7 +108,6 @@ class SpeechPresencePolicy:
     speech_excess_db: float = 12.0
     lufs_silence: float = -60.0
     lufs_speech: float = -30.0
-    ppg_voice_threshold: float = 0.5
     silhouette_threshold: float = 0.5
     coarse_voter_weight: float = 0.25
     coarse_window_ratio: float = 2.0
@@ -283,11 +280,17 @@ def _link_excess(ev: Mapping[str, Any], policy: SpeechPresencePolicy) -> dict[st
 
 
 def _link_ppg(ev: Mapping[str, Any], policy: SpeechPresencePolicy) -> dict[str, Any] | None:
-    """Fraction of non-silent PPG frames → voicing."""
-    frac = _finite(ev.get("nonsilent_frame_fraction"))
-    if frac is None:
+    """Mean PPG posterior on ``<silent>`` → voicing, by complement.
+
+    ``1 − P(silent)`` rather than a count of non-silent argmax frames: the count reduces every
+    frame to a hard verdict, so a bucket the model was 60% sure about becomes indistinguishable
+    from one it was certain about (register item 11, the same defect as the scene-classifier
+    top-1).
+    """
+    silence = _finite(ev.get("mean_silence_posterior"))
+    if silence is None:
         return None
-    speaks, confidence = _directed(frac)
+    speaks, confidence = _directed(1.0 - max(0.0, min(1.0, silence)))
     return {"speaks": speaks, "native_confidence": confidence}
 
 

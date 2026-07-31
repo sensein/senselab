@@ -10,7 +10,10 @@ JSON-cache deserialization produces.
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import numpy as np
 
 
 def seg_attr(seg: Any, name: str) -> Any:  # noqa: ANN401
@@ -658,6 +661,39 @@ def ppg_argmax_per_frame(
     return per_frame, frame_hop
 
 
+def ppg_silence_posterior_per_frame(
+    ppg_result: Any,  # noqa: ANN401
+    phoneme_labels: list[str] | tuple[str, ...] | None,
+    duration_s: float,
+) -> tuple["np.ndarray", float]:
+    """Per-frame posterior mass on ``<silent>``, and the frame hop.
+
+    The measurement behind the voice-fraction signal. Counting frames whose argmax is not
+    ``<silent>`` is the same reduction that made the scene classifiers vote on top-1 alone
+    (register items 6-7): it collapses a whole distribution to a hard 0 or 1, so a frame the model
+    called silent with 0.6 confidence votes exactly as strongly as one it called silent with 1.0.
+    The posterior keeps that difference, and L2 decides what it means.
+
+    Returns:
+        ``(silence_posterior, frame_hop_s)`` with one entry per frame. Empty array and 0.0 hop when
+        the result is unusable or the inventory has no ``<silent>`` label — an inventory without it
+        cannot answer this question, and guessing an index would fabricate an answer.
+    """
+    import numpy as np
+
+    if not ppg_result or duration_s <= 0:
+        return np.empty(0), 0.0
+    labels = list(phoneme_labels) if phoneme_labels else list(_DEFAULT_PPG_LABELS)
+    if SILENCE_LABEL not in labels:
+        return np.empty(0), 0.0
+    ppg = ppg_result[0] if isinstance(ppg_result, list) and ppg_result else ppg_result
+    arr = _to_2d_frame_major(ppg, n_phonemes=len(labels))
+    if arr is None or arr.shape[0] == 0:
+        return np.empty(0), 0.0
+    values = np.asarray(arr, dtype=np.float64)[:, labels.index(SILENCE_LABEL)]
+    return values, duration_s / int(arr.shape[0])
+
+
 def ppg_argmax_confidence_per_frame(
     ppg_result: Any,  # noqa: ANN401
     phoneme_labels: list[str] | tuple[str, ...] | None,
@@ -946,6 +982,10 @@ def ppg_sequence_per_in_window(
 
 # Default PPG inventory — ppgs 0.0.9 lowercase ARPAbet + ``<silent>``.
 # Pinned here so the harvester is callable without senselab's PPG task installed.
+SILENCE_LABEL = "<silent>"
+"""The PPG inventory's non-speech class. Named once so the label and the index derived from it
+cannot drift apart across the readers that use it."""
+
 _DEFAULT_PPG_LABELS = (
     "aa", "ae", "ah", "ao", "aw", "ay", "b", "ch", "d", "dh",
     "eh", "er", "ey", "f", "g", "hh", "ih", "iy", "jh", "k",
