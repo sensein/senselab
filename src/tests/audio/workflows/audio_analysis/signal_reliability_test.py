@@ -151,52 +151,7 @@ def test_signals_are_scored_independently() -> None:
     assert rel["steady"] > rel["flipper"]
 
 
-# ── the derivation gate belongs in the axis too ───────────────────────
-
-
-def test_a_derived_signal_is_gated_below_an_independent_one() -> None:
-    """FR-011c, applied where the axis is aggregated rather than only in the posterior.
-
-    Observed on a single-speaker recording: a clustering-derived pseudo-diarizer split one
-    speaker into five, so it claimed a speaker change at nearly every bucket. Both embedding
-    models correctly refuted each change — and the refutation was recorded as maximal
-    *identity uncertainty*, pinning the axis at 1.0 while two independent diarizers and both
-    embeddings agreed nothing had changed. A derived claim contradicted by the audio is
-    evidence against the claimant, not evidence that identity is in doubt.
-    """
-    from senselab.audio.workflows.audio_analysis.reliability import derivation_weights
-
-    w = derivation_weights(["embedding_silhouette/ecapa::speechbrain/x", "pyannote/community-1::speechbrain/x"])
-    assert w["embedding_silhouette/ecapa::speechbrain/x"] < w["pyannote/community-1::speechbrain/x"]
-
-
-def test_the_gate_reads_the_signal_name_through_its_embedding_suffix() -> None:
-    """The kind belongs to the claimant.
-
-    Identity sub-signals are keyed ``<diar>::<embedding>``, and it is the diar model that
-    made the claim.
-    """
-    from senselab.audio.workflows.audio_analysis.reliability import derivation_weights
-
-    w = derivation_weights(["embedding_silhouette/speechbrain/spkrec-ecapa-voxceleb::speechbrain/spkrec-ecapa"])
-    assert next(iter(w.values())) < 1.0
-
-
-def test_reliability_and_derivation_compound() -> None:
-    """Both gates apply, as in the influence gates.
-
-    A derived signal that is also unstable is attenuated by each; the two say different
-    things and neither subsumes the other.
-    """
-    from senselab.audio.workflows.audio_analysis.reliability import combined_weights
-
-    both = combined_weights({"embedding_silhouette/x": 0.9}, ["embedding_silhouette/x"])
-    derived_only = combined_weights({}, ["embedding_silhouette/x"])
-    assert both["embedding_silhouette/x"] < derived_only["embedding_silhouette/x"]
-
-
-def test_an_independent_stable_signal_keeps_full_weight() -> None:
-    """Neither gate may quietly discount a signal that has earned its vote."""
-    from senselab.audio.workflows.audio_analysis.reliability import combined_weights
-
-    assert combined_weights({"pyannote/x": 0.0}, ["pyannote/x"])["pyannote/x"] == pytest.approx(1.0)
+# The declared derivation gate's tests lived here. The gate is gone: a source kind written
+# into policy encodes a judgement from whichever recording motivated it, and that judgement
+# was wrong about the very model it named on a second recording. Its replacement is measured
+# — perturbation stability x physical support — and is tested in ``signal_support_test.py``.

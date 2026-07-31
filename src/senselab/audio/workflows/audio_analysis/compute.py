@@ -43,11 +43,15 @@ from senselab.audio.workflows.audio_analysis.harvesters import (
 from senselab.audio.workflows.audio_analysis.identity import harvest_identity_votes
 from senselab.audio.workflows.audio_analysis.presence import harvest_presence_votes
 from senselab.audio.workflows.audio_analysis.reliability import (
-    combined_weights,
+    measured_weights,
     signal_stability,
 )
 from senselab.audio.workflows.audio_analysis.reliability import (
     signal_names as _signal_names,
+)
+from senselab.audio.workflows.audio_analysis.support import (
+    evidence_signal_names,
+    signal_support,
 )
 from senselab.audio.workflows.audio_analysis.types import (
     AxisResult,
@@ -498,12 +502,20 @@ def compute_uncertainty_axes(
     # signal's two answers are already a stability sample — a signal that contradicts
     # itself between them has not earned an equal vote. Aggregation is pure, so deferring
     # it changes nothing else.
-    # Both gates, as in adaptive/influence: perturbation stability asks whether a signal
-    # agrees with itself, the derivation gate whether its agreement with another signal is
-    # independent evidence at all.
+    # Both factors measured, no signal named: perturbation stability asks whether a signal
+    # agrees with itself under a transform, physical support whether the audio carries what
+    # it claimed. Support is measured once on the unmodified pass — a speaker claimed where
+    # there is no speech is a fact about the recording, not about the transform.
+    support_source = harvests_by_label.get("raw_16k") or next(iter(harvests_by_label.values()), None)
+    presence_buckets = getattr(support_source, "presence_votes", []) if support_source else []
+    support = signal_support(
+        presence_buckets,
+        evidence_signals=sorted(evidence_signal_names(presence_buckets)),
+    )
     reliability_by_axis = {
-        axis: combined_weights(
+        axis: measured_weights(
             signal_stability(harvests_by_label, axis=axis),
+            support,
             _signal_names(harvests_by_label, axis=axis),
         )
         for axis in ("presence", "identity", "utterance")
