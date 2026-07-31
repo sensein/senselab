@@ -324,7 +324,7 @@ def build_aligned_timeline_plot(
     title: str | None = None,
     audio_waveform: np.ndarray | None = None,
     audio_sr: int = 16000,
-    chunk_duration_s: float = 20.0,
+    chunk_duration_s: float | None = None,
 ) -> Path | None:
     """Render the aggregate-uncertainty + per-source-detail figure.
 
@@ -334,7 +334,10 @@ def build_aligned_timeline_plot(
     child and adult voices (high f0 → narrowband would smear formants into harmonic
     bands; broadband shows formant trajectories cleanly for both ranges).
 
-    For audio longer than ``chunk_duration_s`` the figure is rendered once and saved
+    Chunked output is opt-in via ``chunk_duration_s``. It wrote ``timeline_001.png``,
+    ``timeline_002.png`` … whose panels were mostly empty, because a fixed window rarely lines
+    up with where anything happened; one figure per L2 round, drawn after fusion, replaced it.
+    When enabled, the figure is rendered once and saved
     repeatedly with ``xlim`` adjusted to each ``chunk_duration_s``-second window. The
     files are written as ``timeline_001.png``, ``timeline_002.png``, …. For shorter
     audio a single ``timeline.png`` is written.
@@ -359,7 +362,8 @@ def build_aligned_timeline_plot(
             Pass a 1-D float array (or 2-D array shaped ``(1, N)``); 2-D input is
             squeezed.
         audio_sr: Sampling rate for ``audio_waveform``. Defaults to 16 kHz.
-        chunk_duration_s: Maximum visible time per figure. Audio longer than this
+        chunk_duration_s: Maximum visible time per figure, or ``None`` (default) for no
+            chunked output at all. Audio longer than this
             triggers chunked output. Defaults to 20 s.
 
     Returns:
@@ -449,7 +453,8 @@ def build_aligned_timeline_plot(
     ppg_row = row_idx.get("ppg")
     asr_row = row_idx.get("asr")
 
-    will_chunk = duration_s > chunk_duration_s + 0.5
+    # ``None`` means chunking is off, so nothing will chunk regardless of duration.
+    will_chunk = bool(chunk_duration_s) and duration_s > float(chunk_duration_s) + 0.5
     # When chunking, fix the figure width per-chunk; otherwise scale with duration.
     fig_width = 12.0 if will_chunk else max(10.0, duration_s / 4.0)
     fig, axes = plt.subplots(
@@ -823,7 +828,13 @@ def build_aligned_timeline_plot(
         fig.savefig(out, dpi=140)
         plt.close(fig)
         return out
-    # Chunked: walk 0..duration in chunk_duration_s windows and re-save with xlim.
+    # Chunked output is opt-in. It produced timeline_001.png, timeline_002.png … whose panels
+    # were mostly empty, because a fixed window rarely lines up with where anything happened.
+    # One figure per L2 round, drawn after fusion, is the useful unit instead.
+    if not chunk_duration_s:
+        plt.close(fig)
+        return None
+
     import math
 
     n_chunks = math.ceil(duration_s / chunk_duration_s)

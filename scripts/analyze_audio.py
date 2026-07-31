@@ -1606,6 +1606,27 @@ def main(argv: list[str] | None = None) -> int:
                     weight_basis_by_axis=basis,
                 )
                 summaries["final_uncertainty"] = final_maps
+
+                # One timeline per round, drawn after that round's fusion.
+                import pandas as _pd_round
+
+                from senselab.audio.workflows.audio_analysis.l2_plot import build_round_timeline
+
+                by_round: dict[int, dict[str, list[dict[str, Any]]]] = {}
+                for key, path in final_maps.items():
+                    if "@round" not in key:
+                        continue
+                    axis_name, round_token = key.split("@round", 1)
+                    frame = _pd_round.read_parquet(path)
+                    by_round.setdefault(int(round_token), {})[axis_name] = frame.to_dict("records")
+                for round_index, axis_rows in sorted(by_round.items()):
+                    build_round_timeline(
+                        run_dir,
+                        round_index=round_index,
+                        axis_rows=axis_rows,
+                        duration_s=float(summaries["passes"].get("raw_16k", {}).get("duration_s") or 0.0),
+                        title=f"L2 round {round_index} — {args.audio.name}",
+                    )
                 print(f"  [final uncertainty] {len(final_maps)} axis map(s) under final/uncertainty/")
             except Exception as exc:  # noqa: BLE001 — a derived artifact must not fail the run
                 logger.warning("final uncertainty maps could not be written: %s", exc)
@@ -1816,12 +1837,39 @@ def main(argv: list[str] | None = None) -> int:
                     if entry.get("speaks"):
                         l1_signals[str(name)].append((float(bucket["start"]), float(bucket["end"])))
             raw_audio = pass_audio.get("raw_16k")
+            raw_summary = summaries["passes"].get("raw_16k", {}) or {}
+            l1_words: list[dict[str, Any]] = []
+            for outcome in ((raw_summary.get("alignment") or {}).get("by_model") or {}).values():
+                result = outcome.get("result") if isinstance(outcome, dict) else None
+                while isinstance(result, list) and result and isinstance(result[0], list):
+                    result = result[0]
+                for segment in result or []:
+                    if not isinstance(segment, dict):
+                        continue
+                    for word in segment.get("words") or segment.get("chunks") or []:
+                        if isinstance(word, dict) and word.get("start") is not None:
+                            l1_words.append(
+                                {
+                                    "start": float(word["start"]),
+                                    "end": float(word.get("end") or word["start"]),
+                                    "text": str(word.get("word") or word.get("text") or ""),
+                                }
+                            )
+                if l1_words:
+                    break
+            l1_scene: dict[str, list[dict[str, Any]]] = {}
+            for classifier in ("ast", "yamnet"):
+                block = raw_summary.get(classifier)
+                if isinstance(block, dict) and block.get("status") == "ok":
+                    l1_scene[classifier] = list(_classification_windows(block.get("result")) or [])
             l1_path = build_l1_signal_plot(
                 run_dir,
                 signals=l1_signals,
                 duration_s=float(summaries["passes"].get("raw_16k", {}).get("duration_s") or 0.0),
                 waveform=None if raw_audio is None else raw_audio.waveform.squeeze().numpy(),
                 sampling_rate=int(getattr(raw_audio, "sampling_rate", 16000) or 16000),
+                words=l1_words,
+                scene_by_classifier=l1_scene,
                 title=f"L1 signals — {args.audio.name}",
             )
             print(f"L1 signals plot: {l1_path}")

@@ -90,3 +90,76 @@ def test_the_plot_works_without_audio(tmp_path) -> None:  # noqa: ANN001
     """A run whose waveform is unavailable should still get its signal rows."""
     path = build_l1_signal_plot(tmp_path, signals={"a": [(0.0, 1.0)]}, duration_s=1.0, waveform=None, sampling_rate=SR)
     assert path.exists()
+
+
+# ── the richer evidence figure ─────────────────────────────────────────
+
+
+def test_the_spectrogram_is_returned_in_db() -> None:
+    """A spectrogram row is read in dB; linear magnitude hides everything below the loudest."""
+    from senselab.audio.workflows.audio_analysis.l1_plot import spectrogram_db
+
+    t = np.arange(0, 1.0, 1 / SR)
+    tone = 0.5 * np.sin(2 * np.pi * 440 * t)
+    spec, times, freqs = spectrogram_db(tone, SR)
+    assert spec.shape == (freqs.size, times.size)
+    assert spec.max() <= 0.0, "normalised so 0 dB is the loudest bin"
+    peak_hz = freqs[int(np.argmax(spec[:, spec.shape[1] // 2]))]
+    assert abs(peak_hz - 440.0) < 60.0
+
+
+def test_a_silent_signal_yields_a_floored_spectrogram() -> None:
+    """Digital silence must not produce -inf, which cannot be rendered."""
+    from senselab.audio.workflows.audio_analysis.l1_plot import spectrogram_db
+
+    spec, _t, _f = spectrogram_db(np.zeros(SR), SR)
+    assert np.isfinite(spec).all()
+
+
+def test_scene_composition_sums_to_one_where_any_label_fired() -> None:
+    """A composition plot is read as shares, so the columns must be normalised."""
+    from senselab.audio.workflows.audio_analysis.l1_plot import scene_composition
+
+    windows = [
+        {"start": 0.0, "end": 1.0, "labels": ["Speech", "Music"], "scores": [0.8, 0.2]},
+        {"start": 1.0, "end": 2.0, "labels": ["Silence"], "scores": [0.9]},
+    ]
+    times, shares = scene_composition(windows, duration_s=2.0, hop_s=0.5)
+    assert times.size == shares.shape[1]
+    totals = shares.sum(axis=0)
+    assert np.allclose(totals[totals > 0], 1.0)
+
+
+def test_scene_composition_leaves_uncovered_time_empty() -> None:
+    """A gap in classifier coverage must read as absent, not as an even split."""
+    from senselab.audio.workflows.audio_analysis.l1_plot import scene_composition
+
+    windows = [{"start": 0.0, "end": 1.0, "labels": ["Speech"], "scores": [0.9]}]
+    _times, shares = scene_composition(windows, duration_s=3.0, hop_s=0.5)
+    assert shares[:, -1].sum() == pytest.approx(0.0)
+
+
+def test_the_plot_accepts_words_a_spectrogram_and_scene_rows(tmp_path) -> None:  # noqa: ANN001
+    """All of it in one figure, which is the point: the rows explain each other."""
+    path = build_l1_signal_plot(
+        tmp_path,
+        signals={"pyannote": [(0.0, 1.0)]},
+        duration_s=2.0,
+        waveform=np.zeros(SR * 2),
+        sampling_rate=SR,
+        words=[{"start": 0.1, "end": 0.4, "text": "hello"}],
+        scene_by_classifier={
+            "yamnet": [{"start": 0.0, "end": 1.0, "labels": ["Speech"], "scores": [0.9]}],
+            "ast": [{"start": 0.0, "end": 2.0, "labels": ["Music"], "scores": [0.5]}],
+        },
+    )
+    assert path.exists() and path.stat().st_size > 0
+
+
+def test_the_figure_still_carries_no_uncertainty(tmp_path) -> None:  # noqa: ANN001
+    """The invariant survives the extra rows: L1 shows evidence, never conclusions."""
+    from senselab.audio.workflows.audio_analysis import l1_plot
+
+    source = __import__("inspect").getsource(l1_plot)
+    for term in ("within_pass_uncertainty", "epistemic", "triage_score"):
+        assert term not in source

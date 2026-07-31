@@ -156,6 +156,9 @@ def test_build_aligned_timeline_plot_chunks_long_audio(tmp_path: Path) -> None:
         grid_hop=0.5,
         audio_waveform=wf,
         audio_sr=sr,
+        # Chunking is opt-in now: by default it produced timeline_001.png, timeline_002.png …
+        # whose panels were mostly empty, and one figure per L2 round replaced it.
+        chunk_duration_s=20.0,
     )
     assert first is not None
     assert first.name == "timeline_001.png"
