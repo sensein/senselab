@@ -11,6 +11,7 @@ from senselab.audio.workflows.audio_analysis.votes import (
     compute_pass_deltas,
     intensity_mask,
     mask_from_pvoice,
+    merge_votes_into_harvest,
 )
 
 
@@ -86,6 +87,68 @@ def test_aggregate_pass_matches_pure_aggregators_and_columns() -> None:
     assert utt.aggregated_uncertainty == pytest.approx(utt_raw * expected_coupling)
     assert results["presence"].provenance["scene_quality"] == {"enabled": True}
     assert results["utterance"].provenance["grid"] == {"win_length": 1.0, "hop_length": 1.0}
+
+
+# ── vote-dict ownership (rows must not alias the harvest) ─────────────
+#     ``aggregate_pass`` is documented as *pure*, but it used to hand the harvest's
+#     own vote dict to each row. Callers that mutated ``row.model_votes`` therefore
+#     silently rewrote the harvest the adaptive loop is later handed. Rows are
+#     snapshots; adding a voter to the harvest is an explicit operation
+#     (``merge_votes_into_harvest``).
+
+
+def test_rows_do_not_alias_the_harvest_vote_dicts() -> None:
+    """Mutating a row's model_votes must not reach back into the harvest."""
+    harvest = _harvest()
+    results = aggregate_pass(harvest, aggregator="min", params={})
+    for axis, votes in (
+        ("presence", harvest.presence_votes),
+        ("identity", harvest.identity_votes),
+        ("utterance", harvest.utterance_votes),
+    ):
+        row = results[axis].rows[0]
+        row.model_votes["injected/marker"] = {"value": 1.0}
+        assert "injected/marker" not in votes[0]["votes"], f"{axis} row aliases the harvest vote dict"
+
+
+def test_merge_votes_into_harvest_is_visible_to_reaggregation() -> None:
+    """An injected voter lands in the harvest and changes the re-derived rows.
+
+    This is the property the adaptive loop depends on: it is handed the
+    ``PassHarvest``, not the rows, so a voter that only reached the rows would be
+    invisible to every round.
+    """
+    harvest = _harvest()
+    before = aggregate_pass(harvest, aggregator="min", params={})["identity"].rows[0]
+    assert before.aggregated_uncertainty == pytest.approx(0.8)
+
+    bucket = (harvest.identity_votes[0]["start"], harvest.identity_votes[0]["end"])
+    n = merge_votes_into_harvest(
+        harvest,
+        "identity",
+        {bucket: {"newdiar/newemb": {"same_label_uncertainty": 1.0}}},
+    )
+    assert n == 1
+    assert "newdiar/newemb" in harvest.identity_votes[0]["votes"]
+
+    after = aggregate_pass(harvest, aggregator="min", params={})["identity"].rows[0]
+    # "min" keeps the worst sub-signal, so a fully-doubtful new voter dominates 0.8.
+    assert after.aggregated_uncertainty == pytest.approx(1.0)
+    assert "newdiar/newemb" in after.contributing_models
+
+
+def test_merge_votes_into_harvest_ignores_unknown_buckets() -> None:
+    """A bucket the harvest doesn't have is reported as unmerged, not silently dropped."""
+    harvest = _harvest()
+    n = merge_votes_into_harvest(harvest, "identity", {(99.0, 100.0): {"x": {"value": 1.0}}})
+    assert n == 0
+    assert all("x" not in b["votes"] for b in harvest.identity_votes)
+
+
+def test_merge_votes_into_harvest_rejects_unknown_axis() -> None:
+    """A typo'd axis name must fail loudly rather than merge nothing."""
+    with pytest.raises(ValueError, match="unknown axis"):
+        merge_votes_into_harvest(_harvest(), "identiy", {})  # codespell:ignore
 
 
 def test_intensity_mask_ramp_and_overlap_average() -> None:
