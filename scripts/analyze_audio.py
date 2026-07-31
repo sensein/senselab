@@ -122,12 +122,13 @@ import json
 import sys
 import time
 import traceback
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 
 from senselab.audio.data_structures import Audio
@@ -766,6 +767,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--invariance-probe",
+        action="store_true",
+        help=(
+            "Re-run diarization under perturbations a correct model must be invariant to "
+            "(gain, whole-sample shift, DC offset) and fold the result into each source's "
+            "measured weight. Off by default because it multiplies diarization inference "
+            "cost by the number of probes."
+        ),
+    )
+    parser.add_argument(
         "--uncertainty-aggregator",
         choices=UNCERTAINTY_AGGREGATORS,
         default="min",
@@ -870,6 +881,56 @@ def prepare_audio(path: Path) -> Audio:
 # (see ``cache_key``) and stamped into parquet provenance via
 # ``_CACHE_SCHEMA_VERSION`` references — never hardcode the literal anywhere
 # else, otherwise the constant and the stamped value will drift.
+
+
+def _distinct_speaker_count(outcome: object) -> int | None:
+    """Distinct speaker labels in one diarization outcome, or ``None`` if it did not run."""
+    if not isinstance(outcome, dict) or outcome.get("status") != "ok":
+        return None
+    result = outcome.get("result")
+    while isinstance(result, list) and result and isinstance(result[0], list):
+        result = result[0]
+    if not isinstance(result, list):
+        return None
+    labels = set()
+    for seg in result:
+        speaker = seg.get("speaker") if isinstance(seg, dict) else getattr(seg, "speaker", None)
+        if speaker is not None:
+            labels.add(str(speaker))
+    return len(labels) or None
+
+
+def _diarize_counts_for_probe(args: argparse.Namespace) -> Callable[[Any, int], dict[str, int]]:
+    """Return a callable that diarizes a waveform and reports each model's speaker count.
+
+    Used only by ``--invariance-probe``. Built here rather than inline so the probe re-runs
+    the *same* models the pass used, with the same settings — a probe against different
+    settings would measure the settings rather than the model's invariance.
+    """
+
+    def run(waveform: np.ndarray, sampling_rate: int) -> dict[str, int]:
+        from senselab.audio.workflows.audio_analysis.stages import model_for_task
+
+        audio = Audio(
+            waveform=torch.tensor(np.asarray(waveform, dtype=np.float32)).unsqueeze(0),
+            sampling_rate=int(sampling_rate),
+        )
+        counts: dict[str, int] = {}
+        for model_id in args.diarization_models:
+            try:
+                result = diarize_audios(
+                    audios=[audio],
+                    model=model_for_task(model_id, task="diarization"),
+                    device=pick_device(args.device),
+                )
+            except Exception:  # noqa: BLE001 — a model that cannot run yields no evidence
+                continue
+            n = _distinct_speaker_count({"status": "ok", "result": result})
+            if n is not None:
+                counts[model_id] = n
+        return counts
+
+    return run
 
 
 def _speech_presence_labels(args: argparse.Namespace) -> list[str]:
@@ -1583,16 +1644,56 @@ def main(argv: list[str] | None = None) -> int:
                     ),
                     [],
                 )
+                # Invariance folds in as a third measured factor when asked for. Unlike the
+                # enhanced-pass comparison, a failure here cannot be explained away as the
+                # audio having changed — these perturbations leave the answer well-defined.
+                invariance: dict[str, float] = {}
+                if args.invariance_probe:
+                    try:
+                        from senselab.audio.workflows.audio_analysis.invariance import (
+                            probe_diarization_invariance,
+                        )
+
+                        raw_audio = pass_audio.get("raw_16k")
+                        reference = {
+                            model: n
+                            for model, n in (
+                                (m, _distinct_speaker_count(o))
+                                for m, o in (
+                                    (summaries["passes"].get("raw_16k", {}).get("diarization") or {}).get("by_model")
+                                    or {}
+                                ).items()
+                            )
+                            if n is not None
+                        }
+                        if raw_audio is not None and reference:
+                            invariance = probe_diarization_invariance(
+                                raw_audio.waveform.squeeze().numpy(),
+                                int(raw_audio.sampling_rate),
+                                reference_counts=reference,
+                                run_diarization=_diarize_counts_for_probe(args),
+                            )
+                            print(f"  [invariance] probed {len(invariance)} model(s): {invariance}")
+                    except Exception as exc:  # noqa: BLE001 — an opt-in probe must not fail a run
+                        logger.warning("invariance probe failed: %s", exc)
+
                 measured_support = signal_support(
                     presence_harvest,
                     evidence_signals=sorted(
                         informative_evidence(presence_harvest, sorted(evidence_signal_names(presence_harvest)))
                     ),
                 )
+                # Support x invariance: a source is discounted for claiming speakers the
+                # audio does not carry, and for changing its answer when nothing about the
+                # question changed. Absent either measurement, that factor stays 1.0.
+                combined = {
+                    name: float(measured_support.get(name, 1.0)) * float(invariance.get(name, 1.0))
+                    for name in set(measured_support) | set(invariance)
+                }
                 posterior, hypotheses, correspondence = build_speaker_identity(
                     summaries["passes"],
                     identity_votes=identity_harvest,
-                    support=measured_support,
+                    support=combined,
                 )
                 tracks = build_presence_tracks(identity_harvest or [])
                 write_speaker_outputs(
