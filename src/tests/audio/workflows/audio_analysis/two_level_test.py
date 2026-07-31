@@ -11,6 +11,8 @@ about it, and iterates. The maps it writes are the answer.
 
 from __future__ import annotations
 
+import pathlib
+
 import pytest
 
 from senselab.audio.workflows.audio_analysis.fuse import (
@@ -132,9 +134,9 @@ def test_the_final_maps_are_written_for_every_axis(tmp_path) -> None:  # noqa: A
         harvests={"raw_16k": _harvest("raw_16k", [_bucket(0.0, {"a": 0.3})])},
         weights_by_axis={},
     )
-    assert set(written) == {"presence", "identity", "utterance"}
-    for path in written.values():
-        pd.read_parquet(path)
+    assert {"presence", "identity", "utterance"} <= set(written)
+    for axis in ("presence", "identity", "utterance"):
+        pd.read_parquet(written[axis])
 
 
 def test_the_final_map_carries_its_attribution(tmp_path) -> None:  # noqa: ANN001
@@ -169,9 +171,7 @@ def test_the_final_map_is_byte_identical_across_runs(tmp_path) -> None:  # noqa:
     second = tmp_path / "two"
     a = write_final_uncertainty(first, harvests=harvests, weights_by_axis={})
     b = write_final_uncertainty(second, harvests=harvests, weights_by_axis={})
-    assert (first / "final" / "uncertainty" / "identity.parquet").read_bytes() == (
-        second / "final" / "uncertainty" / "identity.parquet"
-    ).read_bytes()
+    assert pathlib.Path(a["identity"]).read_bytes() == pathlib.Path(b["identity"]).read_bytes()
     assert set(a) == set(b)
 
 

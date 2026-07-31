@@ -26,6 +26,7 @@ from senselab.audio.workflows.audio_analysis.aggregators import apply_aggregator
 from senselab.audio.workflows.audio_analysis.statistics import epistemic_uncertainty, variability
 
 __all__ = [
+    "fuse_rounds",
     "write_final_uncertainty",
     "fuse_axis",
     "per_signal_uncertainty",
@@ -163,6 +164,89 @@ def fuse_axis(
     return rows
 
 
+def fuse_rounds(
+    buckets_by_pass: Mapping[str, Sequence[Mapping[str, Any]]],
+    *,
+    weights: Mapping[str, float],
+    aggregator: str = "mean",
+    weight_basis: Mapping[str, Mapping[str, float]] | None = None,
+    mask_regions: Sequence[Mapping[str, Any]] = (),
+    speaker_claims: Mapping[str, Sequence[tuple[float, float]]] | None = None,
+    max_rounds: int = 1,
+    tolerance: float = 1e-3,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Iterate the fusion until it stops moving, or ``max_rounds`` is reached.
+
+    Round 0 fuses with one weight per signal. Later rounds apply *regional* trust: where the
+    mask contradicts a signal's speaker claim, that signal is discounted in that region only.
+    A global discount for a local failure is what suppressed the source that was right about
+    the five named speakers, so the withdrawal has to stay local to be safe to apply at all.
+
+    Args:
+        buckets_by_pass: ``{pass_label → L1 buckets}``.
+        weights: Round-0 per-signal weights.
+        aggregator: Aggregator for ``triage_score``.
+        weight_basis: Per-signal factor breakdown.
+        mask_regions: Mask regions with ``state`` and ``confidence``, used for regional trust.
+        speaker_claims: ``{signal → spans}`` where the signal asserted a speaker.
+        max_rounds: Cap on iterations.
+        tolerance: Per-bucket change below which a round counts as no change.
+
+    Returns:
+        ``(rows, log)`` — the final rows, and one log entry per round recording whether it
+        changed anything. The log is what distinguishes "converged" from "ran out of rounds",
+        which a bare result cannot say.
+    """
+    from senselab.audio.workflows.audio_analysis.rounds import regional_weights, round_converged
+
+    log: list[dict[str, Any]] = []
+    rows = fuse_axis(
+        buckets_by_pass,
+        weights=weights,
+        aggregator=aggregator,
+        weight_basis=weight_basis,
+        round_index=0,
+    )
+    log.append({"round": 0, "buckets": len(rows), "converged": False, "regional_trust_applied": False})
+
+    if not mask_regions or not speaker_claims:
+        # Nothing to localise trust against: further rounds would recompute the same numbers,
+        # and reporting them as convergence would overstate what was checked.
+        log[-1]["converged"] = True
+        log[-1]["reason"] = "no mask regions or speaker claims to localise trust against"
+        return rows, log
+
+    per_region = regional_weights(base_weights=dict(weights), regions=mask_regions, claims=speaker_claims)
+    for round_index in range(1, max(1, int(max_rounds))):
+        # Apply the tightest regional weight covering each signal, so a signal contradicted
+        # anywhere it spoke is attenuated for the fold rather than silently rescued by a
+        # region where it stayed quiet.
+        tightened = {
+            signal: min((w.get(signal, 1.0) for w in per_region.values()), default=weights.get(signal, 1.0))
+            for signal in weights
+        }
+        candidate = fuse_axis(
+            buckets_by_pass,
+            weights=tightened,
+            aggregator=aggregator,
+            weight_basis=weight_basis,
+            round_index=round_index,
+        )
+        converged = round_converged(rows, candidate, tolerance=tolerance)
+        rows = candidate
+        log.append(
+            {
+                "round": round_index,
+                "buckets": len(rows),
+                "converged": converged,
+                "regional_trust_applied": True,
+            }
+        )
+        if converged:
+            break
+    return rows, log
+
+
 def write_final_uncertainty(
     out_dir: Any,  # noqa: ANN401 — Path
     *,
@@ -170,14 +254,19 @@ def write_final_uncertainty(
     weights_by_axis: Mapping[str, Mapping[str, float]],
     aggregator: str = "mean",
     weight_basis_by_axis: Mapping[str, Mapping[str, Mapping[str, float]]] | None = None,
-    round_index: int = 0,
+    mask_regions: Sequence[Mapping[str, Any]] = (),
+    speaker_claims: Mapping[str, Sequence[tuple[float, float]]] | None = None,
+    max_rounds: int = 1,
 ) -> dict[str, Any]:
-    """Write ``final/uncertainty/{presence,identity,utterance}.parquet`` — the level-2 answer.
+    """Write ``L2/round<N>/uncertainty/{presence,identity,utterance}.parquet``.
 
-    These are the maps a consumer should read. The per-pass parquets under
-    ``<pass>/uncertainty/`` remain, but as level-1 diagnostics: they record what each signal
-    said and what a single pass would have concluded on its own, before anything was measured
-    about the signals' reliability.
+    One directory per round, because a reader needs to see what each iteration changed and not
+    only where it ended up — a single map cannot distinguish "settled immediately" from
+    "moved a long way and then settled".
+
+    These are the maps a consumer should read. The per-pass parquets under ``L1/<pass>/`` are
+    level-1 diagnostics: what each signal said, and what one pass alone would have concluded
+    before anything was measured about the signals' reliability.
 
     Args:
         out_dir: Run directory.
@@ -186,7 +275,9 @@ def write_final_uncertainty(
         aggregator: Aggregator for the ``triage_score`` fold.
         weight_basis_by_axis: ``{axis → {signal → {factor → value}}}``, so a discounted signal
             records which factor discounted it.
-        round_index: Which iteration produced these maps.
+        mask_regions: Mask regions, enabling regional trust in rounds after the first.
+        speaker_claims: ``{signal → spans}`` where each signal asserted a speaker.
+        max_rounds: Cap on L2 iterations.
 
     Returns:
         ``{axis → written path}`` as strings, for the run summary.
@@ -196,19 +287,23 @@ def write_final_uncertainty(
     import pandas as pd
 
     axis_field = {"presence": "presence_votes", "identity": "identity_votes", "utterance": "utterance_votes"}
-    final = Path(out_dir) / "final" / "uncertainty"
-    final.mkdir(parents=True, exist_ok=True)
+    level2 = Path(out_dir) / "L2"
+    level2.mkdir(parents=True, exist_ok=True)
 
     written: dict[str, Any] = {}
+    logs: dict[str, Any] = {}
     for axis, field in axis_field.items():
         by_pass = {label: getattr(h, field, []) or [] for label, h in harvests.items()}
-        rows = fuse_axis(
+        rows, round_log = fuse_rounds(
             by_pass,
             weights=weights_by_axis.get(axis, {}),
             aggregator=aggregator,
             weight_basis=(weight_basis_by_axis or {}).get(axis),
-            round_index=round_index,
+            mask_regions=mask_regions,
+            speaker_claims=speaker_claims,
+            max_rounds=max_rounds,
         )
+        logs[axis] = round_log
         frame = pd.DataFrame(
             [
                 {
@@ -244,7 +339,19 @@ def write_final_uncertainty(
                 "weight_basis",
             ],
         )
-        path = final / f"{axis}.parquet"
-        frame.to_parquet(path, index=False)
-        written[axis] = str(path)
+        # One directory per round, so a reader can see what each iteration changed rather
+        # than only where it ended up. The last round is also the axis's headline path.
+        for round_index in sorted({int(r["round"]) for r in rows} or {0}):
+            per_round = frame[frame["round"] == round_index] if len(frame) else frame
+            round_dir = level2 / f"round{round_index}" / "uncertainty"
+            round_dir.mkdir(parents=True, exist_ok=True)
+            round_path = round_dir / f"{axis}.parquet"
+            per_round.to_parquet(round_path, index=False)
+            written[f"{axis}@round{round_index}"] = str(round_path)
+            written[axis] = str(round_path)
+
+    # The round log distinguishes "converged" from "ran out of rounds", which the maps alone
+    # cannot say and which call for different follow-up.
+    (level2 / "rounds.json").write_text(json.dumps(logs, indent=2, sort_keys=True) + "\n")
+    written["rounds"] = str(level2 / "rounds.json")
     return written
