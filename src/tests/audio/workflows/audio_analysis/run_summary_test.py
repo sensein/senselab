@@ -50,7 +50,7 @@ def test_the_reducible_share_is_reported() -> None:
 
 
 def test_the_worst_regions_are_named_with_their_times() -> None:
-    """ "Uncertainty was 0.4" is not actionable; "0.9 at 0.5-1.0 s" is."""
+    """A bare mean is not actionable; a time-stamped worst region is."""
     doc = build_run_summary(axis_rows={"identity": _axis_rows([0.1, 0.9, 0.2])}, speakers={}, rounds={}, top_n=1)
     worst = doc["axes"]["identity"]["worst_regions"][0]
     assert worst["start"] == pytest.approx(0.5) and worst["uncertainty"] == pytest.approx(0.9)
