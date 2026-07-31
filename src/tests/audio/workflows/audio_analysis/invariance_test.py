@@ -85,13 +85,15 @@ def test_a_model_that_answers_identically_is_fully_invariant() -> None:
 
 def test_a_model_that_changes_its_answer_loses_invariance() -> None:
     """A different answer to the same question is a defect, not a response to the signal."""
-    assert invariance_score(2, {"gain_down_6db": 5, "shift_10ms": 2}) < 1.0
+    score = invariance_score(2, {"gain_down_6db": 5, "shift_10ms": 2})
+    assert score is not None and score < 1.0
 
 
 def test_disagreement_is_graded_by_how_far_the_answer_moved() -> None:
     """One extra speaker and three extra speakers are not equally wrong."""
     near = invariance_score(2, {"gain_down_6db": 3})
     far = invariance_score(2, {"gain_down_6db": 8})
+    assert near is not None and far is not None
     assert far < near
 
 

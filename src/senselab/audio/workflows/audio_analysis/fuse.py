@@ -96,24 +96,22 @@ def fuse_axis(
             if not isinstance(bucket, Mapping):
                 continue
             key = (round(float(bucket.get("start", 0.0)), 6), round(float(bucket.get("end", 0.0)), 6))
-            per_signal = per_signal_uncertainty(bucket)
             slot = collected.setdefault(key, {})
             passes_seen.setdefault(key, set()).add(str(pass_label))
-            for signal, value in per_signal.items():
+            for signal, value in per_signal_uncertainty(bucket).items():
                 slot.setdefault(signal, []).append(value)
 
     rows: list[dict[str, Any]] = []
     for start, end in sorted(collected):
-        per_signal = collected[(start, end)]
-        signals = sorted(per_signal)
+        readings = collected[(start, end)]
+        signals = sorted(readings)
         # One reading per signal: the mean across passes. Averaging here rather than treating
         # each pass as a separate voter keeps a signal's weight from scaling with how many
         # passes it happened to appear in.
-        values = [sum(per_signal[s]) / len(per_signal[s]) for s in signals]
+        values = [sum(readings[name]) / len(readings[name]) for name in signals]
         applied = [float(weights.get(s, 1.0)) for s in signals]
-        fused = (
-            apply_aggregator([v for v in values], aggregator, weights=applied if signals else None) if signals else None
-        )
+        candidates: list[float | None] = list(values)
+        fused = apply_aggregator(candidates, aggregator, weights=applied) if signals else None
         rows.append(
             {
                 "start": start,
