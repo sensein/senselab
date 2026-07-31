@@ -436,6 +436,7 @@ def test_profile_from_related_audios_records_the_build_grid(monkeypatch: pytest.
         profile_hop_s=1.0,
     )
     assert profile is not None
+    assert profile.params is not None
     assert profile.params.profile_window_s == 2.0
     assert profile.params.profile_hop_s == 1.0
 
@@ -483,10 +484,13 @@ def test_minority_share_does_not_change_confidence(monkeypatch: pytest.MonkeyPat
         [ProfileInput(audio=a, file_id="a.wav"), ProfileInput(audio=b, file_id="b.wav")],
         embedding_models=[_MODEL],
     )
+    # 0.0 for "no runner-up", matching how build_speaker_profile calls it.
     expected = decide_confidence(
         has_dominant=True,
-        dominant_speech_seconds=profile.dominant_cluster.speech_seconds,
-        runner_up_speech_seconds=(profile.runner_up_cluster.speech_seconds if profile.runner_up_cluster else None),
+        dominant_speech_seconds=profile.aggregate_speech_seconds,
+        runner_up_speech_seconds=(
+            profile.runner_up_cluster.speech_seconds if profile.runner_up_cluster is not None else 0.0
+        ),
     )
     assert profile.confidence == expected
 
