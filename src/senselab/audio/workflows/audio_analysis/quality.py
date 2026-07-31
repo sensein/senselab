@@ -1,27 +1,42 @@
-"""Per-bucket audio-quality degradation scores for the presence axis.
+"""L1 scene-quality measurements: what the estimators measured, in their own units.
 
-Emits four ``[0, 1]`` degradation scores (0 = clean, 1 = fully degraded) plus a
-quality-uncertainty score, per presence bucket:
+Seven measurements per analysis window, each in native units and none rescaled:
 
-- ``quality_snr``     — from Brouhaha frame SNR (primary), cross-checked against
-                        senselab's existing spectral-gating and peak SNR metrics;
-- ``quality_clip``    — from ``proportion_clipped_metric`` (existing DSP);
-- ``quality_reverb``  — from Brouhaha C50;
-- ``quality_bandwidth``— from a torch.stft spectral-rolloff-vs-Nyquist measure;
-- ``quality_uncertainty`` — normalized spread among the independent SNR estimators.
+- ``snr_brouhaha_db`` — Brouhaha's SNR head, dB;
+- ``c50_brouhaha_db`` — Brouhaha's C50 (clarity) head, dB;
+- ``snr_spectral_gating_db`` / ``snr_peak_db`` — senselab's two DSP SNR metrics, dB;
+- ``rolloff_95_hz`` — the frequency below which 95% of spectral energy sits, Hz;
+- ``proportion_clipped`` — fraction of samples at full scale;
+- ``rms`` — root-mean-square energy, uncalibrated.
 
-**Analysis resolution ≠ reporting grid.** The STFT/model estimators are unreliable
-below ~0.5 s (and SQUIM/Brouhaha are trained on longer chunks), so quality is
-computed on a fixed 0.5 s / 0.25 s *analysis* window and each presence *reporting*
-bucket takes the value of its nearest analysis window. The analysis-window params
-are recorded in provenance; the true quality resolution is 0.5 s even when presence
-buckets are finer. See ``contracts/quality.md``.
+**Why no degradation scores here.** This module used to emit ``quality_snr`` and
+``quality_reverb`` as ``[0, 1]`` scores via ``clip((clean_db - value) / span, 0, 1)`` against 25 dB
+and 30 dB anchors. Both returned **0.0 in every bucket of every recording measured**, because
+clean speech sits at 60-70 dB SNR and 59.8 dB C50 — far above anchors chosen for conversational
+audio. Probing the model directly showed the heads were never the problem: across digital silence,
+white noise and clean speech they span −5 to 70 dB SNR and discriminate speech from silence by
++0.98 on the VAD head. A working measurement was destroyed by a clamp sitting on top of it. The
+anchors are calibration, so they belong in :mod:`degradation` at L2, where a fitted profile can
+replace them and where a saturating choice is visible as a fusion decision rather than baked into
+the recorded data.
+
+Two related reductions were removed rather than moved. ``primary_snr_db`` picked Brouhaha and
+otherwise averaged the DSP metrics — estimator selection is fusion. ``quality_uncertainty`` took
+the standard deviation of all three; because they use different noise-floor definitions, that
+spread measured definitional disagreement rather than measurement uncertainty and pinned at 1.0
+structurally, even on perfect audio. See
+``specs/20260728-221507-per-speaker-identity-scene/l1-post-processing-register.md`` items 17-24.
+
+**Analysis resolution ≠ reporting grid.** The STFT and model estimators are unreliable below
+~0.5 s (Brouhaha is trained at 6 s), so measurement happens on a fixed 0.5 s / 0.25 s analysis
+window. Each reporting bucket takes its nearest analysis window's value; the true resolution is
+recorded in provenance so a consumer cannot mistake a repeated value for an independent one.
 """
 
 from __future__ import annotations
 
 import math
-from typing import Any, Optional
+from typing import Any, Optional, SupportsFloat
 
 import numpy as np
 import torch
@@ -33,55 +48,96 @@ from senselab.audio.tasks.quality_control.metrics import (
     root_mean_square_energy_metric,
     spectral_gating_snr_metric,
 )
-from senselab.audio.tasks.scene_quality.brouhaha import BrouhahaFrames
+from senselab.audio.tasks.scene_quality.brouhaha import BROUHAHA_MODEL_ID, BROUHAHA_REVISION, BrouhahaFrames
 from senselab.audio.workflows.audio_analysis.embeddings import _slice_audio, _window_starts
 from senselab.audio.workflows.audio_analysis.grid import BucketGrid
+from senselab.audio.workflows.audio_analysis.signal import SignalProvenance
+
+__all__ = [
+    "QUALITY_ANALYSIS_HOP_S",
+    "QUALITY_ANALYSIS_WIN_S",
+    "QUALITY_SIGNALS",
+    "harvest_quality_measurements",
+]
 
 QUALITY_ANALYSIS_WIN_S = 0.5
 QUALITY_ANALYSIS_HOP_S = 0.25
 
-# Default normalization when no fitted calibration profile is supplied (US5 replaces
-# these via the calibration profile). Documented, bounded, uncalibrated.
-#
-# SNR anchors are speech-appropriate so noisy recordings read clearly more
-# degraded than clean ones: clean conversational/studio speech sits at ~25 dB+
-# SNR (-> degradation ~0), while a noisy recording at ~10-15 dB reads elevated
-# (0.5-0.75) and heavy noise (<=5 dB) saturates to 1.0. The window is narrower
-# than the old 30->0 dB span so the mid-SNR region (where "noisy" lives) is more
-# discriminative.
-_DEFAULT_SNR_CLEAN_DB = 25.0
-_DEFAULT_SNR_FLOOR_DB = 5.0
-_DEFAULT_C50_CLEAN_DB = 30.0
-_DEFAULT_C50_FLOOR_DB = -5.0
-# Upper spectral edge, not voiced-energy tilt: an 85% roll-off sits at the
-# voiced-energy concentration (~1-2 kHz) even for full-band speech and would
-# flag every recording as band-limited. A high percentile tracks the actual
-# top of the spectrum, so full-band speech reads ~clean and telephone/codec
-# band-limiting (energy truncated at ~3.4 kHz) reads high.
-_DEFAULT_BANDWIDTH_ROLLOFF_PCT = 0.95
-# SNR-estimator spread (dB) that maps to full quality-uncertainty (=1.0).
-_SNR_SPREAD_REF_DB = 15.0
-# Below this RMS the slice is treated as silence → quality is undefined (null).
-_SILENCE_RMS = 1e-4
+# Upper spectral edge, not voiced-energy tilt: an 85% roll-off sits at the voiced-energy
+# concentration (~1-2 kHz) even for full-band speech and would flag every recording as
+# band-limited. A high percentile tracks the actual top of the spectrum.
+_ROLLOFF_PCT = 0.95
+
+QUALITY_SIGNALS: tuple[str, ...] = (
+    "snr_brouhaha_db",
+    "c50_brouhaha_db",
+    "snr_spectral_gating_db",
+    "snr_peak_db",
+    "rolloff_95_hz",
+    "proportion_clipped",
+    "rms",
+)
+"""The measurements this module emits, in provenance order."""
+
+# One provenance record per signal. ``resolution_s`` is the analysis hop and ``window_s`` the
+# analysis window: they differ, and a consumer assuming hop equals window would treat overlapping
+# windows as independent samples.
+_UNITS: dict[str, str] = {
+    "snr_brouhaha_db": "dB",
+    "c50_brouhaha_db": "dB",
+    "snr_spectral_gating_db": "dB",
+    "snr_peak_db": "dB",
+    "rolloff_95_hz": "hertz",
+    "proportion_clipped": "proportion",
+    # RMS of a float waveform has no absolute reference — it scales with input gain. Saying so is
+    # the point of the ``arbitrary`` unit: a consumer must not compare it across recordings.
+    "rms": "arbitrary",
+}
+_MODELS: dict[str, str] = {
+    "snr_brouhaha_db": BROUHAHA_MODEL_ID,
+    "c50_brouhaha_db": BROUHAHA_MODEL_ID,
+    "snr_spectral_gating_db": "senselab.spectral_gating_snr_metric",
+    "snr_peak_db": "senselab.peak_snr_from_spectral_metric",
+    "rolloff_95_hz": "torch.stft",
+    "proportion_clipped": "senselab.proportion_clipped_metric",
+    "rms": "senselab.root_mean_square_energy_metric",
+}
+_REDUCTIONS: dict[str, str | None] = {
+    "snr_brouhaha_db": "mean over frames in the analysis window",
+    "c50_brouhaha_db": "mean over frames in the analysis window",
+    "snr_spectral_gating_db": None,
+    "snr_peak_db": None,
+    "rolloff_95_hz": f"cumulative-energy quantile at {_ROLLOFF_PCT}, mean over STFT frames",
+    "proportion_clipped": None,
+    "rms": None,
+}
 
 
-def _linear_db_to_degradation(value_db: float, clean_db: float, floor_db: float) -> Optional[float]:
-    """Map a dB quality value to a ``[0, 1]`` degradation score (0 = clean)."""
-    if value_db is None or not np.isfinite(value_db):
-        return None
-    span = clean_db - floor_db
-    if span <= 0:
-        return None
-    return float(np.clip((clean_db - value_db) / span, 0.0, 1.0))
+def _provenance(status_by_signal: dict[str, str]) -> dict[str, Any]:
+    """Build the provenance block for one analysis window."""
+    out: dict[str, Any] = {}
+    for name in QUALITY_SIGNALS:
+        backend = "brouhaha venv" if _MODELS[name] == BROUHAHA_MODEL_ID else "main env"
+        out[name] = SignalProvenance(
+            signal=name,
+            model=_MODELS[name],
+            units=_UNITS[name],
+            revision=BROUHAHA_REVISION if _MODELS[name] == BROUHAHA_MODEL_ID else None,
+            resolution_s=QUALITY_ANALYSIS_HOP_S,
+            window_s=QUALITY_ANALYSIS_WIN_S,
+            reduction=_REDUCTIONS[name],
+            backend=backend,
+            status=status_by_signal.get(name, "ok"),
+        ).to_json()
+    return out
 
 
-def _bandwidth_degradation(slice_audio: Audio) -> Optional[float]:
-    """Effective-bandwidth degradation from the 95% spectral rolloff vs Nyquist.
+def _rolloff_hz(slice_audio: Audio) -> Optional[float]:
+    """Frequency below which ``_ROLLOFF_PCT`` of spectral energy sits, in Hz.
 
-    Uses ``torch.stft`` (no librosa) — a band-limited signal (e.g. telephone-band
-    ≤ 4 kHz) concentrates energy in the low bins, so its rolloff frequency sits
-    well below Nyquist and the degradation approaches 1; a full-band signal rolls
-    off near Nyquist and scores near 0.
+    Reported as a frequency rather than as ``1 - rolloff / nyquist``: the inversion turns a
+    measurement into a badness score, and it hard-codes "band-limited is bad", which is a
+    task-dependent judgement. L2 compares it against Nyquist.
     """
     wf = slice_audio.waveform
     if wf is None or wf.numel() == 0:
@@ -105,122 +161,85 @@ def _bandwidth_degradation(slice_audio: Audio) -> Optional[float]:
     power = (spec.abs() ** 2).mean(dim=1)  # avg over frames → per-frequency-bin energy
     total = float(power.sum().item())
     if total <= 0:
+        # No energy at all: the spectrum has no upper edge to report. A missing measurement, not
+        # a measured zero.
         return None
     cumulative = torch.cumsum(power, dim=0) / total
-    idx = int(torch.searchsorted(cumulative, torch.tensor(_DEFAULT_BANDWIDTH_ROLLOFF_PCT)).item())
+    idx = int(torch.searchsorted(cumulative, torch.tensor(_ROLLOFF_PCT)).item())
     idx = min(idx, power.shape[0] - 1)
-    sr = slice_audio.sampling_rate
-    nyquist = sr / 2.0
-    rolloff_hz = idx * sr / n_fft  # bin index → Hz
-    if nyquist <= 0:
+    return float(idx * slice_audio.sampling_rate / n_fft)
+
+
+def _finite_or_none(value: SupportsFloat | None) -> Optional[float]:
+    """Coerce to float, or ``None`` when absent or non-finite."""
+    if value is None:
         return None
-    return float(np.clip(1.0 - rolloff_hz / nyquist, 0.0, 1.0))
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f if np.isfinite(f) else None
 
 
-def _analysis_window_quality(
+def _analysis_window(
     slice_audio: Audio,
     brouhaha: Optional[BrouhahaFrames],
     start_s: float,
     end_s: float,
-    calibration: Optional[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Compute the quality vector for one analysis window."""
-    cal = calibration or {}
-    snr_clean = float(cal.get("snr_clean_db", _DEFAULT_SNR_CLEAN_DB))
-    snr_floor = float(cal.get("snr_floor_db", _DEFAULT_SNR_FLOOR_DB))
-    c50_clean = float(cal.get("c50_clean_db", _DEFAULT_C50_CLEAN_DB))
-    c50_floor = float(cal.get("c50_floor_db", _DEFAULT_C50_FLOOR_DB))
+    """Measure one analysis window. No thresholds, no anchors, no reductions across estimators."""
+    values: dict[str, Optional[float]] = dict.fromkeys(QUALITY_SIGNALS)
 
-    rms = root_mean_square_energy_metric(slice_audio)
-    is_silence = not np.isfinite(rms) or rms < _SILENCE_RMS
-
-    # Clipping is always computable and cheap.
+    values["rms"] = _finite_or_none(root_mean_square_energy_metric(slice_audio))
     try:
-        clip_deg: Optional[float] = float(np.clip(proportion_clipped_metric(slice_audio), 0.0, 1.0))
+        values["proportion_clipped"] = _finite_or_none(proportion_clipped_metric(slice_audio))
     except (ValueError, TypeError):
-        clip_deg = None
+        values["proportion_clipped"] = None
+    values["rolloff_95_hz"] = _rolloff_hz(slice_audio)
 
-    if is_silence:
-        # Signal-dependent quality is undefined on silence (edge case in spec).
-        return {
-            "quality_snr": None,
-            "quality_clip": clip_deg,
-            "quality_reverb": None,
-            "quality_bandwidth": None,
-            "quality_uncertainty": None,
-            "_raw": {"silence": True, "rms": rms},
-        }
-
-    # SNR estimators (dB): Brouhaha (primary) + two existing DSP metrics.
-    snr_estimates_db: list[float] = []
-    brouhaha_snr_db: Optional[float] = None
-    brouhaha_c50_db: Optional[float] = None
     if brouhaha is not None:
         _vad, b_snr, b_c50 = brouhaha.mean_in_window(start_s, end_s)
-        if np.isfinite(b_snr):
-            brouhaha_snr_db = float(b_snr)
-            snr_estimates_db.append(brouhaha_snr_db)
-        if np.isfinite(b_c50):
-            brouhaha_c50_db = float(b_c50)
-    for metric in (spectral_gating_snr_metric, peak_snr_from_spectral_metric):
+        values["snr_brouhaha_db"] = _finite_or_none(b_snr)
+        values["c50_brouhaha_db"] = _finite_or_none(b_c50)
+
+    # Both DSP estimators run unconditionally. Their disagreement with Brouhaha is information for
+    # L2, so no estimator is skipped on the grounds that another one answered.
+    for name, metric in (
+        ("snr_spectral_gating_db", spectral_gating_snr_metric),
+        ("snr_peak_db", peak_snr_from_spectral_metric),
+    ):
         try:
-            val = float(metric(slice_audio))
-            if np.isfinite(val):
-                snr_estimates_db.append(val)
+            values[name] = _finite_or_none(metric(slice_audio))
         except (ValueError, TypeError, RuntimeError):
-            continue
+            values[name] = None
 
-    # Primary SNR: Brouhaha when present, else mean of the DSP estimators.
-    if brouhaha_snr_db is not None:
-        primary_snr_db: Optional[float] = brouhaha_snr_db
-    elif snr_estimates_db:
-        primary_snr_db = float(np.mean(snr_estimates_db))
-    else:
-        primary_snr_db = None
-
-    quality_snr = (
-        _linear_db_to_degradation(primary_snr_db, snr_clean, snr_floor) if primary_snr_db is not None else None
-    )
-    quality_reverb = (
-        _linear_db_to_degradation(brouhaha_c50_db, c50_clean, c50_floor) if brouhaha_c50_db is not None else None
-    )
-    quality_bandwidth = _bandwidth_degradation(slice_audio)
-
-    # Quality-uncertainty: normalized spread among the independent SNR estimators.
-    quality_uncertainty: Optional[float] = None
-    if len(snr_estimates_db) >= 2:
-        spread = float(np.std(snr_estimates_db))
-        quality_uncertainty = float(np.clip(spread / _SNR_SPREAD_REF_DB, 0.0, 1.0))
-
-    return {
-        "quality_snr": quality_snr,
-        "quality_clip": clip_deg,
-        "quality_reverb": quality_reverb,
-        "quality_bandwidth": quality_bandwidth,
-        "quality_uncertainty": quality_uncertainty,
-        "_raw": {
-            "snr_estimates_db": snr_estimates_db,
-            "brouhaha_snr_db": brouhaha_snr_db,
-            "brouhaha_c50_db": brouhaha_c50_db,
-            "primary_snr_db": primary_snr_db,
-        },
-    }
+    statuses = {name: ("ok" if values[name] is not None else "unavailable") for name in QUALITY_SIGNALS}
+    row: dict[str, Any] = dict(values)
+    row["provenance"] = _provenance(statuses)
+    return row
 
 
-def harvest_quality_scores(
+def harvest_quality_measurements(
     *,
     audio: Audio,
     brouhaha: Optional[BrouhahaFrames],
     grid: BucketGrid,
-    calibration: Optional[dict[str, Any]] = None,
 ) -> list[dict[str, Any]]:
-    """Return one quality dict per presence bucket on ``grid``.
+    """Return one measurement dict per reporting bucket on ``grid``.
 
-    Quality is computed on the fixed 0.5 s / 0.25 s analysis window and broadcast
-    to each reporting bucket via nearest-analysis-window-center. Each returned dict
-    carries ``start``, ``end``, the five ``quality_*`` values (any of which may be
-    ``None`` when its source is unavailable — FR-023), and a ``_raw`` block for the
-    parquet ``model_votes``.
+    Args:
+        audio: The pass audio.
+        brouhaha: Per-frame Brouhaha outputs, or ``None`` when the model was unavailable — its
+            two columns are then null (FR-023) while the DSP measurements still land.
+        grid: The reporting grid.
+
+    Returns:
+        One dict per bucket carrying ``start``, ``end``, the seven values in
+        :data:`QUALITY_SIGNALS` (any of which may be ``None`` when its estimator produced
+        nothing), and a ``provenance`` block keyed by signal name.
+
+        Values are measurements in the units declared in provenance. Nothing here is a
+        ``[0, 1]`` score; use :func:`degradation.scene_degradation` to obtain those.
     """
     duration_s = float(audio.waveform.shape[-1]) / float(audio.sampling_rate)
     if duration_s <= 0:
@@ -230,10 +249,9 @@ def harvest_quality_scores(
     analysis: list[dict[str, Any]] = []
     for t in starts:
         end = min(duration_s, t + QUALITY_ANALYSIS_WIN_S)
-        sl = _slice_audio(audio, t, end)
-        q = _analysis_window_quality(sl, brouhaha, t, end, calibration)
-        q["_center"] = 0.5 * (t + end)
-        analysis.append(q)
+        window = _analysis_window(_slice_audio(audio, t, end), brouhaha, t, end)
+        window["_center"] = 0.5 * (t + end)
+        analysis.append(window)
 
     if not analysis:
         return []
@@ -241,19 +259,10 @@ def harvest_quality_scores(
 
     out: list[dict[str, Any]] = []
     for b_start, b_end, _idx in grid.iter_buckets(duration_s):
-        b_center = 0.5 * (b_start + b_end)
-        nearest = int(np.argmin(np.abs(centers - b_center)))
+        nearest = int(np.argmin(np.abs(centers - 0.5 * (b_start + b_end))))
         src = analysis[nearest]
-        out.append(
-            {
-                "start": b_start,
-                "end": b_end,
-                "quality_snr": src["quality_snr"],
-                "quality_clip": src["quality_clip"],
-                "quality_reverb": src["quality_reverb"],
-                "quality_bandwidth": src["quality_bandwidth"],
-                "quality_uncertainty": src["quality_uncertainty"],
-                "_raw": src["_raw"],
-            }
-        )
+        row: dict[str, Any] = {"start": b_start, "end": b_end}
+        row.update({name: src[name] for name in QUALITY_SIGNALS})
+        row["provenance"] = src["provenance"]
+        out.append(row)
     return out

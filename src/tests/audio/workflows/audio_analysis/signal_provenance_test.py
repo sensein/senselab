@@ -61,8 +61,10 @@ def test_the_reduction_is_recorded() -> None:
 
 
 def test_resolution_and_window_are_recorded_separately() -> None:
-    """They differ: openSMILE HNR steps every 10 ms over a 60 ms window, so a consumer that
-    assumed hop == window would treat overlapping frames as independent.
+    """Hop and window are separate fields because they differ.
+
+    openSMILE HNR steps every 10 ms over a 60 ms window, so a consumer that assumed hop equals
+    window would treat overlapping frames as independent observations.
     """
     m = measurement(
         11.2,
@@ -85,7 +87,7 @@ def test_a_failed_signal_is_representable() -> None:
 
 
 def test_a_null_value_with_ok_status_is_refused() -> None:
-    """ "Measured, and the answer is nothing" is not a state; it is a missing status."""
+    """Measured-and-the-answer-is-nothing is not a state; it is a missing status."""
     with pytest.raises(ValueError, match="status"):
         measurement(None, units="probability", signal="x", model="y")
 

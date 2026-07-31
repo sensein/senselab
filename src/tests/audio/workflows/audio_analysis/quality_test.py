@@ -1,9 +1,12 @@
-"""Tests for the per-bucket scene-quality harvester (feature 20260722-175022).
+"""Tests for scene quality across the L1/L2 split (features 20260722-175022, 20260728-221507).
 
-Model-free: Brouhaha frames are constructed directly, so no gated model download
-is needed. Covers SC-001 (clean → low degradation), SC-002 (noised region → SNR
-degradation up ≥0.3), clipping, effective bandwidth, quality-uncertainty spread,
-and the null-safe / silence edge cases (FR-023).
+L1 (``quality.py``) reports measurements in their native units and does not threshold, clamp, or
+rescale. L2 (``degradation.py``) turns those into ``[0, 1]`` degradation scores against calibrated
+anchors. The split is load-bearing rather than cosmetic: the previous single-layer version applied
+``clip((25 - snr_db) / 20, 0, 1)`` inside L1, which returned ``0.0`` in every bucket of every real
+recording because clean speech measures 60-70 dB. The measurement was fine; the clamp destroyed it.
+
+Model-free: Brouhaha frames are constructed directly, so no gated model download is needed.
 """
 
 from __future__ import annotations
@@ -15,8 +18,14 @@ import torch
 import senselab.audio.tasks.scene_quality.brouhaha as brouhaha_mod
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.scene_quality.brouhaha import BrouhahaFrames
+from senselab.audio.workflows.audio_analysis.degradation import (
+    bandwidth_degradation,
+    reverb_degradation,
+    scene_degradation,
+    snr_degradation,
+)
 from senselab.audio.workflows.audio_analysis.grid import BucketGrid
-from senselab.audio.workflows.audio_analysis.quality import harvest_quality_scores
+from senselab.audio.workflows.audio_analysis.quality import QUALITY_SIGNALS, harvest_quality_measurements
 
 SR = 16000
 
@@ -50,91 +59,185 @@ def _lowpass_tones(duration_s: float) -> np.ndarray:
     return 0.1 * (np.sin(2 * np.pi * 300 * t) + np.sin(2 * np.pi * 800 * t))
 
 
-def test_all_scores_in_unit_range() -> None:
-    """Every non-null quality score stays within [0, 1]."""
-    audio = _audio(_white_noise(2.0))
-    grid = BucketGrid(win_length=0.5, hop_length=0.5)
-    rows = harvest_quality_scores(audio=audio, brouhaha=_const_brouhaha(2.0, 20.0, 25.0), grid=grid)
+def _rows(audio: Audio, brouhaha: BrouhahaFrames | None, win: float = 0.5) -> list[dict]:
+    return harvest_quality_measurements(audio=audio, brouhaha=brouhaha, grid=BucketGrid(win_length=win, hop_length=win))
+
+
+# ── L1: measurements in native units ─────────────────────────────────────────
+
+
+def test_l1_reports_snr_in_db_not_rescaled() -> None:
+    """A 70 dB SNR reads 70 dB. This is the regression guard for the clamp that zeroed the column.
+
+    The old L1 emitted ``clip((25 - 70) / 20, 0, 1) == 0.0`` here, indistinguishable from heavy
+    noise pinned at the other end of the same scale.
+    """
+    rows = _rows(_audio(_white_noise(2.0)), _const_brouhaha(2.0, snr_db=70.0, c50_db=59.8))
     assert rows
     for r in rows:
-        for key in ("quality_snr", "quality_clip", "quality_reverb", "quality_bandwidth", "quality_uncertainty"):
-            v = r[key]
-            assert v is None or (0.0 <= v <= 1.0), f"{key}={v} out of range"
+        assert r["snr_brouhaha_db"] == pytest.approx(70.0, abs=1e-6)
+        assert r["c50_brouhaha_db"] == pytest.approx(59.8, abs=1e-6)
 
 
-def test_clean_high_snr_low_degradation() -> None:
-    """SC-001: high Brouhaha SNR + high C50 → low snr/reverb degradation."""
-    audio = _audio(_white_noise(2.0))
-    rows = harvest_quality_scores(
-        audio=audio,
-        brouhaha=_const_brouhaha(2.0, snr_db=30.0, c50_db=30.0),
-        grid=BucketGrid(win_length=0.5, hop_length=0.5),
-    )
-    assert all(r["quality_snr"] is not None and r["quality_snr"] < 0.1 for r in rows)
-    assert all(r["quality_reverb"] is not None and r["quality_reverb"] < 0.1 for r in rows)
+def test_l1_preserves_full_dynamic_range() -> None:
+    """Measured SNRs 75 dB apart stay 75 dB apart — no anchor compresses them."""
+    quiet = _rows(_audio(_white_noise(1.0)), _const_brouhaha(1.0, snr_db=-5.0, c50_db=22.9))
+    clean = _rows(_audio(_white_noise(1.0)), _const_brouhaha(1.0, snr_db=70.0, c50_db=59.8))
+    spread = clean[0]["snr_brouhaha_db"] - quiet[0]["snr_brouhaha_db"]
+    assert spread == pytest.approx(75.0, abs=1e-6)
 
 
-def test_noised_region_snr_degradation_rises() -> None:
-    """SC-002: a low-SNR region shows quality_snr degradation ≥0.3 higher than a clean region."""
-    duration = 2.0
-    hop = 0.02
+def test_l1_emits_each_snr_estimator_separately() -> None:
+    """Estimators are reported side by side, never reduced to one value or to their spread.
+
+    ``primary_snr_db`` (pick brouhaha, else average the DSP metrics) was estimator *selection*,
+    and ``quality_uncertainty`` was their standard deviation — but the three quantities use
+    different noise-floor definitions, so their spread measured definitional disagreement rather
+    than uncertainty and pinned at 1.0 structurally. Both are L2's business, given the parts.
+    """
+    rows = _rows(_audio(_white_noise(1.0, amp=0.15)), _const_brouhaha(1.0, snr_db=60.0, c50_db=20.0))
+    r = rows[0]
+    assert r["snr_brouhaha_db"] == pytest.approx(60.0)
+    assert r["snr_spectral_gating_db"] is not None
+    assert r["snr_peak_db"] is not None
+    assert "primary_snr_db" not in r
+    assert "quality_uncertainty" not in r
+
+
+def test_l1_reports_no_degradation_scores() -> None:
+    """No ``quality_*`` score is emitted at L1 — those are conclusions, not measurements."""
+    rows = _rows(_audio(_white_noise(1.0)), _const_brouhaha(1.0, 20.0, 25.0))
+    for r in rows:
+        assert not [k for k in r if k.startswith("quality_")], f"L1 emitted degradation scores: {r}"
+
+
+def test_l1_reports_measurements_on_silence() -> None:
+    """Silence gets its measurements, not nulls.
+
+    The old ``rms < 1e-4 -> null everything`` gate was a threshold, and it discarded brouhaha's
+    actual reading. Brouhaha reports ~43 dB SNR on digital silence, which is a meaningless answer
+    that L2 must be able to see in order to distrust; nulling it hides the evidence.
+    """
+    rows = _rows(_audio(np.zeros(int(1.0 * SR))), _const_brouhaha(1.0, snr_db=43.5, c50_db=31.1))
+    assert rows
+    for r in rows:
+        assert r["snr_brouhaha_db"] == pytest.approx(43.5, abs=1e-6)
+        assert r["rms"] is not None and r["rms"] < 1e-6
+
+
+def test_l1_bandwidth_is_a_frequency() -> None:
+    """Roll-off is reported in Hz, not as an inverted-and-clamped badness score."""
+    full = _rows(_audio(_white_noise(1.5)), None)
+    band = _rows(_audio(_lowpass_tones(1.5)), None)
+    full_hz = np.nanmean([r["rolloff_95_hz"] for r in full if r["rolloff_95_hz"] is not None])
+    band_hz = np.nanmean([r["rolloff_95_hz"] for r in band if r["rolloff_95_hz"] is not None])
+    assert band_hz < full_hz
+    assert band_hz < 2000.0  # content is ≤ 1 kHz
+    assert full_hz > 5000.0  # full-band noise rolls off near Nyquist (8 kHz)
+
+
+def test_l1_clipping_is_a_proportion() -> None:
+    """``proportion_clipped`` passes through as measured."""
+    clean = _rows(_audio(_white_noise(1.0, amp=0.2)), None)
+    clipped = _rows(_audio(np.clip(_white_noise(1.0, amp=2.0), -1.0, 1.0)), None)
+    assert max(r["proportion_clipped"] for r in clipped) > max(r["proportion_clipped"] for r in clean)
+    for r in clean + clipped:
+        assert 0.0 <= r["proportion_clipped"] <= 1.0  # a proportion, by definition
+
+
+def test_l1_null_when_brouhaha_absent() -> None:
+    """FR-023: no Brouhaha → its two columns are null; the DSP measurements still land."""
+    rows = _rows(_audio(_white_noise(1.0)), None)
+    assert rows
+    assert all(r["snr_brouhaha_db"] is None and r["c50_brouhaha_db"] is None for r in rows)
+    assert any(r["snr_spectral_gating_db"] is not None for r in rows)
+    assert any(r["rolloff_95_hz"] is not None for r in rows)
+
+
+def test_l1_provenance_declares_units_for_every_signal() -> None:
+    """Each measurement carries units, model, and native resolution — the point of the envelope."""
+    rows = _rows(_audio(_white_noise(1.0)), _const_brouhaha(1.0, 20.0, 25.0))
+    prov = rows[0]["provenance"]
+    assert set(prov) == set(QUALITY_SIGNALS)
+    expected_units = {
+        "snr_brouhaha_db": "dB",
+        "c50_brouhaha_db": "dB",
+        "snr_spectral_gating_db": "dB",
+        "snr_peak_db": "dB",
+        "rolloff_95_hz": "hertz",
+        "proportion_clipped": "proportion",
+        "rms": "arbitrary",
+    }
+    for name, units in expected_units.items():
+        assert prov[name]["units"] == units, f"{name} declared {prov[name]['units']!r}, expected {units!r}"
+        assert prov[name]["model"]
+        assert prov[name]["resolution_s"] == pytest.approx(0.25)
+        assert prov[name]["window_s"] == pytest.approx(0.5)
+
+
+# ── L2: degradation from measurements ────────────────────────────────────────
+
+
+def test_l2_snr_degradation_spans_the_anchors() -> None:
+    """SC-001/SC-002 at L2: clean reads ~0, heavy noise saturates, mid-SNR discriminates."""
+    assert snr_degradation(70.0) == pytest.approx(0.0)
+    assert snr_degradation(30.0) == pytest.approx(0.0)
+    assert snr_degradation(3.0) == pytest.approx(1.0)
+    assert snr_degradation(15.0) == pytest.approx(0.5)
+    assert snr_degradation(None) is None
+
+
+def test_l2_noised_region_degrades_more_than_clean() -> None:
+    """SC-002 end to end: L1 measures dB, L2 separates the noisy half by ≥0.3."""
+    duration, hop = 2.0, 0.02
     n = int(duration / hop)
     snr = np.full(n, 30.0)
-    snr[: n // 2] = 3.0  # first half is noisy
+    snr[: n // 2] = 3.0
     brouhaha = BrouhahaFrames(vad=np.ones(n), snr_db=snr, c50_db=np.full(n, 25.0), frame_hop_s=hop)
-    rows = harvest_quality_scores(
-        audio=_audio(_white_noise(duration)),
-        brouhaha=brouhaha,
-        grid=BucketGrid(win_length=0.5, hop_length=0.5),
-    )
-    noisy = [r["quality_snr"] for r in rows if r["end"] <= 1.0]
-    clean = [r["quality_snr"] for r in rows if r["start"] >= 1.0]
+    rows = _rows(_audio(_white_noise(duration)), brouhaha)
+    scored = [scene_degradation(r, sampling_rate=SR) for r in rows]
+    noisy = [s["quality_snr"] for s, r in zip(scored, rows) if r["end"] <= 1.0]
+    clean = [s["quality_snr"] for s, r in zip(scored, rows) if r["start"] >= 1.0]
     assert min(noisy) - max(clean) >= 0.3
 
 
-def test_clipping_detected() -> None:
-    """Hard-clipped audio yields higher quality_clip than clean audio."""
-    clean = _white_noise(1.0, amp=0.2)
-    clipped = np.clip(_white_noise(1.0, amp=2.0), -1.0, 1.0)  # hard clipping plateaus at ±1
-    grid = BucketGrid(win_length=0.5, hop_length=0.5)
-    r_clean = harvest_quality_scores(audio=_audio(clean), brouhaha=None, grid=grid)
-    r_clip = harvest_quality_scores(audio=_audio(clipped), brouhaha=None, grid=grid)
-    assert max(r["quality_clip"] for r in r_clip) > max(r["quality_clip"] for r in r_clean)
+def test_l2_reverb_and_bandwidth_degradation() -> None:
+    """C50 and roll-off map to degradation only at L2, using their own anchors."""
+    assert reverb_degradation(59.8) == pytest.approx(0.0)
+    assert reverb_degradation(-5.0) == pytest.approx(1.0)
+    assert bandwidth_degradation(7600.0, sampling_rate=SR) < 0.1  # near Nyquist
+    assert bandwidth_degradation(3400.0, sampling_rate=SR) > 0.5  # telephone band
+    assert bandwidth_degradation(None, sampling_rate=SR) is None
 
 
-def test_bandwidth_full_vs_bandlimited() -> None:
-    """A band-limited signal reports higher quality_bandwidth than full-band noise."""
-    grid = BucketGrid(win_length=0.5, hop_length=0.5)
-    full = harvest_quality_scores(audio=_audio(_white_noise(1.5)), brouhaha=None, grid=grid)
-    band = harvest_quality_scores(audio=_audio(_lowpass_tones(1.5)), brouhaha=None, grid=grid)
-    full_bw = np.nanmean([r["quality_bandwidth"] for r in full if r["quality_bandwidth"] is not None])
-    band_bw = np.nanmean([r["quality_bandwidth"] for r in band if r["quality_bandwidth"] is not None])
-    assert band_bw > full_bw
-    assert band_bw > 0.5  # strongly band-limited
+def test_l2_calibration_profile_overrides_anchors() -> None:
+    """The anchors are calibration, so a fitted profile replaces them at L2."""
+    assert snr_degradation(70.0, clean_db=80.0, floor_db=60.0) == pytest.approx(0.5)
+    row = {"snr_brouhaha_db": 70.0, "c50_brouhaha_db": None, "rolloff_95_hz": None, "proportion_clipped": None}
+    scored = scene_degradation(row, sampling_rate=SR, calibration={"snr_clean_db": 80.0, "snr_floor_db": 60.0})
+    assert scored["quality_snr"] == pytest.approx(0.5)
 
 
-def test_quality_uncertainty_rises_on_estimator_disagreement() -> None:
-    """FR-005: divergent SNR estimators → higher quality_uncertainty."""
-    audio = _audio(_white_noise(1.0, amp=0.15))
-    grid = BucketGrid(win_length=0.5, hop_length=0.5)
-    agree = harvest_quality_scores(audio=audio, brouhaha=_const_brouhaha(1.0, snr_db=6.0, c50_db=20.0), grid=grid)
-    disagree = harvest_quality_scores(audio=audio, brouhaha=_const_brouhaha(1.0, snr_db=60.0, c50_db=20.0), grid=grid)
-    au = np.nanmean([r["quality_uncertainty"] for r in agree if r["quality_uncertainty"] is not None])
-    du = np.nanmean([r["quality_uncertainty"] for r in disagree if r["quality_uncertainty"] is not None])
-    assert du > au
+def test_l2_scores_stay_in_unit_range() -> None:
+    """Every non-null L2 score is a bounded degradation score."""
+    rows = _rows(_audio(_white_noise(2.0)), _const_brouhaha(2.0, 20.0, 25.0))
+    for r in rows:
+        scored = scene_degradation(r, sampling_rate=SR)
+        assert scored["snr_source"] == "snr_brouhaha_db"  # attribution, not a score
+        for key, v in scored.items():
+            if key == "snr_source":
+                continue
+            assert v is None or 0.0 <= v <= 1.0, f"{key}={v} out of range"
 
 
-def test_null_safe_without_brouhaha() -> None:
-    """FR-023 / T010: no Brouhaha → reverb null, but snr (DSP) and bandwidth still computed."""
-    rows = harvest_quality_scores(
-        audio=_audio(_white_noise(1.0)),
-        brouhaha=None,
-        grid=BucketGrid(win_length=0.5, hop_length=0.5),
-    )
-    assert rows
-    assert all(r["quality_reverb"] is None for r in rows)
-    assert any(r["quality_snr"] is not None for r in rows)
-    assert any(r["quality_bandwidth"] is not None for r in rows)
+def test_l2_null_measurement_yields_null_score() -> None:
+    """A missing measurement stays missing — it must not become a confident 0.0."""
+    row = {"snr_brouhaha_db": None, "c50_brouhaha_db": None, "rolloff_95_hz": None, "proportion_clipped": None}
+    scored = scene_degradation(row, sampling_rate=SR)
+    assert all(v is None for v in scored.values())
+
+
+# ── Brouhaha extractor plumbing ──────────────────────────────────────────────
 
 
 def test_brouhaha_null_safe_when_venv_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -149,9 +252,6 @@ def test_brouhaha_null_safe_when_venv_unavailable(monkeypatch: pytest.MonkeyPatc
 
 def test_brouhaha_assembles_frames_from_worker_output(monkeypatch: pytest.MonkeyPatch, tmp_path: object) -> None:
     """The subprocess results (per-chunk .npy) are loaded + stitched into BrouhahaFrames."""
-    import numpy as np
-
-    # Fake the venv + worker: write one chunk .npy and return a matching result.
     npy = tmp_path / "chunk_0_0.npy"  # type: ignore[operator]
     frames = np.stack([np.full(50, 0.9), np.full(50, 22.0), np.full(50, 27.0)], axis=1)  # (50, 3)
     np.save(npy, frames)
@@ -171,18 +271,3 @@ def test_brouhaha_assembles_frames_from_worker_output(monkeypatch: pytest.Monkey
     assert bf is not None
     assert abs(bf.frame_hop_s - 0.02) < 1e-9
     assert np.allclose(bf.vad, 0.9) and np.allclose(bf.snr_db, 22.0) and np.allclose(bf.c50_db, 27.0)
-
-
-def test_silence_bucket_yields_null_quality() -> None:
-    """Silent buckets report null signal-dependent quality (spec edge case)."""
-    silence = np.zeros(int(1.0 * SR))
-    rows = harvest_quality_scores(
-        audio=_audio(silence),
-        brouhaha=_const_brouhaha(1.0, 20.0, 20.0),
-        grid=BucketGrid(win_length=0.5, hop_length=0.5),
-    )
-    assert rows
-    for r in rows:
-        assert r["quality_snr"] is None
-        assert r["quality_reverb"] is None
-        assert r["quality_bandwidth"] is None
