@@ -218,6 +218,7 @@ def build_l1_signal_plot(
     sampling_rate: int = 16000,
     series: Mapping[str, tuple[Sequence[float], Sequence[float]]] | None = None,
     words_by_model: Mapping[str, Sequence[Mapping[str, object]]] | None = None,
+    speakers_by_model: Mapping[str, Sequence[tuple[float, float, str]]] | None = None,
     scene_by_classifier: Mapping[str, Sequence[Mapping[str, object]]] | None = None,
     failed: Sequence[str] = (),
     title: str | None = None,
@@ -237,6 +238,9 @@ def build_l1_signal_plot(
         words_by_model: ``{asr_model → aligned words}``. Drawn *inside* that model's own row —
             a shared words row collided every token into an unreadable smear and, worse,
             attributed a transcript to no model in particular.
+        speakers_by_model: ``{diar_model → [(start, end, cluster_id)]}``. Each cluster gets
+            its own colour: a flat row makes a two-speaker conversation look identical to a
+            one-speaker one, which is exactly what the identity axis is arguing about.
         scene_by_classifier: ``{classifier → windows}`` as stacked category shares.
         failed: Signals that ran and errored. They keep a row, marked as failed: omitting them
             makes a failure indistinguishable from a signal that was never configured.
@@ -255,11 +259,16 @@ def build_l1_signal_plot(
 
     series = dict(series or {})
     words_by_model = dict(words_by_model or {})
+    speakers_by_model = dict(speakers_by_model or {})
+    # One stable colour per cluster across every row, so the same speaker reads the same way
+    # in each diarizer's row — the comparison the figure exists to support.
+    cluster_ids = sorted({c for spans in speakers_by_model.values() for _s, _e, c in spans})
+    cluster_colour = {cluster: plt.get_cmap("tab10")(i % 10) for i, cluster in enumerate(cluster_ids)}
     scene = dict(scene_by_classifier or {})
 
     # Build the row plan: (kind, name) in group order, so like sits with like.
     plan: list[tuple[str, str]] = []
-    named = set(signals) | set(series) | set(scene) | set(failed)
+    named = set(signals) | set(series) | set(scene) | set(failed) | set(speakers_by_model)
     for kind, _label in SIGNAL_GROUPS:
         for name in sorted(n for n in named if classify_signal(n) == kind):
             plan.append((kind, name))
@@ -344,6 +353,16 @@ def build_l1_signal_plot(
                 clip_on=True,
             )
 
+    if cluster_ids:
+        from matplotlib.patches import Patch
+
+        fig.legend(
+            handles=[Patch(color=cluster_colour[c], label=c) for c in cluster_ids],
+            loc="lower right",
+            ncol=min(8, len(cluster_ids)),
+            fontsize=6,
+            frameon=False,
+        )
     flat[-1].set_xlabel("time (s)")
     fig.suptitle(title or "L1 signals (evidence)", fontsize=10)
     fig.tight_layout()

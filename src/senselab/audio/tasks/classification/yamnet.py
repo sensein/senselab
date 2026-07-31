@@ -73,6 +73,10 @@ import json
 import sys
 
 try:
+    import os
+    import pathlib
+    import shutil
+
     import numpy as np
     import soundfile as sf
     import tensorflow_hub as hub
@@ -81,8 +85,36 @@ try:
     audio_paths = args["audio_paths"]
     top_k = args.get("top_k", 5)
 
-    # Load YAMNet
-    model = hub.load("https://tfhub.dev/google/yamnet/1")
+    # Load YAMNet.
+    #
+    # The TF-Hub cache defaults to $TMPDIR, which is wrong twice over: it is discarded between
+    # reboots so the model is re-fetched, and a partially-written entry is reused forever
+    # because TF-Hub only checks that the directory exists. That second failure is not
+    # hypothetical — it took YAMNet out of a real run with
+    # "contains neither 'saved_model.pb' nor 'saved_model.pbtxt'", leaving the axis a signal
+    # short with no indication the cause was a corrupt download rather than the audio.
+    _HUB_URL = "https://tfhub.dev/google/yamnet/1"
+    cache_root = pathlib.Path(
+        os.environ.get("SENSELAB_TFHUB_CACHE")
+        or (pathlib.Path.home() / ".cache" / "senselab" / "tfhub")
+    )
+    cache_root.mkdir(parents=True, exist_ok=True)
+    os.environ["TFHUB_CACHE_DIR"] = str(cache_root)
+
+    def _load_yamnet():
+        try:
+            return hub.load(_HUB_URL)
+        except (ValueError, OSError) as exc:
+            # A corrupt entry must be a cache miss, not a permanent failure. Discard the
+            # incomplete directory and fetch once more; a second failure is real.
+            if "saved_model" not in str(exc):
+                raise
+            for stale in cache_root.iterdir():
+                if stale.is_dir() and not any(stale.glob("saved_model.pb*")):
+                    shutil.rmtree(stale, ignore_errors=True)
+            return hub.load(_HUB_URL)
+
+    model = _load_yamnet()
 
     # Load class names from the model's assets
     import csv
