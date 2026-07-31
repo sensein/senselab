@@ -104,3 +104,51 @@ def test_a_conversation_no_longer_collapses_to_one_region() -> None:
         buckets.append(_b(i * 0.5, 0.95 if speaking else 0.02, unc=0.05, nontarget=0.7))
     mask = build_mask(buckets, "speech", profile=PROFILE)
     assert len(mask.regions) > 1
+
+
+# ── heterogeneous evidence is not disagreement ─────────────────────────
+
+
+def test_a_silent_breath_detector_during_speech_is_not_disagreement() -> None:
+    """The cause of the useless mask, one level up from the state machine.
+
+    For a speech task the target types are speech, breath and mouth noise, and each has its
+    own detector. During ordinary speech the breath detector correctly scores ~0 — it is
+    answering a different question, not contradicting the speech detector. Treating the gap
+    between them as uncertainty put 0.9997 on every bucket of a 21.5 s conversation, which
+    left the whole file unusable.
+
+    Because the sources combine by maximum — any one of them establishes target activity —
+    confidence far above the threshold means the verdict is not in doubt, whatever the others
+    say about their own event types.
+    """
+    from senselab.audio.workflows.audio_analysis.background_mask import combine_target_evidence
+
+    row = combine_target_evidence(0.0, 0.5, [0.99, 0.0], active_at=0.6, free_at=0.2)
+    assert row["target_confidence"] == pytest.approx(0.99)
+    assert row["uncertainty"] < 0.2
+
+
+def test_evidence_near_the_threshold_is_genuinely_uncertain() -> None:
+    """The honest case the change must not flatten: a decision that could go either way."""
+    from senselab.audio.workflows.audio_analysis.background_mask import combine_target_evidence
+
+    row = combine_target_evidence(0.0, 0.5, [0.55, 0.5], active_at=0.6, free_at=0.2)
+    assert row["uncertainty"] > 0.5
+
+
+def test_confidently_absent_evidence_is_also_certain() -> None:
+    """Both ends of the decision can be confident; only the middle is doubtful."""
+    from senselab.audio.workflows.audio_analysis.background_mask import combine_target_evidence
+
+    row = combine_target_evidence(0.0, 0.5, [0.01, 0.0], active_at=0.6, free_at=0.2)
+    assert row["target_confidence"] == pytest.approx(0.01)
+    assert row["uncertainty"] < 0.2
+
+
+def test_no_evidence_at_all_is_maximally_uncertain() -> None:
+    """Absent evidence must not read as a confident "nothing here"."""
+    from senselab.audio.workflows.audio_analysis.background_mask import combine_target_evidence
+
+    row = combine_target_evidence(0.0, 0.5, [], active_at=0.6, free_at=0.2)
+    assert row["uncertainty"] == pytest.approx(1.0)
