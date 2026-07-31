@@ -27,6 +27,8 @@ from typing import Mapping, Sequence
 import numpy as np
 
 __all__ = [
+    "classify_signal",
+    "SIGNAL_GROUPS",
     "DBFS_FLOOR",
     "build_l1_signal_plot",
     "rms_dbfs_track",
@@ -159,6 +161,54 @@ def scene_composition(
     return times, shares
 
 
+SIGNAL_GROUPS: tuple[tuple[str, str], ...] = (
+    ("frame", "frame posteriors"),
+    ("acoustic", "acoustic proxies"),
+    ("scene", "scene classifiers"),
+    ("diarization", "diarization"),
+    ("asr", "ASR"),
+    ("other", "other"),
+)
+"""Display order, grouped by what kind of evidence a signal is.
+
+Alphabetical order interleaved a frame VAD, an acoustic proxy and a diarizer, which made the
+figure unreadable: every row looked identical, so a reader could not tell what kind of claim
+any of them was making. Grouping is what lets the eye compare like with like."""
+
+_ROW_HEIGHT = {
+    "spectrogram": 3.0,
+    "scene": 1.4,
+    "asr": 1.6,
+    "frame": 1.2,
+    "acoustic": 1.0,
+    "diarization": 0.9,
+    "level": 1.2,
+    "other": 0.9,
+}
+"""Relative row heights. A uniform height gave a binary on/off row the same space as a
+spectrogram, which wastes the figure on the rows carrying least information."""
+
+
+def classify_signal(name: str) -> str:
+    """Group a signal name by the kind of evidence it is.
+
+    Read from the naming the harvester already uses rather than a hand-maintained list, so a
+    new voter lands in the right group without a second place to update.
+    """
+    text = str(name)
+    if text.startswith("frame_"):
+        return "frame"
+    if text.startswith("acoustic_"):
+        return "acoustic"
+    if text in ("ast", "yamnet") or text.startswith("scene"):
+        return "scene"
+    if "diar" in text or text.startswith("pyannote") or text.startswith("embedding_silhouette"):
+        return "diarization"
+    if any(tag in text.lower() for tag in ("whisper", "canary", "qwen", "asr", "granite")):
+        return "asr"
+    return "other"
+
+
 def build_l1_signal_plot(
     out_dir: Path | str,
     *,
@@ -166,23 +216,30 @@ def build_l1_signal_plot(
     duration_s: float,
     waveform: np.ndarray | None = None,
     sampling_rate: int = 16000,
-    words: Sequence[Mapping[str, object]] | None = None,
+    series: Mapping[str, tuple[Sequence[float], Sequence[float]]] | None = None,
+    words_by_model: Mapping[str, Sequence[Mapping[str, object]]] | None = None,
     scene_by_classifier: Mapping[str, Sequence[Mapping[str, object]]] | None = None,
+    failed: Sequence[str] = (),
     title: str | None = None,
 ) -> Path:
-    """Draw one row per L1 signal plus a dBFS level row, and save under ``L1/signals.png``.
+    """Draw the L1 evidence figure: grouped rows, each in the display type its data warrants.
 
     Args:
         out_dir: Run directory.
-        signals: ``{signal → [(start, end), ...]}`` spans the signal reported.
-        duration_s: Recording length, so empty rows still span the figure.
-        waveform: Mono samples for the spectrogram and level rows, or ``None`` to omit them.
+        signals: ``{signal → spans}`` for signals whose claim is on/off.
+        duration_s: Recording length.
+        waveform: Mono samples for the spectrogram and level rows.
         sampling_rate: Sample rate of ``waveform``.
-        words: Aligned words (``start``, ``end``, ``text``) drawn as a transcript row, so a
-            disagreement can be read against what was actually said there.
-        scene_by_classifier: ``{classifier → windows}`` drawn as stacked category shares, one
-            row per classifier — AST and YAMNet disagree often enough that a merged row would
-            hide which of them saw what.
+        series: ``{signal → (times, values)}`` for signals that report a continuous
+            confidence. Plotted as a trace: rendering a frame posterior as an on/off bar
+            discards everything it measured, which is why both VAD rows previously drew as
+            solid full-width blocks.
+        words_by_model: ``{asr_model → aligned words}``. Drawn *inside* that model's own row —
+            a shared words row collided every token into an unreadable smear and, worse,
+            attributed a transcript to no model in particular.
+        scene_by_classifier: ``{classifier → windows}`` as stacked category shares.
+        failed: Signals that ran and errored. They keep a row, marked as failed: omitting them
+            makes a failure indistinguishable from a signal that was never configured.
         title: Figure title.
 
     Returns:
@@ -196,80 +253,96 @@ def build_l1_signal_plot(
 
     from senselab.audio.workflows.audio_analysis.layout import evidence_dir
 
-    names = sorted(signals)
-    scene_names = sorted(scene_by_classifier or {})
-    n_rows = (
-        len(names) + len(scene_names) + (1 if words else 0) + (2 if waveform is not None else 0)  # spectrogram + level
+    series = dict(series or {})
+    words_by_model = dict(words_by_model or {})
+    scene = dict(scene_by_classifier or {})
+
+    # Build the row plan: (kind, name) in group order, so like sits with like.
+    plan: list[tuple[str, str]] = []
+    named = set(signals) | set(series) | set(scene) | set(failed)
+    for kind, _label in SIGNAL_GROUPS:
+        for name in sorted(n for n in named if classify_signal(n) == kind):
+            plan.append((kind, name))
+    if waveform is not None:
+        plan.append(("spectrogram", "spectrogram"))
+        plan.append(("level", "RMS dBFS"))
+
+    heights = [_ROW_HEIGHT.get(kind, 1.0) for kind, _n in plan]
+    fig, axs = plt.subplots(
+        len(plan),
+        1,
+        figsize=(15, 0.42 * sum(heights) + 1.2),
+        sharex=True,
+        squeeze=False,
+        gridspec_kw={"height_ratios": heights},
     )
-    height = max(2.0, 0.45 * max(1, n_rows) + 1.2)
-    fig, axes = plt.subplots(max(1, n_rows), 1, figsize=(14, height), sharex=True, squeeze=False)
-    flat = [ax for (ax,) in axes]
+    flat = [ax for (ax,) in axs]
 
-    for ax, name in zip(flat, names):
-        ax.set_ylabel(name[:34], rotation=0, ha="right", va="center", fontsize=7)
+    for ax, (kind, name) in zip(flat, plan):
         ax.set_xlim(0, max(duration_s, 1e-6))
-        ax.set_ylim(0, 1)
         ax.set_yticks([])
-        for start, end in signals[name] or ():
-            ax.add_patch(Rectangle((float(start), 0.1), max(1e-3, float(end) - float(start)), 0.8, color="#3b6ea5"))
+        ax.set_ylabel(f"{name[:40]}\n[{kind}]", rotation=0, ha="right", va="center", fontsize=6)
 
-    row = len(names)
-    for classifier in scene_names:
-        ax = flat[row]
-        row += 1
-        ax.set_ylabel(f"scene\n{classifier}", rotation=0, ha="right", va="center", fontsize=7)
-        ax.set_xlim(0, max(duration_s, 1e-6))
-        times, shares = scene_composition(scene_by_classifier[classifier], duration_s=duration_s)
-        if shares.size:
-            ax.stackplot(times, shares, linewidth=0)
+        if name in failed:
             ax.set_ylim(0, 1)
-        ax.set_yticks([])
+            ax.text(0.5, 0.5, "failed", transform=ax.transAxes, ha="center", va="center", fontsize=7, color="#aa3333")
+            continue
 
-    if words:
-        ax = flat[row]
-        row += 1
-        ax.set_ylabel("words", rotation=0, ha="right", va="center", fontsize=7)
-        ax.set_xlim(0, max(duration_s, 1e-6))
+        if kind == "spectrogram":
+            spec, s_times, s_freqs = spectrogram_db(waveform, sampling_rate)
+            ax.imshow(
+                spec,
+                origin="lower",
+                aspect="auto",
+                cmap="magma",
+                extent=(0.0, float(s_times[-1] if s_times.size else duration_s), 0.0, float(s_freqs[-1])),
+            )
+            continue
+
+        if kind == "level":
+            times, levels = rms_dbfs_track(waveform, sampling_rate)
+            if times.size:
+                ax.plot(times, levels, linewidth=0.7, color="#333333")
+                ax.set_ylim(DBFS_FLOOR, 3.0)
+                ax.set_yticks([DBFS_FLOOR, 0])
+                ax.tick_params(labelsize=5)
+            ax.grid(True, axis="y", alpha=0.25)
+            continue
+
+        if kind == "scene" and name in scene:
+            times, shares = scene_composition(scene[name], duration_s=duration_s)
+            if shares.size:
+                ax.stackplot(times, shares, linewidth=0)
+                ax.set_ylim(0, 1)
+            continue
+
+        if name in series:
+            times, values = series[name]
+            ax.plot(np.asarray(times, dtype=float), np.asarray(values, dtype=float), linewidth=0.7, color="#1f6f4a")
+            ax.set_ylim(0, 1.02)
+            ax.set_yticks([0, 1])
+            ax.tick_params(labelsize=5)
+            ax.grid(True, axis="y", alpha=0.2)
+            continue
+
+        # Binary spans.
         ax.set_ylim(0, 1)
-        ax.set_yticks([])
-        for word in words:
-            start = float(word.get("start", 0.0) or 0.0)
-            end = float(word.get("end", start) or start)
+        for start, end in signals.get(name) or ():
+            ax.add_patch(Rectangle((float(start), 0.15), max(1e-3, float(end) - float(start)), 0.7, color="#3b6ea5"))
+        # ASR words go in the model's own row, so a transcript is attributed to who produced it.
+        for word in words_by_model.get(name) or ():
+            w_start = float(word.get("start", 0.0) or 0.0)
+            w_end = float(word.get("end", w_start) or w_start)
             ax.text(
-                (start + end) / 2.0,
+                (w_start + w_end) / 2.0,
                 0.5,
                 str(word.get("text") or ""),
                 ha="center",
                 va="center",
-                fontsize=6,
-                rotation=0,
+                fontsize=4.5,
+                color="white",
                 clip_on=True,
             )
-            ax.axvline(start, color="#bbbbbb", linewidth=0.3)
-
-    if waveform is not None:
-        ax = flat[row]
-        row += 1
-        spec, s_times, s_freqs = spectrogram_db(waveform, sampling_rate)
-        ax.set_ylabel("spectrogram", rotation=0, ha="right", va="center", fontsize=7)
-        ax.imshow(
-            spec,
-            origin="lower",
-            aspect="auto",
-            extent=(0.0, float(s_times[-1] if s_times.size else duration_s), 0.0, float(s_freqs[-1])),
-            cmap="magma",
-        )
-        ax.set_xlim(0, max(duration_s, 1e-6))
-        ax.set_yticks([])
-
-        ax = flat[-1]
-        times, levels = rms_dbfs_track(waveform, sampling_rate)
-        ax.set_ylabel("RMS\ndBFS", rotation=0, ha="right", va="center", fontsize=7)
-        ax.set_xlim(0, max(duration_s, 1e-6))
-        if times.size:
-            ax.plot(times, levels, linewidth=0.7, color="#333333")
-            ax.set_ylim(DBFS_FLOOR, 3.0)
-        ax.grid(True, axis="y", alpha=0.25)
 
     flat[-1].set_xlabel("time (s)")
     fig.suptitle(title or "L1 signals (evidence)", fontsize=10)
@@ -278,6 +351,6 @@ def build_l1_signal_plot(
     dest = evidence_dir(out_dir)
     dest.mkdir(parents=True, exist_ok=True)
     path = dest / "signals.png"
-    fig.savefig(path, dpi=110)
+    fig.savefig(path, dpi=120)
     plt.close(fig)
     return path
