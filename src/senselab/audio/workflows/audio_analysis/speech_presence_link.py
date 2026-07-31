@@ -52,6 +52,7 @@ __all__ = [
     "link_speech_presence",
     "policy_from_params",
     "votes_for_harvest",
+    "derive_window_clusters",
 ]
 
 AsrConfidencePooling = Literal["mean_of_exp", "exp_of_mean"]
@@ -303,6 +304,93 @@ def _link_silhouette(ev: Mapping[str, Any], policy: SpeechPresencePolicy) -> dic
     return {"speaks": speaks, "native_confidence": confidence}
 
 
+def derive_window_clusters(
+    per_window_embeddings: Mapping[str, Sequence[Any]] | None,
+) -> dict[str, Any] | None:
+    """Cluster one pass's windowed speaker embeddings — an L2 derivation over L1 vectors.
+
+    L1 measures embedding *vectors*; whether they form coherent speaker clusters is a conclusion
+    about the pass, needs every window at once, and is exactly the kind of judgement that belongs
+    here (D-7). It used to run inside the harvester, which meant the only thing surviving to L2 was
+    a thresholded ``speaks``.
+
+    The full clustering result is returned rather than only the per-window voice score, because the
+    same computation answers a second question: ``labels`` assigns each window to a cluster, which
+    is what a later stage needs to assign and re-assign speaker labels. Recomputing it there would
+    risk two stages disagreeing about the clustering they are each reasoning over.
+
+    Args:
+        per_window_embeddings: ``{embedding_model → [WindowEmbedding]}``.
+
+    Returns:
+        ``{"model", "windows", "clusters"}`` for the first embedding model (alphabetically) with
+        usable windows, or ``None`` when none produced a clustering. Alphabetical rather than
+        merged: running every model would be a vote of voters inside one signal class, which is the
+        aggregator's job, not this function's.
+    """
+    if not per_window_embeddings:
+        return None
+    from senselab.audio.workflows.audio_analysis.embeddings import cluster_pass_speakers
+
+    for model in sorted(per_window_embeddings):
+        entries = list(per_window_embeddings.get(model) or [])
+        if not entries:
+            continue
+        clusters = cluster_pass_speakers(entries)
+        if clusters is not None:
+            return {"model": str(model), "windows": entries, "clusters": clusters}
+    return None
+
+
+def _silhouette_votes_by_bucket(
+    rows: Sequence[Mapping[str, Any]],
+    derived: Mapping[str, Any],
+    policy: SpeechPresencePolicy,
+) -> dict[int, dict[str, Any]]:
+    """Match each reporting bucket to its nearest embedding window and build its vote.
+
+    Nearest-centre rather than overlap because the embedding window (2 s by default) is usually
+    wider than the bucket, so several buckets legitimately share one window's answer. The window's
+    width rides along as ``native_window_s`` so the coarseness is visible to the demotion rule
+    rather than assumed away.
+    """
+    windows = list(derived.get("windows") or [])
+    clusters = derived.get("clusters") or {}
+    p_voice = clusters.get("p_voice") or {}
+    labels = clusters.get("labels") or {}
+    if not windows or not p_voice:
+        return {}
+    centres = [0.5 * (float(w.start_s) + float(w.end_s)) for w in windows]
+    out: dict[int, dict[str, Any]] = {}
+    for row_idx, row in enumerate(rows):
+        start, end = _finite(row.get("start")), _finite(row.get("end"))
+        if start is None or end is None:
+            continue
+        centre = 0.5 * (start + end)
+        best = min(range(len(centres)), key=lambda i: abs(centres[i] - centre))
+        if best not in p_voice:
+            continue
+        window = windows[best]
+        score = _finite(p_voice[best])
+        if score is None:
+            continue
+        speaks, confidence = _directed(score)
+        vote: dict[str, Any] = {
+            "silhouette": score,
+            "speaks": speaks,
+            "native_confidence": confidence,
+            "units": "coefficient",
+            "native_window_s": float(window.end_s) - float(window.start_s),
+            "embedding_model": derived.get("model"),
+        }
+        # Which cluster the window landed in — the half of this computation that assigns labels
+        # rather than scoring voicing. Carried so a later stage can reassign without re-clustering.
+        if best in labels:
+            vote["cluster_id"] = labels[best]
+        out[row_idx] = vote
+    return out
+
+
 _SUFFIX_RULES = (("::no_speech_prob", _link_no_speech_prob),)
 
 _EXACT_RULES = {
@@ -360,6 +448,7 @@ def link_speech_presence(
     *,
     policy: SpeechPresencePolicy = DEFAULT_POLICY,
     reporting_win_s: float | None = None,
+    per_window_embeddings: Mapping[str, Sequence[Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Turn L1 speech-presence evidence rows into vote rows the aggregator can fold.
 
@@ -369,6 +458,10 @@ def link_speech_presence(
         policy: The interpretations to apply. Defaults to the documented anchors.
         reporting_win_s: Width of the reporting bucket, needed to decide which voters are coarse
             relative to it. Omit to skip demotion entirely.
+        per_window_embeddings: L1 embedding vectors per window. When given, the
+            ``embedding_silhouette`` signal is *derived here* (see :func:`derive_window_clusters`)
+            and appears only in the votes — it is a conclusion about the pass, never an L1
+            measurement of a bucket. Omit and the signal is simply absent.
 
     Returns:
         Per-bucket ``{"start", "end", "votes", "frame_dispersion"}`` dicts, where each vote carries
@@ -379,8 +472,11 @@ def link_speech_presence(
     Pure — the input rows are not mutated, so the adaptive loop can re-link the same harvest under
     a different policy each round and get the same answer every time.
     """
+    derived = derive_window_clusters(per_window_embeddings)
+    silhouette_votes = _silhouette_votes_by_bucket(rows or [], derived, policy) if derived else {}
+
     out: list[dict[str, Any]] = []
-    for row in rows or []:
+    for row_idx, row in enumerate(rows or []):
         evidence = row.get("evidence") or {}
         votes: dict[str, dict[str, Any]] = {}
         for name, ev in evidence.items():
@@ -398,6 +494,11 @@ def link_speech_presence(
             if _is_coarse(ev, reporting_win_s, policy):
                 vote["weight"] = policy.coarse_voter_weight
             votes[str(name)] = vote
+        silhouette = silhouette_votes.get(row_idx)
+        if silhouette is not None:
+            if _is_coarse(silhouette, reporting_win_s, policy):
+                silhouette = {**silhouette, "weight": policy.coarse_voter_weight}
+            votes["embedding_silhouette"] = silhouette
         out.append(
             {
                 "start": row.get("start"),
@@ -428,4 +529,5 @@ def votes_for_harvest(
         getattr(harvest, "speech_presence_evidence", None) or [],
         policy=policy,
         reporting_win_s=(grids.get("speech_presence") or {}).get("win_length"),
+        per_window_embeddings=getattr(harvest, "per_window_embeddings", None),
     )

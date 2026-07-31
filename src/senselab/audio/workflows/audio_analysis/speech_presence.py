@@ -30,15 +30,15 @@ What each signal contributes, and what the measurement is:
   over the bucket's frames, plus its dispersion and frame count. Not a count of frames whose
   argmax is not ``<silent>``: that collapses each frame's distribution to a hard verdict, the same
   reduction the scene-classifier top-1 made.
-- **Windowed speaker embeddings** — ``silhouette``, how well a window sits inside a coherent
-  speaker cluster.
 - **Frame posteriors** (``segmentation-3.0`` raw scores, Brouhaha's VAD head) — ``frame_mean``,
   ``frame_std``, ``n_frames``, and the per-speaker ``channel_means`` / ``channel_labels`` kept
   intact (D-5), plus the declared ``resolution_s`` and ``native_window_s``.
 
-One reduction remains here and is an open register item: ``embedding_silhouette`` (12) still
-clusters at L1 rather than emitting the embedding vectors. It is a derived signal per D-7 and moves
-once ``PassHarvest`` carries the per-window embeddings.
+Windowed speaker embeddings are **not** read here. Clustering them is a derived signal per D-7 —
+it needs the whole pass, and its output (per-window silhouette and cluster label) is a conclusion
+about speaker structure rather than a measurement of this bucket. The vectors travel on
+``PassHarvest.per_window_embeddings`` and ``speech_presence_link.derive_window_clusters`` clusters
+them at L2.
 """
 
 from __future__ import annotations
@@ -152,7 +152,6 @@ def harvest_speech_presence_evidence(
     grid: BucketGrid,
     speech_presence_labels: list[str],
     alignment_by_model: dict[str, Any],
-    per_window_embeddings: dict[str, list[Any]] | None = None,
     frame_posteriors: dict[str, "FramePosterior"] | None = None,
     waveform: "np.ndarray | None" = None,
     sampling_rate: int | None = None,
@@ -171,7 +170,6 @@ def harvest_speech_presence_evidence(
         speech_presence_labels: AudioSet labels whose score mass counts as speech.
         alignment_by_model: Per-ASR-model alignment blocks, used to recover timestamps for
             text-only backends.
-        per_window_embeddings: Windowed speaker embeddings, enabling the silhouette signal.
         frame_posteriors: Signal name → continuous per-frame posteriors.
         waveform: Pass audio, enabling the two absolute-scale acoustic signals. Both are
             whole-recording measurements — the noise floor is a percentile over the whole
@@ -257,28 +255,6 @@ def harvest_speech_presence_evidence(
                 file=_sys.stderr,
             )
             ppg_silence, ppg_frame_hop = np.empty(0), 0.0
-
-    # Embedding-cluster silhouette. Cluster the windowed embeddings; each window's silhouette
-    # coefficient measures how well it fits inside one of the clusters. Voice from a coherent
-    # speaker sits firmly inside a cluster; silence or noise lacks the inter-cluster structure.
-    # This avoids the previous "embedding norm vs median" heuristic, which is dominated by
-    # phonetic content rather than voicing. We use whichever embedding model is alphabetically
-    # first (typically ECAPA before ResNet); running all of them would amount to a vote of voters
-    # within one signal class — leave that to the aggregator if a future caller wants it.
-    silhouette_scores: dict[int, float] = {}
-    silhouette_windows: list[Any] = []
-    if per_window_embeddings:
-        from senselab.audio.workflows.audio_analysis.embeddings import silhouette_voice_score
-
-        for emb_model in sorted(per_window_embeddings):
-            entries = per_window_embeddings.get(emb_model) or []
-            if not entries:
-                continue
-            scores = silhouette_voice_score(entries)
-            if scores is not None:
-                silhouette_scores = scores
-                silhouette_windows = entries
-                break
 
     # One pass over the waveform for each absolute acoustic track, before the bucket loop: both are
     # whole-recording measurements (the floor estimate needs the whole distribution).
@@ -385,24 +361,6 @@ def harvest_speech_presence_evidence(
                     "n_frames": int(window.size),
                     "units": "probability",
                     "resolution_s": ppg_frame_hop,
-                }
-
-        # ── Embedding silhouette (register item 12: still clustered at L1) ─
-        if silhouette_scores and silhouette_windows:
-            best_idx: int | None = None
-            best_dist = float("inf")
-            for i, w in enumerate(silhouette_windows):
-                wc = 0.5 * (float(w.start_s) + float(w.end_s))
-                d = abs(wc - bucket_center)
-                if d < best_dist:
-                    best_dist = d
-                    best_idx = i
-            if best_idx is not None and best_idx in silhouette_scores:
-                window = silhouette_windows[best_idx]
-                evidence["embedding_silhouette"] = {
-                    "silhouette": silhouette_scores[best_idx],
-                    "units": "coefficient",
-                    "native_window_s": float(window.end_s) - float(window.start_s),
                 }
 
         # ── Frame posteriors (segmentation-3.0, Brouhaha VAD) ────────────

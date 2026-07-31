@@ -347,3 +347,81 @@ def test_ppg_vote_absent_without_a_posterior() -> None:
     """A bucket with no PPG frames drops the signal rather than voting from nothing."""
     rows = [_bucket({"ppg_voice_fraction": {"n_frames": 0}})]
     assert "ppg_voice_fraction" not in link_speech_presence(rows)[0]["votes"]
+
+
+# ── register item 12: clustering is an L2 derivation over L1 vectors ─────────
+
+
+def _embedding_windows(vectors: "list[list[float]]", width_s: float = 2.0, hop_s: float = 1.0) -> list[Any]:
+    import numpy as np
+
+    from senselab.audio.workflows.audio_analysis.embeddings import WindowEmbedding
+
+    return [
+        WindowEmbedding(start_s=i * hop_s, end_s=i * hop_s + width_s, vector=np.asarray(v, dtype=np.float64))
+        for i, v in enumerate(vectors)
+    ]
+
+
+def _two_speaker_windows() -> list[Any]:
+    """Six windows in two well-separated directions — a clustering with real structure."""
+    a, b = [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]
+    return _embedding_windows([a, a, a, b, b, b])
+
+
+def test_silhouette_is_derived_at_L2_not_measured_at_L1() -> None:
+    """The harvester no longer accepts embeddings, and no evidence row carries a silhouette.
+
+    Clustering needs every window of the pass at once and yields a conclusion about speaker
+    structure, so it is a derived signal (D-7) rather than a measurement of any one bucket.
+    """
+    import inspect
+
+    from senselab.audio.workflows.audio_analysis.speech_presence import harvest_speech_presence_evidence
+
+    params = inspect.signature(harvest_speech_presence_evidence).parameters
+    assert "per_window_embeddings" not in params, "L1 must not be given the vectors to cluster"
+
+
+def test_link_derives_the_silhouette_vote_from_the_vectors() -> None:
+    """Given L1 vectors, the vote appears — and carries the score it was derived from."""
+    rows = [_bucket({}), {"start": 3.0, "end": 3.5, "evidence": {}, "frame_dispersion": None}]
+    linked = link_speech_presence(rows, per_window_embeddings={"ecapa": _two_speaker_windows()})
+    vote = linked[0]["votes"]["embedding_silhouette"]
+    assert "silhouette" in vote and 0.0 <= vote["silhouette"] <= 1.0
+    assert vote["embedding_model"] == "ecapa"
+    assert vote["native_window_s"] == pytest.approx(2.0)
+
+
+def test_silhouette_vote_carries_the_cluster_assignment() -> None:
+    """The half of the computation that assigns labels must survive, not only the voicing score.
+
+    A later stage repairs speaker labels; if it re-clustered, the two stages could disagree about
+    the structure they are each reasoning over.
+    """
+    rows = [
+        _bucket({}),
+        {"start": 4.0, "end": 4.5, "evidence": {}, "frame_dispersion": None},
+    ]
+    linked = link_speech_presence(rows, per_window_embeddings={"ecapa": _two_speaker_windows()})
+    ids = [b["votes"]["embedding_silhouette"].get("cluster_id") for b in linked]
+    assert all(i is not None for i in ids)
+    assert ids[0] != ids[1], "buckets 4 s apart sit in the two different speaker clusters"
+
+
+def test_derive_window_clusters_exposes_the_whole_result() -> None:
+    """Callers that need the clustering itself get it, rather than only the per-window score."""
+    from senselab.audio.workflows.audio_analysis.speech_presence_link import derive_window_clusters
+
+    derived = derive_window_clusters({"ecapa": _two_speaker_windows()})
+    assert derived is not None
+    assert derived["model"] == "ecapa"
+    assert set(derived["clusters"]) >= {"n_speakers", "labels", "p_voice"}
+    assert derived["clusters"]["n_speakers"] == 2
+
+
+def test_no_embeddings_means_no_silhouette_vote() -> None:
+    """Absent vectors drop the signal rather than contributing a neutral one."""
+    linked = link_speech_presence([_bucket({})])
+    assert "embedding_silhouette" not in linked[0]["votes"]
+    assert "embedding_silhouette" not in link_speech_presence([_bucket({})], per_window_embeddings={})[0]["votes"]

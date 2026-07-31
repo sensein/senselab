@@ -293,7 +293,6 @@ def harvest_pass(
         grid=pres_grid,
         speech_presence_labels=speech_presence_labels,
         alignment_by_model=align_by_model,
-        per_window_embeddings=per_window_embeddings,
         frame_posteriors=frame_voters or None,
         # Audio for the absolute acoustic signals (LUFS, level-above-floor). Both are
         # whole-recording measurements, so they cannot be recovered from the per-frame openSMILE
@@ -360,6 +359,10 @@ def harvest_pass(
         # Carried so the aggregate phase can compare a measured roll-off against Nyquist without
         # touching audio, which would break its purity guarantee.
         sampling_rate=int(per_pass_audio.sampling_rate) if per_pass_audio is not None else 16000,
+        # L1 vectors. The clustering over them is L2's (D-7), so they travel rather than their
+        # conclusion — which also lets a later stage reuse the same cluster assignment for
+        # speaker label repair instead of re-deriving one that could disagree.
+        per_window_embeddings=dict(per_window_embeddings or {}),
         provenance_extras={
             "scene_quality": scene_quality_provenance,
             "sound_sources": sound_sources_provenance,
