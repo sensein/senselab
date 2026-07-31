@@ -18,16 +18,16 @@ from senselab.audio.workflows.audio_analysis.votes import (
 def _harvest() -> PassHarvest:
     return PassHarvest(
         pass_label="raw_16k",
-        speech_presence_votes=[
+        speech_presence_evidence=[
             {  # confident speech → low uncertainty, p_voice 1.0
                 "start": 0.0,
                 "end": 0.5,
-                "votes": {"m1": {"speaks": True, "native_confidence": None}, "m2": {"speaks": True}},
+                "evidence": {"m1": {"covered_fraction": 1.0}, "m2": {"covered_fraction": 1.0}},
             },
             {  # split vote + instability → OR formula on speech_presence_uncertainty column
                 "start": 0.5,
                 "end": 1.0,
-                "votes": {"m1": {"speaks": True}, "m2": {"speaks": False}},
+                "evidence": {"m1": {"covered_fraction": 1.0}, "m2": {"covered_fraction": 0.0}},
                 "frame_dispersion": 0.5,
             },
         ],
@@ -151,9 +151,9 @@ def _coupling_harvest(
             }
     return PassHarvest(
         pass_label="raw_16k",
-        speech_presence_votes=[
-            {"start": 0.0, "end": 0.5, "votes": {"m1": {"speaks": True}}},
-            {"start": 0.5, "end": 1.0, "votes": {"m1": {"speaks": True}}},
+        speech_presence_evidence=[
+            {"start": 0.0, "end": 0.5, "evidence": {"m1": {"covered_fraction": 1.0}}},
+            {"start": 0.5, "end": 1.0, "evidence": {"m1": {"covered_fraction": 1.0}}},
         ],
         asr_votes=[
             {

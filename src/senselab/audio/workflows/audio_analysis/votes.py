@@ -14,7 +14,7 @@ No imports beyond stdlib + the sibling pure modules (``aggregate``, ``types``).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any, Mapping
 
 from senselab.audio.workflows.audio_analysis.aggregate import (
@@ -26,6 +26,10 @@ from senselab.audio.workflows.audio_analysis.aggregate import (
 )
 from senselab.audio.workflows.audio_analysis.degradation import scene_degradation
 from senselab.audio.workflows.audio_analysis.fuse import per_signal_uncertainty
+from senselab.audio.workflows.audio_analysis.speech_presence_link import (
+    policy_from_params,
+    votes_for_harvest,
+)
 from senselab.audio.workflows.audio_analysis.types import AxisResult, UncertaintyRow
 
 
@@ -35,8 +39,11 @@ class PassHarvest:
 
     Attributes:
         pass_label: e.g. ``"raw_16k"``.
-        speech_presence_votes: per-bucket ``{"start", "end", "votes", "frame_instability"?}``
-            dicts from ``harvest_speech_presence_votes``.
+        speech_presence_evidence: per-bucket ``{"start", "end", "evidence", "frame_dispersion"}``
+            dicts from ``harvest_speech_presence_evidence`` — **measurements, not votes**. The
+            thresholds that turn them into beliefs live in ``speech_presence_link``, so this field
+            can be re-linked under a different policy without re-running a model. Call
+            ``speech_presence_link.link_speech_presence`` to get votes from it.
         speaker_votes: per-bucket vote dicts from ``harvest_speaker_votes``.
         asr_votes: per-bucket vote dicts from ``harvest_asr_votes``.
         quality_by_bucket: speech_presence-grid bucket key → L1 scene-quality *measurements* in native
@@ -55,7 +62,7 @@ class PassHarvest:
     """
 
     pass_label: str
-    speech_presence_votes: list[dict[str, Any]] = field(default_factory=list)
+    speech_presence_evidence: list[dict[str, Any]] = field(default_factory=list)
     speaker_votes: list[dict[str, Any]] = field(default_factory=list)
     asr_votes: list[dict[str, Any]] = field(default_factory=list)
     quality_by_bucket: dict[tuple[float, float], dict[str, Any]] = field(default_factory=dict)
@@ -224,6 +231,13 @@ def aggregate_pass(
     pass_label = harvest.pass_label
     out: dict[str, AxisResult] = {}
 
+    # L1 handed over measurements; the thresholds that read them as speech are applied here, once,
+    # under a policy the run records. Re-linking is cheap dict arithmetic, so the adaptive loop can
+    # re-decide a round's beliefs from the same harvest without touching a model.
+    presence_policy = policy_from_params(params)
+    pres_grid = harvest.grids.get("speech_presence", {})
+    speech_presence_votes = votes_for_harvest(harvest, policy=presence_policy)
+
     # ── speech_presence ──
     speech_presence_rows: list[UncertaintyRow] = []
     speech_presence_pv_intervals: list[tuple[float, float, float]] = []
@@ -231,7 +245,7 @@ def aggregate_pass(
     # time overlap to build its coupling multiplier (FR-019).
     quality_intervals: list[tuple[float, float, float]] = []
     competing_intervals: list[tuple[float, float, float]] = []
-    for bucket in harvest.speech_presence_votes:
+    for bucket in speech_presence_votes:
         u = aggregate_speech_presence(bucket["votes"])
         p_v = speech_presence_p_voice(bucket["votes"])
         if u is None and not bucket["votes"]:
@@ -307,7 +321,6 @@ def aggregate_pass(
             if machine is not None or environment is not None:
                 competing_intervals.append((b_start, b_end, float(machine or 0.0) + float(environment or 0.0)))
 
-    pres_grid = harvest.grids.get("speech_presence", {})
     out["speech_presence"] = AxisResult(
         pass_label=pass_label,  # type: ignore[arg-type]
         axis="speech_presence",
@@ -317,7 +330,8 @@ def aggregate_pass(
             "pass": pass_label,
             "grid": dict(pres_grid),
             "comparator_params": params,
-            "contributing_model_set": sorted({m for b in harvest.speech_presence_votes for m in b["votes"]}),
+            "speech_presence_policy": asdict(presence_policy),
+            "contributing_model_set": sorted({m for b in speech_presence_votes for m in b["votes"]}),
             **{k: v for k, v in harvest.provenance_extras.items()},
         },
     )

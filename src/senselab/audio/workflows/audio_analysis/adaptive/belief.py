@@ -169,19 +169,24 @@ class VoteStore:
         return store
 
     @classmethod
-    def from_harvests(cls, harvests: dict[str, Any], *, round_idx: int = 1) -> "VoteStore":
+    def from_harvests(cls, harvests: dict[str, Any], *, round_idx: int = 1, policy: Any = None) -> "VoteStore":  # noqa: ANN401
         """Populate round-1 votes directly from ``compute.harvest_pass`` outputs (T009).
 
         ``harvests`` maps pass label → ``PassHarvest`` (duck-typed:
-        ``speech_presence_votes`` / ``speaker_votes`` / ``asr_votes`` bucket lists plus
+        ``speech_presence_evidence`` / ``speaker_votes`` / ``asr_votes`` bucket lists plus
         ``quality_by_bucket`` / ``source_by_bucket``). This is the in-process
         integration point for analyze_audio — no parquet round-trip; the parquet
         ingest path (:meth:`from_run_dir`) remains for artifact-driven runs.
+
+        The store holds *votes*, so the speech-presence axis is linked from its L1 measurements
+        under ``policy`` (defaults to the documented anchors) on the way in.
         """
+        from senselab.audio.workflows.audio_analysis.speech_presence_link import votes_for_harvest
+
         store = cls()
         for stream, harvest in harvests.items():
             for axis, buckets in (
-                ("speech_presence", harvest.speech_presence_votes),
+                ("speech_presence", votes_for_harvest(harvest, **({"policy": policy} if policy else {}))),
                 ("speaker", harvest.speaker_votes),
                 ("asr", harvest.asr_votes),
             ):

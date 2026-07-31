@@ -50,7 +50,11 @@ from senselab.audio.workflows.audio_analysis.reliability import (
     signal_names as _signal_names,
 )
 from senselab.audio.workflows.audio_analysis.speaker import harvest_speaker_votes
-from senselab.audio.workflows.audio_analysis.speech_presence import harvest_speech_presence_votes
+from senselab.audio.workflows.audio_analysis.speech_presence import harvest_speech_presence_evidence
+from senselab.audio.workflows.audio_analysis.speech_presence_link import (
+    policy_from_params,
+    votes_for_harvest,
+)
 from senselab.audio.workflows.audio_analysis.support import (
     evidence_signal_names,
     informative_evidence,
@@ -284,16 +288,16 @@ def harvest_pass(
             }
         )
 
-    speech_presence_votes = harvest_speech_presence_votes(
+    speech_presence_evidence = harvest_speech_presence_evidence(
         pass_summary=harvest_summary,
         grid=pres_grid,
         speech_presence_labels=speech_presence_labels,
         alignment_by_model=align_by_model,
         per_window_embeddings=per_window_embeddings,
         frame_posteriors=frame_voters or None,
-        # Audio for the absolute acoustic voters (LUFS, level-above-floor). Both are
+        # Audio for the absolute acoustic signals (LUFS, level-above-floor). Both are
         # whole-recording measurements, so they cannot be recovered from the per-frame openSMILE
-        # table the way the percentile-ranked voters they replace were (D-3).
+        # table the way the percentile-ranked signals they replace were (D-3).
         waveform=(per_pass_audio.waveform.detach().cpu().numpy() if per_pass_audio is not None else None),
         sampling_rate=(int(per_pass_audio.sampling_rate) if per_pass_audio is not None else None),
     )
@@ -343,7 +347,7 @@ def harvest_pass(
 
     harvest = PassHarvest(
         pass_label=pass_label,
-        speech_presence_votes=speech_presence_votes,
+        speech_presence_evidence=speech_presence_evidence,
         speaker_votes=speaker_votes,
         asr_votes=asr_votes,
         quality_by_bucket=quality_by_bucket,
@@ -524,7 +528,12 @@ def compute_uncertainty_axes(
     # it claimed. Support is measured once on the unmodified pass — a speaker claimed where
     # there is no speech is a fact about the recording, not about the transform.
     support_source = harvests_by_label.get("raw_16k") or next(iter(harvests_by_label.values()), None)
-    speech_presence_buckets = getattr(support_source, "speech_presence_votes", []) if support_source else []
+    # Support asks whether a claim is corroborated, so it needs verdicts — the harvest stores L1
+    # measurements, and the link has to run first. Same policy the aggregation will use, so the
+    # diagnostics and the reported rows cannot disagree about what each signal said.
+    speech_presence_buckets = (
+        votes_for_harvest(support_source, policy=policy_from_params(params)) if support_source else []
+    )
     support = signal_support(
         speech_presence_buckets,
         evidence_signals=sorted(

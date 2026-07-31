@@ -27,27 +27,33 @@ def seg_attr(seg: Any, name: str) -> Any:  # noqa: ANN401
 # ── Diarization ───────────────────────────────────────────────────────
 
 
-def diar_speaks_in_window(result: Any, win_start: float, win_end: float) -> bool:  # noqa: ANN401
-    """True if any diarization segment overlaps ``[win_start, win_end)``."""
-    if not result:
-        return False
-    segments = result[0] if isinstance(result, list) and result else []
-    for seg in segments:
-        s = seg_attr(seg, "start")
-        e = seg_attr(seg, "end")
-        if s is None or e is None:
-            continue
-        if float(s) < win_end and float(e) > win_start:
-            return True
-    return False
+def _union_length(spans: list[tuple[float, float]]) -> float:
+    """Total length covered by ``spans``, counting overlaps once.
+
+    Shared by the diarization and transcript coverage measures because both answer "how much of
+    this bucket is claimed", and summing instead of unioning would let two simultaneous speakers —
+    or two aligners' word spans — report more than a bucket's worth.
+    """
+    if not spans:
+        return 0.0
+    ordered = sorted(spans)
+    covered = 0.0
+    cur_lo, cur_hi = ordered[0]
+    for lo, hi in ordered[1:]:
+        if lo > cur_hi:
+            covered += cur_hi - cur_lo
+            cur_lo, cur_hi = lo, hi
+        else:
+            cur_hi = max(cur_hi, hi)
+    return covered + (cur_hi - cur_lo)
 
 
 def diar_covered_fraction(result: Any, win_start: float, win_end: float) -> float | None:  # noqa: ANN401
     """Fraction of ``[win_start, win_end)`` covered by any diarization segment.
 
-    The measurement ``diar_speaks_in_window`` reduces to a bool. A segment overlapping 5% of a
-    bucket and one covering all of it are not the same evidence, and a bool cannot tell them apart —
-    which matters most at segment boundaries, exactly where speaker uncertainty is highest.
+    Replaces the ``speaks`` bool this used to reduce to. A segment overlapping 5% of a bucket and
+    one covering all of it are not the same evidence, and a bool cannot tell them apart — which
+    matters most at segment boundaries, exactly where speaker uncertainty is highest.
 
     Returns:
         Coverage in ``[0, 1]``, or ``None`` when the window is empty or the model produced no
@@ -75,17 +81,7 @@ def diar_covered_fraction(result: Any, win_start: float, win_end: float) -> floa
             spans.append((lo, hi))
     if not spans:
         return 0.0
-    spans.sort()
-    covered = 0.0
-    cur_lo, cur_hi = spans[0]
-    for lo, hi in spans[1:]:
-        if lo > cur_hi:
-            covered += cur_hi - cur_lo
-            cur_lo, cur_hi = lo, hi
-        else:
-            cur_hi = max(cur_hi, hi)
-    covered += cur_hi - cur_lo
-    return max(0.0, min(1.0, covered / span))
+    return max(0.0, min(1.0, _union_length(spans) / span))
 
 
 def diar_speaker_label_in_window(result: Any, win_start: float, win_end: float) -> str | None:  # noqa: ANN401
@@ -169,27 +165,106 @@ def resolve_asr_result(asr_block: dict[str, Any], align_block: dict[str, Any] | 
     return asr_res
 
 
-def token_overlaps_window(result: Any, win_start: float, win_end: float) -> bool:  # noqa: ANN401
-    """True if any transcript chunk's timestamp overlaps the window."""
+def asr_bucket_chunk_evidence(result: Any, win_start: float, win_end: float) -> dict[str, Any]:  # noqa: ANN401
+    """What an ASR model reported over one bucket, in its own units and unpooled.
+
+    Replaces the three belief-producing readers this call site used to need
+    (``token_overlaps_window``, ``whisper_bucket_confidence``, ``whisper_bucket_no_speech_prob``),
+    each of which reduced before returning. In particular the confidence reader pooled per-chunk
+    log-probabilities as ``mean(exp(x))``, which by Jensen's inequality is not the same statistic as
+    ``exp(mean(x))`` — a choice worth making explicitly, at L2, rather than inside a getter.
+
+    Returns:
+        ``{"word_overlap_s", "n_words", "avg_logprobs", "no_speech_probs", "claim_span_s",
+        "segment_span_s"}``. Coverage is a union over word spans clipped to the bucket, so
+        overlapping spans cannot exceed its width. The two lists hold one entry per contributing
+        chunk, in the model's own log / probability domains.
+
+        The two span fields are **unclipped** unions, and exist so the coarseness of the claim is
+        measured rather than declared: ``claim_span_s`` is how wide the transcript evidence
+        reaching this bucket actually is, and ``segment_span_s`` the same for the segments whose
+        scalars were pooled. A voter's window is only "coarse" relative to the grid it is reported
+        on, so L2 needs the number rather than a hand-set flag.
+
+    Scalars fall back to the segment level when a line carries no chunk overlapping the bucket
+    (post-aligned text-only ASR exposes them only per segment), while coverage does not — a line
+    whose chunks all fall outside the bucket has placed no word inside it, whatever its own span
+    says.
+    """
+    spans: list[tuple[float, float]] = []
+    claim_spans: list[tuple[float, float]] = []
+    segment_spans: list[tuple[float, float]] = []
+    n_words = 0
+    avg_logprobs: list[float] = []
+    no_speech_probs: list[float] = []
+    empty: dict[str, Any] = {
+        "word_overlap_s": 0.0,
+        "n_words": 0,
+        "avg_logprobs": [],
+        "no_speech_probs": [],
+        "claim_span_s": None,
+        "segment_span_s": None,
+    }
     if not result:
-        return False
+        return empty
+
     items = result if isinstance(result, list) else [result]
     for line in items:
         chunks = seg_attr(line, "chunks") or []
-        if chunks:
-            for c in chunks:
-                cs = seg_attr(c, "start")
-                ce = seg_attr(c, "end")
-                if cs is None or ce is None:
-                    continue
-                if float(cs) < win_end and float(ce) > win_start:
-                    return True
-        else:
-            ls = seg_attr(line, "start")
-            le = seg_attr(line, "end")
-            if ls is not None and le is not None and float(ls) < win_end and float(le) > win_start:
-                return True
-    return False
+        chunk_seen_any = False
+        for c in chunks:
+            cs = seg_attr(c, "start")
+            ce = seg_attr(c, "end")
+            if cs is None or ce is None:
+                continue
+            if float(cs) < win_end and float(ce) > win_start:
+                chunk_seen_any = True
+                n_words += 1
+                spans.append((max(float(win_start), float(cs)), min(float(win_end), float(ce))))
+                claim_spans.append((float(cs), float(ce)))
+                _collect_chunk_scalars(c, avg_logprobs, no_speech_probs)
+        ls = seg_attr(line, "start")
+        le = seg_attr(line, "end")
+        if chunk_seen_any:
+            if ls is not None and le is not None:
+                segment_spans.append((float(ls), float(le)))
+            continue
+        if ls is None or le is None:
+            # No timestamps at all: the scalars still describe this bucket as well as any other,
+            # which is what the aligner exists to fix. No coverage and no span are claimed.
+            _collect_chunk_scalars(line, avg_logprobs, no_speech_probs)
+            continue
+        if float(ls) < win_end and float(le) > win_start:
+            _collect_chunk_scalars(line, avg_logprobs, no_speech_probs)
+            segment_spans.append((float(ls), float(le)))
+            if not chunks:
+                n_words += 1
+                spans.append((max(float(win_start), float(ls)), min(float(win_end), float(le))))
+                claim_spans.append((float(ls), float(le)))
+    return {
+        "word_overlap_s": _union_length(spans),
+        "n_words": n_words,
+        "avg_logprobs": avg_logprobs,
+        "no_speech_probs": no_speech_probs,
+        "claim_span_s": _union_length(claim_spans) if claim_spans else None,
+        "segment_span_s": _union_length(segment_spans) if segment_spans else None,
+    }
+
+
+def _collect_chunk_scalars(item: Any, avg_logprobs: list[float], no_speech_probs: list[float]) -> None:  # noqa: ANN401
+    """Append a chunk's or segment's native scalars, skipping fields it does not expose."""
+    avg = seg_attr(item, "avg_logprob")
+    if avg is not None:
+        try:
+            avg_logprobs.append(float(avg))
+        except (TypeError, ValueError):
+            pass
+    nsp = seg_attr(item, "no_speech_prob")
+    if nsp is not None:
+        try:
+            no_speech_probs.append(float(nsp))
+        except (TypeError, ValueError):
+            pass
 
 
 def asr_text_in_window(
@@ -318,85 +393,6 @@ def whisper_chunk_confidence(chunk: Any) -> tuple[float | None, float | None]:  
             confidence = None
     no_speech = float(nsp) if nsp is not None else None
     return confidence, no_speech
-
-
-def whisper_bucket_confidence(result: Any, win_start: float, win_end: float) -> float | None:  # noqa: ANN401
-    """Mean Whisper-native confidence over chunks overlapping the window.
-
-    Falls back to the segment-level avg_logprob when chunks are absent (e.g.
-    post-aligned text-only ASR). Returns None when no native signal is available
-    (FR-007 — drop, do not zero-impute).
-
-    Note: this returns the arithmetic mean of per-chunk ``exp(avg_logprob)`` —
-    appropriate for the speech_presence axis where each chunk is treated as an independent
-    "is the model confident here?" vote. Do NOT take ``log()`` of this value to
-    recover an avg_logprob — by Jensen's inequality
-    ``log(mean(exp(x))) > mean(x)``. Use ``whisper_bucket_avg_logprob`` instead.
-    """
-    if not result:
-        return None
-    items = result if isinstance(result, list) else [result]
-    confidences: list[float] = []
-    for line in items:
-        chunks = seg_attr(line, "chunks") or []
-        chunk_seen_any = False
-        for c in chunks:
-            cs = seg_attr(c, "start")
-            ce = seg_attr(c, "end")
-            if cs is None or ce is None:
-                continue
-            if float(cs) < win_end and float(ce) > win_start:
-                chunk_seen_any = True
-                conf, _ = whisper_chunk_confidence(c)
-                if conf is not None:
-                    confidences.append(conf)
-        if not chunk_seen_any:
-            ls = seg_attr(line, "start")
-            le = seg_attr(line, "end")
-            if ls is None or le is None or (float(ls) < win_end and float(le) > win_start):
-                conf, _ = whisper_chunk_confidence(line)
-                if conf is not None:
-                    confidences.append(conf)
-    if not confidences:
-        return None
-    return sum(confidences) / len(confidences)
-
-
-def whisper_bucket_no_speech_prob(result: Any, win_start: float, win_end: float) -> float | None:  # noqa: ANN401
-    """Mean Whisper ``no_speech_prob`` over chunks overlapping the window.
-
-    Whisper exports a per-segment ``no_speech_prob`` from its silence head —
-    the cleanest single-scalar VAD signal Whisper itself produces. ``∈ [0, 1]``
-    where higher means the model thinks this region is silence. Returned to
-    the speech_presence harvester as a direct voice-speech_presence voter.
-    """
-    if not result:
-        return None
-    items = result if isinstance(result, list) else [result]
-    nsps: list[float] = []
-    for line in items:
-        chunks = seg_attr(line, "chunks") or []
-        chunk_seen_any = False
-        for c in chunks:
-            cs = seg_attr(c, "start")
-            ce = seg_attr(c, "end")
-            if cs is None or ce is None:
-                continue
-            if float(cs) < win_end and float(ce) > win_start:
-                chunk_seen_any = True
-                _, nsp = whisper_chunk_confidence(c)
-                if nsp is not None:
-                    nsps.append(nsp)
-        if not chunk_seen_any:
-            ls = seg_attr(line, "start")
-            le = seg_attr(line, "end")
-            if ls is None or le is None or (float(ls) < win_end and float(le) > win_start):
-                _, nsp = whisper_chunk_confidence(line)
-                if nsp is not None:
-                    nsps.append(nsp)
-    if not nsps:
-        return None
-    return sum(nsps) / len(nsps)
 
 
 def whisper_bucket_avg_logprob(result: Any, win_start: float, win_end: float) -> float | None:  # noqa: ANN401
