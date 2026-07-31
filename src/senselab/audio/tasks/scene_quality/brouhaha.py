@@ -21,14 +21,15 @@ backends), isolated from the main install. The model is gated on HuggingFace;
 the worker reads ``HF_TOKEN`` from the environment (preserved across the
 subprocess boundary).
 
-Inference runs on the **whole signal** whenever it fits in ``_MAX_WHOLE_SIGNAL_S``. Brouhaha
-estimates SNR and C50, and a chunked estimate is normalised within its own chunk, so a stretch
-that is quiet relative to the recording reads as ordinary when it is the loudest thing in its
-own window. That is not a subtle bias: with 10 s chunks the frame-VAD trace came out flat at
-1.0 across a conversation with four clear pauses.
+Inference uses upstream's ``BrouhahaInference``, which slides the model's trained 6 s window and
+overlap-adds — the path brouhaha's authors ship for this model. An earlier revision here forced
+``window="whole"``, which pyannote warns against for frame-based models and which measured worse
+on every axis: 5.5 dB of SNR error at a true 10 dB against sliding's 0.33 dB, memory growing
+linearly with duration rather than staying bounded, and the authors' own ``slide()`` override
+never executing. It also did not achieve its stated purpose — brouhaha's VAD head is
+high-recall and reads near 1.0 through short pauses regardless of windowing.
 
-Recordings longer than that are split into overlapping ~10 s chunks in the parent process
-and stitched back into one continuous per-frame timeline via
+Frames arrive as one continuous timelineand stitched back into one continuous per-frame timeline via
 ``stitch_frames`` — flat memory, native ~17 ms resolution (shared with the
 segmentation-3.0 extractor).
 """
@@ -80,15 +81,6 @@ _BROUHAHA_PYTHON = "3.11"
 _BROUHAHA_MAX_CUDA_VERSION = (12, 1)
 
 # Chunking for long recordings (mirrors the segmentation extractor's grid).
-_CHUNK_S = 10.0
-_CHUNK_STEP_S = 8.0
-
-_MAX_WHOLE_SIGNAL_S = 600.0
-"""Longest recording inferred in one pass.
-
-Generous on purpose: chunking is the thing that biases the estimate, so it should be the
-exception. Ten minutes of 16 kHz mono is ~600 MB of float32 activations in the worst case,
-which fits comfortably; beyond that the memory risk outweighs the normalisation bias."""
 
 # Multitask output channel order (frames, 3): [VAD, SNR dB, C50 dB].
 _VAD_CHANNEL = 0
@@ -113,7 +105,16 @@ try:
     dev = "cuda" if args["device"] == "cuda" and torch.cuda.is_available() else "cpu"
 
     model = Model.from_pretrained(args["model_name"], use_auth_token=token)
-    inference = Inference(model, window="whole", device=torch.device(dev))
+    # Upstream's own inference class, which defaults to sliding. Three measurements say this
+    # rather than window="whole": pyannote warns that "whole" on a frame-based model "might
+    # lead to bad results and huge memory consumption"; at a true 10 dB SNR sliding errs by
+    # 0.33 dB against whole's 5.5 dB, because the model is trained at duration=6 s and whole
+    # fed it 21.5 s; and whole's memory grows linearly with duration (~494 MB above baseline
+    # at 120 s) while sliding is bounded by batch_size x 6 s. BrouhahaInference also overrides
+    # slide(), so under "whole" the code brouhaha's authors ship for this model never ran.
+    from brouhaha.inference import BrouhahaInference
+
+    inference = BrouhahaInference(model, device=torch.device(dev))
     try:
         hop = float(model.receptive_field.step)
     except Exception:
@@ -224,29 +225,13 @@ def extract_brouhaha_frames(
         out_dir = tmp / "out"
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        # Whole-signal inference wherever it fits. Brouhaha estimates SNR and C50, and a
-        # chunked estimate is normalised within its own chunk — so a stretch that is quiet
-        # *relative to the recording* reads as ordinary when it happens to be the loudest thing
-        # in its own 10 s window. Measured consequence: the frame-VAD trace sat flat at 1.0
-        # across a conversation with four clear pauses, which is not something a voice detector
-        # should ever report. Chunking remains as a memory fallback for long recordings, not as
-        # the default path.
+        # One spec per audio: sliding inference produces a continuous per-frame timeline over
+        # a file of any length at flat memory, so parent-side chunking has nothing to add.
         chunk_specs: list[dict] = []
         for ai, audio in enumerate(audios):
-            sr = int(audio.sampling_rate)
-            duration_s = float(audio.waveform.shape[-1]) / sr
-            if duration_s <= _MAX_WHOLE_SIGNAL_S:
-                path = str(tmp / f"audio_{ai}_whole.wav")
-                audio.save_to_file(path)
-                chunk_specs.append({"path": path, "start_s": 0.0, "audio_idx": ai})
-                continue
-            win_samples = int(_CHUNK_S * sr)
-            step_samples = max(1, int(_CHUNK_STEP_S * sr))
-            for k, chunk in enumerate(audio.window_generator(win_samples, step_samples)):
-                start_s = (k * step_samples) / sr
-                path = str(tmp / f"audio_{ai}_{int(round(start_s * 1000))}.wav")
-                chunk.save_to_file(path)
-                chunk_specs.append({"path": path, "start_s": start_s, "audio_idx": ai})
+            path = str(tmp / f"audio_{ai}.wav")
+            audio.save_to_file(path)
+            chunk_specs.append({"path": path, "start_s": 0.0, "audio_idx": ai})
 
         input_json = json.dumps(
             {
