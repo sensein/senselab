@@ -56,7 +56,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ground-truth", type=Path, default=None, help="Label Studio export JSON")
     args = parser.parse_args(argv)
 
-    if not (args.run_dir / "summary.json").exists():
+    from senselab.audio.workflows.audio_analysis.layout import final_dir
+
+    if not (final_dir(args.run_dir) / "summary.json").exists():
         print(f"ERROR: {args.run_dir} is not an analyze_audio run dir (no summary.json)", file=sys.stderr)
         return 2
 

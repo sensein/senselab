@@ -351,7 +351,7 @@ def test_run_adaptive_loop_accepts_in_process_harvests(tmp_path: Path) -> None:
         max_rounds=1,
         aggregator="min",
     )
-    assert (tmp_path / "rounds" / "1").is_dir(), "round 1 artifacts must still be emitted"
+    assert (belief_dir(tmp_path) / "rounds" / "1").is_dir(), "round 1 artifacts must still be emitted"
     assert isinstance(log, dict)
 
 
@@ -379,7 +379,7 @@ def test_in_process_path_reports_parity_as_skipped_not_passing(tmp_path: Path) -
         max_rounds=1,
         aggregator="min",
     )
-    round1 = _json.loads((tmp_path / "rounds" / "1" / "summary.json").read_text())
+    round1 = _json.loads((belief_dir(tmp_path) / "rounds" / "1" / "summary.json").read_text())
     assert round1["parity_check"]["status"] == "skipped"
     assert "stored parquet" in round1["parity_check"]["reason"]
 
@@ -410,7 +410,7 @@ def test_in_process_ingest_ignores_passes_absent_from_the_summary(tmp_path: Path
         aggregator="min",
     )
     assert isinstance(log, dict)
-    belief = (tmp_path / "rounds" / "1").glob("belief*")
+    belief = (belief_dir(tmp_path) / "rounds" / "1").glob("belief*")
     assert any(belief), "round-1 belief artifacts should exist for the surviving pass"
 
 

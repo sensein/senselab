@@ -1428,7 +1428,7 @@ def main(argv: list[str] | None = None) -> int:
                 pass_label=pl,
                 asr_resolved=asr_resolved_pii,
             )
-            write_json(run_dir / pl / "pii.json", report_to_dict(pii_reports[pl]))
+            write_json(pass_dir(run_dir, pl) / "pii.json", report_to_dict(pii_reports[pl]))
 
         # Global per-pass summary: 4 claims (transcript / speaker / quality / PII)
         # → 1 scalar each + a max() combined. Persist to summary.json.

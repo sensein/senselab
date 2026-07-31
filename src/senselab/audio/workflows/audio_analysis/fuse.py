@@ -41,6 +41,13 @@ _UNCERTAINTY_FIELDS = (
     "value",
 )
 
+# Presence and utterance signals report a *confidence*, not an uncertainty. Converting rather
+# than ignoring them matters: on a real run the identity axis fused 85 buckets while presence
+# fused 0 of 1070 and utterance 0 of 41, because only identity happens to name its field
+# "uncertainty". A level that silently covers one axis of three is worse than one that covers
+# none, since the gap is invisible in the output.
+_CONFIDENCE_FIELDS = ("native_confidence", "p_speech", "p_voice", "argmax_confidence")
+
 
 def per_signal_uncertainty(bucket: Mapping[str, Any]) -> dict[str, float]:
     """Each signal's own uncertainty in one bucket — the level-1 emission.
@@ -63,6 +70,16 @@ def per_signal_uncertainty(bucket: Mapping[str, Any]) -> dict[str, float]:
             if isinstance(value, (int, float)):
                 out[str(name)] = max(0.0, min(1.0, float(value)))
                 break
+        else:
+            for field in _CONFIDENCE_FIELDS:
+                value = entry.get(field)
+                if isinstance(value, (int, float)):
+                    # A confidence of c leaves 1 - c of doubt. Distance from 0.5 would be the
+                    # wrong transform: it maps a confident "no" to zero uncertainty about
+                    # *presence*, which is right, but this field is a confidence in the claim
+                    # the signal made, so its complement is the doubt in that claim.
+                    out[str(name)] = max(0.0, min(1.0, 1.0 - float(value)))
+                    break
     return out
 
 
