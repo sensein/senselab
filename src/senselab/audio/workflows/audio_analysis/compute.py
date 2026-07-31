@@ -51,6 +51,7 @@ from senselab.audio.workflows.audio_analysis.reliability import (
 )
 from senselab.audio.workflows.audio_analysis.support import (
     evidence_signal_names,
+    informative_evidence,
     signal_support,
 )
 from senselab.audio.workflows.audio_analysis.types import (
@@ -510,7 +511,9 @@ def compute_uncertainty_axes(
     presence_buckets = getattr(support_source, "presence_votes", []) if support_source else []
     support = signal_support(
         presence_buckets,
-        evidence_signals=sorted(evidence_signal_names(presence_buckets)),
+        evidence_signals=sorted(
+            informative_evidence(presence_buckets, sorted(evidence_signal_names(presence_buckets)))
+        ),
     )
     reliability_by_axis = {
         axis: measured_weights(

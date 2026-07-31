@@ -32,6 +32,8 @@ from __future__ import annotations
 from typing import Any, Mapping, Sequence
 
 __all__ = [
+    "MIN_EVIDENCE_SPREAD",
+    "informative_evidence",
     "evidence_signal_names",
     "SUPPORT_FLOOR",
     "signal_support",
@@ -152,3 +154,83 @@ def evidence_signal_names(presence_buckets: Sequence[Mapping[str, Any]]) -> set[
                 if str(classifier) in votes:
                     names.add(str(classifier))
     return names
+
+
+MIN_EVIDENCE_SPREAD = 0.15
+"""Minimum range (max − min) before a signal can be considered informative at all."""
+
+EVIDENCE_LOW_THRESHOLD = 0.20
+"""Below this, an evidence signal is reporting "no speech here"."""
+
+MIN_LOW_FRACTION = 0.02
+"""An evidence signal must report "no speech" in at least this fraction of buckets.
+
+This, not the range, is the criterion that matters. Support only ever *removes* weight, so it
+runs entirely on negative evidence: a signal that never says "no speech" cannot withhold
+support from anything, and including it makes the whole measure inert.
+
+Measured over 697 buckets of a real recording, four of seven candidate evidence signals never
+once fell below 0.20 — ``acoustic_hnr`` (median 0.500), ``acoustic_loudness`` (0.897),
+``acoustic_spectral_activity`` (0.940) and ``ast`` (0.728). Pooled alongside genuine VAD they
+held support at 0.996 for every claimant. The two purpose-built voice detectors behaved as
+detectors should: ``frame_segmentation`` reported no speech in 503 of 697 buckets and
+``frame_brouhaha_vad`` in 601.
+
+Range alone would not have caught this: ``acoustic_loudness`` swings 0.500 and ``ast`` 0.242
+while neither ever reaches a negative verdict. Willingness to say no is the property, and it
+is measurable on the run with no per-model judgement."""
+
+
+def informative_evidence(
+    presence_buckets: Sequence[Mapping[str, Any]],
+    candidates: Sequence[str],
+    *,
+    min_spread: float = MIN_EVIDENCE_SPREAD,
+    low_threshold: float = EVIDENCE_LOW_THRESHOLD,
+    min_low_fraction: float = MIN_LOW_FRACTION,
+) -> set[str]:
+    """Keep only evidence signals capable of withholding support.
+
+    A signal reporting the same value everywhere cannot say *where* speech is, so admitting
+    it into the pool guarantees every claim looks supported. Measured on a real run: support
+    came out between 0.967 and 1.000 for every claimant — inert — because acoustic proxies
+    reporting ~0.57 in silence as well as in speech were pooled by max alongside real VAD.
+
+    Discrimination is a property of the signal, measurable on the run itself with no example
+    and no per-model judgement, which is the same standard the weights themselves are held to.
+
+    Args:
+        presence_buckets: Per-bucket presence votes.
+        candidates: Evidence signal names to screen.
+        min_spread: Required max − min range.
+        low_threshold: Value below which the signal is reporting "no speech".
+        min_low_fraction: Fraction of buckets the signal must report as "no speech".
+
+    Returns:
+        The subset that varies enough to locate speech in time.
+    """
+    series: dict[str, list[float]] = {}
+    for bucket in presence_buckets or []:
+        if not isinstance(bucket, Mapping):
+            continue
+        votes = bucket.get("votes") or {}
+        if not isinstance(votes, Mapping):
+            continue
+        for name in candidates:
+            value = _evidence_value(votes.get(name))
+            if value is not None:
+                series.setdefault(str(name), []).append(value)
+
+    keep: set[str] = set()
+    for name, values in series.items():
+        if len(values) < 4:
+            # Too few observations to judge variation; keep it rather than discard evidence
+            # on the strength of a measurement that could not be made.
+            keep.add(name)
+            continue
+        if max(values) - min(values) < float(min_spread):
+            continue
+        low = sum(1 for v in values if v < float(low_threshold))
+        if low / len(values) >= float(min_low_fraction):
+            keep.add(name)
+    return keep

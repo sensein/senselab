@@ -229,3 +229,80 @@ def test_no_signal_is_named_in_the_weighting_logic() -> None:
     body = "\n".join(line for line in source.splitlines() if not line.strip().startswith("#") and '"""' not in line)
     for name in ("embedding_silhouette", "pyannote", "sortformer", "speechbrain"):
         assert name not in body, f"{name!r} appears in weighting logic; weights must be measured"
+
+
+# ── uninformative evidence is not evidence ────────────────────────────
+
+
+def test_sparse_evidence_is_informative_even_though_it_is_mostly_low() -> None:
+    """A percentile spread would call this flat, which is backwards.
+
+    Speech evidence on a mostly-silent recording is near zero almost everywhere and high in
+    the few buckets that matter. Judged by p90 - p10 that reads as no variation at all, and
+    the one signal that actually locates speech gets discarded.
+    """
+    from senselab.audio.workflows.audio_analysis.support import informative_evidence
+
+    buckets = [_bucket(0.0, {"diar": True}, {"vad": 0.95})]
+    buckets += [_bucket(0.5 * i, {"diar": True}, {"vad": 0.01}) for i in range(1, 8)]
+    assert "vad" in informative_evidence(buckets, ["vad"])
+
+
+def test_a_near_constant_evidence_signal_is_not_used() -> None:
+    """Measured on a real run: support came out 0.967-1.000 for every claimant, i.e. inert.
+
+    The cause was pooling by max over an evidence set that included acoustic proxies
+    reporting ~0.57 everywhere, silence included. A signal with no variation across the file
+    cannot say *where* speech is, so admitting it guarantees every claim looks supported.
+    Discrimination is a property of the signal and is measurable without any example.
+    """
+    from senselab.audio.workflows.audio_analysis.support import informative_evidence
+
+    buckets = [_bucket(i * 0.5, {"diar": True}, {"flat": 0.57, "vad": 0.95 if i < 2 else 0.02}) for i in range(6)]
+    informative = informative_evidence(buckets, ["flat", "vad"])
+    assert "vad" in informative
+    assert "flat" not in informative
+
+
+def test_dropping_flat_evidence_restores_discrimination() -> None:
+    """The end-to-end consequence: the same claims now separate instead of all scoring ~1."""
+    from senselab.audio.workflows.audio_analysis.support import informative_evidence
+
+    buckets = [_bucket(0.0, {"honest": True, "overclaimer": True}, {"flat": 0.57, "vad": 0.95})]
+    buckets += [
+        _bucket(0.5 * i, {"honest": False, "overclaimer": True}, {"flat": 0.57, "vad": 0.01}) for i in range(1, 6)
+    ]
+    naive = signal_support(buckets, evidence_signals=["flat", "vad"])
+    refined = signal_support(buckets, evidence_signals=sorted(informative_evidence(buckets, ["flat", "vad"])))
+    assert naive["overclaimer"] > 0.5, "max-pooling over flat evidence hides the overclaim"
+    assert refined["overclaimer"] < 0.4
+    assert refined["honest"] > 0.8
+
+
+def test_all_evidence_flat_means_no_support_measure() -> None:
+    """With nothing informative left, no signal is penalised — the absent-evidence rule."""
+    from senselab.audio.workflows.audio_analysis.support import informative_evidence
+
+    buckets = [_bucket(i * 0.5, {"diar": True}, {"flat": 0.5}) for i in range(4)]
+    assert informative_evidence(buckets, ["flat"]) == set()
+    assert signal_support(buckets, evidence_signals=[]) == {}
+
+
+def test_a_signal_that_never_says_no_is_not_evidence() -> None:
+    """Support runs entirely on negative evidence, so this is the criterion that matters.
+
+    Measured over 697 buckets of a real recording, four of seven candidates never once fell
+    below 0.20 — two acoustic proxies, a spectral-activity heuristic, and AST — and pooled
+    alongside genuine VAD they held support at 0.996 for every claimant. A signal that cannot
+    say "no speech here" cannot withhold support from anything.
+    """
+    from senselab.audio.workflows.audio_analysis.support import informative_evidence
+
+    # Varies by 0.5 — passes a range test — but never reaches a negative verdict.
+    buckets = [
+        _bucket(0.5 * i, {"diar": True}, {"eager": 0.5 + 0.05 * (i % 10), "vad": 0.9 if i < 3 else 0.01})
+        for i in range(20)
+    ]
+    informative = informative_evidence(buckets, ["eager", "vad"])
+    assert "vad" in informative
+    assert "eager" not in informative, "a signal that never says no cannot withhold support"
