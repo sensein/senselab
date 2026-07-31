@@ -1,7 +1,7 @@
 """Load / save the persisted SpeakerProfile artifact (JSON).
 
 Schema is the single source of truth in
-``specs/20260527-151905-speaker-profile-embedding/contracts/speaker-profile.schema.md``.
+``contracts/speaker-profile.schema.md`` in the design spec (PR #523).
 Invariants enforced here:
 
 - Atomic write — write to a sibling ``.tmp`` then ``os.replace`` so readers

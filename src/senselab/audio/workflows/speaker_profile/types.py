@@ -1,7 +1,7 @@
 """Typed dataclasses for the speaker_profile workflow.
 
 These match the data model in
-``specs/20260527-151905-speaker-profile-embedding/data-model.md``.
+``data-model.md`` in the design spec (PR #523).
 
 Following the audio_analysis convention, these are plain ``@dataclass(slots=True)``
 classes (not Pydantic) because they are workflow-internal — the artifact JSON
@@ -82,7 +82,7 @@ class ProfileParams:
 class SpeakerProfile:
     """Persisted, reusable per-subject profile.
 
-    See ``contracts/speaker-profile.schema.md`` for the JSON serialization.
+    See ``contracts/speaker-profile.schema.md`` in the design spec (PR #523) for the JSON serialization.
     The profile is the L2-normalized centroid of the dominant cluster of
     per-window embeddings pooled across the subject's files, per embedding
     model (FR-001 / FR-003).

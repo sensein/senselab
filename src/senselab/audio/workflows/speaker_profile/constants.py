@@ -10,7 +10,9 @@ and audit. Each constant's comment states its value, **origin tag**, and
   ``VALIDATE (T028)`` and tuned against the synthetic fixtures (T010a/b).
 
 References:
-- research.md "Constants & Thresholds"
+- "Constants & Thresholds" in the design spec
+  (PR #523 branch ``20260527-151905-speaker-profile-embedding``); the spec set is not
+  carried in this branch
 - ``senselab/audio/workflows/audio_analysis/{embeddings,clustering}.py``
 """
 
