@@ -176,7 +176,7 @@ def test_scene_quality_and_source_rows_render(tmp_path: Path) -> None:
         r.quality_clip = 0.05
         r.quality_reverb = 0.15
         r.quality_bandwidth = 0.1
-        r.quality_uncertainty = 0.1
+        r.snr_brouhaha_db = 18.0
         r.src_speech = 0.6
         r.src_people = 0.15
         r.src_machine = 0.15

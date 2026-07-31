@@ -255,13 +255,13 @@ def harvest_pass(
         from senselab.audio.workflows.audio_analysis.quality import (
             QUALITY_ANALYSIS_HOP_S,
             QUALITY_ANALYSIS_WIN_S,
-            harvest_quality_scores,
+            harvest_quality_measurements,
         )
 
         brouhaha_frames = extract_brouhaha_frames([per_pass_audio])[0]
-        for q in harvest_quality_scores(
-            audio=per_pass_audio, brouhaha=brouhaha_frames, grid=pres_grid, calibration=calibration
-        ):
+        # No ``calibration`` here: L1 measures in dB / hertz / proportion, and the anchors that
+        # turn those into degradation scores are applied by ``aggregate_pass`` at L2.
+        for q in harvest_quality_measurements(audio=per_pass_audio, brouhaha=brouhaha_frames, grid=pres_grid):
             quality_by_bucket[(round(q["start"], 6), round(q["end"], 6))] = q
         # Reuse the Brouhaha VAD head as a second frame-posterior presence voter.
         if brouhaha_frames is not None:
@@ -345,6 +345,9 @@ def harvest_pass(
             "identity": {"win_length": grid.win_length, "hop_length": grid.hop_length},
             "utterance": {"win_length": utt_grid.win_length, "hop_length": utt_grid.hop_length},
         },
+        # Carried so the aggregate phase can compare a measured roll-off against Nyquist without
+        # touching audio, which would break its purity guarantee.
+        sampling_rate=int(per_pass_audio.sampling_rate) if per_pass_audio is not None else 16000,
         provenance_extras={
             "scene_quality": scene_quality_provenance,
             "sound_sources": sound_sources_provenance,

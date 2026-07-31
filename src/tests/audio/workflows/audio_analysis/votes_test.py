@@ -3,6 +3,7 @@
 import pytest
 
 from senselab.audio.workflows.audio_analysis.aggregate import aggregate_presence, aggregate_utterance
+from senselab.audio.workflows.audio_analysis.degradation import DEFAULT_ANCHORS
 from senselab.audio.workflows.audio_analysis.types import UncertaintyRow
 from senselab.audio.workflows.audio_analysis.votes import (
     DEFAULT_UTTERANCE_SCENE_COUPLING,
@@ -42,7 +43,8 @@ def _harvest() -> PassHarvest:
                 },
             }
         ],
-        quality_by_bucket={(0.0, 0.5): {"quality_snr": 0.1, "_raw": {"snr_db": 22.0}}},
+        # L1 measurements in dB; 23 dB against the 25/5 dB anchors scores 0.1 at L2.
+        quality_by_bucket={(0.0, 0.5): {"snr_brouhaha_db": 23.0, "c50_brouhaha_db": 28.0}},
         source_by_bucket={(0.0, 0.5): {"src_speech": 0.9, "src_dominant": "speech", "_raw": {}}},
         grids={
             "presence": {"win_length": 0.5, "hop_length": 0.5},
@@ -130,12 +132,17 @@ def _coupling_harvest(
     src_machine: float | None = None,
     src_environment: float | None = None,
 ) -> PassHarvest:
-    """One 1 s utterance bucket over two 0.5 s presence buckets carrying scene columns."""
+    """One 1 s utterance bucket over two 0.5 s presence buckets carrying scene columns.
+
+    ``quality_snr`` names the *target degradation* the test wants; it is converted to the dB
+    measurement that yields it, since the harvest now carries measurements and L2 does the scoring.
+    """
     quality: dict[tuple[float, float], dict[str, object]] = {}
     sources: dict[tuple[float, float], dict[str, object]] = {}
     for bucket in ((0.0, 0.5), (0.5, 1.0)):
         if quality_snr is not None:
-            quality[bucket] = {"quality_snr": quality_snr, "_raw": {}}
+            clean, floor = DEFAULT_ANCHORS["snr_clean_db"], DEFAULT_ANCHORS["snr_floor_db"]
+            quality[bucket] = {"snr_brouhaha_db": clean - quality_snr * (clean - floor)}
         if src_machine is not None or src_environment is not None:
             sources[bucket] = {
                 "src_machine": src_machine,

@@ -102,14 +102,20 @@ def test_linear_db_to_unit_anchors_and_monotonicity() -> None:
 
 
 def test_estimator_sweep_monotonic_reported_vs_true() -> None:
-    """T035/SC-007 (env-gated): reported quality_snr rises monotonically as true SNR falls."""
+    """T035/SC-007 (env-gated): degradation rises monotonically as true SNR falls.
+
+    Crosses the L1/L2 boundary deliberately: L1 measures dB, L2 scores it. Monotonicity has to
+    survive both, since either layer could destroy it — L1 by saturating the measurement, L2 by
+    picking anchors outside the swept range.
+    """
     torch = pytest.importorskip("torch")
     pytest.importorskip("librosa")
     import numpy as np
 
     from senselab.audio.data_structures import Audio
+    from senselab.audio.workflows.audio_analysis.degradation import scene_degradation
     from senselab.audio.workflows.audio_analysis.grid import BucketGrid
-    from senselab.audio.workflows.audio_analysis.quality import harvest_quality_scores
+    from senselab.audio.workflows.audio_analysis.quality import harvest_quality_measurements
 
     rng = np.random.default_rng(0)
     sr = 16000
@@ -124,8 +130,11 @@ def test_estimator_sweep_monotonic_reported_vs_true() -> None:
         noise *= np.sqrt(speech_power / (10 ** (true_snr_db / 10)) / max(1e-12, float(np.mean(noise**2))))
         mixed = np.clip(speech + noise, -1, 1)
         audio = Audio(waveform=torch.from_numpy(mixed).unsqueeze(0), sampling_rate=sr)
-        rows = harvest_quality_scores(audio=audio, brouhaha=None, grid=BucketGrid(0.5, 0.5), calibration=None)
-        vals = [r["quality_snr"] for r in rows if r.get("quality_snr") is not None]
+        rows = harvest_quality_measurements(audio=audio, brouhaha=None, grid=BucketGrid(0.5, 0.5))
+        scored = [scene_degradation(r, sampling_rate=sr) for r in rows]
+        # No Brouhaha here, so the documented fallback should be in use and say so.
+        assert {s["snr_source"] for s in scored} == {"snr_spectral_gating_db"}
+        vals = [s["quality_snr"] for s in scored if s.get("quality_snr") is not None]
         assert vals, f"no quality_snr at true SNR {true_snr_db}"
         reported.append(float(np.median(vals)))
     assert reported == sorted(reported), f"degradation not monotone vs falling SNR: {reported}"

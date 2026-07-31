@@ -35,6 +35,7 @@ UNITS: dict[str, str] = {
     "seconds": "A duration or an instant on the recording's timeline.",
     "hertz": "A frequency.",
     "count": "A non-negative integer tally.",
+    "proportion": "A measured fraction of a whole in [0, 1]. Not a belief about anything.",
     "cosine_distance": "1 - cosine similarity, in [0, 2]; 0 is identical direction.",
     "arbitrary": "Uncalibrated model output. Comparable within one model and one recording only.",
 }
@@ -45,7 +46,7 @@ declaration exists to provide. ``arbitrary`` is deliberately available and delib
 unflattering: a signal whose output has no absolute meaning should have to say so, rather than
 being rescaled to ``[0, 1]`` and thereby *looking* like a probability."""
 
-_BOUNDED = {"probability": (0.0, 1.0)}
+_BOUNDED = {"probability": (0.0, 1.0), "proportion": (0.0, 1.0)}
 
 
 @dataclass(frozen=True)
@@ -95,7 +96,10 @@ def measurement(
     reduction: str | None = None,
     backend: str | None = None,
     status: str = "ok",
-    **extra: Any,
+    # Deliberately Any: ``extra`` carries model-specific provenance whose shape differs per
+    # signal (a channel index, a label set, a venv name). Narrowing it would mean enumerating
+    # every model's metadata here, which is the coupling the envelope exists to avoid.
+    **extra: Any,  # noqa: ANN401
 ) -> dict[str, Any]:
     """Wrap one measured value with the provenance needed to interpret it.
 

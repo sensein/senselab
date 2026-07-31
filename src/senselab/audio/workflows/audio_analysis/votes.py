@@ -24,6 +24,7 @@ from senselab.audio.workflows.audio_analysis.aggregate import (
     mean_token_entropy,
     presence_p_voice,
 )
+from senselab.audio.workflows.audio_analysis.degradation import scene_degradation
 from senselab.audio.workflows.audio_analysis.fuse import per_signal_uncertainty
 from senselab.audio.workflows.audio_analysis.types import AxisResult, UncertaintyRow
 
@@ -38,9 +39,15 @@ class PassHarvest:
             dicts from ``harvest_presence_votes``.
         identity_votes: per-bucket vote dicts from ``harvest_identity_votes``.
         utterance_votes: per-bucket vote dicts from ``harvest_utterance_votes``.
-        quality_by_bucket: presence-grid bucket key → quality score dict (US1 columns).
+        quality_by_bucket: presence-grid bucket key → L1 scene-quality *measurements* in native
+            units (dB, hertz, proportion). Degradation scores are derived here at L2 via
+            ``degradation.scene_degradation``, because the anchors that produce them are
+            calibration — held at L1 they zeroed the columns on every real recording.
         source_by_bucket: presence-grid bucket key → source-mass dict (US2 columns).
         grids: axis → ``{"win_length", "hop_length"}`` actually used at harvest.
+        sampling_rate: The pass audio's sample rate, needed to compare a measured spectral
+            roll-off against Nyquist. Carried on the harvest rather than re-derived, so the
+            aggregate phase stays pure and model-free.
         provenance_extras: scene_quality / sound_sources / frame_posteriors blocks.
         synthetic_diarization: optional ``{source_id: diar_block}`` synthesized from
             embedding clustering (kept explicit so callers can opt into the legacy
@@ -54,6 +61,7 @@ class PassHarvest:
     quality_by_bucket: dict[tuple[float, float], dict[str, Any]] = field(default_factory=dict)
     source_by_bucket: dict[tuple[float, float], dict[str, Any]] = field(default_factory=dict)
     grids: dict[str, dict[str, float]] = field(default_factory=dict)
+    sampling_rate: int = 16000
     provenance_extras: dict[str, Any] = field(default_factory=dict)
     synthetic_diarization: dict[str, Any] | None = None
 
@@ -134,6 +142,24 @@ def scene_quality_coupling(
     return max(1.0, coupling)
 
 
+def _quality_anchors(params: dict[str, Any]) -> dict[str, float] | None:
+    """Extract fitted scene-quality anchors from run params, or ``None`` for the defaults.
+
+    The calibration profile is a versioned artifact (US5), so only the keys ``degradation``
+    recognises are forwarded — an unknown key would otherwise silently do nothing while appearing
+    to have been applied.
+    """
+    calibration = params.get("calibration")
+    if not isinstance(calibration, dict):
+        return None
+    anchors = {
+        key: float(calibration[key])
+        for key in ("snr_clean_db", "snr_floor_db", "c50_clean_db", "c50_floor_db")
+        if isinstance(calibration.get(key), (int, float))
+    }
+    return anchors or None
+
+
 def _coupling_weights(params: dict[str, Any]) -> dict[str, float]:
     """Resolve coupling weights from ``params``, falling back to the documented defaults."""
     raw = params.get("utterance_scene_coupling")
@@ -191,10 +217,24 @@ def aggregate_pass(
             continue
         bkey = (round(bucket["start"], 6), round(bucket["end"], 6))
         quality = harvest.quality_by_bucket.get(bkey)
+        # L2 owns the anchors: L1 hands over dB / hertz / proportion measurements and the
+        # degradation scores are derived here, where a fitted calibration profile can replace
+        # the defaults and where a saturated column is visibly a fusion choice.
+        scores = (
+            scene_degradation(
+                quality,
+                sampling_rate=harvest.sampling_rate,
+                calibration=_quality_anchors(params),
+            )
+            if quality is not None
+            else {}
+        )
         source = harvest.source_by_bucket.get(bkey)
         votes = bucket["votes"]
         if quality is not None:
-            votes = {**votes, "__quality__": quality.get("_raw", {})}
+            # The measurements themselves travel into model_votes, so a consumer can always
+            # recover what was measured rather than only what it was scored as.
+            votes = {**votes, "__quality__": {k: v for k, v in quality.items() if k != "provenance"}}
         if source is not None:
             votes = {**votes, "__sources__": source.get("_raw", {})}
         instability = bucket.get("frame_instability")
@@ -218,11 +258,16 @@ def aggregate_pass(
                 intensity_weight=1.0,
                 presence_confidence=float(p_v) if p_v is not None else None,
                 presence_uncertainty=presence_uncertainty,
-                quality_snr=quality.get("quality_snr") if quality else None,
-                quality_clip=quality.get("quality_clip") if quality else None,
-                quality_reverb=quality.get("quality_reverb") if quality else None,
-                quality_bandwidth=quality.get("quality_bandwidth") if quality else None,
-                quality_uncertainty=quality.get("quality_uncertainty") if quality else None,
+                quality_snr=scores.get("quality_snr"),
+                quality_clip=scores.get("quality_clip"),
+                quality_reverb=scores.get("quality_reverb"),
+                quality_bandwidth=scores.get("quality_bandwidth"),
+                snr_brouhaha_db=quality.get("snr_brouhaha_db") if quality else None,
+                c50_brouhaha_db=quality.get("c50_brouhaha_db") if quality else None,
+                snr_spectral_gating_db=quality.get("snr_spectral_gating_db") if quality else None,
+                snr_peak_db=quality.get("snr_peak_db") if quality else None,
+                rolloff_95_hz=quality.get("rolloff_95_hz") if quality else None,
+                proportion_clipped=quality.get("proportion_clipped") if quality else None,
                 src_speech=source.get("src_speech") if source else None,
                 src_people=source.get("src_people") if source else None,
                 src_machine=source.get("src_machine") if source else None,
@@ -233,8 +278,8 @@ def aggregate_pass(
         if p_v is not None:
             presence_pv_intervals.append((float(bucket["start"]), float(bucket["end"]), float(p_v)))
         b_start, b_end = float(bucket["start"]), float(bucket["end"])
-        if quality is not None and quality.get("quality_snr") is not None:
-            quality_intervals.append((b_start, b_end, float(quality["quality_snr"])))
+        if scores.get("quality_snr") is not None:
+            quality_intervals.append((b_start, b_end, float(scores["quality_snr"])))
         if source is not None:
             machine = source.get("src_machine")
             environment = source.get("src_environment")

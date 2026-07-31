@@ -55,11 +55,18 @@ def write_axis_parquet(
     float_extension_columns = (
         "presence_confidence",
         "presence_uncertainty",
+        # L1 measurements in native units, then the L2 scores derived from them. Both are written:
+        # the score alone cannot distinguish "measured clean" from "clamped by its anchor".
+        "snr_brouhaha_db",
+        "c50_brouhaha_db",
+        "snr_spectral_gating_db",
+        "snr_peak_db",
+        "rolloff_95_hz",
+        "proportion_clipped",
         "quality_snr",
         "quality_clip",
         "quality_reverb",
         "quality_bandwidth",
-        "quality_uncertainty",
         "src_speech",
         "src_people",
         "src_machine",

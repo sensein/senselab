@@ -139,7 +139,7 @@ def test_presence_entries_carry_and_tiebreak_on_sub_signals(tmp_path: Path) -> N
         model_votes={"m": {"speaks": True}},
         comparison_status="ok",
         presence_uncertainty=0.7,
-        quality_uncertainty=0.1,
+        snr_brouhaha_db=12.0,
         src_dominant="speech",
     )
     high_instability = UncertaintyRow(
@@ -166,7 +166,7 @@ def test_presence_entries_carry_and_tiebreak_on_sub_signals(tmp_path: Path) -> N
     entries = index["entries"]
     assert entries[0]["start"] == 1.0 and entries[0]["presence_uncertainty"] == 0.95
     assert entries[1]["presence_uncertainty"] == 0.7
-    assert entries[1]["quality_uncertainty"] == 0.1 and entries[1]["src_dominant"] == "speech"
+    assert entries[1]["snr_brouhaha_db"] == 12.0 and entries[1]["src_dominant"] == "speech"
     assert "presence_unc=" in entries[0]["summary"]
     # Null-safe: absent sub-signals are omitted, not null-filled.
-    assert "quality_uncertainty" not in entries[0]
+    assert "snr_brouhaha_db" not in entries[0]

@@ -23,8 +23,12 @@ def _row_summary(row: Any, axis: str) -> str:  # noqa: ANN401
         extras = []
         if getattr(row, "presence_uncertainty", None) is not None:
             extras.append(f"presence_unc={round(float(row.presence_uncertainty), 3)}")
-        if getattr(row, "quality_uncertainty", None) is not None:
-            extras.append(f"quality_unc={round(float(row.quality_uncertainty), 3)}")
+        # The measured SNR rather than a "quality uncertainty": the latter was the standard
+        # deviation of three estimators with different noise-floor definitions, so it reported
+        # definitional disagreement and pinned at 1.0 regardless of the audio. A dB reading is
+        # both interpretable and diagnostic when triaging a bucket by hand.
+        if getattr(row, "snr_brouhaha_db", None) is not None:
+            extras.append(f"snr={round(float(row.snr_brouhaha_db), 1)}dB")
         if getattr(row, "src_dominant", None) is not None:
             extras.append(f"src={row.src_dominant}")
         return summary + (" " + " ".join(extras) if extras else "")
@@ -106,7 +110,7 @@ def build_disagreements_index(
             # FR-024 (T042): presence entries carry the scene sub-signals so the
             # index is filterable/rankable on them (null-safe: omitted when absent).
             if axis == "presence":
-                for field in ("presence_uncertainty", "quality_uncertainty", "src_dominant"):
+                for field in ("presence_uncertainty", "snr_brouhaha_db", "src_dominant"):
                     value = getattr(row, field, None)
                     if value is not None and not (isinstance(value, float) and math.isnan(value)):
                         entry[field] = value

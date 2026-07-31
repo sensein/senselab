@@ -71,12 +71,22 @@ class UncertaintyRow:
     # Presence confidence/uncertainty split (FR-013):
     presence_confidence: float | None = None  # calibrated mean P(speech) in [0,1]
     presence_uncertainty: float | None = None  # decisiveness uncertainty 1-|2p-1| in [0,1]
-    # Audio-quality degradation scores, 0 = clean, 1 = fully degraded (FR-001):
+    # L1 scene-quality measurements, in native units. Recorded alongside the derived scores so a
+    # consumer can always see what was measured, not only how it was scored — the previous version
+    # kept only the scores, which is why a column pinned at 0.0 by its anchor was
+    # indistinguishable from one measured at 0.0.
+    snr_brouhaha_db: float | None = None
+    c50_brouhaha_db: float | None = None
+    snr_spectral_gating_db: float | None = None
+    snr_peak_db: float | None = None
+    rolloff_95_hz: float | None = None
+    proportion_clipped: float | None = None
+    # L2 degradation scores derived from the above against calibrated anchors, 0 = clean,
+    # 1 = fully degraded (FR-001). See ``degradation.scene_degradation``.
     quality_snr: float | None = None
     quality_clip: float | None = None
     quality_reverb: float | None = None
     quality_bandwidth: float | None = None
-    quality_uncertainty: float | None = None  # spread among SNR estimators (FR-005)
     # Background sound-source category masses, sum ~1 when present (FR-007):
     src_speech: float | None = None
     src_people: float | None = None
