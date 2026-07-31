@@ -343,7 +343,7 @@ def build_aligned_timeline_plot(
     audio a single ``timeline.png`` is written.
 
     Args:
-        run_dir: Where ``timeline.png`` (or ``timeline_NNN.png``) is written.
+        run_dir: Run directory; the figure lands in ``final/`` with the other deliverables.
         axis_results: ``{(pass_label, axis) → AxisResult}`` from ``compute_uncertainty_axes``.
         duration_s: Audio duration in seconds — drives the x-axis extent.
         grid_hop: Bucket hop length (seconds) — matches the comparator grid.
@@ -822,7 +822,7 @@ def build_aligned_timeline_plot(
 
     fig.tight_layout(rect=(0, 0.02, 1, 0.97))
     if not will_chunk:
-        out = save_path or (run_dir / "timeline.png")
+        out = save_path or (final_dir(run_dir) / "timeline.png")
         out = Path(out)
         out.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(out, dpi=140)
