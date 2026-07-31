@@ -109,7 +109,7 @@ def test_compute_uncertainty_axes_happy_path() -> None:
     """Two diar models agreeing + two ASR models with one transcript edit on a 4 s clip.
 
     Verifies all 9 axis_results land (3 axes × 2 passes + 3 raw_vs_enhanced) with the
-    right row counts and aggregated_uncertainty in [0, 1].
+    right row counts and within_pass_uncertainty in [0, 1].
     """
     diar_segs = [(0.0, 1.0, "SPEAKER_00"), (1.0, 4.0, "SPEAKER_01")]
     raw_pass = {
@@ -164,20 +164,20 @@ def test_compute_uncertainty_axes_happy_path() -> None:
         presence = axis_results[(pass_label, "presence")]
         assert len(presence.rows) > 0
         for r in presence.rows:
-            assert r.aggregated_uncertainty is None or 0 <= r.aggregated_uncertainty <= 1
+            assert r.within_pass_uncertainty is None or 0 <= r.within_pass_uncertainty <= 1
 
     # Diar agrees across models → presence and identity uncertainty are low.
     raw_presence = axis_results[("raw_16k", "presence")]
     raw_identity = axis_results[("raw_16k", "identity")]
-    avg_presence = sum(r.aggregated_uncertainty or 0 for r in raw_presence.rows) / max(1, len(raw_presence.rows))
-    avg_identity = sum(r.aggregated_uncertainty or 0 for r in raw_identity.rows) / max(1, len(raw_identity.rows))
+    avg_presence = sum(r.within_pass_uncertainty or 0 for r in raw_presence.rows) / max(1, len(raw_presence.rows))
+    avg_identity = sum(r.within_pass_uncertainty or 0 for r in raw_identity.rows) / max(1, len(raw_identity.rows))
     assert avg_presence < 0.5
     assert avg_identity < 0.5
 
     # Utterance: raw pass has one transcript edit (granite "world!!" vs whisper "world"),
     # so at least one bucket should have non-zero uncertainty.
     raw_utterance = axis_results[("raw_16k", "utterance")]
-    assert any((r.aggregated_uncertainty or 0) > 0 for r in raw_utterance.rows)
+    assert any((r.within_pass_uncertainty or 0) > 0 for r in raw_utterance.rows)
 
 
 # ── T026 text-only ASR via alignment block ───────────────────────────
@@ -443,11 +443,11 @@ def test_identity_robust_to_diar_label_naming_conventions() -> None:
     identity = axis_results[("raw_16k", "identity")]
     assert identity.rows, "expected identity rows on a 4 s clip with diar coverage"
 
-    # Without embedding models, all rows should have aggregated_uncertainty=None
+    # Without embedding models, all rows should have within_pass_uncertainty=None
     # (no within-track cosines to fold). The raw labels are recorded on the diar votes
     # for auditability.
     for r in identity.rows:
-        assert r.aggregated_uncertainty is None
+        assert r.within_pass_uncertainty is None
         py = r.model_votes.get("pyannote")
         sf = r.model_votes.get("sortformer")
         assert py is not None and sf is not None
@@ -572,9 +572,9 @@ def test_presence_confidence_uncertainty_split_and_instability(monkeypatch: pyte
     assert all(r.presence_confidence is not None for r in presence.rows)
     assert all(r.presence_uncertainty is not None for r in presence.rows)
     # Instability raises presence_uncertainty above the legacy decisiveness uncertainty.
-    assert any((r.presence_uncertainty or 0.0) > (r.aggregated_uncertainty or 0.0) + 1e-6 for r in presence.rows)
-    # aggregated_uncertainty (legacy column) is untouched by the split.
-    assert all(r.aggregated_uncertainty is None or 0.0 <= r.aggregated_uncertainty <= 1.0 for r in presence.rows)
+    assert any((r.presence_uncertainty or 0.0) > (r.within_pass_uncertainty or 0.0) + 1e-6 for r in presence.rows)
+    # within_pass_uncertainty (legacy column) is untouched by the split.
+    assert all(r.within_pass_uncertainty is None or 0.0 <= r.within_pass_uncertainty <= 1.0 for r in presence.rows)
     assert presence.provenance["frame_posteriors"]["segmentation"]["available"] is True
 
 
@@ -648,11 +648,11 @@ def test_the_three_axes_are_unchanged_by_the_per_speaker_derivation() -> None:
 
     after, _inc2, _emb2 = compute_uncertainty_axes(passes=passes, **kwargs)
     for key in before:
-        rows_before = [(r.start, r.end, r.aggregated_uncertainty) for r in before[key].rows]
-        rows_after = [(r.start, r.end, r.aggregated_uncertainty) for r in after[key].rows]
+        rows_before = [(r.start, r.end, r.within_pass_uncertainty) for r in before[key].rows]
+        rows_after = [(r.start, r.end, r.within_pass_uncertainty) for r in after[key].rows]
         assert rows_before == rows_after, f"{key} changed after the per-speaker derivation ran"
 
     # And the identity axis itself still reports per bucket, in range, as before.
     identity = before[("raw_16k", "identity")]
     assert identity.rows
-    assert all(r.aggregated_uncertainty is None or 0.0 <= r.aggregated_uncertainty <= 1.0 for r in identity.rows)
+    assert all(r.within_pass_uncertainty is None or 0.0 <= r.within_pass_uncertainty <= 1.0 for r in identity.rows)

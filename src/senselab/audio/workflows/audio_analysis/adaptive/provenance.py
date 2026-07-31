@@ -76,9 +76,7 @@ class RevisionRecord:
                 "that produced it (FR-011g)"
             )
         if self.resolution_kind not in RESOLUTION_KINDS:
-            raise ValueError(
-                f"unknown resolution_kind {self.resolution_kind!r}; expected one of {RESOLUTION_KINDS}"
-            )
+            raise ValueError(f"unknown resolution_kind {self.resolution_kind!r}; expected one of {RESOLUTION_KINDS}")
 
     def improves_confidence(self) -> bool:
         """Whether this change may be reported as a confidence gain (FR-011d)."""

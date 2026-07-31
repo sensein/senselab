@@ -42,7 +42,7 @@ def _row(start: float, end: float, axis: str, u: float | None, votes: dict) -> U
         start=start,
         end=end,
         axis=axis,  # type: ignore[arg-type]
-        aggregated_uncertainty=u,
+        within_pass_uncertainty=u,
         contributing_models=sorted(votes.keys()),
         model_votes=votes,
         comparison_status="ok",
@@ -106,7 +106,7 @@ def test_attach_uncertainty_tracks_adds_xml_blocks_and_regions() -> None:
     assert len(raw_regions) == 8
     # enhanced_16k carries 3 Labels + 1 TextArea = 4.
     assert len(enh_regions) == 4
-    # Bin label is "high" because aggregated_uncertainty=0.7 ≥ 0.66.
+    # Bin label is "high" because within_pass_uncertainty=0.7 ≥ 0.66.
     label_regions = [r for r in raw_regions if r["type"] == "labels"]
     assert all(r["value"]["labels"] == ["high"] for r in label_regions)
 
@@ -119,7 +119,7 @@ def _presence_row_with_scene(start: float, *, quality_snr: float | None, src_dom
         start=start,
         end=start + 0.5,
         axis="presence",
-        aggregated_uncertainty=0.4,
+        within_pass_uncertainty=0.4,
         contributing_models=["m"],
         model_votes={"m": {"speaks": True}},
         comparison_status="ok",

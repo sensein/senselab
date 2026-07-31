@@ -15,7 +15,7 @@ def _row(start: float, axis: str, u: float | None) -> UncertaintyRow:
         start=start,
         end=start + 0.5,
         axis=axis,  # type: ignore[arg-type]
-        aggregated_uncertainty=u,
+        within_pass_uncertainty=u,
         contributing_models=["m"],
         model_votes={"m": {"speaks": True}},
         comparison_status="ok",
@@ -43,7 +43,7 @@ def test_disagreements_index_ranks_by_uncertainty_desc(tmp_path: Path) -> None:
         config={"top_n": 10, "aggregator": "min", "phoneme_disagreement_threshold": 0.5},
         incomparable_reasons={},
     )
-    assert [e["aggregated_uncertainty"] for e in idx["entries"]] == [0.9, 0.5, 0.2]
+    assert [e["within_pass_uncertainty"] for e in idx["entries"]] == [0.9, 0.5, 0.2]
     assert idx["entries"][0]["rank"] == 1
     assert idx["entries"][2]["rank"] == 3
 
@@ -121,8 +121,8 @@ def test_disagreements_nan_uncertainty_sorts_last(tmp_path: Path) -> None:
         incomparable_reasons={},
     )
     # Non-null first.
-    assert idx["entries"][0]["aggregated_uncertainty"] == 0.5
-    assert idx["entries"][1]["aggregated_uncertainty"] is None
+    assert idx["entries"][0]["within_pass_uncertainty"] == 0.5
+    assert idx["entries"][1]["within_pass_uncertainty"] is None
 
 
 # ── FR-024 (T042): presence sub-signals in the index ─────────────────────
@@ -134,7 +134,7 @@ def test_presence_entries_carry_and_tiebreak_on_sub_signals(tmp_path: Path) -> N
         start=0.0,
         end=0.5,
         axis="presence",
-        aggregated_uncertainty=0.7,
+        within_pass_uncertainty=0.7,
         contributing_models=["m"],
         model_votes={"m": {"speaks": True}},
         comparison_status="ok",
@@ -146,7 +146,7 @@ def test_presence_entries_carry_and_tiebreak_on_sub_signals(tmp_path: Path) -> N
         start=1.0,
         end=1.5,
         axis="presence",
-        aggregated_uncertainty=0.7,  # same primary — tiebreak must use presence_uncertainty
+        within_pass_uncertainty=0.7,  # same primary — tiebreak must use presence_uncertainty
         contributing_models=["m"],
         model_votes={"m": {"speaks": True}},
         comparison_status="ok",

@@ -287,7 +287,7 @@ def build_final_outputs(
         {
             "start": r["start"],
             "end": r["end"],
-            "aggregated_uncertainty": r.get("aggregated_uncertainty"),
+            "within_pass_uncertainty": r.get("within_pass_uncertainty"),
             "epistemic": r.get("epistemic"),
             "aleatoric_floor": r.get("aleatoric_floor"),
             "status": r.get("status"),

@@ -75,7 +75,7 @@ HIGH_THRESHOLD = 0.66
 
 
 def uncertainty_to_label_bin(value: float | None, status: ComparisonStatus | str) -> str:
-    """Map ``aggregated_uncertainty`` to one of the LS label values per FR-005."""
+    """Map ``within_pass_uncertainty`` to one of the LS label values per FR-005."""
     if status in ("incomparable", "unavailable", "one_sided"):
         return "unavailable" if status == "unavailable" else "incomparable"
     if value is None:
@@ -204,7 +204,7 @@ def attach_uncertainty_tracks_to_ls(
             continue
         result_list = target_task["predictions"][0].setdefault("result", [])
         for row_idx, row in enumerate(result.rows):
-            label_value = uncertainty_to_label_bin(row.aggregated_uncertainty, row.comparison_status)
+            label_value = uncertainty_to_label_bin(row.within_pass_uncertainty, row.comparison_status)
             region_id = f"{track}__{row_idx}"
             result_list.append(
                 {

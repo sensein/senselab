@@ -12,7 +12,7 @@ Implements the VoteStore / BeliefRow semantics of
 
 The prototype ingests a completed ``analyze_audio`` run directory: the six
 per-pass uncertainty parquets are the round-1 vote population, and the stored
-``aggregated_uncertainty`` doubles as a parity oracle for the re-aggregation
+``within_pass_uncertainty`` doubles as a parity oracle for the re-aggregation
 path (tasks.md T007).
 """
 
@@ -51,7 +51,7 @@ _META_COLUMNS = (
     "token_entropy",
     "scene_quality_coupling",
     "intensity_weight",
-    "raw_aggregated_uncertainty",
+    "raw_within_pass_uncertainty",
     "comparison_status",
 )
 
@@ -154,7 +154,7 @@ class VoteStore:
                             )
                         )
                     meta: dict[str, Any] = {
-                        "stored_aggregated_uncertainty": _float_or_none(row.get("aggregated_uncertainty"))
+                        "stored_within_pass_uncertainty": _float_or_none(row.get("within_pass_uncertainty"))
                     }
                     for col in _META_COLUMNS:
                         if col in df.columns:
@@ -196,7 +196,7 @@ class VoteStore:
                             )
                         )
                     if axis == "presence":
-                        meta: dict[str, Any] = {"stored_aggregated_uncertainty": None}
+                        meta: dict[str, Any] = {"stored_within_pass_uncertainty": None}
                         # P2's second trigger reads this; it lives on the harvest
                         # bucket rather than in quality_by_bucket.
                         if bucket.get("frame_instability") is not None:
@@ -209,7 +209,7 @@ class VoteStore:
                             meta.update({k: _json_safe(v) for k, v in s.items() if k in _META_COLUMNS})
                         store.row_meta[(stream, axis, bk)] = meta
                     else:
-                        store.row_meta.setdefault((stream, axis, bk), {"stored_aggregated_uncertainty": None})
+                        store.row_meta.setdefault((stream, axis, bk), {"stored_within_pass_uncertainty": None})
         return store
 
     # ── mutation ───────────────────────────────────────────────────────
@@ -285,7 +285,7 @@ class VoteStore:
         return {
             "start": bucket[0],
             "end": bucket[1],
-            "aggregated_uncertainty": agg,
+            "within_pass_uncertainty": agg,
             "p_voice": p_voice,
             "contributing_sources": sorted(votes.keys()),
         }
@@ -299,10 +299,10 @@ class VoteStore:
 
         The comparison anchors on the **pre-coupling** scale: since FR-019
         (scene→utterance coupling, scene-quality-utterance US4) the parquet's
-        ``aggregated_uncertainty`` may carry a scene multiplier that is not a
+        ``within_pass_uncertainty`` may carry a scene multiplier that is not a
         function of the votes alone — the pure per-vote value is preserved on
-        ``raw_aggregated_uncertainty``, which is what the belief store computes
-        and compares (identical to ``aggregated_uncertainty`` on pre-FR-019
+        ``raw_within_pass_uncertainty``, which is what the belief store computes
+        and compares (identical to ``within_pass_uncertainty`` on pre-FR-019
         artifacts and wherever coupling is 1.0).
         """
         report: dict[str, Any] = {}
@@ -313,10 +313,10 @@ class VoteStore:
                 for bk in self.buckets(stream, axis):
                     n += 1
                     meta = self.row_meta.get((stream, axis, bk)) or {}
-                    stored = meta.get("raw_aggregated_uncertainty")
+                    stored = meta.get("raw_within_pass_uncertainty")
                     if stored is None or stored != stored:  # NaN/missing → legacy column
-                        stored = meta.get("stored_aggregated_uncertainty")
-                    got = self.reaggregate_bucket(stream, axis, bk, aggregator=aggregator)["aggregated_uncertainty"]
+                        stored = meta.get("stored_within_pass_uncertainty")
+                    got = self.reaggregate_bucket(stream, axis, bk, aggregator=aggregator)["within_pass_uncertainty"]
                     if stored is None or got is None:
                         if (stored is None) != (got is None):
                             mismatches += 1
@@ -357,7 +357,7 @@ class BeliefState:
                     _decompose(row, meta)
                     row["status"] = "open"
                     row["round"] = 1
-                    row["history"] = [{"round": 1, "aggregated_uncertainty": row["aggregated_uncertainty"]}]
+                    row["history"] = [{"round": 1, "within_pass_uncertainty": row["within_pass_uncertainty"]}]
                     rows.append(row)
                 state.rows[(stream, axis)] = rows
         return state
@@ -372,13 +372,13 @@ class BeliefState:
             if bk not in buckets:
                 continue
             new = store.reaggregate_bucket(stream, axis, bk, aggregator=self.aggregator)
-            row["aggregated_uncertainty"] = new["aggregated_uncertainty"]
+            row["within_pass_uncertainty"] = new["within_pass_uncertainty"]
             if new["p_voice"] is not None:
                 row["p_voice"] = new["p_voice"]
             row["contributing_sources"] = new["contributing_sources"]
             _decompose(row, row.get("meta") or {})
             row["round"] = round_idx
-            row["history"].append({"round": round_idx, "aggregated_uncertainty": row["aggregated_uncertainty"]})
+            row["history"].append({"round": round_idx, "within_pass_uncertainty": row["within_pass_uncertainty"]})
             changed.append(row)
         return changed
 
@@ -390,7 +390,7 @@ class BeliefState:
         """Σ max(0, u − θ_low) · width — the quantity interventions try to shrink."""
         total = 0.0
         for row in self.axis_rows(stream, axis):
-            u = row.get("aggregated_uncertainty")
+            u = row.get("within_pass_uncertainty")
             if u is None:
                 continue
             total += max(0.0, float(u) - theta_low) * (float(row["end"]) - float(row["start"]))
@@ -404,7 +404,7 @@ def _decompose(row: dict[str, Any], meta: dict[str, Any]) -> None:
     populated by I4 when segmentation-3.0 per-class posteriors are available;
     otherwise the floor degrades to the quality-driven term only.
     """
-    agg = row.get("aggregated_uncertainty")
+    agg = row.get("within_pass_uncertainty")
     floor = 0.0
     for col in ("quality_snr", "quality_clip", "quality_reverb", "overlap_posterior"):
         v = meta.get(col)

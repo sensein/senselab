@@ -152,3 +152,63 @@ def test_no_evidence_at_all_is_maximally_uncertain() -> None:
 
     row = combine_target_evidence(0.0, 0.5, [], active_at=0.6, free_at=0.2)
     assert row["uncertainty"] == pytest.approx(1.0)
+
+
+# ── the mask carries a confidence and an uncertainty, correctly named ───
+
+
+def test_a_region_reports_both_confidence_and_uncertainty() -> None:
+    """They are different quantities and a consumer needs both.
+
+    Confidence is P(target active) in the region; uncertainty is how undetermined that verdict
+    is. A region at confidence 0.5 and uncertainty 1.0 is contested; one at confidence 0.5 and
+    uncertainty 0.0 would be a calibrated coin flip. Only one number cannot say which.
+    """
+    mask = build_mask([_b(i * 0.5, 0.95, unc=0.05) for i in range(8)], "speech", profile=PROFILE)
+    region = mask.regions[0]
+    assert 0.0 <= region.confidence <= 1.0
+    assert 0.0 <= region.uncertainty <= 1.0
+    assert region.confidence > 0.5
+
+
+def test_region_confidence_is_the_mean_over_its_buckets() -> None:
+    """A region's confidence is the mean of its buckets.
+
+    Not the last bucket's value, and not a max that would let one bucket speak for the region.
+    """
+    buckets = [_b(0.0, 0.9, unc=0.05), _b(0.5, 0.7, unc=0.05)]
+    mask = build_mask(buckets, "speech", profile=PROFILE)
+    assert mask.regions[0].confidence == pytest.approx(0.8)
+
+
+def test_region_uncertainty_rises_when_its_buckets_disagree() -> None:
+    """Within-region variability is part of the region's uncertainty.
+
+    A region whose buckets range from 0.1 to 0.9 is less determined than one where every
+    bucket agrees, even when their means coincide.
+    """
+    # Both fixtures stay inside the target-active band so each forms one region; varying
+    # across a band boundary would split them and leave nothing to compare.
+    steady = build_mask([_b(i * 0.5, 0.8, unc=0.0) for i in range(8)], "speech", profile=PROFILE)
+    mixed = build_mask([_b(i * 0.5, 0.98 if i % 2 else 0.62, unc=0.0) for i in range(8)], "speech", profile=PROFILE)
+    assert mixed.regions[0].uncertainty > steady.regions[0].uncertainty
+
+
+def test_region_variability_is_reported_separately_from_uncertainty() -> None:
+    """Dispersion across buckets and undeterminedness of the verdict are not the same number."""
+    mask = build_mask([_b(i * 0.5, 0.98 if i % 2 else 0.62, unc=0.0) for i in range(8)], "speech", profile=PROFILE)
+    region = mask.regions[0]
+    assert region.variability is not None and region.variability > 0.0
+
+
+def test_a_single_bucket_region_has_no_variability() -> None:
+    """Dispersion needs two measurements; zero would claim agreement never observed."""
+    mask = build_mask([_b(0.0, 0.9, unc=0.05)], "speech", profile=PROFILE)
+    assert mask.regions[0].variability is None
+
+
+def test_the_json_reports_all_three_quantities() -> None:
+    """FR-006: a consumer must not have to recompute them from the parquet."""
+    mask = build_mask([_b(i * 0.5, 0.95, unc=0.05) for i in range(8)], "speech", profile=PROFILE)
+    row = mask.to_rows()[0]
+    assert {"confidence", "uncertainty", "variability"} <= set(row)

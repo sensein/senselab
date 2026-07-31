@@ -48,7 +48,7 @@ def _series_for(rows: list, duration_s: float, hop_s: float) -> tuple[np.ndarray
         return np.array([]), np.array([])
     centers = np.array([0.5 * (r.start + r.end) for r in rows], dtype=np.float64)
     values = np.array(
-        [float(r.aggregated_uncertainty) if r.aggregated_uncertainty is not None else np.nan for r in rows],
+        [float(r.within_pass_uncertainty) if r.within_pass_uncertainty is not None else np.nan for r in rows],
         dtype=np.float64,
     )
     # Sort by center so plotting doesn't draw a zigzag if rows arrive out of order.

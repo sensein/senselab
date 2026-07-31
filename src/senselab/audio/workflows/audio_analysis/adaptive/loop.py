@@ -464,7 +464,7 @@ def _bucket_values(state: BeliefState) -> dict[tuple[str, str, tuple[float, floa
     out: dict[tuple[str, str, tuple[float, float]], float | None] = {}
     for (stream, axis), rows in sorted(state.rows.items()):
         for row in rows:
-            out[(stream, axis, (round(row["start"], 6), round(row["end"], 6)))] = row.get("aggregated_uncertainty")
+            out[(stream, axis, (round(row["start"], 6), round(row["end"], 6)))] = row.get("within_pass_uncertainty")
     return out
 
 
@@ -473,7 +473,7 @@ def _mean_over(state: BeliefState, stream: str, axis: str, buckets: set | None) 
     for row in state.axis_rows(stream, axis):
         if buckets is not None and (round(row["start"], 6), round(row["end"], 6)) not in buckets:
             continue
-        u = row.get("aggregated_uncertainty")
+        u = row.get("within_pass_uncertainty")
         if u is not None:
             vals.append(float(u))
     return sum(vals) / len(vals) if vals else None
@@ -509,7 +509,7 @@ def _write_round_belief(round_dir: Path, state: BeliefState, passes: list[str]) 
                         "stream": stream,
                         "start": r["start"],
                         "end": r["end"],
-                        "aggregated_uncertainty": r.get("aggregated_uncertainty"),
+                        "within_pass_uncertainty": r.get("within_pass_uncertainty"),
                         "p_voice": r.get("p_voice"),
                         "epistemic": r.get("epistemic"),
                         "aleatoric_floor": r.get("aleatoric_floor"),

@@ -171,7 +171,7 @@ def build_final_ls_bundle(
             "scale_note": (
                 "final_uncertainty / delta_from_round1 are on the pre-coupling (per-vote) scale; "
                 "round-1 utterance entries from runs with FR-019 scene coupling may include the "
-                "scene multiplier in their aggregated_uncertainty (see scene_quality_coupling)."
+                "scene multiplier in their within_pass_uncertainty (see scene_quality_coupling)."
             ),
             "entries": resolved,
         }
@@ -218,7 +218,7 @@ def _final_belief_index(rounds_dir: Path) -> dict[tuple[str, str, float, float],
             out[(str(row["stream"]), axis, round(float(row["start"]), 4), round(float(row["end"]), 4))] = {
                 "status": row.get("status"),
                 "irreducible_reason": row.get("irreducible_reason"),
-                "aggregated_uncertainty_final": row.get("aggregated_uncertainty"),
+                "within_pass_uncertainty_final": row.get("within_pass_uncertainty"),
             }
     return out
 
@@ -251,8 +251,8 @@ def _resolution_for(
     )
     if row is None:
         return {"status": "bucket_not_in_final_belief"}
-    u0 = entry.get("aggregated_uncertainty")
-    u1 = row.get("aggregated_uncertainty_final")
+    u0 = entry.get("within_pass_uncertainty")
+    u1 = row.get("within_pass_uncertainty_final")
     out = {
         "status": row.get("status"),
         "final_uncertainty": None if u1 is None or u1 != u1 else round(float(u1), 6),

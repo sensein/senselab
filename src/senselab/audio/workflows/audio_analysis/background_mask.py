@@ -28,6 +28,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Literal, Mapping, Sequence
 
+from senselab.audio.workflows.audio_analysis.statistics import variability
+
 MaskState = Literal["target_free", "target_active", "nontarget_active", "indeterminate"]
 
 MASK_STATES: tuple[MaskState, ...] = ("target_free", "target_active", "nontarget_active", "indeterminate")
@@ -62,6 +64,23 @@ class BackgroundMaskRegion:
     end: float
     state: MaskState
     uncertainty: float
+    """How undetermined the region's verdict is, in ``[0, 1]``.
+
+    Distinct from :attr:`confidence`, and both are needed: a region at confidence 0.5 with
+    uncertainty 1.0 is contested, while one at confidence 0.5 with uncertainty 0.0 would be a
+    calibrated coin flip. One number cannot say which."""
+
+    confidence: float = 0.0
+    """``P(target active)`` over the region — the mean of its buckets' confidences.
+
+    A mean rather than a max, so no single bucket speaks for the whole region."""
+
+    variability: float | None = None
+    """Dispersion of confidence across the region's buckets, in confidence units.
+
+    ``None`` for a single-bucket region: dispersion needs two measurements, and zero would
+    claim an agreement never observed."""
+
     guard_trimmed_s: float = 0.0
     contains_nontarget_speech: bool = False
     supports_long_window: bool = False
@@ -156,7 +175,9 @@ class BackgroundMask:
                 "start": r.start,
                 "end": r.end,
                 "state": r.state,
+                "confidence": r.confidence,
                 "uncertainty": r.uncertainty,
+                "variability": r.variability,
                 "guard_trimmed_s": r.guard_trimmed_s,
                 "contains_nontarget_speech": r.contains_nontarget_speech,
                 "supports_long_window": r.supports_long_window,
@@ -320,6 +341,15 @@ def build_mask(
         span = ordered[idx : run_end + 1]
         start, end = float(span[0]["start"]), float(span[-1]["end"])
         uncertainties = [float(b.get("uncertainty") or 0.0) for b in span]
+        confidences = [float(b.get("target_confidence") or 0.0) for b in span]
+        region_confidence = sum(confidences) / len(confidences) if confidences else 0.0
+        spread = variability(confidences)
+        # The region's uncertainty combines its buckets' own undeterminedness with how far they
+        # disagree among themselves: a region whose buckets range 0.1-0.9 is less determined
+        # than one where every bucket agrees, even when their means coincide. Bucket spread is
+        # already in confidence units on [0, 1], so it composes without rescaling.
+        bucket_uncertainty = max(uncertainties) if uncertainties else 0.0
+        region_uncertainty = min(1.0, bucket_uncertainty + (0.0 if spread is None else 2.0 * spread))
         dur = max(0.0, end - start)
         padding_fraction = max(0.0, (long_window_s - dur) / long_window_s) if long_window_s > 0 else 0.0
         regions.append(
@@ -328,7 +358,9 @@ def build_mask(
                 start=start,
                 end=end,
                 state=states[idx],
-                uncertainty=max(uncertainties) if uncertainties else 0.0,
+                uncertainty=region_uncertainty,
+                confidence=region_confidence,
+                variability=spread,
                 guard_trimmed_s=round(sum(guard_trim[idx : run_end + 1]), 6),
                 contains_nontarget_speech=any(bool(b.get("nontarget_speech")) for b in span),
                 supports_long_window=(dur >= min_region_s and padding_fraction <= max_padding),
