@@ -544,6 +544,7 @@ def stage_background_mask(
     """
     from senselab.audio.workflows.audio_analysis.background_mask import (
         build_mask,
+        nontarget_confidence_by_bucket,
         target_confidence_by_bucket,
         target_event_types_for,
     )
@@ -562,6 +563,13 @@ def stage_background_mask(
     event_types, _provenance = target_event_types_for(task_type, resolved)
     active_threshold = float((resolved.get("mask") or {}).get("target_active_confidence", 0.6))
     rows = target_confidence_by_bucket(pass_summary, buckets, event_types, active_threshold=active_threshold)
+    # Second quantity: is there *other* content where the target is absent. Without it the
+    # mask cannot distinguish a silent pause from one carrying room tone or machine noise, and
+    # only the second is worth introspecting — which is why a 21 s conversation previously
+    # produced one uninformative region.
+    scene_mass = _scene_source_mass(pass_summary, buckets)
+    if scene_mass:
+        rows = nontarget_confidence_by_bucket(rows, scene_mass)
     mask = build_mask(rows, task_type, profile=resolved, long_window_s=long_window_s)
 
     doc = mask.to_json()
@@ -753,3 +761,49 @@ def stage_background_sources(
             "provenance": ctx.provenance_for("background_sources", None, {"bands": len(floors)}),
         }
     }
+
+
+def _scene_source_mass(
+    pass_summary: dict[str, Any],
+    buckets: Sequence[tuple[float, float]],
+) -> dict[tuple[float, float], dict[str, float]]:
+    """Per-bucket scene category mass from the AST / YAMNet blocks already in the summary.
+
+    Reuses the classifier output the pass has: the evidence for "something other than the
+    target is happening here" was being computed and then not shown to the mask.
+    """
+    from senselab.audio.workflows.audio_analysis.harvesters import classification_windows
+    from senselab.audio.workflows.audio_analysis.sound_sources import (
+        _category_for,
+        load_source_category_map,
+    )
+
+    try:
+        doc = load_source_category_map()
+    except (OSError, ValueError):
+        return {}
+    mapping, default = dict(doc.get("map") or {}), str(doc.get("default") or "environment")
+
+    per_bucket: dict[tuple[float, float], dict[str, float]] = {}
+    for classifier in ("ast", "yamnet"):
+        block = pass_summary.get(classifier)
+        if not (isinstance(block, dict) and block.get("status") == "ok"):
+            continue
+        for window in classification_windows(block.get("result")) or []:
+            if not isinstance(window, dict):
+                continue
+            w_start = float(window.get("start", 0.0) or 0.0)
+            w_end = float(window.get("end", 0.0) or 0.0)
+            overlapping = [
+                (round(b_start, 6), round(b_end, 6))
+                for b_start, b_end in buckets
+                if not (b_end <= w_start or b_start >= w_end)
+            ]
+            if not overlapping:
+                continue
+            for label, score in zip(window.get("labels") or [], window.get("scores") or []):
+                field = f"src_{_category_for(str(label), mapping, default)}"
+                for key in overlapping:
+                    slot = per_bucket.setdefault(key, {})
+                    slot[field] = max(slot.get(field, 0.0), float(score))
+    return per_bucket
