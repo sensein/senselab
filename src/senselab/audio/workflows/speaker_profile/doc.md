@@ -51,7 +51,7 @@ recording → per-window embeddings + (optional) presence p_voice
 ## Outputs
 
 - **Profile artifact** (one JSON per subject) — see
-  `contracts/speaker-profile.schema.md`. Human-inspectable: subject id, per-model
+  `contracts/speaker-profile.schema.md` in the design spec (PR #523). Human-inspectable: subject id, per-model
   centroids, calibration band, dominant/runner-up cluster stats, per-file usage
   records, confidence, params, provenance.
 - **Per-window comparison results** (`ProfileComparisonResult`): calibrated
@@ -131,7 +131,7 @@ Enrollment wants the coarse grid; frame-level localization wants the fine one. S
 `DIFF_SPEAKER_FLOOR` is fixed at 0.70 regardless, choosing a grid also means choosing a
 band.
 
-CLI: `scripts/build_speaker_profile.py` (see `contracts/build-profile-cli.md`).
+CLI: `scripts/build_speaker_profile.py` (contract: `contracts/build-profile-cli.md` in the design spec (PR #523)).
 
 ```bash
 build_speaker_profile --subject-id SUB --output SUB.profile.json FILE [FILE ...]
@@ -167,4 +167,4 @@ axis: how a profile-derived signal should fold into speaker-identity scoring bel
 with the per-speaker uncertainty work, and `score_voice_groups` is the interface that
 work consumes.
 
-See `specs/20260527-151905-speaker-profile-embedding/` for the full design.
+See the design spec (PR #523) for the full design.

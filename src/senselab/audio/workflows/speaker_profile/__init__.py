@@ -10,7 +10,7 @@ step consumes. Profile-building runs as a standalone stage and shares the
 content-addressable embedding cache, so per-window embeddings are computed once
 across stages and re-runs.
 
-See ``specs/20260527-151905-speaker-profile-embedding/`` for the full design.
+See the design spec (PR #523) for the full design.
 """
 
 from __future__ import annotations

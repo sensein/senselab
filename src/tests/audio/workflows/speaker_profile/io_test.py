@@ -1,7 +1,7 @@
 """Tests for the SpeakerProfile JSON artifact I/O (T010c).
 
 Covers the contract in
-``specs/20260527-151905-speaker-profile-embedding/contracts/speaker-profile.schema.md``:
+``contracts/speaker-profile.schema.md`` in the design spec (PR #523):
 
 - Round-trip save → load preserves all fields.
 - Reader ignores unknown extra keys (forward-compatible).
