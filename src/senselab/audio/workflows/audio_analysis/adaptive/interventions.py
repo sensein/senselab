@@ -832,7 +832,7 @@ def _p2_trigger(region: dict[str, Any], ctx: dict[str, Any]) -> tuple[bool, dict
        identical vote across every bucket they span, so agreement among them is an
        artifact of their window size rather than evidence about this bucket.
     2. **Frame instability** — the speech_presence rows already report
-       ``frame_instability`` from the round-1 posteriors; a high value means the
+       ``frame_dispersion`` from the round-1 posteriors; a high value means the
        bucket straddles an onset, which a finer grid can localize.
     """
     if region is None or region["axis"] != "speech_presence":
@@ -858,7 +858,7 @@ def _p2_trigger(region: dict[str, Any], ctx: dict[str, Any]) -> tuple[bool, dict
             active += 1
             if payload.get("coarse"):
                 coarse += 1
-        fi = (row.get("meta") or {}).get("frame_instability")
+        fi = (row.get("meta") or {}).get("frame_dispersion")
         if fi is not None:
             instability.append(float(fi))
 
@@ -870,8 +870,8 @@ def _p2_trigger(region: dict[str, Any], ctx: dict[str, Any]) -> tuple[bool, dict
         "stream": stream,
         "coarse_share": round(coarse_share, 4),
         "n_active_votes": active,
-        "mean_frame_instability": round(mean_instability, 4),
-        "reason": "coarse_dominance" if coarse_share >= threshold else "frame_instability",
+        "mean_frame_dispersion": round(mean_instability, 4),
+        "reason": "coarse_dominance" if coarse_share >= threshold else "frame_dispersion",
     }
 
 
@@ -952,7 +952,7 @@ def _p2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
                 payload={
                     "speaks": p_speech >= 0.5,
                     "native_confidence": round(p_speech, 6),
-                    "frame_instability": _instability(row["start"], row["end"]),
+                    "frame_dispersion": _instability(row["start"], row["end"]),
                     "coarse": False,
                 },
                 provenance={"rule": "P2_fine_posteriors", "frame_hop_s": hop},

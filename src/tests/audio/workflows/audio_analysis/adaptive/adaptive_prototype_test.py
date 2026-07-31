@@ -476,7 +476,7 @@ def _p2_ctx(
     real row; the trigger read nothing, never fired, and the unit tests still
     passed. Building the store for real is what stops that recurring.
 
-    Each entry is ``(bucket, {source: payload}, frame_instability)``.
+    Each entry is ``(bucket, {source: payload}, frame_dispersion)``.
     """
     from senselab.audio.workflows.audio_analysis.adaptive.belief import Vote, VoteStore
     from senselab.audio.workflows.audio_analysis.adaptive.policy import load_policy
@@ -498,7 +498,7 @@ def _p2_ctx(
             )
         meta: dict[str, Any] = {}
         if instability is not None:
-            meta["frame_instability"] = instability
+            meta["frame_dispersion"] = instability
         rows.append({"start": bk[0], "end": bk[1], "meta": meta})
 
     class _State:
@@ -575,14 +575,14 @@ def test_p2_does_not_fire_on_fine_evidence() -> None:
     assert fires is False
 
 
-def test_p2_fires_on_frame_instability_even_without_coarse_votes() -> None:
+def test_p2_fires_on_frame_dispersion_even_without_coarse_votes() -> None:
     """The second independent trigger: a bucket straddling an onset."""
     from senselab.audio.workflows.audio_analysis.adaptive.interventions import _p2_trigger
 
     ctx = _p2_ctx([((0.0, 0.5), {"opensmile": {"speaks": True}}, 0.6)])
     fires, info = _p2_trigger(_p2_region(), ctx)
     assert fires is True
-    assert info["reason"] == "frame_instability"
+    assert info["reason"] == "frame_dispersion"
 
 
 def test_p2_ignores_non_speech_presence_regions() -> None:

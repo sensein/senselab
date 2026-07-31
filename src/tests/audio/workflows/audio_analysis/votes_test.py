@@ -28,7 +28,7 @@ def _harvest() -> PassHarvest:
                 "start": 0.5,
                 "end": 1.0,
                 "votes": {"m1": {"speaks": True}, "m2": {"speaks": False}},
-                "frame_instability": 0.5,
+                "frame_dispersion": 0.5,
             },
         ],
         speaker_votes=[{"start": 0.0, "end": 1.0, "votes": {"__cross_diar_label_disagreement__": {"value": 0.8}}}],
