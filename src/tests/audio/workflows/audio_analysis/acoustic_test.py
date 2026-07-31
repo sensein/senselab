@@ -60,3 +60,61 @@ def test_silence_does_not_produce_negative_infinity() -> None:
     _t, levels = lufs_track(np.zeros(SR), SR, hop_s=0.1)
     assert np.isfinite(levels).all()
     assert loudness_confidence(float(levels[0])) < 0.1
+
+
+# ── level above the measured noise floor (D-3, register items 8-9) ────────────
+
+
+def _tone_in_noise(duration_s: float, *, tone_amp: float, noise_amp: float, sr: int = 16000) -> np.ndarray:
+    """A 500 Hz tone over broadband noise; the tone occupies the second half only."""
+    t = np.arange(int(duration_s * sr)) / sr
+    rng = np.random.default_rng(0)
+    noise = noise_amp * rng.standard_normal(t.size)
+    tone = np.zeros_like(t)
+    half = t.size // 2
+    tone[half:] = tone_amp * np.sin(2 * np.pi * 500 * t[half:])
+    return (noise + tone).astype(np.float64)
+
+
+def test_level_above_floor_separates_activity_from_the_noise_floor() -> None:
+    """Frames with a source present read well above the recording's own floor."""
+    from senselab.audio.workflows.audio_analysis.acoustic import level_above_floor_track
+
+    wav = _tone_in_noise(4.0, tone_amp=0.2, noise_amp=0.01)
+    times, excess = level_above_floor_track(wav, 16000, hop_s=0.05)
+    assert times.size == excess.size > 0
+    half = excess.size // 2
+    quiet, active = float(np.median(excess[:half])), float(np.median(excess[half:]))
+    assert active - quiet > 10.0, f"tone half only {active - quiet:.1f} dB above the noise half"
+
+
+def test_level_above_floor_is_gain_invariant_but_lufs_is_not() -> None:
+    """Why both signals exist, rather than one standing in for the other.
+
+    Gain scaling changes no signal-to-noise ratio -- it lifts the source and the floor together --
+    so an excess-above-floor measure must be unchanged by it. Absolute loudness must *not* be:
+    that is what makes LUFS able to say "this recording is quiet". A single signal cannot answer
+    both questions, which is what the discarded within-file percentile rank was conflating.
+    """
+    from senselab.audio.workflows.audio_analysis.acoustic import level_above_floor_track, lufs_track
+
+    wav = _tone_in_noise(4.0, tone_amp=0.2, noise_amp=0.01)
+    attenuated = wav * 10.0 ** (-12.0 / 20.0)  # -12 dB
+
+    _t, ex_ref = level_above_floor_track(wav, 16000, hop_s=0.05)
+    _t, ex_att = level_above_floor_track(attenuated, 16000, hop_s=0.05)
+    assert abs(float(np.median(ex_ref)) - float(np.median(ex_att))) < 1.0, "excess should survive gain"
+
+    _t, lufs_ref = lufs_track(wav, 16000, hop_s=0.05)
+    _t, lufs_att = lufs_track(attenuated, 16000, hop_s=0.05)
+    assert float(np.median(lufs_ref)) - float(np.median(lufs_att)) == pytest.approx(12.0, abs=0.5)
+
+
+def test_level_above_floor_handles_digital_silence() -> None:
+    """Pure silence has no floor to exceed; the track must not produce inf or nan."""
+    from senselab.audio.workflows.audio_analysis.acoustic import level_above_floor_track
+
+    _times, excess = level_above_floor_track(np.zeros(16000 * 2), 16000, hop_s=0.05)
+    assert excess.size > 0
+    assert np.isfinite(excess).all()
+    assert float(np.max(excess)) < 3.0, "silence is not activity"

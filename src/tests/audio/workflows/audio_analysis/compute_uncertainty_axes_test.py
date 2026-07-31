@@ -96,7 +96,23 @@ def _silent_audio(duration_s: float, sr: int = 16000) -> Audio:
 
     ``compute_uncertainty_axes`` accepts an audio dict; when
     ``speaker_embedding_models=[]`` the embedding extraction is skipped entirely.
+
+    Audible rather than digitally silent. The absolute acoustic voters (LUFS, level-above-floor)
+    read the waveform directly, so a silent fixture paired with mocked models reporting *speech*
+    is self-contradictory: those voters correctly dissent and presence uncertainty rises. Use
+    :func:`_silence_audio` where silence is the thing under test.
     """
+    import numpy as np
+    import torch
+
+    t = np.arange(int(duration_s * sr)) / sr
+    # ~-26 LUFS: conversational level, so the level-based voters agree with mocked speech.
+    y = (0.15 * np.sin(2 * np.pi * 220 * t) * (0.6 + 0.4 * np.sin(2 * np.pi * 3 * t))).astype("float32")
+    return Audio(waveform=torch.from_numpy(y).reshape(1, -1), sampling_rate=sr)
+
+
+def _silence_audio(duration_s: float, sr: int = 16000) -> Audio:
+    """Digital silence, for tests where the absence of signal is the point."""
     import torch
 
     return Audio(waveform=torch.zeros(1, int(duration_s * sr), dtype=torch.float32), sampling_rate=sr)
