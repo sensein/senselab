@@ -29,7 +29,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal, Mapping, Sequence
 
-from senselab.audio.workflows.audio_analysis.adaptive.influence import SOURCE_KINDS, resolve_influence
+from senselab.audio.workflows.audio_analysis.adaptive.influence import SOURCE_KINDS, effective_weight
 from senselab.audio.workflows.audio_analysis.identity import (
     cluster_active_time,
     label_correspondence_rows,
@@ -53,6 +53,12 @@ __all__ = [
 ]
 
 SourceKind = Literal["independent", "derived"]
+"""Retained for the adaptive loop's influence gates, which govern how far one signal may
+revise another. It no longer decides a source's authority in the count posterior — that is
+measured (see :class:`SourceCountClaim.support`)."""
+
+_SUPPORTED_THRESHOLD = 0.5
+"""Support at or above which a source's claims count as corroborated by the audio."""
 
 
 @dataclass(frozen=True)
@@ -62,7 +68,13 @@ class SourceCountClaim:
     source: str
     count: int
     uncertainty: float = 0.0
-    kind: SourceKind = "independent"
+    support: float = 1.0
+    """Measured physical support for this source's speaker claims, in ``[0, 1]``.
+
+    Replaces the declared ``kind``. A source whose speakers sit where no voice detector
+    reports speech has made claims the recording does not back — a quantity, where the source
+    kind was a judgement transferred from whichever recording motivated it. Defaults to full
+    support so a factor that was never measured cannot act as a discount."""
 
 
 @dataclass(frozen=True)
@@ -72,6 +84,7 @@ class SpeakerCountPosterior:
     Attributes:
         probabilities: count → probability, summing to 1.
         support: count → the sources that claimed it (FR-006).
+        support_by_source: source → its measured physical support (FR-006).
         modal_count: highest-probability count.
         is_multimodal: whether more than one count clears the policy threshold.
         weights: source → the effective weight its claim carried.
@@ -82,6 +95,7 @@ class SpeakerCountPosterior:
     modal_count: int
     is_multimodal: bool
     weights: dict[str, float] = field(default_factory=dict)
+    support_by_source: dict[str, float] = field(default_factory=dict)
     converged: bool = False
 
     def to_json(self) -> dict[str, Any]:
@@ -92,6 +106,10 @@ class SpeakerCountPosterior:
             "modal_count": self.modal_count,
             "is_multimodal": self.is_multimodal,
             "weights": {k: round(v, 6) for k, v in sorted(self.weights.items())},
+            # Distinct key from "support" (count → sources). Collapsing the two would drop
+            # the per-count attribution FR-006 requires, silently and in favour of the newer
+            # field — which is exactly what happened when both were named "support".
+            "source_support": {k: round(v, 6) for k, v in sorted(self.support_by_source.items())},
             "converged": self.converged,
         }
 
@@ -118,7 +136,6 @@ def speaker_count_posterior(
         The posterior. Empty claims yield all mass on zero speakers — the honest reading of
         "no source reported anybody".
     """
-    resolved_gates = dict(gates or {"independent": 1.0, "derived": 0.4})
     if not claims:
         return SpeakerCountPosterior(probabilities={0: 1.0}, support={0: []}, modal_count=0, is_multimodal=False)
 
@@ -126,15 +143,16 @@ def speaker_count_posterior(
     mass: dict[int, float] = {}
     support: dict[int, list[str]] = {}
     for claim in sorted(claims, key=lambda c: c.source):
-        if claim.kind not in SOURCE_KINDS:
-            raise ValueError(f"unknown source kind {claim.kind!r} for {claim.source!r}")
-        weight = resolve_influence(
-            claim.source,
-            base_weight=1.0,
+        if not 0.0 <= float(claim.support) <= 1.0:
+            raise ValueError(f"support for {claim.source!r} must be in [0, 1]; got {claim.support}")
+        # Self-uncertainty x physical support. Both measured, and neither privileges a source
+        # by name — which is what the declared source-kind gate did, wrongly, on a recording
+        # where the down-weighted source was the one that matched the spoken names.
+        weight = effective_weight(
+            1.0,
             uncertainty=claim.uncertainty,
-            kind=claim.kind,
-            gates=resolved_gates,
-        ).effective_weight
+            derivation_gate=float(claim.support),
+        )
         weights[claim.source] = weight
         count = int(claim.count)
         mass[count] = mass.get(count, 0.0) + weight
@@ -151,6 +169,7 @@ def speaker_count_posterior(
             modal_count=counts[0],
             is_multimodal=len(counts) > 1,
             weights=weights,
+            support_by_source={c.source: float(c.support) for c in claims},
         )
 
     probabilities = {c: m / total for c, m in mass.items()}
@@ -162,6 +181,7 @@ def speaker_count_posterior(
         modal_count=modal,
         is_multimodal=len(modes) > 1,
         weights=weights,
+        support_by_source={c.source: float(c.support) for c in claims},
     )
 
 
@@ -172,7 +192,7 @@ class SourceLabelCorrespondence:
     source: str
     source_label: str
     speaker_id: str
-    kind: SourceKind
+    support: float = 1.0
     cluster_id: str | None = None
     confidence: float | None = None
 
@@ -182,7 +202,7 @@ class SourceLabelCorrespondence:
             "source": self.source,
             "source_label": self.source_label,
             "speaker_id": self.speaker_id,
-            "source_kind": self.kind,
+            "source_support": round(float(self.support), 6),
             "cluster_id": self.cluster_id,
             "confidence": self.confidence,
         }
@@ -230,7 +250,7 @@ class SpeakerHypothesis:
     speaker_id: str
     existence_uncertainty: float
     supporting_sources: list[str]
-    source_kinds: dict[str, SourceKind]
+    source_support: dict[str, float]
     first_seen: float | None = None
     last_seen: float | None = None
     total_active_s: float = 0.0
@@ -238,13 +258,14 @@ class SpeakerHypothesis:
     revisions: list[dict[str, Any]] = field(default_factory=list)
 
     @property
-    def has_independent_support(self) -> bool:
-        """Whether any source proposing this speaker observes identity directly.
+    def has_supported_evidence(self) -> bool:
+        """Whether any source proposing this speaker had its claims corroborated by the audio.
 
-        A hypothesis resting only on derived sources is not thereby wrong, but a consumer
-        must be able to see that it has no independent observation behind it.
+        Replaces a ``has_independent_support`` that read a declared source kind. A hypothesis
+        resting only on unsupported claims is not thereby wrong, but a consumer must be able
+        to see that no voice detector backed the regions it was built from.
         """
-        return any(kind == "independent" for kind in self.source_kinds.values())
+        return any(v >= _SUPPORTED_THRESHOLD for v in self.source_support.values())
 
     def to_json(self) -> dict[str, Any]:
         """Serialize per ``contracts/speaker-identity.md``."""
@@ -252,8 +273,8 @@ class SpeakerHypothesis:
             "speaker_id": self.speaker_id,
             "existence_uncertainty": round(self.existence_uncertainty, 6),
             "supporting_sources": sorted(self.supporting_sources),
-            "source_kinds": dict(sorted(self.source_kinds.items())),
-            "has_independent_support": self.has_independent_support,
+            "source_support": {k: round(float(v), 6) for k, v in sorted(self.source_support.items())},
+            "has_supported_evidence": self.has_supported_evidence,
             "first_seen": self.first_seen,
             "last_seen": self.last_seen,
             "total_active_s": round(self.total_active_s, 6),
@@ -374,7 +395,7 @@ def perturbation_uncertainty(evidence: PerturbationEvidence) -> float | None:
 def claims_from_perturbations(
     evidence: Sequence[PerturbationEvidence],
     *,
-    policy: Mapping[str, Any] | None = None,
+    support: Mapping[str, float] | None = None,
     fallback_uncertainty: float = 0.5,
 ) -> list[SourceCountClaim]:
     """Build count claims whose uncertainty is *measured* rather than assigned.
@@ -383,13 +404,15 @@ def claims_from_perturbations(
     perturbation. This replaces a hand-set reliability judgement with evidence the pipeline
     already produces.
 
-    The source kind is still resolved from policy and still gates the claim, but it becomes
-    the secondary term: a source that is demonstrably stable is not held down by a label,
-    and a source that flips under preprocessing is attenuated whatever its label says.
+    The second term is measured physical support, passed in rather than resolved from a label.
+    A source is attenuated for claiming speakers where no voice detector reports speech, not
+    for the name it was given.
 
     Args:
         evidence: Per-source answers across perturbations.
-        policy: Adaptive policy, for :func:`source_kind_for`.
+        support: ``{source → measured support in [0, 1]}``, typically from
+            ``support.signal_support``. A source absent from the mapping keeps full support:
+            a factor that was never measured must not act as a discount.
         fallback_uncertainty: Used when a source offers fewer than two perturbation points,
             so a single-observation source is neither trusted nor discarded outright.
 
@@ -410,7 +433,7 @@ def claims_from_perturbations(
                 source=item.source,
                 count=modal,
                 uncertainty=fallback_uncertainty if measured is None else measured,
-                kind=source_kind_for(item.source, policy),
+                support=float((support or {}).get(item.source, 1.0)),
             )
         )
     return claims
@@ -467,6 +490,7 @@ def build_speaker_identity(
     passes: Mapping[str, Any],
     *,
     identity_votes: Sequence[Mapping[str, Any]] | None = None,
+    support: Mapping[str, float] | None = None,
     policy: Mapping[str, Any] | None = None,
     gates: Mapping[str, float] | None = None,
 ) -> tuple[SpeakerCountPosterior, list[SpeakerHypothesis], list[SourceLabelCorrespondence]]:
@@ -480,6 +504,8 @@ def build_speaker_identity(
         passes: ``summary["passes"]``.
         identity_votes: Bucket dicts from ``harvest_identity_votes``. Optional: the
             posterior stands on the passes alone, and votes only add per-speaker detail.
+        support: ``{source → measured physical support}``. A source absent from the mapping
+            keeps full support — an unmeasured factor must not act as a discount.
         policy: Adaptive policy, for source-kind resolution.
         gates: Derivation gates.
 
@@ -488,12 +514,12 @@ def build_speaker_identity(
         posterior places its mass on zero speakers rather than inventing one.
     """
     evidence = evidence_from_passes(passes)
-    claims = claims_from_perturbations(evidence, policy=policy)
+    claims = claims_from_perturbations(evidence, support=support)
     posterior = speaker_count_posterior(claims, gates=gates)
 
     modal = posterior.modal_count
     supporters = posterior.support.get(modal, [])
-    kinds = {s: source_kind_for(s, policy) for s in supporters}
+    backing = dict(support or {})
 
     # Rank the observed clusters by how long each was active, so which cluster becomes S0 is
     # a property of the evidence rather than of iteration order. A cluster the posterior
@@ -542,7 +568,7 @@ def build_speaker_identity(
                 speaker_id=sid,
                 existence_uncertainty=doubt,
                 supporting_sources=sources,
-                source_kinds={s: source_kind_for(s, policy) for s in sources},
+                source_support={s: float(backing.get(s, 1.0)) for s in sources},
                 first_seen=spans[sid][0] if sid in spans else None,
                 last_seen=spans[sid][1] if sid in spans else None,
                 total_active_s=spans.get(sid, (0.0, 0.0, 0.0))[2],
@@ -560,7 +586,7 @@ def build_speaker_identity(
                 source=str(row["source"]),
                 source_label=str(row["source_label"]),
                 speaker_id=str(row["speaker_id"]),
-                kind=kinds.get(str(row["source"]), source_kind_for(str(row["source"]), policy)),
+                support=float(backing.get(str(row["source"]), 1.0)),
                 cluster_id=str(row["cluster_id"]),
             )
             for row in label_correspondence_rows(identity_votes, speaker_ids=speaker_ids)
@@ -573,7 +599,7 @@ def build_speaker_identity(
                 source=src,
                 source_label=f"<{src}:count={c}>",
                 speaker_id=f"S{min(i, max(modal - 1, 0))}",
-                kind=kinds.get(src, source_kind_for(src, policy)),
+                support=float(backing.get(src, 1.0)),
             )
             for i, (c, srcs) in enumerate(sorted(posterior.support.items()))
             for src in srcs
