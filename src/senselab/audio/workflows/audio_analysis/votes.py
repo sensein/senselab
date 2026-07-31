@@ -148,6 +148,60 @@ def _coupling_weights(params: dict[str, Any]) -> dict[str, float]:
     return weights
 
 
+_HARVEST_VOTE_FIELDS = {
+    "presence": "presence_votes",
+    "identity": "identity_votes",
+    "utterance": "utterance_votes",
+}
+
+
+def merge_votes_into_harvest(
+    harvest: PassHarvest,
+    axis: str,
+    votes_by_bucket: dict[tuple[float, float], dict[str, dict[str, Any]]],
+    *,
+    tol: float = 1e-6,
+) -> int:
+    """Add voters to a harvest's buckets in place; return the bucket count updated.
+
+    The **only** supported way to introduce a new voter after harvest. The harvest —
+    not the ``AxisResult`` rows — is what the adaptive loop is handed
+    (``run_adaptive_loop(harvests=...)``) and what its belief store reads, so a voter
+    written only onto the rows is invisible to every adaptive round. Rows are
+    snapshots taken by :func:`aggregate_pass`; re-call it after merging to re-derive
+    them from the updated harvest.
+
+    Args:
+        harvest: The pass harvest to update in place.
+        axis: ``"presence"``, ``"identity"``, or ``"utterance"``.
+        votes_by_bucket: ``(start, end)`` → ``{source: payload}`` to merge. Buckets
+            are matched on their bounds within ``tol``; a bucket the harvest does not
+            have is skipped (and excluded from the return count) rather than added,
+            since a vote off the harvest grid has no row to attach to.
+        tol: Bucket-bound match tolerance in seconds.
+
+    Returns:
+        The number of harvest buckets that received at least one voter.
+
+    Raises:
+        ValueError: If ``axis`` is not one of the three axis names.
+    """
+    field = _HARVEST_VOTE_FIELDS.get(axis)
+    if field is None:
+        raise ValueError(f"unknown axis {axis!r}; must be one of {sorted(_HARVEST_VOTE_FIELDS)}")
+    buckets: list[dict[str, Any]] = getattr(harvest, field)
+    updated = 0
+    for (start, end), new_votes in votes_by_bucket.items():
+        if not new_votes:
+            continue
+        for bucket in buckets:
+            if abs(float(bucket["start"]) - start) <= tol and abs(float(bucket["end"]) - end) <= tol:
+                bucket["votes"].update(new_votes)
+                updated += 1
+                break
+    return updated
+
+
 def aggregate_pass(harvest: PassHarvest, *, aggregator: str, params: dict[str, Any]) -> dict[str, AxisResult]:
     """Fold one pass's harvested votes into the three per-axis ``AxisResult``s.
 
@@ -176,7 +230,7 @@ def aggregate_pass(harvest: PassHarvest, *, aggregator: str, params: dict[str, A
         bkey = (round(bucket["start"], 6), round(bucket["end"], 6))
         quality = harvest.quality_by_bucket.get(bkey)
         source = harvest.source_by_bucket.get(bkey)
-        votes = bucket["votes"]
+        votes = dict(bucket["votes"])  # snapshot: rows must not alias the harvest
         if quality is not None:
             votes = {**votes, "__quality__": quality.get("_raw", {})}
         if source is not None:
@@ -253,7 +307,7 @@ def aggregate_pass(harvest: PassHarvest, *, aggregator: str, params: dict[str, A
                 axis="identity",
                 aggregated_uncertainty=u_raw,
                 contributing_models=sorted(bucket["votes"].keys()),
-                model_votes=bucket["votes"],
+                model_votes=dict(bucket["votes"]),  # snapshot, not the harvest dict
                 comparison_status="ok" if u_raw is not None else "incomparable",
                 raw_aggregated_uncertainty=u_raw,
                 intensity_weight=mask,
@@ -290,7 +344,7 @@ def aggregate_pass(harvest: PassHarvest, *, aggregator: str, params: dict[str, A
         # Reported value carries the coupling (FR-019); the pre-coupling number stays
         # visible on raw_aggregated_uncertainty and in model_votes so the adjustment is
         # auditable rather than invisible.
-        votes = bucket["votes"]
+        votes = dict(bucket["votes"])  # snapshot: rows must not alias the harvest
         u_reported = u_raw
         if u_raw is not None:
             u_reported = max(0.0, min(1.0, u_raw * coupling))
