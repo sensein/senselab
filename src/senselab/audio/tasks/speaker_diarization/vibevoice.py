@@ -195,17 +195,29 @@ def diarize_audios_with_vibevoice(
             try:
                 segments = processor.decode(generated_ids, return_format="parsed")  # type: ignore[attr-defined]
             except (json.JSONDecodeError, KeyError, IndexError, TypeError, ValueError) as exc:
-                # extract_speaker_dict() doesn't always catch malformed JSON itself
-                # (it only guards a handful of shape checks) — surface this the same
-                # way as its documented "return original text on failure" contract,
-                # without letting a shape error abort the whole batch.
+                # This except clause is a defensive backstop, not the primary failure
+                # path: processor.decode's own extract_speaker_dict() catches shape
+                # mismatches (wrong/renamed keys, non-numeric Start/End, ...) itself
+                # and returns the *original undecoded string* instead of raising —
+                # only literally-invalid JSON (e.g. truncated mid-array) reaches
+                # json.loads() and raises. The `isinstance(segments, str)` check
+                # below is what actually catches the shape-mismatch case.
                 logger.warning(f"VibeVoice-ASR-HF produced unparsable output: {exc}")
                 segments = []
                 decode_failures += 1
 
-            if isinstance(segments, str) or not segments:
-                if isinstance(segments, str):
-                    logger.warning("VibeVoice-ASR-HF output did not parse into structured segments.")
+            if isinstance(segments, str):
+                # extract_speaker_dict()'s own fallback: valid JSON, but not
+                # shaped as expected (missing "Content", non-numeric Start/End,
+                # a schema rename upstream, ...). This — not the except clause
+                # above — is the realistic way a future transformers revision
+                # would break this backend, so it counts toward decode_failures
+                # too; otherwise a total schema break would never be distinguishable
+                # from a legitimately quiet batch (see the all-batch check below).
+                logger.warning("VibeVoice-ASR-HF output did not parse into structured segments.")
+                segments = []
+                decode_failures += 1
+            elif not segments:
                 segments = []
 
             script_lines = []

@@ -221,6 +221,49 @@ def test_diarize_audios_with_vibevoice_raises_when_all_segments_unparsable(
         diarize_audios_with_vibevoice(audios=[resampled_mono_audio_sample], model=model)
 
 
+def test_diarize_audios_with_vibevoice_raises_on_all_batch_schema_mismatch(
+    monkeypatch: pytest.MonkeyPatch, resampled_mono_audio_sample: Audio
+) -> None:
+    """A shape/schema mismatch (the realistic upstream break) also counts as a parse failure.
+
+    ``VibeVoiceAsrProcessor.extract_speaker_dict`` doesn't raise on a shape mismatch (renamed
+    key, non-numeric Start/End, ...) — it logs and returns the original *string* instead. That
+    string fallback, not a raised exception, is how a future transformers revision would
+    realistically break this backend, so it must count toward the all-batch-failed check too.
+    """
+    from senselab.audio.tasks.speaker_diarization import vibevoice as vibevoice_module
+    from senselab.audio.tasks.speaker_diarization.vibevoice import diarize_audios_with_vibevoice
+
+    class _FakeModel:
+        device = torch.device("cpu")
+
+        def parameters(self) -> Iterator[torch.Tensor]:
+            return iter([torch.zeros(1, dtype=torch.float32)])
+
+        def generate(self, **kwargs: torch.Tensor) -> torch.Tensor:
+            input_ids = kwargs["input_ids"]
+            return torch.zeros((1, input_ids.shape[1] + 1), dtype=torch.long)
+
+    class _FakeProcessor:
+        def apply_transcription_request(self, audio: str) -> dict[str, torch.Tensor]:
+            return {"input_ids": torch.zeros((1, 1), dtype=torch.long)}
+
+        def decode(self, generated_ids: torch.Tensor, return_format: str) -> str:
+            # Mirrors extract_speaker_dict()'s own fallback: valid JSON, wrong shape,
+            # so it hands back the raw (undecoded) string rather than raising.
+            return '[{"start":0.0,"end":1.0,"speaker":0,"text":"hi"}]'
+
+    monkeypatch.setattr(
+        vibevoice_module.VibeVoiceDiarization,
+        "_get_vibevoice_model",
+        Mock(return_value=(_FakeProcessor(), _FakeModel())),
+    )
+
+    model: HFModel = HFModel(path_or_uri="microsoft/VibeVoice-ASR-HF")
+    with pytest.raises(RuntimeError, match="failed to parse output for all"):
+        diarize_audios_with_vibevoice(audios=[resampled_mono_audio_sample], model=model)
+
+
 @pytest.mark.skip(reason="Downloads a 7B model; run manually on a GPU machine")
 def test_diarize_audios_with_vibevoice(resampled_mono_audio_sample: Audio) -> None:
     """Test diarizing audios with VibeVoice-ASR-HF."""
