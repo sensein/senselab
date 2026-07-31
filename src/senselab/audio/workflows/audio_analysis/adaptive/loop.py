@@ -36,6 +36,7 @@ from senselab.audio.workflows.audio_analysis.adaptive.interventions import (
 from senselab.audio.workflows.audio_analysis.adaptive.policy import BudgetLedger, load_policy, plan_round
 from senselab.audio.workflows.audio_analysis.adaptive.regions import propose_regions
 from senselab.audio.workflows.audio_analysis.adaptive.types import AxisName, PlannedIntervention, Region
+from senselab.audio.workflows.audio_analysis.layout import belief_dir, final_dir
 
 
 def run_adaptive_loop(
@@ -384,10 +385,16 @@ def run_adaptive_loop(
         run_state=run_state,
         provenance=provenance,
     )
-    final = out_dir / "final"
+    final = final_dir(out_dir)
+    # Belief artifacts (posterior, presence, convergence) are level 2; the deliverables
+    # (transcript, diarization, timeline, summary) stay in final/. Different questions:
+    # "what do we believe" is per bucket and per round, "what do we hand over" is one answer.
+    belief = belief_dir(out_dir)
     final.mkdir(parents=True, exist_ok=True)
-    (final / "convergence.json").write_text(json.dumps(report, indent=2, default=str))
-    (final / "iterations.json").write_text(
+    belief.mkdir(parents=True, exist_ok=True)
+    final.mkdir(parents=True, exist_ok=True)
+    (belief / "convergence.json").write_text(json.dumps(report, indent=2, default=str))
+    (belief / "iterations.json").write_text(
         json.dumps({"policy_hash": policy.get("policy_hash"), "entries": iterations}, indent=2, default=str)
     )
     # Summary figure. This lived only in scripts/adaptive_loop.py, so the
@@ -498,8 +505,8 @@ def _iteration_entry(cand: PlannedIntervention, round_idx: int) -> dict[str, Any
 def _write_round_belief(round_dir: Path, state: BeliefState, passes: list[str]) -> None:
     import pandas as pd
 
-    belief_dir = round_dir / "belief"
-    belief_dir.mkdir(parents=True, exist_ok=True)
+    round_belief = round_dir / "belief"
+    round_belief.mkdir(parents=True, exist_ok=True)
     for axis in AXES:
         rows = []
         for stream in passes:
@@ -520,7 +527,7 @@ def _write_round_belief(round_dir: Path, state: BeliefState, passes: list[str]) 
                     }
                 )
         if rows:
-            pd.DataFrame(rows).to_parquet(belief_dir / f"{axis}.parquet", index=False)
+            pd.DataFrame(rows).to_parquet(round_belief / f"{axis}.parquet", index=False)
 
 
 def _write_round_votes(round_dir: Path, store: VoteStore, round_idx: int) -> None:

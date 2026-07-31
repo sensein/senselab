@@ -21,6 +21,7 @@ from senselab.audio.tasks.speech_to_text_ensemble import (  # noqa: F401 — re-
 )
 from senselab.audio.workflows.audio_analysis.adaptive.belief import bucket_key
 from senselab.audio.workflows.audio_analysis.adaptive.policy import family_weights
+from senselab.audio.workflows.audio_analysis.layout import belief_dir, final_dir
 
 # ── word-stream extraction ───────────────────────────────────────────────
 
@@ -149,7 +150,13 @@ def build_final_outputs(
     language: str | None = None,
 ) -> dict[str, Any]:
     """Write final/{transcript,diarization}.json (+.rttm) + final/presence.parquet; return transcript doc."""
-    final = out_dir / "final"
+    final = final_dir(out_dir)
+    # Belief artifacts (posterior, presence, convergence) are level 2; the deliverables
+    # (transcript, diarization, timeline, summary) stay in final/. Different questions:
+    # "what do we believe" is per bucket and per round, "what do we hand over" is one answer.
+    belief = belief_dir(out_dir)
+    final.mkdir(parents=True, exist_ok=True)
+    belief.mkdir(parents=True, exist_ok=True)
     final.mkdir(parents=True, exist_ok=True)
 
     base_speaker_lookup = make_speaker_lookup(store, state, stream)
@@ -309,7 +316,7 @@ def build_final_outputs(
         }
         for r in state.axis_rows(stream, "presence")
     ]
-    pd.DataFrame(pres_rows).to_parquet(final / "presence.parquet", index=False)
+    pd.DataFrame(pres_rows).to_parquet(belief / "presence.parquet", index=False)
     return transcript
 
 
@@ -345,8 +352,10 @@ def write_speaker_outputs(
     """
     import pandas as pd
 
-    final = Path(out_dir) / "final"
+    final = final_dir(out_dir)
+    belief = belief_dir(out_dir)
     final.mkdir(parents=True, exist_ok=True)
+    belief.mkdir(parents=True, exist_ok=True)
 
     doc = {
         "profile_version": profile_version,
@@ -356,7 +365,7 @@ def write_speaker_outputs(
         "speakers": [h.to_json() for h in hypotheses],
         "label_correspondence": [c.to_json() for c in correspondence],
     }
-    speakers_path = final / "speakers.json"
+    speakers_path = belief / "speakers.json"
     speakers_path.write_text(json.dumps(doc, indent=2) + "\n")
 
     columns = [
@@ -372,6 +381,6 @@ def write_speaker_outputs(
     ]
     rows = [t.to_row() for t in tracks]
     frame = pd.DataFrame(rows, columns=columns) if rows else pd.DataFrame({c: [] for c in columns})
-    presence_path = final / "per_speaker_presence.parquet"
+    presence_path = belief / "per_speaker_presence.parquet"
     frame.to_parquet(presence_path, index=False)
     return speakers_path, presence_path

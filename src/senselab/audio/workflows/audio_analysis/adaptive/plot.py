@@ -20,6 +20,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from senselab.audio.workflows.audio_analysis.layout import belief_dir, final_dir
+
 
 def build_adaptive_timeline(out_dir: Path, *, gt_path: Path | None = None, title: str = "") -> Path | None:
     """Render ``<out_dir>/final/timeline.png``; returns the path (None on failure)."""
@@ -31,11 +33,17 @@ def build_adaptive_timeline(out_dir: Path, *, gt_path: Path | None = None, title
     from matplotlib.patches import Rectangle
 
     out_dir = Path(out_dir)
-    final = out_dir / "final"
+    final = final_dir(out_dir)
+    # Belief artifacts (posterior, presence, convergence) are level 2; the deliverables
+    # (transcript, diarization, timeline, summary) stay in final/. Different questions:
+    # "what do we believe" is per bucket and per round, "what do we hand over" is one answer.
+    belief = belief_dir(out_dir)
+    final.mkdir(parents=True, exist_ok=True)
+    belief.mkdir(parents=True, exist_ok=True)
     transcript = json.loads((final / "transcript.json").read_text())
     stream = transcript.get("stream", "raw_16k")
-    iterations = json.loads((final / "iterations.json").read_text())["entries"]
-    convergence = json.loads((final / "convergence.json").read_text())
+    iterations = json.loads((belief / "iterations.json").read_text())["entries"]
+    convergence = json.loads((belief / "convergence.json").read_text())
 
     rounds_dir = out_dir / "rounds"
     round_ids = sorted(int(p.name) for p in rounds_dir.iterdir() if p.name.isdigit())
@@ -257,8 +265,11 @@ def _draw_per_speaker(ax: Any, out_dir: Path, duration: float) -> None:  # noqa:
     ax.set_xlim(0, duration)
     ax.set_yticks([])
 
-    final = Path(out_dir) / "final"
-    speakers_path, presence_path = final / "speakers.json", final / "per_speaker_presence.parquet"
+    final = final_dir(out_dir)
+    belief = belief_dir(out_dir)
+    final.mkdir(parents=True, exist_ok=True)
+    belief.mkdir(parents=True, exist_ok=True)
+    speakers_path, presence_path = belief / "speakers.json", belief / "per_speaker_presence.parquet"
     if not speakers_path.exists() or not presence_path.exists():
         ax.text(
             0.5,

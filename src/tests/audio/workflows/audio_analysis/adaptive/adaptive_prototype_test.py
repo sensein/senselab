@@ -19,6 +19,7 @@ from senselab.audio.workflows.audio_analysis.adaptive.policy import (
 )
 from senselab.audio.workflows.audio_analysis.adaptive.regions import propose_regions
 from senselab.audio.workflows.audio_analysis.adaptive.types import Region
+from senselab.audio.workflows.audio_analysis.layout import belief_dir
 
 BK = bucket_key(0.0, 0.5)
 
@@ -729,6 +730,6 @@ def test_final_presence_parquet_has_contract_columns(tmp_path: Path) -> None:
         policy=load_policy(),
         generated_from_round=1,
     )
-    cols = list(pd.read_parquet(tmp_path / "final" / "presence.parquet").columns)
+    cols = list(pd.read_parquet(belief_dir(tmp_path) / "presence.parquet").columns)
     for col in ("presence_confidence", "elected_stream", "overlap_posterior"):
         assert col in cols, f"contract column {col!r} missing from final/presence.parquet"

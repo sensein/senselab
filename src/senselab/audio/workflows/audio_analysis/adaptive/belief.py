@@ -31,6 +31,7 @@ from senselab.audio.workflows.audio_analysis.aggregate import (
     aggregate_utterance,
     presence_p_voice,
 )
+from senselab.audio.workflows.audio_analysis.layout import pass_dir
 
 AXES: tuple[AxisName, ...] = ("presence", "identity", "utterance")
 """The three uncertainty axes, typed so callers keep the narrowed literal."""
@@ -123,7 +124,7 @@ class VoteStore:
         store = cls()
         for stream in passes:
             for axis in AXES:
-                pq = run_dir / stream / "uncertainty" / f"{axis}.parquet"
+                pq = pass_dir(run_dir, stream) / "uncertainty" / f"{axis}.parquet"
                 if not pq.exists():
                     continue
                 df = pd.read_parquet(pq)

@@ -152,6 +152,12 @@ from senselab.audio.workflows.audio_analysis.labelstudio import (
     build_labelstudio_config,
     build_labelstudio_task,
 )
+from senselab.audio.workflows.audio_analysis.layout import (
+    belief_dir,
+    final_dir,
+    pass_dir,
+    stability_dir,
+)
 from senselab.audio.workflows.audio_analysis.stage_context import STAGE_VERSIONS, PassPlan, StageContext
 from senselab.audio.workflows.audio_analysis.stages import (
     _asr_has_timestamps,
@@ -1112,7 +1118,7 @@ def _stage_context(
         variant=variant,
         device=device,
         cache_dir=cache_dir,
-        out_dir=out_dir / label,
+        out_dir=pass_dir(out_dir, label),
         audio_source=str(args.audio.resolve()),
         senselab_ver=senselab_ver,
     )
@@ -1238,7 +1244,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Enhancement failed: {exc!r}", file=sys.stderr)
             summaries["passes"]["enhanced_16k"] = {"status": "failed", "error": repr(exc)}
 
-    write_json(run_dir / "summary.json", summaries)
+    write_json(final_dir(run_dir) / "summary.json", summaries)
 
     # Hierarchical Label Studio export — one LS task per audio variant, each
     # carrying parallel timeline tracks (one per analyzer × model). AST and
@@ -1389,9 +1395,9 @@ def main(argv: list[str] | None = None) -> int:
         # Persist 9 parquets (3 axes × 2 passes + 3 raw_vs_enhanced deltas).
         for (pass_label, axis), result in axis_results.items():
             if pass_label == "raw_vs_enhanced":
-                dest = run_dir / "uncertainty" / "raw_vs_enhanced" / f"{axis}.parquet"
+                dest = stability_dir(run_dir) / "raw_vs_enhanced" / f"{axis}.parquet"
             else:
-                dest = run_dir / pass_label / "uncertainty" / f"{axis}.parquet"
+                dest = pass_dir(run_dir, pass_label) / "uncertainty" / f"{axis}.parquet"
             write_axis_parquet(
                 result,
                 dest,
@@ -1462,7 +1468,7 @@ def main(argv: list[str] | None = None) -> int:
         # before the comparator stage so it does not contain
         # ``global_uncertainty``. Overwriting here keeps the on-disk summary
         # in sync with the in-memory dict.
-        write_json(run_dir / "summary.json", summaries)
+        write_json(final_dir(run_dir) / "summary.json", summaries)
 
         # Persist per-pass windowed speaker embeddings — one JSON per (pass, model)
         # at ``<pass>/embeddings/<model>.json`` with the full window grid + vectors.
@@ -1483,7 +1489,7 @@ def main(argv: list[str] | None = None) -> int:
                         for w in windows
                     ],
                 }
-                write_json(run_dir / pass_label / "embeddings" / f"{safe_model_id(model_id)}.json", payload)
+                write_json(pass_dir(run_dir, pass_label) / "embeddings" / f"{safe_model_id(model_id)}.json", payload)
 
         # Attach per-axis Labels + utterance TextArea tracks to the LS bundle.
         if axis_results:
@@ -1514,7 +1520,7 @@ def main(argv: list[str] | None = None) -> int:
                 incomparable_reasons=incomparable_reasons,
                 models_without_native_signal=_models_without_native_signal(summaries),
             )
-            write_json(run_dir / "disagreements.json", index)
+            write_json(final_dir(run_dir) / "disagreements.json", index)
 
         # Timeline plot — best-effort sidecar.
         if axis_results:
@@ -1759,10 +1765,10 @@ def main(argv: list[str] | None = None) -> int:
             except Exception as exc:  # noqa: BLE001 — additive artifacts must not fail the run
                 print(f"warn: adaptive loop failed: {exc!r}", file=sys.stderr)
                 summaries["adaptive"] = {"enabled": True, "status": "failed", "error": repr(exc)}
-            write_json(run_dir / "summary.json", summaries)
+            write_json(final_dir(run_dir) / "summary.json", summaries)
         elif args.no_adaptive_outputs:
             summaries["adaptive"] = {"enabled": False, "reason": "--no-adaptive-outputs"}
-            write_json(run_dir / "summary.json", summaries)
+            write_json(final_dir(run_dir) / "summary.json", summaries)
 
     # Scene-context tracks attach last: they read artifacts written by the per-speaker and
     # mask stages above, and both are questions a reviewer cannot answer from the
@@ -1772,13 +1778,13 @@ def main(argv: list[str] | None = None) -> int:
         from senselab.audio.workflows.audio_analysis.labelstudio import attach_scene_context_tracks_to_ls
 
         mask_rows: list[dict[str, Any]] = []
-        mask_parquet = run_dir / "raw_16k" / "background_mask.parquet"
+        mask_parquet = pass_dir(run_dir, "raw_16k") / "background_mask.parquet"
         if mask_parquet.exists():
             import pandas as _pd
 
             mask_rows = _pd.read_parquet(mask_parquet).to_dict("records")
         speaker_rows: list[dict[str, Any]] = []
-        presence_parquet = run_dir / "final" / "per_speaker_presence.parquet"
+        presence_parquet = belief_dir(run_dir) / "per_speaker_presence.parquet"
         if presence_parquet.exists():
             import pandas as _pd
 
@@ -1793,8 +1799,65 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:  # noqa: BLE001 — an annotation sidecar must not fail the run
         logger.warning("scene-context LS tracks could not be attached: %s", exc)
 
-    write_json(run_dir / "labelstudio_tasks.json", ls_tasks)
-    (run_dir / "labelstudio_config.xml").write_text(config_xml, encoding="utf-8")
+    # L1 evidence plot: every signal that reported, plus the level track. No uncertainty rows
+    # — those are level-2 conclusions drawn from this evidence, and mixing them in invites
+    # reading a conclusion as another observation.
+    if harvests_by_pass:
+        try:
+            from senselab.audio.workflows.audio_analysis.l1_plot import build_l1_signal_plot
+
+            l1_signals: dict[str, list[tuple[float, float]]] = {}
+            reference = harvests_by_pass.get("raw_16k") or next(iter(harvests_by_pass.values()))
+            for bucket in getattr(reference, "presence_votes", []) or []:
+                for name, entry in (bucket.get("votes") or {}).items():
+                    if str(name).startswith("__") or not isinstance(entry, dict):
+                        continue
+                    l1_signals.setdefault(str(name), [])
+                    if entry.get("speaks"):
+                        l1_signals[str(name)].append((float(bucket["start"]), float(bucket["end"])))
+            raw_audio = pass_audio.get("raw_16k")
+            l1_path = build_l1_signal_plot(
+                run_dir,
+                signals=l1_signals,
+                duration_s=float(summaries["passes"].get("raw_16k", {}).get("duration_s") or 0.0),
+                waveform=None if raw_audio is None else raw_audio.waveform.squeeze().numpy(),
+                sampling_rate=int(getattr(raw_audio, "sampling_rate", 16000) or 16000),
+                title=f"L1 signals — {args.audio.name}",
+            )
+            print(f"L1 signals plot: {l1_path}")
+        except Exception as exc:  # noqa: BLE001 — a figure must not fail a completed run
+            logger.warning("L1 signal plot failed: %s", exc)
+
+    # The run headline, readable without a parquet reader. Built from the L2 maps rather than
+    # recomputed, so it cannot disagree with them.
+    try:
+        import pandas as _pd
+
+        from senselab.audio.workflows.audio_analysis.summary import build_run_summary, render_run_summary
+
+        axis_rows: dict[str, list[dict[str, Any]]] = {}
+        for axis in ("presence", "identity", "utterance"):
+            path = (summaries.get("final_uncertainty") or {}).get(axis)
+            if path and Path(path).exists():
+                frame = _pd.read_parquet(path)
+                axis_rows[axis] = frame.to_dict("records")
+        speakers_doc: dict[str, Any] = {}
+        speakers_path = belief_dir(run_dir) / "speakers.json"
+        if speakers_path.exists():
+            speakers_doc = json.loads(speakers_path.read_text())
+        rounds_doc: dict[str, Any] = {}
+        rounds_path = belief_dir(run_dir) / "rounds.json"
+        if rounds_path.exists():
+            rounds_doc = json.loads(rounds_path.read_text())
+        headline = build_run_summary(axis_rows=axis_rows, speakers=speakers_doc, rounds=rounds_doc)
+        write_json(final_dir(run_dir) / "run_summary.json", headline)
+        (final_dir(run_dir) / "summary.md").write_text(render_run_summary(headline), encoding="utf-8")
+        print(f"Summary: {final_dir(run_dir) / 'summary.md'}")
+    except Exception as exc:  # noqa: BLE001 — a headline must not fail a completed run
+        logger.warning("run summary could not be written: %s", exc)
+
+    write_json(final_dir(run_dir) / "labelstudio_tasks.json", ls_tasks)
+    (final_dir(run_dir) / "labelstudio_config.xml").write_text(config_xml, encoding="utf-8")
 
     print(f"\nDone. Summary: {run_dir / 'summary.json'}")
     print(f"Label Studio tasks:  {run_dir / 'labelstudio_tasks.json'}")
