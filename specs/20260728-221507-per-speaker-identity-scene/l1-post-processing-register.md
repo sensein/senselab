@@ -74,8 +74,8 @@ signals"*, this module has no L1 role: it should become an L2 stage reading L1 m
 | 3 | ASR hallucination gate | `speaks and not (nsp >= 0.5)` — threshold + override | `no_speech_prob` per segment, raw | is a transcript over probable silence trustworthy? | open |
 | 4 | Whisper confidence | `avg_logprob` → bucket `native_confidence` | `avg_logprob` per segment, units log-probability | how does token logprob map to belief? | open |
 | 5 | `::no_speech_prob` voter | `speaks = nsp < 0.5`, `nc = 1 − nsp` — threshold + inversion | same raw field as #3 (one measurement, not two voters) | same as #3 | open |
-| 6 | AST | top-1 argmax over 527 labels, then `label in speech_labels` | full label→score map per native window | which categories are present, and is any of them speech? | open |
-| 7 | YAMNet | top-1 argmax over 521 labels, then `label in speech_labels` | full label→score map per 0.48 s hop | same as #6 | open |
+| 6 | AST | top-1 argmax over 527 labels, then `label in speech_labels` | full label→score map per native window | which categories are present, and is any of them speech? | **closed** |
+| 7 | YAMNet | top-1 argmax over 521 labels, then `label in speech_labels` | full label→score map per 0.48 s hop | same as #6 | **closed** |
 | 8 | `acoustic_loudness` | per-pass **percentile band** p10→p75 → `[0,1]` → direction flip | `Loudness_sma3` per 10 ms frame + absolute `LUFS` | what loudness counts as audible here? | open |
 | 9 | `acoustic_spectral_activity` | per-pass percentile band on `spectralFlux_sma3` | raw flux per 10 ms frame | what flux counts as non-stationary, relative to the measured noise floor? | open |
 | 10 | `acoustic_hnr` | fixed 2→10 dB ramp; low maps to `p = 0.5` (abstain) | `HNRdBACF_sma3nz` in dB per 10 ms frame | what HNR indicates voicing, and when is it uninformative? | open |
@@ -97,6 +97,12 @@ a speech-then-silence probe. Closed; see D-5 in `layered-architecture.md` for th
 
 Items 1 and 12 together are why diarization rows render one colour: L1 never emits the labels, so
 nothing downstream can distinguish speakers.
+
+Items 6–7 turned out to need less than expected: the full `labels`/`scores` lists already reach
+`sound_sources.py`, which maps them through the checked-in `audioset_source_map.json`. Only
+`presence.py` was reducing to top-1. It now uses `window_label_mass`, the subset's share of total
+score mass — a window topped by `Music` at 0.40 with `Speech` second at 0.38 previously voted a
+confident *no speech*, discarding 0.38 of speech evidence.
 
 ### Scene quality (`quality.py`)
 

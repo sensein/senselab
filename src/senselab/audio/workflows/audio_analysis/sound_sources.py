@@ -86,6 +86,42 @@ def _native_grid(block: dict[str, Any]) -> tuple[float, float]:
     return win_length, hop_length
 
 
+def window_label_mass(window: Any, labels_of_interest: set[str]) -> Optional[float]:  # noqa: ANN401
+    """Share of one classification window's score mass falling on a subset of labels.
+
+    Args:
+        window: One ``classify_audios`` window dict with ``labels`` and ``scores``.
+        labels_of_interest: The label subset to sum, e.g. the speech-related AudioSet classes.
+
+    Returns:
+        The subset's share of total mass in ``[0, 1]``, or ``None`` when the window carried no
+        scores.
+
+    Replaces ``top-1 label in subset``, which was a threshold disguised as a lookup. AST and
+    YAMNet emit several hundred class scores; taking the argmax and asking whether it happens to
+    be a speech label throws away everything else. A window whose top label is ``Music`` at 0.40
+    with ``Speech`` second at 0.38 voted a confident *no speech* — discarding 0.38 of speech
+    evidence. Mass over the subset keeps it, and which labels count as speech stays a task
+    parameter rather than being folded into a boolean.
+    """
+    if not isinstance(window, dict):
+        return None
+    labels = window.get("labels") or []
+    scores = window.get("scores") or []
+    if not labels or not scores:
+        return None
+    subset = 0.0
+    total = 0.0
+    for label, score in zip(labels, scores):
+        s = max(float(score), 0.0)
+        total += s
+        if str(label) in labels_of_interest:
+            subset += s
+    if total <= 0:
+        return None
+    return subset / total
+
+
 def _window_category_masses(window: Any, mapping: dict[str, str], default: str) -> Optional[dict[str, float]]:  # noqa: ANN401
     """Sum one classification window's scores into the four category masses (normalized)."""
     if not isinstance(window, dict):

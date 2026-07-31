@@ -209,3 +209,40 @@ def test_stage_scene_requests_the_independent_score_function(monkeypatch: "pytes
     )
     assert seen, "classify_audios was never called"
     assert seen[0].get("function_to_apply") == AUDIOSET_SCORE_FUNCTION
+
+
+def test_label_mass_counts_a_second_ranked_speech_label() -> None:
+    """The reason top-1 had to go: a runner-up speech label carries real evidence.
+
+    ``top-1 in speech_labels`` on this window votes a confident *no speech*, because ``Music``
+    edges out ``Speech`` by 0.02 — discarding 0.38 of speech mass out of 1.0.
+    """
+    from senselab.audio.workflows.audio_analysis.sound_sources import window_label_mass
+
+    window = {
+        "start": 0.0,
+        "end": 0.96,
+        "labels": ["Music", "Speech", "Guitar"],
+        "scores": [0.40, 0.38, 0.22],
+    }
+    mass = window_label_mass(window, {"Speech"})
+    assert mass is not None
+    assert mass == pytest.approx(0.38)
+    # And the old rule's verdict, stated so the regression is unambiguous.
+    assert window["labels"][0] not in {"Speech"}
+
+
+def test_label_mass_sums_across_several_speech_labels() -> None:
+    """Mass over the whole subset, since speech has more than one AudioSet class."""
+    from senselab.audio.workflows.audio_analysis.sound_sources import window_label_mass
+
+    window = {"labels": ["Speech", "Narration, monologue", "Rain"], "scores": [0.3, 0.3, 0.4]}
+    assert window_label_mass(window, {"Speech", "Narration, monologue"}) == pytest.approx(0.6)
+
+
+def test_label_mass_is_none_without_scores() -> None:
+    """No scores is not zero mass — it is an absent measurement."""
+    from senselab.audio.workflows.audio_analysis.sound_sources import window_label_mass
+
+    assert window_label_mass({"labels": [], "scores": []}, {"Speech"}) is None
+    assert window_label_mass(None, {"Speech"}) is None

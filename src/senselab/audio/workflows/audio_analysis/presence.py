@@ -14,7 +14,10 @@ runs casts a vote, each calibrated to what its signal can actually answer:
 - **Whisper ``no_speech_prob``** (one extra voter per Whisper model): the
   model's own VAD-like silence head, plumbed as a sibling vote keyed
   ``<asr_model>::no_speech_prob``.
-- **AST / YAMNet**: ``speaks`` = top-1 label ∈ ``speech_presence_labels``.
+- **AST / YAMNet**: the share of class-score mass on ``speech_presence_labels``.
+  Not ``top-1 ∈ labels``: the argmax discards the rest of several hundred
+  scores, so a window topped by ``Music`` at 0.40 with ``Speech`` second at
+  0.38 used to vote a confident *no speech*.
 - **Acoustic / loudness** (openSMILE ``Loudness_sma3``): votes ``True`` for
   any audible sound — captures whisper and distorted voice that voicing-based
   signals miss.
@@ -42,7 +45,6 @@ import numpy as np
 
 from senselab.audio.workflows.audio_analysis.grid import BucketGrid
 from senselab.audio.workflows.audio_analysis.harvesters import (
-    classification_top1_in_window,
     classification_windows,
     diar_speaks_in_window,
     resolve_asr_result,
@@ -50,6 +52,7 @@ from senselab.audio.workflows.audio_analysis.harvesters import (
     whisper_bucket_confidence,
     whisper_bucket_no_speech_prob,
 )
+from senselab.audio.workflows.audio_analysis.sound_sources import window_label_mass
 
 if TYPE_CHECKING:
     from senselab.audio.tasks.voice_activity_detection.frame_posteriors import FramePosterior
@@ -353,24 +356,29 @@ def harvest_presence_votes(
         # bucket straddling a window boundary should use the window that covers
         # most of the bucket, not the one whose start happens to be lower.
         bucket_center = 0.5 * (start + end)
-        if ast_ok:
-            ast_idx = max(0, int(round(bucket_center / ast_hop))) if ast_hop > 0 else 0
-            label, score, _ = classification_top1_in_window(ast_block.get("result"), ast_idx)
-            if label is not None:
-                votes["ast"] = {
-                    "speaks": label in allow,
-                    "native_confidence": score,
-                    "coarse": True,  # AST native window ~10.24 s
-                }
-        if yam_ok:
-            yam_idx = max(0, int(round(bucket_center / yam_hop))) if yam_hop > 0 else 0
-            label, score, _ = classification_top1_in_window(yam_block.get("result"), yam_idx)
-            if label is not None:
-                votes["yamnet"] = {
-                    "speaks": label in allow,
-                    "native_confidence": score,
-                    "coarse": True,  # YAMNet native window ~0.96 s
-                }
+        for name, block, ok, hop, native_win in (
+            ("ast", ast_block, ast_ok, ast_hop if ast_ok else 0.0, 10.24),
+            ("yamnet", yam_block, yam_ok, yam_hop if yam_ok else 0.0, 0.96),
+        ):
+            if not ok:
+                continue
+            idx = max(0, int(round(bucket_center / hop))) if hop > 0 else 0
+            windows = classification_windows(block.get("result"))
+            if idx >= len(windows):
+                continue
+            # Mass over the speech label subset, not ``top-1 in subset``. The argmax discards the
+            # rest of several hundred class scores: a window topped by ``Music`` at 0.40 with
+            # ``Speech`` second at 0.38 previously voted a confident *no speech*.
+            mass = window_label_mass(windows[idx], allow)
+            if mass is None:
+                continue
+            votes[name] = {
+                "speaks": mass >= 0.5,
+                "native_confidence": mass if mass >= 0.5 else 1.0 - mass,
+                "speech_label_mass": mass,
+                "coarse": True,  # one native window spans many fine buckets
+                "native_window_s": native_win,
+            }
 
         # ── Acoustic features ────────────────────────────────────────────
         # Calibrate functions return ``(speaks_v, p_voice)`` where ``p_voice``
