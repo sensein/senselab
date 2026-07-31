@@ -14,6 +14,7 @@ No imports beyond stdlib + the sibling pure modules (``aggregate``, ``types``).
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -148,6 +149,98 @@ def _coupling_weights(params: dict[str, Any]) -> dict[str, float]:
     return weights
 
 
+_HARVEST_VOTE_FIELDS = {
+    "presence": "presence_votes",
+    "identity": "identity_votes",
+    "utterance": "utterance_votes",
+}
+
+
+def merge_votes_into_harvest(
+    harvest: PassHarvest,
+    axis: str,
+    votes_by_bucket: dict[tuple[float, float], dict[str, dict[str, Any]]],
+    *,
+    tol: float = 1e-6,
+) -> int:
+    """Add voters to a harvest's buckets in place; return the bucket count updated.
+
+    The supported way to introduce a new voter into a harvest, for a caller that then
+    re-derives rows with :func:`aggregate_pass` — one code path owns the fold, so rows
+    cannot drift from the harvest they came from.
+
+    **Timing matters.** The adaptive loop seeds its belief store from the harvests *once*
+    (``VoteStore.from_harvests``) and every later voter is added through
+    ``VoteStore.add_vote``. So merging here is only visible to the loop **before the store
+    is seeded** — i.e. before ``run_adaptive_loop`` is called. Merging into a harvest after
+    that point updates the harvest and the rows but not the store, and no adaptive round
+    will see it; use ``VoteStore.add_vote`` for that case.
+
+    Args:
+        harvest: The pass harvest to update in place.
+        axis: ``"presence"``, ``"identity"``, or ``"utterance"``.
+        votes_by_bucket: ``(start, end)`` → ``{source: payload}`` to merge. Buckets are
+            matched on their bounds within ``tol``; one the harvest does not have is
+            skipped with a warning rather than added, since a vote off the harvest grid
+            has no row to attach to. Payload dicts are stored by reference, not copied.
+        tol: Bucket-bound match tolerance in seconds.
+
+    Returns:
+        The number of *distinct harvest buckets* that received at least one voter. Two
+        keys within ``tol`` of the same bucket therefore count once (the later one's
+        overlapping sources win, as with any ``dict.update``).
+
+    Warns:
+        UserWarning: If any key matched no harvest bucket. A merge that silently no-ops
+            is indistinguishable from one that worked, and the return count is easy to
+            ignore, so the mismatch is surfaced rather than left to the caller to notice.
+
+    Raises:
+        ValueError: If ``axis`` is not one of the three axis names.
+    """
+    attr = _HARVEST_VOTE_FIELDS.get(axis)
+    if attr is None:
+        raise ValueError(f"unknown axis {axis!r}; must be one of {sorted(_HARVEST_VOTE_FIELDS)}")
+    buckets: list[dict[str, Any]] = getattr(harvest, attr)
+
+    # Exact-bounds index first: harvest bounds are canonicalized with round(x, 6) elsewhere
+    # (``aggregate_pass``, ``belief.bucket_key``), so the common case is a hit and the scan
+    # is only needed for bounds that differ within ``tol`` but round apart. Without this the
+    # merge is O(keys x buckets), which on a long file at a 0.5 s grid is millions of
+    # comparisons in a module whose contract is "milliseconds, not GPU time".
+    index: dict[tuple[float, float], dict[str, Any]] = {}
+    for bucket in buckets:
+        index.setdefault((round(float(bucket["start"]), 6), round(float(bucket["end"]), 6)), bucket)
+
+    touched: set[int] = set()
+    unmatched: list[tuple[float, float]] = []
+    for (start, end), new_votes in votes_by_bucket.items():
+        if not new_votes:
+            continue
+        target = index.get((round(start, 6), round(end, 6)))
+        if target is None:
+            target = next(
+                (b for b in buckets if abs(float(b["start"]) - start) <= tol and abs(float(b["end"]) - end) <= tol),
+                None,
+            )
+        if target is None:
+            unmatched.append((start, end))
+            continue
+        target["votes"].update(new_votes)
+        touched.add(id(target))
+
+    if unmatched:
+        warnings.warn(
+            f"merge_votes_into_harvest: {len(unmatched)} of {len(votes_by_bucket)} bucket(s) "
+            f"matched no {axis} bucket in the harvest and were dropped "
+            f"(first: {unmatched[0]}). The votes are off the harvest grid, so they have no "
+            f"row to attach to — check that they were computed on the same grid.",
+            UserWarning,
+            stacklevel=2,
+        )
+    return len(touched)
+
+
 def aggregate_pass(harvest: PassHarvest, *, aggregator: str, params: dict[str, Any]) -> dict[str, AxisResult]:
     """Fold one pass's harvested votes into the three per-axis ``AxisResult``s.
 
@@ -176,7 +269,7 @@ def aggregate_pass(harvest: PassHarvest, *, aggregator: str, params: dict[str, A
         bkey = (round(bucket["start"], 6), round(bucket["end"], 6))
         quality = harvest.quality_by_bucket.get(bkey)
         source = harvest.source_by_bucket.get(bkey)
-        votes = bucket["votes"]
+        votes = dict(bucket["votes"])  # own the mapping; payloads stay shared (see aggregate_pass)
         if quality is not None:
             votes = {**votes, "__quality__": quality.get("_raw", {})}
         if source is not None:
@@ -253,7 +346,7 @@ def aggregate_pass(harvest: PassHarvest, *, aggregator: str, params: dict[str, A
                 axis="identity",
                 aggregated_uncertainty=u_raw,
                 contributing_models=sorted(bucket["votes"].keys()),
-                model_votes=bucket["votes"],
+                model_votes=dict(bucket["votes"]),  # own the mapping; payloads stay shared
                 comparison_status="ok" if u_raw is not None else "incomparable",
                 raw_aggregated_uncertainty=u_raw,
                 intensity_weight=mask,
@@ -290,7 +383,7 @@ def aggregate_pass(harvest: PassHarvest, *, aggregator: str, params: dict[str, A
         # Reported value carries the coupling (FR-019); the pre-coupling number stays
         # visible on raw_aggregated_uncertainty and in model_votes so the adjustment is
         # auditable rather than invisible.
-        votes = bucket["votes"]
+        votes = dict(bucket["votes"])  # own the mapping; payloads stay shared (see aggregate_pass)
         u_reported = u_raw
         if u_raw is not None:
             u_reported = max(0.0, min(1.0, u_raw * coupling))

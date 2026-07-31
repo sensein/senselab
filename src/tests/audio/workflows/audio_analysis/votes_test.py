@@ -11,6 +11,7 @@ from senselab.audio.workflows.audio_analysis.votes import (
     compute_pass_deltas,
     intensity_mask,
     mask_from_pvoice,
+    merge_votes_into_harvest,
 )
 
 
@@ -86,6 +87,127 @@ def test_aggregate_pass_matches_pure_aggregators_and_columns() -> None:
     assert utt.aggregated_uncertainty == pytest.approx(utt_raw * expected_coupling)
     assert results["presence"].provenance["scene_quality"] == {"enabled": True}
     assert results["utterance"].provenance["grid"] == {"win_length": 1.0, "hop_length": 1.0}
+
+
+# ── vote-dict ownership (rows must not alias the harvest) ─────────────
+#     ``aggregate_pass`` is documented as *pure*, but it used to hand the harvest's
+#     own vote dict to each row. Callers that mutated ``row.model_votes`` therefore
+#     silently rewrote the harvest the adaptive loop is later handed. Rows are
+#     snapshots; adding a voter to the harvest is an explicit operation
+#     (``merge_votes_into_harvest``).
+
+
+def test_rows_do_not_alias_the_harvest_vote_dicts() -> None:
+    """Mutating a row's model_votes must not reach back into the harvest."""
+    harvest = _harvest()
+    results = aggregate_pass(harvest, aggregator="min", params={})
+    for axis, votes in (
+        ("presence", harvest.presence_votes),
+        ("identity", harvest.identity_votes),
+        ("utterance", harvest.utterance_votes),
+    ):
+        row = results[axis].rows[0]
+        row.model_votes["injected/marker"] = {"value": 1.0}
+        assert "injected/marker" not in votes[0]["votes"], f"{axis} row aliases the harvest vote dict"
+
+
+def test_rows_do_not_alias_the_harvest_without_scene_columns() -> None:
+    """The no-scene path is the one that actually aliased — cover it explicitly.
+
+    ``_harvest()`` gives its presence bucket quality/source columns and its utterance bucket
+    a non-1.0 coupling, so BOTH already rebuilt the vote dict via ``{**votes, ...}`` before
+    this fix; those arms of the test above pass even with the presence/utterance snapshots
+    reverted (verified). The aliasing only bit when there were no scene columns and coupling
+    was exactly 1.0 — i.e. a run with scene features skipped, the documented SC-008 path.
+    """
+    harvest = PassHarvest(
+        pass_label="raw_16k",
+        presence_votes=[{"start": 0.0, "end": 0.5, "votes": {"m1": {"speaks": True}}}],
+        identity_votes=[{"start": 0.0, "end": 1.0, "votes": {"__cross_diar_label_disagreement__": {"value": 0.4}}}],
+        utterance_votes=[{"start": 0.0, "end": 1.0, "votes": {"a": {"text": "hi", "avg_logprob": None}}}],
+        # no quality_by_bucket / source_by_bucket at all
+        grids={"presence": {"win_length": 0.5, "hop_length": 0.5}},
+    )
+    # w_q/w_s = 0 pins the utterance coupling to exactly 1.0, so no copy is made for it either.
+    results = aggregate_pass(harvest, aggregator="min", params={"utterance_scene_coupling": {"w_q": 0.0, "w_s": 0.0}})
+    for axis, votes in (
+        ("presence", harvest.presence_votes),
+        ("identity", harvest.identity_votes),
+        ("utterance", harvest.utterance_votes),
+    ):
+        assert "__quality__" not in results[axis].rows[0].model_votes  # confirms the no-scene path
+        results[axis].rows[0].model_votes["injected/marker"] = {"value": 1.0}
+        assert "injected/marker" not in votes[0]["votes"], f"{axis} row aliases the harvest vote dict"
+
+
+def test_merge_votes_into_harvest_is_visible_to_reaggregation() -> None:
+    """An injected voter lands in the harvest and changes the re-derived rows.
+
+    This is the property the adaptive loop depends on: it is handed the
+    ``PassHarvest``, not the rows, so a voter that only reached the rows would be
+    invisible to every round.
+    """
+    harvest = _harvest()
+    before = aggregate_pass(harvest, aggregator="min", params={})["identity"].rows[0]
+    assert before.aggregated_uncertainty == pytest.approx(0.8)
+
+    bucket = (harvest.identity_votes[0]["start"], harvest.identity_votes[0]["end"])
+    n = merge_votes_into_harvest(
+        harvest,
+        "identity",
+        {bucket: {"newdiar/newemb": {"same_label_uncertainty": 1.0}}},
+    )
+    assert n == 1
+    assert "newdiar/newemb" in harvest.identity_votes[0]["votes"]
+
+    after = aggregate_pass(harvest, aggregator="min", params={})["identity"].rows[0]
+    # "min" keeps the worst sub-signal, so a fully-doubtful new voter dominates 0.8.
+    assert after.aggregated_uncertainty == pytest.approx(1.0)
+    assert "newdiar/newemb" in after.contributing_models
+
+
+def test_merge_votes_into_harvest_ignores_unknown_buckets() -> None:
+    """A bucket the harvest doesn't have is reported as unmerged, not silently dropped."""
+    harvest = _harvest()
+    with pytest.warns(UserWarning):
+        n = merge_votes_into_harvest(harvest, "identity", {(99.0, 100.0): {"x": {"value": 1.0}}})
+    assert n == 0
+    assert all("x" not in b["votes"] for b in harvest.identity_votes)
+
+
+def test_merge_votes_into_harvest_warns_when_a_bucket_matches_nothing() -> None:
+    """A merge that silently no-ops looks identical to one that worked, so it warns.
+
+    The return count is easy to ignore; votes computed on a different grid than the harvest
+    would otherwise vanish with no signal at all.
+    """
+    harvest = _harvest()
+    with pytest.warns(UserWarning, match="matched no identity bucket"):
+        n = merge_votes_into_harvest(harvest, "identity", {(99.0, 100.0): {"x": {"value": 1.0}}})
+    assert n == 0
+
+
+def test_merge_votes_into_harvest_counts_distinct_buckets_not_keys() -> None:
+    """Two keys inside ``tol`` of one bucket count once — the documented return is buckets."""
+    harvest = _harvest()
+    start, end = harvest.identity_votes[0]["start"], harvest.identity_votes[0]["end"]
+    n = merge_votes_into_harvest(
+        harvest,
+        "identity",
+        {
+            (start, end): {"src/a": {"same_label_uncertainty": 0.1}},
+            (start + 5e-7, end): {"src/b": {"same_label_uncertainty": 0.2}},  # within tol of the same bucket
+        },
+    )
+    assert n == 1, "two keys resolving to one bucket must not be counted twice"
+    votes = harvest.identity_votes[0]["votes"]
+    assert "src/a" in votes and "src/b" in votes  # both still merged
+
+
+def test_merge_votes_into_harvest_rejects_unknown_axis() -> None:
+    """A typo'd axis name must fail loudly rather than merge nothing."""
+    with pytest.raises(ValueError, match="unknown axis"):
+        merge_votes_into_harvest(_harvest(), "identiy", {})  # codespell:ignore
 
 
 def test_intensity_mask_ramp_and_overlap_average() -> None:
