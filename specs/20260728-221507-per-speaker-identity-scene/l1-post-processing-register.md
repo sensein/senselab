@@ -61,19 +61,23 @@ context is correct to read through them. The signal was fine; the test was wrong
 Status: `open` = still in L1. Each entry names the L1 replacement — what the tool should emit
 instead — and the L2 question the moved step becomes.
 
-### Presence voters (`presence.py`) — the whole module is post-processing
+### Presence voters — dissolved into L1 evidence + an L2 link stage
 
-`harvest_presence_votes` returns `{"speaks": bool, "native_confidence": float}` per model. Both
+`harvest_presence_votes` returned `{"speaks": bool, "native_confidence": float}` per model. Both
 fields are conclusions. Per the governing instruction *"there is no presence at L1 just good
-signals"*, this module has no L1 role: it should become an L2 stage reading L1 measurements.
+signals"*, the module had no L1 role. It is now `speech_presence.harvest_speech_presence_evidence`
+(measurements in native units) plus `speech_presence_link.link_speech_presence` (an L2 stage under
+a named `SpeechPresencePolicy`). `PassHarvest.speech_presence_votes` became
+`speech_presence_evidence`; every consumer that needs beliefs calls
+`speech_presence_link.votes_for_harvest`.
 
 | # | site | current post-processing | L1 should emit | L2 question | status |
 |---|---|---|---|---|---|
-| 1 | diarization voters | `diar_speaks_in_window` → `speaks` bool | + `covered_fraction`, `speaker_label` | does any segment cover this bucket, and whose? | **partial** |
-| 2 | ASR token overlap | `token_overlaps_window` → `speaks` bool | words `(start_s, end_s, text)` | does a word land here? | open |
-| 3 | ASR hallucination gate | `speaks and not (nsp >= 0.5)` — threshold + override | raw `no_speech_prob` now travels with the verdict | is a transcript over probable silence trustworthy? | **partial** |
-| 4 | Whisper confidence | `avg_logprob` → bucket `native_confidence` | raw `avg_logprob` now recorded alongside | how does token logprob map to belief? | **partial** |
-| 5 | `::no_speech_prob` voter | `speaks = nsp < 0.5`, `nc = 1 − nsp` — threshold + inversion | raw `no_speech_prob` + `native_window_s` recorded | same as #3 | **partial** |
+| 1 | diarization voters | `diar_speaks_in_window` → `speaks` bool | `covered_fraction` + `speaker_label`, no verdict | does any segment cover this bucket, and whose? | **closed** |
+| 2 | ASR token overlap | `token_overlaps_window` → `speaks` bool | `word_overlap_s` (union, clipped) + `n_words` | does enough of a word land here? | **closed** |
+| 3 | ASR hallucination gate | `speaks and not (nsp >= 0.5)` — threshold + override | per-chunk `no_speech_probs`, unpooled | is a transcript over probable silence trustworthy? | **closed** |
+| 4 | Whisper confidence | `mean(exp(avg_logprob))` → bucket `native_confidence` | per-chunk `avg_logprobs`, unpooled | which pooling, and how does logprob map to belief? | **closed** |
+| 5 | `::no_speech_prob` voter | `speaks = nsp < 0.5`, `nc = 1 − nsp` — threshold + inversion | `no_speech_prob` + measured `segment_span_s` | same as #3 | **closed** |
 | 6 | AST | top-1 argmax over 527 labels, then `label in speech_labels` | full label→score map per native window | which categories are present, and is any of them speech? | **closed** |
 | 7 | YAMNet | top-1 argmax over 521 labels, then `label in speech_labels` | full label→score map per 0.48 s hop | same as #6 | **closed** |
 | 8 | `acoustic_loudness` | per-pass **percentile band** p10→p75 → `[0,1]` → direction flip | replaced by absolute `lufs` (D-3) | what loudness counts as audible here? | **closed** |
@@ -81,9 +85,9 @@ signals"*, this module has no L1 role: it should become an L2 stage reading L1 m
 | 10 | `acoustic_hnr` | fixed 2→10 dB ramp; low maps to `p = 0.5` (abstain) | `HNRdBACF_sma3nz` in dB per 10 ms frame | what HNR indicates voicing, and when is it uninformative? | open |
 | 11 | `ppg_voice_fraction` | per-frame argmax, count `!= "<silent>"`, ÷ n, then `>= 0.5` | PPG posterior frames (or argmax label + its probability) | what fraction of non-silent frames means speech? | open |
 | 12 | `embedding_silhouette` | cluster all windows, silhouette coefficient, `>= 0.5` | embedding vectors per window | does clustering support a coherent speaker here? | open |
-| 13 | frame posteriors | bucket-mean over frames, then `>= 0.5` | + `frame_mean`, `frame_std`, `channel_means`, `resolution_s` | how do frames aggregate to a bucket? | **partial** |
+| 13 | frame posteriors | bucket-mean over frames, then `>= 0.5` | `frame_mean`, `frame_std`, `channel_means`, `resolution_s` | how do frames aggregate to a bucket, and where is the cut? | **closed** |
 | 14 | `frame_dispersion` | `clip(2 × mean(std), 0, 1)` — ×2 rescale + clip | dispersion in probability units, unrescaled | how does dispersion enter a belief? | **closed** |
-| 15 | coarse-voter demotion | `weight = 0.25` when grid < 0.5 s | `native_window_s` / `resolution_s` on each vote | how should resolution mismatch be weighted? | **partial** |
+| 15 | coarse-voter demotion | hand-set `coarse: True`, `weight = 0.25` when grid < 0.5 s | measured `native_window_s` / `resolution_s` per signal | how should resolution mismatch be weighted? | **closed** |
 | 16 | segmentation-3.0 reduction | noisy-or over per-speaker channels (was `max`) | per-speaker activation matrix, channels intact | how do per-speaker activations combine? | **closed** |
 
 Item 16 is the sharpest case, and its diagnosis changed once measured. The model reports one
@@ -214,3 +218,48 @@ so the remaining half is not mistaken for done.
 Items 11 (`ppg_voice_fraction`) and 12 (`embedding_silhouette`) remain fully open: both are
 *derived* signals rather than tool outputs, and per D-7 they should be recomputed at L2 from L1
 embeddings and posteriors.
+
+
+## Findings from the full dissolve (items 1-5, 13, 15)
+
+**Two thresholds turned out to be pooling choices in disguise.** Whisper's bucket confidence was
+`mean(exp(avg_logprob))` over the contributing chunks. By Jensen's inequality that strictly exceeds
+`exp(mean(avg_logprob))` whenever the chunks disagree, so these are two different statistics and one
+had been chosen silently, inside a getter named as though it merely read a value. L1 now emits the
+per-chunk list and the choice is `SpeechPresencePolicy.asr_confidence_pooling` — the default
+reproduces the old numbers, but a reader can now see that a choice exists.
+
+**"Coarse" is not a property of a voter.** The harvester hand-marked AST, YAMNet, the ASR token
+voter and the Whisper `no_speech_prob` sibling as `coarse: True`, then applied a fixed `0.25` weight
+whenever the reporting grid was finer than 0.5 s. Both halves were wrong in the same way: a voter is
+only coarse *relative to the grid it is reported on*, so the comparison needs two numbers that are
+never both known at L1. AST's 10.24 s window is stretched across 20 buckets at 0.5 s and across none
+at 10.24 s. The demotion now reads a measured `native_window_s` against the reporting width.
+
+This changes behaviour at the historical 0.5 s grid, deliberately. The old rule (`grid < 0.5 s`) fired
+on no default run at all, so AST at 10.24 s and the Whisper segment voter at ~30 s were counted at
+full weight against 0.5 s buckets they could not resolve. Under the ratio rule they are demoted and
+YAMNet (0.96 s) is not. The old cutoff was arbitrary; this one is measured.
+
+**The ASR voter had no declared window at all.** It was marked coarse with `native_window_s: None`,
+which under a resolution-driven rule would mean "not coarse". The fix was to *measure* it:
+`claim_span_s` is the unclipped union of the transcript spans reaching a bucket, and
+`segment_span_s` the same for the segments whose scalars were pooled. Both are facts about the
+transcript, so the demotion is now derived from evidence rather than from a hand-set flag.
+
+**Three consumers were reading beliefs from what is now a measurement.** `support.py` (does the
+audio corroborate this claim), `fuse.py` (round fusion) and `adaptive/belief.py` (the round-1 vote
+store) all need verdicts, and all three read the harvest field directly. They now call
+`votes_for_harvest`, which links at the grid recorded on the harvest that produced the
+measurements — passing the grid separately is how a coarse voter ends up demoted against the wrong
+bucket width.
+
+**A test fixture spelled beliefs where the pipeline now carries measurements.** `votes_test.py` and
+the adaptive tests built `PassHarvest(speech_presence_votes=[{"votes": {"m1": {"speaks": True}}}])`.
+Translating them to `{"evidence": {"m1": {"covered_fraction": 1.0}}}` is not a mechanical rename:
+it forces each fixture to say which *measurement* produces the belief it was asserting, which is
+the property the layering exists to make explicit.
+
+Items 11-12 (`ppg_voice_fraction`, `embedding_silhouette`) remain open: both are still reduced
+inside the harvester rather than recomputed at L2 from posteriors and embedding vectors. Per D-7
+they are derived signals, and they move once `PassHarvest` carries the underlying measurements.

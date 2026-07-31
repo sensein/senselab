@@ -305,7 +305,9 @@ def test_from_harvests_in_process_integration() -> None:
 
     harvest = PassHarvest(
         pass_label="raw_16k",
-        speech_presence_votes=[{"start": 0.0, "end": 0.5, "votes": {"m1": {"speaks": True}, "m2": {"speaks": False}}}],
+        speech_presence_evidence=[
+            {"start": 0.0, "end": 0.5, "evidence": {"m1": {"covered_fraction": 1.0}, "m2": {"covered_fraction": 0.0}}}
+        ],
         speaker_votes=[{"start": 0.0, "end": 1.0, "votes": {"__cross_diar_label_disagreement__": {"value": 0.5}}}],
         asr_votes=[],
         quality_by_bucket={(0.0, 0.5): {"quality_snr": 0.3, "_raw": {}}},
@@ -334,9 +336,9 @@ def test_run_adaptive_loop_accepts_in_process_harvests(tmp_path: Path) -> None:
 
     harvest = PassHarvest(
         pass_label="raw_16k",
-        speech_presence_votes=[
-            {"start": 0.0, "end": 0.5, "votes": {"m1": {"speaks": True}}},
-            {"start": 0.5, "end": 1.0, "votes": {"m1": {"speaks": False}}},
+        speech_presence_evidence=[
+            {"start": 0.0, "end": 0.5, "evidence": {"m1": {"covered_fraction": 1.0}}},
+            {"start": 0.5, "end": 1.0, "evidence": {"m1": {"covered_fraction": 0.0}}},
         ],
         speaker_votes=[{"start": 0.0, "end": 1.0, "votes": {}}],
         asr_votes=[{"start": 0.0, "end": 1.0, "votes": {"a": {"text": "hi"}}}],
@@ -369,7 +371,7 @@ def test_in_process_path_reports_parity_as_skipped_not_passing(tmp_path: Path) -
 
     harvest = PassHarvest(
         pass_label="raw_16k",
-        speech_presence_votes=[{"start": 0.0, "end": 0.5, "votes": {"m1": {"speaks": True}}}],
+        speech_presence_evidence=[{"start": 0.0, "end": 0.5, "evidence": {"m1": {"covered_fraction": 1.0}}}],
         grids={"asr": {"win_length": 1.0, "hop_length": 1.0}},
     )
     run_adaptive_loop(
@@ -392,7 +394,7 @@ def test_in_process_ingest_ignores_passes_absent_from_the_summary(tmp_path: Path
     def _h(label: str) -> PassHarvest:
         return PassHarvest(
             pass_label=label,
-            speech_presence_votes=[{"start": 0.0, "end": 0.5, "votes": {"m1": {"speaks": True}}}],
+            speech_presence_evidence=[{"start": 0.0, "end": 0.5, "evidence": {"m1": {"covered_fraction": 1.0}}}],
             grids={"asr": {"win_length": 1.0, "hop_length": 1.0}},
         )
 

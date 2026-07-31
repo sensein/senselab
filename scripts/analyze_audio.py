@@ -839,7 +839,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--asr-hop-length must be positive and ≤ --asr-win-length")
     if args.speech_presence_grid_win_length <= 0:
         parser.error("--speech-presence-grid-win-length must be positive")
-    if args.speech_presence_grid_hop_length <= 0 or args.speech_presence_grid_hop_length > args.speech_presence_grid_win_length:
+    if (
+        args.speech_presence_grid_hop_length <= 0
+        or args.speech_presence_grid_hop_length > args.speech_presence_grid_win_length
+    ):
         parser.error("--speech-presence-grid-hop-length must be positive and ≤ --speech-presence-grid-win-length")
     if not (0.0 <= args.phoneme_disagreement_threshold <= 1.0):
         parser.error("--phoneme-disagreement-threshold must be in [0, 1]")
@@ -1193,7 +1196,9 @@ def main(argv: list[str] | None = None) -> int:
             summaries["run_state"] = "no_speech"
             args.skip = tuple(sorted(set(args.skip) | {"diarization", "asr", "alignment"}))
             args.ppg = False
-            print("  no speech found — skipping diarization/ASR/alignment/PPG; speech_presence outputs still emitted (FR-004)")
+            print(
+                "  no speech found — skipping diarization/ASR/alignment/PPG; speech_presence outputs still emitted (FR-004)"
+            )
     run_enhanced_pass = enhancement_mode == "always" or (
         enhancement_mode == "auto"
         and triage is not None
@@ -1668,11 +1673,21 @@ def main(argv: list[str] | None = None) -> int:
                     signal_support,
                 )
 
-                speech_presence_harvest = getattr(harvests_by_pass.get("raw_16k"), "speech_presence_votes", None) or next(
+                from senselab.audio.workflows.audio_analysis.speech_presence_link import (
+                    votes_for_harvest,
+                )
+
+                # Support is measured over verdicts; the harvest holds L1 measurements, so link
+                # first. Prefer the unmodified pass, falling back to whichever pass measured
+                # anything at all.
+                speech_presence_harvest = next(
                     (
-                        getattr(h, "speech_presence_votes", None)
-                        for h in harvests_by_pass.values()
-                        if getattr(h, "speech_presence_votes", None)
+                        linked
+                        for h in (
+                            harvests_by_pass.get("raw_16k"),
+                            *harvests_by_pass.values(),
+                        )
+                        if h is not None and (linked := votes_for_harvest(h))
                     ),
                     [],
                 )
@@ -1712,7 +1727,9 @@ def main(argv: list[str] | None = None) -> int:
                 measured_support = signal_support(
                     speech_presence_harvest,
                     evidence_signals=sorted(
-                        informative_evidence(speech_presence_harvest, sorted(evidence_signal_names(speech_presence_harvest)))
+                        informative_evidence(
+                            speech_presence_harvest, sorted(evidence_signal_names(speech_presence_harvest))
+                        )
                     ),
                 )
                 # Support x invariance: a source is discounted for claiming speakers the
@@ -1834,7 +1851,12 @@ def main(argv: list[str] | None = None) -> int:
             # Rendering a frame posterior as on/off discards everything it measured.
             l1_signals: dict[str, list[tuple[float, float]]] = {}
             l1_series: dict[str, tuple[list[float], list[float]]] = {}
-            for bucket in getattr(reference, "speech_presence_votes", []) or []:
+            from senselab.audio.workflows.audio_analysis.speech_presence_link import votes_for_harvest
+
+            # The diagnostic plots what each signal *concluded*, so it reads the linked votes.
+            # Plotting the raw measurements instead would need a per-signal axis scale — tracked as
+            # follow-up in the L1 post-processing register.
+            for bucket in votes_for_harvest(reference):
                 centre = (float(bucket["start"]) + float(bucket["end"])) / 2.0
                 for name, entry in (bucket.get("votes") or {}).items():
                     if str(name).startswith("__") or not isinstance(entry, dict):

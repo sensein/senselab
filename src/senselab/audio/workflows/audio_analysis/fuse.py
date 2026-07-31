@@ -320,6 +320,7 @@ def write_final_uncertainty(
     mask_regions: Sequence[Mapping[str, Any]] = (),
     speaker_claims: Mapping[str, Sequence[tuple[float, float]]] | None = None,
     max_rounds: int = 1,
+    speech_presence_policy: Any = None,  # noqa: ANN401 — SpeechPresencePolicy, imported lazily
 ) -> dict[str, Any]:
     """Write ``L2/round<N>/uncertainty/{speech_presence,speaker,asr}.parquet``.
 
@@ -341,6 +342,9 @@ def write_final_uncertainty(
         mask_regions: Mask regions, enabling regional trust in rounds after the first.
         speaker_claims: ``{signal → spans}`` where each signal asserted a speaker.
         max_rounds: Cap on L2 iterations.
+        speech_presence_policy: Policy used to read L1 speech-presence measurements as beliefs.
+            Defaults to the documented anchors. Fusion needs verdicts, and the harvest stores
+            measurements, so the link has to happen here rather than being assumed done.
 
     Returns:
         ``{axis → written path}`` as strings, for the run summary.
@@ -349,14 +353,23 @@ def write_final_uncertainty(
 
     import pandas as pd
 
-    axis_field = {"speech_presence": "speech_presence_votes", "speaker": "speaker_votes", "asr": "asr_votes"}
+    from senselab.audio.workflows.audio_analysis.speech_presence_link import (
+        DEFAULT_POLICY,
+        votes_for_harvest,
+    )
+
+    policy = speech_presence_policy if speech_presence_policy is not None else DEFAULT_POLICY
+    axis_field = {"speech_presence": None, "speaker": "speaker_votes", "asr": "asr_votes"}
     level2 = Path(out_dir) / "L2"
     level2.mkdir(parents=True, exist_ok=True)
 
     written: dict[str, Any] = {}
     logs: dict[str, Any] = {}
     for axis, field in axis_field.items():
-        by_pass = {label: getattr(h, field, []) or [] for label, h in harvests.items()}
+        by_pass = {
+            label: (votes_for_harvest(h, policy=policy) if field is None else (getattr(h, field, []) or []))
+            for label, h in harvests.items()
+        }
         rows, round_log = fuse_rounds(
             by_pass,
             weights=weights_by_axis.get(axis, {}),

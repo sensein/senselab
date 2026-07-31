@@ -120,7 +120,7 @@ def test_fusion_is_deterministic() -> None:
 def _harvest(label: str, buckets: list[dict]) -> object:
     from types import SimpleNamespace
 
-    return SimpleNamespace(pass_label=label, speech_presence_votes=[], speaker_votes=buckets, asr_votes=[])
+    return SimpleNamespace(pass_label=label, speech_presence_evidence=[], speaker_votes=buckets, asr_votes=[])
 
 
 def test_the_final_maps_are_written_for_every_axis(tmp_path) -> None:  # noqa: ANN001

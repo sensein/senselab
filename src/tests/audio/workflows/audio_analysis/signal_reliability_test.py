@@ -88,7 +88,7 @@ def _harvest(pass_label: str, values: dict[str, float]) -> object:
     return SimpleNamespace(
         pass_label=pass_label,
         speaker_votes=[{"start": 0.0, "end": 0.5, "votes": votes}],
-        speech_presence_votes=[],
+        speech_presence_evidence=[],
         asr_votes=[],
     )
 

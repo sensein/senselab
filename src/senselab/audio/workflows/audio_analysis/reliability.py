@@ -36,7 +36,15 @@ __all__ = [
 MIN_RELIABILITY = 0.05
 """Floor on a signal's weight, so a maximally-unstable signal is attenuated, not silenced."""
 
-_AXIS_VOTES = {"speech_presence": "speech_presence_votes", "speaker": "speaker_votes", "asr": "asr_votes"}
+_AXIS_SIGNALS: dict[str, tuple[str, str]] = {
+    # (PassHarvest field, key holding the per-signal mapping). The speech-presence axis stores L1
+    # *measurements* under "evidence"; the other two still store votes. Both are read only for
+    # signal names and for the comparable uncertainty fields below, neither of which needs the
+    # verdict — so reliability can be measured before anything is interpreted.
+    "speech_presence": ("speech_presence_evidence", "evidence"),
+    "speaker": ("speaker_votes", "votes"),
+    "asr": ("asr_votes", "votes"),
+}
 
 # Sub-signal fields whose value is an uncertainty in [0, 1] and therefore comparable across
 # passes. Fields carrying raw measurements (cosine distances, transcripts) are excluded —
@@ -49,15 +57,15 @@ _COMPARABLE_FIELDS = (
 )
 
 
-def _bucket_values(votes: Any) -> dict[tuple[float, float], dict[str, float]]:  # noqa: ANN401
-    """``{(start, end) → {signal → uncertainty}}`` for one pass's harvested votes."""
+def _bucket_values(buckets: Any, signal_key: str) -> dict[tuple[float, float], dict[str, float]]:  # noqa: ANN401
+    """``{(start, end) → {signal → uncertainty}}`` for one pass's harvested buckets."""
     out: dict[tuple[float, float], dict[str, float]] = {}
-    for bucket in votes or []:
+    for bucket in buckets or []:
         if not isinstance(bucket, Mapping):
             continue
         key = (round(float(bucket.get("start", 0.0)), 6), round(float(bucket.get("end", 0.0)), 6))
         per_signal: dict[str, float] = {}
-        for name, entry in (bucket.get("votes") or {}).items():
+        for name, entry in (bucket.get(signal_key) or {}).items():
             if not isinstance(entry, Mapping):
                 continue
             for field in _COMPARABLE_FIELDS:
@@ -84,10 +92,11 @@ def signal_stability(harvests: Mapping[str, Any], *, axis: str) -> dict[str, flo
         passes are compared — a signal that dropped out of one pass is silent there, which is
         different from disagreeing.
     """
-    field = _AXIS_VOTES.get(str(axis))
-    if field is None:
-        raise ValueError(f"unknown axis {axis!r}; expected one of {sorted(_AXIS_VOTES)}")
-    per_pass = {label: _bucket_values(getattr(h, field, None)) for label, h in sorted(harvests.items())}
+    resolved = _AXIS_SIGNALS.get(str(axis))
+    if resolved is None:
+        raise ValueError(f"unknown axis {axis!r}; expected one of {sorted(_AXIS_SIGNALS)}")
+    field, signal_key = resolved
+    per_pass = {label: _bucket_values(getattr(h, field, None), signal_key) for label, h in sorted(harvests.items())}
     labels = [lab for lab, v in per_pass.items() if v]
     if len(labels) < 2:
         return {}
@@ -127,14 +136,15 @@ def signal_names(harvests: Mapping[str, Any], *, axis: str) -> list[str]:
     The derivation gate must reach signals with no perturbation evidence too — a signal that
     appeared in only one pass is unmeasured for stability but still derived or not.
     """
-    field = _AXIS_VOTES.get(str(axis))
-    if field is None:
-        raise ValueError(f"unknown axis {axis!r}; expected one of {sorted(_AXIS_VOTES)}")
+    resolved = _AXIS_SIGNALS.get(str(axis))
+    if resolved is None:
+        raise ValueError(f"unknown axis {axis!r}; expected one of {sorted(_AXIS_SIGNALS)}")
+    field, signal_key = resolved
     names: set[str] = set()
     for harvest in harvests.values():
         for bucket in getattr(harvest, field, None) or []:
             if isinstance(bucket, Mapping):
-                names.update(str(k) for k in (bucket.get("votes") or {}))
+                names.update(str(k) for k in (bucket.get(signal_key) or {}))
     return sorted(names)
 
 

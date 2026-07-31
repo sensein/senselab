@@ -207,24 +207,40 @@ side-effect-free API). Design/spec/results: `specs/20260723-225523-dynamic-uncer
 
 The reusable comparator lives at `senselab.audio.workflows.audio_analysis`. The CLI script `scripts/analyze_audio.py` is a thin wrapper: per-task pipeline → one call to `compute_uncertainty_axes(...)` → parquet writers + LS bundle + disagreements index + timeline plot.
 
-The workflow emits three per-bucket uncertainty time series — `presence` (was there a speaker?), `identity` (was it the same speaker?), and `utterance` (what was said?) — each in `[0, 1]`. Every model whose output naturally encodes an axis votes (max-inclusive); the per-axis aggregator (Shannon entropy for presence, cross-model label disagreement + cosine for identity, pairwise mean WER + Whisper avg_logprob + PPG-vs-ASR PER for utterance) collapses sub-signals via `--uncertainty-aggregator`.
+The workflow emits three per-bucket uncertainty time series — `speech_presence` (was there a speaker?), `speaker` (was it the same speaker?), and `asr` (what was said?) — each in `[0, 1]`. Every model whose output naturally encodes an axis votes (max-inclusive); the per-axis aggregator (Shannon entropy for speech_presence, cross-model label disagreement + cosine for speaker, pairwise mean WER + Whisper avg_logprob + PPG-vs-ASR PER for asr) collapses sub-signals via `--uncertainty-aggregator`.
+
+**L1 measures, L2 decides.** L1 reports what a tool produced, in that tool's units, at its own
+resolution: no thresholds, no rescaling to `[0, 1]` against an anchor, no reduction across a
+dimension the tool reported separately, no selection among estimators. Every interpretation lives
+at L2, where it is named and can be changed without re-running a model. Concretely for the
+speech-presence axis: `speech_presence.harvest_speech_presence_evidence` emits measurements
+(segment `covered_fraction`, transcript `word_overlap_s`, per-chunk `avg_logprobs`, `excess_db`,
+`frame_mean` + `channel_means`), and `speech_presence_link.link_speech_presence` turns them into
+votes under a `SpeechPresencePolicy` recorded in each row's provenance. Consumers that need beliefs
+(`support.py`, `fuse.py`, `adaptive/belief.py`) call `speech_presence_link.votes_for_harvest`;
+`PassHarvest.speech_presence_evidence` holds the measurements. Scene quality follows the same
+split: `quality.harvest_quality_measurements` (dB / hertz / proportion) →
+`degradation.scene_degradation` (anchored scores). Remaining violations and their status are
+tracked one-by-one in
+`specs/20260728-221507-per-speaker-identity-scene/l1-post-processing-register.md`; the governing
+design and its decisions D-1 – D-15 are in the sibling `layered-architecture.md`.
 
 Output:
 
-- `<run_dir>/<pass>/uncertainty/{presence,identity,utterance}.parquet` — per-pass axes (6 total per default two-pass run).
-- `<run_dir>/uncertainty/raw_vs_enhanced/{presence,identity,utterance}.parquet` — same-axis deltas across passes (3 total).
-- `<run_dir>/disagreements.json` — top-N ranked across the 9 parquets, sorted by `aggregated_uncertainty` desc with axis-priority tiebreak (utterance > identity > presence).
-- `<run_dir>/timeline.png` — 5-row figure: presence / identity / utterance overlaid raw + enhanced, plus a raw-vs-enhanced delta strip and a reference row.
-- LS Labels tracks `<pass>__uncertainty__{presence,identity,utterance}` and `pass_pair__uncertainty__*`; utterance has a sibling TextArea carrying transcript consensus + dissenting models.
+- `<run_dir>/<pass>/uncertainty/{speech_presence,speaker,asr}.parquet` — per-pass axes (6 total per default two-pass run).
+- `<run_dir>/uncertainty/raw_vs_enhanced/{speech_presence,speaker,asr}.parquet` — same-axis deltas across passes (3 total).
+- `<run_dir>/disagreements.json` — top-N ranked across the 9 parquets, sorted by `aggregated_uncertainty` desc with axis-priority tiebreak (asr > speaker > speech_presence).
+- `<run_dir>/timeline.png` — 5-row figure: speech_presence / speaker / asr overlaid raw + enhanced, plus a raw-vs-enhanced delta strip and a reference row.
+- LS Labels tracks `<pass>__uncertainty__{speech_presence,speaker,asr}` and `pass_pair__uncertainty__*`; asr has a sibling TextArea carrying transcript consensus + dissenting models.
 
 ```bash
 # Default — runs the full pipeline including the workflow
 uv run python scripts/analyze_audio.py audio.wav
 
 # Standalone use of the workflow API (no script)
-python -c "
+uv run python -c "
 from senselab.audio.workflows.audio_analysis import BucketGrid, compute_uncertainty_axes
-axis_results, incomparable = compute_uncertainty_axes(
+axis_results, incomparable, embeddings = compute_uncertainty_axes(
     passes=passes_summary,    # the dict produced by analyze_audio's per-task run_pass
     grid=BucketGrid(),         # 0.5 s non-overlapping by default
     params={...},
