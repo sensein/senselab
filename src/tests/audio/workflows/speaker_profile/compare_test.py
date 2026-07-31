@@ -22,6 +22,7 @@ from senselab.audio.workflows.speaker_profile import constants as C
 from senselab.audio.workflows.speaker_profile.build import TaggedWindowEmbedding, aggregate_dominant_cluster
 from senselab.audio.workflows.speaker_profile.compare import (
     GridMismatchError,
+    GridMismatchWarning,
     check_grid_compatibility,
     compare_recording_to_profile,
     compute_target_quality,
@@ -453,10 +454,21 @@ def test_check_grid_compatibility_accepts_a_matching_grid() -> None:
     check_grid_compatibility([_win(0.0, 2.0), _win(1.0, 2.0)], 2.0)
 
 
-def test_check_grid_compatibility_rejects_a_different_window_length() -> None:
-    """0.5 s windows against a 2.0 s profile is the miscalibration this exists to stop."""
-    with pytest.raises(GridMismatchError, match="0.5s but the profile was enrolled at 2s"):
+def test_check_grid_compatibility_warns_on_a_different_window_length() -> None:
+    """A mismatch warns by default — measured, it degrades scoring rather than breaking it.
+
+    Scoring a 2.0 s-built profile against 0.5 s windows cost 2-10 AUC points on constructed
+    intrusions (replace 0.899 -> 0.877, overlay 0.846 -> 0.751). Real, worth surfacing, not
+    worth aborting a run over.
+    """
+    with pytest.warns(GridMismatchWarning, match="0.5s but the profile was enrolled at 2s"):
         check_grid_compatibility([_win(0.0, 0.5), _win(0.25, 0.5)], 2.0)
+
+
+def test_check_grid_compatibility_raises_when_strict() -> None:
+    """A caller that wants a mismatch to be fatal can opt in."""
+    with pytest.raises(GridMismatchError, match="0.5s but the profile was enrolled at 2s"):
+        check_grid_compatibility([_win(0.0, 0.5), _win(0.25, 0.5)], 2.0, strict=True)
 
 
 def test_check_grid_compatibility_ignores_hop_differences() -> None:

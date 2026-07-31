@@ -20,6 +20,7 @@ leave-one-out, the pooled source windows re-extracted from the shared cache).
 
 from __future__ import annotations
 
+import warnings
 from typing import Mapping, Sequence
 
 import numpy as np
@@ -562,7 +563,11 @@ def score_voice_groups(
 
 
 class GridMismatchError(ValueError):
-    """Raised when detection windows were extracted at a different grid than the profile."""
+    """Raised by ``check_grid_compatibility(..., strict=True)`` on a grid mismatch."""
+
+
+class GridMismatchWarning(UserWarning):
+    """Warned when detection windows were extracted at a different grid than the profile."""
 
 
 def derive_window_grid(windows: Sequence[WindowEmbedding]) -> tuple[float, float | None]:
@@ -586,17 +591,22 @@ def check_grid_compatibility(
     windows: Sequence[WindowEmbedding],
     profile_window_s: float,
     *,
+    strict: bool = False,
     tolerance_s: float = 0.01,
 ) -> None:
     """Verify detection windows match the grid a profile was enrolled at.
 
-    **Why this raises rather than warns.** Comparing a window against a centroid built at
-    a different length adds a duration domain gap on top of whatever speaker difference is
-    present, inflating target and non-target distances alike. Nothing downstream would
-    notice: ``calibration_band`` does **not** adapt to the grid — measured, it came out as
-    the fixed ``SAME/DIFF_SPEAKER_FLOOR_FALLBACK`` values at both 2.0 s and 0.5 s. So a
-    cross-grid comparison quietly scores against thresholds chosen for another grid, and
-    silent miscalibration on an identity decision is worse than a failed run.
+    **Why this warns rather than raises.** Comparing a window against a centroid built at a
+    different length adds a duration domain gap on top of whatever speaker difference is
+    present, and nothing downstream would notice: ``calibration_band`` does **not** adapt to
+    the grid — measured, it came out as the fixed ``SAME/DIFF_SPEAKER_FLOOR_FALLBACK`` values
+    at both 2.0 s and 0.5 s. So a cross-grid comparison quietly scores against thresholds
+    chosen for another grid.
+
+    But measured on constructed intrusions, the cost is **2-10 AUC points** (clean-intrusion
+    0.899 -> 0.877, overlapped 0.846 -> 0.751), not a collapse. Degraded, not meaningless — so
+    the default surfaces it and lets the run continue. Pass ``strict=True`` where a mismatch
+    should be fatal.
 
     Note this guard covers *mixing* grids. It does not fix the related calibration problem
     that the fixed band is implicitly tuned for the coarse grid: cross-subject centroid
@@ -607,20 +617,27 @@ def check_grid_compatibility(
     Args:
         windows: Detection windows for one model.
         profile_window_s: The profile's enrollment window length.
+        strict: Raise instead of warning.
         tolerance_s: Absolute tolerance, to absorb float noise and end-of-audio clipping.
 
-    Raises:
-        GridMismatchError: If the window length differs beyond ``tolerance_s``. The *hop*
-            is deliberately not checked: ``_window_step_seconds`` derives coverage from the
+    Warns:
+        GridMismatchWarning: If the window length differs beyond ``tolerance_s``. The *hop* is
+            deliberately not checked: ``_window_step_seconds`` derives coverage from the
             results' own timestamps, so duration rollups are already hop-agnostic.
+
+    Raises:
+        GridMismatchError: Same condition, when ``strict=True``.
     """
     window_s, _ = derive_window_grid(windows)
     if not windows:
         return
     if abs(window_s - profile_window_s) > tolerance_s:
-        raise GridMismatchError(
+        msg = (
             f"detection windows are {window_s:g}s but the profile was enrolled at "
-            f"{profile_window_s:g}s. The calibration band is grid-specific, so scoring "
-            f"across grids misapplies it. Re-extract at {profile_window_s:g}s, or enroll "
-            f"at {window_s:g}s."
+            f"{profile_window_s:g}s. The calibration band does not adapt to the grid, so this "
+            f"scores against thresholds chosen for another window length — measured cost is "
+            f"2-10 AUC points. Re-extract at {profile_window_s:g}s, or enroll at {window_s:g}s."
         )
+        if strict:
+            raise GridMismatchError(msg)
+        warnings.warn(msg, GridMismatchWarning, stacklevel=2)
