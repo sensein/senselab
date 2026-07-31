@@ -276,3 +276,37 @@ def test_a_declared_uncertainty_wins_over_a_derived_one() -> None:
     """
     bucket = {"votes": {"a": {"same_label_uncertainty": 0.9, "native_confidence": 0.95}}}
     assert per_signal_uncertainty(bucket)["a"] == pytest.approx(0.9)
+
+
+def test_utterance_uncertainty_is_recoverable_from_pairwise_distances() -> None:
+    """The utterance axis reports pairs, not per-model confidences.
+
+    On a real recording all three ASR backends were text-only, so every avg_logprob was None
+    and the axis had no per-signal quantity at all — L2 fused 0 of 41 buckets. A pairwise
+    distance belongs to both models in the pair, so each model's uncertainty is the mean of
+    the distances it takes part in: the transcript that differs from everyone else's is the
+    doubtful one, recoverable even when no model reports its own confidence.
+    """
+    bucket = {
+        "votes": {
+            "a": {"text": "x", "avg_logprob": None},
+            "b": {"text": "y", "avg_logprob": None},
+            "__pairwise_phoneme_distances__": {"pairs": {"a|b": 0.2, "a|c": 0.6}},
+        }
+    }
+    out = per_signal_uncertainty(bucket)
+    assert out["b"] == pytest.approx(0.2)
+    assert out["c"] == pytest.approx(0.6)
+    # 'a' disagrees with both, so it carries the mean of its two distances.
+    assert out["a"] == pytest.approx(0.4)
+
+
+def test_a_directly_reported_uncertainty_overrides_the_pairwise_estimate() -> None:
+    """A signal that states its own doubt is authoritative; the pairwise value is a fallback."""
+    bucket = {
+        "votes": {
+            "a": {"same_label_uncertainty": 0.05},
+            "__pairwise_phoneme_distances__": {"pairs": {"a|b": 0.9}},
+        }
+    }
+    assert per_signal_uncertainty(bucket)["a"] == pytest.approx(0.05)

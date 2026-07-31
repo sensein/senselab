@@ -69,6 +69,8 @@ def per_signal_uncertainty(bucket: Mapping[str, Any]) -> dict[str, float]:
     if not isinstance(votes, Mapping):
         return {}
     out: dict[str, float] = {}
+    # Pairwise evidence first, then overridden below by anything a signal states directly.
+    out.update(_pairwise_per_signal(votes))
     for name, entry in votes.items():
         if not isinstance(entry, Mapping):
             continue
@@ -78,6 +80,8 @@ def per_signal_uncertainty(bucket: Mapping[str, Any]) -> dict[str, float]:
                 out[str(name)] = max(0.0, min(1.0, float(value)))
                 break
         else:
+            if str(name) in out:
+                continue
             for field in _LOGPROB_FIELDS:
                 value = entry.get(field)
                 if isinstance(value, (int, float)):
@@ -95,6 +99,34 @@ def per_signal_uncertainty(bucket: Mapping[str, Any]) -> dict[str, float]:
                     out[str(name)] = max(0.0, min(1.0, 1.0 - float(value)))
                     break
     return out
+
+
+def _pairwise_per_signal(votes: Mapping[str, Any]) -> dict[str, float]:
+    """Per-signal uncertainty from pairwise disagreement, for axes that only report pairs.
+
+    The utterance axis carries ``{model_a|model_b: phoneme_distance}`` rather than a per-model
+    confidence, and on a real recording all three ASR backends were text-only so every
+    ``avg_logprob`` was ``None`` — leaving the axis with no per-signal quantity at all and L2
+    fusing 0 of 41 buckets.
+
+    A distance belongs to both models in the pair, so each model's uncertainty is the mean of
+    the distances it participates in: a transcript that differs from everyone else's is the
+    doubtful one, and that is recoverable from pairs even when no model reports its own
+    confidence. Attributing to one side only would blame whichever name sorted first.
+    """
+    block = votes.get("__pairwise_phoneme_distances__")
+    if not isinstance(block, Mapping):
+        return {}
+    per_model: dict[str, list[float]] = {}
+    for key, distance in (block.get("pairs") or {}).items():
+        if not isinstance(distance, (int, float)):
+            continue
+        parts = str(key).split("|", 1)
+        if len(parts) != 2:
+            continue
+        for model in parts:
+            per_model.setdefault(model, []).append(max(0.0, min(1.0, float(distance))))
+    return {model: sum(v) / len(v) for model, v in sorted(per_model.items()) if v}
 
 
 def fuse_axis(
