@@ -1852,22 +1852,47 @@ def main(argv: list[str] | None = None) -> int:
                     if entry.get("speaks"):
                         l1_signals[str(name)].append((float(bucket["start"]), float(bucket["end"])))
 
-            # Words attributed to the model that produced them.
-            l1_words: dict[str, list[dict[str, Any]]] = {}
-            for model, outcome in ((raw_summary.get("alignment") or {}).get("by_model") or {}).items():
-                result = outcome.get("result") if isinstance(outcome, dict) else None
-                while isinstance(result, list) and result and isinstance(result[0], list):
-                    result = result[0]
-                for segment in result or []:
-                    if not isinstance(segment, dict):
+            # Which cluster each diarizer placed per bucket, so its row can colour by speaker.
+            # A flat row makes a two-speaker conversation look identical to a one-speaker one,
+            # which is precisely what the identity axis is arguing about.
+            l1_speakers: dict[str, list[tuple[float, float, str]]] = {}
+            for bucket in getattr(reference, "identity_votes", []) or []:
+                for name, entry in (bucket.get("votes") or {}).items():
+                    if "::" in str(name) or str(name).startswith("__") or not isinstance(entry, dict):
                         continue
-                    for word in segment.get("words") or segment.get("chunks") or []:
+                    cluster = entry.get("cluster_id")
+                    if cluster and str(cluster) != "SIL":
+                        l1_speakers.setdefault(str(name), []).append(
+                            (float(bucket["start"]), float(bucket["end"]), str(cluster))
+                        )
+
+            # Words attributed to the model that produced them, taken from whichever result
+            # actually carries usable timings. Reading only the alignment block was wrong:
+            # CrisperWhisper and Qwen3-ASR carry *native* word timings in their own chunks and
+            # so are correctly skipped by the aligner, which meant the plot showed words for
+            # the one text-only model and none for the two that had them all along.
+            from senselab.audio.workflows.audio_analysis.harvesters import resolve_asr_result
+
+            asr_by_model = (raw_summary.get("asr") or {}).get("by_model") or {}
+            align_by_model = (raw_summary.get("alignment") or {}).get("by_model") or {}
+            l1_words: dict[str, list[dict[str, Any]]] = {}
+            for model, asr_outcome in asr_by_model.items():
+                if not isinstance(asr_outcome, dict) or asr_outcome.get("status") != "ok":
+                    continue
+                timed = resolve_asr_result(asr_outcome, align_by_model.get(model))
+                lines = timed if isinstance(timed, list) else [timed]
+                while isinstance(lines, list) and lines and isinstance(lines[0], list):
+                    lines = lines[0]
+                for line in lines or []:
+                    if not isinstance(line, dict):
+                        continue
+                    for word in line.get("chunks") or line.get("words") or []:
                         if isinstance(word, dict) and word.get("start") is not None:
                             l1_words.setdefault(str(model), []).append(
                                 {
                                     "start": float(word["start"]),
                                     "end": float(word.get("end") or word["start"]),
-                                    "text": str(word.get("word") or word.get("text") or ""),
+                                    "text": str(word.get("text") or word.get("word") or ""),
                                 }
                             )
 
@@ -1893,6 +1918,7 @@ def main(argv: list[str] | None = None) -> int:
                 sampling_rate=int(getattr(raw_audio, "sampling_rate", 16000) or 16000),
                 series=l1_series,
                 words_by_model=l1_words,
+                speakers_by_model=l1_speakers,
                 scene_by_classifier=l1_scene,
                 failed=l1_failed,
                 title=f"L1 signals — {args.audio.name}",
