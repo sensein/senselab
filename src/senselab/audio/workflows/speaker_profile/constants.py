@@ -113,10 +113,31 @@ the standard for speaker diarization; k-means is the documented fallback."""
 # ---------------------------------------------------------------------------
 
 SAME_SPEAKER_FLOOR_FALLBACK: float = 0.30
-"""[reuse] Literature fallback — typical ECAPA same-speaker noise level."""
+"""[reuse] Literature fallback — typical ECAPA same-speaker noise level.
+
+**MEASURED, b2ai adult, 49 subjects, ECAPA @ 2.0 s/1.0 s** (connected speech, leave-one-out):
+own held-out cosine distance to the profile centroid was **median 0.104, mean 0.152**, and
+**43 of 49** fell below this 0.30 floor — i.e. almost every genuine match clips to
+similarity exactly 1.0.
+"""
 
 DIFF_SPEAKER_FLOOR_FALLBACK: float = 0.70
-"""[reuse] Literature fallback — well above the VoxCeleb EER region."""
+"""[reuse] Literature fallback — well above the VoxCeleb EER region.
+
+**MEASURED, same run:** nearest-impostor distance was **median 0.610, mean 0.596**, and only
+**6 of 49** reached this 0.70 floor — so "confidently different speaker" almost never fires,
+and 43 of 49 impostors land inside the band instead.
+
+Taken together the band is mis-centred for this corpus: raw distances separate well (mean
+margin 0.444) but the fixed 0.30/0.70 span clips ~74–81% of scores to 0 or 1. The empirical
+overlap region is roughly **0.41–0.61** (own max 0.614, impostor min 0.412), so a band spanning
+that would grade the ambiguous zone instead of saturating both ends.
+
+**Left unchanged deliberately.** Saturation costs threshold interpretability and margin, not
+ranking: on constructed intrusions the calibrated AUC tracked the raw AUC closely (0.907 vs
+0.899). Retuning is a corpus-specific decision for a downstream consumer — these are the
+numbers to retune *from*, and the values above remain the domain-agnostic literature defaults.
+"""
 
 
 # ---------------------------------------------------------------------------
