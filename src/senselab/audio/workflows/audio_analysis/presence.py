@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from senselab.audio.workflows.audio_analysis.clustering import ROLE_LABEL_ONLY_PREFIXES
 from senselab.audio.workflows.audio_analysis.grid import BucketGrid
 from senselab.audio.workflows.audio_analysis.harvesters import (
     classification_top1_in_window,
@@ -198,7 +199,16 @@ def harvest_presence_votes(
                             continue
 
     diar_blocks = (pass_summary.get("diarization") or {}).get("by_model") or {}
-    diar_ok = {m: b for m, b in diar_blocks.items() if isinstance(b, dict) and b.get("status") == "ok"}
+    # Role-label backends (e.g. child-adult's CHILD/ADULT/OVERLAP) don't vote on
+    # speech *presence* either: its chunking drops all audio <= 10s and every
+    # clip's final 10s block (see child_adult.py), so an empty result there means
+    # "too short to analyze," not "no speech" — treating it as a normal ok voter
+    # would make it actively vote "no speech" over regions that contain speech.
+    diar_ok = {
+        m: b
+        for m, b in diar_blocks.items()
+        if isinstance(b, dict) and b.get("status") == "ok" and not m.startswith(ROLE_LABEL_ONLY_PREFIXES)
+    }
     asr_blocks = (pass_summary.get("asr") or {}).get("by_model") or {}
     asr_ok = {m: b for m, b in asr_blocks.items() if isinstance(b, dict) and b.get("status") == "ok"}
     asr_resolved = {m: resolve_asr_result(b, alignment_by_model.get(m)) for m, b in asr_ok.items()}

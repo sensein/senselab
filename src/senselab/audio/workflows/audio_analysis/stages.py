@@ -143,6 +143,18 @@ def stage_diarization(audio: Audio, ctx: StageContext, *, models: Sequence[str])
 
     Returns:
         ``{"diarization": {"by_model": {model_id: outcome}}}``.
+
+    Note:
+        VibeVoice-ASR-HF and MOSS-Transcribe-Diarize are joint ASR+diarization
+        models — each ``ScriptLine`` here also carries ``.text`` — but this
+        function is single-task like every other stage, so that transcript only
+        reaches this stage's sidecar JSON; no diar consumer (``identity.py``,
+        ``presence.py``, ...) reads it, and registering the same model_id under
+        both ``models`` here and ``stage_asr``'s model list runs two separate
+        full inferences (``cache_key_for`` includes ``task``, so "diarization"
+        and "asr" never share a cache entry) instead of one shared computation.
+        Sharing one inference across both stages needs a genuine joint-stage
+        contract change, not a fix here.
     """
     by_model: dict[str, Any] = {}
     for model_id in models:

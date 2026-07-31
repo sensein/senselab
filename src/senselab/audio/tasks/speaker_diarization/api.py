@@ -3,10 +3,41 @@
 from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.speaker_diarization.child_adult import diarize_audios_with_child_adult
+from senselab.audio.tasks.speaker_diarization.diarizen import diarize_audios_with_diarizen
+from senselab.audio.tasks.speaker_diarization.moss import diarize_audios_with_moss
 from senselab.audio.tasks.speaker_diarization.nvidia import diarize_audios_with_nvidia_sortformer
 from senselab.audio.tasks.speaker_diarization.pyannote import diarize_audios_with_pyannote
+from senselab.audio.tasks.speaker_diarization.vibevoice import diarize_audios_with_vibevoice
 from senselab.utils.compatibility import requires_compatibility
 from senselab.utils.data_structures import DeviceType, HFModel, PyannoteAudioModel, ScriptLine, SenselabModel
+from senselab.utils.data_structures.logging import logger
+
+_VIBEVOICE_PREFIXES = ("microsoft/VibeVoice-ASR",)
+_CHILD_ADULT_PREFIXES = ("AlexXu811/whisper-child-adult",)
+_MOSS_PREFIXES = ("OpenMOSS-Team/MOSS-Transcribe-Diarize",)
+_DIARIZEN_PREFIXES = ("BUT-FIT/diarizen",)
+
+# Backends dispatched above whose "speaker" label is a role (e.g. CHILD/ADULT/
+# OVERLAP), not a speaker identity. Single source of truth for this distinction:
+# clustering.py/identity.py/presence.py import it from here (rather than each
+# restating the literal) so adding a second role-only backend here can't
+# silently miss excluding it from identity clustering / presence voting too.
+ROLE_LABEL_ONLY_PREFIXES = _CHILD_ADULT_PREFIXES
+
+
+def _warn_if_speaker_hints_ignored(
+    backend_name: str,
+    num_speakers: Optional[int],
+    min_speakers: Optional[int],
+    max_speakers: Optional[int],
+) -> None:
+    """Warn when num_speakers/min_speakers/max_speakers were passed to a backend that ignores them."""
+    if num_speakers is not None or min_speakers is not None or max_speakers is not None:
+        logger.warning(
+            f"num_speakers/min_speakers/max_speakers are ignored by {backend_name} "
+            "(Pyannote-only hints) and will have no effect on this call."
+        )
 
 
 @requires_compatibility("audio.tasks.speaker_diarization.diarize_audios")
@@ -17,14 +48,35 @@ def diarize_audios(
     min_speakers: Optional[int] = None,
     max_speakers: Optional[int] = None,
     device: Optional[DeviceType] = None,
+    max_new_tokens: Optional[int] = None,
 ) -> List[List[ScriptLine]]:
     """Diarize a batch of `Audio` objects, returning per-speaker time segments.
 
-    Supports **Pyannote** (default) and **NVIDIA Sortformer** (HF) backends:
+    Supports **Pyannote** (default), **NVIDIA Sortformer**, **VibeVoice-ASR-HF**, and
+    **USC-SAIL child-adult** (HF-identified) backends:
     - If `model` is a `PyannoteAudioModel`, uses Pyannote (typically expects **mono, 16 kHz**).
       Optional `num_speakers` or (`min_speakers`, `max_speakers`) are honored.
     - If `model` is an `HFModel` and `model.path_or_uri` starts with `"nvidia/diar_sortformer"`,
-    uses NVIDIA Sortformer via Docker (nvidia/diar_sortformer_4spk-v1 detects max **4 speakers**).
+      uses NVIDIA Sortformer via an isolated subprocess venv (nvidia/diar_sortformer_4spk-v1
+      detects max **4 speakers**).
+    - If `model` is an `HFModel` and `model.path_or_uri` starts with `"microsoft/VibeVoice-ASR"`,
+      uses VibeVoice-ASR-HF in-process (``transformers>=5.3``'s
+      ``VibeVoiceAsrForConditionalGeneration``). Narrower than the bare `"microsoft/VibeVoice"`
+      prefix on purpose — `microsoft/VibeVoice-1.5B`/`-Large` are TTS checkpoints, not ASR.
+    - If `model` is an `HFModel` and `model.path_or_uri` starts with
+      `"AlexXu811/whisper-child-adult"`, uses the USC-SAIL child-adult classifier via an
+      isolated subprocess venv (speaker labels are `"CHILD"`/`"ADULT"`/`"OVERLAP"` — frames
+      classified as silence produce no segment — rather than speaker identities;
+      **CUDA only**, see ``child_adult.py``).
+    - If `model` is an `HFModel` and `model.path_or_uri` starts with
+      `"OpenMOSS-Team/MOSS-Transcribe-Diarize"`, uses MOSS-Transcribe-Diarize (0.9B, Apache 2.0)
+      via an isolated subprocess venv (needs ``transformers>=5.6``, kept out of the core
+      environment — see ``moss.py``).
+    - If `model` is an `HFModel` and `model.path_or_uri` starts with `"BUT-FIT/diarizen"`,
+      uses DiariZen (WavLM-Conformer EEND + VBx clustering; diarization only, no
+      transcription) via an isolated subprocess venv that installs DiariZen's own
+      forked pyannote-audio — code MIT, but **model weights are CC BY-NC 4.0
+      (non-commercial only)**; see ``diarizen.py``.
 
     Args:
         audios (list[Audio]):
@@ -32,16 +84,27 @@ def diarize_audios(
         model (SenselabModel | None):
             Diarization backend:
               * ``PyannoteAudioModel(...)`` → Pyannote (default if ``None``).
-              * ``HFModel(...)`` → NVIDIA Sortformer.
+              * ``HFModel(path_or_uri="nvidia/diar_sortformer...")`` → NVIDIA Sortformer.
+              * ``HFModel(path_or_uri="microsoft/VibeVoice-ASR...")`` → VibeVoice-ASR-HF.
+              * ``HFModel(path_or_uri="AlexXu811/whisper-child-adult")`` → USC-SAIL child-adult.
+              * ``HFModel(path_or_uri="OpenMOSS-Team/MOSS-Transcribe-Diarize")`` → MOSS-Transcribe-Diarize.
+              * ``HFModel(path_or_uri="BUT-FIT/diarizen-wavlm-large-s80-md")`` → DiariZen.
         num_speakers (int | None):
             If known, fix the number of speakers (Pyannote only).
         min_speakers (int | None):
             Lower bound when estimating number of speakers (Pyannote only).
         max_speakers (int | None):
-            Upper bound when estimating number of speakers (Pyannote only).
-            NVIDIA Sortformer is limited to 4 speakers.
+            Upper bound when estimating number of speakers (Pyannote only; ignored,
+            with a warning, by every other backend). NVIDIA Sortformer detects at
+            most 4 speakers regardless of this argument — that's a fixed model
+            limit, not something `max_speakers` raises or lowers.
         device (DeviceType | None):
             Preferred device (e.g., ``DeviceType.CPU``, ``DeviceType.CUDA``).
+        max_new_tokens (int | None):
+            Generation budget for the joint ASR+diarization backends
+            (VibeVoice-ASR-HF, MOSS-Transcribe-Diarize only — ignored otherwise).
+            ``None`` uses each backend's own default (4096). Raise this for
+            recordings long enough to risk truncated generation.
 
     Returns:
         list[list[ScriptLine]]: One list per input audio; each `ScriptLine` carries
@@ -83,12 +146,47 @@ def diarize_audios(
             max_speakers=max_speakers,
         )
     elif isinstance(model, HFModel) and str(model.path_or_uri).startswith("nvidia/diar"):
+        _warn_if_speaker_hints_ignored("NVIDIA Sortformer", num_speakers, min_speakers, max_speakers)
         return diarize_audios_with_nvidia_sortformer(
+            audios=audios,
+            model=model,
+            device=device,
+        )
+    elif isinstance(model, HFModel) and str(model.path_or_uri).startswith(_VIBEVOICE_PREFIXES):
+        _warn_if_speaker_hints_ignored("VibeVoice-ASR-HF", num_speakers, min_speakers, max_speakers)
+        vibevoice_kwargs = {} if max_new_tokens is None else {"max_new_tokens": max_new_tokens}
+        return diarize_audios_with_vibevoice(
+            audios=audios,
+            model=model,
+            device=device,
+            **vibevoice_kwargs,
+        )
+    elif isinstance(model, HFModel) and str(model.path_or_uri).startswith(_CHILD_ADULT_PREFIXES):
+        _warn_if_speaker_hints_ignored("the USC-SAIL child-adult classifier", num_speakers, min_speakers, max_speakers)
+        return diarize_audios_with_child_adult(
+            audios=audios,
+            model=model,
+            device=device,
+        )
+    elif isinstance(model, HFModel) and str(model.path_or_uri).startswith(_MOSS_PREFIXES):
+        _warn_if_speaker_hints_ignored("MOSS-Transcribe-Diarize", num_speakers, min_speakers, max_speakers)
+        moss_kwargs = {} if max_new_tokens is None else {"max_new_tokens": max_new_tokens}
+        return diarize_audios_with_moss(
+            audios=audios,
+            model=model,
+            device=device,
+            **moss_kwargs,
+        )
+    elif isinstance(model, HFModel) and str(model.path_or_uri).startswith(_DIARIZEN_PREFIXES):
+        _warn_if_speaker_hints_ignored("DiariZen", num_speakers, min_speakers, max_speakers)
+        return diarize_audios_with_diarizen(
             audios=audios,
             model=model,
             device=device,
         )
     else:
         raise NotImplementedError(
-            "Only Pyannote and NVIDIA Sortformer (from HuggingFace) models are supported for now."
+            "Only Pyannote, NVIDIA Sortformer, VibeVoice-ASR-HF, the USC-SAIL child-adult "
+            "classifier, MOSS-Transcribe-Diarize, and DiariZen (from HuggingFace) models are "
+            "supported for now."
         )
