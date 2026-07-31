@@ -52,13 +52,13 @@ from __future__ import annotations
 import math
 from typing import Any, Mapping, Sequence
 
-from senselab.audio.workflows.audio_analysis.clustering import cluster_speaker_labels_by_embedding
 from senselab.audio.workflows.audio_analysis.embeddings import (
     WindowEmbedding,
     calibrate_cosine_uncertainty,
     window_index_at,
 )
 from senselab.audio.workflows.audio_analysis.grid import BucketGrid
+from senselab.audio.workflows.audio_analysis.harmonize import harmonize_from_diarization
 from senselab.audio.workflows.audio_analysis.harvesters import diar_speaker_label_in_window
 
 SILENT_CLUSTER_ID = "SIL"
@@ -170,25 +170,32 @@ def harvest_identity_votes(
                         continue
 
     # Cluster (diar_model, raw_label) → cluster_id once per pass. Two diar
-    # models that identify the same speaker with different naming end up in
-    # the same cluster — when embeddings are available. Without embeddings the
-    # clusterer falls back to raw_label as cluster_id, in which case
-    # cross-model "disagreement" reduces to literal-string comparison, which
-    # is meaningless across diar conventions; we suppress the cross-model
-    # signal in that case (set ``embeddings_available=False``).
-    embeddings_available = bool(per_window_embeddings) and any(bool(v) for v in per_window_embeddings.values())
-    cluster_map = cluster_speaker_labels_by_embedding(
+    # models that identify the same speaker with different naming end up on the same common id.
+    # H2 (D-6): two independent matchers — temporal overlap and embedding centroid — with their
+    # disagreement recorded as the assignment's own uncertainty. The previous single-matcher
+    # clusterer produced a point assignment with no way to express doubt about itself, so a wrong
+    # guess about which label denotes whom propagated as fact and surfaced downstream as two models
+    # "disagreeing" when they had never been correctly compared.
+    harmonization = harmonize_from_diarization(
         diar_ok,
         per_window_embeddings,
-        cosine_threshold=cluster_cosine_threshold,
+        min_similarity=cluster_cosine_threshold,
     )
+    cluster_map = harmonization.mapping
+    # Whether the labels were actually mapped into a shared space, as opposed to each model keeping
+    # its own names. Cross-model comparison is only meaningful once they were.
+    harmonized = bool(cluster_map)
 
     # An embedding whose same- and between-speaker distances overlap cannot validate an
     # identity claim at this window scale. Its sub-signals then drop out (FR-007) rather
     # than voting: substituting a fixed band that sits below every distance the embedding
     # produces turns "cannot tell" into "confidently different", and one such saturated
     # derived signal outvotes unanimous diarizer agreement.
-    calibrated = same_speaker_floor is not None and diff_speaker_floor is not None
+    # Bound to narrowed locals rather than checked via a boolean: mypy cannot narrow
+    # ``float | None`` through a separate flag, and the alternative was three ignore comments on
+    # calls that are in fact guarded.
+    same_floor = None if same_speaker_floor is None else float(same_speaker_floor)
+    diff_floor = None if diff_speaker_floor is None else float(diff_speaker_floor)
 
     bucket_starts_ends = [(start, end) for start, end, _ in grid.iter_buckets(duration_s)]
 
@@ -233,6 +240,16 @@ def harvest_identity_votes(
                 "cluster_id": cluster_id,
                 "speaker_changed_from_prev": speaker_changed,
             }
+            # How well-determined this model's mapping into the common space was. Carried onto the
+            # vote so it reaches the axis rather than being discarded at the harmonization step: a
+            # bucket whose label assignment is contested must not read as confidently identified.
+            if raw_label is not None:
+                assignment_unc = harmonization.uncertainty.get((m, raw_label))
+                if assignment_unc is not None:
+                    votes[m]["assignment_uncertainty"] = float(assignment_unc)
+                agreed = harmonization.methods_agreed.get((m, raw_label))
+                if agreed is not None:
+                    votes[m]["assignment_methods_agreed"] = bool(agreed)
             prev_cluster_per_model[m] = cluster_id
 
             # Silence carries no embedding signal — skip embedding sub-signals
@@ -255,11 +272,11 @@ def harvest_identity_votes(
                 same_unc: float | None = None
                 if prev_same is not None and prev_same[0] != window_idx:
                     same_cos = _cos_dist(vec, prev_same[1])
-                    if same_cos is not None and calibrated:
+                    if same_cos is not None and same_floor is not None and diff_floor is not None:
                         same_unc = calibrate_cosine_uncertainty(
                             same_cos,
-                            same_speaker_floor=same_speaker_floor,
-                            diff_speaker_floor=diff_speaker_floor,
+                            same_speaker_floor=same_floor,
+                            diff_speaker_floor=diff_floor,
                             direction="same",
                         )
 
@@ -270,11 +287,11 @@ def harvest_identity_votes(
                     prev_imm = prev_emb_immediate.get(imm_key)
                     if prev_imm is not None and prev_imm[0] != window_idx:
                         change_cos = _cos_dist(vec, prev_imm[1])
-                        if change_cos is not None and calibrated:
+                        if change_cos is not None and same_floor is not None and diff_floor is not None:
                             change_unc = calibrate_cosine_uncertainty(
                                 change_cos,
-                                same_speaker_floor=same_speaker_floor,
-                                diff_speaker_floor=diff_speaker_floor,
+                                same_speaker_floor=same_floor,
+                                diff_speaker_floor=diff_floor,
                                 direction="diff",
                             )
 
@@ -291,11 +308,16 @@ def harvest_identity_votes(
                 prev_emb_immediate[imm_key] = (window_idx, vec)
 
         # ── Cross-diar-model agreement ──────────────────────────────────
-        # Compares cluster_ids (post-embedding-clustering) across diar models.
-        # "<silent>" mismatch with a speech cluster IS a real disagreement.
-        # Suppressed when no embeddings are available — without clustering,
-        # different naming conventions would always look like disagreement.
-        if embeddings_available and len(cluster_this_bucket) >= 2:
+        # Compares harmonized common-space ids across diar models. A "<silent>" mismatch against a
+        # speech cluster IS a real disagreement.
+        #
+        # No longer suppressed when embeddings are unavailable. That suppression was correct while
+        # the label mapping came from embedding centroids alone, because its no-embedding fallback
+        # used the raw label string as the cluster id — so agreement reduced to comparing
+        # ``SPEAKER_00`` against ``spk1``, which can only ever report disagreement. H2's overlap
+        # matcher settles that case from timing evidence, so the signal is now measurable without
+        # embeddings, and withholding it would discard evidence we have.
+        if harmonized and len(cluster_this_bucket) >= 2:
             models_sorted = sorted(cluster_this_bucket)
             n_pairs = 0
             n_disagree = 0

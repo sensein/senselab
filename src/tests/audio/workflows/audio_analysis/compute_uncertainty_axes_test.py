@@ -432,9 +432,11 @@ def test_identity_robust_to_diar_label_naming_conventions() -> None:
     E2E run on the higgs clip surfaced the bug (literal-string comparison made every
     bucket saturate at uncertainty=1.0).
 
-    With ``speaker_embedding_models=[]`` the embedding-validation pairs are absent and
-    the aggregator returns ``None``, so we just check the raw labels are recorded for
-    auditability.
+    With ``speaker_embedding_models=[]`` the embedding-validation pairs are absent, but the
+    cross-model signal is still measurable: H2's temporal-overlap matcher maps the two models'
+    labels onto a common space from timing evidence, so two diarizers agreeing on the same timeline
+    now read as *agreement* (0.0) rather than as unmeasurable. This assertion previously expected
+    ``None`` — that was the old single-matcher limitation, not a requirement.
     """
     pyannote_segs = [(0.0, 2.0, "SPEAKER_00"), (2.0, 4.0, "SPEAKER_01")]
     sortformer_segs = [(0.0, 2.0, "speaker_0"), (2.0, 4.0, "speaker_1")]
@@ -459,11 +461,15 @@ def test_identity_robust_to_diar_label_naming_conventions() -> None:
     identity = axis_results[("raw_16k", "identity")]
     assert identity.rows, "expected identity rows on a 4 s clip with diar coverage"
 
-    # Without embedding models, all rows should have within_pass_uncertainty=None
-    # (no within-track cosines to fold). The raw labels are recorded on the diar votes
-    # for auditability.
+    # No embedding models, so there are no within-track cosines to fold; the cross-model
+    # agreement signal carries the row on its own and must report agreement, never a
+    # string-mismatch disagreement.
     for r in identity.rows:
-        assert r.within_pass_uncertainty is None
+        assert r.within_pass_uncertainty == pytest.approx(0.0), (
+            f"models agree on the timeline, so identity uncertainty must be 0, got {r.within_pass_uncertainty}"
+        )
+        cross = r.model_votes.get("__cross_diar_label_disagreement__")
+        assert cross is not None and cross["n_disagree"] == 0
         py = r.model_votes.get("pyannote")
         sf = r.model_votes.get("sortformer")
         assert py is not None and sf is not None
