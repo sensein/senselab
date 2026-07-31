@@ -512,6 +512,7 @@ def target_confidence_by_bucket(
     event_types: Sequence[str],
     *,
     active_threshold: float = 0.6,
+    free_threshold: float = 0.2,
 ) -> list[dict[str, Any]]:
     """Assemble per-bucket target-activity evidence for :func:`build_mask`.
 
@@ -532,6 +533,9 @@ def target_confidence_by_bucket(
         active_threshold: The mask's target-active threshold. An absent target label's
             upper bound counts as evidence only when it falls below this; above it the
             bound is true but uninformative.
+        free_threshold: The mask's target-free threshold. Together with ``active_threshold``
+            it bounds the region where the decision is genuinely in doubt — see
+            :func:`combine_target_evidence`.
 
     Returns:
         Bucket rows ready for :func:`build_mask`.
@@ -546,21 +550,55 @@ def target_confidence_by_bucket(
     rows: list[dict[str, Any]] = []
     for i, (start, end) in enumerate(buckets):
         values: list[float] = [v for s in sources if (v := s[i]) is not None]
-        if not values:
-            rows.append({"start": start, "end": end, "target_confidence": 0.0, "uncertainty": 1.0})
-            continue
-        high, low = max(values), min(values)
         rows.append(
-            {
-                "start": start,
-                "end": end,
-                "target_confidence": high,
-                # Spread between the sources, not a variance: with two sources their gap *is*
-                # the disagreement, and a single source disagrees with nothing.
-                "uncertainty": (high - low) if len(values) > 1 else 0.0,
-            }
+            combine_target_evidence(
+                start,
+                end,
+                values,
+                active_at=active_threshold,
+                free_at=free_threshold,
+            )
         )
     return rows
+
+
+def combine_target_evidence(
+    start: float,
+    end: float,
+    values: Sequence[float],
+    *,
+    active_at: float,
+    free_at: float,
+) -> dict[str, Any]:
+    """Combine one bucket's target-activity evidence into a confidence and an uncertainty.
+
+    The sources combine by **maximum**: each detects a different target event type, and any one
+    of them is sufficient to establish that the participant was active. That is what makes the
+    spread between them the wrong uncertainty measure — during ordinary speech the breath
+    detector correctly reports ~0, answering its own question rather than contradicting the
+    speech detector, and reading the gap as disagreement put 0.9997 on every bucket of a 21.5 s
+    conversation and left the whole file unusable.
+
+    Uncertainty is therefore distance from the decision, not spread between heterogeneous
+    questions: confidence well above ``active_at`` or well below ``free_at`` is a verdict not in
+    doubt, while confidence between them could go either way. No evidence at all stays maximally
+    uncertain — absence must not read as a confident "nothing here".
+    """
+    if not values:
+        return {"start": start, "end": end, "target_confidence": 0.0, "uncertainty": 1.0}
+    confidence = max(float(v) for v in values)
+    if confidence >= float(active_at):
+        margin = (confidence - float(active_at)) / max(1e-9, 1.0 - float(active_at))
+    elif confidence <= float(free_at):
+        margin = (float(free_at) - confidence) / max(1e-9, float(free_at))
+    else:
+        margin = 0.0
+    return {
+        "start": start,
+        "end": end,
+        "target_confidence": confidence,
+        "uncertainty": max(0.0, min(1.0, 1.0 - margin)),
+    }
 
 
 NONTARGET_EXCLUDED_CATEGORIES = ("speech",)

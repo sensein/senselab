@@ -562,7 +562,14 @@ def stage_background_mask(
     buckets = [(b_start, b_end) for b_start, b_end, _idx in bucket_grid.iter_buckets(duration_s)]
     event_types, _provenance = target_event_types_for(task_type, resolved)
     active_threshold = float((resolved.get("mask") or {}).get("target_active_confidence", 0.6))
-    rows = target_confidence_by_bucket(pass_summary, buckets, event_types, active_threshold=active_threshold)
+    free_threshold = float((resolved.get("mask") or {}).get("target_free_confidence", 0.2))
+    rows = target_confidence_by_bucket(
+        pass_summary,
+        buckets,
+        event_types,
+        active_threshold=active_threshold,
+        free_threshold=free_threshold,
+    )
     # Second quantity: is there *other* content where the target is absent. Without it the
     # mask cannot distinguish a silent pause from one carrying room tone or machine noise, and
     # only the second is worth introspecting — which is why a 21 s conversation previously
