@@ -375,6 +375,7 @@ def compute_uncertainty_axes(
     clustering_algorithm: str = "spectral",
     mutate_passes: bool = True,
     harvests_out: dict[str, Any] | None = None,
+    weights_out: dict[str, Any] | None = None,
     calibration: dict[str, Any] | None = None,
 ) -> tuple[dict[tuple[str, UncertaintyAxis], AxisResult], dict[str, str], dict[str, dict[str, list[WindowEmbedding]]]]:
     """Compute per-pass and raw-vs-enhanced uncertainty rows for all three axes.
@@ -398,6 +399,9 @@ def compute_uncertainty_axes(
             already configured via ``--speaker-embedding-models``.
         aggregator: One of ``min`` / ``mean`` / ``harmonic_mean`` /
             ``disagreement_weighted`` (FR-004).
+        weights_out: When given, receives ``{axis → {signal → measured weight}}`` — the
+            weights the per-pass fold applied, so level 2 can fuse with the same numbers
+            rather than recomputing them and drifting apart silently.
         speech_presence_labels: AudioSet labels that count as "speech-present" for AST /
             YAMNet contributions to the presence axis.
         utterance_grid: Optional separate bucket grid for the utterance axis (typically
@@ -515,6 +519,8 @@ def compute_uncertainty_axes(
             informative_evidence(presence_buckets, sorted(evidence_signal_names(presence_buckets)))
         ),
     )
+    if weights_out is not None:
+        weights_out.clear()
     reliability_by_axis = {
         axis: measured_weights(
             signal_stability(harvests_by_label, axis=axis),
@@ -523,6 +529,10 @@ def compute_uncertainty_axes(
         )
         for axis in ("presence", "identity", "utterance")
     }
+    if weights_out is not None:
+        # Exposed so level 2 can fuse with the same weights the diagnostics used; recomputing
+        # them there would let the two drift apart silently.
+        weights_out.update(reliability_by_axis)
     for pass_label, harvest in sorted(harvests_by_label.items()):
         for axis, result in aggregate_pass(
             harvest, aggregator=aggregator, params=params, signal_reliability=reliability_by_axis
