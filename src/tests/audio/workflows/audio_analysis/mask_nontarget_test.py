@@ -72,8 +72,10 @@ def test_a_silent_gap_is_target_free_not_of_interest() -> None:
 
 
 def test_non_task_interest_requires_the_target_to_be_absent() -> None:
-    """Background content under active target speech is not a clean region to introspect —
-    that is the leakage problem the suppression depth measurement exists for.
+    """Interest requires the target to be absent.
+
+    Background content under active target speech is not a clean region to introspect — that
+    is the leakage problem the suppression-depth measurement exists for.
     """
     mask = build_mask([_b(i * 0.5, 0.95, unc=0.05, nontarget=0.9) for i in range(8)], "speech", profile=PROFILE)
     assert all(r.state != "nontarget_active" for r in mask.regions)

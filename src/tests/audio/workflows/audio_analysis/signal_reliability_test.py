@@ -24,7 +24,7 @@ def test_an_unreliable_signal_cannot_decide_the_axis_alone() -> None:
 
     Its doubt is attenuated toward the corroborated answer rather than taken at face value.
     """
-    values = [1.0, 0.0, 0.0]
+    values: list[float | None] = [1.0, 0.0, 0.0]
     unweighted = apply_aggregator(values, "min")
     weighted = apply_aggregator(values, "min", weights=[0.05, 1.0, 1.0])
     assert unweighted == pytest.approx(1.0)
@@ -57,7 +57,7 @@ def test_an_explicit_zero_weight_excludes_a_signal() -> None:
 
 def test_weights_are_optional() -> None:
     """Unweighted aggregation must be unchanged, so existing outputs stay reproducible."""
-    values = [0.2, 0.8, 0.5]
+    values: list[float | None] = [0.2, 0.8, 0.5]
     for name in ("min", "mean", "harmonic_mean", "disagreement_weighted"):
         assert apply_aggregator(values, name) == apply_aggregator(values, name, weights=None)
 
