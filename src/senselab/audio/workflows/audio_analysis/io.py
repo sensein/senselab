@@ -41,6 +41,11 @@ def write_axis_parquet(
     intensity_weights = [r.intensity_weight for r in axis_result.rows]
     contributing = [list(r.contributing_models) for r in axis_result.rows]
     votes_json = [json.dumps(r.model_votes, default=str, separators=(",", ":")) for r in axis_result.rows]
+    # The level-1 emission: each signal's own uncertainty, JSON-encoded like model_votes.
+    # Without this column L2 has to re-derive it from model_votes, and the two would drift.
+    signal_uncertainty_json = [
+        json.dumps(r.signal_uncertainty, default=str, separators=(",", ":")) for r in axis_result.rows
+    ]
     statuses = [r.comparison_status for r in axis_result.rows]
 
     # Scene-aware presence + utterance extension columns (feature 20260722-175022).
@@ -72,6 +77,7 @@ def write_axis_parquet(
         "intensity_weight": pa.array(intensity_weights, type=pa.float64()),
         "contributing_models": pa.array(contributing, type=pa.list_(pa.string())),
         "model_votes": pa.array(votes_json, type=pa.string()),
+        "signal_uncertainty": pa.array(signal_uncertainty_json, type=pa.string()),
         "comparison_status": pa.array(statuses, type=pa.string()),
     }
     for col in float_extension_columns:

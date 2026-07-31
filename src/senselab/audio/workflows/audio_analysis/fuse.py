@@ -20,6 +20,7 @@ matters rather than being a matter of taste.
 from __future__ import annotations
 
 import json
+import math
 from typing import Any, Mapping, Sequence
 
 from senselab.audio.workflows.audio_analysis.aggregators import apply_aggregator
@@ -48,6 +49,12 @@ _UNCERTAINTY_FIELDS = (
 # none, since the gap is invisible in the output.
 _CONFIDENCE_FIELDS = ("native_confidence", "p_speech", "p_voice", "argmax_confidence")
 
+# Utterance signals expose neither an uncertainty nor a [0, 1] confidence — they report
+# ``avg_logprob``, a mean token log-probability. exp() takes it back to a probability, which is
+# the model's own confidence in the transcript it produced. Left unhandled, the utterance axis
+# fused 0 of 41 buckets while the other two fused fully.
+_LOGPROB_FIELDS = ("avg_logprob",)
+
 
 def per_signal_uncertainty(bucket: Mapping[str, Any]) -> dict[str, float]:
     """Each signal's own uncertainty in one bucket — the level-1 emission.
@@ -71,7 +78,14 @@ def per_signal_uncertainty(bucket: Mapping[str, Any]) -> dict[str, float]:
                 out[str(name)] = max(0.0, min(1.0, float(value)))
                 break
         else:
+            for field in _LOGPROB_FIELDS:
+                value = entry.get(field)
+                if isinstance(value, (int, float)):
+                    out[str(name)] = max(0.0, min(1.0, 1.0 - math.exp(min(0.0, float(value)))))
+                    break
             for field in _CONFIDENCE_FIELDS:
+                if str(name) in out:
+                    break
                 value = entry.get(field)
                 if isinstance(value, (int, float)):
                     # A confidence of c leaves 1 - c of doubt. Distance from 0.5 would be the

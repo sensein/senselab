@@ -31,6 +31,7 @@ from typing import Any
 
 import numpy as np
 
+from senselab.audio.workflows.audio_analysis.layout import final_dir
 from senselab.audio.workflows.audio_analysis.types import AxisResult
 from senselab.utils.data_structures.logging import logger
 
@@ -833,7 +834,9 @@ def build_aligned_timeline_plot(
         t1 = min((i + 1) * chunk_duration_s, duration_s)
         for ax in axes:
             ax.set_xlim(t0, t1)
-        out_path = run_dir / f"timeline_{i + 1:03d}.png"
+        chunk_dir = final_dir(run_dir)
+        chunk_dir.mkdir(parents=True, exist_ok=True)
+        out_path = chunk_dir / f"timeline_{i + 1:03d}.png"
         fig.savefig(out_path, dpi=140)
         out_paths.append(out_path)
     plt.close(fig)
