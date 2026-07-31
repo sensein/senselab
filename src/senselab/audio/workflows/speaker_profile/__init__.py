@@ -28,6 +28,7 @@ from senselab.audio.workflows.speaker_profile.build import (
 )
 from senselab.audio.workflows.speaker_profile.compare import (
     GridMismatchError,
+    GridMismatchWarning,
     check_grid_compatibility,
     compare_recording_to_profile,
     compute_target_quality,
@@ -62,6 +63,7 @@ from senselab.audio.workflows.speaker_profile.types import (
 __all__ = [
     "AggregationResult",
     "GridMismatchError",
+    "GridMismatchWarning",
     "ClusterStats",
     "ComparisonFlag",
     "ProfileComparisonResult",

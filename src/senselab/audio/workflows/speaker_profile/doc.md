@@ -115,8 +115,9 @@ load is skipped and reported via `load_failures`, not fatal.
 ## Window grid
 
 A profile records the grid it was enrolled at (`params.profile_window_s` / `profile_hop_s`),
-and `check_grid_compatibility` raises if detection windows were extracted at a different
-*length*. Comparing across lengths adds a duration domain gap on top of any speaker
+and `check_grid_compatibility` **warns** if detection windows were extracted at a different
+*length* (`strict=True` raises instead). Measured on constructed intrusions, a mismatch costs
+2–10 AUC points — degraded, not meaningless, so the default surfaces it and continues. Comparing across lengths adds a duration domain gap on top of any speaker
 difference, and nothing downstream would catch it: measured, `calibration_band` does not
 adapt to the grid — it came out as the fixed fallback values at both 2.0 s and 0.5 s.
 
