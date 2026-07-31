@@ -439,7 +439,7 @@ def build_aligned_timeline_plot(
         _add_row("emb", 1.2)
         if n_ppg_stripes > 0:
             _add_row("ppg", max(0.9, 0.3 * n_ppg_stripes))
-        _add_row("asr", asr_h)
+        _add_row("asr_words", asr_h)
     n_rows = len(height_ratios)
     fig_height = sum(height_ratios) + 1.0
 
@@ -453,10 +453,11 @@ def build_aligned_timeline_plot(
     diar_row = row_idx.get("diar")
     emb_row = row_idx.get("emb")
     ppg_row = row_idx.get("ppg")
-    asr_row = row_idx.get("asr")
 
-    # ``None`` means chunking is off, so nothing will chunk regardless of duration.
-    will_chunk = bool(chunk_duration_s) and duration_s > float(chunk_duration_s) + 0.5
+    # ``None`` means chunking is off, so nothing will chunk regardless of duration. Narrowed to a
+    # local rather than relying on ``bool(...) and ...`` short-circuiting, which mypy cannot follow.
+    chunk_s = None if chunk_duration_s is None else float(chunk_duration_s)
+    will_chunk = chunk_s is not None and chunk_s > 0 and duration_s > chunk_s + 0.5
     # When chunking, fix the figure width per-chunk; otherwise scale with duration.
     fig_width = 12.0 if will_chunk else max(10.0, duration_s / 4.0)
     fig, axes = plt.subplots(
@@ -758,7 +759,10 @@ def build_aligned_timeline_plot(
         # timestamps with the actual text rendered on each bar (small font) so the
         # reviewer can see WHY asr uncertainty is high (punctuation differences,
         # partial words, hesitation tokens).
-        ax_asr = axes[asr_row]
+        # Read the index directly rather than via the Optional local: this block runs under the
+        # same ``has_detail`` guard that added the row, so it is present by construction. The
+        # Optional lookup is what let the key collision with the axis row go unnoticed.
+        ax_asr = axes[row_idx["asr_words"]]
         asr_stripes: list[tuple[str, str, Any]] = []
         for pass_label in pass_order:
             for m, asr_result in (detail_by_pass.get(pass_label) or {}).get("asr_by_model", {}).items():

@@ -142,12 +142,16 @@ def scene_composition(
     for window in windows or ():
         if not isinstance(window, Mapping):
             continue
-        w_start = float(window.get("start", 0.0) or 0.0)
-        w_end = float(window.get("end", 0.0) or 0.0)
+        w_start = _as_float(window.get("start"), 0.0)
+        w_end = _as_float(window.get("end"), 0.0)
         cols = np.where((times + hop_s > w_start) & (times < w_end))[0]
         if cols.size == 0:
             continue
-        for label, score in zip(window.get("labels") or [], window.get("scores") or []):
+        labels = window.get("labels")
+        scores = window.get("scores")
+        if not isinstance(labels, Sequence) or not isinstance(scores, Sequence):
+            continue
+        for label, score in zip(labels, scores):
             category = _category_for(str(label), mapping, default)
             row = index.get(category)
             if row is None:
@@ -187,6 +191,19 @@ _ROW_HEIGHT = {
 }
 """Relative row heights. A uniform height gave a binary on/off row the same space as a
 spectrogram, which wastes the figure on the rows carrying least information."""
+
+
+def _as_float(value: object, default: float) -> float:
+    """Coerce an untyped mapping value to float, falling back to ``default``.
+
+    Plot inputs arrive as ``Mapping[str, object]`` from parquet and JSON, so every field read is
+    ``object``. Narrowing once here beats a cast at each use site, and it keeps a malformed field
+    from raising inside the figure builder — a plot that cannot be drawn should degrade, not abort
+    the run that produced the data.
+    """
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return default
 
 
 def classify_signal(name: str) -> str:
@@ -298,6 +315,9 @@ def build_l1_signal_plot(
             continue
 
         if kind == "spectrogram":
+            if waveform is None:
+                ax.text(0.5, 0.5, "no audio", transform=ax.transAxes, ha="center", va="center", fontsize=7)
+                continue
             spec, s_times, s_freqs = spectrogram_db(waveform, sampling_rate)
             ax.imshow(
                 spec,
@@ -309,6 +329,9 @@ def build_l1_signal_plot(
             continue
 
         if kind == "level":
+            if waveform is None:
+                ax.text(0.5, 0.5, "no audio", transform=ax.transAxes, ha="center", va="center", fontsize=7)
+                continue
             times, levels = rms_dbfs_track(waveform, sampling_rate)
             if times.size:
                 ax.plot(times, levels, linewidth=0.7, color="#333333")
@@ -326,8 +349,8 @@ def build_l1_signal_plot(
             continue
 
         if name in series:
-            times, values = series[name]
-            ax.plot(np.asarray(times, dtype=float), np.asarray(values, dtype=float), linewidth=0.7, color="#1f6f4a")
+            s_x, s_y = series[name]
+            ax.plot(np.asarray(s_x, dtype=float), np.asarray(s_y, dtype=float), linewidth=0.7, color="#1f6f4a")
             ax.set_ylim(0, 1.02)
             ax.set_yticks([0, 1])
             ax.tick_params(labelsize=5)
@@ -340,8 +363,8 @@ def build_l1_signal_plot(
             ax.add_patch(Rectangle((float(start), 0.15), max(1e-3, float(end) - float(start)), 0.7, color="#3b6ea5"))
         # ASR words go in the model's own row, so a transcript is attributed to who produced it.
         for word in words_by_model.get(name) or ():
-            w_start = float(word.get("start", 0.0) or 0.0)
-            w_end = float(word.get("end", w_start) or w_start)
+            w_start = _as_float(word.get("start"), 0.0)
+            w_end = _as_float(word.get("end"), w_start)
             ax.text(
                 (w_start + w_end) / 2.0,
                 0.5,
