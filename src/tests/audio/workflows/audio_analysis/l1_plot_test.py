@@ -214,8 +214,10 @@ def test_a_failed_signal_keeps_a_row(tmp_path) -> None:  # noqa: ANN001
 
 
 def test_asr_words_are_drawn_in_their_own_model_row(tmp_path) -> None:  # noqa: ANN001
-    """A shared words row collided every token into an unreadable smear, and attributed the
-    transcript to no model in particular.
+    """Words belong to the model that produced them.
+
+    A shared row collided every token into an unreadable smear and attributed the transcript
+    to no model in particular.
     """
     path = build_l1_signal_plot(
         tmp_path,
