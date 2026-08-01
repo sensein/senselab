@@ -102,3 +102,30 @@ def test_a_single_pooled_channel_cannot_place_speakers() -> None:
 def test_no_speakers_means_no_binding_to_report() -> None:
     """Nothing to bind is not a binding of nothing."""
     assert per_speaker_presence({}, _fp([[1.0, 0.0]] * 10)) is None
+
+
+def test_spans_are_derived_from_the_harmonised_cluster_not_a_model_label() -> None:
+    """C2 is about the harmonised space, so the spans that feed it must be too.
+
+    A raw ``SPEAKER_00`` means different people to different diarizers; the cluster id is what H2
+    exists to produce. A bucket counts for a cluster when *any* diar model placed it there — the
+    same union rule coverage already uses, so two models agreeing cannot inflate a span.
+    """
+    from senselab.audio.workflows.audio_analysis.joint import speaker_spans_from_votes
+
+    votes = [
+        {"start": 0.0, "end": 0.5, "votes": {"x": {"cluster_ids": {"pyannote": "C0", "sortformer": "C0"}}}},
+        {"start": 0.5, "end": 1.0, "votes": {"x": {"cluster_ids": {"pyannote": "C0"}}}},
+        {"start": 1.0, "end": 1.5, "votes": {"x": {"cluster_ids": {"pyannote": "C1"}}}},
+    ]
+    spans = speaker_spans_from_votes(votes)
+    assert spans["C0"] == [(0.0, 1.0)], "contiguous buckets merge into one span"
+    assert spans["C1"] == [(1.0, 1.5)]
+
+
+def test_silence_is_not_a_speaker() -> None:
+    """The silent cluster is a placeholder, not someone to bind a channel to."""
+    from senselab.audio.workflows.audio_analysis.joint import speaker_spans_from_votes
+
+    votes = [{"start": 0.0, "end": 0.5, "votes": {"x": {"cluster_ids": {"pyannote": "SIL"}}}}]
+    assert speaker_spans_from_votes(votes) == {}

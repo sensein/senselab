@@ -407,3 +407,54 @@ def per_speaker_presence(
         "unassigned_speakers": [s for s in speakers if assignment[s] is None],
         "uncertainty": float(1.0 - (sum(margins) / len(margins))) if margins else 1.0,
     }
+
+
+def speaker_spans_from_votes(
+    speaker_votes: Sequence[Mapping[str, Any]],
+) -> dict[str, list[tuple[float, float]]]:
+    """Harmonised speaker spans from the speaker axis's per-bucket cluster ids.
+
+    The spans J4 binds must live in the **harmonised** space: a raw ``SPEAKER_00`` means different
+    people to different diarizers, and the cluster id is exactly what H2 exists to produce. A bucket
+    counts for a cluster when *any* diar model placed it there — the same union rule coverage uses,
+    so two models agreeing cannot inflate a span.
+
+    Contiguous buckets are merged, so a speaker that spoke across ten buckets is one span rather
+    than ten, which is what the temporal-agreement match wants.
+    """
+    from senselab.audio.workflows.audio_analysis.speaker import SILENT_CLUSTER_ID
+
+    per_cluster: dict[str, list[tuple[float, float]]] = {}
+    for bucket in speaker_votes or []:
+        start, end = _finite_pair(bucket.get("start"), bucket.get("end"))
+        if start is None or end is None:
+            continue
+        seen: set[str] = set()
+        for entry in (bucket.get("votes") or {}).values():
+            if not isinstance(entry, Mapping):
+                continue
+            for cluster in (entry.get("cluster_ids") or {}).values():
+                if cluster and str(cluster) != SILENT_CLUSTER_ID:
+                    seen.add(str(cluster))
+        for cluster in seen:
+            per_cluster.setdefault(cluster, []).append((start, end))
+
+    merged: dict[str, list[tuple[float, float]]] = {}
+    for cluster, spans in sorted(per_cluster.items()):
+        spans.sort()
+        out: list[tuple[float, float]] = []
+        for lo, hi in spans:
+            if out and lo <= out[-1][1] + 1e-9:
+                out[-1] = (out[-1][0], max(out[-1][1], hi))
+            else:
+                out.append((lo, hi))
+        merged[cluster] = out
+    return merged
+
+
+def _finite_pair(a: Any, b: Any) -> tuple[float | None, float | None]:  # noqa: ANN401
+    """Coerce a bucket's start/end to floats, or ``(None, None)`` if either is unusable."""
+    try:
+        return float(a), float(b)
+    except (TypeError, ValueError):
+        return None, None

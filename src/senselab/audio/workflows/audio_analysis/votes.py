@@ -61,6 +61,9 @@ class PassHarvest:
         per_window_embeddings: ``{embedding_model → [WindowEmbedding]}`` — L1 vectors. Clustering
             them is an L2 derivation (``speech_presence_link.derive_window_clusters``), so the
             vectors travel and the conclusion is drawn where it can be re-drawn.
+        frame_posteriors: ``{signal → FramePosterior}`` with per-speaker channels intact. Carried
+            for the same reason: J4 binds speakers to these channels at fusion time, and the
+            binding's stability is convergence criterion C2.
         provenance_extras: scene_quality / sound_sources / frame_posteriors blocks.
         synthetic_diarization: optional ``{source_id: diar_block}`` synthesized from
             embedding clustering (kept explicit so callers can opt into the legacy
@@ -76,6 +79,7 @@ class PassHarvest:
     grids: dict[str, dict[str, float]] = field(default_factory=dict)
     sampling_rate: int = 16000
     per_window_embeddings: dict[str, list[Any]] = field(default_factory=dict)
+    frame_posteriors: dict[str, Any] = field(default_factory=dict)
     provenance_extras: dict[str, Any] = field(default_factory=dict)
     synthetic_diarization: dict[str, Any] | None = None
 

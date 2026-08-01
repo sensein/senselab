@@ -22,7 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Optional, Sequence
 
 from senselab.audio.workflows.audio_analysis.aggregators import apply_aggregator
 from senselab.audio.workflows.audio_analysis.statistics import epistemic_uncertainty, variability
@@ -372,6 +372,32 @@ def fuse_rounds(
     return rows, log
 
 
+def _speaker_assignment(harvests: Mapping[str, Any]) -> Optional[dict[str, str]]:
+    """J4's speaker → channel binding for the reference pass, or ``None`` when unmeasurable.
+
+    Measured on the unmodified pass where available: whether a speaker occupies a channel is a fact
+    about the recording, not about the enhancement transform, the same reasoning physical support
+    already uses.
+
+    Returns ``None`` rather than an empty mapping when the inputs are missing, because an empty
+    binding and an unmeasured one mean different things to C2 — two empty mappings compare equal
+    and would read as a stable assignment nobody checked.
+    """
+    from senselab.audio.workflows.audio_analysis.joint import per_speaker_presence, speaker_spans_from_votes
+
+    harvest = harvests.get("raw_16k") or next(iter(harvests.values()), None)
+    if harvest is None:
+        return None
+    spans = speaker_spans_from_votes(getattr(harvest, "speaker_votes", None) or [])
+    if not spans:
+        return None
+    for posterior in (getattr(harvest, "frame_posteriors", None) or {}).values():
+        result = per_speaker_presence(spans, posterior)
+        if result is not None:
+            return {k: v for k, v in result["assignment"].items() if v is not None}
+    return None
+
+
 def write_final_uncertainty(
     out_dir: Any,  # noqa: ANN401 — Path
     *,
@@ -421,6 +447,10 @@ def write_final_uncertainty(
     )
 
     policy = speech_presence_policy if speech_presence_policy is not None else DEFAULT_POLICY
+    # C2 asks whether the speaker-to-channel binding is stable, so it has to be measured before the
+    # rounds that judge it. Unavailable on a pass with no per-speaker channels or no harmonised
+    # clusters, in which case it stays None and C2 blocks rather than passing.
+    speaker_assignment = _speaker_assignment(harvests)
     axis_field = {"speech_presence": None, "speaker": "speaker_votes", "asr": "asr_votes"}
     level2 = Path(out_dir) / "L2"
     level2.mkdir(parents=True, exist_ok=True)
@@ -434,6 +464,7 @@ def write_final_uncertainty(
         }
         rows, round_log = fuse_rounds(
             by_pass,
+            speaker_assignment=speaker_assignment if axis == "speaker" else None,
             weights=weights_by_axis.get(axis, {}),
             aggregator=aggregator,
             weight_basis=(weight_basis_by_axis or {}).get(axis),
