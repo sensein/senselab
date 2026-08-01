@@ -191,3 +191,11 @@ src/senselab/video/tasks/pose_estimation/models/
 tutorials/audio/tutorial_audio_files/
 tutorials/video/tutorial_images/
 tutorials/video/visualize/
+
+# PII compliance pipeline outputs (scripts/pii_compliance_pipeline.py).
+# These contain participant transcripts, real subject/session IDs and raw PII spans.
+# Treat them as sensitive as the recordings themselves -- never commit them.
+pii_compliance_report.json
+pii_compliance_summary.csv
+flagged_files.txt
+scripts/eval_out/

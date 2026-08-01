@@ -90,6 +90,7 @@ data-safety notes. Read the "Modes" section before a first real run.
 
 import argparse
 import csv
+import inspect
 import json
 import re
 import subprocess
@@ -131,7 +132,14 @@ def _importable(module_name, timeout=60):
 
 # ---- What to run ------------------------------------------------------------
 SELFTEST = False               # run the built-in self-test on synthetic data, not a real scan
-COMPLIANCE_ONLY = False        # skip PII detection entirely: task compliance only (much faster)
+COMPLIANCE_ONLY = False
+# .pt files are read with torch's SAFE unpickler (weights_only=True). Flip this only for
+# files you produced yourself and trust: it permits arbitrary code execution on load.
+TRUST_INPUT_PICKLES = False
+# Include each file's full transcript in the JSON report. OFF: reports are circulated to
+# reviewers, and a transcript with no detected PII would otherwise be copied verbatim.
+# Detected spans and a masked preview are always included regardless.
+INCLUDE_TRANSCRIPTS = False        # skip PII detection entirely: task compliance only (much faster)
 RECURSIVE = False              # also scan sub-folders of INPUT_FOLDER
 
 # ---- PII detection engines (each is skipped with a notice if not installed) --
@@ -145,7 +153,7 @@ ENABLE_PRESIDIO = True         # Microsoft Presidio NER
 # DOUBLES the catch rate, at roughly 10x the review queue, and it is slow (~1-2s per
 # file once warm). Off is a deliberate precision choice, not a capability gap.
 # --> NOTES [LLM] at the end of this block for the full tradeoff.
-ENABLE_LLM = True
+ENABLE_LLM = False
 ENABLE_LLM_COMPLIANCE_JUDGE = True   # also judge BORDERLINE transcripts; needs ENABLE_LLM
 
 # ---- Posture: precision vs recall -------------------------------------------
@@ -174,8 +182,8 @@ COMBINATORIAL_REQUIRE_CATEGORY_DIVERSITY = True  # combinatorial risk needs 2 DI
 # ---- Paths. INPUT_FOLDER is the one value you MUST set ----------------------
 # With no input folder here (and none on the command line) the run stops immediately
 # and says so: it does not guess, and it does not scan the working directory.
-INPUT_FOLDER = "/Users/varunthvar1/Desktop/sample_data"   # >>> SET THIS <<< folder of .pt files
-MAX_FILES = 10                 # cap the number of files, or None for all. Handy for a pilot run.
+INPUT_FOLDER = ""                                # >>> SET THIS <<< folder of .pt files
+MAX_FILES = None               # cap the number of files, or None for ALL. Set e.g. 20 to pilot.
 # The task table this pipeline checks every .pt against, shipped NEXT TO this script.
 # Keep the two together. A relative path resolves against the SCRIPT's folder, never
 # the working directory. Missing -> the run STOPS. --> NOTES [TASK REFERENCE]
@@ -288,6 +296,11 @@ TIER_A_COVERAGE_PASS = 1.1     # 1.1 = the coverage guard is OFF. --> NOTES [TIE
 #   is worth against a missed problem -- a per-study decision, not a default. Off
 #   gives a small, dense, high-precision queue; on gives ~2x the recall for ~10x the
 #   queue.
+#   The LLM can lower a score into review but never rescue a HARD fail. That holds for
+#   Tier C too: a structurally degenerate transcript (empty, non-speech only) keeps its
+#   hard fail even when Tier C scored the file, because an empty recording is broken
+#   regardless of what a judge says about it. Only ACOUSTIC tasks suppress that hard
+#   fail, since there a near-empty transcript is the compliant outcome.
 #   ENABLE_LLM_COMPLIANCE_JUDGE asks the model, task-agnostically, whether a
 #   BORDERLINE transcript reads like a completed spoken response. It runs only on
 #   files already in the review band -- never on every file, never on acoustic tasks,
@@ -313,6 +326,11 @@ TIER_A_COVERAGE_PASS = 1.1     # 1.1 = the coverage guard is OFF. --> NOTES [TIE
 #   so flagging acoustic is high-false-positive for almost no recall.
 #   RECALL_FLAG_ALL_OPEN is the no-LLM fallback for "answered the wrong question",
 #   which otherwise needs ENABLE_LLM. More false positives.
+#   High recall widens what reaches REVIEW, never what reaches CONFIRMED. Two things it
+#   deliberately does NOT relax: structured-identifier format validation (a "device
+#   identifier" with no digits is wrong in either posture) and the cross-engine
+#   corroboration requirement for the hard gate. Both would otherwise let a single
+#   hallucinated span auto-confirm as direct PII.
 #
 # [NAMES]  FLAG_ALL_NAMES
 #   Every detected personal name is review-worthy, no matter whose it is or how weak
@@ -464,11 +482,25 @@ NAME_CONTEXT_RE = re.compile(
 
 
 def _zipf(word):
+    """Zipf word frequency, or None when wordfreq is unavailable.
+
+    None is NOT 0.0. 0.0 means "measured, maximally rare", and every caller reads
+    rarity as evidence FOR a PII hit -- so returning 0.0 on a missing dependency
+    silently INVERTS the precision guards instead of relaxing them: a common-word
+    NAME false positive becomes hard-gate eligible, and the soft rare-role qualifier
+    fires on every phrase. Callers must treat None as "unknown" and take their
+    precision-safe branch."""
     try:
         from wordfreq import zipf_frequency
-        return zipf_frequency(word.lower(), "en")
     except Exception:  # noqa: BLE001
-        return 0.0     # no wordfreq -> don't suppress (favor recall)
+        return None
+    return zipf_frequency(word.lower(), "en")
+
+
+def _wordfreq_available():
+    """Whether word-frequency data is installed at all (wordfreq ships in the `pii`
+    extra). Guards that need frequency evidence must not fire without it."""
+    return _zipf("the") is not None
 
 
 def _name_hard_gate_eligible(span_text, start, source_text, methods, engines, score):
@@ -481,7 +513,10 @@ def _name_hard_gate_eligible(span_text, start, source_text, methods, engines, sc
     corroborated = len(engines) >= 2
     preceding = source_text[max(0, start - 30):start]
     has_context = bool(NAME_CONTEXT_RE.search(preceding))
-    common = (not multitoken) and _zipf(span_text) >= NAME_COMMON_WORD_ZIPF
+    # Unknown frequency (no wordfreq) is treated as "common", i.e. the precision-safe
+    # side: a lone single token with no other name signal stays out of the hard gate.
+    z = _zipf(span_text)
+    common = (not multitoken) and (z is None or z >= NAME_COMMON_WORD_ZIPF)
     if common and not (has_context or precise or multitoken):
         return False
     return multitoken or has_context or precise or corroborated or score >= 0.9
@@ -506,9 +541,13 @@ def _valid_structured_identifier(text, category):
 
 
 def postprocess_entities(entities, source_text):
-    """Apply the precision guards to a flat list of engine detections."""
-    if not PRECISION_MODE:
-        return entities
+    """Apply the precision guards to a flat list of engine detections.
+
+    Structured-identifier FORMAT VALIDATION is a correctness check, not a
+    precision/recall tradeoff: a "device identifier" containing no digits is wrong in
+    either posture, and letting it through in high-recall mode promotes a known
+    hallucination class straight to the confirmed/hard-gate tier. It therefore runs
+    always. PRECISION_MODE governs only the confidence-threshold guard below it."""
     out = []
     for e in entities:
         span_text = source_text[e["start"]:e["end"]]
@@ -523,9 +562,11 @@ def postprocess_entities(entities, source_text):
         if cat in ("IDNUM", "CONTACT", "URL") and not _valid_structured_identifier(span_text, cat):
             continue
         # 3) Low-confidence soft detections dropped (pattern/list hits are exempt).
-        method_root = e["method"].split(":")[0].split("+")[0]
-        if e["confidence"] < MIN_ENGINE_CONFIDENCE and method_root not in _PATTERN_METHODS:
-            continue
+        #    This one IS the precision/recall knob, so high-recall keeps them.
+        if PRECISION_MODE:
+            method_root = e["method"].split(":")[0].split("+")[0]
+            if e["confidence"] < MIN_ENGINE_CONFIDENCE and method_root not in _PATTERN_METHODS:
+                continue
         out.append(e)
     return out
 
@@ -731,7 +772,8 @@ _ROLE_INTRO_RE = re.compile(
 def _phrase_min_zipf(phrase):
     """Minimum word-frequency across a role phrase (a rare word anywhere signals
     specificity). Returns None if no word is known to wordfreq."""
-    zs = [z for z in (_zipf(t) for t in re.findall(r"[a-z'-]+", phrase.lower())) if z > 0.0]
+    zs = [z for z in (_zipf(t) for t in re.findall(r"[a-z\'-]+", phrase.lower()))
+          if z is not None and z > 0.0]
     return min(zs) if zs else None
 
 
@@ -744,7 +786,14 @@ def rare_role_scan(text):
     ents = []
     for m in _STRONG_QUALIFIER_RE.finditer(text):
         ents.append(_entity(m.start(), m.end(), "MISC", 0.6, "rare_role"))
+    # The soft qualifier ("professional <x>") is only discriminating WITH frequency
+    # data -- it is what separates "professional figure skater" from "professional
+    # development". Without wordfreq it would fire on every match, so it is skipped:
+    # a missing optional dependency must not manufacture flags.
+    have_freq = _wordfreq_available()
     for m in _SOFT_QUALIFIER_RE.finditer(text):
+        if not have_freq:
+            continue
         z = _phrase_min_zipf(m.group(2))
         if z is None or z <= RARE_ROLE_QUALIFIER_ZIPF_MAX:  # skip 'professional development'
             ents.append(_entity(m.start(), m.end(), "MISC", 0.55, "rare_role"))
@@ -1292,7 +1341,10 @@ def merge_pii(entities, text):
         # URL regex), OR corroborated by >=2 independent engines, OR very high
         # confidence, OR a name via honorific/gazetteer. A lone low-confidence model
         # guess is NOT auto-failed; it still surfaces as needs_review (recall kept).
-        if not (HARD_GATE_REQUIRE_CORROBORATION and PRECISION_MODE):
+        # Deliberately independent of PRECISION_MODE: high recall widens what reaches
+        # REVIEW, never what reaches CONFIRMED. Tying the two together let a single
+        # uncorroborated engine guess auto-confirm as hard-gate PII in recall mode.
+        if not HARD_GATE_REQUIRE_CORROBORATION:
             hard_gate_eligible = is_strong
         elif not is_strong:
             hard_gate_eligible = False
@@ -1534,9 +1586,17 @@ _SCRIPTED_TASK_PATTERNS = (
 
 
 def _norm_task(s):
-    """Alphanumeric-only, lowercased -- so 'Cape-V-Sentences', 'cape_v_sentences' and
-    'cape-V-sentences-(v2)-3' all normalize compatibly for matching."""
-    return re.sub(r"[^a-z0-9]", "", (s or "").lower())
+    """Lowercased, with every run of separators COLLAPSED to a single '-' -- so
+    'Cape-V-Sentences', 'cape_v_sentences' and 'cape-V-sentences-(v2)-3' all normalize
+    compatibly for matching.
+
+    Separators are collapsed, NOT deleted. Deleting them destroys the only boundary
+    between a task number and the next field, so 'list-7-3' and 'list-73-1' both
+    normalize to strings sharing a prefix, and the prefix fallback in
+    _resolve_reference_keys then silently scores a recording against a SIBLING task's
+    reference text -- reporting a compliant participant as having read the wrong
+    script. Keeping the delimiter lets that fallback require a segment boundary."""
+    return re.sub(r"[^a-z0-9]+", "-", (s or "").lower()).strip("-")
 
 
 def task_key_from_filename(filename):
@@ -1603,13 +1663,16 @@ class ComplianceChecker:
         if exact:
             return exact, False
         # Keys that are a prefix of the token -> token is the more specific name.
-        prefixes = [k for k, nk in self._ref_index.items() if nk and nt.startswith(nk)]
+        # The trailing '-' is load-bearing: it forces the match to end on a segment
+        # boundary, so key 'list-7-3' is NOT treated as a prefix of token 'list-73-1'.
+        prefixes = [k for k, nk in self._ref_index.items() if nk and nt.startswith(nk + "-")]
         if prefixes:
             longest = max(len(self._ref_index[k]) for k in prefixes)
             best = [k for k in prefixes if len(self._ref_index[k]) == longest]
             return best, len(best) > 1
         # Token is a prefix of these keys -> genuinely ambiguous between variants.
-        supersets = [k for k, nk in self._ref_index.items() if nk and nk.startswith(nt)]
+        # Same boundary condition, for the same reason, in the other direction.
+        supersets = [k for k, nk in self._ref_index.items() if nk and nk.startswith(nt + "-")]
         return supersets, len(supersets) > 1
 
     # ---- Resolve the task + MODALITY for a file (filename first, then .pt metadata) ----
@@ -1673,16 +1736,26 @@ class ComplianceChecker:
         return ctx
 
     # ---- Transcript quality (gated by modality) ----
-    def check_quality(self, transcript, suppress=False):
+    def check_quality(self, transcript, suppress=False, keep_hard_fail=True):
         """Deterministic transcript-quality signal. When `suppress` is True (acoustic
         tasks, or tasks whose Tier A/C score is the authority), the raw status is still
         reported but it does NOT contribute a compliance score -- so a near-empty
         transcript for a prolonged-vowel/breath task is never counted as a failure.
         Otherwise it is the compliance signal (a degenerate transcript => failure),
-        optionally corroborated by the LLM on borderline files."""
+        optionally corroborated by the LLM on borderline files.
+
+        `keep_hard_fail` separates the two reasons for suppressing. Suppressing the
+        SCORE is right in both cases, but a structurally degenerate transcript (empty,
+        non-speech only) is a broken recording, not a modality artifact, so the HARD
+        FAIL must still survive when the suppression came from a Tier A/C score being
+        authoritative -- otherwise an LLM "completed: true" on an empty transcript
+        silently rescues a hard fail, which the NOTES explicitly promise it cannot do.
+        Only acoustic tasks pass keep_hard_fail=False, because there a near-empty
+        transcript genuinely is the compliant outcome."""
         q = assess_transcript_quality(transcript)
         if suppress:
-            return dict(q, applies=False, score=None, confidence=None, hard_fail=False,
+            return dict(q, applies=False, score=None, confidence=None,
+                        hard_fail=bool(q["hard_fail"] and keep_hard_fail),
                         raw_status=q["status"])
         q = dict(q, applies=True)
         if (ENABLE_LLM_COMPLIANCE_JUDGE and self.llm and self.llm.active
@@ -1920,10 +1993,14 @@ def _compliance_check_score(quality, task_result, step_results):
     # Quality contributes only when it "applies" (score is not None). For acoustic
     # tasks, or tasks whose Tier A/C score is authoritative, quality is suppressed
     # (score None) so a naturally near-empty transcript is not counted as a failure.
-    if quality is not None and quality.get("score") is not None:
-        scores.append(quality["score"])
-        confs.append(quality["confidence"])
+    # The hard fail is read UNCONDITIONALLY, not only when quality contributes a score.
+    # A suppressed quality signal still carries "this transcript is structurally empty",
+    # and that must reach the decision even though it adds no soft score.
+    if quality is not None:
         hard_fail = hard_fail or bool(quality.get("hard_fail"))
+        if quality.get("score") is not None:
+            scores.append(quality["score"])
+            confs.append(quality["confidence"])
     if task_result and task_result.get("score") is not None:
         scores.append(task_result["score"])
         confs.append(task_result.get("confidence") or 0.5)
@@ -2179,8 +2256,13 @@ class Pipeline:
         # Transcript quality is the compliance signal ONLY for open/unknown tasks with no
         # tier score. Acoustic tasks (a near-empty transcript is expected) and tasks whose
         # Tier A/C score is authoritative suppress it, so they are not falsely failed.
-        suppress_quality = (modality == "acoustic") or task_has_score
-        quality = self.compliance.check_quality(transcript, suppress=suppress_quality)
+        acoustic = (modality == "acoustic")
+        suppress_quality = acoustic or task_has_score
+        # keep_hard_fail=False ONLY for acoustic: there a near-empty transcript is the
+        # compliant outcome. When the suppression is merely "Tier A/C scored this file",
+        # a degenerate transcript is still a broken recording and must keep its hard fail.
+        quality = self.compliance.check_quality(transcript, suppress=suppress_quality,
+                                                keep_hard_fail=not acoustic)
         # High-recall: surface likely non-compliance the text-level tiers miss
         # (unexpected speech on acoustic tasks; thin open responses) as REVIEW.
         # Applied even when Tier C DID score the file: the recall net exists to catch what
@@ -2208,7 +2290,12 @@ class Pipeline:
                            "task": task_result, "protocol_steps": step_results},
             "interactions": interactions,
             "composite": composite,
-            "masked_preview": build_masked_preview(transcript, pii) if pii else transcript,
+            # Always the MASKED form -- uniform in both branches, so the field never
+            # silently becomes the raw transcript. With no detected PII there is nothing
+            # to mask, so the preview would BE the transcript; that case is withheld
+            # unless INCLUDE_TRANSCRIPTS says otherwise.
+            "masked_preview": (build_masked_preview(transcript, pii or [])
+                               if (pii or INCLUDE_TRANSCRIPTS) else None),
         }
 
 
@@ -2236,10 +2323,24 @@ class _NullLLM:
 # .pt loading + folder processing
 # ---------------------------------------------------------------------------
 def load_pt(path):
-    """Returns (transcription, task_meta, error). transcription/error mutually exclusive."""
+    """Returns (transcription, task_meta, error). transcription/error mutually exclusive.
+
+    Loaded with weights_only=True (torch >= 2.6's default). This is a triage tool
+    pointed at folders of .pt files produced elsewhere, so unpickling arbitrary objects
+    would mean code execution during a compliance scan. Everything the pipeline reads --
+    the transcription string and string metadata -- loads fine under the safe reader.
+    TRUST_INPUT_PICKLES opts back out explicitly, with a warning, for corpora whose
+    files carry objects the restricted unpickler refuses."""
     try:
-        data = torch.load(path, map_location="cpu", weights_only=False)
+        data = torch.load(path, map_location="cpu",
+                          weights_only=not TRUST_INPUT_PICKLES)
     except Exception as e:  # noqa: BLE001
+        if not TRUST_INPUT_PICKLES:
+            return None, None, (
+                f"failed to load .pt file: {e}. If this file is TRUSTED and the error "
+                f"mentions weights_only / UnpicklingError, set TRUST_INPUT_PICKLES = True "
+                f"in the CONFIG block (this allows arbitrary code execution on load -- "
+                f"only do it for files you produced yourself)")
         return None, None, f"failed to load .pt file: {e}"
     if not isinstance(data, dict) or "transcription" not in data:
         return None, None, "no 'transcription' key found in loaded object"
@@ -2265,6 +2366,7 @@ def process_file(path, pipeline):
 
 def process_folder(folder, pipeline, recursive, max_files):
     files = sorted(folder.glob("**/*.pt" if recursive else "*.pt"))
+    files_available = len(files)
     if max_files:
         files = files[:max_files]
     if not files:
@@ -2290,10 +2392,16 @@ def process_folder(folder, pipeline, recursive, max_files):
             k = key_fn(r)
             out[k] = out.get(k, 0) + 1
         return out
+    # NOTE: there is no "fail" count. composite_score collapses FAIL into REVIEW before
+    # returning, so no record can carry decision == "fail" -- a `fail` key would be
+    # structurally always 0 and would read as "no hard failures" on a corpus full of
+    # them. The pre-collapse severity is reported by hard_gate/pii_confirmed/
+    # compliance_fail below, which are the real signals.
     summary = {
         "pass": sum(1 for r in results if r["decision"] == "pass"),
         "review": sum(1 for r in results if r["decision"] == "review"),
-        "fail": sum(1 for r in results if r["decision"] == "fail"),
+        "hard_gate": sum(1 for r in results if r["composite"]["pii_confirmed"]
+                         or r["composite"]["compliance_fail"]),
         # where the flags come from (these overlap when a file has both)
         "flagged_by_pii": sum(1 for r in results if r["composite"]["flagged_by_pii"]),
         "flagged_by_compliance": sum(1 for r in results if r["composite"]["flagged_by_compliance"]),
@@ -2314,6 +2422,10 @@ def process_folder(folder, pipeline, recursive, max_files):
             if (r["compliance"].get("task_context") or {}).get("ambiguous_match")
             and r.get("task_id")}),
         "errors": len(errors),
+        # A truncated run must say so IN THE ARTIFACT. A JSON read six months later has
+        # no console scrollback, and a partial screen otherwise reads as a complete one.
+        "truncated": bool(max_files and files_available > max_files),
+        "files_available": files_available,
         # THE DELIVERABLE: which files a human actually has to look at. Everything
         # above is a count; this is the list. A file is flagged when its decision is
         # anything other than "pass" -- i.e. PII worth redacting, a compliance
@@ -2400,8 +2512,10 @@ def print_summary(report):
     print("\n--- Summary ---")
     print(f"Files processed: {report['num_files']}")
     print(f"  pass:                  {s['pass']}")
-    print(f"  review:                {s['review']}  (soft gate -> human review)")
-    print(f"  fail:                  {s['fail']}  (hard gate)")
+    print(f"  review:                {s['review']}  (of which hard-gate: {s['hard_gate']})")
+    if s.get("truncated"):
+        print(f"  !! TRUNCATED: only {report['num_files']} of {s['files_available']} .pt "
+              f"file(s) were scanned (MAX_FILES). This is a partial screen.")
     print("  -- flag breakdown (a file can be flagged by both) --")
     print(f"  flagged_by_pii:        {s['flagged_by_pii']}   (of which confirmed hard-gate PII: {s['pii_confirmed']})")
     print(f"  flagged_by_compliance: {s['flagged_by_compliance']}   (of which hard compliance fail: {s['compliance_fail']})")
@@ -2517,8 +2631,32 @@ def load_task_reference(path):
 # ---------------------------------------------------------------------------
 # Self-test (synthetic data only -- never reads real transcripts)
 # ---------------------------------------------------------------------------
-def run_selftest(args):
+_HERMETIC_NAMES = {
+    "john", "smith", "sarah", "connor", "jane", "will", "may", "grant", "mark",
+    "james", "mary", "robert", "patricia", "michael", "linda", "david", "susan",
+}
+
+
+def run_selftest(args, full=False):
+    """Synthetic-data self-test.
+
+    HERMETIC by default: every PII engine is forced off and the name gazetteer is
+    stubbed, so the run makes NO network calls (no nltk.download, no HuggingFace weight
+    pull) and its verdict does not depend on which optional packages happen to be
+    installed. That determinism is what lets it be wrapped as a normal test -- several
+    Part A assertions (e.g. "clean.pt has no PII") only hold with the model engines
+    absent, so with engines on the same command would legitimately pass on one
+    interpreter and fail on another.
+
+    `full=True` (--selftest-full) keeps the engines as configured, exercising the real
+    spaCy/GLiNER/Presidio load paths. That variant downloads model weights and gazetteer
+    data on first run and is deliberately NOT hermetic."""
     print("Running self-test on SYNTHETIC .pt files (no real data touched)...")
+    if full:
+        print("  [full] engines left as configured -- NOT hermetic (may download weights).")
+    else:
+        print("  [hermetic] all PII engines forced off, gazetteer stubbed, no network.")
+        args.enable_spacy = args.enable_gliner = args.enable_presidio = False
     checks = {}
 
     # ---- Part A: ZERO-CONFIG (no protocol spec). Task info comes from the .pt. ----
@@ -2714,11 +2852,17 @@ def run_selftest(args):
     skater = merge_pii(rare_role_scan(skater_txt), skater_txt)
     dev_txt = "we scheduled some professional development this week"
     dev = merge_pii(rare_role_scan(dev_txt), dev_txt)
-    checks["C: 'professional figure skater' -> review-worthy MISC (not confirmed)"] = (
-        len(skater) >= 1 and skater[0].get("review_worthy") is True
-        and skater[0].get("confirmed") is False
-        and composite_score(skater, None, None, q_ok)["decision"] == "review"
-        and composite_score(skater, None, None, q_ok)["flagged_by_pii"] is True)
+    # Frequency-dependent: distinguishing "professional figure skater" from
+    # "professional development" IS the wordfreq lookup, so this can only be asserted
+    # where wordfreq is installed. The negative case below holds either way.
+    if _wordfreq_available():
+        checks["C: 'professional figure skater' -> review-worthy MISC (not confirmed)"] = (
+            len(skater) >= 1 and skater[0].get("review_worthy") is True
+            and skater[0].get("confirmed") is False
+            and composite_score(skater, None, None, q_ok)["decision"] == "review"
+            and composite_score(skater, None, None, q_ok)["flagged_by_pii"] is True)
+    else:
+        print("  [skip] rare-role frequency checks: wordfreq not installed")
     checks["C: 'professional development' -> not flagged (common role word)"] = (len(dev) == 0)
 
     # ---- Demographic quasi-identifiers: self-disclosed gender & race -> REVIEW ----
@@ -3176,6 +3320,69 @@ def run_selftest(args):
     checks["J: --flagged-list writes one flagged path per line"] = (
         lines == [f["file"] for f in flagged] and len(lines) == len(flagged))
 
+    # ---- Part K: regressions for the review findings (#542 review, section 1) ----
+    print("\n[Part K] Regressions for reported defects.")
+
+    # 1.1 -- a Tier C score must not let an empty transcript pass as compliant.
+    q_sup_open = ComplianceChecker({}, _NullLLM()).check_quality("", suppress=True,
+                                                                keep_hard_fail=True)
+    tier_c_ok = {"tier": "C", "score": 0.95, "confidence": 0.9, "completed": True}
+    cx_11 = composite_score([], tier_c_ok, None, q_sup_open)
+    checks["K1.1: an LLM 'completed' verdict cannot rescue an EMPTY transcript"] = (
+        q_sup_open["hard_fail"] is True and cx_11["compliance_fail"] is True
+        and cx_11["decision"] == "review")
+    q_sup_ac = ComplianceChecker({}, _NullLLM()).check_quality("", suppress=True,
+                                                              keep_hard_fail=False)
+    checks["K1.1: ...but an ACOUSTIC empty transcript still never hard-fails"] = (
+        q_sup_ac["hard_fail"] is False
+        and composite_score([], {"tier": "B", "score": None, "confidence": None},
+                            None, q_sup_ac)["compliance_fail"] is False)
+
+    # 1.2 -- a sibling variant must not borrow another task's reference text.
+    cc_k = ComplianceChecker({}, _NullLLM(), task_reference={
+        "harvard-sentences-list-7-3": {"instructions": "Read.", "prompts": ["He ran half way."]},
+        "cape-V-sentences-1": {"instructions": "Read.", "prompts": ["The blue spot."]},
+        "rainbow": {"instructions": "Read.", "prompts": ["When the sunlight strikes"]}})
+    checks["K1.2: 'list-73-1' does NOT match key 'list-7-3' (segment boundary)"] = (
+        cc_k._resolve_reference_keys("Harvard-Sentences-List-73-1") == ([], False))
+    checks["K1.2: 'cape-V-sentences-11' does NOT match 'cape-V-sentences-1'"] = (
+        cc_k._resolve_reference_keys("Cape-V-sentences-11") == ([], False))
+    ctx_k = cc_k.resolve_task_context("sub-1_task-Harvard-Sentences-List-73-1_features.pt", {})
+    checks["K1.2: an unknown sibling reports reference_missing, not a wrong match"] = (
+        ctx_k["modality"] == "scripted" and ctx_k["reference_missing"] is True
+        and ctx_k["reference_texts"] == [])
+    checks["K1.2: genuine prefix matches still resolve (Rainbow-Passage -> rainbow)"] = (
+        cc_k._resolve_reference_keys("Rainbow-Passage") == (["rainbow"], False))
+
+    # 1.3 -- the missing-wordfreq sentinel must be distinguishable from "maximally rare".
+    # (either wordfreq is present and "the" is a real positive frequency, or it is
+    # absent and the sentinel is None -- 0.0, the old sentinel, is neither.)
+    checks["K1.3: _zipf sentinel is None, never 0.0 ('maximally rare')"] = (
+        _zipf("the") is None or _zipf("the") > 0.0)
+
+    # 1.4 -- high recall widens REVIEW, never CONFIRMED.
+    _sv_hr, _sv_pm = HIGH_RECALL, PRECISION_MODE
+    _mod.HIGH_RECALL, _mod.PRECISION_MODE = True, False
+    try:
+        junk = postprocess_entities([_entity(0, 5, "IDNUM", 0.8, "gliner")], "cough here")
+        merged_junk = merge_pii(junk, "cough here")
+        cx_14 = composite_score(merged_junk, None, None, q_ok)
+    finally:
+        _mod.HIGH_RECALL, _mod.PRECISION_MODE = _sv_hr, _sv_pm
+    checks["K1.4: format validation still runs in high-recall (word-only IDNUM dropped)"] = (
+        junk == [])
+    checks["K1.4: high-recall never manufactures confirmed PII"] = (
+        cx_14["pii_confirmed"] is False)
+
+    # 1.10 -- the summary must not carry a structurally-impossible 'fail' counter.
+    checks["K1.10: composite decision is two-way; no record can ever be 'fail'"] = (
+        composite_score([], None, None, q_empty)["decision"] == "review"
+        and composite_score([], None, None, q_ok)["decision"] == "pass")
+
+    # 1.12 -- --flag-all-pii must not be silently inert.
+    checks["K1.12: the stray-recall-flag interlock covers --flag-all-pii"] = (
+        "--flag-all-pii" in inspect.getsource(_apply_runtime_config))
+
     print()
     for label, ok in checks.items():
         print(f"  [{'PASS' if ok else 'FAIL'}] {label}")
@@ -3297,7 +3504,14 @@ def build_args():
                         "Presidio load, no PII scan). Much faster. PII fields are reported as "
                         "skipped rather than clean, and the composite score reflects "
                         "compliance alone.")
-    p.add_argument("--selftest", action="store_true", default=SELFTEST)
+    p.add_argument("--selftest", action="store_true", default=SELFTEST,
+                   help="Hermetic synthetic self-test: engines forced off, gazetteer "
+                        "stubbed, no network, no LLM. Deterministic.")
+    p.add_argument("--selftest-full", dest="selftest_full", action="store_true",
+                   help="Self-test with the PII engines left as configured, exercising "
+                        "the real spaCy/GLiNER/Presidio load paths. NOT hermetic: it may "
+                        "download model weights, and its result depends on which optional "
+                        "packages are installed.")
     return p.parse_args()
 
 
@@ -3333,7 +3547,8 @@ def _apply_runtime_config(args):
         # their own they do nothing. Silently ignoring them would look like "I turned
         # that on and it caught nothing" -- say so instead.
         stray = [f for f, on in (("--flag-acoustic", RECALL_FLAG_ACOUSTIC),
-                                 ("--flag-all-open", RECALL_FLAG_ALL_OPEN)) if on]
+                                 ("--flag-all-open", RECALL_FLAG_ALL_OPEN),
+                                 ("--flag-all-pii", RECALL_FLAG_ALL_PII)) if on]
         if stray:
             print(f"  [note] {', '.join(stray)} has no effect without --high-recall "
                   f"(the recall nets run inside high-recall mode); enabling it now.")
@@ -3387,6 +3602,8 @@ def print_active_modes(args):
 
 def main():
     args = build_args()
+    if getattr(args, "selftest_full", False):
+        args.selftest = True
     if args.selftest:
         # The self-test must stay hermetic, fast and deterministic: synthetic data, no
         # network, no model server. Force the LLM off regardless of the defaults so a
@@ -3394,7 +3611,18 @@ def main():
         args.enable_llm = args.llm_compliance = False
     _apply_runtime_config(args)
     if args.selftest:
-        run_selftest(args)
+        if getattr(args, "selftest_full", False):
+            run_selftest(args, full=True)
+            return
+        # Stub the gazetteer loader: the real one calls nltk.download() on first use,
+        # which is a network call and would make the "hermetic" claim false.
+        mod = sys.modules[__name__]
+        real_gazetteer = mod.load_name_gazetteer
+        mod.load_name_gazetteer = lambda: set(_HERMETIC_NAMES)
+        try:
+            run_selftest(args)
+        finally:
+            mod.load_name_gazetteer = real_gazetteer
         return
     # STOP if there is no input path. Checked BEFORE any status is printed, so a
     # misconfigured run ends with just this message rather than an unrelated notice
@@ -3418,11 +3646,19 @@ def main():
     pipeline = Pipeline(args, protocol, task_reference)
     report = process_folder(args.folder, pipeline, args.recursive, args.max_files)
     print_summary(report)
-    write_json(report, args.output)
+    # Outputs carry participant transcripts and raw PII spans. A bare filename resolves
+    # beside the INPUT DATA, never the working directory -- running the documented command
+    # from a repo checkout would otherwise drop them into the source tree, where a
+    # `git add -A` commits them.
+    def _out(path):
+        p = Path(path)
+        return p if p.parent != Path(".") else args.folder / p.name
+
+    write_json(report, _out(args.output))
     if args.csv:
-        write_csv(report, Path(args.csv))
+        write_csv(report, _out(args.csv))
     if getattr(args, "flagged_list", ""):
-        write_flagged_list(report, Path(args.flagged_list))
+        write_flagged_list(report, _out(args.flagged_list))
 
 
 if __name__ == "__main__":
