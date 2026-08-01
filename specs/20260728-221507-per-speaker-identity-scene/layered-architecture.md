@@ -420,7 +420,19 @@ Dependency-ordered; each step verifiable before the next.
    arguments**, not defaulted: a pass measured to have no usable band must not get library anchors
    by omission, which is the FR-007 rule the other embedding sub-signals already follow.
 4. **Link functions** and TTS-fitted calibration (D-8, D-9).
-5. **Rounds and convergence** (D-10 – D-12, both guards).
+5. **Rounds and convergence** (D-10 – D-12, both guards). **Convergence done**
+   (`rounds.assess_convergence`, wired into `fuse.fuse_rounds`): C1-C4 judged together, cycle
+   detection separate from slow convergence, the self-confirmation guard on C1, and divergence
+   treated as a legitimate outcome that continues the loop rather than aborting it. Each round's
+   log records `numbers_settled` and `converged` separately plus which criteria blocked, so
+   "cycled" and "ran out of rounds" stay distinguishable from "agreed".
+
+   **Still open in this step:** C2's assignment and C4's action inventory are not yet produced by
+   the fusion path — J4 will supply the first, the intervention catalogue the second — so
+   `_round_record` reports them as *unmeasured* rather than as satisfied. A criterion nobody
+   measured must not read as one that passed, so `converged` currently cannot be reached through
+   that path, which is the honest state. **D-10** (a round re-running L1 at a tighter window/hop)
+   and **D-11** (re-examining a flagged region for all categories) are also still open.
 6. **Rename** `presence`/`identity`/`utterance` → `speech_presence`/`speaker`/`asr`. **Done.**
    Renamed outright with no aliases; `CACHE_SCHEMA_VERSION` bumped 5 → 6 so cached entries carrying
    the old axis names are discarded rather than mixed with new ones.
