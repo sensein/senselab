@@ -357,15 +357,16 @@ the stopping reason, is summarised in `decisions.json`. Per-round outputs remain
 
 Dependency-ordered; each step verifiable before the next.
 
-1. **L1 raw emission. Done except H1.** 23 of 24 register items closed. The speech-presence
+1. **L1 raw emission. Done.** All 24 register items closed. The speech-presence
    harvester is dissolved into `harvest_speech_presence_evidence` (measurements) +
-   `speech_presence_link` (beliefs under a named policy). Register item 24 — quality still copies
-   its nearest analysis window's value rather than resampling — **is H1**, and is the one thing
-   left in this step.
+   `speech_presence_link` (beliefs under a named policy). Register item 24 — quality resampling —
+   closed with it: `resolution.resample_series` is now wired into the quality harvest.
 2. **Harmonization** H1–H5. **H2 done** (`harmonize.py`, dual matcher, assignment uncertainty as
    disagreement, D-6). **H4 done** (checked-in AudioSet category map). **H5 done** (absolute `lufs`
-   / `excess_db` / `hnr_db`, D-3). **H1 open** — `resolution.py` exists and is unwired, so every
-   signal still reports on the reporting grid rather than a common lattice built from its declared
+   / `excess_db` / `hnr_db`, D-3). **H1 partial** — `resolution.resample_series` is wired into the quality
+   harvest (item 24), so scene quality now integrates or holds onto the reporting grid according to
+   direction. The remaining piece is applying the same conversion to the *other* signal families,
+   which still report on the reporting grid rather than on a lattice built from each declared
    native resolution. **H3 open** — transcripts are aligned to audio, not to each other.
 3. **Joint estimation** J1–J9, with J4 as a joint space (D-7). **J3 done**
    (`speaker_identity.speaker_count_posterior`). **J5–J6 done** (`background_mask.py`,
