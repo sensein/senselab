@@ -192,3 +192,9 @@ tutorials/audio/tutorial_audio_files/
 tutorials/video/tutorial_images/
 tutorials/video/visualize/
 artifacts/stitch_validation/
+
+# Run outputs. Content-addressable inputs are reproducible from the cache; the runs
+# themselves are not source, and 142 MB of them were tracked while the default output
+# directory was not — one convention, and it is "not in git".
+artifacts/e2e_runs/
+artifacts/analyze_audio/
