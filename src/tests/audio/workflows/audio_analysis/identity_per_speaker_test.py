@@ -368,3 +368,41 @@ def test_the_band_is_measured_on_the_comparison_it_calibrates() -> None:
     # A typical same-speaker comparison must reach the "confidently same" anchor.
     consecutive = [1.0 - float(vecs[i] @ vecs[i - 1]) for i in range(1, len(vecs)) if labels[i] == labels[i - 1]]
     assert float(np.median(consecutive)) <= same_floor
+
+
+def test_change_point_signal_drops_out_when_the_pass_is_uncalibratable() -> None:
+    """The same FR-007 rule the other embedding sub-signals follow, applied to J2.
+
+    An uncalibratable pass is one where the embeddings were *measured* not to separate speakers.
+    Falling back to the library's default anchors there would let a derived signal vote
+    confidently on exactly the evidence that was found wanting — and on this axis a confident
+    derived signal outvotes unanimous diarizer agreement.
+    """
+    import numpy as np
+
+    from senselab.audio.workflows.audio_analysis.embeddings import WindowEmbedding
+    from senselab.audio.workflows.audio_analysis.grid import BucketGrid
+    from senselab.audio.workflows.audio_analysis.speaker import harvest_speaker_votes
+
+    segs = [{"start": 0.0, "end": 4.0, "speaker": "SPEAKER_00"}]
+    pass_summary = {"duration_s": 4.0, "diarization": {"by_model": {"pyannote": {"status": "ok", "result": [segs]}}}}
+    a, b = np.array([1.0, 0.0]), np.array([0.0, 1.0])
+    windows = [WindowEmbedding(start_s=i * 0.05, end_s=i * 0.05 + 1.0, vector=(a if i < 40 else b)) for i in range(80)]
+
+    uncalibrated = harvest_speaker_votes(
+        pass_summary=pass_summary,
+        grid=BucketGrid(win_length=0.5, hop_length=0.5),
+        per_window_embeddings={"ecapa": windows},
+        same_speaker_floor=None,
+        diff_speaker_floor=None,
+    )
+    assert not any(k.endswith("::change_point") for b_ in uncalibrated for k in b_["votes"])
+
+    calibrated = harvest_speaker_votes(
+        pass_summary=pass_summary,
+        grid=BucketGrid(win_length=0.5, hop_length=0.5),
+        per_window_embeddings={"ecapa": windows},
+        same_speaker_floor=0.30,
+        diff_speaker_floor=0.70,
+    )
+    assert any(k.endswith("::change_point") for b_ in calibrated for k in b_["votes"])

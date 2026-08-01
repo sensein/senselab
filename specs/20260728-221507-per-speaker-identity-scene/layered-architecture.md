@@ -384,16 +384,22 @@ Dependency-ordered; each step verifiable before the next.
    per-bucket calculation would report a 25% chance of an overlap that never occurred.
 
    J2 compares each embedding window against the one a whole window-width later, not the adjacent
-   one. This is D-2's warning made operational: at the 50 ms hop two adjacent 2 s windows share
-   97.5% of their audio, so their distance measures phonetic drift rather than speaker identity.
-   Lagging by the window width makes the two sides disjoint spans meeting at a boundary, and the
-   fine hop then buys localisation of that boundary — which is what D-2 said it buys, and it does
-   not buy independent samples, so neighbouring boundary scores must not be counted as separate
-   evidence. Each bucket takes the *strongest* boundary it contains rather than the mean: a sharp
-   change surrounded by continuation is a change, and averaging would dilute it away. The distance
-   is read through the speaker axis's existing calibration band rather than a new anchor, because a
-   raw cosine of 0.2 is not evidence of anything — same-speaker embeddings sit in a 0.1-0.3 noise
-   floor from phonetic variation alone.
+   one. The reason is **contrast, not a difference in what is measured** — an earlier description of
+   this in the code said the adjacent distance "measures phonetic drift rather than speaker
+   identity", which is wrong. Adjacent 2 s windows at a 50 ms hop share 97.5% of their audio, so
+   swapping 50 ms moves the embedding only slightly: the speaker change is still present but
+   low-amplitude and spread across the window width as one voice is gradually exchanged for the
+   other, rather than appearing as a step. It is hard to place and easy to lose in noise, not
+   absent. Lagging by the window width puts the full between-speaker difference into a single
+   score; the fine hop still earns its keep by localising the boundary, which is what D-2 said it
+   buys, and it does not buy independent samples, so neighbouring scores are near-duplicates and
+   must not be counted as separate evidence.
+
+   The distance is read through the speaker axis's existing calibration band rather than a new
+   anchor, because a raw cosine of 0.2 is not evidence of anything — same-speaker embeddings sit in
+   a 0.1-0.3 noise floor from phonetic variation alone. The band's anchors are **required
+   arguments**, not defaulted: a pass measured to have no usable band must not get library anchors
+   by omission, which is the FR-007 rule the other embedding sub-signals already follow.
 4. **Link functions** and TTS-fitted calibration (D-8, D-9).
 5. **Rounds and convergence** (D-10 – D-12, both guards).
 6. **Rename** `presence`/`identity`/`utterance` → `speech_presence`/`speaker`/`asr`. **Done.**
