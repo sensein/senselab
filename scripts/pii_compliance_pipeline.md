@@ -67,7 +67,11 @@ ollama pull gemma4
 uv run python scripts/pii_compliance_pipeline.py --selftest
 ```
 
-That runs 127 checks on synthetic data in a temp directory and touches no real files. Then
+That runs 137 checks on synthetic data in a temp directory. It is **hermetic**: every PII
+engine is forced off, the name gazetteer is stubbed and the LLM is disabled, so it makes no
+network calls and its verdict does not depend on which optional packages are installed.
+`--selftest-full` instead exercises the real spaCy/GLiNER/Presidio load paths — useful, but
+it downloads model weights and its result varies with your environment. Then
 point it at some data:
 
 ```bash
@@ -106,7 +110,7 @@ as the shape of the trade, not as guarantees for your data.
 
 | Mode | How | Catches | Queue | Use when |
 |---|---|---|---|---|
-| **Precision-first** | *(defaults)* | ~12 / 42 | ~13 files, ~92% real | Reviewer time is scarce; you want a short list that's almost all real. |
+| **Precision-first** *(default)* | *(no changes)* | ~12 / 42 | ~13 files, ~92% real | Reviewer time is scarce; you want a short list that's almost all real. |
 | **+ open-task judging** | `ENABLE_LLM = True` | **20 / 42** † | ~100 files, ~20% real † | You need free-speech / story-recall tasks checked at all. Adds ~1–2 s per file. |
 | **+ recall nets** | `HIGH_RECALL = True` | more | larger | Thin open responses and weak PII should surface too. |
 | **+ acoustic with speech** | `RECALL_FLAG_ACOUSTIC = True` | more | much larger | A vowel/breath task that transcribed as words is worth a look. |
@@ -353,10 +357,17 @@ every call, and that reload tax dominates runtime.
 
 ## Data safety
 
-- The pipeline only ever **reads** `.pt` files. Masked previews live in the report and are never
-  written back; nothing is auto-redacted.
+- The pipeline only ever **reads** `.pt` files, and reads them with torch's **safe
+  unpickler** (`weights_only=True`), so a malicious or corrupted `.pt` cannot execute code
+  during a scan. `TRUST_INPUT_PICKLES = True` opts out for files you produced yourself.
+  Masked previews live in the report and are never written back; nothing is auto-redacted.
 - **Outputs are sensitive.** The JSON and CSV contain real subject/session IDs and PII-derived
-  content — treat them as sensitive as the recordings and keep them out of version control.
+  content — treat them as sensitive as the recordings. A bare output filename is written
+  **beside the input data**, never into the working directory, so running from a repo
+  checkout cannot drop them into the source tree; all three default names are also in
+  `.gitignore`. Full transcripts are withheld unless `INCLUDE_TRANSCRIPTS = True`: the
+  report carries detected spans and a masked preview, but a clean file's transcript is not
+  copied verbatim into a document that gets circulated.
 - **No participant paths in source.** `INPUT_FOLDER` ships empty; the script stops rather than
   guessing.
 - **`--selftest` fabricates its own synthetic data** in a temp directory, so the tool can be
