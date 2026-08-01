@@ -205,8 +205,11 @@ def test_l2_reverb_and_bandwidth_degradation() -> None:
     """C50 and roll-off map to degradation only at L2, using their own anchors."""
     assert reverb_degradation(59.8) == pytest.approx(0.0)
     assert reverb_degradation(-5.0) == pytest.approx(1.0)
-    assert bandwidth_degradation(7600.0, sampling_rate=SR) < 0.1  # near Nyquist
-    assert bandwidth_degradation(3400.0, sampling_rate=SR) > 0.5  # telephone band
+    near_nyquist = bandwidth_degradation(7600.0, sampling_rate=SR)
+    telephone = bandwidth_degradation(3400.0, sampling_rate=SR)
+    assert near_nyquist is not None and telephone is not None
+    assert near_nyquist < 0.1
+    assert telephone > 0.5
     assert bandwidth_degradation(None, sampling_rate=SR) is None
 
 
@@ -320,7 +323,7 @@ def test_a_coarser_bucket_integrates_its_analysis_windows(monkeypatch: pytest.Mo
 
 def test_a_failed_estimator_in_some_windows_does_not_poison_the_bucket(monkeypatch: pytest.MonkeyPatch) -> None:
     """Averaging must skip the windows that measured nothing, not average in a hole."""
-    windows = [
+    windows: list[dict[str, object]] = [
         {"snr_brouhaha_db": 20.0},
         {"snr_brouhaha_db": None},
         {"snr_brouhaha_db": 40.0},

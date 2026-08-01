@@ -101,7 +101,7 @@ def get_gpu_mb(device: str) -> float:
         return torch.cuda.memory_allocated() / (1024 * 1024)
     if device == "mps" and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         try:
-            return torch.mps.driver_allocated_size() / (1024 * 1024)
+            return torch.mps.driver_allocated_memory() / (1024 * 1024)
         except Exception:
             return 0.0
     return 0.0
@@ -153,7 +153,9 @@ def setup_text_embeddings_minilm(device: str):
     from senselab.text.tasks.embeddings_extraction import extract_embeddings_from_text
     from senselab.utils.data_structures import DeviceType, SentenceTransformersModel
 
-    model = SentenceTransformersModel(path_or_uri="sentence-transformers/all-MiniLM-L6-v2", revision="main")
+    model: SentenceTransformersModel = SentenceTransformersModel(
+        path_or_uri="sentence-transformers/all-MiniLM-L6-v2", revision="main"
+    )
     dev = DeviceType(device)
     texts = ["Hello, world!", "Testing embeddings extraction.", "A third sentence for good measure."]
     return extract_embeddings_from_text, (texts, model), {"device": dev}
@@ -163,7 +165,7 @@ def setup_whisper_tiny(device: str):
     from senselab.audio.tasks.speech_to_text import transcribe_audios
     from senselab.utils.data_structures import DeviceType, HFModel
 
-    model = HFModel(path_or_uri="openai/whisper-tiny", revision="main")
+    model: HFModel = HFModel(path_or_uri="openai/whisper-tiny", revision="main")
     dev = DeviceType(device)
     audio = _load_mono_16k()
     return transcribe_audios, ([audio],), {"model": model, "device": dev}
@@ -173,7 +175,7 @@ def setup_mms_tts_eng(device: str):
     from senselab.audio.tasks.text_to_speech import synthesize_texts
     from senselab.utils.data_structures import DeviceType, HFModel
 
-    model = HFModel(path_or_uri="facebook/mms-tts-eng", revision="main")
+    model: HFModel = HFModel(path_or_uri="facebook/mms-tts-eng", revision="main")
     dev = DeviceType(device)
     return synthesize_texts, (["Hello world"],), {"model": model, "device": dev}
 
@@ -182,7 +184,7 @@ def setup_metricgan(device: str):
     from senselab.audio.tasks.speech_enhancement import enhance_audios
     from senselab.utils.data_structures import DeviceType, SpeechBrainModel
 
-    model = SpeechBrainModel(path_or_uri="speechbrain/metricgan-plus-voicebank", revision="main")
+    model: SpeechBrainModel = SpeechBrainModel(path_or_uri="speechbrain/metricgan-plus-voicebank", revision="main")
     dev = DeviceType(device)
     audio = _load_mono_16k()
     return enhance_audios, ([audio],), {"model": model, "device": dev}
@@ -192,7 +194,7 @@ def setup_ecapa(device: str):
     from senselab.audio.tasks.speaker_embeddings import extract_speaker_embeddings_from_audios
     from senselab.utils.data_structures import DeviceType, SpeechBrainModel
 
-    model = SpeechBrainModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb", revision="main")
+    model: SpeechBrainModel = SpeechBrainModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb", revision="main")
     dev = DeviceType(device)
     audio = _load_mono_16k()
     return extract_speaker_embeddings_from_audios, ([audio],), {"model": model, "device": dev}
@@ -202,7 +204,7 @@ def setup_xvector(device: str):
     from senselab.audio.tasks.speaker_embeddings import extract_speaker_embeddings_from_audios
     from senselab.utils.data_structures import DeviceType, SpeechBrainModel
 
-    model = SpeechBrainModel(path_or_uri="speechbrain/spkrec-xvect-voxceleb", revision="main")
+    model: SpeechBrainModel = SpeechBrainModel(path_or_uri="speechbrain/spkrec-xvect-voxceleb", revision="main")
     dev = DeviceType(device)
     audio = _load_mono_16k()
     return extract_speaker_embeddings_from_audios, ([audio],), {"model": model, "device": dev}
@@ -212,7 +214,7 @@ def setup_resnet_speaker(device: str):
     from senselab.audio.tasks.speaker_embeddings import extract_speaker_embeddings_from_audios
     from senselab.utils.data_structures import DeviceType, SpeechBrainModel
 
-    model = SpeechBrainModel(path_or_uri="speechbrain/spkrec-resnet-voxceleb", revision="main")
+    model: SpeechBrainModel = SpeechBrainModel(path_or_uri="speechbrain/spkrec-resnet-voxceleb", revision="main")
     dev = DeviceType(device)
     audio = _load_mono_16k()
     return extract_speaker_embeddings_from_audios, ([audio],), {"model": model, "device": dev}
@@ -222,7 +224,7 @@ def setup_sepformer(device: str):
     from senselab.audio.tasks.speech_enhancement import enhance_audios
     from senselab.utils.data_structures import DeviceType, SpeechBrainModel
 
-    model = SpeechBrainModel(path_or_uri="speechbrain/sepformer-wham16k-enhancement", revision="main")
+    model: SpeechBrainModel = SpeechBrainModel(path_or_uri="speechbrain/sepformer-wham16k-enhancement", revision="main")
     dev = DeviceType(device)
     audio = _load_mono_16k()
     return enhance_audios, ([audio],), {"model": model, "device": dev}
@@ -242,7 +244,7 @@ def setup_pyannote_diarization(device: str):
     from senselab.audio.tasks.speaker_diarization import diarize_audios
     from senselab.utils.data_structures import DeviceType, PyannoteAudioModel
 
-    model = PyannoteAudioModel(path_or_uri="pyannote/speaker-diarization-community-1")
+    model: PyannoteAudioModel = PyannoteAudioModel(path_or_uri="pyannote/speaker-diarization-community-1")
     dev = DeviceType(device)
     audio = _load_mono_16k()
     return diarize_audios, ([audio],), {"model": model, "device": dev}
@@ -260,7 +262,7 @@ def setup_wav2vec2_emotion_dim(device: str):
     audio = Audio(filepath=str(mono_path))
     resampled = resample_audios([audio], 16000)
 
-    model = HFModel(path_or_uri="audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim")
+    model: HFModel = HFModel(path_or_uri="audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim")
     dev = DeviceType(device)
     return classify_emotions_from_speech, (resampled, model), {"device": dev}
 
@@ -269,7 +271,7 @@ def setup_seamless_m4t(device: str):
     from senselab.audio.tasks.speech_to_text import transcribe_audios
     from senselab.utils.data_structures import DeviceType, HFModel
 
-    model = HFModel(path_or_uri="facebook/seamless-m4t-unity-small")
+    model: HFModel = HFModel(path_or_uri="facebook/seamless-m4t-unity-small")
     dev = DeviceType(device)
     audio = _load_mono_16k()
     return transcribe_audios, ([audio],), {"model": model, "device": dev}
@@ -287,7 +289,7 @@ def setup_wav2vec2_xlsr_emotion(device: str):
     audio = Audio(filepath=str(mono_path))
     resampled = resample_audios([audio], 16000)
 
-    model = HFModel(path_or_uri="ehcalabres/wav2vec2-lg-xlsr-en-speech-emotion-recognition")
+    model: HFModel = HFModel(path_or_uri="ehcalabres/wav2vec2-lg-xlsr-en-speech-emotion-recognition")
     dev = DeviceType(device)
     return classify_emotions_from_speech, (resampled, model), {"device": dev}
 
@@ -296,7 +298,7 @@ def setup_bark_small(device: str):
     from senselab.audio.tasks.text_to_speech import synthesize_texts
     from senselab.utils.data_structures import DeviceType, HFModel
 
-    model = HFModel(path_or_uri="suno/bark-small", revision="main")
+    model: HFModel = HFModel(path_or_uri="suno/bark-small", revision="main")
     dev = DeviceType(device)
     return synthesize_texts, (["Hello"],), {"model": model, "device": dev}
 
@@ -305,7 +307,7 @@ def setup_pyannote_vad(device: str):
     from senselab.audio.tasks.voice_activity_detection import detect_human_voice_activity_in_audios
     from senselab.utils.data_structures import DeviceType, PyannoteAudioModel
 
-    model = PyannoteAudioModel(path_or_uri="pyannote/speaker-diarization-community-1")
+    model: PyannoteAudioModel = PyannoteAudioModel(path_or_uri="pyannote/speaker-diarization-community-1")
     dev = DeviceType(device)
     audio = _load_mono_16k()
     return detect_human_voice_activity_in_audios, ([audio],), {"model": model, "device": dev}
@@ -315,7 +317,7 @@ def setup_speaker_verification(device: str):
     from senselab.audio.tasks.speaker_verification import verify_speaker
     from senselab.utils.data_structures import DeviceType, SpeechBrainModel
 
-    model = SpeechBrainModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb", revision="main")
+    model: SpeechBrainModel = SpeechBrainModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb", revision="main")
     dev = DeviceType(device)
     audio = _load_mono_16k()
     return verify_speaker, (audio, audio), {"model": model, "device": dev}
@@ -493,7 +495,7 @@ def generate_report(results: List[ProfileResult]) -> Dict[str, Any]:
 
     if torch.cuda.is_available():
         report["system"]["gpu_name"] = torch.cuda.get_device_name(0)
-        report["system"]["gpu_memory_gb"] = round(torch.cuda.get_device_properties(0).total_mem / (1024**3), 1)
+        report["system"]["gpu_memory_gb"] = round(torch.cuda.get_device_properties(0).total_memory / (1024**3), 1)
 
     # Detect tier changes and warnings
     for r in results:
@@ -680,7 +682,7 @@ class ProfilePlugin:
 
         if torch.cuda.is_available():
             report["system"]["gpu_name"] = torch.cuda.get_device_name(0)
-            report["system"]["gpu_memory_gb"] = round(torch.cuda.get_device_properties(0).total_mem / (1024**3), 1)
+            report["system"]["gpu_memory_gb"] = round(torch.cuda.get_device_properties(0).total_memory / (1024**3), 1)
 
         # Summary stats
         times = [r["wall_seconds"] for r in self.results]
