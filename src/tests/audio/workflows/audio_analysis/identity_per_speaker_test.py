@@ -233,7 +233,9 @@ def test_the_measured_band_actually_admits_the_speaker_it_was_measured_on() -> N
         vecs.append(v / np.linalg.norm(v))
     entries = [WindowEmbedding(start_s=i * 0.5, end_s=i * 0.5 + 2.0, vector=v) for i, v in enumerate(vecs)]
 
-    same = cluster_pass_speakers(entries)["empirical_same_speaker_floor"]
+    clustered = cluster_pass_speakers(entries)
+    assert clustered is not None
+    same = clustered["empirical_same_speaker_floor"]
     stacked = np.stack(vecs)
     dists = [1.0 - float(stacked[i] @ stacked[j]) for i in range(len(vecs)) for j in range(i + 1, len(vecs))]
     assert float(np.median(dists)) <= same

@@ -30,6 +30,7 @@ def test_each_round_writes_its_own_file(tmp_path) -> None:  # noqa: ANN001
     """Later rounds must not overwrite earlier ones, or the comparison is impossible."""
     a = build_round_timeline(tmp_path, round_index=0, axis_rows={"speaker": _rows([0.5])}, duration_s=0.5)
     b = build_round_timeline(tmp_path, round_index=1, axis_rows={"speaker": _rows([0.2])}, duration_s=0.5)
+    assert a is not None and b is not None
     assert a != b and a.exists() and b.exists()
 
 

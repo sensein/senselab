@@ -219,17 +219,18 @@ def test_label_mass_counts_a_second_ranked_speech_label() -> None:
     """
     from senselab.audio.workflows.audio_analysis.sound_sources import window_label_mass
 
+    labels = ["Music", "Speech", "Guitar"]
     window = {
         "start": 0.0,
         "end": 0.96,
-        "labels": ["Music", "Speech", "Guitar"],
+        "labels": labels,
         "scores": [0.40, 0.38, 0.22],
     }
     mass = window_label_mass(window, {"Speech"})
     assert mass is not None
     assert mass == pytest.approx(0.38)
     # And the old rule's verdict, stated so the regression is unambiguous.
-    assert window["labels"][0] not in {"Speech"}
+    assert labels[0] not in {"Speech"}
 
 
 def test_label_mass_sums_across_several_speech_labels() -> None:

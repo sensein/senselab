@@ -97,8 +97,11 @@ def test_disagreeing_matchers_produce_maximal_assignment_uncertainty() -> None:
     h = harmonize_speaker_labels(per_model, centroids=centroids)
     contested = [k for k in centroids if k[0] == "sortformer"]
     assert any(h.methods_agreed[k] is False for k in contested)
-    assert max(h.uncertainty[k] for k in contested) == pytest.approx(1.0)
-    assert min(h.confidence[k] for k in contested) <= 0.5
+    uncertainties = [u for k in contested if (u := h.uncertainty[k]) is not None]
+    confidences = [c for k in contested if (c := h.confidence[k]) is not None]
+    assert uncertainties and confidences, "a contested label must still carry both numbers"
+    assert max(uncertainties) == pytest.approx(1.0)
+    assert min(confidences) <= 0.5
 
 
 def test_single_matcher_is_not_reported_as_certain() -> None:

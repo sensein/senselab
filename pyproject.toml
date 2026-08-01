@@ -115,6 +115,7 @@ dev = [
   "codespell~=2.3",
   "uvloop~=0.22",
   "types-requests~=2.32",
+  "types-pyyaml~=6.0",
   "python-dotenv~=1.1",
   "ipython~=9.7",
   "ipykernel~=7.1",

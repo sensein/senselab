@@ -122,6 +122,7 @@ def test_shared_internal_doubt_is_not_epistemic() -> None:
 def test_epistemic_uncertainty_never_exceeds_total() -> None:
     """A mathematical property of the decomposition; violating it means a sign error."""
     total, epistemic = epistemic_uncertainty([{"a": 0.9, "b": 0.1}, {"a": 0.6, "b": 0.4}])
+    assert total is not None and epistemic is not None
     assert 0.0 <= epistemic <= total <= 1.0
 
 
