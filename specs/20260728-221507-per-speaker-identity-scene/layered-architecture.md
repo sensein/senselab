@@ -444,10 +444,18 @@ Dependency-ordered; each step verifiable before the next.
    that an unmeasured criterion blocks while a measured zero passes: having checked and found no
    remaining action is a different statement from never having looked.
 
-   **Still open in this step:** nothing yet *calls* `fuse_rounds` with a real assignment or action
-   count — J4's output and the intervention catalogue are not plumbed to the call site. **D-10** (a
-   round re-running L1 at a tighter window/hop) and **D-11** (re-examining a flagged region for all
-   categories) also remain. A criterion nobody
+   **C2 is now measured.** `write_final_uncertainty` derives J4's binding from the reference pass
+   (`speaker_spans_from_votes` over the harmonised cluster ids × the pass's frame posteriors, both
+   carried on `PassHarvest`) and passes it to the speaker axis's rounds. It returns `None` rather
+   than an empty mapping when the inputs are missing, because an empty binding and an unmeasured one
+   mean different things to C2 — two empty mappings compare equal and would read as a stable
+   assignment nobody checked.
+
+   **Still open in this step:** C4's action inventory. Counting untried actions means reaching the
+   intervention catalogue in `adaptive/`, which is a different subsystem from this fusion path, so
+   C4 stays unmeasured and convergence stays unreachable here — correctly, rather than by
+   defaulting. **D-10** (a round re-running L1 at a tighter window/hop) and **D-11** (re-examining a
+   flagged region for all categories) also remain. A criterion nobody
    measured must not read as one that passed, so `converged` currently cannot be reached through
    that path, which is the honest state. **D-10** (a round re-running L1 at a tighter window/hop)
    and **D-11** (re-examining a flagged region for all categories) are also still open.

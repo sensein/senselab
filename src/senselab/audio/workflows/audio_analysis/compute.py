@@ -364,6 +364,9 @@ def harvest_pass(
         # conclusion — which also lets a later stage reuse the same cluster assignment for
         # speaker label repair instead of re-deriving one that could disagree.
         per_window_embeddings=dict(per_window_embeddings or {}),
+        # Carried so J4 can bind speakers to channels during fusion; re-running the
+        # model there would defeat the harvest/aggregate split.
+        frame_posteriors=dict(frame_voters or {}),
         provenance_extras={
             "scene_quality": scene_quality_provenance,
             "sound_sources": sound_sources_provenance,
