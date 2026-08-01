@@ -29,8 +29,10 @@ structurally, even on perfect audio. See
 
 **Analysis resolution ≠ reporting grid.** The STFT and model estimators are unreliable below
 ~0.5 s (Brouhaha is trained at 6 s), so measurement happens on a fixed 0.5 s / 0.25 s analysis
-window. Each reporting bucket takes its nearest analysis window's value; the true resolution is
-recorded in provenance so a consumer cannot mistake a repeated value for an independent one.
+window. Reporting buckets are **resampled** from it rather than copied from the nearest window
+(``resolution.resample_series``): coarser than the analysis hop integrates, finer holds. The true
+resolution stays in provenance so a consumer cannot mistake a repeated value for an independent
+one.
 """
 
 from __future__ import annotations
@@ -51,6 +53,7 @@ from senselab.audio.tasks.quality_control.metrics import (
 from senselab.audio.tasks.scene_quality.brouhaha import BROUHAHA_MODEL_ID, BROUHAHA_REVISION, BrouhahaFrames
 from senselab.audio.workflows.audio_analysis.embeddings import _slice_audio, _window_starts
 from senselab.audio.workflows.audio_analysis.grid import BucketGrid
+from senselab.audio.workflows.audio_analysis.resolution import resample_series
 from senselab.audio.workflows.audio_analysis.signal import SignalProvenance
 
 __all__ = [
@@ -255,14 +258,48 @@ def harvest_quality_measurements(
 
     if not analysis:
         return []
-    centers = np.asarray([a["_center"] for a in analysis], dtype=np.float64)
+    centers = [float(a["_center"]) for a in analysis]
+
+    # Resample each signal onto the reporting grid rather than copying its nearest analysis
+    # window (register item 24 / H1). Direction decides the rule, per ``resolution``:
+    # finer-than-the-bucket is an integral, coarser is a hold. Nearest-copy is neither — going
+    # coarser it kept one window and discarded the rest, and which one survived was an artefact
+    # of where the bucket centre happened to fall.
+    buckets = list(grid.iter_buckets(duration_s))
+    if not buckets:
+        return []
+    bucket_hop = max(1e-9, float(buckets[0][1]) - float(buckets[0][0]))
+    kind = "mean" if bucket_hop >= QUALITY_ANALYSIS_HOP_S else "hold"
+
+    resampled: dict[str, np.ndarray] = {}
+    for name in QUALITY_SIGNALS:
+        # Windows where this estimator produced nothing are dropped from its series rather than
+        # carried as NaN: averaging in a hole would turn one failed window into a failed bucket,
+        # while a signal that never reported anywhere correctly yields an empty series.
+        pairs = [(t, a[name]) for t, a in zip(centers, analysis) if isinstance(a[name], (int, float))]
+        _, values = resample_series(
+            [t for t, _ in pairs],
+            [float(v) for _, v in pairs],
+            target_hop_s=bucket_hop,
+            duration_s=duration_s,
+            kind=kind,
+        )
+        resampled[name] = values
+
+    # Provenance is the analysis window's, which declares the resolution measurement actually
+    # happened at. Keeping it is what stops a consumer on a fine grid counting repeated values as
+    # independent evidence; the resampling applied is recorded alongside.
+    provenance = {
+        name: {**dict(analysis[0]["provenance"].get(name, {})), "grid_reduction": kind} for name in QUALITY_SIGNALS
+    }
 
     out: list[dict[str, Any]] = []
-    for b_start, b_end, _idx in grid.iter_buckets(duration_s):
-        nearest = int(np.argmin(np.abs(centers - 0.5 * (b_start + b_end))))
-        src = analysis[nearest]
+    for i, (b_start, b_end, _idx) in enumerate(buckets):
         row: dict[str, Any] = {"start": b_start, "end": b_end}
-        row.update({name: src[name] for name in QUALITY_SIGNALS})
-        row["provenance"] = src["provenance"]
+        for name in QUALITY_SIGNALS:
+            series = resampled[name]
+            value = float(series[i]) if i < series.size else float("nan")
+            row[name] = None if not np.isfinite(value) else value
+        row["provenance"] = provenance
         out.append(row)
     return out

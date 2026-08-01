@@ -271,3 +271,82 @@ def test_brouhaha_assembles_frames_from_worker_output(monkeypatch: pytest.Monkey
     assert bf is not None
     assert abs(bf.frame_hop_s - 0.02) < 1e-9
     assert np.allclose(bf.vad, 0.9) and np.allclose(bf.snr_db, 22.0) and np.allclose(bf.c50_db, 27.0)
+
+
+# ── register item 24 / H1: resample onto the reporting grid, don't copy ──────
+
+
+def _grid_rows(monkeypatch: pytest.MonkeyPatch, per_window: list[dict[str, object]], grid_s: float) -> list[dict]:
+    """Drive ``harvest_quality_measurements`` with scripted analysis windows."""
+    import torch
+
+    from senselab.audio.data_structures import Audio
+    from senselab.audio.workflows.audio_analysis import quality as q
+    from senselab.audio.workflows.audio_analysis.grid import BucketGrid
+
+    calls = {"i": 0}
+
+    def fake_window(slice_audio, brouhaha, start, end):  # noqa: ANN001, ANN202
+        payload = dict.fromkeys(q.QUALITY_SIGNALS)
+        payload.update(per_window[min(calls["i"], len(per_window) - 1)])
+        calls["i"] += 1
+        payload["provenance"] = {
+            n: {"units": "decibel", "resolution_s": q.QUALITY_ANALYSIS_HOP_S} for n in q.QUALITY_SIGNALS
+        }
+        return payload
+
+    monkeypatch.setattr(q, "_analysis_window", fake_window)
+    audio = Audio(waveform=torch.zeros(1, 16000 * 2), sampling_rate=16000)
+    return q.harvest_quality_measurements(audio=audio, brouhaha=None, grid=BucketGrid(grid_s, grid_s))
+
+
+def test_a_coarser_bucket_integrates_its_analysis_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Finer → coarser is an average, not a pick.
+
+    At the 0.5 s / 0.25 s analysis grid a 1 s reporting bucket covers several windows. Copying the
+    nearest one keeps a single measurement and discards the rest, and which one survives is an
+    artefact of where the bucket centre happened to fall.
+    """
+    # Widening gaps on purpose: with an evenly spaced series the average of a run coincides with
+    # one of its members, and a copy would be indistinguishable from an integral.
+    levels = [10.0, 20.0, 33.0, 47.0, 62.0, 78.0, 95.0, 113.0]
+    rows = _grid_rows(monkeypatch, [{"snr_brouhaha_db": v} for v in levels], grid_s=1.0)
+    assert rows, "expected reporting buckets"
+    first = rows[0]["snr_brouhaha_db"]
+    assert first is not None
+    assert first not in levels, "a single window's value survived the reduction"
+    assert min(levels) < first < max(levels)
+
+
+def test_a_failed_estimator_in_some_windows_does_not_poison_the_bucket(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Averaging must skip the windows that measured nothing, not average in a hole."""
+    windows = [
+        {"snr_brouhaha_db": 20.0},
+        {"snr_brouhaha_db": None},
+        {"snr_brouhaha_db": 40.0},
+        {"snr_brouhaha_db": None},
+    ]
+    rows = _grid_rows(monkeypatch, windows * 4, grid_s=1.0)
+    value = rows[0]["snr_brouhaha_db"]
+    assert value is not None and np.isfinite(value)
+    assert value == pytest.approx(30.0, abs=6.0)
+
+
+def test_a_bucket_no_estimator_reached_stays_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No measurement is not a measurement of zero."""
+    rows = _grid_rows(monkeypatch, [{"snr_brouhaha_db": None}], grid_s=1.0)
+    assert rows[0]["snr_brouhaha_db"] is None
+
+
+def test_provenance_still_declares_the_analysis_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A resampled row must not look like it was measured at the reporting rate.
+
+    On a grid finer than the analysis hop the same measurement is repeated across buckets; the
+    declared resolution is what stops a consumer counting those repeats as independent evidence.
+    """
+    rows = _grid_rows(monkeypatch, [{"snr_brouhaha_db": 12.0}], grid_s=0.1)
+    prov = rows[0]["provenance"]["snr_brouhaha_db"]
+    from senselab.audio.workflows.audio_analysis import quality as q
+
+    assert prov["resolution_s"] == pytest.approx(q.QUALITY_ANALYSIS_HOP_S)
+    assert prov["resolution_s"] > 0.1, "the row must not claim the reporting grid's resolution"

@@ -119,7 +119,7 @@ confident *no speech*, discarding 0.38 of speech evidence.
 | 21 | `quality_uncertainty` | `clip(std(snr_estimates)/15, 0, 1)` | **deleted, not moved** — see below | n/a | **closed** |
 | 22 | `primary_snr_db` | brouhaha, else mean of DSP estimators | all three estimators, unreduced | which estimator to trust where? | **closed** |
 | 23 | silence gate | `rms < 1e-4` → nulls all quality columns | `rms`, reported as its own signal | where is quality undefined? | **closed** |
-| 24 | grid broadcast | nearest-analysis-window value copied to each reporting bucket | values at native 0.5 s / 0.25 s analysis resolution | how to resample to the reporting grid? | open |
+| 24 | grid broadcast | nearest-analysis-window value copied to each reporting bucket | values resampled via `resolution.resample_series` | how to resample to the reporting grid? | **closed** |
 
 **Item 21 fails on its own terms, not just on layering.** It takes the standard deviation of
 brouhaha's SNR head, `spectral_gating_snr_metric`, and `peak_snr_from_spectral_metric` — three
@@ -292,8 +292,26 @@ and `_link_hnr`, and L1 emits `hnr_db` alone. The asymmetry is preserved verbati
 distorted voice both read low, so a low HNR cannot be distinguished from silence and must not be
 voted as absence.
 
-**Item 24 is the last one open**, blocked on carrying the native-resolution analysis series
-through `PassHarvest` and wiring `resolution.py` in.
+**All 24 register items are closed.**
+
+## Findings from closing item 24
+
+**Nearest-copy is neither of the two correct rules.** `resolution.py` had stated them and gone
+unused: finer-than-the-bucket is an *integral*, coarser is a *hold*. Copying the nearest analysis
+window is neither. Going coarser it kept one window and discarded the rest, and which one survived
+was an artefact of where the bucket centre happened to fall — at the default 0.5 s grid against a
+0.25 s analysis hop that is half the measurements thrown away in every bucket.
+
+**A failed estimator in one window used to fail the whole bucket.** Windows where a signal produced
+nothing are now dropped from that signal's series rather than carried as `NaN`, so a bucket averages
+over the windows that did report. Previously, if the nearest window happened to be the one where
+the estimator failed, the bucket reported `None` even though neighbouring windows had measured it.
+That was found by the test written for the resampling, not by the resampling itself.
+
+**Provenance had to survive the resample.** On a grid finer than the analysis hop the same
+measurement now repeats across several buckets. The declared `resolution_s` is what stops a
+consumer counting those repeats as independent evidence, so it stays the *analysis* resolution and
+the reduction applied is recorded next to it as `grid_reduction`.
 
 ## Findings from closing item 12
 
