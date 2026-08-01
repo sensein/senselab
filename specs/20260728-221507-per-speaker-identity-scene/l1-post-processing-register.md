@@ -334,3 +334,48 @@ the vote carries `cluster_id` alongside `silhouette`.
 usually wider than a reporting bucket, so several buckets legitimately share one window's answer.
 The width rides along as `native_window_s`, which means the coarse-voter demotion sees it — under
 the old hand-set `coarse: True` the same fact was asserted rather than measured.
+
+---
+
+## Item 25 — L1 emits per-axis estimates (open, largest remaining)
+
+**The rule.** A signal may report its own uncertainty: that is the signal's final measurement, in
+its own terms. L1 must not report an **axis** estimate, or an axis uncertainty/confidence. Folding
+signals into one per-axis number *is* the answer, and the answer is L2's.
+
+**The violation.** L1 writes `L1/<pass>/uncertainty/{speech_presence,speaker,asr}.parquet`, each
+row carrying `within_pass_uncertainty` — a per-axis fold across that pass's signals. The L1
+timeline then plots those three axes as rows. Once a fold is persisted under `L1/` and drawn on a
+timeline labelled `speech_presence_uncertainty`, it has acquired the authority of a measurement,
+which is exactly how the folds this register exists to remove survived in the first place.
+`fuse.py`'s own module docstring already names this as the defect: *"Level 1 computes signals and
+each signal's own uncertainty. It must not decide the answer. The per-pass fold it used to perform
+is a within-pass diagnostic … folding early is precisely how one saturated sub-signal came to pin
+an axis at 1.0 while two independent diarizers, both embedding models and the per-speaker presence
+track all agreed nothing had changed."*
+
+**Why this is not a cleanup.** `within_pass_uncertainty` has **76 references across 17 modules**:
+
+| module | refs | reads it as |
+|---|---|---|
+| `votes.py` | 18 | the per-pass axis value |
+| `adaptive/belief.py` | 17 | the belief store's per-bucket state |
+| `disagreements.py` | 6 | ranking across axes |
+| `types.py`, `io.py` | 10 | the row schema itself |
+| `adaptive/{ls_final,loop,convergence,evaluate,regions,interventions,fusion,plot}.py` | 15 | region proposal, convergence marks, LS tracks, evaluation |
+| `global_summary.py`, `labelstudio.py`, `fuse.py`, `plot.py`, `analyze_audio.py` | 10 | summary + rendering |
+
+The adaptive loop's entire belief store is keyed on an L1-computed axis value. So the violation did
+not stay at L1 — every consumer that reads a per-pass axis number is reading a fold L1 should never
+have made, and deleting the producer without re-pointing them at L2's axes would remove the loop's
+state.
+
+**Shape of the fix.** L1 keeps per-signal uncertainties and drops the axis parquets; the L1 timeline
+plots signals in native units (`L1/signals.png` already does this). Consumers that need an axis
+value read L2's `L2/round<N>/uncertainty/<axis>.parquet`. The adaptive belief store is the hard
+part: it is per-pass and per-round, and L2's axes are fused across passes, so "the speaker axis on
+the raw pass at round 2" has no L2 equivalent today. Whether that quantity should exist at all —
+or whether the belief store should be keyed on L2 axes plus per-signal L1 evidence — is a design
+question, not a mechanical substitution.
+
+**Found by:** a real run, asking why the L1 timeline had axis rows at all.
