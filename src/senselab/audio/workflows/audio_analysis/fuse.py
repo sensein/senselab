@@ -22,12 +22,20 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from dataclasses import dataclass
 from typing import Any, Mapping, Optional, Sequence
 
 from senselab.audio.workflows.audio_analysis.aggregators import apply_aggregator
+from senselab.audio.workflows.audio_analysis.influence import effective_weight
 from senselab.audio.workflows.audio_analysis.statistics import epistemic_uncertainty, variability
 
 __all__ = [
+    "Derivatives",
+    "mask_regions_from_rows",
+    "speaker_claims_from_votes",
+    "measure_axis_overlap",
+    "derive_mask_from_axes",
+    "fuse_axes",
     "fuse_rounds",
     "write_final_uncertainty",
     "fuse_axis",
@@ -234,6 +242,7 @@ def _round_record(
     *,
     untried_actions: int | None,
     assignment: Mapping[str, str] | None = None,
+    overwrote_values: bool = False,
 ) -> Any:  # noqa: ANN401
     """Summarise a fused round in the terms convergence is judged on.
 
@@ -241,6 +250,10 @@ def _round_record(
     intervention catalogue. Both are ``None`` when this path has neither, and ``None`` **blocks**
     the corresponding criterion rather than satisfying it — a criterion nobody measured must not
     read as one that passed.
+
+    ``overwrote_values`` says this round *replaced* a value rather than observing it again — which
+    a round that re-derived the shared structure does. C1 then refuses to credit any fall that
+    followed, so the loop cannot buy itself more rounds by revising its own derivatives.
     """
     from senselab.audio.workflows.audio_analysis.rounds import RoundRecord
 
@@ -255,9 +268,570 @@ def _round_record(
         assignment=assignment,
         measured_buckets=measured,
         untried_actions=None if untried_actions is None else int(untried_actions),
-        overwrote_values=False,
+        overwrote_values=bool(overwrote_values),
         signature=hashlib.sha1(digest.encode()).hexdigest(),
     )
+
+
+@dataclass(frozen=True)
+class Derivatives:
+    """Round outputs that are not axes — and the channel through which the axes reach each other.
+
+    A round produces two kinds of thing. The axes are the answer; the derivatives are the shared
+    structure every axis is estimated *against*: which regions the mask calls target-free, where
+    each signal claimed a speaker, and (as they land) the speaker allocation, the ASR consensus and
+    the scene components.
+
+    They are round outputs rather than fixed inputs because they are themselves estimates. Computed
+    once from round 0 and then held constant, every later round withdraws trust on the strength of a
+    judgement the loop had already improved on — the same staleness the per-axis driver had for the
+    axes themselves.
+
+    **This is why the coupling needs no gate.** A speaker ambiguity reaches the presence axis by
+    changing the speaker allocation both axes are conditioned on, not by presence averaging in a
+    number the speaker axis reported. That distinction is not cosmetic: a shared latent is shared
+    structure, while another axis's *value* is a second copy of the evidence that produced it, and
+    counting the copy would double-count whatever signal both axes read. An earlier draft routed the
+    coupling through the vote fold and needed a fixed discount to keep the extra voter from moving
+    the mean — a band-aid on the wrong channel, since a discount bounds double-counting without
+    removing it, and convergence cannot detect it either (a biased fixed point is still a fixed
+    point).
+
+    Attributes:
+        mask_regions: Regions with ``state`` and ``confidence``.
+        speaker_claims: ``{signal → spans}`` where the signal asserted a speaker.
+    """
+
+    mask_regions: tuple[Mapping[str, Any], ...] = ()
+    speaker_claims: Mapping[str, Sequence[tuple[float, float]]] | None = None
+
+
+def derive_mask_from_axes(
+    rows_by_axis: Mapping[str, Sequence[Mapping[str, Any]]],
+    current: Derivatives,
+    *,
+    settled_below: float = 0.35,
+) -> Optional[Derivatives]:
+    """Re-derive the mask from the previous round's presence and background-mask axes.
+
+    The default coupling path. A region is called target-free where the presence axis has settled
+    *and* the background-mask axis agrees it is settled there, with the region's confidence taken
+    from how settled the two are. That mask then discounts, region by region, any signal claiming a
+    speaker where the evidence says nobody spoke — so a presence result reaches the speaker axis
+    through the structure both are conditioned on rather than as a vote.
+
+    Only regions the previous round actually settled are emitted. A bucket where presence measured
+    nothing yields no region: absence of a claim is not a claim of absence, and a mask that filled
+    those in would withdraw trust on the strength of a gap.
+
+    Args:
+        rows_by_axis: Every axis's rows from the previous round.
+        current: The derivatives in force, returned unchanged when nothing can be re-derived.
+        settled_below: Uncertainty at or below which an axis counts as settled in a bucket. Named
+            rather than inlined because it decides which regions may withdraw trust at all.
+
+    Returns:
+        Updated derivatives, or ``None`` when the previous round gave no grounds to change them —
+        which is different from deriving an empty mask, and is reported as such.
+    """
+    presence = rows_by_axis.get("speech_presence") or []
+    if not presence:
+        return None
+    mask_by_key = {
+        (round(float(r.get("start", 0.0)), 6), round(float(r.get("end", 0.0)), 6)): r
+        for r in (rows_by_axis.get("background_mask") or [])
+    }
+    regions: list[Mapping[str, Any]] = []
+    for row in presence:
+        value = row.get("uncertainty")
+        if value is None:
+            continue
+        key = (round(float(row.get("start", 0.0)), 6), round(float(row.get("end", 0.0)), 6))
+        agreeing = mask_by_key.get(key, {}).get("uncertainty")
+        settled = [float(value)] + ([float(agreeing)] if agreeing is not None else [])
+        if max(settled) > float(settled_below):
+            continue
+        regions.append(
+            {
+                "start": key[0],
+                "end": key[1],
+                "state": "target_free",
+                # How settled the agreeing axes are, so a tentative mask withdraws proportionally
+                # less trust — the mask's confidence already gates how far it may act.
+                "confidence": max(0.0, min(1.0, 1.0 - (sum(settled) / len(settled)))),
+            }
+        )
+    if not regions:
+        return None
+    return Derivatives(mask_regions=tuple(regions), speaker_claims=current.speaker_claims)
+
+
+CROSS_AXIS_PASS = "__axes__"
+"""Synthetic pass label carrying the previous round's axes, kept distinct from any real pass so a
+value the loop computed can never be mistaken for something a microphone recorded."""
+
+
+def cross_axis_inputs(
+    axis: str,
+    rows_by_axis: Mapping[str, Sequence[Mapping[str, Any]]],
+    *,
+    own_keys: Optional[set[tuple[float, float]]] = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """The other axes' previous-round values, as inputs to estimating ``axis``.
+
+    Every round takes all three kinds of thing the loop holds — the signals, the derivatives, and
+    the previous round's axes — and re-estimates each axis from them.
+
+    **No assigned discount.** An earlier draft multiplied these by a fixed 0.4 to keep them from
+    dominating the fold. That contradicts the premise this whole module rests on: weights are
+    *measured* — perturbation stability, physical support — and a factor never measured must not act
+    as a discount. A hand-set constant is exactly such a factor. A cross-axis input therefore carries
+    full weight like any other signal absent from the weights mapping, and is attenuated only by
+    something actually measured about it.
+
+    The residual concern the constant was standing in for is real but different: an axis's value is
+    built from signals, so if two axes read the same signal, its evidence appears twice. That is a
+    correlation to *measure* — the same kind of thing perturbation stability already measures — not
+    a number to assume. Until it is measured, the derivatives carry the coupling that can be
+    justified structurally, and this path carries the rest at face value.
+
+    An axis never contributes to itself: its previous value is the thing being updated, not evidence
+    about it. An axis that measured nothing contributes nothing, because ``None`` is the absence of
+    a claim rather than a low uncertainty.
+
+    **Coupling informs an axis's grid; it never extends it.** Restricted to ``own_keys``, because
+    on a real run the mask contributed one whole-clip region and the fused ``background_mask`` axis
+    emitted 1197 buckets — every one of them sourced from the other axes' finer grid. An axis
+    holding one datum has nothing to contribute back, so it can only echo, and in the output an
+    echo is indistinguishable from a measurement. The evidence-overlap gate does not catch this
+    either: overlap is measured on signal *names*, and a lone axis's name collides with nothing, so
+    a fully-derived axis reads as fully independent.
+
+    Args:
+        axis: The axis being estimated.
+        rows_by_axis: Every axis's rows from the previous round.
+        own_keys: Bucket spans this axis measured itself. Buckets outside it are dropped; ``None``
+            keeps every bucket, for callers that have no grid of their own to respect.
+
+    Returns:
+        ``(buckets, contributing_axes)``, both sorted, so the fixed point cannot depend on the order
+        the axes happen to be visited (FR-011f).
+    """
+    by_key: dict[tuple[float, float], dict[str, dict[str, float]]] = {}
+    contributors: set[str] = set()
+    for other in sorted(rows_by_axis):
+        if other == axis:
+            continue
+        for row in rows_by_axis[other] or []:
+            value = row.get("uncertainty")
+            if value is None:
+                continue
+            key = (round(float(row.get("start", 0.0)), 6), round(float(row.get("end", 0.0)), 6))
+            if own_keys is not None and key not in own_keys:
+                continue
+            by_key.setdefault(key, {})[f"axis::{other}"] = {"same_label_uncertainty": float(value)}
+            contributors.add(other)
+    buckets = [{"start": s, "end": e, "votes": by_key[(s, e)]} for s, e in sorted(by_key) if by_key[(s, e)]]
+    return buckets, sorted(contributors)
+
+
+def measure_axis_overlap(
+    target_rows: Sequence[Mapping[str, Any]],
+    source_rows: Sequence[Mapping[str, Any]],
+) -> Optional[float]:
+    """Fraction of one axis's evidence the other already holds.
+
+    The measured successor to a deleted constant. A cross-axis input is only partly new
+    information: an axis's value is built from signals, so where two axes read the same signal its
+    evidence enters twice. How much is *measurable* — it is the overlap of the two axes'
+    contributing signals — and measuring it is the difference between a gate this codebase accepts
+    and one it has already been burned by.
+
+    ``speaker_identity`` learned this first. Its gate is ``claim.support``, a measured quantity,
+    adopted after a *declared* source-kind gate down-weighted the one source that matched the
+    speaker names actually spoken on a recording. A hand-set multiplier here was that same
+    construct in a different module.
+
+    Signals contributed by a previous round's coupling are excluded from the source's evidence.
+    Counting them would let the measure feed on its own output and drift with every round.
+
+    Args:
+        target_rows: Rows of the axis being estimated.
+        source_rows: Rows of the axis contributing.
+
+    Returns:
+        Overlap in ``[0, 1]``, or ``None`` when the source contributed no evidence of its own —
+        which applies **no** discount, because a factor never measured must not act as one.
+    """
+    target = {s for r in target_rows or () for s in (r.get("contributing_signals") or ())}
+    source = {
+        s for r in source_rows or () for s in (r.get("contributing_signals") or ()) if not str(s).startswith("axis::")
+    }
+    if not source:
+        return None
+    return len(target & source) / len(source)
+
+
+def fuse_axes(
+    buckets_by_axis: Mapping[str, Mapping[str, Sequence[Mapping[str, Any]]]],
+    *,
+    weights_by_axis: Mapping[str, Mapping[str, float]],
+    aggregator: str = "mean",
+    weight_basis_by_axis: Mapping[str, Mapping[str, Mapping[str, float]]] | None = None,
+    mask_regions: Sequence[Mapping[str, Any]] = (),
+    speaker_claims: Mapping[str, Sequence[tuple[float, float]]] | None = None,
+    max_rounds: int = 1,
+    tolerance: float = 1e-3,
+    speaker_assignment_by_axis: Mapping[str, Mapping[str, str] | None] | None = None,
+    untried_actions: int | None = None,
+    derive: Any = derive_mask_from_axes,  # noqa: ANN401 — (rows_by_axis, Derivatives) -> Derivatives | None
+    couple_axes: bool = True,
+    remeasure: Any = None,  # noqa: ANN401 — (axis, regions, rows_by_axis) -> {pass: buckets} | None
+    unsettled_above: float = 0.6,
+    return_history: bool = False,
+) -> Any:  # noqa: ANN401 — 2-tuple, or 3-tuple when return_history
+    """Iterate every axis together, so each round can read the others (D-11).
+
+    Each round asks whether the axes should change, given everything the loop knows: the signals,
+    and the previous round's axes and derivatives. Concretely, a round re-derives the derivatives
+    from the previous round's axes, then re-estimates every axis from its own signals conditioned on
+    those derivatives. Reading the *previous* round throughout means the result cannot depend on the
+    order the axes happen to be visited.
+
+    **The derivatives are how the axes reach each other.** A speaker ambiguity changes the presence
+    answer by changing the shared structure — the mask, the speaker allocation — that both axes are
+    estimated against, never by one axis averaging in a number another axis reported. Routing it
+    through the vote fold instead needs an arbitrary discount to stop the extra voter moving the
+    mean, and still double-counts whatever signal both axes read; conditioning on a shared latent
+    has neither problem.
+
+    Two things the per-axis driver could not do, and the reason this exists:
+
+    - **The categories are coupled.** A speaker ambiguity is frequently a presence ambiguity, and
+      D-7 makes speaker and presence explicitly joint. Running one axis to completion before
+      starting the next means a region settled on one can never reach another, so the coupling was
+      structurally unable to act however it was configured.
+    - **Regional trust stays local.** Where the mask contradicts a signal's speaker claim, that
+      signal is discounted *in that region only*. A global discount for a local failure is what
+      suppressed the source that was right about the five named speakers.
+
+    The driver takes any number of axes. The design names four — ``speech_presence``, ``speaker``,
+    ``asr``, ``background_mask`` — with ``task`` punted, and an axis count baked into the loop is a
+    fact that would need re-finding every time the set changes.
+
+    Args:
+        buckets_by_axis: ``{axis → {pass_label → L1 buckets}}``.
+        weights_by_axis: ``{axis → {signal → measured weight}}``.
+        aggregator: Aggregator for ``triage_score``.
+        weight_basis_by_axis: ``{axis → {signal → {factor → value}}}``.
+        mask_regions: Mask regions with ``state`` and ``confidence``, for regional trust.
+        speaker_claims: ``{signal → spans}`` where the signal asserted a speaker.
+        max_rounds: Cap on iterations.
+        tolerance: Per-bucket change below which a round counts as no change, and the credited
+            epistemic change below which C1 holds.
+        speaker_assignment_by_axis: ``{axis → binding}`` from ``joint.per_speaker_presence``, for
+            C2. An axis without one leaves C2 unmeasured, which blocks convergence for that axis
+            rather than passing it.
+        untried_actions: Remaining unattempted actions, for C4, from a caller whose inventory is
+            wider than this loop's — the adaptive catalogue can re-run models over a region, which
+            is invisible here. Omit and the loop counts its own action set instead.
+        derive: ``(rows_by_axis, current) → Derivatives | None``, called before each round after
+            the first. Defaults to :func:`derive_mask_from_axes`; pass ``None`` to freeze the
+            derivatives at what round 0 was handed. A hook returning ``None`` leaves them in force,
+            and each round's log records ``derivatives_refreshed`` so a stale judgement cannot look
+            like a current one.
+        couple_axes: Whether the previous round's *other* axes are inputs. Setting both this to
+            ``False`` and ``derive`` to ``None`` runs several axes fully isolated, which has to stay
+            reachable: a coupling that cannot be turned off cannot be evaluated against anything.
+        remeasure: ``(axis, regions, rows_by_axis) → {pass_label: buckets} | None`` (D-10). Called
+            once per axis per round with the regions that axis has left unsettled, so a round may
+            *re-measure* rather than only re-weight — re-weighting can only redistribute evidence
+            already gathered, and a region no re-weighting resolves is exactly the one that needs a
+            finer look. Buckets it returns join that axis's inputs from the next fold on. A region
+            is offered once: the same finer look repeated is not new evidence, and C4 would never
+            reach zero. The hook never learns what a model is; it is offered a region and its
+            answer is spent.
+        unsettled_above: Uncertainty above which a bucket is offered for re-measurement. Named
+            because it decides what gets looked at again, and defaulting it silently would make the
+            loop's spending invisible.
+
+    Convergence is reached when no axis changes, or when the loop enters a periodic one. Both are
+    judged per axis by ``rounds.assess_convergence``: C1 and C3 cover "nothing moved" — the values
+    holding still *and* no bucket going unmeasured → measured — while a repeating state is caught by
+    the shared non-convergence detector and reported as ``oscillation`` rather than agreement. A
+    round whose derivatives were re-derived records ``overwrote_values``, so C1 declines to credit
+    a fall the loop produced by revising its own shared structure.
+
+    **C4's inventory is this loop's own, and the log says so.** Working from a fixed harvest, this
+    loop can withdraw regional trust and re-examine an axis against the others; both are spent the
+    moment a later round runs, so from round 1 the count is a *measured* zero rather than a
+    defaulted one. That distinction is the whole of C4 — never having looked must not read as
+    having checked — but a measured zero here is still the narrow claim "this loop ran out of
+    moves", not the wide one "no further measurement would help". ``action_scope`` names which
+    inventory was counted so the two cannot be conflated.
+
+        return_history: Also return ``{axis → {round → rows}}``. The per-round maps under
+            ``L2/round<N>/`` are supposed to show what each iteration changed; without this the
+            caller only ever had the final rows, every one carrying the final round index, so the
+            writer emitted a single directory and the trail the layout promises did not exist.
+
+    Returns:
+        ``({axis → rows}, {axis → log})``, plus ``{axis → {round → rows}}`` when
+        ``return_history``.
+    """
+    from senselab.audio.workflows.audio_analysis.rounds import (
+        assess_convergence,
+        regional_weights,
+        round_converged,
+    )
+
+    axes = sorted(buckets_by_axis)
+    assignments = dict(speaker_assignment_by_axis or {})
+    basis_by_axis = dict(weight_basis_by_axis or {})
+
+    derived = Derivatives(mask_regions=tuple(mask_regions or ()), speaker_claims=speaker_claims)
+
+    per_region: dict[tuple[float, float], dict[str, float]] = {}
+    regional_by_axis: dict[str, dict[str, float]] = {}
+
+    def _apply_derivatives(state: Derivatives) -> None:
+        # Recomputed whenever the derivatives change, because regional trust is a function *of*
+        # them: holding the weights while the mask moved would keep withdrawing trust on the
+        # strength of a judgement a later round had already improved on.
+        per_region.clear()
+        regional_by_axis.clear()
+        if not state.mask_regions or not state.speaker_claims:
+            return
+        for axis in axes:
+            weights = weights_by_axis.get(axis, {})
+            computed = regional_weights(
+                base_weights=dict(weights), regions=state.mask_regions, claims=state.speaker_claims
+            )
+            per_region.update(computed)
+            # The tightest regional weight covering each signal, so a signal contradicted anywhere
+            # it spoke is attenuated for the fold rather than silently rescued by a region where it
+            # stayed quiet.
+            regional_by_axis[axis] = {
+                signal: min((w.get(signal, 1.0) for w in computed.values()), default=weights.get(signal, 1.0))
+                for signal in weights
+            }
+
+    _apply_derivatives(derived)
+
+    # This loop's own action inventory (C4): withdrawing regional trust where it would actually
+    # change a weight, plus re-examining each axis against the others. A region that contradicts
+    # nothing offers no action, so counting it would manufacture work the loop cannot do.
+    regional_actions = sum(
+        1
+        for axis in axes
+        for region_weights in ([per_region[k] for k in per_region] if regional_by_axis.get(axis) else [])
+        if any(region_weights.get(s, w) < w for s, w in weights_by_axis.get(axis, {}).items())
+    )
+    # Two coupling actions: re-deriving the shared structure, and reading the other axes.
+    use_axes = bool(couple_axes) and len(axes) > 1
+    can_rederive = derive is not None and len(axes) > 1
+    can_remeasure = remeasure is not None
+    # Regions already offered to the hook, per axis. Offering one twice would let C4 count an
+    # action that has in fact been spent, so "converged" could never be reached.
+    offered: dict[str, set[tuple[float, float]]] = {axis: set() for axis in axes}
+
+    def _pending(axis: str, rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for row in rows or ():
+            value = row.get("uncertainty")
+            if value is None or float(value) <= float(unsettled_above):
+                continue
+            key = (round(float(row.get("start", 0.0)), 6), round(float(row.get("end", 0.0)), 6))
+            if key in offered[axis]:
+                continue
+            out.append({"start": key[0], "end": key[1], "uncertainty": float(value)})
+        return out
+
+    caller_supplied = untried_actions is not None
+    if caller_supplied:
+        action_scope = "caller_supplied"
+    elif can_remeasure:
+        action_scope = "remeasure"
+    elif can_rederive or use_axes:
+        action_scope = "cross_axis"
+    else:
+        action_scope = "regional_trust"
+
+    def _untried(applied: bool) -> Optional[int]:
+        # The caller's wider inventory wins where given; otherwise the count is this loop's own,
+        # and its actions are spent the moment a later round runs.
+        if caller_supplied:
+            return untried_actions
+        if applied:
+            return 0
+        pending = sum(len(_pending(axis, rows_by_axis.get(axis) or [])) for axis in axes) if can_remeasure else 0
+        if applied:
+            return pending
+        return regional_actions + (1 if can_rederive else 0) + (1 if use_axes else 0) + pending
+
+    # Working copy: re-measurement adds inputs for later rounds without mutating the caller's.
+    inputs: dict[str, dict[str, Sequence[Mapping[str, Any]]]] = {a: dict(buckets_by_axis[a]) for a in axes}
+    rows_by_axis: dict[str, list[dict[str, Any]]] = {}
+    logs: dict[str, list[dict[str, Any]]] = {axis: [] for axis in axes}
+    history: dict[str, list[Any]] = {}
+    stopped: dict[str, bool] = {axis: False for axis in axes}
+
+    per_round: dict[str, dict[int, list[dict[str, Any]]]] = {axis: {} for axis in axes}
+    for axis in axes:
+        rows_by_axis[axis] = fuse_axis(
+            buckets_by_axis[axis],
+            weights=weights_by_axis.get(axis, {}),
+            aggregator=aggregator,
+            weight_basis=basis_by_axis.get(axis),
+            round_index=0,
+        )
+        for row in rows_by_axis[axis]:
+            row["coupled_from"] = []
+        per_round[axis][0] = [dict(r) for r in rows_by_axis[axis]]
+        history[axis] = [
+            _round_record(
+                0, rows_by_axis[axis], untried_actions=_untried(applied=False), assignment=assignments.get(axis)
+            )
+        ]
+        logs[axis].append(
+            {
+                "round": 0,
+                "buckets": len(rows_by_axis[axis]),
+                "converged": False,
+                "regional_trust_applied": False,
+                "action_scope": action_scope,
+            }
+        )
+
+    can_iterate = bool(regional_by_axis) or can_rederive or use_axes or can_remeasure
+    if not can_iterate:
+        for axis in axes:
+            # The loop stops because it *cannot iterate*, which is not the four-criteria verdict
+            # this field carries everywhere else. Flagged rather than left to look like one.
+            logs[axis][-1]["converged"] = True
+            logs[axis][-1]["criteria_evaluated"] = False
+            logs[axis][-1]["reason"] = "nothing to re-derive and nothing to localise trust against"
+        if return_history:
+            return rows_by_axis, logs, per_round
+        return rows_by_axis, logs
+
+    for round_index in range(1, max(1, int(max_rounds))):
+        # Read from the previous round for every axis, so the result cannot depend on the order the
+        # axes are visited within this one.
+        previous = {axis: list(rows_by_axis[axis]) for axis in axes}
+        # Derivatives are round *outputs*, so a round that can re-derive them does so before using
+        # them. Without this the mask and the speaker claims stay frozen at whatever round 0
+        # produced, and every later round withdraws trust on the strength of a stale judgement.
+        derivatives_refreshed = False
+        if derive is not None:
+            refreshed = derive(previous, derived)
+            if refreshed is not None and refreshed != derived:
+                derived = refreshed
+                _apply_derivatives(derived)
+                derivatives_refreshed = True
+        for axis in axes:
+            if stopped[axis]:
+                continue
+            # D-10: offer this axis's unsettled regions a finer look before re-folding it.
+            remeasured = False
+            if can_remeasure:
+                regions = _pending(axis, previous[axis])
+                if regions:
+                    for region in regions:
+                        offered[axis].add((region["start"], region["end"]))
+                    refined = remeasure(axis, regions, previous)
+                    if refined:
+                        inputs[axis] = {**inputs[axis], **{str(k): v for k, v in refined.items()}}
+                        remeasured = True
+            weights = dict(regional_by_axis.get(axis) or weights_by_axis.get(axis, {}))
+            folded = dict(inputs[axis])
+            # All three inputs the loop holds: this axis's signals, the derivatives (through the
+            # regional weights above), and the previous round's axes.
+            own_keys = {
+                (round(float(r.get("start", 0.0)), 6), round(float(r.get("end", 0.0)), 6)) for r in previous[axis]
+            }
+            extra, from_axes = cross_axis_inputs(axis, previous, own_keys=own_keys) if use_axes else ([], [])
+            basis = dict(basis_by_axis.get(axis) or {})
+            if extra:
+                folded[CROSS_AXIS_PASS] = extra
+                for other in from_axes:
+                    overlap = measure_axis_overlap(previous[axis], previous[other])
+                    if overlap is None:
+                        continue
+                    # The uncertainty gate is deliberately left open: the quantity a cross-axis
+                    # input carries *is* the other axis's uncertainty, so discounting it for being
+                    # uncertain would suppress exactly the informative case.
+                    weights[f"axis::{other}"] = effective_weight(
+                        1.0, uncertainty=0.0, derivation_gate=1.0 - float(overlap)
+                    )
+                    basis[f"axis::{other}"] = {"evidence_overlap": float(overlap)}
+            candidate = fuse_axis(
+                folded,
+                weights=weights,
+                aggregator=aggregator,
+                weight_basis=basis,
+                round_index=round_index,
+            )
+            # Which axes reached this one: directly as inputs, and — when the shared structure was
+            # re-derived this round — through the derivatives every axis contributed to. Recorded
+            # per row so a coupled value is distinguishable from one reached on this axis's own
+            # evidence.
+            coupled = sorted({*from_axes, *(a for a in axes if a != axis)} if derivatives_refreshed else from_axes)
+            for row in candidate:
+                row["coupled_from"] = list(coupled) if row.get("contributing_signals") else []
+            numbers_settled = round_converged(rows_by_axis[axis], candidate, tolerance=tolerance)
+            rows_by_axis[axis] = candidate
+            # Snapshot before the next round overwrites it: the copy is what makes the per-round
+            # maps comparable rather than N references to one mutated list.
+            per_round[axis][round_index] = [dict(r) for r in candidate]
+            history[axis].append(
+                _round_record(
+                    round_index,
+                    candidate,
+                    untried_actions=_untried(applied=True),
+                    assignment=assignments.get(axis),
+                    # A coupled round *replaced* a value rather than observing it again, so the
+                    # self-confirmation guard must refuse to credit any fall that followed.
+                    overwrote_values=bool(derivatives_refreshed or from_axes or remeasured),
+                )
+            )
+            verdict = assess_convergence(history[axis], tolerance=tolerance, max_rounds=max(1, int(max_rounds)))
+            logs[axis].append(
+                {
+                    "round": round_index,
+                    "buckets": len(candidate),
+                    # Kept separate on purpose: the numbers holding still is one of four criteria,
+                    # and reporting it as convergence is what let a round stop while the assignment
+                    # was still flipping or a region still had an untried action.
+                    "numbers_settled": numbers_settled,
+                    "converged": verdict["converged"],
+                    "blocking": verdict["blocking"],
+                    "credited_epistemic_change": verdict["credited_epistemic_change"],
+                    "diverged": verdict["diverged"],
+                    "stop_reason": verdict["stop_reason"],
+                    # Which round states traded places, when they did. A bare "oscillation" says the
+                    # loop failed to settle without saying between what, which is the part an
+                    # operator needs to know whether the disagreement is resolvable.
+                    "repeating_states": verdict["repeating_states"],
+                    "regional_trust_applied": bool(regional_by_axis.get(axis)),
+                    "coupled_from": list(coupled),
+                    # Whether this round re-derived the mask and speaker claims, or reused round
+                    # 0's. A reader cannot otherwise tell a refreshed judgement from a stale one.
+                    "derivatives_refreshed": derivatives_refreshed,
+                    # Whether this round took a finer look rather than only re-weighting (D-10).
+                    "remeasured": remeasured,
+                    # Which action inventory C4 was answered against. A measured zero here says this
+                    # loop ran out of moves, not that no further measurement would help.
+                    "action_scope": action_scope,
+                }
+            )
+            if verdict["stop"]:
+                stopped[axis] = True
+        if all(stopped.values()):
+            break
+    if return_history:
+        return rows_by_axis, logs, per_round
+    return rows_by_axis, logs
 
 
 def fuse_rounds(
@@ -273,12 +847,11 @@ def fuse_rounds(
     speaker_assignment: Mapping[str, str] | None = None,
     untried_actions: int | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Iterate the fusion until it stops moving, or ``max_rounds`` is reached.
+    """One axis on its own — :func:`fuse_axes` with a single axis and no re-derivation.
 
-    Round 0 fuses with one weight per signal. Later rounds apply *regional* trust: where the
-    mask contradicts a signal's speaker claim, that signal is discounted in that region only.
-    A global discount for a local failure is what suppressed the source that was right about
-    the five named speakers, so the withdrawal has to stay local to be safe to apply at all.
+    A wrapper rather than a second implementation: two round loops over the same criteria could
+    reach opposite verdicts on identical history, which is the duplication that already had to be
+    undone once for non-convergence detection.
 
     Args:
         buckets_by_pass: ``{pass_label → L1 buckets}``.
@@ -288,88 +861,28 @@ def fuse_rounds(
         mask_regions: Mask regions with ``state`` and ``confidence``, used for regional trust.
         speaker_claims: ``{signal → spans}`` where the signal asserted a speaker.
         max_rounds: Cap on iterations.
-        tolerance: Per-bucket change below which a round counts as no change, and the credited
-            epistemic change below which C1 holds.
-        speaker_assignment: The ``S_k`` → channel binding from ``joint.per_speaker_presence``,
-            for C2. Omit and C2 is unmeasured, which blocks convergence rather than passing it.
-        untried_actions: Remaining unattempted actions, for C4. Omit and C4 is unmeasured, with
-            the same consequence — "converged" must not be reachable by never having looked.
-
-    Convergence is judged on all four criteria (C1-C4 in ``rounds.assess_convergence``), not on
-    the numbers holding still. Those are different claims: the fused values can settle while the
-    speaker-to-channel assignment still flips, while a bucket is still going unmeasured → measured,
-    or while a region has an action nobody has tried. Each round's log therefore records
-    ``numbers_settled`` and ``converged`` separately, plus which criteria blocked.
+        tolerance: Per-bucket change below which a round counts as no change.
+        speaker_assignment: The ``S_k`` → channel binding, for C2.
+        untried_actions: Remaining unattempted actions, for C4.
 
     Returns:
-        ``(rows, log)`` — the final rows, and one log entry per round. The log is what
-        distinguishes "converged" from "cycled" from "ran out of rounds", which a bare result
-        cannot say.
+        ``(rows, log)`` for the single axis.
     """
-    from senselab.audio.workflows.audio_analysis.rounds import (
-        RoundRecord,
-        assess_convergence,
-        regional_weights,
-        round_converged,
-    )
-
-    log: list[dict[str, Any]] = []
-    rows = fuse_axis(
-        buckets_by_pass,
-        weights=weights,
+    axis = "_"
+    rows_by_axis, logs = fuse_axes(
+        {axis: buckets_by_pass},
+        weights_by_axis={axis: weights},
         aggregator=aggregator,
-        weight_basis=weight_basis,
-        round_index=0,
+        weight_basis_by_axis={axis: weight_basis} if weight_basis is not None else None,
+        mask_regions=mask_regions,
+        speaker_claims=speaker_claims,
+        max_rounds=max_rounds,
+        tolerance=tolerance,
+        speaker_assignment_by_axis={axis: speaker_assignment},
+        untried_actions=untried_actions,
+        derive=None,
     )
-    history = [_round_record(0, rows, untried_actions=untried_actions, assignment=speaker_assignment)]
-    log.append({"round": 0, "buckets": len(rows), "converged": False, "regional_trust_applied": False})
-
-    if not mask_regions or not speaker_claims:
-        # Nothing to localise trust against: further rounds would recompute the same numbers,
-        # and reporting them as convergence would overstate what was checked.
-        log[-1]["converged"] = True
-        log[-1]["reason"] = "no mask regions or speaker claims to localise trust against"
-        return rows, log
-
-    per_region = regional_weights(base_weights=dict(weights), regions=mask_regions, claims=speaker_claims)
-    for round_index in range(1, max(1, int(max_rounds))):
-        # Apply the tightest regional weight covering each signal, so a signal contradicted
-        # anywhere it spoke is attenuated for the fold rather than silently rescued by a
-        # region where it stayed quiet.
-        tightened = {
-            signal: min((w.get(signal, 1.0) for w in per_region.values()), default=weights.get(signal, 1.0))
-            for signal in weights
-        }
-        candidate = fuse_axis(
-            buckets_by_pass,
-            weights=tightened,
-            aggregator=aggregator,
-            weight_basis=weight_basis,
-            round_index=round_index,
-        )
-        numbers_settled = round_converged(rows, candidate, tolerance=tolerance)
-        rows = candidate
-        history.append(_round_record(round_index, rows, untried_actions=untried_actions, assignment=speaker_assignment))
-        verdict = assess_convergence(history, tolerance=tolerance, max_rounds=max(1, int(max_rounds)))
-        log.append(
-            {
-                "round": round_index,
-                "buckets": len(rows),
-                # Kept separate on purpose: the numbers holding still is one of four criteria, and
-                # reporting it as convergence is what let a round stop while the assignment was
-                # still flipping or a region still had an untried action.
-                "numbers_settled": numbers_settled,
-                "converged": verdict["converged"],
-                "blocking": verdict["blocking"],
-                "credited_epistemic_change": verdict["credited_epistemic_change"],
-                "diverged": verdict["diverged"],
-                "stop_reason": verdict["stop_reason"],
-                "regional_trust_applied": True,
-            }
-        )
-        if verdict["stop"]:
-            break
-    return rows, log
+    return rows_by_axis[axis], logs[axis]
 
 
 def _speaker_assignment(harvests: Mapping[str, Any]) -> Optional[dict[str, str]]:
@@ -396,6 +909,109 @@ def _speaker_assignment(harvests: Mapping[str, Any]) -> Optional[dict[str, str]]
         if result is not None:
             return {k: v for k, v in result["assignment"].items() if v is not None}
     return None
+
+
+def _mask_axis_votes(mask_regions: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """The ``background_mask`` axis's per-bucket votes, from the mask's own confidence.
+
+    The design names four axes and this is the fourth. It has no vote harvest of its own because
+    the mask is not a model ensemble — it is one derived judgement per region — but it does report
+    how sure it is, and ``1 - confidence`` is that judgement's uncertainty in exactly the units the
+    other axes use.
+
+    An ``indeterminate`` region is skipped rather than voted at maximum uncertainty. "I cannot tell"
+    is the absence of a claim, and the other axes already treat an absent claim as absent rather
+    than as a confident maximum — imputing one here would let an unresolved region outvote the
+    regions that were actually resolved.
+
+    Args:
+        mask_regions: Regions with ``start``, ``end``, ``state`` and ``confidence``.
+
+    Returns:
+        Bucket dicts in the shape :func:`fuse_axis` consumes, in time order.
+    """
+    votes: list[dict[str, Any]] = []
+    for region in mask_regions or ():
+        state = str(region.get("state") or "indeterminate")
+        confidence = region.get("confidence")
+        if state == "indeterminate" or not isinstance(confidence, (int, float)):
+            continue
+        votes.append(
+            {
+                "start": float(region.get("start", 0.0)),
+                "end": float(region.get("end", 0.0)),
+                "votes": {"mask": {"same_label_uncertainty": max(0.0, min(1.0, 1.0 - float(confidence)))}},
+            }
+        )
+    return sorted(votes, key=lambda v: (v["start"], v["end"]))
+
+
+def mask_regions_from_rows(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Normalise ``background_mask.parquet`` rows into the shape regional trust expects.
+
+    The mask reports ``uncertainty``; ``rounds.regional_weights`` and :func:`_mask_axis_votes`
+    both read ``confidence``. Passing the rows through unconverted is not a cosmetic mismatch —
+    ``region.get("confidence", 1.0)`` would default to *fully confident*, so a mask that was
+    unsure would withdraw the maximum trust it is capable of withdrawing. That is the
+    absent-reads-as-fine failure this design has hit repeatedly, and it is worth one conversion
+    function to close.
+
+    A row with no measured uncertainty is dropped rather than assumed certain, for the same
+    reason: a mask that never said how sure it was has not earned the right to act.
+
+    Args:
+        rows: Mask rows with ``start``, ``end``, ``state`` and ``uncertainty``.
+
+    Returns:
+        Regions carrying ``confidence``, in time order.
+    """
+    out: list[dict[str, Any]] = []
+    for row in rows or ():
+        uncertainty = row.get("uncertainty")
+        if not isinstance(uncertainty, (int, float)):
+            continue
+        out.append(
+            {
+                "start": float(row.get("start", 0.0)),
+                "end": float(row.get("end", 0.0)),
+                "state": str(row.get("state") or "indeterminate"),
+                "confidence": max(0.0, min(1.0, 1.0 - float(uncertainty))),
+            }
+        )
+    return sorted(out, key=lambda r: (r["start"], r["end"]))
+
+
+def speaker_claims_from_votes(
+    speaker_votes: Sequence[Mapping[str, Any]],
+) -> dict[str, list[tuple[float, float]]]:
+    """``{model → spans}`` where that model actually named a speaker.
+
+    Regional trust discounts a signal *where it made a claim the mask contradicts*, so the claim
+    has to be a real one. A model reporting silence has claimed nothing, and treating that as a
+    claim would let the mask discount a model for agreeing with it.
+
+    Args:
+        speaker_votes: Per-bucket dicts with ``start``, ``end`` and ``votes``.
+
+    Returns:
+        Spans per model, in time order, with models that named nobody omitted entirely.
+    """
+    from senselab.audio.workflows.audio_analysis.harvesters import SILENCE_LABEL
+
+    claims: dict[str, list[tuple[float, float]]] = {}
+    for bucket in speaker_votes or ():
+        votes = bucket.get("votes")
+        if not isinstance(votes, Mapping):
+            continue
+        span = (float(bucket.get("start", 0.0)), float(bucket.get("end", 0.0)))
+        for model, entry in votes.items():
+            if not isinstance(entry, Mapping):
+                continue
+            label = entry.get("speaker_label")
+            if not label or str(label) == SILENCE_LABEL:
+                continue
+            claims.setdefault(str(model), []).append(span)
+    return {m: sorted(spans) for m, spans in sorted(claims.items())}
 
 
 def write_final_uncertainty(
@@ -451,29 +1067,62 @@ def write_final_uncertainty(
     # rounds that judge it. Unavailable on a pass with no per-speaker channels or no harmonised
     # clusters, in which case it stays None and C2 blocks rather than passing.
     speaker_assignment = _speaker_assignment(harvests)
-    axis_field = {"speech_presence": None, "speaker": "speaker_votes", "asr": "asr_votes"}
-    level2 = Path(out_dir) / "L2"
-    level2.mkdir(parents=True, exist_ok=True)
-
-    written: dict[str, Any] = {}
-    logs: dict[str, Any] = {}
-    for axis, field in axis_field.items():
-        by_pass = {
+    # The design names four axes, with ``task`` punted. ``background_mask`` votes come from the
+    # mask's own per-region confidence rather than a vote harvest, because the mask reports where
+    # it is sure a region is target-free — which is exactly this axis's question.
+    axis_field: dict[str, str | None] = {
+        "speech_presence": None,
+        "speaker": "speaker_votes",
+        "asr": "asr_votes",
+    }
+    buckets_by_axis: dict[str, Mapping[str, Sequence[Mapping[str, Any]]]] = {
+        axis: {
             label: (votes_for_harvest(h, policy=policy) if field is None else (getattr(h, field, []) or []))
             for label, h in harvests.items()
         }
-        rows, round_log = fuse_rounds(
-            by_pass,
-            speaker_assignment=speaker_assignment if axis == "speaker" else None,
-            weights=weights_by_axis.get(axis, {}),
-            aggregator=aggregator,
-            weight_basis=(weight_basis_by_axis or {}).get(axis),
-            mask_regions=mask_regions,
-            speaker_claims=speaker_claims,
-            max_rounds=max_rounds,
-        )
-        logs[axis] = round_log
-        frame = pd.DataFrame(
+        for axis, field in axis_field.items()
+    }
+    mask_votes = _mask_axis_votes(mask_regions)
+    if mask_votes:
+        buckets_by_axis["background_mask"] = {"mask": mask_votes}
+
+    level2 = Path(out_dir) / "L2"
+    level2.mkdir(parents=True, exist_ok=True)
+
+    rows_by_axis, logs, per_round = fuse_axes(
+        buckets_by_axis,
+        # C2 is a claim about the speaker axis specifically; handing the same binding to the other
+        # axes would report a criterion as measured on axes it says nothing about.
+        speaker_assignment_by_axis={"speaker": speaker_assignment},
+        weights_by_axis=weights_by_axis,
+        aggregator=aggregator,
+        weight_basis_by_axis=weight_basis_by_axis,
+        mask_regions=mask_regions,
+        speaker_claims=speaker_claims,
+        max_rounds=max_rounds,
+        return_history=True,
+    )
+
+    written: dict[str, Any] = {}
+
+    def _frame(axis: str, rows: Sequence[Mapping[str, Any]]) -> Any:  # noqa: ANN401 — pd.DataFrame
+        columns = [
+            "start",
+            "end",
+            "axis",
+            "uncertainty",
+            "epistemic_uncertainty",
+            "confidence",
+            "variability",
+            "triage_score",
+            "round",
+            "contributing_signals",
+            "contributing_passes",
+            "signal_weights",
+            "weight_basis",
+            "coupled_from",
+        ]
+        return pd.DataFrame(
             [
                 {
                     "start": r["start"],
@@ -489,34 +1138,27 @@ def write_final_uncertainty(
                     "contributing_passes": r["contributing_passes"],
                     "signal_weights": json.dumps(r["signal_weights"], sort_keys=True),
                     "weight_basis": json.dumps(r["weight_basis"], sort_keys=True),
+                    # Which other axes moved this value (D-11). Without it a coupled row is
+                    # indistinguishable from one this axis reached on its own evidence.
+                    "coupled_from": r.get("coupled_from") or [],
                 }
                 for r in rows
             ],
-            columns=[
-                "start",
-                "end",
-                "axis",
-                "uncertainty",
-                "epistemic_uncertainty",
-                "confidence",
-                "variability",
-                "triage_score",
-                "round",
-                "contributing_signals",
-                "contributing_passes",
-                "signal_weights",
-                "weight_basis",
-            ],
+            columns=columns,
         )
-        # One directory per round, so a reader can see what each iteration changed rather
-        # than only where it ended up. The last round is also the axis's headline path.
-        for round_index in sorted({int(r["round"]) for r in rows} or {0}):
-            per_round = frame[frame["round"] == round_index] if len(frame) else frame
+
+    # One directory per round, from the per-round history rather than the final rows. Writing the
+    # final rows N times would have produced N identical directories claiming to be a trajectory;
+    # deriving the round set from the rows' own ``round`` field produced exactly one, because every
+    # final row carries the final index. Neither shows what an iteration changed.
+    for axis, rounds_for_axis in per_round.items():
+        for round_index in sorted(rounds_for_axis):
             round_dir = level2 / f"round{round_index}" / "uncertainty"
             round_dir.mkdir(parents=True, exist_ok=True)
             round_path = round_dir / f"{axis}.parquet"
-            per_round.to_parquet(round_path, index=False)
+            _frame(axis, rounds_for_axis[round_index]).to_parquet(round_path, index=False)
             written[f"{axis}@round{round_index}"] = str(round_path)
+            # The headline path is the last round the axis actually ran.
             written[axis] = str(round_path)
 
     # The round log distinguishes "converged" from "ran out of rounds", which the maps alone
