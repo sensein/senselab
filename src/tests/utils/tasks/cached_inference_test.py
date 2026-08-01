@@ -74,7 +74,7 @@ def test_schema_version_is_pinned() -> None:
     in a suite area that was not being exercised. A pin that can drift unnoticed cannot enforce
     what it exists to enforce.
     """
-    assert CACHE_SCHEMA_VERSION == 6
+    assert CACHE_SCHEMA_VERSION == 7
 
 
 def test_param_order_does_not_change_the_key() -> None:

@@ -61,7 +61,7 @@ __all__ = [
     "write_json",
 ]
 
-CACHE_SCHEMA_VERSION = 6
+CACHE_SCHEMA_VERSION = 7
 """Bump to invalidate every on-disk entry (see :func:`sync_cache_with_schema_version`).
 
 Bumped 1 → 2 when ``wrapper_hash`` became ``code_version``: the key payload
@@ -81,6 +81,13 @@ field and moved to a 100 ms analysis frame (changing which bands exist at all), 
 the background mask and source stages emit new shapes. Rather than reason about which
 subset of entries survives, wipe — cache invalidation is free, and a stale entry that
 *looks* readable is far more expensive than recomputing one.
+
+Bumped 4 → 7 across the L2 round rework: the fused rows gained a ``coupled_from``
+column, ``background_mask`` became a fourth emitted axis, and the per-round log gained
+``action_scope`` / ``derivatives_refreshed`` / ``remeasured`` / ``repeating_states``.
+A round's *inputs* changed too — every round after the first now reads the previous
+round's axes and re-derived derivatives — so a cached outcome is not merely missing
+columns, it answers a different question.
 """
 
 
