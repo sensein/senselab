@@ -14,11 +14,16 @@ channel is whom is ill-defined until the speaker↔channel assignment is resolve
 space D-7 hands to L2 rounds. A **count** of active channels is invariant to that permutation, so it
 is well-defined immediately — and it is precisely the signal the old noisy-or collapse destroyed,
 since `1 − Π(1 − p_k)` answers "is anyone speaking" and discards how many.
+
+**J2 — where the voice changes** (:func:`speaker_change_series`). Compares each embedding window
+against the one a whole window-width later, so the two sides are disjoint spans meeting at a
+boundary. Adjacent windows at the 50 ms hop share 97.5% of their audio and would measure phonetic
+drift rather than speaker identity.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Sequence
 
 import numpy as np
 
@@ -27,7 +32,7 @@ from senselab.audio.workflows.audio_analysis.statistics import entropy_uncertain
 if TYPE_CHECKING:
     from senselab.audio.tasks.voice_activity_detection.frame_posteriors import FramePosterior
 
-__all__ = ["overlap_count_posterior", "count_distribution"]
+__all__ = ["overlap_count_posterior", "count_distribution", "speaker_change_series"]
 
 
 def count_distribution(probs: np.ndarray) -> np.ndarray:
@@ -114,4 +119,90 @@ def overlap_count_posterior(
         "uncertainty": entropy_uncertainty({str(k): v for k, v in counts.items()}),
         "n_frames": int(hi - lo),
         "n_channels": int(data.shape[1]),
+    }
+
+
+def speaker_change_series(
+    entries: Sequence[Any],
+    *,
+    same_speaker_floor: float = 0.30,
+    diff_speaker_floor: float = 0.70,
+) -> dict[str, Any] | None:
+    """J2: where the voice changes, from windowed speaker embeddings.
+
+    Compares each window against the one a **whole window-width later**, not the adjacent one. At
+    the 50 ms hop D-2 chose, two adjacent 2 s windows share 97.5% of their audio, so their distance
+    is dominated by the 2.5% that is new — phonetic content, not speaker identity. Lagging by the
+    window width makes the two sides disjoint spans meeting at a boundary, which is the comparison
+    a change point actually is. The fine hop then buys *localisation* of that boundary, roughly
+    tenfold, which is exactly what D-2 said it buys and does not: it does not buy independent
+    samples, and treating neighbouring scores as independent evidence would overcount badly.
+
+    The distance is read through the calibration band the speaker axis already uses rather than a
+    new anchor — a raw cosine of 0.2 is not evidence of anything, because same-speaker embeddings
+    sit in a 0.1–0.3 noise floor from phonetic variation alone.
+
+    Args:
+        entries: ``WindowEmbedding`` list for one pass, ascending in time.
+        same_speaker_floor: Distance at or below which the two spans are confidently one speaker.
+        diff_speaker_floor: Distance at or above which they are confidently different.
+
+    Returns:
+        ``{"times", "distance", "p_change", "uncertainty", "lag_steps", "window_s", "hop_s"}``, all
+        arrays aligned on boundary times, or ``None`` when the pass has fewer windows than one lag —
+        with nothing disjoint to compare there is no claim to make.
+
+        ``uncertainty`` is the binary entropy of ``{change, no change}``, so a confident change and
+        a confident continuation are both certain and the doubt sits where the calibration band
+        cannot resolve the distance.
+    """
+    items = list(entries or [])
+    if len(items) < 2:
+        return None
+    starts = np.asarray([float(w.start_s) for w in items], dtype=np.float64)
+    window_s = float(items[0].end_s) - float(items[0].start_s)
+    hop_s = float(starts[1] - starts[0])
+    if window_s <= 0 or hop_s <= 0:
+        return None
+    lag = max(1, int(round(window_s / hop_s)))
+    if len(items) <= lag:
+        return None
+
+    from senselab.audio.workflows.audio_analysis.embeddings import calibrate_cosine_uncertainty
+
+    times, distances, p_change = [], [], []
+    for i in range(len(items) - lag):
+        a = np.asarray(items[i].vector, dtype=np.float64).ravel()
+        b = np.asarray(items[i + lag].vector, dtype=np.float64).ravel()
+        na, nb = float(np.linalg.norm(a)), float(np.linalg.norm(b))
+        if na <= 0 or nb <= 0:
+            continue
+        d = 1.0 - float(np.dot(a, b) / (na * nb))
+        # ``direction="same"`` returns how far the audio contradicts a same-speaker claim, which is
+        # the probability that a change occurred here.
+        p = calibrate_cosine_uncertainty(
+            d,
+            same_speaker_floor=same_speaker_floor,
+            diff_speaker_floor=diff_speaker_floor,
+            direction="same",
+        )
+        times.append(float(items[i].end_s))  # the boundary the two disjoint spans meet at
+        distances.append(d)
+        p_change.append(float(min(1.0, max(0.0, p))))
+
+    if not times:
+        return None
+    probs = np.asarray(p_change, dtype=np.float64)
+    unc = np.asarray(
+        [entropy_uncertainty({"change": float(p), "same": float(1.0 - p)}) or 0.0 for p in probs],
+        dtype=np.float64,
+    )
+    return {
+        "times": np.asarray(times, dtype=np.float64),
+        "distance": np.asarray(distances, dtype=np.float64),
+        "p_change": probs,
+        "uncertainty": unc,
+        "lag_steps": lag,
+        "window_s": window_s,
+        "hop_s": hop_s,
     }

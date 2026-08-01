@@ -310,11 +310,14 @@ def test_an_uncalibratable_embedding_emits_no_speaker_claim() -> None:
         same_speaker_floor=None,
         diff_speaker_floor=None,
     )
+    # Name the sub-signal under test rather than matching every key containing "::": the
+    # separator is shared by every derived sub-signal on this axis, so a loose selector silently
+    # picks up unrelated ones as they are added.
     emitted = [
         v["same_label_uncertainty"]
         for bucket in votes
         for k, v in bucket["votes"].items()
-        if "::" in k and isinstance(v, dict)
+        if isinstance(v, dict) and "same_label_uncertainty" in v
     ]
     assert emitted and all(u is None for u in emitted)
     # The raw distance is still recorded — dropping the claim must not destroy the evidence.
@@ -322,7 +325,7 @@ def test_an_uncalibratable_embedding_emits_no_speaker_claim() -> None:
         v["embedding_cosine_within_track"]
         for bucket in votes
         for k, v in bucket["votes"].items()
-        if "::" in k and isinstance(v, dict)
+        if isinstance(v, dict) and "embedding_cosine_within_track" in v
     ]
     assert any(c is not None for c in cosines)
 
