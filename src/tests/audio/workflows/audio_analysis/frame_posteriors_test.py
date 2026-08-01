@@ -274,3 +274,26 @@ def test_fixed_semantic_channels_are_never_permuted() -> None:
     stitched = stitch_frames([a, b], [0.0, 0.5], 0.1)
     assert stitched[5:10, 0] == pytest.approx(np.full(5, 0.5))
     assert stitched[5:10, 1] == pytest.approx(np.full(5, 0.5))
+
+
+def test_a_seam_with_no_confident_speaker_is_left_alone() -> None:
+    """Alignment must decline when the overlap has nothing to key on.
+
+    Measured on the validation run: 4 of 8 seams fell in silence. There the cost matrix is
+    near-uniform and the "best" permutation is arbitrary — and because it is applied to the *whole*
+    chunk, acting on it would scramble frames that had nothing wrong with them. Exact zeros happen
+    to make the assignment degenerate to identity, so the hazard only shows up with faint noise,
+    which is what this pins.
+    """
+    import numpy as np
+
+    from senselab.audio.tasks.voice_activity_detection.frame_posteriors import stitch_frames
+
+    rng = np.random.default_rng(0)
+    a = rng.uniform(0.0, 0.02, size=(10, 3))  # silence with a little jitter
+    b = np.zeros((10, 3))
+    b[:, 2] = 0.9  # a real speaker, but only *after* the overlap region
+    b[:5] = rng.uniform(0.0, 0.02, size=(5, 3))
+    aligned = stitch_frames([a, b], [0.0, 0.5], 0.1, align_permutations=True)
+    # The speaker must still be in the channel the model put them in.
+    assert aligned[10:, 2] == pytest.approx(np.full(5, 0.9))

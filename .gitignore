@@ -191,3 +191,4 @@ src/senselab/video/tasks/pose_estimation/models/
 tutorials/audio/tutorial_audio_files/
 tutorials/video/tutorial_images/
 tutorials/video/visualize/
+artifacts/stitch_validation/

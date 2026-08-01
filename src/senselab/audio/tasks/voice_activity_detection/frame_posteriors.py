@@ -219,15 +219,27 @@ _CHUNK_S = 10.0
 _CHUNK_STEP_S = 8.0  # 2 s overlap → smooth stitching across chunk seams
 
 
+MIN_SEAM_ACTIVATION = 0.5
+"""Activation a chunk overlap must reach before its columns may be permuted.
+
+Below this the overlap holds no confident speaker, the assignment cost is near-uniform, and the
+"best" permutation is arbitrary. Since the permutation is applied to the *whole* chunk, acting on
+an arbitrary match would scramble frames that were fine. Measured on the validation run: half the
+seams of a 72 s recording fell in silence."""
+
+
 def _match_columns(reference: np.ndarray, candidate: np.ndarray) -> tuple[int, ...]:
     """Column permutation of ``candidate`` that best matches ``reference``, by squared error.
 
     Hungarian assignment on the pairwise MSE between columns over the frames the two share. Falls
-    back to the identity when scipy is unavailable or the shapes disagree — a wrong permutation is
-    worse than none, so an uncertain match declines rather than guesses.
+    back to the identity when scipy is unavailable, the shapes disagree, or the overlap carries no
+    confident speaker — a wrong permutation is worse than none, so an uncertain match declines
+    rather than guesses.
     """
     identity = tuple(range(candidate.shape[1]))
     if reference.shape != candidate.shape or reference.size == 0:
+        return identity
+    if max(float(reference.max()), float(candidate.max())) < MIN_SEAM_ACTIVATION:
         return identity
     cost = np.empty((candidate.shape[1], reference.shape[1]), dtype=np.float64)
     for j in range(candidate.shape[1]):
