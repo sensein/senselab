@@ -143,7 +143,7 @@ class FramePosterior:
         """Per-frame P(speech), pooled from the channels."""
         return collapse_to_speech_prob(self.activations, channel_format=self.channel_format)
 
-    def _frame_slice(self, start_s: float, end_s: float) -> Optional[tuple[int, int]]:
+    def frame_slice(self, start_s: float, end_s: float) -> Optional[tuple[int, int]]:
         """Frame index range overlapping ``[start, end)``, or ``None`` when empty."""
         n = int(self.activations.shape[0]) if self.activations.ndim >= 1 else 0
         if self.frame_hop_s <= 0 or n == 0:
@@ -159,7 +159,7 @@ class FramePosterior:
         instability (a bucket straddling an onset has high frame variance). Returns
         ``(nan, nan)`` when no frame overlaps.
         """
-        span = self._frame_slice(start_s, end_s)
+        span = self.frame_slice(start_s, end_s)
         if span is None:
             return (float("nan"), float("nan"))
         window = self.speech_prob()[span[0] : span[1]]
@@ -171,7 +171,7 @@ class FramePosterior:
         The basis for per-speaker speech_presence: it keeps *which* channel was active, which pooling
         discards. ``None`` when no frame overlaps.
         """
-        span = self._frame_slice(start_s, end_s)
+        span = self.frame_slice(start_s, end_s)
         if span is None:
             return None
         return np.asarray(np.nanmean(self.activations[span[0] : span[1], :], axis=0), dtype=np.float64)

@@ -60,6 +60,7 @@ from senselab.audio.workflows.audio_analysis.embeddings import (
 from senselab.audio.workflows.audio_analysis.grid import BucketGrid
 from senselab.audio.workflows.audio_analysis.harmonize import harmonize_from_diarization
 from senselab.audio.workflows.audio_analysis.harvesters import diar_speaker_label_in_window
+from senselab.audio.workflows.audio_analysis.joint import overlap_count_posterior
 
 SILENT_CLUSTER_ID = "SIL"
 
@@ -105,6 +106,7 @@ def harvest_speaker_votes(
     pass_summary: dict[str, Any],
     grid: BucketGrid,
     per_window_embeddings: dict[str, list[WindowEmbedding]],
+    frame_posteriors: dict[str, Any] | None = None,
     same_speaker_floor: float | None = 0.30,
     diff_speaker_floor: float | None = 0.70,
     cluster_cosine_threshold: float = 0.5,
@@ -115,6 +117,10 @@ def harvest_speaker_votes(
         pass_summary: Per-task summary for one pass (diarization, alignment, etc.).
         grid: Bucket grid.
         per_window_embeddings: ``{embedding_model_id → [WindowEmbedding, ...]}``.
+        frame_posteriors: ``{signal → FramePosterior}`` with per-speaker channels intact. Each
+            contributes a J1 ``__overlap_count__`` sub-signal: a distribution over how many
+            speakers are simultaneously active, whose entropy is the doubt. Permutation-invariant,
+            so it is well-defined before the speaker↔channel assignment is resolved (D-7).
         same_speaker_floor: ``None`` when the pass admits no usable calibration band, in
             which case the embedding sub-signals are omitted entirely. Otherwise, cosine
             distance ≤ this is treated as confidently
@@ -331,6 +337,23 @@ def harvest_speaker_votes(
                 "n_pairs": n_pairs,
                 "n_disagree": n_disagree,
                 "cluster_ids": dict(cluster_this_bucket),
+            }
+
+        # J1 — how many speakers are simultaneously active. A count is invariant to the
+        # activation channels' arbitrary ordering, so it is answerable before the speaker↔channel
+        # assignment D-7 hands to rounds; the entropy of the count distribution is the doubt.
+        for name, fp in (frame_posteriors or {}).items():
+            j1 = overlap_count_posterior(fp, start, end)
+            if j1 is None or j1["uncertainty"] is None:
+                continue
+            votes[f"{name}::overlap_count"] = {
+                "value": float(j1["uncertainty"]),
+                "expected_count": j1["expected_count"],
+                "p_overlap": j1["p_overlap"],
+                # The distribution itself, keyed by count, so a consumer can see *which* counts
+                # were in contention rather than only how much doubt there was between them.
+                "count_distribution": {str(k): v for k, v in j1["counts"].items()},
+                "n_frames": j1["n_frames"],
             }
 
         out.append({"start": start, "end": end, "votes": votes})

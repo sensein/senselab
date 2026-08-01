@@ -352,9 +352,16 @@ Dependency-ordered; each step verifiable before the next.
 3. **Joint estimation** J1–J9, with J4 as a joint space (D-7). **J3 done**
    (`speaker_identity.speaker_count_posterior`). **J5–J6 done** (`background_mask.py`,
    `noise_floor.py`, `sources.py`). **J8 done** (`reliability.py`, cross-pass stability as measured
-   weight). **J9 done** (`invariance.py`, `--invariance-probe`). **J1, J2, J4, J7 open** — overlap
-   count from the now-intact activation channels, embedding change points, per-speaker presence as
-   the `S_k` ↔ channel joint space, and phoneme-vs-transcript agreement.
+   weight). **J9 done** (`invariance.py`, `--invariance-probe`). **J1 done** (`joint.overlap_count_posterior`, wired as the
+   `<signal>::overlap_count` speaker sub-signal). **J2, J4, J7 open** — embedding change points,
+   per-speaker presence as the `S_k` ↔ channel joint space, and phoneme-vs-transcript agreement.
+
+   J1 was answerable before the rest because a *count* of active channels is invariant to the
+   channels' arbitrary ordering, while anything naming *which* channel is whom waits on the joint
+   space rounds resolve. It is also the signal the old noisy-or collapse destroyed: `1 − Π(1 − p_k)`
+   answers "is anyone speaking" and discards how many. The posterior is built per frame and then
+   pooled — two speakers taking turns within a bucket average to 0.5 on each channel, which as a
+   per-bucket calculation would report a 25% chance of an overlap that never occurred.
 4. **Link functions** and TTS-fitted calibration (D-8, D-9).
 5. **Rounds and convergence** (D-10 – D-12, both guards).
 6. **Rename** `presence`/`identity`/`utterance` → `speech_presence`/`speaker`/`asr`. **Done.**
