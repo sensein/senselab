@@ -451,7 +451,21 @@ Dependency-ordered; each step verifiable before the next.
    mean different things to C2 — two empty mappings compare equal and would read as a stable
    assignment nobody checked.
 
-   **Still open in this step:** C4's action inventory. Counting untried actions means reaching the
+   **Duplication to resolve before C4.** `adaptive/convergence.py` already had
+   `detect_non_convergence`, which detects oscillation *and* stagnation over a sliding window of
+   round states, and reports them separately because the remedies differ — a flip-flop means two
+   signals disagree irreconcilably, standing still means no signal has anything left to contribute.
+   `rounds.assess_convergence` was written without checking for it and carries its own cycle
+   detection, which compares against all earlier signatures but collapses both failures into
+   `"cycle"`. The two are not redundant by accident: they serve different loops (the adaptive loop
+   in `adaptive/loop.py`, the L2 fusion rounds in `fuse.fuse_rounds`), but the *detection* should be
+   one implementation, not two that can disagree about the same history.
+
+   The fix is to move `detect_non_convergence` down to `rounds.py` and have `adaptive/convergence.py`
+   use it from there — the dependency runs adaptive → workflow, so the shared piece belongs at the
+   lower level. Not attempted yet: it is a cross-subsystem move and deserves a full context budget.
+
+   **Also still open:** C4's action inventory. Counting untried actions means reaching the
    intervention catalogue in `adaptive/`, which is a different subsystem from this fusion path, so
    C4 stays unmeasured and convergence stays unreachable here — correctly, rather than by
    defaulting. **D-10** (a round re-running L1 at a tighter window/hop) and **D-11** (re-examining a
