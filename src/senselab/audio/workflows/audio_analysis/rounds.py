@@ -32,6 +32,8 @@ from typing import Any, Mapping, Optional, Sequence
 __all__ = [
     "RoundRecord",
     "assess_convergence",
+    "detect_non_convergence",
+    "DEFAULT_CYCLE_WINDOW",
     "DEFAULT_MAX_ROUNDS",
     "MIN_REGIONAL_TRUST",
     "regional_weights",
@@ -142,6 +144,66 @@ different outcomes, and a reader needs to see which budget produced the first.""
 EPISTEMIC_TOLERANCE = 1e-3
 """Credited change below which epistemic uncertainty counts as having stopped falling."""
 
+DEFAULT_CYCLE_WINDOW = 4
+"""How many recent rounds non-convergence is judged over.
+
+A cycle of period *p* only becomes visible once the window holds a repeat, which takes ``p + 1``
+rounds; four therefore catches periods one through three. Bounding it matters in the other
+direction too: a state that recurred early and has not since is not *currently* cycling, and
+stopping for it would end a run that had begun to make progress.
+"""
+
+
+def detect_non_convergence(
+    round_states: Sequence[Mapping[str, Any]],
+    *,
+    window: int,
+) -> tuple[Optional[str], list[dict[str, Any]]]:
+    """Detect oscillation or stagnation across recent rounds.
+
+    Mutual influence makes both failures reachable: two interpretations that each imply the
+    other is wrong will trade places indefinitely, and a loop can also grind without
+    improving. Emitting the last round's state in either case would present an unsettled
+    value as settled.
+
+    Oscillation and stagnation are reported separately because the remedies differ — a
+    flip-flop means two signals disagree irreconcilably, while standing still means no
+    signal has anything left to contribute.
+
+    This lives here rather than in ``adaptive/`` because two loops need it — the adaptive
+    intervention loop and the L2 fusion rounds — and the dependency runs adaptive → workflow.
+    Two implementations of one test could reach opposite verdicts on identical history.
+
+    Args:
+        round_states: Per-round state snapshots, oldest first.
+        window: How many recent rounds to inspect. Required rather than defaulted: the two
+            loops run to different depths, so one number cannot be right for both, and a
+            shared default is how they would silently drift apart again. Must be at least 2,
+            since alternation cannot be observed in a single round.
+
+    Returns:
+        ``(reason, states)`` where reason is ``"oscillation"``, ``"no_improvement"``, or
+        ``None``. ``states`` holds the distinct repeating states when oscillating.
+
+    Raises:
+        ValueError: If ``window`` is below 2.
+    """
+    if window < 2:
+        raise ValueError(f"oscillation window must be at least 2 to observe alternation; got {window}")
+    recent = list(round_states)[-window:]
+    if len(recent) < 2:
+        return None, []
+
+    keys = [tuple(sorted(state.items(), key=lambda kv: str(kv[0]))) for state in recent]
+    distinct = list(dict.fromkeys(keys))
+    if len(distinct) == 1:
+        # Same state every round: nothing is moving.
+        return "no_improvement", []
+    if len(distinct) < len(keys):
+        # At least one state recurred after being left — a cycle, of any period.
+        return "oscillation", [dict(k) for k in distinct]
+    return None, []
+
 
 @dataclass(frozen=True)
 class RoundRecord:
@@ -180,6 +242,7 @@ def assess_convergence(
     *,
     tolerance: float = EPISTEMIC_TOLERANCE,
     max_rounds: int = DEFAULT_MAX_ROUNDS,
+    cycle_window: int = DEFAULT_CYCLE_WINDOW,
 ) -> dict[str, Any]:
     """Decide whether the round loop has converged, and if not, whether to stop anyway.
 
@@ -209,12 +272,14 @@ def assess_convergence(
         history: Round records in order, oldest first.
         tolerance: Credited epistemic change below which C1 holds.
         max_rounds: Cap (D-12).
+        cycle_window: How many recent rounds non-convergence is judged over.
 
     Returns:
         ``{"converged", "criteria", "blocking", "credited_epistemic_change", "diverged", "stop",
-        "stop_reason"}``. ``stop`` is true when the loop should end for *any* reason; only
-        ``converged`` says the criteria were met, so "ran out of rounds" and "agreed" stay
-        distinguishable — a bare result cannot say which happened.
+        "stop_reason", "repeating_states"}``. ``stop`` is true when the loop should end for *any*
+        reason; only ``converged`` says the criteria were met, so "ran out of rounds" and "agreed"
+        stay distinguishable — a bare result cannot say which happened. ``stop_reason`` separates
+        ``"oscillation"`` from ``"no_improvement"`` because the remedies differ.
     """
     records = list(history or [])
     if len(records) < 2:
@@ -228,6 +293,7 @@ def assess_convergence(
             "diverged": False,
             "stop": bool(records and len(records) >= int(max_rounds)),
             "stop_reason": "max_rounds" if records and len(records) >= int(max_rounds) else None,
+            "repeating_states": [],
         }
 
     prev, cur = records[-2], records[-1]
@@ -254,15 +320,22 @@ def assess_convergence(
     converged = all(criteria.values())
 
     # Cycle detection is separate from slow convergence on purpose (D-12): an A→B→A→B oscillation
-    # reports movement every round, so it can only be caught by state repeating.
-    earlier = [r.signature for r in records[:-1]]
-    cycling = cur.signature in earlier and not converged
+    # reports movement every round, so it can only be caught by state repeating. The detector is
+    # shared with the adaptive loop so the two cannot reach opposite verdicts on the same history.
+    # It runs only when something still blocks: once all four criteria hold, the same state twice
+    # is what settling looks like, not a cycle.
+    repeat_reason: Optional[str] = None
+    repeating: list[dict[str, Any]] = []
+    if not converged:
+        repeat_reason, repeating = detect_non_convergence(
+            [{"signature": r.signature} for r in records], window=max(2, int(cycle_window))
+        )
 
     stop_reason: Optional[str] = None
     if converged:
         stop_reason = "converged"
-    elif cycling:
-        stop_reason = "cycle"
+    elif repeat_reason is not None:
+        stop_reason = repeat_reason
     elif len(records) >= int(max_rounds):
         stop_reason = "max_rounds"
 
@@ -274,4 +347,5 @@ def assess_convergence(
         "diverged": diverged,
         "stop": stop_reason is not None,
         "stop_reason": stop_reason,
+        "repeating_states": repeating,
     }

@@ -152,6 +152,7 @@ def run_adaptive_loop(
     ledger = BudgetLedger(policy)
     iterations: list[dict[str, Any]] = []
     round_summaries: list[dict[str, Any]] = []
+    round_states: list[dict[str, Any]] = []
     touch_counts: dict[tuple[str, str, tuple[float, float]], int] = {}
     run_state = "max_rounds"
 
@@ -228,6 +229,16 @@ def run_adaptive_loop(
             ledger=ledger,
         )
         round_summaries.append(rs)
+        # State snapshot for non-convergence detection (FR-011e). Uncertainty mass plus the
+        # bucket-status census is what "the same interpretation as last round" means here: two
+        # interpretations trading places move the mass back and forth without either settling,
+        # and that is invisible to the "nothing fired" stop below, which sees movement every round.
+        round_states.append(
+            {
+                **{f"mass/{k}": v for k, v in sorted(rs["uncertainty_mass"]["after"].items())},
+                **{f"status/{k}": v for k, v in sorted(rs["bucket_statuses"].items())},
+            }
+        )
         rd = rounds_dir / str(round_idx)
         _write_round_belief(rd, state, passes)
         (rd / "regions.json").write_text(json.dumps(regions, indent=2, default=str))
@@ -384,6 +395,7 @@ def run_adaptive_loop(
         iterations=iterations,
         run_state=run_state,
         provenance=provenance,
+        round_states=round_states,
     )
     final = final_dir(out_dir)
     # Belief artifacts (posterior, speech_presence, convergence) are level 2; the deliverables
@@ -411,6 +423,11 @@ def run_adaptive_loop(
 
     return {
         "run_state": run_state,
+        # Why the loop stopped, after non-convergence detection has had its say. A caller reading
+        # only ``run_state`` would see "converged" for a run that stopped because nothing more
+        # would fire while its state was still trading places.
+        "termination_reason": report["termination_reason"],
+        "converged": report["converged"],
         "policy_hash": policy.get("policy_hash"),
         "timeline": timeline_path,
         "parity_check": parity,
