@@ -432,10 +432,22 @@ Dependency-ordered; each step verifiable before the next.
    log records `numbers_settled` and `converged` separately plus which criteria blocked, so
    "cycled" and "ran out of rounds" stay distinguishable from "agreed".
 
-   **Still open in this step:** C2's assignment and C4's action inventory are not yet *threaded
-   into* the fusion path. J4 now produces the binding and its margin, but `fuse_rounds` does not
-   yet receive them, and the intervention catalogue that would answer C4 is not wired either, so
-   `_round_record` reports both as *unmeasured* rather than as satisfied. A criterion nobody
+   `fuse_rounds` accepts `speaker_assignment` (J4's binding, for C2) and `untried_actions` (the
+   intervention catalogue, for C4). Omitting either leaves that criterion **unmeasured, which
+   blocks convergence** rather than passing it.
+
+   That last point was wrong in the first implementation and is worth recording. `assignment=None`
+   compared equal between rounds and a defaulted `untried_actions=0` read as an exhausted
+   inventory, so both criteria reported *passed* while nothing had been measured — the loop could
+   reach `converged` on two criteria while claiming four, which is exactly the failure the
+   four-criteria design exists to prevent. `None` now means unmeasured for both, and a test pins
+   that an unmeasured criterion blocks while a measured zero passes: having checked and found no
+   remaining action is a different statement from never having looked.
+
+   **Still open in this step:** nothing yet *calls* `fuse_rounds` with a real assignment or action
+   count — J4's output and the intervention catalogue are not plumbed to the call site. **D-10** (a
+   round re-running L1 at a tighter window/hop) and **D-11** (re-examining a flagged region for all
+   categories) also remain. A criterion nobody
    measured must not read as one that passed, so `converged` currently cannot be reached through
    that path, which is the honest state. **D-10** (a round re-running L1 at a tighter window/hop)
    and **D-11** (re-examining a flagged region for all categories) are also still open.

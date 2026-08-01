@@ -109,3 +109,25 @@ def test_convergence_reports_which_criterion_blocked_it() -> None:
     """A bare boolean cannot tell an operator what to change."""
     result = assess_convergence([_r(0), _r(1, untried_actions=2, measured_buckets=11)])
     assert set(result["blocking"]) == {"c3", "c4"}
+
+
+def test_an_unmeasured_criterion_blocks_rather_than_passes() -> None:
+    """A criterion nobody measured must not read as one that passed.
+
+    This is the difference between "we checked four things" and "we checked two and defaulted the
+    rest". ``None`` means unmeasured for both the assignment and the action inventory, and an
+    absent measurement cannot license a convergence claim — the same rule support and reliability
+    already follow for a factor that was never gathered.
+    """
+    unmeasured = [_r(0, assignment=None, untried_actions=None), _r(1, assignment=None, untried_actions=None)]
+    result = assess_convergence(unmeasured)
+    assert result["criteria"]["c2"] is False
+    assert result["criteria"]["c4"] is False
+    assert result["converged"] is False
+    assert set(result["blocking"]) == {"c2", "c4"}
+
+
+def test_zero_untried_actions_is_a_measurement_and_does_pass() -> None:
+    """Having *checked* that no action remains is different from never having looked."""
+    result = assess_convergence([_r(0, untried_actions=0), _r(1, untried_actions=0)])
+    assert result["criteria"]["c4"] is True

@@ -228,13 +228,19 @@ def fuse_axis(
     return rows
 
 
-def _round_record(round_index: int, rows: Sequence[Mapping[str, Any]], *, untried_actions: int) -> Any:  # noqa: ANN401
+def _round_record(
+    round_index: int,
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    untried_actions: int | None,
+    assignment: Mapping[str, str] | None = None,
+) -> Any:  # noqa: ANN401
     """Summarise a fused round in the terms convergence is judged on.
 
-    The assignment and the action inventory are not yet produced by this fusion path — J4 is what
-    will supply the first and the intervention catalogue the second — so they are reported as
-    unmeasured rather than as satisfied. That keeps ``converged`` honest: a criterion nobody
-    measured must not read as one that passed.
+    ``assignment`` comes from ``joint.per_speaker_presence`` (J4) and ``untried_actions`` from the
+    intervention catalogue. Both are ``None`` when this path has neither, and ``None`` **blocks**
+    the corresponding criterion rather than satisfying it — a criterion nobody measured must not
+    read as one that passed.
     """
     from senselab.audio.workflows.audio_analysis.rounds import RoundRecord
 
@@ -246,9 +252,9 @@ def _round_record(round_index: int, rows: Sequence[Mapping[str, Any]], *, untrie
     return RoundRecord(
         round_index=round_index,
         epistemic=epistemic,
-        assignment=None,
+        assignment=assignment,
         measured_buckets=measured,
-        untried_actions=int(untried_actions),
+        untried_actions=None if untried_actions is None else int(untried_actions),
         overwrote_values=False,
         signature=hashlib.sha1(digest.encode()).hexdigest(),
     )
@@ -264,6 +270,8 @@ def fuse_rounds(
     speaker_claims: Mapping[str, Sequence[tuple[float, float]]] | None = None,
     max_rounds: int = 1,
     tolerance: float = 1e-3,
+    speaker_assignment: Mapping[str, str] | None = None,
+    untried_actions: int | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Iterate the fusion until it stops moving, or ``max_rounds`` is reached.
 
@@ -282,6 +290,10 @@ def fuse_rounds(
         max_rounds: Cap on iterations.
         tolerance: Per-bucket change below which a round counts as no change, and the credited
             epistemic change below which C1 holds.
+        speaker_assignment: The ``S_k`` → channel binding from ``joint.per_speaker_presence``,
+            for C2. Omit and C2 is unmeasured, which blocks convergence rather than passing it.
+        untried_actions: Remaining unattempted actions, for C4. Omit and C4 is unmeasured, with
+            the same consequence — "converged" must not be reachable by never having looked.
 
     Convergence is judged on all four criteria (C1-C4 in ``rounds.assess_convergence``), not on
     the numbers holding still. Those are different claims: the fused values can settle while the
@@ -309,7 +321,7 @@ def fuse_rounds(
         weight_basis=weight_basis,
         round_index=0,
     )
-    history = [_round_record(0, rows, untried_actions=0)]
+    history = [_round_record(0, rows, untried_actions=untried_actions, assignment=speaker_assignment)]
     log.append({"round": 0, "buckets": len(rows), "converged": False, "regional_trust_applied": False})
 
     if not mask_regions or not speaker_claims:
@@ -337,7 +349,7 @@ def fuse_rounds(
         )
         numbers_settled = round_converged(rows, candidate, tolerance=tolerance)
         rows = candidate
-        history.append(_round_record(round_index, rows, untried_actions=0))
+        history.append(_round_record(round_index, rows, untried_actions=untried_actions, assignment=speaker_assignment))
         verdict = assess_convergence(history, tolerance=tolerance, max_rounds=max(1, int(max_rounds)))
         log.append(
             {

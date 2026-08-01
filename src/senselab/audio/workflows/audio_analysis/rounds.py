@@ -152,10 +152,15 @@ class RoundRecord:
         epistemic: Mean epistemic (reducible) uncertainty after the round, or ``None`` when it was
             not measured — total uncertainty can plateau while reducible doubt remains, which is
             why C1 is stated on the reducible part.
-        assignment: The ``S_k`` → activation-channel mapping this round settled on (C2). The
-            numbers can settle while this still flips, so it is judged separately.
+        assignment: The ``S_k`` → activation-channel mapping this round settled on (C2), from
+            ``joint.per_speaker_presence``. The numbers can settle while this still flips, so it is
+            judged separately. ``None`` means it was not measured, which blocks C2 rather than
+            satisfying it: two unmeasured rounds compare equal, and reading that as stability would
+            let the loop declare convergence on criteria nobody checked.
         measured_buckets: How many buckets carry a measurement (C3).
-        untried_actions: Actions still available and unattempted anywhere (C4).
+        untried_actions: Actions still available and unattempted anywhere (C4). ``None`` means the
+            inventory was never taken, which blocks C4 — never having looked is not the same as
+            having checked and found none.
         overwrote_values: Whether any action *replaced* a signal's value this round. Feeds the
             self-confirmation guard: a fall bought by overwriting is not a confidence gain.
         signature: A hashable digest of the round's state, for cycle detection.
@@ -165,7 +170,7 @@ class RoundRecord:
     epistemic: Optional[float]
     assignment: Optional[Mapping[str, str]]
     measured_buckets: int
-    untried_actions: int
+    untried_actions: Optional[int]
     overwrote_values: bool
     signature: str
 
@@ -239,9 +244,12 @@ def assess_convergence(
         credited = 0.0
 
     c1 = credited is not None and abs(credited) <= float(tolerance)
-    c2 = prev.assignment == cur.assignment
+    # Both guard against the unmeasured case explicitly. Comparing two ``None`` assignments
+    # yields equality, and a defaulted zero action count reads as an exhausted inventory — either
+    # would let a criterion nobody checked report as one that passed.
+    c2 = prev.assignment is not None and cur.assignment is not None and prev.assignment == cur.assignment
     c3 = int(cur.measured_buckets) <= int(prev.measured_buckets)
-    c4 = int(cur.untried_actions) <= 0
+    c4 = cur.untried_actions is not None and int(cur.untried_actions) <= 0
     criteria = {"c1": c1, "c2": c2, "c3": c3, "c4": c4}
     converged = all(criteria.values())
 
