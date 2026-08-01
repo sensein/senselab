@@ -22,6 +22,12 @@ rejected rather than honored.
 
 Deliberately pure and dependency-free so the guards can be tested without the loop, and so
 they can be sequenced *before* the influence paths they protect (spec Dependencies).
+
+Lives at the workflow level rather than under ``adaptive/`` because three consumers there need it —
+``speaker_identity`` for its source weights, ``fuse`` for the cross-axis evidence-overlap gate, and
+the adaptive loop itself. A shared piece imported *upward* out of a subsystem inverts the dependency
+and makes the subsystem look like a library for the level above it; the same reasoning moved
+non-convergence detection down to ``rounds.py``.
 """
 
 from __future__ import annotations

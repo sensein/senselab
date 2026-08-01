@@ -29,7 +29,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal, Mapping, Sequence
 
-from senselab.audio.workflows.audio_analysis.adaptive.influence import SOURCE_KINDS, effective_weight
+from senselab.audio.workflows.audio_analysis.influence import SOURCE_KINDS, effective_weight
 from senselab.audio.workflows.audio_analysis.speaker import (
     cluster_active_time,
     label_correspondence_rows,

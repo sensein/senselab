@@ -18,7 +18,7 @@ perturbation evidence simply keeps its full weight by default.
 
 **Reliability never reaches zero.** With two perturbation points the measure is coarse, so a
 hard zero would erase a dissenting claim rather than down-weight it — the same reasoning as
-the influence gate's floor in ``adaptive/influence.py``.
+the influence gate's floor in ``influence.py``.
 """
 
 from __future__ import annotations

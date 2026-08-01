@@ -22,16 +22,16 @@ from __future__ import annotations
 
 import pytest
 
-from senselab.audio.workflows.audio_analysis.adaptive.influence import (
-    InfluenceWeight,
-    effective_weight,
-    resolve_influence,
-)
 from senselab.audio.workflows.audio_analysis.adaptive.provenance import (
     RESOLUTION_KINDS,
     RevisionRecord,
     classify_resolution,
     revision_log_entry,
+)
+from senselab.audio.workflows.audio_analysis.influence import (
+    InfluenceWeight,
+    effective_weight,
+    resolve_influence,
 )
 
 GATES = {"independent": 1.0, "derived": 0.4}
@@ -263,13 +263,13 @@ def test_influence_resolution_is_deterministic() -> None:
 
 def test_signal_ordering_is_stable_regardless_of_input_order() -> None:
     """Iteration order must not depend on dict insertion order (FR-011f)."""
-    from senselab.audio.workflows.audio_analysis.adaptive.influence import ordered_signals
+    from senselab.audio.workflows.audio_analysis.influence import ordered_signals
 
     assert ordered_signals({"b": 1, "a": 2, "c": 3}) == ordered_signals({"c": 3, "a": 2, "b": 1})
 
 
 def test_ordered_signals_is_sorted() -> None:
     """A fixed order, independent of how the mapping was built."""
-    from senselab.audio.workflows.audio_analysis.adaptive.influence import ordered_signals
+    from senselab.audio.workflows.audio_analysis.influence import ordered_signals
 
     assert ordered_signals({"z": 1, "a": 1, "m": 1}) == ["a", "m", "z"]
