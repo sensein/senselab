@@ -448,8 +448,12 @@ def _resolve_input_audio(recorded: str | None, run_dir: Path) -> str | None:
     """Resolve the run's input audio path, re-rooting when the run came from another machine.
 
     Tries the recorded absolute path first, then the last one/two path components
-    relative to the repo root inferred from ``run_dir`` (…/artifacts/e2e_runs/<run>
+    relative to the repo root inferred from ``run_dir`` (…/artifacts/analyze_audio/<run>
     → repo). Returns None when nothing exists — audio-dependent rules then guard.
+
+    The root is inferred from the path *shape*, which is fragile: it walks a fixed number of
+    parents rather than looking for a marker. It happens to work for the default output layout
+    and would not for an arbitrary ``--out-dir``.
     """
     if not recorded:
         return None

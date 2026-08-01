@@ -740,3 +740,35 @@ empty in all 85 rows. Fixed by wiring all three, with `mask_regions_from_rows` c
 `uncertainty` to the `confidence` regional trust reads (unconverted, `.get("confidence", 1.0)` would
 have defaulted an unsure mask to *fully confident* and withdrawn the maximum trust available).
 Not yet re-run, so the rounds iterating end-to-end remains unverified.
+
+---
+
+## Output store and cache location (decided; cache move not yet implemented)
+
+**`artifacts/analyze_audio/` is the store.** There were two conventions for the same thing —
+`analyze_audio.py` defaulted here while `e2e_runs/` was the documented target for the adaptive e2e
+test, `adaptive_loop.py`, quickstart and T110. One of them was also tracked in git (618 files,
+142 MB) while the other was not. All references now point at `analyze_audio/`, and both paths are
+gitignored: run outputs are not source.
+
+**The CLI must accept any analysis directory.** `--out-dir` already does. The default is a local
+convenience, not an assumption the code may rely on — which is why
+`adaptive/loop.py:_resolve_input_audio` is fragile: it re-roots a recorded audio path by walking a
+fixed number of parents from the run directory, inferring the repo root from the path *shape*. That
+works for the default layout and silently fails for an arbitrary `--out-dir`. It should look for a
+marker rather than count directory levels.
+
+**The cache should live inside the target output directory.** Today it is a separate sibling
+(`artifacts/analyze_audio_cache/`, `--cache-dir`), so pointing `--out-dir` at another disk or
+another machine's export leaves the cache behind and the run silently recomputes — or worse, reuses
+entries keyed to inputs that are no longer the ones being analysed. Making the cache a child of the
+output directory keeps a run self-contained and movable.
+
+The alternative worth naming: a **global** cache (`~/.cache/senselab/analyze_audio/`), shared across
+every output directory. That trades self-containment for reuse across runs, which is the thing the
+content-addressable keys were designed to give. The two are not exclusive — a per-output cache with
+a global read-through fallback would give both — but that is a third design, not a compromise.
+
+Not implemented. Recorded so the choice is deliberate when it is made, rather than settled by
+whichever call site is edited first. `CACHE_SCHEMA_VERSION` already makes invalidation free, so
+relocating costs recomputation and nothing else.

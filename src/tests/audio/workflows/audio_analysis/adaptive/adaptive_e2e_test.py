@@ -16,7 +16,7 @@ These need real artifacts, so they skip unless the relevant env vars point at da
 
 Run e.g.::
 
-    SENSELAB_ADAPTIVE_E2E_RUN_DIR=artifacts/e2e_runs/<run> uv run pytest \
+    SENSELAB_ADAPTIVE_E2E_RUN_DIR=artifacts/analyze_audio/<run> uv run pytest \
         src/tests/audio/workflows/audio_analysis/adaptive/adaptive_e2e_test.py -v
 """
 
