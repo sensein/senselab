@@ -330,6 +330,7 @@ def harvest_pass(
         pass_summary=harvest_summary,
         grid=grid,
         per_window_embeddings=per_window_embeddings,
+        frame_posteriors=frame_voters or None,
         same_speaker_floor=same_floor_eff,
         diff_speaker_floor=diff_floor_eff,
         cluster_cosine_threshold=cluster_cosine_threshold,
