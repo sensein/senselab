@@ -11,7 +11,7 @@ final round fuses a consensus transcript / diarization / speech_presence track w
 full decision audit trail.
 
 Usage:
-    uv run python scripts/adaptive_loop.py artifacts/e2e_runs/<run_dir> \
+    uv run python scripts/adaptive_loop.py artifacts/analyze_audio/<run_dir> \
         --cache-dir artifacts/analyze_audio_cache \
         --ground-truth ~/Downloads/updated-label-XXXX.json
 

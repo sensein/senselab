@@ -106,7 +106,7 @@ Validate:
 ```bash
 uv run python - <<'PY'
 import json, pandas as pd, glob
-mj = glob.glob('artifacts/e2e_runs/*/raw/background_mask.json')[-1]
+mj = glob.glob('artifacts/analyze_audio/*/raw/background_mask.json')[-1]
 m = json.load(open(mj))
 assert m['metadata_provenance'] in ('recognized','fallback')          # SC-025
 assert 'total_masked_s' in m and 'masked_fraction' in m               # SC-021
@@ -147,7 +147,7 @@ fabricated finding:
 ```bash
 uv run python - <<'PY'
 import pandas as pd, glob, json
-run = sorted(glob.glob('artifacts/e2e_runs/*'))[-1]
+run = sorted(glob.glob('artifacts/analyze_audio/*'))[-1]
 src = pd.read_parquet(f'{run}/raw/background_sources.parquet')
 # SC-014: every finding carries its margin
 assert src.above_floor_db.notna().all()
@@ -226,7 +226,7 @@ Validate:
 ```bash
 uv run python - <<'PY'
 import json, glob, pandas as pd
-run = sorted(glob.glob('artifacts/e2e_runs/*'))[-1]
+run = sorted(glob.glob('artifacts/analyze_audio/*'))[-1]
 sp = json.load(open(f'{run}/final/speakers.json'))
 cp = sp['count_posterior']
 assert abs(sum(cp['probabilities'].values()) - 1.0) < 1e-9
