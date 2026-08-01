@@ -20,7 +20,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from senselab.audio.workflows.audio_analysis.layout import belief_dir, final_dir
+from senselab.audio.workflows.audio_analysis.layout import belief_dir, evidence_dir, final_dir
 
 
 def build_adaptive_timeline(out_dir: Path, *, gt_path: Path | None = None, title: str = "") -> Path | None:
@@ -199,26 +199,50 @@ def build_adaptive_timeline(out_dir: Path, *, gt_path: Path | None = None, title
 
     # ── row 5: fused words ──────────────────────────────────────────────
     cmap_conf = plt.get_cmap("RdYlGn")
-    for w in transcript["words"]:
+    # Word labels cycle through three text lanes (word i -> lane i % 3). Speech runs at roughly
+    # three words a second, so at any readable font size consecutive labels overlap when they share
+    # one lane; rotating them 35 degrees traded one kind of illegibility for another. Staggering
+    # gives each label three words' worth of horizontal room and lets the text sit upright.
+    text_lanes = (0.78, 0.50, 0.22)
+    for idx, w in enumerate(transcript["words"]):
         mid = (w["start"] + w["end"]) / 2
         conf = float(w.get("confidence") or 0.0)
-        ax_w.add_patch(
-            Rectangle(
-                (w["start"], 0.25),
-                max(0.02, w["end"] - w["start"]),
-                0.5,
-                facecolor=cmap_conf(conf),
-                alpha=0.8,
-                edgecolor="black",
-                linewidth=0.4,
-            )
+        lane = idx % len(text_lanes)
+        # Confidence lives on the label's own background. The separate box-plus-number below each
+        # word encoded the same quantity three ways — box colour, printed value, and position —
+        # while the staggering had already pulled the label away from the box it belonged to, so
+        # the colour stopped reading as that word's.
+        ax_w.text(
+            mid,
+            text_lanes[lane],
+            w["text"],
+            ha="center",
+            va="center",
+            fontsize=7,
+            zorder=2,
+            bbox={
+                "boxstyle": "round,pad=0.2",
+                "facecolor": cmap_conf(conf),
+                "edgecolor": "black",
+                "linewidth": 0.3,
+                "alpha": 0.9,
+            },
         )
-        ax_w.text(mid, 0.87, w["text"], ha="center", va="center", fontsize=7, rotation=35)
-        ax_w.text(mid, 0.5, f"{conf:.2f}", ha="center", va="center", fontsize=5.5)
         if w.get("alternates"):
             alt_txt = "|".join(a["text"] for a in w["alternates"][:2])
-            ax_w.text(mid, 0.12, alt_txt, ha="center", fontsize=5, color="grey")
-    ax_w.set_ylabel("fused words\n(conf color)", rotation=0, ha="right", va="center")
+            ax_w.text(mid, text_lanes[lane] - 0.09, alt_txt, ha="center", va="center", fontsize=5, color="grey")
+    # A colorbar, because a colour scale with no key requires the reader to guess which end is
+    # confident. Horizontal and inset so it costs no row height.
+    if transcript["words"]:
+        cax = ax_w.inset_axes((0.35, 1.02, 0.3, 0.05))
+        fig.colorbar(
+            plt.cm.ScalarMappable(norm=plt.Normalize(0.0, 1.0), cmap=cmap_conf),
+            cax=cax,
+            orientation="horizontal",
+        )
+        cax.tick_params(labelsize=5, length=2, pad=1)
+        cax.set_title("word confidence", fontsize=6, pad=2)
+    ax_w.set_ylabel("fused words", rotation=0, ha="right", va="center")
     ax_w.set_ylim(0, 1.1)
     ax_w.set_yticks([])
     ax_w.set_xlabel("time (s)")
@@ -242,6 +266,13 @@ _MASK_STATE_STYLE = {
     # Green reads as "usable" and grey as "unknown" without needing the legend;
     # target-active is deliberately muted so the eye lands on the usable spans.
     "target_free": ("#2e7d32", "target-free"),
+    # Target absent, something else audible — the state a background claim is actually *made*
+    # from, since a silent stretch characterises nothing. It was missing from this table, so it
+    # fell through to the ``indeterminate`` default and every such region rendered as "cannot
+    # tell": on a clip whose only finding was a 5.5 s non-target span, the mask row showed
+    # nothing but grey. Blue rather than another green, because it answers a different question
+    # from ``target_free`` — the two are kept apart everywhere else for the same reason.
+    "nontarget_active": ("#1565c0", "non-target active"),
     "indeterminate": ("#9e9e9e", "cannot tell"),
     "target_active": ("#c8c8c8", "target active"),
 }
@@ -356,7 +387,7 @@ def _draw_per_speaker(ax: Any, out_dir: Path, duration: float) -> None:  # noqa:
 
 
 def _draw_background_mask(ax: Any, out_dir: Path, duration: float) -> None:  # noqa: ANN401 — matplotlib Axes
-    """Draw the background mask as a three-state strip, with uncertainty as alpha.
+    """Draw the background mask as a four-state strip, with uncertainty as alpha.
 
     Absent mask parquet leaves an explicitly labelled empty row rather than a silently
     blank one — "no mask was produced" and "the mask was empty" are different facts, and a
@@ -371,8 +402,13 @@ def _draw_background_mask(ax: Any, out_dir: Path, duration: float) -> None:  # n
     ax.set_yticks([])
     ax.set_xlim(0, duration)
 
+    # ``L1/<pass>/background_mask.parquet`` — two levels down, not one. The glob was written
+    # against the flat layout and silently matched nothing once passes moved under ``L1/``, so
+    # this row reported "no background mask" on runs whose mask had found regions. Same drift,
+    # and the same silence, as the outcome loader: a glob that matches nothing is indistinguishable
+    # from a stage that produced nothing.
     rows: list[dict[str, Any]] = []
-    for candidate in sorted(out_dir.glob("*/background_mask.parquet")):
+    for candidate in sorted(evidence_dir(out_dir).glob("*/background_mask.parquet")):
         try:
             import pandas as pd
 
