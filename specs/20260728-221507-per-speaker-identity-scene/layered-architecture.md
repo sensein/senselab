@@ -383,8 +383,13 @@ Dependency-ordered; each step verifiable before the next.
    weight). **J9 done** (`invariance.py`, `--invariance-probe`). **J1 done** (`joint.overlap_count_posterior`, wired as the
    `<signal>::overlap_count` speaker sub-signal). **J2 done**
    (`joint.speaker_change_series`, wired as `<embedding_model>::change_point`). **J7 done**
-   (`joint.phoneme_transcript_agreement`, over H3's slots). **J4 open** — per-speaker presence as
-   the `S_k` ↔ channel joint space, which waits on rounds.
+   (`joint.phoneme_transcript_agreement`, over H3's slots). **J4 done** (`joint.per_speaker_presence`) — the `S_k` ↔ channel
+   binding, decided by temporal agreement and Hungarian-matched, reporting how firmly it is
+   determined rather than only what it decided. Nothing is thresholded: a speaker with no
+   overlapping channel activity is left unbound rather than given the least-bad channel, and a
+   channel no speaker claimed is reported — that is the shape a missed speaker takes. The
+   `assignment_margin` is what C2 needs, and the fact that it is *evidence* rather than a
+   preprocessing result is D-7's point.
 
    J7 is worth having over the per-window PER the ASR axis already computes because it asks a
    different question. That measure asks whether *a* model's transcript matches the audio; J7 asks
@@ -427,9 +432,10 @@ Dependency-ordered; each step verifiable before the next.
    log records `numbers_settled` and `converged` separately plus which criteria blocked, so
    "cycled" and "ran out of rounds" stay distinguishable from "agreed".
 
-   **Still open in this step:** C2's assignment and C4's action inventory are not yet produced by
-   the fusion path — J4 will supply the first, the intervention catalogue the second — so
-   `_round_record` reports them as *unmeasured* rather than as satisfied. A criterion nobody
+   **Still open in this step:** C2's assignment and C4's action inventory are not yet *threaded
+   into* the fusion path. J4 now produces the binding and its margin, but `fuse_rounds` does not
+   yet receive them, and the intervention catalogue that would answer C4 is not wired either, so
+   `_round_record` reports both as *unmeasured* rather than as satisfied. A criterion nobody
    measured must not read as one that passed, so `converged` currently cannot be reached through
    that path, which is the honest state. **D-10** (a round re-running L1 at a tighter window/hop)
    and **D-11** (re-examining a flagged region for all categories) are also still open.

@@ -27,7 +27,7 @@ readings of the same span without echoing a third transcriber's opinion.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
 import numpy as np
 
@@ -36,7 +36,13 @@ from senselab.audio.workflows.audio_analysis.statistics import entropy_uncertain
 if TYPE_CHECKING:
     from senselab.audio.tasks.voice_activity_detection.frame_posteriors import FramePosterior
 
-__all__ = ["overlap_count_posterior", "count_distribution", "speaker_change_series", "phoneme_transcript_agreement"]
+__all__ = [
+    "overlap_count_posterior",
+    "count_distribution",
+    "speaker_change_series",
+    "phoneme_transcript_agreement",
+    "per_speaker_presence",
+]
 
 
 def count_distribution(probs: np.ndarray) -> np.ndarray:
@@ -312,3 +318,92 @@ def phoneme_transcript_agreement(
             }
         )
     return out
+
+
+def per_speaker_presence(
+    speaker_spans: Mapping[str, Sequence[tuple[float, float]]],
+    posterior: "FramePosterior",
+) -> dict[str, Any] | None:
+    """J4: bind harmonised speakers to activation channels, and report how firmly.
+
+    A **joint** space rather than an inheritance (D-7). The activation channels are
+    permutation-arbitrary, so they carry timing but cannot name anyone; the harmonised speaker space
+    carries names but only segment-level timing, so it cannot place a speaker inside a segment. Each
+    supplies exactly what the other lacks, and the binding between them is evidence — how
+    well-determined it is *is* part of the speaker uncertainty rather than an input to it, which is
+    what makes its stability a convergence criterion (C2) rather than a preprocessing step.
+
+    The binding is decided by temporal agreement, Hungarian-matched, because that is the only
+    evidence linking a name to a channel. Nothing is thresholded: a speaker with no overlapping
+    channel activity is left unbound rather than given the least-bad channel, and a channel no
+    speaker claimed is reported rather than dropped — that is the shape a missed speaker takes.
+
+    Args:
+        speaker_spans: ``{speaker id → [(start_s, end_s), ...]}`` from the harmonised speaker space.
+        posterior: Frame posteriors with per-speaker channels intact (D-5).
+
+    Returns:
+        ``{"assignment", "assignment_margin", "presence", "unassigned_channels",
+        "unassigned_speakers", "uncertainty"}``, or ``None`` when the question cannot be asked —
+        a single pooled channel has already discarded who was speaking, and no speakers means
+        nothing to bind.
+
+        ``presence`` maps each bound speaker to its channel's ``(times, probabilities)`` at frame
+        resolution — the timing the speaker space never had. ``assignment_margin`` is the bound
+        channel's overlap lead over the runner-up, normalised; ``uncertainty`` is one minus the
+        mean margin, so a tie between channels reads as doubt rather than as a decision.
+    """
+    if posterior is None or posterior.channel_format == "single":
+        return None
+    data = np.asarray(posterior.activations, dtype=np.float64)
+    if data.ndim != 2 or data.shape[1] < 2:
+        return None
+    speakers = sorted(s for s, spans in (speaker_spans or {}).items() if spans)
+    if not speakers:
+        return None
+
+    hop = float(posterior.frame_hop_s)
+    if hop <= 0:
+        return None
+    n_frames, n_channels = data.shape
+    labels = list(posterior.channel_labels) or [f"speaker#{i + 1}" for i in range(n_channels)]
+    times = np.arange(n_frames) * hop
+
+    # Agreement between each speaker's claimed spans and each channel's activity, in
+    # activation-seconds: a channel that is strongly active throughout a speaker's turn agrees more
+    # than one that flickers.
+    score = np.zeros((len(speakers), n_channels), dtype=np.float64)
+    for i, speaker in enumerate(speakers):
+        mask = np.zeros(n_frames, dtype=bool)
+        for start, end in speaker_spans[speaker]:
+            mask |= (times >= float(start)) & (times < float(end))
+        if mask.any():
+            score[i] = data[mask].sum(axis=0) * hop
+
+    from senselab.audio.workflows.audio_analysis.harmonize import _maximise
+
+    pairs = _maximise(score)
+    assignment: dict[str, str | None] = {s: None for s in speakers}
+    margin: dict[str, float] = {s: 0.0 for s in speakers}
+    for i, j in pairs:
+        if score[i, j] <= 0:
+            continue  # no agreement at all is absence of evidence, not a weak match
+        assignment[speakers[i]] = labels[j]
+        row = np.sort(score[i])[::-1]
+        runner_up = float(row[1]) if row.size > 1 else 0.0
+        best = float(row[0])
+        margin[speakers[i]] = (best - runner_up) / best if best > 0 else 0.0
+
+    bound = {c for c in assignment.values() if c is not None}
+    presence = {s: (times, data[:, labels.index(c)]) for s, c in assignment.items() if c is not None and c in labels}
+    margins = [margin[s] for s in speakers if assignment[s] is not None]
+    return {
+        "assignment": assignment,
+        "assignment_margin": margin,
+        "presence": presence,
+        # A channel nobody claimed is how a missed speaker shows up, and a speaker no channel backs
+        # is a claim the frames do not carry. Both are findings; neither is a tidying-up problem.
+        "unassigned_channels": [c for c in labels if c not in bound and float(data[:, labels.index(c)].max()) > 0],
+        "unassigned_speakers": [s for s in speakers if assignment[s] is None],
+        "uncertainty": float(1.0 - (sum(margins) / len(margins))) if margins else 1.0,
+    }
