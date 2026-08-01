@@ -1603,12 +1603,35 @@ def main(argv: list[str] | None = None) -> int:
                 # axis, so it is split off rather than fused.
                 basis = reliability_by_axis.get("__basis__") or {}
                 axis_weights = {k: v for k, v in reliability_by_axis.items() if k != "__basis__"}
+                # The mask and the speaker claims are what make the rounds able to *do* anything:
+                # without them the loop has no regional trust to withdraw and no fourth axis to
+                # emit, so it folds once and stops. They were previously left at their defaults,
+                # which silently reduced every run to a single round.
+                from senselab.audio.workflows.audio_analysis.fuse import (
+                    mask_regions_from_rows,
+                    speaker_claims_from_votes,
+                )
+
+                fusion_mask_rows: list[dict[str, Any]] = []
+                mask_path = pass_dir(run_dir, "raw_16k") / "background_mask.parquet"
+                if mask_path.exists():
+                    import pandas as _pd_mask
+
+                    fusion_mask_rows = _pd_mask.read_parquet(mask_path).to_dict("records")
+                # The mask governs fusion from the *raw* pass: whether a region is target-free is a
+                # fact about the recording, not about the enhancement transform.
+                mask_regions = mask_regions_from_rows(fusion_mask_rows)
+                reference = harvests_by_pass.get("raw_16k") or next(iter(harvests_by_pass.values()))
+                speaker_claims = speaker_claims_from_votes(getattr(reference, "speaker_votes", []) or [])
                 final_maps = write_final_uncertainty(
                     run_dir,
                     harvests=harvests_by_pass,
                     weights_by_axis=axis_weights,
                     aggregator=args.uncertainty_aggregator,
                     weight_basis_by_axis=basis,
+                    mask_regions=mask_regions,
+                    speaker_claims=speaker_claims,
+                    max_rounds=args.max_rounds,
                 )
                 summaries["final_uncertainty"] = final_maps
 
@@ -1624,15 +1647,24 @@ def main(argv: list[str] | None = None) -> int:
                     axis_name, round_token = key.split("@round", 1)
                     frame = _pd_round.read_parquet(path)
                     by_round.setdefault(int(round_token), {})[axis_name] = frame.to_dict("records")
-                for round_index, axis_rows in sorted(by_round.items()):
+                # Named for the round it belongs to: the run-summary block later in this same
+                # function binds its own ``axis_rows`` over the *final* axes, and one name for two
+                # different quantities in one scope is how the wrong one gets read.
+                for round_index, round_axis_rows in sorted(by_round.items()):
                     build_round_timeline(
                         run_dir,
                         round_index=round_index,
-                        axis_rows=axis_rows,
+                        axis_rows=round_axis_rows,
                         duration_s=float(summaries["passes"].get("raw_16k", {}).get("duration_s") or 0.0),
                         title=f"L2 round {round_index} — {args.audio.name}",
                     )
-                print(f"  [final uncertainty] {len(final_maps)} axis map(s) under final/uncertainty/")
+                # Name the directory the writer actually used. The maps live under
+                # L2/round<N>/uncertainty/, and pointing at final/uncertainty/ sent a reader to an
+                # empty path; the count also included @round aliases, so it overstated the axes.
+                axis_names = sorted({k.split("@")[0] for k in final_maps if k != "rounds"})
+                print(
+                    f"  [final uncertainty] {len(axis_names)} axis map(s) under L2/round<N>/uncertainty/: {', '.join(axis_names)}"
+                )
             except Exception as exc:  # noqa: BLE001 — a derived artifact must not fail the run
                 logger.warning("final uncertainty maps could not be written: %s", exc)
                 summaries["final_uncertainty"] = {"status": "failed", "error": repr(exc)}
@@ -1791,13 +1823,19 @@ def main(argv: list[str] | None = None) -> int:
                     "policy_hash": adaptive_log.get("policy_hash"),
                     "rounds": adaptive_log.get("rounds"),
                     "run_state": adaptive_log.get("run_state"),
+                    # `run_state` is the loop's own reason for stopping; `termination_reason` is
+                    # that reason after non-convergence detection has had its say, so a run that
+                    # ran out of moves while two interpretations traded places does not read as
+                    # agreement (FR-011e).
+                    "termination_reason": adaptive_log.get("termination_reason"),
+                    "converged": adaptive_log.get("converged"),
                     "n_interventions_fired": adaptive_log.get("n_interventions_fired"),
                     "n_words_fused": adaptive_log.get("n_words_fused"),
                     "parity_check": (adaptive_log.get("parity_check") or {}).get("status", "checked"),
                     "ingest": "in_process_harvests",
                     "timeline": adaptive_log.get("timeline"),
                 }
-                print(f"Adaptive: {run_dir / 'final'} ({summaries['adaptive'].get('run_state')})")
+                print(f"Adaptive: {run_dir / 'final'} ({summaries['adaptive'].get('termination_reason')})")
                 if summaries["adaptive"].get("timeline"):
                     print(f"Adaptive timeline: {summaries['adaptive']['timeline']}")
             except Exception as exc:  # noqa: BLE001 — additive artifacts must not fail the run
