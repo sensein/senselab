@@ -382,8 +382,18 @@ Dependency-ordered; each step verifiable before the next.
    `noise_floor.py`, `sources.py`). **J8 done** (`reliability.py`, cross-pass stability as measured
    weight). **J9 done** (`invariance.py`, `--invariance-probe`). **J1 done** (`joint.overlap_count_posterior`, wired as the
    `<signal>::overlap_count` speaker sub-signal). **J2 done**
-   (`joint.speaker_change_series`, wired as `<embedding_model>::change_point`). **J4, J7 open** —
-   per-speaker presence as the `S_k` ↔ channel joint space, and phoneme-vs-transcript agreement.
+   (`joint.speaker_change_series`, wired as `<embedding_model>::change_point`). **J7 done**
+   (`joint.phoneme_transcript_agreement`, over H3's slots). **J4 open** — per-speaker presence as
+   the `S_k` ↔ channel joint space, which waits on rounds.
+
+   J7 is worth having over the per-window PER the ASR axis already computes because it asks a
+   different question. That measure asks whether *a* model's transcript matches the audio; J7 asks
+   which of the readings on the table does. PPG posteriors reach the audio without passing through
+   a language model, so they can adjudicate between two ASR readings without echoing a third
+   transcriber's opinion. The candidate distribution is `max(0, 1 − PER)` normalised — a linear
+   link with no free temperature, so the adjudication introduces no tuned parameter. A slot where
+   every reading is contradicted yields a uniform distribution and full doubt rather than being
+   dropped: "all candidates are unsupported" is a finding, not a missing measurement.
 
    J1 was answerable before the rest because a *count* of active channels is invariant to the
    channels' arbitrary ordering, while anything naming *which* channel is whom waits on the joint
