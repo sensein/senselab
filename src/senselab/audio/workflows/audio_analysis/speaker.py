@@ -52,6 +52,8 @@ from __future__ import annotations
 import math
 from typing import Any, Mapping, Sequence
 
+import numpy as np
+
 from senselab.audio.workflows.audio_analysis.embeddings import (
     WindowEmbedding,
     calibrate_cosine_uncertainty,
@@ -60,7 +62,7 @@ from senselab.audio.workflows.audio_analysis.embeddings import (
 from senselab.audio.workflows.audio_analysis.grid import BucketGrid
 from senselab.audio.workflows.audio_analysis.harmonize import harmonize_from_diarization
 from senselab.audio.workflows.audio_analysis.harvesters import diar_speaker_label_in_window
-from senselab.audio.workflows.audio_analysis.joint import overlap_count_posterior
+from senselab.audio.workflows.audio_analysis.joint import overlap_count_posterior, speaker_change_series
 
 SILENT_CLUSTER_ID = "SIL"
 
@@ -205,6 +207,21 @@ def harvest_speaker_votes(
 
     bucket_starts_ends = [(start, end) for start, end, _ in grid.iter_buckets(duration_s)]
 
+    # J2 — where the voice changes, computed once per pass over the embedding windows. Boundary
+    # times are on the embedding hop (50 ms by default), far finer than the reporting grid, so each
+    # bucket reads the boundaries that fall inside it rather than the series being resampled: a
+    # change point is an instant, and averaging it into a bucket would blunt exactly the
+    # localisation the fine hop was chosen to buy.
+    change_by_model: dict[str, dict[str, Any]] = {}
+    for emb_model in sorted(per_window_embeddings or {}):
+        series = speaker_change_series(
+            per_window_embeddings.get(emb_model) or [],
+            same_speaker_floor=same_speaker_floor if same_speaker_floor is not None else 0.30,
+            diff_speaker_floor=diff_speaker_floor if diff_speaker_floor is not None else 0.70,
+        )
+        if series is not None:
+            change_by_model[emb_model] = series
+
     # Per-bucket raw label per diar model. None when the model emitted no
     # segment overlapping the bucket; we promote those to "<silent>" below.
     label_sequences: dict[str, list[str | None]] = {m: [] for m in diar_ok}
@@ -337,6 +354,26 @@ def harvest_speaker_votes(
                 "n_pairs": n_pairs,
                 "n_disagree": n_disagree,
                 "cluster_ids": dict(cluster_this_bucket),
+            }
+
+        # J2 — a change point inside this bucket is evidence about the speaker axis. The bucket
+        # takes the *strongest* boundary it contains, not the mean: a single sharp change
+        # surrounded by continuation is a change, and averaging would dilute it into nothing.
+        for emb_model, series in change_by_model.items():
+            inside = (series["times"] >= start) & (series["times"] < end)
+            if not inside.any():
+                continue
+            best = int(np.argmax(series["p_change"][inside]))
+            votes[f"{emb_model}::change_point"] = {
+                "value": float(series["uncertainty"][inside][best]),
+                "p_change": float(series["p_change"][inside][best]),
+                "cosine_distance": float(series["distance"][inside][best]),
+                "boundary_s": float(series["times"][inside][best]),
+                "n_boundaries": int(inside.sum()),
+                # Neighbouring boundaries share almost all of their audio, so they are not
+                # independent evidence; recorded so a consumer cannot treat them as such.
+                "resolution_s": float(series["hop_s"]),
+                "native_window_s": float(series["window_s"]),
             }
 
         # J1 — how many speakers are simultaneously active. A count is invariant to the

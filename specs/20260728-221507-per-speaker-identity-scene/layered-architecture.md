@@ -372,7 +372,8 @@ Dependency-ordered; each step verifiable before the next.
    (`speaker_identity.speaker_count_posterior`). **J5–J6 done** (`background_mask.py`,
    `noise_floor.py`, `sources.py`). **J8 done** (`reliability.py`, cross-pass stability as measured
    weight). **J9 done** (`invariance.py`, `--invariance-probe`). **J1 done** (`joint.overlap_count_posterior`, wired as the
-   `<signal>::overlap_count` speaker sub-signal). **J2, J4, J7 open** — embedding change points,
+   `<signal>::overlap_count` speaker sub-signal). **J2 done**
+   (`joint.speaker_change_series`, wired as `<embedding_model>::change_point`). **J4, J7 open** —
    per-speaker presence as the `S_k` ↔ channel joint space, and phoneme-vs-transcript agreement.
 
    J1 was answerable before the rest because a *count* of active channels is invariant to the
@@ -381,6 +382,18 @@ Dependency-ordered; each step verifiable before the next.
    answers "is anyone speaking" and discards how many. The posterior is built per frame and then
    pooled — two speakers taking turns within a bucket average to 0.5 on each channel, which as a
    per-bucket calculation would report a 25% chance of an overlap that never occurred.
+
+   J2 compares each embedding window against the one a whole window-width later, not the adjacent
+   one. This is D-2's warning made operational: at the 50 ms hop two adjacent 2 s windows share
+   97.5% of their audio, so their distance measures phonetic drift rather than speaker identity.
+   Lagging by the window width makes the two sides disjoint spans meeting at a boundary, and the
+   fine hop then buys localisation of that boundary — which is what D-2 said it buys, and it does
+   not buy independent samples, so neighbouring boundary scores must not be counted as separate
+   evidence. Each bucket takes the *strongest* boundary it contains rather than the mean: a sharp
+   change surrounded by continuation is a change, and averaging would dilute it away. The distance
+   is read through the speaker axis's existing calibration band rather than a new anchor, because a
+   raw cosine of 0.2 is not evidence of anything — same-speaker embeddings sit in a 0.1-0.3 noise
+   floor from phonetic variation alone.
 4. **Link functions** and TTS-fitted calibration (D-8, D-9).
 5. **Rounds and convergence** (D-10 – D-12, both guards).
 6. **Rename** `presence`/`identity`/`utterance` → `speech_presence`/`speaker`/`asr`. **Done.**
