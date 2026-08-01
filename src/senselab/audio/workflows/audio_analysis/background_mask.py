@@ -681,3 +681,75 @@ def nontarget_confidence_by_bucket(
                 enriched["nontarget_confidence"] = max(0.0, min(1.0, max(values)))
         out.append(enriched)
     return out
+
+
+def target_spans_from_evidence(
+    *,
+    word_spans: Sequence[tuple[float, float]] = (),
+    speaker_spans: Sequence[tuple[float, float]] = (),
+    frame_speech: Sequence[float] = (),
+    frame_hop_s: float = 0.0,
+    frame_threshold: float = 0.5,
+    duration_s: float = 0.0,
+    min_free_s: float = 0.0,
+) -> dict[str, list[tuple[float, float]]]:
+    """Target-active and target-free spans, from every axis at its own resolution.
+
+    The mask was as coarse as its coarsest source: two bucketed sources on a 0.5 s grid, so a
+    bucket holding one short word was wholly target-active and every gap shorter than a bucket was
+    invisible. Yet the system already measures speech far more precisely — ASR word boundaries at
+    roughly 10 ms, frame posteriors at 16.9 ms — and the mask is a *derived* quantity, free to read
+    any axis it likes. Deriving it from the finest available evidence is what makes it temporally
+    precise enough to be worth having.
+
+    Evidence is **unioned, not averaged**: a word the recognizer heard and a span the diarizer
+    attributed are each sufficient to establish the target was present, so they are not votes to
+    reconcile. A span is free only where *nothing* claimed activity.
+
+    Args:
+        word_spans: ASR word ``(start, end)`` spans — the most precise speech evidence available.
+        speaker_spans: Diarization spans attributed to a speaker.
+        frame_speech: Per-frame speech probability.
+        frame_hop_s: Seconds per frame; required for ``frame_speech`` to mean anything.
+        frame_threshold: Frame probability at or above which the target counts as present.
+        duration_s: Recording duration, so the tail after the last claim is reachable.
+        min_free_s: Shortest span offered as free. An inter-word pause is not a background
+            opportunity — the target is still present — and without a floor every gap becomes a
+            region no classifier could characterise.
+
+    Returns:
+        ``{"target": spans, "free": spans}``, both merged and in time order. Both are empty when
+        nothing was measured: an absence of evidence is not a claim that the clip is free, which
+        would be the loudest possible guess.
+    """
+    active: list[tuple[float, float]] = [(float(a), float(b)) for a, b in word_spans if float(b) > float(a)]
+    active += [(float(a), float(b)) for a, b in speaker_spans if float(b) > float(a)]
+    if frame_speech and frame_hop_s > 0:
+        run_start: float | None = None
+        for i, value in enumerate(frame_speech):
+            if float(value) >= float(frame_threshold):
+                run_start = i * frame_hop_s if run_start is None else run_start
+            elif run_start is not None:
+                active.append((run_start, i * frame_hop_s))
+                run_start = None
+        if run_start is not None:
+            active.append((run_start, len(frame_speech) * frame_hop_s))
+    if not active:
+        return {"target": [], "free": []}
+
+    merged: list[tuple[float, float]] = []
+    for start, end in sorted(active):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+
+    free: list[tuple[float, float]] = []
+    cursor = 0.0
+    for start, end in merged:
+        if start - cursor >= float(min_free_s) and start > cursor:
+            free.append((cursor, start))
+        cursor = max(cursor, end)
+    if float(duration_s) - cursor >= float(min_free_s) and float(duration_s) > cursor:
+        free.append((cursor, float(duration_s)))
+    return {"target": merged, "free": free}
