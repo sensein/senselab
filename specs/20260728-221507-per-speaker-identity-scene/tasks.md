@@ -224,7 +224,7 @@ synthetic signals and assert weighting, attribution, and termination behavior.
 
 - [X] T080 [US1] Implement `InfluenceWeight` with uncertainty and derivation gates in `src/senselab/audio/workflows/audio_analysis/adaptive/influence.py` per `data-model.md` §2.
 - [X] T081 [US1] Implement `RevisionRecord` and `ResolutionKind` in `src/senselab/audio/workflows/audio_analysis/adaptive/provenance.py`, generalizing the loop's existing explained-versus-improved distinction (research D13).
-- [X] T082 [US1] Implement oscillation and no-improvement detection in `src/senselab/audio/workflows/audio_analysis/adaptive/convergence.py`, extending `ConvergenceReport` with `termination_reason`, `oscillation_states`, and `unresolved_quantities`.
+- [X] T082 [US1] Implement oscillation and no-improvement detection in `src/senselab/audio/workflows/audio_analysis/rounds.py` (shared by both loops), extending `ConvergenceReport` with `termination_reason`, `oscillation_states`, and `unresolved_quantities`, and wiring `adaptive/loop.py` to snapshot per-round state so the detector actually runs. *Was marked done while the detector was unused and none of the three report fields were emitted — a run that oscillated reported `run_state: "converged"`.*
 - [X] T083 [US1] Enforce deterministic iteration order and stable serialized key ordering in `src/senselab/audio/workflows/audio_analysis/adaptive/loop.py` (FR-011f).
 - [X] T084 [US1] Add `--influence-profile` and `--max-influence-rounds` flags to `scripts/analyze_audio.py`.
 

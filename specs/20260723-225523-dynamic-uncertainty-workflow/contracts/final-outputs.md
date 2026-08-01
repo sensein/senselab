@@ -75,6 +75,11 @@ entries — the full decision surface, not only fired actions.
 
 ## summary.json (additive keys)
 
-`adaptive: {run_state, rounds_executed, policy_hash, budget: {...}, uncertainty_mass_by_round: {...}}`
-alongside the existing `global_uncertainty` block (whose semantics are unchanged; it is now computed
-from the final belief state).
+`adaptive: {run_state, termination_reason, converged, rounds_executed, policy_hash, budget: {...},
+uncertainty_mass_by_round: {...}}` alongside the existing `global_uncertainty` block (whose semantics
+are unchanged; it is now computed from the final belief state).
+
+`run_state` is the loop's own reason for stopping; `termination_reason` is that reason after
+non-convergence detection has had its say (FR-011e), and the two differ exactly when a run stopped
+with nothing left to fire while its state was still trading places. Consumers deciding whether an
+answer settled must read `termination_reason` / `converged`, never `run_state` alone.

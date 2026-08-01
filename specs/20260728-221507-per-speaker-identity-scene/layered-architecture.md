@@ -351,6 +351,26 @@ a different kind of object and would invite reading a ratio-spread as a dispersi
 the stopping reason, is summarised in `decisions.json`. Per-round outputs remain under
 `L2/round<N>/` for audit.
 
+`L2/rounds.json` carries the per-axis round log `fuse_rounds` produces, one entry per round:
+
+| field | meaning |
+|---|---|
+| `numbers_settled` | the fused values stopped moving — **one** of four criteria, not convergence |
+| `converged` | all four criteria held |
+| `criteria_evaluated` | `false` on the round-0 shortcut, where the loop could not iterate at all |
+| `blocking` | which criteria failed |
+| `credited_epistemic_change` | C1's change *after* the self-confirmation guard |
+| `diverged` | uncertainty rose — legitimate, and does not stop the loop |
+| `stop_reason` | `converged` \| `oscillation` \| `no_improvement` \| `max_rounds` \| `null` |
+| `repeating_states` | which states traded places, when oscillating |
+| `action_scope` | which action inventory C4 was answered against |
+| `coupled_from` | which other axes voted into this axis this round (D-11) |
+| `derivatives_refreshed` | whether the round re-derived the mask and claims, or reused round 0's |
+| `remeasured` | whether the round took a finer look rather than only re-weighting (D-10) |
+
+`numbers_settled` and `converged` are deliberately separate fields: a consumer that reads the
+first as the second is making exactly the claim the four-criteria design exists to prevent.
+
 ---
 
 ## Implementation order
@@ -432,9 +452,11 @@ Dependency-ordered; each step verifiable before the next.
    log records `numbers_settled` and `converged` separately plus which criteria blocked, so
    "cycled" and "ran out of rounds" stay distinguishable from "agreed".
 
-   `fuse_rounds` accepts `speaker_assignment` (J4's binding, for C2) and `untried_actions` (the
-   intervention catalogue, for C4). Omitting either leaves that criterion **unmeasured, which
-   blocks convergence** rather than passing it.
+   `fuse_rounds` accepts `speaker_assignment` (J4's binding, for C2) and `untried_actions` (for C4,
+   from a caller whose action inventory is wider than the loop's own). Omitting `speaker_assignment`
+   leaves C2 **unmeasured, which blocks convergence** rather than passing it; omitting
+   `untried_actions` falls back to the loop's own countable inventory, with `action_scope` recording
+   which was used (see C4 below).
 
    That last point was wrong in the first implementation and is worth recording. `assignment=None`
    compared equal between rounds and a defaulted `untried_actions=0` read as an exhausted
@@ -451,28 +473,182 @@ Dependency-ordered; each step verifiable before the next.
    mean different things to C2 — two empty mappings compare equal and would read as a stable
    assignment nobody checked.
 
-   **Duplication to resolve before C4.** `adaptive/convergence.py` already had
-   `detect_non_convergence`, which detects oscillation *and* stagnation over a sliding window of
-   round states, and reports them separately because the remedies differ — a flip-flop means two
-   signals disagree irreconcilably, standing still means no signal has anything left to contribute.
-   `rounds.assess_convergence` was written without checking for it and carries its own cycle
-   detection, which compares against all earlier signatures but collapses both failures into
-   `"cycle"`. The two are not redundant by accident: they serve different loops (the adaptive loop
-   in `adaptive/loop.py`, the L2 fusion rounds in `fuse.fuse_rounds`), but the *detection* should be
-   one implementation, not two that can disagree about the same history.
+   **Duplication resolved.** `adaptive/convergence.py` already had `detect_non_convergence`, which
+   detects oscillation *and* stagnation over a sliding window of round states, and reports them
+   separately because the remedies differ — a flip-flop means two signals disagree irreconcilably,
+   standing still means no signal has anything left to contribute. `rounds.assess_convergence` was
+   written without checking for it and carried its own cycle detection, which compared against all
+   earlier signatures but collapsed both failures into `"cycle"`. The two were not redundant by
+   accident: they serve different loops (the adaptive loop in `adaptive/loop.py`, the L2 fusion
+   rounds in `fuse.fuse_rounds`). But the *detection* is one question about a round history, and two
+   implementations of it could reach opposite verdicts on identical states.
 
-   The fix is to move `detect_non_convergence` down to `rounds.py` and have `adaptive/convergence.py`
-   use it from there — the dependency runs adaptive → workflow, so the shared piece belongs at the
-   lower level. Not attempted yet: it is a cross-subsystem move and deserves a full context budget.
+   `detect_non_convergence` now lives in `rounds.py` — the dependency runs adaptive → workflow, so
+   the shared piece belongs at the lower level — and `assess_convergence` calls it in place of its
+   own check, so the fusion rounds report `"oscillation"` and `"no_improvement"` instead of one
+   flattened `"cycle"`. Two things changed with the move beyond deduplication:
 
-   **Also still open:** C4's action inventory. Counting untried actions means reaching the
-   intervention catalogue in `adaptive/`, which is a different subsystem from this fusion path, so
-   C4 stays unmeasured and convergence stays unreachable here — correctly, rather than by
-   defaulting. **D-10** (a round re-running L1 at a tighter window/hop) and **D-11** (re-examining a
-   flagged region for all categories) also remain. A criterion nobody
-   measured must not read as one that passed, so `converged` currently cannot be reached through
-   that path, which is the honest state. **D-10** (a round re-running L1 at a tighter window/hop)
-   and **D-11** (re-examining a flagged region for all categories) are also still open.
+   - **The window now bounds recency in both loops.** The old check asked "does the current
+     signature appear anywhere earlier", which never expires: a state that recurred once and was
+     left behind would keep stopping the loop after it had resumed making progress. A cycle of
+     period *p* becomes visible once the window holds a repeat, which takes `p + 1` rounds, so
+     `DEFAULT_CYCLE_WINDOW = 4` catches periods one through three.
+   - **Convergence suppresses the verdict, not the reverse.** When all four criteria hold, a
+     repeated signature is agreement, not a cycle — the same state twice is what settling looks
+     like. The detector runs only when something still blocks. The adaptive report needs the
+     asymmetric form of the same rule: a settled loop *holds still*, so `no_improvement` cannot
+     count against a convergence the loop reached on its own grounds, while `oscillation` still
+     overrides it — those values are unsettled whatever the loop concluded. Without that
+     distinction every clean convergence reported as a failure to converge.
+
+   **The detector was never wired to anything.** Finding it unused was the reason to look: T082
+   built it, `ConvergenceReport` was specified to carry `termination_reason`, `oscillation_states`
+   and `unresolved_quantities`, and none of the three were emitted, so a run that oscillated
+   reported `run_state: "converged"` when the loop stopped because nothing more would fire. That is
+   precisely "an unsettled value presented as settled". `adaptive/loop.py` now snapshots each
+   round's uncertainty mass and bucket-status census, and `build_convergence_report` runs the
+   detector over them; a detector verdict *overrides* `run_state`, since a loop with nothing left to
+   fire has still not settled if its state was trading places.
+
+   `unresolved_quantities` is `None`, not `[]`, when no resolution inventory was supplied. An empty
+   list would read as "we checked and everything settled" — the same default-stands-in-for-absent
+   shape that C2/C4 hit above, and that the quality nearest-window fallback and J2's calibration
+   floors hit before that. Unrecognised run states pass through rather than folding into `"budget"`,
+   for the same reason: mapping the unknown onto a known outcome is how a state nobody has thought
+   about starts reading as one that was.
+
+   **C4 is now measured, against a named inventory.** The blocker was framed as "counting untried
+   actions means reaching the intervention catalogue in `adaptive/`", and that framing was the
+   mistake: it assumed one global action inventory that only the adaptive subsystem holds. There
+   are two, because the loops can do different things.
+
+   `fuse_rounds` works from a *fixed harvest*. The only thing it can do without new measurement is
+   withdraw regional trust where the mask contradicts a claim, and the tightened weights apply
+   every such region at once. So its inventory is countable by inspection: `available_actions` at
+   round 0, zero from round 1 — a **measured** zero, which is what C4 asks for, rather than the
+   defaulted zero that previously made C4 read as passed while nothing had been checked.
+
+   That does not make the adaptive catalogue redundant; it makes the scope explicit. A measured
+   zero here says *this loop ran out of moves*, not *no further measurement would help* — the
+   adaptive loop can still re-run models over the same region. Each round's log records
+   `action_scope` (`regional_trust` or `caller_supplied`) so the narrow claim cannot be read as the
+   wide one, and a caller that does hold the wider inventory passes `untried_actions` to override
+   the local count. The rule generalises: a criterion answered against a narrower inventory than
+   the question implies is not the same failure as one never answered, but it misleads the same
+   way unless the scope travels with the answer.
+
+   Fixed alongside it: the round-0 shortcut (no mask regions or speaker claims) marked itself
+   `converged` without evaluating any criterion, so a reader could take it for the four-criteria
+   verdict the same field carries everywhere else. It now also records `criteria_evaluated: false`
+   — the loop stopped because it *cannot iterate*, which is a different statement from agreeing.
+
+   **D-11 done: the axes are interleaved.** The old shape was one `fuse_rounds` call per axis, each
+   loop run to completion before the next began. A region doubtful on `speaker` therefore could not
+   reach `speech_presence` — the coupling was structurally unable to act however it was configured,
+   which is not a tuning problem. `fuse_axes` replaces it: every axis folds round 0, then each later
+   round folds every axis against the *previous* round's outputs. `fuse_rounds` is now a wrapper
+   around it with one axis and coupling off, not a second implementation — two round loops over the
+   same criteria could reach opposite verdicts on identical history, which already had to be undone
+   once for non-convergence detection.
+
+   **The stage boundaries, stated as they actually are.** L1 emits signals. L2 round 0 takes the
+   signals and emits *derivatives and axes*; round *N* takes round *N-1*'s outputs plus the signals
+   and emits axes plus targeted refinements; `final/` takes round *N*'s outputs plus the signals.
+   Two consequences the first implementation had wrong:
+
+   - **Derivatives are round outputs, not fixed inputs.** The mask and the speaker claims are
+     estimates. Computed once and held constant, every later round withdraws trust on the strength
+     of a judgement the loop had already improved on. `fuse_axes` takes a `derive` hook called
+     before each round after the first, and each round's log records `derivatives_refreshed` — a
+     stale judgement must not look like a current one.
+   - **Cross-axis input is estimation, not attention.** An earlier draft had another axis's doubt
+     only raise `triage_score`, leaving the measured quantities untouched. That is a weaker claim
+     than the design makes: D-7 has speaker and presence *jointly* estimated, so another axis's
+     value is a genuine input to this axis's fold. It enters as `axis::<other>`.
+
+   So each round takes **all three** things the loop holds — the signals, the derivatives, and the
+   previous round's axes — and re-estimates every axis from them. Convergence is no axis changing,
+   or the loop entering a periodic one: C1 and C3 cover "nothing moved" (values holding still *and*
+   no bucket going unmeasured → measured), and a repeating state is caught by the shared
+   non-convergence detector and reported as `oscillation` rather than as agreement.
+
+   **No assigned discount on the cross-axis input.** A draft in between multiplied it by a fixed
+   `0.4` — a `CouplingPolicy` "derivation gate" — to stop the extra input dominating the fold. That
+   contradicts the premise the whole module rests on: weights here are *measured* (perturbation
+   stability, physical support), with the explicit rule that a factor never measured must not act as
+   a discount. A hand-set constant is exactly such a factor, so it was removed rather than tuned. A
+   cross-axis input now carries full weight like any other signal absent from the weights mapping.
+
+   The concern the constant was standing in for is real but is a different kind of thing: an axis's
+   value is built from signals, so where two axes read the same signal its evidence appears twice.
+   That is a correlation to **measure** — the same sort of quantity perturbation stability already
+   measures — not a number to assume. Until it is measured, the derivatives carry the coupling that
+   can be justified structurally and the axis path carries the rest at face value. Assuming a
+   discount would have looked like a fix while leaving the bias in place, and convergence cannot
+   catch it either: a biased fixed point is still a fixed point.
+
+   Rounds that used cross-axis input or re-derived the shared structure set `overwrote_values`, so
+   C1 refuses to credit any drop the loop produced itself. An axis is never an input to itself — its
+   previous value is the thing being updated, not evidence about it — and an axis that measured
+   nothing contributes nowhere: `None` is the absence of a claim, not a low uncertainty.
+
+   **Four axes, not three.** `speech_presence`, `speaker`, `asr`, `background_mask`, with `task`
+   punted. `background_mask` had modules but was never an emitted axis; it has no vote harvest
+   because it is one derived judgement per region rather than a model ensemble, but it does report
+   how sure it is, and `1 - confidence` is that judgement's uncertainty in the units the other axes
+   already use. An `indeterminate` region is skipped rather than voted at maximum uncertainty —
+   otherwise an unresolved region outvotes the resolved ones. `fuse_axes` takes any number of axes;
+   a count baked into the loop is a fact that needs re-finding every time the set changes, and it
+   had already been baked in at three.
+
+   **Isolation stayed reachable, after briefly not being.** Removing `CouplingPolicy` also removed
+   the only way to run several axes uncoupled, since `derive=None` disables re-derivation but leaves
+   the axis-to-axis input on. `couple_axes=False` restores it. This matters more than a convenience
+   flag: the coupling is only evaluable against the *same* axis set with coupling as the single
+   difference — comparing against a one-axis run changes two things at once and says nothing.
+
+   **The successor gate, measured.** `measure_axis_overlap` computes the fraction of a contributing
+   axis's evidence the receiving axis already holds — the overlap of their `contributing_signals` —
+   and that drives the weight through the existing `effective_weight`. An axis telling us only what
+   we already have earns little; one with independent evidence earns full weight; an axis whose
+   evidence cannot be measured earns **no discount**, because a factor never measured must not act
+   as one. The measured value is recorded in `weight_basis` as `evidence_overlap`, so a reader can
+   see which factor discounted a cross-axis input and by how much. Signals contributed by a previous
+   round's coupling are excluded from the source's evidence — counting them would let the measure
+   feed on its own output and drift every round.
+
+   The uncertainty gate is deliberately left open on this path. The quantity a cross-axis input
+   carries *is* the other axis's uncertainty, so discounting it for being uncertain would suppress
+   precisely the informative case — the opposite of the reasoning that applies when a signal's own
+   unreliability should limit its influence.
+
+   **`influence.py` moved down** from `adaptive/` to the workflow level. It is pure and
+   dependency-free, and three consumers at the workflow level now need it: `speaker_identity` for
+   its source weights, `fuse` for the overlap gate, and the adaptive loop itself. A shared piece
+   imported *upward* out of a subsystem inverts the dependency and makes the subsystem look like a
+   library for the level above it — the same reasoning that moved non-convergence detection into
+   `rounds.py`. The inversion predated this work (`speaker_identity` already reached up for it);
+   adding a second consumer is what made it worth fixing rather than noting.
+
+   **D-10 done: a round may re-measure, not only re-weight.** Re-weighting can only redistribute
+   the evidence already gathered, so a region no re-weighting resolves is exactly the one that needs
+   a finer look. `fuse_axes` takes a `remeasure` hook, called once per axis per round with that
+   axis's regions still above `unsettled_above`; whatever inputs it returns join that axis's fold
+   from then on. The dependency stays pointed the right way — the loop never learns what a model is,
+   only that a region was offered and an answer came back.
+
+   Three properties it has to have, each for a reason the loop would otherwise get wrong:
+
+   - **A region is offered once.** The same finer look repeated is not new evidence, and C4 would
+     never reach zero if a spent action kept being counted as pending.
+   - **Pending re-measurements block C4** and make `action_scope` name a real inventory rather than
+     a single-item one. This is the case the earlier `regional_trust`-only scope was honest about
+     being narrow.
+   - **A re-measured round sets `overwrote_values`**, because a re-measurement *replaces* a value.
+     C1 must not read the resulting fall as independent evidence agreeing.
+
+   `unsettled_above` is named rather than inlined: it decides what gets looked at again, and a
+   silent default would make the loop's spending invisible.
 6. **Rename** `presence`/`identity`/`utterance` → `speech_presence`/`speaker`/`asr`. **Done.**
    Renamed outright with no aliases; `CACHE_SCHEMA_VERSION` bumped 5 → 6 so cached entries carrying
    the old axis names are discarded rather than mixed with new ones.
@@ -512,3 +688,55 @@ the axis name; they are now `--speaker-same-floor` / `--speaker-diff-floor`.
 `CACHE_SCHEMA_VERSION == 4` while the constant was already 5, so it had been failing unnoticed in a
 suite area that was not being exercised. A pin that can drift silently cannot enforce what it
 exists to enforce; it now reads 6 and records why.
+
+---
+
+## ASR word timestamps: source belongs at L0 (open)
+
+Found by the first real cold run: `final/transcript.json` had **zero words** on a clip all three
+backends transcribed correctly. Not an alignment failure — a collection one.
+
+| model | word timestamps from |
+|---|---|
+| CrisperWhisper | native (word-level Whisper) — 62 chunks present |
+| Qwen3-ASR | bundled `Qwen3-ForcedAligner-0.6B` companion — 62 chunks present |
+| canary-qwen 2.5B | none (text-only) — currently sent to MMS, which returned 0 words |
+
+`collect_word_streams` sourced words from the alignment outcomes only, so the two models carrying
+usable chunks contributed nothing and the one that needed alignment contributed zero. Net: no
+transcript, and an empty word row in `final/timeline.png`.
+
+**Decisions.**
+
+1. **The timestamp source is declared at L0, not sniffed downstream.** `speech_to_text` returns
+   word chunks carrying `native` / `bundled_aligner` / `none`, set by each backend. Today
+   `collect_word_streams` infers it by probing for `chunks`, which has a fusion helper
+   reverse-engineering a fact the backend knows for certain. With it declared, the alignment stage
+   runs only where the source is `none` (and stamps `mms_alignment` / `qwen_aligner` on what it
+   produces), and every consumer reads one shape instead of three ad-hoc probes. Same
+   L1-measures/L2-decides split, one level down: L0 reports what it produced and where the timings
+   came from; deciding which to trust when models disagree stays at L2.
+
+2. **canary-qwen aligns with the Qwen3 aligner, not MMS — which is already D-1, unimplemented.**
+   D-1 decided this at design time: both text-only paths use Qwen3-ForcedAligner-0.6B so that
+   word-boundary differences between two models reflect *the models, not two different aligners*,
+   with CrisperWhisper keeping its native timings because forcing an aligner over a model that
+   already reports boundaries discards the more direct measurement. The run confirms the shape D-1
+   describes and confirms the code never followed it: canary still goes to MMS and gets 0 words.
+   The MMS case bug is then incidental — canary should not be reaching MMS at all.
+
+   **The cost D-1 accepts, which must be carried in provenance:** canary and Qwen3-ASR share an
+   aligner, so their word times agree partly for reasons that have nothing to do with the audio.
+   D-1 wants that — a common aligner is what makes a boundary difference attributable to the
+   models — but the asr axis also *compares* timestamps across models, and there two of three
+   agreeing because one aligner produced both is not corroboration. Same shape as the cross-axis
+   double-counting the evidence-overlap gate measures. Agreement between models sharing a
+   `timestamp_source` must not be read as independent confirmation.
+
+**Also found by the same run:** the L2 rounds were inert. `analyze_audio.py` called
+`write_final_uncertainty` with no `max_rounds`, `mask_regions` or `speaker_claims`, so `range(1, 1)`
+was empty and every run folded once and stopped — no regional trust, no fourth axis, `coupled_from`
+empty in all 85 rows. Fixed by wiring all three, with `mask_regions_from_rows` converting the mask's
+`uncertainty` to the `confidence` regional trust reads (unconverted, `.get("confidence", 1.0)` would
+have defaulted an unsure mask to *fully confident* and withdrawn the maximum trust available).
+Not yet re-run, so the rounds iterating end-to-end remains unverified.
