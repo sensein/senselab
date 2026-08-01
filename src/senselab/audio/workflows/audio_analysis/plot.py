@@ -31,7 +31,7 @@ from typing import Any
 
 import numpy as np
 
-from senselab.audio.workflows.audio_analysis.layout import final_dir
+from senselab.audio.workflows.audio_analysis.layout import evidence_dir, final_dir
 from senselab.audio.workflows.audio_analysis.types import AxisResult
 from senselab.utils.data_structures.logging import logger
 
@@ -828,7 +828,12 @@ def build_aligned_timeline_plot(
 
     fig.tight_layout(rect=(0, 0.02, 1, 0.97))
     if not will_chunk:
-        out = save_path or (final_dir(run_dir) / "timeline.png")
+        # L1, not final/. This is the *evidence* timeline — what each signal measured, before
+        # anything was fused — and it was writing to final/timeline.png, the same path the
+        # adaptive timeline uses. The later write silently replaced it, so a run appeared to
+        # produce one timeline and the L1 view was unrecoverable. Two different questions
+        # ("what did the signals say" vs "what did we conclude") must not share a filename.
+        out = save_path or (evidence_dir(run_dir) / "timeline.png")
         out = Path(out)
         out.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(out, dpi=140)
@@ -851,7 +856,8 @@ def build_aligned_timeline_plot(
         t1 = min((i + 1) * chunk_duration_s, duration_s)
         for ax in axes:
             ax.set_xlim(t0, t1)
-        chunk_dir = final_dir(run_dir)
+        # Same reasoning as the single-figure path above: these are L1 evidence views.
+        chunk_dir = evidence_dir(run_dir)
         chunk_dir.mkdir(parents=True, exist_ok=True)
         out_path = chunk_dir / f"timeline_{i + 1:03d}.png"
         fig.savefig(out_path, dpi=140)
