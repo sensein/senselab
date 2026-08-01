@@ -28,6 +28,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import math
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -43,20 +44,36 @@ from senselab.audio.workflows.audio_analysis.harvesters import (
     resolve_asr_result,
     whisper_bucket_avg_logprob,
 )
+from senselab.audio.workflows.audio_analysis.layout import pass_dir
 
 # ── shared artifact/cache access ─────────────────────────────────────────
 
 
 def load_outcomes_dir(run_dir: Path, stream: str, task_dir: str) -> dict[str, dict[str, Any]]:
-    """Load ``<run_dir>/<stream>/<task_dir>/*.json`` keyed by provenance.model_id.
+    """Load ``pass_dir(run_dir, stream)/<task_dir>/*.json`` keyed by provenance.model_id.
 
     Each payload records its ``_file_stem`` — alignment files are keyed by the
     *aligner* model id in provenance but written under the parent ASR model's
     safe filename, so cross-task joins go through the stem.
+
+    The path comes from :func:`~senselab.audio.workflows.audio_analysis.layout.pass_dir` rather
+    than being rebuilt here. It was rebuilt as ``run_dir / stream / task_dir`` until the pass
+    outputs moved under ``L1/``, at which point this returned ``{}`` on every run — silently, so
+    the ASR fusion path received nothing and emitted an empty transcript with no error anywhere.
+
+    A missing directory now warns. An empty result is a legitimate answer only when the stage did
+    not run; when the directory itself is absent the caller is asking about a layout that does not
+    exist, and returning ``{}`` makes those two indistinguishable — which is precisely how the
+    drift above survived to the point of producing a transcript with no words.
     """
     out: dict[str, dict[str, Any]] = {}
-    d = run_dir / stream / task_dir
+    d = pass_dir(run_dir, stream) / task_dir
     if not d.is_dir():
+        print(
+            f"warn: no {task_dir!r} outcomes directory for stream {stream!r} at {d} — "
+            "nothing will be loaded for this task",
+            file=sys.stderr,
+        )
         return out
     for f in sorted(d.glob("*.json")):
         try:
@@ -74,7 +91,7 @@ def load_alignments_matched(
 ) -> dict[str, dict[str, Any]]:
     """Alignment payloads re-keyed by their parent **ASR** model id (stem join)."""
     by_stem: dict[str, dict[str, Any]] = {}
-    d = run_dir / stream / "alignment"
+    d = pass_dir(run_dir, stream) / "alignment"
     if d.is_dir():
         for f in sorted(d.glob("*.json")):
             try:
@@ -645,7 +662,7 @@ def _get_identity_repair(ctx: dict[str, Any], stream: str) -> dict[str, Any] | N
     from senselab.audio.workflows.audio_analysis.adaptive.identity_repair import repair_identity
 
     window_embeddings: dict[str, list[dict[str, Any]]] = {}
-    emb_dir = ctx["run_dir"] / stream / "embeddings"
+    emb_dir = pass_dir(ctx["run_dir"], stream) / "embeddings"
     if emb_dir.is_dir():
         for f in sorted(emb_dir.glob("*.json")):
             try:

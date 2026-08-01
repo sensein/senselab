@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from senselab.audio.workflows.audio_analysis.layout import final_dir
+from senselab.audio.workflows.audio_analysis.layout import evidence_dir, final_dir
 from senselab.audio.workflows.audio_analysis.plot import build_aligned_timeline_plot
 from senselab.audio.workflows.audio_analysis.types import AxisResult, UncertaintyRow
 
@@ -166,8 +166,11 @@ def test_build_aligned_timeline_plot_chunks_long_audio(tmp_path: Path) -> None:
     )
     assert first is not None
     assert first.name == "timeline_001.png"
-    # Chunked timelines are deliverables, so they land in final/ with the rest of them.
-    chunks = sorted(final_dir(tmp_path).glob("timeline_*.png"))
+    # L1, not final/. These draw what each *signal* measured, before anything was fused, and the
+    # single-figure form was writing to the same `final/timeline.png` the adaptive timeline uses —
+    # so the later write replaced it and the evidence view was unrecoverable. Evidence and
+    # conclusions must not share a directory, let alone a filename.
+    chunks = sorted(evidence_dir(tmp_path).glob("timeline_*.png"))
     assert [p.name for p in chunks] == ["timeline_001.png", "timeline_002.png", "timeline_003.png"]
 
 
