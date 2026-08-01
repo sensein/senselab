@@ -103,6 +103,18 @@ def _embedding_for_bucket(
     return idx, [float(x) for x in w.vector.tolist()]
 
 
+CHANGE_POINT_BUCKET_REDUCTION = "max"
+"""How a reporting bucket summarises the change-point boundaries inside it.
+
+A decision rather than arithmetic, so it is named here and overridable rather than inlined as an
+``argmax``. ``"max"`` is the default because a single sharp boundary surrounded by continuation *is*
+a change, and averaging it against its neighbours would dilute it away — the boundaries inside one
+bucket are near-duplicates of each other at a 50 ms hop, so a mean is closer to "how continuous was
+this stretch" than to "did a change happen here". ``"mean"`` is available for a caller who wants the
+latter question answered instead.
+"""
+
+
 def harvest_speaker_votes(
     *,
     pass_summary: dict[str, Any],
@@ -112,6 +124,7 @@ def harvest_speaker_votes(
     same_speaker_floor: float | None = 0.30,
     diff_speaker_floor: float | None = 0.70,
     cluster_cosine_threshold: float = 0.5,
+    change_point_bucket_reduction: str = CHANGE_POINT_BUCKET_REDUCTION,
 ) -> list[dict[str, Any]]:
     """Yield ``{"start", "end", "votes"}`` per bucket for the speaker axis.
 
@@ -119,6 +132,9 @@ def harvest_speaker_votes(
         pass_summary: Per-task summary for one pass (diarization, alignment, etc.).
         grid: Bucket grid.
         per_window_embeddings: ``{embedding_model_id → [WindowEmbedding, ...]}``.
+        change_point_bucket_reduction: How a bucket summarises the change-point boundaries it
+            contains — ``"max"`` (default) or ``"mean"``. Named and overridable because it is a
+            decision, not arithmetic: see :data:`CHANGE_POINT_BUCKET_REDUCTION`.
         frame_posteriors: ``{signal → FramePosterior}`` with per-speaker channels intact. Each
             contributes a J1 ``__overlap_count__`` sub-signal: a distribution over how many
             speakers are simultaneously active, whose entropy is the doubt. Permutation-invariant,
@@ -212,15 +228,20 @@ def harvest_speaker_votes(
     # bucket reads the boundaries that fall inside it rather than the series being resampled: a
     # change point is an instant, and averaging it into a bucket would blunt exactly the
     # localisation the fine hop was chosen to buy.
+    # No calibration band means the embeddings were *measured* not to separate speakers on this
+    # pass, so the change-point signal drops out rather than borrowing the library anchors — the
+    # same FR-007 rule the other embedding sub-signals follow, and for the same reason: on this
+    # axis a confident derived signal outvotes unanimous diarizer agreement.
     change_by_model: dict[str, dict[str, Any]] = {}
-    for emb_model in sorted(per_window_embeddings or {}):
-        series = speaker_change_series(
-            per_window_embeddings.get(emb_model) or [],
-            same_speaker_floor=same_speaker_floor if same_speaker_floor is not None else 0.30,
-            diff_speaker_floor=diff_speaker_floor if diff_speaker_floor is not None else 0.70,
-        )
-        if series is not None:
-            change_by_model[emb_model] = series
+    if same_speaker_floor is not None and diff_speaker_floor is not None:
+        for emb_model in sorted(per_window_embeddings or {}):
+            series = speaker_change_series(
+                per_window_embeddings.get(emb_model) or [],
+                same_speaker_floor=same_speaker_floor,
+                diff_speaker_floor=diff_speaker_floor,
+            )
+            if series is not None:
+                change_by_model[emb_model] = series
 
     # Per-bucket raw label per diar model. None when the model emitted no
     # segment overlapping the bucket; we promote those to "<silent>" below.
@@ -356,20 +377,24 @@ def harvest_speaker_votes(
                 "cluster_ids": dict(cluster_this_bucket),
             }
 
-        # J2 — a change point inside this bucket is evidence about the speaker axis. The bucket
-        # takes the *strongest* boundary it contains, not the mean: a single sharp change
-        # surrounded by continuation is a change, and averaging would dilute it into nothing.
+        # J2 — a change point inside this bucket is evidence about the speaker axis.
         for emb_model, series in change_by_model.items():
             inside = (series["times"] >= start) & (series["times"] < end)
             if not inside.any():
                 continue
-            best = int(np.argmax(series["p_change"][inside]))
+            probs = series["p_change"][inside]
+            best = (
+                int(np.argmax(probs))
+                if change_point_bucket_reduction == "max"
+                else int(np.argmin(np.abs(probs - float(np.mean(probs)))))
+            )
             votes[f"{emb_model}::change_point"] = {
                 "value": float(series["uncertainty"][inside][best]),
                 "p_change": float(series["p_change"][inside][best]),
                 "cosine_distance": float(series["distance"][inside][best]),
                 "boundary_s": float(series["times"][inside][best]),
                 "n_boundaries": int(inside.sum()),
+                "bucket_reduction": change_point_bucket_reduction,
                 # Neighbouring boundaries share almost all of their audio, so they are not
                 # independent evidence; recorded so a consumer cannot treat them as such.
                 "resolution_s": float(series["hop_s"]),

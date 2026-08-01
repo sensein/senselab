@@ -117,6 +117,11 @@ def test_overlap_probability_is_the_mass_above_one_speaker() -> None:
 # ── J2: speaker change points from windowed embeddings ──────────────────────
 
 
+BAND = {"same_speaker_floor": 0.30, "diff_speaker_floor": 0.70}
+"""The calibration band these tests assume. Named here rather than defaulted in the function so
+the anchors a test relies on are visible in the test."""
+
+
 def _windows(vectors: list[list[float]], width_s: float = 2.0, hop_s: float = 0.05) -> list:
     from senselab.audio.workflows.audio_analysis.embeddings import WindowEmbedding
 
@@ -135,7 +140,7 @@ def test_change_detection_compares_across_a_whole_window_not_adjacent_ones() -> 
     """
     from senselab.audio.workflows.audio_analysis.joint import speaker_change_series
 
-    result = speaker_change_series(_windows([[1.0, 0.0]] * 100, width_s=2.0, hop_s=0.05))
+    result = speaker_change_series(_windows([[1.0, 0.0]] * 100, width_s=2.0, hop_s=0.05), **BAND)
     assert result is not None
     assert result["lag_steps"] == 40, "2.0 s window / 0.05 s hop = 40 steps to reach a disjoint span"
 
@@ -146,7 +151,7 @@ def test_a_speaker_change_shows_up_at_the_boundary() -> None:
 
     a, b = [1.0, 0.0], [0.0, 1.0]
     entries = _windows([a] * 60 + [b] * 60)
-    result = speaker_change_series(entries)
+    result = speaker_change_series(entries, **BAND)
     assert result is not None
     peak_idx = int(np.argmax(result["p_change"]))
     peak_t = result["times"][peak_idx]
@@ -160,7 +165,7 @@ def test_one_speaker_throughout_yields_no_change_evidence() -> None:
     """A steady speaker must not produce change points, or every recording has them."""
     from senselab.audio.workflows.audio_analysis.joint import speaker_change_series
 
-    result = speaker_change_series(_windows([[1.0, 0.0]] * 120))
+    result = speaker_change_series(_windows([[1.0, 0.0]] * 120), **BAND)
     assert result is not None
     assert float(np.max(result["p_change"])) < 0.1
     assert float(np.mean(result["uncertainty"])) < 0.2
@@ -179,8 +184,8 @@ def test_change_uncertainty_peaks_where_the_evidence_is_ambiguous() -> None:
     # same-speaker floor, i.e. inside the phonetic noise floor where a small distance is no evidence
     # at all, so it reads as a confident continuation rather than as ambiguity.
     mid = [float(np.cos(np.pi / 3)), float(np.sin(np.pi / 3))]
-    ambiguous = speaker_change_series(_windows([[1.0, 0.0]] * 60 + [mid] * 60))
-    confident = speaker_change_series(_windows([[1.0, 0.0]] * 120))
+    ambiguous = speaker_change_series(_windows([[1.0, 0.0]] * 60 + [mid] * 60), **BAND)
+    confident = speaker_change_series(_windows([[1.0, 0.0]] * 120), **BAND)
     assert ambiguous is not None and confident is not None
     assert float(np.max(ambiguous["uncertainty"])) > float(np.max(confident["uncertainty"]))
 
@@ -189,5 +194,21 @@ def test_too_few_windows_to_span_a_lag_yields_no_claim() -> None:
     """With less than one window-length of hops there is no disjoint pair to compare."""
     from senselab.audio.workflows.audio_analysis.joint import speaker_change_series
 
-    assert speaker_change_series(_windows([[1.0, 0.0]] * 10)) is None
-    assert speaker_change_series([]) is None
+    assert speaker_change_series(_windows([[1.0, 0.0]] * 10), **BAND) is None
+    assert speaker_change_series([], **BAND) is None
+
+
+def test_change_detection_refuses_to_run_without_calibration() -> None:
+    """A pass with no usable calibration band must not get anchors for free.
+
+    The floors are required rather than defaulted precisely so this cannot happen by omission:
+    substituting the library defaults would let the signal vote confidently on a pass where the
+    embeddings were measured to be uncalibratable, which is the failure FR-007 exists to prevent.
+    """
+    import inspect
+
+    from senselab.audio.workflows.audio_analysis.joint import speaker_change_series
+
+    params = inspect.signature(speaker_change_series).parameters
+    for name in ("same_speaker_floor", "diff_speaker_floor"):
+        assert params[name].default is inspect.Parameter.empty, f"{name} must not carry a default anchor"

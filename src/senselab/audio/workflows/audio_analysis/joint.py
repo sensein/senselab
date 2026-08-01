@@ -125,18 +125,25 @@ def overlap_count_posterior(
 def speaker_change_series(
     entries: Sequence[Any],
     *,
-    same_speaker_floor: float = 0.30,
-    diff_speaker_floor: float = 0.70,
+    same_speaker_floor: float,
+    diff_speaker_floor: float,
 ) -> dict[str, Any] | None:
     """J2: where the voice changes, from windowed speaker embeddings.
 
-    Compares each window against the one a **whole window-width later**, not the adjacent one. At
-    the 50 ms hop D-2 chose, two adjacent 2 s windows share 97.5% of their audio, so their distance
-    is dominated by the 2.5% that is new — phonetic content, not speaker identity. Lagging by the
-    window width makes the two sides disjoint spans meeting at a boundary, which is the comparison
-    a change point actually is. The fine hop then buys *localisation* of that boundary, roughly
-    tenfold, which is exactly what D-2 said it buys and does not: it does not buy independent
-    samples, and treating neighbouring scores as independent evidence would overcount badly.
+    Compares each window against the one a **whole window-width later**, not the adjacent one.
+
+    The reason is contrast, not a difference in what is being measured. Two adjacent 2 s windows at
+    a 50 ms hop share 97.5% of their audio, so swapping 50 ms of content moves the embedding only
+    slightly — the distance is small everywhere, and a speaker change is spread across the window
+    width as one voice is gradually exchanged for the other rather than appearing as a step. The
+    change is still *there*; it is just low-amplitude and smeared, so a boundary is hard to place
+    and easy to lose in noise. Lagging by the window width makes the two sides disjoint spans
+    meeting at a boundary, which is the comparison a change point actually is and which puts the
+    full between-speaker difference into a single score.
+
+    The fine hop still earns its keep: it *localises* that boundary, roughly tenfold. What it does
+    not buy is independent samples, so neighbouring scores are near-duplicates and must not be
+    counted as separate evidence — the hop is reported alongside so a consumer can see that.
 
     The distance is read through the calibration band the speaker axis already uses rather than a
     new anchor — a raw cosine of 0.2 is not evidence of anything, because same-speaker embeddings
@@ -145,7 +152,10 @@ def speaker_change_series(
     Args:
         entries: ``WindowEmbedding`` list for one pass, ascending in time.
         same_speaker_floor: Distance at or below which the two spans are confidently one speaker.
-        diff_speaker_floor: Distance at or above which they are confidently different.
+        diff_speaker_floor: Distance at or above which they are confidently different. Both are
+            **required**: a pass whose embeddings were measured not to separate speakers has no
+            usable band, and defaulting to library anchors there would let this signal vote
+            confidently on exactly the evidence that was found wanting (FR-007).
 
     Returns:
         ``{"times", "distance", "p_change", "uncertainty", "lag_steps", "window_s", "hop_s"}``, all
