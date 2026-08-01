@@ -203,3 +203,74 @@ def test_null_safe_when_model_construction_fails(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(fp_mod, "PyannoteAudioModel", _boom)
     audio = Audio(waveform=torch.zeros(1, 16000, dtype=torch.float32), sampling_rate=16000)
     assert fp_mod.extract_speech_frame_posteriors([audio]) == [None]
+
+
+# ── chunk stitching must not average two different speakers together ─────────
+
+
+def test_stitching_averages_mismatched_speakers_without_permutation_alignment() -> None:
+    """The failure mode, pinned so the fix below has something to be a fix *of*.
+
+    segmentation-3.0's speaker columns are arbitrary per inference, so the same person can be
+    column 0 in one chunk and column 1 in the next. Averaging by column index then splits one
+    speaker across two half-strength channels through the whole overlap region.
+    """
+    import numpy as np
+
+    from senselab.audio.tasks.voice_activity_detection.frame_posteriors import stitch_frames
+
+    hop = 0.1
+    a = np.zeros((10, 2))
+    a[:, 0] = 1.0  # speaker is column 0 here
+    b = np.zeros((10, 2))
+    b[:, 1] = 1.0  # ...and column 1 here — same person, relabelled
+    naive = stitch_frames([a, b], [0.0, 0.5], hop)
+    overlap = naive[5:10]
+    assert overlap == pytest.approx(np.full((5, 2), 0.5)), "one speaker smeared across two channels"
+
+
+def test_permutation_alignment_keeps_one_speaker_in_one_channel() -> None:
+    """With alignment, the relabelled chunk is matched to the timeline before it is averaged in."""
+    import numpy as np
+
+    from senselab.audio.tasks.voice_activity_detection.frame_posteriors import stitch_frames
+
+    a = np.zeros((10, 2))
+    a[:, 0] = 1.0
+    b = np.zeros((10, 2))
+    b[:, 1] = 1.0
+    aligned = stitch_frames([a, b], [0.0, 0.5], 0.1, align_permutations=True)
+    assert aligned[:, 0] == pytest.approx(np.ones(15)), "the speaker stays at full strength"
+    assert aligned[:, 1] == pytest.approx(np.zeros(15)), "and the empty channel stays empty"
+
+
+def test_permutation_alignment_leaves_an_already_consistent_chunk_alone() -> None:
+    """No flip to undo means no change — alignment must not invent one."""
+    import numpy as np
+
+    from senselab.audio.tasks.voice_activity_detection.frame_posteriors import stitch_frames
+
+    a = np.zeros((10, 2))
+    a[:, 0] = 1.0
+    b = np.zeros((10, 2))
+    b[:, 0] = 1.0
+    aligned = stitch_frames([a, b], [0.0, 0.5], 0.1, align_permutations=True)
+    assert aligned[:, 0] == pytest.approx(np.ones(15))
+
+
+def test_fixed_semantic_channels_are_never_permuted() -> None:
+    """Brouhaha's columns are [vad, snr, c50] — permuting them would swap unrelated quantities.
+
+    The alignment is opt-in for exactly this reason: it is only sound where the channel ordering
+    carries no meaning.
+    """
+    import numpy as np
+
+    from senselab.audio.tasks.voice_activity_detection.frame_posteriors import stitch_frames
+
+    # A chunk where SNR happens to look more like the previous chunk's VAD than its own SNR does.
+    a = np.tile(np.array([[1.0, 0.0, 0.0]]), (10, 1))
+    b = np.tile(np.array([[0.0, 1.0, 0.0]]), (10, 1))
+    stitched = stitch_frames([a, b], [0.0, 0.5], 0.1)
+    assert stitched[5:10, 0] == pytest.approx(np.full(5, 0.5))
+    assert stitched[5:10, 1] == pytest.approx(np.full(5, 0.5))
