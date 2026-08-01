@@ -339,10 +339,22 @@ the stopping reason, is summarised in `decisions.json`. Per-round outputs remain
 
 Dependency-ordered; each step verifiable before the next.
 
-1. **L1 raw emission.** Scene quality (register items 17–24) — in progress; then frame signals with
-   channels intact (D-5, items 16, 13–14); then scene posteriors (6–7); then acoustic (8–10, D-3).
-2. **Harmonization** H1–H5, with H2 carrying assignment uncertainty (D-6).
-3. **Joint estimation** J1–J9, with J4 as a joint space (D-7).
+1. **L1 raw emission. Done except H1.** 23 of 24 register items closed. The speech-presence
+   harvester is dissolved into `harvest_speech_presence_evidence` (measurements) +
+   `speech_presence_link` (beliefs under a named policy). Register item 24 — quality still copies
+   its nearest analysis window's value rather than resampling — **is H1**, and is the one thing
+   left in this step.
+2. **Harmonization** H1–H5. **H2 done** (`harmonize.py`, dual matcher, assignment uncertainty as
+   disagreement, D-6). **H4 done** (checked-in AudioSet category map). **H5 done** (absolute `lufs`
+   / `excess_db` / `hnr_db`, D-3). **H1 open** — `resolution.py` exists and is unwired, so every
+   signal still reports on the reporting grid rather than a common lattice built from its declared
+   native resolution. **H3 open** — transcripts are aligned to audio, not to each other.
+3. **Joint estimation** J1–J9, with J4 as a joint space (D-7). **J3 done**
+   (`speaker_identity.speaker_count_posterior`). **J5–J6 done** (`background_mask.py`,
+   `noise_floor.py`, `sources.py`). **J8 done** (`reliability.py`, cross-pass stability as measured
+   weight). **J9 done** (`invariance.py`, `--invariance-probe`). **J1, J2, J4, J7 open** — overlap
+   count from the now-intact activation channels, embedding change points, per-speaker presence as
+   the `S_k` ↔ channel joint space, and phoneme-vs-transcript agreement.
 4. **Link functions** and TTS-fitted calibration (D-8, D-9).
 5. **Rounds and convergence** (D-10 – D-12, both guards).
 6. **Rename** `presence`/`identity`/`utterance` → `speech_presence`/`speaker`/`asr`. **Done.**
