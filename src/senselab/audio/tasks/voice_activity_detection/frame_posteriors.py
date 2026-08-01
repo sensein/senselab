@@ -219,10 +219,36 @@ _CHUNK_S = 10.0
 _CHUNK_STEP_S = 8.0  # 2 s overlap → smooth stitching across chunk seams
 
 
+def _match_columns(reference: np.ndarray, candidate: np.ndarray) -> tuple[int, ...]:
+    """Column permutation of ``candidate`` that best matches ``reference``, by squared error.
+
+    Hungarian assignment on the pairwise MSE between columns over the frames the two share. Falls
+    back to the identity when scipy is unavailable or the shapes disagree — a wrong permutation is
+    worse than none, so an uncertain match declines rather than guesses.
+    """
+    identity = tuple(range(candidate.shape[1]))
+    if reference.shape != candidate.shape or reference.size == 0:
+        return identity
+    cost = np.empty((candidate.shape[1], reference.shape[1]), dtype=np.float64)
+    for j in range(candidate.shape[1]):
+        cost[j] = np.mean((reference - candidate[:, j : j + 1]) ** 2, axis=0)
+    try:
+        from scipy.optimize import linear_sum_assignment
+    except ImportError:  # pragma: no cover - scipy is a hard dependency in practice
+        return identity
+    rows, cols = linear_sum_assignment(cost)
+    permutation = list(identity)
+    for src, dst in zip(rows.tolist(), cols.tolist()):
+        permutation[dst] = src
+    return tuple(permutation)
+
+
 def stitch_frames(
     chunk_arrays: list[np.ndarray],
     chunk_starts_s: list[float],
     hop_s: float,
+    *,
+    align_permutations: bool = False,
 ) -> np.ndarray:
     """Overlap-average per-chunk ``(frames, C)`` arrays into one continuous timeline.
 
@@ -231,6 +257,24 @@ def stitch_frames(
     uncovered frames are trimmed. Returns a ``(num_frames, C)`` array. Pure /
     model-free so it is shared by the in-process extractor and the Brouhaha
     subprocess path.
+
+    Args:
+        chunk_arrays: Per-chunk ``(frames, C)`` (or ``(frames,)``) activations.
+        chunk_starts_s: Absolute start time of each chunk, seconds.
+        hop_s: Frame hop, seconds.
+        align_permutations: Match each chunk's columns to the already-stitched timeline before
+            averaging. **Required for speaker segmentation, wrong for anything else.**
+
+            A speaker-segmentation model assigns its output channels arbitrarily *per inference*,
+            so the same person can be column 0 in one chunk and column 1 in the next. Averaging by
+            column index then splits one speaker into two half-strength channels across the whole
+            overlap region — which reads downstream as two speakers each half-present, i.e. as
+            overlapped speech that never happened. pyannote's own pipeline solves this permutation
+            before aggregating; this is the same step.
+
+            It must stay opt-in because it is only sound where the ordering carries no meaning.
+            Brouhaha's columns are ``[vad, snr, c50]``: permuting them would swap unrelated
+            physical quantities.
     """
     if not chunk_arrays or hop_s <= 0:
         return np.zeros((0, 1))
@@ -243,6 +287,15 @@ def stitch_frames(
     count = np.zeros(n_global, dtype=np.float64)
     for arr, t0 in zip(norm, chunk_starts_s):
         base = int(round(t0 / hop_s))
+        if align_permutations and arr.shape[1] > 1 and count.any():
+            # Match against what the overlap already holds, not against the previous chunk: the
+            # timeline is the thing every later chunk must agree with, and comparing pairwise would
+            # let a permutation drift chunk by chunk.
+            span = [g for g in range(base, min(n_global, base + arr.shape[0])) if count[g] > 0]
+            if span:
+                local = [g - base for g in span]
+                reference = accum[span] / np.maximum(count[span, None], 1.0)
+                arr = arr[:, list(_match_columns(reference, arr[local]))]
         for i in range(arr.shape[0]):
             g = base + i
             if 0 <= g < n_global:
@@ -296,7 +349,9 @@ def chunked_frame_inference(
             break
         start += step_samples
 
-    data = stitch_frames(chunk_arrays, chunk_starts_s, hop)
+    # Speaker channels are permutation-arbitrary per inference, so they must be matched to the
+    # timeline before averaging (see ``stitch_frames``). Single-column outputs are unaffected.
+    data = stitch_frames(chunk_arrays, chunk_starts_s, hop, align_permutations=True)
     return data, hop, win
 
 

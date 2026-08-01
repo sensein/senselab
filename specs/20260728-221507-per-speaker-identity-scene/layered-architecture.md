@@ -133,6 +133,24 @@ denote the same person. A guess propagated as fact makes two models that were ne
 compared read as disagreeing — which is exactly how speaker uncertainty stayed high in regions
 where per-speaker presence was unambiguous, the observation that started this work.
 
+**D-5 addendum — keeping the channels was not enough; the stitch was averaging strangers.**
+`segmentation-3.0` is defined on 10 s chunks, so L1 slides a bounded window and reconstructs one
+timeline (stitching sliding windows back together is explicitly not post-processing). But the
+overlap-average matched chunks **by column index**, and a speaker-segmentation model assigns its
+channels arbitrarily *per inference* — the same permutation-arbitrariness that makes J4 a joint
+space and J1 answerable. A speaker who is column 0 in one chunk and column 1 in the next was
+therefore split into two half-strength channels across the whole 2 s overlap, which reads
+downstream as two speakers each half-present: overlapped speech that never occurred, on 25% of
+every recording longer than one chunk. pyannote's own pipeline resolves this permutation before
+aggregating; `stitch_frames` now does the same, matching each chunk to the already-stitched
+timeline (not to its predecessor, which would let a permutation drift chunk by chunk). It is
+opt-in, because Brouhaha's `[vad, snr, c50]` columns carry fixed meaning and permuting them would
+swap unrelated physical quantities.
+
+*Evidence:* deterministic and model-free — a two-chunk stitch with a known relabelling produces two
+0.5 channels without alignment and one full channel with it. That shows the code had no defence; it
+does not measure how often a flip occurs on real audio, which needs a GPU run not yet done.
+
 **D-6. Match speaker labels by both methods, and treat their disagreement as the uncertainty.**
 Temporal-overlap assignment (Hungarian on co-occurrence) and embedding-centroid similarity per
 label are computed independently; where they agree the assignment is confident, and where they
