@@ -6,6 +6,14 @@ from typing import Any
 
 from senselab.audio.workflows.audio_analysis.adaptive.belief import AXES, bucket_key
 from senselab.audio.workflows.audio_analysis.adaptive.types import PlannedIntervention
+from senselab.audio.workflows.audio_analysis.rounds import detect_non_convergence
+
+__all__ = [
+    "apply_convergence_marks",
+    "build_convergence_report",
+    "round_summary",
+    "unresolved_quantities",
+]
 
 
 def apply_convergence_marks(
@@ -97,6 +105,17 @@ def round_summary(
     }
 
 
+_TERMINATION_BY_RUN_STATE = {
+    "converged": "converged",
+    "max_rounds": "budget",
+    "budget_exhausted": "budget",
+    "no_runnable_interventions": "budget",
+}
+"""Run states whose termination meaning is settled. Anything absent passes through unchanged
+rather than being folded into ``budget`` — mapping an unrecognised state onto a known outcome is
+how a state nobody has thought about starts reading as one that was."""
+
+
 def build_convergence_report(
     *,
     state: Any,  # noqa: ANN401
@@ -107,8 +126,35 @@ def build_convergence_report(
     iterations: list[dict[str, Any]],
     run_state: str,
     provenance: dict[str, Any],
+    round_states: list[dict[str, Any]] | None = None,
+    per_quantity: dict[str, str] | None = None,
+    window: int = 3,
 ) -> dict[str, Any]:
-    """``final/convergence.json`` per data-model.md ConvergenceReport."""
+    """``final/convergence.json`` per data-model.md ConvergenceReport.
+
+    Args:
+        state: Belief state to summarise.
+        passes: Stream names.
+        policy: Active policy.
+        rounds: Per-round summaries for rounds 2..K.
+        ledger: Budget ledger.
+        iterations: Intervention entries across the run.
+        run_state: Why the loop stopped, in the loop's own vocabulary.
+        provenance: Fields merged into the report verbatim.
+        round_states: Per-round state snapshots, oldest first, for non-convergence detection
+            (FR-011e). Omit when the loop did not track them.
+        per_quantity: ``{quantity → resolution kind}``. ``None`` means the inventory was never
+            taken, which is reported as such: an empty list would read as "we checked and
+            everything settled".
+        window: Rounds inspected for oscillation or stagnation. Three, not the fusion rounds'
+            four: this loop's rounds are expensive, so a run rarely gets deep enough for a
+            longer window to see anything a shorter one missed.
+
+    Returns:
+        The report dict. ``termination_reason`` overrides ``run_state`` when the detector fires —
+        a loop that stopped because nothing more would fire has still not settled if its state was
+        trading places, and reporting that as agreement is the failure FR-011e exists to prevent.
+    """
     per_axis: dict[str, Any] = {}
     irreducible_regions: list[dict[str, Any]] = []
     for stream in passes:
@@ -147,8 +193,22 @@ def build_convergence_report(
         for e in iterations
         if e["status"] in ("deferred_budget", "blocked_guard")
     ]
+    repeat_reason, repeating = detect_non_convergence(round_states or [], window=window)
+    # A settled loop *holds still* — that is what settling looks like — so a frozen state cannot
+    # be evidence against a convergence the loop reported on its own grounds (no region above
+    # θ_low, nothing rejected). Trading places is different: those values are unsettled whatever
+    # the loop concluded, which is the case FR-011e exists for.
+    if repeat_reason == "no_improvement" and run_state == "converged":
+        repeat_reason, repeating = None, []
+    termination_reason = repeat_reason or _TERMINATION_BY_RUN_STATE.get(run_state, run_state)
     return {
         "run_state": run_state,
+        "converged": termination_reason == "converged",
+        "rounds_run": len(rounds) + 1,
+        "termination_reason": termination_reason,
+        "oscillation_states": repeating,
+        "per_quantity": per_quantity,
+        "unresolved_quantities": None if per_quantity is None else unresolved_quantities(per_quantity),
         "rounds": rounds,
         "per_axis": per_axis,
         "irreducible_regions": irreducible_regions,
@@ -158,52 +218,12 @@ def build_convergence_report(
     }
 
 
-# ── non-convergence detection (T082, FR-011e / FR-011h) ────────────────
-
-
-def detect_non_convergence(
-    round_states: list[dict[str, Any]],
-    *,
-    window: int = 3,
-) -> tuple[str | None, list[dict[str, Any]]]:
-    """Detect oscillation or stagnation across recent rounds.
-
-    Mutual influence makes both failures reachable: two interpretations that each imply the
-    other is wrong will trade places indefinitely, and a loop can also grind without
-    improving. Emitting the last round's state in either case would present an unsettled
-    value as settled.
-
-    Oscillation and stagnation are reported separately because the remedies differ — a
-    flip-flop means two signals disagree irreconcilably, while standing still means no
-    signal has anything left to contribute.
-
-    Args:
-        round_states: Per-round state snapshots, oldest first.
-        window: How many recent rounds to inspect. Must be at least 2, since alternation
-            cannot be observed in a single round.
-
-    Returns:
-        ``(reason, states)`` where reason is ``"oscillation"``, ``"no_improvement"``, or
-        ``None``. ``states`` holds the distinct repeating states when oscillating.
-
-    Raises:
-        ValueError: If ``window`` is below 2.
-    """
-    if window < 2:
-        raise ValueError(f"oscillation window must be at least 2 to observe alternation; got {window}")
-    recent = round_states[-window:]
-    if len(recent) < 2:
-        return None, []
-
-    keys = [tuple(sorted(state.items(), key=lambda kv: str(kv[0]))) for state in recent]
-    distinct = list(dict.fromkeys(keys))
-    if len(distinct) == 1:
-        # Same state every round: nothing is moving.
-        return "no_improvement", []
-    if len(distinct) < len(keys):
-        # At least one state recurred after being left — a cycle, of any period.
-        return "oscillation", [dict(k) for k in distinct]
-    return None, []
+# ── non-convergence reporting (T082, FR-011e / FR-011h) ────────────────
+#
+# The detector itself lives in ``rounds.detect_non_convergence``: both this loop and the L2
+# fusion rounds ask the same question of a round history, and two implementations of it could
+# disagree about identical states. The dependency runs adaptive → workflow, so the shared piece
+# belongs at the lower level.
 
 
 def unresolved_quantities(per_quantity: dict[str, str]) -> list[str]:

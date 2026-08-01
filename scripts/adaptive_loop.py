@@ -75,7 +75,12 @@ def main(argv: list[str] | None = None) -> int:
         aggregator=args.aggregator,
     )
     out_dir = Path(result["out_dir"])
-    print(f"run_state: {result['run_state']}  rounds: {result['rounds']}")
+    # Both, when they disagree: the loop's own reason for stopping is not the same claim as
+    # whether the answer settled, and an oscillating run stops with "nothing left to fire".
+    verdict = result["termination_reason"]
+    if verdict != result["run_state"]:
+        verdict = f"{verdict} (loop stopped: {result['run_state']})"
+    print(f"termination: {verdict}  rounds: {result['rounds']}")
     print("parity:", json.dumps(result["parity_check"]))
     print(
         f"interventions fired: {result['n_interventions_fired']}  "

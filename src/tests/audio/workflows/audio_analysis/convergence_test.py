@@ -10,7 +10,11 @@ from __future__ import annotations
 
 import pytest
 
-from senselab.audio.workflows.audio_analysis.rounds import RoundRecord, assess_convergence
+from senselab.audio.workflows.audio_analysis.rounds import (
+    RoundRecord,
+    assess_convergence,
+    detect_non_convergence,
+)
 
 
 def _r(idx: int, **kw: object) -> RoundRecord:
@@ -84,8 +88,89 @@ def test_an_oscillation_is_caught_rather_than_burning_the_budget() -> None:
     history = [_r(0, signature="a"), _r(1, signature="b", epistemic=0.7), _r(2, signature="a", epistemic=0.5)]
     result = assess_convergence(history)
     assert result["stop"] is True
-    assert result["stop_reason"] == "cycle"
+    assert result["stop_reason"] == "oscillation"
     assert result["converged"] is False, "a cycle is a reason to stop, not evidence of agreement"
+
+
+def test_a_frozen_state_that_still_blocks_a_criterion_is_stagnation_not_oscillation() -> None:
+    """Flip-flopping and standing still are different failures, so they get different names.
+
+    A loop trading two interpretations needs the disagreement resolved; a loop repeating one state
+    while a criterion still blocks has nothing left to contribute and needs a new action. Reporting
+    both as "cycle" told an operator to look for a conflict that was not there.
+    """
+    frozen = [_r(0, signature="x", untried_actions=None), _r(1, signature="x", untried_actions=None)]
+    result = assess_convergence(frozen)
+    assert result["converged"] is False, "C4 was never measured, so it cannot pass"
+    assert result["stop_reason"] == "no_improvement"
+
+
+def test_convergence_uses_the_shared_detector_rather_than_its_own_cycle_check() -> None:
+    """One implementation, so the two loops cannot disagree about the same history.
+
+    ``adaptive/convergence.py`` already detected oscillation and stagnation; a second, cruder check
+    living here meant the fusion rounds and the adaptive loop could reach opposite verdicts on
+    identical round states.
+    """
+    from senselab.audio.workflows.audio_analysis.adaptive import convergence as adaptive_convergence
+
+    assert adaptive_convergence.detect_non_convergence is detect_non_convergence
+
+
+# ── the shared detector itself (moved down from adaptive/, FR-011e) ──────────
+
+
+def test_alternating_states_detected_as_oscillation() -> None:
+    """Two interpretations trading places is the signature."""
+    reason, states = detect_non_convergence([{"count": 1}, {"count": 4}, {"count": 1}], window=3)
+    assert reason == "oscillation"
+    assert len(states) == 2
+
+
+def test_steady_progress_is_not_oscillation() -> None:
+    """Monotone improvement is the healthy case."""
+    reason, _ = detect_non_convergence([{"u": 0.9}, {"u": 0.6}, {"u": 0.3}], window=3)
+    assert reason is None
+
+
+def test_repeating_the_same_state_is_stagnation_not_oscillation() -> None:
+    """Standing still and flip-flopping are different failures with different remedies."""
+    reason, _ = detect_non_convergence([{"u": 0.5}, {"u": 0.5}, {"u": 0.5}], window=3)
+    assert reason == "no_improvement"
+
+
+def test_window_shorter_than_two_cannot_detect_alternation() -> None:
+    """A one-round window cannot observe a flip-flop."""
+    with pytest.raises(ValueError, match="window"):
+        detect_non_convergence([{"a": 1}], window=1)
+
+
+def test_too_few_rounds_yields_no_verdict() -> None:
+    """One round is not evidence of a pattern."""
+    reason, _ = detect_non_convergence([{"a": 1}], window=3)
+    assert reason is None
+
+
+def test_three_way_cycle_is_still_oscillation() -> None:
+    """Alternation is not limited to period two."""
+    reason, _ = detect_non_convergence([{"c": 1}, {"c": 2}, {"c": 3}, {"c": 1}, {"c": 2}, {"c": 3}], window=6)
+    assert reason == "oscillation"
+
+
+def test_oscillation_states_are_the_repeating_ones() -> None:
+    """The report names which interpretations are trading places."""
+    _reason, states = detect_non_convergence([{"count": 1}, {"count": 4}, {"count": 1}, {"count": 4}], window=4)
+    assert {frozenset(s.items()) for s in states} == {frozenset({"count": 1}.items()), frozenset({"count": 4}.items())}
+
+
+def test_a_repeat_that_fell_out_of_the_window_is_no_longer_cycling() -> None:
+    """The window bounds recency, which is the point of having one.
+
+    A state that recurred early and has not since is not *currently* oscillating, and stopping the
+    loop for it would end a run that had started making progress.
+    """
+    history = [{"c": 1}, {"c": 2}, {"c": 1}, {"c": 3}, {"c": 4}, {"c": 5}]
+    assert detect_non_convergence(history, window=3)[0] is None
 
 
 def test_the_round_cap_stops_the_loop_and_says_so() -> None:
