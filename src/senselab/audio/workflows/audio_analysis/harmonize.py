@@ -32,6 +32,9 @@ import numpy as np
 from senselab.audio.workflows.audio_analysis.statistics import confidence, entropy_uncertainty
 
 __all__ = [
+    "TranscriptHarmonization",
+    "TranscriptSlot",
+    "harmonize_transcripts",
     "SpeakerHarmonization",
     "centroid_assignment",
     "harmonize_from_diarization",
@@ -357,3 +360,182 @@ def harmonize_from_diarization(
             centroids = built
 
     return harmonize_speaker_labels(segments_by_model, centroids=centroids, min_similarity=min_similarity)
+
+
+# ── H3: a common word space across ASR models ────────────────────────────────
+
+
+def _normalise_token(text: str) -> str:
+    """Casefold and strip punctuation, for deciding *agreement* only.
+
+    Models differ in casing and punctuation convention, and those differences are not
+    transcription disputes. Normalisation therefore decides whether two readings agree; it never
+    replaces what a model actually said, which stays on the slot.
+    """
+    return "".join(ch for ch in str(text).casefold() if ch.isalnum() or ch == "'")
+
+
+@dataclass
+class TranscriptSlot:
+    """One position in the harmonised word space.
+
+    Attributes:
+        start_s: Earliest start among the models that filled this slot.
+        end_s: Latest end among them.
+        words: ``{model → surface form}``; a model absent from the slot maps to ``None``.
+        consensus: The majority reading, or ``None`` when no reading holds a strict majority —
+            a two-way tie has no winner, and publishing either would manufacture agreement.
+        disagreement: ``1 − (largest agreeing share)`` over the models that filled the slot.
+    """
+
+    start_s: float
+    end_s: float
+    words: dict[str, Optional[str]]
+    consensus: Optional[str]
+    disagreement: float
+
+
+@dataclass
+class TranscriptHarmonization:
+    """The harmonised lattice plus the two rates H3 exists to expose.
+
+    Attributes:
+        slots: Word positions in time order.
+        gap_rate: ``{model → fraction of slots this model left empty}``.
+        insertion_rate: ``{model → fraction of this model's words no other model produced}``.
+        reference: The model whose token sequence anchored the alignment.
+    """
+
+    slots: list[TranscriptSlot]
+    gap_rate: dict[str, float]
+    insertion_rate: dict[str, float]
+    reference: Optional[str]
+
+
+def _align_pair(a: Sequence[str], b: Sequence[str]) -> list[tuple[Optional[int], Optional[int]]]:
+    """Levenshtein alignment path between two token sequences.
+
+    Returns ``(i, j)`` pairs where either side may be ``None`` for a gap. Needed rather than the
+    plain distance because H3's whole purpose is *which* positions correspond: a distance says a
+    model missed a word, an alignment says which one and leaves the rest lined up.
+    """
+    n, m = len(a), len(b)
+    cost = np.zeros((n + 1, m + 1), dtype=np.int64)
+    cost[:, 0] = np.arange(n + 1)
+    cost[0, :] = np.arange(m + 1)
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            sub = cost[i - 1, j - 1] + (0 if a[i - 1] == b[j - 1] else 1)
+            cost[i, j] = min(sub, cost[i - 1, j] + 1, cost[i, j - 1] + 1)
+
+    path: list[tuple[Optional[int], Optional[int]]] = []
+    i, j = n, m
+    while i > 0 or j > 0:
+        if i > 0 and j > 0 and cost[i, j] == cost[i - 1, j - 1] + (0 if a[i - 1] == b[j - 1] else 1):
+            path.append((i - 1, j - 1))
+            i, j = i - 1, j - 1
+        elif i > 0 and cost[i, j] == cost[i - 1, j] + 1:
+            path.append((i - 1, None))
+            i -= 1
+        else:
+            path.append((None, j - 1))
+            j -= 1
+    path.reverse()
+    return path
+
+
+def harmonize_transcripts(
+    by_model: Mapping[str, Sequence[tuple[float, float, str]]],
+) -> TranscriptHarmonization:
+    """H3: align several ASR transcripts to each other, not only to audio.
+
+    Each transcript arrives already aligned to the audio, independently. That is not enough to
+    compare them: a model that inserts or drops one word shifts every timestamp after it, so a
+    time-based comparison turns a single miss into a whole tail of apparent substitutions. Aligning
+    the token sequences to each other keeps the rest lined up and makes "these models produced
+    different words for the same position" expressible — which a per-window WER cannot say.
+
+    Alignment is **star-shaped**: every model is aligned to one reference, and the reference's
+    positions plus each model's insertions form the slots. The reference is the model whose token
+    count is the median, so an outlier transcript (a hallucinated run, a truncated decode) does not
+    become the frame everything else is measured against. This is an approximation — a full
+    multiple-sequence alignment would not privilege any model — and the reference is reported so a
+    consumer can see which one was privileged.
+
+    Args:
+        by_model: ``{model → [(start_s, end_s, text), ...]}`` in time order.
+
+    Returns:
+        A :class:`TranscriptHarmonization`. Gap and insertion rates are per model; slot
+        disagreement is ``1 − largest agreeing share`` among the models that filled it.
+    """
+    models = sorted(m for m, w in (by_model or {}).items() if w)
+    if not models:
+        return TranscriptHarmonization(slots=[], gap_rate={}, insertion_rate={}, reference=None)
+
+    words = {m: [(float(s), float(e), str(t)) for s, e, t in by_model[m]] for m in models}
+    tokens = {m: [_normalise_token(t) for _, _, t in words[m]] for m in models}
+
+    # Median token count, so neither the longest nor the shortest transcript anchors the space.
+    ordered = sorted(models, key=lambda m: len(tokens[m]))
+    reference = ordered[len(ordered) // 2]
+
+    # slot key -> {model: word index}. Reference positions are integers; a run of insertions
+    # between reference positions r-1 and r is keyed (r, k) so it sorts into place.
+    slot_members: dict[tuple[float, float], dict[str, int]] = {}
+    for ref_pos in range(len(tokens[reference])):
+        slot_members[(float(ref_pos), 0.0)] = {reference: ref_pos}
+
+    for model in models:
+        if model == reference:
+            continue
+        pending = 0
+        last_ref = -1
+        for r_idx, m_idx in _align_pair(tokens[reference], tokens[model]):
+            if r_idx is not None and m_idx is not None:
+                slot_members.setdefault((float(r_idx), 0.0), {})[model] = m_idx
+                last_ref, pending = r_idx, 0
+            elif r_idx is not None:
+                last_ref, pending = r_idx, 0  # reference-only position: a gap for this model
+            elif m_idx is not None:
+                # Model-only position: an insertion, keyed between the surrounding reference
+                # positions so a run of them sorts into place rather than collapsing onto one slot.
+                pending += 1
+                slot_members.setdefault((float(last_ref) + 0.5, float(pending)), {})[model] = m_idx
+
+    slots: list[TranscriptSlot] = []
+    for key in sorted(slot_members):
+        members = slot_members[key]
+        surfaces = {m: words[m][i][2] for m, i in members.items()}
+        spans = [(words[m][i][0], words[m][i][1]) for m, i in members.items()]
+        counts: dict[str, int] = {}
+        for m, i in members.items():
+            counts[tokens[m][i]] = counts.get(tokens[m][i], 0) + 1
+        top = max(counts.values())
+        winners = [tok for tok, c in counts.items() if c == top]
+        # A strict majority only: with two models reading differently there is no winner, and
+        # publishing either would manufacture agreement that was never observed.
+        consensus_token = winners[0] if len(winners) == 1 else None
+        consensus = None
+        if consensus_token is not None:
+            consensus = next(surfaces[m] for m, i in members.items() if tokens[m][i] == consensus_token)
+        slots.append(
+            TranscriptSlot(
+                start_s=min(s for s, _ in spans),
+                end_s=max(e for _, e in spans),
+                words={m: surfaces.get(m) for m in models},
+                consensus=consensus,
+                disagreement=float(1.0 - top / len(members)) if members else 0.0,
+            )
+        )
+
+    n_slots = len(slots) or 1
+    gap_rate = {m: sum(1 for s in slots if s.words.get(m) is None) / n_slots for m in models}
+    insertion_rate = {}
+    for m in models:
+        produced = len(words[m]) or 1
+        alone = sum(
+            1 for s in slots if s.words.get(m) is not None and sum(v is not None for v in s.words.values()) == 1
+        )
+        insertion_rate[m] = alone / produced if len(models) > 1 else 0.0
+    return TranscriptHarmonization(slots=slots, gap_rate=gap_rate, insertion_rate=insertion_rate, reference=reference)

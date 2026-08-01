@@ -367,7 +367,16 @@ Dependency-ordered; each step verifiable before the next.
    harvest (item 24), so scene quality now integrates or holds onto the reporting grid according to
    direction. The remaining piece is applying the same conversion to the *other* signal families,
    which still report on the reporting grid rather than on a lattice built from each declared
-   native resolution. **H3 open** — transcripts are aligned to audio, not to each other.
+   native resolution. **H3 done** (`harmonize.harmonize_transcripts`) — the transcripts are
+   aligned to each other, not only to audio. A model that inserts or drops one word shifts every
+   timestamp after it, so a time-based comparison turns a single miss into a whole tail of apparent
+   substitutions; aligning the token sequences keeps the rest lined up. Star-shaped against the
+   *median-length* transcript, so an outlier (a hallucinated run, a truncated decode) does not
+   become the frame everything else is measured against — an approximation against full
+   multiple-sequence alignment, with the privileged model reported so it is visible. A slot with no
+   strict majority publishes no consensus: a two-way disagreement has no winner, and naming one
+   would manufacture agreement never observed. Normalisation (case, punctuation) decides agreement
+   only; each model's surface form is kept.
 3. **Joint estimation** J1–J9, with J4 as a joint space (D-7). **J3 done**
    (`speaker_identity.speaker_count_posterior`). **J5–J6 done** (`background_mask.py`,
    `noise_floor.py`, `sources.py`). **J8 done** (`reliability.py`, cross-pass stability as measured
