@@ -19,6 +19,7 @@ matters rather than being a matter of taste.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from typing import Any, Mapping, Sequence
@@ -227,6 +228,32 @@ def fuse_axis(
     return rows
 
 
+def _round_record(round_index: int, rows: Sequence[Mapping[str, Any]], *, untried_actions: int) -> Any:  # noqa: ANN401
+    """Summarise a fused round in the terms convergence is judged on.
+
+    The assignment and the action inventory are not yet produced by this fusion path — J4 is what
+    will supply the first and the intervention catalogue the second — so they are reported as
+    unmeasured rather than as satisfied. That keeps ``converged`` honest: a criterion nobody
+    measured must not read as one that passed.
+    """
+    from senselab.audio.workflows.audio_analysis.rounds import RoundRecord
+
+    values = [r.get("within_pass_uncertainty") for r in rows]
+    numeric = [float(v) for v in values if isinstance(v, (int, float))]
+    epistemic = sum(numeric) / len(numeric) if numeric else None
+    measured = sum(1 for v in values if isinstance(v, (int, float)))
+    digest = ";".join(f"{r.get('start')}:{r.get('within_pass_uncertainty')}" for r in rows)
+    return RoundRecord(
+        round_index=round_index,
+        epistemic=epistemic,
+        assignment=None,
+        measured_buckets=measured,
+        untried_actions=int(untried_actions),
+        overwrote_values=False,
+        signature=hashlib.sha1(digest.encode()).hexdigest(),
+    )
+
+
 def fuse_rounds(
     buckets_by_pass: Mapping[str, Sequence[Mapping[str, Any]]],
     *,
@@ -253,14 +280,26 @@ def fuse_rounds(
         mask_regions: Mask regions with ``state`` and ``confidence``, used for regional trust.
         speaker_claims: ``{signal → spans}`` where the signal asserted a speaker.
         max_rounds: Cap on iterations.
-        tolerance: Per-bucket change below which a round counts as no change.
+        tolerance: Per-bucket change below which a round counts as no change, and the credited
+            epistemic change below which C1 holds.
+
+    Convergence is judged on all four criteria (C1-C4 in ``rounds.assess_convergence``), not on
+    the numbers holding still. Those are different claims: the fused values can settle while the
+    speaker-to-channel assignment still flips, while a bucket is still going unmeasured → measured,
+    or while a region has an action nobody has tried. Each round's log therefore records
+    ``numbers_settled`` and ``converged`` separately, plus which criteria blocked.
 
     Returns:
-        ``(rows, log)`` — the final rows, and one log entry per round recording whether it
-        changed anything. The log is what distinguishes "converged" from "ran out of rounds",
-        which a bare result cannot say.
+        ``(rows, log)`` — the final rows, and one log entry per round. The log is what
+        distinguishes "converged" from "cycled" from "ran out of rounds", which a bare result
+        cannot say.
     """
-    from senselab.audio.workflows.audio_analysis.rounds import regional_weights, round_converged
+    from senselab.audio.workflows.audio_analysis.rounds import (
+        RoundRecord,
+        assess_convergence,
+        regional_weights,
+        round_converged,
+    )
 
     log: list[dict[str, Any]] = []
     rows = fuse_axis(
@@ -270,6 +309,7 @@ def fuse_rounds(
         weight_basis=weight_basis,
         round_index=0,
     )
+    history = [_round_record(0, rows, untried_actions=0)]
     log.append({"round": 0, "buckets": len(rows), "converged": False, "regional_trust_applied": False})
 
     if not mask_regions or not speaker_claims:
@@ -295,17 +335,27 @@ def fuse_rounds(
             weight_basis=weight_basis,
             round_index=round_index,
         )
-        converged = round_converged(rows, candidate, tolerance=tolerance)
+        numbers_settled = round_converged(rows, candidate, tolerance=tolerance)
         rows = candidate
+        history.append(_round_record(round_index, rows, untried_actions=0))
+        verdict = assess_convergence(history, tolerance=tolerance, max_rounds=max(1, int(max_rounds)))
         log.append(
             {
                 "round": round_index,
                 "buckets": len(rows),
-                "converged": converged,
+                # Kept separate on purpose: the numbers holding still is one of four criteria, and
+                # reporting it as convergence is what let a round stop while the assignment was
+                # still flipping or a region still had an untried action.
+                "numbers_settled": numbers_settled,
+                "converged": verdict["converged"],
+                "blocking": verdict["blocking"],
+                "credited_epistemic_change": verdict["credited_epistemic_change"],
+                "diverged": verdict["diverged"],
+                "stop_reason": verdict["stop_reason"],
                 "regional_trust_applied": True,
             }
         )
-        if converged:
+        if verdict["stop"]:
             break
     return rows, log
 

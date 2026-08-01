@@ -26,9 +26,13 @@ exactly when it had started working.
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any, Mapping, Optional, Sequence
 
 __all__ = [
+    "RoundRecord",
+    "assess_convergence",
+    "DEFAULT_MAX_ROUNDS",
     "MIN_REGIONAL_TRUST",
     "regional_weights",
     "round_converged",
@@ -127,3 +131,139 @@ def round_converged(
         if abs(float(new) - float(old)) > float(tolerance):
             return False
     return True
+
+
+# ── Convergence: C1-C4, cycle detection, and the two guards ──────────────────
+
+DEFAULT_MAX_ROUNDS = 10
+"""Round cap (D-12). Named rather than inlined because running out of rounds and agreeing are
+different outcomes, and a reader needs to see which budget produced the first."""
+
+EPISTEMIC_TOLERANCE = 1e-3
+"""Credited change below which epistemic uncertainty counts as having stopped falling."""
+
+
+@dataclass(frozen=True)
+class RoundRecord:
+    """What one L2 round produced, in the terms convergence is judged on.
+
+    Attributes:
+        round_index: 0-based round number.
+        epistemic: Mean epistemic (reducible) uncertainty after the round, or ``None`` when it was
+            not measured — total uncertainty can plateau while reducible doubt remains, which is
+            why C1 is stated on the reducible part.
+        assignment: The ``S_k`` → activation-channel mapping this round settled on (C2). The
+            numbers can settle while this still flips, so it is judged separately.
+        measured_buckets: How many buckets carry a measurement (C3).
+        untried_actions: Actions still available and unattempted anywhere (C4).
+        overwrote_values: Whether any action *replaced* a signal's value this round. Feeds the
+            self-confirmation guard: a fall bought by overwriting is not a confidence gain.
+        signature: A hashable digest of the round's state, for cycle detection.
+    """
+
+    round_index: int
+    epistemic: Optional[float]
+    assignment: Optional[Mapping[str, str]]
+    measured_buckets: int
+    untried_actions: int
+    overwrote_values: bool
+    signature: str
+
+
+def assess_convergence(
+    history: Sequence[RoundRecord],
+    *,
+    tolerance: float = EPISTEMIC_TOLERANCE,
+    max_rounds: int = DEFAULT_MAX_ROUNDS,
+) -> dict[str, Any]:
+    """Decide whether the round loop has converged, and if not, whether to stop anyway.
+
+    All four criteria must hold, because each can settle while another is still moving:
+
+    - **C1** epistemic uncertainty stopped falling. Stated on the *reducible* part: the total can
+      plateau while reducible doubt remains.
+    - **C2** the ``S_k`` ↔ channel assignment is stable. D-7's joint space can keep flipping while
+      every number holds still.
+    - **C3** no bucket went unmeasured → measured. New coverage is progress; counting it as
+      stability would stop the loop exactly when it began working.
+    - **C4** no region has an untried available action, or "converged" means "ran out of ideas".
+
+    Two guards shape C1 rather than sitting beside it:
+
+    **Self-confirmation.** A fall in uncertainty that followed an action *overwriting* a value earns
+    no credit, so a round cannot buy itself more rounds by replacing a signal with its preferred
+    answer. Only a fall from an independent measurement agreeing counts.
+
+    **Divergence is legitimate.** A confirmation action that refutes a claim *should* raise
+    uncertainty, so convergence is not monotone decrease — defining it that way would bias the loop
+    toward ratifying round 0 and leave the confirmation half of the design unable to change
+    anything. A rise means the loop has not converged; it is not an error, and it does not stop the
+    loop.
+
+    Args:
+        history: Round records in order, oldest first.
+        tolerance: Credited epistemic change below which C1 holds.
+        max_rounds: Cap (D-12).
+
+    Returns:
+        ``{"converged", "criteria", "blocking", "credited_epistemic_change", "diverged", "stop",
+        "stop_reason"}``. ``stop`` is true when the loop should end for *any* reason; only
+        ``converged`` says the criteria were met, so "ran out of rounds" and "agreed" stay
+        distinguishable — a bare result cannot say which happened.
+    """
+    records = list(history or [])
+    if len(records) < 2:
+        # One observation cannot show stability, the same rule reliability follows for a single
+        # pass. Reporting convergence here would assert something never measured.
+        return {
+            "converged": False,
+            "criteria": {"c1": False, "c2": False, "c3": False, "c4": False},
+            "blocking": ["c1", "c2", "c3", "c4"],
+            "credited_epistemic_change": None,
+            "diverged": False,
+            "stop": bool(records and len(records) >= int(max_rounds)),
+            "stop_reason": "max_rounds" if records and len(records) >= int(max_rounds) else None,
+        }
+
+    prev, cur = records[-2], records[-1]
+
+    raw_change: Optional[float] = None
+    if prev.epistemic is not None and cur.epistemic is not None:
+        raw_change = float(cur.epistemic) - float(prev.epistemic)
+    diverged = bool(raw_change is not None and raw_change > float(tolerance))
+
+    # The guard: a *fall* that followed an overwrite is not credited. A rise still counts, because
+    # a refutation is real information however it was produced.
+    credited = raw_change
+    if credited is not None and cur.overwrote_values and credited < 0:
+        credited = 0.0
+
+    c1 = credited is not None and abs(credited) <= float(tolerance)
+    c2 = prev.assignment == cur.assignment
+    c3 = int(cur.measured_buckets) <= int(prev.measured_buckets)
+    c4 = int(cur.untried_actions) <= 0
+    criteria = {"c1": c1, "c2": c2, "c3": c3, "c4": c4}
+    converged = all(criteria.values())
+
+    # Cycle detection is separate from slow convergence on purpose (D-12): an A→B→A→B oscillation
+    # reports movement every round, so it can only be caught by state repeating.
+    earlier = [r.signature for r in records[:-1]]
+    cycling = cur.signature in earlier and not converged
+
+    stop_reason: Optional[str] = None
+    if converged:
+        stop_reason = "converged"
+    elif cycling:
+        stop_reason = "cycle"
+    elif len(records) >= int(max_rounds):
+        stop_reason = "max_rounds"
+
+    return {
+        "converged": converged,
+        "criteria": criteria,
+        "blocking": [name for name, ok in criteria.items() if not ok],
+        "credited_epistemic_change": credited,
+        "diverged": diverged,
+        "stop": stop_reason is not None,
+        "stop_reason": stop_reason,
+    }
