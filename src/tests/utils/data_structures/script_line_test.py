@@ -215,3 +215,43 @@ def test_from_dict_leaves_token_confidence_none_when_absent() -> None:
     assert line.avg_logprob is None
     assert line.no_speech_prob is None
     assert line.token_entropy is None
+
+
+# ── where word timestamps came from (L0 declares, L2 decides) ────────────
+
+
+def test_a_line_can_declare_where_its_timestamps_came_from() -> None:
+    """Three backends produce word times three different ways, and the difference matters.
+
+    CrisperWhisper reports them natively, Qwen3-ASR gets them from a bundled companion aligner,
+    canary-qwen is text-only and needs an external one. Downstream this was inferred by probing
+    for `chunks`, which has a fusion helper reverse-engineering a fact the backend knows for
+    certain. Declared here alongside `avg_logprob` and `no_speech_prob`, which follow the same
+    "if the backend reports one, otherwise None" pattern.
+    """
+    from senselab.utils.data_structures.script_line import ScriptLine
+
+    line = ScriptLine(text="I", start=0.0, end=0.1, timestamp_source="native")
+    assert line.timestamp_source == "native"
+
+
+def test_timestamp_source_defaults_to_unmeasured_rather_than_a_guess() -> None:
+    """A backend that never declared must not read as one that reported native timings."""
+    from senselab.utils.data_structures.script_line import ScriptLine
+
+    assert ScriptLine(text="I", start=0.0, end=0.1).timestamp_source is None
+
+
+def test_an_unknown_timestamp_source_is_rejected() -> None:
+    """The asr axis compares word times across models; two sharing an aligner are not independent.
+
+    That comparison only holds if the vocabulary is closed — a free-text field would let a new
+    backend invent a label nobody downstream knows to treat as correlated.
+    """
+    import pytest
+    from pydantic import ValidationError
+
+    from senselab.utils.data_structures.script_line import ScriptLine
+
+    with pytest.raises(ValidationError):
+        ScriptLine(text="I", start=0.0, end=0.1, timestamp_source="made_up")

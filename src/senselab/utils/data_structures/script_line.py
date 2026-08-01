@@ -42,9 +42,14 @@ Examples:
             world [0.60 - 1.20]
 """
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from pydantic import BaseModel, ValidationInfo, field_validator, model_validator
+
+TimestampSource = Literal["native", "bundled_aligner", "external_aligner"]
+"""Where a line's `start`/`end` came from. Closed rather than free text: the asr axis compares word
+times across models, and that comparison is only sound if every source is one the consumer knows
+how to treat — a new backend inventing its own label would silently read as independent."""
 
 
 class ScriptLine(BaseModel):
@@ -59,6 +64,14 @@ class ScriptLine(BaseModel):
         avg_logprob (float | None): Mean per-token log-probability, when the ASR
             backend reports one (Whisper today); `None` otherwise.
         no_speech_prob (float | None): Backend's own no-speech probability in `[0, 1]`.
+        timestamp_source (TimestampSource | None): Who produced `start`/`end` — the recognizer
+            itself (`native`), a companion aligner shipped with it (`bundled_aligner`), an
+            external forced aligner (`external_aligner`), or `None` when the backend did not
+            declare. Declared here rather than inferred downstream: whether a model reports word
+            times is a fact it knows for certain, and consumers were reverse-engineering it by
+            probing for `chunks`. It also carries a dependency the ASR axis needs — two models
+            whose times come from the *same* aligner agree partly for reasons that have nothing
+            to do with the audio, so that agreement is not independent corroboration.
         token_entropy (list[float] | float | None): Per-token softmax entropy, or a
             single pre-collapsed mean.
 
@@ -89,6 +102,7 @@ class ScriptLine(BaseModel):
     # confidence the model never reported.
     avg_logprob: Optional[float] = None  # mean per-token log-probability (negative)
     no_speech_prob: Optional[float] = None  # Whisper's own no-speech head, in [0, 1]
+    timestamp_source: Optional[TimestampSource] = None  # who produced start/end; None = undeclared
     # Per-token softmax entropy, or a single mean when the caller pre-collapsed it.
     token_entropy: Optional[Union[List[float], float]] = None
 

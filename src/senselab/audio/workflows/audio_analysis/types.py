@@ -12,7 +12,13 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 UncertaintyAxis = Literal["speech_presence", "speaker", "asr"]
-"""Three uncertainty axes — see FR-001 / FR-002."""
+"""The axes with a *vote harvest* — see FR-001 / FR-002.
+
+Narrower than the axis set L2 fuses, deliberately. ``background_mask`` is a fourth axis at fusion
+(its votes come from the mask's own per-region confidence, not from an ensemble) and ``task`` is a
+punted fifth, but neither is harvested, so neither belongs in the type that describes what harvest
+produces. Widening it here would promise `compute.py` inputs that no harvester emits.
+"""
 
 PassLabel = Literal["raw_16k", "enhanced_16k", "raw_vs_enhanced"]
 """Pass identifier used for parquet pathing and the disagreements.json `pass` field."""
