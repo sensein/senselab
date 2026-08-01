@@ -216,6 +216,77 @@ def test_the_log_distinguishes_converged_from_out_of_rounds() -> None:
     assert {"round", "converged", "regional_trust_applied"} <= set(log[-1])
 
 
+def test_c4_counts_this_loop_s_own_actions_rather_than_going_unmeasured() -> None:
+    """C4 asks whether a region still has an action nobody tried, and this loop has exactly one.
+
+    Its action set is what it can do *without new measurement*: withdraw regional trust where the
+    mask contradicts a claim. Once the tightened weights apply every such region, none remains
+    untried — a measured zero, not a defaulted one, so C4 stops blocking on the honest grounds
+    that the inventory was actually taken.
+    """
+    from senselab.audio.workflows.audio_analysis.fuse import fuse_rounds
+
+    _rows, log = fuse_rounds(
+        {"raw_16k": [_b(0.0, {"a": 0.3})]},
+        weights={"a": 1.0},
+        mask_regions=[_region(0.0, 0.5, "target_free", confidence=1.0)],
+        speaker_claims={"a": [(0.0, 0.5)]},
+        max_rounds=3,
+    )
+    assert "c4" not in log[-1]["blocking"], "the one available action was applied, and it was counted"
+    assert log[-1]["action_scope"] == "regional_trust"
+
+
+def test_the_action_scope_is_named_so_convergence_is_not_read_too_widely() -> None:
+    """A loop running out of moves is a narrower claim than no measurement helping.
+
+    The adaptive catalogue can still re-run models over the same region. Recording which inventory
+    was counted keeps a fusion-round convergence from being read as the wider statement.
+    """
+    from senselab.audio.workflows.audio_analysis.fuse import fuse_rounds
+
+    _rows, log = fuse_rounds(
+        {"raw_16k": [_b(0.0, {"a": 0.3})]},
+        weights={"a": 1.0},
+        mask_regions=[_region(0.0, 0.5, "target_free", confidence=1.0)],
+        speaker_claims={"a": [(0.0, 0.5)]},
+        max_rounds=3,
+    )
+    assert log[-1]["action_scope"] == "regional_trust"
+
+
+def test_a_caller_with_a_wider_inventory_overrides_the_loop_s_own_count() -> None:
+    """The adaptive loop knows about interventions this one cannot see.
+
+    When it says actions remain, C4 must block even though the fusion loop has exhausted its own —
+    otherwise the narrower inventory silently answers the wider question.
+    """
+    from senselab.audio.workflows.audio_analysis.fuse import fuse_rounds
+
+    _rows, log = fuse_rounds(
+        {"raw_16k": [_b(0.0, {"a": 0.3})]},
+        weights={"a": 1.0},
+        mask_regions=[_region(0.0, 0.5, "target_free", confidence=1.0)],
+        speaker_claims={"a": [(0.0, 0.5)]},
+        max_rounds=3,
+        untried_actions=2,
+    )
+    assert "c4" in log[-1]["blocking"]
+    assert log[-1]["action_scope"] == "caller_supplied"
+
+
+def test_the_round_zero_shortcut_does_not_claim_the_criteria_were_checked() -> None:
+    """With no mask there is no round 1 to run, which is not the same as having converged.
+
+    The loop stops because it cannot iterate, so the reason must say so rather than letting a
+    reader take `converged` here for the four-criteria verdict it is everywhere else.
+    """
+    from senselab.audio.workflows.audio_analysis.fuse import fuse_rounds
+
+    _rows, log = fuse_rounds({"raw_16k": [_b(0.0, {"a": 0.3})]}, weights={"a": 1.0}, max_rounds=5)
+    assert log[0]["criteria_evaluated"] is False
+
+
 def test_every_round_records_its_index() -> None:
     """Rows carry the round that produced them, so successive maps are comparable."""
     from senselab.audio.workflows.audio_analysis.fuse import fuse_rounds
