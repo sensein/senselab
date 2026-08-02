@@ -902,3 +902,84 @@ layer's data. Where that was violated, nothing broke — two copies of the same 
 indistinguishable to a reader, a glob that matches nothing looks like a stage that produced nothing,
 and coupling that matches zero keys looks like coupling that had nothing to say. Every one of those
 was found by looking at a real run, and none by a test.
+
+### What is present at the output of each stage
+
+Concretely, for a two-pass run. Marked **[is]** where this is what a run produces today and
+**[should]** where the target differs from current behaviour.
+
+#### After L1 — evidence
+
+```
+L1/
+  <pass>/                        raw_16k, enhanced_16k
+    signals/<signal>.parquet     per-signal measurement, native units + resolution   [should]
+      + provenance.json          units, model id + revision, window/hop, tool-side reduction
+    diarization/<model>.json     per-model speaker spans
+    asr/<model>.json             ScriptLine tree: text, word chunks, avg_logprob,
+                                 no_speech_prob, timestamp_source
+    alignment/<model>.json       word boundaries for models that report none natively
+    embeddings/                  per-window speaker vectors (2.0 s / 50 ms)
+    ast.json, yamnet.json        [{label: score}, ...] per window
+    features.json, features/     praat / opensmile / torchaudio-squim measurements
+    noise_floor.parquet          per-band floor + ECMA-74 prominence
+    background_sources.parquet   per-band source candidates
+    background_mask.{parquet,json}  regions + state + uncertainty
+  stability/                     cross-pass deltas — the perturbation evidence
+  signals.png, timeline.png      evidence views, signals in native units
+```
+
+Present per value: the number, its units, the model and revision that produced it, the window and
+hop it was measured over, and any reduction the *tool* performed. Absent: any axis, any threshold,
+anything in `[0, 1]` that was not natively a probability.
+
+*Today `L1/<pass>/uncertainty/{speech_presence,speaker,asr}.parquet` also exist, carrying
+`within_pass_uncertainty` — a per-axis fold. That is register item 25 and does not belong here.*
+
+#### After each L2 round — belief
+
+```
+L2/
+  round<N>/
+    uncertainty/<axis>.parquet   one row per bucket per axis                          [is]
+    derivatives/                 mask, speaker allocation, ASR consensus, scene       [should]
+  rounds.json                    per-round decision log
+```
+
+Present per axis row: `start`, `end`, `uncertainty`, `epistemic_uncertainty`, `confidence`,
+`variability`, `triage_score`, `round`, `contributing_signals`, `contributing_passes`,
+`signal_weights`, `weight_basis`, `coupled_from`.
+
+Four quantities kept distinct because they answer different questions and have different estimators:
+entropy, its reducible part, a probability, a dispersion in native units. `triage_score` is the
+policy fold and is *not* one of them — it ranks where to spend budget.
+
+Present per round in the log: `numbers_settled` and `converged` separately, `criteria_evaluated`,
+`blocking`, `credited_epistemic_change`, `diverged`, `stop_reason`, `repeating_states`,
+`action_scope`, `derivatives_refreshed`, `remeasured`, `coupled_from`.
+
+The belief state itself lives here — one per `(axis, bucket, source, pass, scope)` — rather than in
+a subsystem's private store. **[should]**
+
+#### After final — the answer
+
+```
+final/
+  transcript.json                fused words with confidence and alternates
+  diarization.json, .rttm        fused speaker turns
+  speakers.json                  count posterior + per-speaker hypotheses
+  per_speaker_presence.parquet   one track per hypothesised speaker
+  decisions.json                 trajectory, reversals, stopping reason
+  timeline.png, summary.md       the human-facing views
+  summary.json                   run provenance: policy hash, versions, budget    [should: ~6 KB]
+  labelstudio_{tasks.json,config.xml}, eval.json
+```
+
+Present: the converged state and how it was reached. Absent: anything another stage reads — today
+`summary.json` carries 4.8 MB of inlined L1 evidence, which is register item 26.
+
+#### The one-line test per stage
+
+- **L1** — could a different lab reproduce this number from the audio and the provenance alone?
+- **L2** — is every threshold that shaped this value named in a policy recorded on the row?
+- **final** — does anything in the pipeline open this directory?
