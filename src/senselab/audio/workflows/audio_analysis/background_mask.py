@@ -755,3 +755,46 @@ def target_spans_from_evidence(
     if float(duration_s) - cursor >= float(min_free_s) and float(duration_s) > cursor:
         free.append((cursor, float(duration_s)))
     return {"target": merged, "free": free}
+
+
+def apply_span_evidence(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    target_spans: Sequence[tuple[float, float]],
+) -> list[dict[str, Any]]:
+    """Fold span-resolution target evidence into per-bucket confidence.
+
+    ``target_confidence_by_bucket`` combines diarization and classifier scores by taking the
+    **maximum**, because either is sufficient to establish the target was active. A recognised ASR
+    word is evidence of exactly the same kind, measured an order of magnitude more precisely, and
+    was simply absent from that union — the mask never consulted the transcript at all.
+
+    **Raises only.** ASR misses words, and a diarizer can miss a turn, so a bucket no span touches
+    is not thereby evidence the target was absent. Letting an empty span lower confidence would
+    convert a recogniser's miss into a positive claim that nobody spoke, and that region would then
+    be offered as usable background — the most damaging direction for this particular error.
+
+    A bucket a span touches also becomes more *certain*: a direct observation resolves doubt, and
+    leaving the uncertainty untouched would understate what is now known.
+
+    Note this improves accuracy, not boundary resolution: regions are still cut on the bucket grid.
+    Word-resolution boundaries need ``build_mask`` to accept spans rather than buckets, which
+    changes what a region means.
+
+    Args:
+        rows: Per-bucket evidence rows with ``start``, ``end``, ``target_confidence``.
+        target_spans: Spans where an axis observed the target directly — ASR words, speaker turns.
+
+    Returns:
+        New rows; inputs are not mutated.
+    """
+    spans = [(float(a), float(b)) for a, b in target_spans if float(b) > float(a)]
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        new = dict(row)
+        lo, hi = float(new.get("start", 0.0)), float(new.get("end", 0.0))
+        if any(min(hi, b) - max(lo, a) > 0 for a, b in spans):
+            new["target_confidence"] = max(float(new.get("target_confidence") or 0.0), 1.0)
+            new["uncertainty"] = min(float(new.get("uncertainty") or 0.0), 0.0)
+        out.append(new)
+    return out

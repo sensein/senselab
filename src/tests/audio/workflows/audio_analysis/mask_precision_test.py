@@ -56,3 +56,46 @@ def test_a_gap_shorter_than_the_guard_is_not_offered_as_background() -> None:
 def test_no_evidence_at_all_yields_no_claim_either_way() -> None:
     """Nothing measured is not "the whole clip is free" — that would be the loudest possible guess."""
     assert target_spans_from_evidence(duration_s=5.0) == {"target": [], "free": []}
+
+
+# ── word evidence reaches the per-bucket confidence ──────────────────────
+
+
+def test_a_word_raises_target_confidence_in_the_bucket_it_falls_in() -> None:
+    """ASR words are direct evidence the target spoke, and the mask was not consulting them.
+
+    `target_confidence_by_bucket` combined diarization and classifier scores by taking the
+    maximum, because either is sufficient to establish activity. A recognised word is evidence of
+    exactly the same kind and was simply absent from the union.
+    """
+    from senselab.audio.workflows.audio_analysis.background_mask import apply_span_evidence
+
+    rows = [
+        {"start": 0.0, "end": 0.5, "target_confidence": 0.1, "uncertainty": 0.4},
+        {"start": 0.5, "end": 1.0, "target_confidence": 0.1, "uncertainty": 0.4},
+    ]
+    out = apply_span_evidence(rows, target_spans=[(0.6, 0.8)])
+    assert out[0]["target_confidence"] == pytest.approx(0.1), "no word here, unchanged"
+    assert out[1]["target_confidence"] == pytest.approx(1.0), "a word here is direct evidence"
+
+
+def test_span_evidence_only_raises_confidence_never_lowers_it() -> None:
+    """ASR misses words, so silence in the transcript is not evidence the target was absent.
+
+    Letting an empty span lower confidence would turn a recogniser's miss into a positive claim
+    that nobody spoke — which is exactly the region a background characterisation would then
+    wrongly treat as usable.
+    """
+    from senselab.audio.workflows.audio_analysis.background_mask import apply_span_evidence
+
+    rows = [{"start": 0.0, "end": 0.5, "target_confidence": 0.9, "uncertainty": 0.1}]
+    assert apply_span_evidence(rows, target_spans=[])[0]["target_confidence"] == pytest.approx(0.9)
+
+
+def test_a_bucket_raised_by_span_evidence_becomes_more_certain_too() -> None:
+    """A direct observation resolves doubt; leaving uncertainty untouched would understate it."""
+    from senselab.audio.workflows.audio_analysis.background_mask import apply_span_evidence
+
+    rows = [{"start": 0.0, "end": 0.5, "target_confidence": 0.1, "uncertainty": 0.8}]
+    out = apply_span_evidence(rows, target_spans=[(0.1, 0.2)])
+    assert out[0]["uncertainty"] < 0.8
