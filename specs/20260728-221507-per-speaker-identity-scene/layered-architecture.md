@@ -1306,3 +1306,40 @@ every new consumer inherited the product type without having to justify it. The 
 was `scripts/analyze_audio.py` picking the *lower-uncertainty pass* as the run's bottom line —
 treating a perturbation sample as two competing answers, and discarding the disagreement that was
 the evidence. That reads as reasonable only if a pass can have an axis.
+
+---
+
+## `background_mask` is an output axis, not a derivative (correction)
+
+**Recorded because the code still says three.** `types.UncertaintyAxis`, `adaptive.types.AxisName`
+and `adaptive.belief.AXES` are all three-valued, and ten further sites carry the literal tuple
+`("speech_presence", "speaker", "asr")`. Every one of them is wrong by one.
+
+`background_mask` is a **fourth output axis** and carries the same estimates as the others:
+uncertainty, probability, and confidence, per bucket. It is not a derivative, not a sidecar, and
+not a mask-shaped special case. `fuse_axes` already emits it — `L2/round<N>/uncertainty/background_mask.parquet`
+appears on every real run — so the *fusion* path has four axes while the *type* system, the belief
+store and the adaptive loop have three.
+
+Consequences of the miscount, each observed rather than predicted:
+
+- The L1 guard's `AXIS_NAMES` omitted `background_mask`, so `L1/<pass>/background_mask.parquet`
+  sat on disk while the guard reported the invariant held. A list of names cannot be complete for
+  a set that grows; the guard has to key on **shape** — a fold across signals — which is what makes
+  it correct for a fifth axis nobody has written yet.
+- The adaptive loop iterates `AXES` for region proposal, convergence marking and the report, so
+  `background_mask` is never proposed for intervention, never marked converged or irreducible, and
+  never appears in `convergence.json`. It is fused and then dropped from the loop that acts on axes.
+- `ATTENUATED_AXES` is a second, differently-sized subset (`speech_presence`, `asr`) with no stated
+  relation to `AXES`. Two hand-maintained lists of axes will drift; which one is authoritative is
+  not written down anywhere.
+
+The design has said four throughout — `L2/round<N>/{speech_presence,speaker,asr,background_mask}/`
+appears in the output layout — with `task` a punted fifth. The three-valued types are the residue
+of the axis set before the mask became an axis, and they are the reason "four axes" keeps being
+re-discovered by measurement instead of being a fact the code states once.
+
+**What this requires.** One authoritative axis set, derived rather than restated, with the type
+aliases generated from it; `background_mask` participating in region proposal, convergence and the
+convergence report on the same terms as the other three; and `ATTENUATED_AXES` either justified
+against it in writing or removed. Adding the fifth axis later must be one edit, not eleven.
