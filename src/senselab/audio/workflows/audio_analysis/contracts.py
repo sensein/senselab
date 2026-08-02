@@ -82,6 +82,8 @@ __all__ = [
     "artifact_violations",
     "dag_edges",
     "dead_artifact_deviations",
+    "declared_artifacts",
+    "folding_stages",
     "matches",
     "overlap",
     "pipeline_sources",
