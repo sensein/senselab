@@ -103,9 +103,7 @@ def write_linked_votes(
             # re-ingest sees the same context the in-process path does.
             for name in ("frame_dispersion",):
                 if isinstance(bucket.get(name), (int, float)):
-                    rows.append(
-                        (axis, start, end, f"__{name}__", str(pass_label), json.dumps({"value": bucket[name]}))
-                    )
+                    rows.append((axis, start, end, f"__{name}__", str(pass_label), json.dumps({"value": bucket[name]})))
     table = pa.table(
         {
             "axis": pa.array([r[0] for r in rows], type=pa.string()),

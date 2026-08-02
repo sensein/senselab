@@ -676,11 +676,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         metavar=("W_Q", "W_S"),
         default=(0.5, 0.25),
         help=(
-            "Scene-to-asr coupling weights (FR-019): reported asr uncertainty is "
-            "multiplied by 1 + W_Q * quality_snr + W_S * (src_machine + src_environment) over the "
-            "bucket's span, clipped to 1.0. The multiplier is recorded in the "
-            "scene_quality_coupling column and the pre-coupling value stays in "
-            "raw_within_pass_uncertainty. Defaults to 0.5 0.25; pass '0 0' to disable coupling."
+            "Scene-to-asr coupling weights (FR-019). Applied at L2 to the asr axis's "
+            "triage_score — the policy fold — and never to `uncertainty`, which is the entropy "
+            "measure and has no policy in it: triage_score is multiplied by "
+            "1 + W_Q * quality_snr + W_S * (src_machine + src_environment) over the bucket's "
+            "span, clipped to 1.0. The audit trail is on the fused row itself "
+            "(scene_quality_coupling, triage_score_pre_coupling, coupled_from) plus the "
+            "un-coupled per-signal ASR measurements in L1/<pass>/signals/<asr_model>.parquet. "
+            "Defaults to 0.5 0.25; pass '0 0' to disable coupling."
         ),
     )
     parser.add_argument(

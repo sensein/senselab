@@ -67,7 +67,17 @@ def _bucket_beliefs(buckets: Any) -> dict[tuple[float, float], dict[str, float]]
         if not isinstance(bucket, Mapping):
             continue
         key = (round(float(bucket.get("start", 0.0)), 6), round(float(bucket.get("end", 0.0)), 6))
-        per_signal = per_signal_uncertainty(bucket)
+        per_signal = dict(per_signal_uncertainty(bucket))
+        # A voter that states only a direction — ``speaks: True`` with no confidence — has no
+        # per-signal *doubt* to compare, so `per_signal_uncertainty` rightly omits it. But its
+        # answer is what flipped, and a flip is exactly what stability is asking about. Each
+        # signal is only ever compared against itself across passes, so the scale need only be
+        # consistent per signal; omitting these voters is what left them permanently unmeasured.
+        for name, entry in (bucket.get("votes") or {}).items():
+            if str(name) in per_signal or not isinstance(entry, Mapping):
+                continue
+            if isinstance(entry.get("speaks"), bool):
+                per_signal[str(name)] = 1.0 if entry["speaks"] else 0.0
         if per_signal:
             out[key] = per_signal
     return out

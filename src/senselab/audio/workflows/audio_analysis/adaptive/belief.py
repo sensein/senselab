@@ -224,8 +224,7 @@ class VoteStore:
         if not columns:
             return
         spans = [
-            (float(r["start"]), float(r["end"]), {c: _json_safe(r[c]) for c in columns})
-            for _, r in frame.iterrows()
+            (float(r["start"]), float(r["end"]), {c: _json_safe(r[c]) for c in columns}) for _, r in frame.iterrows()
         ]
         for stream, axis, bk in list(self.row_meta):
             if stream not in passes:
