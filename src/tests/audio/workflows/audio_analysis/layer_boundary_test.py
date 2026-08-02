@@ -1,33 +1,46 @@
-"""Guards for the four boundaries whose absence let every defect in this feature survive.
+"""Guards for the boundaries whose absence let every defect in this feature survive.
 
 Each of these was found by inspecting a real run's outputs, and none by a test — because each
 failure was *silent*. An absent directory returns ``{}``, a glob matches nothing, a projection
 matches zero keys, a field read by the wrong name returns ``None``. Nothing raised in any of
 them. These tests make each one raise.
 
-The four:
+Three of the guards read a **real run directory**, not a tree this file builds. A guard that
+walks its own fixture only ever proves that the fixture is consistent with itself; the defects
+this feature shipped were all in what the pipeline actually wrote. When no run is available the
+guards :func:`pytest.skip` with the reason, so "did not run" stays distinguishable from "found
+nothing" — which is the failure signature the whole file exists to remove.
 
-1. **Nothing under ``L1/`` is named for an axis.** An axis is a fold across signals *and* across
-   passes, so it can be neither produced by one pass nor stored under one. (register item 25)
-2. **No pipeline module reads a path under ``final/``.** A deliverable something reads is an
-   intermediate wearing the wrong name. (register item 26)
-3. **A threshold-derived value carries the policy that produced it.** L2's one-line test.
-4. **A field is not read by a name that does not exist on the rows being read.** Three live bugs
+The rules:
+
+1. **Nothing under ``L1/`` carries a fold.** An axis is an aggregate across signals *and* across
+   passes, so it can be neither produced by one pass nor stored under one. Keyed on **shape**, not
+   on names: the violation is a parquet carrying an ``axis`` column or a column whose value is an
+   aggregate across signals. ``L1/<pass>/asr/<model>.json`` merely *shares* a name with an axis —
+   it is one model's raw transcript, and no name list can tell the two apart. (register item 25)
+2. **No pipeline module reads a path under ``final/``.** Checked by resolving aliases in the AST:
+   ``final = final_dir(out_dir)`` followed by ``final / "transcript.json"`` is the same violation
+   as writing it on one line, and a regex sees only the second. (register item 26)
+3. **No artifact is keyed by both a pass and an axis.** A vote may be per-pass — a signal measured
+   on a pass is a real per-pass measurement — but an axis may not, because a pass is an input
+   dimension to the fold and never an index on its output. (register item 27)
+4. **A threshold-derived value carries the policy that produced it.** L2's one-line test.
+5. **A field is not read by a name that does not exist on the rows being read.** Three live bugs
    in this feature were exactly this, and each read as "the measurement was absent".
 """
 
 from __future__ import annotations
 
 import ast
-import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import pytest
 
-WORKFLOW_DIR = Path(__file__).resolve().parents[4] / "senselab" / "audio" / "workflows" / "audio_analysis"
-SCRIPTS_DIR = Path(__file__).resolve().parents[4].parent / "scripts"
-AXIS_NAMES = ("speech_presence", "speaker", "asr", "uncertainty")
+REPO_ROOT = Path(__file__).resolve().parents[5]
+WORKFLOW_DIR = REPO_ROOT / "src" / "senselab" / "audio" / "workflows" / "audio_analysis"
+SCRIPTS_DIR = REPO_ROOT / "scripts"
+RUNS_DIR = REPO_ROOT / "artifacts" / "analyze_audio"
 
 
 def _pipeline_sources() -> list[Path]:
@@ -37,48 +50,106 @@ def _pipeline_sources() -> list[Path]:
     return [f for f in files if f.exists()]
 
 
-# ── 1. Nothing under L1/ is named for an axis ────────────────────────────────
+# ── the real run these guards are read against ───────────────────────────────
 
 
-def test_no_writer_puts_an_axis_under_l1(tmp_path: Path) -> None:
-    """A run's ``L1/`` tree must contain no path segment naming an axis.
+@pytest.fixture(scope="session")
+def real_run_dir() -> Path:
+    """The newest completed run under ``artifacts/analyze_audio/``.
 
-    Exercised on a real write rather than by reading source, so a future writer that constructs
-    the path some other way is caught too.
+    A run counts as complete when it has both an ``L1/`` and an ``L2/`` directory — the two the
+    layout guards are about. Skips rather than passing when there is none, because a layout guard
+    with nothing to walk reports exactly what a layout guard that found no violation reports.
     """
-    from senselab.audio.workflows.audio_analysis.io import write_signal_parquet, write_signal_stability
-    from senselab.audio.workflows.audio_analysis.layout import evidence_dir, pass_dir, stability_dir
-    from senselab.audio.workflows.audio_analysis.types import SignalResult, SignalRow
-
-    write_signal_parquet(
-        SignalResult(
-            pass_label="raw_16k",
-            signal="diar_pyannote",
-            rows=[SignalRow(start=0.0, end=0.5, signal="diar_pyannote", measurement={"covered_fraction": 1.0})],
-        ),
-        pass_dir(tmp_path, "raw_16k") / "signals" / "diar_pyannote.parquet",
+    candidates = (
+        [p for p in RUNS_DIR.iterdir() if p.is_dir() and (p / "L1").is_dir() and (p / "L2").is_dir()]
+        if RUNS_DIR.is_dir()
+        else []
     )
-    write_signal_stability(
-        [
-            {
-                "start": 0.0,
-                "end": 0.5,
-                "signal": "diar_pyannote",
-                "pass_a": "raw_16k",
-                "pass_b": "enhanced_16k",
-                "abs_delta": 0.1,
-                "n_passes_present": 2,
-            }
-        ],
-        stability_dir(tmp_path) / "diar_pyannote.parquet",
-    )
+    if not candidates:
+        pytest.skip(
+            f"no completed run under {RUNS_DIR} (need one with L1/ and L2/). "
+            "These guards read what the pipeline actually wrote; with no run they would pass "
+            "vacuously. Produce one with: uv run python scripts/analyze_audio.py <audio>"
+        )
+    return max(candidates, key=lambda p: p.stat().st_mtime)
 
+
+def _columns(path: Path) -> set[str]:
+    """The column names of a parquet, read from its schema alone."""
+    import pyarrow.parquet as pq
+
+    return set(pq.read_schema(path).names)
+
+
+#: Columns whose value is an aggregate across signals. A row carrying one of these has had a fold
+#: applied to it; ``axis`` says so outright. Named, rather than inferred, because the whole point
+#: is that the set is auditable — a new fold column is added here or it is not guarded.
+FOLD_COLUMNS = frozenset(
+    {
+        "uncertainty",
+        "epistemic_uncertainty",
+        "triage_score",
+        "within_pass_uncertainty",
+        "contributing_signals",
+    }
+)
+
+#: A row attributed to one source or one signal is a measurement or a vote, not a fold — even when
+#: it carries an ``axis`` column saying which fold it will feed.
+PER_SOURCE_COLUMNS = frozenset({"source", "signal"})
+
+#: The ways an artifact can be indexed by a pass.
+PASS_COLUMNS = frozenset({"stream", "pass_label", "pass"})
+
+
+def _fold_columns(columns: set[str]) -> list[str]:
+    """Which of a parquet's columns make it a fold. Empty when it is a measurement or a vote."""
+    if columns & PER_SOURCE_COLUMNS:
+        return []
+    return sorted((columns & FOLD_COLUMNS) | ({"axis"} & columns))
+
+
+def _pass_labels(run_dir: Path) -> set[str]:
+    """The pass names this run actually used, taken from ``L1/`` rather than assumed."""
+    return {p.name for p in (run_dir / "L1").iterdir() if p.is_dir() and p.name != "stability"}
+
+
+# ── 1. Nothing under L1/ carries a fold ──────────────────────────────────────
+
+
+def test_nothing_under_l1_carries_a_fold(real_run_dir: Path) -> None:
+    """``L1/`` is evidence: each signal's own measurement, in that signal's own units.
+
+    Keyed on the shape of what was written, not on a list of axis names. A name list is guarded
+    only against the axes that existed when it was written, so an axis added later is unguarded by
+    construction — which is how ``L1/<pass>/background_mask.parquet`` came to sit under a pass
+    carrying a per-region ``uncertainty`` folded from every presence signal and thresholded by a
+    detection-margin profile.
+    """
     offenders = [
-        str(p.relative_to(evidence_dir(tmp_path)))
-        for p in evidence_dir(tmp_path).rglob("*")
-        if any(part == axis or part.startswith(f"{axis}.") for part in p.parts for axis in AXIS_NAMES)
+        f"L1/{p.relative_to(real_run_dir / 'L1')}: {_fold_columns(_columns(p))}"
+        for p in sorted((real_run_dir / "L1").rglob("*.parquet"))
+        if _fold_columns(_columns(p))
     ]
-    assert not offenders, f"L1/ must not name an axis; found {offenders}"
+    assert not offenders, f"{real_run_dir.name}: L1 stores measurements, never a fold across signals:\n" + "\n".join(
+        offenders
+    )
+
+
+def test_the_l1_guard_discriminates_by_shape_and_not_by_name(real_run_dir: Path) -> None:
+    """``L1/<pass>/asr/<model>.json`` is named for an axis and is not a violation.
+
+    It is one model's raw transcript — evidence, at that model's own resolution, in that model's
+    own units. Only shape separates it from a fold that happens to be stored under a different
+    name, so this test asserts the discrimination is actually exercised: if no such file exists,
+    rule 1 above has never had to make the distinction and its passing means less than it looks.
+    """
+    named_for_an_axis = sorted((real_run_dir / "L1").rglob("asr/*.json"))
+    assert named_for_an_axis, "no per-model transcript under L1/<pass>/asr/ — the shape rule is untested here"
+    signals = sorted((real_run_dir / "L1").rglob("signals/*.parquet"))
+    assert signals, "no per-signal measurement under L1/<pass>/signals/"
+    assert not any(_fold_columns(_columns(p)) for p in signals)
 
 
 def test_signal_row_carries_no_axis_and_no_fold() -> None:
@@ -115,13 +186,7 @@ def test_fused_axis_has_no_pass_index() -> None:
 
 
 def test_the_name_within_pass_uncertainty_is_gone_from_the_workflow_layer() -> None:
-    """A per-pass axis is a contradiction, and the name taught the vocabulary that hid it.
-
-    The adaptive subsystem still carries it as the belief store's own per-bucket column. That is
-    a *per-(stream, axis, bucket)* value the store computes for itself, not something L1 hands it,
-    and collapsing its stream index is tracked as the remainder of register item 27. Nothing in
-    the workflow layer may name it.
-    """
+    """A per-pass axis is a contradiction, and the name taught the vocabulary that hid it."""
     workflow = [f for f in WORKFLOW_DIR.glob("*.py")] + [SCRIPTS_DIR / "analyze_audio.py"]
     offenders = [
         f"{f.name}:{n}"
@@ -135,27 +200,132 @@ def test_the_name_within_pass_uncertainty_is_gone_from_the_workflow_layer() -> N
 
 # ── 2. No pipeline module reads a path under final/ ──────────────────────────
 
-_FINAL_READ = re.compile(
-    r"""final_dir\([^)]*\)\s*/\s*["'][\w.]+["']\s*\)?\s*\.\s*(read_text|read_bytes|open|exists)"""
-    r"""|read_parquet\(\s*final""",
-)
+#: Path methods that read. ``mkdir`` and ``write_text`` are absent on purpose: a stage may *write*
+#: its deliverable into ``final/``; what it may not do is take one back out as input.
+_READ_METHODS = frozenset({"read_text", "read_bytes", "open", "glob", "rglob", "iterdir", "is_file", "is_dir"})
+
+#: Free/attribute calls that read a path passed as an argument.
+_READ_FUNCTIONS = frozenset({"open", "read_parquet", "read_json", "read_csv", "read_table", "load"})
 
 
-def test_no_pipeline_module_reads_under_final() -> None:
+def _final_rooted(node: ast.AST, roots: set[str]) -> bool:
+    """Is this expression a path under ``final/``?
+
+    True for a ``final_dir(...)`` call, for anything divided out of one, for ``<x> / "final"``,
+    and for any local name bound to one of those.
+    """
+    if isinstance(node, ast.Call):
+        func = node.func
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+        return name == "final_dir"
+    if isinstance(node, ast.Name):
+        return node.id in roots
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        if _final_rooted(node.left, roots):
+            return True
+        right = node.right
+        if isinstance(right, ast.Constant) and right.value == "final":
+            return True
+        if isinstance(right, ast.Name) and right.id == "FINAL_DIR":
+            return True
+        if isinstance(right, ast.Attribute) and right.attr == "FINAL_DIR":
+            return True
+    return False
+
+
+def _own_nodes(scope: ast.AST) -> Iterator[ast.AST]:
+    """Every node belonging to this scope, without descending into a nested one."""
+    for child in ast.iter_child_nodes(scope):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            continue
+        yield child
+        yield from _own_nodes(child)
+
+
+def _nested_scopes(scope: ast.AST) -> Iterator[ast.AST]:
+    """The scopes defined directly inside this one."""
+    for child in ast.iter_child_nodes(scope):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            yield child
+        else:
+            yield from _nested_scopes(child)
+
+
+def _scope_reads(scope: ast.AST, inherited: frozenset[str], path: Path, lines: list[str]) -> list[str]:
+    """Reads of a ``final/`` path in this scope and the scopes inside it."""
+    roots = set(inherited)
+    assignments = [n for n in _own_nodes(scope) if isinstance(n, (ast.Assign, ast.AnnAssign, ast.NamedExpr))]
+    # A fixpoint, because aliases chain: ``final = final_dir(d)`` then ``tasks = final / "t.json"``.
+    for _ in range(len(assignments) + 1):
+        before = len(roots)
+        for node in assignments:
+            value = node.value
+            if value is None or not _final_rooted(value, roots):
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            roots.update(t.id for t in targets if isinstance(t, ast.Name))
+        if len(roots) == before:
+            break
+
+    offenders: list[str] = []
+    for call in (n for n in _own_nodes(scope) if isinstance(n, ast.Call)):
+        func = call.func
+        hit = False
+        if isinstance(func, ast.Attribute) and func.attr in _READ_METHODS and _final_rooted(func.value, roots):
+            hit = True
+        elif isinstance(func, ast.Attribute) and func.attr in _READ_FUNCTIONS:
+            hit = any(_final_rooted(a, roots) for a in call.args)
+        elif isinstance(func, ast.Name) and func.id in _READ_FUNCTIONS:
+            hit = any(_final_rooted(a, roots) for a in call.args)
+        if hit:
+            offenders.append(f"{path.name}:{call.lineno}: {lines[call.lineno - 1].strip()}")
+
+    for child in _nested_scopes(scope):
+        offenders += _scope_reads(child, frozenset(roots), path, lines)
+    return offenders
+
+
+def test_no_pipeline_module_reads_under_final(real_run_dir: Path) -> None:
     """``final/`` holds the answer; a stage that reads it is treating a deliverable as state.
 
-    The evaluator is exempt by design — it scores the deliverable, so it is a consumer of the
+    Resolved through the AST rather than matched as text. The regex this replaces required the
+    read to be attached to the ``final_dir(...)`` call in one expression, so binding the directory
+    to a name first — which is what every real caller does — walked straight past it, and the
+    guard passed while three live reads sat in the tree.
+
+    The evaluator is exempt by design: it scores the deliverable, so it is a consumer of the
     answer rather than a stage that builds it.
     """
-    exempt = {"evaluate.py", "layer_boundary_test.py"}
+    exempt = {"evaluate.py", Path(__file__).name}
     offenders: list[str] = []
     for path in _pipeline_sources():
         if path.name in exempt:
             continue
-        for lineno, line in enumerate(path.read_text().splitlines(), start=1):
-            if _FINAL_READ.search(line):
-                offenders.append(f"{path.name}:{lineno}: {line.strip()}")
+        source = path.read_text()
+        offenders += _scope_reads(ast.parse(source), frozenset(), path, source.splitlines())
     assert not offenders, "pipeline stages must not read final/:\n" + "\n".join(offenders)
+
+
+def test_the_final_read_guard_sees_through_an_alias() -> None:
+    """The rule is about the path, not about how many expressions it took to name it.
+
+    Both forms below are the same violation; the previous regex caught only the first. Asserted
+    directly so the guard's discriminating power is itself tested, rather than inferred from the
+    tree happening to be clean.
+    """
+    inline = "def f(d):\n    return json.loads((final_dir(d) / 'transcript.json').read_text())\n"
+    aliased = (
+        "def f(d):\n    final = final_dir(d)\n    p = final / 'transcript.json'\n    return json.loads(p.read_text())\n"
+    )
+    writing = (
+        "def f(d):\n"
+        "    final = final_dir(d)\n"
+        "    final.mkdir(parents=True, exist_ok=True)\n"
+        "    (final / 'x.json').write_text('{}')\n"
+    )
+    for src in (inline, aliased):
+        assert _scope_reads(ast.parse(src), frozenset(), Path("probe.py"), src.splitlines())
+    assert not _scope_reads(ast.parse(writing), frozenset(), Path("probe.py"), writing.splitlines())
 
 
 def test_run_summary_deliverable_carries_no_l1_evidence(tmp_path: Path) -> None:
@@ -185,7 +355,57 @@ def test_run_summary_deliverable_carries_no_l1_evidence(tmp_path: Path) -> None:
     assert index["input_audio"] == "/tmp/x.wav"
 
 
-# ── 3. A threshold-derived value names the policy that produced it ───────────
+# ── 3. No artifact is keyed by both a pass and an axis ───────────────────────
+
+
+def test_no_artifact_is_keyed_by_both_a_pass_and_an_axis(real_run_dir: Path) -> None:
+    """An axis IS an aggregator — across signals and across passes alike.
+
+    A pass is an input dimension to the fold, never an index on its output, so a per-pass axis is
+    a category error rather than a redundancy. It is detectable by shape: rows carrying a fold
+    *and* a pass index. Votes are exempt and stay per-pass, which is what makes perturbation
+    stability computable at all — a vote carries a ``source``, and that is what tells the two
+    apart without consulting a filename.
+    """
+    labels = _pass_labels(real_run_dir)
+    offenders: list[str] = []
+    for path in sorted(real_run_dir.rglob("*.parquet")):
+        columns = _columns(path)
+        folds = _fold_columns(columns)
+        if not folds:
+            continue
+        relative = path.relative_to(real_run_dir)
+        keys = sorted(columns & PASS_COLUMNS) + [part for part in relative.parts if part in labels]
+        if keys:
+            offenders.append(f"{relative}: fold {folds} keyed by pass {keys}")
+    assert not offenders, (
+        f"{real_run_dir.name}: an axis is a fold across passes, so it cannot be indexed by one:\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_a_fold_has_one_row_per_bucket_not_one_per_pass(real_run_dir: Path) -> None:
+    """The arithmetic consequence of rule 3, checked so the rule cannot be satisfied on paper.
+
+    Dropping a ``stream`` column while still emitting one row per (pass, bucket) leaves the
+    category error intact and merely unlabelled: the file would then carry two rows claiming the
+    same bucket. Every fold's ``(start, end)`` pairs must therefore be unique.
+    """
+    import pyarrow.parquet as pq
+
+    offenders: list[str] = []
+    for path in sorted(real_run_dir.rglob("*.parquet")):
+        columns = _columns(path)
+        if not _fold_columns(columns) or not {"start", "end"} <= columns:
+            continue
+        table = pq.read_table(path, columns=["start", "end"])
+        buckets = list(zip(table.column("start").to_pylist(), table.column("end").to_pylist()))
+        if len(buckets) != len(set(buckets)):
+            offenders.append(f"{path.relative_to(real_run_dir)}: {len(buckets)} rows over {len(set(buckets))} buckets")
+    assert not offenders, f"{real_run_dir.name}: a fold has one row per bucket:\n" + "\n".join(offenders)
+
+
+# ── 4. A threshold-derived value names the policy that produced it ───────────
 
 
 def test_label_bins_travel_with_the_policy_that_produced_them() -> None:
@@ -235,7 +455,7 @@ def test_scene_coupling_records_its_weights_and_pre_coupling_value() -> None:
     assert axes["asr"].provenance["asr_scene_coupling"]["weights"]
 
 
-# ── 4. No field is read by a name that does not exist on the rows read ───────
+# ── 5. No field is read by a name that does not exist on the rows read ───────
 
 _FUSED_AXIS_FIELDS = {
     "start",
