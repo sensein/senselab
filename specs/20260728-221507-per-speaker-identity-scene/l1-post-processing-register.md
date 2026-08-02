@@ -573,3 +573,52 @@ Two silent fallbacks found while tracing and **still open**, both in `adaptive/f
 key is only ever set inside `row["meta"]`, and `(r["meta"] or {}).get("elected_stream", stream)`
 always emits the fusion stream because `elected_stream` is written to the *region*, never to
 `row["meta"]`.
+
+## Items 25 and 26 were not closed, and how that was found (2026-08-02)
+
+The four guards written to hold items 25–27 shut all **passed while the rules were being
+violated**, which is the same failure signature as every defect in this register: a check that
+resolves to nothing is indistinguishable from a check that found nothing.
+
+- The item-25 guard walked a tmp tree it built from two writers, so it never saw what a run
+  puts on disk, and it matched a hard-coded `AXIS_NAMES` list — leaving any axis added later
+  unguarded by construction. On a real run `L1/<pass>/background_mask.parquet` was sitting there,
+  carrying a per-region `uncertainty` folded across every presence signal and thresholded by the
+  detection-margin profile. It is now `L2/background_mask.parquet`, and the guard keys on
+  **shape** — an `axis` column, or a column whose value is an aggregate across signals — so
+  `L1/<pass>/asr/<model>.json`, which merely shares a name with an axis, stays legal for the
+  right reason.
+- The item-26 guard was a regex requiring the read to hang off the `final_dir(...)` call within
+  one expression. Every real caller binds the directory to a name first, so it matched none of
+  them: `adaptive/plot.py` read `final/transcript.json` and `adaptive/ls_final.py` read three
+  files under `final/`, all live, while the guard was green. It now resolves aliases per scope
+  through the AST.
+- `build_final_ls_bundle` was still a no-op for a second reason the register did not reach:
+  analyze_audio did not write the run bundle until *after* the adaptive loop had finished, so
+  re-pointing the reader could not have helped. The bundle is now completed (scene tracks
+  included) and written to `L2/` before the loop. Measured: 0 `final__consensus_transcript`
+  regions before, 72 after, on the same clip.
+- Two more reads that had never resolved: `_aggregator_from_run` read the pre-L1/L2 flat
+  `<run>/disagreements.json`, so every standalone adaptive run silently fell back to `min`; and
+  both background-mask plot readers were globs that had drifted, so each row reported "no
+  background mask" on runs whose mask had found regions.
+
+### Item 27 — artifact half closed
+
+`L2/rounds/<N>/belief/<axis>.parquet` carried a `stream` column and twice the rows of the
+cross-pass fold. It now holds one row per bucket, folded across passes by **most doubtful wins** —
+the policy `_final_belief_index` was already applying at read time — with `stream_fold`,
+`elected_stream` and `folded_from` recorded on the row. Three readers had each invented their own
+collapse (`_final_belief_index` kept the more doubtful row, `adaptive.plot` filtered to the fusion
+stream, `evaluate` filtered to the transcript's): three answers from one file, none written down.
+The column is `uncertainty`, not `within_pass_uncertainty` — the row is no longer within a pass.
+
+**What still remains** is unchanged from the section above: the store's in-memory
+per-`(stream, axis, bucket)` fold, blocked on `fuse_axis` accepting per-`(bucket, signal)`
+weights. That is correct for *votes* and only wrong when it reaches an artifact, which it no
+longer does. A new guard — no parquet keyed by both a pass and an axis, paired with one requiring
+a fold to have one row per bucket — now fails if it comes back, including via the paper-compliant
+escape of renaming the column while still emitting two rows per bucket.
+
+All three run-reading guards resolve their run from `artifacts/analyze_audio/` and skip, naming
+the command that produces one, when there is none.
