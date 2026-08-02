@@ -99,8 +99,11 @@ FOLD_COLUMNS = frozenset(
 #: it carries an ``axis`` column saying which fold it will feed.
 PER_SOURCE_COLUMNS = frozenset({"source", "signal"})
 
-#: The ways an artifact can be indexed by a pass.
-PASS_COLUMNS = frozenset({"stream", "pass_label", "pass"})
+#: The ways an artifact can be indexed by a pass. ``elected_stream`` is one of them: naming the
+#: pass whose reading was *taken as* the axis's is a per-pass axis with the index moved into the
+#: value. ``contributing_passes`` and ``folded_from`` are not — they say which passes fed the fold,
+#: which is provenance about an input dimension rather than a selection among outputs.
+PASS_COLUMNS = frozenset({"stream", "pass_label", "pass", "elected_stream"})
 
 
 def _fold_columns(columns: set[str]) -> list[str]:
@@ -403,6 +406,46 @@ def test_a_fold_has_one_row_per_bucket_not_one_per_pass(real_run_dir: Path) -> N
         if len(buckets) != len(set(buckets)):
             offenders.append(f"{path.relative_to(real_run_dir)}: {len(buckets)} rows over {len(set(buckets))} buckets")
     assert not offenders, f"{real_run_dir.name}: a fold has one row per bucket:\n" + "\n".join(offenders)
+
+
+def test_no_belief_api_takes_a_pass_to_produce_an_axis() -> None:
+    """Rule 3 applied to the API, because an artifact guard can only see the last step.
+
+    The writer can collapse two per-pass rows into one at the moment it writes, and every
+    artifact guard above then passes while the loop itself still holds — and reasons over — one
+    axis value per pass: regions proposed per (pass, axis), convergence marked per (pass, axis),
+    a fusion stream elected by comparing one pass's axis against another's. The collapse is then
+    a *presentation* of the category error rather than its absence, and every reader that reaches
+    past the parquet still sees two answers.
+
+    So the shape is asserted where it is decided: an axis-producing call may not take a pass.
+    Vote-level calls are exempt and must stay per-pass — that is what makes perturbation
+    stability computable — so they are listed here by name rather than by omission.
+    """
+    import inspect
+
+    from senselab.audio.workflows.audio_analysis.adaptive import regions as regions_module
+    from senselab.audio.workflows.audio_analysis.adaptive.belief import BeliefState, VoteStore
+
+    axis_producing = [
+        VoteStore.reaggregate_bucket,
+        VoteStore.buckets,
+        BeliefState.axis_rows,
+        BeliefState.uncertainty_mass,
+        BeliefState.update_buckets,
+        BeliefState.from_store,
+        regions_module.propose_regions,
+    ]
+    offenders = [
+        f"{fn.__qualname__}({name})"
+        for fn in axis_producing
+        for name in inspect.signature(fn).parameters
+        if name in {"stream", "streams", "passes", "pass_label"}
+    ]
+    assert not offenders, (
+        "an axis is a fold across passes, so nothing that produces one may be indexed by a pass:\n"
+        + "\n".join(offenders)
+    )
 
 
 # ── 4. A threshold-derived value names the policy that produced it ───────────
