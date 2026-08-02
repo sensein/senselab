@@ -25,6 +25,7 @@ from typing import Any
 
 from senselab.audio.workflows.audio_analysis.aggregate import _normalize_transcript_for_wer
 from senselab.audio.workflows.audio_analysis.harvesters import _levenshtein
+from senselab.audio.workflows.audio_analysis.layout import belief_dir, final_dir
 
 _TOKEN_EQUIV = {"u": "you"}  # annotator shorthand normalization, reported separately
 
@@ -65,12 +66,17 @@ def evaluate_against_ground_truth(
 ) -> dict[str, Any]:
     """Score final outputs in ``out_dir`` against the LS ground truth; write eval.json."""
     gt = load_ls_ground_truth(gt_path)
-    final = Path(out_dir) / "final"
+    # The evaluator scores the deliverable, so it is entitled to read ``final/`` — it is a
+    # consumer of the answer, not a stage that builds it. The belief artifacts it also needs are
+    # level 2, and reading them from ``final/`` crashed: the writer has put them under ``L2/``
+    # since the layout split, and nothing pointed this reader at the new location.
+    final = final_dir(out_dir)
+    belief = belief_dir(out_dir)
     transcript = json.loads((final / "transcript.json").read_text())
     diarization = json.loads((final / "diarization.json").read_text())
     import pandas as pd
 
-    speech_presence = pd.read_parquet(final / "speech_presence.parquet")
+    speech_presence = pd.read_parquet(belief / "speech_presence.parquet")
 
     speech_spans = [(s["start"], s["end"]) for s in gt["segments"]]
     transcribed = [(s["start"], s["end"]) for s in gt["segments"] if s["text"]]
@@ -174,7 +180,7 @@ def evaluate_against_ground_truth(
         vals = [w["confidence"] for w in transcript["words"] if _in_any((w["start"] + w["end"]) / 2.0, spans)]
         return round(sum(vals) / len(vals), 4) if vals else None
 
-    rows2 = json.loads((Path(out_dir) / "rounds").joinpath("1", "summary.json").read_text())
+    rows2 = json.loads((belief_dir(out_dir) / "rounds").joinpath("1", "summary.json").read_text())
     localization = {
         "untranscribed_gt_spans": untranscribed,
         "fused_confidence_in_untranscribed": _mean_conf(untranscribed),
@@ -185,8 +191,9 @@ def evaluate_against_ground_truth(
     try:
         import pandas as pd  # noqa: PLC0415
 
-        last_round = max(int(p.name) for p in (Path(out_dir) / "rounds").iterdir() if p.name.isdigit())
-        ident = pd.read_parquet(Path(out_dir) / "rounds" / str(last_round) / "belief" / "speaker.parquet")
+        rounds_dir = belief_dir(out_dir) / "rounds"
+        last_round = max(int(p.name) for p in rounds_dir.iterdir() if p.name.isdigit())
+        ident = pd.read_parquet(rounds_dir / str(last_round) / "belief" / "speaker.parquet")
         ident = ident[ident["stream"] == transcript.get("stream", "raw_16k")]
         boundaries = [g["start"] for g in gt["segments"][1:]]
         at_b: list[float] = []

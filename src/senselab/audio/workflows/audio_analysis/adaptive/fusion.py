@@ -223,8 +223,13 @@ def build_final_outputs(
     calibrated: bool = False,
     timestamps_meta: dict[str, Any] | None = None,
     language: str | None = None,
-) -> dict[str, Any]:
-    """Write final/{transcript,diarization}.json (+.rttm) + final/speech_presence.parquet; return transcript doc."""
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Write the final deliverables and return ``(transcript, diarization)``.
+
+    Both documents come back rather than only the transcript, so a caller that needs the
+    diarization does not have to read ``final/diarization.json`` off disk — which would make a
+    deliverable an input to the stage standing next to the one that wrote it.
+    """
     final = final_dir(out_dir)
     # Belief artifacts (posterior, speech_presence, convergence) are level 2; the deliverables
     # (transcript, diarization, timeline, summary) stay in final/. Different questions:
@@ -393,7 +398,7 @@ def build_final_outputs(
         for r in state.axis_rows(stream, "speech_presence")
     ]
     pd.DataFrame(pres_rows).to_parquet(belief / "speech_presence.parquet", index=False)
-    return transcript
+    return transcript, diarization
 
 
 def write_speaker_outputs(

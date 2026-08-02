@@ -13,6 +13,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from senselab.audio.workflows.audio_analysis.layout import belief_dir, final_dir
+
 _CONF_BINS = (("high", 0.66), ("medium", 0.33), ("low", 0.0))
 
 
@@ -57,12 +59,16 @@ def build_final_ls_bundle(
     iterations: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Write final/{labelstudio_tasks.json, labelstudio_config.xml, disagreements_resolved.json}."""
-    final = Path(out_dir) / "final"
+    final = final_dir(out_dir)
     final.mkdir(parents=True, exist_ok=True)
+    rounds_dir = belief_dir(out_dir) / "rounds"
     report: dict[str, Any] = {}
 
-    tasks_path = Path(run_dir) / "labelstudio_tasks.json"
-    config_path = Path(run_dir) / "labelstudio_config.xml"
+    # The run bundle lives in ``final/`` and the rounds under ``L2/``. Both moved with the layout
+    # split and neither reader was re-pointed, so this stage silently produced nothing: an absent
+    # path returns "not found", which is indistinguishable from a run that had no bundle.
+    tasks_path = final_dir(run_dir) / "labelstudio_tasks.json"
+    config_path = final_dir(run_dir) / "labelstudio_config.xml"
     if tasks_path.exists() and config_path.exists():
         tasks = json.loads(tasks_path.read_text())
         config = config_path.read_text()
@@ -149,10 +155,10 @@ def build_final_ls_bundle(
         report["reason"] = "run LS bundle not found"
 
     # ── disagreements_resolved.json ──────────────────────────────────────
-    dis_path = Path(run_dir) / "disagreements.json"
+    dis_path = final_dir(run_dir) / "disagreements.json"
     if dis_path.exists():
         dis = json.loads(dis_path.read_text())
-        region_spans = _region_spans(Path(out_dir) / "rounds")
+        region_spans = _region_spans(rounds_dir)
         resolved = []
         for entry in dis.get("entries") or []:
             annotated = dict(entry)
@@ -164,15 +170,10 @@ def build_final_ls_bundle(
                 and _overlaps(region_spans.get(e["region_id"]), entry)
                 and e.get("axis") == entry.get("axis")
             ]
-            annotated["resolution"] = _resolution_for(entry, Path(out_dir) / "rounds")
+            annotated["resolution"] = _resolution_for(entry, rounds_dir)
             resolved.append(annotated)
         payload = {
             "source": str(dis_path),
-            "scale_note": (
-                "final_uncertainty / delta_from_round1 are on the pre-coupling (per-vote) scale; "
-                "round-1 asr entries from runs with FR-019 scene coupling may include the "
-                "scene multiplier in their within_pass_uncertainty (see scene_quality_coupling)."
-            ),
             "entries": resolved,
         }
         (final / "disagreements_resolved.json").write_text(json.dumps(payload, indent=2))
@@ -201,24 +202,37 @@ def _overlaps(span: tuple[float, float] | None, entry: dict[str, Any]) -> bool:
     return float(entry.get("start", 0)) < span[1] and float(entry.get("end", 0)) > span[0]
 
 
-def _final_belief_index(rounds_dir: Path) -> dict[tuple[str, str, float, float], dict[str, Any]]:
-    """Last round's belief rows indexed by (stream, axis, start, end)."""
+def _final_belief_index(rounds_dir: Path) -> dict[tuple[str, float, float], dict[str, Any]]:
+    """Last round's belief rows indexed by ``(axis, start, end)``.
+
+    Not by stream. A bucket "converged on raw but open on enhanced" is not a meaningful state —
+    it is one recording — and keying on the pass made every bucket appear twice.
+    """
     try:
         import pandas as pd
 
         last = max(int(p.name) for p in rounds_dir.iterdir() if p.name.isdigit())
     except (OSError, ValueError):
         return {}
-    out: dict[tuple[str, str, float, float], dict[str, Any]] = {}
+    out: dict[tuple[str, float, float], dict[str, Any]] = {}
     for axis in ("speech_presence", "speaker", "asr"):
         f = rounds_dir / str(last) / "belief" / f"{axis}.parquet"
         if not f.exists():
             continue
         for _, row in pd.read_parquet(f).iterrows():
-            out[(str(row["stream"]), axis, round(float(row["start"]), 4), round(float(row["end"]), 4))] = {
+            key = (axis, round(float(row["start"]), 4), round(float(row["end"]), 4))
+            # Where both passes report the same bucket, keep the more doubtful reading rather
+            # than whichever row happened to be last: a settled answer must not be manufactured
+            # by iteration order.
+            value = row.get("within_pass_uncertainty")
+            prior = out.get(key)
+            if prior is not None and prior["within_pass_uncertainty_final"] is not None:
+                if value is None or value != value or value <= prior["within_pass_uncertainty_final"]:
+                    continue
+            out[key] = {
                 "status": row.get("status"),
                 "irreducible_reason": row.get("irreducible_reason"),
-                "within_pass_uncertainty_final": row.get("within_pass_uncertainty"),
+                "within_pass_uncertainty_final": value,
             }
     return out
 
@@ -226,7 +240,7 @@ def _final_belief_index(rounds_dir: Path) -> dict[tuple[str, str, float, float],
 def _resolution_for(
     entry: dict[str, Any],
     rounds_dir: Path,
-    _cache: dict[str, dict[tuple[str, str, float, float], dict[str, Any]]] = {},  # noqa: B006 — per-call-site memo
+    _cache: dict[str, dict[tuple[str, float, float], dict[str, Any]]] = {},  # noqa: B006 — per-call-site memo
 ) -> dict[str, Any]:
     # Memoized per rounds_dir + directory mtime so repeated in-process runs that
     # rewrite the same out_dir never read a stale final-belief index.
@@ -238,12 +252,10 @@ def _resolution_for(
         _cache.clear()
         _cache[stamp] = _final_belief_index(rounds_dir)
     index = _cache[stamp]
-    pass_label = str(entry.get("pass") or "")
-    if pass_label == "pass_pair":
-        return {"status": "delta_entry_not_tracked"}
+    # No pass on a disagreements entry any more: an axis is a fold across passes, so the entry
+    # names a span of the recording. The belief index is keyed the same way.
     row = index.get(
         (
-            pass_label,
             str(entry.get("axis")),
             round(float(entry.get("start", 0)), 4),
             round(float(entry.get("end", 0)), 4),
@@ -251,7 +263,7 @@ def _resolution_for(
     )
     if row is None:
         return {"status": "bucket_not_in_final_belief"}
-    u0 = entry.get("within_pass_uncertainty")
+    u0 = entry.get("triage_score")
     u1 = row.get("within_pass_uncertainty_final")
     out = {
         "status": row.get("status"),
