@@ -138,8 +138,7 @@ try:
         for i, frame_scores in enumerate(scores_np):
             top_indices = frame_scores.argsort()[::-1][:top_k]
             windows.append({
-                "labels": [class_names[idx] for idx in top_indices],
-                "scores": [float(frame_scores[idx]) for idx in top_indices],
+                "label_scores": [{class_names[idx]: float(frame_scores[idx])} for idx in top_indices],
             })
         all_results.append(windows)
 
@@ -232,8 +231,7 @@ class YAMNetClassifier:
                         {
                             "start": start,
                             "end": end,
-                            "labels": w["labels"],
-                            "scores": w["scores"],
+                            "label_scores": w["label_scores"],
                             "win_length": cls.WINDOW_SECONDS,
                             "hop_length": cls.HOP_SECONDS,
                         }

@@ -121,8 +121,8 @@ def test_scene_composition_sums_to_one_where_any_label_fired() -> None:
     from senselab.audio.workflows.audio_analysis.l1_plot import scene_composition
 
     windows = [
-        {"start": 0.0, "end": 1.0, "labels": ["Speech", "Music"], "scores": [0.8, 0.2]},
-        {"start": 1.0, "end": 2.0, "labels": ["Silence"], "scores": [0.9]},
+        {"start": 0.0, "end": 1.0, "label_scores": [{"Speech": 0.8}, {"Music": 0.2}]},
+        {"start": 1.0, "end": 2.0, "label_scores": [{"Silence": 0.9}]},
     ]
     times, shares = scene_composition(windows, duration_s=2.0, hop_s=0.5)
     assert times.size == shares.shape[1]
@@ -134,7 +134,7 @@ def test_scene_composition_leaves_uncovered_time_empty() -> None:
     """A gap in classifier coverage must read as absent, not as an even split."""
     from senselab.audio.workflows.audio_analysis.l1_plot import scene_composition
 
-    windows = [{"start": 0.0, "end": 1.0, "labels": ["Speech"], "scores": [0.9]}]
+    windows = [{"start": 0.0, "end": 1.0, "label_scores": [{"Speech": 0.9}]}]
     _times, shares = scene_composition(windows, duration_s=3.0, hop_s=0.5)
     assert shares[:, -1].sum() == pytest.approx(0.0)
 
@@ -149,8 +149,8 @@ def test_the_plot_accepts_words_a_spectrogram_and_scene_rows(tmp_path) -> None: 
         sampling_rate=SR,
         words_by_model={"whisper": [{"start": 0.1, "end": 0.4, "text": "hello"}]},
         scene_by_classifier={
-            "yamnet": [{"start": 0.0, "end": 1.0, "labels": ["Speech"], "scores": [0.9]}],
-            "ast": [{"start": 0.0, "end": 2.0, "labels": ["Music"], "scores": [0.5]}],
+            "yamnet": [{"start": 0.0, "end": 1.0, "label_scores": [{"Speech": 0.9}]}],
+            "ast": [{"start": 0.0, "end": 2.0, "label_scores": [{"Music": 0.5}]}],
         },
     )
     assert path.exists() and path.stat().st_size > 0

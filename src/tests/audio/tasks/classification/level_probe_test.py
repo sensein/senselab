@@ -32,7 +32,7 @@ from senselab.audio.tasks.classification.level_probe import (
 
 def _win(labels: list[str], scores: list[float], start: float = 0.0, end: float = 1.0) -> dict[str, Any]:
     """One classification window in the shape ``classify_audios`` emits."""
-    return {"start": start, "end": end, "labels": labels, "scores": scores}
+    return {"start": start, "end": end, "label_scores": [{lb: sc} for lb, sc in zip(labels, scores)]}
 
 
 # ── top-k extraction ──────────────────────────────────────────────────

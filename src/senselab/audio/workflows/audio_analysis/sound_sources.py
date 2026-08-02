@@ -20,6 +20,7 @@ from functools import lru_cache
 from importlib import resources
 from typing import Any, Optional
 
+from senselab.audio.tasks.classification.label_scores import label_scores
 from senselab.audio.workflows.audio_analysis.grid import BucketGrid
 from senselab.audio.workflows.audio_analysis.harvesters import classification_windows
 from senselab.utils.data_structures.logging import logger
@@ -106,8 +107,9 @@ def window_label_mass(window: Any, labels_of_interest: set[str]) -> Optional[flo
     """
     if not isinstance(window, dict):
         return None
-    labels = window.get("labels") or []
-    scores = window.get("scores") or []
+    pairs = label_scores(window)
+    labels = [next(iter(d)) for d in pairs]
+    scores = [next(iter(d.values())) for d in pairs]
     if not labels or not scores:
         return None
     subset = 0.0
@@ -126,8 +128,9 @@ def _window_category_masses(window: Any, mapping: dict[str, str], default: str) 
     """Sum one classification window's scores into the four category masses (normalized)."""
     if not isinstance(window, dict):
         return None
-    labels = window.get("labels") or []
-    scores = window.get("scores") or []
+    pairs = label_scores(window)
+    labels = [next(iter(d)) for d in pairs]
+    scores = [next(iter(d.values())) for d in pairs]
     if not labels or not scores:
         return None
     masses = {c: 0.0 for c in SOURCE_CATEGORIES}

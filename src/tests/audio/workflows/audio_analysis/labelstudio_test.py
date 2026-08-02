@@ -245,8 +245,8 @@ def test_collect_classification_labels_pulls_unique_labels() -> None:
     """The LS-config XML builder collects every distinct AudioSet label observed."""
     classify_result = [
         [
-            {"start": 0.0, "end": 0.5, "labels": ["Speech", "Music"], "scores": [0.9, 0.1]},
-            {"start": 0.5, "end": 1.0, "labels": ["Speech", "Silence"], "scores": [0.8, 0.2]},
+            {"start": 0.0, "end": 0.5, "label_scores": [{"Speech": 0.9}, {"Music": 0.1}]},
+            {"start": 0.5, "end": 1.0, "label_scores": [{"Speech": 0.8}, {"Silence": 0.2}]},
         ]
     ]
     labels = _collect_classification_labels(classify_result)
@@ -257,8 +257,8 @@ def test_classification_to_ls_emits_regions_for_dict_shape() -> None:
     """The LS conversion must skip empty entries but emit one region per dict window."""
     result = [
         [
-            {"start": 0.0, "end": 0.5, "labels": ["Speech"], "scores": [0.95]},
-            {"start": 0.5, "end": 1.0, "labels": ["Music"], "scores": [0.62]},
+            {"start": 0.0, "end": 0.5, "label_scores": [{"Speech": 0.95}]},
+            {"start": 0.5, "end": 1.0, "label_scores": [{"Music": 0.62}]},
         ]
     ]
     regions = _classification_to_ls(result, prefix="raw__ast", win_length=0.5, hop_length=0.5)

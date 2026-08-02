@@ -15,6 +15,7 @@ import re
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from senselab.audio.tasks.classification.label_scores import label_scores
 from senselab.audio.workflows.audio_analysis.harvesters import (
     asr_has_timestamps,
     seg_attr,
@@ -569,7 +570,7 @@ def _collect_classification_labels(result: Any) -> set[str]:  # noqa: ANN401
     for window in _classification_windows(result):
         if not isinstance(window, dict):
             continue
-        for label in window.get("labels") or []:
+        for label in (next(iter(d)) for d in label_scores(window)):
             if label:
                 labels.add(str(label))
     return labels

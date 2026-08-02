@@ -32,8 +32,7 @@ def _window(start: float, end: float, labels: list[str], scores: list[float]) ->
     return {
         "start": start,
         "end": end,
-        "labels": labels,
-        "scores": scores,
+        "label_scores": [{lb: sc} for lb, sc in zip(labels, scores)],
         "win_length": end - start,
         "hop_length": 0.5,
     }
@@ -159,8 +158,12 @@ def test_softmax_suppresses_a_secondary_category_relative_to_sigmoid() -> None:
     competitive = _softmax(logits + [-5.0] * 525)[:2]
     independent = _sigmoid(logits)
 
-    comp = _window_category_masses({"labels": labels, "scores": competitive}, mapping, default)
-    indep = _window_category_masses({"labels": labels, "scores": independent}, mapping, default)
+    comp = _window_category_masses(
+        {"label_scores": [{lb: sc} for lb, sc in zip(labels, competitive)]}, mapping, default
+    )
+    indep = _window_category_masses(
+        {"label_scores": [{lb: sc} for lb, sc in zip(labels, independent)]}, mapping, default
+    )
     assert comp is not None and indep is not None
     assert indep["machine"] > 3.0 * comp["machine"], (
         f"expected competition to suppress the secondary category; got {comp['machine']:.3f} vs {indep['machine']:.3f}"
@@ -189,7 +192,7 @@ def test_stage_scene_requests_the_independent_score_function(monkeypatch: "pytes
 
     def _spy(*_args: object, **kwargs: object) -> list[list[dict[str, object]]]:
         seen.append(dict(kwargs))
-        return [[{"start": 0.0, "end": 1.0, "labels": ["Speech"], "scores": [0.9]}]]
+        return [[{"start": 0.0, "end": 1.0, "label_scores": [{"Speech": 0.9}]}]]
 
     monkeypatch.setattr(stages_mod, "classify_audios", _spy)
 
@@ -223,8 +226,7 @@ def test_label_mass_counts_a_second_ranked_speech_label() -> None:
     window = {
         "start": 0.0,
         "end": 0.96,
-        "labels": labels,
-        "scores": [0.40, 0.38, 0.22],
+        "label_scores": [{lb: sc} for lb, sc in zip(labels, [0.40, 0.38, 0.22])],
     }
     mass = window_label_mass(window, {"Speech"})
     assert mass is not None
@@ -237,7 +239,7 @@ def test_label_mass_sums_across_several_speech_labels() -> None:
     """Mass over the whole subset, since speech has more than one AudioSet class."""
     from senselab.audio.workflows.audio_analysis.sound_sources import window_label_mass
 
-    window = {"labels": ["Speech", "Narration, monologue", "Rain"], "scores": [0.3, 0.3, 0.4]}
+    window = {"label_scores": [{"Speech": 0.3}, {"Narration, monologue": 0.3}, {"Rain": 0.4}]}
     assert window_label_mass(window, {"Speech", "Narration, monologue"}) == pytest.approx(0.6)
 
 
@@ -245,5 +247,5 @@ def test_label_mass_is_none_without_scores() -> None:
     """No scores is not zero mass — it is an absent measurement."""
     from senselab.audio.workflows.audio_analysis.sound_sources import window_label_mass
 
-    assert window_label_mass({"labels": [], "scores": []}, {"Speech"}) is None
+    assert window_label_mass({"label_scores": []}, {"Speech"}) is None
     assert window_label_mass(None, {"Speech"}) is None

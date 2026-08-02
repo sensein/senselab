@@ -31,6 +31,7 @@ from typing import Any, Literal, Mapping, Sequence
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.classification import classify_audios
+from senselab.audio.tasks.classification.label_scores import label_scores
 from senselab.audio.tasks.features_extraction.temporal import extract_temporal_features
 from senselab.audio.tasks.forced_alignment import align_transcriptions
 from senselab.audio.tasks.speaker_diarization import diarize_audios
@@ -808,7 +809,7 @@ def _scene_source_mass(
             ]
             if not overlapping:
                 continue
-            for label, score in zip(window.get("labels") or [], window.get("scores") or []):
+            for label, score in ((k, v) for d in label_scores(window) for k, v in d.items()):
                 field = f"src_{_category_for(str(label), mapping, default)}"
                 for key in overlapping:
                     slot = per_bucket.setdefault(key, {})

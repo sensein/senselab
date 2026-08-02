@@ -249,16 +249,14 @@ def test_ast_yamnet_uses_floor_window_indexing() -> None:
                 {
                     "start": 0.0,
                     "end": 10.24,
-                    "labels": ["Speech"],
-                    "scores": [0.9],
+                    "label_scores": [{"Speech": 0.9}],
                     "win_length": 10.24,
                     "hop_length": 10.24,
                 },
                 {
                     "start": 10.24,
                     "end": 20.48,
-                    "labels": ["Music"],
-                    "scores": [0.8],
+                    "label_scores": [{"Music": 0.8}],
                     "win_length": 10.24,
                     "hop_length": 10.24,
                 },
@@ -402,8 +400,7 @@ def test_multi_word_audioset_labels_match() -> None:
                 {
                     "start": 0.0,
                     "end": 10.24,
-                    "labels": ["Narration, monologue", "Music"],
-                    "scores": [0.8, 0.2],
+                    "label_scores": [{"Narration, monologue": 0.8}, {"Music": 0.2}],
                     "win_length": 10.24,
                     "hop_length": 10.24,
                 },
@@ -531,8 +528,7 @@ def test_speech_presence_rows_carry_source_columns() -> None:
         {
             "start": 0.0,
             "end": 2.0,
-            "labels": ["Speech", "Vehicle"],
-            "scores": [0.8, 0.2],
+            "label_scores": [{"Speech": 0.8}, {"Vehicle": 0.2}],
             "win_length": 2.0,
             "hop_length": 2.0,
         }
