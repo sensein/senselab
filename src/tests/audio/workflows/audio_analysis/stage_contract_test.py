@@ -847,12 +847,20 @@ def test_a_fold_indexed_by_a_perturbation_is_flagged(tmp_path: Path) -> None:
 
 
 def _current_run_tree(root: Path) -> None:
-    """The tree a completed run leaves today, as recorded from ``clip18s_20260802-155406``.
+    """The tree a completed run leaves today, as recorded from ``verify_clip_18s_20260802-182800``.
 
     Reproduced rather than assumed, so the artifact half of the register is exercised on every
     machine — including the ones with no ``artifacts/analyze_audio/`` to walk. It is not a
     substitute for :func:`test_a_real_run_conforms_or_the_violation_is_in_the_register`, which
     reads what the pipeline actually wrote; it is what keeps the register honest in between.
+
+    Recorded, which is the whole of its value: the previous version wrote every round's
+    ``summary.json`` and ``timeline.png`` and all four axes in every round, which is what the
+    declaration says a round owes and *not* what the pipeline produces. A fixture that records the
+    intent rather than the output is a fixture that cannot fail, and under it the four defects
+    this tree carries — the fourth axis stopping mid-loop, two schemas under one artifact name, no
+    round producing the full set, and ``final/`` computing rather than extracting — were all
+    invisible.
     """
     (root / "triage.json").write_text("{}")
     (root / "L1").mkdir(parents=True, exist_ok=True)
@@ -897,18 +905,51 @@ def _current_run_tree(root: Path) -> None:
         (belief / name).write_text("{}")
     _write_table(belief / "per_speaker_presence.parquet", {"start": [0.0], "end": [0.5], "speaker": ["S0"]})
     _write_table(belief / "speech_presence.parquet", {"start": [0.0], "end": [0.5], "round": [1]})
-    # One round tree, 0-based, shared by both producers. Round 0 is fusion's baseline, which the
-    # adaptive loop adopts rather than renumbering as its own "round 1".
+    # One round tree, 0-based, shared by both producers — and that is where the sharing stops.
+    # Rounds 0-2 come from ``fuse.write_final_uncertainty`` and rounds 3-4 from the adaptive
+    # loop's belief store, so the run has two producers writing one declared artifact:
+    #
+    #   - the fuse rounds carry ``axis``/``signal_weights``/``weight_basis``/``coupled_from``;
+    #   - the loop rounds carry ``status``/``p_voice``/``aleatoric_floor``/``attenuation`` and no
+    #     ``axis`` at all, so a reader cannot tell from a round which producer wrote it;
+    #   - the fourth axis has estimates in 0-2 and none in 3-4;
+    #   - only the loop writes ``summary.json`` (for its baseline and its own rounds) and only
+    #     fuse writes ``timeline.png``.
     for index in (0, 1, 2):
         for axis in ("speech_presence", "speaker", "asr", "background_mask"):
             _write_table(
                 belief / "round" / str(index) / "estimates" / f"{axis}.parquet",
-                {"start": [0.0], "end": [0.5], "uncertainty": [0.3], "round": [index]},
+                {
+                    "start": [0.0],
+                    "end": [0.5],
+                    "axis": [axis],
+                    "uncertainty": [0.3],
+                    "round": [index],
+                    "signal_weights": ["{}"],
+                    "weight_basis": ["{}"],
+                },
             )
         (belief / "round" / str(index) / "timeline.png").write_bytes(b"")
+    for index in (3, 4):
+        for axis in ("speech_presence", "speaker", "asr"):
+            _write_table(
+                belief / "round" / str(index) / "estimates" / f"{axis}.parquet",
+                {
+                    "start": [0.0],
+                    "end": [0.5],
+                    "uncertainty": [0.3],
+                    "round": [index],
+                    "status": ["open"],
+                    "p_voice": [0.9],
+                    "aleatoric_floor": [0.1],
+                },
+            )
+    # The loop's baseline is the last round fusion wrote, so round 2 gets a summary and the two
+    # rounds before it get none.
+    for index in (2, 3, 4):
         (belief / "round" / str(index) / "summary.json").write_text("{}")
     derivatives = belief / "round" / "0" / "derivatives"
-    for axis in ("speech_presence", "speaker", "asr"):
+    for axis in ("speech_presence", "speaker", "asr", "background_mask"):
         _write_table(
             derivatives / "votes" / f"{axis}.parquet",
             {"start": [0.0], "end": [0.5], "source": ["diar_a"], "stream": ["raw"]},
@@ -919,7 +960,7 @@ def _current_run_tree(root: Path) -> None:
         derivatives / "stability" / "diar_a.parquet",
         {"start": [0.0], "end": [0.5], "signal": ["diar_a"], "pass_a": ["raw"], "pass_b": ["enhanced"]},
     )
-    for index in (1, 2):
+    for index in (3, 4):
         regions = belief / "round" / str(index) / "derivatives" / "regions.json"
         regions.parent.mkdir(parents=True, exist_ok=True)
         regions.write_text("[]")
