@@ -49,14 +49,28 @@ def test_region_scope_shadows_same_source_file_scope() -> None:
     assert len(shadowed) == 1 and shadowed[0].source == "model_a" and shadowed[0].scope == "file"
 
 
-def test_purge_excludes_from_aggregation_but_keeps_row() -> None:
-    """C10: purged votes leave aggregation on both axes yet persist for provenance."""
+def test_attenuated_votes_stay_in_aggregation() -> None:
+    """C10 no longer erases: an uncorroborated claim is weighed down, not removed.
+
+    The behaviour this replaces deleted the vote from ``active_votes``, so the bucket reported
+    confident silence whenever the only witness to a quiet speaker was doubted.
+    """
     store = VoteStore()
     store.add_vote(_vote("asr_x"))
-    n = store.purge_source_in_bucket("raw_16k", BK, "asr_x", reason="hallucination", round_idx=2)
-    assert n == 1
-    assert "asr_x" not in store.active_votes("raw_16k", "speech_presence", BK)
-    assert any(v.status == "purged_hallucination" for v in store._votes.values())
+    records = store.attenuate_source_in_bucket(
+        "raw_16k",
+        BK,
+        "asr_x",
+        corroboration=0.0,
+        evidence_sources=["frame_vad"],
+        reason="uncorroborated_speech_claim",
+        round_idx=2,
+        measured_on=("speech_presence", BK),
+    )
+    assert len(records) == 1
+    assert "asr_x" in store.active_votes("raw_16k", "speech_presence", BK)
+    assert store.evidence_weights("raw_16k", "speech_presence", BK)["asr_x"] > 0.0
+    assert all(v.status == "active" for v in store._votes.values())
 
 
 def _rows(uncertainties: list[float], win: float = 0.5) -> list[dict]:

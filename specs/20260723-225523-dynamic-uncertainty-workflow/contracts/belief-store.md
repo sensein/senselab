@@ -30,11 +30,17 @@ final/ ...                  # see contracts/final-outputs.md
    intervention on the same crop overwrites its own logical vote (idempotent).
 3. **Shadowing**: `scope=region:*` from (model, stream) shadows `scope=file` from the same
    (model, stream) in buckets covered by the region core. Never across models, never across streams.
-   `status=purged_hallucination` (from P3) excludes a vote from aggregation on **both** presence and
-   utterance axes; the row persists.
+   `status` is `active | shadowed` and nothing else: no rule may remove a vote from aggregation.
+   What a rule withdraws is **weight** — `VoteStore.attenuate_source_in_bucket` multiplies
+   `vote.evidence_weight` by the measured corroboration, floored at `floors.MIN_EVIDENCE_WEIGHT`,
+   and appends the factor to `provenance.evidence_weight_factors`. P3 acts this way on the presence
+   and utterance axes (never identity: evidence that no one spoke here is silent about *which*
+   speaker it was).
 4. **Aggregation reads only `status=active` votes**, weighted by `policy.family_weights[family] ×
-   payload.weight`. Aggregators are the existing pure functions (`aggregate.py`) plus the
-   epistemic/aleatoric decomposition (D7).
+   payload.weight × vote.evidence_weight`. Aggregators are the existing pure functions
+   (`aggregate.py`) plus the epistemic/aleatoric decomposition (D7). A source absent from the
+   evidence-weight map was never measured and contributes unweighted — absent is not zero. An empty
+   map is byte-identical to no map, which is what keeps `parity_check` comparing one quantity.
 5. **Incremental re-aggregation**: after an intervention, only buckets intersecting its region core are
    re-aggregated; all other rows carry forward by reference (same values, same `round`).
 6. **Final-state mirroring**: the last round's aggregated rows are also written to the pre-existing
@@ -46,7 +52,9 @@ final/ ...                  # see contracts/final-outputs.md
 
 ## Invariants (tested)
 
-- No bucket loses evidence across rounds: `|active ∪ shadowed ∪ purged|` is non-decreasing.
+- No bucket loses evidence across rounds: `|active ∪ shadowed|` is non-decreasing, and every
+  `evidence_weight` stays strictly above 0 — attenuation is bounded below by the shared floor, so a
+  vote can be made unable to win but never made to disappear.
 - Re-running `aggregate_all` over the reconstructed live set reproduces every round's belief parquet
   byte-identically (determinism, SC-004).
 - For any (model, stream, bucket): at most one active vote.

@@ -46,9 +46,36 @@ def load_policy(path: Path | None = None, overrides: dict[str, Any] | None = Non
         policy = _deep_merge(policy, override)
     if overrides:
         policy = _deep_merge(policy, _drop_none(overrides))
+    _validate_floors(policy)
     canonical = json.dumps(policy, sort_keys=True, separators=(",", ":"))
     policy["policy_hash"] = hashlib.sha256(canonical.encode()).hexdigest()
     return policy
+
+
+_WEIGHT_FLOOR_KEYS: tuple[tuple[str, str], ...] = (("adjudication", "min_evidence_weight"),)
+"""``(block, key)`` policy entries that floor a withdrawn weight and must stay strictly positive."""
+
+
+def _validate_floors(policy: dict[str, Any]) -> None:
+    """Reject a policy that sets a weight floor to zero.
+
+    Aggregation drops a voter whose weight reaches zero, so a zero floor restores erasure through
+    configuration — silently, and everywhere at once. A floor that can be configured to zero is
+    not a floor, which is why this raises rather than clamping.
+    """
+    for block, key in _WEIGHT_FLOOR_KEYS:
+        raw = (policy.get(block) or {}).get(key)
+        if raw is None:
+            raise ValueError(f"policy.{block}.{key} is required — a withdrawn weight needs a stated floor")
+        try:
+            value = float(raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"policy.{block}.{key} must be a number; got {raw!r}") from exc
+        if value <= 0.0:
+            raise ValueError(
+                f"policy.{block}.{key} must be > 0; got {value}. A zero floor deletes a vote from "
+                "aggregation instead of attenuating it — that is purging with extra steps."
+            )
 
 
 def _drop_none(d: dict[str, Any]) -> dict[str, Any]:

@@ -35,6 +35,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal, Mapping
 
+from senselab.audio.workflows.audio_analysis.floors import MIN_EVIDENCE_WEIGHT
+
 __all__ = [
     "SOURCE_KINDS",
     "InfluenceWeight",
@@ -84,7 +86,7 @@ def effective_weight(
     uncertainty: float,
     derivation_gate: float,
     exponent: float = 1.0,
-    min_gate: float = 0.05,
+    min_gate: float = MIN_EVIDENCE_WEIGHT,
 ) -> float:
     """Apply both gates to a base weight.
 
@@ -124,7 +126,7 @@ def resolve_influence(
     kind: str,
     gates: Mapping[str, float],
     exponent: float = 1.0,
-    min_gate: float = 0.05,
+    min_gate: float = MIN_EVIDENCE_WEIGHT,
 ) -> InfluenceWeight:
     """Resolve one signal's influence, validating the gate configuration.
 

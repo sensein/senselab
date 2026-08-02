@@ -20,7 +20,7 @@ in Phase 8.
 
 ## Phase 2: Foundational (blocking) — belief store (Phase A of plan.md)
 
-- [X] T004 Vote model + VoteStore with shadow/coexist/purge semantics per contracts/belief-store.md (`adaptive/belief.py`)
+- [X] T004 Vote model + VoteStore with shadow/coexist semantics and floored per-vote `evidence_weight` (no removal path) per contracts/belief-store.md (`adaptive/belief.py`)
 - [X] T005 Ingest existing run artifacts: 6 per-pass uncertainty parquets → votes
   (`adaptive/belief.py`); per-model ASR/alignment/diarization JSONs → word streams
   (`adaptive/interventions.load_outcomes_dir` + `adaptive/fusion.collect_word_streams`)
@@ -66,7 +66,7 @@ in Phase 8.
 ## Phase 5: US3 — Cross-signal repair (P2)
 
 - [X] T021 [US3] S1 stream election per region with recorded scores; enhancement-artifact guard degraded to available evidence (FR-015) (`adaptive/interventions.py`)
-- [X] T022 [US3] P3 hallucination adjudication over existing evidence (available indicators: native word confidence, source masses, presence p_voice); purge semantics on both axes (C10)
+- [X] T022 [US3] P3 uncorroborated-speech attenuation over existing evidence (indicators: native word confidence, source masses, measured corroboration from the independent presence pool); floored weight withdrawal on the presence and utterance axes (C10)
 - [X] T023 [US3] C9 missed-speech correction vote (`adjudicator/missed_speech`) where phonetic/text evidence contradicts low p_voice
 - [X] T024 [US3] I1 boundary refinement (`adaptive/identity_repair.py`): consensus adjacent-cosine change-point trajectory from stored per-window embeddings (live fine-hop re-embedding available in `backends.embed_windows` for full envs); boundary-confidence from prominence
 - [X] T024a [US3] I2 re-cluster: change-point + diar-boundary segmentation, p_voice-weighted pooling, deterministic average-linkage cosine clustering, cross-model co-association consensus; refined clusters drive fusion speaker attribution + `final/diarization.json`; per-bucket `__cross_diar_label_disagreement__` recomputed with the new voter

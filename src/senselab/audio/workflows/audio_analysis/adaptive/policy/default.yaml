@@ -23,11 +23,22 @@ election:
     quality: 0.3
     asr_agreement: 0.3
 adjudication:
-  p_voice_hallucination: 0.2   # below this, ASR text triggers P3
-  p_voice_missed: 0.6          # below this, strong text agreement triggers C9
+  # P3 reads *measured corroboration* from the independent presence pool (frame posteriors and
+  # acoustic proxies that are willing to report absence — never ASR or diarizers, which infer
+  # presence from a decision that already presupposes a speaker). It used to read the belief row's
+  # p_voice, which folds in the indicted ASR's own vote: the source partly protected itself and
+  # acting on it moved the number that indicted it.
+  corroboration_low: 0.2       # below this, an ASR speech claim becomes a P3 candidate
+  corroboration_very_low: 0.1  # was the unnamed `p_voice_hallucination / 2`
   low_native_confidence: 0.35
   low_src_speech: 0.4
   min_indicators: 2
+  # Floor on the weight P3 may withdraw. Validated > 0 at load: aggregation drops voters at
+  # weight <= 0, so a zero floor here is a purge switch, not a tuning knob.
+  min_evidence_weight: 0.05
+  p_voice_missed_low: 0.2      # C9's own lower bound; it used to borrow P3's threshold, so
+                               # retuning one rule silently moved the other
+  p_voice_missed: 0.6          # below this, strong text agreement triggers C9
   missed_speech_weight: 0.5
 fusion:
   slot_overlap: 0.3            # min time-overlap fraction to join an existing word slot
@@ -74,7 +85,7 @@ speaker:                      # I1/I2 speaker repair (stored or live embeddings)
   fine_hop_s: 0.1
 rules:
   S1_stream_election: {enabled: true}
-  P3_hallucination_adjudication: {enabled: true}
+  P3_uncorroborated_speech_attenuation: {enabled: true}
   C9_missed_speech: {enabled: true}
   U2_reserve_escalation: {enabled: true}
   U1_region_reasr: {enabled: true}

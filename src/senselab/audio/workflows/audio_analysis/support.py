@@ -31,17 +31,25 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
+from senselab.audio.workflows.audio_analysis.floors import MIN_EVIDENCE_WEIGHT
+
 __all__ = [
     "MIN_EVIDENCE_SPREAD",
     "informative_evidence",
     "evidence_signal_names",
     "SUPPORT_FLOOR",
     "signal_support",
+    "CORROBORATION_POOLING",
+    "EVIDENCE_WEIGHT_MAP",
+    "presence_probability",
+    "bucket_corroboration",
+    "evidence_weight_from_corroboration",
 ]
 
-SUPPORT_FLOOR = 0.05
+SUPPORT_FLOOR = MIN_EVIDENCE_WEIGHT
 """Floor on support, so an unsupported signal is attenuated rather than silenced — it may be
-the only source that noticed something. Mirrors the perturbation-reliability floor."""
+the only source that noticed something. The number and its derivation live in
+:data:`~senselab.audio.workflows.audio_analysis.floors.MIN_EVIDENCE_WEIGHT`."""
 
 
 def _claims_speech(entry: Any) -> bool | None:  # noqa: ANN401 — vote entries are duck-typed
@@ -55,14 +63,117 @@ def _claims_speech(entry: Any) -> bool | None:  # noqa: ANN401 — vote entries 
 
 
 def _evidence_value(entry: Any) -> float | None:  # noqa: ANN401
-    """Continuous P(speech) carried by an evidence entry, if any."""
+    """P(speech) an entry states outright, for entries that never took a direction."""
     if not isinstance(entry, Mapping):
         return None
     for field in ("p_speech", "p_voice", "value", "native_confidence"):
         v = entry.get(field)
-        if isinstance(v, (int, float)):
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
             return max(0.0, min(1.0, float(v)))
     return None
+
+
+CORROBORATION_POOLING = "max"
+"""How several independent evidence signals in one bucket become one number.
+
+Named because ``max`` is a choice, and the same choice ``signal_support`` already makes: the
+measure only ever *removes* weight, so it must discount a claim solely when *nothing* credible
+supports it. One signal reporting speech is enough to make the claim supportable.
+"""
+
+EVIDENCE_WEIGHT_MAP = "identity_floored"
+"""How a corroboration measurement becomes a weight, named so it can be replaced without re-running
+a model. ``identity_floored`` is ``max(floor, corroboration)``.
+
+Identity, because any other shape — a fixed multiplier, an exponent, a sigmoid — inserts a constant
+nobody measured. The claim is "this source asserts speech here"; the independent evidence for that
+same event is already a probability in ``[0, 1]``; that probability *is* how far the assertion
+carries. The only free parameter left is the floor, which is named, shared and justified.
+"""
+
+
+def presence_probability(entry: Any) -> float | None:  # noqa: ANN401 — vote entries are duck-typed
+    """``P(speech)`` carried by one presence vote, read in the direction the voter cast it.
+
+    ``native_confidence`` is the voter's confidence in *its own* ``speaks`` direction (see
+    ``speech_presence_link._directed``), so a voter reporting ``speaks=False`` at confidence 0.8 is
+    asserting ``P(speech) = 0.2``. Reading that field raw turns every negative vote into a positive
+    one — the difference between "no speech here" and "confident speech here", for exactly the
+    voters whose job is to say no. It also silently made every directed voter fail
+    :func:`informative_evidence`'s "willing to say no" screen, because a directed confidence is
+    ``max(p, 1 − p)`` and can never fall below 0.5.
+
+    Falls back to :func:`_evidence_value` for entries that state a probability outright and never
+    took a direction.
+    """
+    if not isinstance(entry, Mapping):
+        return None
+    if "speaks" in entry and entry.get("speaks") is not None:
+        raw = entry.get("native_confidence")
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            confidence = max(0.0, min(1.0, float(raw)))
+            return confidence if entry.get("speaks") else 1.0 - confidence
+        return 1.0 if entry.get("speaks") else 0.0
+    return _evidence_value(entry)
+
+
+def bucket_corroboration(
+    votes: Mapping[str, Any],
+    *,
+    evidence_signals: Sequence[str],
+) -> float | None:
+    """Strongest independent indication of speech in one bucket, or ``None`` if none was measured.
+
+    This is :func:`signal_support`'s measure at the resolution of a single bucket, the same way
+    ``rounds.regional_weights`` is ``reliability``'s global weight at regional resolution. It is
+    leave-one-out by construction: ``evidence_signals`` only ever contains voters that observe
+    speech presence *directly*, so a claimant can never be in its own evidence pool and attenuating
+    the claimant cannot move the number that measured it.
+
+    Args:
+        votes: The bucket's active votes, ``{signal → payload}``.
+        evidence_signals: Names admitted as independent presence evidence, derived per run via
+            :func:`evidence_signal_names` + :func:`informative_evidence`.
+
+    Returns:
+        ``max`` over the evidence signals present in this bucket (see :data:`CORROBORATION_POOLING`),
+        or ``None`` when no evidence signal reported a usable value here. ``None`` means *unmeasured*
+        and must never be read as zero.
+    """
+    if not isinstance(votes, Mapping):
+        return None
+    values = [
+        p for name in evidence_signals if name in votes and (p := presence_probability(votes.get(name))) is not None
+    ]
+    return max(values) if values else None
+
+
+def evidence_weight_from_corroboration(
+    corroboration: float,
+    *,
+    floor: float = MIN_EVIDENCE_WEIGHT,
+) -> float:
+    """``max(floor, clamp01(corroboration))`` — the weight *is* the measurement.
+
+    Args:
+        corroboration: Independent evidence for the claim, in ``[0, 1]``.
+        floor: Minimum weight. See :data:`EVIDENCE_WEIGHT_MAP` for why the map above the floor is
+            the identity.
+
+    Returns:
+        The weight to apply to the claimant's vote.
+
+    Raises:
+        ValueError: If ``floor`` is not strictly positive. A zero floor re-introduces erasure
+            through the back door, because the presence fold drops voters at ``weight <= 0`` — a
+            floor that can be configured to zero is not a floor.
+    """
+    if float(floor) <= 0.0:
+        raise ValueError(
+            f"evidence-weight floor must be > 0; got {floor}. A zero floor deletes the vote from "
+            "aggregation instead of attenuating it, which is the erasure this map exists to avoid."
+        )
+    return max(float(floor), max(0.0, min(1.0, float(corroboration))))
 
 
 def signal_support(
@@ -101,7 +212,7 @@ def signal_support(
         # Max rather than mean because the measure only ever *removes* weight — it should
         # discount a claim solely when nothing credible supports it, and one signal
         # reporting speech is enough to make the claim supportable.
-        available = [_evidence_value(votes.get(name)) for name in evidence_names if name in votes]
+        available = [presence_probability(votes.get(name)) for name in evidence_names if name in votes]
         present = [v for v in available if v is not None]
         if not present:
             continue
@@ -178,7 +289,13 @@ detectors should: ``frame_segmentation`` reported no speech in 503 of 697 bucket
 
 Range alone would not have caught this: ``acoustic_loudness`` swings 0.500 and ``ast`` 0.242
 while neither ever reaches a negative verdict. Willingness to say no is the property, and it
-is measurable on the run with no per-model judgement."""
+is measurable on the run with no per-model judgement.
+
+Caveat on those figures: they were taken while the screen read ``native_confidence`` undirected,
+which cannot fall below 0.5 for any voter that took a direction — so part of what they measured was
+the reading, not the voter. The screen now uses :func:`presence_probability`. The thresholds are
+unchanged because the *property* they test is unchanged, but the per-voter verdicts above must be
+re-measured before they are cited again."""
 
 
 def informative_evidence(
@@ -217,7 +334,7 @@ def informative_evidence(
         if not isinstance(votes, Mapping):
             continue
         for name in candidates:
-            value = _evidence_value(votes.get(name))
+            value = presence_probability(votes.get(name))
             if value is not None:
                 series.setdefault(str(name), []).append(value)
 

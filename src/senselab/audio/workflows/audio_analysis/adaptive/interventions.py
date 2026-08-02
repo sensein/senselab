@@ -3,9 +3,9 @@
 Implemented for real on artifacts + the content-addressable cache:
 
 - ``S1_stream_election`` — per-region raw/enhanced election from belief evidence.
-- ``P3_hallucination_adjudication`` / ``C9_missed_speech`` — cross-signal repair
-  over existing evidence (C10 / C9), degraded to the indicators present in the
-  ingested run (no whisper ``no_speech_prob`` / PPG unless the run had them).
+- ``P3_uncorroborated_speech_attenuation`` / ``C9_missed_speech`` — cross-signal
+  repair over existing evidence (C10 / C9), degraded to the indicators present in
+  the ingested run (no whisper ``no_speech_prob`` / PPG unless the run had them).
 - ``U2_reserve_escalation`` — adds reserve ASR models by **cache replay**: the
   reserve model's whole-file result is read from ``analyze_audio``'s
   content-addressable cache (same audio signature ⇒ same waveform), windowed to
@@ -45,6 +45,7 @@ from senselab.audio.workflows.audio_analysis.harvesters import (
     whisper_bucket_avg_logprob,
 )
 from senselab.audio.workflows.audio_analysis.layout import pass_dir
+from senselab.audio.workflows.audio_analysis.support import evidence_weight_from_corroboration
 
 # ── shared artifact/cache access ─────────────────────────────────────────
 
@@ -245,21 +246,54 @@ def _region_text(ctx: dict[str, Any], stream: str, region: dict[str, Any]) -> st
 # ── P3 / C9: adjudication over existing evidence (C10 / C9) ─────────────
 
 
+def _presence_pool(ctx: dict[str, Any], stream: str) -> list[str]:
+    """Independent presence voters for ``stream``, derived once per run and cached on ``ctx``."""
+    from senselab.audio.workflows.audio_analysis.adaptive.corroboration import (  # noqa: PLC0415
+        independent_presence_pool,
+    )
+
+    cache = ctx.setdefault("_presence_pools", {})
+    if stream not in cache:
+        pool, rejected = independent_presence_pool(ctx["store"], stream)
+        cache[stream] = pool
+        ctx.setdefault("_presence_pools_rejected", {})[stream] = rejected
+    return list(cache[stream])
+
+
 def _adjudication_candidates(ctx: dict[str, Any], stream: str) -> list[dict[str, Any]]:
+    """ASR speech claims in buckets where independent evidence measured little support.
+
+    Keyed on measured corroboration rather than on the row's ``p_voice``. ``p_voice`` is a
+    weighted mean over *all* presence voters including the indicted ASR, so the source partly
+    protected itself and acting on it changed the very number that indicted it — a same-round
+    feedback path. Reading the independent pool instead makes the trigger quantity and the
+    attenuation degree one measurement.
+    """
+    from senselab.audio.workflows.audio_analysis.adaptive.belief import (  # noqa: PLC0415
+        UNCORROBORATED_SPEECH_CLAIM,
+    )
+    from senselab.audio.workflows.audio_analysis.support import bucket_corroboration  # noqa: PLC0415
+
     adj = ctx["policy"]["adjudication"]
+    pool = _presence_pool(ctx, stream)
     out = []
     for row in ctx["state"].axis_rows(stream, "speech_presence"):
-        p_voice = row.get("p_voice")
-        if p_voice is None or p_voice >= adj["p_voice_hallucination"]:
-            continue
         bk = bucket_key(row["start"], row["end"])
         votes = ctx["store"].active_votes(stream, "speech_presence", bk)
+        corroboration = bucket_corroboration(votes, evidence_signals=pool)
+        # Nothing measured here ⇒ nothing may be discounted. Absent is not zero.
+        if corroboration is None or corroboration >= adj["corroboration_low"]:
+            continue
         for source, payload in votes.items():
-            if source.startswith(("__", "acoustic_", "frame_", "embedding_", "ast", "yamnet")):
+            if source.startswith("__") or source in pool:
                 continue
             if source not in ctx["asr_model_ids"].get(stream, set()):
                 continue
             if not payload.get("speaks"):
+                continue
+            if ctx["store"].has_evidence_weight_factor(
+                stream, "speech_presence", bk, source, reason=UNCORROBORATED_SPEECH_CLAIM
+            ):
                 continue
             meta = row.get("meta") or {}
             nc = payload.get("native_confidence")
@@ -267,10 +301,18 @@ def _adjudication_candidates(ctx: dict[str, Any], stream: str) -> list[dict[str,
                 "low_native_confidence": nc is not None and float(nc) < adj["low_native_confidence"],
                 "low_src_speech": (meta.get("src_speech") is not None)
                 and float(meta.get("src_speech") or 1.0) < adj["low_src_speech"],
-                "very_low_p_voice": float(p_voice) < adj["p_voice_hallucination"] / 2.0,
+                "very_low_corroboration": corroboration < adj["corroboration_very_low"],
             }
             if sum(indicators.values()) >= adj["min_indicators"]:
-                out.append({"bucket": bk, "source": source, "indicators": indicators, "p_voice": p_voice})
+                out.append(
+                    {
+                        "bucket": bk,
+                        "source": source,
+                        "indicators": indicators,
+                        "corroboration": corroboration,
+                        "evidence_sources": list(pool),
+                    }
+                )
     return out
 
 
@@ -281,23 +323,64 @@ def _p3_trigger(region: dict[str, Any], ctx: dict[str, Any]) -> tuple[bool, dict
 
 
 def _p3_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+    """Withdraw weight from uncorroborated speech claims; the votes stay in the fold.
+
+    The claim is attenuated on the presence bucket and on every asr bucket overlapping it, all by
+    the *same* measurement taken on the presence bucket — which is what ``measured_on`` records.
+    Nothing is removed: a quiet or overlapped speaker produces this exact signature, and deleting
+    the only source that heard them leaves the bucket reporting confident silence with no trace to
+    appeal to.
+    """
+    from senselab.audio.workflows.audio_analysis.adaptive.belief import (  # noqa: PLC0415
+        UNCORROBORATED_SPEECH_CLAIM,
+    )
+
+    adj = ctx["policy"]["adjudication"]
+    floor = float(adj["min_evidence_weight"])
     touched: dict[tuple[str, str], set[tuple[float, float]]] = {}
-    purged = []
+    attenuated = []
     for stream in ctx["passes"]:
         for c in _adjudication_candidates(ctx, stream):
-            n = ctx["store"].purge_source_in_bucket(
-                stream, c["bucket"], c["source"], reason="hallucination_adjudicated", round_idx=ctx["round_idx"]
+            measured_on = ("speech_presence", c["bucket"])
+            records = ctx["store"].attenuate_source_in_bucket(
+                stream,
+                c["bucket"],
+                c["source"],
+                corroboration=c["corroboration"],
+                evidence_sources=c["evidence_sources"],
+                reason=UNCORROBORATED_SPEECH_CLAIM,
+                round_idx=ctx["round_idx"],
+                measured_on=measured_on,
+                floor=floor,
             )
-            # Purge also hits asr buckets overlapping this speech_presence bucket.
             for urow in _rows_in_span(ctx["state"].axis_rows(stream, "asr"), c["bucket"][0], c["bucket"][1]):
                 ubk = bucket_key(urow["start"], urow["end"])
-                n += ctx["store"].purge_source_in_bucket(
-                    stream, ubk, c["source"], reason="hallucination_adjudicated", round_idx=ctx["round_idx"]
+                records += ctx["store"].attenuate_source_in_bucket(
+                    stream,
+                    ubk,
+                    c["source"],
+                    corroboration=c["corroboration"],
+                    evidence_sources=c["evidence_sources"],
+                    reason=UNCORROBORATED_SPEECH_CLAIM,
+                    round_idx=ctx["round_idx"],
+                    measured_on=measured_on,
+                    floor=floor,
                 )
                 touched.setdefault((stream, "asr"), set()).add(ubk)
             touched.setdefault((stream, "speech_presence"), set()).add(c["bucket"])
-            purged.append({**c, "stream": stream, "votes_purged": n})
-    return {"purged": purged, "touched": touched}
+            attenuated.append(
+                {
+                    **c,
+                    "stream": stream,
+                    "votes_attenuated": len(records),
+                    "evidence_weight": max(
+                        (r["evidence_weight"] for r in records),
+                        default=evidence_weight_from_corroboration(c["corroboration"], floor=floor),
+                    ),
+                    "axes": sorted({r["axis"] for r in records}),
+                }
+            )
+    return {"attenuated": attenuated, "touched": touched}
 
 
 def _c9_trigger(region: dict[str, Any], ctx: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
@@ -310,7 +393,9 @@ def _missed_speech_candidates(ctx: dict[str, Any], stream: str) -> list[dict[str
     out = []
     for row in ctx["state"].axis_rows(stream, "speech_presence"):
         p_voice = row.get("p_voice")
-        if p_voice is None or not (adj["p_voice_hallucination"] <= p_voice < adj["p_voice_missed"]):
+        # C9's own lower bound. It used to borrow P3's threshold, so retuning one rule silently
+        # moved the other; the numbers are unchanged, the coupling is not.
+        if p_voice is None or not (adj["p_voice_missed_low"] <= p_voice < adj["p_voice_missed"]):
             continue
         bk = bucket_key(row["start"], row["end"])
         if "adjudicator/missed_speech" in ctx["store"].active_votes(stream, "speech_presence", bk):
@@ -1092,7 +1177,7 @@ RULES: list[dict[str, Any]] = [
         "execute": _s1_execute,
     },
     {
-        "id": "P3_hallucination_adjudication",
+        "id": "P3_uncorroborated_speech_attenuation",
         "axes": [],  # stream-global, runs at most once per round
         "meta_axis": "speech_presence",
         "cost": "light",
