@@ -223,15 +223,27 @@ split: `quality.harvest_quality_measurements` (dB / hertz / proportion) →
 `degradation.scene_degradation` (anchored scores). Remaining violations and their status are
 tracked one-by-one in
 `specs/20260728-221507-per-speaker-identity-scene/l1-post-processing-register.md`; the governing
-design and its decisions D-1 – D-15 are in the sibling `layered-architecture.md`.
+design and its decisions D-1 – D-16 are in the sibling `layered-architecture.md`.
+
+**An uncertainty axis IS an aggregator** (D-16). It aggregates across signals *and* across
+passes, so there is no such thing as a per-pass axis — a pass is an input dimension to the fold,
+never an index on its output. Passes are a *perturbation sample*: a signal whose answer flips
+between them has not earned its weight, which is what `reliability.signal_stability` measures,
+per signal, and what sets each signal's fusion weight. L1 emits
+`L1/<pass>/signals/<signal>.parquet` in native units and nothing under `L1/` is named for an
+axis; the single fold is `fuse.fuse_axis`, which receives every pass at once and reports the pass
+dimension only as each row's `contributing_passes` column.
 
 Output:
 
-- `<run_dir>/<pass>/uncertainty/{speech_presence,speaker,asr}.parquet` — per-pass axes (6 total per default two-pass run).
-- `<run_dir>/uncertainty/raw_vs_enhanced/{speech_presence,speaker,asr}.parquet` — same-axis deltas across passes (3 total).
-- `<run_dir>/disagreements.json` — top-N ranked across the 9 parquets, sorted by `aggregated_uncertainty` desc with axis-priority tiebreak (asr > speaker > speech_presence).
-- `<run_dir>/timeline.png` — 5-row figure: speech_presence / speaker / asr overlaid raw + enhanced, plus a raw-vs-enhanced delta strip and a reference row.
-- LS Labels tracks `<pass>__uncertainty__{speech_presence,speaker,asr}` and `pass_pair__uncertainty__*`; asr has a sibling TextArea carrying transcript consensus + dissenting models.
+- `<run_dir>/L1/<pass>/signals/<signal>.parquet` — one row per (signal, bucket), the measurement in the tool's own units; units / window / hop / model / revision in `schema.metadata`.
+- `<run_dir>/L1/stability/<signal>.parquet` + `signals.json` — cross-pass `|Δ|` per bucket and the run-level mean that sets each signal's fusion weight.
+- `<run_dir>/L1/passes.json` — the small index later stages read (duration, audio signature, input path).
+- `<run_dir>/L2/round<N>/uncertainty/<axis>.parquet` — the three fused axes: `uncertainty`, `epistemic_uncertainty`, `confidence`, `variability`, `triage_score`, `contributing_signals`, `contributing_passes`, `signal_weights`, `weight_basis`, `round`.
+- `<run_dir>/L2/round0/votes/<axis>.parquet` — the linked evidence at the vote level, keyed `(axis, bucket, source, pass, scope)`; what the adaptive store ingests.
+- `<run_dir>/final/disagreements.json` — top-N ranked over the fused axes by `triage_score`, axis-priority tiebreak (asr > speaker > speech_presence). No `pass` field: an axis has no pass.
+- `<run_dir>/final/timeline.png` — one line per axis with `epistemic_uncertainty` shaded beneath, plus a per-signal stability strip and a reference row.
+- LS Labels tracks `uncertainty__{speech_presence,speaker,asr}` (attached once) plus per-pass evidence tracks `<pass>__signal__<signal>`; asr has a sibling TextArea carrying transcript consensus + dissenting models.
 
 ```bash
 # Default — runs the full pipeline including the workflow
@@ -240,7 +252,7 @@ uv run python scripts/analyze_audio.py audio.wav
 # Standalone use of the workflow API (no script)
 uv run python -c "
 from senselab.audio.workflows.audio_analysis import BucketGrid, compute_uncertainty_axes
-axis_results, incomparable, embeddings = compute_uncertainty_axes(
+signals, fused_axes, incomparable, embeddings = compute_uncertainty_axes(
     passes=passes_summary,    # the dict produced by analyze_audio's per-task run_pass
     grid=BucketGrid(),         # 0.5 s non-overlapping by default
     params={...},
