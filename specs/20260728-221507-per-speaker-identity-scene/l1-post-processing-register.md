@@ -418,3 +418,34 @@ way in. If they differ, the readers depend on the transformation, and that has t
 path substitution would then silently change what they see.
 
 **Found by:** asking why `final/` contained anything that something else reads.
+
+---
+
+## Item 27 — two parallel speaker-axis pipelines, and the timeline draws the uncoupled one (open)
+
+Measured on one run, after H1 made cross-axis coupling work:
+
+| source | rows | round 0 → 1 (median) | coupled rows |
+|---|---|---|---|
+| `fuse_axes` → `L2/round<N>/uncertainty/speaker.parquet` | 72 | 0.646 → 0.739 | 72 / 72 |
+| adaptive belief → `L2/rounds/<n>/belief/speaker.parquet` | 144 | 0.667 → 0.833 | none — no coupling path exists |
+
+`adaptive/plot.py` draws the second. So per-speaker presence visibly fails to move speaker
+uncertainty in `final/timeline.png` even though the fused axis now couples on every bucket: the
+plot is showing a different lineage.
+
+They are not two views of one quantity. Different grids (72 vs 144, the latter carrying both
+streams), different provenance — the belief store ingests **L1's per-pass axis folds**, which is
+item 25's quantity — and only one of them is reachable by D-11's coupling. Two different numbers
+sharing a name.
+
+This is the consequence item 25 predicted, made concrete: because L1 emits per-axis folds, a second
+axis lineage exists at all, and the adaptive loop was built on it. Fixing item 25 and fixing this
+are the same work — there should be one speaker axis, fused at L2, and the belief store should read
+it rather than re-deriving from per-pass folds.
+
+Until then, any statement about "the speaker axis" has to say *which one*, and the timeline is the
+misleading case because it is the artifact a human actually looks at.
+
+**Found by:** noticing that per-speaker presence still did not move speaker uncertainty in the
+final timeline after coupling was verified working.
