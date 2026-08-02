@@ -983,3 +983,82 @@ Present: the converged state and how it was reached. Absent: anything another st
 - **L1** — could a different lab reproduce this number from the audio and the provenance alone?
 - **L2** — is every threshold that shaped this value named in a policy recorded on the row?
 - **final** — does anything in the pipeline open this directory?
+
+### What is present at the input of each stage
+
+The input side is where the violations actually happened: every defect in this work was a stage
+reading something it should not have had, or failing to read something it should.
+
+#### Into L1
+
+```
+audio file                       one recording
+task_type                        what counts as the *target* — speech, breathing, cough …
+pass definitions                 raw_16k, enhanced_16k: the transform applied
+model ids + revisions            what to run, pinned
+device, cache location
+```
+
+Present: the recording and the configuration. **Absent: any prior result.** L1 never reads L2 or
+`final/`, and never reads its own earlier output — a re-measurement (D-10) arrives as a *request*
+for a window and hop over a span, not as a belief to refine. That is what makes an L1 value
+reproducible from provenance alone.
+
+`task_type` is load-bearing at the input, not a label: without it the mask has no definition of
+target activity and marks the whole clip active. A run given no `task_type` produced
+`regions_total: 0` on audio containing a 6 s speech-free gap.
+
+#### Into L2 round 0
+
+```
+L1 measurements                  per signal, per pass, native units + resolution
+link policy                      SpeechPresencePolicy and siblings — every threshold, named
+reliability evidence             perturbation stability across passes, physical support
+aggregator choice                min / mean — the policy fold for triage_score
+calibration profile              versioned anchors, or absence recorded as absence
+```
+
+Present: measurements and the named policies that interpret them. **Absent: any axis.** Round 0
+constructs the axes; receiving one would mean L1 had already decided.
+
+A calibration profile that is missing must arrive as *missing*, not as a default — a sub-signal that
+cannot be calibrated drops out rather than voting, because a confident derived signal outvotes
+unanimous agreement between diarizers.
+
+#### Into L2 round N
+
+```
+L1 measurements                  unchanged, the same ones round 0 saw
+round N-1 axes                   every axis, all of them, at their own grids
+round N-1 derivatives            mask, speaker allocation, ASR consensus, scene components
+round N-1 belief state           votes with provenance and status
+convergence history              prior rounds' records, for C1-C4 and cycle detection
+```
+
+Present: everything the loop knows. **Absent: round N's own partial results** — an axis reads the
+*previous* round, never a sibling updated earlier in this one, or the fixed point depends on visit
+order.
+
+The axes arrive on their own grids and must be *projected* onto the receiving axis's lattice.
+Matching raw bucket keys is not projection: on real audio the four axes carried 85 / 41 / 1070 / 1
+buckets and shared zero keys, so coupling silently did nothing while every test passed.
+
+#### Into final
+
+```
+round N axes + derivatives       the converged belief
+L1 measurements                  where a deliverable needs raw evidence — word text, spans
+run provenance                   policy hash, model revisions, versions, budget
+```
+
+Present: the last round, and evidence for the things a deliverable quotes verbatim. **Absent:
+anything from an earlier round** — trajectory belongs in `decisions.json` as a summary, not as
+inputs to re-fuse. `final/` composes; it does not decide.
+
+#### The failure mode this side has
+
+Every input violation in this work was **silent**: an absent directory returned `{}`, a glob matched
+nothing, a projection matched zero keys, a default stood in for a missing measurement. None raised.
+An input a stage should not have is invisible because it works; an input a stage needs and lacks is
+invisible because empty and absent look identical. That is why each was found by inspecting a real
+run's outputs, and none by a test.
