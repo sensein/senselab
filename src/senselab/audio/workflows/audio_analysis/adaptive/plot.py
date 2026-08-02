@@ -61,8 +61,10 @@ def build_adaptive_timeline(
     first_r, last_r = round_ids[0], round_ids[-1]
 
     def _belief(round_idx: int, axis: str) -> "pd.DataFrame":
-        df = pd.read_parquet(rounds_dir / str(round_idx) / "belief" / f"{axis}.parquet")
-        return df[df["stream"] == stream].sort_values("start")
+        # No stream filter: the belief file holds one row per bucket, already folded across
+        # passes by the writer under a recorded policy. Filtering here picked one pass's reading
+        # and called it the run's, which is a fold nobody wrote down.
+        return pd.read_parquet(rounds_dir / str(round_idx) / "belief" / f"{axis}.parquet").sort_values("start")
 
     pres, ident_0, ident_k = _belief(last_r, "speech_presence"), _belief(first_r, "speaker"), _belief(last_r, "speaker")
     utt_0, utt_k = _belief(first_r, "asr"), _belief(last_r, "asr")
@@ -132,9 +134,7 @@ def build_adaptive_timeline(
     # ── row 2: speech_presence ─────────────────────────────────────────────────
     mids_p = (pres["start"] + pres["end"]) / 2
     ax_p.plot(mids_p, pres["p_voice"], color="tab:blue", lw=1.2, label="p_voice (final)")
-    ax_p.fill_between(
-        mids_p, 0, pres["within_pass_uncertainty"].fillna(0), color="tab:red", alpha=0.18, label="uncertainty"
-    )
+    ax_p.fill_between(mids_p, 0, pres["uncertainty"].fillna(0), color="tab:red", alpha=0.18, label="uncertainty")
     ax_p.axhline(0.5, color="grey", lw=0.6, ls=":")
     ax_p.set_ylabel("speech_presence", rotation=0, ha="right", va="center")
     ax_p.set_ylim(-0.02, 1.02)
@@ -566,9 +566,7 @@ def _step(ax: Any, df: Any, *, color: str, label: str) -> None:  # noqa: ANN401
     if not len(df):
         return
     mids = (df["start"] + df["end"]) / 2
-    ax.plot(
-        mids, df["within_pass_uncertainty"], drawstyle="steps-mid", color=color, lw=1.4, label=label, marker="o", ms=2.5
-    )
+    ax.plot(mids, df["uncertainty"], drawstyle="steps-mid", color=color, lw=1.4, label=label, marker="o", ms=2.5)
 
 
 def _region_mid(entry: dict[str, Any], rounds_dir: Path, *, axis: str | None = None) -> float | None:

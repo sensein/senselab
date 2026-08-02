@@ -564,31 +564,78 @@ def _iteration_entry(cand: PlannedIntervention, round_idx: int) -> dict[str, Any
     }
 
 
+def _more_doubtful(candidate: float | None, incumbent: float | None) -> bool:
+    """Does ``candidate`` express more doubt than ``incumbent``?
+
+    ``None`` and NaN mean *no signal spoke*, which is not a confident reading and not a doubtful
+    one — it is no reading. So a measured value displaces an absent one, and an absent value never
+    displaces a measured one. Treating absence as 0.0 would let a bucket nobody measured be
+    reported as settled.
+    """
+    c = None if candidate is None or candidate != candidate else float(candidate)
+    i = None if incumbent is None or incumbent != incumbent else float(incumbent)
+    if c is None:
+        return False
+    if i is None:
+        return True
+    return c > i
+
+
 def _write_round_belief(round_dir: Path, state: BeliefState, passes: list[str]) -> None:
+    """Write one belief row per (axis, bucket) — the fold across passes, never one row per pass.
+
+    An axis is an aggregator across signals *and* across passes, so a pass is an input dimension
+    to the fold and never an index on its output. The two passes are the same recording under a
+    transform: "converged on raw, open on enhanced" is not a state a recording can be in, it is
+    two readings of one bucket, and the artifact has to say which reading the run stands behind.
+    Emitting both left every reader to invent its own collapse — ``_final_belief_index`` had one,
+    ``adaptive.plot`` filtered to the fusion stream, ``evaluate`` filtered to the transcript's —
+    three different answers from one file.
+
+    The fold is **most doubtful wins**, lifted from the reader that already applied it. The whole
+    selected reading travels together rather than the maxima of each column separately, so the row
+    stays internally consistent; ``elected_stream`` names where it came from and ``folded_from``
+    which passes reported the bucket at all. Named on the row, because a selection is a policy and
+    a policy that is not written down cannot be disagreed with.
+    """
     import pandas as pd
 
     round_belief = round_dir / "belief"
     round_belief.mkdir(parents=True, exist_ok=True)
     for axis in AXES:
-        rows = []
+        chosen: dict[tuple[float, float], tuple[str, dict[str, Any]]] = {}
+        reported: dict[tuple[float, float], list[str]] = {}
         for stream in passes:
             for r in state.axis_rows(stream, axis):
-                rows.append(
-                    {
-                        "stream": stream,
-                        "start": r["start"],
-                        "end": r["end"],
-                        "within_pass_uncertainty": r.get("within_pass_uncertainty"),
-                        "p_voice": r.get("p_voice"),
-                        "epistemic": r.get("epistemic"),
-                        "aleatoric_floor": r.get("aleatoric_floor"),
-                        "status": r.get("status"),
-                        "irreducible_reason": r.get("irreducible_reason"),
-                        "round": r.get("round"),
-                        "n_sources": len(r.get("contributing_sources") or []),
-                        **attenuation_columns(r),
-                    }
-                )
+                key = (round(float(r["start"]), 6), round(float(r["end"]), 6))
+                reported.setdefault(key, []).append(stream)
+                incumbent = chosen.get(key)
+                if incumbent is None or _more_doubtful(
+                    r.get("within_pass_uncertainty"), incumbent[1].get("within_pass_uncertainty")
+                ):
+                    chosen[key] = (stream, r)
+        rows = []
+        for key in sorted(chosen):
+            stream, r = chosen[key]
+            rows.append(
+                {
+                    "start": r["start"],
+                    "end": r["end"],
+                    # Not ``within_pass_uncertainty``: this row is no longer within a pass.
+                    "uncertainty": r.get("within_pass_uncertainty"),
+                    "p_voice": r.get("p_voice"),
+                    "epistemic": r.get("epistemic"),
+                    "aleatoric_floor": r.get("aleatoric_floor"),
+                    "status": r.get("status"),
+                    "irreducible_reason": r.get("irreducible_reason"),
+                    "round": r.get("round"),
+                    "n_sources": len(r.get("contributing_sources") or []),
+                    "stream_fold": "most_doubtful",
+                    "elected_stream": stream,
+                    "folded_from": sorted(reported[key]),
+                    **attenuation_columns(r),
+                }
+            )
         if rows:
             pd.DataFrame(rows).to_parquet(round_belief / f"{axis}.parquet", index=False)
 

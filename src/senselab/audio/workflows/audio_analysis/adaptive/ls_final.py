@@ -211,8 +211,11 @@ def _overlaps(span: tuple[float, float] | None, entry: dict[str, Any]) -> bool:
 def _final_belief_index(rounds_dir: Path) -> dict[tuple[str, float, float], dict[str, Any]]:
     """Last round's belief rows indexed by ``(axis, start, end)``.
 
-    Not by stream. A bucket "converged on raw but open on enhanced" is not a meaningful state —
-    it is one recording — and keying on the pass made every bucket appear twice.
+    Not by stream, and no longer collapsed here: the belief file now holds one row per bucket,
+    folded across passes by the writer under a policy it records. This function used to apply its
+    own most-doubtful collapse, ``adaptive.plot`` filtered to the fusion stream, and ``evaluate``
+    filtered to the transcript's — three answers from one file, only one of which was written
+    down. The fold moved to the writer so there is one.
     """
     try:
         import pandas as pd
@@ -227,18 +230,10 @@ def _final_belief_index(rounds_dir: Path) -> dict[tuple[str, float, float], dict
             continue
         for _, row in pd.read_parquet(f).iterrows():
             key = (axis, round(float(row["start"]), 4), round(float(row["end"]), 4))
-            # Where both passes report the same bucket, keep the more doubtful reading rather
-            # than whichever row happened to be last: a settled answer must not be manufactured
-            # by iteration order.
-            value = row.get("within_pass_uncertainty")
-            prior = out.get(key)
-            if prior is not None and prior["within_pass_uncertainty_final"] is not None:
-                if value is None or value != value or value <= prior["within_pass_uncertainty_final"]:
-                    continue
             out[key] = {
                 "status": row.get("status"),
                 "irreducible_reason": row.get("irreducible_reason"),
-                "within_pass_uncertainty_final": value,
+                "final_uncertainty": row.get("uncertainty"),
             }
     return out
 
@@ -270,7 +265,7 @@ def _resolution_for(
     if row is None:
         return {"status": "bucket_not_in_final_belief"}
     u0 = entry.get("triage_score")
-    u1 = row.get("within_pass_uncertainty_final")
+    u1 = row.get("final_uncertainty")
     out = {
         "status": row.get("status"),
         "final_uncertainty": None if u1 is None or u1 != u1 else round(float(u1), 6),
