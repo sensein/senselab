@@ -135,9 +135,29 @@ def build_adaptive_timeline(out_dir: Path, *, gt_path: Path | None = None, title
     if gt:
         for b in [s["start"] for s in gt["segments"][1:]]:
             ax_i.axvline(b, color="black", lw=0.8, ls="--", alpha=0.6)
+    # The L2 fused speaker axis, beside the belief store's. Two different numbers sharing a name
+    # (item 27); the fused one is the only one cross-axis coupling can reach, so omitting it makes
+    # coupling look broken when it is simply not what this row was drawing.
+    fused_spk = _fused_axis(out_dir, "speaker")
+    if fused_spk is not None and len(fused_spk):
+        mids = (fused_spk["start"] + fused_spk["end"]) / 2
+        ax_i.plot(
+            mids,
+            fused_spk["uncertainty"],
+            color="tab:green",
+            lw=1.1,
+            ls="-.",
+            label="L2 fused (coupled)",
+        )
     ax_i.set_ylabel("speaker\nuncertainty", rotation=0, ha="right", va="center")
     ax_i.set_ylim(-0.02, 1.05)
-    ax_i.legend(loc="lower right", fontsize=7, ncol=2, title="GT boundaries dashed", title_fontsize=6)
+    ax_i.legend(
+        loc="lower right",
+        fontsize=7,
+        ncol=3,
+        title="belief store vs L2 fused — different quantities (item 27)",
+        title_fontsize=6,
+    )
 
     # ── row 4: asr + regions + interventions ─────────────────────
     _step(ax_u, utt_0, color="silver", label=f"round {first_r}")
@@ -551,3 +571,28 @@ def _region_mid(entry: dict[str, Any], rounds_dir: Path, *, axis: str | None = N
                 return None
             return (reg["core_start"] + reg["core_end"]) / 2
     return None
+
+
+def _fused_axis(out_dir: Path, axis: str) -> Any:  # noqa: ANN401 — pd.DataFrame or None
+    """The L2 fused axis for ``axis``, from the last round that wrote one.
+
+    A *different quantity* from the belief store this figure otherwise draws, and drawn beside it
+    deliberately (register item 27). They share a name and nothing else: different grids, different
+    provenance — the belief store ingests L1's per-pass axis folds — and only the fused one is
+    reachable by D-11's cross-axis coupling. Showing one and labelling it "speaker uncertainty"
+    invites the reading that per-speaker presence failed to move it, when in fact the coupled
+    quantity was never on the figure.
+
+    Returns ``None`` when no fused parquet exists, so older runs still render.
+    """
+    import pandas as pd
+
+    from senselab.audio.workflows.audio_analysis.layout import belief_dir
+
+    found = sorted(belief_dir(out_dir).glob(f"round*/uncertainty/{axis}.parquet"))
+    if not found:
+        return None
+    try:
+        return pd.read_parquet(found[-1]).sort_values("start")
+    except Exception:  # noqa: BLE001 — a plot must not fail a run
+        return None
