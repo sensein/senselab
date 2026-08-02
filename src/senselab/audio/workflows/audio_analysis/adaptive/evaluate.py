@@ -25,7 +25,13 @@ from typing import Any
 
 from senselab.audio.workflows.audio_analysis.aggregate import _normalize_transcript_for_wer
 from senselab.audio.workflows.audio_analysis.harvesters import _levenshtein
-from senselab.audio.workflows.audio_analysis.layout import belief_dir, final_dir
+from senselab.audio.workflows.audio_analysis.layout import (
+    belief_dir,
+    estimates_dir,
+    final_dir,
+    round_dir,
+    rounds_present,
+)
 
 _TOKEN_EQUIV = {"u": "you"}  # annotator shorthand normalization, reported separately
 
@@ -180,23 +186,23 @@ def evaluate_against_ground_truth(
         vals = [w["confidence"] for w in transcript["words"] if _in_any((w["start"] + w["end"]) / 2.0, spans)]
         return round(sum(vals) / len(vals), 4) if vals else None
 
-    rows2 = json.loads((belief_dir(out_dir) / "rounds").joinpath("1", "summary.json").read_text())
+    baseline_summary = round_dir(out_dir, rounds_present(out_dir)[0]) / "summary.json"
+    rows2 = json.loads(baseline_summary.read_text())
     localization = {
         "untranscribed_gt_spans": untranscribed,
         "fused_confidence_in_untranscribed": _mean_conf(untranscribed),
         "fused_confidence_in_transcribed": _mean_conf(transcribed),
-        "round1_uncertainty_mass": rows2.get("uncertainty_mass"),
+        "baseline_uncertainty_mass": rows2.get("uncertainty_mass"),
     }
     # Identity uncertainty at GT speaker boundaries vs inside segments.
     try:
         import pandas as pd  # noqa: PLC0415
 
-        rounds_dir = belief_dir(out_dir) / "rounds"
-        last_round = max(int(p.name) for p in rounds_dir.iterdir() if p.name.isdigit())
-        # One row per bucket, folded across passes by the writer. The filter this replaces took
-        # the transcript's stream, which scored the run against whichever pass the transcript came
-        # from rather than against the belief the run published.
-        ident = pd.read_parquet(rounds_dir / str(last_round) / "belief" / "speaker.parquet")
+        last = rounds_present(out_dir)[-1]
+        # One row per bucket, folded across perturbations by the writer. The filter this replaces
+        # took the transcript's stream, which scored the run against whichever perturbation the
+        # transcript came from rather than against the belief the run published.
+        ident = pd.read_parquet(estimates_dir(out_dir, last) / "speaker.parquet")
         boundaries = [g["start"] for g in gt["segments"][1:]]
         at_b: list[float] = []
         inside: list[float] = []

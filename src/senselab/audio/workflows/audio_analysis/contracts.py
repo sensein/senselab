@@ -300,9 +300,14 @@ L2_ROUND = StageContract(
         Artifact("L2/round/{n}/derivatives/**", "mask, speaker allocation, ASR consensus, scene components"),
         Artifact(
             "L2/round/{n}/estimates/*.parquet",
-            "the axes: one row per (axis, bucket)",
-            key=("axis", "bucket"),
-            keyed_in_path=("axis",),
+            "the axes: one row per (round, axis, bucket)",
+            # The round belongs in the key: an estimate is what *this* round believes, and a
+            # later round may believe otherwise. The path fixes it, as it fixes the axis, so
+            # neither has to appear as a column — but carrying either as provenance is not a
+            # violation, and treating the round column as one was the guard reading redundancy
+            # as contradiction.
+            key=("axis", "bucket", "round"),
+            keyed_in_path=("axis", "round"),
         ),
         Artifact("L2/round/{n}/timeline.png", "the same figure the final timeline draws"),
         Artifact("L2/round/{n}/summary.json", "what this round did, and what it now estimates"),
@@ -350,6 +355,18 @@ EVAL = StageContract(
     writes=(Artifact("final/eval.json", "the score"),),
 )
 
+LAYOUT = StageContract(
+    stage="LAYOUT",
+    why=(
+        "Names the tree, and answers the one question about it that no path alone can: which "
+        "rounds exist. Declared as a node rather than left PURE because every stage needs that "
+        "answer, and each deriving it independently is how sorted(glob('round*'))[-1] came to "
+        "read round 9 on a run with eleven rounds. It reads the round tree's directory names and "
+        "nothing inside them, and writes nothing at all."
+    ),
+    reads=("L2/round/*",),
+)
+
 PURE = StageContract(
     stage="PURE",
     why=(
@@ -369,7 +386,7 @@ ORCHESTRATOR = StageContract(
 )
 
 STAGE_CONTRACTS: Final[Mapping[str, StageContract]] = {
-    contract.stage: contract for contract in (L1, L2_ROUND, FINAL, EVAL, PURE, ORCHESTRATOR)
+    contract.stage: contract for contract in (L1, L2_ROUND, FINAL, EVAL, LAYOUT, PURE, ORCHESTRATOR)
 }
 
 DAG_STAGES: Final[tuple[str, ...]] = ("L1", "L2_ROUND", "FINAL", "EVAL")
@@ -401,6 +418,8 @@ MODULE_STAGE: Final[Mapping[str, str]] = {
     "src/senselab/audio/workflows/audio_analysis/summary.py": "FINAL",
     # the consumer.
     "src/senselab/audio/workflows/audio_analysis/adaptive/evaluate.py": "EVAL",
+    # the tree's own vocabulary.
+    "src/senselab/audio/workflows/audio_analysis/layout.py": "LAYOUT",
     # the drivers.
     "scripts/analyze_audio.py": "ORCHESTRATOR",
     "scripts/adaptive_loop.py": "ORCHESTRATOR",
@@ -439,10 +458,6 @@ _INLINED = (
     "itself opens run artifacts and the DAG cannot see inside it. Closes when each stage owns "
     "its own writes."
 )
-_TWO_TREES = (
-    "Two round trees, L2/round<N>/ (0-based, fuse) and L2/rounds/<N>/ (1-based, adaptive), with "
-    "different numbering bases. D-17: one tree, L2/round/<n>/{derivatives,estimates}."
-)
 _AT_L2_ROOT = (
     "A per-round quantity flattened to the L2 root, so it has no round to belong to and the "
     "last writer wins. D-17: it is a round artifact under L2/round/<n>/."
@@ -466,15 +481,8 @@ KNOWN_DEVIATIONS: Final[tuple[Deviation, ...]] = (
     Deviation(_DRIVER, "write", "L1/perturbation/*/pii.json", _INLINED),
     Deviation(_DRIVER, "write", "L1/raw/embeddings/*.json", _INLINED),
     Deviation(_DRIVER, "write", "L1/perturbation/*/embeddings/*.json", _INLINED),
-    Deviation(_DRIVER, "write", "L2/round*/votes/*.parquet", _INLINED),
-    Deviation(
-        _DRIVER,
-        "write",
-        "L2/round*/stability/*.parquet",
-        _INLINED + " Cross-perturbation stability is now a round derivative rather than an L1 "
-        "artifact, which is the half of it D-17 settles; the round tree it lands in is still the "
-        "0-based fusion one, so it moves again with the rest of L2/round*/.",
-    ),
+    Deviation(_DRIVER, "write", "L2/round/*/derivatives/votes/*.parquet", _INLINED),
+    Deviation(_DRIVER, "write", "L2/round/*/derivatives/stability/*.parquet", _INLINED),
     Deviation(_DRIVER, "write", "L2/disagreements.json", _INLINED),
     Deviation(_DRIVER, "write", "L2/labelstudio_tasks.json", _INLINED),
     Deviation(_DRIVER, "write", "L2/labelstudio_config.xml", _INLINED),
@@ -519,35 +527,7 @@ KNOWN_DEVIATIONS: Final[tuple[Deviation, ...]] = (
         "L2/background_mask.parquet",
         "An L1 module reading an L2 artifact to draw an L1 figure — the evidence view is rendered from belief.",
     ),
-    # ── two round trees, and round artifacts flattened to the L2 root ───────
-    Deviation(
-        _mod("fuse.py"),
-        "write",
-        "L2/round*/uncertainty/*.parquet",
-        _TWO_TREES + " 'uncertainty' also names one of the four quantities on the row rather "
-        "than the thing itself; the directory is 'estimates'.",
-    ),
-    Deviation(_mod("l2_plot.py"), "write", "L2/round*/timeline.png", _TWO_TREES),
-    Deviation(_mod("adaptive/loop.py"), "write", "L2/rounds/1/summary.json", _TWO_TREES),
-    Deviation(_mod("adaptive/loop.py"), "write", "L2/rounds/*/summary.json", _TWO_TREES),
-    Deviation(_mod("adaptive/loop.py"), "write", "L2/rounds/*/regions.json", _TWO_TREES),
-    Deviation(_mod("adaptive/loop.py"), "read", "L2/round0/uncertainty", _TWO_TREES),
-    Deviation(
-        _mod("adaptive/loop.py"),
-        "read",
-        "L2/round0/uncertainty/*.parquet",
-        _TWO_TREES + " This is the numbering collision at its sharpest: the adaptive loop's "
-        "round 1 consumes the fusion loop's round 0, and under one tree those are the same "
-        "node — a round reading its own output.",
-    ),
-    Deviation(
-        _mod("adaptive/belief.py"),
-        "read",
-        "L2/round0/votes/*.parquet",
-        _TWO_TREES + " The path is also hand-built from raw strings rather than through layout, "
-        "so it is a third spelling of one location; and every Vote it produces is stamped "
-        "round=1 from a file whose path says round 0.",
-    ),
+    # ── round artifacts still flattened to the L2 root ──────────────────────
     Deviation(_mod("fuse.py"), "write", "L2/rounds.json", _AT_L2_ROOT),
     Deviation(_mod("adaptive/loop.py"), "write", "L2/convergence.json", _AT_L2_ROOT),
     Deviation(_mod("adaptive/loop.py"), "write", "L2/iterations.json", _AT_L2_ROOT),
@@ -610,20 +590,9 @@ KNOWN_DEVIATIONS: Final[tuple[Deviation, ...]] = (
     Deviation(_mod("adaptive/plot.py"), "read", "L2/iterations.json", _AT_L2_ROOT),
     Deviation(_mod("adaptive/plot.py"), "read", "L2/convergence.json", _AT_L2_ROOT),
     Deviation(_mod("adaptive/plot.py"), "read", "L2/background_mask.parquet", _AT_L2_ROOT),
-    Deviation(_mod("adaptive/plot.py"), "read", "L2/rounds", _TWO_TREES),
-    Deviation(_mod("adaptive/plot.py"), "read", "L2/rounds/*/regions.json", _TWO_TREES),
-    Deviation(_mod("adaptive/plot.py"), "read", "L2/rounds/*/belief/*.parquet", _EARLIER_ROUND),
-    Deviation(
-        _mod("adaptive/plot.py"),
-        "read",
-        "L2/round*/uncertainty/*.parquet",
-        _TWO_TREES + " The glob is also sorted lexicographically and the last element taken, so "
-        "round10 sorts before round2 and the 'last round' overlay reads round 9's map on any run "
-        "past ten rounds.",
-    ),
     Deviation(_mod("adaptive/ls_final.py"), "read", "L2/labelstudio_tasks.json", _AT_L2_ROOT),
     Deviation(_mod("adaptive/ls_final.py"), "read", "L2/labelstudio_config.xml", _AT_L2_ROOT),
-    Deviation(_mod("adaptive/ls_final.py"), "read", "L2/disagreements.json", _EARLIER_ROUND),
+    Deviation(_mod("adaptive/ls_final.py"), "read", "L2/disagreements.json", _AT_L2_ROOT),
     # ── the evaluator scores things that are not in final/ ──────────────────
     Deviation(
         _mod("adaptive/evaluate.py"),
@@ -632,9 +601,21 @@ KNOWN_DEVIATIONS: Final[tuple[Deviation, ...]] = (
         "The evaluator reaches into L2 for a track that should be a deliverable. Closes with "
         "the fusion-stage write above.",
     ),
-    Deviation(_mod("adaptive/evaluate.py"), "read", "L2/rounds", _TWO_TREES),
-    Deviation(_mod("adaptive/evaluate.py"), "read", "L2/rounds/1/summary.json", _EARLIER_ROUND),
-    Deviation(_mod("adaptive/evaluate.py"), "read", "L2/rounds/*/belief/speaker.parquet", _TWO_TREES),
+    Deviation(
+        _mod("adaptive/evaluate.py"),
+        "read",
+        "L2/round/*/summary.json",
+        "The evaluator reads the baseline round's uncertainty mass out of L2. EVAL consumes "
+        "final/ and nothing else — a scorer reaching into the belief tree is scoring an "
+        "intermediate. Closes when the trajectory it wants is in final/decisions.json.",
+    ),
+    Deviation(
+        _mod("adaptive/evaluate.py"),
+        "read",
+        "L2/round/*/estimates/speaker.parquet",
+        "Same: the speaker axis it localises against is the last round's estimate rather than "
+        "the deliverable. Closes when final/ carries the converged speaker axis.",
+    ),
     # ── a writer with no stage at all ───────────────────────────────────────
     Deviation(
         _mod("level.py"),
@@ -647,8 +628,6 @@ KNOWN_DEVIATIONS: Final[tuple[Deviation, ...]] = (
     # ══ the artifact tree ═══════════════════════════════════════════════════
     # What a completed run leaves on disk that no stage declares. Matched as patterns, so one
     # entry covers a directory the restructure moves as a unit.
-    Deviation("", "artifact", "L2/round*/**", _TWO_TREES),
-    Deviation("", "artifact", "L2/rounds/**", _TWO_TREES),
     Deviation("", "artifact", "L2/rounds.json", _AT_L2_ROOT),
     Deviation("", "artifact", "L2/convergence.json", _AT_L2_ROOT),
     Deviation("", "artifact", "L2/iterations.json", _AT_L2_ROOT),
@@ -677,8 +656,13 @@ when an entry stops matching, so closing a violation *requires* deleting its ent
 are the point — an entry without one is a silenced test.
 
 Not represented here, because neither guard can see them: an L1 figure rendered from an L2
-belief (a path-conformant write of wrongly-sourced content), and a round reading a sibling
-mutated earlier in the same round (in-memory state, not an artifact). Both are named in
+belief (a path-conformant write of wrongly-sourced content), a round reading a sibling mutated
+earlier in the same round (in-memory state, not an artifact), and **two writers producing one
+declared artifact with different columns** — ``L2/round/0/estimates/<axis>.parquet`` comes from
+``fuse`` and carries ``signal_weights``/``weight_basis``; later rounds come from the belief store
+and carry ``p_voice``/``aleatoric_floor`` instead, so a reader comparing round 0 with round 2
+gets different columns for the same quantity. The key rules pass on both, because both are
+genuinely keyed by ``(axis, bucket)``; what differs is below the key. All three are named in
 ``specs/20260728-221507-per-speaker-identity-scene/layered-architecture.md``.
 
 The ``artifact`` entries are matched as **patterns**, unlike the static ones, because a
@@ -959,11 +943,11 @@ class _PathResolver(ast.NodeVisitor):
             return (_LAYOUT_ROOTS[str(name)],)
         if name == "perturbation_dir":
             return _PERTURBATION_DIRS
-        if name == "belief_dir":
-            # ``belief_dir(run)`` is ``L2``; ``belief_dir(run, n)`` is ``L2/round<n>``. The second
-            # form is the one the current tree writes and it is *not* the declared
-            # ``L2/round/<n>``, which is exactly the two-round-trees finding.
-            return (("L2", "round*"),) if len(node.args) + len(node.keywords) > 1 else (("L2",),)
+        if name in _ROUND_DIRS:
+            # The round index is a runtime value, so it resolves to ``*``: which round a module
+            # writes into is the unrolled DAG's question; the static guard's is only which
+            # *directory* it wrote to.
+            return (_ROUND_DIRS[str(name)],)
         if name == "Path" and node.args:
             return self._eval(node.args[0], env)
         if isinstance(func, ast.Attribute) and name == "joinpath":
@@ -976,6 +960,19 @@ class _PathResolver(ast.NodeVisitor):
             return tuple(branch + extra for branch in base)
         return None
 
+
+_ROUND_DIRS: Final[Mapping[str, tuple[str, ...]]] = {
+    "belief_dir": ("L2",),
+    "round_dir": ("L2", "round", "*"),
+    "estimates_dir": ("L2", "round", "*", "estimates"),
+    "derivatives_dir": ("L2", "round", "*", "derivatives"),
+}
+"""Layout helpers naming a place in the round tree.
+
+``belief_dir`` used to take an optional round index and return ``L2`` or ``L2/round<n>``. One
+helper returning a directory *and* its child made the root a place things could be written, which
+is how nine per-round quantities came to sit flattened at ``L2/`` with no round to belong to.
+"""
 
 _NAMED_SEGMENTS: Final[Mapping[str, str]] = {
     "EVIDENCE_DIR": "L1",

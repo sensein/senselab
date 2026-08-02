@@ -1,4 +1,4 @@
-"""``L2/round<N>/timeline.png`` — one figure per round, drawn after that round's fusion.
+"""``L2/round/<n>/timeline.png`` — one figure per round, drawn after that round's fusion.
 
 A single end-state figure cannot show what the iteration did. Per round, a reader can see
 whether a round moved anything and where, which is what says whether the loop is earning its
@@ -55,7 +55,7 @@ def build_round_timeline(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    from senselab.audio.workflows.audio_analysis.layout import belief_dir
+    from senselab.audio.workflows.audio_analysis.layout import round_dir
 
     axes_present = [axis for axis in sorted(axis_rows) if axis_rows[axis]]
     if not axes_present:
@@ -88,7 +88,7 @@ def build_round_timeline(
     fig.suptitle(title or f"L2 round {round_index} — fused belief", fontsize=10)
     fig.tight_layout()
 
-    dest = belief_dir(out_dir, round_index)
+    dest = round_dir(out_dir, round_index)
     dest.mkdir(parents=True, exist_ok=True)
     path = dest / "timeline.png"
     fig.savefig(path, dpi=110)

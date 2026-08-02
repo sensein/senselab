@@ -16,10 +16,20 @@ on the *location* rather than a dimension of the data, which is what let consume
 ``L1/<pass>/`` for one perturbation's evidence and quietly get a different answer than a fold
 over all of them.
 
-``L2/round<N>/`` — **belief.** The fused uncertainty maps, one directory per iteration. Per
-round rather than only final because a single map cannot distinguish "settled immediately" from
-"moved a long way and then settled", and that difference is what tells an operator whether the
-loop is earning its cost.
+``L2/round/<n>/`` — **belief.** *One* round tree, holding ``estimates/`` (the axes, one file
+each), ``derivatives/`` (the mask, the votes, the stability, the regions a round proposed),
+``timeline.png`` and ``summary.json``. Per round rather than only final because a single map
+cannot distinguish "settled immediately" from "moved a long way and then settled", and that
+difference is what tells an operator whether the loop is earning its cost.
+
+There were two trees: ``L2/round<N>/`` from fusion (0-based) and ``L2/rounds/<N>/`` from the
+adaptive loop (1-based), so the fusion loop's round 0 and the adaptive loop's round 1 were the
+same iteration under two names — and "round 1" meant different things depending on which
+directory you were reading. Under one tree they are one node, and the numbering is the run's.
+
+``estimates/`` rather than ``uncertainty/``: a row carries uncertainty, epistemic uncertainty,
+confidence and variability, so naming the directory after one of the four names a column rather
+than the thing itself.
 
 ``final/`` — **deliverables.** The summary, the timeline, and the consensus artifacts a
 consumer actually acts on. Kept separate from ``L2/`` because "what do we believe" and "what do
@@ -42,9 +52,14 @@ __all__ = [
     "EVIDENCE_DIR",
     "FINAL_DIR",
     "belief_dir",
+    "derivatives_dir",
+    "estimates_dir",
     "evidence_dir",
     "final_dir",
+    "last_round",
     "perturbation_dir",
+    "round_dir",
+    "rounds_present",
     "signals_dir",
 ]
 
@@ -82,10 +97,52 @@ def signals_dir(run_dir: Path | str) -> Path:
     return evidence_dir(run_dir) / "signals"
 
 
-def belief_dir(run_dir: Path | str, round_index: int | None = None) -> Path:
-    """``<run>/L2`` or ``<run>/L2/round<N>`` — the fused belief for one iteration."""
-    base = Path(run_dir) / BELIEF_DIR
-    return base if round_index is None else base / f"round{int(round_index)}"
+def belief_dir(run_dir: Path | str) -> Path:
+    """``<run>/L2`` — the root of the round tree, and nothing else.
+
+    It takes no round index any more. ``belief_dir(run)`` and ``belief_dir(run, n)`` returning a
+    directory and its child made the root a place things could be written, which is how nine
+    per-round quantities came to sit flattened at ``L2/`` with no round to belong to and the last
+    writer winning.
+    """
+    return Path(run_dir) / BELIEF_DIR
+
+
+def round_dir(run_dir: Path | str, round_index: int) -> Path:
+    """``<run>/L2/round/<n>`` — one iteration of the belief loop."""
+    return belief_dir(run_dir) / "round" / str(int(round_index))
+
+
+def estimates_dir(run_dir: Path | str, round_index: int) -> Path:
+    """``<run>/L2/round/<n>/estimates`` — the axes, one file each, one row per bucket."""
+    return round_dir(run_dir, round_index) / "estimates"
+
+
+def derivatives_dir(run_dir: Path | str, round_index: int) -> Path:
+    """``<run>/L2/round/<n>/derivatives`` — what the round built on the way to its estimates.
+
+    The mask, the linked votes, the cross-perturbation stability, the regions it proposed. All
+    per round, because each is a thing *that round* decided and a later round may decide
+    differently.
+    """
+    return round_dir(run_dir, round_index) / "derivatives"
+
+
+def rounds_present(run_dir: Path | str) -> tuple[int, ...]:
+    """Which rounds a run has written, in numeric order.
+
+    Numeric, not lexicographic: the previous "last round" was ``sorted(glob("round*"))[-1]``,
+    which puts ``round10`` before ``round2`` and so read round 9's map on any run past ten
+    rounds.
+    """
+    base = belief_dir(run_dir) / "round"
+    return tuple(sorted(int(p.name) for p in base.glob("*") if p.is_dir() and p.name.isdigit()))
+
+
+def last_round(run_dir: Path | str) -> int | None:
+    """The highest round index this run wrote, or ``None`` when it wrote none."""
+    rounds = rounds_present(run_dir)
+    return rounds[-1] if rounds else None
 
 
 def final_dir(run_dir: Path | str) -> Path:

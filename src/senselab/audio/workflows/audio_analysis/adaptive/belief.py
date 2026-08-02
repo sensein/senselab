@@ -17,7 +17,7 @@ and it is exactly what makes perturbation stability computable. An *axis* may no
 input dimension to the fold, never an index on its output. So :meth:`VoteStore.reaggregate_bucket`
 takes no stream, and the fold across passes is :func:`fuse.fuse_axis` — the same one
 ``compute_uncertainty_axes`` performs — rather than a second implementation living here. The two
-L2 trees (``L2/round<N>/uncertainty/`` and ``L2/rounds/<N>/belief/``) then answer the same question
+L2 round tree (``L2/round/<n>/estimates/``) then answers the same question
 with the same arithmetic, which :meth:`VoteStore.fused_parity` checks against what was written.
 
 What that replaced was not a redundancy. The store held one belief row per (stream, axis, bucket),
@@ -25,7 +25,7 @@ so "converged on raw, open on enhanced" was a state a bucket could be in; every 
 own collapse, and the writer's ``elected_stream`` — one pass's reading taken as the run's — was a
 per-pass axis with the index moved into the value.
 
-Ingest is the **linked evidence at the vote level** — ``L2/round0/votes/<axis>.parquet`` on the
+Ingest is the **linked evidence at the vote level** — ``L2/round/0/derivatives/votes/<axis>.parquet`` on the
 artifact path, the ``PassHarvest`` objects on the in-process path. Re-derivability is proved by
 :meth:`VoteStore.replay_check`, which rebuilds each bucket from what is persisted.
 """
@@ -49,7 +49,7 @@ from senselab.audio.workflows.audio_analysis.degradation import (
 )
 from senselab.audio.workflows.audio_analysis.floors import MIN_EVIDENCE_WEIGHT
 from senselab.audio.workflows.audio_analysis.fuse import fuse_axis
-from senselab.audio.workflows.audio_analysis.layout import perturbation_dir
+from senselab.audio.workflows.audio_analysis.layout import derivatives_dir, perturbation_dir
 from senselab.audio.workflows.audio_analysis.support import (
     CORROBORATION_POOLING,
     EVIDENCE_WEIGHT_MAP,
@@ -209,7 +209,7 @@ class VoteStore:
 
     @classmethod
     def from_run_dir(cls, run_dir: Path, passes: list[str]) -> "VoteStore":
-        """Populate round-1 votes from ``<run_dir>/L2/round0/votes/<axis>.parquet``.
+        """Populate round-0 votes from ``<run_dir>/L2/round/0/derivatives/votes/<axis>.parquet``.
 
         Ingests the **linked evidence at the vote level**, which is legitimately keyed
         ``(axis, bucket, source, pass, scope)``. It used to read
@@ -221,14 +221,14 @@ class VoteStore:
 
         The per-bucket scene measurements travel in the vote file itself, under the reserved names
         of :data:`_MEASUREMENT_SOURCES`. They used to be joined from
-        ``L2/round0/uncertainty/speech_presence.parquet``, a file that carries none of them: the
+        ``L2/round/0/estimates/speech_presence.parquet``, a file that carries none of them: the
         intersection was empty on every run, the join returned early, and every bucket's
         measurements were silently absent.
         """
         import pandas as pd
 
         store = cls()
-        votes_dir = Path(run_dir) / "L2" / "round0" / "votes"
+        votes_dir = derivatives_dir(run_dir, 0) / "votes"
         for axis in AXES:
             pq = votes_dir / f"{axis}.parquet"
             if not pq.exists():
@@ -250,7 +250,7 @@ class VoteStore:
                     store._record_measurement(stream, axis, bk, source, payload)
                     continue
                 store.add_vote(
-                    Vote(axis=axis, bucket=bk, source=source, stream=stream, scope="file", round=1, payload=payload)
+                    Vote(axis=axis, bucket=bk, source=source, stream=stream, scope="file", round=0, payload=payload)
                 )
                 store.row_meta.setdefault((stream, axis, bk), {})
         return store
@@ -267,8 +267,8 @@ class VoteStore:
         slot.update({k: _json_safe(v) for k, v in payload.items() if k in _META_COLUMNS})
 
     @classmethod
-    def from_harvests(cls, harvests: dict[str, Any], *, round_idx: int = 1, policy: Any = None) -> "VoteStore":  # noqa: ANN401
-        """Populate round-1 votes directly from ``compute.harvest_pass`` outputs (T009).
+    def from_harvests(cls, harvests: dict[str, Any], *, round_idx: int = 0, policy: Any = None) -> "VoteStore":  # noqa: ANN401
+        """Populate baseline-round votes directly from ``compute.harvest_pass`` outputs (T009).
 
         ``harvests`` maps pass label → ``PassHarvest`` (duck-typed:
         ``speech_presence_evidence`` / ``speaker_votes`` / ``asr_votes`` bucket lists plus

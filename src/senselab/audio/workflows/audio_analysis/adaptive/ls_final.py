@@ -13,7 +13,15 @@ import json
 from pathlib import Path
 from typing import Any
 
-from senselab.audio.workflows.audio_analysis.layout import belief_dir, final_dir
+from senselab.audio.workflows.audio_analysis.layout import (
+    belief_dir,
+    derivatives_dir,
+    estimates_dir,
+    final_dir,
+    last_round,
+    round_dir,
+    rounds_present,
+)
 
 _CONF_BINS = (("high", 0.66), ("medium", 0.33), ("low", 0.0))
 
@@ -61,7 +69,6 @@ def build_final_ls_bundle(
     """Write final/{labelstudio_tasks.json, labelstudio_config.xml, disagreements_resolved.json}."""
     final = final_dir(out_dir)
     final.mkdir(parents=True, exist_ok=True)
-    rounds_dir = belief_dir(out_dir) / "rounds"
     report: dict[str, Any] = {}
 
     # The run bundle is the belief rendered for an annotator — per-pass uncertainty and scene
@@ -164,7 +171,7 @@ def build_final_ls_bundle(
     dis_path = belief_dir(run_dir) / "disagreements.json"
     if dis_path.exists():
         dis = json.loads(dis_path.read_text())
-        region_spans = _region_spans(rounds_dir)
+        region_spans = _region_spans(out_dir)
         resolved = []
         for entry in dis.get("entries") or []:
             annotated = dict(entry)
@@ -176,7 +183,7 @@ def build_final_ls_bundle(
                 and _overlaps(region_spans.get(e["region_id"]), entry)
                 and e.get("axis") == entry.get("axis")
             ]
-            annotated["resolution"] = _resolution_for(entry, rounds_dir)
+            annotated["resolution"] = _resolution_for(entry, out_dir)
             resolved.append(annotated)
         payload = {
             "source": str(dis_path),
@@ -187,12 +194,10 @@ def build_final_ls_bundle(
     return report
 
 
-def _region_spans(rounds_dir: Path) -> dict[str, tuple[float, float]]:
+def _region_spans(out_dir: Path) -> dict[str, tuple[float, float]]:
     spans: dict[str, tuple[float, float]] = {}
-    if not rounds_dir.is_dir():
-        return spans
-    for rd in rounds_dir.iterdir():
-        f = rd / "regions.json"
+    for index in rounds_present(out_dir):
+        f = derivatives_dir(out_dir, index) / "regions.json"
         if f.exists():
             try:
                 for reg in json.loads(f.read_text()):
@@ -208,7 +213,7 @@ def _overlaps(span: tuple[float, float] | None, entry: dict[str, Any]) -> bool:
     return float(entry.get("start", 0)) < span[1] and float(entry.get("end", 0)) > span[0]
 
 
-def _final_belief_index(rounds_dir: Path) -> dict[tuple[str, float, float], dict[str, Any]]:
+def _final_belief_index(out_dir: Path) -> dict[tuple[str, float, float], dict[str, Any]]:
     """Last round's belief rows indexed by ``(axis, start, end)``.
 
     Not by stream, and no longer collapsed here: the belief file now holds one row per bucket,
@@ -217,15 +222,14 @@ def _final_belief_index(rounds_dir: Path) -> dict[tuple[str, float, float], dict
     filtered to the transcript's — three answers from one file, only one of which was written
     down. The fold moved to the writer so there is one.
     """
-    try:
-        import pandas as pd
+    import pandas as pd
 
-        last = max(int(p.name) for p in rounds_dir.iterdir() if p.name.isdigit())
-    except (OSError, ValueError):
+    last = last_round(out_dir)
+    if last is None:
         return {}
     out: dict[tuple[str, float, float], dict[str, Any]] = {}
     for axis in ("speech_presence", "speaker", "asr"):
-        f = rounds_dir / str(last) / "belief" / f"{axis}.parquet"
+        f = estimates_dir(out_dir, last) / f"{axis}.parquet"
         if not f.exists():
             continue
         for _, row in pd.read_parquet(f).iterrows():
@@ -240,18 +244,22 @@ def _final_belief_index(rounds_dir: Path) -> dict[tuple[str, float, float], dict
 
 def _resolution_for(
     entry: dict[str, Any],
-    rounds_dir: Path,
+    out_dir: Path,
     _cache: dict[str, dict[tuple[str, float, float], dict[str, Any]]] = {},  # noqa: B006 — per-call-site memo
 ) -> dict[str, Any]:
-    # Memoized per rounds_dir + directory mtime so repeated in-process runs that
+    # Memoized per round tree + directory mtime so repeated in-process runs that
     # rewrite the same out_dir never read a stale final-belief index.
+    # Stamped on the round it actually reads, not on the tree root: final/ extracts the *last*
+    # round, so that is the directory whose mtime says whether the index is stale.
+    last = last_round(out_dir)
+    tree = round_dir(out_dir, last) if last is not None else belief_dir(out_dir)
     try:
-        stamp = f"{rounds_dir}|{rounds_dir.stat().st_mtime_ns}"
+        stamp = f"{tree}|{tree.stat().st_mtime_ns}"
     except OSError:
-        stamp = str(rounds_dir)
+        stamp = str(tree)
     if stamp not in _cache:
         _cache.clear()
-        _cache[stamp] = _final_belief_index(rounds_dir)
+        _cache[stamp] = _final_belief_index(out_dir)
     index = _cache[stamp]
     # No pass on a disagreements entry any more: an axis is a fold across passes, so the entry
     # names a span of the recording. The belief index is keyed the same way.
