@@ -16,14 +16,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-UncertaintyAxis = Literal["speech_presence", "speaker", "asr"]
-"""The axes with a *vote harvest* — see FR-001 / FR-002.
+from senselab.audio.workflows.audio_analysis.axes import AxisName as UncertaintyAxis
 
-Narrower than the axis set L2 fuses, deliberately. ``background_mask`` is a fourth axis at fusion
-(its votes come from the mask's own per-region confidence, not from an ensemble) and ``task`` is a
-punted fifth, but neither is harvested, so neither belongs in the type that describes what harvest
-produces. Widening it here would promise `compute.py` inputs that no harvester emits.
-"""
+__all__ = ["ComparisonStatus", "FusedAxis", "PerSegmentEmbedding", "SignalResult", "SignalRow", "UncertaintyAxis"]
+
+# ``UncertaintyAxis`` is ``axes.AxisName`` — a plain ``str``, because the axis set is open. It
+# used to be a three-member ``Literal`` justified as "narrower than the set L2 fuses", and that
+# narrowing is precisely what made ``background_mask`` unrepresentable in every consumer that
+# needed to act on it. Which axes a *harvest* produces is now ``axes.HARVESTED_AXES``: a subset
+# asked for by property, not a type that forbids the others from existing.
 
 # A perturbation is a plain ``str``, not a Literal. The set is **open** — raw is the identity,
 # enhancement is one more, and a future L2 round may propose another — so anything that enumerates

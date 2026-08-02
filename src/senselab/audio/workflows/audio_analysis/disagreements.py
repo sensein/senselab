@@ -13,10 +13,9 @@ import math
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from senselab.audio.workflows.audio_analysis.axes import AXIS_PRIORITY as _AXIS_PRIORITY
 from senselab.audio.workflows.audio_analysis.labelstudio import HIGH_THRESHOLD
 from senselab.audio.workflows.audio_analysis.types import FusedAxis
-
-_AXIS_PRIORITY: dict[str, int] = {"asr": 0, "speaker": 1, "speech_presence": 2}
 
 
 def _row_summary(row: Mapping[str, Any], axis: str, evidence: Mapping[str, Any] | None) -> str:
@@ -113,7 +112,7 @@ def build_disagreements_index(
     def _sort_key(e: dict[str, Any]) -> tuple[Any, ...]:
         score = e["triage_score"]
         primary = -float(score) if isinstance(score, (int, float)) and not math.isnan(float(score)) else float("inf")
-        return (primary, _AXIS_PRIORITY.get(e["axis"], 99), e["start"])
+        return (primary, _AXIS_PRIORITY[str(e["axis"])], e["start"])
 
     candidates.sort(key=_sort_key)
     selected = candidates[: max(0, top_n)] if top_n > 0 else []

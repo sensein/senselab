@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from senselab.audio.workflows.audio_analysis.axes import HARVESTED_AXES
 from senselab.audio.workflows.audio_analysis.layout import (
     belief_dir,
     derivatives_dir,
@@ -228,7 +229,7 @@ def _final_belief_index(out_dir: Path) -> dict[tuple[str, float, float], dict[st
     if last is None:
         return {}
     out: dict[tuple[str, float, float], dict[str, Any]] = {}
-    for axis in ("speech_presence", "speaker", "asr"):
+    for axis in HARVESTED_AXES:
         f = estimates_dir(out_dir, last) / f"{axis}.parquet"
         if not f.exists():
             continue

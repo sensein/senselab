@@ -152,6 +152,7 @@ from senselab.audio.workflows.audio_analysis.labelstudio import (
     build_labelstudio_config,
     build_labelstudio_task,
 )
+from senselab.audio.workflows.audio_analysis.axes import AXIS_NAMES, HARVESTED_AXES
 from senselab.audio.workflows.audio_analysis.layout import (
     belief_dir,
     derivatives_dir,
@@ -1505,7 +1506,7 @@ def main(argv: list[str] | None = None) -> int:
         # The linked evidence, at the vote level — where (axis, bucket, source, pass, scope) is a
         # legitimate key. This is what the artifact-driven adaptive path ingests, so it sees the
         # same evidence the in-process path does instead of a per-pass axis fold.
-        for axis_name in ("speech_presence", "speaker", "asr"):
+        for axis_name in HARVESTED_AXES:
             write_linked_votes(
                 {label: linked.buckets_by_axis.get(axis_name, []) for label, linked in linked_by_pass.items()},
                 axis_name,
@@ -1656,6 +1657,19 @@ def main(argv: list[str] | None = None) -> int:
                     comparator_params=comparator_params,
                 )
                 summaries["final_uncertainty"] = final_maps
+
+                # The fourth axis's evidence, written where the other three write theirs, so the
+                # belief store ingests four axes rather than three. Without this the mask axis was
+                # fused and plotted but proposed no regions and was marked by no convergence
+                # criterion — a run could report "nothing left to do" having never asked it.
+                from senselab.audio.workflows.audio_analysis.fuse import mask_axis_votes
+
+                write_linked_votes(
+                    {"mask": mask_axis_votes(mask_regions)},
+                    "background_mask",
+                    derivatives_dir(run_dir, 0) / "votes" / "background_mask.parquet",
+                    provenance=run_provenance,
+                )
 
                 # One timeline per round, drawn after that round's fusion.
                 import pandas as _pd_round
@@ -2151,7 +2165,7 @@ def main(argv: list[str] | None = None) -> int:
         from senselab.audio.workflows.audio_analysis.summary import build_run_summary, render_run_summary
 
         axis_rows: dict[str, list[dict[str, Any]]] = {}
-        for axis in ("speech_presence", "speaker", "asr"):
+        for axis in AXIS_NAMES:
             path = (summaries.get("final_uncertainty") or {}).get(axis)
             if path and Path(path).exists():
                 frame = _pd.read_parquet(path)

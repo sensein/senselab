@@ -38,6 +38,7 @@ import numpy as np
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.audio_analysis.asr import harvest_asr_votes
+from senselab.audio.workflows.audio_analysis.axes import HARVESTED_AXES
 from senselab.audio.workflows.audio_analysis.embeddings import (
     WindowEmbedding,
     extract_per_window_embeddings,
@@ -573,7 +574,7 @@ def compute_uncertainty_axes(
         linked_out.update(linked_by_pass)
     buckets_by_axis_pass = {
         axis: {label: linked.buckets_by_axis.get(axis, []) for label, linked in linked_by_pass.items()}
-        for axis in ("speech_presence", "speaker", "asr")
+        for axis in HARVESTED_AXES
     }
 
     # Support is measured on the recording when it is present: the identity is the one
@@ -592,7 +593,7 @@ def compute_uncertainty_axes(
         weights_out.clear()
     instability_by_axis = {
         axis: signal_stability(harvests_by_label, axis=axis, buckets_by_pass=buckets_by_axis_pass[axis])
-        for axis in ("speech_presence", "speaker", "asr")
+        for axis in HARVESTED_AXES
     }
     reliability_by_axis = {
         axis: measured_weights(
@@ -600,16 +601,14 @@ def compute_uncertainty_axes(
             support,
             _signal_names(harvests_by_label, axis=axis),
         )
-        for axis in ("speech_presence", "speaker", "asr")
+        for axis in HARVESTED_AXES
     }
     if stability_out is not None:
         stability_out.clear()
         stability_out.update(
             {
                 "instability": {axis: dict(v) for axis, v in instability_by_axis.items()},
-                "per_bucket": {
-                    axis: stability_rows(buckets_by_axis_pass[axis]) for axis in ("speech_presence", "speaker", "asr")
-                },
+                "per_bucket": {axis: stability_rows(buckets_by_axis_pass[axis]) for axis in HARVESTED_AXES},
             }
         )
     if weights_out is not None:
@@ -634,7 +633,7 @@ def compute_uncertainty_axes(
     # signals are — and appear on the output only as the ``contributing_passes`` column.
     basis = (weights_out or {}).get("__basis__") or {}
     fused_axes: dict[str, FusedAxis] = {}
-    for axis in ("speech_presence", "speaker", "asr"):
+    for axis in HARVESTED_AXES:
         rows = fuse_axis(
             buckets_by_axis_pass[axis],
             weights=reliability_by_axis.get(axis, {}),
