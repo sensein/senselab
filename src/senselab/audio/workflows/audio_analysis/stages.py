@@ -544,6 +544,7 @@ def stage_background_mask(
         A ``{"background_mask": {...}}`` fragment carrying the mask document.
     """
     from senselab.audio.workflows.audio_analysis.background_mask import (
+        apply_span_evidence,
         build_mask,
         nontarget_confidence_by_bucket,
         target_confidence_by_bucket,
@@ -578,6 +579,12 @@ def stage_background_mask(
     scene_mass = _scene_source_mass(pass_summary, buckets)
     if scene_mass:
         rows = nontarget_confidence_by_bucket(rows, scene_mass)
+    # ASR words are direct, word-resolution evidence that the target was active, and the mask was
+    # not consulting the transcript at all. Raises confidence only: a recogniser's miss must not
+    # become a positive claim that nobody spoke.
+    word_spans = _target_word_spans(pass_summary)
+    if word_spans and "speech" in {str(e) for e in event_types}:
+        rows = apply_span_evidence(rows, target_spans=word_spans)
     mask = build_mask(rows, task_type, profile=resolved, long_window_s=long_window_s)
 
     doc = mask.to_json()
@@ -815,3 +822,33 @@ def _scene_source_mass(
                     slot = per_bucket.setdefault(key, {})
                     slot[field] = max(slot.get(field, 0.0), float(score))
     return per_bucket
+
+
+def _target_word_spans(pass_summary: Mapping[str, Any]) -> list[tuple[float, float]]:
+    """Word spans from every ASR model in the pass, as direct target-activity evidence.
+
+    Unioned across models rather than picking one: a word any recogniser heard is evidence the
+    target spoke, and requiring agreement would discard exactly the quiet or overlapped words a
+    single model catches. Words with no timing contribute nothing — a recogniser that produced
+    text without boundaries has said nothing about *when*.
+    """
+
+    def _leaves(node: object) -> list[Mapping[str, Any]]:
+        # A ScriptLine tree: the leaves are the words. Walked here rather than importing
+        # `adaptive.fusion.iter_word_leaves`, which would point this module *up* into a subsystem.
+        if isinstance(node, list):
+            return [w for item in node for w in _leaves(item)]
+        if isinstance(node, Mapping):
+            children = node.get("chunks")
+            return _leaves(children) if children else [node]
+        return []
+
+    spans: list[tuple[float, float]] = []
+    for outcome in ((pass_summary.get("asr") or {}).get("by_model") or {}).values():
+        if not isinstance(outcome, Mapping) or outcome.get("status") not in (None, "ok"):
+            continue
+        for word in _leaves(outcome.get("result") or []):
+            start, end = word.get("start"), word.get("end")
+            if isinstance(start, (int, float)) and isinstance(end, (int, float)) and end > start:
+                spans.append((float(start), float(end)))
+    return sorted(spans)
