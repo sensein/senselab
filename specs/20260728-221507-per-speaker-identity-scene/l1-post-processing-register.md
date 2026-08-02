@@ -622,3 +622,110 @@ escape of renaming the column while still emitting two rows per bucket.
 
 All three run-reading guards resolve their run from `artifacts/analyze_audio/` and skip, naming
 the command that produces one, when there is none.
+
+## Item 27 — closed (2026-08-02)
+
+The remaining half was **not** blocked on `fuse_axis` accepting per-`(bucket, signal)` weights.
+That blocker was stated from the wrong side of the call: `fuse_axis` is invoked *per bucket* by the
+store, so the per-signal weights it takes are already this bucket's. The store composes them across
+passes (mean over the passes a signal voted in, an unmeasured pass contributing `1.0`) and hands
+them over; no signature change was needed. The claim had gone unchecked for two rounds and was
+recorded as a blocker in both.
+
+**Nothing is keyed by both a pass and an axis, in memory or on disk.**
+
+| was | is |
+|---|---|
+| `VoteStore.reaggregate_bucket(stream, axis, bucket)` | `reaggregate_bucket(axis, bucket)` |
+| `VoteStore.buckets(stream, axis)` | `buckets(axis)`; `vote_buckets(stream, axis)` for vote-level readers |
+| `BeliefState.rows[(stream, axis)]` | `rows[axis]`; `axis_rows(axis)`, `uncertainty_mass(axis, θ)` |
+| `propose_regions(rows, axis, stream, …)` | `propose_regions(rows, axis, …)`; `Region.stream` → `action_stream` |
+| `touch_counts[(stream, axis, bucket)]` | `[(axis, bucket)]` |
+| the store's own fold | `fuse.fuse_axis` — one definition, checkable |
+| `elected_stream` on the belief row | `contributing_passes` |
+
+**The fold is `fuse_axis`.** The store had a second implementation of the axis, which is what made
+"the two L2s disagree" a real disagreement rather than a formatting difference. With one
+implementation the comparison becomes possible, and `VoteStore.fused_parity` performs it against
+`L2/round0/uncertainty/<axis>.parquet`. Round **0**, not the last round: later rounds condition
+each axis on the others, evidence the store does not have, so comparing against them skipped every
+bucket as coupled and reported a vacuous zero. On clip18s (18 s, two passes):
+`speech_presence` 896 compared / 0 mismatches, `speaker` 72 / 0, `asr` 24 / 0, `max_abs_diff` 0.0.
+`replay_check` keeps proving the other property — re-derivability from what is persisted.
+
+**Stream election survives only where a pass must genuinely be chosen**, and only on per-signal
+evidence. Two sites did it over a per-pass *axis*, which is the category error itself:
+
+- the fusion stream was `min(passes, key=uncertainty_mass(pass, "asr"))` → now the mean per-signal
+  ASR doubt on each pass, read from that pass's votes;
+- `S1_stream_election` read three per-pass axis quantities → now `p_voice`, scene degradation and
+  per-signal ASR doubt, each per pass from votes and measurements. Its result is
+  `Region.action_stream`: which audio to hand a model, not an index on the belief.
+
+### What this exposed
+
+- **`aleatoric_floor` was `0.0` on every bucket of every run.** It read `quality_snr` and siblings —
+  anchored *scores*, which neither ingest path has ever carried (the harvest holds dB; the fused
+  presence parquet holds neither). Every lookup missed and the floor defaulted to `0.0`, which is
+  the confident claim "this audio imposes no floor", so the `snr_floor` irreducibility verdict
+  could not fire and a run could only ever report
+  `no_reduction_under_available_interventions`. The floor is now derived from the dB under named
+  anchors, carries `aleatoric_floor_policy` on the row, and is `None` — not `0.0` — where nothing
+  was measured. Scene measurements ride the presence grid, so the other two axes fill in from the
+  presence buckets they overlap; without that the verdict stayed unreachable on two axes out of
+  three. Measured: 178/896 presence, 15/72 speaker, 8/35 asr buckets now carry a floor, and
+  `snr_floor` fires on the same clip that previously reported only the other reason.
+- **The artifact ingest dropped `__cross_diar_label_disagreement__`.** It was diverted into
+  `row_meta` by a payload-shape test ("dunder name with a `value` key"), while the in-process path
+  kept it as a vote — the two ingests differed by one speaker signal and nothing said so. Reserved
+  names are now listed.
+- **`_attach_scene_measurements` matched nothing.** It joined the bucket measurements from
+  `L2/round0/uncertainty/speech_presence.parquet`, a file that carries none of them: empty column
+  intersection, early return, no measurements attached on any run. They travel in the vote file
+  under `__quality__` and are read from there.
+- **The scene→asr coupling never reached disk.** `_apply_scene_coupling` ran on
+  `compute_uncertainty_axes`'s in-memory rows; `write_final_uncertainty` then re-folded every axis
+  across its rounds and analyze_audio copied `triage_score` and `coupled_from` back, so every
+  persisted asr row had `coupled_from == []` while `scene_quality_coupling` and
+  `triage_score_pre_coupling` sat on the row asserting an adjustment its number did not contain.
+  The implementation moved to `votes.apply_scene_coupling`, applied per round, both columns
+  written. Measured: 35/35 asr rows coupled, `triage_score != triage_score_pre_coupling` on all 35.
+- **The parity check found a difference between two spellings of "nothing".** Parquet reads a
+  missing value back as `NaN`, the store holds `None`; 11 asr buckets where *neither* had a value
+  were reported as mismatches until both sides went through `_float_or_none`.
+
+### What the guard now asserts
+
+`test_no_belief_api_takes_a_pass_to_produce_an_axis` inspects the signatures of every
+axis-producing call. The artifact guards can only see the last step: a writer that collapses two
+per-pass rows at the moment it writes satisfies them while the loop still holds one axis value per
+pass — which is exactly the state the previous round left, and why its "artifact half closed" was
+the whole of what it had closed. Both guards were shown failing on the tree before the fix:
+
+```
+L2/rounds/1/belief/speech_presence.parquet: fold ['uncertainty'] keyed by pass ['elected_stream']
+VoteStore.reaggregate_bucket(stream) / BeliefState.axis_rows(stream) / propose_regions(stream)
+```
+
+`elected_stream` joined `PASS_COLUMNS` for the artifact guard: naming the pass whose reading was
+taken *as* the axis's is a per-pass axis with the index moved into the value.
+`contributing_passes` is not, and stays — it says which passes fed the fold.
+
+### Consequences worth knowing
+
+The presence axis's `uncertainty` is now `fuse_axis`'s entropy over per-signal doubt, not
+`1 − |2·p_voice − 1|`. On a bucket where the only voters report a direction and no confidence, the
+fold is `None` where the old estimator returned a number: no signal expressed doubt, which is not
+the same as agreement. On real runs this changes nothing measurable — 896/896 presence buckets
+still fuse, because the frame-posterior and ASR signals carry confidences — but a synthetic
+coverage-only fixture now reports `None`. `p_voice` itself is unchanged and still comes from
+`speaks`, so every consumer that needed a probability about the world still has one.
+
+### Still open
+
+`aggregate.aggregate_speech_presence`, `aggregate_speaker` and `aggregate_asr` now have no caller
+in `src/`. They are the per-axis estimators the store used before delegating to `fuse_axis`, and
+leaving them in the tree leaves a second definition of the axis available to the next reader who
+goes looking. They should be deleted with their tests, or one of them promoted into
+`fuse.per_signal_uncertainty` if its treatment of a direction-only voter is judged better than
+returning nothing.
