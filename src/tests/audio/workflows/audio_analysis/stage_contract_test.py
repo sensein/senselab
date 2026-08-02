@@ -23,6 +23,10 @@ The four rule families:
    writer reached through a helper, or a file nobody meant to emit.
 4. **The register does not rot.** A registered deviation that stops matching fails, so closing a
    violation requires deleting its entry.
+
+``layer_boundary_test.py`` keeps its rules 4 and 5 — a threshold-derived value naming the policy
+that produced it, and a field read by a name the rows actually have. Neither is a path rule and
+D-17 does not replace them. Its rules 1-3 are superseded and go with the restructure.
 """
 
 from __future__ import annotations

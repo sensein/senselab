@@ -1452,3 +1452,42 @@ computed at the wrong stage.
 - A new axis, a new perturbation, or a new derivative needs no guard edit.
 - The two round trees, `L1/stability/`, the per-pass axis, and `final/` being read are one finding —
   edges the DAG forbids — rather than four to be found separately.
+
+### Where it lives, and what each half can see
+
+`src/senselab/audio/workflows/audio_analysis/contracts.py` is the declaration and the only place
+it exists. `src/tests/audio/workflows/audio_analysis/stage_contract_test.py` applies it.
+
+Nothing restates the declaration. `dag_edges` builds the graph by asking which of a consumer's
+declared reads could name one of a producer's declared writes, so a contract change moves the
+graph with it; `unrolled_contracts(n)` turns the round into *n* nodes, which is what makes
+ordering checkable at all — as one node, `L2_ROUND` reads and writes the same directory and is
+trivially its own predecessor.
+
+**The key is the mechanism that terminates.** Each declared artifact carries the tuple its rows
+are indexed by, and three rules fall out of it: a key dimension the path does not supply must
+appear as a column; a dimension outside the key must not appear at all; a non-interval dimension
+may be spelled once. That yields *keyed by no perturbation* and *keyed by two* as consequences
+rather than as entries, which is exactly the pair the shape-based guard could not express, and it
+holds for the fifth axis and the third perturbation before either is written.
+
+**Two guards, because neither subsumes the other.** The static one resolves aliases through the
+AST to a fixpoint and cannot see a path handed to a helper as a parameter. The artifact one sees
+concrete paths and cannot run without a run. Conformance is *subsumption*, not intersection: an
+access the guard cannot prove conformant is not a permitted one. Intersection was tried, and it
+silently unenforced the rule that matters most — `pass_dir(run_dir, stream) / "asr"` resolves to
+`L1/*/asr`, whose `*` intersects the `signals` in `L1/signals/**`, so every `adaptive/` read of a
+per-perturbation directory read as permitted.
+
+**`KNOWN_DEVIATIONS` is the worklist, not an exemption list.** 82 entries, each naming the clause
+it breaks and what closes it, and `dead_static_deviations` fails when an entry stops matching —
+so closing a violation requires deleting its entry. Every rule has been observed failing against
+a constructed violation, which the previous three rounds of guards had not been.
+
+**What neither guard can see**, recorded so the silence is not read as absence: an L1 figure
+rendered from an L2 belief conforms on paths and is still wrong, and a round reading a sibling
+mutated earlier in the same round is in-memory state rather than an artifact.
+
+`layer_boundary_test.py` keeps its rules 4 and 5 — a threshold-derived value naming its policy,
+and a field read by a name the rows have. Those are not path rules and D-17 does not replace
+them. Its rules 1–3 are superseded and go with the restructure, not with the mechanism.
