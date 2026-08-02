@@ -157,32 +157,79 @@ def _rows_in_span(rows: list[dict[str, Any]], start: float, end: float) -> list[
     return [r for r in rows if r["end"] > start and r["start"] < end]
 
 
+def _action_stream(region: dict[str, Any] | None) -> str:
+    """Which pass a rule should operate on for this region.
+
+    A region has no stream — it is a span of the recording, proposed from an axis that folds across
+    passes. What a rule needs is an *action target*: which audio to hand a model. ``S1`` elects one
+    from per-signal evidence and records it as ``action_stream``; before it has run, or when no
+    rule has asked, the raw pass is the default because it is the one that was recorded rather than
+    produced.
+    """
+    return str((region or {}).get("action_stream") or "raw_16k")
+
+
 def _mean(vals: list[float | None]) -> float | None:
     clean = [v for v in vals if v is not None and v == v]
     return sum(clean) / len(clean) if clean else None
 
 
 def _election_scores(region: dict[str, Any], ctx: dict[str, Any]) -> dict[str, dict[str, float]]:
+    """Score each pass over the region, from that pass's own votes and measurements.
+
+    Every term is per (signal, pass) or a per-pass measurement — never a reading of an axis. An
+    axis is a fold across passes and therefore has no per-pass value to compare; asking it for one
+    is what this rule used to do, and it is the same category error the belief store had. What a
+    pass genuinely owns is what its signals said and what its audio measured, which is also the
+    only evidence that bears on "which pass should a model be re-run against".
+    """
+    from senselab.audio.workflows.audio_analysis.aggregate import speech_presence_p_voice  # noqa: PLC0415
+    from senselab.audio.workflows.audio_analysis.degradation import (  # noqa: PLC0415
+        SNR_PREFERENCE,
+        clip_degradation,
+        reverb_degradation,
+        snr_degradation,
+    )
+    from senselab.audio.workflows.audio_analysis.fuse import per_signal_uncertainty  # noqa: PLC0415
+
+    store = ctx["store"]
+    lo, hi = float(region["core_start"]), float(region["core_end"])
     scores: dict[str, dict[str, float]] = {}
     w = ctx["policy"]["election"]["weights"]
     for stream in ctx["passes"]:
-        pres = _rows_in_span(
-            ctx["state"].axis_rows(stream, "speech_presence"), region["core_start"], region["core_end"]
-        )
-        utt = _rows_in_span(ctx["state"].axis_rows(stream, "asr"), region["core_start"], region["core_end"])
-        p_conf = _mean([r.get("p_voice") for r in pres]) or 0.0
-        degr = _mean(
-            [
-                max(
-                    float((r.get("meta") or {}).get("quality_snr") or 0.0),
-                    float((r.get("meta") or {}).get("quality_clip") or 0.0),
-                    float((r.get("meta") or {}).get("quality_reverb") or 0.0),
+        presence_buckets = [bk for bk in store.vote_buckets(stream, "speech_presence") if bk[1] > lo and bk[0] < hi]
+        p_values = [
+            p
+            for bk in presence_buckets
+            if (
+                p := speech_presence_p_voice(
+                    store.active_votes(stream, "speech_presence", bk),
+                    weights=store.evidence_weights(stream, "speech_presence", bk),
                 )
-                for r in pres
+            )
+            is not None
+        ]
+        degradations: list[float] = []
+        for bk in presence_buckets:
+            meta = store.row_meta.get((stream, "speech_presence", bk)) or {}
+            snr_name = next((n for n in SNR_PREFERENCE if meta.get(n) is not None), None)
+            terms = [
+                snr_degradation(meta.get(snr_name)) if snr_name else None,
+                reverb_degradation(meta.get("c50_brouhaha_db")),
+                clip_degradation(meta.get("proportion_clipped")),
             ]
-        )
-        quality = 1.0 - (degr if degr is not None else 0.0)
-        agree = 1.0 - (_mean([r.get("within_pass_uncertainty") for r in utt]) or 0.0)
+            measured = [float(t) for t in terms if t is not None]
+            if measured:
+                degradations.append(max(measured))
+        doubts = [
+            v
+            for bk in store.vote_buckets(stream, "asr")
+            if bk[1] > lo and bk[0] < hi
+            for v in per_signal_uncertainty({"votes": store.active_votes(stream, "asr", bk)}).values()
+        ]
+        p_conf = _mean(list(p_values)) or 0.0
+        quality = 1.0 - (_mean(list(degradations)) or 0.0)
+        agree = 1.0 - (_mean(list(doubts)) or 0.0)
         total = w["speech_presence_conf"] * p_conf + w["quality"] * quality + w["asr_agreement"] * agree
         scores[stream] = {
             "speech_presence_conf": round(p_conf, 6),
@@ -212,14 +259,7 @@ def _s1_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
         # is confidently silent — SepFormer can synthesize speech-like energy.
         raw_text = _region_text(ctx, "raw_16k", region)
         enh_text = _region_text(ctx, elected, region)
-        raw_pres = _mean(
-            [
-                r.get("p_voice")
-                for r in _rows_in_span(
-                    ctx["state"].axis_rows("raw_16k", "speech_presence"), region["core_start"], region["core_end"]
-                )
-            ]
-        )
+        raw_pres = _mean([scores["raw_16k"]["speech_presence_conf"]]) if "raw_16k" in scores else None
         if enh_text and not raw_text and (raw_pres is not None and raw_pres < 0.2):
             guard_fired = True
             elected = "raw_16k"
@@ -230,14 +270,18 @@ def _s1_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
         "guard_fired": guard_fired,
     }
     ctx["elections"][region["region_id"]] = election
-    region["elected_stream"] = elected
+    # An action target, not an index on the belief: it names the pass a later rule should re-run a
+    # model against, and no axis changes because of it.
+    region["action_stream"] = elected
     return {"election": election, "touched": {}}
 
 
 def _region_text(ctx: dict[str, Any], stream: str, region: dict[str, Any]) -> str:
     texts = []
-    for row in _rows_in_span(ctx["state"].axis_rows(stream, "asr"), region["core_start"], region["core_end"]):
-        bk = bucket_key(row["start"], row["end"])
+    lo, hi = float(region["core_start"]), float(region["core_end"])
+    for bk in ctx["store"].vote_buckets(stream, "asr"):
+        if bk[1] <= lo or bk[0] >= hi:
+            continue
         for source, payload in ctx["store"].active_votes(stream, "asr", bk).items():
             if not source.startswith("__") and payload.get("text"):
                 texts.append(str(payload["text"]))
@@ -278,7 +322,7 @@ def _adjudication_candidates(ctx: dict[str, Any], stream: str) -> list[dict[str,
     adj = ctx["policy"]["adjudication"]
     pool = _presence_pool(ctx, stream)
     out = []
-    for row in ctx["state"].axis_rows(stream, "speech_presence"):
+    for row in ctx["state"].axis_rows("speech_presence"):
         bk = bucket_key(row["start"], row["end"])
         votes = ctx["store"].active_votes(stream, "speech_presence", bk)
         corroboration = bucket_corroboration(votes, evidence_signals=pool)
@@ -338,7 +382,7 @@ def _p3_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
 
     adj = ctx["policy"]["adjudication"]
     floor = float(adj["min_evidence_weight"])
-    touched: dict[tuple[str, str], set[tuple[float, float]]] = {}
+    touched: dict[str, set[tuple[float, float]]] = {}
     attenuated = []
     for stream in ctx["passes"]:
         for c in _adjudication_candidates(ctx, stream):
@@ -354,7 +398,7 @@ def _p3_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
                 measured_on=measured_on,
                 floor=floor,
             )
-            for urow in _rows_in_span(ctx["state"].axis_rows(stream, "asr"), c["bucket"][0], c["bucket"][1]):
+            for urow in _rows_in_span(ctx["state"].axis_rows("asr"), c["bucket"][0], c["bucket"][1]):
                 ubk = bucket_key(urow["start"], urow["end"])
                 records += ctx["store"].attenuate_source_in_bucket(
                     stream,
@@ -367,8 +411,8 @@ def _p3_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
                     measured_on=measured_on,
                     floor=floor,
                 )
-                touched.setdefault((stream, "asr"), set()).add(ubk)
-            touched.setdefault((stream, "speech_presence"), set()).add(c["bucket"])
+                touched.setdefault("asr", set()).add(ubk)
+            touched.setdefault("speech_presence", set()).add(c["bucket"])
             attenuated.append(
                 {
                     **c,
@@ -392,7 +436,7 @@ def _c9_trigger(region: dict[str, Any], ctx: dict[str, Any]) -> tuple[bool, dict
 def _missed_speech_candidates(ctx: dict[str, Any], stream: str) -> list[dict[str, Any]]:
     adj = ctx["policy"]["adjudication"]
     out = []
-    for row in ctx["state"].axis_rows(stream, "speech_presence"):
+    for row in ctx["state"].axis_rows("speech_presence"):
         p_voice = row.get("p_voice")
         # C9's own lower bound. It used to borrow P3's threshold, so retuning one rule silently
         # moved the other; the numbers are unchanged, the coupling is not.
@@ -402,7 +446,7 @@ def _missed_speech_candidates(ctx: dict[str, Any], stream: str) -> list[dict[str
         if "adjudicator/missed_speech" in ctx["store"].active_votes(stream, "speech_presence", bk):
             continue
         families = set()
-        for urow in _rows_in_span(ctx["state"].axis_rows(stream, "asr"), bk[0], bk[1]):
+        for urow in _rows_in_span(ctx["state"].axis_rows("asr"), bk[0], bk[1]):
             ubk = bucket_key(urow["start"], urow["end"])
             for source, payload in ctx["store"].active_votes(stream, "asr", ubk).items():
                 if not source.startswith("__") and payload.get("text"):
@@ -413,7 +457,7 @@ def _missed_speech_candidates(ctx: dict[str, Any], stream: str) -> list[dict[str
 
 
 def _c9_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
-    touched: dict[tuple[str, str], set[tuple[float, float]]] = {}
+    touched: dict[str, set[tuple[float, float]]] = {}
     added = []
     weight = float(ctx["policy"]["adjudication"]["missed_speech_weight"])
     for stream in ctx["passes"]:
@@ -430,7 +474,7 @@ def _c9_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
                     provenance={"families_agreeing": c["families"], "rule": "C9_missed_speech"},
                 )
             )
-            touched.setdefault((stream, "speech_presence"), set()).add(c["bucket"])
+            touched.setdefault("speech_presence", set()).add(c["bucket"])
             added.append({**c, "stream": stream})
     return {"added": added, "touched": touched}
 
@@ -450,12 +494,12 @@ def _reserves_in_cache(ctx: dict[str, Any], stream: str) -> list[str]:
 def _u2_trigger(region: dict[str, Any], ctx: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     if region is None or region["axis"] != "asr":
         return False, {}
-    stream = region.get("elected_stream") or region.get("stream") or "raw_16k"
+    stream = _action_stream(region)
     reserves = _reserves_in_cache(ctx, stream)
     if not reserves:
         return False, {"reason": "no_cached_reserves"}
-    rows = _rows_in_span(ctx["state"].axis_rows(stream, "asr"), region["core_start"], region["core_end"])
-    epi = _mean([r.get("epistemic") for r in rows])
+    rows = _rows_in_span(ctx["state"].axis_rows("asr"), region["core_start"], region["core_end"])
+    epi = _mean([r.get("epistemic_uncertainty") for r in rows])
     if epi is None or epi < ctx["policy"]["thresholds"]["theta_low"]:
         return False, {"epistemic": epi}
     return True, {"reserves": reserves, "epistemic": round(float(epi), 6), "stream": stream}
@@ -513,9 +557,9 @@ def _u2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
         pair_kind = "word"
         harvested = _harvest_word_level(pass_summary_ext, grid, align_by_model, ctx["duration_s"])
 
-    rows = ctx["state"].axis_rows(stream, "asr")
+    rows = ctx["state"].axis_rows("asr")
     covered = region_buckets(region, rows)
-    touched: dict[tuple[str, str], set[tuple[float, float]]] = {}
+    touched: dict[str, set[tuple[float, float]]] = {}
     n_votes = 0
     for entry in harvested:
         bk = bucket_key(entry["start"], entry["end"])
@@ -537,7 +581,7 @@ def _u2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
                 )
             )
             n_votes += 1
-        touched.setdefault((stream, "asr"), set()).add(bk)
+        touched.setdefault("asr", set()).add(bk)
     fam = family_weights(sorted([m for m in asr_by_model]), ctx["policy"])
     return {
         "reserves_used": used_reserves,
@@ -610,9 +654,9 @@ def _u1_trigger(region: dict[str, Any], ctx: dict[str, Any]) -> tuple[bool, dict
     models = [m for m in (ctx["policy"].get("u1_asr_models") or []) if m not in ctx.get("live_asr_done", set())]
     if not models:
         return False, {"reason": "no_u1_models"}
-    stream = region.get("elected_stream") or region.get("stream") or "raw_16k"
-    rows = _rows_in_span(ctx["state"].axis_rows(stream, "asr"), region["core_start"], region["core_end"])
-    epi = _mean([r.get("epistemic") for r in rows])
+    stream = _action_stream(region)
+    rows = _rows_in_span(ctx["state"].axis_rows("asr"), region["core_start"], region["core_end"])
+    epi = _mean([r.get("epistemic_uncertainty") for r in rows])
     if epi is None or epi < ctx["policy"]["thresholds"]["theta_low"]:
         return False, {"epistemic": epi}
     return True, {
@@ -701,9 +745,9 @@ def _u1_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     else:
         pair_kind = "word"
         harvested = _harvest_word_level(pass_summary_ext, grid, align_by_model, ctx["duration_s"])
-    rows = ctx["state"].axis_rows(stream, "asr")
+    rows = ctx["state"].axis_rows("asr")
     covered = region_buckets(region, rows)
-    touched: dict[tuple[str, str], set[tuple[float, float]]] = {}
+    touched: dict[str, set[tuple[float, float]]] = {}
     n_votes = 0
     for entry in harvested:
         bk = bucket_key(entry["start"], entry["end"])
@@ -725,7 +769,7 @@ def _u1_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
                 )
             )
             n_votes += 1
-        touched.setdefault((stream, "asr"), set()).add(bk)
+        touched.setdefault("asr", set()).add(bk)
     return {
         "models": ran,
         "stream": stream,
@@ -774,7 +818,7 @@ def _get_identity_repair(ctx: dict[str, Any], stream: str) -> dict[str, Any] | N
         repaired = repair_identity(
             window_embeddings=window_embeddings,
             diar_boundaries=diar_boundaries,
-            p_voice_at=make_p_voice_lookup(ctx["state"], stream),
+            p_voice_at=make_p_voice_lookup(ctx["state"]),
             duration_s=ctx["duration_s"],
             policy=ctx["policy"],
         )
@@ -785,14 +829,14 @@ def _get_identity_repair(ctx: dict[str, Any], stream: str) -> dict[str, Any] | N
 def _i1_trigger(region: dict[str, Any], ctx: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     if region is None or region["axis"] != "speaker":
         return False, {}
-    stream = region.get("stream") or "raw_16k"
+    stream = _action_stream(region)
     if (stream, region["core_start"], region["core_end"]) in ctx.get("_i1_done", set()):
         return False, {}
     return True, {"crop": [region["crop_start"], region["crop_end"]], "stream": stream}
 
 
 def _i1_guard(region: dict[str, Any], ctx: dict[str, Any]) -> str | None:
-    emb_dir = ctx["run_dir"] / (region.get("stream") or "raw_16k") / "embeddings"
+    emb_dir = ctx["run_dir"] / _action_stream(region) / "embeddings"
     if not emb_dir.is_dir() or not any(emb_dir.glob("*.json")):
         if _spec_missing("torch") or _spec_missing("speechbrain"):
             return "embedding_backend_unavailable (no stored embeddings, no live backend)"
@@ -806,10 +850,10 @@ def _i1_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     if repaired is None:
         raise RuntimeError("identity_repair_no_embeddings")
     ctx.setdefault("_i1_done", set()).add((stream, region["core_start"], region["core_end"]))
-    touched: dict[tuple[str, str], set[tuple[float, float]]] = {}
+    touched: dict[str, set[tuple[float, float]]] = {}
     n_votes = 0
     in_region = [c for c in repaired["change_points"] if region["crop_start"] <= c["time"] <= region["crop_end"]]
-    for row in _rows_in_span(ctx["state"].axis_rows(stream, "speaker"), region["core_start"], region["core_end"]):
+    for row in _rows_in_span(ctx["state"].axis_rows("speaker"), region["core_start"], region["core_end"]):
         bk = bucket_key(row["start"], row["end"])
         cps_here = [c for c in in_region if row["start"] <= c["time"] < row["end"]]
         if not cps_here:
@@ -829,7 +873,7 @@ def _i1_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
                 provenance={"rule": "I1_boundary_refinement", "models": repaired["models_used"]},
             )
         )
-        touched.setdefault((stream, "speaker"), set()).add(bk)
+        touched.setdefault("speaker", set()).add(bk)
         n_votes += 1
     return {
         "change_points_in_region": in_region,
@@ -842,7 +886,7 @@ def _i1_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
 def _i2_trigger(region: dict[str, Any], ctx: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     if region is None or region["axis"] != "speaker":
         return False, {}
-    stream = region.get("stream") or "raw_16k"
+    stream = _action_stream(region)
     if ctx.get("refined_identity", {}).get(stream):
         return False, {}  # once per stream per run
     return True, {"stream": stream}
@@ -859,9 +903,9 @@ def _i2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     if repaired is None:
         raise RuntimeError("identity_repair_no_embeddings")
     ctx.setdefault("refined_identity", {})[stream] = repaired
-    touched: dict[tuple[str, str], set[tuple[float, float]]] = {}
+    touched: dict[str, set[tuple[float, float]]] = {}
     n_votes = 0
-    for row in ctx["state"].axis_rows(stream, "speaker"):
+    for row in ctx["state"].axis_rows("speaker"):
         bk = bucket_key(row["start"], row["end"])
         mid = (row["start"] + row["end"]) / 2.0
         cid = cluster_at(repaired, mid)
@@ -906,7 +950,7 @@ def _i2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
                     provenance={"rule": "I2_recluster"},
                 )
             )
-        touched.setdefault((stream, "speaker"), set()).add(bk)
+        touched.setdefault("speaker", set()).add(bk)
         n_votes += 2
     return {
         "n_clusters": repaired["n_clusters"],
@@ -940,8 +984,8 @@ def _p2_trigger(region: dict[str, Any], ctx: dict[str, Any]) -> tuple[bool, dict
     """
     if region is None or region["axis"] != "speech_presence":
         return False, {}
-    stream = region.get("stream")
-    rows = _rows_in_span(ctx["state"].axis_rows(stream, "speech_presence"), region["core_start"], region["core_end"])
+    stream = _action_stream(region)
+    rows = _rows_in_span(ctx["state"].axis_rows("speech_presence"), region["core_start"], region["core_end"])
     if not rows:
         return False, {}
 
@@ -1033,9 +1077,9 @@ def _p2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
         var = sum((v - mean) ** 2 for v in vals) / len(vals)
         return float(min(1.0, 2.0 * (var**0.5)))
 
-    rows = ctx["state"].axis_rows(stream, "speech_presence")
+    rows = ctx["state"].axis_rows("speech_presence")
     covered = region_buckets(region, rows)
-    touched: dict[tuple[str, str], set[tuple[float, float]]] = {}
+    touched: dict[str, set[tuple[float, float]]] = {}
     n_votes = 0
     for row in _rows_in_span(rows, region["core_start"], region["core_end"]):
         bk = bucket_key(row["start"], row["end"])
@@ -1072,7 +1116,7 @@ def _p2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
         if ov is not None:
             row.setdefault("meta", {})["overlap_posterior"] = round(ov, 4)
             row["overlap_posterior"] = round(ov, 4)
-        touched.setdefault((stream, "speech_presence"), set()).add(bk)
+        touched.setdefault("speech_presence", set()).add(bk)
 
     return {
         "frame_hop_s": hop,
@@ -1093,12 +1137,12 @@ def _i4_trigger(region: dict[str, Any], ctx: dict[str, Any]) -> tuple[bool, dict
         r
         for r in ctx.get("all_regions", [])
         if r["axis"] == "asr"
-        and r.get("stream") == region.get("stream")
+        and r.get("stream") == _action_stream(region)
         and min(r["core_end"], region["core_end"]) - max(r["core_start"], region["core_start"]) > 0
     ]
     return bool(co), {
         "co_located_asr_regions": [r["region_id"] for r in co],
-        "stream": region.get("stream") or "raw_16k",
+        "stream": _action_stream(region),
     }
 
 
@@ -1134,7 +1178,7 @@ def _i4_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     post, err = overlap_posteriors(wav, span=(region["crop_start"], region["crop_end"]))
     if post is None:
         raise RuntimeError(err or "posteriors_failed")
-    touched: dict[tuple[str, str], set[tuple[float, float]]] = {}
+    touched: dict[str, set[tuple[float, float]]] = {}
     hop, overlap = float(post["frame_hop"]), post["overlap"]
 
     def _mean_overlap(s: float, e: float) -> float | None:
@@ -1146,15 +1190,13 @@ def _i4_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     mean_over_core = _mean_overlap(region["core_start"], region["core_end"])
     for apply_stream in ctx["passes"]:
         for axis in ("speaker", "asr"):
-            for row in _rows_in_span(
-                ctx["state"].axis_rows(apply_stream, axis), region["core_start"], region["core_end"]
-            ):
+            for row in _rows_in_span(ctx["state"].axis_rows(axis), region["core_start"], region["core_end"]):
                 ov = _mean_overlap(row["start"], row["end"])
                 if ov is None:
                     continue
                 row.setdefault("meta", {})["overlap_posterior"] = round(ov, 4)
                 row["overlap_posterior"] = round(ov, 4)
-                touched.setdefault((apply_stream, axis), set()).add(bucket_key(row["start"], row["end"]))
+                touched.setdefault(axis, set()).add(bucket_key(row["start"], row["end"]))
     return {
         "source_stream": source_stream,
         "stream_fallback": stream_fallback,

@@ -97,7 +97,7 @@ def evaluate_against_ground_truth(
         fp += (not gt_speech) and pred
         fn += gt_speech and (not pred)
         tn += (not gt_speech) and (not pred)
-        u = row.get("within_pass_uncertainty")
+        u = row.get("uncertainty")
         if u is not None and u == u:
             (unc_speech if gt_speech else unc_sil).append(float(u))
     speech_presence_eval = {

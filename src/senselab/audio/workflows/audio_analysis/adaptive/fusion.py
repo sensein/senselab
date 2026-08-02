@@ -138,8 +138,13 @@ def rollup_segments(words: list[dict[str, Any]], *, min_corroboration: float) ->
 
 
 def make_speaker_lookup(store: Any, state: Any, stream: str) -> Any:  # noqa: ANN401
-    """(t) → majority unified cluster_id across active diarization votes at t."""
-    rows = state.axis_rows(stream, "speaker")
+    """(t) → majority unified cluster_id across active diarization votes at t.
+
+    The buckets come from the axis (one set, folded across passes); the *labels* come from one
+    pass's votes, because a cluster label is a statement a model made about a pass and the
+    transcript being attributed was built from that pass.
+    """
+    rows = state.axis_rows("speaker")
 
     def lookup(t: float) -> str | None:
         for row in rows:
@@ -160,9 +165,9 @@ def make_speaker_lookup(store: Any, state: Any, stream: str) -> Any:  # noqa: AN
     return lookup
 
 
-def make_p_voice_lookup(state: Any, stream: str) -> Any:  # noqa: ANN401
+def make_p_voice_lookup(state: Any) -> Any:  # noqa: ANN401
     """(t) → speech_presence p_voice at t from the speech_presence belief rows."""
-    rows = state.axis_rows(stream, "speech_presence")
+    rows = state.axis_rows("speech_presence")
 
     def lookup(t: float) -> float | None:
         best = None
@@ -247,7 +252,7 @@ def build_final_outputs(
             return cluster_at(refined_identity, t) or base_speaker_lookup(t)
     else:
         speaker_lookup = base_speaker_lookup
-    p_voice_lookup = make_p_voice_lookup(state, stream)
+    p_voice_lookup = make_p_voice_lookup(state)
 
     # transcript.json — segments rollup on speaker change or >0.5 s word gap, minus the words
     # whose measured corroboration falls below the rendering threshold. They stay in `words[]`.
@@ -295,7 +300,7 @@ def build_final_outputs(
             c["total_speech_s"] = round(c["total_speech_s"] + (seg["end"] - seg["start"]), 6)
             c["n_segments"] += 1
     else:
-        for row in state.axis_rows(stream, "speaker"):
+        for row in state.axis_rows("speaker"):
             mid = (row["start"] + row["end"]) / 2.0
             cid = speaker_lookup(mid)
             pv = p_voice_lookup(mid)
@@ -322,7 +327,7 @@ def build_final_outputs(
             clusters[seg["cluster_id"]]["n_segments"] += 1
     # contracts/final-outputs.md: member_labels (refined cluster ↔ diar-model raw
     # labels via vote co-occurrence) + per-segment overlap flag (I4 posterior).
-    speaker_rows = state.axis_rows(stream, "speaker")
+    speaker_rows = state.axis_rows("speaker")
     member_labels: dict[str, dict[str, set]] = {}
     for seg in diar_segments:
         labels_for_cluster = member_labels.setdefault(str(seg["cluster_id"]), {})
@@ -369,9 +374,11 @@ def build_final_outputs(
         {
             "start": r["start"],
             "end": r["end"],
-            "within_pass_uncertainty": r.get("within_pass_uncertainty"),
-            "epistemic": r.get("epistemic"),
+            "uncertainty": r.get("uncertainty"),
+            "epistemic_uncertainty": r.get("epistemic_uncertainty"),
+            "triage_score": r.get("triage_score"),
             "aleatoric_floor": r.get("aleatoric_floor"),
+            "aleatoric_floor_terms": (r.get("aleatoric_floor_policy") or {}).get("terms") or [],
             "status": r.get("status"),
             "irreducible_reason": r.get("irreducible_reason"),
             "round": r.get("round"),
@@ -381,9 +388,10 @@ def build_final_outputs(
             # backwards compatibility, and two names for one quantity is how
             # schemas rot.
             "speech_presence_confidence": r.get("speech_presence_confidence", r.get("p_voice")),
-            # Which pass S1 elected for this span; falls back to the fusion stream
-            # when no per-region election ran.
-            "elected_stream": (r.get("meta") or {}).get("elected_stream", stream),
+            # Which passes fed the fold. Not which one was *elected*: an axis is a fold across
+            # passes, so naming a winner here is the per-pass axis again with the index moved into
+            # the value, and this column carried one on every run.
+            "contributing_passes": r.get("contributing_passes") or [],
             # Written by I4 / P2 when per-class segmentation posteriors were
             # available; None elsewhere (the column exists either way so the
             # schema is stable).
@@ -395,7 +403,7 @@ def build_final_outputs(
             # needs appealing.
             **attenuation_columns(r),
         }
-        for r in state.axis_rows(stream, "speech_presence")
+        for r in state.axis_rows("speech_presence")
     ]
     pd.DataFrame(pres_rows).to_parquet(belief / "speech_presence.parquet", index=False)
     return transcript, diarization

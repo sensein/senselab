@@ -23,6 +23,7 @@ __all__ = [
     "aggregate_speech_presence",
     "aggregate_asr",
     "mean_token_entropy",
+    "per_source_voice",
     "speech_presence_p_voice",
 ]
 
@@ -47,30 +48,20 @@ def _evidence_factor(weights: Mapping[str, float] | None, source: str) -> float:
         return 1.0
 
 
-def _weighted_p_voice(votes: dict[str, dict[str, Any]], *, weights: Mapping[str, float] | None = None) -> float | None:
-    """Weighted mean per-voter probability of voice for one bucket, or ``None``.
+def per_source_voice(
+    votes: dict[str, dict[str, Any]], *, weights: Mapping[str, float] | None = None
+) -> dict[str, tuple[float, float]]:
+    """``{source → (p_voice, weight)}`` for one bucket, before any fold across voters.
 
-    Each voter maps ``(speaks, native_confidence)`` to a per-voter voice
-    probability, then contributes with its optional ``weight`` (default 1.0):
+    Exposed because the fold across *passes* has to happen at this level. A caller that folds
+    ``_weighted_p_voice`` per pass and averages the results weights each pass by how many voters it
+    happened to contain; averaging each voter's own reading first — the rule :func:`fuse.fuse_axis`
+    applies to every other signal — does not. Same per-voter mapping either way, defined once.
 
-    - ``native_confidence`` ``c`` with ``speaks=True`` → ``p = c``;
-      with ``speaks=False`` → ``p = 1 - c``.
-    - No ``native_confidence`` → ``p = 1.0`` if ``speaks`` else ``0.0``.
-    - ``hallucinated`` → ``p = 0.1`` (vote against voice).
-
-    ``weight`` lets a caller demote coarse voters (whole-window scene tags,
-    per-segment no-speech probability, sentence-level ASR) on fine reporting
-    grids without dropping them (FR-014). When every weight is 1.0 (the
-    default) this is the plain mean, so existing outputs are unchanged.
-
-    ``weights`` is the *second*, independent factor: how far this source's claim was corroborated
-    by evidence measured about it (``belief.VoteStore.evidence_weights``). The two multiply and
-    stay separately recoverable — the payload keeps what the link layer decided about the voter's
-    coarseness, the map keeps what a later round measured about its corroboration. A source absent
-    from ``weights`` was not measured and keeps its payload weight untouched.
+    Voters with no ``speaks`` field, or a non-positive payload weight, are absent from the result:
+    policy declaring a voter inapplicable on this grid is not a reading of zero.
     """
-    num = 0.0
-    den = 0.0
+    out: dict[str, tuple[float, float]] = {}
     for source, v in votes.items():
         if not isinstance(v, dict) or "speaks" not in v:
             continue
@@ -102,6 +93,35 @@ def _weighted_p_voice(votes: dict[str, dict[str, Any]], *, weights: Mapping[str,
             p_voter = 1.0 if speak_val else 0.0
         else:
             p_voter = nc if speak_val else (1.0 - nc)
+        out[str(source)] = (p_voter, weight)
+    return out
+
+
+def _weighted_p_voice(votes: dict[str, dict[str, Any]], *, weights: Mapping[str, float] | None = None) -> float | None:
+    """Weighted mean per-voter probability of voice for one bucket, or ``None``.
+
+    Each voter maps ``(speaks, native_confidence)`` to a per-voter voice
+    probability, then contributes with its optional ``weight`` (default 1.0):
+
+    - ``native_confidence`` ``c`` with ``speaks=True`` → ``p = c``;
+      with ``speaks=False`` → ``p = 1 - c``.
+    - No ``native_confidence`` → ``p = 1.0`` if ``speaks`` else ``0.0``.
+    - ``hallucinated`` → ``p = 0.1`` (vote against voice).
+
+    ``weight`` lets a caller demote coarse voters (whole-window scene tags,
+    per-segment no-speech probability, sentence-level ASR) on fine reporting
+    grids without dropping them (FR-014). When every weight is 1.0 (the
+    default) this is the plain mean, so existing outputs are unchanged.
+
+    ``weights`` is the *second*, independent factor: how far this source's claim was corroborated
+    by evidence measured about it (``belief.VoteStore.evidence_weights``). The two multiply and
+    stay separately recoverable — the payload keeps what the link layer decided about the voter's
+    coarseness, the map keeps what a later round measured about its corroboration. A source absent
+    from ``weights`` was not measured and keeps its payload weight untouched.
+    """
+    num = 0.0
+    den = 0.0
+    for p_voter, weight in per_source_voice(votes, weights=weights).values():
         num += weight * p_voter
         den += weight
     if den <= 0:

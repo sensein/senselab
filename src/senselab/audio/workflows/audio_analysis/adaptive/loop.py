@@ -112,23 +112,23 @@ def run_adaptive_loop(
         store = VoteStore.from_harvests({pl: h for pl, h in harvests.items() if pl in passes})
     else:
         store = VoteStore.from_run_dir(run_dir, passes)
-    parity = store.replay_check(passes, aggregator=aggregator)
-    state = BeliefState.from_store(store, passes, aggregator=aggregator)
-    asr_grid = _grid_from_rows(state.axis_rows(passes[0], "asr"))
+    parity = store.replay_check(aggregator=aggregator)
+    fused_parity = store.fused_parity(_fused_axes_from_run(run_dir), aggregator=aggregator)
+    state = BeliefState.from_store(store, aggregator=aggregator)
+    asr_grid = _grid_from_rows(state.axis_rows("asr"))
     theta_low = float(policy["thresholds"]["theta_low"])
 
     rounds_dir = belief_dir(out_dir) / "rounds"
-    _write_round_belief(rounds_dir / "1", state, passes)
+    _write_round_belief(rounds_dir / "1", state)
     (rounds_dir / "1" / "summary.json").write_text(
         json.dumps(
             {
                 "round": 1,
                 "ingested_from": str(run_dir),
                 "replay_check": parity,
+                "fused_parity": fused_parity,
                 "aggregator": aggregator,
-                "uncertainty_mass": {
-                    f"{s}/{a}": round(state.uncertainty_mass(s, a, theta_low), 6) for s in passes for a in AXES
-                },
+                "uncertainty_mass": {str(a): round(state.uncertainty_mass(a, theta_low), 6) for a in AXES},
             },
             indent=2,
         )
@@ -154,26 +154,24 @@ def run_adaptive_loop(
     iterations: list[dict[str, Any]] = []
     round_summaries: list[dict[str, Any]] = []
     round_states: list[dict[str, Any]] = []
-    touch_counts: dict[tuple[str, str, tuple[float, float]], int] = {}
+    touch_counts: dict[tuple[str, tuple[float, float]], int] = {}
     run_state = "max_rounds"
 
     # ── rounds 2..K ──────────────────────────────────────────────────────
     for round_idx in range(2, max_rounds + 1):
         ctx["round_idx"] = round_idx
-        mass_before = {f"{s}/{a}": round(state.uncertainty_mass(s, a, theta_low), 6) for s in passes for a in AXES}
+        mass_before: dict[str, float] = {a: round(state.uncertainty_mass(a, theta_low), 6) for a in AXES}
         regions: list[Region] = []
-        for stream in passes:
-            for axis in AXES:
-                regions.extend(
-                    propose_regions(
-                        state.axis_rows(stream, axis),
-                        axis=axis,
-                        stream=stream,
-                        policy=policy,
-                        round_idx=round_idx,
-                        duration_s=duration_s,
-                    )
+        for axis in AXES:
+            regions.extend(
+                propose_regions(
+                    state.axis_rows(axis),
+                    axis=axis,
+                    policy=policy,
+                    round_idx=round_idx,
+                    duration_s=duration_s,
                 )
+            )
         ctx["all_regions"] = regions
         admitted, not_admitted = plan_round(
             rules=RULES, regions=regions, ctx=ctx, ledger=ledger, policy=policy, round_idx=round_idx
@@ -186,22 +184,22 @@ def run_adaptive_loop(
             try:
                 before_vals = _bucket_values(state)
                 result = rule["execute"](cand, ctx)
-                touched: dict[tuple[str, AxisName], set] = result.pop("touched", {})
+                touched: dict[AxisName, set] = result.pop("touched", {})
                 delta = {}
                 # Sorted: these iterations accumulate into output, so a fixed order makes
                 # byte-reproducibility structural rather than a property of dict insertion
                 # order that a refactor could quietly break (FR-011f).
-                for (stream, axis), buckets in sorted(touched.items()):
-                    state.update_buckets(store, stream, axis, buckets, round_idx)
+                for axis, buckets in sorted(touched.items()):
+                    state.update_buckets(store, axis, buckets, round_idx)
                     for bk in buckets:
-                        key = (stream, axis, bk)
+                        key = (axis, bk)
                         touch_counts[key] = touch_counts.get(key, 0) + 1
                     # Before/after means over the SAME (touched) bucket set.
-                    befores = [v for bk in buckets if (v := before_vals.get((stream, axis, bk))) is not None]
-                    after = _mean_over(state, stream, axis, buckets)
+                    befores = [v for bk in buckets if (v := before_vals.get((axis, bk))) is not None]
+                    after = _mean_over(state, axis, buckets)
                     if befores and after is not None:
                         before = sum(befores) / len(befores)
-                        delta[f"{stream}/{axis}"] = {
+                        delta[axis] = {
                             "mean_before": round(before, 6),
                             "mean_after": round(after, 6),
                             "delta": round(after - before, 6),
@@ -218,11 +216,10 @@ def run_adaptive_loop(
             iterations.append(_iteration_entry(cand, round_idx))
 
         budget_left = ledger.can_admit("medium") or ledger.can_admit("heavy")
-        apply_convergence_marks(state, passes=passes, policy=policy, touch_counts=touch_counts, budget_left=budget_left)
+        apply_convergence_marks(state, policy=policy, touch_counts=touch_counts, budget_left=budget_left)
         rs = round_summary(
             round_idx=round_idx,
             state=state,
-            passes=passes,
             policy=policy,
             fired=fired,
             not_admitted=not_admitted,
@@ -241,7 +238,7 @@ def run_adaptive_loop(
             }
         )
         rd = rounds_dir / str(round_idx)
-        _write_round_belief(rd, state, passes)
+        _write_round_belief(rd, state)
         (rd / "regions.json").write_text(json.dumps(regions, indent=2, default=str))
         (rd / "summary.json").write_text(json.dumps(rs, indent=2, default=str))
         _write_round_votes(rd, store, round_idx)
@@ -253,16 +250,22 @@ def run_adaptive_loop(
         run_state = "max_rounds"
 
     # ── fusion round ─────────────────────────────────────────────────────
-    # The consensus transcript comes from the stream whose FINAL asr
-    # evidence is most self-consistent (lowest residual uncertainty mass);
-    # region elections break ties. Enhancement can degrade ASR even when it
-    # improves speech_presence/quality signals, so transcript fusion must not
-    # inherit the speech_presence/quality-weighted election blindly.
+    # The consensus transcript comes from the pass whose ASR *signals* are most self-consistent;
+    # region elections break ties. Enhancement can degrade ASR even when it improves
+    # speech_presence/quality signals, so transcript fusion must not inherit the
+    # speech_presence/quality-weighted election blindly.
+    #
+    # Measured per (signal, pass) from the votes, not by comparing one pass's *axis* against
+    # another's. An axis is a fold across passes, so it has no per-pass value to compare — asking
+    # for one was the same category error the belief store had, surviving in the one place that
+    # genuinely does have to choose a pass. What a pass owns is its signals' readings, and those
+    # are exactly what a transcript is built from.
+    per_pass_asr = {s: _asr_signal_doubt(store, s) for s in passes}
     elected_streams = [e["elected"] for e in ctx["elections"].values()]
     fusion_stream = min(
         passes,
         key=lambda s: (
-            round(state.uncertainty_mass(s, "asr", theta_low), 9),
+            round(doubt, 9) if (doubt := per_pass_asr[s]) is not None else float("inf"),
             -elected_streams.count(s),
             s,
         ),
@@ -406,7 +409,7 @@ def run_adaptive_loop(
             run_dir=run_dir,
             transcript=transcript_doc,
             diarization=diarization_doc,
-            speech_presence_rows=state.axis_rows(fusion_stream, "speech_presence"),
+            speech_presence_rows=state.axis_rows("speech_presence"),
             fusion_stream=fusion_stream,
             iterations=iterations,
         )
@@ -422,7 +425,6 @@ def run_adaptive_loop(
     }
     report = build_convergence_report(
         state=state,
-        passes=passes,
         policy=policy,
         rounds=round_summaries,
         ledger=ledger,
@@ -465,6 +467,7 @@ def run_adaptive_loop(
         "policy_hash": policy.get("policy_hash"),
         "timeline": timeline_path,
         "replay_check": parity,
+        "fused_parity": fused_parity,
         "rounds": len(round_summaries) + 1,
         "n_interventions_fired": sum(1 for e in iterations if e["status"] == "fired"),
         "n_words_fused": len(words),
@@ -520,6 +523,48 @@ def _aggregator_from_run(run_dir: Path) -> str | None:
     return None
 
 
+def _fused_axes_from_run(run_dir: Path) -> dict[str, list[dict[str, Any]]]:
+    """The axes L2 already wrote, for :meth:`VoteStore.fused_parity`.
+
+    Reads the *last* round the fusion driver ran, since that is the run's answer. Missing files
+    yield an empty mapping and the parity report then says ``not_in_l2`` for every bucket, which is
+    a finding rather than a pass — a check with no oracle must not read as a check that succeeded.
+    """
+    import pandas as pd
+
+    base = belief_dir(run_dir)
+    rounds = sorted(
+        (int(p.name.removeprefix("round")) for p in base.glob("round*") if p.name.removeprefix("round").isdigit()),
+        reverse=True,
+    )
+    for round_idx in rounds:
+        directory = base / f"round{round_idx}" / "uncertainty"
+        found: dict[str, list[dict[str, Any]]] = {
+            str(path.stem): pd.read_parquet(path).to_dict("records")
+            for path in sorted(directory.glob("*.parquet"))
+            if path.stem in AXES
+        }
+        if found:
+            return found
+    return {}
+
+
+def _asr_signal_doubt(store: VoteStore, stream: str) -> float | None:
+    """Mean per-signal ASR uncertainty on one pass, over the buckets that pass reported.
+
+    A per-*pass* quantity computed from per-pass votes, which is legitimate: it is what the pass's
+    own transcribers said, never a reading of the axis. Returns ``None`` when no ASR signal spoke
+    on this pass, which must not sort as "most confident".
+    """
+    from senselab.audio.workflows.audio_analysis.fuse import per_signal_uncertainty
+
+    values: list[float] = []
+    for bucket in store.vote_buckets(stream, "asr"):
+        readings = per_signal_uncertainty({"votes": store.active_votes(stream, "asr", bucket)})
+        values.extend(readings.values())
+    return sum(values) / len(values) if values else None
+
+
 def _grid_from_rows(rows: list[dict[str, Any]]) -> tuple[float, float]:
     if not rows:
         return (1.0, 0.5)
@@ -528,21 +573,21 @@ def _grid_from_rows(rows: list[dict[str, Any]]) -> tuple[float, float]:
     return (round(win, 6), round(hop, 6) or win)
 
 
-def _bucket_values(state: BeliefState) -> dict[tuple[str, str, tuple[float, float]], float | None]:
-    """Per-bucket aggregated uncertainty snapshot (delta baselines use the touched set)."""
-    out: dict[tuple[str, str, tuple[float, float]], float | None] = {}
-    for (stream, axis), rows in sorted(state.rows.items()):
+def _bucket_values(state: BeliefState) -> dict[tuple[str, tuple[float, float]], float | None]:
+    """Per-bucket axis snapshot (delta baselines use the touched set)."""
+    out: dict[tuple[str, tuple[float, float]], float | None] = {}
+    for axis, rows in sorted(state.rows.items()):
         for row in rows:
-            out[(stream, axis, (round(row["start"], 6), round(row["end"], 6)))] = row.get("within_pass_uncertainty")
+            out[(axis, (round(row["start"], 6), round(row["end"], 6)))] = row.get("uncertainty")
     return out
 
 
-def _mean_over(state: BeliefState, stream: str, axis: str, buckets: set | None) -> float | None:
+def _mean_over(state: BeliefState, axis: str, buckets: set | None) -> float | None:
     vals = []
-    for row in state.axis_rows(stream, axis):
+    for row in state.axis_rows(axis):
         if buckets is not None and (round(row["start"], 6), round(row["end"], 6)) not in buckets:
             continue
-        u = row.get("within_pass_uncertainty")
+        u = row.get("uncertainty")
         if u is not None:
             vals.append(float(u))
     return sum(vals) / len(vals) if vals else None
@@ -564,78 +609,46 @@ def _iteration_entry(cand: PlannedIntervention, round_idx: int) -> dict[str, Any
     }
 
 
-def _more_doubtful(candidate: float | None, incumbent: float | None) -> bool:
-    """Does ``candidate`` express more doubt than ``incumbent``?
+def _write_round_belief(round_dir: Path, state: BeliefState) -> None:
+    """Write one belief row per (axis, bucket) — the axis, which is already the fold.
 
-    ``None`` and NaN mean *no signal spoke*, which is not a confident reading and not a doubtful
-    one — it is no reading. So a measured value displaces an absent one, and an absent value never
-    displaces a measured one. Treating absence as 0.0 would let a bucket nobody measured be
-    reported as settled.
-    """
-    c = None if candidate is None or candidate != candidate else float(candidate)
-    i = None if incumbent is None or incumbent != incumbent else float(incumbent)
-    if c is None:
-        return False
-    if i is None:
-        return True
-    return c > i
+    Nothing is collapsed here any more. The state holds one row per (axis, bucket) because that is
+    what an axis is, so this writer transcribes rather than decides. It used to receive one row per
+    (pass, axis, bucket) and elect the most doubtful pass, recording the winner as
+    ``elected_stream`` — which is a per-pass axis with the index moved into the value, and left the
+    loop itself still reasoning over two answers per bucket while the file showed one.
 
-
-def _write_round_belief(round_dir: Path, state: BeliefState, passes: list[str]) -> None:
-    """Write one belief row per (axis, bucket) — the fold across passes, never one row per pass.
-
-    An axis is an aggregator across signals *and* across passes, so a pass is an input dimension
-    to the fold and never an index on its output. The two passes are the same recording under a
-    transform: "converged on raw, open on enhanced" is not a state a recording can be in, it is
-    two readings of one bucket, and the artifact has to say which reading the run stands behind.
-    Emitting both left every reader to invent its own collapse — ``_final_belief_index`` had one,
-    ``adaptive.plot`` filtered to the fusion stream, ``evaluate`` filtered to the transcript's —
-    three different answers from one file.
-
-    The fold is **most doubtful wins**, lifted from the reader that already applied it. The whole
-    selected reading travels together rather than the maxima of each column separately, so the row
-    stays internally consistent; ``elected_stream`` names where it came from and ``folded_from``
-    which passes reported the bucket at all. Named on the row, because a selection is a policy and
-    a policy that is not written down cannot be disagreed with.
+    ``contributing_passes`` survives and ``elected_stream`` does not, because they are different
+    claims: the first says which passes fed the fold, the second says which pass's reading was
+    taken *instead* of folding.
     """
     import pandas as pd
 
     round_belief = round_dir / "belief"
     round_belief.mkdir(parents=True, exist_ok=True)
     for axis in AXES:
-        chosen: dict[tuple[float, float], tuple[str, dict[str, Any]]] = {}
-        reported: dict[tuple[float, float], list[str]] = {}
-        for stream in passes:
-            for r in state.axis_rows(stream, axis):
-                key = (round(float(r["start"]), 6), round(float(r["end"]), 6))
-                reported.setdefault(key, []).append(stream)
-                incumbent = chosen.get(key)
-                if incumbent is None or _more_doubtful(
-                    r.get("within_pass_uncertainty"), incumbent[1].get("within_pass_uncertainty")
-                ):
-                    chosen[key] = (stream, r)
-        rows = []
-        for key in sorted(chosen):
-            stream, r = chosen[key]
-            rows.append(
-                {
-                    "start": r["start"],
-                    "end": r["end"],
-                    # Not ``within_pass_uncertainty``: this row is no longer within a pass.
-                    "uncertainty": r.get("within_pass_uncertainty"),
-                    "p_voice": r.get("p_voice"),
-                    "epistemic": r.get("epistemic"),
-                    "aleatoric_floor": r.get("aleatoric_floor"),
-                    "status": r.get("status"),
-                    "irreducible_reason": r.get("irreducible_reason"),
-                    "round": r.get("round"),
-                    "n_sources": len(r.get("contributing_sources") or []),
-                    "stream_fold": "most_doubtful",
-                    "elected_stream": stream,
-                    "folded_from": sorted(reported[key]),
-                    **attenuation_columns(r),
-                }
-            )
+        rows = [
+            {
+                "start": r["start"],
+                "end": r["end"],
+                "uncertainty": r.get("uncertainty"),
+                "epistemic_uncertainty": r.get("epistemic_uncertainty"),
+                "confidence": r.get("confidence"),
+                "variability": r.get("variability"),
+                "triage_score": r.get("triage_score"),
+                "p_voice": r.get("p_voice"),
+                "aleatoric_floor": r.get("aleatoric_floor"),
+                "aleatoric_floor_terms": (r.get("aleatoric_floor_policy") or {}).get("terms") or [],
+                "status": r.get("status"),
+                "irreducible_reason": r.get("irreducible_reason"),
+                "round": r.get("round"),
+                "n_sources": len(r.get("contributing_sources") or []),
+                "contributing_signals": r.get("contributing_signals") or [],
+                "contributing_passes": r.get("contributing_passes") or [],
+                **attenuation_columns(r),
+            }
+            for r in sorted(state.axis_rows(axis), key=lambda x: (float(x["start"]), float(x["end"])))
+        ]
         if rows:
             pd.DataFrame(rows).to_parquet(round_belief / f"{axis}.parquet", index=False)
 
