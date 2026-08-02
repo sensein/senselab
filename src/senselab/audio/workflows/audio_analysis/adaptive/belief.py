@@ -106,7 +106,7 @@ them; they were carried and dropped.
 the harvest holds dB and the fused presence parquet holds neither. So ``aleatoric_floor`` read a
 name that existed nowhere, took ``None``, and floored at ``0.0`` on every bucket of every run,
 which is the confident claim "this audio imposes no floor". The scores are now derived here from
-the dB columns under named anchors (:func:`_aleatoric_floor`), which is where an anchored score
+the dB columns under named anchors (:func:`_attach_floor`), which is where an anchored score
 belongs anyway.
 """
 
@@ -125,6 +125,15 @@ kept it, so the two ingests disagreed by exactly one signal and nothing said so.
 
 The value is the meta key a single-valued payload lands under; ``None`` means merge the payload's
 own keys (filtered to :data:`_META_COLUMNS`).
+"""
+
+
+_COUPLINGS_LEAVING_UNCERTAINTY_ALONE = frozenset({"scene_quality"})
+"""Couplings that move a row's policy fold but not its entropy measure.
+
+Named so :meth:`VoteStore.fused_parity` can still compare a row the scene coupling touched. The
+coupling multiplies ``triage_score``, which exists to rank where budget goes; ``uncertainty`` has
+no policy in it and is untouched.
 """
 
 
@@ -724,9 +733,12 @@ class VoteStore:
         stability and support) are not the store's (measured corroboration), so a difference there
         is expected rather than diagnostic.
 
-        Buckets whose stored row records a ``coupled_from`` are counted as ``skipped_coupled``
+        Buckets whose stored row was moved by *another axis* are counted as ``skipped_coupled``
         rather than compared: cross-axis coupling is an input the store does not have, and scoring
         it as a mismatch would report a difference the store could not have avoided.
+        ``scene_quality`` is not such a case — it multiplies ``triage_score`` and leaves
+        ``uncertainty`` alone — so treating every ``coupled_from`` alike skipped the whole asr axis
+        and reported a vacuous zero.
         """
         report: dict[str, Any] = {}
         for axis in AXES:
@@ -738,11 +750,19 @@ class VoteStore:
                 if row is None:
                     missing += 1
                     continue
-                if row.get("coupled_from") is not None and len(row["coupled_from"]) > 0:
+                # Tested for ``None`` explicitly: the column arrives from parquet as a numpy array,
+                # and ``or ()`` on one raises rather than falling through to the empty case.
+                raw_coupled: Any = row.get("coupled_from")
+                coupled = {str(c) for c in (raw_coupled if raw_coupled is not None else ())}
+                if coupled - _COUPLINGS_LEAVING_UNCERTAINTY_ALONE:
                     skipped += 1
                     continue
-                mine = self.reaggregate_bucket(axis, bk, aggregator=aggregator)["uncertainty"]
-                theirs = row.get("uncertainty")
+                # ``_float_or_none`` on both sides: parquet reads a missing value back as NaN and
+                # the store holds ``None``, and comparing the two raw made 11 asr buckets where
+                # *neither* had a value report as mismatches — a check that finds a difference
+                # between two spellings of "nothing" is worse than no check.
+                mine = _float_or_none(self.reaggregate_bucket(axis, bk, aggregator=aggregator)["uncertainty"])
+                theirs = _float_or_none(row.get("uncertainty"))
                 if mine is None or theirs is None:
                     if (mine is None) != (theirs is None):
                         mismatches += 1

@@ -774,3 +774,55 @@ def test_final_speech_presence_parquet_has_contract_columns(tmp_path: Path) -> N
     cols = list(pd.read_parquet(belief_dir(tmp_path) / "speech_presence.parquet").columns)
     for col in ("speech_presence_confidence", "contributing_passes", "overlap_posterior"):
         assert col in cols, f"contract column {col!r} missing from final/speech_presence.parquet"
+
+
+# ── the store's fold is L2's fold (fused_parity) ─────────────────────────
+
+
+def _parity_fixture() -> tuple[Any, dict[str, list[dict[str, Any]]]]:
+    """A two-pass store plus the axes ``fuse_axis`` produces from the same votes."""
+    from senselab.audio.workflows.audio_analysis.fuse import fuse_axis
+    from senselab.audio.workflows.audio_analysis.votes import PassHarvest
+
+    def _harvest(label: str, value: float) -> PassHarvest:
+        return PassHarvest(
+            pass_label=label,
+            speaker_votes=[
+                {"start": 0.0, "end": 1.0, "votes": {"diar_a": {"same_label_uncertainty": value}}},
+                {"start": 1.0, "end": 2.0, "votes": {"diar_a": {"same_label_uncertainty": 1.0 - value}}},
+            ],
+        )
+
+    harvests = {"raw_16k": _harvest("raw_16k", 0.2), "enhanced_16k": _harvest("enhanced_16k", 0.6)}
+    store = VoteStore.from_harvests(harvests)
+    rows = fuse_axis({label: h.speaker_votes for label, h in harvests.items()}, weights={})
+    return store, {"speaker": rows}
+
+
+def test_the_store_and_l2_fold_the_same_evidence_to_the_same_number() -> None:
+    """The parity check the store should always have been held to.
+
+    Against ``fuse_axes``, not against a stored L1 fold: the old oracle was a per-pass axis, which
+    cannot exist, produced by a *second implementation*, so a mismatch could not distinguish "the
+    store missed an input" from "the two folds disagree". Now there is one fold, and any difference
+    is a difference in evidence — which is the thing worth catching.
+    """
+    store, fused = _parity_fixture()
+    report = store.fused_parity(fused, aggregator="min")["speaker"]
+    assert report["compared"] == 2, "a check that compares nothing reports the same zero as one that passes"
+    assert report["mismatches"] == 0 and report["not_in_l2"] == 0
+
+
+def test_a_signal_the_ingest_drops_is_reported_as_a_mismatch() -> None:
+    """The failure the check exists for: same arithmetic, different evidence.
+
+    This is exactly what the artifact ingest did to ``__cross_diar_label_disagreement__`` — kept it
+    on one path, filed it as a measurement on the other — and no test or artifact said so.
+    """
+    store, fused = _parity_fixture()
+    dropped = [v for v in store.votes_for("enhanced_16k", "speaker", (0.0, 1.0))]
+    assert dropped, "fixture must have an enhanced-pass vote to drop"
+    for vote in dropped:
+        vote.status = "shadowed"
+    report = store.fused_parity(fused, aggregator="min")["speaker"]
+    assert report["mismatches"] >= 1, "losing one pass's signal must not fold to the same number"
